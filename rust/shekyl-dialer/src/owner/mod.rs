@@ -41,8 +41,8 @@ use shekyl_timing_engine::{Clock, OwnerHandle};
 
 use self::address::{live_sessions, LiveSessions};
 use self::handshake::Attempt;
-use self::ready::Bell;
 pub use self::ready::NotReady;
+use self::ready::{park, Bell};
 use crate::attempts::Attempts;
 use crate::bans::HubBans;
 use crate::candidate::CandidateFilter;
@@ -506,17 +506,23 @@ impl Dialer {
         rng: &mut R,
     ) {
         let mut parked: Option<NotReady> = None;
-        while !self.stop.load(Ordering::Acquire) {
-            // Read the bell before the check: a ring between the two still
-            // ends the wait.
+        loop {
+            // The bell first, then the stop, then readiness. `stop` sets its
+            // flag before it rings, so a ring already counted in `seen` is a
+            // stop this check sees; and a ring after the read ends the wait.
             let seen = self.bell.rung();
+            if self.stop.load(Ordering::Acquire) {
+                break;
+            }
             match self.readiness(connector) {
                 Err(missing) => {
                     if parked != Some(missing) {
                         tracing::info!("{connector:?}: the dialer waits: {}", missing.describe());
                         parked = Some(missing);
                     }
-                    self.bell.wait_past(seen);
+                    if !park(&self.bell, owner, seen) {
+                        break;
+                    }
                     continue;
                 }
                 Ok(()) => {

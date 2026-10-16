@@ -208,8 +208,9 @@ fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
 
 /// **The owner loop parks on change.** While the link is down the loop arms
 /// no timer: however far the clock moves, the engine fires no Discovery wake.
-/// When the link returns, the loop arms its normal spacing and dials; and a
-/// stop ends a parked loop at once.
+/// When the link returns, the loop arms its normal spacing and dials. A wake
+/// that fires after a fall draws nothing because `choose` reads readiness at
+/// every wake; the tests above show that without a clock.
 #[test]
 fn the_owner_loop_waits_on_the_link_and_resumes_when_it_returns() {
     let clock = ManualClock::new(Tick::new(1_000_000_000));
@@ -271,26 +272,67 @@ fn the_owner_loop_waits_on_the_link_and_resumes_when_it_returns() {
     });
     assert!(fires() >= 1);
 
-    // The link falls while the loop waits on its timer. The wake that fires
-    // then draws nothing; the loop parks, and a stop ends the parked loop.
-    let after_dial = gray(&dialer);
-    take_link_down(&dialer);
-    let fired = fires();
-    clock.set(Tick::new(clock.now().get() + spacing + 1));
-    let _nudge_again = service
-        .handle()
-        .register(OwnerClass::Interim)
-        .expect("nudge");
-    wait_until("the pending wake did not fire", || fires() > fired);
-    thread::sleep(Duration::from_millis(100));
-    assert_eq!(
-        gray(&dialer),
-        after_dial,
-        "the wake after the fall drew nothing"
-    );
-    dialer.stop();
-    wait_until("a parked loop did not end at the stop", || {
+    // Closing the engine ends the loop wherever it waits.
+    service.close();
+    wait_until("the loop did not end when the engine closed", || {
         loop_thread.is_finished()
     });
     loop_thread.join().expect("the loop");
+}
+
+/// How a parked loop is ended, in each test below.
+#[derive(Clone, Copy)]
+enum Ending {
+    Stop,
+    EngineClosed,
+    OwnerDeregistered,
+}
+
+/// A loop whose link is down from its first wake parks before it arms any
+/// timer. `run` ends at the stop, at the owner's deregistration and at the
+/// engine's close (Copilot on #1092: the bell alone saw only the stop).
+fn a_parked_loop_ends_at(ending: Ending) {
+    let clock = ManualClock::new(Tick::new(1_000_000_000));
+    let service = EngineService::start(clock.clone());
+    let dialer = dialer(&clock, tip());
+    dialer.set_network_id([7; 16]);
+    take_link_down(&dialer);
+    let owner = Arc::new(
+        service
+            .handle()
+            .register(OwnerClass::Discovery)
+            .expect("register"),
+    );
+    let running = Arc::clone(&dialer);
+    let held = Arc::clone(&owner);
+    let loop_thread = thread::spawn(move || {
+        running.run(CLEARNET, &held, &mut SplitMix64::new(3));
+    });
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        !loop_thread.is_finished(),
+        "the loop parks; it does not end"
+    );
+    match ending {
+        Ending::Stop => dialer.stop(),
+        Ending::EngineClosed => service.close(),
+        Ending::OwnerDeregistered => owner.deregister().expect("deregister"),
+    }
+    wait_until("the parked loop did not end", || loop_thread.is_finished());
+    loop_thread.join().expect("the loop");
+}
+
+#[test]
+fn a_parked_loop_ends_at_the_stop() {
+    a_parked_loop_ends_at(Ending::Stop);
+}
+
+#[test]
+fn a_parked_loop_ends_when_the_engine_closes() {
+    a_parked_loop_ends_at(Ending::EngineClosed);
+}
+
+#[test]
+fn a_parked_loop_ends_when_its_owner_is_deregistered() {
+    a_parked_loop_ends_at(Ending::OwnerDeregistered);
 }

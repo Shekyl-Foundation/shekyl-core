@@ -12,9 +12,13 @@
 //! waits on the [`Bell`], which every change that could supply it rings: a
 //! link published, the tip published, the network id set, and the stop.
 
-use std::sync::{Condvar, Mutex};
+use std::future::Future;
+use std::pin::pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Wake, Waker};
 
 use shekyl_seam::{DownCause, Outbound};
+use shekyl_timing_engine::{Clock, OwnerHandle};
 
 /// What a connector lacks to dial. The plan draws nothing while any is
 /// missing.
@@ -59,34 +63,93 @@ impl NotReady {
 /// so a loop that reads it before checking readiness cannot miss a ring that
 /// lands between the check and the wait.
 pub(super) struct Bell {
-    rung: Mutex<u64>,
-    changed: Condvar,
+    state: Mutex<Rung>,
+}
+
+struct Rung {
+    count: u64,
+    /// Who is waiting for the next ring. Each is woken once, at that ring.
+    waiting: Vec<Waker>,
 }
 
 impl Bell {
     pub(super) fn new() -> Self {
         Self {
-            rung: Mutex::new(0),
-            changed: Condvar::new(),
+            state: Mutex::new(Rung {
+                count: 0,
+                waiting: Vec::new(),
+            }),
         }
     }
 
     /// How many times the bell has rung.
     pub(super) fn rung(&self) -> u64 {
-        *self.rung.lock().expect("bell")
+        self.state.lock().expect("bell").count
     }
 
     pub(super) fn ring(&self) {
-        let mut rung = self.rung.lock().expect("bell");
-        *rung = rung.wrapping_add(1);
-        self.changed.notify_all();
+        let waiting = {
+            let mut state = self.state.lock().expect("bell");
+            state.count = state.count.wrapping_add(1);
+            std::mem::take(&mut state.waiting)
+        };
+        for waker in waiting {
+            waker.wake();
+        }
     }
 
-    /// Block until the bell has rung since it read `seen`.
-    pub(super) fn wait_past(&self, seen: u64) {
-        let mut rung = self.rung.lock().expect("bell");
-        while *rung == seen {
-            rung = self.changed.wait(rung).expect("bell");
+    /// Ready once the bell has rung since it read `seen`.
+    fn poll_past(&self, seen: u64, cx: &Context<'_>) -> Poll<()> {
+        let mut state = self.state.lock().expect("bell");
+        if state.count != seen {
+            return Poll::Ready(());
         }
+        if !state
+            .waiting
+            .iter()
+            .any(|waker| waker.will_wake(cx.waker()))
+        {
+            state.waiting.push(cx.waker().clone());
+        }
+        Poll::Pending
+    }
+}
+
+/// Wait, with no timer armed, until `bell` rings after `seen` (`true`) or
+/// `owner`'s wait ends because the engine closed or the owner was
+/// deregistered (`false`: the loop ends). Both are polled on this thread, so
+/// whichever comes first ends the wait, and neither can be missed.
+pub(super) fn park<C: Clock>(bell: &Bell, owner: &OwnerHandle<C>, seen: u64) -> bool {
+    let mut owner_wait = pin!(owner.wait_wake_async());
+    block_on(|cx| {
+        if let Poll::Ready(waited) = owner_wait.as_mut().poll(cx) {
+            // Nothing is armed while the loop is parked, so only the end of
+            // the owner's life ends its wait. A wake that does arrive is
+            // treated as a ring: the loop looks again.
+            return Poll::Ready(waited.is_ok());
+        }
+        bell.poll_past(seen, cx).map(|()| true)
+    })
+}
+
+/// Poll `step` on this thread until it is ready, parking the thread between
+/// polls. A wake unparks it.
+fn block_on<T>(mut step: impl FnMut(&mut Context<'_>) -> Poll<T>) -> T {
+    struct Unpark(std::thread::Thread);
+    impl Wake for Unpark {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker = Waker::from(Arc::new(Unpark(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    loop {
+        if let Poll::Ready(value) = step(&mut cx) {
+            return value;
+        }
+        std::thread::park();
     }
 }
