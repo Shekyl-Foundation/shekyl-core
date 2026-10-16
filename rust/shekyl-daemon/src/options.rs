@@ -95,7 +95,7 @@ fn shown(row: &Row, live: &Resolved) -> ShownRow {
     if matches!(row.kind, Kind::Secret) {
         ShownRow::secret(row.name, source, value.is_some())
     } else {
-        ShownRow::value(row.name, source, row.runtime, value.map(Value::render))
+        ShownRow::text(row.name, source, row.runtime, value.map(Value::render))
     }
 }
 
@@ -288,13 +288,13 @@ mod tests {
     fn development_levers_exist_only_on_their_networks() {
         let mainnet = handle(&["--network", "mainnet"]);
         let all = mainnet.show(None).unwrap();
-        assert!(all.iter().all(|v| !v.row.name.starts_with("dev-")));
+        assert!(all.iter().all(|v| !v.row.name().starts_with("dev-")));
         let refused = mainnet.show(Some(&["dev-sync".to_owned()])).unwrap_err();
         assert!(matches!(refused, ShowRefusal::Refused(r) if r.code == "config.dev.network"));
         let regtest = handle(&["--network", "regtest"]);
         let all = regtest.show(None).unwrap();
-        let sync = all.iter().find(|v| v.row.name == "dev-sync").unwrap();
-        assert_eq!(sync.row.value, Some(Some("on".to_owned())));
+        let sync = all.iter().find(|v| v.row.name() == "dev-sync").unwrap();
+        assert_eq!(sync.row.value(), Some(Some("on")));
     }
 
     fn pair(name: &str, value: &str) -> (String, String) {
@@ -303,7 +303,7 @@ mod tests {
 
     fn text_of(handle: &DaemonOptions, name: &str) -> Option<String> {
         let rows = handle.show(Some(&[name.to_owned()])).unwrap();
-        rows[0].row.value.clone().flatten()
+        rows[0].row.value().and_then(|text| text.map(str::to_owned))
     }
 
     /// RT-O25: what `option_show` prints, `option_set` accepts, and builds
@@ -344,9 +344,9 @@ mod tests {
         let h = handle(&["--network", "regtest"]);
         let rows = h.set(&[pair("p2p-upload-max", "1MiB/s")]).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].source, "runtime");
-        assert!(rows[0].runtime);
-        assert_eq!(rows[0].value, Some(Some("1MiB/s".to_owned())));
+        assert_eq!(rows[0].source(), "runtime");
+        assert!(rows[0].runtime());
+        assert_eq!(rows[0].value(), Some(Some("1MiB/s")));
         h.set(&[pair("p2p-upload-max", "unlimited")]).unwrap();
         assert_eq!(text_of(&h, "p2p-upload-max").as_deref(), Some("unlimited"));
         h.set(&[pair("log-category", "none")]).unwrap();
@@ -395,7 +395,7 @@ mod tests {
     fn show_lists_live_rows_in_table_order_with_their_grants_and_sources() {
         let h = handle(&["--network", "regtest", "--log-level", "info"]);
         let all = h.show(None).unwrap();
-        let names: Vec<&str> = all.iter().map(|v| v.row.name.as_str()).collect();
+        let names: Vec<&str> = all.iter().map(|v| v.row.name()).collect();
         let table: Vec<&str> = TABLE
             .rows
             .iter()
@@ -403,26 +403,30 @@ mod tests {
             .map(|r| r.name)
             .collect();
         assert_eq!(names, table);
-        let level = all.iter().find(|v| v.row.name == "log-level").unwrap();
+        let level = all.iter().find(|v| v.row.name() == "log-level").unwrap();
         assert_eq!(level.grant, RowGrant::Status);
-        assert_eq!(level.row.source, "cli");
-        let onion = all.iter().find(|v| v.row.name == "tor-onion").unwrap();
+        assert_eq!(level.row.source(), "cli");
+        let onion = all.iter().find(|v| v.row.name() == "tor-onion").unwrap();
         assert_eq!(onion.grant, RowGrant::Config);
-        assert_eq!(onion.row.value, Some(None), "unset and not runtime is null");
+        assert_eq!(
+            onion.row.value(),
+            Some(None),
+            "unset and not runtime is null"
+        );
         let secret = all
             .iter()
-            .find(|v| matches!(TABLE.row(&v.row.name).unwrap().kind, Kind::Secret))
+            .find(|v| matches!(TABLE.row(v.row.name()).unwrap().kind, Kind::Secret))
             .expect("the table has a secret row");
-        assert_eq!(secret.row.value, None);
-        assert_eq!(secret.row.secret, Some(true));
-        assert_eq!(secret.row.set, Some(false));
+        assert_eq!(secret.row.value(), None);
+        assert!(secret.row.is_secret());
+        assert_eq!(secret.row.set(), Some(false));
 
         // Named rows come back in table order whatever the order asked.
         let two = h
             .show(Some(&["p2p-upload-max".to_owned(), "log-level".to_owned()]))
             .unwrap();
-        assert_eq!(two[0].row.name, "log-level");
-        assert_eq!(two[1].row.name, "p2p-upload-max");
+        assert_eq!(two[0].row.name(), "log-level");
+        assert_eq!(two[1].row.name(), "p2p-upload-max");
         let unknown = h.show(Some(&["nope".to_owned()])).unwrap_err();
         assert!(matches!(unknown, ShowRefusal::Refused(r) if r.code == "config.name.unknown"));
     }

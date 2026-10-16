@@ -50,29 +50,48 @@ impl RowGrant {
 }
 
 /// One row as `option_show` reports it and `option_set` echoes it
-/// (RT-O25): the value as text in the grammar's syntax, or the secret
-/// form with no value.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ShownRow {
-    /// The option's name.
-    pub name: String,
-    /// `default`, `file`, `cli` or `runtime`.
-    pub source: String,
-    /// Whether `option_set` accepts it.
-    pub runtime: bool,
-    /// The value as text, or `null` when unset; absent on a secret row.
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "present"
-    )]
-    pub value: Option<Option<String>>,
-    /// Present, and true, on a secret row only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret: Option<bool>,
-    /// Whether a secret row holds a value; present on a secret row only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub set: Option<bool>,
+/// (RT-O25). A value row carries the grammar text, or `null` when the
+/// value is unset. A secret row carries whether it is set and never the
+/// text. The two forms do not overlap: a document that has both, or
+/// neither, is refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShownRow {
+    /// A row whose value is text in the grammar's syntax, or unset.
+    Value {
+        /// The option's name.
+        name: String,
+        /// `default`, `file`, `cli` or `runtime`.
+        source: String,
+        /// Whether `option_set` accepts it.
+        runtime: bool,
+        /// The value as text. `None` is the wire's `null`: unset.
+        value: Option<String>,
+    },
+    /// A secret row. The text never leaves the process.
+    Secret {
+        /// The option's name.
+        name: String,
+        /// `default`, `file`, `cli` or `runtime`.
+        source: String,
+        /// Whether the secret holds a value.
+        set: bool,
+    },
+}
+
+/// The document serde reads before it becomes a [`ShownRow`]. `value` uses
+/// [`present`] so a JSON `null` stays an unset value row rather than an
+/// absent member, which is the secret form.
+#[derive(Deserialize)]
+struct ShownWire {
+    name: String,
+    source: String,
+    runtime: bool,
+    #[serde(default, deserialize_with = "present")]
+    value: Option<Option<String>>,
+    #[serde(default)]
+    secret: Option<bool>,
+    #[serde(default)]
+    set: Option<bool>,
 }
 
 /// A `value` member that is present, `null` included: serde reads `null`
@@ -83,29 +102,143 @@ fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<Strin
 }
 
 impl ShownRow {
-    /// A value row.
+    /// A value row: the grammar text, or unset.
     #[must_use]
-    pub fn value(name: &str, source: &str, runtime: bool, value: Option<String>) -> Self {
-        Self {
+    pub fn text(name: &str, source: &str, runtime: bool, value: Option<String>) -> Self {
+        Self::Value {
             name: name.to_owned(),
             source: source.to_owned(),
             runtime,
-            value: Some(value),
-            secret: None,
-            set: None,
+            value,
         }
     }
 
-    /// A secret row: no text, only whether it is set.
+    /// A secret row: no text, only whether it is set. A secret is never a
+    /// runtime row.
     #[must_use]
     pub fn secret(name: &str, source: &str, set: bool) -> Self {
-        Self {
+        Self::Secret {
             name: name.to_owned(),
             source: source.to_owned(),
-            runtime: false,
-            value: None,
-            secret: Some(true),
-            set: Some(set),
+            set,
+        }
+    }
+
+    /// The option's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Value { name, .. } | Self::Secret { name, .. } => name,
+        }
+    }
+
+    /// Where the value came from: `default`, `file`, `cli` or `runtime`.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        match self {
+            Self::Value { source, .. } | Self::Secret { source, .. } => source,
+        }
+    }
+
+    /// Whether `option_set` accepts the row. A secret row is never runtime.
+    #[must_use]
+    pub const fn runtime(&self) -> bool {
+        match self {
+            Self::Value { runtime, .. } => *runtime,
+            Self::Secret { .. } => false,
+        }
+    }
+
+    /// The value text. `Some(None)` is an unset value row; `None` is a
+    /// secret row, which carries no text.
+    #[must_use]
+    pub fn value(&self) -> Option<Option<&str>> {
+        match self {
+            Self::Value { value, .. } => Some(value.as_deref()),
+            Self::Secret { .. } => None,
+        }
+    }
+
+    /// Whether this is a secret row.
+    #[must_use]
+    pub const fn is_secret(&self) -> bool {
+        matches!(self, Self::Secret { .. })
+    }
+
+    /// Whether a secret row holds a value. `None` on a value row.
+    #[must_use]
+    pub const fn set(&self) -> Option<bool> {
+        match self {
+            Self::Secret { set, .. } => Some(*set),
+            Self::Value { .. } => None,
+        }
+    }
+}
+
+impl Serialize for ShownRow {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        match self {
+            Self::Value {
+                name,
+                source,
+                runtime,
+                value,
+            } => {
+                let mut row = serializer.serialize_struct("ShownRow", 4)?;
+                row.serialize_field("name", name)?;
+                row.serialize_field("source", source)?;
+                row.serialize_field("runtime", runtime)?;
+                row.serialize_field("value", value)?;
+                row.end()
+            }
+            Self::Secret { name, source, set } => {
+                let mut row = serializer.serialize_struct("ShownRow", 5)?;
+                row.serialize_field("name", name)?;
+                row.serialize_field("source", source)?;
+                row.serialize_field("runtime", &false)?;
+                row.serialize_field("secret", &true)?;
+                row.serialize_field("set", set)?;
+                row.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ShownRow {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = ShownWire::deserialize(deserializer)?;
+        let secret_marked = wire.secret.is_some() || wire.set.is_some();
+        match (wire.value, wire.secret, wire.set) {
+            (Some(value), None, None) => Ok(Self::Value {
+                name: wire.name,
+                source: wire.source,
+                runtime: wire.runtime,
+                value,
+            }),
+            (None, Some(true), Some(set)) if !wire.runtime => Ok(Self::Secret {
+                name: wire.name,
+                source: wire.source,
+                set,
+            }),
+            (None, Some(true), Some(_)) => Err(serde::de::Error::custom(
+                "a secret row is not a runtime row",
+            )),
+            (None, Some(false), _) => Err(serde::de::Error::custom(
+                "a secret row has `secret: true`; `false` is not a form",
+            )),
+            (None, Some(true), None) | (None, None, Some(_)) => Err(serde::de::Error::custom(
+                "a secret row carries `secret: true` and `set`, and no `value`",
+            )),
+            (Some(_), _, _) if secret_marked => Err(serde::de::Error::custom(
+                "a row is a value or a secret, not both",
+            )),
+            (None, None, None) => Err(serde::de::Error::custom(
+                "a row carries `value` or `secret` and `set`",
+            )),
+            (Some(_), _, _) => Err(serde::de::Error::custom(
+                "a row is a value or a secret, not both",
+            )),
         }
     }
 }
@@ -362,7 +495,7 @@ mod tests {
             let mut rows = Vec::new();
             for (name, value) in pairs {
                 *self.value.lock().unwrap() = value.clone();
-                rows.push(ShownRow::value(name, "runtime", true, Some(value.clone())));
+                rows.push(ShownRow::text(name, "runtime", true, Some(value.clone())));
             }
             Ok(rows)
         }
@@ -370,7 +503,7 @@ mod tests {
         fn show(&self, names: Option<&[String]>) -> Result<Vec<VisibleRow>, ShowRefusal> {
             let all = vec![
                 VisibleRow {
-                    row: ShownRow::value(
+                    row: ShownRow::text(
                         "log-level",
                         "default",
                         true,
@@ -388,7 +521,7 @@ mod tests {
                 Some(names) => {
                     let mut picked = Vec::new();
                     for name in names {
-                        match all.iter().find(|r| r.row.name == *name) {
+                        match all.iter().find(|r| r.row.name() == name) {
                             Some(r) => picked.push(r.clone()),
                             None => {
                                 return Err(ShowRefusal::Refused(Refusal {
@@ -454,8 +587,8 @@ mod tests {
         assert_eq!(data[1].code, "config.runtime.startup-only");
         assert_eq!(*h.value.lock().unwrap(), "warn", "nothing applied");
         let set = option_set(&h, &[("log-level".to_owned(), "info".to_owned())]).unwrap();
-        assert_eq!(set.options[0].source, "runtime");
-        assert_eq!(set.options[0].value, Some(Some("info".to_owned())));
+        assert_eq!(set.options[0].source(), "runtime");
+        assert_eq!(set.options[0].value(), Some(Some("info")));
     }
 
     /// Each row is shown under the grant it names: the view listener sees
@@ -466,9 +599,10 @@ mod tests {
         let h = handle();
         let full = option_show(&h, None, Disclosure::FULL).unwrap();
         assert_eq!(full.options.len(), 2);
-        assert_eq!(full.options[1].secret, Some(true));
+        assert!(full.options[1].is_secret());
         assert_eq!(
-            full.options[1].value, None,
+            full.options[1].value(),
+            None,
             "a secret carries no value member"
         );
         let view = option_show(&h, None, Disclosure::VIEW).unwrap();
@@ -493,7 +627,7 @@ mod tests {
     /// and `set` and no `value`.
     #[test]
     fn the_two_row_forms_serialize_apart() {
-        let v = serde_json::to_value(ShownRow::value(
+        let v = serde_json::to_value(ShownRow::text(
             "p2p-upload-max",
             "default",
             true,
@@ -503,11 +637,31 @@ mod tests {
         assert_eq!(v["value"], "unlimited");
         assert!(v.get("secret").is_none());
         let unset =
-            serde_json::to_value(ShownRow::value("mine-address", "default", false, None)).unwrap();
+            serde_json::to_value(ShownRow::text("mine-address", "default", false, None)).unwrap();
         assert!(unset["value"].is_null());
         let s = serde_json::to_value(ShownRow::secret("tor-socks-password", "file", true)).unwrap();
         assert!(s.get("value").is_none());
         assert_eq!(s["secret"], true);
         assert_eq!(s["set"], true);
+        assert_eq!(s["runtime"], false);
+
+        let back: ShownRow = serde_json::from_value(v).unwrap();
+        assert_eq!(back.value(), Some(Some("unlimited")));
+        let unset_back: ShownRow = serde_json::from_value(unset).unwrap();
+        assert_eq!(unset_back.value(), Some(None));
+        let secret_back: ShownRow = serde_json::from_value(s).unwrap();
+        assert_eq!(secret_back.set(), Some(true));
+
+        for bad in [
+            serde_json::json!({"name": "a", "source": "default", "runtime": false}),
+            serde_json::json!({"name": "a", "source": "default", "runtime": false, "value": "x", "secret": true, "set": true}),
+            serde_json::json!({"name": "a", "source": "default", "runtime": false, "secret": false, "set": true}),
+            serde_json::json!({"name": "a", "source": "default", "runtime": true, "secret": true, "set": false}),
+        ] {
+            assert!(
+                serde_json::from_value::<ShownRow>(bad).is_err(),
+                "an ambiguous or incomplete row is refused"
+            );
+        }
     }
 }

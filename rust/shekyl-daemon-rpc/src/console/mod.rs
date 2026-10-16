@@ -1138,18 +1138,17 @@ fn rate_limits(src: &Source) -> Result<(Option<u64>, Option<u64>), String> {
         let row = reply
             .options
             .iter()
-            .find(|r| r.name == name)
+            .find(|r| r.name() == name)
             .ok_or_else(|| format!("option_show did not answer {name}"))?;
         let text = row
-            .value
-            .clone()
+            .value()
             .flatten()
             .ok_or_else(|| format!("option_show gave {name} no value"))?;
         let kind = &shekyl_daemon_config::TABLE
             .row(name)
             .ok_or_else(|| format!("{name} is not a row of the table"))?
             .kind;
-        match kind.parse_text(&text) {
+        match kind.parse_text(text) {
             Ok(shekyl_options::Value::Rate(bytes)) => Ok(Some(bytes)),
             Ok(shekyl_options::Value::Word(_)) => Ok(None),
             Ok(_) | Err(_) => Err(format!(
