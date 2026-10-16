@@ -7,7 +7,8 @@
 //!
 //! [`managed_tor_command`] is the whole launch a user gets. It is infallible:
 //! the only fallible step is [`LaunchEnvironment::resolve`], and on Windows
-//! that step is the system-directory lookup. The blank file and the data
+//! that step is the system-directory lookup. The environment is a closed set
+//! (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part 2, as amended 2026-10-16). The blank file and the data
 //! directory are prepared before the command is spawned
 //! ([`prepare_data_directory`], [`install_blank_config`]).
 //!
@@ -24,7 +25,16 @@ use tokio::process::Command;
 #[cfg(windows)]
 use super::actor::SystemDirectoryError;
 use super::actor::{ControlError, ManagedTor};
-use crate::binary::VerifiedTorBinary;
+
+/// Where OpenSSL reads its configuration. Tor initialises OpenSSL without
+/// `OPENSSL_INIT_NO_LOAD_CONFIG` (`crypto_openssl_mgt.c` at `tor-0.4.9.13` and
+/// `tor-0.4.9.14`), so with this unset OpenSSL reads `openssl.cnf` under its
+/// compiled-in `OPENSSLDIR`. For every Expert Bundle that is
+/// `/var/tmp/dist/openssl/ssl`, a path any local account can create, and a
+/// configuration there can name a provider or engine module that OpenSSL
+/// loads into tor. The launch names the blank file instead: an empty
+/// configuration loads no module, and the default provider is built in.
+const OPENSSL_CONF_VARIABLE: &str = "OPENSSL_CONF";
 
 /// `LD_LIBRARY_PATH`. One absolute directory, the verified binary's own.
 #[cfg(target_os = "linux")]
@@ -77,31 +87,39 @@ const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 #[cfg(windows)]
 const SINGLE_LINK: u32 = 1;
 
-/// The at-most-one variable the managed tor receives, already resolved.
+/// The managed tor's whole environment, already resolved: a closed set, each
+/// value from a trusted source and none from the parent's environment
+/// (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part 2, as amended 2026-10-16).
 ///
-/// One variant per target. The command applies [`Self::variable`] and nothing
-/// else, so the environment a test reads off the command is this value.
-pub(crate) enum LaunchEnvironment {
+/// | Variable | Target | Source |
+/// | --- | --- | --- |
+/// | `OPENSSL_CONF` | all | the launcher's blank file in the data directory |
+/// | `LD_LIBRARY_PATH` | Linux | the verified witness's directory |
+/// | `SystemRoot` | Windows | `GetSystemWindowsDirectoryW` |
+///
+/// macOS sets `OPENSSL_CONF` only; `DYLD_*` stays unset. `OPENSSL_MODULES` and
+/// `OPENSSL_ENGINES` are not set: with no configuration naming a module,
+/// nothing reads them, and `HardwareAccel` stays off. A typed option that adds
+/// hardware acceleration or a named provider reopens this: the launch then
+/// names an absolute directory it owns (`TOR_BUNDLE_DISTRIBUTION.md` §2
+/// finding 13). The command applies
+/// [`Self::variables`] and nothing else, so the environment a test reads off
+/// the command is this value.
+pub(crate) struct LaunchEnvironment {
+    openssl_conf: PathBuf,
     /// Linux: the loader searches the directory the pin gate checked.
     #[cfg(target_os = "linux")]
-    LoaderPath(PathBuf),
+    loader_path: PathBuf,
     /// Windows: `SystemRoot` from `GetSystemWindowsDirectoryW`.
     #[cfg(windows)]
-    SystemRoot(OsString),
-    /// Every other target, including macOS, sets nothing. `DYLD_*` stays unset.
-    #[cfg(not(any(target_os = "linux", windows)))]
-    Cleared,
+    system_root: OsString,
 }
 
 impl LaunchEnvironment {
-    /// Resolve the one variable, or fail before spawn.
+    /// Resolve the closed set for `managed`, or fail before spawn.
     ///
-    /// `binary` is read on Linux only, where the loader path is the witness's
-    /// directory. On Windows the value comes from the system call.
-    #[cfg_attr(
-        not(target_os = "linux"),
-        allow(unused_variables, reason = "only Linux reads the witness directory")
-    )]
+    /// The witness is read on Linux only, where the loader path is its
+    /// directory. On Windows `SystemRoot` comes from the system call.
     #[cfg_attr(
         not(windows),
         expect(
@@ -109,40 +127,29 @@ impl LaunchEnvironment {
             reason = "only the Windows system-directory lookup can fail"
         )
     )]
-    pub(crate) fn resolve(binary: &VerifiedTorBinary) -> Result<Self, ControlError> {
-        #[cfg(target_os = "linux")]
-        let environment = Self::LoaderPath(binary.library_dir().to_path_buf());
-        #[cfg(windows)]
-        let environment =
-            Self::SystemRoot(system_windows_directory().map_err(ControlError::SystemDirectory)?);
-        #[cfg(not(any(target_os = "linux", windows)))]
-        let environment = Self::Cleared;
-        Ok(environment)
-    }
-
-    /// The one variable this target sets after `env_clear`.
-    ///
-    /// A target either always sets one or always sets none. The empty case is
-    /// the absence of this method, not an `Option` that one target's build
-    /// would always fill.
-    #[cfg(any(target_os = "linux", windows))]
-    pub(crate) fn variable(&self) -> (&'static str, &OsStr) {
-        match self {
+    pub(crate) fn resolve(managed: &ManagedTor) -> Result<Self, ControlError> {
+        Ok(Self {
+            openssl_conf: blank_config_path(&managed.data_dir),
             #[cfg(target_os = "linux")]
-            Self::LoaderPath(dir) => (LOADER_PATH_VARIABLE, dir.as_os_str()),
+            loader_path: managed.tor_binary.library_dir().to_path_buf(),
             #[cfg(windows)]
-            Self::SystemRoot(root) => (SYSTEM_ROOT_VARIABLE, root.as_os_str()),
-        }
+            system_root: system_windows_directory().map_err(ControlError::SystemDirectory)?,
+        })
     }
 
-    #[cfg_attr(
-        not(any(target_os = "linux", windows)),
-        allow(unused_variables, reason = "this target sets no variable")
-    )]
+    /// Every variable this target sets after `env_clear`, by name.
+    pub(crate) fn variables(&self) -> Vec<(&'static str, &OsStr)> {
+        vec![
+            (OPENSSL_CONF_VARIABLE, self.openssl_conf.as_os_str()),
+            #[cfg(target_os = "linux")]
+            (LOADER_PATH_VARIABLE, self.loader_path.as_os_str()),
+            #[cfg(windows)]
+            (SYSTEM_ROOT_VARIABLE, self.system_root.as_os_str()),
+        ]
+    }
+
     fn apply(&self, cmd: &mut Command) {
-        #[cfg(any(target_os = "linux", windows))]
-        {
-            let (name, value) = self.variable();
+        for (name, value) in self.variables() {
             cmd.env(name, value);
         }
     }
@@ -159,11 +166,12 @@ pub(crate) fn managed_tor_command(
     // The witness type guarantees this path passed the hash-pin gate and is
     // canonical: the file hashed is the file named.
     let mut cmd = Command::new(managed.tor_binary.as_path());
-    // No inherited environment (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part 2).
-    // `LD_PRELOAD`, `LD_LIBRARY_PATH` or `DYLD_INSERT_LIBRARIES` from a shell,
-    // a unit file or a profile would load code into the process whose files
-    // were just verified. `Command::get_envs` does not show this clear; the
-    // re-exec test reads the child's own environment.
+    // No inherited environment, then the closed set (`TOR_BUNDLE_DISTRIBUTION.md`
+    // TB-7 part 2, as amended 2026-10-16). `LD_PRELOAD`, `LD_LIBRARY_PATH`,
+    // `DYLD_INSERT_LIBRARIES` or `OPENSSL_CONF` from a shell, a unit file or a
+    // profile would load code into the process whose files were just verified.
+    // `Command::get_envs` does not show this clear; the re-exec test reads the
+    // child's own environment.
     cmd.env_clear();
     environment.apply(&mut cmd);
     cmd.arg("--DataDirectory")
@@ -241,7 +249,7 @@ pub(crate) fn managed_tor_command(
 }
 
 /// The zero-length file the managed tor is given as its torrc, its defaults
-/// torrc and both GeoIP files.
+/// torrc and both GeoIP files, and OpenSSL as its configuration.
 pub(crate) fn blank_config_path(data_dir: &Path) -> PathBuf {
     data_dir.join(BLANK_FILE_NAME)
 }
@@ -563,12 +571,12 @@ fn strip_sentence_period(text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binary::VerifiedTorBinary;
 
     fn launch_arguments(disable_network: bool) -> Vec<String> {
         let dir = tempfile::tempdir().expect("fixture directory");
         let managed = managed_fixture(dir.path(), disable_network);
-        let environment =
-            LaunchEnvironment::resolve(&managed.tor_binary).expect("launch environment");
+        let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
         managed_tor_command(&managed, &dir.path().join("control_port"), &environment)
             .as_std()
             .get_args()
@@ -639,8 +647,7 @@ mod tests {
     fn the_launch_names_its_own_blank_file() {
         let dir = tempfile::tempdir().expect("fixture directory");
         let managed = managed_fixture(dir.path(), false);
-        let environment =
-            LaunchEnvironment::resolve(&managed.tor_binary).expect("launch environment");
+        let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
         let cmd = managed_tor_command(&managed, &dir.path().join("control_port"), &environment);
         let args: Vec<&OsStr> = cmd.as_std().get_args().collect();
         let blank = blank_config_path(&managed.data_dir);
@@ -662,7 +669,8 @@ mod tests {
         }
     }
 
-    /// The variable list on the built command.
+    /// The variable set on the built command, against an oracle written out
+    /// here rather than read from [`LaunchEnvironment::variables`].
     ///
     /// `Command::get_envs` returns only variables this builder set. It cannot
     /// see `env_clear`, so a launch that copied the parent's `SystemRoot`, or
@@ -673,27 +681,30 @@ mod tests {
     fn the_managed_launch_environment_is_exact() {
         let dir = tempfile::tempdir().expect("fixture directory");
         let managed = managed_fixture(dir.path(), false);
-        let environment =
-            LaunchEnvironment::resolve(&managed.tor_binary).expect("launch environment");
+        let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
         let cmd = managed_tor_command(&managed, &dir.path().join("control_port"), &environment);
-        let envs: Vec<(&OsStr, Option<&OsStr>)> = cmd.as_std().get_envs().collect();
-        #[cfg(any(target_os = "linux", windows))]
-        let expected = {
-            let (name, value) = environment.variable();
-            vec![(OsStr::new(name), Some(value))]
-        };
-        #[cfg(not(any(target_os = "linux", windows)))]
-        let expected: Vec<(&OsStr, Option<&OsStr>)> = Vec::new();
-        assert_eq!(envs, expected);
+        let mut envs: Vec<(&OsStr, Option<&OsStr>)> = cmd.as_std().get_envs().collect();
+        envs.sort();
+        let blank = blank_config_path(&managed.data_dir);
+        #[cfg(target_os = "linux")]
+        let mut expected = vec![
+            (
+                OsStr::new("LD_LIBRARY_PATH"),
+                Some(managed.tor_binary.library_dir().as_os_str()),
+            ),
+            (OsStr::new("OPENSSL_CONF"), Some(blank.as_os_str())),
+        ];
         #[cfg(windows)]
-        {
-            let root = system_windows_directory().expect("GetSystemWindowsDirectoryW");
-            assert_eq!(
-                envs.first().and_then(|(_, value)| *value),
-                Some(root.as_os_str()),
-                "SystemRoot is the system call's value"
-            );
-        }
+        let root = system_windows_directory().expect("GetSystemWindowsDirectoryW");
+        #[cfg(windows)]
+        let mut expected = vec![
+            (OsStr::new("OPENSSL_CONF"), Some(blank.as_os_str())),
+            (OsStr::new("SystemRoot"), Some(root.as_os_str())),
+        ];
+        #[cfg(not(any(target_os = "linux", windows)))]
+        let mut expected = vec![(OsStr::new("OPENSSL_CONF"), Some(blank.as_os_str()))];
+        expected.sort();
+        assert_eq!(envs, expected);
     }
 
     /// Set in the re-executed copy of this test binary.
@@ -763,8 +774,7 @@ mod tests {
             disable_network: true,
             exit_observer: None,
         };
-        let environment =
-            LaunchEnvironment::resolve(&managed.tor_binary).expect("launch environment");
+        let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
         let status = managed_tor_command(&managed, &dir.join("control_port"), &environment)
             .spawn()
             .expect("spawn the shim")
@@ -844,31 +854,66 @@ mod tests {
         vars
     }
 
+    /// The value the dump holds for `name`. Only reached after the names
+    /// matched, so a missing name here is a test defect, not a leak.
+    fn dumped<'a>(vars: &[(&str, &'a str)], name: &str) -> &'a str {
+        vars.iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, value)| *value)
+            .unwrap_or_else(|| panic!("{name} is not in the child's environment"))
+    }
+
+    /// `OPENSSL_CONF` names the launcher's blank file, the same path whichever
+    /// target: the data directory is the shim's `data`.
+    fn assert_openssl_conf(vars: &[(&str, &str)], dir: &Path) {
+        assert_eq!(
+            Path::new(dumped(vars, "OPENSSL_CONF")),
+            blank_config_path(&dir.join("data")),
+            "OPENSSL_CONF is the launcher's blank file"
+        );
+    }
+
     #[cfg(target_os = "linux")]
     fn assert_child_environment(vars: &[(&str, &str)], names: &[&str], dir: &Path) {
-        assert_eq!(names, ["LD_LIBRARY_PATH"], "the child's whole environment");
-        assert_eq!(Path::new(vars[0].1), dir, "the loader path");
+        let mut sorted = names.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(
+            sorted,
+            ["LD_LIBRARY_PATH", "OPENSSL_CONF"],
+            "the child's whole environment"
+        );
+        assert_eq!(
+            Path::new(dumped(vars, "LD_LIBRARY_PATH")),
+            dir,
+            "the loader path"
+        );
+        assert_openssl_conf(vars, dir);
     }
 
     #[cfg(windows)]
-    fn assert_child_environment(vars: &[(&str, &str)], names: &[&str], _dir: &Path) {
+    fn assert_child_environment(vars: &[(&str, &str)], names: &[&str], dir: &Path) {
         let root = system_windows_directory().expect("GetSystemWindowsDirectoryW");
         let root = root.to_str().expect("the system directory is unicode");
+        let mut sorted = names.to_vec();
+        sorted.sort_unstable();
         assert_eq!(
-            names,
-            [SYSTEM_ROOT_VARIABLE],
+            sorted,
+            ["OPENSSL_CONF", SYSTEM_ROOT_VARIABLE],
             "the child's whole environment"
         );
+        let system_root = dumped(vars, SYSTEM_ROOT_VARIABLE);
         assert_ne!(
-            vars[0].1, POISON_SYSTEM_ROOT,
+            system_root, POISON_SYSTEM_ROOT,
             "the child kept the poisoned SystemRoot"
         );
-        assert_eq!(vars[0].1, root, "SystemRoot is the system call's value");
+        assert_eq!(system_root, root, "SystemRoot is the system call's value");
+        assert_openssl_conf(vars, dir);
     }
 
     #[cfg(not(any(target_os = "linux", windows)))]
-    fn assert_child_environment(_vars: &[(&str, &str)], names: &[&str], _dir: &Path) {
-        assert!(names.is_empty(), "the child's whole environment: {names:?}");
+    fn assert_child_environment(vars: &[(&str, &str)], names: &[&str], dir: &Path) {
+        assert_eq!(names, ["OPENSSL_CONF"], "the child's whole environment");
+        assert_openssl_conf(vars, dir);
     }
 
     #[cfg(unix)]
@@ -924,6 +969,109 @@ fn main() {
     #[cfg(not(any(unix, windows)))]
     fn stage_environment_shim(_dir: &Path) {
         panic!("the environment shim has no form on this target");
+    }
+
+    /// A configuration that makes OpenSSL load a provider module that does not
+    /// exist, with diagnostics on, so a failed load fails OpenSSL's start.
+    /// Without `config_diagnostics` OpenSSL ignores configuration errors at
+    /// start, and a merely malformed file proves nothing.
+    fn provider_loading_config(module: &Path) -> String {
+        format!(
+            "config_diagnostics = 1\nopenssl_conf = openssl_init\n[openssl_init]\n\
+             providers = provider_sect\n[provider_sect]\nprobe = probe_sect\n\
+             [probe_sect]\nmodule = {}\nactivate = 1\n",
+            module.display()
+        )
+    }
+
+    /// How long a launch gets to either write its control-port file or exit.
+    const LAUNCH_VERDICT_WINDOW: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// How a launch ended within [`LAUNCH_VERDICT_WINDOW`].
+    enum LaunchVerdict {
+        CameUp,
+        Exited,
+        TimedOut,
+    }
+
+    /// `true` when the launched tor wrote its control-port file (it came up),
+    /// `false` when it exited first. The child is killed and reaped on every
+    /// verdict, a timeout included, before this returns or panics, so the
+    /// caller's temporary directory never drops under a live tor.
+    async fn launch_comes_up(mut cmd: Command, port_file: &Path) -> bool {
+        let mut child = cmd.spawn().expect("spawn the managed tor");
+        let verdict = tokio::select! {
+            _ = child.wait() => LaunchVerdict::Exited,
+            () = async {
+                while !port_file.exists() {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            } => LaunchVerdict::CameUp,
+            () = tokio::time::sleep(LAUNCH_VERDICT_WINDOW) => LaunchVerdict::TimedOut,
+        };
+        child.start_kill().ok();
+        child.wait().await.ok();
+        match verdict {
+            LaunchVerdict::CameUp => true,
+            LaunchVerdict::Exited => false,
+            LaunchVerdict::TimedOut => {
+                panic!(
+                    "the managed tor neither came up nor exited within {LAUNCH_VERDICT_WINDOW:?}"
+                )
+            }
+        }
+    }
+
+    /// OpenSSL inside the managed tor reads the file `OPENSSL_CONF` names, and
+    /// the launch's own value lets tor start.
+    ///
+    /// Tor initialises OpenSSL without `OPENSSL_INIT_NO_LOAD_CONFIG`, so with
+    /// the variable unset OpenSSL reads `openssl.cnf` under its compiled-in
+    /// `OPENSSLDIR`, `/var/tmp/dist/openssl/ssl` in every Expert Bundle: a
+    /// path any local account can create, holding a configuration that can
+    /// name a module for OpenSSL to load into tor. Two arms of one launch:
+    /// as built, tor comes up; with only `OPENSSL_CONF` pointed at a
+    /// configuration that loads a provider module which does not exist, tor
+    /// fails to start. The second arm proves this binary's OpenSSL honours the
+    /// variable; [`the_managed_launch_environment_is_exact`] proves the launch
+    /// sets it to the blank file. Nothing is planted at the host's real
+    /// `OPENSSLDIR`.
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
+    async fn openssl_reads_only_the_launchers_configuration() {
+        let dir = tempfile::tempdir().expect("fixture directory");
+        let managed = ManagedTor {
+            tor_binary: VerifiedTorBinary::unchecked_for_test(crate::test_support::tor_binary()),
+            data_dir: dir.path().join("data"),
+            socks_port: super::super::actor::SocksPort::Auto,
+            disable_network: true,
+            exit_observer: None,
+        };
+        prepare_data_directory(&managed.data_dir)
+            .await
+            .expect("data directory");
+        install_blank_config(&managed.data_dir)
+            .await
+            .expect("the blank file");
+        let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
+
+        let port_file = dir.path().join("control_port_as_built");
+        let as_built = managed_tor_command(&managed, &port_file, &environment);
+        assert!(
+            launch_comes_up(as_built, &port_file).await,
+            "the launch as built must start: its OPENSSL_CONF is the blank file"
+        );
+
+        let config = dir.path().join("loads-a-missing-provider.cnf");
+        let module = dir.path().join("no-such-provider-module");
+        std::fs::write(&config, provider_loading_config(&module)).expect("write the config");
+        let port_file = dir.path().join("control_port_with_provider");
+        let mut with_provider = managed_tor_command(&managed, &port_file, &environment);
+        with_provider.env(OPENSSL_CONF_VARIABLE, &config);
+        assert!(
+            !launch_comes_up(with_provider, &port_file).await,
+            "a configuration naming a provider module must stop tor: OpenSSL reads OPENSSL_CONF"
+        );
     }
 
     /// The permission bits, without the file-type bits `mode()` also returns.

@@ -10,6 +10,7 @@
 use super::*;
 use crate::census::CenRow;
 use crate::fault::{FormAttempt, PerHeightRecord};
+use crate::harness::expected_references;
 use crate::harness::fixture::{candidate_on, chain_of, recorded, spendable_chain};
 use crate::harness::{
     defined, expected_seed, expected_target, judged, Faulted, FaultingView, MockChain,
@@ -309,12 +310,14 @@ fn at_genesis_both_medians_are_the_zone() {
 // ---------------------------------------------------------------------------
 
 fn validated_on(chain: &MockChain, candidate: Candidate) -> Weights {
+    let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

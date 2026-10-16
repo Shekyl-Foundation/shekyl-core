@@ -160,7 +160,11 @@ THIS_CRATE = "shekyl-chain-rules"
 # between `#[test]` and `fn` (`#[should_panic]`, `#[ignore]`) are allowed;
 # the name inside a comment, a string, or a call is not a definition.
 def _test_def_re(name: str) -> re.Pattern[str]:
-    return re.compile(rf"#\[test\]\s*(?:#\[[^\]]*\]\s*)*fn\s+{re.escape(name)}\s*\(")
+    # `#[test] fn` or, in an async crate (the ingest's switch tests, CEN-K5–K7),
+    # `#[tokio::test] async fn`; other attributes may sit between.
+    return re.compile(
+        rf"#\[(?:tokio::)?test\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+{re.escape(name)}\s*\("
+    )
 # The C++ source suffixes this tree uses (`.cc` — `src/fcmp/bulletproofs_plus.cc`
 # is a census site; `.inl` — the protocol handler). One list, two consumers:
 # the census `site(s)` check and the holder-path check below.
@@ -1134,6 +1138,9 @@ def selftest() -> None:
         raise SystemExit(f"selftest held-by-store summary:\n{summary(figs4)}")
     _expect_refusal(_inputs(registry=hs_reg, crates={}), "holder crate 'shekyl-chain-store' is not a workspace crate", "store holder crate missing")
     _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "fn l1_held() {}\n"}), "holder test 'l1_held' is not a `#[test] fn` defined in 'shekyl-chain-store'", "store holder fn without #[test]")
+    _expect_ok(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "#[tokio::test]\nasync fn l1_held() {}\n"}), "a holder test that is an async tokio test")
+    _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "async fn l1_held() {}\n"}), "holder test 'l1_held' is not a `#[test] fn`", "store holder async fn without a test attribute")
+    _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "#[tokio::main]\nasync fn l1_held() {}\n"}), "holder test 'l1_held' is not a `#[test] fn`", "store holder under another tokio attribute")
     _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "// #[test] fn l1_held() {}\n"}), "holder test 'l1_held' is not a `#[test] fn`", "store holder test only in a comment")
     _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "#[test]\nfn other() { l1_held(); }\n"}), "holder test 'l1_held' is not a `#[test] fn`", "store holder test only called, not defined")
     _expect_refusal(_inputs(registry=hs_reg, crates={"shekyl-chain-store": "#[test]\nfn l1_held_more() {}\n"}), "holder test 'l1_held' is not a `#[test] fn`", "store holder test only as a prefix of a longer name")

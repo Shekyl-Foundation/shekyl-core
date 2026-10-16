@@ -74,7 +74,15 @@ address and the per-boot publish yields to it. `--tx-proxy` alone does not.
   Never prefer Shekyl-operated relays for Shekyl circuits.
 
 Follow the [Tor Project's relay documentation](https://community.torproject.org/relay/)
-for the relay itself. Do not copy a torrc from this page into an exit
+for the relay itself.
+
+**Set `MaxMemInQueues` by hand on a small host.** Unset, Tor sizes it at
+three quarters of physical memory and does not know `shekyld` shares the
+machine. On a 4 GB host with no swap, a relay at 1 MB/s beside the daemon
+was killed by the kernel twice in one evening, before Tor's own limit was
+reached: [`benchmarks/trc1_carried_traffic_20261012.md`](benchmarks/trc1_carried_traffic_20261012.md),
+interim result 1. That record's Amendment 1 runs the relay at 512 MB and
+reports what the cap changed. Do not copy a torrc from this page into an exit
 configuration. Wallet Tor stays a separate instance (PWD-E9); this page is
 the daemon overlay posture.
 
