@@ -1,7 +1,9 @@
 # The managed Tor supervisor — the link under the Tor connector
 
-**Status: RULED 2026-10-15 — ratified as a whole by Rick; not yet
-implemented.** Every question is ruled: `TSR-Q1` to `TSR-Q4` and `TSR-Q6` on
+**Status: RULED 2026-10-15 — ratified as a whole by Rick. Increment 2 of §12
+(the control client's groundwork: the bounded sink, the event parsers, the
+`__OwningControllerFD` launch and the two death signals) is implemented;
+increments 1 and 3 to 6 are not.** Every question is ruled: `TSR-Q1` to `TSR-Q4` and `TSR-Q6` on
 2026-10-14, `TSR-Q5` and `TSR-Q7` on 2026-10-15. The brief was the
 daemon-configuration lane's, carrying Rick's rulings of 2026-10-14; those and
 the rulings on this round's questions are §1. Implementation follows §12's
@@ -75,12 +77,12 @@ says which and why.
 | --- | --- |
 | The daemon's Tor starts once, blocks init up to 300 s, and is never respawned; the crate says so and why (the static C++ proxy) | `src/p2p/net_node.inl:757`; `rust/shekyl-tor-control-daemon/src/lib.rs:40-46` |
 | Death is logged once and nothing else happens; the proxy stays installed at the dead port. The one log line is `MERROR` under `net.p2p`, which the default filter sets to `FATAL`, so at the default level it is not shown either (`TSR-F11`) | `src/p2p/net_node.inl:71`, `:1214-1232`; `contrib/epee/src/mlog.cpp:127` |
-| Readiness is a `GETINFO status/bootstrap-phase` poll; no production code issues `SETEVENTS` | `rust/shekyl-tor-control-client/src/control/bootstrap.rs:10-11`; `rust/shekyl-tor-control-client/src/control/actor.rs:211-239` |
-| The event sink, once used, is an **unbounded** channel | `rust/shekyl-tor-control-client/src/control/actor.rs:202` |
-| Death is seen only as the control connection ending; no watcher on the child after spawn (`TSR-F16`: that is not enough) | `rust/shekyl-tor-control-client/src/control/actor.rs:1260-1266`, `:1306-1313` |
-| Teardown is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, synchronous wipe | `rust/shekyl-tor-control-client/src/control/actor.rs:97`, `:611-632`, `:783-798`; `rust/shekyl-tor-control-daemon/src/ephemeral.rs:395-415` |
-| The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/actor.rs:874-954`, `:1485-1497` |
-| `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs:900-901` |
+| Readiness is a `GETINFO status/bootstrap-phase` poll; no production code issues `SETEVENTS`. The supervisor's one `SETEVENTS` and the parsers for what it subscribes to exist, unused (§4.2) | `rust/shekyl-tor-control-client/src/control/bootstrap.rs:10-11`; `rust/shekyl-tor-control-client/src/control/events.rs:39`, `:287`, `:588` |
+| The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs:273` |
+| Death has two signals: a watcher waits on the child beside the control connection's end, and either stops the actor (`TSR-F16`) | `rust/shekyl-tor-control-client/src/control/actor.rs:806`, `:1401`, `:1410` |
+| Teardown is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, synchronous wipe | `rust/shekyl-tor-control-client/src/control/actor.rs:102`, `:862`, `:1013`; `rust/shekyl-tor-control-daemon/src/ephemeral.rs:395-415` |
+| The managed tor inherits its owning control connection (`__OwningControllerFD`); it opens no control port and writes no cookie. The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/launch.rs:178`, `:300`, `:872` |
+| `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs:614` |
 | The binary witness is taken once, at start | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:75-79` |
 | The wallet's supervisor re-verifies the pin at every spawn, never gives up, and publishes the SOCKS route as data on a watch, read at use time | `rust/shekyl-tor-control-wallet/src/service.rs:6-45`, `:289-303` |
 | The dialer draws a gray address, then checks whether it can dial at all; a `DialFailed` of any cause drops the outstanding gray draw | `rust/shekyl-dialer/src/owner/mod.rs:685-686`, then `rust/shekyl-dialer/src/owner/handshake.rs:53-71`; `rust/shekyl-peerlist/src/peerlist.rs:529-531` and `rust/shekyl-peerlist/src/partition.rs:326-331` |
@@ -682,7 +684,8 @@ its PR leaves draft.
 1. P2P lane: `TSR-F1`.
 2. Control client: the bounded sink; parsers for `STATUS_GENERAL`,
    `STATUS_CLIENT`, `NETWORK_LIVENESS`, `HS_DESC` and log events; the launch
-   recipe and `AvoidDiskWrites` in the closed list.
+   recipe and `AvoidDiskWrites` in the closed list; the process wait as the
+   second death signal. **Implemented** (#1091).
 3. The supervisor core (sans-IO) and its timing-engine driver; the pin gate per
    spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings.
 4. The probe nonce and the probe.

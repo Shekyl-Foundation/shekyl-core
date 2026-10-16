@@ -376,6 +376,61 @@ impl ControlPair {
     }
 }
 
+/// Test builds only: a sleeper process that inherits a copy of tor's end and lives
+/// `lives`, handed to the test through `sleeper` (`TSR-F16`, case C6b).
+#[cfg(test)]
+pub(crate) struct LeakTorEnd {
+    pub(crate) lives: std::time::Duration,
+    pub(crate) sleeper: tokio::sync::oneshot::Sender<std::process::Child>,
+}
+
+#[cfg(test)]
+impl ControlPair {
+    /// Leak tor's end into a sleeper that lives `leak.lives`. Unix: the sleeper's
+    /// `pre_exec` clears close-on-exec, as the launch does. Windows: the end is marked
+    /// inheritable around the sleeper's spawn, under the spawn lock.
+    pub(crate) fn leak(&self, leak: LeakTorEnd) -> Result<(), ControlError> {
+        let seconds = leak.lives.as_secs().max(1);
+        #[cfg(unix)]
+        let sleeper = {
+            use std::os::unix::process::CommandExt;
+            let tor_end = self.tor_end();
+            let mut cmd = std::process::Command::new("/bin/sleep");
+            cmd.arg(seconds.to_string())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            // SAFETY: as in `inherit_in_the_child_only`: `fcntl` only, no allocation.
+            unsafe {
+                cmd.pre_exec(move || {
+                    let flags = libc::fcntl(tor_end, libc::F_GETFD);
+                    if flags < 0
+                        || libc::fcntl(tor_end, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            crate::spawn_lock::spawn(&mut cmd).map_err(|_| ControlError::Spawn)?
+        };
+        #[cfg(windows)]
+        let sleeper = {
+            // `ping -n N` waits about N - 1 seconds.
+            let mut cmd = std::process::Command::new("ping");
+            cmd.args(["-n", &(seconds + 1).to_string(), "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            let _spawning = crate::spawn_lock::hold();
+            set_inheritable(&self.tors, true)?;
+            let spawned = cmd.spawn();
+            set_inheritable(&self.tors, false)?;
+            spawned.map_err(|_| ControlError::Spawn)?
+        };
+        leak.sleeper.send(sleeper).ok();
+        Ok(())
+    }
+}
+
 #[cfg(unix)]
 fn spawn_inheriting(cmd: &mut Command, _tors: &OurEnd) -> Result<Child, ControlError> {
     cmd.spawn().map_err(|_| ControlError::Spawn)
@@ -788,6 +843,7 @@ mod tests {
             socks_port: super::super::actor::SocksPort::Auto,
             disable_network,
             exit_observer: None,
+            leak: None,
         }
     }
 
@@ -1040,6 +1096,7 @@ mod tests {
             socks_port: super::super::actor::SocksPort::Auto,
             disable_network: true,
             exit_observer: None,
+            leak: None,
         };
         let environment =
             LaunchEnvironment::resolve(&managed.tor_binary).expect("launch environment");

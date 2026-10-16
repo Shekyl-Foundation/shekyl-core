@@ -186,6 +186,10 @@ pub enum ControlError {
     /// The reply stream ended cleanly (EOF / socket close); the connection can no
     /// longer be served.
     StreamClosed,
+    /// The managed tor's process exited, as the wait on it reported (`TSR-F16`). The
+    /// control connection may still have been open: a leaked copy of tor's end keeps
+    /// it so.
+    ProcessExited,
     /// A command was malformed — an empty token list, an empty token, or a token
     /// with a forbidden character (ASCII control or space). Refused before reaching
     /// the wire, so it cannot send a malformed line, inject an extra control line,
@@ -223,6 +227,7 @@ impl std::fmt::Display for ControlError {
             Self::Timeout => write!(f, "control handshake read timed out"),
             Self::Desync => write!(f, "unsolicited control reply (no command in flight)"),
             Self::StreamClosed => write!(f, "control reply stream ended"),
+            Self::ProcessExited => write!(f, "managed tor process exited"),
             Self::InvalidCommand => write!(
                 f,
                 "control command was malformed (empty or forbidden character)"
@@ -657,13 +662,18 @@ pub struct ManagedTor {
     /// is added as further **typed, safe-by-construction** knobs, so the control-plane
     /// invariant stays *structural* rather than validated.
     pub disable_network: bool,
-    /// Optional shutdown-outcome observer — the **production telemetry hook**, currently
-    /// exercised only by the test. After the bounded shutdown wait, `on_stop` reports how
-    /// the child exited ([`TorExit`]); a [`TorExit::Killed`] (an unclean shutdown — tor
-    /// wedged and was SIGKILLed, or the grace wait errored) is the signal a
-    /// supervisor will want to surface. `None` today; the lifecycle test
-    /// uses it to assert a *real* reap rather than probing a pid.
+    /// Optional exit observer — the **production telemetry hook**. Once the child is
+    /// reaped, the watcher reports how it ended ([`TorExit`]): a stop the actor asked
+    /// for ([`TorExit::Reaped`], or [`TorExit::Killed`] when tor wedged past the grace
+    /// window), or a death that came first ([`TorExit::Died`], with the signal that saw
+    /// it). The wallet supervisor awaits it before a respawn reuses the directory; the
+    /// lifecycle tests use it to assert a *real* reap rather than probing a pid.
     pub exit_observer: Option<oneshot::Sender<TorExit>>,
+    /// Test builds only: leak a copy of tor's end of the control connection into a
+    /// sleeper process, the residual `TSR-F16` guards against (case C6b). Dependents
+    /// never see this field.
+    #[cfg(test)]
+    pub(crate) leak: Option<launch::LeakTorEnd>,
 }
 
 /// The control-port actor. Owns the write half and the
@@ -702,68 +712,165 @@ pub struct TorControlClient {
     /// same fact, and the shutdown path would depend on the caller still being
     /// alive to hand it over — which on a crash path it is not.
     published_onions: Vec<ServiceId>,
-    /// The managed `tor` child, for [`TorLaunch::Managed`]. `None` for
+    /// The watch on the managed `tor` child, for [`TorLaunch::Managed`]. `None` for
     /// [`TorLaunch::Attached`] — an attached `tor` is not ours to kill. `on_stop` takes
-    /// it and runs the bounded shutdown.
-    child: Option<TorChild>,
+    /// it and has the watcher run the bounded shutdown.
+    child: Option<ChildWatch>,
+    /// Which of the two death signals reached the actor first, if one did
+    /// (`TSR-F16`). `on_stop` hands it to the watcher, which reports it in [`TorExit`].
+    death: Option<DeathSignal>,
     /// The bootstrap-readiness poll task (design §3b), aborted on drop. Held so the
     /// actor owns its task; the task also self-terminates (`Ready` / actor-death /
     /// no-listeners), so this abort is a prompt-cleanup backstop, not the only exit.
     bootstrap_poll: JoinHandle<()>,
 }
 
-/// The managed `tor` child process the actor owns (present only for
-/// [`TorLaunch::Managed`]). Spawned with `kill_on_drop`, so even a panic that skips
-/// `on_stop` still SIGKILLs it — the last-resort backstop under `TAKEOWNERSHIP`.
+/// The managed `tor` child as the spawn returns it, before the actor arms and hands it
+/// to its watcher. Spawned with `kill_on_drop`, so even a panic that skips `on_stop`
+/// still kills it; the owning control connection's close is the other backstop.
 struct TorChild {
     child: Child,
     exit_observer: Option<oneshot::Sender<TorExit>>,
 }
 
-/// How a managed `tor` child exited at shutdown (observed via [`ManagedTor::exit_observer`]).
+/// How a managed `tor` child ended (observed via [`ManagedTor::exit_observer`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TorExit {
-    /// Exited on its own (`TAKEOWNERSHIP`, or tor dying) or on `SIGTERM` within the
-    /// `SHUTDOWN_GRACE` window, and was reaped with this status — the clean path.
+    /// The actor was asked to stop, and tor exited on `SIGTERM` within the
+    /// `SHUTDOWN_GRACE` window and was reaped with this status: the clean path.
     Reaped(std::process::ExitStatus),
-    /// Not cleanly reaped with a status: either tor wedged past the `SIGTERM` grace window
-    /// and was `SIGKILL`-ed, or the grace `wait` itself errored. Either way the child was
-    /// force-killed (best-effort) and reaped — an **unclean** shutdown.
+    /// The actor was asked to stop, and tor was not cleanly reaped with a status:
+    /// either it wedged past the `SIGTERM` grace window and was killed, or the grace
+    /// `wait` itself errored. Either way the child was killed and reaped: an
+    /// **unclean** shutdown.
     Killed,
+    /// Tor died before the actor was asked to stop it. `first` is the signal that
+    /// reached the actor first (`TSR-F16`); `status` is the reaped exit status, `None`
+    /// when the reap could not report one.
+    Died {
+        /// The first of the two death signals.
+        first: DeathSignal,
+        /// The reaped status.
+        status: Option<std::process::ExitStatus>,
+    },
 }
 
-impl TorChild {
-    /// Shut the child down: **`SIGTERM` → bounded wait → `SIGKILL` → reap**, publishing
-    /// the outcome to the observer if one is wired.
-    ///
-    /// Tolerant of an **already-exited** child by design: on the paths that stop the actor
-    /// *because* the control connection dropped (an error-path `ctx.stop`), a managed
-    /// tor's `TAKEOWNERSHIP` has already exited it — or tor died on its own — so the
-    /// `SIGTERM` is a harmless `ESRCH` and the `wait` reaps immediately. (On a clean
-    /// `on_stop` the connection is still open here, so `SIGTERM` is what exits tor;
-    /// `TAKEOWNERSHIP` then fires as a backstop when the struct drops.) The `SIGKILL`
-    /// escalation is what keeps the wait *bounded* — "SIGTERM + wait" without it would
-    /// hang the wallet forever if `tor` ever wedged.
-    async fn shutdown(mut self) {
-        // Ask tor to exit gracefully (SIGTERM on Unix; DQ-T0.1). No-op if it already
-        // exited, and a no-op off Unix — there the timeout → `kill()` escalation is the
-        // whole shutdown.
-        request_graceful_stop(&self.child);
-        let exit = match timeout(SHUTDOWN_GRACE, self.child.wait()).await {
-            // Exited within the grace window (SIGTERM or TAKEOWNERSHIP) — reaped cleanly.
-            Ok(Ok(status)) => TorExit::Reaped(status),
-            // Either the grace `wait` errored, or it timed out (tor wedged): both mean
-            // "not cleanly reaped", so SIGKILL and reap unconditionally. `start_kill` kills
-            // the process even if the reap can't complete, so neither case leaves a running
-            // or zombie tor. (A `wait` error is usually "already reaped", where this is a
-            // harmless no-op; but if it isn't, the child is still terminated.)
-            Ok(Err(_)) | Err(_) => {
-                kill_and_reap(&mut self.child).await;
-                TorExit::Killed
+/// The two ways the actor learns a managed tor died (`TOR_SUPERVISOR.md` `TSR-F16`).
+///
+/// Neither is the sole signal. A copy of tor's end of the control socket leaked into
+/// another process keeps the socket open after tor dies, for as long as that process
+/// lives (30.3 s measured on Windows, 5.0 s on Linux), so control EOF can come late;
+/// the process wait cannot be held up that way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeathSignal {
+    /// The wait on tor's process returned: the reap on Unix, the process handle on
+    /// Windows.
+    ProcessExited,
+    /// The control connection ended: EOF, a socket error, or a framing desync.
+    ControlClosed,
+}
+
+/// The actor's handle on the task that watches its managed child.
+///
+/// The watcher owns the [`Child`] and waits on it beside a stop request. When the
+/// process exits first, it tells the actor ([`ChildExited`]), which stops. When the
+/// actor stops, `on_stop` sends the request with the death signal it saw first (if
+/// any), and the watcher runs the bounded shutdown, reports [`TorExit`] and ends. If
+/// the actor goes away without `on_stop` (a kill or a panic), the request's sender is
+/// dropped and the watcher kills and reaps the child itself.
+struct ChildWatch {
+    stop: oneshot::Sender<Option<DeathSignal>>,
+    task: JoinHandle<()>,
+}
+
+impl ChildWatch {
+    /// Start watching `child` on behalf of `actor`.
+    fn start(child: TorChild, actor: WeakActorRef<TorControlClient>) -> Self {
+        let (stop, requested) = oneshot::channel();
+        let task = tokio::spawn(watch_child(child, actor, requested));
+        Self { stop, task }
+    }
+
+    /// Ask the watcher to finish, with the death signal the actor saw first, and wait
+    /// until it has reaped the child and reported. The shutdown it runs is bounded.
+    async fn finish(self, death: Option<DeathSignal>) {
+        self.stop.send(death).ok();
+        self.task.await.ok();
+    }
+}
+
+/// The child exited, as the watcher's process wait saw it.
+struct ChildExited;
+
+/// Watch the managed child until the actor asks to finish (`TSR-F16`).
+async fn watch_child(
+    child: TorChild,
+    actor: WeakActorRef<TorControlClient>,
+    mut requested: oneshot::Receiver<Option<DeathSignal>>,
+) {
+    let TorChild {
+        mut child,
+        exit_observer,
+    } = child;
+    let mut exited: Option<Option<std::process::ExitStatus>> = None;
+    let death = loop {
+        tokio::select! {
+            status = child.wait(), if exited.is_none() => {
+                exited = Some(status.ok());
+                // The actor stops on this and then asks the watcher to finish. An actor
+                // already gone has dropped its request, which ends the loop next.
+                if let Some(actor) = actor.upgrade() {
+                    actor.tell(ChildExited).await.ok();
+                }
             }
-        };
-        if let Some(tx) = self.exit_observer {
-            tx.send(exit).ok();
+            // A dropped sender (the actor went away without `on_stop`) is a request with
+            // no death signal: kill, reap, report.
+            death = &mut requested => break death.ok().flatten(),
+        }
+    };
+    let exit = match exited {
+        Some(status) => TorExit::Died {
+            first: death.unwrap_or(DeathSignal::ProcessExited),
+            status,
+        },
+        None => {
+            let shutdown = shut_down(&mut child).await;
+            match death {
+                // The connection ended first and the process was still there: a dead tor
+                // to the actor, wedged or not, which the shutdown has now reaped.
+                Some(first) => TorExit::Died {
+                    first,
+                    status: match shutdown {
+                        TorExit::Reaped(status) => Some(status),
+                        _ => None,
+                    },
+                },
+                None => shutdown,
+            }
+        }
+    };
+    if let Some(tx) = exit_observer {
+        tx.send(exit).ok();
+    }
+}
+
+/// Shut the child down: **`SIGTERM` → bounded wait → kill → reap**.
+///
+/// Tolerant of a child that has just exited: the `SIGTERM` is then a harmless `ESRCH`
+/// and the wait reaps at once. The kill escalation is what keeps the wait *bounded*:
+/// "SIGTERM + wait" without it would hang the wallet forever if `tor` ever wedged.
+async fn shut_down(child: &mut Child) -> TorExit {
+    // Ask tor to exit gracefully (SIGTERM on Unix; DQ-T0.1). A no-op off Unix, where the
+    // timeout → `kill()` escalation is the whole shutdown.
+    request_graceful_stop(child);
+    match timeout(SHUTDOWN_GRACE, child.wait()).await {
+        Ok(Ok(status)) => TorExit::Reaped(status),
+        // The grace `wait` errored or timed out (tor wedged): kill and reap
+        // unconditionally. `start_kill` kills the process even if the reap can't
+        // complete, so neither case leaves a running or zombie tor.
+        Ok(Err(_)) | Err(_) => {
+            kill_and_reap(child).await;
+            TorExit::Killed
         }
     }
 }
@@ -783,9 +890,9 @@ fn request_graceful_stop(child: &Child) {
 }
 
 /// No graceful-stop signal off Unix: the `wait`-timeout → `Child::kill`
-/// (`TerminateProcess`) escalation drives shutdown there instead. A graceful non-Unix
-/// path — closing the control connection for `TAKEOWNERSHIP`, or a console control event
-/// — is a follow-up for when a non-Unix target is real; today the managed launch is Unix.
+/// (`TerminateProcess`) escalation drives shutdown there instead. Closing the owning
+/// control connection would also exit tor, but an exit by that route does not save
+/// tor's `state`; which graceful route the supervisor uses is `TSR-M6`'s question.
 #[cfg(not(unix))]
 fn request_graceful_stop(_child: &Child) {}
 
@@ -914,8 +1021,8 @@ impl Actor for TorControlClient {
                 break;
             }
         }
-        if let Some(child) = self.child.take() {
-            child.shutdown().await;
+        if let Some(watch) = self.child.take() {
+            watch.finish(self.death).await;
         }
         Ok(())
     }
@@ -990,7 +1097,11 @@ async fn handshake(
 /// [`confirm_driveable`] before arming the actor. `kill_on_drop` is the last-resort
 /// backstop.
 async fn spawn_managed_tor(
-    managed: ManagedTor,
+    #[cfg_attr(
+        not(test),
+        allow(unused_mut, reason = "only the test seam takes from it")
+    )]
+    mut managed: ManagedTor,
 ) -> Result<(TorChild, ControlRead, ControlWrite), ControlError> {
     // The directory is owner-only on Unix before any file is written, and a symlink
     // at the final component is refused.
@@ -1002,6 +1113,10 @@ async fn spawn_managed_tor(
 
     let environment = launch::LaunchEnvironment::resolve(&managed.tor_binary)?;
     let pair = launch::ControlPair::new()?;
+    #[cfg(test)]
+    if let Some(leak) = managed.leak.take() {
+        pair.leak(leak)?;
+    }
     let mut cmd = launch::managed_tor_command(&managed, pair.tor_end(), &environment);
     let (child, read, write) = pair.spawn(&mut cmd)?;
     Ok((
@@ -1113,6 +1228,8 @@ impl TorControlClient {
             (),
         );
         let bootstrap_poll = tokio::spawn(bootstrap_poll_loop(actor_ref.clone(), readiness.0));
+        // The second death signal: the process wait, beside the connection's end.
+        let child = child.map(|child| ChildWatch::start(child, actor_ref.downgrade()));
         Self {
             writer,
             events,
@@ -1121,6 +1238,7 @@ impl TorControlClient {
             queue: VecDeque::new(),
             published_onions: Vec::new(),
             child,
+            death: None,
             bootstrap_poll,
         }
     }
@@ -1233,6 +1351,7 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
             // A framing desync or socket error ended the read stream — fail with the
             // specific cause (DQ-T0.6); no reconnect into the same desync.
             StreamMessage::Next(Err(e)) => {
+                self.death.get_or_insert(DeathSignal::ControlClosed);
                 self.fail_all_pending(&e);
                 ctx.stop();
             }
@@ -1280,10 +1399,24 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
             // The read stream ended cleanly (EOF / socket close) — fail so the
             // supervisor restarts (DQ-T0.6).
             StreamMessage::Finished(()) => {
+                self.death.get_or_insert(DeathSignal::ControlClosed);
                 self.fail_all_pending(&ControlError::StreamClosed);
                 ctx.stop();
             }
         }
+    }
+}
+
+impl Message<ChildExited> for TorControlClient {
+    type Reply = ();
+
+    /// The process wait saw the managed child exit (`TSR-F16`). The actor fails every
+    /// caller and stops, whether or not the control connection has closed: a leaked
+    /// copy of tor's end can hold it open for as long as the process holding it lives.
+    async fn handle(&mut self, _msg: ChildExited, ctx: &mut Context<Self, Self::Reply>) {
+        self.death.get_or_insert(DeathSignal::ProcessExited);
+        self.fail_all_pending(&ControlError::ProcessExited);
+        ctx.stop();
     }
 }
 
@@ -1497,6 +1630,10 @@ mod tests {
             ControlError::Desync.to_string(),
             "unsolicited control reply (no command in flight)"
         );
+        assert_eq!(
+            ControlError::ProcessExited.to_string(),
+            "managed tor process exited"
+        );
         // An OS code, never a path or a system message.
         const SAMPLE_OS_CODE: u32 = 2;
         assert_eq!(
@@ -1621,7 +1758,7 @@ mod fake_tor {
 #[cfg(test)]
 mod live_tests {
     use super::{
-        BootstrapReadiness, Command, EventSink, ManagedTor, TorControlClient,
+        BootstrapReadiness, Command, DeathSignal, EventSink, ManagedTor, TorControlClient,
         TorControlClientConfig, TorExit, TorLaunch,
     };
     use kameo::actor::Spawn;
@@ -1827,6 +1964,7 @@ mod live_tests {
                 // The whole point: a service that can reach the network.
                 disable_network: false,
                 exit_observer: None,
+                leak: None,
             }),
             events,
             readiness,
@@ -1974,6 +2112,7 @@ mod live_tests {
                 socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: true,
                 exit_observer: None,
+                leak: None,
             }),
             events,
             readiness,
@@ -2045,6 +2184,7 @@ mod live_tests {
                 socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: false,
                 exit_observer: None,
+                leak: None,
             }),
             events,
             readiness,
@@ -2139,6 +2279,101 @@ mod live_tests {
         actor.wait_for_shutdown().await;
     }
 
+    /// `TSR-F16`, case C6b: a copy of tor's end leaked into another process does not
+    /// hide tor's death. The sleeper holds the socket open for [`LEAK_LIVES`], so
+    /// control EOF cannot arrive before then; the process wait reports the death well
+    /// inside [`DEATH_BOUND`], first, while the sleeper is still running.
+    ///
+    /// Before the process wait existed, the death reached the actor only as EOF, when
+    /// the sleeper exited: about five seconds here, 30.3 s in the Windows measurement.
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
+    async fn a_leaked_tor_end_does_not_hide_tors_death() {
+        /// How long the leaked copy keeps the socket open.
+        const LEAK_LIVES: Duration = Duration::from_secs(5);
+        /// Well under that: the process wait answers within milliseconds of the kill.
+        const DEATH_BOUND: Duration = Duration::from_secs(2);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (exit_tx, exit_rx) = oneshot::channel();
+        let (sleeper_tx, sleeper_rx) = oneshot::channel();
+        let (readiness, _ready_rx) = BootstrapReadiness::new();
+        let (events, _events) = EventSink::bounded();
+        let actor = TorControlClient::spawn(TorControlClientConfig {
+            launch: TorLaunch::Managed(ManagedTor {
+                tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
+                data_dir: dir.path().to_path_buf(),
+                socks_port: super::SocksPort::Fixed(free_port()),
+                disable_network: true,
+                exit_observer: Some(exit_tx),
+                leak: Some(super::super::launch::LeakTorEnd {
+                    lives: LEAK_LIVES,
+                    sleeper: sleeper_tx,
+                }),
+            }),
+            events,
+            readiness,
+        });
+        let reply = actor
+            .ask(Command::GetInfo(vec!["process/pid".to_owned()]))
+            .await
+            .expect("GETINFO process/pid");
+        let pid: u32 = reply
+            .lines()
+            .first()
+            .and_then(|line| line.strip_prefix("process/pid="))
+            .and_then(|pid| pid.parse().ok())
+            .expect("tor's pid");
+        let mut sleeper = sleeper_rx.await.expect("the sleeper holds tor's end");
+
+        kill_by_pid(pid);
+        let started = Instant::now();
+        let exit = tokio::time::timeout(DEATH_BOUND, exit_rx)
+            .await
+            .expect("the death is reported before the leaked end closes")
+            .expect("the exit observer reports");
+        let took = started.elapsed();
+        assert!(
+            matches!(
+                exit,
+                TorExit::Died {
+                    first: DeathSignal::ProcessExited,
+                    ..
+                }
+            ),
+            "the process wait fired first: {exit:?}"
+        );
+        assert!(
+            sleeper.try_wait().expect("sleeper status").is_none(),
+            "the leaked copy was still open when the death was reported ({took:?})"
+        );
+        tokio::time::timeout(DEATH_BOUND, actor.wait_for_shutdown())
+            .await
+            .expect("the actor stopped on the death");
+        sleeper.kill().ok();
+        sleeper.wait().ok();
+    }
+
+    /// Kill tor by pid, as a crash would: no signal it can catch.
+    fn kill_by_pid(pid: u32) {
+        #[cfg(unix)]
+        {
+            let pid = libc::pid_t::try_from(pid).expect("a pid fits pid_t");
+            // SAFETY: `kill(2)` with a constant signal reads and writes no memory.
+            assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0, "kill tor");
+        }
+        #[cfg(windows)]
+        {
+            let status = crate::spawn_lock::status(std::process::Command::new("taskkill").args([
+                "/F",
+                "/PID",
+                &pid.to_string(),
+            ]))
+            .expect("taskkill runs");
+            assert!(status.success(), "taskkill tor");
+        }
+    }
+
     /// Reserve a free loopback port (bind `:0`, read it, drop). A small TOCTOU window
     /// before `tor` binds it remains — acceptable on a test box.
     fn free_port() -> u16 {
@@ -2173,6 +2408,7 @@ mod live_tests {
                 socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: true,
                 exit_observer: Some(exit_tx),
+                leak: None,
             }),
             events,
             readiness,

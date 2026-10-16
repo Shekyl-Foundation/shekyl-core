@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Managed Tor: an inherited control connection, a bounded event queue, and a second death signal** (`TOR_SUPERVISOR.md` increment 2; `TSR-Q7`, `TSR-F2`, `TSR-F16`). This changes the daemon's and the wallet's managed Tor, which share one launcher. Tor now starts with one end of a connected socket pair as its owning, already-authenticated control connection (`__OwningControllerFD`). It opens no control port, writes no port file and no cookie, and needs no `TAKEOWNERSHIP`, so no other local process can reach its controller and there is no window between the spawn and ownership. On Windows, tor's end is inheritable only inside a window that a process-wide spawn lock keeps private. Every Rust spawn in a process that can launch tor takes that lock, and a bundled gate makes every new spawn site be classified. The launch also passes `AvoidDiskWrites 1`. The asynchronous event queue holds 256 events; one that arrives past that is dropped and counted, never waited for, so a burst of tor warnings cannot grow memory without bound. A watcher now waits on tor's process beside the control connection, so a copy of tor's socket leaked into another process (measured at 30.3 s on Windows) no longer hides tor's death. Typed parsers for the events the supervisor will subscribe to land unused, pinned by lines captured from the bundled tor 0.4.9.13. Attached (bring-your-own) Tor is unchanged.
+
 - **Chain rules: stateless verification runs off the single writer (`CHAIN_RULES_CRATE.md` §4.6).** `form`, on the pipeline's parallel workers, now runs every rule that reads no chain state:
   - the header rows and the longhash;
   - CEN-D1 against a **claimed target**;
