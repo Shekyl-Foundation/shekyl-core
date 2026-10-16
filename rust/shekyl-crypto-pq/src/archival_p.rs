@@ -442,9 +442,10 @@ pub fn derive_p_hs_id_seed(
 /// Public-only by design: the secret half is derived and immediately
 /// dropped (wiped by its `ZeroizeOnDrop`), because no persona signing
 /// surface exists to hold it. A full SLH-DSA keygen (~415 ms on the Pi-4
-/// floor) — paid once per full-bundle derivation (staker open derives the
-/// lookahead window, `ARCHIVAL_PERSONA_LOOKAHEAD + 1` bundles), never on a
-/// per-request path. The probe-window id derivation
+/// floor) — paid once per full-bundle derivation (a staker's wallet open
+/// derives one bundle for each bonded slot and for each slot of the
+/// lookahead window, `ARCHIVAL_PERSONA_LOOKAHEAD + 1` of them:
+/// `FN_DSA_HYBRID.md` `FND-25`), never on a per-request path. The probe-window id derivation
 /// (`derive_archival_p_identity_pk`) deliberately does not pay it.
 #[must_use]
 pub fn derive_p_msg_sign_pk(

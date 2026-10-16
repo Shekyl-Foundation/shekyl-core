@@ -70,9 +70,10 @@ use shekyl_economics::{
 };
 
 use crate::fee_ladder::{
-    advance_traced_state, age_state, correction_factor_ratio, AgeState, Rng, FULL_REWARD_ZONE,
+    advance_traced_state, age_state, correction_factor_ratio, AgeState, FULL_REWARD_ZONE,
     REF_TX_WEIGHT,
 };
+use crate::rng::PoissonTrace;
 use crate::volume_window::VolumeWindow;
 
 const VOLUME_WINDOW: usize = TX_VOLUME_WINDOW as usize;
@@ -259,10 +260,10 @@ fn slew_scenario(
     sma: Sma,
     params: &EconomicParams,
 ) -> SlewResult {
-    // Same seed as the dwell set so the traces are comparable across
-    // instruments; both SMA arms of one scenario see the IDENTICAL block
-    // sequence, which is the point of running them side by side.
-    let mut rng = Rng(0x5EED_F1FE_ED1E_5EED);
+    // `PoissonTrace::trace` is the stream the fee instruments share, so a
+    // floor trace and a dwell trace are the same block sequence. Both SMA
+    // arms of one scenario see that sequence.
+    let mut rng = PoissonTrace::trace();
     let mut window: VecDeque<u64> = VecDeque::with_capacity(VOLUME_WINDOW);
     let mut sum: u64 = 0;
     for _ in 0..VOLUME_WINDOW {

@@ -9,11 +9,10 @@ were handed to SO-D8 Slice C on 2026-10-11**
 §11): the verifier of increment 4 is that slice's bundle rule, the signer
 and the verifier must switch in one change, and increment 3 lands in Rust
 only. `FND-4`'s carried item, one decoded key across signatures, goes with
-increment 4. This lane's own code work ended with increment 2; **one item
-stays this lane's: the floor-device run** (`FND-9`, `FND-12`; `BA-T33`'s
-floor arm and its FOLLOWUPS row), ruled by the maintainer on 2026-10-11.
-It is the lane's next work; §10 lists it with the three further FOLLOWUPS
-rows this record owns. The C++ JoinMarket path is
+increment 4. This lane's own code work ended with increment 2; the
+floor-device run the maintainer kept with it on 2026-10-11 was made on
+2026-10-15 (`FND-9`, `FND-12`; `BA-T33`'s floor arm, [`ba_t33_fn_dsa_floor_device_20261015.md`](../benchmarks/ba_t33_fn_dsa_floor_device_20261015.md)). §10 lists
+the three FOLLOWUPS rows this record still owns. The C++ JoinMarket path is
 not changed or ported by this lane (`FND-20`). **The document
 stays OPEN until the settlement lane's cutover selects the receipt
 capability and receipts move onto the key** (§9.4); it closes when that
@@ -33,7 +32,7 @@ the live path selects it; the switch is the settlement lane's cutover
 **Substrate verified at:** `origin/dev` = `6b23eab315`.
 **Authority:** [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md)
 §6, §11 and §13.1 R2–R4 (ruled 2026-10-07).
-**Findings:** `FND-1…FND-20` (§5) and `FND-21…FND-24` (§9.2), registered in
+**Findings:** `FND-1…FND-20` and `FND-25` (§5), and `FND-21…FND-24` (§9.2), registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).
 
 ---
@@ -146,13 +145,15 @@ pinned signature. It also carries the cross-surface negative.
 | x86_64, AVX2 (the default build on the development host) | all pass |
 | x86_64, the crate's AVX2 paths compiled out (`no_avx2` on the four sub-crates) | all pass, same bytes. Run on every pull request by a step of `rust-audit-test.yml` |
 | aarch64 under `qemu-aarch64` (user mode) | all pass, same bytes |
+| aarch64 on the floor device (Cortex-A72), optimized and unoptimized, 2026-10-15 | all pass, same bytes |
 
 The aarch64 run is wired into `depends-aarch64-kats.yml`, beside the other
 cross-architecture vectors. It is an emulated CPU: qemu's floating point is
 a software IEEE-754 implementation, so it shows that the crate's aarch64
 code path computes the same values, and it does not show what a physical
-Cortex-A72 does. That confirmation rides the floor-device benchmark session
-(`FND-9`).
+Cortex-A72 does. The floor device showed that on 2026-10-15: the same
+vectors, signing included, give the pinned bytes on its own floating point
+([`ba_t33_fn_dsa_floor_device_20261015.md`](../benchmarks/ba_t33_fn_dsa_floor_device_20261015.md)).
 
 ### 3.1 Benchmarks
 
@@ -165,12 +166,14 @@ same on every run.
 
 | | x86_64 development host | Floor device |
 | --- | --- | --- |
-| Sign | 457 µs; 6,675,212 instructions | owed (`FND-9`) |
-| Verify | 58 µs; 891,246 instructions | owed |
-| Seeded key generation | 6.2 ms | owed |
+| Sign | 457 µs; 6,675,212 instructions | 2.243 ms (2026-10-15) |
+| Verify | 58 µs; 891,246 instructions | 568 µs |
+| Seeded key generation | 6.2 ms | 45.68 ms |
 
 The x86 figures are of the path the host's CPU selects. They say the gate
-repeats; they do not say what a persona on the floor pays per receipt.
+repeats; they do not say what a persona on the floor pays per receipt. The
+floor column is [`ba_t33_fn_dsa_floor_device_20261015.md`](../benchmarks/ba_t33_fn_dsa_floor_device_20261015.md), at `4c3eb63446`: criterion on the floor device,
+the shipping codegen, every core at 1.8 GHz throughout.
 
 Moving the existing scheme onto the shared body left its gated sign count
 where it was: `crypto_bench_hybrid_sign_1_input` 7,163,792 instructions at
@@ -224,10 +227,10 @@ open a second road to a release.
 | `FND-6` | The x86_64 vectors run AVX2 code the floor device never runs | Recorded at the pin; the same vectors are run with AVX2 compiled out and under aarch64, each by its own CI step |
 | `FND-7` | No licence policy is enforced anywhere in the repository | Recorded. Not this lane's to add |
 | `FND-8` | The lock file moved an unrelated edge (`bindgen` → `itertools`) when the dependency was added without `--locked` | Restored by hand; the lock differs from `dev` by the five packages only |
-| `FND-9` | Sign and verify figures on the floor device are owed, and so is a run of the vectors on aarch64 hardware: their agreement there was shown under emulation, which computes IEEE arithmetic in software and so cannot show what the device's own floating point does | The benches exist (§3.1). Registered as `BA-T33`'s floor arm with a FOLLOWUPS row; the capture is a floor-device session |
+| `FND-9` | Sign and verify figures on the floor device are owed, and so is a run of the vectors on aarch64 hardware: their agreement there was shown under emulation, which computes IEEE arithmetic in software and so cannot show what the device's own floating point does | Closed 2026-10-15 ([`ba_t33_fn_dsa_floor_device_20261015.md`](../benchmarks/ba_t33_fn_dsa_floor_device_20261015.md)): `kat_fn_dsa_hybrid_v1` passed on the floor device in both profiles, signing included, so the device's own floating point gives the pinned bytes; sign 2.243 ms, verify 568 µs, seeded key generation 45.68 ms there |
 | `FND-10` | The brief asks for a floor-device row in the measurement ledger for sign and verify. The ledger holds one row per **constant** whose value rests on a measurement (`defined_in` and `needle` are required), and scheme 3 has no such constant yet: nothing budgets against its cost until the receipt is signed with it | Not entered: a row with no constant would not parse. The measurement is registered where a ledger row would point, `BA-T33` in the tracked set. The ledger row lands with the first constant that reads the figure |
 | `FND-11` | The specification gave the receipt key "its own label" and listed one HKDF row; the brief asks for two. The key is a hybrid with two independently seeded halves, as the identity key is (`ARCHIVAL_P_ACCOUNT_SIGN_INFO`, `ARCHIVAL_P_ML_DSA_INFO`), so one label cannot seed it | Two labels, one per half. The specification's §6.3 and §16 now name both |
-| `FND-12` | Deriving a persona's keys now includes one FN-DSA-1024 key generation per slot: 6.2 ms on an x86_64 development host, and unmeasured on the floor device. It is paid at engine assembly, for the lookahead set (two slots, plus a first-stake intent slot), by stakers only, inside the blocking unit that already runs one ML-KEM and two ML-DSA key generations per slot. The bond watch's probe window does not pay it: it derives identity public keys alone (`derive_archival_p_identity_pk`) | Recorded. The floor figure rides `BA-T33`'s floor arm, which already times seeded key generation |
+| `FND-12` | Deriving a persona's keys now includes one FN-DSA-1024 key generation per slot: 6.2 ms on an x86_64 development host, and unmeasured on the floor device. It is paid at engine assembly, once for every slot in the bonded set and in the three slots from the cursor (`staking_block.rs:341-349`, `assemble.rs:443-461`), by stakers only, inside the blocking unit that already runs one ML-KEM and two ML-DSA key generations per slot. The bond watch's probe window does not pay it: it derives identity public keys alone (`derive_archival_p_identity_pk`) | Measured 2026-10-15 ([`ba_t33_fn_dsa_floor_device_20261015.md`](../benchmarks/ba_t33_fn_dsa_floor_device_20261015.md)): one slot's derivation 466 ms on the floor device, the receipt key 44.5 ms of it (9.6 %), timed from that slot's own seeds. A staker with `k` bonded slots derives `k + 3` slots at wallet open, one after another: (k + 3) × 466 ms, 1.40 s with none bonded, about 44.5 ms per slot of it the receipt key |
 | `FND-13` | Increment 1 held the FN-DSA secret key as a 2,369-byte array inline in `FnDsaHybridSecretKey`. Key generation returned it by value and every move of the key copied it; `Zeroizing` wipes only where a value last rested, so each earlier copy stayed on a stack nobody wipes. It went unnoticed while nothing held the key. Putting it in the persona bundle made the bundle large enough to trip clippy's stack-array lint in an engine test, which is how it was found | Fixed with increment 2: both secret halves are `HeapSecret<N>` (`rust/shekyl-crypto-pq/src/heap_secret.rs`), a fixed-length buffer at one heap address, wiped there on drop. Key generation writes the FN-DSA half in place and the Ed25519 half is copied from the caller's borrowed seed, so neither is a by-value array on the stack and moving the key moves two pointers (`a_secret_key_holds_neither_half_inline`). It is its own type because `zeroize` implements `Zeroize` for `Box<[Z]>` and not for `Box<[Z; N]>`, so `Zeroizing<Box<[u8; N]>>` does not compile. Callers borrow a half with `as_array`, or `as_array_mut` to write it in place. There is no `Deref`: `[u8; N]` is `Copy`, so `*secret` would be the unwiped stack copy the type exists to prevent. The type is crate-private. The public key and the signature stay inline; neither is secret |
 | `FND-14` | Three sites each built `rand_chacha::ChaCha20Rng::from_seed` to generate a re-derivable key: ML-DSA-65 (`derivation::keygen_from_seed`), ML-KEM-768 (`account::ml_kem_keypair_from_d_z`) and FN-DSA-1024. That generator takes the seed by value, keeps it as its key with up to 256 bytes of buffered output, and has no wipe: every seeded key generation left its seed on the stack | One owner, `seeded_rng::SeededRng`. The cipher is `Box<ChaCha20Legacy>`: `SeededRng` is pointer-sized (`it_is_a_pointer`), a move leaves the cipher at the address it was boxed into (`a_move_does_not_move_the_cipher`), and drop wipes that heap cipher (`the_stream_is_wiped_on_drop`; the cipher's `ZeroizeOnDrop`, which the `zeroize` feature of `chacha20` provides — `chacha20` was already in the lock with that feature). Same stream, held against `ChaCha20Rng` on every call shape by `matches_rand_chacha_on_every_call_shape` and against the frozen bytes by every pinned key vector; none moved. What stays open: `ChaCha20Legacy::new` returns the cipher by value and the crate has no constructor that writes into caller memory, so `from_seed` moves that one return into the box and the source slot is not wiped. Closing it needs that upstream constructor. Unsafe placement is refused (`#[deny(unsafe_code)]` on this crate). Named in FOLLOWUPS |
 | `FND-15` | `FND-13` is not peculiar to scheme 3. The persona bundle held its onion seed as an inline `Zeroizing<[u8; 32]>`, and the same shape is a field of moved structs across the workspace: about thirty fields in nine crates, with the three typed secret wrappers of `keys.rs` (one of them the 2,400-byte ML-KEM decapsulation key) held inline in the same bundle. Rule 35 prefers that shape and the by-value return that feeds it | `ArchivalPKeys::hs_id_seed` is a crate-private `HeapSecret<32>`. Other crates borrow it through `hs_id_seed() -> &[u8; 32]`; they do not name the buffer type, and a crate that does not already depend on this one does not gain a dependency to hold a secret this way. The rest are named, field by field, in a FOLLOWUPS row with the rule amendment it needs. Not fixed here: the wrappers are the wallet's principal key types and each field is a per-site judgment on whether its struct is moved |
@@ -236,6 +239,7 @@ open a second road to a release.
 | `FND-18` | The wallet recognised its own bond by comparing the recorded `post_kind` byte to `0` in four places (`bond_watch::sightings_in`, `staking_read::live_bonded_personas`, `staking_read::staked_balance_from_records`, `PScanAccrual::confirmed_join_market_personas`). With the JoinMarket's byte at `5`, a wallet would have posted a bond it never confirmed, never counted as staked and never sighted on restore. No type caught it: they are byte compares | Fixed with the wire change: `shekyl_wire::transaction::is_join_market_post_kind` is the one predicate (it is equality with `5`), and each site has a test that a `post_kind` `5` match is a JoinMarket and a `post_kind` `0` match is not. The recorded byte is the wire's. A P-scan state written before this change holds `0` for its joins, so `PSCAN_STATE_VERSION` moved 10 → 11 and such a file is refused by its version word before its body is read (`pscan_state::tests::a_version_10_file_is_refused_as_stale_not_decoded` pins the literal). The refusal reaches the staker as the version form of `-29530`, naming the file, both versions and the remedy — move that one `.wallet.pscan` out of the wallet's folder and open the wallet again; the staking scan rebuilds it from the chain. Nothing rewrites `0` into `5` and nothing rebuilds the file in place (rule 15) |
 | `FND-19` | **Nothing captured from the C++ daemon can contain a JoinMarket this validator admits, and the Rust parser refuses the one it does contain.** The C++ serializer has `post_kind` `0` and no key-carrying kind, so every C++-built JoinMarket is keyless. Three bodies of captured material hold one | Retired, each at its site with this reason, the files themselves untouched: **(a)** the captured chains `bond-post` and `emission-claim` (`rust/shekyl-chain-ingest/tests/vectors`) list their JoinMarket in block 98. That block does not parse and the corpus reader is sequential, so what is retired is not the Bond family's comparison alone but **the replay from height 98 on** — the tip digest, the `0x04` archival snapshot, and every per-height comparison from 98 upward — in the default and the production-substrate lanes (`RETIRED_KEYLESS_JOINS` in `rust/shekyl-chain-ingest/src/vectors_tests/retired_keyless_join.rs`). Blocks 0–97 of both still connect and are compared at every height. `emission-claim`'s `PREDATES` record (refused at 98 by CEN-J15) could no longer be observed and is replaced by the retired record. The archival-inputs table over the corpus loses those chains' three entries (two joins, a credit and a claim, all at or above 98). **(b)** `pqc_signing_preimage_v1.json` and `prunable_digest_parity_v1.json` each pin two bond-post bodies; the Rust legs hold them to their refusal and derive nothing from them, and the bond-post class is no longer in the Rust leg's class list. The C++ legs still parse them. **(c)** `gate4_lifecycle_kat_v1.json`'s `join.wire_hex` is held to its refusal, and the KAT judges the join its own builder makes today. None is regenerated: each file is also read by a C++ test whose decoder knows kind `0` and cannot read kind `5`. They return when a capture can hold a key-carrying JoinMarket |
 | `FND-20` | **The C FFI can no longer verify a JoinMarket or export a bond row.** `shekyl_archival_verify_join_market_bond_post` and `shekyl_e2_archival_snapshot_push_bond` take no receipt key and their signatures are frozen (the header gate). Both refuse every call — `ERR_POST_KIND` and `SHEKYL_E2_TRACE_ERR_ROW` — rather than build a JoinMarket or a record with a key nobody committed. So the C++ daemon admits no JoinMarket (`check_archival_bond_post_input` rejects on the verify's code), and three cases of `tests/unit_tests/archival_bond_post_integration.cpp` asserted the opposite while six more passed for a reason that was no longer theirs | **Decided 2026-10-12, relayed by the lane's coordinator: the C++ test cases whose subject no longer exists are deleted** (rules 15 and 20; rule 50, a check that cannot fail is not a check). In that file and no other C++ file: deleted `gate4_integration_accepts_valid_join_market` and `gf1_join_market_credit_path_pins_identity_key` (each asserted an accept that cannot happen); deleted `gate4_integration_rejects_both_bond_terms`, `_rejects_debit_without_credit`, `_rejects_existing_bond_record`, `_rejects_floor_mismatch`, `_rejects_empty_shard_set` and `_rejects_complete_tree_with_shards` (each now passed on the blanket refusal, not on the defect in its name); `ffi_maps_each_bond_post_error_code` keeps its one live row, the Release export's key coupling, and loses its JoinMarket rows; the helper `hash_from_hex` and three fixture fields only they read are gone. **One test added**, `join_market_verify_ffi_refuses_every_call`: the JoinMarket entry point answers `ERR_POST_KIND` whatever the post says. **Dead in C++ until DEL-008 removes it:** the daemon's JoinMarket branch in `check_archival_bond_post_input`, the two always-refusing exports, and `archival_substrate_lmdb.cpp`'s opt-in capture mode (`SHEKYL_E4_CAPTURE_DIR`), which throws on a store holding a bond record — a tool path, not a CI test. `shekyl_e2_trace_export` fails on such a store for the same reason. The C++ edit was made without building the C++ tree. Falsifier: `grep -c 'SHEKYL_ARCHIVAL_BOND_POST_OK' tests/unit_tests/archival_bond_post_integration.cpp` finds only the replacement test's `EXPECT_NE`, and `git diff --stat origin/dev -- src '*.h'` is empty |
+| `FND-25` | **A staker's wallet-open persona derivation is linear in bonded slots and sequential.** Engine assembly derives one full persona key set for every slot in the bonded set and in the three slots from the cursor (`rust/shekyl-engine-state/src/staking_block.rs:341-349`, with `ARCHIVAL_PERSONA_LOOKAHEAD` = 2), one slot after another (`rust/shekyl-engine-core/src/engine/lifecycle/assemble.rs:443-461`). On the floor device each slot costs 466 ms, so a wallet open spends (k + 3) × 466 ms for `k` bonded slots: 1.40 s with none bonded, and about 5 s, the open-edge budget WSS Round 1 ruled (`WALLET_SIDE_STORE.md`, decision log 2026-09-19), at `k = 8` ([`ba_t33_fn_dsa_floor_device_20261015.md`](../benchmarks/ba_t33_fn_dsa_floor_device_20261015.md)). The receipt key is about a tenth of each slot. The floor device is the node-and-wallet floor; the staker floor is not yet set | **Open: a design question for the maintainer.** No remedy is proposed here and no code changes with this finding |
 
 ## 6. What the later increments inherit
 
@@ -435,7 +439,9 @@ one is wanted.
 
 x86_64 development host, 2026-10-12. Stack: the smallest thread stack each
 step ran on, by a ladder of 8 KiB steps from 16 KiB, so each figure is an
-upper bound on the need; `a_held_key_signs_on_a_small_stack` holds the
+upper bound on the need. The ladder is `examples/fn_dsa_stack_ladder.rs`;
+the floor device's figures, by the same tool, are in
+[`ba_t33_fn_dsa_floor_device_20261015.md`](../benchmarks/ba_t33_fn_dsa_floor_device_20261015.md); `a_held_key_signs_on_a_small_stack` holds the
 bounds. Instructions: gungraun 0.19.3, the draw pinned, two runs identical.
 Time: criterion, the production entry.
 
@@ -631,18 +637,11 @@ serving-task start as well; that is one receipt-key decode per serving
 start, on the stack §9.1 gives, and it is the cutover's to add because it
 is the cutover that makes the cost one the live path should pay.
 
-## 10. What this lane still owes (2026-10-14)
+## 10. What this lane still owes (2026-10-15)
 
-After the handoff of increments 3 and 4 to Slice C, one piece of work is
-this lane's, as ruled by the maintainer on 2026-10-11: **the floor-device
-run.** Sign, verify and seeded key generation under scheme 3 on the floor
-device, with the scheme's vectors run on that hardware in the same session
-(`FND-9`), and the receipt key's cost at engine assembly measured there
-(`FND-12`). It is `BA-T33`'s floor arm; its FOLLOWUPS row carries the
-falsifier, and a floor-device session is a shared-estate claim.
-
-This record also owns three further FOLLOWUPS rows. None is scheduled; each
-names its own blocker or trigger:
+The floor-device run the maintainer kept with this lane on 2026-10-11 was
+made on 2026-10-15 ([`ba_t33_fn_dsa_floor_device_20261015.md`](../benchmarks/ba_t33_fn_dsa_floor_device_20261015.md)). This record owns three FOLLOWUPS rows. None
+is scheduled; each names its own blocker or trigger:
 
 | Row | Trigger |
 | --- | --- |
