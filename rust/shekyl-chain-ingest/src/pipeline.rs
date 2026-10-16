@@ -763,6 +763,7 @@ where
         in_flight: JoinSet::new(),
         pending_barrier: None,
         exhausted: false,
+        unclaimable: None,
     };
     let outcome = drive.run_loop().await;
 
@@ -810,7 +811,14 @@ where
     /// The barrier read but not yet committed, if any; `fill` reads
     /// nothing past it.
     pending_barrier: Option<Sequenced<Barrier>>,
+    /// No further event is read: the source ended, or a block was refused
+    /// or found unclaimable before it was formed. A refusal ends the run,
+    /// and nothing past an unformed block has a target to claim.
     exhausted: bool,
+    /// The connecting height whose target claim observed a corrupt window,
+    /// and what it observed. Asked of the writer once the blocks in flight
+    /// have drained (`target` module docs).
+    unclaimable: Option<(BlockHeight, shekyl_chain_rules::Corrupt)>,
 }
 
 impl<Src, S> Drive<'_, Src, S>
@@ -829,6 +837,12 @@ where
             }
             self.try_barrier().await?;
             if self.exhausted && self.in_flight.is_empty() && self.pending_barrier.is_none() {
+                // Every block ahead of an unclaimable one has been judged,
+                // so the writer's tip is its parent: the writer re-derives
+                // the window over its own view and halts on what it sees.
+                if let Some((height, corrupt)) = self.unclaimable.take() {
+                    return Err(self.observe_target(height, corrupt).await);
+                }
                 // Nothing left to read, form or pop. Every numbered event
                 // was formed or advanced over, so nothing can be waiting;
                 // if something is, it is a defect to surface, not a queue
@@ -916,20 +930,27 @@ where
         let seed = self.claim_seed(height).await?;
         let in_force = self.rules.in_force(height);
         let target = match self.claim_target(height, &in_force).await? {
-            Ok(target) => target,
+            Ok(Ok(target)) => target,
             // CEN-D6 on the claim's own derivation: `validate` would refuse
             // the block on the same headers, so that refusal is its verdict
-            // and it is not formed (`target` module docs).
-            Err(refused) => {
+            // and it is not formed (`target` module docs). The refusal ends
+            // the run, and the ledger has no header at this height for a
+            // successor to claim against, so nothing more is read; the
+            // workers already numbered drain in order.
+            Ok(Err(refused)) => {
                 drop(permit);
+                self.exhausted = true;
                 self.in_flight.spawn_blocking(move || Sequenced {
                     seq,
                     event: Ok((height, Err(refused))),
                 });
                 return Ok(());
             }
+            Err(corrupt) => return Ok(self.unclaimable(height, corrupt)),
         };
-        self.targets.extend(height, &candidate.block, target);
+        if let Err(corrupt) = self.targets.extend(height, &candidate.block, target) {
+            return Ok(self.unclaimable(height, corrupt));
+        }
         self.targets.forget_below_window_of(height);
         if seed != BlockHash::NULL && self.pinned != Some(seed) {
             let substrate = Arc::clone(&self.substrate);
@@ -995,13 +1016,17 @@ where
 
     /// The target for a block connecting at `connecting` under `rule_set`:
     /// the ledger's derivation, after the store has answered every height
-    /// the ledger's window lacks (`target` module docs). `Err(refused)` is
-    /// CEN-D6 on the derivation itself.
+    /// the ledger's window lacks (`target` module docs). The inner `Err` is
+    /// CEN-D6 on the derivation itself; the outer is a corrupt window, the
+    /// writer's to judge.
     async fn claim_target(
         &mut self,
         connecting: BlockHeight,
         rule_set: &shekyl_chain_rules::RuleSet,
-    ) -> Result<Verdict<shekyl_chain_rules::Target>, PipelineFault<Src::Fault, S::Fault>> {
+    ) -> Result<
+        Result<Verdict<shekyl_chain_rules::Target>, shekyl_chain_rules::Corrupt>,
+        PipelineFault<Src::Fault, S::Fault>,
+    > {
         for height in self.targets.missing_for(connecting) {
             let recorded = self
                 .connector
@@ -1016,21 +1041,28 @@ where
             };
             self.targets.record(height, record);
         }
-        match self.targets.claim(connecting, rule_set) {
-            Ok(verdict) => Ok(verdict),
-            // The window holds a record the store supplied that breaks
-            // SI-10. The writer re-derives over its own view and halts on
-            // its own observation; if it does not, the ledger was wrong.
-            Err(corrupt) => {
-                self.connector
-                    .ask(ObserveTarget { height: connecting })
-                    .await
-                    .map_err(collapse)?;
-                Err(PipelineFault::TargetLedger {
-                    height: connecting,
-                    corrupt,
-                })
-            }
+        Ok(self.targets.claim(connecting, rule_set))
+    }
+
+    /// A block whose target cannot be claimed: it is not formed, nothing
+    /// more is read, and once the blocks in flight drain the writer is asked
+    /// to judge the window (`run_loop`).
+    fn unclaimable(&mut self, height: BlockHeight, corrupt: shekyl_chain_rules::Corrupt) {
+        self.exhausted = true;
+        self.unclaimable = Some((height, corrupt));
+    }
+
+    /// The writer re-derives the target and its work for `height` over its
+    /// own view. Its halt, if it observes the corruption itself, is the
+    /// run's fault; if its view is consistent, the ledger was wrong.
+    async fn observe_target(
+        &mut self,
+        height: BlockHeight,
+        corrupt: shekyl_chain_rules::Corrupt,
+    ) -> PipelineFault<Src::Fault, S::Fault> {
+        match self.connector.ask(ObserveTarget { height }).await {
+            Err(fault) => collapse(fault),
+            Ok(()) => PipelineFault::TargetLedger { height, corrupt },
         }
     }
 

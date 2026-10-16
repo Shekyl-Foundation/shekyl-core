@@ -404,7 +404,9 @@ where
         // Connected: its header joins the window the next claim reads. A
         // refused block never does, so a test that mines again after a
         // refusal claims against the chain, not the refused block.
-        self.targets.extend(height, &template.block, target);
+        self.targets
+            .extend(height, &template.block, target)
+            .unwrap_or_else(|corrupt| panic!("the scenario's chain is consistent: {corrupt}"));
         self.targets.forget_below_window_of(height);
         let (_, hash) = applied.connected[0];
         let judged_by = CenRow::ALL

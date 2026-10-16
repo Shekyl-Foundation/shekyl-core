@@ -32,6 +32,17 @@
 //! [`RunFault::StaleTarget`](crate::connector::RunFault::StaleTarget), never
 //! retried away.
 //!
+//! **A corrupt window is the writer's to judge.** The ledger's own records
+//! only ever add a target of at least one to their parent's work, so a
+//! hole, a work decrease or an overflow the derivation observes traces back
+//! to a record the store supplied. [`TargetLedger::claim`] and
+//! [`TargetLedger::extend`] return that observation instead of acting on
+//! it. The driver stops reading, lets the blocks already in flight drain —
+//! any of them may lead the writer to observe the same rows itself — and
+//! then has the writer re-derive the target and its work over its own view
+//! at exactly this height (`ObserveTarget`), so the halt is always the
+//! writer's own observation of its own store.
+//!
 //! **A D6 refusal is the claim's verdict.** When the derivation itself
 //! refuses (CEN-D6: the algorithm derived zero), `validate` would refuse
 //! the block on the same headers. There is no target to claim, and the
@@ -110,14 +121,23 @@ impl TargetLedger {
     /// Record `block`, connecting at `connecting`, as claimed with `target`:
     /// its header, its identity, and the parent's work plus `target`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// As [`Self::claim`].
-    pub fn extend(&mut self, connecting: BlockHeight, block: &Block, target: Target) {
+    /// The step's [`Corrupt`] observation: a hole at the parent, or the sum
+    /// overflowing (SI-10's belt). As for [`Self::claim`], the parent's work
+    /// traces back to a record the store supplied, and the caller has the
+    /// writer re-derive over its own view.
+    pub fn extend(
+        &mut self,
+        connecting: BlockHeight,
+        block: &Block,
+        target: Target,
+    ) -> Result<(), Corrupt> {
         let cumulative_difficulty = match cumulative_difficulty_after(self, connecting, target) {
             Ok(work) => work,
             Err(Fault::View(never)) => match never {},
-            Err(fault) => panic!("target ledger defect at {connecting:?}: {fault}"),
+            Err(Fault::Corrupt(corrupt)) => return Err(corrupt),
+            Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
         };
         self.record(
             connecting,
@@ -127,6 +147,7 @@ impl TargetLedger {
                 cumulative_difficulty,
             },
         );
+        Ok(())
     }
 
     /// Forget every height above `to` — the post-rewind chain (RD-Q13).
@@ -246,7 +267,7 @@ mod tests {
             .expect("consistent")
             .expect("a target");
         let block = candidate(Vec::new()).block;
-        ledger.extend(h(5), &block, target);
+        ledger.extend(h(5), &block, target).expect("consistent");
         let AtHeight::Recorded(extended) = ledger.header_at(h(5)).expect("infallible") else {
             panic!("the formed block is recorded");
         };

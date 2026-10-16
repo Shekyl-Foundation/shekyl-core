@@ -352,12 +352,18 @@ pub struct HeaderAt {
     pub height: BlockHeight,
 }
 
-/// Re-derive CEN-D4's target for `height` over the writer's own view, when
-/// the driver's target ledger observed a corrupt window in records the
+/// Re-derive CEN-D4's target for `height`, and the work it adds, over the
+/// writer's own view, when the driver's target ledger observed a corrupt
+/// window — a hole, a work decrease or an overflowing sum — in records the
 /// store supplied (`target` module docs). The writer acts on its own
 /// observation, never on the driver's: a corrupt chain halts it through
-/// `refuse_corrupt`, exactly as `validate` would have one step later; a
-/// consistent one replies `Ok`, and the ledger was the defect.
+/// `refuse_corrupt`, as `validate`'s derivation would; a consistent one
+/// replies `Ok`, and the ledger was the defect.
+///
+/// `height` must be the height the store connects at next. Above it the
+/// derivation would read past the tip, and a height the writer cannot see
+/// is not a hole; the reply is then `HeightClaim`, a driver defect, and
+/// nothing is halted.
 #[derive(Clone, Copy, Debug)]
 pub struct ObserveTarget {
     /// The connecting height whose window is re-read.
@@ -892,12 +898,26 @@ impl Message<ObserveTarget> for Connector {
         let rule_set = self.rules.in_force(msg.height);
         self.writer.write(|batch| {
             let view = batch.chain_view();
-            match shekyl_chain_rules::target_claim(&view, msg.height, &rule_set) {
-                Ok(_) => Ok(()),
-                Err(Fault::View(e)) => Err(RunFault::Store(e)),
-                Err(Fault::Corrupt(observed)) => {
-                    Err(RunFault::Store(batch.refuse_corrupt(observed)))
+            let (height, _) = connecting(view.tip()?)?;
+            if msg.height != height {
+                return Err(RunFault::HeightClaim {
+                    claimed: msg.height,
+                    connecting: height,
+                });
+            }
+            let observed = match shekyl_chain_rules::target_claim(&view, height, &rule_set) {
+                // CEN-D6 is a verdict on a consistent window, not a fault.
+                Ok(Err(_refused)) => return Ok(()),
+                Ok(Ok(target)) => {
+                    shekyl_chain_rules::cumulative_difficulty_after(&view, height, target)
+                        .map(|_work| ())
                 }
+                Err(fault) => Err(fault),
+            };
+            match observed {
+                Ok(()) => Ok(()),
+                Err(Fault::View(e)) => Err(RunFault::Store(e)),
+                Err(Fault::Corrupt(corrupt)) => Err(RunFault::Store(batch.refuse_corrupt(corrupt))),
                 Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
             }
         })
