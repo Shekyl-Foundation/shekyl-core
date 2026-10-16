@@ -510,7 +510,7 @@ def _(tmp):
 
 @tcase("targets: a missing workflow fails with a diagnosis, not a traceback")
 def _(tmp):
-    proc = targets_tree(tmp)
+    targets_tree(tmp)  # builds the tree; its own run of the gate is not this case
     root = Path(tmp) / "tree"
     (root / ".github" / "workflows" / "tor-pin-verify.yml").unlink()
     proc = subprocess.run(
