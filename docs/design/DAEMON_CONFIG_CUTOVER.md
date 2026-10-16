@@ -243,7 +243,7 @@ read:
 
 The permitted principals are root and the daemon's account on Unix. On
 Windows the check is an **allowlist**: write is permitted only to SYSTEM,
-Administrators and the daemon's own account, and any other access-control
+Administrators, TrustedInstaller and the daemon's own account, and any other access-control
 entry that grants write refuses, whatever it names (Authenticated Users,
 INTERACTIVE, a user's SID, CREATOR OWNER, Everyone, Users). The installer
 creates the directory with exactly that list. The read check for a secret
@@ -254,7 +254,7 @@ own account may write its file: whoever can write that account's files can
 already run code as it. On Windows the machine-wide root is read only with
 `service`; the daemon never creates it, and a root that is missing,
 mis-owned (an owner other than Administrators or SYSTEM) or writable by
-anyone outside Administrators, SYSTEM and the service account refuses with
+anyone outside Administrators, SYSTEM, TrustedInstaller and the service account refuses with
 a typed code. That closes the pre-created-directory hole of §7 item 7.
 
 ### 2.5 Paths and secrets (DC-Q7, IG-13)

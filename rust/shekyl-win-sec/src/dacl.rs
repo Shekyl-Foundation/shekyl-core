@@ -5,7 +5,7 @@
 
 //! Who a file's or directory's security descriptor lets write or read it,
 //! for the daemon configuration's allowlist (`DAEMON_CONFIG_CUTOVER.md`
-//! §2.4): write is permitted only to SYSTEM, Administrators and the
+//! §2.4): write is permitted only to SYSTEM, Administrators, TrustedInstaller and the
 //! daemon's own account, and any other access-control entry that grants
 //! it refuses, whatever it names.
 //!
@@ -41,6 +41,10 @@ use crate::sid::{current_user_sid, sid_to_string, SidString};
 const SYSTEM: &str = "S-1-5-18";
 /// BUILTIN\Administrators.
 const ADMINISTRATORS: &str = "S-1-5-32-544";
+/// NT SERVICE\TrustedInstaller, the Windows servicing account that owns
+/// the system tree: a default `C:\` grants it full control, and nothing
+/// below it is the operator's to restrict. Its SID is fixed.
+const TRUSTED_INSTALLER: &str = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
 
 /// One principal the descriptor grants the right to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,10 +122,11 @@ pub fn read_grantees(path: &Path) -> Result<Vec<Grantee>, DaclError> {
     grantees(path, READ_MASK, false)
 }
 
-/// Whether a SID is SYSTEM or Administrators.
+/// Whether a SID is one of the platform's own principals: SYSTEM,
+/// Administrators or TrustedInstaller.
 #[must_use]
-pub fn is_system_or_administrators(sid: &SidString) -> bool {
-    sid.as_str() == SYSTEM || sid.as_str() == ADMINISTRATORS
+pub fn is_platform_principal(sid: &SidString) -> bool {
+    matches!(sid.as_str(), SYSTEM | ADMINISTRATORS | TRUSTED_INSTALLER)
 }
 
 struct Descriptor(PSECURITY_DESCRIPTOR);
@@ -138,7 +143,7 @@ fn grantees(path: &Path, mask: u32, include_owner: bool) -> Result<Vec<Grantee>,
     let me = current_user_sid().ok();
     let classify = |sid: *mut c_void| -> Option<Grantee> {
         let s = sid_to_string(sid).ok()?;
-        let permitted = is_system_or_administrators(&s) || me.as_ref() == Some(&s);
+        let permitted = is_platform_principal(&s) || me.as_ref() == Some(&s);
         Some(if permitted {
             Grantee::Permitted
         } else {
@@ -218,7 +223,9 @@ fn grantees(path: &Path, mask: u32, include_owner: bool) -> Result<Vec<Grantee>,
         // SAFETY: the type says this ACE is an `ACCESS_ALLOWED_ACE`, whose
         // `SidStart` is the first dword of the SID that follows it in the ACL.
         let allowed = ace.cast::<ACCESS_ALLOWED_ACE>();
-        let ace_mask = unsafe { (*allowed).Mask };
+        // Read through the raw pointer, as the header is: an ACE is
+        // dword-aligned by contract, and the read does not depend on it.
+        let ace_mask = unsafe { std::ptr::addr_of!((*allowed).Mask).read_unaligned() };
         if ace_mask & mask == 0 {
             continue;
         }

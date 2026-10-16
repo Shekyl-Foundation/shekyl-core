@@ -17,9 +17,10 @@
 //! 5. apply.
 //!
 //! The permitted principals are root and the daemon's account on Unix. On
-//! Windows the check is an allowlist: SYSTEM, Administrators and the
-//! daemon's own account, and any other access-control entry that grants
-//! the right refuses, whatever it names.
+//! Windows the check is an allowlist: SYSTEM, Administrators,
+//! TrustedInstaller (the servicing account a default `C:\` grants full
+//! control to) and the daemon's own account, and any other access-control
+//! entry that grants the right refuses, whatever it names.
 //!
 //! The rule is a pure function over what the file system reports (the Unix
 //! rule takes its probe as an argument), so it is tested on described trees
@@ -64,7 +65,7 @@ impl ConfigFile {
 #[cfg(unix)]
 const PERMITTED: &str = "root and the daemon's account, with no group or other write bit";
 #[cfg(windows)]
-const PERMITTED: &str = "SYSTEM, Administrators and the daemon's account";
+const PERMITTED: &str = "SYSTEM, Administrators, TrustedInstaller and the daemon's account";
 
 /// Opens and checks the file at `path`.
 ///
@@ -384,9 +385,16 @@ mod tests {
     }
 
     /// A file the account cannot open is refused before any directory is
-    /// judged, naming the file and the operating system's error.
+    /// judged, naming the file and the operating system's error. Root
+    /// opens every file, so under root (CI's container) the arm cannot be
+    /// reached and the test says so rather than judging the directory
+    /// walk by accident.
     #[test]
     fn a_file_that_cannot_be_opened_is_unreadable() {
+        if rustix::process::geteuid().is_root() {
+            eprintln!("not run: root opens a mode-000 file; the unreadable arm needs an unprivileged account");
+            return;
+        }
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("c.toml");
         std::fs::write(&p, "").unwrap();

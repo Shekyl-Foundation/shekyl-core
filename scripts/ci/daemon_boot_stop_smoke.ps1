@@ -18,7 +18,8 @@
 #   4. marker: a daemon on another network is refused that data directory
 #      with exit 2, naming the marker;
 #   5. configuration file: a file in a directory only this account and
-#      administrators can write is accepted; the same file after its
+#      administrators (and the platform's own principals) can write is
+#      accepted; the same file after its
 #      directory's access list grants Users write is refused with exit 2,
 #      naming the permissions (§2.4). Windows only: the rule is the
 #      access list's; on another platform the case prints that it did not

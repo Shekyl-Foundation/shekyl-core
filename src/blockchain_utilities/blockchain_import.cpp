@@ -46,7 +46,6 @@
 #include "include_base_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "blockchain_utilities/daemon_network_args.h"
-#include "cryptonote_config.h"
 #include "cryptonote_basic/block_ingest.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -786,23 +785,25 @@ int main(int argc, char* argv[])
   try
   {
 
-  // m_config_folder outlives init; core copies the directory. The fields
-  // this tool does not expose are the defaults the old core used.
-  const network_type nettype = opt_regtest ? FAKECHAIN : opt_testnet ? TESTNET : opt_stagenet ? STAGENET : MAINNET;
-  ShekylDaemonSnapshot snapshot{};
-  snapshot.data_dir = m_config_folder.c_str();
-  snapshot.network = static_cast<uint8_t>(nettype);
-  snapshot.offline = false;
-  snapshot.fixed_difficulty = 0;
-  snapshot.txpool_weight_max = DEFAULT_TXPOOL_MAX_WEIGHT;
-  snapshot.sync = true;
-  snapshot.mine_address = nullptr;
-  snapshot.mine_threads = 0;
-  snapshot.console = false;
-  snapshot.command.items = nullptr;
-  snapshot.command.len = 0;
-  snapshot.client_endpoint = nullptr;
-  if (!core.init(snapshot, nullptr))
+  // The snapshot core::init takes is built by the daemon's own parser from
+  // the utility's network and data directory (DAEMON_CONFIG_CUTOVER.md §9):
+  // one source of defaults, the table's, and no second set spelled here.
+  // Both connectors off: the utility serves no peer. The directory is made
+  // absolute because a path row is absolute only.
+  const std::string data_dir_absolute = std::filesystem::absolute(m_config_folder).string();
+  const char *network_word = opt_regtest ? "regtest" : opt_testnet ? "testnet" : opt_stagenet ? "stagenet" : "mainnet";
+  const char *snapshot_argv[] = {
+    "blockchain_import", "--network", network_word, "--data-dir", data_dir_absolute.c_str(),
+    "--clearnet", "off", "--tor", "off"};
+  ShekylDaemonSnapshot *snapshot = nullptr;
+  if (shekyl_daemon_snapshot_parse(static_cast<int>(sizeof(snapshot_argv) / sizeof(snapshot_argv[0])), snapshot_argv, &snapshot) != 0 || snapshot == nullptr)
+  {
+    std::cerr << "Failed to build the daemon snapshot for " << network_word << " at " << data_dir_absolute << ENDL;
+    return 1;
+  }
+  const bool initialised = core.init(*snapshot, nullptr);
+  shekyl_daemon_snapshot_free(snapshot);
+  if (!initialised)
   {
     std::cerr << "Failed to initialize core" << ENDL;
     return 1;

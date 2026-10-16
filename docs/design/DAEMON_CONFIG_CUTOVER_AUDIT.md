@@ -499,6 +499,20 @@ of its own, for the same reason as the negative one.
   awaits today's control at step 8 under the bootstrap deadline. The
   brief's step 8 states the ratified behaviour and the deviation; the
   FOLLOWUPS row names the blocker.
+- **The Windows job's first run (2026-10-16).** Cases 1 to 4 passed on
+  the hosted runner: the lock, the second daemon refused with
+  `config.data-dir.locked`, the stop over RPC, the store, the marker, and
+  the testnet daemon refused with `config.marker.network`. Case 5's
+  baseline was refused: `C:\` grants write to
+  `S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464`,
+  NT SERVICE\TrustedInstaller, the servicing account that owns the
+  system tree, and the allowlist did not name it. It is a platform
+  principal now, with SYSTEM and Administrators, in the code, the
+  refusal text and the brief's §2.4. The Rust CI lane found a second
+  premise: `a_file_that_cannot_be_opened_is_unreadable` runs as root in
+  the container, and root opens a mode-000 file, so the test reached the
+  directory walk and met the world-writable temp root; under root it now
+  says it did not run instead of judging the wrong subject.
 - **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
   covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
   the other direction (the `extern "C"` block of
