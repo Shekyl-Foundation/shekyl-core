@@ -532,8 +532,8 @@ enum IncarnationEnd {
 /// above it. Not a `SupervisorPolicy` field on purpose: it is coupled to the
 /// actor's grace window (it must exceed it), so exposing it as a free knob would
 /// invite a `reap < grace` misconfiguration that gives up on a reap that was
-/// about to succeed. On a genuine miss the loop proceeds; `kill_on_drop` and
-/// `TAKEOWNERSHIP` remain reap backstops.
+/// about to succeed. On a genuine miss the loop proceeds; `kill_on_drop` and the
+/// owning control connection, whose close exits tor, remain reap backstops.
 const REAP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The supervisor loop (§3c). Owns policy only; the incarnation actor owns
@@ -670,8 +670,8 @@ async fn stop_and_reap(
         Ok(exit) => exit,
         Err(_timeout) => {
             // Teardown wedged past the grace budget — force the actor down so it
-            // cannot linger; the child reap is backstopped by `kill_on_drop` /
-            // `TAKEOWNERSHIP`.
+            // cannot linger; the child reap is backstopped by `kill_on_drop` and by
+            // the owning control connection, whose close exits tor.
             actor.kill();
             None
         }
@@ -1330,12 +1330,13 @@ mod live_tests {
         // Murder the incarnation the way a real crash would: SIGKILL, no
         // SIGTERM, no control-connection close. The unique DataDirectory arg
         // identifies exactly our child.
-        let killed = std::process::Command::new("pkill")
-            .arg("-9")
-            .arg("-f")
-            .arg(data_dir.to_str().expect("utf8 tmpdir"))
-            .status()
-            .expect("pkill runs");
+        let killed = shekyl_tor_control_client::spawn_lock::status(
+            std::process::Command::new("pkill")
+                .arg("-9")
+                .arg("-f")
+                .arg(data_dir.to_str().expect("utf8 tmpdir")),
+        )
+        .expect("pkill runs");
         assert!(killed.success(), "pkill must find the managed tor");
 
         // The supervisor must notice and retry on its own...
@@ -1415,12 +1416,13 @@ mod live_tests {
         .await;
 
         // Crash it; the republish must happen again on the fresh incarnation.
-        let killed = std::process::Command::new("pkill")
-            .arg("-9")
-            .arg("-f")
-            .arg(data_dir.to_str().expect("utf8 tmpdir"))
-            .status()
-            .expect("pkill runs");
+        let killed = shekyl_tor_control_client::spawn_lock::status(
+            std::process::Command::new("pkill")
+                .arg("-9")
+                .arg("-f")
+                .arg(data_dir.to_str().expect("utf8 tmpdir")),
+        )
+        .expect("pkill runs");
         assert!(killed.success(), "pkill must find the managed tor");
 
         await_posture(&mut posture, 30, "Restarting after SIGKILL", |p| {
@@ -1484,12 +1486,13 @@ mod live_tests {
         );
 
         // Crash it → one failure → degrade_after=1 trips the sticky alarm.
-        let killed = std::process::Command::new("pkill")
-            .arg("-9")
-            .arg("-f")
-            .arg(data_dir.to_str().expect("utf8 tmpdir"))
-            .status()
-            .expect("pkill runs");
+        let killed = shekyl_tor_control_client::spawn_lock::status(
+            std::process::Command::new("pkill")
+                .arg("-9")
+                .arg("-f")
+                .arg(data_dir.to_str().expect("utf8 tmpdir")),
+        )
+        .expect("pkill runs");
         assert!(killed.success(), "pkill must find the managed tor");
 
         // The crash must actually trip the alarm (degrade_after=1) — assert the

@@ -28,9 +28,7 @@ fn write_password(dir: &Path) -> std::path::PathBuf {
 }
 
 fn run(args: &[&str]) -> (i32, String, String) {
-    let output = Command::new(bin())
-        .args(args)
-        .output()
+    let output = shekyl_tor_control_client::spawn_lock::output(Command::new(bin()).args(args))
         .expect("spawn shekyl-cli");
     let code = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
@@ -285,7 +283,8 @@ impl SpawnedDaemon {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("p2p port");
             listener.local_addr().expect("addr").port().to_string()
         };
-        let child = Command::new(bin)
+        let mut child = Command::new(bin);
+        child
             .args([
                 "--testnet",
                 "--offline",
@@ -305,8 +304,8 @@ impl SpawnedDaemon {
                 "1",
             ])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+            .stderr(std::process::Stdio::null());
+        let child = shekyl_tor_control_client::spawn_lock::spawn(&mut child);
         match child {
             Ok(child) => Self { child, data_dir },
             Err(error) => {

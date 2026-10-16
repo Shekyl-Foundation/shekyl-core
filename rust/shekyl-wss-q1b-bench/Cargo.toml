@@ -12,6 +12,10 @@ description = "WSS-Q1(b) grading harness: spend-edge delta and open-edge refetch
 build = "build.rs"
 
 [dependencies]
+# The `git` spawn in `report` takes the process-wide spawn lock
+# (`TOR_SUPERVISOR.md` §4.7): this binary already reaches the managed-tor
+# launcher through its other dependencies, so this adds no crate to the tree.
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # Scratch store for the population. Already a normal dependency of six
 # workspace crates (`shekyl-engine-file`, `shekyl-cli`, `shekyl-p-host`,
 # `shekyl-wallet-rpc`, `shekyl-tor-control-daemon`, `shekyl-sp-t3-spike`), so

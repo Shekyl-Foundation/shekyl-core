@@ -440,16 +440,14 @@ fn runtime_revision() -> Option<String> {
 }
 
 fn git(args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git")
-        // `-C` before the subcommand: git changes to this directory first, so
-        // the answer describes this crate's repository whatever the caller's
-        // cwd. A path that no longer exists makes git exit non-zero, which the
-        // success check below turns into the build-time fallback.
-        .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
-        .args(args)
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("git");
+    // `-C` before the subcommand: git changes to this directory first, so
+    // the answer describes this crate's repository whatever the caller's
+    // cwd. A path that no longer exists makes git exit non-zero, which the
+    // success check below turns into the build-time fallback.
+    cmd.arg("-C").arg(env!("CARGO_MANIFEST_DIR")).args(args);
+    // This binary links the managed-tor launcher, so its spawns take the lock.
+    let out = shekyl_tor_control_client::spawn_lock::output(&mut cmd).ok()?;
     if !out.status.success() {
         return None;
     }
