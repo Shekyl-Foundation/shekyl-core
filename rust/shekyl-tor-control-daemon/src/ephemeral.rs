@@ -383,8 +383,12 @@ impl DaemonTorControl {
         self.actor.wait_for_shutdown().await;
     }
 
-    /// [`Self::wait_death`] as a future that does not borrow `self`, for a
-    /// watcher spawned to outlive the call that started it.
+    /// [`Self::wait_death`] without borrowing `self`.
+    ///
+    /// `wait_death` awaits the control actor's shutdown (`ActorRef::wait_for_shutdown`).
+    /// This future owns a clone of that actor, so a spawned watcher can
+    /// outlive the call that started it. The wait ends when the actor
+    /// stops: the incarnation exited, or shutdown stopped it.
     pub fn death(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
         let actor = self.actor.clone();
         async move { actor.wait_for_shutdown().await }

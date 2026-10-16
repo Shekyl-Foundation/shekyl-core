@@ -106,16 +106,19 @@ impl std::error::Error for BlockingStartError {}
 /// runs on `DaemonTorControl` drop.
 pub struct BlockingDaemonTor {
     /// Keeps the actor's spawned tasks (exit watcher, framer) polled between
-    /// FFI calls. Declared first so a plain drop aborts the tasks before the
-    /// handle goes; `shutdown` destructures and orders the teardown itself.
+    /// FFI calls. Declared first so a plain drop aborts those tasks, the
+    /// death watcher included, before [`DaemonTorControl`] is dropped. The
+    /// watcher does not run on that path. [`Self::shutdown`] destructures
+    /// this value and runs the watcher before the runtime goes.
     runtime: Pool,
     control: DaemonTorControl,
     /// Set by [`Self::shutdown`] before it tears the incarnation down, so a
     /// death watcher can tell that stop from Tor exiting on its own.
     stopping: Arc<AtomicBool>,
-    /// The watchers [`Self::on_death`] spawned. [`Self::shutdown`] runs them
-    /// out before the runtime goes, so the stop reaches them too.
-    watchers: Mutex<Vec<JoinHandle<()>>>,
+    /// The one death watcher. A later [`Self::on_death`] replaces it, and
+    /// the replaced callback does not run. [`Self::shutdown`] awaits the
+    /// current one before the runtime goes.
+    watcher: Mutex<Option<JoinHandle<()>>>,
 }
 
 /// How the managed Tor's process ended, as a death watcher hears it.
@@ -163,7 +166,7 @@ impl BlockingDaemonTor {
             runtime,
             control,
             stopping: Arc::new(AtomicBool::new(false)),
-            watchers: Mutex::new(Vec::new()),
+            watcher: Mutex::new(None),
         })
     }
 
@@ -204,10 +207,12 @@ impl BlockingDaemonTor {
     }
 
     /// Call `then` once, on this instance's runtime, when the incarnation
-    /// dies — at once when it already has. The edge [`Self::is_alive`]
+    /// dies — at once when it already has. A later call replaces `then`:
+    /// the previous callback does not run. The edge [`Self::is_alive`]
     /// polls, for a consumer that is told rather than asks. [`Self::shutdown`]
     /// is a death too, and waits for `then` to return, so `then` must not
-    /// block. A plain drop of the instance drops a watcher that has not run.
+    /// block. A plain drop aborts the watcher with the runtime, and `then`
+    /// does not run.
     pub fn on_death(&self, then: impl FnOnce(TorDeath) + Send + 'static) {
         let death = self.control.death();
         let stopping = Arc::clone(&self.stopping);
@@ -219,10 +224,14 @@ impl BlockingDaemonTor {
                 TorDeath::Exited
             });
         });
-        self.watchers
+        let replaced = self
+            .watcher
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push(watcher);
+            .replace(watcher);
+        if let Some(replaced) = replaced {
+            replaced.abort();
+        }
     }
 
     /// Bounded teardown (`DEL_ONION`, SIGTERM→wait→SIGKILL, reap, DataDirectory
@@ -234,24 +243,20 @@ impl BlockingDaemonTor {
             runtime,
             control,
             stopping,
-            watchers,
+            watcher,
         } = self;
         stopping.store(true, Ordering::Release);
         let exit = runtime.block_on(control.shutdown());
-        // The incarnation is dead, so every watcher's wait is over: each one
-        // is told of the stop before the runtime that runs it goes.
-        let watchers = watchers
-            .into_inner()
-            .unwrap_or_else(PoisonError::into_inner);
-        runtime.block_on(async {
-            for watcher in watchers {
-                // A watcher that panicked was reported by the panic hook;
-                // the stop goes on either way.
+        // The incarnation is dead, so the watcher's wait is over. It is told
+        // of the stop before the runtime that runs it goes. A panic was
+        // already reported by the panic hook; the stop goes on either way.
+        if let Some(watcher) = watcher.into_inner().unwrap_or_else(PoisonError::into_inner) {
+            runtime.block_on(async {
                 match watcher.await {
                     Ok(()) | Err(_) => {}
                 }
-            }
-        });
+            });
+        }
         exit
     }
 }
@@ -295,6 +300,10 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let killed = BlockingDaemonTor::start(config(dir.path())).expect("start");
+        let (replaced_tx, replaced) = mpsc::channel();
+        killed.on_death(move |death| {
+            replaced_tx.send(death).expect("replaced");
+        });
         let (heard_tx, heard) = mpsc::channel();
         killed.on_death(move |death| heard_tx.send(death).expect("heard"));
         let pid = tor_under(dir.path()).expect("the tor under this directory");
@@ -306,6 +315,10 @@ mod tests {
         assert_eq!(
             heard.recv_timeout(Duration::from_secs(30)),
             Ok(TorDeath::Exited)
+        );
+        assert!(
+            replaced.try_recv().is_err(),
+            "the replaced watcher does not run"
         );
         assert!(!killed.is_alive());
         let _exit_after_kill = killed.shutdown();
