@@ -37,7 +37,6 @@
 // nothing.
 
 #include <boost/filesystem/operations.hpp>
-#include <boost/filesystem/operations.hpp>
 #include "common/scoped_message_writer.h"
 #include "common/util.h"
 #include "cryptonote_core/cryptonote_core.h"
@@ -46,7 +45,6 @@
 #include "daemon/daemon.h"
 #include "misc_log_ex.h"
 #include "p2p/net_node.h"
-#include "string_tools_lexical.h"
 #include "rpc/core_rpc_server.h"
 #include "cryptonote_config.h"
 #include "version.h"
@@ -62,6 +60,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <iostream>
 #include <string>
@@ -110,31 +109,21 @@ int remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept
     const bool regtest = snapshot->network == 3;
 
     // Client mode: a command for a running daemon, at the admin endpoint
-    // Rust resolved. No lock, no marker, no log file.
+    // Rust resolved. No lock, no marker, no log file. The endpoint is four
+    // octets and a port; this does not parse a string.
     if (snapshot->command.len > 0)
     {
-      if (snapshot->client_endpoint == nullptr)
+      if (!snapshot->client_endpoint.present)
         return 1;
       std::vector<std::string> command;
       command.reserve(snapshot->command.len);
       for (size_t i = 0; i < snapshot->command.len; ++i)
         command.emplace_back(snapshot->command.items[i]);
-      const std::string endpoint(snapshot->client_endpoint);
-      const size_t colon = endpoint.rfind(':');
-      if (colon == std::string::npos)
-        return 1;
-      std::string host = endpoint.substr(0, colon);
-      if (host.size() >= 2 && host.front() == '[' && host.back() == ']')
-        host = host.substr(1, host.size() - 2);
+      // Network order, the bit pattern inet_addr returns.
       uint32_t rpc_ip;
-      uint16_t rpc_port;
-      if (!epee::string_tools::get_ip_int32_from_string(rpc_ip, host))
-      {
-        std::cerr << "shekyld: the console client reaches IPv4 admin endpoints only; " << endpoint << " is not one" << std::endl;
-        return 1;
-      }
-      if (!epee::string_tools::get_xtype_from_string(rpc_port, endpoint.substr(colon + 1)))
-        return 1;
+      std::memcpy(&rpc_ip, snapshot->client_endpoint.octets,
+                  sizeof snapshot->client_endpoint.octets);
+      uint16_t rpc_port = snapshot->client_endpoint.port;
       const cryptonote::network_type console_nettype =
         testnet ? cryptonote::TESTNET
         : stagenet ? cryptonote::STAGENET

@@ -22,7 +22,10 @@ pub mod run;
 pub mod signals;
 pub mod tor;
 
-pub use entry::{ShekylDaemonEntry, ShekylDaemonSnapshot, ShekylStringList, SNAPSHOT_FIELDS};
+pub use entry::{
+    ShekylClientEndpoint, ShekylDaemonEntry, ShekylDaemonSnapshot, ShekylMineAddress,
+    ShekylStringList, SNAPSHOT_FIELDS,
+};
 pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
 
 /// The entry with the real platform: the account's roots from the

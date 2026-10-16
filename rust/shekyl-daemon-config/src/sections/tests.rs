@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 use std::ffi::OsString;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 
 use shekyl_options::{Code, Diagnostic, Source, Value};
@@ -286,10 +286,24 @@ fn positional_words_make_a_client_that_needs_an_admin_endpoint() {
     assert!(c.is_client());
     assert_eq!(
         c.session.client_endpoint,
-        Some("127.0.0.1:11029".parse().unwrap())
+        Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 11029))
     );
     let d = codes(build_from(&["--rpc-admin-listen", "none", "status"], ""));
     assert_eq!(d, vec![(Code::ClientNoEndpoint, "rpc-admin-listen".into())]);
+}
+
+/// The console dials IPv4. A daemon may bind an IPv6 admin listener; a
+/// client command to one is refused at parse, with the grammar's range code.
+#[test]
+fn a_client_refuses_an_admin_endpoint_the_console_cannot_dial() {
+    let d = codes(build_from(
+        &["--rpc-admin-listen", "[::1]:11029", "status"],
+        "",
+    ));
+    assert_eq!(d, vec![(Code::ValueRange, "rpc-admin-listen".into())]);
+    let c = build_from(&["--rpc-admin-listen", "[::1]:11029"], "").unwrap();
+    assert_eq!(c.rpc.admin_listen, vec!["[::1]:11029".parse().unwrap()]);
+    assert!(c.session.client_endpoint.is_none());
 }
 
 #[test]
@@ -355,6 +369,26 @@ fn notify_commands_and_levers_are_carried() {
     assert_eq!(c.dev.difficulty, Some(1));
     assert!(!c.dev.sync);
     assert_eq!(c.mine.threads, None, "auto");
+}
+
+/// The decode's keys stay with the address. The miner assembles from them
+/// and does not parse the text a second time.
+#[test]
+fn a_mining_address_keeps_the_decoded_keys() {
+    let addr = shekyl_address::ShekylAddress::new(
+        shekyl_address::Network::Mainnet,
+        [0xaa; 32],
+        [0xbb; 32],
+        [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+        vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+    );
+    let text = addr.encode().unwrap();
+    let c = build_from(&["--mine-address", &text], "").unwrap();
+    let mined = c.mine.address.expect("the address decoded");
+    assert_eq!(mined.text, text);
+    assert_eq!(mined.spend, [0xaa; 32]);
+    assert_eq!(mined.view, [0xbb; 32]);
+    assert_eq!(mined.ml_kem, vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN]);
 }
 
 /// A row the table fills is not replaced with a quieter default when it is

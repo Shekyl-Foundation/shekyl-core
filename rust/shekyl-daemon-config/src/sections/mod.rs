@@ -18,7 +18,7 @@
 //! the one child-row table. [`ban`] reads the ban file. A row the table
 //! fills with a literal is required: its default is not restated here.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
@@ -197,12 +197,31 @@ pub struct Notify {
     pub block_rate: Option<Vec<String>>,
 }
 
+/// A mining address the configuration decode accepted.
+///
+/// The text is what the operator wrote, for display. The keys are what the
+/// miner assembles into an account address. The miner does not parse the
+/// text, and this type does not carry the C++ layout: the X25519 prefix is
+/// derived there, from the view key, beside the ML-KEM encapsulation key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MineAddress {
+    /// The address the operator wrote.
+    pub text: String,
+    /// The spend public key.
+    pub spend: [u8; 32],
+    /// The view public key.
+    pub view: [u8; 32],
+    /// The ML-KEM encapsulation key.
+    pub ml_kem: Vec<u8>,
+}
+
 /// The miner's section.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mine {
-    /// Mine to this address from start; checked against the network.
-    pub address: Option<String>,
-    /// The thread count; `None` is `auto`, the miner's own default.
+    /// Mine to this address from start.
+    pub address: Option<MineAddress>,
+    /// The thread count; `None` is `auto`, which the miner receives as 0
+    /// and resolves itself.
     pub threads: Option<NonZeroU32>,
 }
 
@@ -235,9 +254,10 @@ pub struct Session {
     /// The positional words: a client-mode command, empty for a daemon
     /// start.
     pub command: Vec<String>,
-    /// The admin endpoint a client-mode command reaches; present only in
-    /// client mode.
-    pub client_endpoint: Option<SocketAddr>,
+    /// The admin endpoint a client-mode command reaches. Present only in
+    /// client mode, and only when that endpoint is IPv4: the console dials
+    /// four octets and a port. A daemon may still bind IPv6.
+    pub client_endpoint: Option<SocketAddrV4>,
 }
 
 /// The whole configuration, by section.
@@ -522,7 +542,12 @@ fn mine_section(r: &mut Reader<'_>, network: Network) -> Mine {
         Read::Present(text) => {
             match shekyl_address::ShekylAddress::decode_for_network(&text, address_network(network))
             {
-                Ok(_) => Some(text),
+                Ok(decoded) => Some(MineAddress {
+                    text,
+                    spend: decoded.spend_key,
+                    view: decoded.view_key,
+                    ml_kem: decoded.ml_kem_encap_key,
+                }),
                 Err(error) => {
                     r.faults.push(
                         Diagnostic::new(Code::ValueSyntax, r.source("mine-address"))
@@ -574,7 +599,16 @@ fn session_section(r: &mut Reader<'_>, admin_listen: &[SocketAddr]) -> Session {
         None
     } else {
         match admin_listen.first() {
-            Some(endpoint) => Some(*endpoint),
+            Some(SocketAddr::V4(endpoint)) => Some(*endpoint),
+            Some(endpoint) => {
+                r.faults.push(
+                    Diagnostic::new(Code::ValueRange, r.source("rpc-admin-listen"))
+                        .option("rpc-admin-listen")
+                        .param("value", endpoint.to_string())
+                        .param("rule", "the console client reaches an IPv4 admin endpoint"),
+                );
+                None
+            }
             None => {
                 r.faults.push(
                     Diagnostic::new(Code::ClientNoEndpoint, Source::Cli).option("rpc-admin-listen"),

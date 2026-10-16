@@ -427,11 +427,11 @@ C++ keeps today's defaults as constants until their lanes decide.
 | the fixed difficulty | core | `dev-difficulty` |
 | the pool's weight bound | core | `txpool-weight-max` |
 | sync on or off | the protocol handler | `dev-sync` |
-| the mining address | the miner | `mine-address` |
-| the mining threads | the miner | `mine-threads` |
+| the mining address | the miner | `mine-address`, already decoded: the display text, the spend and view keys, and the ML-KEM encapsulation key. The miner assembles the account address from those keys and does not parse the text |
+| the mining threads | the miner | `mine-threads`; 0 is `auto`, and the miner chooses the count |
 | console on or off | the C++ console | `console` |
 | the console's command words | the C++ console client | the positional words; empty for a daemon start |
-| the console's RPC endpoint | the C++ console client | the first `rpc-admin-listen` endpoint, present only in client mode, where its absence is refused at parse (§2.2) |
+| the console's RPC endpoint | the C++ console client | the first `rpc-admin-listen` endpoint when it is IPv4: four octets in network order and a port, present only in client mode. A client whose endpoint is not IPv4 is refused at parse (`config.value.range`). Absence of any admin endpoint is refused at parse (§2.2) |
 
 **Eleven fields.** A gate pins the count and fails when it rises; each later
 slice that moves a reader deletes its field. If the pre-flight finds a C++

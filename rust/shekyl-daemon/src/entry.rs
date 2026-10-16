@@ -47,6 +47,46 @@ pub struct ShekylStringList {
     pub len: usize,
 }
 
+/// The admin endpoint a client command dials.
+///
+/// Four octets in network order, so a `memcpy` into a `uint32_t` is the
+/// value `inet_addr` would have returned, and the port in host order.
+/// `present` is false for a daemon start. One member of the snapshot, so
+/// the field count stays eleven.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ShekylClientEndpoint {
+    /// The address, network order.
+    pub octets: [u8; 4],
+    /// The port.
+    pub port: u16,
+    /// Whether a client command is dialing this endpoint.
+    pub present: bool,
+}
+
+/// A mining address the configuration already decoded.
+///
+/// The text is display only. `spend` and `view` are the classical public
+/// keys. `ml_kem` is the encapsulation key, not the C++ account layout:
+/// the miner derives the X25519 prefix from `view` and assembles the
+/// account address from these bytes. The pointers are into the snapshot's
+/// owned data and live as long as that data does. One member of the
+/// snapshot, so the field count stays eleven.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ShekylMineAddress {
+    /// The address text, NUL-terminated. Never parsed.
+    pub text: *const c_char,
+    /// The spend public key.
+    pub spend: [u8; 32],
+    /// The view public key.
+    pub view: [u8; 32],
+    /// The ML-KEM encapsulation key. Null when `ml_kem_len` is 0.
+    pub ml_kem: *const u8,
+    /// The encapsulation key's length.
+    pub ml_kem_len: usize,
+}
+
 /// The values whose reader is still C++ (`DAEMON_CONFIG_CUTOVER.md` §2.9),
 /// filled once by Rust before the remnant is constructed.
 #[repr(C)]
@@ -65,20 +105,23 @@ pub struct ShekylDaemonSnapshot {
     pub txpool_weight_max: u64,
     /// Chain synchronisation on; read by the protocol handler.
     pub sync: bool,
-    /// The mining address, NUL-terminated, or null for none; read by the
-    /// miner.
-    pub mine_address: *const c_char,
-    /// The mining thread count, or 0 for `auto`; read by the miner.
+    /// The decoded mining address, or null for none; read by the miner.
+    pub mine_address: *const ShekylMineAddress,
+    /// The mining thread count, or 0 for `auto`; read by the miner. The
+    /// miner chooses the count when this is 0.
     pub mine_threads: u32,
     /// The interactive console on; read by the C++ console.
     pub console: bool,
     /// The console's command words; empty for a daemon start. Read by the
     /// C++ console client.
     pub command: ShekylStringList,
-    /// The admin endpoint a client-mode command reaches, NUL-terminated,
-    /// or null for a daemon start. Read by the C++ console client.
-    pub client_endpoint: *const c_char,
+    /// The admin endpoint a client-mode command reaches. `present` is false
+    /// for a daemon start. Read by the C++ console client.
+    pub client_endpoint: ShekylClientEndpoint,
 }
+
+const _: () = assert!(std::mem::size_of::<ShekylClientEndpoint>() == 8);
+const _: () = assert!(std::mem::align_of::<ShekylClientEndpoint>() == 2);
 
 /// The snapshot's field count. A gate asserts it against the definition
 /// above and the C++ asserts it against [`shekyl_daemon_snapshot_field_count`].

@@ -4541,6 +4541,29 @@ struct ShekylStringList {
   size_t len;
 };
 
+/// The admin endpoint a client command dials. `octets` are network order:
+/// a memcpy into a uint32_t is the value `inet_addr` returns. `present` is
+/// false for a daemon start. One member of the snapshot.
+struct ShekylClientEndpoint {
+  uint8_t octets[4];
+  uint16_t port;
+  bool present;
+};
+static_assert(sizeof(ShekylClientEndpoint) == 8,
+    "the console endpoint is four octets, a port and a flag");
+
+/// A mining address the configuration already decoded. `text` is display
+/// only and is never parsed. `ml_kem` is the encapsulation key; the miner
+/// derives the X25519 prefix from `view`. The pointers live as long as the
+/// snapshot's owned data. One member of the snapshot.
+struct ShekylMineAddress {
+  const char* text;
+  uint8_t spend[32];
+  uint8_t view[32];
+  const uint8_t* ml_kem;
+  size_t ml_kem_len;
+};
+
 /// The values whose reader is still C++ (§2.9), filled once by Rust.
 struct ShekylDaemonSnapshot {
   const char* data_dir;
@@ -4549,11 +4572,11 @@ struct ShekylDaemonSnapshot {
   uint64_t fixed_difficulty;
   uint64_t txpool_weight_max;
   bool sync;
-  const char* mine_address;
+  const ShekylMineAddress* mine_address;
   uint32_t mine_threads;
   bool console;
   ShekylStringList command;
-  const char* client_endpoint;
+  ShekylClientEndpoint client_endpoint;
 };
 
 /// The remnant's `run`: `noexcept`, returns the exit status. The snapshot is

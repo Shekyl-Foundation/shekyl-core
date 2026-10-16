@@ -267,23 +267,30 @@ namespace cryptonote
       m_threads.push_back(boost::thread(m_attrs, boost::bind(&miner::worker_thread, this)));
   }
   //-----------------------------------------------------------------------------------------------------
-  bool miner::init(const ShekylDaemonSnapshot& snapshot, network_type nettype)
+  bool miner::init(const ShekylDaemonSnapshot& snapshot, network_type /*nettype*/)
   {
-    // The two mining rows (DAEMON_CONFIG_CUTOVER.md §2.9): the address the
-    // table admitted, checked here against the network, and the thread
-    // count, 0 for the machine's own.
+    // The two mining rows (DAEMON_CONFIG_CUTOVER.md §2.9). The address was
+    // decoded when the configuration was built and checked against the
+    // network there. This assembles the account key from those bytes and
+    // does not parse the text. A failure is that decode and this assembler
+    // disagreeing. The thread count is passed through: 0 is auto, and
+    // miner::start chooses the count.
     if (snapshot.mine_address != nullptr)
     {
-      const std::string address(snapshot.mine_address);
+      const ShekylMineAddress& mined = *snapshot.mine_address;
       address_parse_info info;
-      if(!cryptonote::get_account_address_from_str(info, nettype, address) || info.is_subaddress)
+      const char* text = mined.text != nullptr ? mined.text : "";
+      if (mined.text == nullptr
+          || !cryptonote::account_public_address_from_decoded(
+               info, mined.spend, mined.view, mined.ml_kem, mined.ml_kem_len))
       {
-        LOG_ERROR("Target account address " << address << " has wrong format, starting daemon canceled");
+        LOG_ERROR("The mining address " << text
+            << " decoded when the configuration was built, and the daemon's address assembler disagreed; starting daemon canceled");
         return false;
       }
       m_mine_address = info.address;
-      m_mine_address_str = address;
-      m_threads_total = snapshot.mine_threads == 0 ? 1 : snapshot.mine_threads;
+      m_mine_address_str = text;
+      m_threads_total = snapshot.mine_threads;
       m_do_mining = true;
     }
     return true;

@@ -31,7 +31,10 @@ use shekyl_daemon_config::{choosers, file, marker, paths, resolve, Lock, Platfor
 use shekyl_options::{read_cli, read_file, Code, Diagnostic, Kind, Source, Value};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 
-use crate::entry::{ShekylDaemonEntry, ShekylDaemonSnapshot, ShekylStringList};
+use crate::entry::{
+    ShekylClientEndpoint, ShekylDaemonEntry, ShekylDaemonSnapshot, ShekylMineAddress,
+    ShekylStringList,
+};
 use crate::options::DaemonOptions;
 use crate::{help, network, signals, tor};
 use shekyl_daemon_rpc::options::OptionsHandle;
@@ -533,8 +536,22 @@ fn announce_all(log_file: &Path, lines: &[String]) {
     }
 }
 
+/// The owned bytes of a mining address. The snapshot's header points at
+/// these allocations, which do not move when this value moves.
+struct MineOwned {
+    text: CString,
+    spend: [u8; 32],
+    view: [u8; 32],
+    ml_kem: Vec<u8>,
+}
+
 /// The owned data behind a snapshot: built on the calling thread, moved to
 /// the run thread, and alive for as long as `run` runs.
+///
+/// The mining header is not stored here. It holds pointers, and this value
+/// is moved onto the run thread before `run` reads it. [`Self::call`] builds
+/// the header on that thread, for the duration of `run`. A lease boxes the
+/// header so the pointer stays valid after the lease is moved.
 pub(crate) struct SnapshotData {
     data_dir: CString,
     network: u8,
@@ -542,16 +559,34 @@ pub(crate) struct SnapshotData {
     fixed_difficulty: u64,
     txpool_weight_max: u64,
     sync: bool,
-    mine_address: Option<CString>,
+    mine: Option<MineOwned>,
     mine_threads: u32,
     console: bool,
     command: Vec<CString>,
-    client_endpoint: Option<CString>,
+    client_endpoint: ShekylClientEndpoint,
 }
 
 impl SnapshotData {
     pub(crate) fn new(config: &DaemonConfig) -> Self {
         let c = |s: &str| CString::new(s.replace('\0', "")).expect("no NUL after the filter");
+        let mine = config.mine.address.as_ref().map(|address| MineOwned {
+            text: c(&address.text),
+            spend: address.spend,
+            view: address.view,
+            ml_kem: address.ml_kem.clone(),
+        });
+        let client_endpoint = match config.session.client_endpoint {
+            Some(endpoint) => ShekylClientEndpoint {
+                octets: endpoint.ip().octets(),
+                port: endpoint.port(),
+                present: true,
+            },
+            None => ShekylClientEndpoint {
+                octets: [0; 4],
+                port: 0,
+                present: false,
+            },
+        };
         Self {
             data_dir: c(&config.data_dir.display().to_string()),
             network: config.network.cryptonote_code(),
@@ -559,11 +594,13 @@ impl SnapshotData {
             fixed_difficulty: config.dev.difficulty.unwrap_or(0),
             txpool_weight_max: config.txpool_weight_max,
             sync: config.dev.sync,
-            mine_address: config.mine.address.as_deref().map(c),
+            mine,
+            // 0 is auto. The miner chooses the count; this does not collapse
+            // it to one thread.
             mine_threads: config.mine.threads.map_or(0, std::num::NonZeroU32::get),
             console: config.session.console,
             command: config.session.command.iter().map(|w| c(w)).collect(),
-            client_endpoint: config.session.client_endpoint.map(|e| c(&e.to_string())),
+            client_endpoint,
         }
     }
 
@@ -576,27 +613,44 @@ impl SnapshotData {
     }
 
     #[cfg(test)]
-    pub(crate) fn client_endpoint(&self) -> Option<String> {
-        self.client_endpoint
-            .as_ref()
-            .map(|e| e.to_string_lossy().into_owned())
-    }
-
-    #[cfg(test)]
     pub(crate) fn data_dir(&self) -> String {
         self.data_dir.to_string_lossy().into_owned()
     }
 
     /// Calls `run` with pointers into this data, which outlives the call.
+    /// The mining header is a local: its pointers address this data's
+    /// allocations, and it lives until `run` returns.
     fn call(&self, run: crate::entry::RunFn) -> i32 {
         let command: Vec<*const c_char> = self.command.iter().map(|w| w.as_ptr()).collect();
-        let snapshot = self.snapshot(&command);
+        let header = self.mine_header();
+        let snapshot = self.snapshot(&command, header.as_ref());
         run(&raw const snapshot)
     }
 
-    /// The snapshot over this data and `command`, the pointers to its
-    /// command words; both must outlive every read of the result.
-    fn snapshot(&self, command: &[*const c_char]) -> ShekylDaemonSnapshot {
+    /// A view of the mining address. The pointers address `self` and are
+    /// valid while `self` is borrowed and the header this returns is alive.
+    fn mine_header(&self) -> Option<ShekylMineAddress> {
+        self.mine.as_ref().map(|mine| ShekylMineAddress {
+            text: mine.text.as_ptr(),
+            spend: mine.spend,
+            view: mine.view,
+            ml_kem: if mine.ml_kem.is_empty() {
+                std::ptr::null()
+            } else {
+                mine.ml_kem.as_ptr()
+            },
+            ml_kem_len: mine.ml_kem.len(),
+        })
+    }
+
+    /// The snapshot over this data, `command` and `mine`. All three must
+    /// outlive every read of the result. `mine` is null when there is no
+    /// address.
+    fn snapshot(
+        &self,
+        command: &[*const c_char],
+        mine: Option<&ShekylMineAddress>,
+    ) -> ShekylDaemonSnapshot {
         ShekylDaemonSnapshot {
             data_dir: self.data_dir.as_ptr(),
             network: self.network,
@@ -604,20 +658,17 @@ impl SnapshotData {
             fixed_difficulty: self.fixed_difficulty,
             txpool_weight_max: self.txpool_weight_max,
             sync: self.sync,
-            mine_address: self
-                .mine_address
-                .as_ref()
-                .map_or(std::ptr::null(), |a| a.as_ptr()),
+            mine_address: match mine {
+                Some(header) => header,
+                None => std::ptr::null(),
+            },
             mine_threads: self.mine_threads,
             console: self.console,
             command: ShekylStringList {
                 items: command.as_ptr(),
                 len: command.len(),
             },
-            client_endpoint: self
-                .client_endpoint
-                .as_ref()
-                .map_or(std::ptr::null(), |e| e.as_ptr()),
+            client_endpoint: self.client_endpoint,
         }
     }
 }
@@ -628,6 +679,10 @@ impl SnapshotData {
 pub(crate) struct Leased {
     snapshot: ShekylDaemonSnapshot,
     _command: Vec<*const c_char>,
+    /// The mining header the snapshot points at. Boxed so moving the lease
+    /// does not move the header; its own pointers address `_data`'s
+    /// allocations, which a move does not relocate either.
+    _header: Option<Box<ShekylMineAddress>>,
     _data: Box<SnapshotData>,
 }
 
@@ -701,10 +756,14 @@ pub(crate) fn snapshot_for_tests(args: &[OsString], host: &Host) -> Result<Box<L
     let Loaded { config, .. } = load(cli, host)?;
     let data = Box::new(SnapshotData::new(&config));
     let command: Vec<*const c_char> = data.command.iter().map(|w| w.as_ptr()).collect();
-    let snapshot = data.snapshot(&command);
+    let header = data.mine_header().map(Box::new);
+    // The box's allocation does not move when the box is moved into the lease.
+    let mine = header.as_deref();
+    let snapshot = data.snapshot(&command, mine);
     Ok(Box::new(Leased {
         snapshot,
         _command: command,
+        _header: header,
         _data: data,
     }))
 }
@@ -848,7 +907,11 @@ mod tests {
             data.command_words(),
             vec!["status".to_owned(), "extra".to_owned()]
         );
-        assert_eq!(data.client_endpoint().as_deref(), Some("127.0.0.1:11029"));
+        assert!(data.client_endpoint.present);
+        assert_eq!(data.client_endpoint.octets, [127, 0, 0, 1]);
+        assert_eq!(data.client_endpoint.port, 11029);
+        assert_eq!(data.mine_threads, 0, "auto reaches the miner as 0");
+        assert!(data.mine_header().is_none());
         assert_eq!(data.data_dir(), d.path().display().to_string());
         assert_eq!(data.network, 3);
     }
