@@ -220,8 +220,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J16,
             CenRow::J18,
             // Slice 6 row 6 (2026-10-08): the bond post's funding half —
-            // its reference context and the proof over its funding spends,
-            // one row in `judge_reference`'s bond-post arm.
+            // its reference context (`judge_reference`'s bond-post arm,
+            // in `validate`) and the proof over its funding spends
+            // (`judge_proofs`, in `form` since 2026-10-16).
             CenRow::J27,
             // Slice 8 row 8: the emission statics — the vin's parse, the
             // slot's key, the signable hash and the reward commit set.
@@ -304,10 +305,22 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         .collect();
     assert_eq!(
         held_by_store,
-        [CenRow::B3, CenRow::K1a, CenRow::K2, CenRow::K3, CenRow::K8],
+        [
+            CenRow::B3,
+            CenRow::K1a,
+            CenRow::K2,
+            CenRow::K3,
+            CenRow::K5,
+            CenRow::K5b,
+            CenRow::K6,
+            CenRow::K7,
+            CenRow::K8
+        ],
         "the rule-set belt at connect (B3, re-classed 2026-10-15, R4); DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
          insert (K3) and no supply word on an alt row (K8) are the store's structures, \
-         proved by the store's tests"
+         proved by the store's tests; promotion (K5), the witness in the alt row (K5b), the \
+         fork choice's match (K6) and the demoted rows (K7) are the switch's (DRS-E5 a5), \
+         proved by the ingest's switch tests"
     );
     assert!(PolicyRow::ALL
         .iter()

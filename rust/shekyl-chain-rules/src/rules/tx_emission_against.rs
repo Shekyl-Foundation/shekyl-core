@@ -82,7 +82,7 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::ViewRead;
 use crate::rule_set::RuleSet;
-use crate::rules::tx_against::{to_key_slots, ReferenceContext, I15};
+use crate::rules::tx_against::ReferenceContext;
 use crate::rules::tx_emission::{the_emission, J19, J22, J24};
 use crate::rules::{Rule, TxContext};
 use crate::verdict::{InvalidBlock, Verdict};
@@ -334,16 +334,10 @@ impl Rule for J26 {
     const ROW: CenRow = CenRow::J26;
 }
 
-impl J26 {
-    /// The fee-input proof against `reference`.
-    fn check(cx: &TxContext<'_>, reference: &ReferenceContext) -> Verdict<()> {
-        I15::verify(cx.tx, &to_key_slots(cx.tx), reference)
-            .map_err(|()| InvalidBlock::new(Self::ROW, cx.locus()))
-    }
-}
-
-/// The rows this sequence records, in order.
-const CLAIM_ROWS: [CenRow; 3] = [CenRow::J23, CenRow::J25, CenRow::J26];
+/// The rows this sequence records, in order. J26 left it on 2026-10-16:
+/// the fee-input proof reads no chain and runs in `form`
+/// ([`crate::rules::proofs::judge_proofs`]), which records it, vacuous or judged.
+const CLAIM_ROWS: [CenRow; 2] = [CenRow::J23, CenRow::J25];
 
 /// The emission's view-bound sequence: J23's gathers, J25's verify, then
 /// J26's fee-input proof. Off the `Emission` class all three rows are
@@ -387,10 +381,6 @@ pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
             Err(refused) => return Ok(Err(refused)),
         }
         coverage.insert(J25::ROW);
-        if let Err(refused) = J26::check(cx, reference) {
-            return Ok(Err(refused));
-        }
-        coverage.insert(J26::ROW);
         return Ok(Ok(()));
     }
     for row in CLAIM_ROWS {

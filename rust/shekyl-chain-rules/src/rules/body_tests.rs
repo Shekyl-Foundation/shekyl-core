@@ -17,6 +17,7 @@
 use super::*;
 use crate::block::Candidate;
 use crate::fault::FormAttempt;
+use crate::harness::fixture::signed;
 use crate::harness::fixture::{
     self, anchored_on, candidate, candidate_on, listed, listed_on, point, point_at, spend,
     spendable_chain,
@@ -35,8 +36,15 @@ use shekyl_wire::{BondPost, BondPostKind, Holdings};
 /// Three distinct listed bodies, the header declaring exactly them. Their
 /// key images are points (CEN-H11), so `form`'s transaction stage admits
 /// them and the stage's verdict is G2's to give.
+/// Three signed bodies: `form` runs the signature sequence (CEN-I17/I18)
+/// at every listed slot since 2026-10-16, so a body it admits is a signed
+/// one. Unanchored — the reference rows are `validate`'s.
 fn three_bodies() -> Candidate {
-    candidate(vec![listed(point(1)), listed(point(2)), listed(point(3))])
+    candidate(vec![
+        signed(listed(point(1))),
+        signed(listed(point(2))),
+        signed(listed(point(3))),
+    ])
 }
 
 fn check(candidate: &Candidate) -> Verdict<()> {
@@ -51,6 +59,7 @@ fn form_judges(candidate: Candidate) -> Verdict<RuleCoverage> {
         &MockSubstrate::default(),
         BlockHash::NULL,
         expected_target(&MockChain::default(), &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => Ok(*formed.coverage()),

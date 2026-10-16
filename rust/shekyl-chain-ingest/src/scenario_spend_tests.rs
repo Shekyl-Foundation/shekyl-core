@@ -139,29 +139,31 @@ async fn l1_refuses_a_twin_spend_listed_behind_the_first() {
 /// A body moved after it was signed: the first spend's prefix touched
 /// (`unlock_time`, a field no view-bound row reads) and listed behind the
 /// untouched one. Its key image doubles the first's, so L1 would refuse it
-/// too — but the slot loop runs first, and the first row in the spend's
-/// `tx_against` sequence that binds the prefix refuses at `Listed(1)`: a
+/// too — but the per-slot rows run first, and the first row in the
+/// spend's sequence that binds the prefix refuses at `Listed(1)`: a
 /// per-transaction row behind a passing body is seen before the
 /// block-level row, the C++'s order (`add_spent_key` is the last check).
-/// That row is CEN-I15, at the transaction: the membership proof is
-/// verified over the prefix hash (`FCMP_PLUS_PLUS.md` §7 step 4), so a
-/// moved prefix fails the proof before the signature sequence is reached.
-/// *Records-was:* until the flip (slice 6 row 6, 2026-10-08) I15 was
-/// staged off the spend class and the refusing row was I18 at input 0 —
-/// the signature no longer covering its message. The signature's own
-/// binding stays witnessed on the signature sequence in the rules crate;
-/// the mutation family's `ForgedSignature` flips the signature and leaves
-/// the body.
+/// That row is CEN-I18, at input 0: since 2026-10-16 `form` runs the
+/// signature sequence at every listed slot before the verify rows
+/// (`CHAIN_RULES_CRATE.md` §4.6), and the signing preimage binds the
+/// prefix (CEN-I17), so the signature no longer covers its message before
+/// the membership proof — which binds the prefix hash too — is verified.
+/// *Records-was:* from the flip (slice 6 row 6, 2026-10-08) to 2026-10-16
+/// the row was CEN-I15 at the transaction, `validate` verifying the proof
+/// ahead of the signatures; before the flip, I18 at input 0 as now. The
+/// proof's own binding stays witnessed by the mutation family and the
+/// rules crate; `ForgedSignature` flips the signature and leaves the body.
 #[tokio::test]
 async fn a_moved_body_listed_behind_its_twin_is_refused_per_slot_before_l1_can() {
-    let (mut scenario, _mined, a, _b) = matured("spend-moved-i15").await;
+    let (mut scenario, _mined, a, _b) = matured("spend-moved-i18").await;
     let mut moved = a.clone();
     moved.prefix.unlock_time += 1;
     refused_at(
         scenario.mine_listing(vec![a, moved]).await,
-        CenRow::I15,
-        Locus::Tx {
+        CenRow::I18,
+        Locus::Input {
             slot: TxSlot::Listed(1),
+            input: 0,
         },
     );
     scenario.close().await;

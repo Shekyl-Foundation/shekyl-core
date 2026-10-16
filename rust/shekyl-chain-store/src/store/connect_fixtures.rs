@@ -22,8 +22,8 @@ use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::target_claim;
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, ChainValid, ChainView, Corrupt, Fault, FormAttempt,
-    HeaderView, PaidEmission, RuleSet, StructurallyValid, Substrate, Target, Trust, ViewRead,
-    Weights,
+    HeaderView, PaidEmission, ReferenceClaims, RuleSet, StructurallyValid, Substrate, Target,
+    Trust, ViewRead, Weights,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
@@ -151,7 +151,7 @@ impl Substrate for FixtureSubstrate {
 /// identity of the block at `shekyl_chain_rules::seed_height(connecting)`.
 /// Read from the same view the verdict will be minted against, as E2's
 /// replay driver will.
-fn expected_seed<'id, V: HeaderView<'id>>(view: &V) -> Result<BlockHash, V::Fault> {
+pub(super) fn expected_seed<'id, V: HeaderView<'id>>(view: &V) -> Result<BlockHash, V::Fault> {
     let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
     let Some(seed_height) = shekyl_chain_rules::seed_height(connecting) else {
         return Ok(BlockHash::NULL);
@@ -204,9 +204,11 @@ pub(super) fn priced_on(store: &ChainStore, candidate: Candidate) -> Candidate {
 }
 
 /// The stateless stage over the fixture substrate, under `GENESIS`,
-/// claiming the seed `view` expects. `view` is any [`HeaderView`]: the
-/// batch's chain view for a connect, the stitched `AltView` for the alt
-/// tier (`alt_tests::admitted`) — the seed is a header read either way.
+/// claiming the seed, target and reference roots `view` expects. `view`
+/// is any [`HeaderView`]: the batch's chain view for a connect, the
+/// stitched `AltView` for the alt tier (`alt_tests::admitted`) — the
+/// seed, the target window and the reference window are header reads
+/// either way (`ReferenceClaims::from_headers`).
 pub(super) fn formed<'id, V: HeaderView<'id>>(
     view: &V,
     candidate: Candidate,
@@ -222,6 +224,8 @@ pub(super) fn formed_under<'id, V: HeaderView<'id>>(
     rules: &RuleSet,
 ) -> Result<StructurallyValid, V::Fault> {
     let seed = expected_seed(view)?;
+    let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
+    let references = ReferenceClaims::from_headers(view, connecting, &candidate)?;
     Ok(
         match form(
             candidate,
@@ -229,6 +233,7 @@ pub(super) fn formed_under<'id, V: HeaderView<'id>>(
             &FixtureSubstrate,
             seed,
             expected_target(view, rules)?,
+            &references,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,
