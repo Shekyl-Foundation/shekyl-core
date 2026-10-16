@@ -392,7 +392,11 @@ mod tests {
     #[test]
     fn a_file_that_cannot_be_opened_is_unreadable() {
         if rustix::process::geteuid().is_root() {
-            eprintln!("not run: root opens a mode-000 file; the unreadable arm needs an unprivileged account");
+            use std::io::Write as _;
+            drop(writeln!(
+                std::io::stderr(),
+                "not run: root opens a mode-000 file; the unreadable arm needs an unprivileged account"
+            ));
             return;
         }
         let d = tempfile::tempdir().unwrap();
