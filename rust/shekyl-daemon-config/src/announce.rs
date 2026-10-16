@@ -128,21 +128,22 @@ mod tests {
         let (network, mode) = choosers(&cli);
         let given =
             shekyl_options::read_file(&TABLE, Path::new("/etc/shekyl/x.toml"), file).unwrap();
-        let resolved = resolve(&TABLE, network, cli, given).unwrap();
+        let mut resolved = resolve(&TABLE, network, cli, given).unwrap();
         let platform = Platform {
             home: Some(PathBuf::from("/srv/op")),
             program_data: None,
         };
-        let config = build(&resolved, network, mode, &platform, None).unwrap();
+        let config = build(&mut resolved, network, mode, &platform, None).unwrap();
         (resolved, config)
     }
 
-    /// The line is rendered from the resolved values, before the sections
-    /// (which refuse a SOCKS credential the dial cannot send); a secret
-    /// row's value never prints.
+    /// The line is rendered from the resolved values after the build has
+    /// named every derived default. A SOCKS credential the dial cannot send
+    /// refuses the sections; the map is still filled, and a secret row's
+    /// value never prints.
     #[test]
     fn the_line_shows_every_value_with_its_source_and_never_a_secret() {
-        let resolved = resolved_only(
+        let mut resolved = resolved_only(
             &[
                 "--network",
                 "regtest",
@@ -155,6 +156,18 @@ mod tests {
             ],
             "tor-socks-username = \"u\"\ntor-socks-password = \"hunter2\"\nlog-level = \"info\"\n",
         );
+        let platform = Platform {
+            home: Some(PathBuf::from("/srv/op")),
+            program_data: None,
+        };
+        let refused = build(
+            &mut resolved,
+            Network::Regtest,
+            RunMode::User,
+            &platform,
+            None,
+        );
+        assert!(refused.is_err(), "a SOCKS credential is refused");
         let line = effective_configuration(
             &TABLE,
             &resolved,
@@ -170,6 +183,27 @@ mod tests {
             line.contains("p2p-upload-max=unlimited (default)"),
             "{line}"
         );
+        let root = crate::paths::root(&platform, RunMode::User, "data-dir").unwrap();
+        let data = crate::paths::data_dir_default(&root, Network::Regtest);
+        let log = crate::paths::log_file_default(&root, Network::Regtest);
+        assert!(
+            line.contains(&format!("data-dir={} (default)", data.display())),
+            "{line}"
+        );
+        assert!(
+            line.contains(&format!("log-file={} (default)", log.display())),
+            "{line}"
+        );
+        assert!(
+            line.contains("clearnet-listen=0.0.0.0:11021 (default)"),
+            "{line}"
+        );
+        assert!(
+            line.contains("rpc-admin-listen=127.0.0.1:11029 (default)"),
+            "{line}"
+        );
+        assert!(!line.contains("tor-file="), "{line}");
+        assert!(resolved.get("tor-file").is_none());
         let levers = dev_levers(&TABLE, &resolved);
         assert_eq!(
             levers,

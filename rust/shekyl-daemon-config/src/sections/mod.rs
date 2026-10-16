@@ -12,10 +12,11 @@
 //! SOCKS endpoint, so a SOCKS endpoint for a connector that is off cannot
 //! be constructed, and a peer whose connector is off is refused here.
 //!
-//! The build is an orchestration. [`read`] faults a wrong value arm instead
-//! of treating it as absence. [`posture`] holds the one child-row table.
-//! [`ban`] reads the ban file. A row the table fills is required: its
-//! default is not restated here.
+//! The build is an orchestration. [`materialize`] writes each derived
+//! default into the resolved map, and [`read`] then only reads that map: a
+//! wrong value arm is a fault, never a second default. [`posture`] holds
+//! the one child-row table. [`ban`] reads the ban file. A row the table
+//! fills with a literal is required: its default is not restated here.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroU32;
@@ -24,12 +25,12 @@ use std::path::{Path, PathBuf};
 use shekyl_options::{Code, Diagnostic, PeerEndpoint, Source};
 
 use crate::network::Network;
-use crate::paths;
 use crate::platform::{Platform, RunMode};
 use crate::resolve::Resolved;
 use crate::LEVELS;
 
 mod ban;
+mod materialize;
 mod posture;
 mod read;
 
@@ -299,9 +300,11 @@ fn address_network(network: Network) -> shekyl_address::Network {
 
 /// Builds the sections from the resolved values.
 ///
-/// `config_file` is the file read, if one was. The ban file is read here,
-/// at parse. The log location is checked by [`log_location_writable`] when
-/// logging starts, not here.
+/// Derived defaults are written into `resolved` first, with source
+/// `default`, so the map this returns through is the map the announcement
+/// and `option show` read. `config_file` is the file read, if one was. The
+/// ban file is read here, at parse. The log location is checked by
+/// [`log_location_writable`] when logging starts, not here.
 ///
 /// # Errors
 /// Every cross-row refusal, a row the table fills when it is absent, a
@@ -309,21 +312,18 @@ fn address_network(network: Network) -> shekyl_address::Network {
 /// a mining address off the network, and a ban file that cannot be read or
 /// holds a line that does not parse.
 pub fn build(
-    resolved: &Resolved,
+    resolved: &mut Resolved,
     network: Network,
     run_mode: RunMode,
     platform: &Platform,
     config_file: Option<&Path>,
 ) -> Result<DaemonConfig, Vec<Diagnostic>> {
+    let mut faults = materialize::fill(resolved, network, run_mode, platform);
     let mut r = Reader::new(resolved);
-    let data_dir = path_or_default(&mut r, platform, run_mode, "data-dir", |root| {
-        paths::data_dir_default(root, network)
-    });
-    let log_file = path_or_default(&mut r, platform, run_mode, "log-file", |root| {
-        paths::log_file_default(root, network)
-    });
+    let data_dir = taken_path(&mut r, "data-dir");
+    let log_file = taken_path(&mut r, "log-file");
     let logging = logging_section(&mut r, log_file);
-    let clearnet = posture::clearnet(&mut r, network);
+    let clearnet = posture::clearnet(&mut r);
     let tor = posture::tor(&mut r);
     let peers = r.peer_list("p2p-peer");
     let closed_peers = r.peer_list("p2p-closed-peer");
@@ -338,15 +338,16 @@ pub fn build(
         tor_on,
     );
     let p2p = p2p_section(&mut r, peers, closed_peers);
-    let rpc = rpc_section(&mut r, network);
+    let rpc = rpc_section(&mut r);
     let mine = mine_section(&mut r, network);
     let dev = dev_section(&mut r);
     let session = session_section(&mut r, &rpc.admin_listen);
     let notify = notify_section(&mut r);
     let txpool_weight_max = r.required_bytes("txpool-weight-max");
 
-    if !r.faults.is_empty() {
-        return Err(r.faults);
+    faults.append(&mut r.faults);
+    if !faults.is_empty() {
+        return Err(faults);
     }
     Ok(DaemonConfig {
         network,
@@ -374,26 +375,13 @@ pub fn build(
     })
 }
 
-/// An explicit path is taken as given. Absence takes the derived default.
-/// A path of the wrong arm is a fault and does not fall through to that
-/// default.
-fn path_or_default(
-    r: &mut Reader<'_>,
-    platform: &Platform,
-    run_mode: RunMode,
-    option: &str,
-    default_at: impl FnOnce(&Path) -> PathBuf,
-) -> PathBuf {
+/// The path [`materialize`] wrote, or the path the operator gave. Absence
+/// means that write already recorded why (no home, no service root); a
+/// wrong arm is already a fault. Neither invents a path here.
+fn taken_path(r: &mut Reader<'_>, option: &str) -> PathBuf {
     match r.optional_path(option) {
         Read::Present(path) => path,
-        Read::Unreadable => PathBuf::new(),
-        Read::Absent => match paths::root(platform, run_mode, option) {
-            Ok(root) => default_at(&root),
-            Err(diagnostic) => {
-                r.faults.push(diagnostic);
-                PathBuf::new()
-            }
-        },
+        Read::Absent | Read::Unreadable => PathBuf::new(),
     }
 }
 
@@ -460,17 +448,9 @@ struct RpcRead {
     connections_max: Option<NonZeroU32>,
 }
 
-fn rpc_section(r: &mut Reader<'_>, network: Network) -> RpcRead {
-    let admin_listen = if r.given("rpc-admin-listen") {
-        r.endpoint_list("rpc-admin-listen", false)
-    } else {
-        vec![SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            network.rpc_port(),
-        )]
-    };
+fn rpc_section(r: &mut Reader<'_>) -> RpcRead {
     RpcRead {
-        admin_listen,
+        admin_listen: r.endpoint_list("rpc-admin-listen", true),
         view_listen: r.endpoint_list("rpc-view-listen", true),
         cors_origins: r.origin_list("rpc-cors-origin"),
         connections_max: r.required_count("rpc-connections-max"),

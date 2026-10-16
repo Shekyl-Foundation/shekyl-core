@@ -5,11 +5,13 @@
 
 //! Strict readers over a [`Resolved`](crate::resolve::Resolved).
 //!
-//! A row the table fills is present after resolve. Absence of such a row,
+//! A row the table fills is present after resolve, and a derived default
+//! the process uses is present after materialize. Absence of such a row,
 //! and a value of the wrong [`Value`] arm, are faults: the reader records
 //! them and returns [`Read::Unreadable`] so the build can keep collecting.
-//! A derived or unset row may be absent. A keyword the row admits
-//! (`unlimited`, `auto`) is that keyword, not a missing value.
+//! A row this build does not fill (`tor-file`, `clearnet-listen` while
+//! clearnet is off, an unset development lever) may be absent. A keyword
+//! the row admits (`unlimited`, `auto`) is that keyword, not a missing value.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;

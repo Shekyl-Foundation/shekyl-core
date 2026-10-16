@@ -672,10 +672,10 @@ fn load(cli: shekyl_options::Cli, host: &Host) -> Result<Loaded, i32> {
                 .map_err(|d| refuse(&[d]))?;
         }
     }
-    let resolved = resolve(&TABLE, network, cli, given).map_err(|ds| refuse(&ds))?;
+    let mut resolved = resolve(&TABLE, network, cli, given).map_err(|ds| refuse(&ds))?;
     let file_read = opened.as_ref().map(|f| f.path.clone());
     let config = build(
-        &resolved,
+        &mut resolved,
         network,
         mode,
         &host.platform,
@@ -841,8 +841,8 @@ mod tests {
         .collect();
         let cli = read_cli(&TABLE, args_v).unwrap();
         let (network, mode) = choosers(&cli);
-        let resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
-        let config = build(&resolved, network, mode, &host(d.path()).platform, None).unwrap();
+        let mut resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
+        let config = build(&mut resolved, network, mode, &host(d.path()).platform, None).unwrap();
         let data = SnapshotData::new(&config);
         assert_eq!(
             data.command_words(),
@@ -874,8 +874,8 @@ mod tests {
         ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
         let (network, mode) = choosers(&cli);
-        let resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
-        let config = build(&resolved, network, mode, &host(d.path()).platform, None).unwrap();
+        let mut resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
+        let config = build(&mut resolved, network, mode, &host(d.path()).platform, None).unwrap();
         let entry = ShekylDaemonEntry {
             run: Some(blocking_run),
             stop: Some(arming_stop),

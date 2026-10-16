@@ -253,12 +253,12 @@ mod tests {
         let args: Vec<OsString> = cli.iter().map(OsString::from).collect();
         let cli = shekyl_options::read_cli(&TABLE, args).unwrap();
         let (network, mode) = choosers(&cli);
-        let resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
+        let mut resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
         let platform = Platform {
             home: Some(PathBuf::from("/srv/op")),
             program_data: None,
         };
-        build(&resolved, network, mode, &platform, None).unwrap()
+        build(&mut resolved, network, mode, &platform, None).unwrap()
     }
 
     /// A valid v3 onion: the Ed25519 base point's hostname.

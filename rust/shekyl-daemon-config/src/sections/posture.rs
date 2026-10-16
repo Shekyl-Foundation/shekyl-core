@@ -9,13 +9,10 @@
 //! The rule is a table, not a copied loop: each child names the parent
 //! posture that refuses it, and the sentence the refusal prints.
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
 use shekyl_options::{Code, Diagnostic, PeerEndpoint};
 
 use super::read::Reader;
 use super::{Clearnet, Onion, Socks, Tor};
-use crate::network::Network;
 
 /// A parent posture under which a child row is a conflict.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -142,7 +139,7 @@ fn refuse_children(r: &mut Reader<'_>, parent: Parent) {
 
 /// The clearnet connector. A word other than `on` or `off` is a fault; the
 /// children are still read, so a bad word does not hide a bad endpoint.
-pub(super) fn clearnet(r: &mut Reader<'_>, network: Network) -> Clearnet {
+pub(super) fn clearnet(r: &mut Reader<'_>) -> Clearnet {
     match r.required_word("clearnet") {
         Some("off") => {
             refuse_children(r, Parent::ClearnetOff);
@@ -150,23 +147,18 @@ pub(super) fn clearnet(r: &mut Reader<'_>, network: Network) -> Clearnet {
         }
         // `on`, and a word that could not be read (the fault is already
         // recorded): the children are still built.
-        Some("on") | None => clearnet_on(r, network),
+        Some("on") | None => clearnet_on(r),
         Some(other) => {
             r.word_choice("clearnet", other, "on, off");
-            clearnet_on(r, network)
+            clearnet_on(r)
         }
     }
 }
 
-fn clearnet_on(r: &mut Reader<'_>, network: Network) -> Clearnet {
-    let listen = if r.given("clearnet-listen") {
-        r.endpoint_list("clearnet-listen", false)
-    } else {
-        vec![SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-            network.p2p_port(),
-        )]
-    };
+fn clearnet_on(r: &mut Reader<'_>) -> Clearnet {
+    // The default listen is already in the map. Clearnet off does not reach
+    // here, and it does not invent a listen the process does not use.
+    let listen = r.endpoint_list("clearnet-listen", true);
     let advertise = r.endpoint_list("clearnet-advertise", false);
     let v4 = advertise
         .iter()

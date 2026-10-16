@@ -29,8 +29,8 @@ fn build_from(cli: &[&str], file: &str) -> Result<DaemonConfig, Vec<Diagnostic>>
     let cli = shekyl_options::read_cli(&TABLE, args)?;
     let (network, mode) = choosers(&cli);
     let given = shekyl_options::read_file(&TABLE, Path::new("/etc/shekyl/x.toml"), file)?;
-    let resolved = resolve(&TABLE, network, cli, given)?;
-    build(&resolved, network, mode, &platform(), None)
+    let mut resolved = resolve(&TABLE, network, cli, given)?;
+    build(&mut resolved, network, mode, &platform(), None)
 }
 
 fn codes(r: Result<DaemonConfig, Vec<Diagnostic>>) -> Vec<(Code, String)> {
@@ -84,9 +84,9 @@ fn no_home_refuses_each_path_that_needs_it_and_not_an_explicit_one() {
         .map(OsString::from)
         .collect();
     let cli = shekyl_options::read_cli(&TABLE, args).unwrap();
-    let resolved = resolve(&TABLE, Network::Mainnet, cli, Vec::new()).unwrap();
+    let mut resolved = resolve(&TABLE, Network::Mainnet, cli, Vec::new()).unwrap();
     let d = build(
-        &resolved,
+        &mut resolved,
         Network::Mainnet,
         RunMode::User,
         &Platform::default(),
@@ -365,7 +365,7 @@ fn a_missing_defaulted_row_is_a_fault() {
     let mut resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
     resolved.values.remove("rpc-connections-max");
     resolved.values.remove("log-level");
-    let err = build(&resolved, network, mode, &platform(), None).unwrap_err();
+    let err = build(&mut resolved, network, mode, &platform(), None).unwrap_err();
     assert!(err.iter().any(|d| {
         d.code == Code::ValueSyntax && d.option.as_deref() == Some("rpc-connections-max")
     }));
@@ -384,8 +384,71 @@ fn a_count_past_u32_is_a_range_fault() {
         "rpc-connections-max",
         (Value::Integer(u64::from(u32::MAX) + 1), Source::Cli),
     );
-    let err = build(&resolved, network, mode, &platform(), None).unwrap_err();
+    let err = build(&mut resolved, network, mode, &platform(), None).unwrap_err();
     assert!(err.iter().any(|d| {
         d.code == Code::ValueRange && d.option.as_deref() == Some("rpc-connections-max")
     }));
+}
+
+/// The values a default start uses are in the map, with source `default`.
+/// `tor-file` stays absent: it is a search, not a path this build invents.
+/// Clearnet off does not name a listen the process does not open.
+#[test]
+fn derived_defaults_are_in_the_map_and_clearnet_off_names_no_listen() {
+    let mut resolved = resolve(
+        &TABLE,
+        Network::Mainnet,
+        shekyl_options::read_cli(&TABLE, std::iter::empty::<OsString>()).unwrap(),
+        Vec::new(),
+    )
+    .unwrap();
+    let config = build(
+        &mut resolved,
+        Network::Mainnet,
+        RunMode::User,
+        &platform(),
+        None,
+    )
+    .unwrap();
+    for name in [
+        "data-dir",
+        "log-file",
+        "clearnet-listen",
+        "rpc-admin-listen",
+    ] {
+        assert_eq!(resolved.source(name), Some(&Source::Default), "{name}");
+    }
+    assert!(resolved.get("tor-file").is_none());
+    assert_eq!(
+        resolved.get("data-dir").map(Value::render).as_deref(),
+        Some(config.data_dir.display().to_string()).as_deref()
+    );
+    assert_eq!(
+        resolved
+            .get("rpc-admin-listen")
+            .map(Value::render)
+            .as_deref(),
+        Some("127.0.0.1:11029")
+    );
+
+    let mut off = resolve(
+        &TABLE,
+        Network::Mainnet,
+        shekyl_options::read_cli(
+            &TABLE,
+            ["--clearnet", "off", "--tor", "off"]
+                .into_iter()
+                .map(OsString::from),
+        )
+        .unwrap(),
+        Vec::new(),
+    )
+    .unwrap();
+    build(&mut off, Network::Mainnet, RunMode::User, &platform(), None).unwrap();
+    assert!(off.get("clearnet-listen").is_none());
+    assert_eq!(off.source("data-dir"), Some(&Source::Default));
+    assert_eq!(
+        off.get("rpc-admin-listen").map(Value::render).as_deref(),
+        Some("127.0.0.1:11029")
+    );
 }
