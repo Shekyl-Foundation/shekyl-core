@@ -29,6 +29,14 @@
 # `git pull` with the same) unless the guard opens the body before it. A
 # rule with no check is a convention.
 #
+# The command is parsed, not pattern-matched: each line is split into shell
+# words (`shlex`, so a quoted argument is one word) and into commands at
+# `;`, `&&`, `||`, `|` and `&`. In a command whose word is `git`, git's
+# global options are skipped — with the argument of the ones that take one
+# (`-C <path>`, `-c <name>=<value>`, `--git-dir`, ...) — and the first word
+# after them is the subcommand. `git -C "$DIR" fetch --depth=1` is a fetch;
+# `echo "git fetch --depth=1"` is not a git command at all.
+#
 # Instance of 47-gate-subject-assertion.mdc: an empty workflows directory,
 # or an unimportable parser, fails rather than passing quietly.
 
@@ -36,6 +44,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import sys
 
 try:
@@ -52,13 +61,24 @@ except ImportError:  # pragma: no cover - exercised by the CI image
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 
-DEPTH_COMMAND = re.compile(
-    r"\bgit\s+(?:fetch|pull)\b[^\n]*?"
-    r"--(?:depth|deepen|unshallow|shallow-since|shallow-exclude)\b"
+DEPTH_FLAGS = ("--depth", "--deepen", "--unshallow", "--shallow-since", "--shallow-exclude")
+DEPTH_SUBCOMMANDS = ("fetch", "pull")
+# git's global options that take their argument as the next word.
+GLOBAL_WITH_ARGUMENT = (
+    "-C",
+    "-c",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--super-prefix",
+    "--config-env",
+    "--exec-path",
+    "--list-cmds",
 )
-GUARD = re.compile(r'^\s*if \[ "\$\{GITHUB_ACTIONS:-\}" != "true" \]; then\s*$', re.M)
-GUARD_EXIT = re.compile(r"^\s*exit 0\s*$", re.M)
-GUARD_END = re.compile(r"^\s*fi\s*$", re.M)
+SEPARATORS = {";", "&&", "||", "|", "&", ";;"}
+GUARD = re.compile(r'^\s*if \[ "\$\{GITHUB_ACTIONS:-\}" != "true" \]; then\s*$')
+GUARD_EXIT = re.compile(r"^\s*exit 0\s*$")
+GUARD_END = re.compile(r"^\s*fi\s*$")
 
 
 def joined(body: str) -> str:
@@ -66,15 +86,66 @@ def joined(body: str) -> str:
     return re.sub(r"\\\n\s*", " ", body)
 
 
-def guarded_before(body: str, at: int) -> bool:
-    """Whether the guard opens, exits 0 and closes before offset `at`."""
-    opener = GUARD.search(body)
-    if opener is None or opener.start() > at:
+def commands(line: str) -> list[list[str]]:
+    """The line's shell words, split into commands at the operators. A line
+    shlex cannot split (an unbalanced quote) is read as whitespace words, so
+    a malformed line is still inspected rather than skipped."""
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    try:
+        words = list(lexer)
+    except ValueError:
+        words = line.split()
+    out: list[list[str]] = [[]]
+    for word in words:
+        if word in SEPARATORS:
+            out.append([])
+        else:
+            out[-1].append(word)
+    return [command for command in out if command]
+
+
+def depth_changing(command: list[str]) -> bool:
+    """Whether `command` is `git [global options] fetch|pull` with a depth
+    flag."""
+    for start, word in enumerate(command):
+        if word == "git" or word.endswith("/git"):
+            break
+    else:
         return False
-    end = GUARD_END.search(body, opener.end())
-    if end is None or end.start() > at:
+    i = start + 1
+    while i < len(command) and command[i].startswith("-"):
+        option = command[i]
+        takes_argument = option in GLOBAL_WITH_ARGUMENT
+        i += 2 if takes_argument else 1
+    if i >= len(command) or command[i] not in DEPTH_SUBCOMMANDS:
         return False
-    return GUARD_EXIT.search(body, opener.end(), end.start()) is not None
+    return any(
+        word == flag or word.startswith(flag + "=")
+        for word in command[i + 1 :]
+        for flag in DEPTH_FLAGS
+    )
+
+
+def first_depth_command(lines: list[str]) -> tuple[int, str] | None:
+    """The line number and text of the body's first depth-changing git
+    command, or `None`."""
+    for number, line in enumerate(lines):
+        if any(depth_changing(command) for command in commands(line)):
+            return number, line.strip()
+    return None
+
+
+def guarded_before(lines: list[str], at: int) -> bool:
+    """Whether the guard opens, exits 0 and closes on lines before `at`."""
+    opener = next((n for n in range(at) if GUARD.match(lines[n])), None)
+    if opener is None:
+        return False
+    end = next((n for n in range(opener + 1, at) if GUARD_END.match(lines[n])), None)
+    if end is None:
+        return False
+    return any(GUARD_EXIT.match(lines[n]) for n in range(opener + 1, end))
 
 
 def findings(workflows: dict[str, object]) -> tuple[list[str], int]:
@@ -88,16 +159,17 @@ def findings(workflows: dict[str, object]) -> tuple[list[str], int]:
                 run = step.get("run") if isinstance(step, dict) else None
                 if not isinstance(run, str):
                     continue
-                body = joined(run)
-                command = DEPTH_COMMAND.search(body)
-                if command is None:
+                lines = joined(run).split("\n")
+                found = first_depth_command(lines)
+                if found is None:
                     continue
+                at, command = found
                 seen += 1
-                if not guarded_before(body, command.start()):
+                if not guarded_before(lines, at):
                     label = step.get("name") or f"step {index}"
                     problems.append(
                         f"{path}: job `{job_name}`, step `{label}` runs "
-                        f"`{command.group(0).strip()}` without the "
+                        f"`{command}` without the "
                         "GITHUB_ACTIONS guard before it"
                     )
     return problems, seen
@@ -155,6 +227,29 @@ def selftest() -> int:
             1,
         ),
         ("plain fetch is not this gate's", wf("git fetch origin dev\n"), 0, 0),
+        (
+            "-C with a quoted path refused",
+            wf('git -C "$GITHUB_WORKSPACE" fetch --depth=1 origin dev\n'),
+            1,
+            1,
+        ),
+        ("-c refused", wf("git -c protocol.version=2 fetch --depth 1 origin x\n"), 1, 1),
+        (
+            "-C guarded passes",
+            wf(GUARD_TEXT + 'git -C "$GITHUB_WORKSPACE" fetch --depth=1 origin dev\n'),
+            0,
+            1,
+        ),
+        (
+            "-c guarded passes",
+            wf(GUARD_TEXT + "git -c protocol.version=2 fetch --depth 1 origin x\n"),
+            0,
+            1,
+        ),
+        ("--no-pager before pull refused", wf("git --no-pager pull --unshallow\n"), 1, 1),
+        ("after && refused", wf("cd repo && git fetch --deepen=5\n"), 1, 1),
+        ("a quoted mention is not a command", wf('echo "git fetch --depth=1"\n'), 0, 0),
+        ("-C log is not a fetch", wf("git -C repo log --depth\n"), 0, 0),
         ("uses-only step ignored", {"w.yml": {"jobs": {"j": {"steps": [{"uses": "x"}]}}}}, 0, 0),
     ]
     failed = 0
