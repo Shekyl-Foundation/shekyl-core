@@ -150,6 +150,35 @@ The connector changes which list is drawn, not the clock. The
 60-second housekeeping timer is not the pace. The owner does not block
 a p2p io worker.
 
+**Readiness comes before the draw (`TSR-F1`; `TOR_SUPERVISOR.md` §4.1,
+§4.6).** A wake draws only when its connector can dial: its link on the
+seam hub is usable, the core has published a tip, and the network id is
+set. That check is the first step of the plan, ahead of the settle and
+of every draw. A draw the connector cannot dial ends as
+`DialFailed(LocalClose)`, and the list rule drops a drawn gray address
+on that outcome, so a dead route used to cost one address per wake.
+
+While any of the three is missing, the owner loop arms no timer. It
+waits on the change: a link published, the tip published, the network
+id set, or the stop. It logs one line when it starts waiting and one
+when it resumes, and the wake spacing resumes with it. A parked loop
+does not run the thirty-minute store of the address file; another
+connector's loop does, and the stop writes it.
+
+The link is `shekyl_transport_layer::Link`: an incarnation, a route,
+and an outbound facet that is `Unknown`, `Usable` or `Down`. The zone
+host publishes clearnet's when its listener is up, with the route
+direct or the operator's `--proxy`. It publishes Tor's when it installs
+the SOCKS proxy (`shekyl_zone_listen_tor`, `shekyl_zone_set_tor_proxy`),
+and when that proxy is the managed Tor's, that Tor's death publishes
+the link down (`BlockingDaemonTor::on_death`, in Rust). An operator's
+Tor stays usable until the supervisor brings its outbound evidence.
+Each connector reads its route from the link at every dial.
+
+Two races are accepted. A link that falls between the plan and the
+dial costs that one draw. A wake whose timer was armed before the fall
+runs once and draws nothing. Tests: `shekyl-dialer/tests/readiness.rs`.
+
 **The population.** A closed network (`--add-exclusive-node`) is not a
 dialer arm (Rick, 2026-10-11): an exclusive list is a network
 declaration. The node's candidate set is the named addresses, and the
@@ -682,8 +711,9 @@ stranded: its lists cannot get it a peer. That wake re-admits the
 connector's configured addresses to gray as operator-named, under normal
 admission: the compiled seeds and `--add-peer`, or, when a closed
 network is declared (`--add-exclusive-node`), that list alone. It dials
-nothing itself; the next wake draws. The apply table and the address
-file are unchanged. The dialer logs one line on entering the state, with
+nothing itself; the next wake draws. Recovery runs only on a wake that
+is ready to dial: a connector whose link is down re-admits nothing. The
+apply table and the address file are unchanged. The dialer logs one line on entering the state, with
 the count re-admitted, and one on leaving it. A connector with a target
 of zero is never stranded. Tests: `shekyl-dialer/tests/recovery.rs` (a
 stranded connector re-admits and dials; a healthy one does not re-admit

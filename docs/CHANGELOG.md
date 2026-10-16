@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- **P2P: the dialer draws only when it can dial (`TSR-F1`, `TOR_SUPERVISOR.md` §4.6).** Before, a wake drew an address and only then found there was no tip, no network id, or no live proxy; the dial failed locally, and the list rule dropped the drawn gray address. Every connector lost addresses this way from start until the core's first tip. After the managed Tor died, the Tor connector lost about one gray onion per second for the rest of the boot, including every address the address file had restored. Each connector now has a link on the seam hub (`shekyl_transport_layer::Link`: a route and an outbound facet, `Unknown`, `Usable` or `Down`). The plan reads that link, the tip and the network id before it draws. While one is missing, the owner loop waits on the change instead of a timer. The zone host publishes the links, the connector reads its route from the link at each dial, and the managed Tor's death takes the Tor link down, watched in Rust. Operator-visible: one log line when a connector starts waiting, naming what it waits for, and one when it resumes; a warning when the managed Tor exits.
 - **Chain rules: stateless verification runs off the single writer (`CHAIN_RULES_CRATE.md` §4.6).** `form`, on the pipeline's parallel workers, now runs every rule that reads no chain state:
   - the header rows and the longhash;
   - CEN-D1 against a **claimed target**;

@@ -679,14 +679,17 @@ its PR leaves draft.
 
 ## 12. Increments (rule 26)
 
-1. P2P lane: `TSR-F1`.
+1. P2P lane: `TSR-F1`. The link replaces the zone host's `tor_proxy` slot
+   here (Rick's TSR-F1 brief, 2026-10-16): the zone host publishes it, the
+   managed Tor's death edge takes it down, and the connector reads its route
+   from it.
 2. Control client: the bounded sink; parsers for `STATUS_GENERAL`,
    `STATUS_CLIENT`, `NETWORK_LIVENESS`, `HS_DESC` and log events; the launch
    recipe and `AvoidDiskWrites` in the closed list.
 3. The supervisor core (sans-IO) and its timing-engine driver; the pin gate per
    spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings.
 4. The probe nonce and the probe.
-5. The link replaces `tor_proxy` in the zone host.
+5. The supervisor becomes the Tor link's publisher, in place of the zone host.
 6. Acceptance; then the C++ deletions, to Rick before they are cut.
 
 ## 13. Review denominator
