@@ -146,7 +146,7 @@ where
         "switch-timing [{label}] offer of the winning block (tier, AL1, plan reads): {offered:?}"
     );
     eprintln!(
-        "switch-timing [{label}] form N + M (RandomX, off the actor, across the host's threads): {:?}",
+        "switch-timing [{label}] form N + M (the recorded PoW, the proofs and the signatures; off the actor, across the host's threads): {:?}",
         timing.form
     );
     eprintln!("switch-timing [{label}] Reorganize (plan checks, N cheap-tier verdicts, pops + SI-5, N rows, M validate + connect, M removes): {:?}", timing.switch);
