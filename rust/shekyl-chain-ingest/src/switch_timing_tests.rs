@@ -56,7 +56,7 @@ where
     let started = Instant::now();
     x.mine(prefix_len).await;
     let prefix = y.mine(prefix_len).await;
-    x.mine(depth).await;
+    let a = x.mine(depth).await;
     y.idle();
     let mut spender = Spender::over(&prefix);
     let mut b: Vec<Mined> = Vec::new();
@@ -111,6 +111,20 @@ where
         .copied()
         .collect();
     assert!(differ.is_empty(), "A → B differs from B in {differ:?}");
+    // The alt table, exactly: x kept every block it demoted, y holds none.
+    let alt =
+        |rows: &std::collections::BTreeMap<&'static str, shekyl_chain_store::store::RawRows>| {
+            use shekyl_chain_store::codec::{AltBlock, Canonical};
+            rows.get("alt_blocks")
+                .map(|r| {
+                    r.iter()
+                        .map(|(_, v)| AltBlock::decode(v).expect("decodes").block().hash())
+                        .collect::<std::collections::BTreeSet<_>>()
+                })
+                .unwrap_or_default()
+        };
+    assert_eq!(alt(&rows_x), a.iter().map(|m| m.hash).collect());
+    assert!(alt(&rows_y).is_empty());
 
     let basis = format!(
         "{} build, {} threads available, N = {depth} demoted, M = {} promoted, {}",

@@ -92,8 +92,9 @@ async fn a_heavier_branch_switches_and_equals_the_branch_connected_directly() {
     );
 
     // Nothing left over: the store that switched is the store that
-    // connected B directly.
+    // connected B directly, and its alt table is exactly A.
     assert_eq!(x.digest().await.expect("d"), y.digest().await.expect("d"));
+    assert_same_chain(&x, &y, &a.iter().collect::<Vec<_>>(), "A → B equals B").await;
 
     // The demoted blocks are alt rows now (K7), and the promoted rows are
     // gone: three held, B's four removed.
@@ -264,6 +265,8 @@ async fn a_checkpoint_forced_switch_discards_the_demoted_chain() {
         "nothing re-entered"
     );
     assert_eq!(x.digest().await.expect("d"), y.digest().await.expect("d"));
+    // Both alt tables empty: x discarded what it demoted, y never had any.
+    assert_same_chain(&x, &y, &[], "a forced switch equals B connected directly").await;
     x.close().await;
     y.close().await;
 }
@@ -308,12 +311,13 @@ async fn a_demoted_block_the_tier_refuses_halts_the_writer_si27() {
 // and the self-differential (`E5-Q9` re-ruled 2026-10-15).
 // ---------------------------------------------------------------------------
 
-/// The tables two stores that hold the same chain may still disagree on:
-/// each holds the alternative blocks it switched away from.
-const EXPECTED_TO_DIFFER: &[&str] = &["alt_blocks"];
+/// The one table two stores holding the same chain legitimately differ
+/// on: each holds the alternative blocks it switched away from. Never
+/// excluded — [`assert_same_chain`] asserts it exactly.
+const ALT_TABLE: &str = "alt_blocks";
 
-/// The tables whose rows differ between `x` and `y`, every table compared
-/// at the byte level (`TableRows`) except [`EXPECTED_TO_DIFFER`].
+/// The tables other than the alt table whose rows differ between `x` and
+/// `y`, every one compared at the byte level (`TableRows`).
 async fn differing_tables(x: &Scenario<FreeHash>, y: &Scenario<FreeHash>) -> Vec<&'static str> {
     let a = x.table_rows().await.expect("rows");
     let b = y.table_rows().await.expect("rows");
@@ -321,9 +325,49 @@ async fn differing_tables(x: &Scenario<FreeHash>, y: &Scenario<FreeHash>) -> Vec
         a.keys().chain(b.keys()).copied().collect();
     names
         .into_iter()
-        .filter(|name| !EXPECTED_TO_DIFFER.contains(name))
+        .filter(|name| *name != ALT_TABLE)
         .filter(|name| a.get(name) != b.get(name))
         .collect()
+}
+
+/// The blocks a store's alt table holds, by hash, decoded from its rows.
+async fn alt_hashes(s: &Scenario<FreeHash>) -> std::collections::BTreeSet<BlockHash> {
+    use shekyl_chain_store::codec::{AltBlock, Canonical};
+    s.table_rows()
+        .await
+        .expect("rows")
+        .get(ALT_TABLE)
+        .map(|rows| {
+            rows.iter()
+                .map(|(_, value)| AltBlock::decode(value).expect("decodes").block().hash())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `switched` holds the chain `direct` connected directly: every table but
+/// the alt table byte-equal, and the alt table exactly — `switched` holds
+/// `kept` (the blocks it demoted and kept), `direct` holds nothing.
+async fn assert_same_chain(
+    switched: &Scenario<FreeHash>,
+    direct: &Scenario<FreeHash>,
+    kept: &[&Mined],
+    why: &str,
+) {
+    assert_eq!(
+        differing_tables(switched, direct).await,
+        Vec::<&str>::new(),
+        "{why}"
+    );
+    assert_eq!(
+        alt_hashes(switched).await,
+        kept.iter().map(|m| m.hash).collect(),
+        "{why}: the switched store's alt table is exactly the demoted blocks it kept"
+    );
+    assert!(
+        alt_hashes(direct).await.is_empty(),
+        "{why}: the directly connected store holds no alternative block"
+    );
 }
 
 /// The levered schedule `scenario_shard` runs: a 20-block epoch and a reorg
@@ -466,11 +510,7 @@ async fn spend_differential(name: &str, rules: crate::schedule::ChainRules, dept
         done.returned.iter().any(|tx| tx.hash() == spend.hash()),
         "the demoted spend comes back for the pool"
     );
-    assert_eq!(
-        differing_tables(&x, &y).await,
-        Vec::<&str>::new(),
-        "A → B equals B"
-    );
+    assert_same_chain(&x, &y, &a.iter().collect::<Vec<_>>(), "A → B equals B").await;
 
     // Back to A: B is one block longer than A was, so the way back pops
     // `depth + 1`. Inside the cap it lands and equals the chain that never
@@ -494,11 +534,13 @@ async fn spend_differential(name: &str, rules: crate::schedule::ChainRules, dept
                     .expect("switch back"),
                 Switched::Done(_)
             ));
-            assert_eq!(
-                differing_tables(&x, &z).await,
-                Vec::<&str>::new(),
-                "A → B → A equals the chain that never switched"
-            );
+            assert_same_chain(
+                &x,
+                &z,
+                &b.iter().collect::<Vec<_>>(),
+                "A → B → A equals the chain that never switched",
+            )
+            .await;
         }
         Offered::BeyondCap(beyond) => {
             assert_eq!(depth, x_cap(rules), "only the cap-depth run is refused");
