@@ -16,7 +16,7 @@ use shekyl_difficulty::ForkChoiceVerdict;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::Transaction;
 
-use crate::connector::{Offered, RunFault, Switched};
+use crate::connector::{Offered, PlanMismatchReason, RunFault, Switched};
 use crate::scenario::{FreeHash, Mined, Scenario};
 
 /// The listed bodies of `branches`' blocks, by hash — what the pool will
@@ -254,6 +254,10 @@ async fn a_checkpoint_forced_switch_discards_the_demoted_chain() {
         .expect("anchor");
     let plan = offer_branch(&x, &b).await;
     assert_eq!(plan.verdict, ForkChoiceVerdict::ForcedSwitch);
+    assert!(
+        plan.demoted.is_empty(),
+        "ForcedSwitch discards the demoted chain and does not read it"
+    );
     let Switched::Done(done) = x.reorganize(&plan, &bodies(&b)).await.expect("switch") else {
         panic!("the forced switch did not land");
     };
@@ -760,7 +764,9 @@ async fn a_stale_or_mismatched_plan_is_a_driver_defect_and_the_writer_stays_up()
     short.promoted.pop();
     assert!(matches!(
         x.reorganize(&short, &bodies(&b)).await,
-        Err(RunFault::PlanMismatch { .. })
+        Err(RunFault::PlanMismatch {
+            reason: PlanMismatchReason::PromotedLength,
+        })
     ));
     // A demoted block formed with a witness its height row does not hold
     // (CEN-K5b's demoted direction).
@@ -769,7 +775,9 @@ async fn a_stale_or_mismatched_plan_is_a_driver_defect_and_the_writer_stays_up()
         Some(shekyl_types::archival::AttestationWitness::new(vec![0x5E; 8]).expect("non-empty"));
     assert!(matches!(
         x.reorganize(&witnessed, &bodies(&b)).await,
-        Err(RunFault::PlanMismatch { .. })
+        Err(RunFault::PlanMismatch {
+            reason: PlanMismatchReason::DemotedChain,
+        })
     ));
     assert_eq!(x.digest().await.expect("d"), before, "nothing moved");
 
@@ -803,7 +811,9 @@ async fn a_plan_naming_a_recorded_block_as_its_alternative_tip_is_a_mismatch_not
     plan.promoted.clear();
     assert!(matches!(
         x.reorganize(&plan, &bodies(&b)).await,
-        Err(RunFault::PlanMismatch { .. })
+        Err(RunFault::PlanMismatch {
+            reason: PlanMismatchReason::AlternativeTipRecorded,
+        })
     ));
     assert_eq!(x.mine(1).await.len(), 1, "the writer is up");
     x.close().await;

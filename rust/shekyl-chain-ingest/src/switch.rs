@@ -20,9 +20,12 @@
 //! 2. [`Reorganize`] — the formed blocks, with the tip the plan was made
 //!    against. On the actor, before any write: the plan is held to the
 //!    store (a tip that moved is a driver defect, never a switch); the cap
-//!    is checked (`E5-Q6`); each demoted block is judged by the cheap tier
+//!    is checked (`E5-Q6`); each demoted block the plan formed — the
+//!    `Switch` arm, which re-admits them — is judged by the cheap tier
 //!    over a snapshot taken here, where its history is exactly the chain
-//!    below it (SAL-13; a refusal is SI-27). Then one `store.write`: the
+//!    below it (SAL-13; a refusal is SI-27). `ForcedSwitch` forms none of
+//!    them and discards them (K7), so the tier does not run and SI-27 does
+//!    not arm. Then one `store.write`: the
 //!    pops and SI-5 (`pop_many`), the demoted rows from their verdicts
 //!    (K7; the checkpoint arm discards them), every alt entry through the
 //!    full `validate` and `connect` (K5; K5b's witness travels in the alt
@@ -40,23 +43,24 @@
 //! a held hash, the orphan policy, and A1/A4's Rust holder — the DRS-X
 //! Round 0 designs them with the live sources.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
     alt_against, seed_height, target_claim, validate, Candidate, CenRow, Fault, InvalidBlock,
-    ReferenceClaim, ReferenceClaims, Stale, StructurallyValid, Target, Tip, Trust,
+    ReferenceClaim, ReferenceClaims, StructurallyValid, Target, Tip, Trust,
     REFERENCE_BLOCK_MAX_AGE,
 };
 use shekyl_chain_store::store::{
-    AltCannot, AltChain, AltView, ChainStore, ReadSnapshot, StoreCannot, StoreError,
+    AltCannot, AltChain, AltView, ChainStore, RawRows, ReadSnapshot, StoreCannot, StoreError,
+    WriteBatch,
 };
 use shekyl_difficulty::{fork_choice, ForkChoiceVerdict};
 use shekyl_types::archival::AttestationWitness;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_wire::{Block, Transaction};
 
-use super::{Connector, RunFault};
+use super::{fault_reply, Connector, PlanMismatchReason, RunFault};
 use crate::schedule::ChainRules;
 use shekyl_chain_rules::{AtHeight, HeaderView};
 
@@ -450,13 +454,7 @@ fn offer(
         Planned::Due(plan) => Ok(Offered::SwitchDue(plan)),
         Planned::BeyondCap(beyond) => Ok(Offered::BeyondCap(beyond)),
         Planned::Refused { refused, remove } => {
-            let cleared: Result<(), StoreError> = store.write(|batch| {
-                for id in &remove {
-                    batch.remove_alt_block(id)?;
-                }
-                Ok(())
-            });
-            cleared?;
+            remove_alt_suffix(store, &remove)?;
             Ok(Offered::Refused(refused))
         }
     }
@@ -468,9 +466,9 @@ fn offer(
 /// (`target_claim`) over the chain the block is on: the stitched view for
 /// an alt entry, the recorded chain below it for a demoted block. A D6
 /// refusal on an alt entry is that block's verdict ([`Planned::Refused`]);
-/// on a demoted block it is a recorded block failing its own rules —
-/// SI-27, the writer halts, as the cheap tier's refusal does in
-/// [`switch`].
+/// on a demoted block the `Switch` arm forms, it is a recorded block
+/// failing its own rules — SI-27, the writer halts, as the cheap tier's
+/// refusal does in [`switch`]. `ForcedSwitch` forms none of them (K7).
 fn plan(
     store: &ChainStore,
     snap: &ReadSnapshot<'_>,
@@ -486,56 +484,44 @@ fn plan(
     }
     let stitched = AltView::new(snap, chain.clone());
     let entries = chain.entries();
-    let seed_on_alt = |height: BlockHeight| -> Result<BlockHash, RunFault> {
-        match seed_height(height) {
-            None => Ok(BlockHash::NULL),
-            Some(at) if at <= root.height => recorded_hash(snap, at),
-            Some(at) => {
-                let index = usize::try_from(at.to_raw() - root.height.to_raw() - 1)
-                    .expect("an alt chain's length fits usize");
-                Ok(entries[index].id)
-            }
-        }
-    };
+    // K7: ForcedSwitch discards the demoted chain, so the plan does not
+    // read the blocks it will not form. The Switch arm re-admits them and
+    // claims their seed and target over the chain below each one.
     let mut demoted = Vec::new();
-    let mut height = root.height;
-    while height < tip.height {
-        height = height.checked_add(BlockCount::ONE).expect("below the tip");
-        let candidate = match snap.candidate_at(height)? {
-            AtHeight::Recorded(candidate) => candidate,
-            AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
-        };
-        let seed = match seed_height(height) {
-            None => BlockHash::NULL,
-            Some(at) => recorded_hash(snap, at)?,
-        };
-        let recorded = match snap.recorded_pow(height)? {
-            AtHeight::Recorded(pow) => pow.proven(),
-            AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
-        };
-        // The recorded chain below this block, as the cheap tier will see
-        // it in `switch` (SAL-13): the target claim over the same view.
-        let parent = recorded_hash(snap, BlockHeight::from_raw(height.to_raw() - 1))?;
-        let below = AltView::new(snap, AltChain::build(snap, &parent)?);
-        let target = match target_claim(&below, height, &rules.in_force(height)) {
-            Ok(Ok(target)) => target,
-            Ok(Err(_refused)) => {
-                let halted: Result<(), RunFault> =
-                    store.write(|batch| Err(RunFault::Store(batch.refuse_demotion(height))));
-                return Err(halted.expect_err("SI-27 halts the writer"));
-            }
-            Err(fault) => return Err(snapshot_fault(store, height, fault)),
-        };
-        demoted.push(PlannedDemotion {
-            at: PlannedBlock {
-                height,
-                hash: recorded_hash(snap, height)?,
-                seed,
-                target,
-                recorded,
-            },
-            candidate,
-        });
+    if verdict == ForkChoiceVerdict::Switch {
+        let mut height = root.height;
+        while height < tip.height {
+            height = height.checked_add(BlockCount::ONE).expect("below the tip");
+            let candidate = match snap.candidate_at(height)? {
+                AtHeight::Recorded(candidate) => candidate,
+                AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
+            };
+            let recorded = match snap.recorded_pow(height)? {
+                AtHeight::Recorded(pow) => pow.proven(),
+                AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
+            };
+            // The recorded chain below this block, as the cheap tier will see
+            // it in `switch` (SAL-13): the seed and the target over the same view.
+            let parent = recorded_hash(snap, BlockHeight::from_raw(height.to_raw() - 1))?;
+            let below = AltView::new(snap, AltChain::build(snap, &parent)?);
+            let target = match target_claim(&below, height, &rules.in_force(height)) {
+                Ok(Ok(target)) => target,
+                Ok(Err(_refused)) => {
+                    return Err(halt_writer(store, |batch| batch.refuse_demotion(height)))
+                }
+                Err(fault) => return Err(snapshot_fault(store, height, fault)),
+            };
+            demoted.push(PlannedDemotion {
+                at: PlannedBlock {
+                    height,
+                    hash: recorded_hash(snap, height)?,
+                    seed: claimed_seed(&below, height)?,
+                    target,
+                    recorded,
+                },
+                candidate,
+            });
+        }
     }
     let mut promoted = Vec::with_capacity(entries.len());
     for (index, entry) in entries.iter().enumerate() {
@@ -560,7 +546,7 @@ fn plan(
             at: PlannedBlock {
                 height,
                 hash: entry.id,
-                seed: seed_on_alt(height)?,
+                seed: claimed_seed(&stitched, height)?,
                 target,
                 recorded: entry.block.pow().proven(),
             },
@@ -630,7 +616,7 @@ fn switch(
         Ok(chain) => chain,
         Err(StoreError::Cannot(StoreCannot::Alt(AltCannot::Unlinked { .. }))) => {
             return Err(RunFault::PlanMismatch {
-                reason: "the plan's alternative tip is not held",
+                reason: PlanMismatchReason::AlternativeTipUnheld,
             })
         }
         Err(e) => return Err(e.into()),
@@ -646,7 +632,7 @@ fn switch(
     // alternative chain at all.
     let Some(last) = entries.last() else {
         return Err(RunFault::PlanMismatch {
-            reason: "the plan's alternative tip is a recorded block",
+            reason: PlanMismatchReason::AlternativeTipRecorded,
         });
     };
     let alternative = last.block.cumulative_difficulty();
@@ -655,7 +641,7 @@ fn switch(
     let keep_demoted = match verdict {
         ForkChoiceVerdict::KeepCurrent => {
             return Err(RunFault::PlanMismatch {
-                reason: "the fork choice keeps the incumbent",
+                reason: PlanMismatchReason::IncumbentKept,
             })
         }
         ForkChoiceVerdict::Switch => true,
@@ -666,7 +652,7 @@ fn switch(
     // witness its row carries (K5b).
     if msg.promoted.len() != entries.len() {
         return Err(RunFault::PlanMismatch {
-            reason: "the promoted blocks are not the alternative chain's entries",
+            reason: PlanMismatchReason::PromotedLength,
         });
     }
     for (formed, entry) in msg.promoted.iter().zip(&entries) {
@@ -677,7 +663,7 @@ fn switch(
             .map(AttestationWitness::as_bytes);
         if formed.hash() != entry.id || witness != entry.block.attestation_witness() {
             return Err(RunFault::PlanMismatch {
-                reason: "a promoted block is not its alt row (identity or witness)",
+                reason: PlanMismatchReason::PromotedRow,
             });
         }
     }
@@ -710,7 +696,7 @@ fn switch(
         )
     {
         return Err(RunFault::PlanMismatch {
-            reason: "the demoted blocks are not the recorded chain above the fork point (identity or witness)",
+            reason: PlanMismatchReason::DemotedChain,
         });
     }
 
@@ -726,9 +712,7 @@ fn switch(
             Ok(Ok(admitted)) => demoted_rows.push(admitted),
             Ok(Err(_refused)) => {
                 let height = *height;
-                let halted: Result<(), RunFault> =
-                    store.write(|batch| Err(RunFault::Store(batch.refuse_demotion(height))));
-                return Err(halted.expect_err("SI-27 halts the writer"));
+                return Err(halt_writer(store, |batch| batch.refuse_demotion(height)));
             }
             Err(fault) => return Err(snapshot_fault(store, *height, fault)),
         }
@@ -794,13 +778,7 @@ fn switch(
             // K5: the failing alt suffix leaves the store, in its own write
             // — the switch's transaction rolled back with everything in it.
             let removed: Vec<BlockHash> = entries[index..].iter().map(|e| e.id).collect();
-            let cleared: Result<(), StoreError> = store.write(|batch| {
-                for id in &removed {
-                    batch.remove_alt_block(id)?;
-                }
-                Ok(())
-            });
-            cleared?;
+            remove_alt_suffix(store, &removed)?;
             Ok(Switched::Refused {
                 at,
                 hash,
@@ -833,47 +811,78 @@ fn recorded_work(
 
 /// A fault the cheap tier raised over a snapshot view. A corrupt read halts
 /// the writer through a batch that arms it, as `validate`'s does through
-/// the connect batch; the rest map as `Apply`'s.
+/// the connect batch; [`fault_reply`] maps the rest.
 fn snapshot_fault(store: &ChainStore, height: BlockHeight, fault: Fault<StoreError>) -> RunFault {
-    match fault {
-        Fault::View(e) => RunFault::Store(e),
-        Fault::Corrupt(observed) => {
-            let halted: Result<(), RunFault> =
-                store.write(|batch| Err(RunFault::Store(batch.refuse_corrupt(observed))));
-            halted.expect_err("a corrupt read halts the writer")
+    fault_reply(height, fault, |observed| {
+        halt_writer(store, |batch| batch.refuse_corrupt(observed))
+    })
+}
+
+/// Arm a halt and return it. `arm` notes the invariant on a batch whose
+/// closure then fails, so `ChainStore::write` prefers that
+/// `InvariantViolated` over the error the closure returned.
+fn halt_writer(
+    store: &ChainStore,
+    arm: impl for<'id> FnOnce(&mut WriteBatch<'_, 'id>) -> StoreError,
+) -> RunFault {
+    let halted: Result<(), RunFault> = store.write(|batch| Err(RunFault::Store(arm(batch))));
+    halted.expect_err("an armed invariant halts the writer")
+}
+
+/// The alt suffix a refusal names, removed in its own write after the
+/// judging write aborted.
+fn remove_alt_suffix(store: &ChainStore, ids: &[BlockHash]) -> Result<(), RunFault> {
+    let cleared: Result<(), StoreError> = store.write(|batch| {
+        for id in ids {
+            batch.remove_alt_block(id)?;
         }
-        Fault::Stale(Stale::Seed {
-            claimed,
-            expected,
-            retry,
-        }) => RunFault::StaleSeed {
-            height,
-            claimed,
-            expected,
-            retry,
-        },
-        Fault::Stale(Stale::Target {
-            claimed,
-            expected,
-            retry,
-        }) => RunFault::StaleTarget {
-            height,
-            claimed,
-            expected,
-            retry,
-        },
-        Fault::Stale(Stale::Reference {
-            slot,
-            reference,
-            claims,
-            retry,
-        }) => RunFault::StaleReference {
-            height,
-            slot,
-            reference,
-            claims,
-            retry,
-        },
-        Fault::Stale(Stale::RuleSet { .. }) => RunFault::StaleRuleSet { height },
+        Ok(())
+    });
+    cleared?;
+    Ok(())
+}
+
+/// The seed claim for the block at `height` on `view`. The seed height is
+/// at or below the block's parent, and this view reaches at least that
+/// parent — an alt entry's stitched chain, or the recorded chain below a
+/// demoted block.
+fn claimed_seed(view: &AltView<'_>, height: BlockHeight) -> Result<BlockHash, RunFault> {
+    let Some(at) = seed_height(height) else {
+        return Ok(BlockHash::NULL);
+    };
+    match view.header_at(at)? {
+        AtHeight::Recorded(record) => Ok(record.hash),
+        AtHeight::AboveTip => unreachable!(
+            "the seed height sits below the block, and this view reaches at least the block's parent"
+        ),
+    }
+}
+
+/// Replace the run's trust with a fixture table — test-only, so the fork
+/// choice's checkpoint arm (CEN-K6/K7) can be reached on a regtest chain,
+/// which no release anchors.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub struct AnchorForTests(pub Trust);
+
+#[cfg(test)]
+impl Message<AnchorForTests> for Connector {
+    type Reply = ();
+
+    async fn handle(&mut self, msg: AnchorForTests, _ctx: &mut Context<Self, Self::Reply>) {
+        self.trust = msg.0;
+    }
+}
+
+/// Every table of the store as stored bytes (`ReadSnapshot::table_rows`) —
+/// a differential's read, not a consensus one.
+#[derive(Clone, Copy, Debug)]
+pub struct TableRows;
+
+impl Message<TableRows> for Connector {
+    type Reply = Result<BTreeMap<&'static str, RawRows>, RunFault>;
+
+    async fn handle(&mut self, _: TableRows, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        Ok(self.writer.read()?.table_rows()?)
     }
 }

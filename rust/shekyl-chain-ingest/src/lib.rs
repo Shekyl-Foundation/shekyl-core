@@ -174,9 +174,9 @@ mod vectors_tests;
 #[cfg(feature = "pipeline")]
 pub use connector::{
     AltBlocksHeld, Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject,
-    Injected, IssueDraws, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
-    PopBeyondReorgCap, Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan,
-    Switched, TableRows, TemplateFacts,
+    Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock, PlannedDemotion,
+    PlannedPromotion, PopBeyondReorgCap, Reorganize, Rewind, Rewound, RunEnd, RunFault, SwitchDone,
+    SwitchPlan, Switched, TableRows, TemplateFacts,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]
