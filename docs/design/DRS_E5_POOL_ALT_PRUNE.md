@@ -968,7 +968,9 @@ above. Each rebuilt chunk must equal the stored one, and the top must equal
 end, so the chunks a pop can change are exactly each layer's last chunk:
 rebuilding them checks the whole trim, at chunk width × depth reads. SI-12
 compares the summary with the same recorded root, and both come back from
-one undo log, so it cannot see a bad trim; SI-5 can.
+one undo log, so it cannot see a bad trim; SI-5 can. An empty tree has no
+chunk to rebuild; its top is `CurveTreeRoot::EMPTY`, which the two stored
+roots can agree on not being.
 
 **Bundles at the switch land with SO-D12's merged increment (ruled
 2026-10-15).** Until then the alt row keeps the attestation witness and

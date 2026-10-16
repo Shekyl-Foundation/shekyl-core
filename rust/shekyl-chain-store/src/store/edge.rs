@@ -19,7 +19,10 @@
 //! chunk just rebuilt — with the rules crate's arithmetic
 //! ([`rebuild_right_edge`]; the store hosts storage and computes no hash of
 //! its own, DRS-D3b). Every rebuilt chunk must equal the stored one, and the
-//! top must equal the live root. Cost: chunk width × depth reads.
+//! top must equal the live root. An empty tree has no chunk to rebuild; its
+//! top is [`CurveTreeRoot::EMPTY`], and a summary and live root that agree
+//! on any other value fail the root arm — SI-12 only holds the two copies
+//! together. Cost: chunk width × depth reads.
 //!
 //! [`WriteBatch::pop_many`] is the one entry that runs it: the connector's
 //! `Rewind` and the switch both pop through it, so a caller cannot pop a
@@ -46,9 +49,10 @@ impl WriteBatch<'_, '_> {
     ///
     /// Whatever [`pop`](Self::pop) returns, at the pop that returned it;
     /// [`StoreInvariant::RightEdgeDiverged`] (SI-5, poisons and halts) when a
-    /// rebuilt chunk is not the stored one or the rebuilt root is not the
-    /// live root; SI-7 for a layer row or leaf that is absent, undecodable
-    /// or off its curve; engine errors.
+    /// rebuilt chunk is not the stored one, the rebuilt root is not the
+    /// live root, or an empty tree's live root is not [`CurveTreeRoot::EMPTY`];
+    /// SI-7 for a layer row or leaf that is absent, undecodable or off its
+    /// curve; engine errors.
     pub fn pop_many(&self, count: u64) -> Result<Vec<Popped>, StoreError> {
         let mut popped = Vec::with_capacity(usize::try_from(count).unwrap_or(0));
         for _ in 0..count {
@@ -67,8 +71,15 @@ impl WriteBatch<'_, '_> {
         // the live root), so `state.root` below is `curve_tree_roots[tip + 1]`.
         let state = curve_reads::summary(txn).map_err(|f| self.arm_read_fault(f))?;
         let Some(span) = RightEdgeSpan::of(state.leaf_count.to_raw()) else {
-            // No leaves, no edge: SI-12 has held the empty summary to the
-            // live root.
+            // No children to rebuild. An empty tree's root is the one root
+            // it has. SI-12 has held the summary to the live root, so the
+            // two copies can agree on a value an empty tree cannot have;
+            // the rebuilt top is `CurveTreeRoot::EMPTY` either way.
+            if state.root != CurveTreeRoot::EMPTY {
+                return Err(self.poison().arm(StoreInvariant::RightEdgeDiverged {
+                    observed: EdgeFault::Root,
+                }));
+            }
             return Ok(());
         };
         let range =

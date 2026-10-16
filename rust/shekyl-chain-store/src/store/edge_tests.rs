@@ -8,7 +8,8 @@
 //! edge, which no pop restores, halts at the leaf chunk; a leaf scalar that
 //! is not on its curve names `curve_tree_leaves`; a summary and recorded
 //! root moved together — SI-12 holds, the tree does not — halts on the
-//! root arm.
+//! root arm. So does an empty tree whose two copies agree on any root but
+//! the empty one: there is no chunk to rebuild, and the empty root is known.
 
 use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, CurveTreeRoot, TreeLeaf};
@@ -80,6 +81,81 @@ fn popping_nothing_reads_nothing_and_succeeds() {
     let (path, store) = chain("edge-zero");
     let out: Result<usize, TestErr> = store.write(|batch| Ok(batch.pop_many(0)?.len()));
     assert_eq!(out, Ok(0));
+    drop(store);
+    cleanup(&path);
+}
+
+/// Three blocks, none of them past the unlock window, so nothing has
+/// drained: a pop leaves the empty tree, whose root is the empty root.
+fn undrained(name: &str) -> (std::path::PathBuf, ChainStore) {
+    let path = tmp(name);
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new(), Vec::new(), Vec::new()]);
+    let state = summary(&store);
+    assert_eq!(state.leaf_count.to_raw(), 0, "nothing has drained");
+    assert_eq!(state.root, CurveTreeRoot::EMPTY);
+    (path, store)
+}
+
+#[test]
+fn popping_an_undrained_chain_holds_the_empty_root() {
+    let (path, store) = undrained("edge-empty-pop");
+    let out: Result<usize, TestErr> = store.write(|batch| Ok(batch.pop_many(1)?.len()));
+    assert_eq!(out, Ok(1));
+    let state = summary(&store);
+    assert_eq!(state.leaf_count.to_raw(), 0);
+    assert_eq!(state.root, CurveTreeRoot::EMPTY);
+    assert!(store.connect_state().is_live());
+    drop(store);
+    cleanup(&path);
+}
+
+#[test]
+fn an_empty_tree_whose_copies_agree_on_another_root_fails_the_root_arm() {
+    // SI-12 holds the summary to the live root. Both set to the same
+    // non-empty value, over no leaves, is a tree the rebuild cannot
+    // read a chunk from and still must refuse: the empty root is known.
+    let (path, store) = undrained("edge-empty-root");
+    let tip = store
+        .begin_read()
+        .expect("read")
+        .tip()
+        .expect("tip")
+        .recorded
+        .expect("a tip")
+        .height
+        .to_raw();
+    drop(store);
+    let wrong = CurveTreeRoot::from_bytes([0x5a; 32]);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut meta = txn.open_table(CURVE_TREE_META).expect("t");
+            let mut state: CurveTreeState = meta
+                .get(())
+                .expect("get")
+                .expect("summary")
+                .value()
+                .decode()
+                .expect("decodes");
+            assert_eq!(state.leaf_count.to_raw(), 0);
+            state.root = wrong;
+            meta.insert((), state.encoded().as_encoded())
+                .expect("plant");
+            txn.open_table(CURVE_TREE_ROOTS)
+                .expect("t")
+                .insert(tip + 1, wrong.encoded().as_encoded())
+                .expect("plant");
+        }
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let out: Result<(), TestErr> = store.write(|batch| Ok(batch.check_right_edge()?));
+    let want = StoreInvariant::RightEdgeDiverged {
+        observed: EdgeFault::Root,
+    };
+    assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
     drop(store);
     cleanup(&path);
 }
