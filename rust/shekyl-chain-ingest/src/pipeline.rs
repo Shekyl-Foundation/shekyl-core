@@ -946,10 +946,14 @@ where
                 });
                 return Ok(());
             }
-            Err(corrupt) => return Ok(self.unclaimable(height, corrupt)),
+            Err(corrupt) => {
+                self.unclaimable(height, corrupt);
+                return Ok(());
+            }
         };
         if let Err(corrupt) = self.targets.extend(height, &candidate.block, target) {
-            return Ok(self.unclaimable(height, corrupt));
+            self.unclaimable(height, corrupt);
+            return Ok(());
         }
         self.targets.forget_below_window_of(height);
         if seed != BlockHash::NULL && self.pinned != Some(seed) {
