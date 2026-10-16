@@ -486,7 +486,7 @@ impl Command {
     /// base64-encoded onion secret key; the other arms produce no secret, but a
     /// uniform return type keeps the one secret-bearing line from being the
     /// exceptional path a future edit forgets.
-    fn to_wire(&self) -> Result<Zeroizing<String>, ControlError> {
+    pub(crate) fn to_wire(&self) -> Result<Zeroizing<String>, ControlError> {
         let (verb, tokens) = match self {
             Self::GetInfo(keys) => ("GETINFO", keys),
             Self::SetEvents(events) => ("SETEVENTS", events),
@@ -2138,6 +2138,129 @@ mod live_tests {
             geoip_parses, OWN_GEOIP_PARSES,
             "the IPv4 and IPv6 GeoIP files, both ours"
         );
+    }
+
+    /// The supervisor's subscription against the pinned tor: everything tor sends for
+    /// it is one of the events [`super::super::events`] types, and a published onion's
+    /// first upload round reaches the trigger (`TSR-Q5`).
+    ///
+    /// Network-requiring, like the onion round trip: a round needs HSDirs. The KATs pin
+    /// lines captured from tor 0.4.9.13; this is where a later tor that writes them
+    /// differently fails, with the version printed beside the failure.
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps, network)"]
+    async fn the_pinned_tors_supervisor_events_parse_and_a_round_triggers() {
+        use super::super::events::{
+            parse_event, ClientStatus, HsDescAction, RoundMark, TorEvent, UploadRounds,
+        };
+        use super::super::onion::{parse_service_id, AddOnion, OnionKey, OnionPort};
+        use std::net::{Ipv4Addr, SocketAddr};
+
+        /// Bootstrap and the first round together; the capture saw both in under a minute.
+        const BOUND: Duration = Duration::from_secs(300);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (events, mut received) = EventSink::bounded();
+        let (readiness, mut ready_rx) = BootstrapReadiness::new();
+        let actor = TorControlClient::spawn(TorControlClientConfig {
+            launch: TorLaunch::Managed(ManagedTor {
+                tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
+                data_dir: dir.path().to_path_buf(),
+                socks_port: super::SocksPort::Fixed(free_port()),
+                disable_network: false,
+                exit_observer: None,
+            }),
+            events,
+            readiness,
+        });
+        let version = actor
+            .ask(Command::GetInfo(vec!["version".to_owned()]))
+            .await
+            .expect("GETINFO version");
+        let version = version.lines().first().cloned().unwrap_or_default();
+        println!("tor under test: {version}");
+        let subscribed = actor
+            .ask(Command::supervisor_events())
+            .await
+            .expect("SETEVENTS reaches tor");
+        assert_eq!(
+            subscribed.status(),
+            250,
+            "tor knows every event type ({version})"
+        );
+
+        let deadline = Instant::now() + BOUND;
+        while !matches!(*ready_rx.borrow_and_update(), super::BootstrapState::Ready) {
+            assert!(
+                Instant::now() < deadline,
+                "tor did not bootstrap ({version})"
+            );
+            tokio::time::timeout(Duration::from_secs(10), ready_rx.changed())
+                .await
+                .ok();
+        }
+
+        let mut expanded = [0u8; super::super::onion::ONION_KEY_BYTES];
+        for (i, b) in expanded.iter_mut().enumerate() {
+            *b = u8::try_from((i * 11 + 5) % 251).expect("fits u8");
+        }
+        expanded[0] &= 248;
+        expanded[31] &= 127;
+        expanded[31] |= 64;
+        let port = OnionPort::loopback(80, SocketAddr::from((Ipv4Addr::LOCALHOST, free_port())))
+            .expect("loopback target");
+        let reply = actor
+            .ask(Command::AddOnion(
+                AddOnion::new(OnionKey::from_expanded_bytes(expanded), port, 4)
+                    .with_flags(super::super::onion::OnionFlags { discard_pk: true }),
+            ))
+            .await
+            .expect("ADD_ONION reaches tor");
+        let service_id = parse_service_id(reply.lines()).expect("a v3 ServiceID");
+        let mut rounds = UploadRounds::new(service_id.clone());
+
+        let (mut bootstrap, mut circuit, mut notice, mut upload, mut triggered) =
+            (false, false, false, false, false);
+        while !triggered {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let reply = tokio::time::timeout(remaining, received.recv())
+                .await
+                .unwrap_or_else(|_| panic!("no upload round triggered in time ({version})"))
+                .expect("the actor is alive");
+            let parsed = parse_event(&reply).expect("a 650 event");
+            match &parsed {
+                TorEvent::Unsubscribed => {
+                    panic!("an event outside the subscription arrived ({version})")
+                }
+                TorEvent::Client {
+                    status: ClientStatus::Bootstrap(b),
+                    ..
+                } => bootstrap |= b.progress.is_some(),
+                TorEvent::Client {
+                    status: ClientStatus::CircuitEstablished,
+                    ..
+                } => circuit = true,
+                TorEvent::Log(_) => notice = true,
+                TorEvent::HsDesc(desc) => {
+                    if desc.address.as_ref() == Some(&service_id) {
+                        upload |= desc.action == HsDescAction::Upload;
+                        triggered = rounds.observe(desc).contains(&RoundMark::FirstUploaded);
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(bootstrap, "a BOOTSTRAP event with its progress ({version})");
+        assert!(circuit, "CIRCUIT_ESTABLISHED ({version})");
+        assert!(notice, "a log event ({version})");
+        assert!(
+            upload,
+            "an UPLOAD for our address before the trigger ({version})"
+        );
+        assert_eq!(received.dropped(), 0, "the test read every event");
+
+        actor.stop_gracefully().await.expect("graceful stop");
+        actor.wait_for_shutdown().await;
     }
 
     /// Reserve a free loopback port (bind `:0`, read it, drop). A small TOCTOU window

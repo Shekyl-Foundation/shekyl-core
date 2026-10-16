@@ -36,6 +36,7 @@ pub mod auth;
 pub mod bootstrap;
 pub mod consensus;
 pub mod encoding;
+pub mod events;
 pub mod framing;
 pub(crate) mod launch;
 pub mod listeners;
@@ -52,6 +53,11 @@ pub use actor::{
 };
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
 pub use bootstrap::{parse_bootstrap_progress, BootstrapState};
+pub use events::{
+    parse_event, Bootstrap, BootstrapProblem, ClientStatus, ClockSkew, GeneralStatus, HsDescAction,
+    HsDescEvent, Liveness, LogEvent, LogSeverity, Recommendation, RoundMark, Severity, TorEvent,
+    UploadRounds, VersionReason, SUPERVISOR_EVENTS,
+};
 pub use framing::{
     ControlReply, Framed, FramingError, ReplyBudget, ReplyFramer, ASYNC_EVENT_STATUS,
     BULK_REPLY_BYTES, ORDINARY_REPLY_BYTES,
