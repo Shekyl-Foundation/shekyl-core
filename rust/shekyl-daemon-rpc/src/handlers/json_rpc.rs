@@ -116,8 +116,10 @@ pub async fn handle(
 
     let core = state.core.clone();
     let method_clone = method.clone();
+    let restricted = state.restricted;
     let result =
-        tokio::task::spawn_blocking(move || core.json_rpc(&method_clone, &params_str)).await;
+        tokio::task::spawn_blocking(move || core.json_rpc(&method_clone, &params_str, restricted))
+            .await;
 
     match result {
         Ok(Some(raw)) => match serde_json::from_str::<FfiJsonRpcResult>(&raw) {

@@ -70,9 +70,9 @@ exists (`src/rpc/core_rpc_server.h:139`,
 `getblocktemplate` → `find_nonce_for_given_block` (RandomX longhash) →
 `submitblock` for the requested count. The handler refuses with
 `CORE_RPC_ERROR_CODE_REGTEST_REQUIRED` outside `FAKECHAIN`
-(`src/rpc/core_rpc_server.cpp:2242–2246`), and the RPC map gates it on
-`!m_restricted` (`src/rpc/core_rpc_server.h:139`), so the integration
-harness must connect to an unrestricted RPC port.
+(`src/rpc/core_rpc_server.cpp:2242–2246`), and the view listener does
+not serve it (`RPC_CHANNEL.md` §6.1), so the integration harness must
+connect to the admin listener.
 
 **Proof-of-life tests.** The Python functional tests that
 historically demonstrated `--regtest` + `generateblocks` invocation

@@ -283,15 +283,25 @@ impl CoreRpc {
         }
     }
 
-    /// Dispatch a JSON REST endpoint (e.g. "/get_info").
-    pub fn json_endpoint(&self, uri: &str, body: &str) -> Option<String> {
+    /// Dispatch a JSON REST endpoint (e.g. "/get_info") as the listener
+    /// whose posture `restricted` names. The posture rides with the call:
+    /// one `core_rpc_server` answers every listener, so the C++ handlers
+    /// read it off the origin the bridge hands them (`core_rpc_ffi.cpp`,
+    /// `rpc_origin`). The in-process console passes `false`: it is the
+    /// admin arm.
+    pub fn json_endpoint(&self, uri: &str, body: &str, restricted: bool) -> Option<String> {
         if self.handle.is_null() {
             return None;
         }
         let c_uri = CString::new(uri).ok()?;
         let c_body = CString::new(body).ok()?;
         unsafe {
-            let ptr = ffi::core_rpc_ffi_json_endpoint(self.handle, c_uri.as_ptr(), c_body.as_ptr());
+            let ptr = ffi::core_rpc_ffi_json_endpoint(
+                self.handle,
+                c_uri.as_ptr(),
+                c_body.as_ptr(),
+                restricted,
+            );
             consume_c_string(ptr)
         }
     }
@@ -1104,14 +1114,19 @@ impl CoreRpc {
 
     /// Dispatch a JSON-RPC 2.0 method.
     /// Returns the raw response string from C++ (contains ok/error envelope).
-    pub fn json_rpc(&self, method: &str, params: &str) -> Option<String> {
+    pub fn json_rpc(&self, method: &str, params: &str, restricted: bool) -> Option<String> {
         if self.handle.is_null() {
             return None;
         }
         let c_method = CString::new(method).ok()?;
         let c_params = CString::new(params).ok()?;
         unsafe {
-            let ptr = ffi::core_rpc_ffi_json_rpc(self.handle, c_method.as_ptr(), c_params.as_ptr());
+            let ptr = ffi::core_rpc_ffi_json_rpc(
+                self.handle,
+                c_method.as_ptr(),
+                c_params.as_ptr(),
+                restricted,
+            );
             consume_c_string(ptr)
         }
     }

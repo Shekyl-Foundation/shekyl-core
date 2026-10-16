@@ -186,9 +186,14 @@ of its own, for the same reason as the negative one.
   connection tracker, two routers: `rpc-admin-listen` at the admin
   preset, `rpc-view-listen` at the view preset
   (`rust/shekyl-daemon-rpc/src/server.rs`, `serve_presets`). The C++
-  `core_rpc_server` is one object with no preset of its own
-  (`caller_is_restricted` is always false; Rust's `served_routes` is the
-  only gate), and `rpc_args.{h,cpp}` and the dead RPC scorer
+  `core_rpc_server` is one object with no posture of its own: a bridged
+  call carries its listener's posture as one of two origins
+  (`core_rpc_ffi.cpp`, `rpc_origin`), `caller_is_restricted` reads the
+  origin, and Rust's `served_routes` gates the route before the bridge is
+  reached. The posture must ride with the call: the (f1) run of the
+  two-daemon origin gate found the three bridged pool routes answering
+  the view listener as the admin's when the server's member stood in for
+  it. `rpc_args.{h,cpp}` and the dead RPC scorer
   (`add_host_fail`, `disable_rpc_ban`, `RPC_IP_FAILS_BEFORE_BLOCK`) go
   with it: deleting `rpc_args` leaves the scorer's one input a constant.
 - **One stop path, from the remnant too.** Rust holds the RPC handle, so

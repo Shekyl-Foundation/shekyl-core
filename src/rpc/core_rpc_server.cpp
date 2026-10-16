@@ -94,8 +94,28 @@ namespace cryptonote
     )
     : m_core(cr)
     , m_p2p(p2p)
-    , m_restricted(false)
   {}
+  //-----------------------------------------------------------------------------------
+  // The origins the bridge hands every bridged handler (core_rpc_ffi.cpp).
+  // Two, so the posture is an identity and not a flag beside one context:
+  // a handler cannot be handed the admin origin with the view posture or
+  // the reverse. Addresses default-constructed: an origin asserts "an RPC
+  // client asked", never "this particular peer asked", and a context shared
+  // by every caller must not carry an address anything could score against
+  // (tests/unit_tests/rpc_restricted_gate.cpp).
+  namespace
+  {
+    const core_rpc_server::connection_context admin_origin{};
+    const core_rpc_server::connection_context view_origin{};
+  }
+  const core_rpc_server::connection_context* rpc_origin(bool restricted)
+  {
+    return restricted ? &view_origin : &admin_origin;
+  }
+  bool rpc_origin_is_restricted(const epee::net_utils::connection_context_base* ctx)
+  {
+    return ctx == &view_origin;
+  }
   core_rpc_server::~core_rpc_server()
   {
   }
@@ -1046,8 +1066,8 @@ namespace cryptonote
 
        This handler used to compute `m_restricted && ctx` and skip the
        `relay_category::all` arm when it held. That expression could not hold in
-       any reachable state: the restricted listener never gets here, and on the
-       admin listener `m_restricted` is false. It was not defence in depth, it
+       any reachable state: the restricted listener never gets here, and the
+       admin origin is not restricted. It was not defence in depth, it
        was residue — and residue on a security-shaped expression costs more than
        it looks, because two reviewers and this author each read it as a live
        path and priced an exploit from it. RK-D6: the restricted posture is

@@ -44,7 +44,8 @@ async fn dispatch_json_raw(
     body: String,
 ) -> Option<String> {
     let core = state.core.clone();
-    tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body))
+    let restricted = state.restricted;
+    tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body, restricted))
         .await
         .ok()
         .flatten()

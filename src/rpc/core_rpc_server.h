@@ -46,6 +46,11 @@
 
 namespace cryptonote
 {
+  /// Whether a bridged request's origin is the view listener's. Defined
+  /// with the origins it compares against (`core_rpc_ffi.cpp`); declared
+  /// here because `core_rpc_server::caller_is_restricted` reads it.
+  bool rpc_origin_is_restricted(const epee::net_utils::connection_context_base* ctx);
+
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
@@ -137,7 +142,7 @@ namespace cryptonote
      */
     bool caller_is_restricted(const connection_context* ctx) const
     {
-      return m_restricted && ctx;
+      return ctx && rpc_origin_is_restricted(ctx);
     }
 
 private:
@@ -149,8 +154,15 @@ private:
 
     core& m_core;
     nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >& m_p2p;
-    bool m_restricted;
   };
+
+  /// The origin the bridge hands every bridged handler: the admin
+  /// listener's or the view listener's. One `core_rpc_server` answers
+  /// every listener (one RPC start), so the posture is the origin's,
+  /// carried per call by the bridge (`core_rpc_ffi.cpp`), never the
+  /// server's. The in-process console is the admin arm.
+  const core_rpc_server::connection_context* rpc_origin(bool restricted);
+
 }
 
 BOOST_CLASS_VERSION(nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >, 1);
