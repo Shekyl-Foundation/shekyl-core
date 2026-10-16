@@ -1182,9 +1182,6 @@ Default. Lands before genesis if it should exist at launch.
 - **The GUI dials its daemon with nothing said — and a dial that says nothing is constructible.**
   - Target: pre-genesis
 
-- **`shekyld <command>` parses `--rpc-bind-ip` with an IPv4-only helper** (added 2026-08-22, RT-W2 review).
-  - Target: pre-genesis
-
 - **Legacy spend-graph analysis utilities (`ancestry`/`depth`/`usage`): audit against FCMP++, then delete** (`prune-known-spent-data` audited and deleted — its eligible set is empty on an amount-0 CT chain) [`EXECUTABLES.md`](EXECUTABLES.md)
   - Target: pre-genesis
 

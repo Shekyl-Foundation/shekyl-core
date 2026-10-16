@@ -468,6 +468,20 @@ of its own, for the same reason as the negative one.
   script cannot run on this seat (no `pwsh`); the Windows job on the PR is
   its first run, and whether the runner's temp directory's ancestors
   satisfy the access-list rule is what that run answers (audit §5).
+- **The documentation (commit (f3), §5.3) and the rows (commit (g), §10).**
+  `README.md`'s running, Tor and pruning sections, `proxies.md`'s daemon
+  section and `USER_GUIDE.md`'s Tor passage say the connectors' rows;
+  `SHEKYL_P2P_PROTOCOL.md`'s derived-port passage names `clearnet-listen
+  none` (a pinned document, edited at its line count); the release notes
+  carry the posture fix, the launchers, the generated docs with their
+  gates and the log budget (IG-Q19). Every §10 carry has its FOLLOWUPS
+  row: the genesis-at-open check, the console's move (DC-N2), the
+  utilities' option sets, the GUI sidecar (its draft PR is open on the
+  GUI repository), the background miner's thread, the two inherited
+  defaults; the `removed_flags` sunset row left with the files. The row
+  on `--rpc-bind-ip`'s IPv4-only parser is closed: the client endpoint is
+  a typed row (`rpc-admin-listen`'s kind, IPv4 or IPv6), and the C++
+  parser is gone with (e1).
 - **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
   covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
   the other direction (the `extern "C"` block of
