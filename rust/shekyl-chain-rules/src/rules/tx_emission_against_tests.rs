@@ -58,8 +58,9 @@ fn short_epochs() -> RuleSet {
     )
 }
 
-/// Off the `Emission` class the sequence judges nothing and records all
-/// three rows vacuous — the row-was-evaluated recording `run_tx` makes.
+/// Off the `Emission` class the sequence judges nothing and records its
+/// two rows vacuous — the row-was-evaluated recording `run_tx` makes. J26
+/// is `form`'s since 2026-10-16 (`judge_proofs`), recorded there.
 #[test]
 fn off_the_emission_class_the_rows_are_recorded_vacuous() {
     let chain = spendable_chain();
@@ -78,7 +79,10 @@ fn off_the_emission_class_the_rows_are_recorded_vacuous() {
         .expect("a spend is not judged here");
         assert!(coverage.contains(CenRow::J23));
         assert!(coverage.contains(CenRow::J25));
-        assert!(coverage.contains(CenRow::J26));
+        assert!(
+            !coverage.contains(CenRow::J26),
+            "J26 is not this sequence's"
+        );
     });
 }
 

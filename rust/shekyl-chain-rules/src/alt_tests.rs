@@ -417,6 +417,7 @@ fn an_alternative_popping_more_than_the_cap_is_refused_only_when_anchored() {
             &capped,
             expected_seed(chain),
             expected_target(chain, &capped),
+            &crate::block::ReferenceClaims::EMPTY,
         )
     };
     chain.with_view(|view| {
@@ -500,6 +501,7 @@ fn a_target_claim_the_alt_chain_does_not_derive_is_stale_not_a_verdict() {
         &MockSubstrate::default(),
         expected_seed(&chain),
         wrong,
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -536,6 +538,7 @@ fn a_rule_set_the_token_was_not_formed_under_is_stale_not_a_verdict() {
             &MockSubstrate::default(),
             expected_seed(&chain),
             expected_target(&chain, &other),
+            &crate::block::ReferenceClaims::EMPTY,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,

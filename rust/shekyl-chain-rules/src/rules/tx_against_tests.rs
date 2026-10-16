@@ -11,19 +11,23 @@
 //! `f2_the_wire_admits_one_transaction_version`).
 //!
 //! **Refusals only, through the pipeline.** A fixture spend carries a named
-//! key image and no membership proof, so CEN-I13/I15 refuse it on any
-//! `MockChain` view (slice 6 row 6): no test here asserts that `tx_against`
-//! or `validate` *accepts* a listed transaction, and a refusal asserted
-//! through either is of a row that runs **before I13** in the sequence
-//! (`judge_reference`'s order: I7; I10, I11, I12; then I13). A row after
-//! it — the signature sequence — is held on the sequence directly. The
-//! acceptances, and every refusal behind a passing body (CEN-L1), are the
-//! ingest driver's on a driven chain: `shekyl-chain-ingest`'s
-//! `scenario_spend_tests` and the mutation family.
+//! key image and a filler membership proof declared at depth 0, so
+//! CEN-I13 refuses it on any `MockChain` view (slice 6 row 6) and CEN-I15
+//! — `form`'s since 2026-10-16, over the caller's reference claim
+//! (`judge_proofs`) — refuses the proof wherever a claim is supplied: no
+//! test here asserts that `tx_against` or `validate` *accepts* a listed
+//! transaction, and a refusal asserted through either is of a row that
+//! runs **before I13** in the sequence (`judge_reference`'s order: I7;
+//! I10, I11, I12; then I13, then the comparison with what `form`
+//! verified). The signature sequence and the verify rows are held on
+//! their functions directly. The acceptances, and every refusal behind a
+//! passing body (CEN-L1), are the ingest driver's on a driven chain:
+//! `shekyl-chain-ingest`'s `scenario_spend_tests` and the mutation family.
 
+use crate::block::{ReferenceClaim, ReferenceClaims, VerifiedReference};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
+use crate::fault::{Corrupt, Fault, FormAttempt, PerHeightRecord, Stale};
 use crate::harness::fixture::{
     anchored_on, balanced_emission, candidate_on, coinbase, emission_vin, join_market, listed,
     listed_on, point, point_at, referencing, serve_credit_only, spend, spendable_chain, TWO_G,
@@ -35,8 +39,8 @@ use crate::harness::{
 use crate::rule_set::RuleSet;
 use crate::rules::tx::{refused_listed, refused_lone};
 use crate::rules::tx_against::{
-    judge_reference, judge_signatures, I11, I13, I17, I18, I7, REFERENCE_BLOCK_MAX_AGE,
-    REFERENCE_BLOCK_MIN_AGE,
+    judge_proofs, judge_reference, judge_signatures, proof_reference, I11, I13, I17, I18, I7,
+    REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE,
 };
 use crate::rules::{run_tx_against, TxContext};
 use crate::trust::Trust;
@@ -93,11 +97,13 @@ fn i7_a_spent_key_image_is_refused_and_a_fresh_one_records() {
     let chain = spendable_chain().with_key_image(KeyImage::from_bytes(KI));
     chain.with_view(|view| {
         assert_refused(
-            defined(tx_against(
+            judged(tx_against(
                 &listed_on(&chain, KI),
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                None,
+                FormAttempt::FIRST,
             )),
             CenRow::I7,
             Locus::Input {
@@ -188,7 +194,14 @@ fn i7_looks_up_an_archival_shapes_funding_spend_too() {
         .expect("the funding image is an input");
     chain.with_view(|view| {
         assert_refused(
-            defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+            judged(tx_against(
+                &tx,
+                TxSlot::Lone,
+                &view,
+                &RuleSet::GENESIS,
+                None,
+                FormAttempt::FIRST,
+            )),
             CenRow::I7,
             Locus::Input {
                 slot: TxSlot::Lone,
@@ -230,9 +243,16 @@ fn i7_is_vacuous_on_the_coinbase() {
 fn i7_propagates_a_view_fault() {
     let view = FaultingView::default();
     assert_eq!(
-        tx_against(&listed(KI), TxSlot::Lone, &view, &RuleSet::GENESIS)
-            .expect_err("the view faulted"),
-        ViewRead::View(Faulted)
+        tx_against(
+            &listed(KI),
+            TxSlot::Lone,
+            &view,
+            &RuleSet::GENESIS,
+            None,
+            FormAttempt::FIRST
+        )
+        .expect_err("the view faulted"),
+        Fault::View(Faulted)
     );
 }
 
@@ -338,11 +358,13 @@ fn i10_refuses_an_unrecorded_reference() {
     let chain = spendable_chain();
     chain.with_view(|view| {
         assert_refused(
-            defined(tx_against(
+            judged(tx_against(
                 &listed(KI),
                 TxSlot::Lone,
                 &view,
                 &RuleSet::GENESIS,
+                None,
+                FormAttempt::FIRST,
             )),
             CenRow::I10,
             Locus::Tx { slot: TxSlot::Lone },
@@ -367,8 +389,14 @@ fn i10_i11_i12_are_vacuous_on_a_serve_credit() {
         let mut coverage = RuleCoverage::EMPTY;
         let cx = TxContext::derive(&credit, TxSlot::Lone, &mut coverage)
             .expect("a serve-credit-only body classifies");
-        let context = defined(judge_reference(&cx, &view, &mut coverage))
-            .expect("a serve credit has no reference to judge");
+        let context = judged(judge_reference(
+            &cx,
+            &view,
+            None,
+            FormAttempt::FIRST,
+            &mut coverage,
+        ))
+        .expect("a serve credit has no reference to judge");
         assert_eq!(context, None, "no context: nothing verifies against one");
         for row in [CenRow::I10, CenRow::I11, CenRow::I12, CenRow::J21] {
             assert!(coverage.contains(row), "{row} recorded vacuous");
@@ -378,9 +406,9 @@ fn i10_i11_i12_are_vacuous_on_a_serve_credit() {
 
 /// I12 reads the anchor at a height I10 just found recorded; a view that
 /// answers `AboveTip` there has a hole below its tip. That is a store
-/// invariant observed broken — `ViewRead::Corrupt(HoleBelowTip)`, the
+/// invariant observed broken — `Fault::Corrupt(HoleBelowTip)`, the
 /// class that halts the writer — never a verdict, and the reason
-/// `tx_against`'s fault is a `ViewRead`. A driven chain cannot produce this
+/// `tx_against`'s fault is a `Fault`. A driven chain cannot produce this
 /// (SI-4 keeps every root below the tip recorded), which is what makes it
 /// the mock's to witness.
 #[test]
@@ -392,8 +420,15 @@ fn i12_a_missing_root_at_the_reference_height_is_corrupt_not_a_verdict() {
     chain.with_view(|inner| {
         let view = inner.withholding(WithheldRead::RootAt(BlockHeight::ZERO));
         assert_eq!(
-            tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS),
-            Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+            tx_against(
+                &tx,
+                TxSlot::Lone,
+                &view,
+                &RuleSet::GENESIS,
+                None,
+                FormAttempt::FIRST
+            ),
+            Err(Fault::Corrupt(Corrupt::HoleBelowTip {
                 at: BlockHeight::ZERO,
                 record: PerHeightRecord::CurveTreeRoot,
             }))
@@ -447,7 +482,14 @@ fn j21_refuses_an_unrecorded_reference_and_one_the_window_refuses() {
     chain.with_view(|view| {
         for tx in [emission(KI), referencing(emission(KI), tip)] {
             assert_refused(
-                defined(tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS)),
+                judged(tx_against(
+                    &tx,
+                    TxSlot::Lone,
+                    &view,
+                    &RuleSet::GENESIS,
+                    None,
+                    FormAttempt::FIRST,
+                )),
                 CenRow::J21,
                 Locus::Tx { slot: TxSlot::Lone },
             );
@@ -482,7 +524,13 @@ fn j21_refuses_a_declared_depth_the_reference_does_not_hold() {
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
                 .expect("an emission classifies");
             assert_refused(
-                defined(judge_reference(&cx, &view, &mut coverage)),
+                judged(judge_reference(
+                    &cx,
+                    &view,
+                    None,
+                    FormAttempt::FIRST,
+                    &mut coverage,
+                )),
                 CenRow::J21,
                 Locus::Tx { slot: TxSlot::Lone },
             );
@@ -516,8 +564,15 @@ fn j21_a_missing_root_or_leaf_count_at_the_reference_is_corrupt_not_a_verdict() 
         chain.with_view(|inner| {
             let view = inner.withholding(withheld);
             assert_eq!(
-                tx_against(&tx, TxSlot::Lone, &view, &RuleSet::GENESIS),
-                Err(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+                tx_against(
+                    &tx,
+                    TxSlot::Lone,
+                    &view,
+                    &RuleSet::GENESIS,
+                    None,
+                    FormAttempt::FIRST
+                ),
+                Err(Fault::Corrupt(Corrupt::HoleBelowTip {
                     at: BlockHeight::ZERO,
                     record,
                 }))
@@ -560,7 +615,13 @@ fn j27_refuses_an_unrecorded_reference_and_one_the_window_refuses() {
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
                 .expect("a bond post classifies");
             assert_refused(
-                defined(judge_reference(&cx, &view, &mut coverage)),
+                judged(judge_reference(
+                    &cx,
+                    &view,
+                    None,
+                    FormAttempt::FIRST,
+                    &mut coverage,
+                )),
                 CenRow::J27,
                 Locus::Tx { slot: TxSlot::Lone },
             );
@@ -600,7 +661,13 @@ fn j27_refuses_a_declared_depth_the_reference_does_not_hold() {
             let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
                 .expect("a bond post classifies");
             assert_refused(
-                defined(judge_reference(&cx, &view, &mut coverage)),
+                judged(judge_reference(
+                    &cx,
+                    &view,
+                    None,
+                    FormAttempt::FIRST,
+                    &mut coverage,
+                )),
                 CenRow::J27,
                 Locus::Tx { slot: TxSlot::Lone },
             );
@@ -608,12 +675,12 @@ fn j27_refuses_a_declared_depth_the_reference_does_not_hold() {
                 !coverage.contains(CenRow::J27),
                 "a refused row is not recorded"
             );
+            // I15 is `form`'s (`judge_proofs`, 2026-10-16), recorded there.
             for row in [
                 CenRow::I10,
                 CenRow::I11,
                 CenRow::I12,
                 CenRow::I13,
-                CenRow::I15,
                 CenRow::J21,
             ] {
                 assert!(
@@ -625,24 +692,17 @@ fn j27_refuses_a_declared_depth_the_reference_does_not_hold() {
     });
 }
 
-/// The verify, apart from the reads: a join anchored on a chain whose
-/// tree **at the reference** is planted at the depth the body declares
-/// passes every step of the sequence — the context is yielded — and is
-/// then refused on J27 over its filler proof, with the row not recorded:
-/// the steps alone are not the row. Genesis's tree is the empty one on
-/// every mock (`trees[0]`), so the chain is one block longer than the
-/// spendable one and the reference is height 1, the tree pushed with
-/// block 0.
-#[test]
-fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
-    use super::{reference_context, BOND_POST_REFERENCE};
+/// A chain whose tree **at height 1** is planted at depth 1: genesis's
+/// tree is the empty one on every mock (`trees[0]`), so the chain is one
+/// block longer than the spendable one and a spend listed on its tip
+/// references height 1, the tree pushed with block 0. Three leaves: one
+/// layer-0 chunk under a single root layer — depth 1
+/// (`harness_probe_tests::the_tree_travels_with_the_root_it_was_pushed_with`).
+fn planted_chain() -> MockChain {
     use crate::harness::fixture::{recorded_with_work, root};
     use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
-
-    // Three leaves: one layer-0 chunk under a single root layer — depth 1
-    // (`harness_probe_tests::the_tree_travels_with_the_root_it_was_pushed_with`).
     let planted = 3;
-    let chain = (0..=REFERENCE_BLOCK_MIN_AGE.to_raw()).fold(MockChain::default(), |chain, h| {
+    (0..=REFERENCE_BLOCK_MIN_AGE.to_raw()).fold(MockChain::default(), |chain, h| {
         let block = recorded_with_work(
             1_000 + h * 120,
             CumulativeDifficulty::from_raw(u128::from(h + 1) * GENESIS_DIFFICULTY),
@@ -653,7 +713,11 @@ fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
         } else {
             chain.push(block, root)
         }
-    });
+    })
+}
+
+/// A join at declared depth 1, anchored on [`planted_chain`].
+fn planted_join(chain: &MockChain) -> Transaction {
     let mut tx = join();
     if let Ct::Fcmp {
         prunable: Some(p), ..
@@ -661,7 +725,39 @@ fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
     {
         p.tree_depth = 1;
     }
-    let tx = anchored_on(&chain, tx);
+    anchored_on(chain, tx)
+}
+
+/// The claim an honest driver makes for `tx`'s reference on `chain`: its
+/// height and the chain's root at that height (CEN-I12's anchor).
+fn honest_claim(chain: &MockChain, tx: &Transaction) -> (shekyl_types::BlockHash, ReferenceClaim) {
+    use crate::view::ChainView;
+    let reference = proof_reference(tx).expect("an anchored body names a reference");
+    let claim = chain.with_view(|view| {
+        let height = crate::harness::infallible(view.height_of(&reference))
+            .expect("anchored on a recorded block");
+        match crate::harness::infallible(view.root_at(height)) {
+            crate::view::AtHeight::Recorded(root) => ReferenceClaim { height, root },
+            crate::view::AtHeight::AboveTip => unreachable!("the reference is below the tip"),
+        }
+    });
+    (reference, claim)
+}
+
+/// The verify, apart from the reads: a join anchored on a chain whose
+/// tree **at the reference** is planted at the depth the body declares
+/// passes every step of the sequence in `validate` — the context is
+/// yielded — and in `form` is refused on J27 over its filler proof against
+/// the honest claim, the row not recorded: the steps alone are not the
+/// row, and the verify is `judge_proofs`' (2026-10-16), never
+/// `judge_reference`'s.
+#[test]
+fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
+    use super::{reference_context, BOND_POST_REFERENCE};
+
+    let chain = planted_chain();
+    let tx = planted_join(&chain);
+    let (reference, claim) = honest_claim(&chain, &tx);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
         let cx =
@@ -675,12 +771,13 @@ fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
         ))
         .expect("every step of the sequence passes over the planted tree");
         assert_eq!(
-            (context.ref_height, context.tree_depth),
-            (BlockHeight::from_raw(1), 1),
-            "the context is yielded: the reference at height 1, depth 1"
+            (context.ref_height, context.anchor, context.tree_depth),
+            (BlockHeight::from_raw(1), claim.root, 1),
+            "the context is yielded: the reference at height 1, its root, depth 1"
         );
+        let claims: ReferenceClaims = [(reference, claim)].into_iter().collect();
         assert_refused(
-            defined(judge_reference(&cx, &view, &mut coverage)),
+            judge_proofs(&cx, &claims, &mut coverage),
             CenRow::J27,
             Locus::Tx { slot: TxSlot::Lone },
         );
@@ -688,6 +785,81 @@ fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
             !coverage.contains(CenRow::J27),
             "a refused row is not recorded, though its steps passed"
         );
+    });
+}
+
+/// CEN-I12's comparison (2026-10-16): the context the chain yields for a
+/// reference against what `form` verified under. No claim at all — the
+/// driver never claimed a reference the chain holds in the window — is
+/// [`Stale::Reference`] with the chain's context as `expected`, never a
+/// verdict and never a second verify; so is a claim for the right height
+/// at another root. The driver's retry is bounded as the seed's is.
+#[test]
+fn i12_a_claim_the_chain_does_not_yield_is_stale_not_a_verdict() {
+    let chain = planted_chain();
+    let tx = planted_join(&chain);
+    let (reference, expected) = honest_claim(&chain, &tx);
+    let other_root = ReferenceClaim {
+        height: expected.height,
+        root: shekyl_types::CurveTreeRoot::from_bytes([0xd1; 32]),
+    };
+    assert_ne!(other_root, expected, "the wrong claim must be wrong");
+    chain.with_view(|view| {
+        for (name, verified) in [
+            ("no claim", None),
+            (
+                "another root",
+                Some(VerifiedReference {
+                    reference,
+                    claim: other_root,
+                }),
+            ),
+        ] {
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage)
+                .expect("a bond post classifies");
+            match judge_reference(&cx, &view, verified, FormAttempt::FIRST, &mut coverage) {
+                Err(Fault::Stale(Stale::Reference {
+                    slot,
+                    reference: named,
+                    claims,
+                    retry,
+                })) => {
+                    assert_eq!(slot, TxSlot::Lone, "{name}");
+                    assert_eq!(named, reference, "{name}");
+                    assert_eq!(claims.claimed, verified.map(|v| v.claim), "{name}");
+                    assert_eq!(claims.expected, expected, "{name}");
+                    assert_eq!(
+                        retry,
+                        crate::fault::Retry::Again(FormAttempt::FIRST.next_for_tests()),
+                        "{name}"
+                    );
+                }
+                other => panic!("{name}: expected Stale::Reference, got {other:?}"),
+            }
+            assert!(
+                !coverage.contains(CenRow::J27),
+                "{name}: a stale claim records nothing"
+            );
+        }
+        // The honest claim: the comparison agrees and the context is
+        // yielded with the row's steps recorded.
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx =
+            TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a bond post classifies");
+        let context = judged(judge_reference(
+            &cx,
+            &view,
+            Some(VerifiedReference {
+                reference,
+                claim: expected,
+            }),
+            FormAttempt::FIRST,
+            &mut coverage,
+        ))
+        .expect("the honest claim agrees with the chain");
+        assert_eq!(context.map(|c| c.anchor), Some(expected.root));
+        assert!(coverage.contains(CenRow::J27), "the reads are recorded");
     });
 }
 

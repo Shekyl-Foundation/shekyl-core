@@ -102,6 +102,7 @@ impl RunEnd {
             RunFault::Store(_) => Some(Self::StoreFaulted),
             RunFault::StaleSeed { .. }
             | RunFault::StaleTarget { .. }
+            | RunFault::StaleReference { .. }
             | RunFault::StaleRuleSet { .. }
             | RunFault::HeightClaim { .. }
             | RunFault::NoNextHeight { .. }
@@ -147,6 +148,25 @@ pub enum RunFault {
         claimed: Target,
         /// What the store's headers derive.
         expected: Target,
+        /// What the validator would allow next.
+        retry: Retry,
+    },
+    /// The driver's reference claim for a listed body disagreed with the
+    /// chain — the height or the root at the body's `reference_block`, or
+    /// no claim where the chain holds the reference in the window
+    /// (`CHAIN_RULES_CRATE.md` §4.6, the third claim). RD-Q5's class: a
+    /// defect — the driver's header chain and the store described
+    /// different chains — never a verdict and never a second verify.
+    #[error("driver defect: reference claim at height {height}, slot {slot:?}, for {reference:?}: claimed {claimed:?}, the chain holds {expected:?} ({retry:?})", claimed = claims.claimed, expected = claims.expected)]
+    StaleReference {
+        /// The connecting height.
+        height: BlockHeight,
+        /// The listed slot whose body names the reference.
+        slot: shekyl_chain_rules::TxSlot,
+        /// The `reference_block` the body names.
+        reference: BlockHash,
+        /// What the driver claimed against what the chain holds.
+        claims: Box<shekyl_chain_rules::ReferenceMismatch>,
         /// What the validator would allow next.
         retry: Retry,
     },
@@ -911,6 +931,18 @@ fn validate_fault(
             height,
             claimed,
             expected,
+            retry,
+        },
+        Fault::Stale(Stale::Reference {
+            slot,
+            reference,
+            claims,
+            retry,
+        }) => RunFault::StaleReference {
+            height,
+            slot,
+            reference,
+            claims,
             retry,
         },
         Fault::Stale(Stale::RuleSet { .. }) => RunFault::StaleRuleSet { height },

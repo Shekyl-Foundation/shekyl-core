@@ -761,6 +761,11 @@ mod edge_tests;
 #[path = "prune_tests.rs"]
 mod prune_tests;
 
+/// Where the proofs are verified: `form`, never `validate` (2026-10-16).
+#[cfg(test)]
+#[path = "verify_site_tests.rs"]
+mod verify_site_tests;
+
 #[cfg(test)]
 #[path = "amendments_tests.rs"]
 mod amendments_tests;

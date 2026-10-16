@@ -924,6 +924,33 @@ after D2 computed it and D1 accepted it, under the store-integrity belts
 the recorded cumulative difficulty sits under; a peer cannot reach it, and
 a corrupted value can touch only a block this node already accepted once.
 
+**The switch supplies three claims, and the closure verifies no proof
+(round 3, 2026-10-16; `CHAIN_RULES_CRATE.md` §4.6).** Re-measured after
+the recorded PoW, the floor device held the write transaction for 109.6 s
+on a cap-depth switch with one spend per promoted block — almost all of it
+spend-proof verification inside `validate`. Each `PlannedBlock` now
+carries its **target** beside its seed (CEN-D4 through `target_claim`
+over the stitched `AltView` for an alt entry, over the recorded chain
+below it for a demoted block; a D6 refusal on an entry is that block's
+verdict at offer, `Offered::Refused`; on a demoted block it is SI-27),
+and the plan carries the post-switch **header chain** a promoted block
+may reference — CEN-I11's window below the first promoted height and the
+entries themselves, each with its header's root (`SwitchPlan::headers`).
+The caller, who holds the bodies, claims each promoted block's references
+off it (`SwitchPlan::references_for`) and `form` verifies the proofs and
+signatures off the actor; inside the closure `validate` compares the
+claim with the chain and faults `Stale::Reference` — `RunFault::StaleReference`,
+a driver defect like a stale target, the transaction rolled back and the
+writer up (`a_reference_or_target_claim_the_switch_cannot_make_is_a_driver_defect`).
+Demoted blocks are formed with **no** reference claims: the cheap tier
+compares none, and the chain verified their proofs when it connected
+them — a claim there would cost N blocks' proofs verified again and buy no
+verdict (reported to the brief as the one discrepancy: Part 1 named the
+snapshot as the demoted target's source and Part 2 named no reference
+source for demoted blocks). An alt row's header root is a claim until
+promotion runs CEN-B5 on it, which happens before any successor's claim
+over it is compared.
+
 **SI-5 recomputes the tree's right edge (ruled 2026-10-15).** After the
 pops — the switch's and `Rewind`'s — the store rebuilds each layer's last
 chunk from its stored children with `shekyl_fcmp::tree`'s primitives, leaf
@@ -1502,3 +1529,4 @@ Not E5's; found while reading the census at the pin.
 | 2026-10-15 | **The switch at the genesis cap, measured** (`switch_timing_tests.rs`, ignored lane; release build on the development host, 16 hardware threads, shared with other sessions' work; N = 720 demoted, M = 721 promoted; each run also holds the switched store to the directly connected one, every table). FreeHash, coinbase-only: offer 34 ms, form 0.15 s, `Reorganize` 1.09 s, **total 1.27 s** — the store's own cost. RandomX (the Rust verifier, light mode), coinbase-only, forming serial: form **682 s** (0.47 s per hash × 1 441), `Reorganize` 1.16 s, total 684 s. RandomX, coinbase-only, forming across the host's threads: form 109 s, `Reorganize` 3.2 s, **total 114 s**. RandomX, one validating spend per promoted block, forming across the threads: form 70 s, `Reorganize` **21.3 s** (721 FCMP++ verifications in promotion's `validate`), **total 91.5 s**. Reading: the switch's cost is the re-form — every demoted block and every promoted one hashed again (the ruled shape; the M were hashed at arrival too) — not the store; on 16 threads it sits just under one block interval (120 s). **Floor device not measured**: it is under another lane's `quiet` claim until 2026-10-15 23:59Z. At four cores and a slower hash it will exceed the interval by a multiple, which is `E5-Q8`'s falsifier shape (a switch at `D_max` on the floor device exceeding the block interval) — measured, it reopens `E5-Q8`'s cost premise and the re-form-versus-store-the-formed-result trade the 2026-10-15 ruling made. |
 | 2026-10-15 | **Review rulings on the switch PR (maintainer).** (1) **CEN-E2's floor is the last anchor at or below the recorded tip**, kept as built; the C++'s `≤ tip + 1` is the count-versus-height confusion, recorded in the census row as a divergence adjudicated against the specification. (2) **SI-27 stays a halt; anchors cannot reach it**: CEN-E5 at open and E2 at offer under the same tip (`StalePlan` otherwise) stand between an anchor table and a demoted block; the register row names both mechanisms, and a test reopens the store under an agreeing release and sees the pending alternative refused at offer (E2) with the writer up. (3) **The switch must not re-hash blocks this node already hashed**: the proof-of-work hash is recorded beside the block (at `connect` and at AL1) and the switch forms through a substrate that answers from it, keyed by (identity, seed) — built in this PR, then re-measured. The floor-device run follows it. |
 | 2026-10-16 | **The switch at the genesis cap, re-measured after the recorded PoW** (`switch_timing_tests.rs`, release; every run also holds the switched store to the direct one, every table, the alt table exactly). **Development host** (16 threads, at `92c0a4403`): RandomX coinbase-only — form 0.085 s (was 109 s), `Reorganize` 1.9 s, **total 2.7 s** (was 114 s); RandomX with one validating spend per promoted block — form 0.047 s (was 70 s), `Reorganize` 21.4 s, **total 21.9 s** (was 91.5 s); FreeHash 1.26 s and 19.8 s. **Floor device** (4 threads, same commit; FreeHash, which with the recorded PoW is the same switch — it calls RandomX zero times — and spares the device hours of RandomX chain-building): coinbase-only **7.0 s** (`Reorganize` 6.5 s); with spends **110.1 s**, of which `Reorganize` **109.6 s**. Reading: the re-hash is gone; what is left is the closure, and with spends the closure holds the write transaction for ~110 s on the floor device — almost all of it promoted blocks' spend-proof verification inside `validate`, which needs the chain and so stays on the writer (the chain-independent checks move off it in #1081). At a 120 s block interval that is the figure `E5-Q8`'s falsifier names the shape of; it is recorded here as measured, not adjudicated. |
+| 2026-10-16 | **Round 3 (maintainer's consolidated brief): the switch claims targets, and every verification that needs no store runs in `form`.** Part 1: each `PlannedBlock` carries `target` beside `seed`, claimed through `target_claim` over the stitched `AltView` (promoted) or the recorded chain below (demoted); a D6 refusal is the entry's verdict at offer or SI-27 on a demoted block; `Stale::Target` during a switch is `RunFault::StaleTarget`. Part 2: `form` takes `references: &ReferenceClaims` and runs the signature sequence and the verify rows (CEN-I15, J26, J27) per slot; `validate` compares the chain's `(height, root)` with the token's claim and faults `Stale::Reference` (`RunFault::StaleReference`), never verifying; the plan carries the post-switch header chain (`SwitchPlan::headers`) the caller claims off; the sequencer claims off its widened target ledger. Demoted blocks are formed with no reference claims (§2.3, the one discrepancy reported). Re-measurement follows in Part 3. |

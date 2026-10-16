@@ -29,8 +29,9 @@ use std::collections::BTreeSet;
 
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
-    validate, ArchivalDelta, AtHeight, Candidate, CenRow, FakechainSchedule, Fault, Locus,
-    RecordWriteKind, ReleaseAnchors, RuleSet, Trust, TxSlot, Verdict,
+    form, validate, ArchivalDelta, AtHeight, Candidate, CenRow, FakechainSchedule, Fault,
+    FormAttempt, HeaderView, Locus, RecordWriteKind, ReferenceClaims, ReleaseAnchors, RuleSet,
+    Trust, TxSlot, Verdict,
 };
 use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest, IssuedDraw};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -39,8 +40,8 @@ use shekyl_wire::Input;
 use shekyl_harness_spender::Persona;
 
 use super::connect_fixtures::{
-    anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, formed_under,
-    priced, spendable_prefix, Grown, Listed, FIRST_SPEND_HEIGHT,
+    anchor, batch_root_going_into, body, candidate_over, connect_chain, credited, expected_seed,
+    expected_target, priced, spendable_prefix, FixtureSubstrate, Grown, Listed, FIRST_SPEND_HEIGHT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::view::BatchView;
@@ -146,22 +147,33 @@ fn connect_empty(store: &ChainStore, grown: &mut Grown, rules: RuleSet) -> Archi
 }
 
 /// [`super::connect_fixtures::judge_under`] that hands the **verdict** back instead of panicking on
-/// a refusal — for the one test here whose block is meant not to connect.
-/// The verdict is read through the rules crate's own `assert_refused`, the
-/// idiom every rule test uses; the store names no verdict type
-/// (`check_store_error_conversion_ban.py` clause 2).
+/// a refusal — either stage's, since `form` verifies the proofs and
+/// signatures (2026-10-16) — for the one test here whose block is meant
+/// not to connect. The verdict is read through the rules crate's own
+/// `assert_refused`, the idiom every rule test uses; the store names no
+/// verdict type (`check_store_error_conversion_ban.py` clause 2).
 fn verdict_under<'b, 'id>(
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
     rules: &RuleSet,
 ) -> Result<Verdict<()>, StoreError> {
     let candidate = priced(view, candidate)?;
-    match validate(
-        formed_under(view, candidate, rules)?,
-        view,
+    let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
+    let references = ReferenceClaims::from_headers(view, connecting, &candidate)?;
+    let formed = match form(
+        candidate,
         rules,
-        &Trust::UNANCHORED,
+        &FixtureSubstrate,
+        expected_seed(view)?,
+        expected_target(view, rules)?,
+        &references,
+        FormAttempt::FIRST,
     ) {
+        Ok(Ok(formed)) => formed,
+        Ok(Err(refused)) => return Ok(Err(refused)),
+        Err(never) => match never {},
+    };
+    match validate(formed, view, rules, &Trust::UNANCHORED) {
         Ok(Ok(_)) => Ok(Ok(())),
         Ok(Err(refused)) => Ok(Err(refused)),
         Err(Fault::View(fault)) => Err(fault),
@@ -674,20 +686,22 @@ fn a_stubbed_family_is_skipped_and_widens_the_files_provenance() {
     cleanup(&path);
 }
 
-// ------------------------------------------------ CEN-J23 over a record
+// ------------------------------------------------ CEN-J26 before a record
 
 /// A claim for the open epoch by a persona whose record the store
 /// **holds** — inserted by an earlier block, read back through the batch
-/// view — is refused at CEN-J23 on the transaction: the open epoch has no
-/// frozen close to gather, whatever the record says. Until E6 slice 8
-/// row 9 this claim passed every rule and met the fold's `NotSettled` arm
-/// at CEN-L7 on the emission's vin; that arm is now the backstop beneath
-/// J23's read, reached only if the two disagreed. The rules crate's driver
-/// reaches a persisted record only through a block the same run
-/// connected; over one read back from the store it is the store's to
-/// witness, through the batch view.
+/// view — carrying the fixture's filler fee proof. *Was* CEN-J23's refusal
+/// on the transaction (the open epoch has no frozen close to gather,
+/// whatever the record says; until E6 slice 8 row 9 it met the fold's
+/// `NotSettled` arm at CEN-L7 instead). Since 2026-10-16 the fee proof is
+/// verified in `form` against the claimed reference root
+/// (`CHAIN_RULES_CRATE.md` §4.6), ahead of every view-bound row, so a
+/// claim wrong in its proof and in its epoch is **CEN-J26's**, and the
+/// persisted record is never read. J23's refusal over a persisted record
+/// with a proof that verifies is the ingest driver's, whose claims are
+/// real (`scenario_emission_tests`, the pass-block claim).
 #[test]
-fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_j23() {
+fn a_claim_with_a_filler_fee_proof_is_refused_at_j26_before_the_persisted_record_is_read() {
     let path = tmp("aw-claim-open");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut grown = Grown::new();
@@ -764,7 +778,7 @@ fn a_claim_on_the_open_epoch_over_a_persisted_record_is_refused_at_j23() {
     });
     assert_refused(
         out.expect("judging only reads"),
-        CenRow::J23,
+        CenRow::J26,
         Locus::Tx {
             slot: TxSlot::Listed(0),
         },

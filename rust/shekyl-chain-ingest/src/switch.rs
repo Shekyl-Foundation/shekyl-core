@@ -44,20 +44,21 @@ use std::collections::BTreeSet;
 
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    alt_against, seed_height, validate, CenRow, Fault, InvalidBlock, Stale, StructurallyValid, Tip,
-    Trust,
+    alt_against, seed_height, target_claim, validate, Candidate, CenRow, Fault, InvalidBlock,
+    ReferenceClaim, ReferenceClaims, Stale, StructurallyValid, Target, Tip, Trust,
+    REFERENCE_BLOCK_MAX_AGE,
 };
 use shekyl_chain_store::store::{
     AltCannot, AltChain, AltView, ChainStore, ReadSnapshot, StoreCannot, StoreError,
 };
 use shekyl_difficulty::{fork_choice, ForkChoiceVerdict};
 use shekyl_types::archival::AttestationWitness;
-use shekyl_types::{BlockCount, BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_wire::{Block, Transaction};
 
 use super::{Connector, RunFault};
 use crate::schedule::ChainRules;
-use shekyl_chain_rules::AtHeight;
+use shekyl_chain_rules::{AtHeight, HeaderView};
 
 /// A switch deeper than the cap in force: refused **locally**, before any
 /// pop and before any RandomX (`E5-Q6`). Never a verdict against the alt
@@ -110,8 +111,11 @@ pub enum Offered {
 }
 
 /// One block a switch will judge, with what `form` needs beside the
-/// substrate: the height (which rule set) and the seed claim (CEN-D3) on
-/// the chain the block is on.
+/// substrate: the height (which rule set), the seed claim (CEN-D3) and the
+/// target claim (CEN-D4) on the chain the block is on. The third claim —
+/// the references — needs the listed bodies, which the plan does not
+/// carry; the caller makes it from the plan's header chain
+/// ([`SwitchPlan::references_for`]).
 #[derive(Clone, Debug)]
 pub struct PlannedBlock {
     /// The height the block sits at on its chain.
@@ -122,6 +126,13 @@ pub struct PlannedBlock {
     /// `seed_height(height)` on the block's own chain, or the null hash
     /// below the first epoch.
     pub seed: BlockHash,
+    /// The target the honest producer claimed: CEN-D4 over the headers
+    /// below `height` on the block's own chain — the stitched view for an
+    /// alt entry, the recorded chain for a demoted block (#1081's
+    /// contract; `validate` and `alt_against` each derive it again and
+    /// fault `Stale::Target` on a disagreement, which during a switch is a
+    /// driver defect).
+    pub target: Target,
     /// The proof-of-work hash this node recorded for the block when it
     /// first judged it, under the seed it was recorded under — `block_pow`
     /// for a demoted block, the alt row's for a promoted one. The caller
@@ -151,6 +162,21 @@ pub struct PlannedPromotion {
     pub witness: Option<AttestationWitness>,
 }
 
+/// One header of the chain a switch promotes onto, as a reference claim
+/// reads it: its identity and the curve-tree root at its height — the
+/// header's `curve_tree_root`, which CEN-B5 holds to `root_at(height)` for
+/// every block that connected, and which promotion holds for every alt
+/// entry before any successor's claim over it is compared.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlannedHeader {
+    /// The header's height on the post-switch chain.
+    pub height: BlockHeight,
+    /// The block's identity — what a listed body's `reference_block` names.
+    pub hash: BlockHash,
+    /// The tree root at `height` (CEN-I12's anchor).
+    pub root: CurveTreeRoot,
+}
+
 /// What [`Offered::SwitchDue`] asks the caller to form.
 #[derive(Clone, Debug)]
 pub struct SwitchPlan {
@@ -167,6 +193,48 @@ pub struct SwitchPlan {
     pub demoted: Vec<PlannedDemotion>,
     /// The alt entries, ascending, ending at the offered block.
     pub promoted: Vec<PlannedPromotion>,
+    /// The post-switch header chain a promoted block may reference,
+    /// ascending: CEN-I11's window below the first promoted height, read
+    /// off the recorded chain, then the alt entries themselves — the
+    /// stitched view, as the plan read it (`AltView::header_at`). The
+    /// caller claims each promoted block's references off it
+    /// ([`Self::references_for`]); a reference outside it is not claimed,
+    /// and `validate` refuses it on CEN-I10/I11.
+    pub headers: Vec<PlannedHeader>,
+}
+
+impl SwitchPlan {
+    /// The reference claims for `candidate`, the bodies of the promoted
+    /// block `at`: every reference it names that [`Self::headers`] holds
+    /// **below** `at.height`, at that header's height and root. The third
+    /// claim to `form` (`CHAIN_RULES_CRATE.md` §4.6); `validate` compares
+    /// it with the chain inside the switch's closure and faults
+    /// `Stale::Reference` on a disagreement — a driver defect, as a stale
+    /// target is.
+    #[must_use]
+    pub fn references_for(&self, at: &PlannedBlock, candidate: &Candidate) -> ReferenceClaims {
+        ReferenceClaims::gather(candidate, |reference| {
+            self.headers
+                .iter()
+                .find(|header| header.hash == *reference && header.height < at.height)
+                .map(|header| ReferenceClaim {
+                    height: header.height,
+                    root: header.root,
+                })
+        })
+    }
+}
+
+/// What [`plan`] made of a winning verdict.
+enum Planned {
+    /// The switch to carry out.
+    Due(SwitchPlan),
+    /// Deeper than the cap (`E5-Q6`): local, the block stays stored.
+    BeyondCap(PopBeyondReorgCap),
+    /// CEN-D6 refused an alt entry's target on its own headers: that
+    /// block's verdict (`target` module docs), so there is no claim to
+    /// make and nothing is formed. The rows stay held.
+    Refused(InvalidBlock),
 }
 
 /// The formed blocks a [`SwitchPlan`] named, back to the actor (module
@@ -371,26 +439,36 @@ fn offer(
     // A fresh snapshot: the plan's alternative chain includes the row just
     // written.
     let snap = store.begin_read()?;
-    match plan(&snap, rules, tip, hash, verdict)? {
-        Ok(plan) => Ok(Offered::SwitchDue(plan)),
-        Err(beyond) => Ok(Offered::BeyondCap(beyond)),
+    match plan(store, &snap, rules, tip, hash, verdict)? {
+        Planned::Due(plan) => Ok(Offered::SwitchDue(plan)),
+        Planned::BeyondCap(beyond) => Ok(Offered::BeyondCap(beyond)),
+        Planned::Refused(refused) => Ok(Offered::Refused(refused)),
     }
 }
 
 /// The plan for switching from `tip` onto the alternative chain ending at
-/// `alt_tip`, or the cap's refusal (`E5-Q6`), read on `snap`.
+/// `alt_tip`, or the cap's refusal (`E5-Q6`), read on `snap`. Each
+/// block's target is claimed here, through the one derivation
+/// (`target_claim`) over the chain the block is on: the stitched view for
+/// an alt entry, the recorded chain below it for a demoted block. A D6
+/// refusal on an alt entry is that block's verdict ([`Planned::Refused`]);
+/// on a demoted block it is a recorded block failing its own rules —
+/// SI-27, the writer halts, as the cheap tier's refusal does in
+/// [`switch`].
 fn plan(
+    store: &ChainStore,
     snap: &ReadSnapshot<'_>,
     rules: ChainRules,
     tip: Tip,
     alt_tip: BlockHash,
     verdict: ForkChoiceVerdict,
-) -> Result<Result<SwitchPlan, PopBeyondReorgCap>, RunFault> {
+) -> Result<Planned, RunFault> {
     let chain = AltChain::build(snap, &alt_tip)?;
     let root = chain.root();
     if let Err(beyond) = within_cap(rules, &chain, tip) {
-        return Ok(Err(beyond));
+        return Ok(Planned::BeyondCap(beyond));
     }
+    let stitched = AltView::new(snap, chain.clone());
     let entries = chain.entries();
     let seed_on_alt = |height: BlockHeight| -> Result<BlockHash, RunFault> {
         match seed_height(height) {
@@ -419,11 +497,25 @@ fn plan(
             AtHeight::Recorded(pow) => pow.proven(),
             AtHeight::AboveTip => unreachable!("heights up to the tip are recorded"),
         };
+        // The recorded chain below this block, as the cheap tier will see
+        // it in `switch` (SAL-13): the target claim over the same view.
+        let parent = recorded_hash(snap, BlockHeight::from_raw(height.to_raw() - 1))?;
+        let below = AltView::new(snap, AltChain::build(snap, &parent)?);
+        let target = match target_claim(&below, height, &rules.in_force(height)) {
+            Ok(Ok(target)) => target,
+            Ok(Err(_refused)) => {
+                let halted: Result<(), RunFault> =
+                    store.write(|batch| Err(RunFault::Store(batch.refuse_demotion(height))));
+                return Err(halted.expect_err("SI-27 halts the writer"));
+            }
+            Err(fault) => return Err(snapshot_fault(store, height, fault)),
+        };
         demoted.push(PlannedDemotion {
             at: PlannedBlock {
                 height,
                 hash: recorded_hash(snap, height)?,
                 seed,
+                target,
                 recorded,
             },
             candidate,
@@ -438,24 +530,50 @@ fn plan(
             .map(|bytes| AttestationWitness::new(bytes.to_vec()))
             .transpose()
             .expect("an alt row's witness was held well-formed when it was read (AL4)");
+        let target = match target_claim(&stitched, height, &rules.in_force(height)) {
+            Ok(Ok(target)) => target,
+            Ok(Err(refused)) => return Ok(Planned::Refused(refused)),
+            Err(fault) => return Err(snapshot_fault(store, height, fault)),
+        };
         promoted.push(PlannedPromotion {
             at: PlannedBlock {
                 height,
                 hash: entry.id,
                 seed: seed_on_alt(height)?,
+                target,
                 recorded: entry.block.pow().proven(),
             },
             block: entry.block.block().clone(),
             witness,
         });
     }
-    Ok(Ok(SwitchPlan {
+    // The header chain the promoted blocks may reference: CEN-I11's window
+    // below the first promoted height, then the entries — every height
+    // through the stitched view, so one reader answers both halves.
+    let first_promoted = root.height.to_raw() + 1;
+    let floor = first_promoted.saturating_sub(REFERENCE_BLOCK_MAX_AGE.to_raw());
+    let alt_tip_height = chain.parent().height.to_raw();
+    let mut headers =
+        Vec::with_capacity(usize::try_from(alt_tip_height - floor + 1).expect("fits"));
+    for raw in floor..=alt_tip_height {
+        let height = BlockHeight::from_raw(raw);
+        let AtHeight::Recorded(record) = stitched.header_at(height)? else {
+            unreachable!("the stitched view answers every height through its tip")
+        };
+        headers.push(PlannedHeader {
+            height,
+            hash: record.hash,
+            root: record.header.curve_tree_root,
+        });
+    }
+    Ok(Planned::Due(SwitchPlan {
         tip,
         root,
         alt_tip,
         verdict,
         demoted,
         promoted,
+        headers,
     }))
 }
 
@@ -711,6 +829,28 @@ fn snapshot_fault(store: &ChainStore, height: BlockHeight, fault: Fault<StoreErr
             height,
             claimed,
             expected,
+            retry,
+        },
+        Fault::Stale(Stale::Target {
+            claimed,
+            expected,
+            retry,
+        }) => RunFault::StaleTarget {
+            height,
+            claimed,
+            expected,
+            retry,
+        },
+        Fault::Stale(Stale::Reference {
+            slot,
+            reference,
+            claims,
+            retry,
+        }) => RunFault::StaleReference {
+            height,
+            slot,
+            reference,
+            claims,
             retry,
         },
         Fault::Stale(Stale::RuleSet { .. }) => RunFault::StaleRuleSet { height },

@@ -220,8 +220,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::J16,
             CenRow::J18,
             // Slice 6 row 6 (2026-10-08): the bond post's funding half —
-            // its reference context and the proof over its funding spends,
-            // one row in `judge_reference`'s bond-post arm.
+            // its reference context (`judge_reference`'s bond-post arm,
+            // in `validate`) and the proof over its funding spends
+            // (`judge_proofs`, in `form` since 2026-10-16).
             CenRow::J27,
             // Slice 8 row 8: the emission statics — the vin's parse, the
             // slot's key, the signable hash and the reward commit set.

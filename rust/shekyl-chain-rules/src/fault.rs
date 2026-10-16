@@ -49,9 +49,11 @@ use shekyl_types::{
 };
 use shekyl_units::AtomicUnits;
 
+use crate::block::ReferenceClaim;
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::Target;
 use crate::tree_growth::FrontierFault;
+use crate::verdict::TxSlot;
 
 /// What `validate` can fail with: the view's own fault, or one of the two
 /// kinds this crate defines. Matched arm by arm — `?` on the caller's side
@@ -132,6 +134,39 @@ pub enum Stale {
         /// Whether `form` may be run again.
         retry: Retry,
     },
+    /// The reference claim a listed transaction's proof was verified
+    /// against in `form` — or the absence of one — is not what this view
+    /// holds at the reference: CEN-I10's height and CEN-I12's anchor
+    /// disagree with it. `form` verified the proof under the claim; the
+    /// chain says the proof should have been verified under something
+    /// else, so the block was not judged against its real anchor. A
+    /// fault, never a refusal — a wrong claim admits nothing, because the
+    /// comparison is what `validate` does instead of verifying again
+    /// (`CHAIN_RULES_CRATE.md` §4.6, the third claim). Reachable with a
+    /// correct driver only by a reorg between the stages; otherwise a
+    /// driver defect, bounded like the seed's and the target's.
+    Reference {
+        /// The listed slot whose transaction names the reference.
+        slot: TxSlot,
+        /// The `reference_block` the transaction names.
+        reference: BlockHash,
+        /// The two claims, boxed so the fault stays small on every path
+        /// that carries it.
+        claims: Box<ReferenceMismatch>,
+        /// Whether `form` may be run again.
+        retry: Retry,
+    },
+}
+
+/// What [`Stale::Reference`] compared: what `form` verified under against
+/// what the view holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReferenceMismatch {
+    /// What `form` verified under; `None` when nothing was claimed for
+    /// this reference and the proof was not verified.
+    pub claimed: Option<ReferenceClaim>,
+    /// What the view holds at the reference.
+    pub expected: ReferenceClaim,
 }
 
 /// Which per-height record a [`Corrupt::HoleBelowTip`] failed to find.
@@ -534,6 +569,25 @@ impl fmt::Display for Stale {
                 f,
                 "stale target: formed against {claimed}, the headers derive {expected} ({retry})"
             ),
+            Self::Reference {
+                slot,
+                reference,
+                claims,
+                retry,
+            } => match &claims.claimed {
+                Some(claimed) => write!(
+                    f,
+                    "stale reference at {slot:?}: {reference:?} was verified under height \
+                     {} root {:?}, the chain holds height {} root {:?} ({retry})",
+                    claimed.height, claimed.root, claims.expected.height, claims.expected.root
+                ),
+                None => write!(
+                    f,
+                    "stale reference at {slot:?}: {reference:?} was not claimed, so its proof \
+                     was not verified; the chain holds it at height {} root {:?} ({retry})",
+                    claims.expected.height, claims.expected.root
+                ),
+            },
         }
     }
 }

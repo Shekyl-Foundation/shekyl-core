@@ -53,7 +53,7 @@ use shekyl_block_template::{
 };
 use shekyl_chain_rules::{
     form, seed_height, ArchivalDelta, Candidate, CenRow, FormAttempt, InvalidBlock, PaidEmission,
-    RuleSet, StructurallyValid, Substrate, Weights,
+    ReferenceClaims, RuleSet, StructurallyValid, Substrate, Target, Weights,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -181,6 +181,8 @@ pub struct Mined {
     /// The seed the producer claimed (CEN-D3) — what a second driver needs
     /// to `form` this block when it arrives there as an alternative.
     pub seed: BlockHash,
+    /// The target the producer claimed (CEN-D4), likewise.
+    pub target: Target,
 }
 
 impl Mined {
@@ -429,12 +431,18 @@ where
             .map_err(StepOutcome::Refused)?;
 
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
+        // The third claim, off the same ledger (its window covers CEN-I11's).
+        let references = match ReferenceClaims::from_headers(&self.targets, height, &candidate) {
+            Ok(references) => references,
+            Err(never) => match never {},
+        };
         let formed = form(
             candidate,
             &rule_set,
             &self.substrate,
             seed,
             target,
+            &references,
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault");
@@ -478,6 +486,7 @@ where
             weights,
             archival,
             seed,
+            target,
         })
     }
 
@@ -503,13 +512,18 @@ where
 
     /// Offer `mined` — a block another driver mined on another branch — as
     /// an alternative arrival: formed here under this driver's substrate
-    /// with the seed its producer claimed, then [`OfferAlt`].
+    /// with the seed and target its producer claimed, then [`OfferAlt`].
+    /// No reference claims: the cheap tier judges headers (CEN-K4), and
+    /// the proofs are verified at promotion, where the plan carries the
+    /// claims ([`SwitchPlan::references_for`]).
     pub async fn offer(&self, mined: &Mined) -> Result<Offered, RunFault> {
         let formed = form(
             mined.candidate(),
             &self.rules.in_force(mined.height),
             &self.substrate,
             mined.seed,
+            mined.target,
+            &ReferenceClaims::EMPTY,
             FormAttempt::FIRST,
         )
         .expect("the driver's substrate does not fault")
@@ -543,12 +557,17 @@ where
         bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
     ) -> Result<(Switched, ReorgTiming), RunFault> {
         let started = std::time::Instant::now();
-        let mut work: Vec<(Candidate, PlannedBlock)> = Vec::new();
+        // Demoted blocks carry no reference claims: the cheap tier never
+        // compares one (it judges headers), so a claim would buy no
+        // verdict and cost N blocks' proofs verified again — proofs the
+        // chain verified when it connected them. Promoted blocks claim off
+        // the plan's header chain (`SwitchPlan::references_for`).
+        let mut work: Vec<(Candidate, PlannedBlock, ReferenceClaims)> = Vec::new();
         if plan.verdict != shekyl_difficulty::ForkChoiceVerdict::ForcedSwitch {
             work.extend(
                 plan.demoted
                     .iter()
-                    .map(|d| (d.candidate.clone(), d.at.clone())),
+                    .map(|d| (d.candidate.clone(), d.at.clone(), ReferenceClaims::EMPTY)),
             );
         }
         let demoted_len = work.len();
@@ -556,7 +575,8 @@ where
             let listed = bodies.get(&p.at.hash).cloned().unwrap_or_default();
             let candidate =
                 Candidate::new(p.block.clone(), listed).with_attestation_witness(p.witness.clone());
-            (candidate, p.at.clone())
+            let references = plan.references_for(&p.at, &candidate);
+            (candidate, p.at.clone(), references)
         }));
         let mut formed_all = self.form_parallel(work);
         let promoted = formed_all.split_off(demoted_len);
@@ -590,17 +610,20 @@ where
     /// names was hashed when this node first judged it, and the plan
     /// carries that record, so a switch calls RandomX only where a seed
     /// claim differs from the recorded one (ruling 3, 2026-10-15).
-    fn form_parallel(&self, work: Vec<(Candidate, PlannedBlock)>) -> Vec<StructurallyValid> {
+    fn form_parallel(
+        &self,
+        work: Vec<(Candidate, PlannedBlock, ReferenceClaims)>,
+    ) -> Vec<StructurallyValid> {
         let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         let chunk = work.len().div_ceil(threads).max(1);
         let recalled = crate::substrate::Recalled::new(
             &self.substrate,
             work.iter()
-                .map(|(_, at)| (at.hash, at.recorded.seed(), at.recorded.pow())),
+                .map(|(_, at, _)| (at.hash, at.recorded.seed(), at.recorded.pow())),
         );
         let substrate = &recalled;
         let rules = self.rules;
-        let mut chunks: Vec<Vec<(Candidate, PlannedBlock)>> = Vec::new();
+        let mut chunks: Vec<Vec<(Candidate, PlannedBlock, ReferenceClaims)>> = Vec::new();
         let mut rest = work;
         while !rest.is_empty() {
             let tail = rest.split_off(chunk.min(rest.len()));
@@ -614,12 +637,14 @@ where
                     scope.spawn(move || {
                         chunk
                             .into_iter()
-                            .map(|(candidate, at)| {
+                            .map(|(candidate, at, references)| {
                                 form(
                                     candidate,
                                     &rules.in_force(at.height),
                                     substrate,
                                     at.seed,
+                                    at.target,
+                                    &references,
                                     FormAttempt::FIRST,
                                 )
                                 .expect("the driver's substrate does not fault")

@@ -51,7 +51,10 @@ use shekyl_types::BlockHash;
 use shekyl_wire::Transaction;
 
 use crate::archival;
-use crate::block::{Candidate, Derived, ProvenPow, StructurallyValid, ValidatedBlock};
+use crate::block::{
+    Candidate, Derived, ProvenPow, ReferenceClaims, StructurallyValid, ValidatedBlock,
+    VerifiedReference,
+};
 use crate::coverage::RuleCoverage;
 use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
@@ -66,7 +69,7 @@ use crate::rules::miner::{Emission, F1, F10, F3, F7, F9};
 use crate::rules::pow::{D1, D2};
 use crate::rules::reward;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
-use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
+use crate::rules::tx_against::{judge_proofs, judge_reference, judge_signatures, I7, L1};
 use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
 use crate::rules::tx_emission::{J19, J20, J22, J24};
 use crate::rules::tx_emission_against::judge_emission_claim;
@@ -139,6 +142,7 @@ pub fn form<S: Substrate>(
     substrate: &S,
     seed: BlockHash,
     target: Target,
+    references: &ReferenceClaims,
     attempt: FormAttempt,
 ) -> Result<Verdict<StructurallyValid>, S::Fault> {
     // Read the clock once, before any rule: every stateless judgement is
@@ -179,9 +183,14 @@ pub fn form<S: Substrate>(
         .iter()
         .enumerate()
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
+    let mut verified = Vec::with_capacity(candidate.transactions.len());
     for (slot, tx) in core::iter::once(miner).chain(listed) {
-        match tx_form(tx, slot, rule_set) {
-            Ok(tx_coverage) => coverage.union(&tx_coverage),
+        match judge_slot_stateless(tx, slot, rule_set, references, &mut coverage) {
+            Ok(reference) => {
+                if slot != TxSlot::Miner {
+                    verified.push(reference);
+                }
+            }
             Err(refused) => return Ok(Err(refused)),
         }
     }
@@ -192,8 +201,35 @@ pub fn form<S: Substrate>(
     judge_form!(FormContext::new(&candidate, rule_set), coverage; H19);
 
     Ok(Ok(StructurallyValid::new(
-        candidate, *rule_set, coverage, clock, hash, seed, target, pow, attempt,
+        candidate, *rule_set, coverage, clock, hash, seed, target, pow, attempt, verified,
     )))
+}
+
+/// One slot's whole stateless judgement, in order: [`tx_form`] (4.H and
+/// the stateless 4.I/4.J rows), then the signatures (CEN-I17/I18,
+/// `judge_signatures` — a definition and the cheapest verification), then
+/// the proofs over the caller's claims (CEN-I15, J26, J27's verify half,
+/// `judge_proofs` — the expensive verification, last). Every one reads
+/// the transaction alone; since 2026-10-16 none of them runs inside the
+/// write transaction. A transaction wrong in two of these rows is named by
+/// the earlier one — a bad signature over a bad proof is CEN-I18's.
+///
+/// Yields what the slot's proof was verified against, for `validate`'s
+/// comparison.
+fn judge_slot_stateless(
+    tx: &Transaction,
+    slot: TxSlot,
+    rule_set: &RuleSet,
+    references: &ReferenceClaims,
+    coverage: &mut RuleCoverage,
+) -> Verdict<Option<VerifiedReference>> {
+    coverage.union(&tx_form(tx, slot, rule_set)?);
+    // The class again, cheaply (`tx_form` derived it into its own
+    // coverage; H5/H6 were recorded there).
+    let mut scratch = RuleCoverage::EMPTY;
+    let cx = rules::TxContext::derive(tx, slot, &mut scratch)?;
+    judge_signatures(&cx, coverage)?;
+    judge_proofs(&cx, references, coverage)
 }
 
 /// The view-bound stage: judge a [`StructurallyValid`] against the chain it
@@ -322,7 +358,14 @@ pub fn validate<'id, V: ChainView<'id>>(
         // `form` judged each transaction on its own (`tx_form`); what is
         // left is what reads the chain. The slot is the transaction's
         // position, so the locus arrives named and nothing is re-homed.
-        match tx_against(tx, slot, view, rule_set).map_err(Fault::from)? {
+        match tx_against(
+            tx,
+            slot,
+            view,
+            rule_set,
+            formed.verified_reference(slot),
+            formed.attempt(),
+        )? {
             Ok(tx_coverage) => coverage.union(&tx_coverage),
             Err(refused) => return Ok(Err(refused)),
         }
@@ -541,7 +584,9 @@ pub fn tx_against<'id, V: ChainView<'id>>(
     slot: TxSlot,
     view: &V,
     rule_set: &RuleSet,
-) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>> {
+    verified: Option<VerifiedReference>,
+    attempt: FormAttempt,
+) -> Result<Verdict<RuleCoverage>, Fault<V::Fault>> {
     // The rule set reaches the archival rows here: J15's reorg cap and
     // settlement schedule, J16's current epoch at the connecting height
     // (`judge_bond_post`), J23's close heights and J25's schedule
@@ -597,7 +642,7 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    let reference = match judge_reference(&cx, view, &mut coverage)? {
+    let reference = match judge_reference(&cx, view, verified, attempt, &mut coverage)? {
         Ok(reference) => reference,
         Err(refused) => return Ok(Err(refused)),
     };
@@ -611,13 +656,11 @@ pub fn tx_against<'id, V: ChainView<'id>>(
         Ok(()) => {}
         Err(refused) => return Ok(Err(refused)),
     }
-    // The signature sequence: I17 yields every input's signing hash, I18
-    // verifies each signature over it (`verify_transaction_pqc_auth`, the
-    // last check of the C++'s `check_tx_inputs`, `blockchain.cpp:4277`).
-    match judge_signatures(&cx, &mut coverage) {
-        Ok(()) => {}
-        Err(refused) => return Ok(Err(refused)),
-    }
+    // The signature sequence (CEN-I17/I18) and the proofs (I15, J26, J27's
+    // verify) ran in `form` — nothing they read is the chain's
+    // (2026-10-16). What this stage holds for them is above: the context
+    // the chain yields, compared with the claim the proof was verified
+    // under.
     Ok(Ok(coverage))
 }
 

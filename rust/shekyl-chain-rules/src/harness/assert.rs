@@ -13,7 +13,7 @@ use shekyl_types::{BlockHash, BlockHeight, PowHash, Timestamp};
 
 use super::views::Faulted;
 use super::MockChain;
-use crate::block::{Candidate, StructurallyValid};
+use crate::block::{Candidate, ReferenceClaim, ReferenceClaims, StructurallyValid};
 use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, ViewRead};
 use crate::rule_set::RuleSet;
@@ -21,7 +21,7 @@ use crate::rules::difficulty::{target_claim, Target};
 use crate::substrate::Substrate;
 use crate::validate::form;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
-use crate::view::AtHeight;
+use crate::view::{AtHeight, ChainView};
 
 /// The environment a fixture is judged in: a fixed clock and a longhash
 /// function the test chooses.
@@ -106,16 +106,39 @@ pub fn expected_target(chain: &MockChain, rule_set: &RuleSet) -> Target {
     })
 }
 
+/// The reference claims an honest driver makes for `candidate` on `chain`
+/// (`CHAIN_RULES_CRATE.md` §4.6, the third claim): for each reference a
+/// listed body names that the chain records, its height (CEN-I10's read)
+/// and the chain's root **at** that height (CEN-I12's anchor, `root_at`,
+/// not the fixture header's field — the mock records roots beside its
+/// blocks, and a `recorded` header carries a placeholder root). A
+/// reference the chain does not hold is not claimed, which is what the
+/// driver would do; I10 refuses it in `validate`.
+#[must_use]
+pub fn expected_references(chain: &MockChain, candidate: &Candidate) -> ReferenceClaims {
+    chain.with_view(|view| {
+        ReferenceClaims::gather(candidate, |reference| {
+            let height = infallible(view.height_of(reference))?;
+            match infallible(view.root_at(height)) {
+                AtHeight::Recorded(root) => Some(ReferenceClaim { height, root }),
+                AtHeight::AboveTip => None,
+            }
+        })
+    })
+}
+
 /// Run the stateless stage under `rule_set` with the default substrate,
-/// claiming `seed` and `target`. Panics if the substrate faults or a
-/// stateless rule refuses — a fixture that wants to exercise either calls
-/// [`form`] itself, or [`judge_on`] for the first refusal of either stage.
+/// claiming `seed`, `target` and `references`. Panics if the substrate
+/// faults or a stateless rule refuses — a fixture that wants to exercise
+/// either calls [`form`] itself, or [`judge_on`] for the first refusal of
+/// either stage.
 #[track_caller]
 pub fn formed_under(
     candidate: Candidate,
     rule_set: &RuleSet,
     seed: BlockHash,
     target: Target,
+    references: &ReferenceClaims,
 ) -> StructurallyValid {
     match form(
         candidate,
@@ -123,6 +146,7 @@ pub fn formed_under(
         &MockSubstrate::default(),
         seed,
         target,
+        references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -131,16 +155,18 @@ pub fn formed_under(
     }
 }
 
-/// [`formed_under`] the genesis rule set, claiming the seed `chain` expects
-/// — the honest driver's call, so D3 holds and the view stage judges the
-/// candidate.
+/// [`formed_under`] the genesis rule set, claiming the seed, target and
+/// references `chain` expects — the honest driver's call, so D3, D4 and
+/// I12's comparison hold and the view stage judges the candidate.
 #[track_caller]
 pub fn formed_on(chain: &MockChain, candidate: Candidate) -> StructurallyValid {
+    let references = expected_references(chain, &candidate);
     formed_under(
         candidate,
         &RuleSet::GENESIS,
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
+        &references,
     )
 }
 
@@ -153,12 +179,14 @@ pub fn formed_on(chain: &MockChain, candidate: Candidate) -> StructurallyValid {
 /// the row, not the stage.
 #[track_caller]
 pub fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
+    let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -201,6 +229,7 @@ pub fn token_for_one_rule(chain: &MockChain, candidate: Candidate) -> Structural
         expected_target(chain, &RuleSet::GENESIS),
         pow,
         FormAttempt::FIRST,
+        Vec::new(),
     )
 }
 

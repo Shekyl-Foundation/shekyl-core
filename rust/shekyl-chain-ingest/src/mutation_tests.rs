@@ -16,11 +16,13 @@ use shekyl_difficulty::{check_hash, Difficulty, FTL_SECONDS};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, Transaction};
 
+use shekyl_harness_spender::{Linked, MinerWallet, Spender};
+
 use crate::archival_driver::ENDPOINT;
 use crate::metrics::Metrics;
 use crate::mutation::{
     first_nonce, Before, Environment, ExpectedPlace, Mutated, Mutation, MutationFault, Overweight,
-    Pow, Unmutable, UNHELD_ATTESTATION_ROOT, UNHELD_ROOT,
+    Pow, Resigned, Unmutable, UNHELD_ATTESTATION_ROOT, UNHELD_REFERENCE, UNHELD_ROOT,
 };
 use crate::pipeline::{run, PipelineConfig, PipelineFault, RunReport};
 use crate::scenario_archival::{complete_tree, Persona};
@@ -144,6 +146,62 @@ struct Legs<'a> {
     pow: Option<Pow<'a>>,
     overweight: Option<Overweight<'a>>,
     twins: &'a [Transaction],
+    resigned: Option<Resigned<'a>>,
+}
+
+/// The wallet-made bodies the three spend mutations take
+/// ([`Environment::resigned`]), built over `chain` below `at` for the
+/// block connecting at `at`: a respend of block 0's coinbase (spent at
+/// `FIRST_SPEND_HEIGHT`, below `at`), and two spends of the coinbase the
+/// block at `at` would spend, one naming the unheld reference and one
+/// naming the parent — each signed after its name moved.
+struct ResignedBodies {
+    respend: Transaction,
+    unknown_reference: Transaction,
+    reference_too_recent: Transaction,
+}
+
+impl ResignedBodies {
+    fn over(chain: &[(Block, Vec<Transaction>)], at: u64) -> Self {
+        assert!(
+            at > FIRST_SPEND_HEIGHT,
+            "block 0's coinbase is spent below {at}"
+        );
+        let below: Vec<Linked<'_>> = chain[..usize::try_from(at).expect("small")]
+            .iter()
+            .map(|(block, listed)| Linked::new(block, listed))
+            .collect();
+        let spender = Spender::over(&below);
+        let wallet = MinerWallet::harness();
+        let fee = Family::Main.fee();
+        let matured = h(at - FIRST_SPEND_HEIGHT);
+        let parent = chain[usize::try_from(at - 1).expect("small")].0.hash();
+        Self {
+            respend: spender.spend_coinbase(wallet, h(0), h(at), fee),
+            unknown_reference: spender.spend_coinbase_referencing(
+                wallet,
+                matured,
+                h(at),
+                fee,
+                UNHELD_REFERENCE,
+            ),
+            reference_too_recent: spender.spend_coinbase_referencing(
+                wallet,
+                matured,
+                h(at),
+                fee,
+                parent,
+            ),
+        }
+    }
+
+    fn legs(&self) -> Resigned<'_> {
+        Resigned {
+            respend: &self.respend,
+            unknown_reference: &self.unknown_reference,
+            reference_too_recent: &self.reference_too_recent,
+        }
+    }
 }
 
 /// How one mutated run ended.
@@ -169,6 +227,7 @@ async fn judge(
         pow: legs.pow,
         overweight: legs.overweight,
         twins: legs.twins,
+        resigned: legs.resigned,
     };
     let mut source = Mutated::new(scripted(chain), h(at), mutation, env);
     let trace = Arc::new(trace_of(chain, false));
@@ -539,9 +598,6 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
         | Mutation::SubstitutedBody
         | Mutation::RelistedTransaction
         | Mutation::DoubledListing
-        | Mutation::DoubleSpend
-        | Mutation::UnknownReference
-        | Mutation::ReferenceTooRecent
         | Mutation::ForgedSignature => {
             let chain = chain(n);
             let outcome = judge(
@@ -552,6 +608,26 @@ async fn setup_and_judge(mutation: Mutation) -> (Outcome, u64) {
                 GENESIS_RULES,
                 MockSubstrate::default(),
                 Legs::default(),
+            )
+            .await;
+            (outcome, AT)
+        }
+        // The three spend mutations take their wallet-made bodies from the
+        // caller (`Environment::resigned`), built over the chain below.
+        Mutation::DoubleSpend | Mutation::UnknownReference | Mutation::ReferenceTooRecent => {
+            let chain = chain(n);
+            let bodies = ResignedBodies::over(&chain, AT);
+            let outcome = judge(
+                &format!("{mutation:?}").to_lowercase(),
+                &chain,
+                AT,
+                mutation,
+                GENESIS_RULES,
+                MockSubstrate::default(),
+                Legs {
+                    resigned: Some(bodies.legs()),
+                    ..Legs::default()
+                },
             )
             .await;
             (outcome, AT)
@@ -604,6 +680,7 @@ fn env() -> Environment<'static> {
         pow: None,
         overweight: None,
         twins: &[],
+        resigned: None,
     }
 }
 
@@ -815,6 +892,7 @@ fn a_clock_with_no_representable_future_does_not_pretend_to_be_past_the_ftl() {
         pow: None,
         overweight: None,
         twins: &[],
+        resigned: None,
     };
     let mut source = Mutated::new(scripted(&chain), h(1), Mutation::FutureTimestamp, env);
     source.next().expect("block 0 is not the mutation");

@@ -999,3 +999,163 @@ async fn a_seed_claim_that_differs_from_the_recorded_one_recomputes() {
     x.close().await;
     y.close().await;
 }
+
+/// The third claim during a switch (2026-10-16, `CHAIN_RULES_CRATE.md`
+/// §4.6): a promoted block's spend is verified in `form` against the
+/// plan's header chain, and `validate` compares the claim with the chain
+/// inside the closure. A claim the chain refutes — the reference at
+/// another height, or no claim where the chain holds the reference in
+/// the window — is `RunFault::StaleReference`, a driver defect: never a
+/// verdict, never a second verify, the transaction rolled back and the
+/// writer up. A stale target claim is the same class. A claim with the
+/// wrong **root** never reaches the comparison: the root is the
+/// verifier's input, so the proof fails against it and `form` refuses the
+/// spend on CEN-I15 — the claim cannot widen what the chain accepts. The
+/// honest plan then lands.
+#[tokio::test]
+async fn a_reference_or_target_claim_the_switch_cannot_make_is_a_driver_defect() {
+    let mut x = Scenario::open("switch-stale-claim-x");
+    let mut y = Scenario::open("switch-stale-claim-y");
+    x.mine(AT).await;
+    let prefix = y.mine(AT).await;
+    let a = x.mine(1).await;
+    y.idle();
+    // B's first block lists a spend referencing a block below the fork
+    // point — inside the plan's header window.
+    let spend = shekyl_harness_spender::Spender::over(&prefix).spend_coinbase(
+        y.wallet(),
+        BlockHeight::from_raw(0),
+        BlockHeight::from_raw(AT),
+        crate::test_support::Family::Main.fee(),
+    );
+    let mut b = vec![y
+        .mine_listing(vec![spend])
+        .await
+        .unwrap_or_else(|o| panic!("the spend connects: {o}"))];
+    b.extend(y.mine(1).await);
+    let reference = *b[0]
+        .candidate()
+        .proof_references()
+        .iter()
+        .next()
+        .expect("the spend names a reference");
+    let plan = offer_branch(&x, &b).await;
+    assert_eq!(plan.demoted.len(), 1);
+    let position = plan
+        .headers
+        .iter()
+        .position(|h| h.hash == reference)
+        .expect("the plan's header chain holds the reference");
+    assert!(
+        plan.headers[position].height < plan.promoted[0].at.height,
+        "the reference is below the block that spends it"
+    );
+    let before = x.digest().await.expect("digest");
+
+    // Another root for the reference: the proof fails against it in
+    // `form` — CEN-I15 at the spend, the claim's own refusal, before any
+    // closure. Through `form` directly, as the driver would see it.
+    let mut wrong_root = plan.clone();
+    let wrong = shekyl_types::CurveTreeRoot::from_bytes([0xd1; 32]);
+    assert_ne!(wrong_root.headers[position].root, wrong);
+    wrong_root.headers[position].root = wrong;
+    {
+        let at = &plan.promoted[0].at;
+        let candidate = b[0].candidate();
+        let claims = wrong_root.references_for(at, &candidate);
+        assert_eq!(claims.get(&reference).map(|c| c.root), Some(wrong));
+        let verdict = shekyl_chain_rules::form(
+            candidate,
+            &crate::scenario::RULES.in_force(at.height),
+            &FreeHash,
+            at.seed,
+            at.target,
+            &claims,
+            shekyl_chain_rules::FormAttempt::FIRST,
+        )
+        .expect("the free substrate does not fault");
+        match verdict {
+            Err(refused) => {
+                assert_eq!(refused.rule, shekyl_chain_rules::CenRow::I15);
+                assert_eq!(
+                    refused.locus,
+                    shekyl_chain_rules::Locus::Tx {
+                        slot: shekyl_chain_rules::TxSlot::Listed(0)
+                    }
+                );
+            }
+            Ok(_) => panic!("a proof verified against a root it was not built over"),
+        }
+    }
+
+    // The reference at another height, its root right: the proof verifies
+    // in `form` and the comparison inside the closure refutes the height,
+    // with both claims named.
+    let mut wrong_height = plan.clone();
+    let shifted = BlockHeight::from_raw(plan.headers[position].height.to_raw() + 1);
+    assert!(shifted < plan.promoted[0].at.height);
+    wrong_height.headers[position].height = shifted;
+    match x.reorganize(&wrong_height, &bodies(&b)).await {
+        Err(RunFault::StaleReference {
+            height,
+            slot,
+            reference: named,
+            claims,
+            ..
+        }) => {
+            assert_eq!(height, b[0].height);
+            assert_eq!(slot, shekyl_chain_rules::TxSlot::Listed(0));
+            assert_eq!(named, reference);
+            assert_eq!(claims.claimed.map(|c| c.height), Some(shifted));
+            assert_eq!(claims.expected.root, plan.headers[position].root);
+            assert_eq!(claims.expected.height, plan.headers[position].height);
+        }
+        other => panic!("expected StaleReference, got {other:?}"),
+    }
+    assert_eq!(x.digest().await.expect("digest"), before, "rolled back");
+
+    // No claim at all for a reference the chain holds in the window.
+    let mut unclaimed = plan.clone();
+    unclaimed.headers.remove(position);
+    match x.reorganize(&unclaimed, &bodies(&b)).await {
+        Err(RunFault::StaleReference { claims, .. }) => {
+            assert_eq!(claims.claimed, None);
+            assert_eq!(claims.expected.root, plan.headers[position].root);
+        }
+        other => panic!("expected StaleReference, got {other:?}"),
+    }
+    assert_eq!(x.digest().await.expect("digest"), before, "rolled back");
+
+    // A target claim the stitched headers do not derive.
+    let mut wrong_target = plan.clone();
+    let claimed = plan.promoted[0].at.target;
+    let other = shekyl_chain_rules::Target::for_tests(
+        core::num::NonZeroU128::new(claimed.difficulty().to_raw().saturating_mul(2).max(2))
+            .expect("non-zero"),
+    );
+    assert_ne!(other, claimed);
+    wrong_target.promoted[0].at.target = other;
+    match x.reorganize(&wrong_target, &bodies(&b)).await {
+        Err(RunFault::StaleTarget {
+            height,
+            claimed: was,
+            expected,
+            ..
+        }) => {
+            assert_eq!(height, b[0].height);
+            assert_eq!(was, other);
+            assert_eq!(expected, claimed);
+        }
+        other => panic!("expected StaleTarget, got {other:?}"),
+    }
+    assert_eq!(x.digest().await.expect("digest"), before, "rolled back");
+
+    // The writer is up and the honest plan lands.
+    let Switched::Done(done) = x.reorganize(&plan, &bodies(&b)).await.expect("switch") else {
+        panic!("the honest switch did not land");
+    };
+    assert_eq!(done.promoted.len(), 2);
+    assert_same_chain(&x, &y, &a.iter().collect::<Vec<_>>(), "A → B equals B").await;
+    x.close().await;
+    y.close().await;
+}

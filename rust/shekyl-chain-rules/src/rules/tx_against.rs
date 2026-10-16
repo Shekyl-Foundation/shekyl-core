@@ -29,10 +29,12 @@
 
 use std::collections::BTreeSet;
 
+use crate::block::{ReferenceClaims, VerifiedReference};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
+use crate::fault::{Corrupt, Fault, FormAttempt, PerHeightRecord, Stale, ViewRead};
 use crate::rules::tx::TxClass;
+use crate::rules::tx_emission_against::J26;
 use crate::rules::{BlockContext, BlockRule, Rule, TxAgainstRule, TxContext, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::{AtHeight, ChainView, Tip};
@@ -174,7 +176,7 @@ impl BlockRule for L1 {
 /// `Null` CT, which has none (on a spend that is CEN-H15's refusal in
 /// `tx_form`, and here it is nothing to look up). Which classes have a
 /// reference to judge is [`judge_reference`]'s dispatch, not this read's.
-fn proof_reference(tx: &Transaction) -> Option<BlockHash> {
+pub(crate) fn proof_reference(tx: &Transaction) -> Option<BlockHash> {
     match &tx.ct {
         Ct::Fcmp {
             reference_block, ..
@@ -303,6 +305,23 @@ pub fn newest_admissible_reference(connecting: BlockHeight) -> Option<BlockHeigh
     connecting.checked_sub_count(REFERENCE_BLOCK_MIN_AGE)
 }
 
+/// CEN-I11's window whole, as `(oldest, newest)` heights inclusive, for a
+/// block connecting at `connecting`: `[connecting − MAX_AGE, connecting −
+/// MIN_AGE]`, the lower edge clamped at genesis. `None` when the chain is
+/// too young to carry a spend ([`newest_admissible_reference`]). The one
+/// home of both edges: [`I11::window`] refuses by it, and a caller that
+/// claims reference roots to `form` ([`ReferenceClaims::from_headers`])
+/// reads exactly these heights — a reference outside them is not claimed,
+/// and I11 refuses it in `validate`.
+#[must_use]
+pub fn admissible_references(connecting: BlockHeight) -> Option<(BlockHeight, BlockHeight)> {
+    let newest = newest_admissible_reference(connecting)?;
+    let oldest = connecting
+        .checked_sub_count(REFERENCE_BLOCK_MAX_AGE)
+        .unwrap_or(BlockHeight::ZERO);
+    Some((oldest, newest))
+}
+
 impl I11 {
     /// The window as a pure predicate over the two heights — the boundary
     /// arithmetic, with nothing read: `Ok(())` when `ref_height` is
@@ -311,16 +330,11 @@ impl I11 {
     /// function (rule 50's first job); the rows operating are witnessed by
     /// the driver.
     pub(crate) fn window(connecting: BlockHeight, ref_height: BlockHeight) -> Result<(), ()> {
-        let Some(newest) = newest_admissible_reference(connecting) else {
+        let Some((oldest, newest)) = admissible_references(connecting) else {
             return Err(());
         };
-        if ref_height > newest {
+        if ref_height > newest || ref_height < oldest {
             return Err(());
-        }
-        if let Some(oldest) = connecting.checked_sub_count(REFERENCE_BLOCK_MAX_AGE) {
-            if ref_height < oldest {
-                return Err(());
-            }
         }
         Ok(())
     }
@@ -511,6 +525,8 @@ impl I15 {
             num_inputs,
             tree_depth: layers,
         };
+        #[cfg(any(test, feature = "harness"))]
+        probes::count_fcmp();
         match proof::verify(
             &fcmp_proof,
             &key_images,
@@ -523,6 +539,44 @@ impl I15 {
             Ok(true) => Ok(()),
             Ok(false) | Err(_) => Err(()),
         }
+    }
+}
+
+/// Call counters for the two verification bodies, so a test can hold that
+/// `validate` runs neither (`CHAIN_RULES_CRATE.md` §4.6: no second verify
+/// site) while `form` runs both. Test-only: nothing in production reads
+/// them.
+#[cfg(any(test, feature = "harness"))]
+pub mod probes {
+    use core::cell::Cell;
+
+    thread_local! {
+        static FCMP: Cell<u64> = const { Cell::new(0) };
+        static SIGNATURES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// How many times [`shekyl_fcmp::proof::verify`] was called through
+    /// CEN-I15's body (the spend's, the emission's fee inputs as J26, the
+    /// bond post's funding spends as J27) **on this thread**. Per thread,
+    /// so a probe over one stage is not moved by another test's `form` on
+    /// a sibling thread — the test runs both stages on its own thread.
+    #[must_use]
+    pub fn fcmp_verifies() -> u64 {
+        FCMP.with(Cell::get)
+    }
+
+    /// How many signatures CEN-I18 verified on this thread.
+    #[must_use]
+    pub fn signature_verifies() -> u64 {
+        SIGNATURES.with(Cell::get)
+    }
+
+    pub(super) fn count_fcmp() {
+        FCMP.with(|c| c.set(c.get() + 1));
+    }
+
+    pub(super) fn count_signature() {
+        SIGNATURES.with(|c| c.set(c.get() + 1));
     }
 }
 
@@ -645,12 +699,18 @@ const SPEND_REFERENCE: ReferenceRows = ReferenceRows {
 };
 
 /// Every row [`judge_reference`]'s spend arm can record — the four steps
-/// of [`SPEND_REFERENCE`] and I15 over the context they yield — which the
-/// other arms record **vacuous**, as [`run_tx_against`](crate::rules::run_tx_against)
-/// records an out-of-scope kind, so G9's mint sees each evaluated at every
-/// slot. Before the flip this was `SPEND_REFERENCE.steps()`: the depth
-/// step and I15 were pending and the mint did not ask for them.
-const SPEND_ARM_ROWS: [CenRow; 5] = [I10::ROW, I11::ROW, I12::ROW, I13::ROW, I15::ROW];
+/// of [`SPEND_REFERENCE`] — which the other arms record **vacuous**, as
+/// [`run_tx_against`](crate::rules::run_tx_against) records an
+/// out-of-scope kind, so G9's mint sees each evaluated at every slot. I15
+/// is not among them since 2026-10-16: the verify runs in `form`
+/// ([`judge_proofs`]), which records I15, J26 and J27's verify half, and
+/// this sequence only compares what it verified against.
+const SPEND_ARM_ROWS: [CenRow; 4] = [I10::ROW, I11::ROW, I12::ROW, I13::ROW];
+
+/// The rows [`judge_proofs`] records — the three verify rows, one per
+/// class that carries a proof — which it records **vacuous** on every
+/// other class, as [`judge_reference`] records the step rows.
+const PROOF_ROWS: [CenRow; 3] = [I15::ROW, J26::ROW, J27::ROW];
 
 /// The emission's attribution: every step is CEN-J21's.
 const EMISSION_REFERENCE: ReferenceRows = ReferenceRows {
@@ -771,21 +831,17 @@ fn reference_context<'id, V: ChainView<'id>>(
 pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
     cx: &TxContext<'_>,
     view: &V,
+    verified: Option<VerifiedReference>,
+    attempt: FormAttempt,
     coverage: &mut RuleCoverage,
-) -> Result<Verdict<Option<ReferenceContext>>, ViewRead<V::Fault>> {
+) -> Result<Verdict<Option<ReferenceContext>>, Fault<V::Fault>> {
     match cx.class {
         TxClass::Spend { .. } => {
             coverage.insert(J21::ROW);
             coverage.insert(J27::ROW);
             match reference_context(cx, view, SPEND_REFERENCE, coverage)? {
-                // The C++'s order: the root at the reference and the depth
-                // against it (`blockchain.cpp:4088`, `:4098`), then
-                // `shekyl_fcmp_verify` over them (`:4157`).
                 Ok(reference) => {
-                    if I15::verify(cx.tx, &to_key_slots(cx.tx), &reference).is_err() {
-                        return Ok(Err(InvalidBlock::new(I15::ROW, cx.locus())));
-                    }
-                    coverage.insert(I15::ROW);
+                    compare_claim(cx, &reference, verified, attempt)?;
                     Ok(Ok(Some(reference)))
                 }
                 Err(refused) => Ok(Err(refused)),
@@ -796,25 +852,28 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
                 coverage.insert(row);
             }
             coverage.insert(J27::ROW);
-            Ok(reference_context(cx, view, EMISSION_REFERENCE, coverage)?.map(Some))
+            match reference_context(cx, view, EMISSION_REFERENCE, coverage)? {
+                Ok(reference) => {
+                    compare_claim(cx, &reference, verified, attempt)?;
+                    Ok(Ok(Some(reference)))
+                }
+                Err(refused) => Ok(Err(refused)),
+            }
         }
         TxClass::BondPost { .. } => {
             for row in SPEND_ARM_ROWS {
                 coverage.insert(row);
             }
             coverage.insert(J21::ROW);
-            // Every step and the verify are one row, so the steps are run
-            // into a scratch and folded in only once the proof has passed:
-            // a refused row is not recorded, whichever of its steps or its
-            // verify refused it. The C++'s order within the arm: the root
-            // at the reference and the depth against it (`:3677`, `:3678`),
-            // then `shekyl_fcmp_verify` over them (`:3713`).
+            // Every step is one row with the verify `form` ran, so the
+            // steps are run into a scratch and folded in only once the
+            // chain's context is the claim the proof was verified under: a
+            // refused row is not recorded, whichever of its steps refused
+            // it, and a stale claim records nothing.
             let mut steps = *coverage;
             match reference_context(cx, view, BOND_POST_REFERENCE, &mut steps)? {
                 Ok(reference) => {
-                    if I15::verify(cx.tx, &to_key_slots(cx.tx), &reference).is_err() {
-                        return Ok(Err(InvalidBlock::new(J27::ROW, cx.locus())));
-                    }
+                    compare_claim(cx, &reference, verified, attempt)?;
                     coverage.union(&steps);
                     Ok(Ok(Some(reference)))
                 }
@@ -830,6 +889,104 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
             Ok(Ok(None))
         }
     }
+}
+
+/// The comparison that replaced the verify (2026-10-16): the context the
+/// chain yields for `cx`'s reference against what `form` verified the
+/// proof under. Agreement is the normal case; a disagreement — a claim for
+/// another height or root, or no claim at all — is
+/// [`Stale::Reference`], never a verdict, and `validate` never verifies the
+/// proof itself. Pure over its operands, so the mock earns its keep on it.
+fn compare_claim<VF>(
+    cx: &TxContext<'_>,
+    reference: &ReferenceContext,
+    verified: Option<VerifiedReference>,
+    attempt: FormAttempt,
+) -> Result<(), Fault<VF>> {
+    let named = proof_reference(cx.tx).expect("a context was yielded, so a reference was named");
+    let expected = crate::block::ReferenceClaim {
+        height: reference.ref_height,
+        root: reference.anchor,
+    };
+    match verified {
+        Some(v) if v.reference == named && v.claim == expected => Ok(()),
+        other => Err(Fault::Stale(Stale::Reference {
+            slot: cx.slot,
+            reference: named,
+            claims: Box::new(crate::fault::ReferenceMismatch {
+                claimed: other.map(|v| v.claim),
+                expected,
+            }),
+            retry: attempt.next(),
+        })),
+    }
+}
+
+/// The verify rows, run in `form` over the caller's claims (2026-10-16,
+/// `CHAIN_RULES_CRATE.md` §4.6 — the third claim): CEN-I15 on a spend,
+/// CEN-J26 on an emission's fee inputs, CEN-J27's verify half on a bond
+/// post's funding spends, each over [`to_key_slots`] against the claimed
+/// root and the body's declared depth (`layers = declared + 1`). Vacuous
+/// on every other class.
+///
+/// A proof-bearing transaction whose reference the caller did not claim is
+/// not verified here and yields `None`; `validate` then refuses it on
+/// CEN-I10/I11 or faults [`Stale::Reference`] — there is no second verify
+/// site. A declared depth the verifier cannot size (`0`, or past a `u8`)
+/// yields `None` too: that is CEN-I13's refusal, which `validate` keeps.
+///
+/// Yields what the proof was verified against, for `validate` to compare
+/// with the chain's context.
+pub(crate) fn judge_proofs(
+    cx: &TxContext<'_>,
+    claims: &ReferenceClaims,
+    coverage: &mut RuleCoverage,
+) -> Verdict<Option<VerifiedReference>> {
+    let (row, verifies) = match cx.class {
+        TxClass::Spend { .. } => (I15::ROW, true),
+        TxClass::Emission { .. } => (J26::ROW, true),
+        TxClass::BondPost { .. } => (J27::ROW, true),
+        TxClass::Coinbase | TxClass::ServeCreditOnly { .. } => (I15::ROW, false),
+    };
+    for vacuous in PROOF_ROWS {
+        if !verifies || vacuous != row {
+            coverage.insert(vacuous);
+        }
+    }
+    if !verifies {
+        return Ok(None);
+    }
+    let Some(reference) = proof_reference(cx.tx) else {
+        // A `Null` CT on a proof-bearing class: CEN-H15 in `tx_form`, and
+        // I10's refusal in `validate`. Nothing to verify.
+        return Ok(None);
+    };
+    let Some(claim) = claims.get(&reference) else {
+        return Ok(None);
+    };
+    let declared = match &cx.tx.ct {
+        Ct::Fcmp {
+            prunable: Some(prunable),
+            ..
+        } => prunable.tree_depth,
+        _ => return Ok(None),
+    };
+    let Ok(tree_depth) = u8::try_from(declared) else {
+        return Ok(None);
+    };
+    if tree_depth == 0 {
+        return Ok(None);
+    }
+    let context = ReferenceContext {
+        ref_height: claim.height,
+        anchor: claim.root,
+        tree_depth,
+    };
+    if I15::verify(cx.tx, &to_key_slots(cx.tx), &context).is_err() {
+        return Err(InvalidBlock::new(row, cx.locus()));
+    }
+    coverage.insert(row);
+    Ok(Some(VerifiedReference { reference, claim }))
 }
 
 /// CEN-I17, a **definition**: what each input's hybrid signature is over —
@@ -925,6 +1082,8 @@ impl I18 {
             return Err(InvalidBlock::new(Self::ROW, Locus::Tx { slot: cx.slot }));
         }
         for (input, (auth, hash)) in pqc_auths.iter().zip(hashes).enumerate() {
+            #[cfg(any(test, feature = "harness"))]
+            probes::count_signature();
             if verify_pqc_auth(
                 auth.scheme_id,
                 &auth.hybrid_public_key,

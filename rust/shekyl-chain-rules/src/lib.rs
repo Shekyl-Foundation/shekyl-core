@@ -171,13 +171,16 @@ pub use archival::{
     BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, SectionCharge,
     SectionCheckFailed, SectionRefused, SectionStanding,
 };
-pub use block::{Candidate, ProvenPow, StructurallyValid, TxIdentity, ValidatedBlock};
+pub use block::{
+    Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,
+    ValidatedBlock, VerifiedReference,
+};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use drain::{tree_after, Drain, DrainedOutput};
 pub use fault::{
-    Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, Retry, SettlementCheck, Stale,
-    ViewRead, MAX_FORM_ATTEMPTS,
+    Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, ReferenceMismatch, Retry,
+    SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,
 };
 pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
@@ -199,8 +202,11 @@ pub use rules::range_proof::{BatchOutcome, ListedProofs};
 pub use rules::reward::{quote_emission, PaidEmission};
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;
+#[cfg(any(test, feature = "harness"))]
+pub use rules::tx_against::probes;
 pub use rules::tx_against::{
-    newest_admissible_reference, REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE,
+    admissible_references, newest_admissible_reference, REFERENCE_BLOCK_MAX_AGE,
+    REFERENCE_BLOCK_MIN_AGE,
 };
 pub use rules::{recorded, recorded_header};
 pub use shekyl_fcmp::LeafInput;

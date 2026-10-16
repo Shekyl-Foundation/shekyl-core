@@ -881,14 +881,16 @@ fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
 #[test]
 fn the_family_over_the_corpus_names_what_it_cannot_reach() {
     let chains = captured_chains();
-    // A corpus chain brings no spare bodies and no twins, and the bound
-    // is the validator's: the weight and the signed-twin mutation are
-    // `Unmutable` here by construction, and the census says so below.
+    // A corpus chain brings no spare bodies, no twins and no wallet-made
+    // spend bodies, and the bound is the validator's: the weight, the
+    // signed-twin and the three spend mutations are `Unmutable` here by
+    // construction, and the census says so below.
     let env = Environment {
         clock: MockSubstrate::CLOCK,
         pow: None,
         overweight: None,
         twins: &[],
+        resigned: None,
     };
     // Per mutation (by its position in `Mutation::ALL`): `Some(causes)`
     // while it has been unreachable on every chain so far, `None` once one
@@ -945,10 +947,14 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
         .zip(everywhere_unmutable)
         .filter_map(|(m, causes)| causes.map(|c| (m, c)))
         .collect();
-    // Four entries, and the census says whose — the environment's or the
+    // Seven entries, and the census says whose — the environment's or the
     // corpus's, never the family's. `PowUnderWrongSeed`: this census
     // carries no PoW leg. `OverweightBlock`: no body supply — the corpus
-    // census judges captured blocks as they are. `DuplicateBondPost`: this
+    // census judges captured blocks as they are. `DoubleSpend`,
+    // `UnknownReference`, `ReferenceTooRecent`: no wallet-made bodies
+    // (`Environment::resigned`, 2026-10-16) — a captured chain's spends are
+    // signed by a wallet this census does not hold; `DoubleSpend` at a
+    // chain's first spend also has nothing spent before it. `DuplicateBondPost`: this
     // census supplies no twins, and the *other* cause —
     // `NoArchivalBodyToDuplicate` — is the heights that carry no post,
     // which is a reading of the corpus: *until 2026-10-12* the bond-post
@@ -990,6 +996,27 @@ fn the_family_over_the_corpus_names_what_it_cannot_reach() {
                 }]
             ),
             (Mutation::OverweightBlock, vec![Unmutable::NoBodySupply]),
+            (
+                Mutation::DoubleSpend,
+                vec![
+                    Unmutable::NothingSpentBefore,
+                    Unmutable::NoResignedBody {
+                        mutation: Mutation::DoubleSpend
+                    }
+                ]
+            ),
+            (
+                Mutation::UnknownReference,
+                vec![Unmutable::NoResignedBody {
+                    mutation: Mutation::UnknownReference
+                }]
+            ),
+            (
+                Mutation::ReferenceTooRecent,
+                vec![Unmutable::NoResignedBody {
+                    mutation: Mutation::ReferenceTooRecent
+                }]
+            ),
         ],
         "the mutations no captured chain can carry, with why"
     );
