@@ -657,7 +657,9 @@ stop path, not a bound.
 
 **Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, and `TSR-M9` to
 `TSR-M11` need only today's managed Tor and a SOCKS self-dial, and are measured
-before the first production commit. `TSR-M2` and `TSR-M8` need the supervisor
+before increment 3 (§12), the first increment whose code uses a bound they set;
+increment 2 uses none. They are taken after the re-pin, on the Tor that ships
+(0.4.9.14), the Pi 4 setting each value. `TSR-M2` and `TSR-M8` need the supervisor
 or the suspend apparatus, and are measured on the implementation branch before
 its PR leaves draft.
 

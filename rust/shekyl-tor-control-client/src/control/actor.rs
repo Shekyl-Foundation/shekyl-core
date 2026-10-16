@@ -891,8 +891,10 @@ fn request_graceful_stop(child: &Child) {
 
 /// No graceful-stop signal off Unix: the `wait`-timeout → `Child::kill`
 /// (`TerminateProcess`) escalation drives shutdown there instead. Closing the owning
-/// control connection would also exit tor, but an exit by that route does not save
-/// tor's `state`; which graceful route the supervisor uses is `TSR-M6`'s question.
+/// control connection is the ruled graceful route (§4.7) and saves as much: tor logs
+/// the owning controller's close and raises `SIGTERM` itself (`lost_owning_controller`
+/// in `control.c`), so `tor_cleanup` forces the same `state` save on both routes, on
+/// every platform. Increment 3 replaces this `SIGTERM` with that close.
 #[cfg(not(unix))]
 fn request_graceful_stop(_child: &Child) {}
 
@@ -2194,8 +2196,10 @@ mod live_tests {
             .ask(Command::GetInfo(vec!["version".to_owned()]))
             .await
             .expect("GETINFO version");
+        // Named in every assertion below, so a failure says which tor wrote what the
+        // parser could not read. Not printed: this crate carries no print surface
+        // (WSS-20, `shekyl-logging`'s `p_serving_crates_carry_no_logging_surface`).
         let version = version.lines().first().cloned().unwrap_or_default();
-        println!("tor under test: {version}");
         let subscribed = actor
             .ask(Command::supervisor_events())
             .await
