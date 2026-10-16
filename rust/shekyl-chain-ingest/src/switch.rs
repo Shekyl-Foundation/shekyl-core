@@ -233,8 +233,15 @@ enum Planned {
     BeyondCap(PopBeyondReorgCap),
     /// CEN-D6 refused an alt entry's target on its own headers: that
     /// block's verdict (`target` module docs), so there is no claim to
-    /// make and nothing is formed. The rows stay held.
-    Refused(InvalidBlock),
+    /// make and nothing is formed. As a promotion verdict does (K5), the
+    /// refused entry and every entry above it leave the alt table —
+    /// `remove`, ascending — in a write of their own.
+    Refused {
+        /// The verdict.
+        refused: InvalidBlock,
+        /// The refused entry and its successors, ascending.
+        remove: Vec<BlockHash>,
+    },
 }
 
 /// The formed blocks a [`SwitchPlan`] named, back to the actor (module
@@ -442,7 +449,16 @@ fn offer(
     match plan(store, &snap, rules, tip, hash, verdict)? {
         Planned::Due(plan) => Ok(Offered::SwitchDue(plan)),
         Planned::BeyondCap(beyond) => Ok(Offered::BeyondCap(beyond)),
-        Planned::Refused(refused) => Ok(Offered::Refused(refused)),
+        Planned::Refused { refused, remove } => {
+            let cleared: Result<(), StoreError> = store.write(|batch| {
+                for id in &remove {
+                    batch.remove_alt_block(id)?;
+                }
+                Ok(())
+            });
+            cleared?;
+            Ok(Offered::Refused(refused))
+        }
     }
 }
 
@@ -522,7 +538,7 @@ fn plan(
         });
     }
     let mut promoted = Vec::with_capacity(entries.len());
-    for entry in entries {
+    for (index, entry) in entries.iter().enumerate() {
         let height = entry.block.height();
         let witness = entry
             .block
@@ -532,7 +548,12 @@ fn plan(
             .expect("an alt row's witness was held well-formed when it was read (AL4)");
         let target = match target_claim(&stitched, height, &rules.in_force(height)) {
             Ok(Ok(target)) => target,
-            Ok(Err(refused)) => return Ok(Planned::Refused(refused)),
+            Ok(Err(refused)) => {
+                return Ok(Planned::Refused {
+                    refused,
+                    remove: entries[index..].iter().map(|e| e.id).collect(),
+                })
+            }
             Err(fault) => return Err(snapshot_fault(store, height, fault)),
         };
         promoted.push(PlannedPromotion {
