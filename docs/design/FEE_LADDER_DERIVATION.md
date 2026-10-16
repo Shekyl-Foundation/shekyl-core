@@ -639,6 +639,45 @@ Two things stated on the record:
    the cap side, the fee floor is the sole long-run security budget and
    this is genesis-blocking, not a calibration question.**
 
+
+### FL-V12 — The served rate's whole-atomic-unit resolution is an output quantizer wherever `F` is small (FL PR C, 2026-10-16)
+
+`--fee-ladder`'s feedback grid runs FL-C7's loop through the served
+ladder, whose rungs are whole atomic units per byte. On the exact window
+(FL-R24) **582 of 600 cells converge** under FL-E1's 50 bp bar; **18 do
+not, worst tail amplitude 833 bp**. That is above FL-E1's pre-registered
+falsifier (§11.5: any cell above one tick, 100–250 bp, on either arm).
+
+**What the 18 are.** All sit at the widest medians, where the served
+standard rung is a two- or three-digit integer, and every one toggles
+between exactly two standard-rung values one served-floor unit apart
+(`standard = 4F`, so 4 atomic units): 48 ↔ 52 at `M` = 50·`Zm`, age 0
+(833 bp, four cells); 124 ↔ 128 at 50·`Zm`, age 12 (322 bp, eight
+cells); 664 ↔ 668 at 10·`Zm`, age 30 (60 bp, six cells). The served
+rate's resolution is acting as an output quantizer, the class FL-R21
+removed from the served path, wherever `F` is small.
+
+**What they are not: loop instability.** `--fee-floor` runs the same
+grid with the floor at `SCALE` resolution (`floor_rate`, below the
+owner's `max(1)` truncation). There, 17 of the 18 converge under 50 bp;
+the eighteenth (age 12, `ε` = 3, `D` = 400, displaced start) reads
+87 bp — above the bar, under one tick, and one of the four cells §11.7
+already records. The dynamics converge; the integer output does not
+resolve the fixed point.
+
+**Why `F` is small there:** the floor decays with the reward (FL-V11)
+and with `M²`, so at a wide median late in the curve one atomic unit of
+the rate is several percent of it.
+
+**Disposition: a requirement on the floor-basis round, EUP-5 G
+(FL-R13), not a change here.** Whatever basis that round derives must
+state the served rate's resolution such that one unit of the rate stays
+inside FL-E1's bar across the reachable state space. The basis sets
+`F`'s magnitude, so the resolution is chosen there. The bar and the
+served ladder are unchanged; `--fee-ladder` labels these cells
+`FL-V12-resolution` and keeps any other shape above the bar as
+`OSCILLATING`, so a real instability cannot be read as this one.
+
 ## §3 The model
 
 **Which reward the derivation prices against — stated because every number
@@ -858,6 +897,9 @@ What the measurement shows:
   resolved on the record in §5.3.
 
 ### §4.4 Dwell (FL-C4a)
+
+*Disposition: FL-C4a is closed and its instrument deleted (§11.4). This
+section is the round's record of what it measured.*
 
 **Metrics (corrected at review round 3):** *median dwell* (blocks a posted
 value persists, whole trace), *distinct posted values* (true set
@@ -2930,7 +2972,7 @@ reopening condition):
 | FL-C1 continuous-schedule precommitment | **met — satisfied, not merely un-overruled** | daemon-computed rung values identical for all wallets at a height (§1.1's own clarification); no wallet-side arithmetic beyond `rate × weight`; `round_money_up_2` leaves the served path but `get_fee_quantization_mask` survives at admission, so paid fees still sit on a lattice — "arbitrary-precision fees" was never on the table; the overrule of §11.2(a) recorded as premise-refuted |
 | FL-C2 coverage | **met exactly** | economy = floor by identity |
 | FL-C3 fee rounding | **re-based** | `round_money_up_2` leaves the served path (finding 7); the mask remains the only rounding |
-| FL-C4a dwell | **re-grounded** on quote quality, not anonymity (§1.4 note) | FL-R24's remaining question |
+| FL-C4a dwell | **closed** | the anonymity ground was refuted (FL-R18); quote stability is answered by FL-R23's identity, a quote at `F(h)` admitted within `G` blocks; the size of the per-block move is FL-E2's, in basis points. With the exact window `C` moves a sliver nearly every block, so a count of integer-rung changes reads "unstable" exactly when the design works; the dwell instrument is deleted (PR C, #1096) |
 | FL-C4b/c | unchanged | three tiers, FL-R17 |
 | FL-C5 | **met** | ladder multiples 1 : 4 : `2M/w_ref` unchanged |
 | FL-C6 relay-floor coherence | **met by construction** | closes FL-D2 |
