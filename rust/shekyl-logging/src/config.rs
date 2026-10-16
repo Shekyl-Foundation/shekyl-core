@@ -104,6 +104,12 @@ pub struct FileSink {
     pub filename_prefix: String,
     /// Rotation policy.
     pub rotation: Rotation,
+    /// Bytes the live file and its archives may occupy together.
+    ///
+    /// Set by [`FileSink::within_budget`]. [`FileSink::size_rolling`],
+    /// [`FileSink::daily`] and [`FileSink::unrotated`] leave this `None`,
+    /// so their rotation stays a file count.
+    pub retained_bytes: Option<u64>,
 }
 
 impl FileSink {
@@ -125,6 +131,7 @@ impl FileSink {
             directory: directory.into(),
             filename_prefix: filename_prefix.into(),
             rotation: Rotation::Daily,
+            retained_bytes: None,
         }
     }
 
@@ -135,6 +142,7 @@ impl FileSink {
             directory: directory.into(),
             filename_prefix: filename_prefix.into(),
             rotation: Rotation::Never,
+            retained_bytes: None,
         }
     }
 
@@ -162,6 +170,7 @@ impl FileSink {
                 max_bytes,
                 max_files,
             },
+            retained_bytes: None,
         }
     }
 }
@@ -190,14 +199,16 @@ pub struct Config {
     ///   `Some(FileSink::unrotated(...))` when the user passes
     ///   `--log-file <path>`. See `rust/shekyl-wallet-rpc/src/main.rs`
     ///   for the exact mapping.
+    /// * `shekyld` — the Rust `main()` builds [`FileSink::within_budget`]
+    ///   from the logging section, so the live file and its archives
+    ///   share one byte budget.
     ///
-    /// The C++ daemon (`shekyld`) does **not** consume this struct. It
-    /// routes through the raw FFI entry point `shekyl_log_init_file`
-    /// (see `rust/shekyl-logging/src/ffi.rs`), which constructs a
+    /// The C++ remnant does not consume this struct. `shekyl_log_init_file`
+    /// (see `rust/shekyl-logging/src/ffi.rs`) still constructs a
     /// [`FileSink::size_rolling`] sink from the `MAX_LOG_FILE_SIZE` /
-    /// `MAX_LOG_FILES` constants in `contrib/epee/include/misc_log_ex.h`
-    /// — not a [`FileSink::daily`]. Integrators mirroring the daemon's
-    /// defaults should therefore construct
+    /// `MAX_LOG_FILES` constants in `contrib/epee/include/misc_log_ex.h`,
+    /// and that rotation stays a file count. Integrators mirroring that
+    /// count should therefore construct
     /// `FileSink::size_rolling(directory, filename_prefix, max_bytes,
     /// max_files)` with a directory under `~/.shekyl/logs/` rather than
     /// reaching for `FileSink::daily`.
@@ -257,17 +268,21 @@ impl Default for Config {
 pub const FILES_WITHIN_BUDGET: u32 = 8;
 
 impl FileSink {
-    /// A size-rolling sink whose live file and archives together never
-    /// exceed `budget_bytes`: [`FILES_WITHIN_BUDGET`] files of an equal
-    /// share each. A budget too small for that many files of at least one
-    /// byte is still honoured: the share floors at one byte.
+    /// A size-rolling sink whose live file and archives together stay
+    /// within `budget_bytes`. The rotation is [`FILES_WITHIN_BUDGET`]
+    /// files of an equal share; the share floors at one byte. The byte
+    /// budget is [`Self::retained_bytes`], so a record larger than its
+    /// share is pruned back to the budget. [`Self::size_rolling`] does
+    /// not set that budget: its cap stays a file count.
     pub fn within_budget(
         directory: impl Into<PathBuf>,
         filename_prefix: impl Into<String>,
         budget_bytes: u64,
     ) -> Self {
         let share = (budget_bytes / u64::from(FILES_WITHIN_BUDGET)).max(1);
-        Self::size_rolling(directory, filename_prefix, share, FILES_WITHIN_BUDGET)
+        let mut sink = Self::size_rolling(directory, filename_prefix, share, FILES_WITHIN_BUDGET);
+        sink.retained_bytes = Some(budget_bytes);
+        sink
     }
 }
 
@@ -278,6 +293,7 @@ mod budget_tests {
     #[test]
     fn a_budget_is_split_into_equal_shares_that_sum_within_it() {
         let sink = FileSink::within_budget("/var/log", "shekyld", 1 << 30);
+        assert_eq!(sink.retained_bytes, Some(1 << 30));
         match sink.rotation {
             Rotation::Size {
                 max_bytes,
@@ -290,6 +306,13 @@ mod budget_tests {
             other => panic!("not size-rolling: {other:?}"),
         }
         let tiny = FileSink::within_budget("/var/log", "shekyld", 3);
+        assert_eq!(tiny.retained_bytes, Some(3));
         assert!(matches!(tiny.rotation, Rotation::Size { max_bytes: 1, .. }));
+        assert!(
+            FileSink::size_rolling("/var/log", "shekyld", 100, 2)
+                .retained_bytes
+                .is_none(),
+            "a count rotation carries no byte budget"
+        );
     }
 }
