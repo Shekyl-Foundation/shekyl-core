@@ -934,7 +934,7 @@ async fn spawn_managed_tor(
     // never by following a symlink or truncating a hard link.
     launch::install_blank_config(&managed.data_dir).await?;
 
-    let environment = launch::LaunchEnvironment::resolve(&managed.tor_binary)?;
+    let environment = launch::LaunchEnvironment::resolve(&managed)?;
     let mut child = launch::managed_tor_command(&managed, &port_file, &environment)
         .spawn()
         .map_err(|_| ControlError::Spawn)?;
@@ -1629,10 +1629,17 @@ mod live_tests {
             .expect("spawn tor");
         // Guard the wait: if wait_for_control_port times out (panics), the child is
         // killed on unwind rather than orphaned. Disarmed once the port is ready.
-        let guard = KillOnDrop(Some(child));
+        let mut guard = KillOnDrop(Some(child));
         // Same not-yet-written startup race the cookie reader models: poll the
-        // control-port file until it parses, with a bounded backoff.
-        let control_addr = wait_for_control_port(&port_file, Duration::from_secs(30)).await;
+        // control-port file until it parses, with a bounded backoff. A tor that
+        // exits first (killed at exec, a bad binary) fails at once, not at the
+        // timeout.
+        let control_addr = wait_for_control_port(
+            &port_file,
+            guard.0.as_mut().expect("child present until disarmed"),
+            Duration::from_secs(30),
+        )
+        .await;
         let child = guard.disarm();
         let cookie_path = data_dir.join("control_auth_cookie");
         TestTor {
@@ -1644,11 +1651,19 @@ mod live_tests {
     }
 
     /// Poll the `ControlPortWriteToFile` until it carries a parseable
-    /// `PORT=<addr>:<port>` line. Async so the backoff yields the runtime instead
-    /// of blocking a worker thread with `std::thread::sleep`.
-    async fn wait_for_control_port(port_file: &Path, timeout: Duration) -> SocketAddr {
+    /// `PORT=<addr>:<port>` line, failing as soon as `child` exits. Async so the
+    /// backoff yields the runtime instead of blocking a worker thread with
+    /// `std::thread::sleep`.
+    async fn wait_for_control_port(
+        port_file: &Path,
+        child: &mut Child,
+        timeout: Duration,
+    ) -> SocketAddr {
         let deadline = Instant::now() + timeout;
         loop {
+            if let Ok(Some(status)) = child.try_wait() {
+                panic!("tor exited ({status}) before writing its control port");
+            }
             if let Ok(contents) = std::fs::read_to_string(port_file) {
                 if let Some(addr) = contents
                     .lines()
@@ -1734,6 +1749,7 @@ mod live_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (tx, _rx) = mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
+        let (exit_tx, exit_rx) = oneshot::channel();
         let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
@@ -1741,7 +1757,7 @@ mod live_tests {
                 socks_port: super::SocksPort::Fixed(free_port()),
                 // The whole point: a service that can reach the network.
                 disable_network: false,
-                exit_observer: None,
+                exit_observer: Some(exit_tx),
             }),
             events: EventSink::new(tx),
             readiness,
@@ -1851,6 +1867,7 @@ mod live_tests {
 
         actor.stop_gracefully().await.expect("graceful stop");
         actor.wait_for_shutdown().await;
+        await_reap_before_drop(exit_rx).await;
     }
 
     /// The managed tor reads no configuration but the launcher's own blank file:
@@ -1882,13 +1899,14 @@ mod live_tests {
         let data_dir = dir.path().to_path_buf();
         let (readiness, _ready_rx) = BootstrapReadiness::new();
         let (tx, _rx) = mpsc::unbounded_channel();
+        let (exit_tx, exit_rx) = oneshot::channel();
         let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
                 data_dir: data_dir.clone(),
                 socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: true,
-                exit_observer: None,
+                exit_observer: Some(exit_tx),
             }),
             events: EventSink::new(tx),
             readiness,
@@ -1901,6 +1919,7 @@ mod live_tests {
         assert_eq!(reply.status(), 250);
         actor.stop_gracefully().await.expect("graceful stop");
         actor.wait_for_shutdown().await;
+        await_reap_before_drop(exit_rx).await;
 
         let ours = launch::blank_config_path(&data_dir);
         let ours = ours.display().to_string();
@@ -1929,6 +1948,17 @@ mod live_tests {
             geoip_parses, OWN_GEOIP_PARSES,
             "the IPv4 and IPv6 GeoIP files, both ours"
         );
+    }
+
+    /// Wait until the managed tor has been reaped, so the test's `TempDir` drops
+    /// after tor is gone. Tor saves `state` when it exits on `SIGTERM`; a drop that
+    /// starts before the reap can race that write and leave a directory holding
+    /// only `state` (`TOR_SUPERVISOR.md` `TSR-M6`).
+    async fn await_reap_before_drop(exit_rx: oneshot::Receiver<TorExit>) {
+        tokio::time::timeout(Duration::from_secs(10), exit_rx)
+            .await
+            .expect("the managed tor is reaped within 10 s of shutdown")
+            .expect("the actor reports the reap");
     }
 
     /// Reserve a free loopback port (bind `:0`, read it, drop). A small TOCTOU window
