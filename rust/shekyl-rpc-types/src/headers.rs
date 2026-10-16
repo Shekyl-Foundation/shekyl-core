@@ -170,9 +170,10 @@ impl FeeTiers {
 
 /// Request of `get_fee_estimate`: no parameters.
 ///
-/// The ladder is a function of chain state alone (FL-R20); `grace_blocks`,
-/// which moved no rung, is deleted rather than ignored (FL-R26, 3.57). A
-/// request still naming it is refused as a wrong parameter.
+/// The ladder is a function of chain state alone (FL-R20); the lookahead
+/// parameter, which moved no rung, is deleted rather than ignored (FL-R26,
+/// 3.57), so a request still naming a member is refused as a wrong
+/// parameter.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GetFeeEstimateRequest {}

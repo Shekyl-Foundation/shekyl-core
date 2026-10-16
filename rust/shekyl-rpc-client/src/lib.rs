@@ -625,7 +625,7 @@ pub trait Rpc: Sync + Clone {
             // in. Reading the shared type makes the next wire change a
             // compile error here.
             // No parameters: the ladder is a function of chain state alone
-            // (FL-R20; `grace_blocks` was deleted at 3.57, FL-R26).
+            // (FL-R20, FL-R26; wire 3.57).
             let res: shekyl_rpc_types::GetFeeEstimateResponse =
                 self.json_rpc_call("get_fee_estimate", None).await?;
 

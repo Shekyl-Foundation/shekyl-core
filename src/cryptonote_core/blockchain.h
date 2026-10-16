@@ -600,8 +600,8 @@ namespace cryptonote
     /// fee median; `c` is raw C in SCALE units. `base_reward` is M_r-neutral.
     void get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward, uint64_t median, uint64_t c, std::vector<uint64_t> &fees) const;
 
-    /// Three-tier estimate from chain state at the tip (FL-R20: a function
-    /// of chain state alone; FL-R26 deleted `grace_blocks`).
+    /// Three-tier estimate from chain state at the tip: a function of chain
+    /// state alone (FL-R20), with no lookahead parameter (FL-R26).
     void get_dynamic_base_fee_estimate_2021_scaling(std::vector<uint64_t> &fees) const;
 
     /**

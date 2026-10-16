@@ -274,7 +274,7 @@ pub trait ChainFacts: Send + Sync {
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault>;
     /// The dynamic base-fee estimate: a function of chain state alone
-    /// (FL-R20; `grace_blocks` is deleted, FL-R26).
+    /// (FL-R20, FL-R26), so it takes no parameter.
     fn fee_estimate(&self) -> Result<FeeEstimate, FactsFault>;
     /// A whole block, named either way. Absence is data ([`BlockAt::block`]
     /// is `None`) for both lookups; the caller knows which it asked for and

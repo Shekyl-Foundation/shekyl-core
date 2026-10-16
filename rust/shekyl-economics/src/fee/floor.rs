@@ -155,39 +155,50 @@ mod tests {
         assert_eq!(at(30, 500, 10 * zone), 672);
     }
 
-    /// The §4.6 degenerates: the tail, a median at and above the zone,
-    /// and the `max(1)` floor.
+    /// The §4.6 degenerates, pinned: at exhaustion `R` is the tail (600 SKL
+    /// per block), `σ` is a tenth of a percent, and the floor at the zone
+    /// is tens of atomic units per byte; a wide median truncates it to the
+    /// `max(1)` floor; a median below the zone is floored to the zone.
     #[test]
     fn the_floor_at_the_degenerates() {
         let p = EconomicParams::default();
         let s = p.emission_curve_asymptote;
-        let tail = tail_subsidy_per_block(&p).expect("tail");
         let height = 80 * BLOCKS_PER_YEAR;
-        // At exhaustion R is the tail; at the baseline C < 1 only through
-        // σ and b, and the floor is 20 atomic/byte at the zone.
-        let at_tail = relay_floor_from(
-            operands(height, s, 0, TxVolume::per_block(50), FULL_REWARD_ZONE),
-            &p,
-        )
-        .expect("priced");
-        assert!(
-            at_tail
-                <= tail * RELAY_FLOOR_REFERENCE_TX_WEIGHT / (FULL_REWARD_ZONE * FULL_REWARD_ZONE)
-                    * 2
-        );
-        assert!(at_tail >= 1);
-        // A median wide enough truncates to the `max(1)` floor.
         assert_eq!(
-            relay_floor_from(
-                operands(
-                    height,
-                    s,
-                    0,
-                    TxVolume::per_block(50),
-                    100_000 * FULL_REWARD_ZONE
-                ),
-                &p,
-            ),
+            tail_subsidy_per_block(&p).expect("tail"),
+            600_000_000,
+            "the tail the degenerates price on"
+        );
+        let at = |v: u64, median: u64| operands(height, s, 0, TxVolume::per_block(v), median);
+        // Baseline volume at the zone: C ≈ 2.0 (b ≈ 0.5 at the saturated
+        // supply ratio, M_r = 1, σ ≈ 0), F = 39.
+        assert_eq!(
+            fee_correction_at(at(50, FULL_REWARD_ZONE), &p).as_scaled(),
+            1_999_942
+        );
+        assert_eq!(relay_floor_from(at(50, FULL_REWARD_ZONE), &p), Some(39));
+        assert_eq!(
+            fee_ladder_from(at(50, FULL_REWARD_ZONE), &p).map(|l| l.as_slots()),
+            Some([39, 156, 7_999])
+        );
+        // Quiet: M_r at its low rail, no burn, C = 0.8, F = 15.
+        assert_eq!(
+            fee_correction_at(at(0, FULL_REWARD_ZONE), &p).as_scaled(),
+            799_976
+        );
+        assert_eq!(relay_floor_from(at(0, FULL_REWARD_ZONE), &p), Some(15));
+        // Congested: M_r at its high rail and b at its cap, C = 13.0, F = 259.
+        assert_eq!(
+            fee_correction_at(at(500, FULL_REWARD_ZONE), &p).as_scaled(),
+            12_999_623
+        );
+        assert_eq!(relay_floor_from(at(500, FULL_REWARD_ZONE), &p), Some(259));
+        // Wider medians: 3·Zm truncates to 4, 10·Zm to the `max(1)` floor,
+        // and a median no block can carry still answers 1.
+        assert_eq!(relay_floor_from(at(50, 3 * FULL_REWARD_ZONE), &p), Some(4));
+        assert_eq!(relay_floor_from(at(50, 10 * FULL_REWARD_ZONE), &p), Some(1));
+        assert_eq!(
+            relay_floor_from(at(50, 100_000 * FULL_REWARD_ZONE), &p),
             Some(1)
         );
         // A median below the zone is floored to it.

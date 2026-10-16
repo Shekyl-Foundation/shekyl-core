@@ -352,7 +352,7 @@ impl DaemonEngine for DaemonClient {
     fn get_fee_estimates(&self) -> impl Send + Future<Output = Result<FeeEstimates, Self::Error>> {
         async move {
             // No parameters: the ladder is a function of chain state alone
-            // (FL-R20; `grace_blocks` was deleted at 3.57, FL-R26).
+            // (FL-R20, FL-R26; wire 3.57).
             let reply: GetFeeEstimateResponse =
                 self.json_rpc_call("get_fee_estimate", None).await?;
             fee_estimates_from_reply(&reply)
