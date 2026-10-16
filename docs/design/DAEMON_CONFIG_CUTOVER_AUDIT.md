@@ -491,6 +491,14 @@ of its own, for the same reason as the negative one.
   replace or remove an entry (add a file, delete a child, take the
   descriptor); the file itself keeps the full mask. Found while writing
   the Windows job's access-list case, before its first run.
+- **Step 8 and the managed Tor.** The Tor lane's §11 (ratified
+  2026-10-15, after this implementation's (c2)) has step 8 not wait for
+  Tor: the connector starts parked on its link. The link is that lane's
+  `TSR-F1` and increment 5; the zone host today takes its SOCKS endpoint
+  once at start and nothing attaches one later, so the Rust `main()`
+  awaits today's control at step 8 under the bootstrap deadline. The
+  brief's step 8 states the ratified behaviour and the deviation; the
+  FOLLOWUPS row names the blocker.
 - **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
   covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
   the other direction (the `extern "C"` block of

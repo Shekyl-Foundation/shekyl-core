@@ -1213,6 +1213,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §4
   - Target: pre-genesis
 
+- **Step 8 of the daemon's start awaits the managed Tor; the ratified design parks the connector.** `TOR_SUPERVISOR.md` §11 (ratified 2026-10-15): the zone host, its listeners and the dialer start without waiting for Tor, the Tor connector starts parked on its link and resumes when the supervisor publishes `Usable`, and the SCM start (RT-W14) does not depend on bootstrap time. The link is `TSR-F1` and the supervisor's increment 5 (the link replaces the zone host's proxy slot), the Tor lane's; the zone host takes its Tor SOCKS endpoint once, at `network::start`, and nothing attaches one later. Until the link lands, `rust/shekyl-daemon/src/run.rs` awaits today's `DaemonTorControl` at step 8, bounded by the bootstrap deadline, then runs clearnet-only with a warning. Falsify by starting the daemon with `tor = managed` and a Tor that never bootstraps: the listeners come up only after the deadline.
+  - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11; [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §2.2
+  - Target: pre-genesis
+
 - **The wallet engine's settlement-schedule lever still reads the environment.** The daemon arms the schedule from its `dev-settlement-epoch-blocks` and `dev-archival-reorg-depth` rows (`DAEMON_CONFIG_CUTOVER.md` §4.2) and reads no environment; the wallet engine (`shekyl-engine-core` `lifecycle/assemble.rs`) and its regtest harness (`regtest_e2e.rs`) still arm through `arm_settlement_epoch_override_for_regtest`, which reads `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` and `SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS`, and the harness spawns the daemon with those variables and the old spellings. Blocked on the engine lane: the daemon-configuration cutover does not change a wallet reader (rule 15, every consumer served first); the harness's launcher is commit (f)'s. Falsify by `rg -n 'env::var\("SHEKYL_SETTLEMENT' rust` returning nothing.
   - Owner: [`DAEMON_CONFIG_CUTOVER.md`](design/DAEMON_CONFIG_CUTOVER.md) §4
   - Target: pre-genesis

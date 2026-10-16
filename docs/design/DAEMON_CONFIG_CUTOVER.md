@@ -175,6 +175,15 @@ What crosses the FFI after the cutover, and nothing else:
 8. Only then does Rust start the zone host, its listeners and the dialer,
    each from its section: a peer that connects earlier would find no tip
    to handshake with and no protocol handler to receive its messages.
+   Step 8 does not wait for the managed Tor ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md)
+   §11): the Tor connector starts parked on its link and resumes when the
+   supervisor publishes `Usable`, which is also what keeps the SCM start
+   (RT-W14) off the bootstrap time. The link is the Tor lane's
+   (`TSR-F1`; its increment 5 replaces the zone host's proxy slot with it);
+   until it lands, the Rust `main()` drives today's `DaemonTorControl` and
+   awaits its start at step 8, bounded by the bootstrap deadline, after
+   which the node runs clearnet-only with a warning (FOLLOWUPS: the parked
+   Tor connector).
 9. Stop is Rust's, and there is one stop path, fed by the POSIX signals,
    every Windows console event (Ctrl-C, Ctrl-Break, window close, logoff,
    shutdown), and the SCM's stop and pre-shutdown controls (DC-F13). The
