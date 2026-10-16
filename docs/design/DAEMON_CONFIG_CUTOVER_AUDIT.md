@@ -513,6 +513,19 @@ of its own, for the same reason as the negative one.
   the container, and root opens a mode-000 file, so the test reached the
   directory walk and met the world-writable temp root; under root it now
   says it did not run instead of judging the wrong subject.
+- **The review round's four findings (2026-10-16).** The stop owner is
+  one latch: `signals::own` opens the operating system's streams once at
+  step 6 and holds them on the signal runtime for the process's life, and
+  `stop_requested` answers at once when a stop already arrived, so a
+  trigger between two waits (the managed Tor's bootstrap sits between the
+  RPC start and step 8) is kept; the Tor wait itself races the stop, so a
+  stop during the bootstrap ends the start without opening step 8. The
+  utilities' default data directory derives regtest's subdirectory as the
+  daemon does, so a regtest utility never opens the mainnet store.
+  `core_tests` gives the parser a data directory of its own, made and
+  removed per replay: the parser's default is the account's regtest
+  directory, and a replay resets the store it opens. The retired carrier
+  gate's dangling `run_one` line is gone from the grep-gates workflow.
 - **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
   covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
   the other direction (the `extern "C"` block of

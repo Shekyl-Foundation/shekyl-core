@@ -60,16 +60,22 @@ namespace cryptonote
   , "Run in a regression testing mode."
   , false
   };
-  inline const command_line::arg_descriptor<std::string, false, true, 2> arg_data_dir = {
+  // The default is the daemon's layout (`shekyl-daemon-config` `paths`): the
+  // root for mainnet, and the network's own subdirectory for every other
+  // network, regtest included, so a regtest utility never opens the
+  // mainnet store.
+  inline const command_line::arg_descriptor<std::string, false, true, 3> arg_data_dir = {
     "data-dir"
   , "Specify data directory"
   , tools::get_default_data_dir()
-  , {{ &arg_testnet_on, &arg_stagenet_on }}
-  , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
-      if (testnet_stagenet[0])
+  , {{ &arg_testnet_on, &arg_stagenet_on, &arg_regtest_on }}
+  , [](std::array<bool, 3> networks, bool defaulted, std::string val)->std::string {
+      if (networks[0])
         return (boost::filesystem::path(val) / "testnet").string();
-      else if (testnet_stagenet[1])
+      else if (networks[1])
         return (boost::filesystem::path(val) / "stagenet").string();
+      else if (networks[2])
+        return (boost::filesystem::path(val) / "regtest").string();
       return val;
     }
   };

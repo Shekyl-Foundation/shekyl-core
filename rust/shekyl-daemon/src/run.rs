@@ -193,6 +193,13 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
             return EXIT_FAILED;
         }
     };
+    if let Err(e) = signals::own(pool.handle()) {
+        tell(
+            &mut std::io::stderr(),
+            &format!("shekyld: the stop triggers could not be owned: {e}"),
+        );
+        return EXIT_FAILED;
+    }
     // The options handle: the resolved values, the runtime rows' owners
     // behind the RPC's two methods (§2.7).
     let options: OptionsHandle = Arc::new(DaemonOptions::new(resolved.clone(), network));
@@ -280,23 +287,48 @@ fn supervise(
         Built::Ended(wait) => note_run(&mut run_status, wait),
         Built::Refused => note_run(&mut run_status, pool.block_on(run_or_stop(&mut done_rx))),
         Built::Ready => {
-            // Step 8: the managed Tor, awaited; then the zone host, its
-            // listeners and the dialer, each from its section; then the
-            // onion, which forwards to the zone host's loopback listener.
-            tor_control = match tor_start {
-                Some(handle) => match pool.block_on(handle) {
-                    Ok(Ok(control)) => Some(control),
-                    Ok(Err(not_running)) => {
-                        tracing::warn!(target: "global", "{not_running}");
-                        None
+            // Step 8: the managed Tor, awaited (a stop asked meanwhile ends
+            // the wait; §2.2 step 8 and the FOLLOWUPS row on the parked
+            // connector); then the zone host, its listeners and the
+            // dialer, each from its section; then the onion, which forwards
+            // to the zone host's loopback listener.
+            let tor_wait = match tor_start {
+                Some(handle) => pool.block_on(async {
+                    tokio::select! {
+                        started = handle => Some(match started {
+                            Ok(Ok(control)) => Some(control),
+                            Ok(Err(not_running)) => {
+                                tracing::warn!(target: "global", "{not_running}");
+                                None
+                            }
+                            Err(e) => {
+                                tracing::error!(target: "global", "the managed Tor's start task failed: {e}");
+                                None
+                            }
+                        }),
+                        cause = signals::stop_requested() => {
+                            note_stop(cause);
+                            None
+                        }
                     }
-                    Err(e) => {
-                        tracing::error!(target: "global", "the managed Tor's start task failed: {e}");
-                        None
-                    }
-                },
-                None => None,
+                }),
+                None => Some(None),
             };
+            let Some(control) = tor_wait else {
+                // Stopped during the Tor wait: nothing of step 8 starts.
+                // The Tor start task finishes on the pool and is torn down
+                // with it.
+                return finish(
+                    pool,
+                    None,
+                    stop,
+                    thread,
+                    done_rx,
+                    run_status,
+                    preserve_status,
+                );
+            };
+            tor_control = control;
             let tor_socks = match (&config.tor, &tor_control) {
                 (Tor::Managed { .. }, Some(control)) => network::TorSocks::At {
                     socks: control.socks_addr(),
@@ -329,9 +361,29 @@ fn supervise(
             }
         }
     }
-    // Step 9: the dialer and the zone host, then the RPC. The remnant's
-    // stop, asked only when `run` has not finished, then joins that thread
-    // while the managed Tor is torn down.
+    finish(
+        pool,
+        tor_control,
+        stop,
+        thread,
+        done_rx,
+        run_status,
+        preserve_status,
+    )
+}
+
+/// Step 9: the dialer and the zone host, then the RPC. The remnant's
+/// stop, asked only when `run` has not finished, then joins that thread
+/// while the managed Tor is torn down. Returns the exit status.
+fn finish(
+    pool: &shekyl_runtime::Pool,
+    tor_control: Option<shekyl_tor_control_daemon::DaemonTorControl>,
+    stop: crate::entry::StopFn,
+    thread: std::thread::JoinHandle<()>,
+    done_rx: Receiver<i32>,
+    run_status: Option<i32>,
+    preserve_status: bool,
+) -> i32 {
     network::stop();
     shekyl_daemon_rpc::ffi_exports::stop();
     let joiner = std::thread::spawn(move || finish_remnant(stop, thread, done_rx, run_status));
@@ -382,8 +434,8 @@ async fn await_built(
 async fn run_or_stop(done_rx: &mut Receiver<i32>) -> RunWait {
     tokio::select! {
         finished = &mut *done_rx => RunWait::Finished(finished.unwrap_or(EXIT_FAILED)),
-        requested = signals::stop_requested() => {
-            note_stop(requested);
+        cause = signals::stop_requested() => {
+            note_stop(cause);
             RunWait::StopRequested
         }
     }
@@ -438,11 +490,8 @@ fn owner_refusal(resolved: &resolve::Resolved, row: Option<&str>, rule: &str) ->
         .param("rule", rule)
 }
 
-fn note_stop(requested: std::io::Result<&'static str>) {
-    match requested {
-        Ok(by) => tracing::warn!(target: "daemon", "stop requested by {by}"),
-        Err(e) => tracing::error!(target: "daemon", "the signal owner failed: {e}; stopping"),
-    }
+fn note_stop(by: &'static str) {
+    tracing::warn!(target: "daemon", "stop requested by {by}");
 }
 
 /// Prints each refusal and returns the refusal status.

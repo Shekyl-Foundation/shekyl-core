@@ -31,6 +31,9 @@
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
+#include <filesystem>
 #include <functional>
 #include <variant>
 #include <vector>
@@ -562,15 +565,41 @@ struct get_test_options {
   const cryptonote::test_options test_options = {0};
 };
 //--------------------------------------------------------------------------
+/// A data directory of the test's own, made for one replay and removed
+/// after the core is gone. The parser's default would be the account's
+/// regtest directory, and a replay resets the store it opens
+/// (`set_genesis_block`): a test must never do that to an operator's chain.
+struct scoped_test_data_dir
+{
+  std::filesystem::path path;
+
+  scoped_test_data_dir()
+  {
+    static std::atomic<unsigned> counter{0};
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    path = std::filesystem::temp_directory_path()
+      / ("shekyl-core-tests-" + std::to_string(nonce) + "-" + std::to_string(counter++));
+    std::filesystem::create_directories(path);
+  }
+
+  ~scoped_test_data_dir()
+  {
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+  }
+};
+//--------------------------------------------------------------------------
 template<class t_test_class>
-inline bool do_replay_events_get_core(std::vector<test_event_entry>& events, cryptonote::core *core)
+inline bool do_replay_events_get_core(std::vector<test_event_entry>& events, cryptonote::core *core, const std::string& data_dir)
 {
   // The snapshot the real Rust parse builds from a test argument list
   // (DAEMON_CONFIG_CUTOVER.md §2.9, rule 26 B2): regtest, a fixed
-  // difficulty of 1, the platform's default data directory.
-  const char *argv[] = {"core_tests", "--network", "regtest", "--dev-difficulty", "1"};
+  // difficulty of 1, the test's own data directory (the command line
+  // outranks the account's configuration file, so no operator value
+  // reaches the store this replay resets).
+  const char *argv[] = {"core_tests", "--network", "regtest", "--dev-difficulty", "1", "--data-dir", data_dir.c_str()};
   ShekylDaemonSnapshot *snapshot = nullptr;
-  if (shekyl_daemon_snapshot_parse(5, argv, &snapshot) != 0 || snapshot == nullptr)
+  if (shekyl_daemon_snapshot_parse(7, argv, &snapshot) != 0 || snapshot == nullptr)
   {
     MERROR("Failed to build the test snapshot");
     return false;
@@ -623,8 +652,9 @@ inline bool replay_events_through_core_validate(std::vector<test_event_entry>& e
 template<class t_test_class>
 inline bool do_replay_events(std::vector<test_event_entry>& events)
 {
+  scoped_test_data_dir data_dir;
   cryptonote::core core(nullptr);
-  bool ret = do_replay_events_get_core<t_test_class>(events, &core);
+  bool ret = do_replay_events_get_core<t_test_class>(events, &core, data_dir.path.string());
   core.deinit();
   return ret;
 }
