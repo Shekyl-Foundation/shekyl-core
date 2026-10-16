@@ -69,7 +69,11 @@ bonded `P` service is hard to connect to its funding transaction.
   `spendable_height = h_f + 10` must be at or below `tip − 6`. That post's
   reference height is `h_f + 10`, so `reference − SPENDABLE_AGE = h_f`
   whatever the offset. A chain-only observer reads the funding block off
-  the bond post.
+  the bond post. No product path spaces the two calls: `stake_in` and
+  `first_stake` are separate (`shekyl-wallet-rpc/src/staking_actions.rs:79-96`;
+  the GUI calls `first_stake` alone, `shekyl-gui-wallet`
+  `src-tauri/src/engine_session.rs:395`). A user who stakes as soon as
+  `first_stake` accepts is on this path.
 - **The delay is measured from the wrong event.** The intent is to
   separate the bond from the funding. The draw starts at the request,
   which is a private moment, and the guard that measures from funding is
@@ -313,9 +317,11 @@ is signed then and valid, where today's sealed bytes would be dead.
 
 **After signing.** Retries resend the same bytes while the reference is
 young. At `REBUILD_AT` (50, `reference.rs:116`; `should_reanchor`, `:249`)
-the post is re-signed with a fresh reference, as the ordinary send path
-re-anchors. The same inputs give the same key images, so at most one
-version lands. `StaleRoot` then means "re-sign", not "resend".
+the post is re-signed with a fresh reference. The ordinary send path
+re-anchors at the same threshold only before its first broadcast (CT-5d,
+`engine/traits/pending_tx.rs:218-232`); re-signing a post that was
+already sent is new here. The same inputs give the same key images, so
+at most one version lands. `StaleRoot` then means "re-sign", not "resend".
 
 **What changes for WI-3.** The dispatch driver "never constructs or
 signs" (`ARCHIVAL_BOND_WI3_DISPATCH.md:34-35`). Under this default it
@@ -365,12 +371,14 @@ observer from BD-Q1 can work in two directions.
 the nearest: `ρ ≈ N_P × c / SEB`, with `N_P ∈ 79–154` bonded personas and
 per-epoch churn `c ∈ [0.02, 0.2]`
 (`docs/completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md:265-284`). In a
-stationary population, joins replace exits, so the join rate takes the
-same box. That equality is this round's reasoning, not a measurement. The
-forward candidate count is `ρ × W`, and the window for `N_t` candidates
-is `W ≥ (N_t − 1) / ρ` (FD4's shape):
+stationary population, joins replace exits. FD4's `c` also counts
+`HoldingsUpdate` drops (`:273`), which no join replaces, so the join
+rate is **at most** that box. That bound is this round's reasoning, not a
+measurement. The forward candidate count is `ρ × W`, so the counts below
+are upper bounds, and the window for `N_t` candidates,
+`W ≥ (N_t − 1) / ρ` (FD4's shape), is a lower bound:
 
-| Window | Latency (mean / max) | Other bond posts in window (`79, 0.02` … `154, 0.2`) | Window for `N_t = 10` (`TARGET_ANON_SET`, WI-4 `:238`) |
+| Window | Latency (mean / max) | Other bond posts in window, at most (`79, 0.02` … `154, 0.2`) | Window for `N_t = 10` (`TARGET_ANON_SET`, WI-4 `:238`), at least |
 | --- | --- | --- | --- |
 | `600` (the sentinel) | 10 h / 20 h | 0.09 … 1.85 | — |
 | `1,000` (the sim's free ceiling, below) | 17 h / 33 h | 0.16 … 3.1 | — |
