@@ -147,6 +147,19 @@ fn a_direct_dial_draws_nothing_while_the_link_is_down() {
     assert_eq!(gray(&dialer), before, "an unready dial does not draw");
 }
 
+/// A stop and an exit are different causes. The waiting line names which.
+#[test]
+fn a_stopped_link_is_not_described_as_an_exit() {
+    assert_eq!(
+        NotReady::LinkDown(DownCause::ProcessStopped).describe(),
+        "its link is down: the Tor it dials through was stopped"
+    );
+    assert_eq!(
+        NotReady::LinkDown(DownCause::ProcessExited).describe(),
+        "its link is down: the Tor it dials through has exited"
+    );
+}
+
 /// The control: the same wakes over a usable link dial, and each failed
 /// dial costs its address. This is what a down link did before the plan
 /// read it.

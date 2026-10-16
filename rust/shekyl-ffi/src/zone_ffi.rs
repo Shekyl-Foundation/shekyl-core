@@ -60,6 +60,10 @@ struct Host {
     /// The seam's hub. Accept reads its ceiling on every socket, and the
     /// gap sender lives on the connection row there.
     hub: Hub,
+    /// The incarnation the managed-Tor death watch names. `None` when no
+    /// watch is held, so a later publish of the same address can arm the
+    /// watch an earlier one missed.
+    watched_incarnation: Mutex<Option<u64>>,
     clearnet: Mutex<Option<ClearnetReady>>,
     clearnet_tx: mpsc::UnboundedSender<ClearnetAdmitted>,
     tor_tx: mpsc::UnboundedSender<TorAdmitted>,
@@ -303,6 +307,7 @@ fn ensure(network_id: *const u8, ceiling: InboundCeiling) -> Result<Arc<Host>, (
         engine: engine_handle,
         sockets: process_sockets(),
         hub: hub.clone(),
+        watched_incarnation: Mutex::new(None),
         clearnet: Mutex::new(None),
         clearnet_tx,
         tor_tx,
@@ -711,40 +716,139 @@ pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
     0
 }
 
+/// Whether the SOCKS address just published is the managed Tor's listener.
+///
+/// The slot answers this. The plan does not look at the process again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedListener {
+    /// The address is that process's SOCKS listener. Its death is this
+    /// route's death.
+    This,
+    /// An operator proxy, or no managed Tor is in the slot.
+    NotThis,
+}
+
+/// What the managed Tor's death watch should do after a route publish.
+///
+/// The watch follows the route now installed, not the fact that the route
+/// changed. A second publish of the same address still watches when the
+/// first one ran before the process existed, and a publish that is not
+/// that process's listener drops a watch the route no longer names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TorDeathWatch {
+    /// The watch already names this incarnation, or there is nothing to watch.
+    Keep,
+    /// Replace the watch so its callback names `incarnation`.
+    Arm { incarnation: u64 },
+    /// The route is no longer the managed Tor's. Drop the watch.
+    Clear,
+}
+
+/// `published` is what [`Links::publish_usable`] just returned. Both
+/// variants carry the incarnation a later down must name, so an unchanged
+/// route is planned the same way as a new one. `held` is the incarnation
+/// the current watch names.
+fn plan_tor_death_watch(
+    published: RoutePublish,
+    held: Option<u64>,
+    listener: ManagedListener,
+) -> TorDeathWatch {
+    match listener {
+        ManagedListener::This => {
+            let incarnation = published.incarnation();
+            if held == Some(incarnation) {
+                TorDeathWatch::Keep
+            } else {
+                TorDeathWatch::Arm { incarnation }
+            }
+        }
+        ManagedListener::NotThis => {
+            if held.is_some() {
+                TorDeathWatch::Clear
+            } else {
+                TorDeathWatch::Keep
+            }
+        }
+    }
+}
+
+/// How a managed-Tor death is recorded on the link. An exit and a stop
+/// both take it down; only an exit is a fault.
+fn down_cause(death: TorDeath) -> DownCause {
+    match death {
+        TorDeath::Exited => DownCause::ProcessExited,
+        TorDeath::Stopped => DownCause::ProcessStopped,
+    }
+}
+
 /// Publish the Tor link usable through `socks`, until the supervisor owns
 /// the route (`TOR_SUPERVISOR.md` §4.1). When `socks` is the managed Tor's,
 /// that Tor's death publishes the link down, so the dialer stops drawing
-/// onions it cannot reach (`TSR-F1`). An operator's Tor (`--tx-proxy`)
-/// stays usable: its outbound evidence comes with the supervisor.
+/// onions it cannot reach (`TSR-F1`). The watch names the incarnation now
+/// installed, including when this call did not change the route. An
+/// operator's Tor (`--tx-proxy`) stays usable: its outbound evidence comes
+/// with the supervisor, and a watch left by an earlier managed route is
+/// dropped.
 fn install_tor_route(host: &Host, socks: SocketAddr) {
     // `listen_tor` and the outbound-only path both install the proxy. The
-    // second call of the same address is not a new route.
-    let RoutePublish::Installed { incarnation } =
+    // second call of the same address is not a new route. It can still be
+    // the call that first finds the managed Tor.
+    let published =
         host.hub
             .links()
-            .publish_usable(ConnectorId::Tor, Route::Socks(socks), host.hub.now())
-    else {
-        return;
+            .publish_usable(ConnectorId::Tor, Route::Socks(socks), host.hub.now());
+    if let RoutePublish::Installed { .. } = published {
+        tracing::info!("the Tor zone dials through the SOCKS proxy at {socks}");
+    }
+    reconcile_tor_death_watch(host, socks, published);
+}
+
+/// Make the death watch name `published`, or drop it when `socks` is not
+/// the managed Tor's listener. The route publish has already returned.
+fn reconcile_tor_death_watch(host: &Host, socks: SocketAddr, published: RoutePublish) {
+    let listener = if crate::daemon_tor_ffi::is_managed_socks(socks) {
+        ManagedListener::This
+    } else {
+        ManagedListener::NotThis
     };
-    tracing::info!("the Tor zone dials through the SOCKS proxy at {socks}");
-    let hub = host.hub.clone();
-    let watched = crate::daemon_tor_ffi::on_managed_death(socks, move |death| {
-        let fell = hub.links().publish_down(
-            ConnectorId::Tor,
-            incarnation,
-            DownCause::ProcessExited,
-            hub.now(),
-        );
-        if fell && death == TorDeath::Exited {
-            tracing::warn!(
-                "the managed Tor has exited: the Tor connector draws no dial until its link returns"
+    let mut held = host
+        .watched_incarnation
+        .lock()
+        .expect("watched incarnation");
+    match plan_tor_death_watch(published, *held, listener) {
+        TorDeathWatch::Keep => {}
+        TorDeathWatch::Arm { incarnation } => {
+            let hub = host.hub.clone();
+            // Rechecked under the slot lock. A mismatch aborts the watch
+            // the process still has; an empty slot leaves `held` clear so
+            // the next publish of this address arms.
+            let armed = crate::daemon_tor_ffi::arm_managed_death(socks, move |death| {
+                let cause = down_cause(death);
+                let fell =
+                    hub.links()
+                        .publish_down(ConnectorId::Tor, incarnation, cause, hub.now());
+                if fell && cause == DownCause::ProcessExited {
+                    tracing::warn!(
+                        "the managed Tor has exited: the Tor connector draws no dial until its link returns"
+                    );
+                }
+            });
+            *held = armed.then_some(incarnation);
+            if armed {
+                tracing::debug!("the managed Tor's death watches incarnation {incarnation}");
+            } else {
+                tracing::debug!(
+                    "no death watch for incarnation {incarnation}: the managed Tor's listener is no longer {socks}"
+                );
+            }
+        }
+        TorDeathWatch::Clear => {
+            crate::daemon_tor_ffi::clear_managed_death();
+            *held = None;
+            tracing::debug!(
+                "the Tor proxy at {socks} is not the managed Tor's: the death watch is dropped"
             );
         }
-    });
-    if !watched {
-        tracing::debug!(
-            "the Tor proxy at {socks} is not the managed Tor's: no death edge is watched"
-        );
     }
 }
 

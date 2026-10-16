@@ -171,9 +171,15 @@ host publishes clearnet's when its listener is up, with the route
 direct or the operator's `--proxy`. It publishes Tor's when it installs
 the SOCKS proxy (`shekyl_zone_listen_tor`, `shekyl_zone_set_tor_proxy`),
 and when that proxy is the managed Tor's, that Tor's death publishes
-the link down (`BlockingDaemonTor::on_death`, in Rust). An operator's
-Tor stays usable until the supervisor brings its outbound evidence.
-Each connector reads its route from the link at every dial.
+the link down (`BlockingDaemonTor::on_death`, in Rust). The watch names
+the incarnation just published, so a second publish of the same address
+still watches when the first ran before the process existed, and a
+route that is not the managed Tor's drops the watch. An exit is
+`DownCause::ProcessExited` and is logged as a warning; a shutdown is
+`DownCause::ProcessStopped`, takes the link down, and is not. An
+operator's Tor stays usable until the supervisor brings its outbound
+evidence. Each connector reads its route from the link at every dial.
+`Dialer::dial`, the named draw, reads the same gate before it draws.
 
 Two races are accepted. A link that falls between the plan and the
 dial costs that one draw. A wake whose timer was armed before the fall

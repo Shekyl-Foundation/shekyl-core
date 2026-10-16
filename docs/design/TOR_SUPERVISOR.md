@@ -422,7 +422,8 @@ expectation; `TSR-M3` verifies it before anything depends on it.
 ### 4.6 The dialer
 
 - `choose` reads the connector's outbound facet, the tip and the network id
-  **before** it draws (`TSR-F1`).
+  **before** it draws (`TSR-F1`). `dial`, the named draw, reads the same three
+  before it draws. The owner loop draws through `choose`.
 - While the facet is not `Usable`, the owner loop waits on the link, not on its
   wake timer.
 - A Tor dial's outcome goes to the lists as today **and** to the supervisor as
@@ -700,7 +701,9 @@ its PR leaves draft.
 1. P2P lane: `TSR-F1`. The link replaces the zone host's `tor_proxy` slot
    here (Rick's TSR-F1 brief, 2026-10-16): the zone host publishes it, the
    managed Tor's death edge takes it down, and the connector reads its route
-   from it.
+   from it. The watch follows the route now installed, including a second
+   publish of the same address. An exit and a shutdown both take the link
+   down; only an exit warns.
 2. Control client: the bounded sink; parsers for `STATUS_GENERAL`,
    `STATUS_CLIENT`, `NETWORK_LIVENESS`, `HS_DESC` and log events; the launch
    recipe and `AvoidDiskWrites` in the closed list.

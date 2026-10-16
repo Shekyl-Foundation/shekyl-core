@@ -295,3 +295,81 @@ fn a_closed_admission_keeps_the_dial_cause() {
         assert_eq!(err.kind(), CloseKind::DialFailed);
     });
 }
+
+/// The watch follows the incarnation just published. Returning before the
+/// plan on [`RoutePublish::Unchanged`] fails the first assert: that publish
+/// is how a route installed before the managed Tor existed gets its watch.
+#[test]
+fn the_watch_follows_a_managed_route_whether_or_not_the_publish_changed_it() {
+    assert_eq!(
+        plan_tor_death_watch(
+            RoutePublish::Unchanged { incarnation: 4 },
+            None,
+            ManagedListener::This,
+        ),
+        TorDeathWatch::Arm { incarnation: 4 },
+    );
+    assert_eq!(
+        plan_tor_death_watch(
+            RoutePublish::Unchanged { incarnation: 4 },
+            Some(4),
+            ManagedListener::This,
+        ),
+        TorDeathWatch::Keep,
+    );
+    assert_eq!(
+        plan_tor_death_watch(
+            RoutePublish::Installed { incarnation: 4 },
+            Some(4),
+            ManagedListener::This,
+        ),
+        TorDeathWatch::Keep,
+    );
+    assert_eq!(
+        plan_tor_death_watch(
+            RoutePublish::Installed { incarnation: 5 },
+            Some(4),
+            ManagedListener::This,
+        ),
+        TorDeathWatch::Arm { incarnation: 5 },
+    );
+    assert_eq!(
+        plan_tor_death_watch(
+            RoutePublish::Installed { incarnation: 1 },
+            None,
+            ManagedListener::This,
+        ),
+        TorDeathWatch::Arm { incarnation: 1 },
+    );
+}
+
+/// A route that is not the managed Tor's drops a watch, including when the
+/// publish itself did not change. An early keep on an unchanged publish
+/// leaves that watch held. Nothing held stays nothing.
+#[test]
+fn a_route_that_is_not_the_managed_tor_drops_a_held_watch_and_only_that() {
+    assert_eq!(
+        plan_tor_death_watch(
+            RoutePublish::Unchanged { incarnation: 4 },
+            Some(3),
+            ManagedListener::NotThis,
+        ),
+        TorDeathWatch::Clear,
+    );
+    assert_eq!(
+        plan_tor_death_watch(
+            RoutePublish::Installed { incarnation: 2 },
+            None,
+            ManagedListener::NotThis,
+        ),
+        TorDeathWatch::Keep,
+    );
+}
+
+/// An exit and a stop both take the link down, and they are not the same
+/// cause. Swapping the arms fails this.
+#[test]
+fn an_exit_and_a_stop_record_different_causes() {
+    assert_eq!(down_cause(TorDeath::Exited), DownCause::ProcessExited);
+    assert_eq!(down_cause(TorDeath::Stopped), DownCause::ProcessStopped);
+}

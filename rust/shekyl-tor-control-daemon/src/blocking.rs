@@ -116,8 +116,9 @@ pub struct BlockingDaemonTor {
     /// death watcher can tell that stop from Tor exiting on its own.
     stopping: Arc<AtomicBool>,
     /// The one death watcher. A later [`Self::on_death`] replaces it, and
-    /// the replaced callback does not run. [`Self::shutdown`] awaits the
-    /// current one before the runtime goes.
+    /// [`Self::clear_death`] removes it; the replaced callback does not
+    /// run. [`Self::shutdown`] awaits the current one before the runtime
+    /// goes.
     watcher: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -208,8 +209,9 @@ impl BlockingDaemonTor {
 
     /// Call `then` once, on this instance's runtime, when the incarnation
     /// dies — at once when it already has. A later call replaces `then`:
-    /// the previous callback does not run. The edge [`Self::is_alive`]
-    /// polls, for a consumer that is told rather than asks. [`Self::shutdown`]
+    /// the previous callback does not run. [`Self::clear_death`] removes
+    /// the watch without running it. The edge [`Self::is_alive`] polls,
+    /// for a consumer that is told rather than asks. [`Self::shutdown`]
     /// is a death too, and waits for `then` to return, so `then` must not
     /// block. A plain drop aborts the watcher with the runtime, and `then`
     /// does not run.
@@ -224,11 +226,22 @@ impl BlockingDaemonTor {
                 TorDeath::Exited
             });
         });
-        let replaced = self
-            .watcher
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .replace(watcher);
+        self.swap_watcher(Some(watcher));
+    }
+
+    /// Remove the death watcher. Its callback does not run. [`Self::shutdown`]
+    /// then has nothing to join.
+    pub fn clear_death(&self) {
+        self.swap_watcher(None);
+    }
+
+    /// One watcher. The task this replaces is aborted, so its callback
+    /// does not run.
+    fn swap_watcher(&self, next: Option<JoinHandle<()>>) {
+        let replaced = std::mem::replace(
+            &mut *self.watcher.lock().unwrap_or_else(PoisonError::into_inner),
+            next,
+        );
         if let Some(replaced) = replaced {
             replaced.abort();
         }

@@ -37,10 +37,19 @@ pub enum Route {
 }
 
 /// Why a link went down.
+///
+/// The two process causes are one family. [`Self::ProcessExited`] is a
+/// process that ended while it was meant to be running. [`Self::ProcessStopped`]
+/// is a process this node stopped. Both take the link down — the port is
+/// gone either way — and only an exit is announced as a fault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownCause {
-    /// The managed Tor's process ended: its SOCKS port is gone with it.
+    /// The process behind the route exited, or was killed, while it was
+    /// meant to be running. Its port is gone with it.
     ProcessExited,
+    /// This node stopped the process behind the route. The port is gone
+    /// because shutdown took it.
+    ProcessStopped,
 }
 
 /// Can this node open streams through the link.
@@ -82,7 +91,7 @@ impl Link {
 }
 
 /// How [`Links::publish_usable`] left the connector.
-#[must_use = "an unchanged publish must not arm a new watcher"]
+#[must_use = "a later down names this incarnation, including when the route did not change"]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoutePublish {
     /// Already usable on this route. The incarnation is unchanged, and no

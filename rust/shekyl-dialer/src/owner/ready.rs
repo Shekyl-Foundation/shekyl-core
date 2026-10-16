@@ -53,6 +53,9 @@ impl NotReady {
             Self::LinkDown(DownCause::ProcessExited) => {
                 "its link is down: the Tor it dials through has exited"
             }
+            Self::LinkDown(DownCause::ProcessStopped) => {
+                "its link is down: the Tor it dials through was stopped"
+            }
             Self::NoTip => "the core has published no tip",
             Self::NoNetworkId => "no network id is set",
         }
