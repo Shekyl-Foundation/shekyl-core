@@ -736,3 +736,29 @@ async fn a_stale_or_mismatched_plan_is_a_driver_defect_and_the_writer_stays_up()
     x.close().await;
     y.close().await;
 }
+
+#[tokio::test]
+async fn a_plan_naming_a_recorded_block_as_its_alternative_tip_is_a_mismatch_not_a_crash() {
+    // A driver defect a malformed plan carries: its alternative tip is a
+    // block the recorded chain holds, so the alternative chain has no
+    // entries. The actor replies; it does not panic, and stays up.
+    let mut x = with_prefix("switch-empty-plan-x", PREFIX).await;
+    let mut y = with_prefix("switch-empty-plan-y", PREFIX).await;
+    x.mine(3).await;
+    y.idle();
+    let b = y.mine(4).await;
+    let mut plan = offer_branch(&x, &b).await;
+    plan.alt_tip = x
+        .hash_at(BlockHeight::from_raw(PREFIX))
+        .await
+        .expect("read")
+        .expect("recorded");
+    plan.promoted.clear();
+    assert!(matches!(
+        x.reorganize(&plan, &bodies(&b)).await,
+        Err(RunFault::PlanMismatch { .. })
+    ));
+    assert_eq!(x.mine(1).await.len(), 1, "the writer is up");
+    x.close().await;
+    y.close().await;
+}
