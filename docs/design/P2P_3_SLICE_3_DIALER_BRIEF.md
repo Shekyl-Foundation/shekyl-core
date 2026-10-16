@@ -805,9 +805,11 @@ which was the reviewer's imprecision, not a ruling. Records-was before
 that: "the Tor arms are unchanged", which also kept `DialFailed`
 writing on Tor.*
 
-Windows come from `failed_addr_cache::window` (`net_node.h:263`).
-Tor starts at the short window and doubles, capped at the hour.
-*Records-was: clearnet is the hour.*
+The suppression window is the same schedule on every operating system.
+Four minutes after the first failure, doubled for each consecutive
+failure, capped at one hour (`window_nanos` in `shekyl-dialer`).
+*Records-was: clearnet used the flat hour, from
+`failed_addr_cache::window`.*
 
 `implicates_address` decides the write, on `DialFailed` and on
 `PeerlistRefused`. On Tor a rejected handshake and an onion reply in
@@ -1044,9 +1046,9 @@ memory (R2: a TCP RST and, NN being unauthenticated, a forged
 either would have suppressed an honest address for an hour); on Tor
 only a reply in `0x04 0x05 0xF0 0xF1 0xF2` writes it, and those come
 from our own Tor process. A handshake timeout, a peer close, a local
-failure, and a clearnet proxy reply never did. The window is the one
-`failed_addr_cache::window` already derived. An attacker who can force
-reply 4 still buys only the short Tor window. That residual is
+failure, and a clearnet proxy reply never did. The window is that
+same schedule. An attacker who can force reply 4 still buys only the
+short first window. That residual is
 unchanged. The key is host and port, so a refused port does not
 suppress another port on the same host. The memory dies with the
 process. *Records-was: a refused dial and a rejected handshake wrote
