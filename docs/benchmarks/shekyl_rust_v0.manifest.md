@@ -951,7 +951,8 @@ production entry and its OS-seeded draw.
 is floating-point: the pinned crate uses hardware `f64` and dispatches to
 AVX2 at run time on x86_64, so an x86 count is a count of code the floor
 device does not run. It is a drift signal for the x86 path and nothing
-else; `BA-T33`'s T3 arm is the floor figure.
+else; `BA-T33`'s T3 arm is the floor figure
+(`ba_t33_fn_dsa_floor_device_20261015.md`, 2026-10-15).
 
 **First counts** (x86_64 development host, gungraun-runner 0.19.3, two
 runs identical): sign 6,675,212 instructions; verify 891,246. Criterion on
@@ -962,6 +963,11 @@ gungraun-runner 0.19.3, two runs identical): sign 6,675,435 instructions;
 sign through the held key 6,010,472 (−9.96 %); verify 891,438. Criterion
 on the same host: sign 442 µs, sign through the held key 411 µs (−7.0 %),
 decoding and holding a key once 52 µs.
+
+**Criterion only, not gated:** `fn_dsa_hybrid_persona_slot_derivation`
+(added 2026-10-15), one persona slot's whole `derive_archival_p_keys`, the
+unit engine assembly pays per held slot; beside the key-generation arm it
+gives the receipt key's share of a slot (`FN_DSA_HYBRID.md` `FND-12`).
 
 ---
 
@@ -1174,3 +1180,7 @@ prescribes (`docs/MID_REWIRE_HARDENING.md` §4.3).
   cell, absorbed by the rolling baseline on the next `dev` rotation; the
   two existing cells are untouched. Schema version unchanged
   (`shekyl_rust_v0`): same class, same counter.
+- `BA-T33` floor arm (2026-10-15): §13's criterion sibling gains
+  `fn_dsa_hybrid_persona_slot_derivation`, criterion only. No gated
+  function is added or changed, and no count moves. Schema version
+  unchanged (`shekyl_rust_v0`).
