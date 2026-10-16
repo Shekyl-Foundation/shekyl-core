@@ -65,9 +65,6 @@ shekyl-units = { path = "../shekyl-units" }
 # (DAEMON_RPC_KV_GET_INFO.md §4.3, RK-D19); the handler calls it and does
 # nothing else with economics.
 shekyl-economics = { path = "../shekyl-economics" }
-# Bp+ batch verification takes a CSPRNG for the batch weights; same 0.6 pin
-# and `std` (OsRng) feature as shekyl-fcmp's own verify path.
-rand_core = { version = "0.6", features = ["std"] }
 # The `shekyld <command>` control client (`ctl_client.rs`): the outbound
 # half of the daemon's HTTP surface rides the same first-party transport the
 # wallet dials the daemon with, replacing epee's `http_simple_client`.
@@ -91,6 +88,10 @@ shekyl-consensus = { path = "../shekyl-consensus" }
 # the same production builder the StakeEngine assembles with.
 shekyl-archival-bond-builder = { path = "../shekyl-archival-bond-builder" }
 rand_chacha = { workspace = true }
+# `SeedableRng` for the fixtures' seeded draws (tests/submit_verifier.rs).
+# Test-only: the Bp+ verify draws no entropy (its weights are derived from the
+# proof, CEN-H19 ruling R3), so production takes no RNG crate.
+rand_core = { version = "0.6", features = ["std"] }
 tower = { version = "0.5", features = ["util"] }
 http = "1"
 

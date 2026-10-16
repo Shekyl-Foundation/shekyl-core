@@ -2,14 +2,15 @@ use rand_core::{OsRng, RngCore};
 
 use curve25519_dalek::scalar::Scalar;
 
-use crate::{batch_verifier::BatchVerifier, Bulletproof, BulletproofError};
+use crate::{verify_batch, BatchEntry, Bulletproof, BulletproofError};
 use shekyl_curve_primitives::Commitment;
 
+mod derived;
 mod plus;
 
 #[test]
 fn bulletproofs_plus() {
-    let mut verifier = BatchVerifier::new();
+    let mut proofs = vec![];
     for i in 1..=16 {
         let commitments = (1..=i)
             .map(|_| Commitment::new(Scalar::random(&mut OsRng), OsRng.next_u64()))
@@ -22,10 +23,17 @@ fn bulletproofs_plus() {
             .map(Commitment::calculate)
             .map(|p| p.compress().into())
             .collect::<Vec<_>>();
-        assert!(bp.verify(&mut OsRng, &commitments));
-        assert!(bp.batch_verify(&mut OsRng, &mut verifier, &commitments));
+        assert!(verify_batch(&[BatchEntry {
+            proof: &bp,
+            commitments: &commitments,
+        }]));
+        proofs.push((bp, commitments));
     }
-    assert!(verifier.verify());
+    let batch = proofs
+        .iter()
+        .map(|(proof, commitments)| BatchEntry { proof, commitments })
+        .collect::<Vec<_>>();
+    assert!(verify_batch(&batch));
 }
 
 #[test]

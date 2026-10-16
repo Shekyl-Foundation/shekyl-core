@@ -78,6 +78,13 @@ jobs:
         shell: bash
         run: |
           set -u
+          # Setup only, and only on the runner: on a developer's clone this
+          # fetch would make the shared object store shallow, and the base
+          # commit is already there (check_workflow_fetch_guard.py).
+          if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+            echo "not under GitHub Actions; the base revision is already local, fetch skipped"
+            exit 0
+          fi
           if [ -z "${FREEZE_BASE}" ]; then
             echo "no base revision for the dial-path freeze on event ${GITHUB_EVENT_NAME}"
             exit 1
@@ -151,6 +158,13 @@ jobs:
           # workflow edit.
           run_one "Workflow files parse and are well-formed" \
             python3 scripts/ci/check_workflows_parse.py
+          # A setup step that fetches with a depth would make a developer's
+          # shared clone shallow when the steps are run locally; it carries
+          # the GITHUB_ACTIONS guard, and this holds every such step to it.
+          run_one "A depth-changing fetch runs only under GitHub Actions (selftest)" \
+            python3 scripts/ci/check_workflow_fetch_guard.py --selftest
+          run_one "A depth-changing fetch runs only under GitHub Actions" \
+            python3 scripts/ci/check_workflow_fetch_guard.py
 
           # The production-shape clippy step in rust-audit-test.yml must name
           # exactly the TEST_ONLY owners. It parses that workflow, so it lives

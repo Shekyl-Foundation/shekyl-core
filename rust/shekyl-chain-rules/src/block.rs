@@ -160,9 +160,19 @@ impl Candidate {
 /// * `seed` — the block id the caller **claimed** sits at the seed height
 ///   (CEN-D3). `validate` verifies it against the committing view and
 ///   returns [`Stale::Seed`](crate::Stale::Seed) on a mismatch.
+/// * `target` — the difficulty the caller **claimed** CEN-D4 derives for
+///   the connecting height, a function of the headers below it alone.
+///   `form` judges CEN-D1 against it, before any body work, so a block
+///   short of its proof-of-work costs RandomX and nothing more. `validate`
+///   and `alt_against` derive D4 over their view and return
+///   [`Stale::Target`](crate::Stale::Target) on a mismatch.
 /// * `pow` — the RandomX longhash under that seed (CEN-D2), computed here
 ///   because it is the most expensive call in the validator and this stage
 ///   runs outside the write transaction.
+/// * `coverage` — every stateless row, the transactions' included: `form`
+///   runs `tx_form` at the miner slot and every listed slot, and CEN-H19's
+///   batch over the listed proofs, so the view-bound stage judges only what
+///   reads the chain.
 /// * `judged_at` — the wall clock at `form`. **This makes the verdict
 ///   time-dependent**: a `StructurallyValid`, and the `ChainValid` minted
 ///   from it, is no longer a pure function of `(candidate, view, rule_set)`.
@@ -199,6 +209,7 @@ pub struct StructurallyValid {
     judged_at: Timestamp,
     hash: BlockHash,
     seed: BlockHash,
+    target: Target,
     pow: PowHash,
     attempt: FormAttempt,
 }
@@ -217,6 +228,7 @@ impl StructurallyValid {
         judged_at: Timestamp,
         hash: BlockHash,
         seed: BlockHash,
+        target: Target,
         pow: PowHash,
         attempt: FormAttempt,
     ) -> Self {
@@ -227,6 +239,7 @@ impl StructurallyValid {
             judged_at,
             hash,
             seed,
+            target,
             pow,
             attempt,
         }
@@ -283,6 +296,14 @@ impl StructurallyValid {
         self.seed
     }
 
+    /// The target the caller claimed and `form` judged CEN-D1 against.
+    /// `validate` and `alt_against` derive CEN-D4 over their view and
+    /// return [`Stale::Target`](crate::Stale::Target) on a mismatch.
+    #[must_use]
+    pub const fn target(&self) -> Target {
+        self.target
+    }
+
     /// The longhash under the claimed seed (CEN-D2) — what CEN-D1 compares
     /// against the target once the seed is verified.
     #[must_use]
@@ -314,6 +335,7 @@ impl fmt::Debug for StructurallyValid {
             .field("coverage", &self.coverage)
             .field("judged_at", &self.judged_at)
             .field("seed", &self.seed)
+            .field("target", &self.target)
             .field("pow", &self.pow)
             .field("attempt", &self.attempt)
             .finish()

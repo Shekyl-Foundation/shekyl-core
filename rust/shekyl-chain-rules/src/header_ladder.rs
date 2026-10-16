@@ -14,16 +14,18 @@
 //! The rules are named here, in three contiguous segments, and nowhere
 //! else. [`judge_header_ladder`] runs them in order for the alt tier.
 //! `validate` calls the same three functions and inserts its chain-state
-//! rules between them: B5 after the parent link, B4 after the clock and
-//! the proof, G1 after the anchor and the coinbase. Those three are
+//! rules between them: B5 after the parent link, B4 after the clock (the
+//! proof, CEN-D1, is `form`'s), G1 after the anchor and the coinbase. Those three are
 //! `BlockRule`s; they are not members of this ladder, and a segment cannot
 //! name one — [`run_header`](crate::rules::run_header) takes a
 //! [`HeaderRule`](crate::rules::HeaderRule).
 //!
 //! [`derive`] is the shared preparation: the tip, the connecting height,
 //! the seed (CEN-D3), the newest-11 window (CEN-C3), the target (CEN-D4,
-//! CEN-D6 the zero guard), the cumulative difficulty after the block, the
-//! comparison (CEN-D1b), and the [`BlockContext`] the predicates read. The
+//! CEN-D6 the zero guard) and its check against the target `form` judged
+//! CEN-D1 against ([`Stale::Target`] on a mismatch), the cumulative
+//! difficulty after the block, the comparison (CEN-D1b), and the
+//! [`BlockContext`] the predicates read. The
 //! alt tier records CEN-D5 beside that target, and only when a target was
 //! produced — a D6 refusal is D4's verdict, and D5 did not run. `validate`
 //! does not record D5: its window is the recorded chain.
@@ -33,12 +35,12 @@ use shekyl_types::BlockHeight;
 
 use crate::block::StructurallyValid;
 use crate::coverage::RuleCoverage;
-use crate::fault::Fault;
+use crate::fault::{Fault, Stale};
 use crate::rule_set::RuleSet;
 use crate::rules::anchors::E1;
 use crate::rules::difficulty::D4;
 use crate::rules::miner::{F4, F5, F6};
-use crate::rules::pow::{D1b, D1, D3};
+use crate::rules::pow::{D1b, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::{self, BlockContext};
@@ -67,7 +69,7 @@ pub(crate) struct HeaderFacts<'a> {
 ///
 /// [`Fault::View`] on the view's own fault; [`Fault::Corrupt`] on a hole
 /// below the parent or a non-monotone cumulative difficulty;
-/// [`Fault::Stale`] when `formed`'s seed is not this view's.
+/// [`Fault::Stale`] when `formed`'s seed or target is not this view's.
 pub(crate) fn derive<'a, 'id, H: HeaderView<'id>>(
     formed: &'a StructurallyValid,
     view: &H,
@@ -83,6 +85,16 @@ pub(crate) fn derive<'a, 'id, H: HeaderView<'id>>(
         Ok(target) => target,
         Err(refused) => return Ok(Err(refused)),
     };
+    // `form` judged CEN-D1 against the caller's claim; the claim must be
+    // what this view's headers derive, or the block was never judged
+    // against its real target. A fault, not a verdict (`Stale::Target`).
+    if formed.target() != target {
+        return Err(Fault::Stale(Stale::Target {
+            claimed: formed.target(),
+            expected: target,
+            retry: formed.attempt().next(),
+        }));
+    }
     let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
     D1b::record(coverage);
     Ok(Ok(HeaderFacts {
@@ -116,14 +128,15 @@ pub(crate) fn parent_link<'id, H: HeaderView<'id>>(
     Ok(Ok(()))
 }
 
-/// CEN-C1, CEN-C2, CEN-D1: the clock against the window, and the proof
-/// against the target [`derive`] put on the context.
-pub(crate) fn clock_and_proof<'id, H: HeaderView<'id>>(
+/// CEN-C1, CEN-C2: the clock against the window. CEN-D1, the proof against
+/// the target, is `form`'s: it runs before any body work, against the
+/// claim [`derive`] verifies.
+pub(crate) fn clock<'id, H: HeaderView<'id>>(
     cx: &BlockContext<'_>,
     view: &H,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, Fault<H::Fault>> {
-    judge_header!(cx, view, coverage; C1, C2, D1);
+    judge_header!(cx, view, coverage; C1, C2);
     Ok(Ok(()))
 }
 
@@ -149,7 +162,7 @@ pub(crate) fn judge_header_ladder<'id, H: HeaderView<'id>>(
     if let Err(refused) = parent_link(cx, view, coverage)? {
         return Ok(Err(refused));
     }
-    if let Err(refused) = clock_and_proof(cx, view, coverage)? {
+    if let Err(refused) = clock(cx, view, coverage)? {
         return Ok(Err(refused));
     }
     anchor_and_coinbase(cx, view, coverage)

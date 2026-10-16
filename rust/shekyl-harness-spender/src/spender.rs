@@ -54,6 +54,14 @@ struct Located {
     gindex: u64,
 }
 
+/// Whether a built spend carries the range proof its prover made, or that
+/// proof one bit off (CEN-H19's negative fixture).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RangeProof {
+    AsProved,
+    Broken,
+}
+
 /// The wallet-side tree over a chain's mined blocks, and the facts a
 /// spend of one of its coinbases needs (crate docs).
 pub struct Spender {
@@ -243,6 +251,33 @@ impl Spender {
         self.spend_coinbase_posting(wallet, height, connecting, fee, None)
     }
 
+    /// [`Self::spend_coinbase`] with its range proof one bit off what the
+    /// prover made, signed **after** the flip: the wallet-made body of a
+    /// producer who lists a bad range proof under valid signatures. Every
+    /// other row passes it — the membership proof is over the prefix, the
+    /// signatures cover the flipped prunable region — so CEN-H19's
+    /// verification half is the only row that can refuse it. A proof
+    /// flipped after signing is CEN-I18's refusal, at the slot loop, and
+    /// never reaches the batch.
+    #[must_use]
+    pub fn spend_coinbase_breaking_range_proof(
+        &self,
+        wallet: &MinerWallet,
+        height: BlockHeight,
+        connecting: BlockHeight,
+        fee: u64,
+    ) -> Transaction {
+        let sourced = vec![self.source_coinbase(wallet, height, connecting)];
+        Self::spend_sourced(
+            sourced,
+            connecting,
+            fee,
+            None,
+            wallet.recipient(),
+            RangeProof::Broken,
+        )
+    }
+
     /// [`Self::spend_coinbase`] with an archival bond post riding it
     /// (DRS-E4 commit 4; the ingest's `scenario_archival`): the post is the prefix's one
     /// extra input, its term sits on the side its kind fixes — a credit is a
@@ -415,7 +450,14 @@ impl Spender {
         recipient: &Recipient,
     ) -> Transaction {
         let sourced = vec![self.source_coinbase(wallet, height, connecting)];
-        Self::spend_sourced(sourced, connecting, fee, bond, recipient)
+        Self::spend_sourced(
+            sourced,
+            connecting,
+            fee,
+            bond,
+            recipient,
+            RangeProof::AsProved,
+        )
     }
 
     /// A spend of several blocks' coinbases in **one** transaction, listed
@@ -457,7 +499,14 @@ impl Spender {
             "each spent coinbase has its own key image"
         );
         let inputs: Vec<Sourced> = pairs.into_iter().map(|(_, source)| source).collect();
-        let tx = Self::spend_sourced(inputs, connecting, fee, None, wallet.recipient());
+        let tx = Self::spend_sourced(
+            inputs,
+            connecting,
+            fee,
+            None,
+            wallet.recipient(),
+            RangeProof::AsProved,
+        );
         let spent_heights: Vec<BlockHeight> = tx
             .prefix
             .inputs
@@ -503,6 +552,7 @@ impl Spender {
         fee: u64,
         bond: Option<&PostedBond<'_>>,
         recipient: &Recipient,
+        range_proof: RangeProof,
     ) -> Transaction {
         // Inputs in strict-descending key-image order (CEN-I5), as the
         // engine's `sign_bridge` orders them before signing; the prefix
@@ -618,7 +668,7 @@ impl Spender {
             &extra,
         )
         .expect("the prefix hashes");
-        let signed = sign_transaction_with_terms(
+        let mut signed = sign_transaction_with_terms(
             tx_prefix_hash,
             &spend_inputs,
             &outputs,
@@ -628,6 +678,14 @@ impl Spender {
             &tree,
         )
         .expect("sign the spend");
+        if range_proof == RangeProof::Broken {
+            // Bit 0 of `r1`'s low byte: after `A ‖ A1 ‖ B`, so every point
+            // still decompresses and the scalar stays reduced. Before
+            // `open_spend`, so every signature covers the flipped proof
+            // (CEN-I17 binds the prunable region by its hash) and only the
+            // range proof's own equation can refuse the body.
+            signed.bulletproof_plus[96] ^= 1;
+        }
         // One revealed key per spend input, each derived from its own
         // output's shared secret at its own index (the signer's derivation).
         // `open_spend` hashes these keys, signs the spend slots, and refuses
