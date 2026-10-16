@@ -538,6 +538,7 @@ stale_through = [
   { through = "cb507edf7", note = "A link per connector (TSR-F1): a route and an outbound facet on the seam hub, read by the connector at each dial in place of its proxy slot. No deadline and no dial I/O changes. Not re-measured." },
   { through = "f60ab687f", note = "Republishing the usable route keeps its incarnation and tells no watcher; a return from down is a new incarnation. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
   { through = "21524f1a8", note = "A link subscription unsubscribes when dropped. Watcher bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
+  { through = "7e9ea0f61", note = "The managed-Tor death watch follows the route now installed, and a shutdown publishes ProcessStopped. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
 ]
 
 [[constant]]
@@ -621,6 +622,7 @@ cleared = [
   { through = "cb507edf7", reason = "The Tor link (TSR-F1) holds the route the Tor dial used to read from the zone host's proxy slot; the dial, the gap and their I/O are unchanged, so the capture still prices this tree." },
   { through = "f60ab687f", reason = "The Tor link keeps one incarnation across a repeated publish of the same route, so the managed-Tor death watcher is armed once. The dial, the gap and their I/O are unchanged." },
   { through = "21524f1a8", reason = "Link subscriptions are removed when dropped. The dial, the gap and their I/O are unchanged." },
+  { through = "7e9ea0f61", reason = "The Tor link's death watch is re-planned on each publish and a stop has its own cause; the dial, the gap and their I/O are unchanged, so the capture still prices this tree." },
 ]
 
 [[constant]]
