@@ -254,12 +254,20 @@ impl Block {
     /// PoW preimage (which omits it). The Monero block-202612 special case is shed
     /// (dead pre-genesis chain history).
     pub fn hash(&self) -> BlockHash {
-        let blob = self.pow_blob();
-        let mut preimage = Vec::new();
-        write_varint(blob.len(), &mut preimage).expect("Vec write is infallible");
-        preimage.extend_from_slice(&blob);
-        BlockHash::from_bytes(keccak256(&preimage))
+        identity_of_pow_blob(&self.pow_blob())
     }
+}
+
+/// The block identity (CEN-B6) of the block whose [`Block::pow_blob`] is
+/// `blob`: one keccak over the blob's length and the blob. The identity is
+/// a function of the PoW preimage, so a holder of the preimage alone — the
+/// `Substrate::longhash` caller — can name the block it hashes.
+#[must_use]
+pub fn identity_of_pow_blob(blob: &[u8]) -> BlockHash {
+    let mut preimage = Vec::new();
+    write_varint(blob.len(), &mut preimage).expect("Vec write is infallible");
+    preimage.extend_from_slice(blob);
+    BlockHash::from_bytes(keccak256(&preimage))
 }
 
 #[cfg(test)]

@@ -113,12 +113,15 @@ fn judge<'b, 'id>(
         Err(Fault::View(fault)) => return Err(fault),
         Err(other) => panic!("the bench chain's headers are a chain: {other:?}"),
     };
+    let references =
+        shekyl_chain_rules::ReferenceClaims::from_headers(view, connecting, &candidate)?;
     let formed = match form(
         candidate,
         &RULES,
         substrate,
         seed,
         target,
+        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

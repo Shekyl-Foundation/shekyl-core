@@ -14,6 +14,10 @@ fn facts(weight: u64) -> AltBlockFacts {
         height: BlockHeight::from_raw(41),
         block_weight: BlockWeight::from_raw(weight),
         cumulative_difficulty: CumulativeDifficulty::from_raw((5u128 << 64) | 4),
+        pow: crate::codec::RecordedPow {
+            seed: shekyl_types::BlockHash::from_bytes([0x5E; 32]),
+            pow: shekyl_types::PowHash::from_bytes([0x70; 32]),
+        },
     }
 }
 
@@ -62,6 +66,8 @@ fn an_alt_row_has_no_supply_word() {
     expected.extend_from_slice(&41u64.to_le_bytes()); // height
     expected.extend_from_slice(&2_048u64.to_le_bytes()); // weight, always
     expected.extend_from_slice(&((5u128 << 64) | 4).to_le_bytes()); // one u128
+    expected.extend_from_slice(&[0x5E; 32]); // the recorded PoW's seed
+    expected.extend_from_slice(&[0x70; 32]); // the recorded PoW
     expected.extend_from_slice(&u32::try_from(block().len()).unwrap().to_le_bytes());
     expected.extend_from_slice(&block());
     expected.push(1); // witness present
@@ -69,13 +75,15 @@ fn an_alt_row_has_no_supply_word() {
     expected.extend_from_slice(&witness());
     assert_eq!(
         bytes, expected,
-        "height, weight, difficulty, block, witness — nothing else"
+        "height, weight, difficulty, recorded PoW, block, witness — nothing else"
     );
-    // The facts half is the three scalars; a fourth would not build here.
+    // The facts half is the three scalars and the recorded PoW; a fifth
+    // would not build here.
     let AltBlockFacts {
         height,
         block_weight,
         cumulative_difficulty,
+        pow: _,
     } = record.facts();
     assert_eq!(height, BlockHeight::from_raw(41));
     assert_eq!(block_weight, BlockWeight::from_raw(2_048));
@@ -121,6 +129,8 @@ fn forged(weight: u64, block: &[u8], witness: Option<&[u8]>) -> Vec<u8> {
     out.extend_from_slice(&41u64.to_le_bytes());
     out.extend_from_slice(&weight.to_le_bytes());
     out.extend_from_slice(&((5u128 << 64) | 4).to_le_bytes());
+    out.extend_from_slice(&[0x5E; 32]); // recorded pow: seed
+    out.extend_from_slice(&[0x70; 32]); // recorded pow: hash
     out.extend_from_slice(&u32::try_from(block.len()).unwrap().to_le_bytes());
     out.extend_from_slice(block);
     match witness {

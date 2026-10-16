@@ -15,7 +15,7 @@ use shekyl_fcmp::tree::{
 };
 use shekyl_types::{CurveTreeRoot, TreeLeaf};
 
-use super::{grow, FrontierFault, GrowFault, TreeFrontier};
+use super::{grow, rebuild_right_edge, FrontierFault, GrowFault, RightEdgeSpan, TreeFrontier};
 
 /// A deterministic leaf whose four scalars are small integers — canonical
 /// field elements on both curves, distinct per leaf and per slot.
@@ -88,9 +88,112 @@ fn grow_in_batches_equals_rebuild(batches: &[usize]) {
         // grow leaves behind only if the tree ever shrank, which it does
         // not: growth only adds layers). So the counts match exactly.
         assert_eq!(stored.len(), expected, "no stray chunk writes");
+        // SI-5's rebuild over what the grows stored is the stored edge.
+        let edge = right_edge_from(&all, &stored);
+        for (layer, hash) in edge.iter().enumerate() {
+            let layer = u8::try_from(layer).expect("depth fits u8");
+            let last = built[usize::from(layer)].len() as u64 - 1;
+            assert_eq!(
+                stored.get(&(layer, last)),
+                Some(hash),
+                "rebuilt last chunk at layer {layer} after {} leaves",
+                all.len()
+            );
+        }
+        assert_eq!(
+            CurveTreeRoot::from_bytes(*edge.last().expect("a root")),
+            growth.root,
+            "rebuilt root after {} leaves",
+            all.len()
+        );
         frontier = growth.frontier_after();
         assert_eq!(frontier.leaf_count, all.len() as u64);
     }
+}
+
+/// SI-5's read, from a map of stored chunks: the span's leaves and the full
+/// children below each layer's last chunk, then the rebuild.
+fn right_edge_from(all: &[TreeLeaf], stored: &BTreeMap<(u8, u64), [u8; 32]>) -> Vec<[u8; 32]> {
+    let span = RightEdgeSpan::of(all.len() as u64).expect("a non-empty tree");
+    let at = |p: u64| usize::try_from(p).expect("a test tree fits usize");
+    let leaves = &all[at(span.leaves.start)..at(span.leaves.end)];
+    let full: Vec<Vec<[u8; 32]>> = span
+        .children
+        .iter()
+        .enumerate()
+        .map(|(below, range)| {
+            let below = u8::try_from(below).expect("depth fits u8");
+            (range.start..range.end - 1)
+                .map(|chunk| stored[&(below, chunk)])
+                .collect()
+        })
+        .collect();
+    rebuild_right_edge(&span, leaves, &full).expect("rebuilds")
+}
+
+#[test]
+fn the_empty_tree_has_no_edge() {
+    assert_eq!(RightEdgeSpan::of(0), None);
+}
+
+#[test]
+fn a_wrong_full_child_below_the_edge_moves_the_rebuilt_root() {
+    // The gap a top-chunk read leaves: a lower chunk wrong while the top
+    // is untouched. The rebuild reads the full children, so the root it
+    // derives moves.
+    let two_layers = SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH;
+    let n = two_layers + 50;
+    let all: Vec<TreeLeaf> = (0..n as u64).map(leaf).collect();
+    let mut stored: BTreeMap<(u8, u64), [u8; 32]> = BTreeMap::new();
+    for w in grow(&TreeFrontier::EMPTY, &all)
+        .expect("grows")
+        .layer_writes
+    {
+        stored.insert((w.layer, w.chunk), w.hash);
+    }
+    let honest = right_edge_from(&all, &stored);
+    // 20 leaf chunks, 2 layer-1 chunks, one root: layer 1's chunk 0 is a
+    // full child of the root and no chunk on the edge. Give it another
+    // chunk's hash.
+    stored.insert((1, 0), stored[&(1, 1)]);
+    let tampered = right_edge_from(&all, &stored);
+    assert_ne!(
+        honest.last(),
+        tampered.last(),
+        "a wrong full child must move the root"
+    );
+}
+
+#[test]
+fn a_wrong_leaf_under_the_edge_moves_the_leaf_chunk() {
+    let all: Vec<TreeLeaf> = (0..45).map(leaf).collect();
+    let mut stored: BTreeMap<(u8, u64), [u8; 32]> = BTreeMap::new();
+    for w in grow(&TreeFrontier::EMPTY, &all)
+        .expect("grows")
+        .layer_writes
+    {
+        stored.insert((w.layer, w.chunk), w.hash);
+    }
+    let honest = right_edge_from(&all, &stored);
+    let mut wrong = all.clone();
+    wrong[44] = leaf(1_000);
+    let tampered = right_edge_from(&wrong, &stored);
+    assert_ne!(honest[0], tampered[0]);
+    assert_ne!(honest.last(), tampered.last());
+}
+
+#[test]
+fn the_rebuild_refuses_inputs_that_are_not_the_span() {
+    let span = RightEdgeSpan::of(45).expect("non-empty");
+    let leaves: Vec<TreeLeaf> = (38..45).map(leaf).collect();
+    assert!(matches!(
+        rebuild_right_edge(&span, &leaves[1..], &[vec![]]),
+        Err(FrontierFault::Shape { .. })
+    ));
+    assert!(matches!(
+        rebuild_right_edge(&span, &leaves, &[]),
+        Err(FrontierFault::Shape { .. })
+    ));
 }
 
 #[test]

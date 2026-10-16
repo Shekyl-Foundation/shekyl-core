@@ -93,14 +93,14 @@ use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
     stored_timelock, BlockBody, BlockInfo, Canonical, Coded, CoverageGaps, OutKey, OutTx, Present,
-    Raw, RuleSetInForce, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
-    TxPrunedSegment,
+    Raw, RecordedPow, RuleSetInForce, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
+    TxPrunableSegment, TxPrunedSegment,
 };
 use crate::ids::{AmountIndex, OutputSlot, OutputStorageId, TxStorageId};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
-    BLOCKS, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS, OUTPUT_TXS,
-    SPENT_KEYS, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
+    BLOCKS, BLOCK_HEIGHTS, BLOCK_INFO, BLOCK_POW, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
+    OUTPUT_TXS, SPENT_KEYS, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE,
     TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
@@ -340,6 +340,11 @@ impl<'id> WriteBatch<'_, 'id> {
         };
         self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?
             .insert(height, info.encoded().as_encoded())?;
+        // The PoW `form` computed under the block's seed and this verdict
+        // accepted (CEN-D1/D2/D3), recorded so a switch re-forms the block
+        // without hashing it again (ruling 3, 2026-10-15).
+        self.open_insert_table(BLOCK_POW, StoreInvariant::TipMismatch)?
+            .insert(height, RecordedPow::of(block.pow()).encoded().as_encoded())?;
 
         // ---- 7. rule set (CEN-B3's belt) --------------------------------
         // The belt stores the **id**, and the id is not the set: under

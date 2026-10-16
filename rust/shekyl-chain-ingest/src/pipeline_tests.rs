@@ -14,8 +14,8 @@ use kameo::error::SendError;
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
-    form, Candidate, CenRow, FormAttempt, InvalidBlock, Locus, Retry, RuleSet, StructurallyValid,
-    Verdict,
+    form, Candidate, CenRow, FormAttempt, InvalidBlock, Locus, ReferenceClaims, Retry, RuleSet,
+    StructurallyValid, Verdict,
 };
 use shekyl_chain_store::codec::{BlockInfo, Canonical, Present};
 use shekyl_chain_store::lmdb_order::LmdbHashKey;
@@ -83,12 +83,17 @@ fn formed(
         .claim(h(height), &RuleSet::GENESIS)
         .expect("consistent")
         .expect("a target");
+    let references = match ReferenceClaims::from_headers(&ledger, h(height), &candidate) {
+        Ok(references) => references,
+        Err(never) => match never {},
+    };
     let verdict = form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         seed,
         target,
+        &references,
         FormAttempt::FIRST,
     )
     .expect("mock substrate forms");

@@ -18,7 +18,13 @@
 //! - the [`TargetLedger`] — a window of [`HeaderRecord`]s ending at the
 //!   last block the driver handed to `form`, each recorded with the target
 //!   the driver claimed for it and the work that target adds
-//!   ([`cumulative_difficulty_after`], the validator's own step);
+//!   ([`cumulative_difficulty_after`], the validator's own step). The
+//!   window is the wider of LWMA-1's and CEN-I11's reference window
+//!   ([`REFERENCE_BLOCK_MAX_AGE`]), because the same ledger answers the
+//!   third claim (2026-10-16, `CHAIN_RULES_CRATE.md` §4.6): the height and
+//!   root of every block a listed body names as its `reference_block`
+//!   (`ReferenceClaims::from_headers`, a `HeaderView` read — the ledger is
+//!   one);
 //! - the **store** — every block already connected, which answers a height
 //!   the window lacks: at the start of a run, and after a rewind moves the
 //!   connecting height backwards.
@@ -53,7 +59,7 @@ use std::collections::BTreeMap;
 
 use shekyl_chain_rules::{
     cumulative_difficulty_after, target_claim, AtHeight, Corrupt, Fault, HeaderRecord, HeaderView,
-    RuleSet, Target, Tip, Verdict,
+    RuleSet, Target, Tip, Verdict, REFERENCE_BLOCK_MAX_AGE,
 };
 use shekyl_difficulty::N_USIZE;
 use shekyl_types::BlockHeight;
@@ -73,16 +79,32 @@ impl TargetLedger {
         Self::default()
     }
 
+    /// The lowest height the claims for a block connecting at `connecting`
+    /// read: the parent's LWMA-1 window (`N` below the parent) or CEN-I11's
+    /// oldest admissible reference (`MAX_AGE` below `connecting`),
+    /// whichever is lower; `None` at genesis admission.
+    fn floor_for(connecting: BlockHeight) -> Option<u64> {
+        let parent = connecting.to_raw().checked_sub(1)?;
+        let n = u64::try_from(N_USIZE).expect("N fits u64");
+        Some(
+            parent.saturating_sub(n).min(
+                connecting
+                    .to_raw()
+                    .saturating_sub(REFERENCE_BLOCK_MAX_AGE.to_raw()),
+            ),
+        )
+    }
+
     /// The heights a claim for `connecting` reads that the ledger lacks:
-    /// the parent, whose work the next record extends, and the LWMA-1
-    /// window below it. Empty at genesis admission.
+    /// the parent, whose work the next record extends, the LWMA-1 window
+    /// below it, and the reference window (module docs). Empty at genesis
+    /// admission.
     #[must_use]
     pub fn missing_for(&self, connecting: BlockHeight) -> Vec<BlockHeight> {
-        let Some(parent) = connecting.to_raw().checked_sub(1) else {
+        let Some(floor) = Self::floor_for(connecting) else {
             return Vec::new();
         };
-        let n = u64::try_from(N_USIZE).expect("N fits u64");
-        (parent.saturating_sub(n)..=parent)
+        (floor..connecting.to_raw())
             .filter(|h| !self.headers.contains_key(h))
             .map(BlockHeight::from_raw)
             .collect()
@@ -156,11 +178,13 @@ impl TargetLedger {
     }
 
     /// Forget heights a claim for `connecting` no longer reads: everything
-    /// below the parent's LWMA-1 window. Between rewinds the window only
-    /// moves up; after one, the store answers. Keeps the ledger a window.
+    /// below the parent's LWMA-1 window and the reference window. Between
+    /// rewinds the window only moves up; after one, the store answers.
+    /// Keeps the ledger a window.
     pub fn forget_below_window_of(&mut self, connecting: BlockHeight) {
-        let n = u64::try_from(N_USIZE).expect("N fits u64");
-        let floor = connecting.to_raw().saturating_sub(1).saturating_sub(n);
+        let Some(floor) = Self::floor_for(connecting) else {
+            return;
+        };
         let keep = self.headers.split_off(&floor);
         self.headers = keep;
     }
@@ -240,20 +264,29 @@ mod tests {
         );
     }
 
-    /// The store is asked for the parent and the LWMA-1 window below it —
-    /// `N + 1` heights once the chain is that long, fewer before — and only
-    /// for what the ledger lacks.
+    /// The store is asked for the parent, the LWMA-1 window below it and
+    /// CEN-I11's reference window — the wider of `N + 1` heights and
+    /// `MAX_AGE` once the chain is that long, fewer before — and only for
+    /// what the ledger lacks.
     #[test]
     fn the_store_is_asked_for_the_window_the_ledger_lacks() {
         let mut ledger = TargetLedger::new();
         assert_eq!(ledger.missing_for(h(3)), vec![h(0), h(1), h(2)]);
-        let connecting = n() + 10;
+        let width = (n() + 1).max(REFERENCE_BLOCK_MAX_AGE.to_raw());
+        let connecting = width + 10;
         let missing = ledger.missing_for(h(connecting));
-        assert_eq!(missing.len(), N_USIZE + 1, "the parent and N below it");
-        assert_eq!(missing.first(), Some(&h(connecting - 1 - n())));
+        assert_eq!(
+            missing.len(),
+            usize::try_from(width).expect("fits"),
+            "the parent, N below it, and the oldest admissible reference"
+        );
+        assert_eq!(missing.first(), Some(&h(connecting - width)));
         assert_eq!(missing.last(), Some(&h(connecting - 1)));
         ledger.record(h(connecting - 1), record_at(1));
-        assert_eq!(ledger.missing_for(h(connecting)).len(), N_USIZE);
+        assert_eq!(
+            ledger.missing_for(h(connecting)).len(),
+            usize::try_from(width - 1).expect("fits")
+        );
     }
 
     /// A formed block joins the ledger with its parent's work plus the
@@ -287,7 +320,7 @@ mod tests {
     #[test]
     fn rewind_drops_the_fork_and_forget_keeps_the_window() {
         let mut ledger = TargetLedger::new();
-        let top = n() + 20;
+        let top = n().max(REFERENCE_BLOCK_MAX_AGE.to_raw()) + 20;
         for height in 0..=top {
             ledger.record(h(height), record_at(u128::from(height) + 1));
         }
@@ -297,7 +330,10 @@ mod tests {
             Some(h(top - 5))
         );
         ledger.forget_below_window_of(h(top - 4));
-        assert_eq!(ledger.len(), N_USIZE + 1);
+        // The parent and its LWMA-1 window, or CEN-I11's reference window
+        // below the connecting height — whichever is wider.
+        let width = (n() + 1).max(REFERENCE_BLOCK_MAX_AGE.to_raw());
+        assert_eq!(ledger.len(), usize::try_from(width).expect("fits"));
         assert!(ledger.missing_for(h(top - 4)).is_empty());
     }
 }

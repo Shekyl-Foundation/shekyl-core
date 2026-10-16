@@ -56,7 +56,8 @@ use std::sync::Arc;
 use kameo::actor::PreparedActor;
 use kameo::error::SendError;
 use shekyl_chain_rules::{
-    form, FormAttempt, InvalidBlock, PaidEmission, StructurallyValid, Substrate, Verdict, Weights,
+    form, FormAttempt, InvalidBlock, PaidEmission, ReferenceClaims, StructurallyValid, Substrate,
+    Verdict, Weights,
 };
 use shekyl_chain_store::archival_snapshot::SnapshotDiff;
 use shekyl_chain_store::store::{ChainStore, StoreError};
@@ -951,6 +952,14 @@ where
                 return Ok(());
             }
         };
+        // The third claim: the height and root of every reference a listed
+        // body names, off the same ledger (`CHAIN_RULES_CRATE.md` §4.6).
+        // Read before this block's own header joins the ledger — a block
+        // cannot reference itself (CEN-I11) — and before the window moves.
+        let references = match ReferenceClaims::from_headers(&self.targets, height, &candidate) {
+            Ok(references) => references,
+            Err(never) => match never {},
+        };
         if let Err(corrupt) = self.targets.extend(height, &candidate.block, target) {
             self.unclaimable(height, corrupt);
             return Ok(());
@@ -971,6 +980,7 @@ where
                 &*substrate,
                 seed,
                 target,
+                &references,
                 FormAttempt::FIRST,
             );
             metrics.block_formed(started.elapsed());
