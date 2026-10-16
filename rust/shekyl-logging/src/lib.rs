@@ -100,6 +100,7 @@ pub use filter::{
     directives_from_legacy_categories, FilterError, TranslationReport, SHEKYL_LOG_ENV,
 };
 
+use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use thiserror::Error;
@@ -253,11 +254,13 @@ pub fn init(config: Config) -> Result<LoggerGuard, InitError> {
 pub(crate) fn install_subscriber(
     config: Config,
 ) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
-    install_reserved(config, std::io::stderr(), queue::SINK_QUEUE_LINES)
+    let stderr = std::io::stderr();
+    let ansi = stderr.is_terminal();
+    install_reserved(config, stderr, queue::SINK_QUEUE_LINES, ansi)
 }
 
 /// Reserve the process subscriber, then install `config` with `stderr`
-/// queued at `lines`.
+/// queued at `lines`, colouring stderr's lines only when `ansi` is set.
 ///
 /// One reservation for every caller. A failed attempt clears
 /// [`INITIALIZED`] so a later call can retry. Success leaves the
@@ -268,6 +271,7 @@ fn install_reserved<W: std::io::Write + Send + 'static>(
     config: Config,
     stderr: W,
     lines: usize,
+    ansi: bool,
 ) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
     if INITIALIZED
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -276,7 +280,7 @@ fn install_reserved<W: std::io::Write + Send + 'static>(
         return Err(InitError::AlreadyInitialized);
     }
 
-    let result = install_subscriber_with_stderr(config, stderr, lines);
+    let result = install_subscriber_with_stderr(config, stderr, lines, ansi);
     if result.is_err() {
         INITIALIZED.store(false, Ordering::SeqCst);
     } else {
@@ -288,10 +292,19 @@ fn install_reserved<W: std::io::Write + Send + 'static>(
 /// The subscriber itself. `stderr` is the stderr sink. Every sink is
 /// queued at `lines`. Production passes the process's `stderr` and
 /// [`SINK_QUEUE_LINES`]; the never-blocks test passes a sink that stalls.
+///
+/// `ansi` is whether stderr's lines carry colour codes. Production sets it
+/// only when stderr is a terminal. Under systemd, a pipe or a redirect the
+/// codes would land in the journal or the file as escape bytes, and every
+/// `grep` over them would have to strip them first. It is always set
+/// explicitly, so the `NO_COLOR` variable that `tracing-subscriber`'s
+/// default consults does not decide it: the daemon takes no environment
+/// input (`83-input-grammar`). The file sink never carries colour.
 fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
     config: Config,
     stderr: W,
     lines: usize,
+    ansi: bool,
 ) -> Result<(LoggerGuard, FilterReloadHandle), InitError> {
     let filter = filter::resolve_env_filter(config.fallback_default)
         .map_err(|e| InitError::FilterParse(e.to_string()))?;
@@ -304,7 +317,7 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
     // Queued like every sink: a log call never waits on stderr. What
     // stderr carries (levels, format) is unchanged; that is IG-14's.
     let (stderr_writer, stderr_guard) = queue::queued(stderr, queue::Sink::Stderr, lines);
-    let stderr_layer = fmt::layer().with_writer(stderr_writer);
+    let stderr_layer = fmt::layer().with_writer(stderr_writer).with_ansi(ansi);
 
     let (file_layer, file_guard) = if let Some(file_sink) = config.file_sink {
         let (writer, guard) = appender::open(&file_sink, lines)?;
@@ -335,6 +348,8 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
 /// Test-only hook: [`init`] with `stderr` standing in for the process's
 /// stderr and every sink's queue at `lines`, so a test can stall the sink
 /// and watch the queue drop and report instead of blocking the caller.
+/// A stand-in is never a terminal, so its lines carry no colour codes, as
+/// the process's stderr does not when it is a pipe or the journal.
 ///
 /// Enters through [`install_reserved`], the same reservation as [`init`]
 /// and the FFI path.
@@ -344,7 +359,7 @@ pub fn __test_only_init_with_stderr<W: std::io::Write + Send + 'static>(
     stderr: W,
     lines: usize,
 ) -> Result<LoggerGuard, InitError> {
-    let (guard, reload_handle) = install_reserved(config, stderr, lines)?;
+    let (guard, reload_handle) = install_reserved(config, stderr, lines, false)?;
     ffi::__register_reload_handle(reload_handle);
     Ok(guard)
 }
