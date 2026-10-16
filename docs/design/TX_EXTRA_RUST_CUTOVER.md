@@ -92,7 +92,7 @@ template). At Round 0 the **block template / coinbase writer had no Rust
 owner** (TXE-F8): E6 slice 4 was landing the coinbase *judge* (F1–F10, F13,
 F20 — `CHAIN_RULES_SLICE_4.md` §4), not the builder. UPDATE 2026-09-24: the
 owner is `shekyl-block-template` (#852, E6 slice 6 §5.3); `construct_miner_tx`
-and these callers are the C++ that crate's daemon consumers retire (E3/E4).
+and these callers are the C++ that crate's daemon consumers retire at the store flip (DRS-X).
 
 ### 1.3 Test callers (`tests/`), by file
 

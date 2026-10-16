@@ -37,6 +37,7 @@ pub mod bootstrap;
 pub mod consensus;
 pub mod encoding;
 pub mod framing;
+pub(crate) mod launch;
 pub mod listeners;
 pub mod onion;
 pub mod ready;
@@ -46,7 +47,7 @@ pub mod vanguards;
 
 pub use actor::{
     BootstrapReadiness, Command, CommandResult, ControlError, EventSink, ManagedTor, Signal,
-    SocksPort, TorControlClient, TorControlClientConfig, TorExit, TorLaunch,
+    SocksPort, SystemDirectoryError, TorControlClient, TorControlClientConfig, TorExit, TorLaunch,
 };
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
 pub use bootstrap::{parse_bootstrap_progress, BootstrapState};
