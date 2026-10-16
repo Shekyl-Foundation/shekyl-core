@@ -198,12 +198,12 @@ pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
 };
+#[cfg(any(test, feature = "harness"))]
+pub use rules::proofs::probes;
 pub use rules::range_proof::{BatchOutcome, ListedProofs};
 pub use rules::reward::{quote_emission, PaidEmission};
 pub use rules::seed_height;
 pub use rules::timestamps::mtp_median_at;
-#[cfg(any(test, feature = "harness"))]
-pub use rules::tx_against::probes;
 pub use rules::tx_against::{
     admissible_references, newest_admissible_reference, REFERENCE_BLOCK_MAX_AGE,
     REFERENCE_BLOCK_MIN_AGE,

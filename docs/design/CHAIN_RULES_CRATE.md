@@ -799,7 +799,7 @@ connect can claim it as it claims the seed and the target. So:
   in the window, is `Stale::Reference { slot, reference, claims: Box<ReferenceMismatch { claimed, expected }>, retry }`
   — a fault, never a verdict, and **there is no fallback verify in
   `validate`**: the probe `validate_verifies_no_proof_and_no_signature_and_form_verifies_both`
-  (`shekyl-chain-store`, thread-local counters in `tx_against::probes`)
+  (`shekyl-chain-store`, thread-local counters in `rules::proofs::probes`)
   holds `form`'s deltas positive and `validate`'s zero on a real spend.
   CEN-J25's verify stays on the writer (its operands are the gathered
   closes, chain facts).

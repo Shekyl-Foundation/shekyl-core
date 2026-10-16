@@ -37,9 +37,10 @@ use crate::harness::{
     MockChain, WithheldRead,
 };
 use crate::rule_set::RuleSet;
+use crate::rules::proofs::judge_proofs;
 use crate::rules::tx::{refused_listed, refused_lone};
 use crate::rules::tx_against::{
-    judge_proofs, judge_reference, judge_signatures, proof_reference, I11, I13, I17, I18, I7,
+    judge_reference, judge_signatures, proof_reference, I11, I13, I17, I18, I7,
     REFERENCE_BLOCK_MAX_AGE, REFERENCE_BLOCK_MIN_AGE,
 };
 use crate::rules::{run_tx_against, TxContext};

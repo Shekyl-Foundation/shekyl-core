@@ -26,24 +26,25 @@
 //! output it owns. The belt exists to catch a validator with a hole, not to
 //! be the rule (`STORE_INVARIANT_REGISTER.md` SI-1; the census minted L1 as
 //! the validator's, C2-R8 Q6).
+//!
+//! The verify that needs no chain — CEN-I17/I18, and CEN-I15, CEN-J26,
+//! CEN-J27's verify half — lives in [`super::proofs`] and runs in `form`.
+//! This module reads the chain and compares that claim; it does not verify
+//! again. I17 and I18 are re-exported so the census path stays.
 
 use std::collections::BTreeSet;
 
-use crate::block::{ReferenceClaims, VerifiedReference};
+use crate::block::VerifiedReference;
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault, FormAttempt, PerHeightRecord, Stale, ViewRead};
 use crate::rules::tx::TxClass;
-use crate::rules::tx_emission_against::J26;
 use crate::rules::{BlockContext, BlockRule, Rule, TxAgainstRule, TxContext, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::{AtHeight, ChainView, Tip};
-use shekyl_crypto_pq::signature::verify_pqc_auth;
 use shekyl_fcmp::leaf::PqcKeyScalar;
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
-use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, SigningPayloadHash,
-};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Ct, Input, Transaction};
 
 // CEN-I11's window, from `config/consensus_constants.json` at build time
@@ -206,12 +207,13 @@ pub(crate) fn to_key_slots(tx: &Transaction) -> Vec<usize> {
 }
 
 /// The curve-tree context a proof-bearing transaction's reference names,
-/// yielded by [`judge_reference`] for the rows that verify against it:
-/// CEN-I15 on a spend and CEN-J27 on a bond post (both [`I15::verify`]
-/// over [`to_key_slots`], run inside the arm that derived the context),
-/// CEN-J25's backing proof and CEN-J26's fee-input proof on an emission.
-/// *Records-was:* the spend's verify was staged off until 2026-10-08
-/// (see [`I12`]).
+/// yielded by [`judge_reference`] once the chain's `(height, root)` agrees
+/// with what `form` verified ([`crate::rules::proofs::judge_proofs`],
+/// [`I15::verify`] over [`to_key_slots`]): CEN-I15's operand on a spend,
+/// CEN-J27's on a bond post, CEN-J25's backing proof and CEN-J26's
+/// fee-input proof on an emission. *Records-was:* the spend's verify was
+/// staged off until 2026-10-08 (see [`I12`]), and until 2026-10-16 it ran
+/// inside the arm that derived this context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReferenceContext {
     /// I10's operand: the reference's recorded height.
@@ -310,7 +312,7 @@ pub fn newest_admissible_reference(connecting: BlockHeight) -> Option<BlockHeigh
 /// MIN_AGE]`, the lower edge clamped at genesis. `None` when the chain is
 /// too young to carry a spend ([`newest_admissible_reference`]). The one
 /// home of both edges: [`I11::window`] refuses by it, and a caller that
-/// claims reference roots to `form` ([`ReferenceClaims::from_headers`])
+/// claims reference roots to `form` ([`crate::block::ReferenceClaims::from_headers`])
 /// reads exactly these heights — a reference outside them is not claimed,
 /// and I11 refuses it in `validate`.
 #[must_use]
@@ -466,10 +468,10 @@ impl I13 {
 /// (H21, H22) has already required that, and this row refuses it again
 /// rather than verify an empty subset against a proof.
 ///
-/// Run on the spend class by [`judge_reference`]'s spend arm over
-/// [`to_key_slots`], once the reference sequence has yielded its context
-/// (on the spend class since 2026-10-08, see [`I12`]); run on the
-/// emission's fee inputs as CEN-J26.
+/// Run in `form` by [`crate::rules::proofs::judge_proofs`] over
+/// [`to_key_slots`] against the caller's claim (on the spend class since
+/// 2026-10-08, see [`I12`]). The emission's fee inputs are CEN-J26 and the
+/// bond post's funding spends are CEN-J27: the same body, another row.
 pub(crate) struct I15;
 
 impl Rule for I15 {
@@ -526,7 +528,7 @@ impl I15 {
             tree_depth: layers,
         };
         #[cfg(any(test, feature = "harness"))]
-        probes::count_fcmp();
+        super::proofs::probes::count_fcmp();
         match proof::verify(
             &fcmp_proof,
             &key_images,
@@ -539,44 +541,6 @@ impl I15 {
             Ok(true) => Ok(()),
             Ok(false) | Err(_) => Err(()),
         }
-    }
-}
-
-/// Call counters for the two verification bodies, so a test can hold that
-/// `validate` runs neither (`CHAIN_RULES_CRATE.md` §4.6: no second verify
-/// site) while `form` runs both. Test-only: nothing in production reads
-/// them.
-#[cfg(any(test, feature = "harness"))]
-pub mod probes {
-    use core::cell::Cell;
-
-    thread_local! {
-        static FCMP: Cell<u64> = const { Cell::new(0) };
-        static SIGNATURES: Cell<u64> = const { Cell::new(0) };
-    }
-
-    /// How many times [`shekyl_fcmp::proof::verify`] was called through
-    /// CEN-I15's body (the spend's, the emission's fee inputs as J26, the
-    /// bond post's funding spends as J27) **on this thread**. Per thread,
-    /// so a probe over one stage is not moved by another test's `form` on
-    /// a sibling thread — the test runs both stages on its own thread.
-    #[must_use]
-    pub fn fcmp_verifies() -> u64 {
-        FCMP.with(Cell::get)
-    }
-
-    /// How many signatures CEN-I18 verified on this thread.
-    #[must_use]
-    pub fn signature_verifies() -> u64 {
-        SIGNATURES.with(Cell::get)
-    }
-
-    pub(super) fn count_fcmp() {
-        FCMP.with(|c| c.set(c.get() + 1));
-    }
-
-    pub(super) fn count_signature() {
-        SIGNATURES.with(|c| c.set(c.get() + 1));
     }
 }
 
@@ -630,10 +594,11 @@ impl Rule for J21 {
 /// reached it with their reference and proof unjudged (found 2026-10-06,
 /// slice 8 row 9).
 ///
-/// The row has no body of its own: it is [`reference_context`] with every
-/// step attributed to this row ([`BOND_POST_REFERENCE`]) and
-/// [`I15::verify`] over the context it yields — the sequence the spend
-/// runs under I10–I13 and I15 and the emission under J21 and J26, chosen
+/// The row has no body of its own: the view-bound half is
+/// [`reference_context`] with every step attributed to this row
+/// ([`BOND_POST_REFERENCE`]); the verify half is [`I15::verify`] in `form`
+/// ([`crate::rules::proofs::judge_proofs`]). The spend runs the same
+/// sequence under I10–I13 and I15, the emission under J21 and J26, chosen
 /// by [`judge_reference`]'s class arm. Runs **after** `judge_bond_post`,
 /// the C++'s order (`check_archival_bond_post_input` at `:3616`, the
 /// funding half after it): a post refused against its record is J13–J18's
@@ -703,14 +668,10 @@ const SPEND_REFERENCE: ReferenceRows = ReferenceRows {
 /// [`run_tx_against`](crate::rules::run_tx_against) records an
 /// out-of-scope kind, so G9's mint sees each evaluated at every slot. I15
 /// is not among them since 2026-10-16: the verify runs in `form`
-/// ([`judge_proofs`]), which records I15, J26 and J27's verify half, and
-/// this sequence only compares what it verified against.
+/// ([`crate::rules::proofs::judge_proofs`]), which records I15, J26 and
+/// J27's verify half, and this sequence only compares what it verified
+/// against.
 const SPEND_ARM_ROWS: [CenRow; 4] = [I10::ROW, I11::ROW, I12::ROW, I13::ROW];
-
-/// The rows [`judge_proofs`] records — the three verify rows, one per
-/// class that carries a proof — which it records **vacuous** on every
-/// other class, as [`judge_reference`] records the step rows.
-const PROOF_ROWS: [CenRow; 3] = [I15::ROW, J26::ROW, J27::ROW];
 
 /// The emission's attribution: every step is CEN-J21's.
 const EMISSION_REFERENCE: ReferenceRows = ReferenceRows {
@@ -720,10 +681,9 @@ const EMISSION_REFERENCE: ReferenceRows = ReferenceRows {
     depth: J21::ROW,
 };
 
-/// The bond post's attribution: every step is CEN-J27's, and so is the
-/// verify over the context — the row [`judge_reference`]'s bond-post arm
-/// records once the proof has passed, never before (the steps alone are
-/// not the row).
+/// The bond post's attribution: every step is CEN-J27's. The caller
+/// records those rows once the chain's context is the claim `form`
+/// verified, never before — a stale claim records nothing.
 const BOND_POST_REFERENCE: ReferenceRows = ReferenceRows {
     lookup: J27::ROW,
     window: J27::ROW,
@@ -756,8 +716,11 @@ fn refuse_step(
 /// connecting height (I11's), the declared depth read off the body where
 /// the class judges it, the anchor read at the height (I12's), the tree's
 /// depth at the height read and the declared one admitted against it
-/// (I13's). Each step is recorded under and refuses under `rows`' row for
-/// it; the per-height reads classify a missing record as
+/// (I13's). A refusal records the steps that passed under `rows`' row for
+/// them, except the refusing row ([`refuse_step`]). A pass records
+/// nothing: the caller records the passed rows only after the chain's
+/// context agrees with the claim `form` verified, so a stale claim
+/// records nothing. The per-height reads classify a missing record as
 /// [`Corrupt::HoleBelowTip`], never a verdict.
 ///
 /// Yields the [`ReferenceContext`] every step passed over. *Records-was:*
@@ -795,10 +758,6 @@ fn reference_context<'id, V: ChainView<'id>>(
         Ok(fits) if I13::admits(declared, depth) => fits,
         _ => return Ok(Err(refuse_step(cx, rows, 3, rows.depth, coverage))),
     };
-    for step in rows.steps() {
-        coverage.insert(step);
-    }
-    coverage.insert(rows.depth);
     Ok(Ok(ReferenceContext {
         ref_height,
         anchor,
@@ -806,11 +765,42 @@ fn reference_context<'id, V: ChainView<'id>>(
     }))
 }
 
+/// The steps `rows` names, recorded once the claim has agreed. A refused
+/// step never reaches here; [`refuse_step`] recorded what passed before it.
+fn record_passed_context(rows: ReferenceRows, coverage: &mut RuleCoverage) {
+    for step in rows.steps() {
+        coverage.insert(step);
+    }
+    coverage.insert(rows.depth);
+}
+
+/// [`reference_context`] under `rows`, then the claim comparison. The
+/// passed rows are recorded only when the chain's context is the claim
+/// `form` verified — the rule the bond-post arm used to keep with a
+/// scratch, now the rule for every class.
+fn context_after_claim<'id, V: ChainView<'id>>(
+    cx: &TxContext<'_>,
+    view: &V,
+    rows: ReferenceRows,
+    verified: Option<VerifiedReference>,
+    attempt: FormAttempt,
+    coverage: &mut RuleCoverage,
+) -> Result<Verdict<Option<ReferenceContext>>, Fault<V::Fault>> {
+    match reference_context(cx, view, rows, coverage)? {
+        Ok(reference) => {
+            compare_claim(cx, &reference, verified, attempt)?;
+            record_passed_context(rows, coverage);
+            Ok(Ok(Some(reference)))
+        }
+        Err(refused) => Ok(Err(refused)),
+    }
+}
+
 /// The reference rows, dispatched on the transaction's class: CEN-I10,
-/// CEN-I11, CEN-I12 and CEN-I13 on a spend, then CEN-I15's verify over
-/// the context they yield; CEN-J21 on an emission; CEN-J27 — the same
-/// sequence and the same verify, one row — on a bond post; vacuous on
-/// every other class.
+/// CEN-I11, CEN-I12 and CEN-I13 on a spend; CEN-J21 on an emission;
+/// CEN-J27 — the same sequence, one row — on a bond post; vacuous on
+/// every other class. The verify over the context is `form`'s
+/// ([`crate::rules::proofs::judge_proofs`]); this compares.
 ///
 /// The dispatch is explicit so that no gate decides which arm a class
 /// reaches: the emission reaches J21 because it is an emission, the bond
@@ -818,16 +808,18 @@ fn reference_context<'id, V: ChainView<'id>>(
 /// touches the other's. Each arm records the other arms' rows vacuous
 /// first, as [`run_tx_against`](crate::rules::run_tx_against) records an
 /// out-of-scope kind, then runs [`reference_context`] under its own
-/// attribution. On a spend the yielded context is I15's operand — the
-/// proof verified over every `ToKey` input ([`to_key_slots`]), the row
-/// recorded on success and refusing at the transaction — and the arm
+/// attribution and records the passed rows only once the claim agrees.
+/// On a spend the yielded context is I15's operand — the proof `form`
+/// verified over every `ToKey` input ([`to_key_slots`]) — and the arm
 /// yields it on; on an emission the whole context is J21's and is
 /// yielded, for CEN-J25's backing proof and CEN-J26's fee-input proof; on
-/// a bond post the context and the verify over it are J27's, and the
-/// context is yielded on with nothing left to read it. A class with no
-/// reference to look up records everything vacuous and yields `None`.
-/// *Records-was:* until 2026-10-08 the spend arm ran I10–I12 alone and
-/// yielded `None` (see [`I12`]), and the bond post was a vacuous class.
+/// a bond post the context is J27's, and the context is yielded on with
+/// nothing left to read it. A class with no reference to look up records
+/// everything vacuous and yields `None`. *Records-was:* until 2026-10-08
+/// the spend arm ran I10–I12 alone and yielded `None` (see [`I12`]), and
+/// the bond post was a vacuous class. Until 2026-10-16 the spend and
+/// emission arms recorded their context rows before the claim was
+/// compared, and only the bond post held them back.
 pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
     cx: &TxContext<'_>,
     view: &V,
@@ -839,46 +831,21 @@ pub(crate) fn judge_reference<'id, V: ChainView<'id>>(
         TxClass::Spend { .. } => {
             coverage.insert(J21::ROW);
             coverage.insert(J27::ROW);
-            match reference_context(cx, view, SPEND_REFERENCE, coverage)? {
-                Ok(reference) => {
-                    compare_claim(cx, &reference, verified, attempt)?;
-                    Ok(Ok(Some(reference)))
-                }
-                Err(refused) => Ok(Err(refused)),
-            }
+            context_after_claim(cx, view, SPEND_REFERENCE, verified, attempt, coverage)
         }
         TxClass::Emission { .. } => {
             for row in SPEND_ARM_ROWS {
                 coverage.insert(row);
             }
             coverage.insert(J27::ROW);
-            match reference_context(cx, view, EMISSION_REFERENCE, coverage)? {
-                Ok(reference) => {
-                    compare_claim(cx, &reference, verified, attempt)?;
-                    Ok(Ok(Some(reference)))
-                }
-                Err(refused) => Ok(Err(refused)),
-            }
+            context_after_claim(cx, view, EMISSION_REFERENCE, verified, attempt, coverage)
         }
         TxClass::BondPost { .. } => {
             for row in SPEND_ARM_ROWS {
                 coverage.insert(row);
             }
             coverage.insert(J21::ROW);
-            // Every step is one row with the verify `form` ran, so the
-            // steps are run into a scratch and folded in only once the
-            // chain's context is the claim the proof was verified under: a
-            // refused row is not recorded, whichever of its steps refused
-            // it, and a stale claim records nothing.
-            let mut steps = *coverage;
-            match reference_context(cx, view, BOND_POST_REFERENCE, &mut steps)? {
-                Ok(reference) => {
-                    compare_claim(cx, &reference, verified, attempt)?;
-                    coverage.union(&steps);
-                    Ok(Ok(Some(reference)))
-                }
-                Err(refused) => Ok(Err(refused)),
-            }
+            context_after_claim(cx, view, BOND_POST_REFERENCE, verified, attempt, coverage)
         }
         TxClass::Coinbase | TxClass::ServeCreditOnly { .. } => {
             for row in SPEND_ARM_ROWS {
@@ -922,198 +889,7 @@ fn compare_claim<VF>(
     }
 }
 
-/// The verify rows, run in `form` over the caller's claims (2026-10-16,
-/// `CHAIN_RULES_CRATE.md` §4.6 — the third claim): CEN-I15 on a spend,
-/// CEN-J26 on an emission's fee inputs, CEN-J27's verify half on a bond
-/// post's funding spends, each over [`to_key_slots`] against the claimed
-/// root and the body's declared depth (`layers = declared + 1`). Vacuous
-/// on every other class.
-///
-/// A proof-bearing transaction whose reference the caller did not claim is
-/// not verified here and yields `None`; `validate` then refuses it on
-/// CEN-I10/I11 or faults [`Stale::Reference`] — there is no second verify
-/// site. A declared depth the verifier cannot size (`0`, or past a `u8`)
-/// yields `None` too: that is CEN-I13's refusal, which `validate` keeps.
-///
-/// Yields what the proof was verified against, for `validate` to compare
-/// with the chain's context.
-pub(crate) fn judge_proofs(
-    cx: &TxContext<'_>,
-    claims: &ReferenceClaims,
-    coverage: &mut RuleCoverage,
-) -> Verdict<Option<VerifiedReference>> {
-    let (row, verifies) = match cx.class {
-        TxClass::Spend { .. } => (I15::ROW, true),
-        TxClass::Emission { .. } => (J26::ROW, true),
-        TxClass::BondPost { .. } => (J27::ROW, true),
-        TxClass::Coinbase | TxClass::ServeCreditOnly { .. } => (I15::ROW, false),
-    };
-    for vacuous in PROOF_ROWS {
-        if !verifies || vacuous != row {
-            coverage.insert(vacuous);
-        }
-    }
-    if !verifies {
-        return Ok(None);
-    }
-    let Some(reference) = proof_reference(cx.tx) else {
-        // A `Null` CT on a proof-bearing class: CEN-H15 in `tx_form`, and
-        // I10's refusal in `validate`. Nothing to verify.
-        return Ok(None);
-    };
-    let Some(claim) = claims.get(&reference) else {
-        return Ok(None);
-    };
-    let declared = match &cx.tx.ct {
-        Ct::Fcmp {
-            prunable: Some(prunable),
-            ..
-        } => prunable.tree_depth,
-        _ => return Ok(None),
-    };
-    let Ok(tree_depth) = u8::try_from(declared) else {
-        return Ok(None);
-    };
-    if tree_depth == 0 {
-        return Ok(None);
-    }
-    let context = ReferenceContext {
-        ref_height: claim.height,
-        anchor: claim.root,
-        tree_depth,
-    };
-    if I15::verify(cx.tx, &to_key_slots(cx.tx), &context).is_err() {
-        return Err(InvalidBlock::new(row, cx.locus()));
-    }
-    coverage.insert(row);
-    Ok(Some(VerifiedReference { reference, claim }))
-}
-
-/// CEN-I17, a **definition**: what each input's hybrid signature is over —
-/// the PQC signing preimage, `FCMP_SPEND_SIGNING_PREIMAGE.md` §1.1: the
-/// pruned segment ‖ keccak256(prunable) ‖ that input's PQC header ‖
-/// keccak256 of every input's hybrid public key, so neither the proof nor
-/// any input's key can be swapped under a standing signature. **Adopted**
-/// from the wire, not re-derived: [`shekyl_wire::PqcSigningPreimage`] is the
-/// one derivation the wallet signs over and the daemon verifies against
-/// (through `shekyl_tx_pqc_signing_payload_hashes`; slice 6 Q7 (c)), and it
-/// is held to the specification's output over eight daemon-accepted shapes
-/// by `shekyl-wire/tests/pqc_signing_preimage_kat.rs`. A second body here
-/// would be the two-sources class the cutover closed.
-///
-/// Recorded as coverage where the hashes are derived, the D4 arrangement:
-/// nothing about a candidate fails a definition, and
-/// `implemented(rules::tx_against::I17)` names this derivation. Stateless —
-/// it reads the transaction alone — but derived here beside I12's anchor
-/// because the two are CEN-I18's and CEN-I15's operands, assembled where
-/// those verification rows run.
-///
-/// The consumer is CEN-I18's signature verification: [`judge_signatures`]
-/// runs the two as one sequence, this row yielding and I18 verifying.
-pub(crate) struct I17;
-
-impl Rule for I17 {
-    const ROW: CenRow = CenRow::I17;
-}
-
-impl I17 {
-    /// Every input's `signed_hash(i)`, in input order, recorded as this row.
-    /// Empty for a body with no `pqc_auths` — the coinbase, and the
-    /// serve-credit form, which CEN-H20 forbids to carry any: that form is
-    /// signed over the pass record instead (CEN-J10), so this row and I18
-    /// are vacuous on it by construction, not by exemption.
-    pub(crate) fn signed_hashes(
-        cx: &TxContext<'_>,
-        coverage: &mut RuleCoverage,
-    ) -> Vec<SigningPayloadHash> {
-        coverage.insert(Self::ROW);
-        cx.tx.pqc_signing_payload_hashes()
-    }
-}
-
-/// CEN-I18: every input's hybrid PQC signature — Ed25519 **and** ML-DSA-65,
-/// or the M-of-N multisig container — verifies over that input's
-/// `signed_hash(i)` (`verify_transaction_pqc_auth`, `tx_pqc_verify.cpp`;
-/// gated at `blockchain.cpp:4277–4285` on every non-coinbase transaction
-/// but the serve credit). The verification body is
-/// [`shekyl_crypto_pq::signature::verify_pqc_auth`], **the same function
-/// the daemon's `shekyl_pqc_verify` and daemon-rpc's K13 call** — scheme
-/// dispatch, the tx-auth domains and the container parse live there once,
-/// so the validator, the daemon and the pool cannot disagree on what a
-/// valid slot is. The slot's structural pins (`auth_version`, `flags`,
-/// scheme id, key-blob length) are CEN-I16's, in `tx_form`.
-///
-/// Refuses at the input whose signature does not verify. Vacuous on the
-/// two classes with no `pqc_auths` by construction — the coinbase, and the
-/// serve-credit form, which CEN-H20 forbids them because its
-/// countersignature is CEN-J10's, over the pass record: I17 yields nothing
-/// there and this row verifies nothing, and neither reaches for J10's
-/// object (`i17_reads_none_of_a_serve_credits_pass_record_…`).
-pub(crate) struct I18;
-
-impl Rule for I18 {
-    const ROW: CenRow = CenRow::I18;
-}
-
-impl I18 {
-    /// Verify `pqc_auths[i]` over `hashes[i]` for every input.
-    ///
-    /// The hashes are I17's, one per auth by construction
-    /// ([`shekyl_wire::Transaction::pqc_signing_payload_hashes`]); a body
-    /// for which I17 yielded none while `pqc_auths` is populated — the
-    /// storage-pruned form, which `tx_form` refuses before this stage and
-    /// the wire never carries — has no message for its signatures to be
-    /// over, and is refused at the transaction rather than silently
-    /// verified over nothing.
-    ///
-    /// The row is recorded only when the check passes, including the
-    /// vacuous non-`Fcmp` arm. A refusal leaves it unrecorded, as
-    /// [`crate::rules::run_tx`] does for a stateless rule.
-    pub(crate) fn check(
-        cx: &TxContext<'_>,
-        hashes: &[SigningPayloadHash],
-        coverage: &mut RuleCoverage,
-    ) -> Verdict<()> {
-        let Ct::Fcmp { pqc_auths, .. } = &cx.tx.ct else {
-            coverage.insert(Self::ROW);
-            return Ok(());
-        };
-        if pqc_auths.len() != hashes.len() {
-            return Err(InvalidBlock::new(Self::ROW, Locus::Tx { slot: cx.slot }));
-        }
-        for (input, (auth, hash)) in pqc_auths.iter().zip(hashes).enumerate() {
-            #[cfg(any(test, feature = "harness"))]
-            probes::count_signature();
-            if verify_pqc_auth(
-                auth.scheme_id,
-                &auth.hybrid_public_key,
-                &auth.hybrid_signature,
-                hash.as_bytes(),
-            )
-            .is_err()
-            {
-                return Err(InvalidBlock::new(
-                    Self::ROW,
-                    Locus::Input {
-                        slot: cx.slot,
-                        input,
-                    },
-                ));
-            }
-        }
-        coverage.insert(Self::ROW);
-        Ok(())
-    }
-}
-
-/// CEN-I17 and CEN-I18 as one sequence: I17 yields every input's signing
-/// hash, I18 verifies each input's signature over it. The D4 arrangement
-/// [`judge_reference`] uses for I10–I12 — the definition row records at
-/// the derivation, the verification row consumes the operand it yielded.
-pub(crate) fn judge_signatures(cx: &TxContext<'_>, coverage: &mut RuleCoverage) -> Verdict<()> {
-    let signed_hashes = I17::signed_hashes(cx, coverage);
-    I18::check(cx, &signed_hashes, coverage)
-}
+pub(crate) use super::proofs::{judge_signatures, I17, I18};
 
 #[cfg(test)]
 #[path = "tx_against_tests.rs"]

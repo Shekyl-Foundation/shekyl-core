@@ -336,7 +336,7 @@ impl Rule for J26 {
 
 /// The rows this sequence records, in order. J26 left it on 2026-10-16:
 /// the fee-input proof reads no chain and runs in `form`
-/// (`tx_against::judge_proofs`), which records it, vacuous or judged.
+/// ([`crate::rules::proofs::judge_proofs`]), which records it, vacuous or judged.
 const CLAIM_ROWS: [CenRow; 2] = [CenRow::J23, CenRow::J25];
 
 /// The emission's view-bound sequence: J23's gathers, J25's verify, then

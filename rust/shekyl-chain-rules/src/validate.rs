@@ -67,9 +67,10 @@ use crate::rules::difficulty::Target;
 use crate::rules::header::{B1, B2, B5, B6};
 use crate::rules::miner::{Emission, F1, F10, F3, F7, F9};
 use crate::rules::pow::{D1, D2};
+use crate::rules::proofs::judge_proofs;
 use crate::rules::reward;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
-use crate::rules::tx_against::{judge_proofs, judge_reference, judge_signatures, I7, L1};
+use crate::rules::tx_against::{judge_reference, judge_signatures, I7, L1};
 use crate::rules::tx_bond::{judge_bond_post, judge_serve_credit_bond};
 use crate::rules::tx_emission::{J19, J20, J22, J24};
 use crate::rules::tx_emission_against::judge_emission_claim;
@@ -541,8 +542,8 @@ pub fn tx_form(tx: &Transaction, slot: TxSlot, _rule_set: &RuleSet) -> Verdict<R
     //    required the shape — the C++ emission arm's byte-only checks, in
     //    its order; `rules::tx_emission`). The cap does not have to precede
     //    the shape rules to bound proof work: `form` runs the H19 batch after
-    //    every slot's `tx_form`, and I15 runs in `validate`, so I4 has
-    //    already refused.
+    //    every slot's `tx_form`, and I15 runs in `form` (`judge_proofs`),
+    //    so I4 has already refused.
     judge_tx!(cx, coverage; H1, H3, H4, H7, I19, I20, H9, H10, H11, H14, H15, H16, H17, H18);
     judge_tx!(cx, coverage; H20, H21, H22);
     rules::run_tx_unrecorded::<H19>(&cx)?;
