@@ -70,7 +70,7 @@ use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_pow_randomx::CacheStore;
 
 /// Which mutations a captured chain can carry (`CHAIN_RULES_SLICE_7.md` §3.7).
-mod census;
+mod corpus_census;
 mod h19_cost;
 mod retired_keyless_join;
 pub(crate) use retired_keyless_join::{retired_keyless_join, UntilRetiredJoin};
