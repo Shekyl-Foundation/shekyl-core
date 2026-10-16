@@ -257,13 +257,7 @@ bool Blockchain::check_fee(size_t tx_weight, uint64_t fee) const
     return false;
   }
 
-  const int32_t rc = shekyl_relay_floor_admits(
-      fee,
-      tx_weight,
-      get_fee_quantization_mask(),
-      floors,
-      n,
-      shekyl_relay_admission_slack_bp());
+  const int32_t rc = shekyl_relay_floor_admits(fee, tx_weight, floors, n);
   if (rc < 0)
   {
     MERROR("shekyl_relay_floor_admits rejected its arguments (rc=" << rc << ")");

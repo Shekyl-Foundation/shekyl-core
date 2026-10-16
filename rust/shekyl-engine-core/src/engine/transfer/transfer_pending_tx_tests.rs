@@ -109,14 +109,11 @@ fn test_ledger() -> LocalLedger {
 }
 
 fn test_fee_estimates() -> FeeEstimates {
-    // mask=1 keeps `FeeRate`'s fee↔weight roundtrip consistent with the
-    // structural predictor's fee varint term under `converge_fee`.
-    let tiny = FeeRate::new(1, 1).expect("tiny test fee rate is non-zero");
+    let tiny = FeeRate::new(1).expect("tiny test fee rate is non-zero");
     FeeEstimates {
         economy: tiny,
         standard: tiny,
         priority: tiny,
-        quantization_mask: 1,
     }
 }
 
@@ -3420,10 +3417,9 @@ fn populate_ledger_scan_only(
 fn daemon_fee_estimates_distinct() -> FeeEstimates {
     // Distinct, monotonic, under the absolute cap.
     FeeEstimates {
-        economy: FeeRate::new(5, 1).expect("economy rate"),
-        standard: FeeRate::new(10, 1).expect("standard rate"),
-        priority: FeeRate::new(40, 1).expect("priority rate"),
-        quantization_mask: 1,
+        economy: FeeRate::new(5).expect("economy rate"),
+        standard: FeeRate::new(10).expect("standard rate"),
+        priority: FeeRate::new(40).expect("priority rate"),
     }
 }
 
@@ -3491,7 +3487,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
         20,
     );
     let request = standard_request(7_000);
-    let rate = FeeRate::new(10, 1).expect("rate");
+    let rate = FeeRate::new(10).expect("rate");
     let fee_directive = build_fee_directive(
         &rate,
         InputCount::clamped(1),

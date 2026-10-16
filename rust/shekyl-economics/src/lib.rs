@@ -53,9 +53,9 @@ pub use escalation::{
 };
 pub use fee::{
     checked_corrected_fee_ladder, checked_relay_fee_floor, corrected_fee_ladder, fee_correction,
-    quantize_pow2_ceil, relay_fee_floor, relay_floor_admits, round_money_up_2, FeeCorrection,
-    FeeLadder, EMISSION_CLAIM_FEE_FLOOR, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_LOOKBACK,
-    RELAY_FLOOR_WINDOW,
+    quantized_fee, relay_fee_floor, relay_floor_admits, FeeCorrection, FeeLadder,
+    EMISSION_CLAIM_FEE_FLOOR, FEE_DECIMAL_PLACES, FEE_QUANTIZATION_MASK, RELAY_ADMISSION_SLACK_BP,
+    RELAY_FLOOR_LOOKBACK, RELAY_FLOOR_WINDOW,
 };
 pub use params::{
     calc_stake_ratio, EconomicParams, EconomicParamsError, BLOCKS_PER_YEAR, CALIBRATION_GENERATION,

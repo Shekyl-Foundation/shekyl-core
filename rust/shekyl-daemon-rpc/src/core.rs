@@ -748,18 +748,17 @@ impl CoreRpc {
     }
 
     /// The dynamic base-fee estimate (`shekyl_rpc_fee_estimate`).
-    pub fn fee_estimate(&self, grace_blocks: u64) -> Result<ffi::FeeEstimateFactsFfi, i32> {
+    pub fn fee_estimate(&self) -> Result<ffi::FeeEstimateFactsFfi, i32> {
         if self.handle.is_null() {
             return Err(ffi::SHEKYL_RPC_FACTS_ERR_NULL);
         }
         let mut pod = ffi::FeeEstimateFactsFfi {
             fees: [0; 3],
-            quantization_mask: 0,
             fee_count: 0,
             reserved: [0; 7],
         };
         // SAFETY: live handle; `pod` is a valid out pointer for the call.
-        let rc = unsafe { ffi::shekyl_rpc_fee_estimate(self.handle, grace_blocks, &raw mut pod) };
+        let rc = unsafe { ffi::shekyl_rpc_fee_estimate(self.handle, &raw mut pod) };
         if rc == ffi::SHEKYL_RPC_FACTS_OK {
             Ok(pod)
         } else {

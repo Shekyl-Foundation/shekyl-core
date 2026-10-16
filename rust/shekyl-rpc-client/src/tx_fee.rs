@@ -3,7 +3,13 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Quantized fee arithmetic over daemon-derived rates (Phase 2a §3.10).
+//! Fee arithmetic over daemon-derived rates (Phase 2a §3.10).
+//!
+//! A fee is `weight × rate` rounded up to the fee lattice, and the lattice
+//! and its rounding are `shekyl-economics`' ([`quantized_fee`],
+//! `FEE_QUANTIZATION_MASK`): the same function relay admission runs, so a
+//! wallet's fee and the daemon's requirement cannot sit on different
+//! lattices.
 //!
 //! Ownership of the dust boundary, precisely (2026-08-16), because
 //! "it moved to engine-core" would be wrong in both directions:
@@ -22,6 +28,8 @@
 //! other exists. The pre-2026-08-16 `MARGINAL_INPUT_WEIGHT` constant
 //! *here* was the thing that moved: a provisional stub with a zero
 //! FCMP proof increment that outlived the KAT meant to replace it.
+
+use shekyl_economics::quantized_fee;
 
 use crate::FeeRate;
 
@@ -47,11 +55,7 @@ pub fn dust_threshold(rate: &FeeRate, marginal_input_weight: usize) -> u64 {
 /// Non-panicking fee from weight. Returns `None` on overflow or unusable weight.
 #[must_use]
 pub fn try_fee_from_weight(rate: &FeeRate, weight: usize) -> Option<u64> {
-    let weight_u64 = u64::try_from(weight).ok()?;
-    rate.per_weight.checked_mul(weight_u64).and_then(|fee| {
-        let aligned = fee.div_ceil(rate.mask);
-        aligned.checked_mul(rate.mask)
-    })
+    quantized_fee(u64::try_from(weight).ok()?, rate.per_weight)
 }
 
 /// Fee from weight for wallet paths that must not panic on daemon-derived rates.
@@ -66,20 +70,29 @@ pub fn fee_from_weight(rate: &FeeRate, weight: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_economics::quantized_fee;
+
     use crate::FeeRate;
 
     #[test]
-    fn fee_from_weight_matches_calculate_for_sane_rates() {
-        let rate = FeeRate::new(10, 1).unwrap();
+    fn the_fee_is_the_rate_times_the_weight_on_the_lattice() {
+        let rate = FeeRate::new(333).unwrap();
+        // 11 097 × 333 = 3 695 301, rounded up to the next 1 000.
+        assert_eq!(fee_from_weight(&rate, 11_097), 3_696_000);
         assert_eq!(
-            fee_from_weight(&rate, 100),
-            rate.calculate_fee_from_weight(100)
+            fee_from_weight(&rate, 11_097),
+            rate.calculate_fee_from_weight(11_097)
+        );
+        assert_eq!(
+            fee_from_weight(&rate, 11_097),
+            shekyl_economics::quantized_fee(11_097, 333).unwrap(),
+            "one arithmetic: the wallet rounds as admission requires"
         );
     }
 
     #[test]
     fn try_fee_from_weight_returns_none_on_overflow() {
-        let rate = FeeRate::new(u64::MAX, 1).unwrap();
+        let rate = FeeRate::new(u64::MAX).unwrap();
         assert!(try_fee_from_weight(&rate, 2).is_none());
         assert_eq!(fee_from_weight(&rate, 2), u64::MAX);
     }

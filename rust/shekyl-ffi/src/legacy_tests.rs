@@ -1188,14 +1188,40 @@ fn corrected_fee_ladder_marshals_the_heritage_vector() {
 }
 
 #[test]
-fn relay_constants_cross_the_abi_from_the_rust_owner() {
+fn the_lookback_crosses_the_abi_from_the_rust_owner() {
     assert_eq!(
         shekyl_relay_floor_lookback(),
         u64::try_from(shekyl_economics::RELAY_FLOOR_LOOKBACK).expect("G fits u64")
     );
+}
+
+/// The admission predicate at the boundary is the crate's: the lattice and
+/// the slack are its own constants, so C++ passes the fee, the weight and
+/// the window and nothing else.
+#[test]
+fn relay_floor_admits_ffi_is_the_crates_predicate_on_the_lattice() {
+    let floors = [333u64, 340, 350];
+    let weight = 11_097u64;
+    // 11 097 × 333 = 3 695 301 → 3 696 000 on the lattice.
+    let needed = shekyl_economics::quantized_fee(weight, 333).expect("fits");
+    assert_eq!(needed, 3_696_000);
+    let admits = |fee: u64| unsafe { shekyl_relay_floor_admits(fee, weight, floors.as_ptr(), 3) };
+    assert_eq!(admits(needed), 1);
+    assert_eq!(admits(needed - 1), 0);
     assert_eq!(
-        shekyl_relay_admission_slack_bp(),
-        shekyl_economics::RELAY_ADMISSION_SLACK_BP
+        admits(weight * 333),
+        0,
+        "the raw product is below the lattice step"
+    );
+    assert_eq!(
+        unsafe { shekyl_relay_floor_admits(u64::MAX, 1, floors.as_ptr(), 7) },
+        -1,
+        "a window longer than G + 1 is refused"
+    );
+    assert_eq!(
+        unsafe { shekyl_relay_floor_admits(u64::MAX, 1, core::ptr::null(), 0) },
+        0,
+        "an empty window refuses"
     );
 }
 

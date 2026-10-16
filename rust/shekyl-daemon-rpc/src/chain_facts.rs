@@ -273,19 +273,9 @@ pub trait ChainFacts: Send + Sync {
         at: BlockLookup,
         fill_pow_hash: bool,
     ) -> Result<BlockHeaderAt, FactsFault>;
-    /// The dynamic base-fee estimate. A `grace_blocks` above
-    /// [`Self::fee_grace_blocks_max`] is refused by the caller first; the
-    /// facts layer refuses it too rather than letting the estimator throw.
-    fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault>;
-    /// The ceiling `grace_blocks` must not exceed.
-    ///
-    /// **On the trait, not a free function reaching into the FFI.** As a free
-    /// function it read the C++ constant directly, which meant the unit-test
-    /// link stub answered 0 and every request was refused under test — the
-    /// refusal test then passed for the wrong reason, asserting a bound it
-    /// had not exercised. Here the production impl still single-sources the
-    /// constant from C++ and a double can state one.
-    fn fee_grace_blocks_max(&self) -> u64;
+    /// The dynamic base-fee estimate: a function of chain state alone
+    /// (FL-R20; `grace_blocks` is deleted, FL-R26).
+    fn fee_estimate(&self) -> Result<FeeEstimate, FactsFault>;
     /// A whole block, named either way. Absence is data ([`BlockAt::block`]
     /// is `None`) for both lookups; the caller knows which it asked for and
     /// so which refusal to produce.
@@ -353,11 +343,10 @@ pub trait P2pFacts: Send + Sync {
     fn p2p_state(&self) -> Result<P2pRead<()>, FactsFault>;
 }
 
-/// The dynamic base-fee estimate: three priced tiers and the quantization mask.
+/// The dynamic base-fee estimate: three priced tiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeeEstimate {
     pub fees: [u64; 3],
-    pub quantization_mask: u64,
 }
 
 /// Throttle counters and the core's start time.
@@ -402,10 +391,7 @@ fn fee_estimate_from_pod(pod: ffi::FeeEstimateFactsFfi) -> Result<FeeEstimate, F
     if usize::from(pod.fee_count) != pod.fees.len() {
         return Err(FactsFault::Inconsistent);
     }
-    Ok(FeeEstimate {
-        fees: pod.fees,
-        quantization_mask: pod.quantization_mask,
-    })
+    Ok(FeeEstimate { fees: pod.fees })
 }
 
 /// One place where a header POD becomes typed facts.
@@ -506,18 +492,8 @@ impl ChainFacts for FfiChainFacts {
         })
     }
 
-    fn fee_grace_blocks_max(&self) -> u64 {
-        // The C++ constant, single-sourced: `CRYPTONOTE_REWARD_BLOCKS_WINDOW`
-        // behind a handle-free export, never restated here.
-        // SAFETY: a compile-time constant, no handle, no allocation.
-        unsafe { ffi::shekyl_rpc_fee_grace_blocks_max() }
-    }
-
-    fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault> {
-        let pod = self
-            .core
-            .fee_estimate(grace_blocks)
-            .map_err(FactsFault::from_code)?;
+    fn fee_estimate(&self) -> Result<FeeEstimate, FactsFault> {
+        let pod = self.core.fee_estimate().map_err(FactsFault::from_code)?;
         fee_estimate_from_pod(pod)
     }
 
@@ -610,13 +586,11 @@ mod tests {
     fn a_fee_pod_that_did_not_write_every_tier_is_inconsistent() {
         let three = ffi::FeeEstimateFactsFfi {
             fees: [1, 2, 3],
-            quantization_mask: 8,
             fee_count: 3,
             reserved: [0; 7],
         };
         let ok = fee_estimate_from_pod(three).expect("three tiers is the contract");
         assert_eq!(ok.fees, [1, 2, 3]);
-        assert_eq!(ok.quantization_mask, 8);
 
         for count in [0, 2, 4] {
             let mut short = three;

@@ -419,12 +419,6 @@ pub extern "C" fn shekyl_relay_floor_lookback() -> u64 {
     shekyl_economics::RELAY_FLOOR_LOOKBACK as u64
 }
 
-/// Admission slack in basis points. Rust is the owner; pinned at zero.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_admission_slack_bp() -> u32 {
-    shekyl_economics::RELAY_ADMISSION_SLACK_BP
-}
-
 /// Three-slot ladder `[economy, standard, priority]`. Economy **is** the
 /// relay floor at the same operands. The penalty-free zone is
 /// [`shekyl_economics::EconomicParams::full_reward_zone`], not an argument.
@@ -499,7 +493,11 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
     0
 }
 
-/// Admit iff `fee >= mask_round_up(weight · min(floors)) − slack`.
+/// Admit iff `fee ≥ quantized_fee(weight, min(floors))`
+/// ([`shekyl_economics::relay_floor_admits`]). The fee lattice
+/// (`FEE_QUANTIZATION_MASK`) and the admission slack
+/// (`RELAY_ADMISSION_SLACK_BP`) are the predicate's own constants; C++
+/// passes what only it holds.
 ///
 /// `floors` is at most [`shekyl_economics::RELAY_FLOOR_WINDOW`] values;
 /// a longer window is refused (`-1`). Empty refuses. Returns `1` / `0` /
@@ -513,10 +511,8 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
 pub unsafe extern "C" fn shekyl_relay_floor_admits(
     fee: u64,
     weight: u64,
-    mask: u64,
     floors: *const u64,
     floors_len: usize,
-    slack_bp: u32,
 ) -> i32 {
     if floors_len > shekyl_economics::RELAY_FLOOR_WINDOW {
         return -1;
@@ -526,9 +522,7 @@ pub unsafe extern "C" fn shekyl_relay_floor_admits(
     let Some(window) = (unsafe { slice_from_typed_ptr(floors, floors_len) }) else {
         return -1;
     };
-    i32::from(shekyl_economics::relay_floor_admits(
-        fee, weight, mask, window, slack_bp,
-    ))
+    i32::from(shekyl_economics::relay_floor_admits(fee, weight, window))
 }
 
 /// Advance `already_generated_coins` by a block reward.

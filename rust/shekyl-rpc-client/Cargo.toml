@@ -55,6 +55,10 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types", default-features = false }
 # Decode edge for `Rpc::get_height` (`HEIGHT_SEMANTICS.md` C2). `no_std`
 # so this crate's aspirational `--no-default-features` path stays open.
 shekyl-types = { path = "../shekyl-types", default-features = false }
+# The fee lattice (`FEE_QUANTIZATION_MASK`, `quantized_fee`): the one
+# rounding a paid fee meets, owned where relay admission reads it. A std
+# crate, like `shekyl-rpc-types` above and for the same reason.
+shekyl-economics = { path = "../shekyl-economics" }
 
 
 [features]

@@ -10,26 +10,6 @@ use super::correction::FeeCorrection;
 use super::relay::{checked_relay_fee_floor, clamped_median};
 use crate::params::{EconomicParams, SCALE};
 
-/// `round_money_up(v, 2)` — round UP to 2 significant decimal digits.
-///
-/// Off the served path (FL-R21). Kept as the production owner of the
-/// rounding rule: wallet cap and the FL instrument import this rather
-/// than carrying a third copy. Saturation is unreachable for any fee
-/// the ladder can emit.
-#[must_use]
-pub fn round_money_up_2(v: u64) -> u64 {
-    if v < 100 {
-        return v;
-    }
-    let mut unit = 1u64;
-    let mut head = v;
-    while head >= 100 {
-        head /= 10;
-        unit *= 10;
-    }
-    v.div_ceil(unit).saturating_mul(unit)
-}
-
 /// Wallet-side emission-claim value floor, atomic units
 /// (`ENGINE_CADENCE_DRIVER.md` §4): hold settled epochs until Σreward
 /// clears this. Genesis economy × claim envelope, rounded up to 3.6 SKL
@@ -310,14 +290,5 @@ mod tests {
             [1, 4, 4],
             "every rung truncates to zero here; the floors must still leave a ladder"
         );
-    }
-
-    #[test]
-    fn round_money_up_two_places_matches_cpp() {
-        assert_eq!(round_money_up_2(0), 0);
-        assert_eq!(round_money_up_2(99), 99);
-        assert_eq!(round_money_up_2(101), 110);
-        assert_eq!(round_money_up_2(27_810), 28_000);
-        assert_eq!(round_money_up_2(13_653_333), 14_000_000);
     }
 }

@@ -373,17 +373,17 @@ uint64_t shekyl_long_term_block_weight(
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
-// Admit iff fee >= mask_round_up(weight * min(floors)) - slack_bp.
+// Admit iff fee >= weight * min(floors) rounded up to the fee lattice
+// (shekyl_economics::FEE_QUANTIZATION_MASK), less the admission slack
+// (RELAY_ADMISSION_SLACK_BP, 0); both are the predicate's own constants.
 // floors is at most shekyl_relay_floor_lookback()+1 values; only the
 // minimum is read. A short window is stricter; empty refuses.
 // Returns 1 admit, 0 refuse, -1 bad pointer/length.
 int32_t shekyl_relay_floor_admits(
     uint64_t fee,
     uint64_t weight,
-    uint64_t mask,
     const uint64_t* floors,
-    size_t floors_len,
-    uint32_t slack_bp);
+    size_t floors_len);
 
 // F = R*C*w_ref/M^2, floored at 1. Same function as the ladder's economy
 // rung. The penalty-free zone is EconomicParams::full_reward_zone, not an
@@ -404,8 +404,6 @@ uint64_t shekyl_fee_correction(
 
 // G — lookback depth. Rust is the owner.
 uint64_t shekyl_relay_floor_lookback(void);
-// Admission slack, basis points. Rust is the owner; pinned at 0.
-uint32_t shekyl_relay_admission_slack_bp(void);
 
 // Three-slot ladder [economy, standard, priority]. Economy is the relay
 // floor at the same operands. The penalty-free zone is

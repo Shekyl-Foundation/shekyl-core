@@ -312,10 +312,9 @@ mod tests {
         // Distinct, monotonic, under the absolute cap. Ceiling
         // refusals live in `fee_policy::tests`.
         ValidatedFeeEstimates::try_new(FeeEstimates {
-            economy: FeeRate::new(5, 1).expect("economy fee rate is non-zero"),
-            standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
-            priority: FeeRate::new(40, 1).expect("priority fee rate is non-zero"),
-            quantization_mask: 1,
+            economy: FeeRate::new(5).expect("economy fee rate is non-zero"),
+            standard: FeeRate::new(10).expect("standard fee rate is non-zero"),
+            priority: FeeRate::new(40).expect("priority fee rate is non-zero"),
         })
         .expect("test fixture is well-formed")
     }
@@ -356,10 +355,9 @@ mod tests {
 
         let daemon = std::sync::Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
         daemon.set_fee_estimates(FeeEstimates {
-            economy: FeeRate::new(5, 1).expect("economy rate"),
-            standard: FeeRate::new(10, 1).expect("standard rate"),
-            priority: FeeRate::new(40, 1).expect("priority rate"),
-            quantization_mask: 1,
+            economy: FeeRate::new(5).expect("economy rate"),
+            standard: FeeRate::new(10).expect("standard rate"),
+            priority: FeeRate::new(40).expect("priority rate"),
         });
 
         let snapshot = DaemonFeeSnapshotSource::from_arc(std::sync::Arc::clone(&daemon))

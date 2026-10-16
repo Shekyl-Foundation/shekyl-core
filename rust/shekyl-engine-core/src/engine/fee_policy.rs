@@ -17,23 +17,17 @@
 //!
 //! 1. **Tier band monotonic** — `economy ≤ standard ≤ priority`. An
 //!    inversion is a defect or a lie, not a market condition.
-//! 2. **Absolute cap on the EFFECTIVE weight-1 charge** — for each
-//!    named tier, `fee_from_weight(rate, 1) ≤`
-//!    [`absolute_fee_rate_cap()`] (a STRUCTURAL bound on the served
-//!    priority rung — every factor at its own extreme, derived from the
-//!    parameters and KAT-pinned. Two earlier
+//! 2. **Absolute cap on the per-weight rate** — for each named tier,
+//!    `per_weight ≤` [`absolute_fee_rate_cap()`]: the exact structural
+//!    maximum of the served priority rung, every factor at its own
+//!    extreme, derived from the parameters and KAT-pinned. Two earlier
 //!    values were caught refusing HONEST quotes: a 100,000 mid-regime
 //!    literal, and a 28,000,000 genesis-point maximum that the reachable
-//!    surface exceeds from year 3 — see [`absolute_fee_rate_cap`]).
-//!    The effective charge, not the raw `per_weight`: every fee is
-//!    rounded UP to a multiple of the daemon-controlled
-//!    `quantization_mask`, so a raw-rate cap is bypassable by mask
-//!    alone (tiers `(1,1,1)` with mask `10^18` would quantize every
-//!    ordinary transaction to `10^18` units). The weight-1 charge is
-//!    `≥ mask` and `≥ per_weight`, so one bound caps both without a
-//!    second policy constant; the marginal per-weight cost stays
-//!    `≤ per_weight ≤` the same bound, and mask rounding adds at most
-//!    one mask unit (`≤` the cap) to any fee, once.
+//!    surface exceeds from year 3 — see [`absolute_fee_rate_cap`]. The
+//!    rate is the whole of what the daemon serves: the lattice a fee is
+//!    rounded up to (`shekyl_economics::FEE_QUANTIZATION_MASK`) is a Rust
+//!    constant the wallet and the daemon share, not a daemon input, so
+//!    there is no daemon-controlled rounding for a cap to bound.
 //!
 //! [`ValidatedFeeEstimates`] is the only constructor. Quote and build
 //! both go through it; Custom band-checks run later, against a snapshot
@@ -41,18 +35,12 @@
 //!
 //! `Custom` is bounded by those two facts and nothing else — at or
 //! above the snapshot's economy floor, at or below the same absolute
-//! cap. It gets no relative ceiling of its own: economy is the market
-//! floor, so an economy multiple cannot separate a user's typo from an
-//! honest top tier, and one anchored on `priority` would be a free
-//! parameter. The floor reads the raw per-weight rate and the ceiling
-//! the effective weight-1 charge — different quantities on purpose,
-//! because "does this undercut economy" and "how much can this cost"
-//! are maximized at opposite ends of the weight range. See
-//! [`CustomFeeBand`].
+//! cap, both read on the per-weight rate. It gets no relative ceiling of
+//! its own: economy is the market floor, so an economy multiple cannot
+//! separate a user's typo from an honest top tier, and one anchored on
+//! `priority` would be a free parameter. See [`CustomFeeBand`].
 
-use core::num::NonZeroU64;
-
-use shekyl_rpc_client::{tx_fee, FeeRate};
+use shekyl_rpc_client::FeeRate;
 
 use super::traits::FeeEstimates;
 
@@ -61,57 +49,50 @@ use super::traits::FeeEstimates;
 /// formula folds in.
 const DYNAMIC_FEE_REFERENCE_TX_WEIGHT: u64 = 3_000;
 
-/// Absolute cap (atomic units) on every named tier's — and `Custom`'s —
-/// **effective weight-1 charge**: the maximum fee an honest daemon can
+/// Absolute cap (atomic units per weight) on every named tier's — and
+/// `Custom`'s — per-weight rate: the maximum fee rate an honest daemon can
 /// legitimately quote over the whole emission era.
 ///
-/// Derived, not hand-picked — and derived as an **upper bound rather
-/// than a located maximum**, which is the correction this row carries.
+/// Derived, not hand-picked — and derived as the exact **structural
+/// maximum**, not a located one. An earlier derivation evaluated the
+/// maximum of a PRODUCT at the maximum of one factor: it took `C = 2` at
+/// genesis because the operand reward `R` peaks there. But `C` GROWS with
+/// age — `σ` decays toward zero and the burn fraction rises with the
+/// supply ratio — while `R` decays only as `remaining >> esf`. The product
+/// therefore peaks in the interior, not at genesis, and the resulting cap
+/// of 28,000,000 was **below honest daemon quotes**: swept over the
+/// reachable age/volume surface the served priority rung passes
+/// 38,000,000 as early as year 3. A wallet on that cap would have refused
+/// a correct quote — a liveness failure, and the expensive direction (PR
+/// #640 review).
 ///
-/// The earlier derivation evaluated the maximum of a PRODUCT at the
-/// maximum of one factor: it took `C_q = 2` at genesis because the
-/// operand reward `R` peaks there. But `C_q` GROWS with age — `σ` decays
-/// toward zero and the burn fraction rises with the supply ratio — while
-/// `R` decays only as `remaining >> esf`. The product therefore peaks in
-/// the interior, not at genesis, and the resulting cap of 28,000,000 was
-/// **below honest daemon quotes**: swept over the reachable age/volume
-/// surface the served priority rung reaches **91,000,000** at ≈ year 7
-/// (`v = 500`, `C_q = 16`, `R ≈ 851.9e9`), and passes 38,000,000 as
-/// early as year 3. A wallet on that cap would have refused a correct
-/// quote — a liveness failure, and the expensive direction (PR #640
-/// review).
-///
-/// So the cap is now a **structural bound that cannot be wrong**, not a
-/// swept maximum that can be re-measured wrong. Every factor is taken at
-/// its own extreme, from the parameters:
+/// So the cap is a **structural bound that cannot be wrong**, not a swept
+/// maximum that can be re-measured wrong. Every factor is taken at its own
+/// extreme, from the parameters:
 ///
 /// ```text
-/// C   = (1−σ)·M_r/(1−b)  ≤  1·release_max/(1−burn_cap)     (σ ⇒ 0)
-/// C_q = 2^ceil(log2 C)                                      (≤ 16 at canonical params)
-///       — bounding device, not the served scalar: C_q ≥ C, so the cap
-///         is an upper bound, loose in the safe direction.
+/// C   = (1−σ)·M_r/(1−b)  ≤  ⌊SCALE·release_max/(SCALE−burn_cap)⌋  (σ ⇒ 0)
+///       — the exact maximum: `fee_correction` is monotone in each of its
+///         clamped operands, so this is its value at the extremes, 13.0
+///         at canonical parameters, with no rounding on top.
 /// R   ≤ base_block_reward(0)                                (monotone in already_generated)
 /// Mfw ≥ Zm
-/// cap = corrected_fee_ladder(R₀, Zm, w_ref, C_q^max).priority
+/// cap = corrected_fee_ladder(R₀, Zm, w_ref, C_max).priority
 /// ```
 ///
 /// This is loose against the reachable maximum by design: a cap exists to
 /// refuse an absurd quote, and refusing an HONEST one dead-letters the
-/// wallet, so soundness beats tightness. `absolute_cap_bounds_the_swept_
-/// reachable_maximum` sweeps the reachable surface and asserts the
-/// measured maximum stays under this bound, so a parameter change that
-/// pushed the reachable peak above it fails loudly rather than silently.
-///
-/// Two tests carry different halves of the guarantee, and the split is
-/// deliberate: `absolute_cap_is_the_structural_bound` pins this value so
-/// a parameter change moves it loudly, while
+/// wallet, so soundness beats tightness. Two tests carry different halves
+/// of the guarantee, and the split is deliberate:
+/// `absolute_cap_is_the_structural_bound` pins this value so a parameter
+/// change moves it loudly, while
 /// `absolute_cap_bounds_the_swept_reachable_maximum` is the one that
-/// matters — it sweeps the reachable surface and fails if an honest
-/// quote ever exceeds the bound. Deliberately NOT
-/// covering `BLOCK_REWARD_OVERESTIMATE` (the daemon's 10,000-SKL
-/// placeholder when its own reward computation fails): a daemon that
-/// just logged an internal error is not a daemon whose quote we pay —
-/// refusing that snapshot is the cap working.
+/// matters — it sweeps the reachable surface and fails if an honest quote
+/// ever exceeds the bound. Deliberately NOT covering
+/// `BLOCK_REWARD_OVERESTIMATE` (the daemon's 10,000-SKL placeholder when
+/// its own reward computation fails): a daemon that just logged an
+/// internal error is not a daemon whose quote we pay — refusing that
+/// snapshot is the cap working.
 ///
 /// `pub` because [`CeilingViolation::bound`] returns it as the
 /// `-29109` wire payload's `bound` field: an RPC consumer reading
@@ -131,14 +112,14 @@ pub fn absolute_fee_rate_cap() -> u64 {
     .priority
 }
 
-/// Largest SCALE-unit multiplier used as a cap bound: raw `C` at
-/// `σ = 0`, `M_r = release_max`, `b = burn_cap`, then the pow2 ceiling.
-/// The served ladder multiplies by raw `C`; the ceiling is kept because
-/// `C_q ≥ C` makes this an upper bound (loose in the safe direction).
+/// The largest SCALE-unit multiplier the served ladder can carry: raw `C`
+/// at `σ = 0`, `M_r = release_max`, `b = burn_cap`. `fee_correction`'s
+/// own expression at its operands' extremes, so this IS the maximum,
+/// not a bound over it.
 fn structural_max_correction(params: &shekyl_economics::params::EconomicParams) -> u64 {
     let scale = u128::from(shekyl_economics::params::SCALE);
     let c_max = scale * u128::from(params.release_max) / (scale - u128::from(params.burn_cap));
-    shekyl_economics::quantize_pow2_ceil(u64::try_from(c_max).expect("C bound fits u64"))
+    u64::try_from(c_max).expect("C bound fits u64")
 }
 
 /// Failures from fee estimation / snapshot validation.
@@ -191,13 +172,10 @@ pub enum CeilingViolation {
         /// Per-weight priority rate.
         priority: u64,
     },
-    /// A named tier's **effective weight-1 quantized charge** exceeds
-    /// [`absolute_fee_rate_cap()`] (the charge includes the
-    /// daemon-controlled mask rounding — see the module docs for why
-    /// the raw rate is not the checked quantity).
-    #[error("tier above the absolute per-weight cap (effective weight-1 charge {rate})")]
+    /// A named tier's per-weight rate exceeds [`absolute_fee_rate_cap()`].
+    #[error("tier above the absolute per-weight cap (rate {rate})")]
     AboveAbsoluteCap {
-        /// Offending effective weight-1 charge (atomic units).
+        /// Offending per-weight rate (atomic units per weight).
         rate: u64,
     },
 }
@@ -272,10 +250,8 @@ pub enum CustomFeeBand {
     /// tier. Not paternalism: below it the transaction does not clear.
     #[error("custom feerate below economy floor")]
     BelowEconomyFloor,
-    /// Effective weight-1 charge above [`absolute_fee_rate_cap()`], on
-    /// the same basis [`ValidatedFeeEstimates`] applies to every named
-    /// tier. A rate that overflows the fee arithmetic is this variant
-    /// too — it is certainly above the cap.
+    /// Per-weight rate above [`absolute_fee_rate_cap()`], the same bound
+    /// [`ValidatedFeeEstimates`] applies to every named tier.
     #[error("custom feerate above the absolute per-weight cap")]
     AboveAbsoluteCap,
 }
@@ -291,11 +267,6 @@ pub enum CustomFeeBand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ValidatedFeeEstimates {
     inner: FeeEstimates,
-    /// The non-zero proof for `inner.quantization_mask`, established
-    /// once in [`Self::try_new`]. Carried rather than re-derived so no
-    /// accessor needs an `expect` (or an unreachable error arm) to hand
-    /// the mask to an infallible [`FeeRate::from_nonzero`].
-    mask: NonZeroU64,
 }
 
 impl ValidatedFeeEstimates {
@@ -303,38 +274,13 @@ impl ValidatedFeeEstimates {
     ///
     /// # Errors
     ///
-    /// [`FeeEstimatorError::DaemonResponseInvalid`] if a named rate's
-    /// mask disagrees with the snapshot mask (or the mask is zero).
     /// [`FeeEstimatorError::DaemonFeeUnreasonable`] if the tier band is
-    /// non-monotonic or any named tier exceeds the absolute cap.
+    /// non-monotonic or any named tier's rate exceeds the absolute cap.
     pub(crate) fn try_new(snapshot: FeeEstimates) -> Result<Self, FeeEstimatorError> {
-        let mask = NonZeroU64::new(snapshot.quantization_mask).ok_or(
-            FeeEstimatorError::DaemonResponseInvalid {
-                reason: "quantization_mask is zero",
-            },
-        )?;
-        for (rate, which) in [
-            (&snapshot.economy, "economy"),
-            (&snapshot.standard, "standard"),
-            (&snapshot.priority, "priority"),
-        ] {
-            if rate.mask() != snapshot.quantization_mask {
-                return Err(FeeEstimatorError::DaemonResponseInvalid {
-                    reason: match which {
-                        "economy" => "economy feerate mask disagrees with snapshot mask",
-                        "standard" => "standard feerate mask disagrees with snapshot mask",
-                        _ => "priority feerate mask disagrees with snapshot mask",
-                    },
-                });
-            }
-        }
-
         let economy = snapshot.economy.per_weight();
         let standard = snapshot.standard.per_weight();
         let priority = snapshot.priority.per_weight();
 
-        // Raw rates for monotonicity: the tiers share one mask, so the
-        // effective ordering follows the raw ordering exactly.
         if economy > standard || standard > priority {
             return Err(FeeEstimatorError::DaemonFeeUnreasonable(
                 CeilingViolation::NonMonotonic {
@@ -344,27 +290,14 @@ impl ValidatedFeeEstimates {
                 },
             ));
         }
-        // EFFECTIVE weight-1 charge for the cap: the mask rounds every
-        // fee up to a mask multiple, so the raw rate alone is
-        // mask-bypassable (module docs). `fee(1) ≥ mask` also bounds
-        // the mask itself under the same constant.
-        for rate in [&snapshot.economy, &snapshot.standard, &snapshot.priority] {
-            // Fail-closed arithmetic: an overflowing weight-1 charge is
-            // represented as `u64::MAX`, which the cap branch refuses as
-            // what it is — a charge above any finite cap (`-29109`) —
-            // rather than a malformed response (`-29102`). Same
-            // disposition as `Custom`'s cap arm.
-            let one = tx_fee::fee_from_weight(rate, 1);
-            if one > absolute_fee_rate_cap() {
-                return Err(FeeEstimatorError::DaemonFeeUnreasonable(
-                    CeilingViolation::AboveAbsoluteCap { rate: one },
-                ));
-            }
+        // The band is monotone, so the priority rate is the largest; one
+        // comparison caps all three.
+        if priority > absolute_fee_rate_cap() {
+            return Err(FeeEstimatorError::DaemonFeeUnreasonable(
+                CeilingViolation::AboveAbsoluteCap { rate: priority },
+            ));
         }
-        Ok(Self {
-            inner: snapshot,
-            mask,
-        })
+        Ok(Self { inner: snapshot })
     }
 
     /// Economy tier.
@@ -384,17 +317,6 @@ impl ValidatedFeeEstimates {
     pub fn priority(self) -> FeeRate {
         self.inner.priority
     }
-
-    /// Snapshot quantization mask (shared by every named tier and by
-    /// `Custom` construction).
-    ///
-    /// [`NonZeroU64`] because the constructor refused a zero mask —
-    /// the proof travels with the value, so `Custom` construction is
-    /// total.
-    #[must_use]
-    pub fn quantization_mask(self) -> NonZeroU64 {
-        self.mask
-    }
 }
 
 #[cfg(test)]
@@ -404,10 +326,9 @@ mod tests {
 
     fn snapshot(e: u64, s: u64, p: u64) -> FeeEstimates {
         FeeEstimates {
-            economy: FeeRate::new(e, 1).expect("economy"),
-            standard: FeeRate::new(s, 1).expect("standard"),
-            priority: FeeRate::new(p, 1).expect("priority"),
-            quantization_mask: 1,
+            economy: FeeRate::new(e).expect("economy"),
+            standard: FeeRate::new(s).expect("standard"),
+            priority: FeeRate::new(p).expect("priority"),
         }
     }
 
@@ -465,71 +386,16 @@ mod tests {
             .expect("the withdrawn 10× lock must not refuse 10.1×");
     }
 
-    /// The finding's vector, pinned: a benign raw rate under an
-    /// enormous daemon-controlled mask must NOT pass — the mask alone
-    /// quantizes every ordinary transaction to one mask unit, which is
-    /// the overpayment the cap exists to refuse. The negative controls
-    /// keep honest small masks (the daemon's real rounding granularity)
-    /// passing at the same raw rates.
+    /// A saturated rate is an over-cap refusal, not a malformed response:
+    /// `u64::MAX` per weight is unambiguously above any finite cap and
+    /// must answer `-29109` (`AboveAbsoluteCap`), never `-29102`.
     #[test]
-    fn absolute_cap_is_on_the_effective_charge_not_the_raw_rate() {
-        let masked = |e: u64, s: u64, p: u64, m: u64| FeeEstimates {
-            economy: FeeRate::new(e, m).expect("economy"),
-            standard: FeeRate::new(s, m).expect("standard"),
-            priority: FeeRate::new(p, m).expect("priority"),
-            quantization_mask: m,
-        };
-
-        // Raw rates of 1 pass a raw-rate cap; the 10^18 mask makes the
-        // effective weight-1 charge 10^18. Refused, with the effective
-        // charge in the wire pair.
-        match ValidatedFeeEstimates::try_new(masked(1, 1, 1, 1_000_000_000_000_000_000)) {
+    fn a_saturated_rate_is_over_cap_not_malformed() {
+        match ValidatedFeeEstimates::try_new(snapshot(u64::MAX, u64::MAX, u64::MAX)) {
             Err(FeeEstimatorError::DaemonFeeUnreasonable(CeilingViolation::AboveAbsoluteCap {
                 rate,
-            })) => {
-                assert_eq!(rate, 1_000_000_000_000_000_000);
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
-
-        // Honest mask (the 2021-scaling daemon's rounding granularity):
-        // same KAT raw rates pass — the fix must not refuse honesty.
-        ValidatedFeeEstimates::try_new(masked(333, 1332, 66_666, 10_000))
-            .expect("KAT row with an honest 10k mask passes");
-
-        // Boundary: mask exactly at the cap with a tiny rate — the
-        // effective charge is exactly the cap, and passes.
-        let cap = absolute_fee_rate_cap();
-        ValidatedFeeEstimates::try_new(masked(1, 1, 1, cap))
-            .expect("effective charge exactly at the cap passes");
-        // One unit above: refused.
-        match ValidatedFeeEstimates::try_new(masked(1, 1, 1, cap + 1)) {
-            Err(FeeEstimatorError::DaemonFeeUnreasonable(CeilingViolation::AboveAbsoluteCap {
-                rate,
-            })) => assert_eq!(rate, cap + 1),
-            other => panic!("unexpected: {other:?}"),
-        }
-    }
-
-    /// The overflow arm is an over-cap refusal, not a malformed
-    /// response: a representable wire value whose weight-1 charge
-    /// overflows the fee arithmetic is unambiguously above any finite
-    /// cap and must answer `-29109` (`AboveAbsoluteCap`, saturated
-    /// rate), never `-29102`.
-    #[test]
-    fn weight_one_overflow_is_over_cap_not_malformed() {
-        let m = 2u64;
-        let big = FeeEstimates {
-            economy: FeeRate::new(u64::MAX, m).expect("economy"),
-            standard: FeeRate::new(u64::MAX, m).expect("standard"),
-            priority: FeeRate::new(u64::MAX, m).expect("priority"),
-            quantization_mask: m,
-        };
-        match ValidatedFeeEstimates::try_new(big) {
-            Err(FeeEstimatorError::DaemonFeeUnreasonable(CeilingViolation::AboveAbsoluteCap {
-                rate,
-            })) => assert_eq!(rate, u64::MAX, "saturated charge rides the wire pair"),
-            other => panic!("overflow must be an over-cap refusal: {other:?}"),
+            })) => assert_eq!(rate, u64::MAX, "the saturated rate rides the wire pair"),
+            other => panic!("a saturated rate must be an over-cap refusal: {other:?}"),
         }
     }
 
@@ -547,22 +413,22 @@ mod tests {
         ValidatedFeeEstimates::try_new(snapshot(cap, cap, cap))
             .expect("exactly the absolute cap is within the ceiling");
     }
-    /// The cap is a STRUCTURAL BOUND (see `absolute_fee_rate_cap`), and
-    /// this pins its value so a parameter change moves it loudly.
+    /// The cap is the STRUCTURAL maximum (see `absolute_fee_rate_cap`),
+    /// and this pins its value so a parameter change moves it loudly.
     #[test]
     fn absolute_cap_is_the_structural_bound() {
-        let cap = absolute_fee_rate_cap();
-        // 109,226,666 = 2·R₀·C_max/(Zm·SCALE) with R₀ = 1,024,000,000,000 (the
-        // design's ESF 22 per block; 218,453,333 at the per-minute
-        // convention's R₀ = 2,048,000,000,000 until 2026-10-04) and
-        // C_max = 16·SCALE. It was 220,000,000 while the served ladder rounded
-        // each rung up to two significant digits; FL-R21 takes
-        // `round_money_up_2` off that path, so the bound is now the
-        // arithmetic's own answer. The cap TIGHTENED, and the swept maximum
-        // below moved down with it, so the soundness margin is unchanged —
-        // which is the property that matters, not the value.
+        let p = shekyl_economics::params::EconomicParams::default();
         assert_eq!(
-            cap, 109_226_666,
+            structural_max_correction(&p),
+            13 * shekyl_economics::params::SCALE,
+            "C_max = ⌊SCALE·release_max/(SCALE−burn_cap)⌋ is exactly 13.0 at canonical params"
+        );
+        // 88,746,666 = ⌊2·R₀·C_max/(Zm·SCALE)⌋ with R₀ = 1,024,000,000,000
+        // (1,024 SKL), C_max = 13·SCALE and Zm = 300,000: the arithmetic's
+        // own answer, no rounding on any factor.
+        assert_eq!(
+            absolute_fee_rate_cap(),
+            88_746_666,
             "economics params moved the structural fee bound"
         );
     }
@@ -680,18 +546,10 @@ mod tests {
     /// first-stake all ride this constructor from block 1.
     #[test]
     fn genesis_condition_snapshots_are_well_formed() {
-        // Raw folded-formula tiers at genesis conditions.
+        // The served tiers at genesis conditions (`C = 1`, `M = Zm`,
+        // `R₀` = 1,024 SKL): `genesis_top_rung_anchors` in
+        // `shekyl-economics` pins the top rung.
         ValidatedFeeEstimates::try_new(snapshot(34_133, 136_533, 6_826_666))
-            .expect("raw genesis-condition tiers are honest and must pass");
-        // Historical genesis quotes remain well-formed numbers — they sit
-        // well under the structural cap rather than on it: the raw tiers
-        // of the per-minute curve (a 2 048-SKL genesis, until 2026-10-04),
-        // and their rounded forms (round_money_up, 2 digits).
-        ValidatedFeeEstimates::try_new(snapshot(68_266, 273_066, 13_653_325))
-            .expect("the per-minute curve's raw genesis tiers are honest and must pass");
-        ValidatedFeeEstimates::try_new(snapshot(69_000, 280_000, 14_000_000))
-            .expect("rounded genesis-condition C_q=1 tiers are honest and must pass");
-        ValidatedFeeEstimates::try_new(snapshot(140_000, 550_000, 28_000_000))
-            .expect("rounded genesis-congested C_q=2 tiers are honest and must pass");
+            .expect("genesis-condition tiers are honest and must pass");
     }
 }
