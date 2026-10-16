@@ -10,6 +10,8 @@
 //! run also holds the switched store to the store that connected the
 //! winning branch directly, every table but the alt table.
 
+#![cfg(test)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
