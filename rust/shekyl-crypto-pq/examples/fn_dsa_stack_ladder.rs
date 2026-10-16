@@ -27,7 +27,9 @@
 //! [`STEP`]-byte steps, a child recurses until only that budget is left
 //! below it and runs the operation there. A child that overflows aborts, so
 //! each budget is its own process; the first budget whose child exits 0 is
-//! the figure. Depths are read from the addresses of locals, which safe
+//! the figure. The probe counts only if it ended in the runtime's
+//! stack-overflow abort, and a rung that fails any other way stops the
+//! ladder rather than counting as too small a budget. Depths are read from the addresses of locals, which safe
 //! code may take and compare but never dereference. A figure is good to
 //! about one step either way: the budgets come in steps, and the probe's
 //! last printed depth leaves some room below it that is not counted, so
@@ -58,8 +60,8 @@
 //!   key's generation is part of (`FND-12`).
 
 use std::hint::black_box;
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, ExitCode, Stdio};
+use std::io::Write;
+use std::process::{Command, ExitCode};
 
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
@@ -121,9 +123,12 @@ fn ladder() -> ExitCode {
         eprintln!("cannot locate this binary to run its children");
         return ExitCode::from(2);
     };
-    let Some(depth) = deepest_frame(&me) else {
-        eprintln!("the probe printed no depth");
-        return ExitCode::FAILURE;
+    let depth = match deepest_frame(&me) {
+        Ok(depth) => depth,
+        Err(why) => {
+            eprintln!("the probe is not usable: {why}");
+            return ExitCode::FAILURE;
+        }
     };
     println!(
         "# deepest frame {depth} bytes below the thread's first, on a {THREAD_STACK}-byte stack"
@@ -135,17 +140,16 @@ fn ladder() -> ExitCode {
             if budget > LAST_BUDGET {
                 break None;
             }
-            // A child that overflows aborts with a signal; its stderr says
-            // so and is dropped here: only the exit status is read.
-            let status = Command::new(&me)
-                .args(["rung", op, &depth.to_string(), &budget.to_string()])
-                .stderr(Stdio::null())
-                .status();
-            match status {
-                Ok(status) if status.success() => break Some(budget),
-                Ok(_) => budget += STEP,
-                Err(error) => {
-                    eprintln!("{op}: cannot start a child: {error}");
+            let rung = run_child(&me, &["rung", op, &depth.to_string(), &budget.to_string()]);
+            match rung {
+                Ok((Ending::Passed, _)) => break Some(budget),
+                Ok((Ending::Overflowed, _)) => budget += STEP,
+                // Anything else is not a verdict on the budget: a setup that
+                // failed, an operation that returned an error, a signal from
+                // elsewhere. Climbing past it would report a need the
+                // operation does not have.
+                Ok((Ending::Other(why), _)) | Err(why) => {
+                    eprintln!("{op} at a {budget}-byte budget ended without a verdict: {why}");
                     return ExitCode::FAILURE;
                 }
             }
@@ -163,23 +167,73 @@ fn ladder() -> ExitCode {
 
 /// Runs the probe child and returns the last depth it printed before it
 /// overflowed.
-fn deepest_frame(me: &std::path::Path) -> Option<usize> {
-    let mut child = Command::new(me)
-        .arg("probe")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let stdout = child.stdout.take()?;
-    let last = BufReader::new(stdout)
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| line.parse::<usize>().ok())
-        .last();
-    // The probe ends by overflowing, so its exit status is that abort and is
-    // not read; a child that cannot be reaped is a failed probe.
-    child.wait().ok()?;
-    last
+fn deepest_frame(me: &std::path::Path) -> Result<usize, String> {
+    let (ending, stdout) = run_child(me, &["probe"])?;
+    // A probe that stopped for any reason but running out of stack reports a
+    // shallower depth than the thread has, so every rung would leave more
+    // stack than its budget and the ladder would understate every need.
+    match ending {
+        Ending::Overflowed => {}
+        Ending::Passed => return Err("it returned instead of overflowing".into()),
+        Ending::Other(why) => return Err(why),
+    }
+    let text = String::from_utf8(stdout).map_err(|_| "its output is not text".to_string())?;
+    let mut last = None;
+    for line in text.lines() {
+        let depth = line
+            .parse::<usize>()
+            .map_err(|_| format!("it printed {line:?}, which is not a depth"))?;
+        last = Some(depth);
+    }
+    last.ok_or_else(|| "it printed no depth".to_string())
+}
+
+/// How a child ended.
+enum Ending {
+    /// Exit status 0.
+    Passed,
+    /// The Rust runtime's stack-overflow abort: its message on stderr and,
+    /// on Unix, the abort signal.
+    Overflowed,
+    /// Anything else, with what was seen.
+    Other(String),
+}
+
+/// `SIGABRT`, which the Rust runtime raises after reporting an overflow.
+/// Its value is 6 on every Unix this tool is run on.
+#[cfg(unix)]
+const SIGABRT: i32 = 6;
+
+/// The marker the Rust runtime writes to stderr when a thread overflows its
+/// stack, before it aborts.
+const OVERFLOW_MARKER: &str = "has overflowed its stack";
+
+/// Run this binary with `args` and say how it ended, with its stdout.
+fn run_child(me: &std::path::Path, args: &[&str]) -> Result<(Ending, Vec<u8>), String> {
+    let output = Command::new(me)
+        .args(args)
+        .output()
+        .map_err(|error| format!("cannot start a child: {error}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let ending = if output.status.success() {
+        Ending::Passed
+    } else if stderr.contains(OVERFLOW_MARKER) && aborted(&output.status) {
+        Ending::Overflowed
+    } else {
+        Ending::Other(format!("{}; stderr: {}", output.status, stderr.trim()))
+    };
+    Ok((ending, output.stdout))
+}
+
+#[cfg(unix)]
+fn aborted(status: &std::process::ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt as _;
+    status.signal() == Some(SIGABRT)
+}
+
+#[cfg(not(unix))]
+fn aborted(status: &std::process::ExitStatus) -> bool {
+    !status.success()
 }
 
 /// The probe child: recurse until the stack runs out, printing each frame's
@@ -204,8 +258,9 @@ fn descend(top: usize, out: &mut impl Write) {
     let pad = [0_u8; BURN_FRAME];
     let here = address_of(black_box(&pad));
     let depth = top.saturating_sub(here);
-    // A write that fails ends the probe early; the ladder then has a
-    // shallower depth and reports larger budgets, never smaller.
+    // A write that fails ends the probe without an overflow, and the ladder
+    // refuses a probe that did not overflow: a shallower depth would leave
+    // every rung more stack than its budget.
     if writeln!(out, "{depth}").and_then(|()| out.flush()).is_err() || depth > THREAD_STACK {
         return;
     }
