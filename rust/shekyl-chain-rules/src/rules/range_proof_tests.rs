@@ -270,11 +270,13 @@ fn a_block_short_of_its_proof_of_work_is_refused_before_the_batch_runs() {
     let chain = crate::harness::fixture::spendable_chain();
     let claim = expected_target(&chain, &seven);
     assert_eq!(claim.difficulty().to_raw(), 7);
+    // Signed: the signature sequence runs in `form` ahead of the batch
+    // (2026-10-16), and a body it refuses never reaches it.
     let block = || {
         crate::harness::fixture::candidate_on(
             &chain,
-            vec![crate::harness::fixture::listed(
-                crate::harness::fixture::point(1),
+            vec![crate::harness::fixture::signed(
+                crate::harness::fixture::listed(crate::harness::fixture::point(1)),
             )],
         )
     };
@@ -286,6 +288,7 @@ fn a_block_short_of_its_proof_of_work_is_refused_before_the_batch_runs() {
             substrate,
             crate::harness::expected_seed(&chain),
             claim,
+            &crate::block::ReferenceClaims::EMPTY,
             FormAttempt::FIRST,
         ) {
             Ok(verdict) => verdict.map(|_formed| ()),
@@ -335,13 +338,22 @@ fn form_refuses_a_bad_range_proof_with_no_view_in_scope() {
         prunable.bulletproofs = vec![BpPlus::from_bytes(&bytes).expect("a wire Bp+")];
     }
     // Distinct bodies: the good one keeps its proof, the bad one is broken.
+    // Both signed **after** the edit: the signing preimage binds the
+    // prunable region (CEN-I17), and I18 runs in `form` ahead of the batch
+    // (2026-10-16), so a bad proof under a stale signature is I18's
+    // refusal, not H19's — this fixture is singly invalid.
     good.prefix.unlock_time = 0;
+    let (good, bad) = (
+        crate::harness::fixture::signed(good),
+        crate::harness::fixture::signed(bad),
+    );
     let verdict = match crate::validate::form(
         candidate(vec![good, bad]),
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         BlockHash::NULL,
         expected_target(&MockChain::default(), &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     ) {
         Ok(verdict) => verdict.map(|_formed| ()),

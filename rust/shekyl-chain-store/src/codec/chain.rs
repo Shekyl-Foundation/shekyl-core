@@ -150,6 +150,55 @@ impl Canonical for BlockInfo {
     }
 }
 
+/// `block_pow[h]` and the alt row's PoW field — the proof-of-work hash this
+/// node computed for a block under the seed it was claimed under, and that
+/// the verdict carrying it accepted (`ProvenPow`; `DRS_E5_POOL_ALT_PRUNE.md`
+/// 2026-10-15 ruling 3). A derived fact recorded beside the block, as its
+/// cumulative difficulty is, so a switch re-judges a block this node already
+/// hashed without hashing it again. 64 bytes: `seed ‖ pow`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordedPow {
+    /// The seed the hash was computed under (CEN-D3).
+    pub seed: BlockHash,
+    /// RandomX over the block's PoW preimage under `seed` (CEN-D2).
+    pub pow: shekyl_types::PowHash,
+}
+
+impl RecordedPow {
+    /// The row for a verdict's PoW.
+    #[must_use]
+    pub const fn of(proven: shekyl_chain_rules::ProvenPow) -> Self {
+        Self {
+            seed: proven.seed(),
+            pow: proven.pow(),
+        }
+    }
+
+    /// The row read back, as the rules crate's value.
+    #[must_use]
+    pub const fn proven(self) -> shekyl_chain_rules::ProvenPow {
+        shekyl_chain_rules::ProvenPow::recorded(self.seed, self.pow)
+    }
+}
+
+impl Canonical for RecordedPow {
+    const NAME: &'static str = "recorded_pow";
+    const FIXED_WIDTH: Option<usize> = Some(64);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.seed.as_bytes());
+        out.extend_from_slice(self.pow.as_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let b = exact::<64>(Self::NAME, bytes)?;
+        Ok(Self {
+            seed: BlockHash::from_bytes(b[0..32].try_into().expect("32-byte slice")),
+            pow: shekyl_types::PowHash::from_bytes(b[32..64].try_into().expect("32-byte slice")),
+        })
+    }
+}
+
 /// `tx_indices[tx_hash]` — LMDB `txindex` minus the hash (`tx_data_t`), 24 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TxIndex {

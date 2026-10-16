@@ -12,6 +12,7 @@
 use super::*;
 use crate::block::Candidate;
 use crate::fault::{Corrupt, FormAttempt};
+use crate::harness::expected_references;
 use crate::harness::fixture::{candidate_on, recorded, root};
 use crate::harness::{
     assert_refused, boundary_pair, expected_seed, expected_target, formed_on, judged, Faulted,
@@ -56,6 +57,7 @@ fn candidate_at(chain: &MockChain, timestamp: u64) -> Candidate {
 
 /// Both stages over `chain` with the substrate's clock at `clock`.
 fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> {
+    let references = expected_references(chain, &candidate);
     let substrate = MockSubstrate {
         clock: Timestamp::from_raw(clock),
         ..MockSubstrate::default()
@@ -66,6 +68,7 @@ fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> 
         &substrate,
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -85,6 +88,7 @@ fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> 
 
 /// One rule alone, with the window C3 derives for `chain`.
 fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> {
+    let references = expected_references(chain, &candidate);
     let substrate = MockSubstrate {
         clock: Timestamp::from_raw(clock),
         ..MockSubstrate::default()
@@ -95,6 +99,7 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
         &substrate,
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -366,6 +371,7 @@ fn at_genesis_all_three_rows_record_as_applied_and_refuse_nothing() {
         &substrate,
         BlockHash::NULL,
         expected_target(&chain, &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     )
     .expect("no fault")

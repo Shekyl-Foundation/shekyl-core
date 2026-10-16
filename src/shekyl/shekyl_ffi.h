@@ -3023,7 +3023,8 @@ int32_t shekyl_difficulty_lwma1_next(
 /// The fork-choice comparison (C2-R1b-Q1a): strictly greater cumulative
 /// difficulty switches, equality keeps the incumbent, an operator-
 /// checkpoint match forces the switch. Writes
-/// `SHEKYL_FORK_CHOICE_KEEP_CURRENT` or `SHEKYL_FORK_CHOICE_SWITCH` to
+/// `SHEKYL_FORK_CHOICE_KEEP_CURRENT`, `SHEKYL_FORK_CHOICE_SWITCH` or
+/// `SHEKYL_FORK_CHOICE_FORCED_SWITCH` to
 /// `*out_verdict`; returns 0 on success or
 /// `SHEKYL_DIFFICULTY_ERR_NULL_PTR`.
 int32_t shekyl_difficulty_fork_choice(
@@ -4237,6 +4238,9 @@ struct ShekylOwnedBuffer {
 #define SHEKYL_FORK_CHOICE_KEEP_CURRENT      INT32_C(0)
 /// `shekyl_difficulty_fork_choice`: reorganize onto the alternative.
 #define SHEKYL_FORK_CHOICE_SWITCH            INT32_C(1)
+/// `shekyl_difficulty_fork_choice`: reorganize onto the alternative because
+/// a checkpoint names it; the demoted blocks are discarded (CEN-K7).
+#define SHEKYL_FORK_CHOICE_FORCED_SWITCH     INT32_C(2)
 
 /// `shekyl_pow_randomx_v2_hash` wrote `*out_hash`, or
 /// `shekyl_pow_randomx_v2_set_canonical` pinned the seedhash.

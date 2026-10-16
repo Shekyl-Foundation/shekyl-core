@@ -46,6 +46,10 @@ pub(super) fn alt(height: BlockHeight, block: &[u8], witness: Option<Vec<u8>>) -
             height,
             block_weight: BlockWeight::from_raw(300 + raw),
             cumulative_difficulty: CumulativeDifficulty::from_raw(1_000 + u128::from(raw)),
+            pow: crate::codec::RecordedPow {
+                seed: shekyl_types::BlockHash::NULL,
+                pow: shekyl_types::PowHash::from_bytes([0; 32]),
+            },
         },
         block,
         witness,
@@ -85,7 +89,11 @@ pub(super) fn side_candidate(
     previous: BlockHash,
     key_image: usize,
 ) -> Candidate {
-    let filler = fixture::spend(fixture::point(key_image), 2);
+    // Signed: `form` runs the signature sequence at every listed slot
+    // (2026-10-16); the filler's proof is unverified here (no reference
+    // claim at offer) and refused at promotion, which these tests never
+    // reach.
+    let filler = fixture::signed(fixture::spend(fixture::point(key_image), 2));
     candidate(height.to_raw(), previous, vec![filler])
 }
 
