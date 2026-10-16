@@ -57,6 +57,7 @@ LOCKED = {
 NO_TOR = "the crate cannot reach shekyl-tor-control-client"
 
 EXEMPT = {
+    "shekyl-crypto-pq/examples/fn_dsa_stack_ladder.rs": NO_TOR,
     "shekyl-levin/tests/dual_stack.rs": NO_TOR,
     "shekyl-levin/tests/inbound_cost_bench.rs": NO_TOR,
     "shekyl-logging/tests/c_ffi.rs": NO_TOR,
