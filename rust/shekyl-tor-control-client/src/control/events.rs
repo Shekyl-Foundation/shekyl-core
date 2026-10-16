@@ -26,7 +26,7 @@
 //!
 //! **No keyword is read from inside a quoted value.** `SUMMARY="… PROGRESS=99 …"` and
 //! `WARNING="… REASON=…"` carry free text, which tor fills from relay names and error
-//! strings. The lexer ([`super::event_lex`]) splits on spaces outside quotes and recognises `KEY=` only at
+//! strings. The lexer splits on spaces outside quotes and recognises `KEY=` only at
 //! the start of a token, so a keyword planted inside a quoted value is part of that
 //! value. This is the rule [`bootstrap`](super::bootstrap) states for its own poll.
 

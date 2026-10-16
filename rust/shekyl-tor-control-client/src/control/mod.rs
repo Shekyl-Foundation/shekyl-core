@@ -30,8 +30,9 @@
 //! [`encoding`] holds the byte↔text conversions the wire needs — uppercase hex
 //! and base64 — once, so a codec correction cannot land on one call site and
 //! miss its counterpart.
-//! [`events`] parses one asynchronous `650` line, and [`event_lex`] is the
-//! quoted-field lexer it reads with. [`upload_rounds`] is the supervisor's
+//! [`events`] parses one asynchronous `650` line. The quoted-field lexer it
+//! reads with stays private to this module: a keyword counts only at the start
+//! of a token, before any quote is opened. [`upload_rounds`] is the supervisor's
 //! policy over parsed `HS_DESC` events (`TSR-Q5`). Nothing in production sends
 //! `SETEVENTS` yet; the policy stays because the later increments are its caller.
 
