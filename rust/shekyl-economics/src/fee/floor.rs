@@ -1,0 +1,259 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The relay floor and the served ladder from one block's operands: the
+//! one composition of `σ`, `b`, `C`, `R` and `F`.
+//!
+//! `FEE_LADDER_DERIVATION.md` §11.6 ("economics" item) and PR C §6. The
+//! daemon's estimate and its relay floor used to be composed in C++
+//! (`relay_floor_at` / `fee_correction_from` in `relay_floor_ring.cpp`)
+//! out of four Rust calls, and that composition priced the burn on
+//! **gross** `already_generated_coins` where the validator prices it on
+//! the **net** circulating supply (FL-R16c): the floor's `b`, and so its
+//! `C`, differed from what the miner is paid as soon as anything had
+//! burned, and the FL-V1 identity was broken in the C++. Here there is
+//! one composition, and its supply operand is the validator's
+//! [`CirculatingSupply`].
+//!
+//! The operands are a block's chain state: its height, the parent's gross
+//! emission, the derived circulating supply, the volume window and the
+//! long-term effective median in force for it. `shekyl-chain-rules`
+//! reads them off a `ChainView` (`relay_floor_at`, `relay_floor_window`);
+//! this module does not know where they came from.
+
+use super::correction::{fee_correction, FeeCorrection};
+use super::ladder::{checked_corrected_fee_ladder, FeeLadder};
+use super::relay::checked_relay_fee_floor;
+use crate::burn::calc_burn_pct_at;
+use crate::emission::base_block_reward;
+use crate::emission_share::emission_share_at;
+use crate::params::EconomicParams;
+use crate::supply::CirculatingSupply;
+use crate::volume::TxVolume;
+
+/// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT`: the reference transaction
+/// weight the floor and every rung fold in. The basis question (FL-R13,
+/// `w_ref`) is EUP-5 G's; until it is derived, this is the inherited
+/// 3 000.
+pub const RELAY_FLOOR_REFERENCE_TX_WEIGHT: u64 = 3_000;
+
+/// One block's fee operands: the chain state the floor and the ladder at
+/// that block are a function of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeeOperands {
+    /// The block's height — `σ`'s operand (`emission_share_at`).
+    pub height: u64,
+    /// The parent's gross emission (`block_info.coins_generated` at
+    /// `height − 1`; zero at genesis) — `R`'s operand.
+    pub parent_coins_generated: u64,
+    /// The circulating supply at parent state — `b`'s operand, derived by
+    /// its one owner and never a caller's choice of numerator (FL-R16c).
+    pub supply: CirculatingSupply,
+    /// CEN-F20's volume window at the block — `M_r`'s and `b`'s operand.
+    pub tx_volume: TxVolume,
+    /// The long-term effective median in force for the block — `M`.
+    pub long_term_effective_median: u64,
+}
+
+/// Raw `C` at the operands: `(1−σ)·M_r/(1−b)` with `σ` at the height,
+/// `b` on the derived supply, `M_r` on the window.
+#[must_use]
+pub fn fee_correction_at(operands: FeeOperands, params: &EconomicParams) -> FeeCorrection {
+    let sigma = emission_share_at(operands.height);
+    let burn = calc_burn_pct_at(operands.tx_volume, operands.supply, params);
+    fee_correction(operands.tx_volume, sigma, burn, params)
+}
+
+/// The M_r-neutral base reward at the operands: `max(curve(remaining),
+/// TAIL)` on the parent's accumulator (FL-R12′). `M_r` lives inside `C`.
+/// `None` only when the parameters cannot price the tail.
+fn base_reward_at(operands: FeeOperands, params: &EconomicParams) -> Option<u64> {
+    base_block_reward(operands.parent_coins_generated, params).ok()
+}
+
+/// The relay floor at the operands: `F = R·C·w_ref/M²`, floored at 1
+/// ([`checked_relay_fee_floor`]). `None` when the parameters cannot price
+/// the tail or the scalars leave the `u128` domain.
+#[must_use]
+pub fn relay_floor_from(operands: FeeOperands, params: &EconomicParams) -> Option<u64> {
+    checked_relay_fee_floor(
+        base_reward_at(operands, params)?,
+        operands.long_term_effective_median,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        fee_correction_at(operands, params),
+        params,
+    )
+}
+
+/// The served three-rung ladder at the same operands. Its economy rung
+/// is [`relay_floor_from`]'s value by construction (FL-R6): one
+/// derivation serves the quote and admits against it.
+#[must_use]
+pub fn fee_ladder_from(operands: FeeOperands, params: &EconomicParams) -> Option<FeeLadder> {
+    checked_corrected_fee_ladder(
+        base_reward_at(operands, params)?,
+        operands.long_term_effective_median,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        fee_correction_at(operands, params),
+        params,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::emission::{projected_already_generated, tail_subsidy_per_block};
+    use crate::params::{BLOCKS_PER_YEAR, FULL_REWARD_ZONE, SCALE};
+    use shekyl_units::AtomicUnits;
+
+    fn operands(
+        height: u64,
+        parent_coins: u64,
+        burned: u64,
+        tx_volume: TxVolume,
+        median: u64,
+    ) -> FeeOperands {
+        FeeOperands {
+            height,
+            parent_coins_generated: parent_coins,
+            supply: CirculatingSupply::derive(
+                AtomicUnits::from_raw(parent_coins),
+                AtomicUnits::from_raw(burned),
+            )
+            .expect("burned ≤ generated"),
+            tx_volume,
+            long_term_effective_median: median,
+        }
+    }
+
+    /// The §1.8 grid: the registered ages on the projected trajectory, at
+    /// the registered volumes and medians, `C` raw. Pinned from the code;
+    /// a parameter change moves these loudly.
+    #[test]
+    fn the_floor_at_the_registered_grid() {
+        let p = EconomicParams::default();
+        let zone = FULL_REWARD_ZONE;
+        let at = |age: u64, v: u64, median: u64| {
+            let height = age * BLOCKS_PER_YEAR;
+            let ag = projected_already_generated(height, &p).expect("projected");
+            relay_floor_from(operands(height, ag, 0, TxVolume::per_block(v), median), &p)
+                .expect("priced")
+        };
+        // Genesis: σ = 0, R₀ = 1 024 SKL, C = 1 at the baseline, so
+        // F = R₀·w_ref/Zm² = 34 133.
+        assert_eq!(at(0, 50, zone), 34_133);
+        // Genesis, quiet: M_r at its low rail, C = 0.8.
+        assert_eq!(at(0, 0, zone), 27_306);
+        // Year 1 congested (v = 200), year 12 quiet (v = 5), year 12
+        // congested at 3·Zm, year 30 at 10·Zm and v = 500 — the
+        // `--fee-ladder` rung tables' economy rungs.
+        assert_eq!(at(1, 200, zone), 38_382);
+        assert_eq!(at(12, 5, zone), 13_453);
+        assert_eq!(at(12, 200, 3 * zone), 4_721);
+        assert_eq!(at(30, 500, 10 * zone), 672);
+    }
+
+    /// The §4.6 degenerates: the tail, a median at and above the zone,
+    /// and the `max(1)` floor.
+    #[test]
+    fn the_floor_at_the_degenerates() {
+        let p = EconomicParams::default();
+        let s = p.emission_curve_asymptote;
+        let tail = tail_subsidy_per_block(&p).expect("tail");
+        let height = 80 * BLOCKS_PER_YEAR;
+        // At exhaustion R is the tail; at the baseline C < 1 only through
+        // σ and b, and the floor is 20 atomic/byte at the zone.
+        let at_tail = relay_floor_from(
+            operands(height, s, 0, TxVolume::per_block(50), FULL_REWARD_ZONE),
+            &p,
+        )
+        .expect("priced");
+        assert!(
+            at_tail
+                <= tail * RELAY_FLOOR_REFERENCE_TX_WEIGHT / (FULL_REWARD_ZONE * FULL_REWARD_ZONE)
+                    * 2
+        );
+        assert!(at_tail >= 1);
+        // A median wide enough truncates to the `max(1)` floor.
+        assert_eq!(
+            relay_floor_from(
+                operands(
+                    height,
+                    s,
+                    0,
+                    TxVolume::per_block(50),
+                    100_000 * FULL_REWARD_ZONE
+                ),
+                &p,
+            ),
+            Some(1)
+        );
+        // A median below the zone is floored to it.
+        assert_eq!(
+            relay_floor_from(operands(0, 0, 0, TxVolume::per_block(50), 1), &p),
+            relay_floor_from(
+                operands(0, 0, 0, TxVolume::per_block(50), FULL_REWARD_ZONE),
+                &p
+            ),
+        );
+    }
+
+    /// The economy rung is the floor at the same operands: one derivation
+    /// serves and admits (FL-R6 as an identity).
+    #[test]
+    fn the_ladders_economy_rung_is_the_floor() {
+        let p = EconomicParams::default();
+        for (age, v, median, burned_permille) in [
+            (0u64, 50u64, FULL_REWARD_ZONE, 0u64),
+            (4, 200, 3 * FULL_REWARD_ZONE, 5),
+            (12, 5, FULL_REWARD_ZONE, 50),
+            (30, 500, 10 * FULL_REWARD_ZONE, 100),
+        ] {
+            let height = age * BLOCKS_PER_YEAR;
+            let ag = projected_already_generated(height, &p).expect("projected");
+            let ops = operands(
+                height,
+                ag,
+                ag / 1000 * burned_permille,
+                TxVolume::per_block(v),
+                median,
+            );
+            let ladder = fee_ladder_from(ops, &p).expect("priced");
+            assert_eq!(Some(ladder.economy), relay_floor_from(ops, &p));
+            assert_eq!(ladder.standard, 4 * ladder.economy);
+        }
+    }
+
+    /// The supply operand is the NET supply: a burned total lowers `b`
+    /// and so raises `C` and the floor, where the gross operand the C++
+    /// composition used would have left both where they were (FL-R16c).
+    #[test]
+    fn the_burn_is_priced_on_the_net_supply() {
+        let p = EconomicParams::default();
+        let height = 12 * BLOCKS_PER_YEAR;
+        let ag = projected_already_generated(height, &p).expect("projected");
+        let volume = TxVolume::per_block(200);
+        let gross = operands(height, ag, 0, volume, FULL_REWARD_ZONE);
+        let net = operands(height, ag, ag / 10, volume, FULL_REWARD_ZONE);
+        let c_gross = fee_correction_at(gross, &p);
+        let c_net = fee_correction_at(net, &p);
+        assert!(
+            c_net < c_gross,
+            "a tenth of the emission burned lowers the burn ratio's operand, so b falls and C with it"
+        );
+        assert!(relay_floor_from(net, &p) < relay_floor_from(gross, &p));
+        // And `C` at a zero burn is the raw scalar the sim and the FFI
+        // compute from the same three inputs.
+        assert_eq!(
+            c_gross,
+            fee_correction(
+                volume,
+                emission_share_at(height),
+                calc_burn_pct_at(volume, gross.supply, &p).min(SCALE),
+                &p
+            )
+        );
+    }
+}

@@ -258,6 +258,18 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Self::Fault> {
             Ok(shekyl_units::AtomicUnits::ZERO)
         }
+        fn long_term_effective_median_at(
+            &self,
+            _: shekyl_types::BlockHeight,
+        ) -> Result<AtHeight<shekyl_types::LongTermWeight>, Self::Fault> {
+            Ok(AtHeight::AboveTip)
+        }
+        fn burned_through(
+            &self,
+            _: shekyl_types::BlockHeight,
+        ) -> Result<AtHeight<shekyl_units::AtomicUnits>, Self::Fault> {
+            Ok(AtHeight::AboveTip)
+        }
         // No bonds: the honest empty archival state (DRS-E4 §5.2).
         crate::archival_reads!(empty);
     }

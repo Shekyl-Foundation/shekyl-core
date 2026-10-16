@@ -73,6 +73,7 @@ use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_pow_randomx::CacheStore;
 
 mod h19_cost;
+mod relay_floor;
 mod retired_keyless_join;
 pub(crate) use retired_keyless_join::{retired_keyless_join, UntilRetiredJoin};
 
@@ -285,6 +286,24 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + std::fmt::Debug + 'static,
 {
+    let (report, path, _) = replay_keeping_store(dir, manifest, substrate, policy).await;
+    cleanup(&path);
+    report
+}
+
+/// [`replay_under`] without the cleanup: the replayed store stays at the
+/// returned path, under the returned rules, for a test that reads the
+/// chain the run connected (`relay_floor.rs`). The caller removes it.
+pub(crate) async fn replay_keeping_store<S>(
+    dir: &Path,
+    manifest: &Manifest,
+    substrate: Arc<S>,
+    policy: ApplyPolicy,
+) -> (Result<RunReport, String>, PathBuf, ChainRules)
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: Send + std::fmt::Debug + 'static,
+{
     let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
     let trace = std::fs::read(dir.join("trace.e2")).expect("read trace.e2");
     let mut source = UntilRetiredJoin::new(
@@ -331,11 +350,10 @@ where
     )
     .await
     .map_err(|e| format!("{e:?}"));
-    cleanup(&path);
     if report.is_ok() {
         source.finish(&manifest.shape);
     }
-    report
+    (report, path, rules)
 }
 
 /// A path-safe spelling of the policy, so two replays of one chain under
