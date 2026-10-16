@@ -190,10 +190,9 @@ of its own, for the same reason as the negative one.
   call carries its listener's posture as one of two origins
   (`core_rpc_ffi.cpp`, `rpc_origin`), `caller_is_restricted` reads the
   origin, and Rust's `served_routes` gates the route before the bridge is
-  reached. The posture must ride with the call: the (f1) run of the
-  two-daemon origin gate found the three bridged pool routes answering
-  the view listener as the admin's when the server's member stood in for
-  it. `rpc_args.{h,cpp}` and the dead RPC scorer
+  reached. The posture rides with the call because one server answers
+  both listeners: a posture held by the server is the admin's for every
+  caller. `rpc_args.{h,cpp}` and the dead RPC scorer
   (`add_host_fail`, `disable_rpc_ban`, `RPC_IP_FAILS_BEFORE_BLOCK`) go
   with it: deleting `rpc_args` leaves the scorer's one input a constant.
 - **One stop path, from the remnant too.** Rust holds the RPC handle, so
@@ -419,6 +418,39 @@ of its own, for the same reason as the negative one.
   wallet CLI's daemon-down hint names `shekyld --network testnet`. Not
   run here: the fleet launcher (it addresses the Foundation's hosts) and
   the BA-T5 sessions (they measure on a testnet peer).
+- **The option documentation is the table's (commit (f2), §5.3, IG-9).**
+  `shekyl-daemon-config`'s `docs` module renders two fragments from the
+  table, the option table every public row with its kind, default,
+  surface, runtime mark and help, and an annotated TOML example of every
+  file row, each line commented so the example is the defaults; both are
+  committed under `docs/generated/` and a test holds the committed text
+  equal to the rendering (regenerated on purpose by an ignored test). A
+  second test uncomments the example and parses every value with its
+  row's kind. `scripts/ci/check_daemon_option_docs.py` holds
+  `EXECUTABLES.md` and `USER_GUIDE.md` equal to the fragments between
+  markers and refuses a `shekyld` flag in the listed guides that is not a
+  row; the development rows ride in the table's HTML comment so a
+  regtest guide may name `dev-difficulty` while `--help` does not. The
+  two guides' hand-written option tables, the background-mining and
+  Tor passages and the network table are replaced by the fragments and
+  the grammar's spellings; `SHEKYLD_PREREQUISITES.md`'s regtest
+  invocation follows.
+- **The recipe gate (commit (f2), §5.2, DC-Q8).**
+  `scripts/ci/check_launch_recipes.py` reads the shipped unit and the
+  fleet's two units and generators: every flag an `ExecStart` passes is a
+  row the command line accepts, a unit's `--data-dir` is
+  `/var/lib/<StateDirectory>` and its `--log-file` sits under
+  `/var/log/<LogsDirectory>`, every key a generator writes into a node's
+  file is a row the file accepts, and the generators' default roots are
+  the fleet units' directories. Bitten on the shipped unit with
+  `--non-interactive` restored to its `ExecStart`.
+- **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
+  covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
+  the other direction (the `extern "C"` block of
+  `shekyl-daemon-rpc/src/ffi.rs` against the headers under `src/`),
+  comparing arity and type classes, with test-module link stubs not
+  counted as exports. It was bitten on the posture parameter the one RPC
+  start needed.
 - **A test for every §6 row.** Commit (a) carries a table from each §6 row
   to its test. A row that only Windows can exercise names where it runs:
   the Windows CI job, or the Windows seat by hand. A `cfg(windows)` test

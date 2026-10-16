@@ -36,9 +36,9 @@ fee_policy_version daemon-side exposure`.
 
 ### Verdict: PRESENT — usable, with V3-specific caveats
 
-`shekyld` inherits Monero's `FAKECHAIN` network type, the `--regtest`
-CLI flag, the `generateblocks` JSON-RPC method, and the
-`--fixed-difficulty` knob. A Rust integration-test harness can spawn
+`shekyld` inherits Monero's `FAKECHAIN` network type (`--network
+regtest`), the `generateblocks` JSON-RPC method, and a fixed-difficulty
+lever (the `dev-difficulty` row, regtest only). A Rust integration-test harness can spawn
 `shekyld` and drive an end-to-end transfer cycle without waiting for
 real-network PoW, but several Shekyl-genesis differences mean the
 regtest path is **not** a free pass on V3 consensus rules.
@@ -51,18 +51,17 @@ regtest path is **not** a free pass on V3 consensus rules.
 borrows mainnet constants for genesis, ports, and network id
 (`src/cryptonote_config.h:338–343`).
 
-**CLI activation.** Passing `--regtest` to `shekyld` sets
-`m_nettype = FAKECHAIN` (`src/cryptonote_core/cryptonote_core.cpp:472–475`).
-The flag is mutually exclusive with `--testnet` / `--stagenet`: the
-configuration takes one network. Companion flags:
+**CLI activation.** `--network regtest` selects `FAKECHAIN`
+(`src/cryptonote_core/cryptonote_core.cpp:472–475`). The `network` row
+takes one word, so no second network can be named. Companion rows:
 
-- `--fixed-difficulty <N>` — pin difficulty to a constant. Default `0`
-  means "use adaptive difficulty," so for instant-mining the harness
-  must pass `--fixed-difficulty 1` (or another small value)
+- `--dev-difficulty <N>` — pin difficulty to a constant. Unset means
+  "use adaptive difficulty," so for instant-mining the harness must pass
+  `--dev-difficulty 1` (or another small value)
   (`src/cryptonote_core/blockchain.cpp:895–897, 1263–1265`).
-- `--keep-fakechain` — preserve LMDB across runs; without it, the DB
-  is wiped each launch (`src/cryptonote_core/cryptonote_core.cpp:531–538`).
-- `--offline` — disable peer dialing (recommended for hermetic tests).
+- `--clearnet off --tor off` — no listener and no dial (recommended for
+  hermetic tests). The store persists across runs in the data directory;
+  a fresh chain is a fresh directory.
 
 **On-demand block generation.** The JSON-RPC method `generateblocks`
 exists (`src/rpc/core_rpc_server.h:139`,
@@ -92,17 +91,15 @@ per [`FOLLOWUPS.md`](./FOLLOWUPS.md) V3.1
 
 ```bash
 shekyld \
-  --regtest \
-  --offline \
-  --fixed-difficulty 1 \
+  --network regtest \
+  --clearnet off --tor off \
+  --dev-difficulty 1 \
   --data-dir /tmp/shekyl-regtest-XXXX \
-  --rpc-bind-port 28081 \
-  --p2p-bind-port 28080 \
-  --no-zmq
+  --log-file /tmp/shekyl-regtest-XXXX/shekyld.log \
+  --rpc-admin-listen 127.0.0.1:28081
 ```
 
-Use `--keep-fakechain` if you want the chain to persist across daemon
-restarts within a single test run.
+The chain persists across daemon restarts in the data directory.
 
 ### V3-specific caveats
 

@@ -16,6 +16,7 @@
 #![deny(unsafe_code)]
 
 pub mod announce;
+pub mod docs;
 pub mod file;
 pub mod lock;
 pub mod marker;
