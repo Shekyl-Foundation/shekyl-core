@@ -726,7 +726,7 @@ async fn a_switch_at_the_cap_calls_randomx_zero_times() {
     // when this node first judged it — the demoted ones at connect, the
     // promoted ones at arrival — and the plan carries those records. The
     // switch's forming asks RandomX nothing.
-    let (x, probe, y, b, plan) = at_the_cap_with_a_probe("switch-recall").await;
+    let (mut x, probe, y, b, plan) = at_the_cap_with_a_probe("switch-recall").await;
     assert_eq!(
         plan.demoted.len(),
         usize::try_from(LEVERED_CAP).expect("small")
@@ -749,7 +749,7 @@ async fn a_seed_claim_that_differs_from_the_recorded_one_recomputes() {
     // The record is keyed by (identity, seed): a claim under another seed
     // is not the recorded computation, so it goes to RandomX — once — and
     // then to CEN-D3, which refuses the claim as it would without a record.
-    let (x, probe, y, b, mut plan) = at_the_cap_with_a_probe("switch-recall-seed").await;
+    let (mut x, probe, y, b, mut plan) = at_the_cap_with_a_probe("switch-recall-seed").await;
     plan.promoted[0].at.seed = BlockHash::from_bytes([0x5D; 32]);
     let before = probe.calls();
     let out = x.reorganize(&plan, &bodies(&b)).await;

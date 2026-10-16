@@ -603,9 +603,11 @@ where
     /// promoted block `form` refuses under the plan's claims is
     /// [`RefusePromotion`]: the failing suffix is removed and nothing is
     /// popped. A demoted block this node connected forms without claims; a
-    /// refusal there is an invariant, not a verdict.
+    /// refusal there is an invariant, not a verdict. After
+    /// [`Switched::Done`], the header ledger drops every height above the
+    /// fork, so the next claim reloads the chain this switch connected.
     pub async fn reorganize(
-        &self,
+        &mut self,
         plan: &SwitchPlan,
         bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
     ) -> Result<Switched, RunFault> {
@@ -616,9 +618,11 @@ where
 
     /// [`Self::reorganize`], reporting how long the forming (step 1, the
     /// RandomX) and the [`Reorganize`] message (the judging, the closure)
-    /// each took — the switch PR's cap-depth measurement.
+    /// each took — the switch PR's cap-depth measurement. A switch that
+    /// lands drops the losing branch from the header ledger
+    /// ([`Self::reorganize`]).
     pub async fn reorganize_timed(
-        &self,
+        &mut self,
         plan: &SwitchPlan,
         bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
     ) -> Result<(Switched, ReorgTiming), RunFault> {
@@ -688,6 +692,15 @@ where
             })
             .await
             .map_err(handler_error)?;
+        if let Switched::Done(_) = &switched {
+            // The ledger still holds the losing branch above the fork. A
+            // later claim reloads only the heights it lacks, so those
+            // headers have to leave before the next block is priced against
+            // this chain. The seed is read from the store at each mine;
+            // there is no seed ledger to drop. A refusal, the cap, or the
+            // floor leaves the chain where it was, and the ledger with it.
+            self.targets.rewind_to(plan.root.height);
+        }
         Ok((
             switched,
             ReorgTiming {

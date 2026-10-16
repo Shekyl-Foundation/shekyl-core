@@ -14,18 +14,24 @@
 //! chain — empty claims, so the cheap tier can hold it — and a heavier
 //! child is assembled on top of it without connecting either. Anchoring
 //! the broken block at the recorded tip would be CEN-E2, not a switch.
+//!
+//! The other test is the driver's header ledger after a switch that lands.
+//! It still held the losing branch, and a later claim reloads only heights
+//! it lacks, so a spend whose reference and whose target window sit on the
+//! promoted chain connects only once those headers have been dropped.
 
 use std::collections::HashMap;
 
-use shekyl_chain_rules::{CenRow, Locus, TxSlot};
+use shekyl_chain_rules::{CenRow, Locus, TxSlot, REFERENCE_BLOCK_MIN_AGE};
+use shekyl_harness_spender::Spender;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
-use shekyl_wire::Transaction;
+use shekyl_wire::{Ct, Transaction};
 
 use crate::connector::{Offered, Switched};
-use crate::scenario::Scenario;
+use crate::scenario::{Mined, Scenario};
 use crate::test_support::Family;
 
-use super::AT;
+use super::{bodies, offer_branch, AT};
 
 #[tokio::test]
 async fn a_promotion_form_refusal_removes_the_alt_suffix_and_does_not_pop() {
@@ -114,6 +120,54 @@ async fn a_promotion_form_refusal_removes_the_alt_suffix_and_does_not_pop() {
     );
     assert_eq!(x.alt_blocks_held().await.expect("al6"), 0);
     assert_eq!(x.mine(1).await.len(), 1, "the writer is up");
+    x.close().await;
+    y.close().await;
+}
+
+#[tokio::test]
+async fn a_switch_drops_the_losing_branch_from_the_target_ledger() {
+    // The newest reference a block may name is `connecting − MIN_AGE`
+    // below it. The losing branch is that deep, so the height the spend
+    // names was cached as the incumbent's header and now belongs to the
+    // chain the switch promoted.
+    let min_age = REFERENCE_BLOCK_MIN_AGE.to_raw();
+    let mut x = Scenario::open("switch-ledger-x");
+    let mut y = Scenario::open("switch-ledger-y");
+    x.mine(AT).await;
+    let prefix = y.mine(AT).await;
+    x.mine(min_age).await;
+    y.idle();
+    let won = y.mine(min_age + 1).await;
+    let plan = offer_branch(&x, &won).await;
+    let Switched::Done(_) = x.reorganize(&plan, &bodies(&won)).await.expect("switch") else {
+        panic!("the switch did not land");
+    };
+
+    let connecting = BlockHeight::from_raw(AT + min_age + 1);
+    assert_eq!(won[1].height, BlockHeight::from_raw(AT + 1));
+    let mut chain: Vec<Mined> = prefix;
+    chain.extend(won.iter().cloned());
+    let spend = Spender::over(&chain).spend_coinbase(
+        x.wallet(),
+        BlockHeight::from_raw(0),
+        connecting,
+        Family::Main.fee(),
+    );
+    let reference = match &spend.ct {
+        Ct::Fcmp {
+            reference_block, ..
+        } => *reference_block,
+        Ct::Null(_) => panic!("a spend names a reference"),
+    };
+    assert_eq!(
+        reference, won[1].hash,
+        "the spend references a block the switch promoted"
+    );
+    let landed = x
+        .mine_listing(vec![spend])
+        .await
+        .unwrap_or_else(|outcome| panic!("the spend connects on the switched chain: {outcome}"));
+    assert_eq!(landed.height, connecting);
     x.close().await;
     y.close().await;
 }
