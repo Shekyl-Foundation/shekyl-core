@@ -523,6 +523,53 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --locked --no-deps --lib -p shekyl-win-sec
 
+      # TB-7 part 2 on Windows. This is the only job that compiles this
+      # crate's Windows code, so clippy for it lives here too.
+      #
+      # `the_managed_launch_environment_is_exact` reads `Command::get_envs`,
+      # which lists variables the builder set and cannot see `env_clear`.
+      # The proof that the child inherits nothing else, and that `SystemRoot`
+      # is `GetSystemWindowsDirectoryW` rather than the parent's value, is
+      # `managed_tor_child_inherits_no_environment`: it re-executes with a
+      # poisoned `SystemRoot` and reads the environment the shim received.
+      #
+      # `--exact` plus "1 passed": a renamed test matches nothing and cargo
+      # exits 0, which is not a pass.
+      - name: "TB-7: clippy -D warnings (shekyl-tor-control-client, Windows)"
+        shell: pwsh
+        working-directory: rust
+        run: cargo clippy --locked -p shekyl-tor-control-client --all-targets -- -D warnings
+
+      - name: "TB-7: the managed launch environment pair list"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          # As in the WP-W5 step below: a non-zero cargo exit must reach
+          # $LASTEXITCODE and the printed output, not end the block first.
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-tor-control-client --lib -- control::launch::tests::the_managed_launch_environment_is_exact --exact *> tb7-env.out
+          $rc = $LASTEXITCODE
+          Get-Content tb7-env.out
+          if ($rc -ne 0) { exit $rc }
+          if (-not (Select-String -Path tb7-env.out -Pattern 'test result: ok\. 1 passed' -Quiet)) {
+            Write-Error "the TB-7 environment pair-list test did not run"
+            exit 1
+          }
+
+      - name: "TB-7: the managed tor inherits no environment"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-tor-control-client --lib -- control::launch::tests::managed_tor_child_inherits_no_environment --exact *> tb7-inherit.out
+          $rc = $LASTEXITCODE
+          Get-Content tb7-inherit.out
+          if ($rc -ne 0) { exit $rc }
+          if (-not (Select-String -Path tb7-inherit.out -Pattern 'test result: ok\. 1 passed' -Quiet)) {
+            Write-Error "the TB-7 inheritance test did not run"
+            exit 1
+          }
+
       # The pre-registered probes (docs/design/WINDOWS_WALLET_PROBE_SHEET.md).
       # BLOCKING, and that is the point of writing them down first: each probe
       # carries a prediction made before any Windows machine ran it, and the

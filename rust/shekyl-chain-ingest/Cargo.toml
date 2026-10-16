@@ -5,7 +5,7 @@
 
 [package]
 name = "shekyl-chain-ingest"
-description = "The daemon's block-ingest pipeline: Source → form → sequence → validate+connect → sinks. Production code shared by DRS-E2 (replay) and E3 (live); the replay driver is its first source."
+description = "The daemon's block-ingest pipeline: Source → form → sequence → validate+connect → sinks. Production code shared by DRS-E2 (replay) and DRS-X (live, the store flip); the replay driver is its first source."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -124,7 +124,8 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # The block producer the scenario driver (`scenario.rs`, test-only) builds
 # candidates with — the production template over the production stack
 # (CHAIN_RULES_SLICE_6.md §5.3). Dev-dependency: the driver is a test
-# instrument; the template crate's production consumer is E3's handler.
+# instrument; the template crate's production consumer is the live
+# daemon's handler at the store flip (DRS-X).
 shekyl-block-template = { path = "../shekyl-block-template" }
 # The harness miner every scenario block pays (`scenario.rs`), and the
 # spender over the scenario's blocks: the wallet-side curve tree mirrors

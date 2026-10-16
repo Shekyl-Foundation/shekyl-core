@@ -423,7 +423,7 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     let again = connector.ask(Digest).await;
     assert!(again.is_ok(), "reads are unaffected");
     // The writer stays up: a later Apply with the store's seed connects.
-    // Replay treats StaleSeed as run-ending; E3 re-forms on this actor.
+    // Replay treats StaleSeed as run-ending; DRS-X re-forms on this actor.
     let (h1b, f1b) = formed(
         1,
         candidate(&chain[1].0, &chain[1].1),
@@ -498,7 +498,7 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     // A verdict is data on Applied. The writer does not go Over, so a
-    // later Apply at the same height can still run (E3 / mutation family).
+    // later Apply at the same height can still run (DRS-X / mutation family).
     let path = tmp("connector-refusal");
     let chain = chain(2);
     let connector = Connector::spawn(ConnectorArgs {

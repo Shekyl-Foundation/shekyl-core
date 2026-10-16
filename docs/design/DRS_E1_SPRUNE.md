@@ -393,7 +393,7 @@ SCW-7's one (`undo_log` retention `< D_max`), F29's one (§6), plus: any
 durable archival serving state on a daemon — a body past its shard's
 boundary, a persona id, a retention list (#775 / Q9); a discard that runs
 while the serve-credit admission verifier still derives `R_k` from a frozen
-segment (§11 — moot before the E3 cutover, and stated so the sequencing is
+segment (§11 — moot before the store flip (DRS-X), and stated so the sequencing is
 the mechanism); **a stored discard watermark or frontier cell, or any batch
 read of segment presence that selects what to discard** — the set is named
 by the epoch (§4), and either would be a second, node-local source; a
@@ -424,7 +424,7 @@ stays withdrawn)*;
 `SHT-Q2`*), `D_MAX` at `CEN-E2` with
 `SEB > D_MAX`, and the journal-horizon function of §12 — the plan's
 commit 1 or a precursor PR**; and §11's
-precondition, which the E3 cutover ordering discharges. *Corrected
+precondition, which the store flip's ordering (DRS-X) discharges. *Corrected
 2026-09-22:* Q1's journal-horizon assertion is **S-ARCH's** (the journals
 have no Rust writer here); what this surface owes it is the function.
 
@@ -593,6 +593,6 @@ chain-store, chain-rules and archival-retention (**359** + 14, **209** + 15,
 journals' retirement at `journal_horizon` (S-ARCH's writers, when they
 land — *landed 2026-10-09, `SLK-Q1`: the slash log's retirement runs in this
 batch, §3; the other six journals dissolved into `undo_log` and retire with
-it*); §11's serve-credit precondition (the E3 cutover ordering; nothing in
+it*); §11's serve-credit precondition (the store flip's ordering, DRS-X; nothing in
 production reads this store yet); the reward leg's `w_launch`.
 

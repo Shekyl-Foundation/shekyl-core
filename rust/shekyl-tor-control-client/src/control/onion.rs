@@ -622,10 +622,11 @@ mod tests {
         //
         // **This test covers only ONE of the two routes into that mode.** The other
         // is torrc (`HiddenServiceNonAnonymousMode` + `SocksPort 0`), which is
-        // foreclosed by construction at the spawn site in `actor.rs` — six typed
-        // options, no `extra_args` — not by this assertion. A future typed knob
-        // added there would re-open it while this test stayed green, so the spawn
-        // site carries a matching comment naming the coupling.
+        // foreclosed by construction in `launch.rs` — tor's configuration files
+        // named as one zero-length file of the launcher's own, the other options
+        // typed, no `extra_args` — not by this assertion. A future typed knob
+        // added there would re-open it while this test stayed green, so the
+        // launch command carries a matching comment naming the coupling.
         for discard_pk in [false, true] {
             for pow in [
                 OnionPow::Disabled,

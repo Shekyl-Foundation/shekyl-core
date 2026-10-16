@@ -1471,9 +1471,15 @@ at-open 5   by-construction 16   held-by-store 4   enforced 163   ratified
 139 / enforced 163`. The denominator moved up by ten after the a4 line:
 CEN-J28 was minted `implemented` (2026-10-12, FN-DSA increment 3), and
 CEN-J29–J37, the bundle's nine admission rows, were minted `pending` the
-same day. **After CEN-H19's verification half (2026-10-15, PR #1081):**
-`consensus: implemented 128 / validator-enforced 161`, every other term
-unchanged. H19 flipped and 4.H is complete (`23 / 23`). Policy unchanged.
+same day. **At `dev` `dd916a870` (2026-10-15, after #1080's census
+re-class, R4):** `consensus: implemented 134 / validator-enforced 161
+held-by-cxx 2   at-open 5   by-construction 22   held-by-store 5   enforced
+163   ratified 139 / enforced 163` — seven rows re-classed (B3, A3, A6, A7,
+L11, L12, L16), six to `by_construction` and one to `held_by_store`; the
+denominator did not move. **After CEN-H19's verification half (PR #1081,
+measured on that base):** `consensus: implemented 135 / validator-enforced
+161`, every other term unchanged. H19 flipped and 4.H is complete
+(`23 / 23`). Policy unchanged.
 
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.
