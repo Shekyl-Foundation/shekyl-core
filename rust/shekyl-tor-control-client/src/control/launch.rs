@@ -99,7 +99,10 @@ const SINGLE_LINK: u32 = 1;
 ///
 /// macOS sets `OPENSSL_CONF` only; `DYLD_*` stays unset. `OPENSSL_MODULES` and
 /// `OPENSSL_ENGINES` are not set: with no configuration naming a module,
-/// nothing reads them, and `HardwareAccel` stays off. The command applies
+/// nothing reads them, and `HardwareAccel` stays off. A typed option that adds
+/// hardware acceleration or a named provider reopens this: the launch then
+/// names an absolute directory it owns (`TOR_BUNDLE_DISTRIBUTION.md` §2
+/// finding 13). The command applies
 /// [`Self::variables`] and nothing else, so the environment a test reads off
 /// the command is this value.
 pub(crate) struct LaunchEnvironment {

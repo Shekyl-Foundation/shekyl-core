@@ -651,20 +651,20 @@ diagnostic. No figure is set before its row lands.
 
 **`TSR-M6`, what is established (2026-10-16; mechanisms from an x86 diagnostic
 and the floor device's dry run, timings to come from the floor run).** Under
-`AvoidDiskWrites 1` Tor did not rewrite `state` within 240 s of bootstrap,
-while it reported 20 entry guards; with `AvoidDiskWrites 0` it wrote them
-within 34 s. How Tor exits decides whether it saves `state`: `SIGTERM` and
-`SIGNAL SHUTDOWN` sent on the owning connection both rewrite it, with every
-guard, under either setting; closing the owning connection and a kill do not.
-So the teardown §4.7 rules (close the owning connection) leaves a kept
-directory's guards on disk only if Tor's deferred write has already happened,
-and a respawn before it samples new guards. Sending `SIGNAL SHUTDOWN` before
-the close saves them on every stop of a live Tor, leaving only a crash before
-the deferred write to re-roll; that is a change to the ruled teardown, posed
-to Rick, not adopted here. The same exit-time save explains the macOS run's
-leftover temporary directories holding only `state`: the client's live tests
-stop Tor with `SIGTERM`, and a `TempDir` that drops before the reap races that
-write. Those tests now wait for the reap before the drop.
+`AvoidDiskWrites 1` Tor defers its periodic `state` write: none within 240 s of
+bootstrap while it reported 20 entry guards; with `AvoidDiskWrites 0` it wrote
+them within 34 s. Every clean exit saves `state` with every guard, under either
+setting: `SIGTERM`, `SIGNAL SHUTDOWN`, and the end of the owning connection
+(Tor's `lost_owning_controller` raises `SIGTERM`, and `tor_cleanup` saves
+`state`; measured at 0.1 s to exit). A kill does not. So the teardown §4.7
+rules keeps a live Tor's guards in its kept directory, and the re-roll this row
+measures is a Tor that crashes before its deferred write: the respawn then
+samples new guards. The same exit-time save explains the macOS run's leftover
+temporary directories holding only `state`: kameo 0.20's
+`ActorRef::wait_for_shutdown` returns when the mailbox closes, before the run
+loop calls `on_stop` and reaps Tor, so a test's `TempDir` could drop while Tor
+was still saving on its way out. The client's live tests now wait for the reap
+before the drop.
 
 The Windows and Linux stop-path figures (closing our end, and the parent's
 `abort()`, each exiting Tor within about 20 ms; C4, C5) are evidence for the

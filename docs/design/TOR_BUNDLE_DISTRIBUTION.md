@@ -102,11 +102,22 @@ the Foundation's hosts showed what that costs once Tor is not optional.
     `OPENSSL_INIT_NO_LOAD_CONFIG` (`crypto_openssl_mgt.c`, identical at
     `tor-0.4.9.13` and `tor-0.4.9.14`), so OpenSSL reads `openssl.cnf` there
     whenever `OPENSSL_CONF` is unset. A configuration can name a provider or
-    engine module by absolute path, and OpenSSL loads it into tor: on Linux
-    x86, the pinned tor given a configuration that names a missing provider
-    module, with diagnostics on, aborts at start, while a merely malformed
-    file is ignored. Nothing was planted at the real path. TB-7 part 2 closes
-    it by naming the launcher's blank file in `OPENSSL_CONF`.
+    engine module by absolute path, and OpenSSL loads it into tor. Given a
+    configuration that names a missing provider module, with diagnostics on,
+    the pinned tor aborts at start on Linux x86 and on Windows (both builds,
+    `0xC0000409`), while a merely malformed file is ignored. On Windows `C:\`
+    lets any authenticated user create a directory, and a new `C:\var`
+    inherits Modify for all of them, so any local user can write
+    `C:\var\tmp\dist\openssl\ssl\openssl.cnf`; with `OPENSSL_CONF` unset, a
+    file placed at that default in a sandbox did not load, for a reason not
+    yet traced, so the default stays a live risk. Nothing was planted at a
+    real path. TB-7 part 2 closes it by naming the launcher's blank file in
+    `OPENSSL_CONF`. The bundles also compile in `MODULESDIR` and `ENGINESDIR`
+    under the same root; the launch reaches neither (no configuration names
+    a module, no provider is loaded by name, `HardwareAccel` is off).
+    **Reopen** when a typed option adds hardware acceleration or a named
+    provider: the launch then names an absolute directory it owns
+    (`AccelDir`, `OPENSSL_MODULES`).
 
 ## 3. The rulings
 

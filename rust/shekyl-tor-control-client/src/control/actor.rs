@@ -1951,8 +1951,10 @@ mod live_tests {
     }
 
     /// Wait until the managed tor has been reaped, so the test's `TempDir` drops
-    /// after tor is gone. Tor saves `state` when it exits on `SIGTERM`; a drop that
-    /// starts before the reap can race that write and leave a directory holding
+    /// after tor is gone. `wait_for_shutdown` is not that point: kameo 0.20
+    /// returns from it when the mailbox closes, before the run loop calls
+    /// `on_stop`, which is where tor is stopped and reaped. Tor saves `state` on
+    /// its way out, so a drop that starts first can leave a directory holding
     /// only `state` (`TOR_SUPERVISOR.md` `TSR-M6`).
     async fn await_reap_before_drop(exit_rx: oneshot::Receiver<TorExit>) {
         tokio::time::timeout(Duration::from_secs(10), exit_rx)
