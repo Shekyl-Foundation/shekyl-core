@@ -20,14 +20,11 @@
 //! 2. **Absolute cap on the per-weight rate** — for each named tier,
 //!    `per_weight ≤` [`absolute_fee_rate_cap()`]: the exact structural
 //!    maximum of the served priority rung, every factor at its own
-//!    extreme, derived from the parameters and KAT-pinned. Two earlier
-//!    values were caught refusing HONEST quotes: a 100,000 mid-regime
-//!    literal, and a 28,000,000 genesis-point maximum that the reachable
-//!    surface exceeds from year 3 — see [`absolute_fee_rate_cap`]. The
-//!    rate is the whole of what the daemon serves: the lattice a fee is
-//!    rounded up to (`shekyl_economics::FEE_QUANTIZATION_MASK`) is a Rust
-//!    constant the wallet and the daemon share, not a daemon input, so
-//!    there is no daemon-controlled rounding for a cap to bound.
+//!    extreme, derived from the parameters and KAT-pinned. The rate is the
+//!    whole of what the daemon serves: the lattice a fee is rounded up to
+//!    (`shekyl_economics::FEE_QUANTIZATION_MASK`) is a Rust constant the
+//!    wallet and the daemon share, not a daemon input, so there is no
+//!    daemon-controlled rounding for a cap to bound.
 //!
 //! [`ValidatedFeeEstimates`] is the only constructor. Quote and build
 //! both go through it; Custom band-checks run later, against a snapshot
@@ -51,24 +48,15 @@ const DYNAMIC_FEE_REFERENCE_TX_WEIGHT: u64 = 3_000;
 
 /// Absolute cap (atomic units per weight) on every named tier's — and
 /// `Custom`'s — per-weight rate: the maximum fee rate an honest daemon can
-/// legitimately quote over the whole emission era.
+/// quote over the whole emission era.
 ///
-/// Derived, not hand-picked — and derived as the exact **structural
-/// maximum**, not a located one. An earlier derivation evaluated the
-/// maximum of a PRODUCT at the maximum of one factor: it took `C = 2` at
-/// genesis because the operand reward `R` peaks there. But `C` GROWS with
-/// age — `σ` decays toward zero and the burn fraction rises with the
-/// supply ratio — while `R` decays only as `remaining >> esf`. The product
-/// therefore peaks in the interior, not at genesis, and the resulting cap
-/// of 28,000,000 was **below honest daemon quotes**: swept over the
-/// reachable age/volume surface the served priority rung passes
-/// 38,000,000 as early as year 3. A wallet on that cap would have refused
-/// a correct quote — a liveness failure, and the expensive direction (PR
-/// #640 review).
-///
-/// So the cap is a **structural bound that cannot be wrong**, not a swept
-/// maximum that can be re-measured wrong. Every factor is taken at its own
-/// extreme, from the parameters:
+/// A **structural bound**, not a swept maximum: the served priority rung is
+/// `2·R·C/M`, a product whose factors peak at different ages — `R` is
+/// largest at genesis, while `C` grows as `σ` decays and the burn fraction
+/// rises with the supply ratio — so its maximum over the chain's life is
+/// not at any single state a sweep can be sure to visit. Taking every
+/// factor at its own extreme, from the parameters, gives a bound no
+/// reachable state exceeds:
 ///
 /// ```text
 /// C   = (1−σ)·M_r/(1−b)  ≤  ⌊SCALE·release_max/(SCALE−burn_cap)⌋  (σ ⇒ 0)
@@ -80,10 +68,10 @@ const DYNAMIC_FEE_REFERENCE_TX_WEIGHT: u64 = 3_000;
 /// cap = corrected_fee_ladder(R₀, Zm, w_ref, C_max).priority
 /// ```
 ///
-/// This is loose against the reachable maximum by design: a cap exists to
-/// refuse an absurd quote, and refusing an HONEST one dead-letters the
-/// wallet, so soundness beats tightness. Two tests carry different halves
-/// of the guarantee, and the split is deliberate:
+/// The bound is loose against the reachable maximum by design: a cap exists
+/// to refuse an absurd quote, and refusing an honest one dead-letters the
+/// wallet, so soundness beats tightness. Two tests carry the two halves of
+/// the guarantee:
 /// `absolute_cap_is_the_structural_bound` pins this value so a parameter
 /// change moves it loudly, while
 /// `absolute_cap_bounds_the_swept_reachable_maximum` is the one that
@@ -368,20 +356,14 @@ mod tests {
         // tests/unit_tests/scaling_2021.cpp `wallet_fee_estimate`,
         // mapped economy=fees[0], standard=fees[1], priority=fees[2].
         //
-        // These MIRROR that file's rows, so they move when it moves — which
-        // is the only thing that makes a mirrored constant a cross-check
-        // rather than a second copy free to drift. They moved with FL-R21
-        // (no rounding step on the served path, `standard` = 4F exactly).
+        // These MIRROR that file's rows (the served ladder at `C` = 1, no
+        // rounding step, `standard` = 4F exactly), so they move when it
+        // moves — which is the only thing that makes a mirrored constant a
+        // cross-check rather than a second copy free to drift.
         ValidatedFeeEstimates::try_new(snapshot(333, 1332, 66_666))
             .expect("10 SKL / 300k-zone Fh=66666 is 200× economy and must pass");
         ValidatedFeeEstimates::try_new(snapshot(13, 52, 13_333))
             .expect("10 SKL / 1.5M-zone Fh=13333 is 1025× economy and must pass");
-        // The large-Mnw row is deliberately NOT repeated: `Mfw = min(Mnw, Mlw)`
-        // makes it identical to the first row, which is the dead `min` finding
-        // showing through. It used to carry Fh = 22,000 — the SURGE-DISCOUNT
-        // value FL-C2(b) deleted at #640 — so it had been citing a number no
-        // C++ KAT contained for two rounds before this commit; the remaining
-        // mention over there is a comment saying exactly that.
         ValidatedFeeEstimates::try_new(snapshot(10, 20, 101))
             .expect("the withdrawn 10× lock must not refuse 10.1×");
     }
@@ -433,28 +415,23 @@ mod tests {
         );
     }
 
-    /// The bound must actually BOUND — and the previous cap did not,
-    /// which is why this test exists (PR #640 review). It walks emission
-    /// trajectories and, at every registered chain age, evaluates the
-    /// served priority rung across the reachable volume grid; the
-    /// maximum it finds must sit at or under the cap.
+    /// The bound must actually bound. This walks emission trajectories
+    /// and, at every registered chain age, evaluates the served priority
+    /// rung across the reachable volume grid; the maximum it finds must sit
+    /// at or under the cap.
     ///
-    /// **It sweeps trajectories, not just states, and that distinction
-    /// was a correction.** An earlier version walked only the NEUTRAL
-    /// (`M_r = 1`) accumulation and called its peak "the reachable
-    /// maximum". It is not: history matters, because a slower-emitting
-    /// past leaves more `remaining` and therefore a larger `R` at the
-    /// same height. A chain dormant at the `M_r = 0.8` rail and then
-    /// busy peaks above the neutral walk (both still far under the bound).
-    /// So the release rails are swept as the accumulation extremes.
+    /// **It sweeps trajectories, not just states**, because history moves
+    /// `R`: a slower-emitting past leaves more `remaining`, and so a larger
+    /// `R` at the same height. The release rails are swept as the
+    /// accumulation extremes, a chain dormant at the `M_r = 0.8` rail and
+    /// then busy among them.
     ///
-    /// **Even this does not enumerate reachable histories** — arbitrary
-    /// volume paths are uncountable — and that is precisely why the cap
-    /// is a STRUCTURAL bound rather than a swept maximum. What this test
-    /// guarantees is a floor under the bound's adequacy, not a proof of
-    /// tightness. If it fails, the cap is refusing honest daemon quotes
-    /// — a wallet liveness failure — and the bound must be re-derived
-    /// BEFORE the literal is touched.
+    /// **It does not enumerate reachable histories** — arbitrary volume
+    /// paths are uncountable — which is why the cap is a structural bound
+    /// rather than a swept maximum. What this test guarantees is a floor
+    /// under the bound's adequacy, not a proof of tightness. If it fails,
+    /// the cap is refusing honest daemon quotes — a wallet liveness failure
+    /// — and the bound must be re-derived before the literal is touched.
     #[test]
     fn absolute_cap_bounds_the_swept_reachable_maximum() {
         use shekyl_economics::params::SCALE;
@@ -527,11 +504,9 @@ mod tests {
         // The rail only sets how much has been emitted: a dormant past keeps
         // more `remaining`, so a higher `R` at every age, but a lower supply
         // ratio, so a lower burn fraction and with it a lower `C`. Which
-        // wins depends on the curve. On the design's ESF 22 per block the
-        // preserved reward wins and the peak is on the dormant rail,
-        // 36,904,281. At the per-minute convention's 21 (until 2026-10-04)
-        // the burn term won: 68,531,636 on the neutral rail. Either way it
-        // stays under the structural cap, which is the property.
+        // wins depends on the curve; at ESF 22 per block the preserved
+        // reward wins and the peak is on the dormant rail. It stays under
+        // the structural cap, which is the property.
         assert_eq!(worst.0, 36_904_281, "the swept maximum moved");
         assert_eq!(
             worst.3, p.release_min,
