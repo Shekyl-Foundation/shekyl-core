@@ -3,6 +3,21 @@
 ## [Unreleased]
 
 - **Benchmarks: hybrid scheme 3 measured on the floor device** (`docs/benchmarks/ba_t33_fn_dsa_floor_device_20261015.md`). On the Pi 4, an Ed25519 + FN-DSA-1024 signature takes 2.24 ms (1.70 ms with the key held across signatures), a verification 0.57 ms, and a seeded key generation 45.7 ms. The scheme's test vectors, signing included, give the pinned bytes on the device's own floating point, which emulation could not show. One persona slot's key derivation takes 466 ms there, the receipt key 9.6 % of it. A staker's wallet open derives one slot for each bonded slot and three more, one after another: 1.40 s with none bonded, and 466 ms more for each bonded slot. `shekyl-crypto-pq` gains `examples/fn_dsa_stack_ladder.rs`, which finds the stack each scheme-3 operation needs, and a criterion arm for one persona slot's derivation.
+- **Chain rules: stateless verification runs off the single writer (`CHAIN_RULES_CRATE.md` §4.6).** `form`, on the pipeline's parallel workers, now runs every rule that reads no chain state:
+  - the header rows and the longhash;
+  - CEN-D1 against a **claimed target**;
+  - every transaction's `tx_form`;
+  - CEN-H19's batch.
+
+  `validate`, inside the write transaction, keeps only what reads the chain. The target becomes a claim beside the seed: the caller derives it from the header chain ahead of connect with `target_claim`, and `validate` and `alt_against` re-derive it. A mismatch is the new `Stale::Target`. A block short of its proof-of-work now costs RandomX and nothing more.
+
+  The ingest driver keeps a target ledger beside its seed ledger. The store answers any header the window lacks, through the `HeaderAt` read.
+
+  Refusal order changes: a block wrong in both a stateless and a view-bound row is named by the stateless one. For example, a coinbase whose extra does not parse is now refused on CEN-I19, where the C++ names B4. `form`'s signature gains the target argument.
+
+- **Chain rules: the Rust validator verifies range proofs (CEN-H19's verification half; `CHAIN_RULES_CRATE.md` §4.6).** `form` verifies every listed transaction's Bulletproof+ in one batch per block. A failed batch re-verifies each proof alone and refuses at the first bad transaction. The batch weights are derived from the batch, not drawn from the node's entropy (ruling R3, 2026-10-15): a `ChaCha20Rng` seeded by cSHAKE256 under the new domain `shekyl/bp-plus-batch-weights-v1` over every proof and commitment in block order. The submit engine verifies a batch of one through the same body (`shekyl_bulletproofs::verify_batch`), and the wire-to-verifier reassembly has one home (`shekyl_wire::BpPlus::to_bulletproof`). `Bulletproof::verify` and the public `OsRng`-weighted batch verifier are removed. Without this check, the Rust validator's balance check would pass commitments to out-of-range amounts. That was never exposed, because the store replays only blocks the C++ had already validated, but it was a precondition of making the Rust validator the validator of record. Coverage: `implemented 134 → 135 / 161`.
+
+- **Spend proofs: the FCMP++ verify's batch weights are derived, not drawn (ruling R3).** `shekyl_fcmp::proof::verify` (CEN-I15's body) and `verify_membership_only` seed their three batch verifiers' weights with a `ChaCha20Rng` keyed by cSHAKE256 over every value the verify reads, under two new domains: `shekyl/fcmp-pp-batch-weights-v1` and `shekyl/fcmp-membership-only-batch-weights-v1`. The verdict is now a property of the transaction's bytes, not of a node's entropy. The accepted set is unchanged, except with probability about `1/ℓ`.
 
 ## [3.1.0-alpha.10] - 2026-10-15
 

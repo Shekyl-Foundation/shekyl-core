@@ -520,7 +520,10 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         .map(|c| CompressedPoint::from(CompressedEdwardsY(*c)))
         .collect();
     assert!(
-        bp.verify(&mut rng, &bp_commitments),
+        shekyl_bulletproofs::verify_batch(&[shekyl_bulletproofs::BatchEntry {
+            proof: &bp,
+            commitments: &bp_commitments,
+        }]),
         "Bulletproof+ range proof must verify over the output commitments"
     );
 

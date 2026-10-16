@@ -208,7 +208,7 @@ fn the_scenario_rules_are_regtest_at_difficulty_one() {
 
 /// DRS-E3 commit 7 (`DRS_E3_CURVE_WRITER.md` §2.3, §6 row 7): the driver
 /// produces a **real** FCMP++ spend against the tree the store grew, and the
-/// store admits it — the object CEN-I15 and H19-verify wait for.
+/// store admits it — the object CEN-I15 and H19's verification half judge.
 ///
 /// Two oracles in one test. The wallet-side tree (`shekyl_curve_tree`'s
 /// client, fed the same blocks) and the store's writer (`grow.rs`) are held

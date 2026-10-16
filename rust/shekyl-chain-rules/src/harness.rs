@@ -521,8 +521,9 @@ pub mod bundle;
 mod views;
 
 pub use assert::{
-    assert_refused, boundary_pair, credited_to_this_falsifier, defined, expected_seed, formed,
-    formed_on, formed_under, infallible, judged, MockSubstrate,
+    assert_refused, boundary_pair, credited_to_this_falsifier, defined, expected_seed,
+    expected_target, formed, formed_on, formed_under, infallible, judge_on, judged,
+    token_for_one_rule, MockSubstrate,
 };
 pub use views::{
     Faulted, FaultingView, NonCanonicalBondView, NonCanonicalHybridKey, WithheldRead,

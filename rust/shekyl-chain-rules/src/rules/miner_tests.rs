@@ -19,11 +19,11 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault, FormAttempt};
 use crate::harness::fixture::{
-    candidate, candidate_on, coinbase, recorded, recorded_with_work, G, TWO_G,
+    candidate, candidate_on, coinbase, coinbase_extra, recorded, recorded_with_work, G, TWO_G,
 };
 use crate::harness::{
-    assert_refused, credited_to_this_falsifier, defined, expected_seed, formed_on, judged, Faulted,
-    MockChain, MockSubstrate,
+    assert_refused, credited_to_this_falsifier, defined, expected_seed, expected_target, formed_on,
+    judged, Faulted, MockChain, MockSubstrate,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule};
@@ -51,6 +51,7 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -93,7 +94,7 @@ fn check_alone<R: FormRule>(candidate: &Candidate) -> Verdict<()> {
 }
 
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
-    let formed = formed_on(chain, candidate.clone());
+    let formed = crate::harness::token_for_one_rule(chain, candidate.clone());
     chain.with_view(|view| {
         defined(R::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
@@ -222,12 +223,15 @@ fn cen_f4_exactly_one_output_above_genesis() {
     let two = with_coinbase(&chain, |tx| {
         let extra = tx.prefix.outputs[0].clone();
         tx.prefix.outputs.push(extra);
-        // Keep F10's arity satisfied so the refusal is F4's alone.
+        // Keep F10's arity satisfied, and refit I20's extra to two outputs
+        // (the miner slot's `tx_form` runs in `form`, ahead of F4), so the
+        // refusal is F4's alone.
         if let Ct::Null(base) = &mut tx.ct {
             base.commitments.push(TWO_G);
             base.enc_amounts.push([0x55; 9]);
             base.enc_labels.push([0x66; 9]);
         }
+        tx.prefix.extra = coinbase_extra(2);
     });
     assert_refused(check_alone_on::<F4>(&chain, &two), CenRow::F4, MINER);
     assert_refused(judge_on(&chain, two), CenRow::F4, MINER);
