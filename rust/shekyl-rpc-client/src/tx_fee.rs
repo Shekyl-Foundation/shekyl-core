@@ -70,8 +70,6 @@ pub fn fee_from_weight(rate: &FeeRate, weight: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_economics::quantized_fee;
-
     use crate::FeeRate;
 
     #[test]

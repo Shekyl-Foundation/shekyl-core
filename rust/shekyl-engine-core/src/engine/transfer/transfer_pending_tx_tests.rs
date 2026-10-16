@@ -2038,8 +2038,11 @@ async fn concurrent_builds_serialize_on_the_build_permit() {
     use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    // Two inputs, each funding one build's amount and its fee on the fee
+    // lattice with room to spare: the second input is the smaller one and
+    // its build pays 7 000 plus a fee rounded up to the next 1 000.
     let (ledger, _tree_dir, tree) =
-        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+        funded_ledger_and_tree(&[(1, 50_000), (2, 40_000)], 1, 20).await;
     let entered = Arc::new(AtomicUsize::new(0));
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let pending = Arc::new(test_pending_tx_with_tree_and_fee_source(

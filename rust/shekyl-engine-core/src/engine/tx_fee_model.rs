@@ -271,14 +271,15 @@ mod tests {
         let (n_in, n_out, depth) = (InputCount::clamped(1), OutputCount::clamped(1), 1u8);
 
         let fee = converge_fee(&rate, n_in, n_out, depth, 0);
-        // 268_466_584 → 272_336_024 with PL-D3 (2026-09-14): the 64-byte 0x07
-        // entry and the opening leg move the (1,1,depth 1) weight.
-        assert_eq!(fee, 272_336_024, "the fee-varint fixed point for this rate");
+        // The (1,1,depth 1) weight at this rate prices just over 2^28, so
+        // the varint grows from four bytes to five; the fixed point is that
+        // product rounded up to the fee lattice (`FEE_QUANTIZATION_MASK`).
+        assert_eq!(fee, 272_337_000, "the fee-varint fixed point for this rate");
+        assert_eq!(fee % shekyl_economics::FEE_QUANTIZATION_MASK, 0);
 
         // The defining property, stated on its own axis: the returned fee is
-        // what its own predicted weight prices. Two passes return 268_442_400,
-        // which prices at 268_466_584 — short by one varint byte's worth of
-        // rate (24_184 atomic units).
+        // what its own predicted weight prices. A fee returned one pass
+        // early prices one varint byte's worth of rate short.
         assert_eq!(
             fee_from_weight(&rate, predict_weight(n_in, n_out, depth, fee)),
             fee,
