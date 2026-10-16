@@ -24,7 +24,7 @@
 //! (`shekyl-daemon-image::shard_view`, `SHARD_VIEW_FETCH.md` `SV-D9`).
 //! The scheduler decides nothing it could not decide against in-memory
 //! facts. The running daemon still opens LMDB, so `ServerConfig` keeps
-//! `SkeletonAbsent` until the `DRS-E3` cutover selects the adapter.
+//! `SkeletonAbsent` until the store flip (`DRS-X`) selects the adapter.
 //!
 //! A pass record is not built here. [`Read`] carries what one needs — the
 //! header, the delivery digest, `P`'s signature — and the caller that
