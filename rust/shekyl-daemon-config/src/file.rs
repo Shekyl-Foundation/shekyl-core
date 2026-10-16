@@ -227,20 +227,26 @@ fn reader_outside_permitted(file: &File, _path: &Path) -> Option<String> {
 
 #[cfg(windows)]
 fn writer_outside_permitted(_file: &File, path: &Path) -> Option<(String, String)> {
-    use shekyl_win_sec::dacl::{write_grantees, Grantee};
-    let judge = |shown: &Path| -> Option<(String, String)> {
-        match write_grantees(shown) {
-            Ok(grantees) => grantees.into_iter().find_map(|g| match g {
-                Grantee::Permitted => None,
-                Grantee::Other(sid) => Some((shown.display().to_string(), sid)),
-            }),
-            Err(e) => Some((shown.display().to_string(), format!("unknown: {e}"))),
-        }
-    };
-    if let Some(found) = judge(path) {
+    use shekyl_win_sec::dacl::{directory_write_grantees, write_grantees, DaclError, Grantee};
+    let judge =
+        |shown: &Path, grantees: Result<Vec<Grantee>, DaclError>| -> Option<(String, String)> {
+            match grantees {
+                Ok(grantees) => grantees.into_iter().find_map(|g| match g {
+                    Grantee::Permitted => None,
+                    Grantee::Other(sid) => Some((shown.display().to_string(), sid)),
+                }),
+                Err(e) => Some((shown.display().to_string(), format!("unknown: {e}"))),
+            }
+        };
+    // The file by every write right; a directory above it by the rights
+    // that replace or remove an entry (a default `C:\` lets Users add a
+    // subdirectory, which changes no file below it).
+    if let Some(found) = judge(path, write_grantees(path)) {
         return Some(found);
     }
-    ancestors(path).into_iter().find_map(|dir| judge(&dir))
+    ancestors(path)
+        .into_iter()
+        .find_map(|dir| judge(&dir, directory_write_grantees(&dir)))
 }
 
 #[cfg(windows)]

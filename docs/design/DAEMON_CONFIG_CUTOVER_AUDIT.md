@@ -482,6 +482,15 @@ of its own, for the same reason as the negative one.
   on `--rpc-bind-ip`'s IPv4-only parser is closed: the client endpoint is
   a typed row (`rpc-admin-listen`'s kind, IPv4 or IPv6), and the C++
   parser is gone with (e1).
+- **The Windows access-list rule reads a directory by the rights that
+  change its entries.** Commit (a)'s walk judged every directory above the
+  configuration file by the file write mask, which holds
+  `FILE_APPEND_DATA`; on a directory that right is "add a subdirectory",
+  and a default `C:\` grants BUILTIN\Users exactly that, so no file under
+  `C:\` could have passed. A directory is now judged by the rights that
+  replace or remove an entry (add a file, delete a child, take the
+  descriptor); the file itself keeps the full mask. Found while writing
+  the Windows job's access-list case, before its first run.
 - **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
   covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
   the other direction (the `extern "C"` block of

@@ -79,6 +79,15 @@ const WRITE_MASK: u32 = FILE_WRITE_DATA
     | GENERIC_WRITE
     | GENERIC_ALL;
 
+/// The write rights on a directory that let a principal replace or remove
+/// an entry below it: add a file, delete a child, or take the descriptor.
+/// Not `FILE_APPEND_DATA`, which on a directory is "add a subdirectory":
+/// a default `C:\` grants BUILTIN\Users exactly that, and it changes no
+/// child the daemon reads. Not the attribute and EA writes either, which
+/// touch the directory's own metadata.
+const DIRECTORY_WRITE_MASK: u32 =
+    FILE_WRITE_DATA | FILE_DELETE_CHILD | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL;
+
 /// Any read right.
 const READ_MASK: u32 = FILE_READ_DATA | GENERIC_READ | GENERIC_ALL;
 
@@ -89,6 +98,16 @@ const READ_MASK: u32 = FILE_READ_DATA | GENERIC_READ | GENERIC_ALL;
 /// [`DaclError`] when the descriptor cannot be read.
 pub fn write_grantees(path: &Path) -> Result<Vec<Grantee>, DaclError> {
     grantees(path, WRITE_MASK, true)
+}
+
+/// Who may replace or remove an entry of the directory `path`: the owner,
+/// and every allow entry carrying one of [`DIRECTORY_WRITE_MASK`]'s rights.
+/// The rule for a directory above a file the daemon reads.
+///
+/// # Errors
+/// [`DaclError`] when the descriptor cannot be read.
+pub fn directory_write_grantees(path: &Path) -> Result<Vec<Grantee>, DaclError> {
+    grantees(path, DIRECTORY_WRITE_MASK, true)
 }
 
 /// Who may read `path`: every allow entry carrying a read right.

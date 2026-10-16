@@ -87,6 +87,9 @@ function Start-Shekyld {
     $quoted = $Words | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ } }
     $proc = Start-Process -FilePath $Daemon -ArgumentList $quoted -RedirectStandardOutput $out `
         -RedirectStandardError $err -PassThru -NoNewWindow
+    # Cache the handle now: without it, ExitCode is null for a child that
+    # exits before the first read, and the refusal cases exit at once.
+    $null = $proc.Handle
     return @{ Proc = $proc; Out = $out; Err = $err }
 }
 
@@ -165,7 +168,11 @@ $markerFile = Join-Path $dataDir 'shekyld.network'
 
 function Get-DaemonWords {
     param([string] $Network, [string] $Data, [int] $Port, [string] $Log, [string[]] $Extra = @())
-    return @('--network', $Network, '--clearnet', 'off', '--tor', 'off', '--dev-difficulty', '1',
+    # `dev-difficulty` is a regtest-only row: on another network it is
+    # refused at resolve (config.dev.network), before the data directory is
+    # looked at, so the testnet daemon of case 4 must not carry it.
+    $lever = if ($Network -eq 'regtest') { @('--dev-difficulty', '1') } else { @() }
+    return @('--network', $Network, '--clearnet', 'off', '--tor', 'off') + $lever + @(
         '--data-dir', $Data, '--rpc-admin-listen', "127.0.0.1:$Port", '--log-file', $Log,
         '--log-level', 'warn') + $Extra
 }
