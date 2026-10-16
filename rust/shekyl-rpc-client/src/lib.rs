@@ -28,11 +28,7 @@ use serde_json::{json, Value};
 use shekyl_curve_io::*;
 use shekyl_rpc_types::core_rpc_version_string;
 use shekyl_types::ChainCount;
-// Number of blocks the fee estimate will be valid for
-// https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
-//   /src/wallet/wallet2.cpp#L121
 
-/// Phase 2a canonical dust threshold (§3.10.2).
 pub mod tx_fee;
 
 /// An error from the RPC.

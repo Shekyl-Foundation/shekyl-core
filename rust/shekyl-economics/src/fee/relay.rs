@@ -67,7 +67,7 @@ pub fn relay_fee_floor(
 }
 
 /// Admit iff `fee ≥ quantized_fee(weight, min(floors))`: the requirement on
-/// the fee lattice ([`FEE_QUANTIZATION_MASK`]), less
+/// the fee lattice ([`super::quantization::FEE_QUANTIZATION_MASK`]), less
 /// [`RELAY_ADMISSION_SLACK_BP`] basis points (zero).
 ///
 /// `floors` is the `(h′−G ..= h′)` window; only the minimum is read, so
