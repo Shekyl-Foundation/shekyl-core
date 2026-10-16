@@ -73,6 +73,7 @@
 use crate::block::Candidate;
 use crate::census::{CenRow, PolicyRow, RowStatus};
 use crate::fault::FormAttempt;
+use crate::harness::expected_references;
 use crate::harness::fixture::{candidate_on, recorded, repriced, root};
 use crate::harness::{
     assert_refused, expected_seed, expected_target, judged, Faulted, MockChain, MockSubstrate,
@@ -681,12 +682,14 @@ fn one_block() -> MockChain {
 
 /// Both stages against `chain`; the mock never faults.
 fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
+    let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

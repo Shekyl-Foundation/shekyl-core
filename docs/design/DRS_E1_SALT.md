@@ -470,7 +470,11 @@ lands (§10).
   the block. E5's demotion sequence is therefore: read the tip's bytes,
   cumulative difficulty, coins and weight and the witness through the
   batch's view, `pop()`, AL1. Stated here so the E5 plan inherits the order
-  rather than discovering `Popped`'s shape.
+  rather than discovering `Popped`'s shape. **Carried and built** (DRS-E5
+  switch PR): `ReadSnapshot::candidate_at` reads each demoted block — block,
+  listed bodies, witness — on a snapshot taken before the write; the cheap
+  tier judges it there and AL1 writes the row from that verdict after the
+  pops (`DRS_E5_POOL_ALT_PRUNE.md` §2.3).
 - **SAL-14 — `rollback_blockchain_switching` is a deletion, not a port**
   *(added on the rulings, 2026-09-25)*. The function (`:1080`, called at
   `:1204`) pops the blocks the failed switch promoted and re-adds the ones
@@ -489,7 +493,13 @@ lands (§10).
   applied nothing non-store. The row belongs to E5's plan with both halves
   and the falsifier (`git grep rollback_blockchain_switching src/` → 0 after
   the cutover); this document names it so the E5 plan inherits a deletion
-  plus an ordering rule, not a translation task.
+  plus an ordering rule, not a translation task. **Carried and built**
+  (DRS-E5 switch PR): the Rust switch is one `store.write`; a promotion
+  verdict aborts it and the store is the pre-switch chain, with no
+  compensating writes (the failing alt suffix is removed afterwards in a
+  write of its own, CEN-K5). The pool half of the ordering rule is PR-b's:
+  until then the demoted bodies come back from the closure's `Ok` and the
+  one caller drops them. The deletion stays `DEL-009`'s, at the store flip.
 - **SAL-15 — the folded witness's §7.1.1 obligation moves with it, and the
   fold lets the "declared, not enforced" boundary be enforced** *(added on
   the rulings, 2026-09-25; checked against `DAEMON_REDB_STORE.md` §7.1.1

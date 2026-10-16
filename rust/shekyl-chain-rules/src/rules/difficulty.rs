@@ -109,6 +109,14 @@ impl Target {
 
     /// A fixed target for a Fakechain rule set (`RuleSet::fakechain`,
     /// CEN-D7). Non-zero by the argument's type.
+    /// A target at `difficulty` that no header chain derived — for a test
+    /// that needs a claim the headers refute (`Stale::Target`).
+    #[cfg(any(test, feature = "harness"))]
+    #[must_use]
+    pub const fn for_tests(difficulty: NonZeroU128) -> Self {
+        Self::fixed(difficulty)
+    }
+
     pub(crate) const fn fixed(fixed: NonZeroU128) -> Self {
         Self(fixed)
     }

@@ -36,6 +36,7 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
             &FixtureSubstrate,
             BlockHash::NULL,
             expected_target(&view, &seven).expect("the view answers"),
+            &shekyl_chain_rules::ReferenceClaims::EMPTY,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,
@@ -85,6 +86,7 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
             &FixtureSubstrate,
             BlockHash::NULL,
             expected_target(&view, &seven).expect("the view answers"),
+            &shekyl_chain_rules::ReferenceClaims::EMPTY,
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,

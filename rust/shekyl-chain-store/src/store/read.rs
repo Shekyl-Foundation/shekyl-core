@@ -1000,6 +1000,140 @@ impl ReadSnapshot<'_> {
         self.get_property::<ArchivalLastSlashEpochCell>()
     }
 
+    /// Every catalogued table's rows as stored bytes, by table name, in key
+    /// order — the whole file at the byte level, for a **differential**: two
+    /// stores that should hold the same state compared table by table, so a
+    /// difference names its table (`DRS_E5_POOL_ALT_PRUNE.md` a6's
+    /// self-differential: a store that switched A → B against one that
+    /// connected B directly). Not a consensus read and not a digest: no
+    /// rule reads it, and it carries no domain-separated commitment. A
+    /// table absent from the file is absent from the map.
+    ///
+    /// # Errors
+    ///
+    /// Engine errors.
+    pub fn table_rows(&self) -> Result<BTreeMap<&'static str, super::undo::RawRows>, StoreError> {
+        let mut out = BTreeMap::new();
+        for target in crate::schema::undo_targets() {
+            if let Some(rows) = target.raw_rows(&self.txn)? {
+                out.insert(target.name(), rows);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The proof-of-work hash this node recorded for the block at `height`
+    /// (`block_pow`, written by `connect`), under the seed it was computed
+    /// under. [`AtHeight::AboveTip`] past the tip.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a recorded height with no row or an undecodable one; engine
+    /// errors.
+    pub fn recorded_pow(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<crate::codec::RecordedPow>, StoreError> {
+        match self.tip_row()? {
+            Some((tip, _)) if height.to_raw() <= tip => {}
+            _ => return Ok(AtHeight::AboveTip),
+        }
+        chain_reads::cell(
+            &self.txn,
+            crate::schema::BLOCK_POW,
+            height.to_raw(),
+            "block_pow",
+        )
+        .map_err(chain_reads::ReadFault::into_plain)?
+        .map(AtHeight::Recorded)
+        .ok_or_else(|| {
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                key: "block_pow",
+                fault: CellFault::Absent,
+            })
+        })
+    }
+
+    /// **SAL-13.** The recorded block at `height` as the candidate it was:
+    /// the block, every listed transaction's whole wire bytes (`pruned ‖
+    /// pqc_auths ‖ prunable`, [`TxRecord::wire_bytes`]) in the header's
+    /// order, and its attestation witness (A10; CEN-K5b: the witness is
+    /// captured off its height row before the pop). What a switch reads for
+    /// each block it is about to demote, on the snapshot taken before the
+    /// pops (`DRS_E5_POOL_ALT_PRUNE.md` §2.3): the cheap tier judges it, its
+    /// row is written from that verdict, and its listed bodies go back to
+    /// the pool. [`AtHeight::AboveTip`] past the tip.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 when a listed hash has no record, a region a poppable height
+    /// must hold is discarded (the retention prune keeps every body above
+    /// the undo floor, so a body missing there is a store that disagrees
+    /// with its own floor), the reassembled bytes do not parse as a
+    /// transaction, or the witness row is not a witness; whatever
+    /// [`block`](Self::block) and the per-transaction reads return; engine
+    /// errors.
+    pub fn candidate_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<shekyl_chain_rules::Candidate>, StoreError> {
+        let body = match self.block(height)? {
+            AtHeight::Recorded(body) => body,
+            AtHeight::AboveTip => return Ok(AtHeight::AboveTip),
+        };
+        let corrupt = |key: &'static str, reason: &'static str| {
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                key,
+                fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+                    codec: "recorded_candidate",
+                    reason,
+                }),
+            })
+        };
+        let mut transactions = Vec::with_capacity(body.block.transaction_hashes.len());
+        for hash in &body.block.transaction_hashes {
+            let Some(record) = self.tx_record(hash)? else {
+                return Err(corrupt(
+                    "tx_indices",
+                    "a listed hash has no recorded transaction",
+                ));
+            };
+            let prunable = match self.tx_prunable(record.location.id)? {
+                AtIndex::Recorded(Prunable::Retained(segment)) => segment,
+                AtIndex::Recorded(Prunable::Discarded) => {
+                    return Err(corrupt(
+                        "txs_prunable",
+                        "a body at a poppable height is discarded",
+                    ))
+                }
+                AtIndex::BeyondCount => {
+                    return Err(corrupt("txs_pruned", "a recorded id is beyond the count"))
+                }
+            };
+            let Some(bytes) = record.wire_bytes(prunable) else {
+                return Err(corrupt(
+                    "txs_pqc_auths",
+                    "a pqc_auths region at a poppable height is discarded",
+                ));
+            };
+            let tx = shekyl_wire::Transaction::read(&mut bytes.as_slice())
+                .map_err(|_| corrupt("txs_pruned", "the reassembled transaction does not parse"))?;
+            transactions.push(tx);
+        }
+        let witness = match self.attestation_witness_at(height)? {
+            AtHeight::Recorded(bytes) => bytes,
+            AtHeight::AboveTip => unreachable!("the block at this height was just read"),
+        };
+        let witness = witness
+            .map(shekyl_types::archival::AttestationWitness::new)
+            .transpose()
+            .map_err(|_| corrupt("archival_attestation_witness", "the row is not a witness"))?;
+        Ok(AtHeight::Recorded(
+            shekyl_chain_rules::Candidate::new(body.block, transactions)
+                .with_attestation_witness(witness),
+        ))
+    }
+
     /// **A10.** Attestation witness bytes, unparsed. [`AtHeight::AboveTip`]
     /// past the tip; `Recorded(None)` when the recorded block stored no row;
     /// `Recorded(Some(bytes))` for a non-empty row within the witness cap.
