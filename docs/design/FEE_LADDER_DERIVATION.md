@@ -762,7 +762,8 @@ top rung rounds to 14,000,000. The design genesis is 1,024 SKL. Its legacy
 (These tables measure the *mispricing* and therefore apply raw `C`; the
 values a §5.2 daemon would actually serve apply the quantized `C_q` and
 differ by up to one pow2 step. The instrument's `served_ceil_cq` column
-carries them — measured highlights, review round 3: in every quiet state
+carried them until the column was deleted with the snap (2026-10-15); the
+figures stay as that round's record. Measured highlights, review round 3: in every quiet state
 with `C ∈ (0.5, 1]` the ceiling rule gives `C_q = 1`, so the **served
 ladder equals today's ladder exactly** — genesis-quiet, genesis-baseline
 and mature-quiet all serve `[69 000/16 000, …]` unchanged, meaning launch

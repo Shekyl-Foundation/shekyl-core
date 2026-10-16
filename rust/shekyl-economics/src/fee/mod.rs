@@ -13,18 +13,15 @@
 //! M         = max(long-term median, Zm)
 //! ```
 //!
-//! Quantized `C_q` / hysteresis live in [`correction`] for the wallet-cap
-//! bound and the derivation instrument. They are not the served scalar
-//! (FL-R20). PR C deletes them from the instrument.
+//! [`quantize_pow2_ceil`] is the wallet-cap ceiling (`C_q ≥ C`). The daemon
+//! multiplies by raw `C` (FL-R20). The §7 hysteresis band was deleted with
+//! FL-R21.
 
 pub mod correction;
 pub mod ladder;
 pub mod relay;
 
-pub use correction::{
-    fee_correction, fee_correction_quantized, hysteresis_fold, hysteresis_settled, hysteresis_step,
-    quantize_pow2_ceil, FeeCorrection,
-};
+pub use correction::{fee_correction, quantize_pow2_ceil, FeeCorrection};
 pub use ladder::{
     checked_corrected_fee_ladder, corrected_fee_ladder, round_money_up_2, FeeLadder,
     EMISSION_CLAIM_FEE_FLOOR,
