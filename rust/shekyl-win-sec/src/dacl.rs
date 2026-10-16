@@ -101,8 +101,8 @@ pub fn write_grantees(path: &Path) -> Result<Vec<Grantee>, DaclError> {
 }
 
 /// Who may replace or remove an entry of the directory `path`: the owner,
-/// and every allow entry carrying one of [`DIRECTORY_WRITE_MASK`]'s rights.
-/// The rule for a directory above a file the daemon reads.
+/// and every allow entry that can add a file, delete a child, or take the
+/// descriptor. The rule for a directory above a file the daemon reads.
 ///
 /// # Errors
 /// [`DaclError`] when the descriptor cannot be read.
