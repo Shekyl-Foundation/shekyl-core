@@ -99,7 +99,7 @@ sync_start() {  # a fresh data directory, then the daemon, then wait until it is
     --clearnet-listen none --tor off \
     --rpc-admin-listen "127.0.0.1:$SYNC_RPC" --rpc-view-listen "127.0.0.1:$SYNC_RPC_R" \
     --p2p-closed-peer "$PEER" --dev-clearnet-encrypt \
-    --log-file "$WORK/syncdata/sync.log" --log-level warn > "$WORK/syncdata/stdout.log" 2>&1 &
+    --log-file "$WORK/syncdata/sync.log" --log-level info > "$WORK/syncdata/stdout.log" 2>&1 &
   SYNC_PID=$!
   echo "$SYNC_PID" > "$WORK/syncdata/pid"
   # Wait until the daemon's own log shows it past height 50. The RPC is
