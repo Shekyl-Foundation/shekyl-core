@@ -444,6 +444,30 @@ of its own, for the same reason as the negative one.
   file is a row the file accepts, and the generators' default roots are
   the fleet units' directories. Bitten on the shipped unit with
   `--non-interactive` restored to its `ExecStart`.
+- **The refused-inbound gate (commit (f2), §5.2; Rick, 2026-10-14).**
+  `shekyl-levin/tests/refused_inbound.rs` starts the daemon through a
+  shell that lowers its own soft descriptor limit and execs the daemon
+  (the limit is the child's alone), reads the bounded ceiling the seam
+  logs at bind, fills it with peers whose handshakes are answered, and
+  asserts that the next peer is closed before its handshake while the
+  admitted ones stay. No option and no lever: the bound is the
+  derivation (PWD-B1). Unix only. The live rig the inbound cost bench
+  carried is a shared test module now (`tests/live_daemon`). Armed in
+  `run_live_daemon_gates.sh` as its own list with the same ratchet (every
+  ignored test of the binary is armed, every armed name is listed);
+  observed red by filling one short of the ceiling.
+- **The Windows job's cutover cases (commit (f2), §5.2).**
+  `daemon_boot_stop_smoke.ps1` asserts, on one daemon: the lock while it
+  runs, a second daemon on the data directory refused with exit 2 naming
+  `config.data-dir.locked`, the stop over RPC with exit 0, the store, the
+  marker naming regtest and its id, a testnet daemon refused with
+  `config.marker.network`; and, Windows only, a configuration file in a
+  private directory accepted and the same file refused with
+  `config.file.permissions` after `icacls` grants Users write on its
+  directory. The poll keeps its last error for the timeout message. The
+  script cannot run on this seat (no `pwsh`); the Windows job on the PR is
+  its first run, and whether the runner's temp directory's ancestors
+  satisfy the access-list rule is what that run answers (audit §5).
 - **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
   covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
   the other direction (the `extern "C"` block of
