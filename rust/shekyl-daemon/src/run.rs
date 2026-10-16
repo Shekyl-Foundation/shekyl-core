@@ -11,15 +11,19 @@
 //! answers `--help` and `--version`, takes the lock, checks the marker,
 //! starts logging, makes the announcements, installs the one signal owner,
 //! fills the snapshot and calls the remnant's `run` on a thread of its own.
-//! A stop request calls the remnant's `stop`, the thread is joined, and the
-//! lock is released last. A refusal exits with 2, a runtime failure with
-//! 1, and `run`'s status becomes the exit status otherwise.
+//! Stop is one path: the dialer and the zone host, then the RPC, then the
+//! remnant's `stop` (only when `run` has not finished) together with the
+//! managed Tor's teardown. The lock is released last. A refusal exits with
+//! 2, a runtime failure with 1, and `run`'s status becomes the exit status
+//! otherwise.
 
 use std::ffi::{c_char, CStr, CString, OsString};
 use std::io::Write;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use tokio::sync::oneshot::{self, Receiver};
 
 use shekyl_daemon_config::announce;
 use shekyl_daemon_config::sections::{build, log_location_writable, DaemonConfig, Tor};
@@ -36,6 +40,13 @@ use shekyl_daemon_rpc::options::OptionsHandle;
 pub const EXIT_REFUSED: i32 = 2;
 /// A runtime failure.
 pub const EXIT_FAILED: i32 = 1;
+
+/// One line for the operator. Help and version use standard output; a
+/// refusal or a failure uses standard error. A closed stream does not
+/// change the exit status.
+fn tell(out: &mut impl Write, line: &str) {
+    drop(writeln!(out, "{line}"));
+}
 
 /// The platform facts and the one derivation the entry needs, so a test
 /// can run the sequence without an account or a build.
@@ -58,7 +69,6 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         Ok(cli) => cli,
         Err(ds) => return refuse(&ds),
     };
-    let (network, mode) = choosers(&cli);
     let release_name = c_string(entry.release_name);
     let version_full = c_string(entry.version_full);
     if cli.given.iter().any(|g| g.row.name == "help") {
@@ -69,51 +79,29 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         return 0;
     }
     if cli.given.iter().any(|g| g.row.name == "version") {
-        println!(
-            "Shekyl '{release_name}' (v{version_full}, protocol {})\nOS: {} {}",
-            entry.protocol_version,
-            std::env::consts::OS,
-            std::env::consts::ARCH
+        tell(
+            &mut std::io::stdout(),
+            &format!(
+                "Shekyl '{release_name}' (v{version_full}, protocol {})\nOS: {} {}",
+                entry.protocol_version,
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            ),
         );
         return 0;
     }
 
-    // The file: named, or the network's default.
-    let (config_path, named) = match cli.given.iter().find(|g| g.row.name == "config-file") {
-        Some(g) => match &g.value {
-            Value::Path(p) => (p.clone(), true),
-            _ => return EXIT_FAILED,
-        },
-        None => match paths::config_file_default(&host.platform, mode, network) {
-            Ok(p) => (p, false),
-            Err(d) => return refuse(&[d]),
-        },
+    let Loaded {
+        config_path,
+        file_read,
+        resolved,
+        config,
+    } = match load(cli, host) {
+        Ok(loaded) => loaded,
+        Err(status) => return status,
     };
-    let opened = match file::open(&config_path, named) {
-        Ok(o) => o,
-        Err(d) => return refuse(&[d]),
-    };
-    let mut given = Vec::new();
-    if let Some(config_file) = &opened {
-        given = match read_file(&TABLE, &config_path, &config_file.text) {
-            Ok(g) => g,
-            Err(ds) => return refuse(&ds),
-        };
-        for g in given.iter().filter(|g| matches!(g.row.kind, Kind::Secret)) {
-            if let Err(d) = config_file.secret_readable_only_by_permitted(g.row.name) {
-                return refuse(&[d]);
-            }
-        }
-    }
-    let resolved = match resolve(&TABLE, network, cli, given) {
-        Ok(r) => r,
-        Err(ds) => return refuse(&ds),
-    };
-    let file_read = opened.as_ref().map(|f| f.path.as_path());
-    let config = match build(&resolved, network, mode, &host.platform, file_read) {
-        Ok(c) => c,
-        Err(ds) => return refuse(&ds),
-    };
+    let read_path = file_read.as_deref();
+    let network = config.network;
 
     // Client mode: no lock, no marker, no log file, no announcement.
     if config.is_client() {
@@ -126,7 +114,10 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         Err(d) => return refuse(&[d]),
     };
     let Some(network_id) = (host.network_id_of)(network.cryptonote_code()) else {
-        eprintln!("shekyld: no network id for {}", network.name());
+        tell(
+            &mut std::io::stderr(),
+            &format!("shekyld: no network id for {}", network.name()),
+        );
         return EXIT_FAILED;
     };
     if let Err(d) = marker::check_or_write(&lock, network, network_id) {
@@ -145,14 +136,17 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     let _logger = match shekyl_logging::init(logging) {
         Ok(guard) => guard,
         Err(e) => {
-            eprintln!("shekyld: logging could not start: {e}");
+            tell(
+                &mut std::io::stderr(),
+                &format!("shekyld: logging could not start: {e}"),
+            );
             return EXIT_FAILED;
         }
     };
     let mut lines = vec![announce::effective_configuration(
         &TABLE,
         &resolved,
-        file_read,
+        read_path,
         &config_path,
     )];
     lines.extend(announce::dev_levers(&TABLE, &resolved));
@@ -163,23 +157,22 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     // binds the seam. The schedule levers are recorded here, before the
     // core whose first epoch arithmetic would latch them exists; a value
     // the owner refuses is the row's refusal (§6).
-    network::record(&config);
+    if let Err(disagreement) = network::record(&config) {
+        tell(&mut std::io::stderr(), &format!("shekyld: {disagreement}"));
+        return EXIT_FAILED;
+    }
     let dev = &config.dev;
-    if let Err(rule) = shekyl_ffi::pow_randomx_ffi::record_seed_epoch(
+    if let Err(refusal) = shekyl_ffi::pow_randomx_ffi::record_seed_epoch(
         dev.pow_seed_epoch_blocks,
         dev.pow_seed_epoch_lag,
     ) {
-        return refuse(&[owner_refusal(&resolved, "dev-pow-seed-epoch-blocks", &rule)]);
+        return refuse(&[owner_refusal(&resolved, refusal.row(), refusal.rule())]);
     }
-    if let Err(rule) = shekyl_ffi::archival_ffi::arm_settlement_schedule(
+    if let Err(refusal) = shekyl_ffi::archival_ffi::arm_settlement_schedule(
         dev.settlement_epoch_blocks,
         dev.archival_reorg_depth,
     ) {
-        return refuse(&[owner_refusal(
-            &resolved,
-            "dev-settlement-epoch-blocks",
-            &rule,
-        )]);
+        return refuse(&[owner_refusal(&resolved, refusal.row(), refusal.rule())]);
     }
 
     // The one signal owner, the RPC section for the remnant's one start,
@@ -193,7 +186,10 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     let pool = match shekyl_runtime::runtime(budget, &name) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("shekyld: the signal owner's runtime could not start: {e}");
+            tell(
+                &mut std::io::stderr(),
+                &format!("shekyld: the signal owner's runtime could not start: {e}"),
+            );
             return EXIT_FAILED;
         }
     };
@@ -206,22 +202,30 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     status
 }
 
-/// What the first wait reached: the remnant's one RPC start completed
-/// (§2.2 step 7's last act), that start was refused, `run` ended on its
-/// own, or a stop was requested first.
-enum Reached {
-    Constructed,
-    RpcRefused,
+/// `run` returned, or a stop was requested while it was still running.
+/// A small status: copied, never borrowed.
+#[derive(Clone, Copy)]
+enum RunWait {
     Finished(i32),
     StopRequested,
 }
 
-/// Steps 7 to 9: the remnant's `run` on its own thread, the wait for its
-/// RPC start, and the one stop path. Returns the exit status.
+/// The remnant's RPC start completed, it was refused, or `run` ended or a
+/// stop arrived before that start.
+#[derive(Clone, Copy)]
+enum Built {
+    Ready,
+    Refused,
+    Ended(RunWait),
+}
+
+/// Steps 7 to 9: the remnant's `run` on its own thread, one wait for its
+/// RPC start, one step-8 start, one wait for exit, and one teardown.
+/// Returns the exit status.
 ///
-/// The waits run on `pool`; the stop sequence runs on this thread, outside
-/// any async context, because the RPC's stop blocks on its own runtime's
-/// drain and a runtime cannot be entered from inside another's `block_on`.
+/// The waits run on `pool`. The teardown runs on this thread, outside any
+/// async context, because the RPC's stop blocks on its own runtime's drain
+/// and a runtime cannot be entered from inside another's `block_on`.
 fn supervise(
     entry: &ShekylDaemonEntry,
     config: &DaemonConfig,
@@ -230,14 +234,15 @@ fn supervise(
     options: OptionsHandle,
 ) -> i32 {
     let Some(run) = entry.run else {
-        eprintln!("shekyld: the entry has no run");
+        tell(&mut std::io::stderr(), "shekyld: the entry has no run");
         return EXIT_FAILED;
     };
     let Some(stop) = entry.stop else {
-        eprintln!("shekyld: the entry has no stop");
+        tell(&mut std::io::stderr(), "shekyld: the entry has no stop");
         return EXIT_FAILED;
     };
-    let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(config.rpc.clone(), options);
+    let mut constructed =
+        shekyl_daemon_rpc::ffi_exports::configure(config.rpc.clone(), options, config.offline());
     // Step 6: the notify runner, installed before the core that pushes to
     // it exists; its children run on the signal owner's runtime (§2.10).
     shekyl_ffi::notify_ffi::install(&config.notify, pool.handle().clone());
@@ -245,7 +250,7 @@ fn supervise(
     // awaited at step 8.
     let tor_start = tor::begin(&config.tor, &config.data_dir, pool.handle());
     let data = SnapshotData::new(config);
-    let (done_tx, mut done_rx) = tokio::sync::oneshot::channel::<i32>();
+    let (done_tx, mut done_rx) = oneshot::channel::<i32>();
     let thread = std::thread::Builder::new()
         .name("shekyld-run".to_owned())
         .spawn(move || {
@@ -256,7 +261,10 @@ fn supervise(
     let thread = match thread {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("shekyld: the run thread could not start: {e}");
+            tell(
+                &mut std::io::stderr(),
+                &format!("shekyld: the run thread could not start: {e}"),
+            );
             return EXIT_FAILED;
         }
     };
@@ -264,54 +272,14 @@ fn supervise(
     // Step 7: the remnant constructs core, the protocol handler and
     // net_node, and calls the RPC start once; its completion is the signal
     // that the core exists for step 8.
-    let reached = pool.block_on(async {
-        tokio::select! {
-            built = &mut constructed => match built {
-                Ok(Ok(())) => Reached::Constructed,
-                Ok(Err(refusal)) => {
-                    tracing::error!(target: "daemon", "the RPC did not start: {refusal}");
-                    Reached::RpcRefused
-                }
-                Err(_replaced) => {
-                    tracing::error!(target: "daemon", "the RPC section was replaced before the start");
-                    Reached::RpcRefused
-                }
-            },
-            finished = &mut done_rx => Reached::Finished(finished.unwrap_or(EXIT_FAILED)),
-            requested = signals::stop_requested() => {
-                note_stop(requested);
-                Reached::StopRequested
-            }
-        }
-    });
+    let mut run_status = None;
+    // A network that cannot start is a failure even when `run` returned 0.
+    let mut preserve_status = true;
     let mut tor_control = None;
-    let status = match reached {
-        Reached::Finished(status) => status,
-        Reached::StopRequested => {
-            stop_path(stop);
-            pool.block_on(&mut done_rx).unwrap_or(EXIT_FAILED)
-        }
-        Reached::RpcRefused => {
-            // The remnant's run throws and returns; a stop asked for
-            // meanwhile is honoured all the same.
-            let finished = pool.block_on(async {
-                tokio::select! {
-                    finished = &mut done_rx => Some(finished.unwrap_or(EXIT_FAILED)),
-                    requested = signals::stop_requested() => {
-                        note_stop(requested);
-                        None
-                    }
-                }
-            });
-            match finished {
-                Some(status) => status,
-                None => {
-                    stop_path(stop);
-                    pool.block_on(&mut done_rx).unwrap_or(EXIT_FAILED)
-                }
-            }
-        }
-        Reached::Constructed => {
+    match pool.block_on(await_built(&mut constructed, &mut done_rx)) {
+        Built::Ended(wait) => note_run(&mut run_status, wait),
+        Built::Refused => note_run(&mut run_status, pool.block_on(run_or_stop(&mut done_rx))),
+        Built::Ready => {
             // Step 8: the managed Tor, awaited; then the zone host, its
             // listeners and the dialer, each from its section; then the
             // onion, which forwards to the zone host's loopback listener.
@@ -352,37 +320,21 @@ fn supervise(
                         ));
                         tor::watch_death(control, published, pool.handle());
                     }
-                    let finished = pool.block_on(async {
-                        tokio::select! {
-                            finished = &mut done_rx => Some(finished.unwrap_or(EXIT_FAILED)),
-                            requested = signals::stop_requested() => {
-                                note_stop(requested);
-                                None
-                            }
-                        }
-                    });
-                    match finished {
-                        Some(status) => status,
-                        None => {
-                            stop_path(stop);
-                            pool.block_on(&mut done_rx).unwrap_or(EXIT_FAILED)
-                        }
-                    }
+                    note_run(&mut run_status, pool.block_on(run_or_stop(&mut done_rx)));
                 }
                 Err(e) => {
                     tracing::error!(target: "global", "the network could not start: {e}; stopping");
-                    stop_path(stop);
-                    let _status = pool.block_on(&mut done_rx);
-                    EXIT_FAILED
+                    preserve_status = false;
                 }
             }
         }
-    };
-    // `run` ended: whatever stopped it, the zone host and the RPC are
-    // stopped before the core they serve is gone (the remnant stops the RPC
-    // too; the second is a no-op), and the managed Tor is torn down.
+    }
+    // Step 9: the dialer and the zone host, then the RPC. The remnant's
+    // stop, asked only when `run` has not finished, then joins that thread
+    // while the managed Tor is torn down.
     network::stop();
     shekyl_daemon_rpc::ffi_exports::stop();
+    let joiner = std::thread::spawn(move || finish_remnant(stop, thread, done_rx, run_status));
     if let Some(control) = tor_control {
         let exit = pool.block_on(control.shutdown());
         tracing::info!(
@@ -390,15 +342,92 @@ fn supervise(
             "the managed Tor was torn down ({exit:?}); the address is gone, a restart mints a new one"
         );
     }
+    let status = match joiner.join() {
+        Ok(status) => status,
+        Err(_) => {
+            tracing::error!(target: "daemon", "the run thread's joiner panicked");
+            EXIT_FAILED
+        }
+    };
+    if preserve_status {
+        status
+    } else {
+        EXIT_FAILED
+    }
+}
+
+/// The RPC start, or `run` ending or a stop arriving before it.
+async fn await_built(
+    constructed: &mut Receiver<Result<(), String>>,
+    done_rx: &mut Receiver<i32>,
+) -> Built {
+    tokio::select! {
+        built = &mut *constructed => match built {
+            Ok(Ok(())) => Built::Ready,
+            Ok(Err(refusal)) => {
+                tracing::error!(target: "daemon", "the RPC did not start: {refusal}");
+                Built::Refused
+            }
+            Err(_replaced) => {
+                tracing::error!(target: "daemon", "the RPC section was replaced before the start");
+                Built::Refused
+            }
+        },
+        waited = run_or_stop(done_rx) => Built::Ended(waited),
+    }
+}
+
+/// `run`'s return, or a stop request. One wait, used after the RPC start
+/// and again after step 8.
+async fn run_or_stop(done_rx: &mut Receiver<i32>) -> RunWait {
+    tokio::select! {
+        finished = &mut *done_rx => RunWait::Finished(finished.unwrap_or(EXIT_FAILED)),
+        requested = signals::stop_requested() => {
+            note_stop(requested);
+            RunWait::StopRequested
+        }
+    }
+}
+
+fn note_run(run_status: &mut Option<i32>, wait: RunWait) {
+    if let RunWait::Finished(status) = wait {
+        *run_status = Some(status);
+    }
+}
+
+/// The remnant's half of step 9. `stop` is asked only when `run` has not
+/// already returned. The status is `run`'s.
+fn finish_remnant(
+    stop: crate::entry::StopFn,
+    thread: std::thread::JoinHandle<()>,
+    mut done_rx: Receiver<i32>,
+    status: Option<i32>,
+) -> i32 {
+    let status = match status {
+        Some(status) => status,
+        None => match done_rx.try_recv() {
+            Ok(status) => status,
+            Err(oneshot::error::TryRecvError::Closed) => EXIT_FAILED,
+            Err(oneshot::error::TryRecvError::Empty) => {
+                stop();
+                done_rx.blocking_recv().unwrap_or(EXIT_FAILED)
+            }
+        },
+    };
     if thread.join().is_err() {
         tracing::error!(target: "daemon", "the run thread ended by a panic");
     }
     status
 }
 
-/// A value its owner refuses at its own start (§6): the row's range
-/// refusal, at the source the value came from, with the owner's rule.
-fn owner_refusal(resolved: &resolve::Resolved, row: &str, rule: &str) -> Diagnostic {
+/// A value its owner refuses at its own start (§6). A row's refusal is
+/// pinned to that row, at the source the value came from. A latch that
+/// already happened names no row: the machine holds the fact, and either
+/// lever would be the wrong one to blame.
+fn owner_refusal(resolved: &resolve::Resolved, row: Option<&str>, rule: &str) -> Diagnostic {
+    let Some(row) = row else {
+        return Diagnostic::new(Code::ValueRange, Source::Machine).param("rule", rule);
+    };
     let value = resolved
         .get(row)
         .map_or_else(|| "unset".to_owned(), Value::render);
@@ -416,20 +445,10 @@ fn note_stop(requested: std::io::Result<&'static str>) {
     }
 }
 
-/// Step 9's order: the dialer and the zone host, then the RPC, drained,
-/// then the remnant's `stop`, which returns at once; the managed Tor's
-/// teardown and the remnant's thread end in parallel after it, and the
-/// lock is released by the caller after `run` has returned.
-fn stop_path(stop: crate::entry::StopFn) {
-    network::stop();
-    shekyl_daemon_rpc::ffi_exports::stop();
-    stop();
-}
-
 /// Prints each refusal and returns the refusal status.
 fn refuse(diagnostics: &[Diagnostic]) -> i32 {
     for d in diagnostics {
-        eprintln!("shekyld: {}", d.render());
+        tell(&mut std::io::stderr(), &format!("shekyld: {}", d.render()));
     }
     EXIT_REFUSED
 }
@@ -454,7 +473,7 @@ fn unsafe_c_str(ptr: *const c_char) -> String {
 /// The announcements, to standard error and appended to the log file.
 fn announce_all(log_file: &Path, lines: &[String]) {
     for line in lines {
-        eprintln!("shekyld: {line}");
+        tell(&mut std::io::stderr(), &format!("shekyld: {line}"));
     }
     if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(log_file) {
         for line in lines {
@@ -568,17 +587,25 @@ pub(crate) struct Leased {
 #[allow(unsafe_code)]
 unsafe impl Send for Leased {}
 
-/// The real parse for a C++ test binary (`shekyl_daemon_snapshot_parse`):
-/// the arguments through the table, the file and the sections, with the
-/// platform's roots; no lock, marker or logging. `Err` is the exit status
-/// a start would have given, the refusals printed.
-pub(crate) fn snapshot_for_tests(args: &[OsString], host: &Host) -> Result<Box<Leased>, i32> {
-    let rest = args.get(1..).unwrap_or(&[]);
-    let cli = read_cli(&TABLE, rest.iter().cloned()).map_err(|ds| refuse(&ds))?;
+/// The file, the resolved values and the sections. `config_path` is the
+/// path the announcements name, including when the default file was absent.
+/// `file_read` is set only when a file was read.
+struct Loaded {
+    config_path: PathBuf,
+    file_read: Option<PathBuf>,
+    resolved: resolve::Resolved,
+    config: DaemonConfig,
+}
+
+/// The command line through the sections: the file, its secret check, the
+/// resolution and the build. [`main`] answers `--help` and `--version`
+/// before calling this.
+fn load(cli: shekyl_options::Cli, host: &Host) -> Result<Loaded, i32> {
     let (network, mode) = choosers(&cli);
     let (config_path, named) = match cli.given.iter().find(|g| g.row.name == "config-file") {
         Some(g) => match &g.value {
             Value::Path(p) => (p.clone(), true),
+            // The row's kind is a path. Another arm does not come from the parser.
             _ => return Err(EXIT_FAILED),
         },
         None => (
@@ -587,16 +614,42 @@ pub(crate) fn snapshot_for_tests(args: &[OsString], host: &Host) -> Result<Box<L
         ),
     };
     let opened = file::open(&config_path, named).map_err(|d| refuse(&[d]))?;
-    let given = match &opened {
-        Some(config_file) => {
-            read_file(&TABLE, &config_path, &config_file.text).map_err(|ds| refuse(&ds))?
+    let mut given = Vec::new();
+    if let Some(config_file) = &opened {
+        given = read_file(&TABLE, &config_path, &config_file.text).map_err(|ds| refuse(&ds))?;
+        for g in given.iter().filter(|g| matches!(g.row.kind, Kind::Secret)) {
+            config_file
+                .secret_readable_only_by_permitted(g.row.name)
+                .map_err(|d| refuse(&[d]))?;
         }
-        None => Vec::new(),
-    };
+    }
     let resolved = resolve(&TABLE, network, cli, given).map_err(|ds| refuse(&ds))?;
-    let file_read = opened.as_ref().map(|f| f.path.as_path());
-    let config =
-        build(&resolved, network, mode, &host.platform, file_read).map_err(|ds| refuse(&ds))?;
+    let file_read = opened.as_ref().map(|f| f.path.clone());
+    let config = build(
+        &resolved,
+        network,
+        mode,
+        &host.platform,
+        file_read.as_deref(),
+    )
+    .map_err(|ds| refuse(&ds))?;
+    Ok(Loaded {
+        config_path,
+        file_read,
+        resolved,
+        config,
+    })
+}
+
+/// The real parse for a C++ test binary (`shekyl_daemon_snapshot_parse`):
+/// the arguments through the table, the file and the sections, with the
+/// platform's roots; no lock, marker or logging. `Err` is the exit status
+/// a start would have given, the refusals printed. The secret check is the
+/// same one [`load`] runs for a daemon start.
+pub(crate) fn snapshot_for_tests(args: &[OsString], host: &Host) -> Result<Box<Leased>, i32> {
+    let rest = args.get(1..).unwrap_or(&[]);
+    let cli = read_cli(&TABLE, rest.iter().cloned()).map_err(|ds| refuse(&ds))?;
+    let Loaded { config, .. } = load(cli, host)?;
     let data = Box::new(SnapshotData::new(&config));
     let command: Vec<*const c_char> = data.command.iter().map(|w| w.as_ptr()).collect();
     let snapshot = data.snapshot(&command);
@@ -609,7 +662,7 @@ pub(crate) fn snapshot_for_tests(args: &[OsString], host: &Host) -> Result<Box<L
 
 fn call_run(entry: &ShekylDaemonEntry, config: &DaemonConfig) -> i32 {
     let Some(run) = entry.run else {
-        eprintln!("shekyld: the entry has no run");
+        tell(&mut std::io::stderr(), "shekyld: the entry has no run");
         return EXIT_FAILED;
     };
     SnapshotData::new(config).call(run)

@@ -438,6 +438,13 @@ slice that moves a reader deletes its field. If the pre-flight finds a C++
 reader of the advertised address on `dev`, it is a twelfth field,
 recorded there.
 
+The relay's identity and the descriptors reserved for the inbound ceiling
+are read inside Rust (the zone the remnant opens, and the seam bind). They
+are one preparation the Rust `main()` installs before `run`, not snapshot
+fields. The RPC reads offline from the same fact the snapshot carries for
+C++, at its configure, so a peer-list answer is offline before any dialer
+call.
+
 ### 2.10 The notify runner (DC-Q14)
 
 A Rust runner owns the three commands. Each C++ event site pushes the
@@ -471,8 +478,8 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 | paths | `shekyl-daemon-config` (lock, marker); core through the snapshot | the run mode (`service`, DC-Q17), the resolved data directory and log file, and their sources | `data-dir`, `log-file`, `config-file`, `os-version` (folded into `version`) |
 | logging | `shekyl-logging` | the level, the per-category levels, the disk budget for the live file and its archives (IG-Q19) | `log-level`, `max-log-file-size`, `max-log-files` |
 | network | `shekyl-daemon-config`, read by every owner | the network and its params row | `testnet`, `stagenet`, `regtest` |
-| clearnet connector | the zone host and the dialer | the posture: `Off`, or `On` with listen endpoints, an optional SOCKS endpoint with its credentials, and the advertised endpoints | `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6`, `p2p-ignore-ipv4`, `p2p-external-port`, `proxy`, and `offline` with the Tor connector |
-| Tor connector | `shekyl-tor` and the zone host | the posture: `Off`, `Managed` with the Tor binary's path, or `Operator` with a SOCKS endpoint, its credentials, and an optional onion with its local listen endpoint | `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound`, `SHEKYL_TOR_BINARY` (environment) |
+| clearnet connector | the zone host and the dialer | the posture: `Off`, or `On` with listen endpoints, an optional SOCKS endpoint (credentials are refused until a dial sends them), and the advertised endpoints | `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6`, `p2p-ignore-ipv4`, `p2p-external-port`, `proxy`, and `offline` with the Tor connector |
+| Tor connector | `shekyl-tor` and the zone host | the posture: `Off`, `Managed` with the Tor binary's path, or `Operator` with a SOCKS endpoint (credentials are refused until a dial sends them) and an optional onion with its local listen endpoint | `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound`, `SHEKYL_TOR_BINARY` (environment) |
 | p2p policy | the dialer and the peer lists | the operator's peers, the closed-network declaration (absent or non-empty, DC-F11), the local-range override, early disclosure, the ban file's entries, the two rate bounds | `add-peer`, `seed-node`, `add-exclusive-node`, `allow-local-ip`, `p2p-disclose-early` (PR-3), `ban-list`, `in-peers`, `limit-rate-up`, `limit-rate-down`, `limit-rate`, `out-peers`, `tos-flag`, `no-igd`, `igd` |
 | rpc | `shekyl-daemon-rpc` | the admin and view listener sets, the origin list, the connection cap | `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-use-ipv6`, `rpc-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address`, `rpc-restricted-bind-port`, `restricted-rpc`, `rpc-access-control-origins`, `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip`, `rpc-response-soft-limit`, `disable-rpc-ban` |
 | txpool | core, through the snapshot | the weight bound | `max-txpool-weight` |

@@ -3387,11 +3387,10 @@ typedef void (*ShekylRelayCarrierResolvedCb)(void* ctx, std::uint64_t token, boo
 
 //! Open a relay with the caller's epoch length. Its identity (which
 //! connectors are configured) and whether the development cover carrier
-//! runs are the recorded posture (`shekyl_relay_posture_record` for the
-//! test harness; the daemon's Rust main() records them from its
-//! sections). Null when nothing is recorded, or on a `stems` the slot
-//! arithmetic cannot hold, a zero epoch, or a configuration the relay
-//! refuses.
+//! runs are the remnant's preparation (`shekyl_relay_posture_record` for
+//! the test harness; the daemon's Rust main() installs it before `run`).
+//! Null when nothing is installed, or on a `stems` the slot arithmetic
+//! cannot hold, a zero epoch, or a configuration the relay refuses.
 RelayZoneHandle* shekyl_relay_zone_new(std::uint64_t now_ms,
                                        std::size_t stems,
                                        std::uint32_t min_epoch_secs,
@@ -4411,15 +4410,15 @@ struct shekyl_rpc_peer_facts {
 };
 static_assert(sizeof(shekyl_rpc_peer_facts) == 24, "peer facts layout is pinned on both sides");
 /// White then gray entries in one array; `public_only` nonzero lists the
-/// clearnet lists alone. 0; 1 (offline, nothing written); or -1 for a null
-/// out pointer or no lists online. Release `*out_owner` with shekyl_rpc_peer_list_free.
+/// clearnet lists alone. 0, or -1 for a null out pointer or no lists.
+/// Offline is the RPC's answer, from the bit its configure recorded, and
+/// is not a result here. Release `*out_owner` with shekyl_rpc_peer_list_free.
 int shekyl_rpc_peer_list(std::uint8_t public_only, const shekyl_rpc_peer_facts** out,
     std::size_t* out_len, void** out_owner);
 void shekyl_rpc_peer_list_free(void* owner);
-/// Clearnet white and gray list sizes. 0; 1 (offline, nothing written); or -1.
+/// Clearnet white and gray list sizes. 0, or -1 for a null out pointer or
+/// no lists. Offline is not a result here.
 int shekyl_rpc_peerlist_sizes(std::uint64_t* out_white, std::uint64_t* out_gray);
-/// Whether P2P runs: 0 running, 1 offline, -2 before it is recorded.
-int shekyl_rpc_p2p_state(void);
 /// The close kind's name for a log line, from the Rust table; static, never freed.
 const char* shekyl_close_kind_name(std::uint8_t kind);
 /// A peerlist a peer sent over session `session` (the socket id), as it

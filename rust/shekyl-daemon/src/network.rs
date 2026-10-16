@@ -51,12 +51,22 @@ pub fn reserved_descriptors(config: &DaemonConfig) -> u64 {
 }
 
 /// What the owners read at their build, recorded before the remnant is
-/// constructed (step 6).
-pub fn record(config: &DaemonConfig) {
-    shekyl_ffi::rpc_peerlist_ffi::record_offline(config.offline());
+/// constructed (step 6). The relay identity and the reserved descriptor
+/// count are one preparation. A second install that disagrees is refused.
+///
+/// # Errors
+/// [`shekyl_ffi::remnant_prep::PrepDisagreement`] when the preparation was
+/// already installed with different facts.
+pub fn record(config: &DaemonConfig) -> Result<(), shekyl_ffi::remnant_prep::PrepDisagreement> {
+    let prep = shekyl_ffi::remnant_prep::RemnantPrep {
+        relay: shekyl_ffi::relay_zone_ffi::relay_identity(
+            &connectors(config),
+            config.dev.relay_cover,
+        ),
+        reserved_descriptors: reserved_descriptors(config),
+    };
+    shekyl_ffi::remnant_prep::install(prep)?;
     shekyl_ffi::peerlist_ffi::allow_local(config.p2p.local);
-    shekyl_ffi::relay_zone_ffi::record_posture(&connectors(config), config.dev.relay_cover);
-    shekyl_ffi::inbound_ceiling_ffi::record_reserved(reserved_descriptors(config));
     shekyl_ffi::link_ffi::set_limits(config.p2p.upload_max, config.p2p.download_max);
     for ban in &config.p2p.bans {
         match ban {
@@ -66,13 +76,10 @@ pub fn record(config: &DaemonConfig) {
                 }
             }
             Ban::Host(ip) => shekyl_ffi::seam_ffi::bans::ban_host_permanent(*ip),
-            Ban::Peer(shekyl_options::PeerEndpoint::Ip(endpoint)) => {
-                shekyl_ffi::seam_ffi::bans::ban_host_permanent(endpoint.ip());
-            }
-            // The parser admits no onion line (the table is keyed by IP).
-            Ban::Peer(shekyl_options::PeerEndpoint::Onion { .. }) => {}
+            Ban::Peer(endpoint) => shekyl_ffi::seam_ffi::bans::ban_host_permanent(endpoint.ip()),
         }
     }
+    Ok(())
 }
 
 /// This node's own clearnet addresses: `clearnet-advertise` (§2.8), the
@@ -343,7 +350,7 @@ mod tests {
             file.to_str().unwrap(),
         ]);
         assert_eq!(c.p2p.bans.len(), 2);
-        record(&c);
+        record(&c).expect("the ban file's preparation installs");
         let banned =
             |host: &str| shekyl_ffi::seam_ffi::bans::is_banned_permanently(host.parse().unwrap());
         assert!(banned("203.0.113.9"), "permanent");

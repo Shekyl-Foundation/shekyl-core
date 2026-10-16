@@ -255,10 +255,9 @@ pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundC
 /// A null `post` or a null `ctx` clears the seam. Returns 0.
 ///
 /// The hub's inbound ceiling is this process's, resolved here from its
-/// descriptor limit and the reservation the daemon's Rust `main()`
-/// recorded (`inbound_ceiling_ffi::record_reserved`); nothing about it
-/// crosses from C++. A harness that wants another bound sets it after the
-/// bind with [`shekyl_seam_set_ceiling`].
+/// descriptor limit and the reservation in the remnant's preparation;
+/// nothing about it crosses from C++. A harness that wants another bound
+/// sets it after the bind with [`shekyl_seam_set_ceiling`].
 ///
 /// A previous binding is closed and its harness threads are joined before
 /// this call publishes the next one. `ctx` from that binding stays valid

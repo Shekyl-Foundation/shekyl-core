@@ -39,13 +39,25 @@ pub struct ShekylInboundCeiling {
     pub held: u64,
 }
 
+/// The inbound ceiling for this process, from its descriptor limit and the
+/// reservation in the remnant's preparation, with nothing held yet: what
+/// the seam binds with. An unset reservation reads as 0, which is what a
+/// harness that binds with no daemon reserves.
+pub fn configured() -> InboundCeiling {
+    InboundCeiling::resolve(
+        observe_descriptors(),
+        crate::remnant_prep::reserved_descriptors(),
+        0,
+    )
+}
+
 /// Resolve the inbound safety bound from this process and `reserved`.
 ///
 /// `reserved` is descriptors the caller has promised but not opened.
 ///
 /// `inbound_held` is how many descriptors this process currently spends on
 /// inbound connections it has already accepted. They are excluded from the
-/// observed count, because this bound MEASURES inbound: leaving them in would
+/// observed count, because this bound measures inbound: leaving them in would
 /// charge them twice and make the answer depend on how loaded the node was
 /// when the call happened. Pass `0` when nothing is connected yet.
 ///
@@ -53,25 +65,6 @@ pub struct ShekylInboundCeiling {
 ///
 /// `out` must be non-null and point at a writable [`ShekylInboundCeiling`]
 /// for the duration of the call. A null `out` returns without writing.
-/// The descriptors reserved beyond the p2p's own: the RPC connection cap
-/// and the dialers' outbound targets, recorded by the daemon's Rust
-/// `main()` before the remnant binds the seam (`DAEMON_CONFIG_CUTOVER.md`
-/// §4.2, the zone host's values). 0 until recorded, which is what a
-/// harness that binds without a daemon reserves.
-static RESERVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// Records the descriptors reserved beyond the p2p's own.
-pub fn record_reserved(reserved: u64) {
-    RESERVED.store(reserved, std::sync::atomic::Ordering::Release);
-}
-
-/// The inbound ceiling for this process, from its descriptor limit and the
-/// recorded reservation, with nothing held yet: what the seam binds with.
-pub fn configured() -> InboundCeiling {
-    let reserved = RESERVED.load(std::sync::atomic::Ordering::Acquire);
-    InboundCeiling::resolve(observe_descriptors(), reserved, 0)
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_inbound_ceiling_resolve(
     reserved: u64,

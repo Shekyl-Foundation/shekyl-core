@@ -560,6 +560,64 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
     (b != NIL).then(|| ConnectionId::from_bytes(b))
 }
 
+/// The relay half of the remnant's preparation: one bit per connector
+/// index, and whether the development cover carrier runs. The mask is
+/// computed here, next to [`connectors_from_mask`], so the preparation
+/// stores no dialer type.
+#[must_use]
+pub fn relay_identity(
+    connectors: &[ConnectorId],
+    cover: bool,
+) -> crate::remnant_prep::RelayIdentity {
+    let connectors = connectors
+        .iter()
+        .fold(0u32, |mask, connector| mask | (1u32 << connector.index()));
+    crate::remnant_prep::RelayIdentity { connectors, cover }
+}
+
+/// The C++ test harness writer (`tests/unit_tests/levin.cpp`,
+/// `tests/unit_tests/node_server.cpp`). It overwrites the relay half
+/// between notifiers and does not touch the reservation. Returns 0, or -1
+/// for a bit past the connector count.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_posture_record(configured: u32, cover: bool) -> i32 {
+    if connectors_from_mask(configured).is_err() {
+        return -1;
+    }
+    crate::remnant_prep::state_relay(crate::remnant_prep::RelayIdentity {
+        connectors: configured,
+        cover,
+    });
+    0
+}
+
+/// Opens the relay zone from the remnant's preparation. Null when no
+/// identity is installed: a relay with no identity is not built.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_zone_new(
+    now_ms: u64,
+    stems: usize,
+    min_epoch_secs: u32,
+    epoch_jitter_secs: u32,
+) -> *mut RelayZoneHandle {
+    let Some(identity) = crate::remnant_prep::relay() else {
+        return std::ptr::null_mut();
+    };
+    let flags = if identity.cover {
+        SHEKYL_RELAY_ZONE_NOISE_ENABLED
+    } else {
+        0
+    };
+    new_zone(
+        now_ms,
+        stems,
+        min_epoch_secs,
+        epoch_jitter_secs,
+        flags,
+        identity.connectors,
+    )
+}
+
 /// Open a zone. Release with [`shekyl_relay_zone_free`].
 ///
 /// The epoch length is a parameter because it is C++-owned and already
@@ -588,67 +646,9 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// count other than the inherited width, and a noise epoch too short to
 /// carry a full-size message. Every [`shekyl_relay::RelayNewError`] maps
 /// to null because that is the only channel a C ABI has.
-/// The relay's posture, recorded by the daemon's Rust `main()` from its
-/// sections before the remnant constructs the relay: which connectors are
-/// configured (the relay's identity, one bit per connector index) and
-/// whether the development cover carrier runs (`dev-relay-cover`). `None`
-/// until recorded; [`shekyl_relay_zone_new`] then refuses, fail closed.
-static POSTURE: Mutex<Option<(u32, bool)>> = Mutex::new(None);
-
-/// Records the relay's posture: `connectors` configured, `cover` on.
-pub fn record_posture(connectors: &[ConnectorId], cover: bool) {
-    let mask = connectors
-        .iter()
-        .fold(0u32, |mask, c| mask | (1u32 << c.index()));
-    *POSTURE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((mask, cover));
-}
-
-/// [`record_posture`] for the C++ test harness (`tests/unit_tests/levin.cpp`),
-/// which builds relays with no daemon; the daemon records in Rust. Returns
-/// 0, or -1 for a bit past the connector count.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_posture_record(configured: u32, cover: bool) -> i32 {
-    let Ok(connectors) = connectors_from_mask(configured) else {
-        return -1;
-    };
-    record_posture(&connectors, cover);
-    0
-}
-
-/// Opens the relay zone from the recorded posture ([`record_posture`]).
-/// Null when none is recorded: a relay with no identity is not built.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_new(
-    now_ms: u64,
-    stems: usize,
-    min_epoch_secs: u32,
-    epoch_jitter_secs: u32,
-) -> *mut RelayZoneHandle {
-    let Some((configured, cover)) = *POSTURE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-    else {
-        return std::ptr::null_mut();
-    };
-    let flags = if cover {
-        SHEKYL_RELAY_ZONE_NOISE_ENABLED
-    } else {
-        0
-    };
-    new_zone(
-        now_ms,
-        stems,
-        min_epoch_secs,
-        epoch_jitter_secs,
-        flags,
-        configured,
-    )
-}
-
-/// The relay zone from explicit flags and connector mask: the production
-/// export above reads them from the recorded posture; the tests state them.
+///
+/// The production export reads the flags and the mask from the remnant's
+/// preparation. The tests state them.
 pub(crate) fn new_zone(
     now_ms: u64,
     stems: usize,

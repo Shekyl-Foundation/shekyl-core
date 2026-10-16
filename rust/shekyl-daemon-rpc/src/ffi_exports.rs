@@ -27,6 +27,7 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::os::raw::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use shekyl_daemon_config::sections::Rpc;
@@ -66,6 +67,10 @@ struct Running {
 
 static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 static RUNNING: Mutex<Option<Running>> = Mutex::new(None);
+/// Offline, from the same fact the snapshot carries for C++. The peer
+/// methods read it before any dialer call. Default false, so a process
+/// that never configured still asks the dialer.
+static OFFLINE: AtomicBool = AtomicBool::new(false);
 /// The options handle the last `configure` recorded, for the in-process
 /// console arm, which has the core and not the server's state.
 static OPTIONS: Mutex<Option<OptionsHandle>> = Mutex::new(None);
@@ -82,14 +87,33 @@ fn slot<T>(of: &'static Mutex<Option<T>>) -> MutexGuard<'static, Option<T>> {
     of.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Records the RPC section and the options handle (`option_set` and
-/// `option_show`'s owner, RT-O26) for the one start call and returns the
-/// receiver that call completes: `Ok(())` once every listener is bound and
-/// served, `Err` naming the refusal otherwise. The Rust `main()` calls this
-/// before the remnant is constructed; a second call before the start
-/// replaces the first, whose receiver then never completes.
-pub fn configure(section: Rpc, options: OptionsHandle) -> oneshot::Receiver<Result<(), String>> {
+/// Whether this daemon is offline. The peer methods answer
+/// [`crate::core::P2pRead::Offline`] from this bit and do not call the
+/// peer-list exports.
+#[must_use]
+pub fn offline() -> bool {
+    OFFLINE.load(Ordering::Acquire)
+}
+
+fn store_offline(offline: bool) {
+    OFFLINE.store(offline, Ordering::Release);
+}
+
+/// Records the RPC section, whether the daemon is offline, and the options
+/// handle (`option_set` and `option_show`'s owner, RT-O26) for the one
+/// start call and returns the receiver that call completes: `Ok(())` once
+/// every listener is bound and served, `Err` naming the refusal otherwise.
+/// The Rust `main()` calls this before the remnant is constructed; a second
+/// call before the start replaces the first, whose receiver then never
+/// completes. `offline` is the configuration's fact, the same one the
+/// snapshot carries for C++.
+pub fn configure(
+    section: Rpc,
+    options: OptionsHandle,
+    offline: bool,
+) -> oneshot::Receiver<Result<(), String>> {
     let (constructed, rx) = oneshot::channel();
+    store_offline(offline);
     *slot(&OPTIONS) = Some(Arc::clone(&options));
     *slot(&PENDING) = Some(Pending {
         section,
@@ -220,4 +244,42 @@ pub fn stop() {
 #[no_mangle]
 pub extern "C" fn shekyl_daemon_rpc_stop() {
     stop();
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::core::{CoreRpc, P2pRead};
+
+    /// The offline bit and the section `configure` stores are process-wide.
+    /// This puts both back, including when the test panics.
+    struct Reset;
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            store_offline(false);
+            slot(&PENDING).take();
+            slot(&OPTIONS).take();
+        }
+    }
+
+    #[test]
+    fn an_offline_configure_answers_offline_without_a_dialer() {
+        let _reset = Reset;
+        // The cap is not read by the peer methods. Any legal section works.
+        let section = Rpc {
+            admin_listen: Vec::new(),
+            view_listen: Vec::new(),
+            cors_origins: Vec::new(),
+            connections_max: NonZeroU32::MIN,
+        };
+        let _started = configure(section, Arc::new(OptionsAbsent), true);
+        assert_eq!(CoreRpc::p2p_state(), Ok(P2pRead::Offline));
+        assert_eq!(CoreRpc::peerlist_sizes(), Ok(P2pRead::Offline));
+        store_offline(false);
+        assert_eq!(CoreRpc::p2p_state(), Ok(P2pRead::Running(())));
+    }
 }

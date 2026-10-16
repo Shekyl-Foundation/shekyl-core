@@ -299,29 +299,81 @@ pub unsafe extern "C" fn shekyl_pow_randomx_v2_set_canonical(seedhash: *const [u
 /// `DAEMON_CONFIG_CUTOVER.md` §4.2), before the first read latched it.
 static RECORDED: Mutex<Option<(u64, u64)>> = Mutex::new(None);
 
+/// Why the daemon's seed-epoch rows were refused. Each arm names the row
+/// it is about, except a latch that already happened: that refusal is the
+/// machine's, and pinning either row would blame the wrong one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeedEpochRefusal {
+    /// `dev-pow-seed-epoch-blocks` is not a power of two in range.
+    Blocks(String),
+    /// `dev-pow-seed-epoch-lag` is not a power of two at most the lag.
+    Lag(String),
+    /// The schedule had already latched. No row owns that fact.
+    Latched(String),
+}
+
+impl SeedEpochRefusal {
+    /// The option the refusal is about, when one option owns it.
+    #[must_use]
+    pub const fn row(&self) -> Option<&'static str> {
+        match self {
+            Self::Blocks(_) => Some("dev-pow-seed-epoch-blocks"),
+            Self::Lag(_) => Some("dev-pow-seed-epoch-lag"),
+            Self::Latched(_) => None,
+        }
+    }
+
+    /// The rule the diagnostic prints.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        match self {
+            Self::Blocks(rule) | Self::Lag(rule) | Self::Latched(rule) => rule,
+        }
+    }
+}
+
+impl std::fmt::Display for SeedEpochRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.rule())
+    }
+}
+
+impl std::error::Error for SeedEpochRefusal {}
+
 /// Records the seed-epoch schedule from the daemon's section: the Rust
 /// `main()` calls this at step 6, before any export reads it. `None` is
-/// the mainnet value. The daemon refuses to start on `Err`, naming the row.
+/// the mainnet value. The daemon refuses to start on `Err`, naming the row
+/// the arm carries.
 ///
 /// # Errors
-/// A length that is not a power of two in `2..=SEEDHASH_EPOCH_BLOCKS`, or a
-/// lag that is not a power of two at most `SEEDHASH_EPOCH_LAG`; the text
-/// names the rule. A record after the first read is refused too: the
-/// schedule had latched.
-pub fn record_seed_epoch(blocks: Option<u64>, lag: Option<u64>) -> Result<(), String> {
+/// [`SeedEpochRefusal::Blocks`] when the length is not a power of two in
+/// `2..=SEEDHASH_EPOCH_BLOCKS`, [`SeedEpochRefusal::Lag`] when the lag is
+/// not a power of two at most `SEEDHASH_EPOCH_LAG`, and
+/// [`SeedEpochRefusal::Latched`] when a read already pinned a different pair.
+pub fn record_seed_epoch(blocks: Option<u64>, lag: Option<u64>) -> Result<(), SeedEpochRefusal> {
     let blocks = match blocks {
         Some(b) if (2..=SEEDHASH_EPOCH_BLOCKS).contains(&b) && b.is_power_of_two() => b,
-        Some(_) => return Err(format!("a power of two from 2 to {SEEDHASH_EPOCH_BLOCKS}")),
+        Some(_) => {
+            return Err(SeedEpochRefusal::Blocks(format!(
+                "a power of two from 2 to {SEEDHASH_EPOCH_BLOCKS}"
+            )))
+        }
         None => SEEDHASH_EPOCH_BLOCKS,
     };
     let lag = match lag {
         Some(l) if l <= SEEDHASH_EPOCH_LAG && l.is_power_of_two() => l,
-        Some(_) => return Err(format!("a power of two at most {SEEDHASH_EPOCH_LAG}")),
+        Some(_) => {
+            return Err(SeedEpochRefusal::Lag(format!(
+                "a power of two at most {SEEDHASH_EPOCH_LAG}"
+            )))
+        }
         None => SEEDHASH_EPOCH_LAG,
     };
     if let Some(latched) = PARAMS.get() {
         if *latched != (blocks, lag) {
-            return Err("the seed-epoch schedule had already latched".to_owned());
+            return Err(SeedEpochRefusal::Latched(
+                "the seed-epoch schedule had already latched".to_owned(),
+            ));
         }
     }
     *RECORDED
@@ -394,11 +446,31 @@ mod tests {
     /// the mainnet value: the daemon names the row instead.
     #[test]
     fn a_seed_epoch_record_refuses_a_value_off_the_schedule() {
-        assert!(record_seed_epoch(Some(3), None).is_err());
-        assert!(record_seed_epoch(Some(1), None).is_err());
-        assert!(record_seed_epoch(Some(SEEDHASH_EPOCH_BLOCKS * 2), None).is_err());
-        assert!(record_seed_epoch(None, Some(SEEDHASH_EPOCH_LAG * 2)).is_err());
-        assert!(record_seed_epoch(None, Some(3)).is_err());
+        assert!(matches!(
+            record_seed_epoch(Some(3), None),
+            Err(SeedEpochRefusal::Blocks(_))
+        ));
+        assert!(matches!(
+            record_seed_epoch(Some(1), None),
+            Err(SeedEpochRefusal::Blocks(_))
+        ));
+        assert!(matches!(
+            record_seed_epoch(Some(SEEDHASH_EPOCH_BLOCKS * 2), None),
+            Err(SeedEpochRefusal::Blocks(_))
+        ));
+        assert!(matches!(
+            record_seed_epoch(None, Some(SEEDHASH_EPOCH_LAG * 2)),
+            Err(SeedEpochRefusal::Lag(_))
+        ));
+        assert!(matches!(
+            record_seed_epoch(None, Some(3)),
+            Err(SeedEpochRefusal::Lag(_))
+        ));
+        assert_eq!(
+            SeedEpochRefusal::Latched(String::new()).row(),
+            None,
+            "a latch is the machine's fact, not a row's"
+        );
     }
     use shekyl_pow_randomx::PreparedCache;
 

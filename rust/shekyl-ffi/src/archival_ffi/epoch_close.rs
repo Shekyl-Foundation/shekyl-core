@@ -249,32 +249,77 @@ pub extern "C" fn shekyl_archival_reorg_depth_blocks() -> u64 {
     shekyl_archival_retention::effective_archival_reorg_depth_blocks()
 }
 
+/// Why the daemon's settlement rows were refused. Each arm names the row
+/// it is about, except a latch that already happened: that refusal is the
+/// machine's, and pinning either row would blame the wrong one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettlementScheduleRefusal {
+    /// `dev-settlement-epoch-blocks` is outside the cap's floor.
+    Epoch(String),
+    /// `dev-archival-reorg-depth` is outside `1..=ARCHIVAL_REORG_DEPTH_BLOCKS`.
+    Reorg(String),
+    /// The schedule had already latched. No row owns that fact.
+    Latched(String),
+}
+
+impl SettlementScheduleRefusal {
+    /// The option the refusal is about, when one option owns it.
+    #[must_use]
+    pub const fn row(&self) -> Option<&'static str> {
+        match self {
+            Self::Epoch(_) => Some("dev-settlement-epoch-blocks"),
+            Self::Reorg(_) => Some("dev-archival-reorg-depth"),
+            Self::Latched(_) => None,
+        }
+    }
+
+    /// The rule the diagnostic prints, in the row's terms.
+    #[must_use]
+    pub fn rule(&self) -> &str {
+        match self {
+            Self::Epoch(rule) | Self::Reorg(rule) | Self::Latched(rule) => rule,
+        }
+    }
+}
+
+impl std::fmt::Display for SettlementScheduleRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.rule())
+    }
+}
+
+impl std::error::Error for SettlementScheduleRefusal {}
+
 /// Arms the settlement schedule from the daemon's `dev-` rows
 /// (`DAEMON_CONFIG_CUTOVER.md` §4.2): the Rust `main()` calls this at
 /// step 6, before the core whose first epoch arithmetic latches the
 /// schedule exists. `None` is the genesis pin. The daemon refuses to start
-/// on `Err`, naming the row.
+/// on `Err`, naming the row the arm carries.
 ///
 /// # Errors
-/// The owner's refusal as text: a value outside its range, or a schedule
+/// [`SettlementScheduleRefusal`]: a value outside its range, or a schedule
 /// already latched.
-pub fn arm_settlement_schedule(blocks: Option<u64>, reorg_cap: Option<u64>) -> Result<u64, String> {
+pub fn arm_settlement_schedule(
+    blocks: Option<u64>,
+    reorg_cap: Option<u64>,
+) -> Result<u64, SettlementScheduleRefusal> {
     use shekyl_archival_retention::SettlementEpochOverrideError as E;
     use shekyl_archival_retention::{ARCHIVAL_REORG_DEPTH_BLOCKS, SETTLEMENT_EPOCH_BLOCKS};
-    // The rule in the row's terms: the error's own text names the
-    // environment variables the wallet engine still reads.
+    // The rule in the row's terms. The error's own text names the
+    // environment variables the wallet engine still reads; this mapping
+    // does not.
     shekyl_archival_retention::arm_settlement_epoch_override(blocks, reorg_cap).map_err(|e| match e {
         E::Invalid {
             floor, reorg_cap, ..
-        } => format!(
+        } => SettlementScheduleRefusal::Epoch(format!(
             "an integer from {floor} to {SETTLEMENT_EPOCH_BLOCKS}, strictly above the archival reorg depth of {reorg_cap}"
-        ),
-        E::InvalidReorgCap { .. } => {
-            format!("an integer from 1 to {ARCHIVAL_REORG_DEPTH_BLOCKS}")
-        }
-        E::ArmedTooLate { latched } => format!(
+        )),
+        E::InvalidReorgCap { .. } => SettlementScheduleRefusal::Reorg(format!(
+            "an integer from 1 to {ARCHIVAL_REORG_DEPTH_BLOCKS}"
+        )),
+        E::ArmedTooLate { latched } => SettlementScheduleRefusal::Latched(format!(
             "the settlement schedule had already latched at {latched} blocks before the daemon recorded the row"
-        ),
+        )),
     })
 }
 
@@ -661,9 +706,21 @@ mod arm_tests {
     #[test]
     fn a_settlement_lever_off_its_range_is_refused_in_the_rows_terms() {
         let e = arm_settlement_schedule(Some(40), None).unwrap_err();
-        assert!(e.starts_with("an integer from 721 to 10000"), "{e}");
-        assert!(!e.contains("SHEKYL_"), "{e}");
+        assert!(matches!(e, super::SettlementScheduleRefusal::Epoch(_)));
+        assert_eq!(e.row(), Some("dev-settlement-epoch-blocks"));
+        assert!(
+            e.rule().starts_with("an integer from 721 to 10000"),
+            "{}",
+            e.rule()
+        );
+        assert!(!e.rule().contains("SHEKYL_"), "{}", e.rule());
         let e = arm_settlement_schedule(None, Some(0)).unwrap_err();
-        assert!(e.starts_with("an integer from 1 to "), "{e}");
+        assert!(matches!(e, super::SettlementScheduleRefusal::Reorg(_)));
+        assert_eq!(e.row(), Some("dev-archival-reorg-depth"));
+        assert!(
+            e.rule().starts_with("an integer from 1 to "),
+            "{}",
+            e.rule()
+        );
     }
 }

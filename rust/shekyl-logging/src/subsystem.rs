@@ -14,6 +14,8 @@
 //! The list is the owner the grammar's `log-category` row validates its
 //! keys against, by reference.
 
+use std::io::Write;
+
 use tracing::Level;
 
 use crate::filter::level_directive;
@@ -221,7 +223,12 @@ pub fn directive_from_words(base: &str, overrides: &[(&str, &str)]) -> Option<St
 pub fn apply(base: Level, overrides: &[(Subsystem, Level)]) {
     let directive = directive(base, overrides);
     if let Err(reason) = crate::ffi::reload_directive(directive) {
-        eprintln!("shekyl-logging: the runtime log change was not applied: {reason}");
+        // No subscriber is the failure, so this cannot go through tracing.
+        // The line is the operator's, on standard error.
+        drop(writeln!(
+            std::io::stderr(),
+            "shekyl-logging: the runtime log change was not applied: {reason}"
+        ));
     }
 }
 

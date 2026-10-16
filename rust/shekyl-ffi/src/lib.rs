@@ -148,6 +148,9 @@ pub mod levin_ffi;
 // Inbound descriptor ceiling (PWD-I7). One call: Rust probes the process
 // and returns the admission decision. C++ passes reservations only.
 pub mod inbound_ceiling_ffi;
+/// The relay identity and the reserved descriptor count, installed once
+/// before the remnant runs. Not a snapshot field (§2.9).
+pub mod remnant_prep;
 
 // The p2p seam. C++ posts onto the connection strand. Rust records the
 // cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
