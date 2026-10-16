@@ -46,6 +46,7 @@
 #include "include_base_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "blockchain_utilities/daemon_network_args.h"
+#include "cryptonote_config.h"
 #include "cryptonote_basic/block_ingest.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -57,8 +58,9 @@ namespace
 bool opt_batch   = true;
 bool opt_verify  = true; // use add_new_block, which does verification before calling add_block
 bool opt_resume  = true;
-bool opt_testnet = true;
-bool opt_stagenet = true;
+bool opt_testnet = false;
+bool opt_stagenet = false;
+bool opt_regtest = false;
 
 // number of blocks per batch transaction
 // adjustable through command-line argument according to available RAM
@@ -645,6 +647,12 @@ int main(int argc, char* argv[])
   command_line::add_arg(desc_cmd_sett, arg_log_level);
   command_line::add_arg(desc_cmd_sett, arg_batch_size);
   command_line::add_arg(desc_cmd_sett, arg_block_stop);
+  // The utility's own network and data directory (DAEMON_CONFIG_CUTOVER.md
+  // §9). The daemon's option set is not registered here.
+  command_line::add_arg(desc_cmd_sett, cryptonote::arg_data_dir);
+  command_line::add_arg(desc_cmd_sett, cryptonote::arg_testnet_on);
+  command_line::add_arg(desc_cmd_sett, cryptonote::arg_stagenet_on);
+  command_line::add_arg(desc_cmd_sett, cryptonote::arg_regtest_on);
 
   command_line::add_arg(desc_cmd_only, arg_count_blocks);
   command_line::add_arg(desc_cmd_only, arg_pop_blocks);
@@ -660,7 +668,6 @@ int main(int argc, char* argv[])
 
   po::options_description desc_options("Allowed options");
   desc_options.add(desc_cmd_only).add(desc_cmd_sett);
-  cryptonote::core::init_options(desc_options);
 
   po::variables_map vm;
   bool r = command_line::handle_error_helper(desc_options, [&]()
@@ -710,9 +717,12 @@ int main(int argc, char* argv[])
 
   opt_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
   opt_stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-  if (opt_testnet && opt_stagenet)
+  opt_regtest = command_line::get_arg(vm, cryptonote::arg_regtest_on);
+  const int networks_named =
+    static_cast<int>(opt_testnet) + static_cast<int>(opt_stagenet) + static_cast<int>(opt_regtest);
+  if (networks_named > 1)
   {
-    std::cerr << "Error: Can't specify more than one of --testnet and --stagenet" << ENDL;
+    std::cerr << "Error: Can't specify more than one of --testnet, --stagenet and --regtest" << ENDL;
     return 1;
   }
   m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
@@ -753,7 +763,7 @@ int main(int argc, char* argv[])
     MINFO("batch:   " << std::boolalpha << opt_batch << std::noboolalpha);
   }
   MINFO("resume:  " << std::boolalpha << opt_resume  << std::noboolalpha);
-  MINFO("nettype: " << (opt_testnet ? "testnet" : opt_stagenet ? "stagenet" : "mainnet"));
+  MINFO("nettype: " << (opt_regtest ? "regtest" : opt_testnet ? "testnet" : opt_stagenet ? "stagenet" : "mainnet"));
 
   MINFO("bootstrap file path: " << import_file_path);
   MINFO("database path:       " << m_config_folder);
@@ -776,7 +786,23 @@ int main(int argc, char* argv[])
   try
   {
 
-  if (!core.init(vm, nullptr))
+  // m_config_folder outlives init; core copies the directory. The fields
+  // this tool does not expose are the defaults the old core used.
+  const network_type nettype = opt_regtest ? FAKECHAIN : opt_testnet ? TESTNET : opt_stagenet ? STAGENET : MAINNET;
+  ShekylDaemonSnapshot snapshot{};
+  snapshot.data_dir = m_config_folder.c_str();
+  snapshot.network = static_cast<uint8_t>(nettype);
+  snapshot.offline = false;
+  snapshot.fixed_difficulty = 0;
+  snapshot.txpool_weight_max = DEFAULT_TXPOOL_MAX_WEIGHT;
+  snapshot.sync = true;
+  snapshot.mine_address = nullptr;
+  snapshot.mine_threads = 0;
+  snapshot.console = false;
+  snapshot.command.items = nullptr;
+  snapshot.command.len = 0;
+  snapshot.client_endpoint = nullptr;
+  if (!core.init(snapshot, nullptr))
   {
     std::cerr << "Failed to initialize core" << ENDL;
     return 1;
