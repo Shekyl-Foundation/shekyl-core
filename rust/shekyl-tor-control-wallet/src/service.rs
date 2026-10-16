@@ -198,9 +198,10 @@ pub enum ServiceFailure {
     /// [`SupervisorPolicy::bootstrap_deadline`].
     BootstrapTimeout,
     /// The incarnation (actor/child) died. Carries the reaped [`TorExit`] when the
-    /// death was observed through teardown (`Killed` = tor wedged and was
-    /// `SIGKILL`-ed — the unclean signal an operator wants), or `None` when the
-    /// exit was not observed (e.g. the readiness channel closed first).
+    /// exit was observed: `Died` when tor died first (with the signal that saw it),
+    /// `Killed` when tor wedged and was killed in teardown (the unclean signal an
+    /// operator wants), or `None` when the exit was not observed (e.g. the readiness
+    /// channel closed first).
     Exited(Option<TorExit>),
     /// A supervisor-internal fault, not a tor failure — the gate's
     /// `spawn_blocking` task panicked or was cancelled (a `JoinError`). Carries
@@ -627,8 +628,8 @@ async fn supervise(
         match end {
             IncarnationEnd::Shutdown => return,
             IncarnationEnd::Failed(mut failure) => {
-                // Attach the reaped exit to an unqualified death (`Killed` vs
-                // `Reaped` is the operator signal); other causes keep their own.
+                // Attach the reaped exit to an unqualified death (`Died`, `Killed`
+                // or `Reaped` is the operator signal); other causes keep their own.
                 if let ServiceFailure::Exited(slot) = &mut failure {
                     *slot = exit;
                 }
@@ -648,9 +649,10 @@ async fn supervise(
 }
 
 /// Stop the incarnation and **await its child being reaped**, returning the exit
-/// telemetry. The exit channel fires from `on_stop` *after* `TorChild::shutdown`
-/// completes the SIGTERM→wait→SIGKILL→reap, so awaiting it guarantees no tor
-/// lingers to lock the reused `DataDirectory` (and yields `Killed`/`Reaped`).
+/// telemetry. The exit channel fires from the actor's child watcher *after* the
+/// child is reaped (by the SIGTERM→wait→SIGKILL→reap, or at once for a tor that
+/// already died), so awaiting it guarantees no tor lingers to lock the reused
+/// `DataDirectory` (and yields `Died`, `Killed` or `Reaped`).
 ///
 /// The **whole** sequence is bounded by [`REAP_TIMEOUT`], not just the reap wait:
 /// `stop_gracefully` sends `Signal::Stop` on the actor's bounded (cap-64) mailbox,

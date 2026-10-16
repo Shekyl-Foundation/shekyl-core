@@ -19,13 +19,18 @@
 # gate makes it be classified before it lands.
 #
 # THE RULE. A file in rust/ (outside target/ and the vendored shekyl-oxide/)
-# that contains a `Command::new(` (std or tokio, under any alias ending in
-# `Command`) must be listed below. A LOCKED file must call `spawn_lock::`. An
+# that builds a process command with `Command::new(` (std or tokio, under any
+# alias ending in `Command`) must be listed below. A command built some other
+# way (`Command::from`, or one passed in already built) is not seen here; the
+# file that calls `Command::new` for it is. A LOCKED file must call `spawn_lock::`. An
 # EXEMPT file carries its reason: the crate it is in cannot reach
 # shekyl-tor-control-client (checked when the entry was written with
 # `cargo tree -p <crate> -e normal,dev,build`), or the file runs in a process of
 # its own (a build script). A listed file with no spawn left fails too, so the
-# list does not outlive its subjects.
+# list does not outlive its subjects. An exemption for a crate that cannot reach
+# the client fails when that crate's manifest gains a direct
+# `shekyl-tor-control*` edge; a new transitive edge is not seen, so a dependency
+# change re-opens the classification for whoever makes it.
 #
 # SUBJECT. The launch itself is LOCKED; if no file in the tree builds a command,
 # this gate has nothing to check and fails.
@@ -83,9 +88,21 @@ def spawn_files(root):
     return found
 
 
+TOR_EDGE = re.compile(r"^\s*shekyl-tor-control[\w-]*\s*=", re.MULTILINE)
+
+
 def check(root, locked, exempt, subject):
     errors = []
     found = spawn_files(root)
+    for rel, reason in sorted(exempt.items()):
+        if reason != NO_TOR:
+            continue
+        manifest = root / rel.split("/", 1)[0] / "Cargo.toml"
+        if manifest.exists() and TOR_EDGE.search(manifest.read_text(encoding="utf-8")):
+            errors.append(
+                f"{rel}: exempt because its crate cannot reach shekyl-tor-control-client, "
+                f"but {manifest.relative_to(root)} names a shekyl-tor-control crate"
+            )
     if subject not in found:
         errors.append(f"{subject}: the launch builds no command; the gate has no subject")
     for rel in sorted(found):
@@ -121,6 +138,16 @@ def selftest():
         "locked without the lock": ({launch: "Command::new(x)"}, {launch}, {}, 1),
         "stale entry": ({launch: locked_text}, {launch}, {"gone.rs": "r"}, 1),
         "no subject": ({"b/x.rs": "Command::new(y)"}, {launch}, {"b/x.rs": "r"}, 2),
+        "an exempt crate that gained a tor edge": (
+            {
+                launch: locked_text,
+                "b/x.rs": "Command::new(y)",
+                "b/Cargo.toml": 'shekyl-tor-control-client = { path = "../c" }\n',
+            },
+            {launch},
+            {"b/x.rs": NO_TOR},
+            1,
+        ),
         "vendored and target skipped": (
             {launch: locked_text, "shekyl-oxide/v.rs": "Command::new(z)", "target/t.rs": "Command::new(z)"},
             {launch},
