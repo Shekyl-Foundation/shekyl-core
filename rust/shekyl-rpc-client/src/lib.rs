@@ -14,7 +14,6 @@
 use core::{fmt::Debug, future::Future, num::NonZeroU64};
 use std_shims::{
     alloc::format,
-    io,
     string::{String, ToString},
     vec,
     vec::Vec,
@@ -25,7 +24,6 @@ use zeroize::Zeroize;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use shekyl_curve_io::*;
 use shekyl_rpc_types::core_rpc_version_string;
 use shekyl_types::ChainCount;
 
@@ -227,34 +225,6 @@ impl FeeRate {
     #[must_use]
     pub fn per_weight(&self) -> u64 {
         self.per_weight
-    }
-
-    /// Write the FeeRate.
-    ///
-    /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
-    /// defined serialization.
-    pub fn write(&self, w: &mut impl io::Write) -> io::Result<()> {
-        w.write_all(&self.per_weight.to_le_bytes())
-    }
-
-    /// Serialize the FeeRate to a `Vec<u8>`.
-    ///
-    /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
-    /// defined serialization.
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut res = Vec::with_capacity(8);
-        self.write(&mut res)
-            .expect("write failed but <Vec as io::Write> doesn't fail");
-        res
-    }
-
-    /// Read a FeeRate.
-    ///
-    /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
-    /// defined serialization.
-    pub fn read(r: &mut impl io::Read) -> io::Result<FeeRate> {
-        let per_weight = read_u64(r)?;
-        FeeRate::new(per_weight).map_err(io::Error::other)
     }
 
     /// The fee for `weight`: [`tx_fee::fee_from_weight`], which fails
