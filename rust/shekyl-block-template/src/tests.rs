@@ -14,7 +14,7 @@ use shekyl_chain_rules::harness::fixture::{
     anchored_on, point_at, recorded_with_work, root, spend, spendable_chain,
 };
 use shekyl_chain_rules::harness::{
-    assert_refused, expected_seed, judged, MockChain, MockSubstrate,
+    assert_refused, expected_seed, expected_target, judged, MockChain, MockSubstrate,
 };
 use shekyl_chain_rules::{
     form, validate, Candidate, CenRow, ChainView, FormAttempt, Locus, RuleSet, Trust,
@@ -158,6 +158,7 @@ fn admitted(chain: &MockChain, template: Template) -> Vec<CenRow> {
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
         FormAttempt::FIRST,
     )
     .expect("the default substrate never faults")
@@ -575,6 +576,7 @@ fn the_builders_c1_refusal_is_the_validators() {
         &RuleSet::GENESIS,
         &substrate,
         expected_seed(&chain),
+        expected_target(&chain, &RuleSet::GENESIS),
         FormAttempt::FIRST,
     )
     .expect("no fault")

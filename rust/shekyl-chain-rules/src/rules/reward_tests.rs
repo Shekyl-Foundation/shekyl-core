@@ -23,7 +23,8 @@ use crate::harness::fixture::{
     candidate, candidate_on, chain_of, listed_on, point_at, spendable_chain,
 };
 use crate::harness::{
-    assert_refused, defined, expected_seed, judged, Faulted, MockChain, MockSubstrate,
+    assert_refused, defined, expected_seed, expected_target, judged, Faulted, MockChain,
+    MockSubstrate,
 };
 use crate::rule_set::RuleSet;
 use crate::rules::block_weight::{EffectiveMedian, Medians, Weights};
@@ -437,6 +438,7 @@ fn validated_on(chain: &MockChain, candidate: Candidate) -> Verdict<(Weights, Pa
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

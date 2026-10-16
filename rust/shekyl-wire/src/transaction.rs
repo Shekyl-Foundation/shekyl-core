@@ -1025,6 +1025,25 @@ impl BpPlus {
         Ok(())
     }
 
+    /// Reassemble the [`shekyl_bulletproofs::Bulletproof`] the verifier reads
+    /// from this wire proof: the one copy of the conversion, for every Shekyl
+    /// verifier (`shekyl-chain-rules`' CEN-H19 fold, the submit engine's N8
+    /// leg, the pool door).
+    ///
+    /// The two layouts are byte-identical (`A‖A1‖B‖r1‖s1‖d1‖vec(L)‖vec(R)`;
+    /// the round-trip is pinned by shekyl-tx-builder's mapping test), so the
+    /// conversion is serialize-then-`read_plus`. `read_plus` enforces reduced
+    /// scalars — the C++ `is_reduced(r1/s1/d1)` parity — and caps L/R at the
+    /// maximal round count, so `None` is a proof the verifier refuses, not a
+    /// marshalling loss. Points are not decompressed here; the verifier does
+    /// that and refuses a point that does not decompress.
+    #[must_use]
+    pub fn to_bulletproof(&self) -> Option<shekyl_bulletproofs::Bulletproof> {
+        let mut bytes = Vec::with_capacity((6 + self.l.len() + self.r.len()) * 32 + 4);
+        self.write(&mut bytes).ok()?;
+        shekyl_bulletproofs::Bulletproof::read_plus(&mut bytes.as_slice()).ok()
+    }
+
     /// Parse a single Bp+ from a complete blob, requiring exact consumption. The
     /// tx-builder uses this to map a `shekyl_oxide` `Bulletproof` — which serializes to
     /// the identical byte layout (`a‖a1‖b‖r1‖s1‖d1‖vec(L)‖vec(R)`) — into the wire

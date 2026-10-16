@@ -74,7 +74,9 @@ use crate::block::Candidate;
 use crate::census::{CenRow, PolicyRow, RowStatus};
 use crate::fault::FormAttempt;
 use crate::harness::fixture::{candidate_on, recorded, repriced, root};
-use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, MockSubstrate};
+use crate::harness::{
+    assert_refused, expected_seed, expected_target, judged, Faulted, MockChain, MockSubstrate,
+};
 use crate::rule_set::RuleSet;
 use crate::trust::Trust;
 use crate::validate::{form, tx_form, validate};
@@ -684,6 +686,7 @@ fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
+        expected_target(chain, &RuleSet::GENESIS),
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

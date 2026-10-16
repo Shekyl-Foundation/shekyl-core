@@ -21,7 +21,7 @@
 //! measures. The pins assert exactly that split: the crypto components verify
 //! (positive limb), and the wire round-trips at the claimed shape.
 
-use rand_core::{CryptoRng, OsRng, RngCore};
+use rand_core::{CryptoRng, RngCore};
 
 use curve25519_dalek::scalar::Scalar;
 use shekyl_bulletproofs::Bulletproof;
@@ -129,10 +129,15 @@ pub fn build_bp<R: RngCore + CryptoRng>(rng: &mut R, n_out: usize) -> BpFixture 
     }
 }
 
-/// Verify the Bp+ proxy fixture. `true` is the only acceptable result for a
-/// fixture the bench times (self-witness, same rule as `ADMISSION_OK`).
+/// Verify the Bp+ proxy fixture as a batch of one under derived weights —
+/// the body every Shekyl validator calls (CEN-H19, ruling R3), so the timed
+/// figure includes the seed's cSHAKE. `true` is the only acceptable result for
+/// a fixture the bench times (self-witness, same rule as `ADMISSION_OK`).
 pub fn bp_verify(fx: &BpFixture) -> bool {
-    fx.proof.verify(&mut OsRng, &fx.commitments)
+    shekyl_bulletproofs::verify_batch(&[shekyl_bulletproofs::BatchEntry {
+        proof: &fx.proof,
+        commitments: &fx.commitments,
+    }])
 }
 
 /// Everything the cold-block connect path pays for one transaction, at one

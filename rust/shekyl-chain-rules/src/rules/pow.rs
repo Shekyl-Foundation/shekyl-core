@@ -19,12 +19,15 @@
 //! | Row | Stage | Reads |
 //! | --- | --- | --- |
 //! | D2 | `form` | the candidate's PoW preimage, a seed the caller **claims**, `Substrate::longhash` |
+//! | D1 | `form` | the longhash against a target the caller **claims** |
 //! | D3 | `validate` | the view: is the claimed seed the block id at `seedheight(connecting)`? |
-//! | D1b | `validate` | the longhash and the target: `hash · difficulty < 2^256` |
-//! | D1 | `validate` | D1b's answer |
+//! | D1b | `validate` | the comparison's form, `hash · difficulty < 2^256`, recorded where D4 derives the target the claim is verified against |
 //!
-//! The expensive call stays outside the write transaction; every
-//! chain-dependent judgement stays inside it.
+//! The expensive call stays outside the write transaction, and so does the
+//! proof-of-work verdict: D1 refuses a block short of its target before
+//! `form` spends anything on its body. Every chain-dependent judgement —
+//! that the seed and the target the caller claimed are the chain's —
+//! stays inside it.
 //!
 //! # Two definitions, one verification, one predicate
 //!
@@ -56,9 +59,11 @@
 //! a definition — *what "satisfies" means* — evaluated once at
 //! [`D1b::satisfies`] and recorded there.
 //!
-//! **D1** is the predicate: the longhash must satisfy the target. It reads
-//! D1b's answer from the context and refuses on `false`. Two rows, one
-//! comparison, each recorded by the writer that owns it.
+//! **D1** is the predicate: the longhash must satisfy the target. `form`
+//! judges it against the caller's claimed target ([`D1::judge`]) and
+//! refuses on `false`; the claim is verified against the view where D4
+//! derives the target, a mismatch being [`Stale::Target`]. Two rows, one
+//! comparison, each recorded by the stage that owns it.
 //!
 //! # The seed-epoch env lever is not here
 //!
@@ -74,11 +79,10 @@ use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, Stale, ViewRead};
-#[cfg(test)]
 use crate::rules::difficulty::Target;
-use crate::rules::{recorded_header, BlockContext, HeaderRule, Rule};
+use crate::rules::{recorded_header, Rule};
 use crate::substrate::Substrate;
-use crate::verdict::{refused, Locus, Verdict};
+use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::HeaderView;
 
 /// CEN-D2: the longhash is RandomX v2 over the PoW preimage under the
@@ -209,23 +213,28 @@ impl D1b {
 
 /// CEN-D1: the block's longhash must satisfy the difficulty target.
 ///
-/// A header rule that reads no view at all: the target is the context's
-/// (D4's, derived from header facts) and the longhash is `form`'s.
+/// Judged in `form`, right after the longhash and before any body work,
+/// against the target the caller **claimed** (D4's derivation over the
+/// headers below the connecting height, which the caller runs ahead of
+/// connect as it reads the seed). `validate` and `alt_against` verify the
+/// claim against their view; a mismatch is
+/// [`Stale::Target`](crate::Stale::Target), so no block is admitted on a
+/// target its chain does not derive.
 pub(crate) struct D1;
 
 impl Rule for D1 {
     const ROW: CenRow = CenRow::D1;
 }
 
-impl HeaderRule for D1 {
-    fn check<'id, H: HeaderView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &H,
-    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
-        if cx.target.is_satisfied_by(cx.formed.pow()) {
-            Ok(Ok(()))
+impl D1 {
+    /// Whether `pow` satisfies the claimed `target`, recording this row on a
+    /// pass.
+    pub(crate) fn judge(pow: PowHash, target: Target, coverage: &mut RuleCoverage) -> Verdict<()> {
+        if target.is_satisfied_by(pow) {
+            coverage.insert(Self::ROW);
+            Ok(())
         } else {
-            refused(Self::ROW, Locus::Block)
+            Err(InvalidBlock::new(Self::ROW, Locus::Block))
         }
     }
 }

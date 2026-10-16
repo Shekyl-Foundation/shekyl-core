@@ -33,7 +33,7 @@ use crate::rule_set::RuleSet;
 use crate::rules::BlockContext;
 use crate::trust::Trust;
 use crate::validate::validate;
-use crate::verdict::{ChainValid, Locus, Verdict};
+use crate::verdict::{Locus, Verdict};
 use crate::view::{AtHeight, ChainView, Tip};
 use shekyl_archival_retention::{
     attestation_root, empty_attestation_root, p_canonical_id_from_hybrid_pubkey,
@@ -50,7 +50,7 @@ use shekyl_wire::tx_extra::{parse, serialize, TxExtraField};
 
 /// Run B4 on its own against `chain`.
 fn check_alone_on(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
-    let formed = formed_on(chain, candidate.clone());
+    let formed = crate::harness::token_for_one_rule(chain, candidate.clone());
     chain.with_view(|view| {
         defined(B4::check(
             &BlockContext::for_tests(&formed, chain.tip(), None),
@@ -59,18 +59,9 @@ fn check_alone_on(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     })
 }
 
-/// Judge a candidate through the pipeline against `chain`.
+/// Judge a candidate through both stages against `chain`.
 fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
-    let formed = formed_on(chain, candidate);
-    chain.with_view(|view| {
-        judged(validate(
-            formed,
-            &view,
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
-        ))
-        .map(|_valid: ChainValid<_>| ())
-    })
+    crate::harness::judge_on(chain, candidate)
 }
 
 /// `candidate` with its header's `attestation_root` replaced.
@@ -216,17 +207,27 @@ fn cen_b4_genesis_commits_the_empty_root_too() {
 
 // --- the operands do not parse -------------------------------------------
 
-/// An extra that does not parse is refused **here**, before the coinbase
-/// reaches I19/I20 in the slot loop — the C++'s order, and never read as
-/// the committed empty set.
+/// An extra that does not parse is refused by B4 on its own — never read as
+/// the committed empty set — and, through both stages, by CEN-I19 at the
+/// miner slot in `form`. The C++ runs `verify_block_attestation` before the
+/// coinbase's extra checks, so there B4 names the block; here the miner
+/// slot's `tx_form` is stateless and runs in `form`, before any view-bound
+/// row (#1081's review, item 1: stateless verification leaves the single
+/// writer). One refusal either way; the row differs, as stated.
 #[test]
-fn cen_b4_unreadable_coinbase_extra_is_refused_here_not_at_i20() {
+fn cen_b4_unreadable_coinbase_extra_is_refused_alone_and_by_i19_in_form() {
     let chain = chain_of(3);
     let mut candidate = candidate_on(&chain, Vec::new());
     candidate.block.miner_transaction.prefix.extra = vec![0xFF, 0x01, 0x02];
     assert!(parse(&candidate.block.miner_transaction.prefix.extra).is_err());
     assert_refused(check_alone_on(&chain, &candidate), CenRow::B4, Locus::Block);
-    assert_refused(judge_on(&chain, candidate), CenRow::B4, Locus::Block);
+    assert_refused(
+        judge_on(&chain, candidate),
+        CenRow::I19,
+        Locus::Tx {
+            slot: crate::verdict::TxSlot::Miner,
+        },
+    );
 }
 
 #[test]
@@ -369,7 +370,7 @@ fn cen_b4_a_hole_in_the_anchor_window_is_corrupt_not_a_refusal() {
     let chain = chain_with_window();
     let record = signed_record(&chain, BlockHeight::ZERO);
     let candidate = carrying(&chain, record);
-    let formed = formed_on(&chain, candidate);
+    let formed = crate::harness::token_for_one_rule(&chain, candidate);
     let connecting = Tip::connecting_height(chain.tip().as_ref());
     // The window is block identities — header facts (DRS-E5 `E5-15`'s
     // working half of B4) — so the hole is the header record's.
@@ -401,7 +402,7 @@ fn cen_b4_a_non_canonical_bond_key_is_corrupt_not_an_absent_bond() {
     let record = signed_record(&chain, BlockHeight::ZERO);
     let persona = PCanonicalId::from_bytes(record.p_id);
     let candidate = carrying(&chain, record);
-    let formed = formed_on(&chain, candidate);
+    let formed = crate::harness::token_for_one_rule(&chain, candidate);
     let key = NonCanonicalHybridKey::from_bytes(NOT_A_HYBRID_KEY)
         .expect("four bytes are not a canonical hybrid public key");
     chain.with_view(|inner| {

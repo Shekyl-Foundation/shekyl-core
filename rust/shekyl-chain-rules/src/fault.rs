@@ -50,6 +50,7 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 
 use crate::rule_set::RuleSet;
+use crate::rules::difficulty::Target;
 use crate::tree_growth::FrontierFault;
 
 /// What `validate` can fail with: the view's own fault, or one of the two
@@ -112,6 +113,22 @@ pub enum Stale {
         formed_under: Box<RuleSet>,
         /// What `validate` was given.
         in_force: Box<RuleSet>,
+        /// Whether `form` may be run again.
+        retry: Retry,
+    },
+    /// The target `form` judged CEN-D1 against is not the one CEN-D4
+    /// derives from the headers below the connecting height on this view.
+    /// The target is a function of those headers alone, so the caller
+    /// derives the claim from the header chain ahead of connect (the same
+    /// [`target_claim`](crate::target_claim) this check runs), and a
+    /// mismatch means the two described different chains: a reorg between
+    /// the stages, or a driver defect. A fault, never a refusal — the
+    /// block was not judged against its real target.
+    Target {
+        /// What `form` was given.
+        claimed: Target,
+        /// What the view's headers derive.
+        expected: Target,
         /// Whether `form` may be run again.
         retry: Retry,
     },
@@ -508,6 +525,14 @@ impl fmt::Display for Stale {
             } => write!(
                 f,
                 "stale rule set: formed under {formed_under:?}, {in_force:?} is in force ({retry})"
+            ),
+            Self::Target {
+                claimed,
+                expected,
+                retry,
+            } => write!(
+                f,
+                "stale target: formed against {claimed}, the headers derive {expected} ({retry})"
             ),
         }
     }

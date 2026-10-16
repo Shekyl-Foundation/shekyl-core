@@ -17,7 +17,8 @@ use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, Retry, Stale};
 use crate::harness::fixture::{candidate, candidate_on, chain_of, recorded_with_work};
 use crate::harness::{
-    assert_refused, expected_seed, formed_on, formed_under, judged, MockChain, MockSubstrate,
+    assert_refused, expected_seed, expected_target, formed_on, formed_under, judged, MockChain,
+    MockSubstrate,
 };
 use crate::rule_set::{FakechainSchedule, RuleSet, SettlementEpochBlocks};
 use crate::trust::Trust;
@@ -120,13 +121,14 @@ fn an_inverted_fork_is_not_a_fork() {
 /// header ladder — CEN-K4's set, in census order. A2 is the ladder's
 /// parent link, the one header fact the tier checks against its own
 /// candidate; D7 is the fixed-target consultation D4 records on every
-/// derivation (`None` under GENESIS).
-const ALT_TIER_ROWS: [CenRow; 18] = [
+/// derivation (`None` under GENESIS). CEN-D1 is `form`'s, judged against
+/// the claimed target before any body work; the tier verifies the claim
+/// where it derives D4 (`Stale::Target` on a mismatch).
+const ALT_TIER_ROWS: [CenRow; 17] = [
     CenRow::A2,
     CenRow::C1,
     CenRow::C2,
     CenRow::C3,
-    CenRow::D1,
     CenRow::D1b,
     CenRow::D3,
     CenRow::D4,
@@ -379,6 +381,7 @@ fn an_alternative_popping_more_than_the_cap_is_refused_only_when_anchored() {
             candidate_on(chain, Vec::new()),
             &capped,
             expected_seed(chain),
+            expected_target(chain, &capped),
         )
     };
     chain.with_view(|view| {
@@ -443,6 +446,48 @@ fn the_fork_is_judged_before_the_header_ladder() {
     });
 }
 
+/// As `validate`: a target claim the stitched chain does not derive is
+/// `Stale::Target`, never a verdict — the tier verifies the claim where it
+/// derives D4, through the one ladder preparation both share.
+#[test]
+fn a_target_claim_the_alt_chain_does_not_derive_is_stale_not_a_verdict() {
+    let chain = chain_of(12);
+    let seven = RuleSet::fakechain(
+        core::num::NonZeroU128::new(7),
+        FakechainSchedule::PRODUCTION,
+    );
+    let wrong = expected_target(&chain, &seven);
+    let right = expected_target(&chain, &RuleSet::GENESIS);
+    assert_ne!(wrong, right, "the fixture's claim must be wrong");
+    let formed = match form(
+        candidate_on(&chain, Vec::new()),
+        &RuleSet::GENESIS,
+        &MockSubstrate::default(),
+        expected_seed(&chain),
+        wrong,
+        FormAttempt::FIRST,
+    ) {
+        Ok(Ok(formed)) => formed,
+        other => panic!("the fixture forms: {other:?}"),
+    };
+    chain.with_view(|view| {
+        match alt_against(
+            formed,
+            &forked(&view, fork_at_tip(&chain)),
+            &RuleSet::GENESIS,
+            &Trust::UNANCHORED,
+        ) {
+            Err(Fault::Stale(Stale::Target {
+                claimed, expected, ..
+            })) => {
+                assert_eq!(claimed, wrong);
+                assert_eq!(expected, right);
+            }
+            other => panic!("expected Stale::Target, got {other:?}"),
+        }
+    });
+}
+
 #[test]
 fn a_rule_set_the_token_was_not_formed_under_is_stale_not_a_verdict() {
     // As `validate`: the claim check is the same, and a mismatch names
@@ -455,6 +500,7 @@ fn a_rule_set_the_token_was_not_formed_under_is_stale_not_a_verdict() {
             &other,
             &MockSubstrate::default(),
             expected_seed(&chain),
+            expected_target(&chain, &other),
             FormAttempt::FIRST,
         ) {
             Ok(Ok(formed)) => formed,
