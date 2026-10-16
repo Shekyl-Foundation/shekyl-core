@@ -77,11 +77,11 @@ says which and why.
 | --- | --- |
 | The daemon's Tor starts once, blocks init up to 300 s, and is never respawned; the crate says so and why (the static C++ proxy) | `src/p2p/net_node.inl:757`; `rust/shekyl-tor-control-daemon/src/lib.rs:40-46` |
 | Death is logged once and nothing else happens; the proxy stays installed at the dead port. The one log line is `MERROR` under `net.p2p`, which the default filter sets to `FATAL`, so at the default level it is not shown either (`TSR-F11`) | `src/p2p/net_node.inl:71`, `:1214-1232`; `contrib/epee/src/mlog.cpp:127` |
-| Readiness is a `GETINFO status/bootstrap-phase` poll; no production code issues `SETEVENTS`. The supervisor's one `SETEVENTS` and the parsers for what it subscribes to exist, unused (§4.2) | `rust/shekyl-tor-control-client/src/control/bootstrap.rs:10-11`; `rust/shekyl-tor-control-client/src/control/events.rs:39`, `:287`, `:588` |
+| Readiness is a `GETINFO status/bootstrap-phase` poll; no production code issues `SETEVENTS`. The supervisor's one `SETEVENTS`, the parsers for what it subscribes to, and the upload-round policy exist, unused (§4.2, `TSR-Q5`) | `rust/shekyl-tor-control-client/src/control/bootstrap.rs:10-11`; `rust/shekyl-tor-control-client/src/control/events.rs:42`, `:290`; `rust/shekyl-tor-control-client/src/control/upload_rounds.rs:50` |
 | The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs:273` |
-| Death has two signals: a watcher waits on the child beside the control connection's end, and either stops the actor (`TSR-F16`) | `rust/shekyl-tor-control-client/src/control/actor.rs:806`, `:1401`, `:1410` |
-| Teardown is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, synchronous wipe | `rust/shekyl-tor-control-client/src/control/actor.rs:102`, `:862`, `:1013`; `rust/shekyl-tor-control-daemon/src/ephemeral.rs:395-415` |
-| The managed tor inherits its owning control connection (`__OwningControllerFD`); it opens no control port and writes no cookie. The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/launch.rs:178`, `:300`, `:872` |
+| Death has two signals: a watcher waits on the child beside the control connection's end, and either stops the actor (`TSR-F16`) | `rust/shekyl-tor-control-client/src/control/actor.rs:823`, `:1384`, `:1432`, `:1447` |
+| Teardown is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, synchronous wipe | `rust/shekyl-tor-control-client/src/control/actor.rs:102`, `:889`, `:1042`; `rust/shekyl-tor-control-daemon/src/ephemeral.rs:395-415` |
+| The managed tor inherits its owning control connection (`__OwningControllerFD`); it opens no control port and writes no cookie. The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/launch.rs:185`, `:393`, `:1126` |
 | `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs:614` |
 | The binary witness is taken once, at start | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:75-79` |
 | The wallet's supervisor re-verifies the pin at every spawn, never gives up, and publishes the SOCKS route as data on a watch, read at use time | `rust/shekyl-tor-control-wallet/src/service.rs:6-45`, `:289-303` |
@@ -449,11 +449,21 @@ through the same path (C5).
 
 - **Unix:** a `socketpair`. Tor's end is marked inheritable in the child only,
   in `pre_exec` (clearing `FD_CLOEXEC`), so no concurrent spawn can inherit it.
-- **Windows:** a connected loopback pair. Tor's end is marked inheritable only
-  around the spawn, and the flag is cleared on our copy right after it. The
-  daemon spawns no other process inside that window; this is a design rule,
-  and Tor is its only child today. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` is the
-  strict form, and it is not in stable `std`; reopen when it is.
+  The parent's copy keeps close-on-exec, and is closed before the spawn returns.
+- **Windows:** a connected loopback pair. The parent's copy of tor's end is
+  inheritable only inside the spawn lock, and that copy is closed before the
+  lock is released, including when the spawn fails. Closing the handle is what
+  ends the window: a failed inherit-bit clear still drops the socket while the
+  lock is held, so the bit cannot outlive the guard.
+  Every other Rust spawn in a process that itself launches a managed tor takes
+  the same lock. A process that does not launch tor does not. The socket is not
+  in its address space.
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` would name the handles one `CreateProcess`
+  may inherit. It would not stop a different `CreateProcess` in this process,
+  still passing `bInheritHandles` and still omitting a list, from inheriting a
+  handle that is inheritable at that moment. The lock is that closure.
+  Stabilising the list in `std` does not retire it. The C++ `tools::spawn`
+  residual (DC-F12) stays outside the lock until that lane is gone.
 
 The launch also passes `--torrc-file`, `--defaults-torrc`, `GeoIPFile` and
 `GeoIPv6File`, each naming an empty file, and on Windows sets `SystemRoot`
@@ -554,7 +564,7 @@ cut (rule 15; §9).
 Rule 81 applies to every message: the words name what the operator sees and
 can do, not Tor's vocabulary. Bridges are out of scope; reopen when an operator
 reports a network that blocks Tor and the typed launch surface
-(`actor.rs:874-954`) has a reviewed bridge option.
+(`launch.rs:263`) has a reviewed bridge option.
 
 ## 6. Rejected alternatives
 
@@ -623,13 +633,13 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 | Deleted | Where | Replaced by |
 | --- | --- | --- |
 | The no-respawn disposition and its FFI echo | `rust/shekyl-tor-control-daemon/src/lib.rs:40-46`; `rust/shekyl-ffi/src/daemon_tor_ffi.rs:320-323` | §4.4 |
-| `DEL_ONION` on stop (the daemon's path; the wallet keeps its own) | `rust/shekyl-tor-control-client/src/control/actor.rs:783-798` | §4.7 |
-| `SIGTERM` in the managed shutdown | `rust/shekyl-tor-control-client/src/control/actor.rs:611-632` | §4.7 |
+| `DEL_ONION` on stop (the daemon's path; the wallet keeps its own) | `rust/shekyl-tor-control-client/src/control/actor.rs:1042-1052` | §4.7 |
+| `SIGTERM` in the managed shutdown | `rust/shekyl-tor-control-client/src/control/actor.rs:889-908` | §4.7 |
 | The per-publish seed, minted and dropped inside `publish` so that Tor is the key's only holder | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:328-332` | the boot's seed in secure memory, republished on each respawn (`TSR-Q1`) |
 | The synchronous wipe in teardown and on drop | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:395-415`; `data_dir.rs` `wipe`, `Drop` | the tombstone (§4.7) |
 | `EventSink::unsubscribed()` on the daemon's path | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:253` | §4.2 |
 | The FFI-installed `tor_proxy` | `rust/shekyl-ffi/src/zone_ffi.rs:63` | the link (§4.1) |
-| The control port, its port file, cookie authentication and `TAKEOWNERSHIP` on the daemon's managed launch (the wallet's attached posture keeps its authentication) | `rust/shekyl-tor-control-client/src/control/actor.rs:894-899`, `:854-861` | the inherited owning socket (`TSR-Q7`, §4.7) |
+| The control port, its port file, cookie authentication and `TAKEOWNERSHIP` on the daemon's managed launch (the wallet's attached posture keeps its authentication) | gone from the managed launch (`rust/shekyl-tor-control-client/src/control/launch.rs:203-204`); the attached handshake stays (`rust/shekyl-tor-control-client/src/control/actor.rs:1068-1076`) | the inherited owning socket (`TSR-Q7`, §4.7) |
 | The C++ start, liveness poll and teardown, and their FFI exports | `src/p2p/net_node.inl:756-810`, `:1209-1232`; `rust/shekyl-ffi/src/daemon_tor_ffi.rs:61`, `:142-341`; `blocking.rs` | the supervisor, started and stopped by the Rust `main()` (#1066); to Rick before they are cut |
 
 ## 10. Bounds to measure (FOLLOWUPS rows)
