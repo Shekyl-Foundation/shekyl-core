@@ -368,12 +368,61 @@ pub struct FeedbackResult {
     /// `fee_tail_max / fee_tail_min − 1`, basis points: FL-C7's reading,
     /// scored against [`CONVERGED_AMPLITUDE_BP`].
     pub tail_amplitude_bp: u64,
+    /// The cell's reading against the bar ([`settlement`]).
+    pub settled: Settlement,
 }
 
-/// FL-C7's bar: the paid fee's tail amplitude is above FL-E1's pre-registered
-/// limit ([`CONVERGED_AMPLITUDE_BP`]).
-fn is_oscillating(fb: &FeedbackResult) -> bool {
-    fb.tail_amplitude_bp > CONVERGED_AMPLITUDE_BP
+/// How a feedback cell's tail reads against FL-E1's pre-registered bar.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Settlement {
+    /// Tail amplitude at or under [`CONVERGED_AMPLITUDE_BP`].
+    Converged,
+    /// Above the bar, and the tail toggles between two standard-rung
+    /// values exactly one served-floor unit apart: the served rate's
+    /// whole-atomic-unit resolution acting as an output quantizer where `F`
+    /// is small, not loop instability (FL-V12,
+    /// `FEE_LADDER_DERIVATION.md` §2). The same loop converges at
+    /// `fee_floor.rs`'s finer resolution.
+    ResolutionCell,
+    /// Above the bar in any other shape: an oscillation this instrument
+    /// does not explain.
+    Oscillating,
+}
+
+/// Standard-rung atomic units one atomic unit of the served floor moves,
+/// read off the production ladder (`standard = 4F`) rather than restated.
+fn standard_units_per_floor_unit(params: &EconomicParams) -> u64 {
+    let ladder = corrected_fee_ladder(
+        10 * shekyl_units::ATOMIC_UNITS_PER_SKL,
+        FULL_REWARD_ZONE,
+        REF_TX_WEIGHT,
+        FeeCorrection::UNITY,
+        params,
+    );
+    assert_eq!(
+        ladder.standard % ladder.economy,
+        0,
+        "the standard rung is a whole multiple of the floor"
+    );
+    ladder.standard / ladder.economy
+}
+
+/// FL-C7's reading of one cell's tail against FL-E1's bar: its amplitude,
+/// how many distinct standard-rung fees it held and their range, and the
+/// rung units one served-floor unit is.
+fn settlement(
+    tail_amplitude_bp: u64,
+    distinct_fees_tail: u64,
+    fee_tail: (u64, u64),
+    floor_unit: u64,
+) -> Settlement {
+    if tail_amplitude_bp <= CONVERGED_AMPLITUDE_BP {
+        Settlement::Converged
+    } else if distinct_fees_tail == 2 && fee_tail.1 - fee_tail.0 == floor_unit {
+        Settlement::ResolutionCell
+    } else {
+        Settlement::Oscillating
+    }
 }
 
 /// One feedback cell. The reference fee is the standard rung at the
@@ -386,6 +435,7 @@ fn feedback_scenario(
     start_volume: u64,
     st: AgeState,
     median: u64,
+    floor_unit: u64,
     params: &EconomicParams,
 ) -> FeedbackResult {
     let f_ref = standard_fee(
@@ -435,22 +485,29 @@ fn feedback_scenario(
         }
     }
 
+    let distinct_fees_tail = u64::try_from(tail_fees.len()).expect("tail cardinality fits");
+    let tail_amplitude_bp =
+        u64::try_from(u128::from(fee_max) * 10_000 / u128::from(fee_min.max(1)) - 10_000)
+            .expect("amplitude fits u64");
     FeedbackResult {
         age_years: st.height / BLOCKS_PER_YEAR,
         median,
         elasticity_milli: eps_milli,
         demand_scale,
         start_volume,
-        distinct_fees_tail: u64::try_from(tail_fees.len()).expect("tail cardinality fits"),
+        distinct_fees_tail,
         tail_transitions,
         v_avg_tail_min: v_min,
         v_avg_tail_max: v_max,
         fee_tail_min: fee_min,
         fee_tail_max: fee_max,
-        tail_amplitude_bp: u64::try_from(
-            u128::from(fee_max) * 10_000 / u128::from(fee_min.max(1)) - 10_000,
-        )
-        .expect("amplitude fits u64"),
+        tail_amplitude_bp,
+        settled: settlement(
+            tail_amplitude_bp,
+            distinct_fees_tail,
+            (fee_min, fee_max),
+            floor_unit,
+        ),
     }
 }
 
@@ -546,6 +603,7 @@ pub struct FeeLadderReport {
     rung_tables: Vec<RungTable>,
     feedback: Vec<FeedbackResult>,
     converged_amplitude_bp: u64,
+    standard_units_per_floor_unit: u64,
     degenerate: DegeneratePins,
     fee_signal_bits: Vec<AnchoredReduction>,
 }
@@ -640,6 +698,7 @@ pub fn report() -> FeeLadderReport {
         ),
     ];
 
+    let floor_unit = standard_units_per_floor_unit(&params);
     let mut feedback = Vec::new();
     for &(_, st) in &states {
         for &factor in &MEDIAN_ZONE_FACTORS {
@@ -653,6 +712,7 @@ pub fn report() -> FeeLadderReport {
                             start,
                             st,
                             median,
+                            floor_unit,
                             &params,
                         ));
                     }
@@ -669,6 +729,7 @@ pub fn report() -> FeeLadderReport {
         rung_tables,
         feedback,
         converged_amplitude_bp: CONVERGED_AMPLITUDE_BP,
+        standard_units_per_floor_unit: floor_unit,
         degenerate: degenerate_pins(&params),
         fee_signal_bits: registered_models(),
     }
@@ -695,7 +756,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             below = t.served_below_relay,
         );
     }
-    let oscillating: Vec<_> = r.feedback.iter().filter(|fb| is_oscillating(fb)).collect();
+    let count = |want: Settlement| r.feedback.iter().filter(|fb| fb.settled == want).count();
     let worst_amplitude = r
         .feedback
         .iter()
@@ -704,15 +765,26 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
         .unwrap_or(0);
     let _ = writeln!(
         out,
-        "fee-ladder: feedback grid = {} cells; converged_amplitude_bp={}; worst_tail_amplitude_bp={worst_amplitude}; {} oscillating",
+        "fee-ladder: feedback grid = {} cells; converged_amplitude_bp={}; worst_tail_amplitude_bp={worst_amplitude}; {} converged; {} FL-V12 resolution cells (the tail toggles one served-floor unit, {} standard-rung units: the served rate's whole-unit resolution, not loop instability); {} oscillating",
         r.feedback.len(),
         r.converged_amplitude_bp,
-        oscillating.len()
+        count(Settlement::Converged),
+        count(Settlement::ResolutionCell),
+        r.standard_units_per_floor_unit,
+        count(Settlement::Oscillating)
     );
-    for fb in oscillating {
+    for fb in r
+        .feedback
+        .iter()
+        .filter(|fb| fb.settled != Settlement::Converged)
+    {
+        let label = match fb.settled {
+            Settlement::ResolutionCell => "FL-V12-resolution",
+            _ => "OSCILLATING",
+        };
         let _ = writeln!(
             out,
-            "fee-ladder: feedback age={} M={} eps={} D={} start={} distinct_tail={} transitions={} tail_amplitude_bp={} v_tail=[{},{}] fee_tail=[{},{}]",
+            "fee-ladder: feedback {label} age={} M={} eps={} D={} start={} distinct_tail={} transitions={} tail_amplitude_bp={} v_tail=[{},{}] fee_tail=[{},{}]",
             fb.age_years,
             fb.median,
             fb.elasticity_milli,
@@ -840,26 +912,35 @@ mod tests {
         );
     }
 
-    /// FL-C7's reading is the FL-E1 bar: a cell whose paid fee wobbles by
-    /// more than `CONVERGED_AMPLITUDE_BP` in the tail oscillates, one that
-    /// wobbles by at most that much has settled.
+    /// FL-C7's reading is the FL-E1 bar: at or under
+    /// `CONVERGED_AMPLITUDE_BP` a cell has settled; above it, a tail that
+    /// toggles one served-floor unit is an FL-V12 resolution cell, and any
+    /// other shape oscillates.
     #[test]
-    fn oscillation_is_scored_on_the_shared_amplitude_bar() {
-        let cell = |amplitude_bp: u64| FeedbackResult {
-            age_years: 0,
-            median: FULL_REWARD_ZONE,
-            elasticity_milli: 0,
-            demand_scale: 50,
-            start_volume: 50,
-            distinct_fees_tail: 2,
-            tail_transitions: 7,
-            v_avg_tail_min: 50,
-            v_avg_tail_max: 51,
-            fee_tail_min: 10_000,
-            fee_tail_max: 10_000 + amplitude_bp,
-            tail_amplitude_bp: amplitude_bp,
-        };
-        assert!(!is_oscillating(&cell(CONVERGED_AMPLITUDE_BP)));
-        assert!(is_oscillating(&cell(CONVERGED_AMPLITUDE_BP + 1)));
+    fn settlement_is_scored_on_the_shared_bar_and_the_floor_unit() {
+        let params = EconomicParams::default();
+        let unit = standard_units_per_floor_unit(&params);
+        assert_eq!(unit, 4, "standard is 4F");
+        // At and just over the bar, on a large rung.
+        assert_eq!(
+            settlement(CONVERGED_AMPLITUDE_BP, 2, (10_000, 10_050), unit),
+            Settlement::Converged
+        );
+        // 48 ↔ 52: one floor unit on a two-digit rung, 833 bp.
+        assert_eq!(
+            settlement(833, 2, (48, 52), unit),
+            Settlement::ResolutionCell
+        );
+        // Two rung values two floor units apart, or three values: not one
+        // unit of resolution, so the instrument does not explain it.
+        assert_eq!(
+            settlement(1_666, 2, (48, 56), unit),
+            Settlement::Oscillating
+        );
+        assert_eq!(settlement(833, 3, (48, 52), unit), Settlement::Oscillating);
+        assert_eq!(
+            settlement(CONVERGED_AMPLITUDE_BP + 1, 2, (10_000, 10_051), unit),
+            Settlement::Oscillating
+        );
     }
 }
