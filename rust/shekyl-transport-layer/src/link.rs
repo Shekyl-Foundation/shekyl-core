@@ -21,7 +21,7 @@
 //! slot for it until then.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use shekyl_timing_engine::Tick;
 
@@ -116,7 +116,35 @@ pub type Watcher = Arc<dyn Fn(ConnectorId) + Send + Sync>;
 /// Every connector's link, and who is told when one changes.
 pub struct Links {
     links: Mutex<[Link; ConnectorId::COUNT]>,
-    watchers: Mutex<Vec<Watcher>>,
+    watchers: Arc<Mutex<Watchers>>,
+}
+
+/// The registered watchers, each under the id its [`Subscription`] names.
+#[derive(Default)]
+struct Watchers {
+    next: u64,
+    by_id: Vec<(u64, Watcher)>,
+}
+
+/// One watcher's registration on a [`Links`]. Dropping it removes the
+/// watcher, so a reader rebuilt in the same process (a zone host, and the
+/// dialer built with it) leaves nothing behind on a hub that outlives it.
+#[must_use = "dropping the subscription removes its watcher"]
+pub struct Subscription {
+    watchers: Weak<Mutex<Watchers>>,
+    id: u64,
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        if let Some(watchers) = self.watchers.upgrade() {
+            watchers
+                .lock()
+                .expect("link watchers")
+                .by_id
+                .retain(|(id, _)| *id != self.id);
+        }
+    }
 }
 
 impl Default for Links {
@@ -131,7 +159,7 @@ impl Links {
     pub fn new() -> Self {
         Self {
             links: Mutex::new([Link::UNKNOWN; ConnectorId::COUNT]),
-            watchers: Mutex::new(Vec::new()),
+            watchers: Arc::new(Mutex::new(Watchers::default())),
         }
     }
 
@@ -207,9 +235,17 @@ impl Links {
         });
     }
 
-    /// Call `watcher` after every change to any connector's link.
-    pub fn subscribe(&self, watcher: Watcher) {
-        self.watchers.lock().expect("link watchers").push(watcher);
+    /// Call `watcher` after every change to any connector's link, until the
+    /// returned [`Subscription`] is dropped.
+    pub fn subscribe(&self, watcher: Watcher) -> Subscription {
+        let mut watchers = self.watchers.lock().expect("link watchers");
+        let id = watchers.next;
+        watchers.next = watchers.next.wrapping_add(1);
+        watchers.by_id.push((id, watcher));
+        Subscription {
+            watchers: Arc::downgrade(&self.watchers),
+            id,
+        }
     }
 
     fn change(&self, connector: ConnectorId, edit: impl FnOnce(&mut Link)) -> u64 {
@@ -226,7 +262,14 @@ impl Links {
     /// Watchers run with neither lock held. The clone is that snapshot:
     /// a link changes when a route is installed, falls, or is withdrawn.
     fn notify(&self, connector: ConnectorId) {
-        let watchers: Vec<Watcher> = self.watchers.lock().expect("link watchers").clone();
+        let watchers: Vec<Watcher> = self
+            .watchers
+            .lock()
+            .expect("link watchers")
+            .by_id
+            .iter()
+            .map(|(_, watcher)| Arc::clone(watcher))
+            .collect();
         for watcher in watchers {
             watcher(connector);
         }
@@ -315,7 +358,7 @@ mod tests {
         let links = Links::new();
         let heard = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&heard);
-        links.subscribe(Arc::new(move |_| {
+        let _watching = links.subscribe(Arc::new(move |_| {
             count.fetch_add(1, Ordering::SeqCst);
         }));
         let incarnation = links
@@ -337,6 +380,33 @@ mod tests {
         assert_eq!(heard.load(Ordering::SeqCst), 3, "usable, down, withdrawn");
     }
 
+    /// A dropped subscription is not called again and leaves no entry, so a
+    /// reader rebuilt many times on one hub (the FFI tests rebuild the zone
+    /// host and its dialer) does not grow the list.
+    #[test]
+    fn a_dropped_subscription_hears_nothing_and_leaves_nothing() {
+        let links = Links::new();
+        let heard = Arc::new(AtomicUsize::new(0));
+        for _ in 0..5 {
+            let count = Arc::clone(&heard);
+            let watching = links.subscribe(Arc::new(move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+            }));
+            drop(watching);
+        }
+        let count = Arc::clone(&heard);
+        let kept = links.subscribe(Arc::new(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(links.watchers.lock().expect("watchers").by_id.len(), 1);
+        links.withdraw(ConnectorId::Tor);
+        assert_eq!(heard.load(Ordering::SeqCst), 1, "only the kept one hears");
+        drop(kept);
+        links.withdraw(ConnectorId::Tor);
+        assert_eq!(heard.load(Ordering::SeqCst), 1);
+        assert!(links.watchers.lock().expect("watchers").by_id.is_empty());
+    }
+
     /// The default boot installs one SOCKS address twice (`listen_tor`, then
     /// `dial_through_tor`). That is the same route, so the incarnation stays
     /// and nobody is told again. A return from down is a new incarnation
@@ -346,7 +416,7 @@ mod tests {
         let links = Links::new();
         let heard = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&heard);
-        links.subscribe(Arc::new(move |_| {
+        let _watching = links.subscribe(Arc::new(move |_| {
             count.fetch_add(1, Ordering::SeqCst);
         }));
         let first = links.publish_usable(ConnectorId::Tor, socks(9050), Tick::new(1));

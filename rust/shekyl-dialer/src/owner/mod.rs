@@ -36,7 +36,7 @@ use shekyl_peerlist::{
     NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick, WHITE_REFILL_LINE,
 };
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
-use shekyl_seam::{Hub, SocketId, SyncPayload};
+use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
 
 use self::address::{live_sessions, LiveSessions};
@@ -119,6 +119,9 @@ pub struct Dialer {
     /// What a parked owner loop waits on. The hub's links ring it on every
     /// change; so do the tip, the network id and the stop.
     bell: Arc<Bell>,
+    /// The hub's links ring [`Self::bell`] while this is held. Dropped with
+    /// the dialer, so a dialer rebuilt on the same hub leaves no watcher.
+    _links_watch: Subscription,
 }
 
 /// The peerlist's name for a seam session: the socket id, little-endian,
@@ -149,12 +152,8 @@ impl Dialer {
         targets[ConnectorId::Clearnet.index()] = P2P_DEFAULT_OUT_PEERS as usize;
         targets[ConnectorId::Tor.index()] = MIN_PROVISIONED_OUT_PEERS as usize;
         let bell = Arc::new(Bell::new());
-        let heard = Arc::downgrade(&bell);
-        hub.links().subscribe(Arc::new(move |_| {
-            if let Some(bell) = heard.upgrade() {
-                bell.ring();
-            }
-        }));
+        let ringing = Arc::clone(&bell);
+        let links_watch = hub.links().subscribe(Arc::new(move |_| ringing.ring()));
         Self {
             hub,
             shared: Arc::new(Mutex::new(Shared {
@@ -178,6 +177,7 @@ impl Dialer {
             store: Mutex::new(None),
             owners: Mutex::new([false; ConnectorId::COUNT]),
             bell,
+            _links_watch: links_watch,
         }
     }
 

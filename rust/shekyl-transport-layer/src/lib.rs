@@ -47,5 +47,5 @@ pub use declaration::{
     StackPlan, StreamKind, YesNo,
 };
 pub use dial::check_dial;
-pub use link::{DownCause, Link, Links, Outbound, Route, RoutePublish, Watcher};
+pub use link::{DownCause, Link, Links, Outbound, Route, RoutePublish, Subscription, Watcher};
 pub use shekyl_net_address::NetworkAddress;
