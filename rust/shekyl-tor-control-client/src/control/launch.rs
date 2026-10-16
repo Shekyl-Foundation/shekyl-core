@@ -1043,9 +1043,17 @@ mod tests {
     const SHELL_OWN_VARIABLES: [&str; 3] = ["PWD", "SHLVL", "_"];
 
     /// A directory that is not the Windows directory. The re-executed test
-    /// process is given it as `SystemRoot`; the managed child must not keep it.
+    /// process sets it as its own `SystemRoot` before the launch; the managed
+    /// child must not keep it.
     #[cfg(windows)]
     const POISON_SYSTEM_ROOT: &str = r"C:\shekyl-not-a-windows-directory";
+
+    /// Tells the re-executed process to poison its `SystemRoot` once the control
+    /// pair exists. It cannot start with the poison: Winsock loads its providers
+    /// from the Windows directory, so the pair's loopback bind fails under a wrong
+    /// `SystemRoot` (`WSAEPROVIDERFAILEDINIT`, 10106; seen on Windows, 2026-10-16).
+    #[cfg(windows)]
+    const POISON_AFTER_PAIR: &str = "SHEKYL_TEST_POISON_SYSTEM_ROOT";
 
     #[cfg(windows)]
     const SHIM_FILE_NAME: &str = "tor.exe";
@@ -1061,7 +1069,8 @@ mod tests {
     /// reads what the shim wrote, the inner half is the process whose
     /// environment is dirty.
     ///
-    /// On Windows the outer half poisons `SystemRoot`. The shim is a small
+    /// On Windows the inner half poisons its own `SystemRoot` once the control
+    /// pair exists (Winsock needs the real one to make it). The shim is a small
     /// Rust program, because `CreateProcess` will not run a `.cmd` the way
     /// Unix runs a shell script. The dump's `SystemRoot` has to be the system
     /// call's value.
@@ -1075,12 +1084,6 @@ mod tests {
     }
 
     async fn run_inner_half(dir: &OsStr) {
-        #[cfg(windows)]
-        assert_eq!(
-            std::env::var(SYSTEM_ROOT_VARIABLE).as_deref(),
-            Ok(POISON_SYSTEM_ROOT),
-            "the inner half must be the process that holds the poisoned SystemRoot"
-        );
         assert!(
             std::env::var_os(ENV_SENTINEL_NAME).is_some(),
             "the inner half's environment is not dirty"
@@ -1098,9 +1101,25 @@ mod tests {
             exit_observer: None,
             leak: None,
         };
+        let pair = ControlPair::new().expect("control pair");
+        // From here on this process's own `SystemRoot` is wrong, through the
+        // resolve and the spawn: the child's must still be the system call's.
+        // A single-test process, so the `set_var` races nothing.
+        #[cfg(windows)]
+        {
+            assert!(
+                std::env::var_os(POISON_AFTER_PAIR).is_some(),
+                "the outer half asks for the poison"
+            );
+            std::env::set_var(SYSTEM_ROOT_VARIABLE, POISON_SYSTEM_ROOT);
+            assert_eq!(
+                std::env::var(SYSTEM_ROOT_VARIABLE).as_deref(),
+                Ok(POISON_SYSTEM_ROOT),
+                "the inner half holds the poisoned SystemRoot"
+            );
+        }
         let environment =
             LaunchEnvironment::resolve(&managed.tor_binary).expect("launch environment");
-        let pair = ControlPair::new().expect("control pair");
         let mut cmd = managed_tor_command(&managed, pair.tor_end(), &environment);
         let (mut child, _read, _write) = pair.spawn(&mut cmd).expect("spawn the shim");
         let status = child.wait().await.expect("wait for the shim");
@@ -1131,7 +1150,7 @@ mod tests {
             .env(PRELOAD_NAME, PRELOAD_VALUE)
             .env(ENV_SENTINEL_NAME, ENV_SENTINEL_VALUE);
         #[cfg(windows)]
-        reexec.env(SYSTEM_ROOT_VARIABLE, POISON_SYSTEM_ROOT);
+        reexec.env(POISON_AFTER_PAIR, "1");
         let output = crate::spawn_lock::output(&mut reexec).expect("re-execute the test binary");
         assert!(
             output.status.success(),

@@ -2175,6 +2175,7 @@ mod live_tests {
         const BOUND: Duration = Duration::from_secs(300);
 
         let dir = tempfile::tempdir().expect("tempdir");
+        let (exit_tx, exit_rx) = oneshot::channel();
         let (events, mut received) = EventSink::bounded();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
         let actor = TorControlClient::spawn(TorControlClientConfig {
@@ -2183,7 +2184,7 @@ mod live_tests {
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: false,
-                exit_observer: None,
+                exit_observer: Some(exit_tx),
                 leak: None,
             }),
             events,
@@ -2277,6 +2278,14 @@ mod live_tests {
 
         actor.stop_gracefully().await.expect("graceful stop");
         actor.wait_for_shutdown().await;
+        // `wait_for_shutdown` returns when the mailbox closes, which kameo does
+        // before `on_stop` reaps. The exit report comes after the reap; awaiting it
+        // keeps the directory from dropping under a live tor (on Windows its open
+        // files cannot be removed).
+        tokio::time::timeout(Duration::from_secs(15), exit_rx)
+            .await
+            .expect("the child is reaped")
+            .expect("the exit observer reports");
     }
 
     /// `TSR-F16`, case C6b: a copy of tor's end leaked into another process does not
