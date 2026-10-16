@@ -105,9 +105,10 @@ without touching the list rule:** the preconditions are part of the plan. No
 draw happens unless the connector's link is usable and the tip and network id
 are known; while the link is down the owner loop waits on the link's change,
 not on a timer. A local failure that races the link's fall costs one draw per
-incident. Whether a non-implicating `DialFailed` should also return the draw to
-gray (`settle_outstanding`) rather than drop it is the P2P lane's question;
-this round does not need it answered.
+incident. The drop stays: a non-implicating `DialFailed` is not returned to gray
+(closed by the P2P lane, Rick, 2026-10-16, #1092; the dialer brief, "The
+fill"). Implication decides the failed-address memory, not list membership,
+and on clearnet nothing implicates, so the drop is what clears dead hosts.
 
 **TSR-F2 (high; Tor lane). Subscribing to events makes the sink a memory
 channel an outsider can fill.** `EventSink` wraps an unbounded `mpsc`. Once

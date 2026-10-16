@@ -179,6 +179,17 @@ Two races are accepted. A link that falls between the plan and the
 dial costs that one draw. A wake whose timer was armed before the fall
 runs once and draws nothing. Tests: `shekyl-dialer/tests/readiness.rs`.
 
+**A failed dial drops its draw, whatever the cause (Rick, 2026-10-16;
+closed in #1092).** A `DialFailed` gray draw is dropped, not returned to
+gray, including when the cause does not implicate the address. Whether
+a cause implicates the address decides whether the failed-address memory
+punishes it, never list membership. On clearnet no cause implicates the
+address, because nothing authenticates the destination. So a return to
+gray would keep every dead host that only ever times out on gray for
+good, and the drop is what clears them out. The case that made the drop
+costly, a node that could not dial at all, is the readiness gate's. What
+remains is one draw per link that falls between the plan and the dial.
+
 **The population.** A closed network (`--add-exclusive-node`) is not a
 dialer arm (Rick, 2026-10-11): an exclusive list is a network
 declaration. The node's candidate set is the named addresses, and the
