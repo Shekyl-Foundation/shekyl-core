@@ -101,13 +101,14 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    ArchivalLastSlashEpochCell, BlockInfo, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry,
+    ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CodecError, RMarket, SigmaWorkMilli,
+    SlashLogEntry,
 };
 
 use super::archival_reads;
 use super::chain_reads::{self, ReadFault};
 use super::curve_reads;
-use super::error::StoreError;
+use super::error::{CellFault, StoreError, StoreInvariant};
 use super::leaf_reads;
 use super::tx_reads;
 use super::write::WriteBatch;
@@ -311,8 +312,9 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     /// The `total_burned` fold less the `block_burn` rows in
     /// `(height, tip]` ([`chain_reads::burned_in`]): the fold as it stood
     /// after the block at `height` connected. A fold below the rows above
-    /// it is a store that does not hold what it claims, and arms the
-    /// batch's poison as SI-7.
+    /// it is a register that does not hold the sum of its rows — SI-7 on
+    /// the `total_burned` cell, its reason spelled — and arms the batch's
+    /// poison.
     fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, StoreError> {
         let Some((tip, _)) = self.tip_row()? else {
             return Ok(AtHeight::AboveTip);
@@ -325,7 +327,13 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
             .map_err(|f| self.arm(f))?;
         match fold.checked_sub(above) {
             Some(through) => Ok(AtHeight::Recorded(through)),
-            None => Err(self.arm(chain_reads::absent_fold("total_burned"))),
+            None => Err(self.arm(ReadFault::Invariant(StoreInvariant::CellCorrupt {
+                key: "total_burned",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "total_burned",
+                    reason: "the burned fold is below the block_burn rows it sums",
+                }),
+            }))),
         }
     }
 

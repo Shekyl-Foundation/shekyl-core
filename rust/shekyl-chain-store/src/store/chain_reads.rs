@@ -209,13 +209,6 @@ pub(super) fn absent(cell: &'static str) -> ReadFault {
 /// SI-7 for a row that is present and does not decode under its codec.
 /// Shared with `output_reads`: one classification of "the bytes are not
 /// this codec" for every typed cell.
-/// A chain-state fold below the per-height rows it is the sum of — the
-/// `total_burned` register under its `block_burn` rows — reported as the
-/// register's own SI-7 arm.
-pub(super) fn absent_fold(cell: &'static str) -> ReadFault {
-    absent(cell)
-}
-
 pub(super) fn undecodable(cell: &'static str, cause: CodecError) -> ReadFault {
     ReadFault::Invariant(StoreInvariant::CellCorrupt {
         key: cell,
@@ -424,7 +417,9 @@ pub(super) fn weights_below<T: ReadTables>(
 /// and including the block at `through`. An absent row is a zero burn (the
 /// writer's convention, R8). The relay floor's `burned_through(h)` is the
 /// fold less this at `(h, tip]` — a projection bounded by how far below
-/// the tip `h` lies, never a recomputation.
+/// the tip `h` lies, never a recomputation. Rows whose sum leaves `u64`
+/// are rows the `total_burned` fold could not have folded under its
+/// checked arithmetic: SI-8, [`StoreInvariant::FoldOverflow`].
 pub(super) fn burned_in<T: ReadTables>(
     txn: &T,
     after: u64,
@@ -441,9 +436,11 @@ pub(super) fn burned_in<T: ReadTables>(
             .value()
             .decode()
             .map_err(|cause| undecodable("block_burn", cause))?;
-        sum = sum
-            .checked_add(burned)
-            .ok_or_else(|| absent("block_burn"))?;
+        sum =
+            sum.checked_add(burned)
+                .ok_or(ReadFault::Invariant(StoreInvariant::FoldOverflow {
+                    cell: "total_burned",
+                }))?;
     }
     Ok(sum)
 }
