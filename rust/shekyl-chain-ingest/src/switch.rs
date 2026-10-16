@@ -276,7 +276,7 @@ pub struct Reorganize {
 /// docs). The proofs ran off the actor; the closure does not open, so the
 /// main chain is not popped. The failing alt suffix is removed, as a
 /// promotion verdict's is (K5).
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RefusePromotion {
     /// The plan's tip; nothing is removed if the store's tip moved.
     pub tip: Tip,
