@@ -251,6 +251,21 @@ pub enum Corrupt {
         /// Which record was missing. The store maps this onto the cell.
         record: PerHeightRecord,
     },
+    /// The relay floor at a height cannot be priced from the operands the
+    /// view holds: `shekyl_economics::relay_floor_from` answered `None`,
+    /// because `R·C·w_ref/M²` left its `u128` domain. The parameters' tail
+    /// is priced before any rule runs, and `R` and `C` are bounded by the
+    /// parameters, so the operand that can leave the domain is the stored
+    /// median. A median is a block weight, bounded by the weight limit; a
+    /// `block_info` row holding one past the domain is bytes no conforming
+    /// store writes — reported as the row's fault, never a panic in the
+    /// reader.
+    RelayFloorUnpriceable {
+        /// The height whose floor was asked for.
+        at: BlockHeight,
+        /// The operands the view yielded at that height.
+        operands: shekyl_economics::FeeOperands,
+    },
     /// A recorded output's points do not decompress — `construct_leaf`
     /// refused them (DRS-E3 §3.2). Every admitted output's key, commitment
     /// and `0x07` point were gated as canonical prime-order points at
@@ -575,6 +590,10 @@ impl fmt::Display for Corrupt {
             Self::HoleBelowTip { at, record } => write!(
                 f,
                 "no {record} recorded at height {at:?}, below the connecting height (SI-7)"
+            ),
+            Self::RelayFloorUnpriceable { at, operands } => write!(
+                f,
+                "the relay floor at height {at:?} cannot be priced from {operands:?}: the floor's arithmetic leaves its domain (a stored median no block can carry)"
             ),
             Self::LeafNotConstructible { output, input } => write!(
                 f,

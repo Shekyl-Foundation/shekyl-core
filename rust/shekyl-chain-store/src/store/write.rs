@@ -334,6 +334,18 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             // connecting height the batch noted is the context. The record
             // selects the cell: a root hole reported as `block_info` would
             // halt the writer against the wrong table.
+            // The relay-floor reader found a `block_info` median the floor's
+            // arithmetic cannot take — a weight no block can carry, in the
+            // row that records weights. The row's own SI-7 shape, with the
+            // reason spelled (FL PR C).
+            Corrupt::RelayFloorUnpriceable { at: _, operands: _ } => StoreInvariant::CellCorrupt {
+                key: "block_info",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "block_info",
+                    reason:
+                        "the long-term effective median leaves the relay floor's arithmetic domain",
+                }),
+            },
             Corrupt::HoleBelowTip { at: _, record } => StoreInvariant::CellCorrupt {
                 key: match record {
                     // The header record is a projection of the same row

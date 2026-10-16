@@ -241,6 +241,35 @@ fn a_burn_above_the_emission_is_corrupt() {
     );
 }
 
+/// A stored median no block can carry — one that takes `M²·SCALE` out of
+/// `u128` — is the row's fault, reported as `Corrupt`, never a panic in
+/// the reader.
+#[test]
+fn a_median_beyond_the_floors_domain_is_corrupt() {
+    let chain = chain(4, 10).with_median_at(h(2), LongTermWeight::from_raw(u64::MAX));
+    let out = chain.with_view(|view| relay_floor_at(&view, h(2)));
+    let AtHeight::Recorded(operands) = chain
+        .with_view(|view| fee_operands_at(&view, h(2)))
+        .expect("the operands read; only their price leaves the domain")
+    else {
+        panic!("height 2 is recorded");
+    };
+    assert_eq!(operands.long_term_effective_median, u64::MAX);
+    assert_eq!(
+        out,
+        Err(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
+            at: h(2),
+            operands,
+        }))
+    );
+    // And the window that spans it refuses the same way, where a ring
+    // would have carried a garbage floor forward.
+    assert!(matches!(
+        chain.with_view(|view| relay_floor_window(&view, h(4))),
+        Err(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable { .. }))
+    ));
+}
+
 /// Two chains sharing a prefix and diverging after it: each view yields
 /// its own fork's floors at the heights past the fork, and the same
 /// floors below it — a reorg needs no ring to rebuild.

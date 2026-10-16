@@ -113,25 +113,25 @@ pub fn fee_operands_at<'id, V: ChainView<'id>>(
 ///
 /// # Errors
 ///
-/// As [`fee_operands_at`].
-///
-/// # Panics
-///
-/// If the owner cannot price the operands: the parameters' tail subsidy is
-/// asserted priceable when [`economics`] resolves, and the scalars are
-/// chain `u64`s with `C` bounded by the parameters, so the `u128` domain
-/// holds for any median a block can carry.
+/// As [`fee_operands_at`]; and [`Corrupt::RelayFloorUnpriceable`] when the
+/// owner answers `None`. Its two causes: the parameters cannot price the
+/// tail, which the crate asserts away before any rule runs; or the
+/// stored median is so large that the floor's scalars leave the `u128`
+/// domain, which no block can carry and so is a `block_info` row the store
+/// does not hold as it claims — reported, never a panic in the reader.
 pub fn relay_floor_at<'id, V: ChainView<'id>>(
     view: &V,
     height: BlockHeight,
 ) -> Result<AtHeight<u64>, ViewRead<V::Fault>> {
-    Ok(match fee_operands_at(view, height)? {
-        AtHeight::Recorded(operands) => AtHeight::Recorded(
-            relay_floor_from(operands, economics())
-                .expect("economics() priced the tail; the floor's scalars are chain u64s"),
-        ),
-        AtHeight::AboveTip => AtHeight::AboveTip,
-    })
+    match fee_operands_at(view, height)? {
+        AtHeight::Recorded(operands) => relay_floor_from(operands, economics())
+            .map(AtHeight::Recorded)
+            .ok_or(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
+                at: height,
+                operands,
+            })),
+        AtHeight::AboveTip => Ok(AtHeight::AboveTip),
+    }
 }
 
 /// The `RELAY_FLOOR_WINDOW` floors admission at `connecting` reads:
