@@ -109,16 +109,26 @@ impl WriteBatch<'_, '_> {
 }
 
 /// A rebuild input that is not a tree: the stored bytes are off their
-/// curve, or the span read is not the span's size. SI-7 on the table that
-/// holds them, as the grow path maps the same fault (`write.rs`,
-/// `Corrupt::TreeUnservable`).
+/// curve, or the span read is not the span's size. SI-7 on the table the
+/// bytes were read from. A leaf scalar is layer 0 (`curve_tree_leaves`,
+/// codec `tree_leaf`); a chunk hash is every layer above it
+/// (`curve_tree_layers`, codec `layer_hash`). The grow path (`write.rs`)
+/// maps `NotOnCurve` only for a frontier last-chunk hash, already known
+/// to be a layer hash — a leaf fails earlier as `LeafNotConstructible`.
 fn unservable(fault: FrontierFault) -> StoreInvariant {
     match fault {
+        FrontierFault::NotOnCurve { layer: 0 } => StoreInvariant::CellCorrupt {
+            key: "curve_tree_leaves",
+            fault: CellFault::Undecodable(CodecError::Invalid {
+                codec: "tree_leaf",
+                reason: "a leaf scalar on the tree's right edge is not on its curve",
+            }),
+        },
         FrontierFault::NotOnCurve { .. } => StoreInvariant::CellCorrupt {
             key: "curve_tree_layers",
             fault: CellFault::Undecodable(CodecError::Invalid {
                 codec: "layer_hash",
-                reason: "a chunk hash or leaf scalar on the tree's right edge is not on its curve",
+                reason: "a chunk hash on the tree's right edge is not on its curve",
             }),
         },
         FrontierFault::Shape { .. } => StoreInvariant::CellCorrupt {

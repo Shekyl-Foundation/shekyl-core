@@ -5,9 +5,10 @@
 
 //! SI-5 (`edge.rs`): after a run of pops the tree's right edge is what its
 //! stored children rebuild to. A clean run passes; a wrong leaf under the
-//! edge, which no pop restores, halts at the leaf chunk; a summary and
-//! recorded root moved together — SI-12 holds, the tree does not — halts on
-//! the root arm.
+//! edge, which no pop restores, halts at the leaf chunk; a leaf scalar that
+//! is not on its curve names `curve_tree_leaves`; a summary and recorded
+//! root moved together — SI-12 holds, the tree does not — halts on the
+//! root arm.
 
 use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, CurveTreeRoot, TreeLeaf};
@@ -83,9 +84,15 @@ fn popping_nothing_reads_nothing_and_succeeds() {
     cleanup(&path);
 }
 
-/// Rewrite the leaf at `position` to a different canonical leaf, under the
-/// store's back (a raw redb transaction, as the read tests plant rows).
-fn plant_wrong_leaf(path: &std::path::Path, position: u64) {
+/// Rewrite the leaf at `position` under the store's back (a raw redb
+/// transaction, as the read tests plant rows). `edit` decides the bytes:
+/// a still-canonical scalar diverges the chunk; a non-element is not on
+/// the curve.
+fn rewrite_leaf(
+    path: &std::path::Path,
+    position: u64,
+    edit: impl FnOnce(&mut [u8; TreeLeaf::LEN]),
+) {
     let db = redb::Database::open(path).expect("open raw");
     let txn = db.begin_write().expect("write");
     {
@@ -98,8 +105,7 @@ fn plant_wrong_leaf(path: &std::path::Path, position: u64) {
             .decode()
             .expect("decodes");
         let mut bytes = *held.as_bytes();
-        // The low byte of the first scalar: still canonical, not the leaf.
-        bytes[0] ^= 1;
+        edit(&mut bytes);
         leaves
             .insert(position, TreeLeaf::from_bytes(bytes).encoded().as_encoded())
             .expect("plant");
@@ -113,7 +119,8 @@ fn a_wrong_leaf_under_the_edge_halts_the_pop_run_at_the_leaf_chunk() {
     drop(store);
     // Position 0 sits in the leaf layer's last (and only) chunk and below
     // anything the pops trim: no undo row restores it.
-    plant_wrong_leaf(&path, 0);
+    // The low byte of the first scalar: still canonical, not the leaf.
+    rewrite_leaf(&path, 0, |bytes| bytes[0] ^= 1);
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let out: Result<usize, TestErr> = store.write(|batch| Ok(batch.pop_many(POPS)?.len()));
     let want = StoreInvariant::RightEdgeDiverged {
@@ -129,6 +136,41 @@ fn a_wrong_leaf_under_the_edge_halts_the_pop_run_at_the_leaf_chunk() {
         "SI-5 halts at the height the last pop worked at"
     );
     // Nothing landed: the tip is where it was.
+    let tip = store
+        .begin_read()
+        .expect("read")
+        .tip()
+        .expect("tip")
+        .recorded;
+    assert_eq!(tip.map(|t| t.height.to_raw()), Some(TIP));
+    drop(store);
+    cleanup(&path);
+}
+
+#[test]
+fn an_off_curve_leaf_on_the_edge_names_the_leaves_table() {
+    let (path, store) = chain("edge-off-curve-leaf");
+    drop(store);
+    // Not a field element: the rebuild refuses it before it can diverge.
+    rewrite_leaf(&path, 0, |bytes| bytes.fill(0xFF));
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let out: Result<usize, TestErr> = store.write(|batch| Ok(batch.pop_many(POPS)?.len()));
+    let want = StoreInvariant::CellCorrupt {
+        key: "curve_tree_leaves",
+        fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
+            codec: "tree_leaf",
+            reason: "a leaf scalar on the tree's right edge is not on its curve",
+        }),
+    };
+    assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(TIP - POPS + 1),
+            row: want,
+        },
+        "SI-5 halts at the height the last pop worked at"
+    );
     let tip = store
         .begin_read()
         .expect("read")
