@@ -359,9 +359,9 @@ census_rows! {
         // row 10). The second guard the C++ needed is unrepresentable.
         A3 by_construction(crate::block::Candidate, "cen_b4_non_empty_root_with_nothing_supplied_is_refused"),
         A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_invalid_prev_id"),
-        // A5: subsumed by the 4.G weight rule (slice 7); the pre-parse fast
-        // path is the driver's DoS choice, not a row.
-        A5 pending,
+        // A5 is bucket 3 (ruled not a rule, R4 2026-10-15): the block limit is
+        // G6b's, and the C++ pre-parse leeway is not a second limit. The
+        // census keeps the id; this registry does not (CEN-F12's precedent).
         // A6/A7: wire invariants (R8 arm B), held by `Block::from_bytes`:
         // no `Block` exists that the parser refused, so no rule sees one.
         // The path is the type — `use` cannot name an associated function.

@@ -366,8 +366,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // (`FN_DSA_HYBRID.md` §6). 154 → 163 the same day: CEN-J29–J37, the
     // serve-credit bundle's nine admission rows, minted `pending` with the
     // pure verifier that names them as refusals (`archival/bundle.rs`,
-    // STAGED — no rule type is bound until `SO-D12`'s cutover).
-    assert_eq!(CenRow::ALL.len(), 163);
+    // STAGED — no rule type is bound until `SO-D12`'s cutover). 163 → 162
+    // on 2026-10-15: CEN-A5 (the C++ pre-parse blob cut, weight limit +
+    // 100) went to bucket 3, ruled not a rule (R4): the block limit is
+    // G6b's, and a leeway beside it is not a second limit.
+    assert_eq!(CenRow::ALL.len(), 162);
     assert_eq!(PolicyRow::ALL.len(), 9);
 }
 
