@@ -25,7 +25,7 @@
 //! none inherits the framework's default. The [`Apply`] handler is the
 //! table (§1.1). **Store-terminal faults end the actor; everything else is
 //! a reply the driver owns.** A replay driver may treat a stale seed as
-//! run-ending; E3 re-forms on the same actor. A refusal is never `Over`.
+//! run-ending; the live daemon (DRS-X) re-forms on the same actor. A refusal is never `Over`.
 //!
 //! | outcome | here |
 //! | --- | --- |
@@ -402,7 +402,7 @@ pub struct BudgetAccruingOf {
 /// through the definitions the validator uses (`tx_volume_window`,
 /// `mtp_median_at`) — so the template is priced at the operands it will be
 /// judged by, never at a second copy of them. The `get_block_template`
-/// read path in the shape E3 will serve it; the slice-6 scenario driver is
+/// read path in the shape the live daemon (DRS-X) will serve it; the slice-6 scenario driver is
 /// its first consumer.
 #[derive(Clone, Copy, Debug)]
 pub struct TemplateFacts;

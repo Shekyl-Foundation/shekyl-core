@@ -248,6 +248,9 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
     assert_eq!(
         by_construction,
         [
+            CenRow::A3,
+            CenRow::A6,
+            CenRow::A7,
             CenRow::F2,
             CenRow::F8,
             CenRow::F19,
@@ -264,8 +267,13 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::I3,
             CenRow::L8,
             CenRow::L9,
+            CenRow::L11,
+            CenRow::L12,
+            CenRow::L16,
         ],
-        "slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter; \
+        "the census re-class of 2026-10-15 (R4): B4's one witness field (A3), the wire's \
+         block parser (A6, A7), the root `tree_after` derives that B5 judges (L11, L12), \
+         and the holdings fold over the store's rows (L16); slice 4 Q4: the wire's version and output tag, the view brand, the epoch parameter; \
          slice 5 Q6: the same version (H2, H13) and tag (H12) for listed transactions, one \
          commitment per output (H8), and a parsed transaction as `tx_form`'s input (H23); \
          slice 6 Q3: the CT type set plus H15 (I2) and the same version a fourth time (I3); \
@@ -294,6 +302,7 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
     assert_eq!(
         held_by_store,
         [
+            CenRow::B3,
             CenRow::K1a,
             CenRow::K2,
             CenRow::K3,
@@ -303,7 +312,7 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::K7,
             CenRow::K8
         ],
-        "DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
+        "the rule-set belt at connect (B3, re-classed 2026-10-15, R4); DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
          insert (K3) and no supply word on an alt row (K8) are the store's structures, \
          proved by the store's tests; promotion (K5), the witness in the alt row (K5b), the \
          fork choice's match (K6) and the demoted rows (K7) are the switch's (DRS-E5 a5), \

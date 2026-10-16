@@ -357,24 +357,33 @@ census_rows! {
         A1 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known_is_already_exists"),
         A2 implemented(crate::rules::topology::A2),
         // A3: subsumed by B4's empty-witness arm — never its own rule
-        // (slice 1 Q3); B4 landed with slice 8 row 10, and this row is
-        // judged wherever B4 is. It stays `pending` as a *row* because the
-        // census keeps it as one and the bijection gate counts it; the
-        // rule that decides it is `rules::attestation::B4`.
-        A3 pending,
+        // (slice 1 Q3). The validator has no witness-less entry to guard:
+        // `Candidate::attestation_witness` is the one door, and B4 judges
+        // `None` as the empty preimage against the header root, so a
+        // non-empty root with nothing supplied refuses as B4 (slice 8
+        // row 10). The second guard the C++ needed is unrepresentable.
+        A3 by_construction(crate::block::Candidate, "cen_b4_non_empty_root_with_nothing_supplied_is_refused"),
         A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_invalid_prev_id"),
         // A5: subsumed by the 4.G weight rule (slice 7); the pre-parse fast
         // path is the driver's DoS choice, not a row.
         A5 pending,
-        // A6/A7: wire invariants (R8 arm B, holder `shekyl_wire::Block::
-        // from_bytes`); re-homed to the wire-side invariant register when
-        // the wire-format port mints it. A7's *value* is arm C (F2).
-        A6 pending,
-        A7 pending,
+        // A6/A7: wire invariants (R8 arm B), held by `Block::from_bytes`:
+        // no `Block` exists that the parser refused, so no rule sees one.
+        // The path is the type — `use` cannot name an associated function.
+        // A7's *value* is arm C: the wire refuses above `READ_LEN_CAP`
+        // (10^6), tighter than the census's 2^28, and the two bounds are
+        // one field's two undocumented values (FOLLOWUPS, CEN-A7's row).
+        A6 by_construction(shekyl_wire::Block, "a6_a_block_blob_the_wire_cannot_parse_is_refused"),
+        A7 by_construction(shekyl_wire::Block, "a7_a_transaction_hash_count_above_the_bound_is_refused_before_any_hash_is_read"),
         // 4.B Block header: version, attestation, curve-tree root
         B1 implemented(crate::rules::header::B1),
         B2 implemented(crate::rules::header::B2),
-        B3 pending,
+        // B3: the store's rule-set belt (`connect` phases 1 and 7) — a
+        // verdict judged under a set other than the one in force refuses
+        // at connect, compared by value; the id is recorded per height.
+        // The rules crate imports no store, so the holder is the store's
+        // (E5-18, as K1a/K2/K3/K8).
+        B3 held_by_store("shekyl-chain-store", "a_fakechain_verdict_is_refused_under_genesis_in_force"),
         B4 implemented(crate::rules::attestation::B4),
         B5 implemented(crate::rules::header::B5),
         B6 implemented(crate::rules::header::B6),
@@ -637,10 +646,26 @@ census_rows! {
         L8 by_construction(crate::archival::accrue, "l8_an_accrual_that_overflows_is_a_corrupt_view"),
         L9 by_construction(crate::archival::apply_slash, "l9_slashing_a_shard_the_record_does_not_hold_is_a_corrupt_view"),
         L10 pending,
-        L11 pending,
-        L12 pending,
+        // L11/L12: growth has no rule type (E3 Round 1, `drain.rs`'s module
+        // docs). The rows still bind, because B5 judges the next header's
+        // root against the root `tree_after` derives from the chain below:
+        // a drain that dropped an accepted output (L11), or matured one at
+        // any height but h+60 (coinbase) / h+10 (listed) (L12), is another
+        // root, and B5 refuses it. The derivation is the holder.
+        L11 by_construction(crate::drain::tree_after, "l11_an_accepted_output_left_out_of_the_tree_is_a_different_root"),
+        L12 by_construction(crate::drain::tree_after, "l12_a_coinbase_leaf_joins_at_sixty_and_a_listed_leaf_at_ten_and_neither_earlier"),
+        // L14: the mechanism is ruled and built (every keyed write is a
+        // declared verb); the five per-site semantics are R8b-3…R8b-7, and
+        // R8b-3…R8b-6 carry no ruling — the porters chose the verbs
+        // (`DRS_E4_ARCHIVAL_WRITER.md`: "L14's four sites are C2-R8b's to
+        // name"). Pending until each is named.
         L14 pending,
-        L16 pending,
+        // L16: the as-of-height holdings fold is `holds_shard_at` (DRS-E4
+        // commit 2), evaluated by this crate's `ChainView` walk over A1's
+        // record and A2's slash-log rows; the store reads rows and folds
+        // nothing. The falsifier holds the verdict's logged slash to what
+        // the fold reads back.
+        L16 by_construction(shekyl_archival_retention::holds_shard_at, "l16_the_slash_the_verdict_logs_is_what_the_held_at_height_fold_reads"),
         // 4.M Mempool admission (the `kept_by_block` axis) — consensus-flagged rows
         M2 pending,
         M8 pending,

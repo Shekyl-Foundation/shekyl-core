@@ -25,7 +25,7 @@
 //!   after each switch" the reorg fixture family needs.
 //!
 //! Who *decides* a rewind is the source's business: the reorg fixture scripts
-//! it; E3's p2p source computes the heavier-chain switch (the daemon's
+//! it; DRS-X's p2p source computes the heavier-chain switch (the daemon's
 //! alt-chain logic) and emits it. The pipeline only executes.
 //!
 //! **`Inject` is the one out-of-band event** (DRS-E4 §3.8 item 3): a
@@ -40,7 +40,7 @@
 //! no captured chain but `emission-claim`.
 //!
 //! The corpus source (E2's first) carries all three kinds; the mutation
-//! family is Extend-only; the reorg family and E3's feed emit `Rewind`.
+//! family is Extend-only; the reorg family and DRS-X's p2p feed emit `Rewind`.
 
 use shekyl_chain_rules::Candidate;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -243,7 +243,7 @@ pub struct Sequenced<T> {
 /// A supplier of ordered ingest events.
 ///
 /// Implemented by the corpus reader (E2), the mutation and reorg fixture
-/// families, and E3's p2p feed. A source is pulled, not pushed: the
+/// families, and DRS-X's p2p feed. A source is pulled, not pushed: the
 /// pipeline asks for the next event when it has room, so back-pressure is
 /// the caller's `next` cadence and no channel is hidden inside the trait.
 pub trait Source {
