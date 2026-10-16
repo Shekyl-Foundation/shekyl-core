@@ -27,7 +27,7 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_seam::{
     connector_from_index, drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial,
-    Direction, DownCause, Endpoint, Hub, Route, SocketId,
+    Direction, DownCause, Endpoint, Hub, Route, RoutePublish, SocketId,
 };
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
 use shekyl_tor::{
@@ -544,10 +544,13 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
     // The listener is up: clearnet's outbound is usable. Its route is
     // direct, or the operator's `--proxy`.
     let route = proxy.map_or(Route::Direct, Route::Socks);
-    host.hub
-        .links()
-        .publish_usable(ConnectorId::Clearnet, route, host.hub.now());
-    tracing::info!("the clearnet zone dials {route:?}");
+    if let RoutePublish::Installed { .. } =
+        host.hub
+            .links()
+            .publish_usable(ConnectorId::Clearnet, route, host.hub.now())
+    {
+        tracing::info!("the clearnet zone dials {route:?}");
+    }
     crate::dialer_ffi::start_connector(ConnectorId::Clearnet, &host.engine);
     if let Some(listener) = bound_v6 {
         spawn_clearnet(&host, listener, kind, tally);
@@ -714,10 +717,15 @@ pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
 /// onions it cannot reach (`TSR-F1`). An operator's Tor (`--tx-proxy`)
 /// stays usable: its outbound evidence comes with the supervisor.
 fn install_tor_route(host: &Host, socks: SocketAddr) {
-    let incarnation =
+    // `listen_tor` and the outbound-only path both install the proxy. The
+    // second call of the same address is not a new route.
+    let RoutePublish::Installed { incarnation } =
         host.hub
             .links()
-            .publish_usable(ConnectorId::Tor, Route::Socks(socks), host.hub.now());
+            .publish_usable(ConnectorId::Tor, Route::Socks(socks), host.hub.now())
+    else {
+        return;
+    };
     tracing::info!("the Tor zone dials through the SOCKS proxy at {socks}");
     let hub = host.hub.clone();
     let watched = crate::daemon_tor_ffi::on_managed_death(socks, move |death| {

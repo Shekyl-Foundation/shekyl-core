@@ -20,7 +20,7 @@ use shekyl_levin::SupportFlags;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::address_file::AddressFileError;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{Hub, Route, SyncPayload};
+use shekyl_seam::{Hub, Route, RoutePublish, SyncPayload};
 use shekyl_timing_engine::{Clock, ManualClock};
 use shekyl_transport_layer::Sockets;
 
@@ -54,10 +54,16 @@ fn dialer() -> (Arc<Dialer>, ManualClock) {
     ));
     dialer.set_network_id([7; 16]);
     // The link is usable: the plan draws only then (TSR-F1).
-    dialer
-        .hub()
-        .links()
-        .publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1));
+    assert!(
+        matches!(
+            dialer
+                .hub()
+                .links()
+                .publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1),),
+            RoutePublish::Installed { .. }
+        ),
+        "the test route was not already usable"
+    );
     (dialer, clock)
 }
 

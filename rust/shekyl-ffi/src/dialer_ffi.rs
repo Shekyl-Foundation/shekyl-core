@@ -723,10 +723,16 @@ mod tests {
         let top = [1u8; 32];
         unsafe { shekyl_core_publish_tip(1, 1, 0, top.as_ptr()) };
         dialer.set_network_id([7; 16]);
-        dialer.hub().links().publish_usable(
-            ConnectorId::Clearnet,
-            shekyl_seam::Route::Direct,
-            dialer.hub().now(),
+        assert!(
+            matches!(
+                dialer.hub().links().publish_usable(
+                    ConnectorId::Clearnet,
+                    shekyl_seam::Route::Direct,
+                    dialer.hub().now(),
+                ),
+                shekyl_seam::RoutePublish::Installed { .. }
+            ),
+            "ready installs the clearnet route"
         );
         assert_eq!(dialer.readiness(ConnectorId::Clearnet), Ok(()));
     }

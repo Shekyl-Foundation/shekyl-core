@@ -57,8 +57,9 @@ pub enum Outbound {
 /// One connector's link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Link {
-    /// Bumps on every new route, and when a route is withdrawn. A `Down` for
-    /// an earlier incarnation is stale and changes nothing.
+    /// Bumps when a route is installed or withdrawn. Republishing the route
+    /// the link is already usable on does not bump. A `Down` for an earlier
+    /// incarnation is stale and changes nothing.
     pub incarnation: u64,
     /// `None` while there is no route.
     pub route: Option<Route>,
@@ -77,6 +78,34 @@ impl Link {
     #[must_use]
     pub const fn is_usable(&self) -> bool {
         matches!(self.outbound, Outbound::Usable { .. })
+    }
+}
+
+/// How [`Links::publish_usable`] left the connector.
+#[must_use = "an unchanged publish must not arm a new watcher"]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutePublish {
+    /// Already usable on this route. The incarnation is unchanged, and no
+    /// watcher is called.
+    Unchanged {
+        /// The incarnation already in place.
+        incarnation: u64,
+    },
+    /// Usable on this route as of this call. Watchers were called. A later
+    /// [`Links::publish_down`] names `incarnation`.
+    Installed {
+        /// The incarnation this call installed.
+        incarnation: u64,
+    },
+}
+
+impl RoutePublish {
+    /// The incarnation [`Links::publish_down`] names.
+    #[must_use]
+    pub const fn incarnation(self) -> u64 {
+        match self {
+            Self::Unchanged { incarnation } | Self::Installed { incarnation } => incarnation,
+        }
     }
 }
 
@@ -112,14 +141,33 @@ impl Links {
         self.links.lock().expect("links")[connector.index()]
     }
 
-    /// Install `route` for `connector`, usable from `now`. Returns the new
-    /// incarnation, which a later [`Self::publish_down`] names.
-    pub fn publish_usable(&self, connector: ConnectorId, route: Route, now: Tick) -> u64 {
-        self.change(connector, |link| {
-            link.incarnation = link.incarnation.wrapping_add(1);
-            link.route = Some(route);
-            link.outbound = Outbound::Usable { since: now };
-        })
+    /// Install `route` for `connector`, usable from `now`.
+    ///
+    /// When the link is already usable on `route`, the incarnation stays and
+    /// no watcher is called. A route that is down, or a different route,
+    /// takes a new incarnation. [`RoutePublish::incarnation`] is what a later
+    /// [`Self::publish_down`] names.
+    pub fn publish_usable(&self, connector: ConnectorId, route: Route, now: Tick) -> RoutePublish {
+        let published = {
+            let mut links = self.links.lock().expect("links");
+            let link = &mut links[connector.index()];
+            if link.is_usable() && link.route == Some(route) {
+                RoutePublish::Unchanged {
+                    incarnation: link.incarnation,
+                }
+            } else {
+                link.incarnation = link.incarnation.wrapping_add(1);
+                link.route = Some(route);
+                link.outbound = Outbound::Usable { since: now };
+                RoutePublish::Installed {
+                    incarnation: link.incarnation,
+                }
+            }
+        };
+        if let RoutePublish::Installed { .. } = published {
+            self.notify(connector);
+        }
+        published
     }
 
     /// The route of `incarnation` went down at `now`. Returns whether the
@@ -175,7 +223,8 @@ impl Links {
         incarnation
     }
 
-    /// The watchers run with neither lock held.
+    /// Watchers run with neither lock held. The clone is that snapshot:
+    /// a link changes when a route is installed, falls, or is withdrawn.
     fn notify(&self, connector: ConnectorId) {
         let watchers: Vec<Watcher> = self.watchers.lock().expect("link watchers").clone();
         for watcher in watchers {
@@ -207,7 +256,9 @@ mod tests {
     #[test]
     fn a_route_is_usable_and_its_death_is_down() {
         let links = Links::new();
-        let incarnation = links.publish_usable(ConnectorId::Tor, socks(9050), Tick::new(5));
+        let incarnation = links
+            .publish_usable(ConnectorId::Tor, socks(9050), Tick::new(5))
+            .incarnation();
         assert!(links.get(ConnectorId::Tor).is_usable());
         assert!(links.publish_down(
             ConnectorId::Tor,
@@ -235,8 +286,12 @@ mod tests {
     #[test]
     fn a_stale_down_changes_nothing() {
         let links = Links::new();
-        let first = links.publish_usable(ConnectorId::Tor, socks(9050), Tick::new(1));
-        let second = links.publish_usable(ConnectorId::Tor, socks(9150), Tick::new(2));
+        let first = links
+            .publish_usable(ConnectorId::Tor, socks(9050), Tick::new(1))
+            .incarnation();
+        let second = links
+            .publish_usable(ConnectorId::Tor, socks(9150), Tick::new(2))
+            .incarnation();
         assert_ne!(first, second);
         assert!(!links.publish_down(
             ConnectorId::Tor,
@@ -263,7 +318,9 @@ mod tests {
         links.subscribe(Arc::new(move |_| {
             count.fetch_add(1, Ordering::SeqCst);
         }));
-        let incarnation = links.publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1));
+        let incarnation = links
+            .publish_usable(ConnectorId::Clearnet, Route::Direct, Tick::new(1))
+            .incarnation();
         assert!(links.publish_down(
             ConnectorId::Clearnet,
             incarnation,
@@ -278,5 +335,51 @@ mod tests {
         ));
         links.withdraw(ConnectorId::Clearnet);
         assert_eq!(heard.load(Ordering::SeqCst), 3, "usable, down, withdrawn");
+    }
+
+    /// The default boot installs one SOCKS address twice (`listen_tor`, then
+    /// `dial_through_tor`). That is the same route, so the incarnation stays
+    /// and nobody is told again. A return from down is a new incarnation
+    /// even on that same address.
+    #[test]
+    fn republishing_the_usable_route_keeps_its_incarnation() {
+        let links = Links::new();
+        let heard = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&heard);
+        links.subscribe(Arc::new(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+        }));
+        let first = links.publish_usable(ConnectorId::Tor, socks(9050), Tick::new(1));
+        let again = links.publish_usable(ConnectorId::Tor, socks(9050), Tick::new(9));
+        assert_eq!(
+            first,
+            RoutePublish::Installed { incarnation: 1 },
+            "the first install is a change"
+        );
+        assert_eq!(again, RoutePublish::Unchanged { incarnation: 1 });
+        assert_eq!(
+            links.get(ConnectorId::Tor).outbound,
+            Outbound::Usable {
+                since: Tick::new(1)
+            },
+            "since stays the moment the route became usable"
+        );
+        assert_eq!(heard.load(Ordering::SeqCst), 1, "a repeat tells no one");
+
+        assert!(links.publish_down(
+            ConnectorId::Tor,
+            first.incarnation(),
+            DownCause::ProcessExited,
+            Tick::new(3)
+        ));
+        let recovered = links.publish_usable(ConnectorId::Tor, socks(9050), Tick::new(4));
+        assert_eq!(recovered, RoutePublish::Installed { incarnation: 2 });
+        assert_eq!(
+            links.get(ConnectorId::Tor).outbound,
+            Outbound::Usable {
+                since: Tick::new(4)
+            }
+        );
+        assert_eq!(heard.load(Ordering::SeqCst), 3, "down, then usable again");
     }
 }

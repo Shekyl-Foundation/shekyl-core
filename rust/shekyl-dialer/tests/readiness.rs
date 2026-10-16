@@ -25,7 +25,7 @@ use shekyl_draw_rng::SplitMix64;
 use shekyl_levin::SupportFlags;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, RefusedSet, Tick};
-use shekyl_seam::{DownCause, Hub, Route, SyncPayload};
+use shekyl_seam::{DownCause, Hub, Route, RoutePublish, SyncPayload};
 use shekyl_timing_engine::{Clock, EngineService, ManualClock, OwnerClass};
 use shekyl_transport_layer::Sockets;
 
@@ -99,7 +99,9 @@ fn wakes(dialer: &Dialer, n: usize) -> usize {
 /// death.
 fn take_link_down(dialer: &Dialer) {
     let links = dialer.hub().links();
-    let incarnation = links.publish_usable(CLEARNET, Route::Direct, Tick::new(1));
+    let incarnation = links
+        .publish_usable(CLEARNET, Route::Direct, Tick::new(1))
+        .incarnation();
     assert!(links.publish_down(
         CLEARNET,
         incarnation,
@@ -133,10 +135,16 @@ fn a_connector_whose_link_is_down_keeps_its_gray_list() {
 fn the_same_wakes_over_a_usable_link_draw_and_lose_their_addresses() {
     let dialer = dialer(&ManualClock::new(Tick::new(1)), tip());
     dialer.set_network_id([7; 16]);
-    dialer
-        .hub()
-        .links()
-        .publish_usable(CLEARNET, Route::Direct, Tick::new(1));
+    assert!(
+        matches!(
+            dialer
+                .hub()
+                .links()
+                .publish_usable(CLEARNET, Route::Direct, Tick::new(1)),
+            RoutePublish::Installed { .. }
+        ),
+        "the test route was not already usable"
+    );
     assert_eq!(wakes(&dialer, 3), 3);
     assert_eq!(gray(&dialer).len(), 1, "three draws, three addresses gone");
 }
@@ -155,10 +163,16 @@ fn a_connector_with_no_route_draws_nothing() {
 fn a_connector_with_no_published_tip_draws_nothing() {
     let dialer = dialer(&ManualClock::new(Tick::new(1)), Arc::new(|| None));
     dialer.set_network_id([7; 16]);
-    dialer
-        .hub()
-        .links()
-        .publish_usable(CLEARNET, Route::Direct, Tick::new(1));
+    assert!(
+        matches!(
+            dialer
+                .hub()
+                .links()
+                .publish_usable(CLEARNET, Route::Direct, Tick::new(1)),
+            RoutePublish::Installed { .. }
+        ),
+        "the test route was not already usable"
+    );
     let before = gray(&dialer);
     assert_eq!(dialer.readiness(CLEARNET), Err(NotReady::NoTip));
     assert_eq!(wakes(&dialer, WAKES), 0);
@@ -168,10 +182,16 @@ fn a_connector_with_no_published_tip_draws_nothing() {
 #[test]
 fn a_connector_with_no_network_id_draws_nothing() {
     let dialer = dialer(&ManualClock::new(Tick::new(1)), tip());
-    dialer
-        .hub()
-        .links()
-        .publish_usable(CLEARNET, Route::Direct, Tick::new(1));
+    assert!(
+        matches!(
+            dialer
+                .hub()
+                .links()
+                .publish_usable(CLEARNET, Route::Direct, Tick::new(1)),
+            RoutePublish::Installed { .. }
+        ),
+        "the test route was not already usable"
+    );
     let before = gray(&dialer);
     assert_eq!(dialer.readiness(CLEARNET), Err(NotReady::NoNetworkId));
     assert_eq!(wakes(&dialer, WAKES), 0);
@@ -228,11 +248,18 @@ fn the_owner_loop_waits_on_the_link_and_resumes_when_it_returns() {
     assert_eq!(gray(&dialer), before);
     drop(nudge);
 
-    // The link returns: the loop arms its spacing, and a wake dials.
-    dialer
-        .hub()
-        .links()
-        .publish_usable(CLEARNET, Route::Direct, clock.now());
+    // The link returns: a return from down is a new route, the loop arms
+    // its spacing, and a wake dials.
+    assert!(
+        matches!(
+            dialer
+                .hub()
+                .links()
+                .publish_usable(CLEARNET, Route::Direct, clock.now()),
+            RoutePublish::Installed { .. }
+        ),
+        "a return from down is a new route"
+    );
     thread::sleep(Duration::from_millis(100));
     clock.set(Tick::new(clock.now().get() + spacing + 1));
     let _nudge = service
