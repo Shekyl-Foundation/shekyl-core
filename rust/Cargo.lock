@@ -5238,9 +5238,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "shekyl-onion-v3",
+ "shekyl-win-sec",
  "tempfile",
  "tokio",
- "windows-sys 0.61.2",
  "zeroize",
 ]
 

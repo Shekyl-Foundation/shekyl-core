@@ -433,30 +433,23 @@ async fn write_blank_file(path: &Path) -> Result<(), ControlError> {
 /// The system-wide directory, not the per-session one `GetWindowsDirectoryW`
 /// would return under Terminal Services. The call reads no environment.
 /// Without this value the pinned `tor.exe` (0.4.9.13) aborts at startup with
-/// `0xC0000409` (observed on Windows, 2026-10-15).
+/// `0xC0000409` (observed on Windows, 2026-10-15). The call is
+/// `shekyl-win-sec`'s, the one home of the daemon's Windows platform calls
+/// (the notify runner reads the same value through it); this crate keeps
+/// its content-free error, the OS code and nothing else.
 #[cfg(windows)]
 fn system_windows_directory() -> Result<OsString, SystemDirectoryError> {
-    use std::os::windows::ffi::OsStringExt;
-    use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
-
-    // SAFETY: a null buffer with a size of zero writes nothing. The call
-    // returns the size the buffer needs, terminating null included, or 0
-    // on failure. The OS error is read before any further call.
-    let needed = unsafe { GetSystemWindowsDirectoryW(std::ptr::null_mut(), 0) };
-    if needed == 0 {
-        return Err(SystemDirectoryError::from_last_os_error());
-    }
-    let len = usize::try_from(needed).map_err(|_| SystemDirectoryError::UnusableLength)?;
-    let mut buf = vec![0u16; len];
-    // SAFETY: `buf` holds `needed` u16s and the call writes at most that many,
-    // including the terminating null. On success the return excludes that null.
-    let written = unsafe { GetSystemWindowsDirectoryW(buf.as_mut_ptr(), needed) };
-    if written == 0 || written >= needed {
-        return Err(SystemDirectoryError::UnusableLength);
-    }
-    let chars = usize::try_from(written).map_err(|_| SystemDirectoryError::UnusableLength)?;
-    buf.truncate(chars);
-    Ok(OsString::from_wide(&buf))
+    use shekyl_win_sec::system_dir::SystemDirectoryError as Platform;
+    shekyl_win_sec::system_dir::system_windows_directory().map_err(|e| match e {
+        Platform::Os(os) => os
+            .raw_os_error()
+            .and_then(|code| u32::try_from(code).ok())
+            .map_or(
+                SystemDirectoryError::UnusableLength,
+                SystemDirectoryError::Os,
+            ),
+        Platform::UnusableLength => SystemDirectoryError::UnusableLength,
+    })
 }
 
 // --- What tor's notice log says it opened -----------------------------------

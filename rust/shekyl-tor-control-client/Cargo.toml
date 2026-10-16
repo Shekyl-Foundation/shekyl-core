@@ -52,7 +52,9 @@ libc = "0.2"
 # Already in Cargo.lock at 0.61.2 through tokio and mio, so this adds no
 # supply-chain surface; the symbol was read in that version's source.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
+# The one home of the Windows platform calls (`GetSystemWindowsDirectoryW`
+# for the managed tor's `SystemRoot`).
+shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
 hex-literal = "1"
