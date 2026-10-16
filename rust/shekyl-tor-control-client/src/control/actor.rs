@@ -56,6 +56,8 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
 use std::time::Duration;
 
@@ -65,8 +67,7 @@ use kameo::error::ActorStopReason;
 use kameo::message::{Context, Message, StreamMessage};
 use kameo::reply::{DelegatedReply, ReplySender};
 use kameo::Actor;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -77,7 +78,9 @@ use zeroize::Zeroizing;
 use super::auth::{parse_authchallenge, read_cookie_file, AuthError};
 use super::bootstrap::{bootstrap_step, parse_bootstrap_progress, BootstrapState, BootstrapStep};
 use super::encoding::hex_upper;
-use super::framing::{ControlReply, Framed, FramingError, ReplyBudget, ReplyFramer};
+use super::framing::{
+    ControlReply, Framed, FramingError, ReplyBudget, ReplyFramer, ORDINARY_REPLY_BYTES,
+};
 use super::launch;
 use super::onion::{AddOnion, ServiceId};
 use super::safecookie::verify_server_hash;
@@ -99,6 +102,29 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// How long to wait for a spawned managed `tor` to write its `ControlPort` file before
 /// giving up (a `tor` that never opens the control port cannot be driven).
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The read half of a control connection, whatever carries it: a TCP connection to an
+/// attached tor's control port, or the managed tor's inherited socket.
+pub(crate) type ControlRead = Pin<Box<dyn AsyncRead + Send>>;
+
+/// The write half of a control connection. See [`ControlRead`].
+pub(crate) type ControlWrite = Pin<Box<dyn AsyncWrite + Send>>;
+
+/// How many asynchronous events the [`EventSink`] holds for a consumer that has not
+/// read them yet. The next event is dropped and counted, never waited for.
+///
+/// The memory this bounds: each held event is one framed reply. A status or
+/// descriptor event is one line of a few hundred bytes, and a log event carries one
+/// tor log message, which tor formats into a buffer of about ten kilobytes. So a full
+/// queue of the events the supervisor subscribes to holds at most about 2.5 MiB. The
+/// framer's own ceiling per reply ([`ORDINARY_REPLY_BYTES`], 256 KiB) puts the
+/// absolute bound at 64 MiB, which only a tor sending replies no subscribed event has
+/// could reach. A consumer that keeps up never fills it; one that stalls loses the
+/// newest events and can read how many from [`EventReceiver::dropped`].
+pub const EVENT_QUEUE_EVENTS: usize = 256;
+
+/// The absolute bound [`EVENT_QUEUE_EVENTS`] states, in bytes.
+const _: () = assert!(EVENT_QUEUE_EVENTS * ORDINARY_REPLY_BYTES == 64 * 1024 * 1024);
 
 /// Why the managed tor's Windows system directory could not be read.
 ///
@@ -219,37 +245,56 @@ impl std::fmt::Display for ControlError {
 
 impl std::error::Error for ControlError {}
 
-/// Where asynchronous `650` events (`STREAM`, `STATUS_CLIENT`, …) are routed — the
-/// bootstrap gate / measurement consumer. The actor only ever *sends* into it.
+/// Where asynchronous `650` events (`STREAM`, `STATUS_CLIENT`, …) are routed: the
+/// bootstrap gate, the measurement consumer, and the supervisor. The actor only ever
+/// *sends* into it.
 ///
 /// Carries [`ControlReply`]s, a forensic surface, so it is not `Debug`.
 ///
-/// **Unbounded by design:** the actor must never block on its consumer — `route`
-/// is non-blocking and drops on a closed receiver, so a slow consumer can't stall
-/// the read loop. The deliberate residual is that a *stalled* (alive-but-not-
-/// draining) consumer grows memory without bound; this is bounded in practice by
-/// the loopback control port's low event rate.
+/// **Bounded, and the actor never waits on it** (`TOR_SUPERVISOR.md` `TSR-F2`). It holds
+/// [`EVENT_QUEUE_EVENTS`]; an event that arrives while it is full is dropped and counted,
+/// and the count is the consumer's to read ([`EventReceiver::dropped`]). Anyone who can
+/// make tor log can make events arrive, including a peer misbehaving at our onion, so an
+/// unbounded queue would be a memory channel an outsider can fill. Waiting instead of
+/// dropping would stall the read loop, and with it every command reply.
 ///
-/// `Clone` so the §3c supervisor can hand each incarnation the same long-lived
-/// sink (the consumer's receiver survives restarts; senders are per-incarnation).
-/// **Consequence for consumers:** because the supervisor retains a sender clone
-/// across restarts, the events receiver does *not* observe all-senders-dropped
-/// when an incarnation dies — a supervised consumer must detect incarnation death
-/// via the supervisor's posture watch (the wallet's `WalletTorControl`, or the
-/// daemon's `DaemonTorControl` once it exists — not linked, see the crate docs),
-/// not via `recv() == None` (which is correct only for a directly-spawned,
-/// sole-sender actor).
+/// `Clone` so a supervisor can hand each incarnation the same long-lived sink: the
+/// consumer's receiver and the drop count survive restarts, and senders are
+/// per-incarnation. **Consequence for consumers:** because the supervisor retains a
+/// sender clone across restarts, the receiver does *not* observe all-senders-dropped
+/// when an incarnation dies. A supervised consumer must detect incarnation death through
+/// the supervisor's posture watch (the wallet's `WalletTorControl`, or the daemon's
+/// supervisor once it exists), not through `recv() == None`, which is correct only for a
+/// directly spawned, sole-sender actor.
 #[derive(Clone)]
-pub struct EventSink(mpsc::UnboundedSender<ControlReply>);
+pub struct EventSink {
+    sender: mpsc::Sender<ControlReply>,
+    dropped: Arc<AtomicU64>,
+}
+
+/// The consumer's end of an [`EventSink`]: the held events, and how many were dropped
+/// because the queue was full.
+pub struct EventReceiver {
+    receiver: mpsc::Receiver<ControlReply>,
+    dropped: Arc<AtomicU64>,
+}
 
 impl EventSink {
-    /// Wrap the sending half of an event channel; the consumer keeps the receiver.
+    /// A sink holding up to [`EVENT_QUEUE_EVENTS`], and the receiver its consumer keeps.
     #[must_use]
-    pub fn new(sender: mpsc::UnboundedSender<ControlReply>) -> Self {
-        Self(sender)
+    pub fn bounded() -> (Self, EventReceiver) {
+        let (sender, receiver) = mpsc::channel(EVENT_QUEUE_EVENTS);
+        let dropped = Arc::new(AtomicU64::new(0));
+        (
+            Self {
+                sender,
+                dropped: Arc::clone(&dropped),
+            },
+            EventReceiver { receiver, dropped },
+        )
     }
 
-    /// A sink with no consumer — **the correct production value today**, and a
+    /// A sink with no consumer: **the correct production value today**, and a
     /// place to notice when it stops being one.
     ///
     /// Async `650` events arrive only after a `SETEVENTS`
@@ -257,32 +302,73 @@ impl EventSink {
     /// DQ-T0.4 `STREAM` measurement is a harness, and §3c's retraction settled
     /// that bootstrap readiness is a `GETINFO` **poll**, not a subscription
     /// ("a `GETINFO` poll is a command, not a subscription, so it never touches
-    /// `SETEVENTS`"). So in production this sink receives nothing, ever, and
-    /// wiring a consumer to it would be wiring a consumer to silence.
+    /// `SETEVENTS`"). The daemon's supervisor will subscribe; until it exists, this
+    /// sink receives nothing, and wiring a consumer to it would be wiring a consumer
+    /// to silence.
     ///
-    /// This exists rather than an inline `let (tx, _rx) = unbounded_channel()`
+    /// This exists rather than an inline `let (sink, _receiver) = EventSink::bounded()`
     /// because that shape is indistinguishable from a caller who dropped the
     /// receiver by accident. Whoever adds the first production `SETEVENTS` has
     /// to replace a call named `unsubscribed`, which is a question a reviewer
-    /// can see; deleting an anonymous `_rx` is not.
+    /// can see; deleting an anonymous `_receiver` is not.
     ///
-    /// The returned sink drops every event, and nothing accumulates: routing
-    /// treats a closed receiver as "the consumer is gone" and discards. (Stated
-    /// rather than linked — the routing method is private, and a public doc
-    /// that links into it fails the crate's `rustdoc -D warnings` gate.)
+    /// The returned sink drops every event and counts none: routing treats a
+    /// closed receiver as "the consumer is gone", which is not an overflow.
     #[must_use]
     pub fn unsubscribed() -> Self {
         // The receiver is dropped here on purpose, which is what closes the
-        // channel and makes every later send a no-op. Named constructor, so
-        // the drop is the documented behaviour rather than a caller's slip.
-        let (tx, _rx) = mpsc::unbounded_channel();
-        Self(tx)
+        // channel and makes every later send a no-op.
+        let (sink, _receiver) = Self::bounded();
+        sink
     }
 
-    /// Route an async event to the consumer. A closed receiver means the consumer
-    /// is gone, so dropping the event is correct — not a failure the actor acts on.
+    /// Route an async event to the consumer, never waiting. A full queue drops the event
+    /// and counts it. A closed receiver means the consumer is gone, so the event is
+    /// discarded and not counted: nobody is left to read the count.
     fn route(&self, reply: ControlReply) {
-        self.0.send(reply).ok();
+        match self.sender.try_send(reply) {
+            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+impl EventReceiver {
+    /// The next held event, or `None` once every sender is gone and the queue is empty.
+    pub async fn recv(&mut self) -> Option<ControlReply> {
+        self.receiver.recv().await
+    }
+
+    /// The next held event if one is waiting.
+    ///
+    /// # Errors
+    ///
+    /// [`mpsc::error::TryRecvError::Empty`] when nothing is held, and
+    /// [`mpsc::error::TryRecvError::Disconnected`] once every sender is gone and the
+    /// queue is empty.
+    pub fn try_recv(&mut self) -> Result<ControlReply, mpsc::error::TryRecvError> {
+        self.receiver.try_recv()
+    }
+
+    /// How many events are held now. Never more than [`EVENT_QUEUE_EVENTS`].
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.receiver.len()
+    }
+
+    /// Whether no event is held now.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.receiver.is_empty()
+    }
+
+    /// How many events were dropped because the queue was full, since the sink was made.
+    /// It never decreases, and it counts across every incarnation that shared the sink.
+    #[must_use]
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
 }
 
@@ -490,6 +576,15 @@ pub enum TorLaunch {
         /// Path to `DataDirectory/control_auth_cookie`.
         cookie_path: PathBuf,
     },
+    /// A control connection that is already open and authenticated, with no process
+    /// behind it the actor owns: the unit tests' fake tor. Test builds only.
+    #[cfg(test)]
+    Connected {
+        /// The fake tor's replies and events.
+        read: ControlRead,
+        /// Where the actor writes its commands.
+        write: ControlWrite,
+    },
 }
 
 /// How the managed tor's `SocksPort` is chosen — a typed knob (like
@@ -576,7 +671,7 @@ pub struct ManagedTor {
 /// managed child (if any) in `child`, and the bootstrap poll task in `bootstrap_poll`.
 pub struct TorControlClient {
     /// Write half — commands go out here, one on the wire at a time.
-    writer: OwnedWriteHalf,
+    writer: ControlWrite,
     /// Async-event sink.
     events: EventSink,
     /// The command currently on the wire, awaiting its reply (`DelegatedReply`),
@@ -752,6 +847,18 @@ impl Actor for TorControlClient {
                 control_addr,
                 cookie_path,
             } => (control_addr, cookie_path, None),
+            #[cfg(test)]
+            TorLaunch::Connected { read, write } => {
+                return Ok(Self::arm(
+                    &actor_ref,
+                    read,
+                    write,
+                    ReplyFramer::default(),
+                    events,
+                    readiness,
+                    None,
+                ));
+            }
         };
 
         // Run the handshake, then arm the actor. A **managed** child is reaped explicitly on
@@ -769,36 +876,9 @@ impl Actor for TorControlClient {
                 }
             };
 
-        // Handshake done — hand the read half to the stream and let kameo merge it
-        // into the mailbox. The budget cell is shared with the stream's framer: the
-        // stream charges against it, the actor sets it per command.
-        let budget = framer.budget();
-        actor_ref.attach_stream(
-            ReplyStream {
-                read: reader,
-                framer,
-                done: false,
-            },
-            (),
-            (),
-        );
-
-        // Spawn the bootstrap poll task (design §3b): it drives the readiness watch
-        // through the public `ask` — a `GETINFO status/bootstrap-phase` poll, *not* a
-        // `STATUS_CLIENT` subscription, so it never touches `SETEVENTS`. Its first
-        // `ask` queues behind the run loop that begins once `on_start` returns.
-        let bootstrap_poll = tokio::spawn(bootstrap_poll_loop(actor_ref.clone(), readiness.0));
-
-        Ok(TorControlClient {
-            writer,
-            events,
-            pending: None,
-            budget,
-            queue: VecDeque::new(),
-            published_onions: Vec::new(),
-            child,
-            bootstrap_poll,
-        })
+        Ok(Self::arm(
+            &actor_ref, reader, writer, framer, events, readiness, child,
+        ))
     }
 
     /// Clean shutdown: withdraw onions this actor published, then kill the
@@ -857,11 +937,13 @@ async fn handshake(
     control_addr: SocketAddr,
     cookie_path: &Path,
     take_ownership: bool,
-) -> Result<(OwnedReadHalf, OwnedWriteHalf, ReplyFramer), ControlError> {
+) -> Result<(ControlRead, ControlWrite, ReplyFramer), ControlError> {
     let stream = TcpStream::connect(control_addr)
         .await
         .map_err(|_| ControlError::Connect)?;
-    let (mut reader, mut writer) = stream.into_split();
+    let (reader, writer) = stream.into_split();
+    let (mut reader, mut writer): (ControlRead, ControlWrite) =
+        (Box::pin(reader), Box::pin(writer));
     let mut framer = ReplyFramer::default();
 
     let cookie = read_cookie_file(cookie_path).map_err(ControlError::Auth)?;
@@ -1107,6 +1189,47 @@ async fn bootstrap_poll_loop(actor: ActorRef<TorControlClient>, tx: watch::Sende
 }
 
 impl TorControlClient {
+    /// Arm an actor on a control connection that is open and authenticated: hand the
+    /// read half to the stream, so kameo merges it into the mailbox, and start the
+    /// bootstrap poll. The budget cell is shared with the stream's framer: the stream
+    /// charges against it, the actor sets it per command.
+    ///
+    /// The bootstrap poll task (design §3b) drives the readiness watch through the
+    /// public `ask`: a `GETINFO status/bootstrap-phase` poll, *not* a `STATUS_CLIENT`
+    /// subscription, so it never touches `SETEVENTS`. Its first `ask` queues behind
+    /// the run loop that begins once `on_start` returns.
+    fn arm(
+        actor_ref: &ActorRef<Self>,
+        read: ControlRead,
+        writer: ControlWrite,
+        framer: ReplyFramer,
+        events: EventSink,
+        readiness: BootstrapReadiness,
+        child: Option<TorChild>,
+    ) -> Self {
+        let budget = framer.budget();
+        actor_ref.attach_stream(
+            ReplyStream {
+                read,
+                framer,
+                done: false,
+            },
+            (),
+            (),
+        );
+        let bootstrap_poll = tokio::spawn(bootstrap_poll_loop(actor_ref.clone(), readiness.0));
+        Self {
+            writer,
+            events,
+            pending: None,
+            budget,
+            queue: VecDeque::new(),
+            published_onions: Vec::new(),
+            child,
+            bootstrap_poll,
+        }
+    }
+
     /// Fail every in-flight and queued caller with `err` — the actor is stopping.
     fn fail_all_pending(&mut self, err: &ControlError) {
         if let Some((tx, _in_flight)) = self.pending.take() {
@@ -1278,7 +1401,7 @@ impl Message<StreamMessage<Result<Framed, ControlError>, (), ()>> for TorControl
 /// kameo delivers as `StreamMessage::Finished` ([`ControlError::StreamClosed`]).
 /// After an error the stream is terminal (`done`) and yields `None` thereafter.
 struct ReplyStream {
-    read: OwnedReadHalf,
+    read: ControlRead,
     framer: ReplyFramer,
     done: bool,
 }
@@ -1304,7 +1427,7 @@ impl Stream for ReplyStream {
             }
             let mut tmp = [0u8; READ_CHUNK];
             let mut rb = ReadBuf::new(&mut tmp);
-            match Pin::new(&mut this.read).poll_read(cx, &mut rb) {
+            match this.read.as_mut().poll_read(cx, &mut rb) {
                 Poll::Ready(Ok(())) => {
                     let filled = rb.filled();
                     if filled.is_empty() {
@@ -1325,7 +1448,7 @@ impl Stream for ReplyStream {
 }
 
 /// Write `line` followed by CRLF to the control port.
-async fn write_line(writer: &mut OwnedWriteHalf, line: &str) -> Result<(), ControlError> {
+async fn write_line(writer: &mut ControlWrite, line: &str) -> Result<(), ControlError> {
     writer
         .write_all(line.as_bytes())
         .await
@@ -1339,7 +1462,7 @@ async fn write_line(writer: &mut OwnedWriteHalf, line: &str) -> Result<(), Contr
 
 /// Read one complete reply, bounded by `HANDSHAKE_READ_TIMEOUT`.
 async fn read_reply(
-    reader: &mut OwnedReadHalf,
+    reader: &mut ControlRead,
     framer: &mut ReplyFramer,
 ) -> Result<ControlReply, ControlError> {
     let read = async {
@@ -1363,7 +1486,7 @@ async fn read_reply(
 
 /// Read one reply and require the given status, else [`ControlError::Rejected`].
 async fn expect_status(
-    reader: &mut OwnedReadHalf,
+    reader: &mut ControlRead,
     framer: &mut ReplyFramer,
     want: u16,
 ) -> Result<ControlReply, ControlError> {
@@ -1513,13 +1636,6 @@ mod tests {
     }
 }
 
-/// Live-Tor integration KATs (item 5) — the actor's I/O paths against a real
-/// `tor`. `#[ignore]`-gated (off the unit lane); on the integration lane the
-/// binary is **required**, so a missing `SHEKYL_TEST_TOR_BINARY` hard-fails rather
-/// than letting a read-path test pass by not running.
-///
-/// This holds the **fast path** (offline `tor` under `DisableNetwork 1`):
-/// handshake + command correlation + read loop, no circuits. The bootstrapped
 /// Covers the `--SocksPort` value `spawn_managed_tor` passes. Does not
 /// launch Tor.
 #[cfg(test)]
@@ -1533,6 +1649,99 @@ mod socks_port_arg {
     }
 }
 
+/// The actor against a fake tor on an in-memory connection, in the unit gate.
+#[cfg(test)]
+mod fake_tor {
+    use super::{
+        BootstrapReadiness, Command, EventSink, TorControlClient, TorControlClientConfig,
+        TorLaunch, EVENT_QUEUE_EVENTS,
+    };
+    use kameo::actor::Spawn;
+    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
+
+    /// Bytes the in-memory connection buffers in each direction. A writer that fills
+    /// it waits for the reader, as on a socket.
+    const PIPE_BYTES: usize = 64 * 1024;
+
+    /// Longer than any step here takes; a wedged actor fails instead of hanging.
+    const STEP_BOUND: Duration = Duration::from_secs(10);
+
+    /// A tor that writes `flood` log events before anything else, then answers every
+    /// command line with `250 OK`. Every line, because the actor's bootstrap poll asks
+    /// too, and an unanswered command would hold every later one behind it.
+    async fn flooding_tor(stream: DuplexStream, flood: usize) {
+        let (read, mut write) = tokio::io::split(stream);
+        for i in 0..flood {
+            let event = format!("650 NOTICE flood {i}\r\n");
+            if write.write_all(event.as_bytes()).await.is_err() {
+                return;
+            }
+        }
+        let mut lines = BufReader::new(read).lines();
+        while let Ok(Some(_command)) = lines.next_line().await {
+            if write.write_all(b"250 OK\r\n").await.is_err() {
+                return;
+            }
+        }
+    }
+
+    /// `TSR-F2`: a consumer that reads nothing holds the bound and no more, the rest
+    /// are counted, and the read loop is not held up. The reply to a command written
+    /// after the flood arrives only once every flood event has been routed, so the
+    /// counts are final when it does.
+    #[tokio::test]
+    async fn a_flood_of_events_is_held_to_the_bound_counted_and_never_stalls_a_reply() {
+        const EXCESS: usize = 1000;
+        let (ours, theirs) = tokio::io::duplex(PIPE_BYTES);
+        let peer = tokio::spawn(flooding_tor(theirs, EVENT_QUEUE_EVENTS + EXCESS));
+        let (read, write) = tokio::io::split(ours);
+        let (events, mut received) = EventSink::bounded();
+        let (readiness, _ready) = BootstrapReadiness::new();
+        let actor = TorControlClient::spawn(TorControlClientConfig {
+            launch: TorLaunch::Connected {
+                read: Box::pin(read),
+                write: Box::pin(write),
+            },
+            events,
+            readiness,
+        });
+
+        let reply = tokio::time::timeout(
+            STEP_BOUND,
+            actor.ask(Command::GetInfo(vec!["version".to_owned()])),
+        )
+        .await
+        .expect("a reply arrives while the queue is full")
+        .expect("the command is answered");
+        assert_eq!(reply.status(), 250);
+        assert_eq!(
+            received.len(),
+            EVENT_QUEUE_EVENTS,
+            "held: the bound, no more"
+        );
+        assert_eq!(
+            received.dropped(),
+            u64::try_from(EXCESS).expect("small"),
+            "every event past the bound is counted"
+        );
+        // The oldest are kept and the newest dropped.
+        let first = received.try_recv().expect("a held event");
+        assert_eq!(first.lines(), ["NOTICE flood 0"]);
+
+        actor.stop_gracefully().await.expect("graceful stop");
+        actor.wait_for_shutdown().await;
+        peer.abort();
+    }
+}
+
+/// Live-Tor integration KATs (item 5) — the actor's I/O paths against a real
+/// `tor`. `#[ignore]`-gated (off the unit lane); on the integration lane the
+/// binary is **required**, so a missing `SHEKYL_TEST_TOR_BINARY` hard-fails rather
+/// than letting a read-path test pass by not running.
+///
+/// This holds the **fast path** (offline `tor` under `DisableNetwork 1`):
+/// handshake + command correlation + read loop, no circuits. The bootstrapped
 /// `STREAM`/CircID measurement (DQ-T0.4) needs a `DisableNetwork 0` instance with
 /// network egress and lands next.
 #[cfg(test)]
@@ -1546,7 +1755,7 @@ mod live_tests {
     use std::path::{Path, PathBuf};
     use std::process::{Child, Command as ProcCommand, Stdio};
     use std::time::{Duration, Instant};
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::oneshot;
 
     use super::super::launch::{self, LoggedFile};
     use crate::test_support::tor_binary;
@@ -1670,7 +1879,7 @@ mod live_tests {
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
     async fn handshake_and_getinfo_against_offline_tor() {
         let tor = spawn_offline_tor().await;
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (events, _events) = EventSink::bounded();
         // This test exercises the handshake + command correlation, not bootstrap; the
         // poll task runs harmlessly against `DisableNetwork 1` (never reaches Ready) and
         // is aborted on drop. Keep the receiver alive so the poll task doesn't stop early.
@@ -1680,7 +1889,7 @@ mod live_tests {
                 control_addr: tor.control_addr,
                 cookie_path: tor.cookie_path.clone(),
             },
-            events: EventSink::new(tx),
+            events,
             readiness,
         });
 
@@ -1732,7 +1941,7 @@ mod live_tests {
         use std::net::{Ipv4Addr, SocketAddr};
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (events, _events) = EventSink::bounded();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
         let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
@@ -1743,7 +1952,7 @@ mod live_tests {
                 disable_network: false,
                 exit_observer: None,
             }),
-            events: EventSink::new(tx),
+            events,
             readiness,
         });
 
@@ -1881,7 +2090,7 @@ mod live_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path().to_path_buf();
         let (readiness, _ready_rx) = BootstrapReadiness::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (events, _events) = EventSink::bounded();
         let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
@@ -1890,7 +2099,7 @@ mod live_tests {
                 disable_network: true,
                 exit_observer: None,
             }),
-            events: EventSink::new(tx),
+            events,
             readiness,
         });
         // A handshake means tor has finished reading its configuration.
@@ -1954,7 +2163,7 @@ mod live_tests {
         // Keep the readiness receiver alive so the poll task (harmless on DisableNetwork)
         // doesn't stop early; it is aborted on shutdown regardless.
         let (readiness, _ready_rx) = BootstrapReadiness::new();
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (events, _events) = EventSink::bounded();
         let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Managed(ManagedTor {
                 // The declared test bypass of the hash-pin gate: this lifecycle
@@ -1966,7 +2175,7 @@ mod live_tests {
                 disable_network: true,
                 exit_observer: Some(exit_tx),
             }),
-            events: EventSink::new(tx),
+            events,
             readiness,
         });
 

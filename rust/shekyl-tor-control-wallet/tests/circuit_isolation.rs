@@ -172,7 +172,7 @@ mod live {
     use shekyl_p_transport::derive_socks_user;
     use shekyl_tor_control_client::control::{
         parse_stream_event, BootstrapReadiness, BootstrapState, CircId, Command, ControlError,
-        ControlReply, EventSink, TorControlClient, TorControlClientConfig, TorLaunch,
+        EventReceiver, EventSink, TorControlClient, TorControlClientConfig, TorLaunch,
     };
     use shekyl_types::PCanonicalId;
     use std::net::SocketAddr;
@@ -180,7 +180,7 @@ mod live {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::watch;
     use tokio::time::timeout;
 
     /// The one fixed dial target shared by all four measured dials. Holding the
@@ -309,7 +309,7 @@ mod live {
     async fn capture_dial(
         socks: SocketAddr,
         auth: Option<String>,
-        rx: &mut mpsc::UnboundedReceiver<ControlReply>,
+        rx: &mut EventReceiver,
     ) -> Result<CircId, Apparatus> {
         // Drop residue from the prior dial so the next attach is attributed correctly.
         while rx.try_recv().is_ok() {}
@@ -404,14 +404,14 @@ mod live {
         socks_addr: SocketAddr,
         cookie_path: &Path,
     ) -> Result<Observations, Apparatus> {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (events, mut rx) = EventSink::bounded();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
         let actor = TorControlClient::spawn(TorControlClientConfig {
             launch: TorLaunch::Attached {
                 control_addr,
                 cookie_path: cookie_path.to_path_buf(),
             },
-            events: EventSink::new(tx),
+            events,
             readiness,
         });
 
