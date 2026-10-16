@@ -578,10 +578,32 @@ pub struct Claimant<'a> {
 /// `claimant.identity` and is signed by `claimant.sign` — so the body
 /// passes CEN-J20 and CEN-I18 as the claimant's own would. Re-signing an
 /// already-signed body is the same two passes again over the same bytes;
-/// a caller may anchor first ([`anchored_at`]) and claim after.
+/// a caller may anchor first ([`anchored_at`]) and claim after. On a body
+/// with no emission vin the claimant's slot is the bond post's
+/// ([`signed_as`]).
 #[must_use]
 pub fn signed_claiming(tx: Transaction, claimant: &Claimant<'_>) -> Transaction {
     signed_with(tx, Some(claimant))
+}
+
+/// [`signed`] with the bond-post slot keyed **and signed** by `persona`,
+/// whatever persona the post itself names: a validly signed post under
+/// the wrong key — CEN-J13's refusal alone, with CEN-I18 passing. The
+/// other shape of a mis-keyed post, the slot's key swapped after signing,
+/// fails I18 before J13 is read (the signature no longer verifies under
+/// the key the slot carries), and since 2026-10-16 I18 runs in `form`,
+/// ahead of every view-bound row.
+#[must_use]
+pub fn signed_as(tx: Transaction, persona: &FixturePersona) -> Transaction {
+    let seed = archival::identity_seed_of(persona.tag);
+    let sign = |hash: &SigningPayloadHash| fixture_signature(&seed, hash);
+    signed_with(
+        tx,
+        Some(&Claimant {
+            identity: persona.identity.clone(),
+            sign: &sign,
+        }),
+    )
 }
 
 fn signed_with(mut tx: Transaction, claimant: Option<&Claimant<'_>>) -> Transaction {
@@ -598,11 +620,18 @@ fn signed_with(mut tx: Transaction, claimant: Option<&Claimant<'_>>) -> Transact
         .enumerate()
         .map(|(index, input)| fixture_signing_seed(index, input))
         .collect();
+    // The claimant's slot: the emission vin's, else the bond post's.
     let emission_slot = claimant.and_then(|_| {
         tx.prefix
             .inputs
             .iter()
             .position(|input| matches!(input, Input::ArchivalRewardEmission { .. }))
+            .or_else(|| {
+                tx.prefix
+                    .inputs
+                    .iter()
+                    .position(|input| matches!(input, Input::BondPost(_)))
+            })
     });
     // Pass 1 — the public keys, which the message binds. The key only:
     // deriving it by signing a dummy message would make a signature and

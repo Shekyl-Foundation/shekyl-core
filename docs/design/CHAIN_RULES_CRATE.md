@@ -769,6 +769,76 @@ every stateless row precedes every view-bound row, so a block wrong in
 both is named by the stateless row (a coinbase whose extra does not parse
 is CEN-I19's at the miner slot, where the C++ names B4).
 
+**Every verification that needs no store runs in `form` — the third
+claim (2026-10-16, the switch PR's round 3).** Measured first: on the
+floor device a cap-depth switch whose promoted blocks each list one spend
+held the write transaction for 109.6 s, almost all of it spend-proof
+verification inside `validate`. The proof needs the chain for one fact —
+the root at the reference block (CEN-I12's anchor) — and that fact is a
+header fact: CEN-B5 holds every connected block's `curve_tree_root` to
+`root_at(height)`, so a caller that keeps the header chain ahead of
+connect can claim it as it claims the seed and the target. So:
+
+- `form` takes `references: &ReferenceClaims` — per distinct
+  `reference_block` the listed bodies name, the block's `(height, root)`
+  (`ReferenceClaims::from_headers` reads them off any `HeaderView` across
+  CEN-I11's window, `admissible_references`; `ReferenceClaims::gather`
+  from a lookup by identity) — and runs, per slot after `tx_form` and
+  before CEN-H19's batch: the signature sequence CEN-I17/I18
+  (`judge_signatures`) and the verify rows CEN-I15, J26 and J27's verify
+  half (`judge_proofs`: `I15::verify` over `to_key_slots` against the
+  claimed root and the body's declared depth). A reference with no claim
+  is not verified; a declared depth the verifier cannot size (`0`, past a
+  `u8`) is not verified either — that is CEN-I13's refusal, `validate`'s.
+  The token carries what each slot's proof was verified against
+  (`StructurallyValid::verified_reference`).
+- `validate`'s reference path (`judge_reference`) keeps CEN-I10/I11/I13's
+  steps and the I12 anchor read, and **compares** the chain's `(height,
+  root)` with the token's claim. Agreement is the normal case; a claim for
+  another height or root, or no claim where the chain holds the reference
+  in the window, is `Stale::Reference { slot, reference, claims: Box<ReferenceMismatch { claimed, expected }>, retry }`
+  — a fault, never a verdict, and **there is no fallback verify in
+  `validate`**: the probe `validate_verifies_no_proof_and_no_signature_and_form_verifies_both`
+  (`shekyl-chain-store`, thread-local counters in `rules::proofs::probes`)
+  holds `form`'s deltas positive and `validate`'s zero on a real spend.
+  CEN-J25's verify stays on the writer (its operands are the gathered
+  closes, chain facts).
+- `tx_against` takes `verified: Option<VerifiedReference>` and the
+  attempt, and returns `Fault` (the comparison is a stage's fault, not a
+  `ViewRead`). **The pool's call** (b1) must therefore run `tx_form` →
+  `judge_signatures` → `judge_proofs` over its own claims first and hand
+  the result in; a `None` on a proof-bearing body that passes I10/I11 is
+  `Stale::Reference`.
+- The three claim sources: the ingest sequencer's `TargetLedger` (its
+  window widened to the wider of LWMA-1's and I11's), the switch plan's
+  header chain (`SwitchPlan::headers`, the stitched view as the plan read
+  it; `SwitchPlan::references_for`), and the store fixtures' view.
+  Demoted blocks are formed with no claims: the cheap tier compares none
+  and the chain verified their proofs when it connected them.
+
+Refusal order changes with it: the signature sequence precedes every
+view-bound row, so a listed body wrong in both is I18's (a bond post whose
+slot key was swapped after signing was J13's; the mis-keyed-but-signed
+post is still J13's, `signed_as`); the verify rows precede I13 where a
+claim is supplied, so a filler proof declared at a depth the verifier can
+size is I15's/J26's/J27's in `form`, and one declared at `0` stays I13's.
+
+*Wargame (claim source = header chain).* (1) An alt entry whose header
+lies about its root: promotion runs B5 on that entry before any
+successor's claim over it is compared, so the lie is B5's refusal and the
+successor is never judged. (2) A driver that claims a root for a
+reference outside the window: `judge_proofs` verifies against it, I11
+refuses in `validate` — the verify was wasted, the verdict is the rule's.
+(3) A driver that claims the wrong root for an in-window reference: the
+proof fails against it (I15, `form`'s refusal) or, forged to pass, meets
+the comparison and faults; either way nothing with a wrong anchor
+connects. (4) A reorg between the stages: the chain's `(height, root)` at
+the reference moved, the comparison faults with a bounded retry, and the
+re-`form` claims off the new chain — the seed's shape. (5) The claim
+cannot widen what the chain accepts: `validate` still reads its own
+record for the anchor and refuses I10/I11/I13 on its own facts; the claim
+only decides *where* the verify ran.
+
 ```rust
 /// The world a block is judged in, not the chain: a clock (CEN-C1) and a
 /// RandomX longhash (CEN-D2). Implemented by the daemon; mocked in tests.
@@ -782,8 +852,24 @@ pub trait Substrate {
 /// caller CLAIMS the rule set in force and the seed at `seedheight(h)`.
 pub fn form<S: Substrate>(
     candidate: Candidate, rule_set: &RuleSet, substrate: &S,
-    seed: BlockHash, target: Target, attempt: FormAttempt,
+    seed: BlockHash, target: Target, references: &ReferenceClaims, attempt: FormAttempt,
 ) -> Result<Verdict<StructurallyValid>, S::Fault>;
+
+/// The third claim: per distinct `reference_block` the listed bodies name,
+/// its `(height, root)` — `from_headers` across CEN-I11's window of any
+/// `HeaderView`; `gather` from a lookup by identity (2026-10-16).
+pub struct ReferenceClaim { pub height: BlockHeight, pub root: CurveTreeRoot }
+pub struct ReferenceClaims { /* BTreeMap<BlockHash, ReferenceClaim> */ }
+impl ReferenceClaims {
+    pub const EMPTY: Self;
+    pub fn from_headers<'id, V: HeaderView<'id>>(view: &V, connecting: BlockHeight, candidate: &Candidate) -> Result<Self, V::Fault>;
+    pub fn gather(candidate: &Candidate, lookup: impl FnMut(&BlockHash) -> Option<ReferenceClaim>) -> Self;
+}
+/// CEN-I11's window as `(oldest, newest)` — the one home of both edges.
+pub fn admissible_references(connecting: BlockHeight) -> Option<(BlockHeight, BlockHeight)>;
+/// What a listed slot's proof was verified against, on the token.
+pub struct VerifiedReference { pub reference: BlockHash, pub claim: ReferenceClaim }
+impl StructurallyValid { pub fn verified_reference(&self, slot: TxSlot) -> Option<VerifiedReference>; }
 
 /// CEN-D4's target for `connecting` over `view`'s headers: the claim's one
 /// derivation, which `validate` and `alt_against` run again to verify it.
@@ -826,7 +912,12 @@ impl AnchorConflict { pub const fn remedy(&self) -> Remedy; }
 pub enum Remedy { RefuseToRun /* at genesis */, PopTo(ChainCount) /* stop at max(h − 2, 1) blocks; the tip is count.tip() */ }
 
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
-pub enum Stale { Seed { claimed, expected, retry: Retry }, RuleSet { formed_under: RuleSet, in_force: RuleSet, retry } }
+pub enum Stale {
+    Seed { claimed, expected, retry: Retry }, RuleSet { formed_under: RuleSet, in_force: RuleSet, retry },
+    Target { claimed: Target, expected: Target, retry },                                   // #1081
+    Reference { slot: TxSlot, reference: BlockHash, claims: Box<ReferenceMismatch>, retry }, // 2026-10-16: the chain's (height, root) at the reference against the token's claim
+}
+pub struct ReferenceMismatch { pub claimed: Option<ReferenceClaim>, pub expected: ReferenceClaim }
 pub enum Retry { Again(FormAttempt), Exhausted }          // MAX_FORM_ATTEMPTS = 3
 pub enum Corrupt {
     CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow,   // ZeroTarget deleted 2026-09-20 (RD-F17): zero is CEN-D6's verdict
@@ -869,13 +960,18 @@ pub fn tx_form(tx: &shekyl_wire::Transaction, slot: TxSlot, rule_set: &RuleSet) 
 /// Stateful per-tx rules (4.I). The pool passes its `PoolView` decorator here.
 /// Takes the SLOT it judges at, as `tx_form` does (slice 6 commit 4: deriving
 /// at `Lone` and re-homing the locus afterwards put the coinbase through H5
-/// at the wrong slot; `Locus::rehome` is deleted). The fault widens to
-/// `ViewRead<V::Fault>` (slice 6 commit 5): I12 reads a per-height record,
-/// and a root missing at a height I10 just found recorded is
-/// `Corrupt::HoleBelowTip`, never a verdict.
+/// at the wrong slot; `Locus::rehome` is deleted). The fault is a `Fault`
+/// (2026-10-16; `ViewRead` from slice 6 commit 5 until then): I12 reads a
+/// per-height record, and a root missing at a height I10 just found
+/// recorded is `Corrupt::HoleBelowTip`, never a verdict; and the comparison
+/// of that record with `verified` — what `form`'s `judge_proofs` verified
+/// the slot's proof against — faults `Stale::Reference`. The caller runs
+/// `tx_form` → `judge_signatures` → `judge_proofs` first; nothing here
+/// verifies a proof or a signature.
 pub fn tx_against<'id, V: ChainView<'id>>(
     tx: &shekyl_wire::Transaction, slot: TxSlot, view: &V, rule_set: &RuleSet,
-) -> Result<Verdict<RuleCoverage>, ViewRead<V::Fault>>;
+    verified: Option<VerifiedReference>, attempt: FormAttempt,
+) -> Result<Verdict<RuleCoverage>, Fault<V::Fault>>;
 ```
 
 Generic over `V: ChainView<'id>` (not `&dyn`) so E5's decorator implements the

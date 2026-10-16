@@ -50,6 +50,7 @@ fn judge_under(candidate: Candidate, rule_set: &RuleSet) -> Verdict<()> {
         &MockSubstrate::default(),
         BlockHash::NULL,
         expected_target(&MockChain::default(), rule_set),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

@@ -40,7 +40,7 @@ use shekyl_types::{BlockHash, PCanonicalId, TxHash};
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{
-    AccrualFault, CellFault, LeafCountFault, LeafDensity, SettlementFault, SlashFault,
+    AccrualFault, CellFault, EdgeFault, LeafCountFault, LeafDensity, SettlementFault, SlashFault,
     StoreInvariant, UndoFault,
 };
 
