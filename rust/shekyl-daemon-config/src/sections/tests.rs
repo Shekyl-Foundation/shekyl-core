@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use shekyl_options::{Code, Diagnostic, Source, Value};
 
 use super::{
-    build, log_location_writable, read_ban_file, Ban, Clearnet, DaemonConfig, Onion, Socks, Tor,
+    build, link_limits, log_location_writable, read_ban_file, Ban, Clearnet, DaemonConfig, Onion,
+    Socks, Tor,
 };
 use crate::network::Network;
 use crate::platform::{Platform, RunMode};
@@ -372,6 +373,32 @@ fn a_missing_defaulted_row_is_a_fault() {
     assert!(err
         .iter()
         .any(|d| d.code == Code::ValueSyntax && d.option.as_deref() == Some("log-level")));
+}
+
+/// A rate the constructor did not admit is a fault, not an unlimited link.
+#[test]
+fn a_rate_of_the_wrong_arm_is_not_unlimited() {
+    let cli = shekyl_options::read_cli(&TABLE, std::iter::empty::<OsString>()).unwrap();
+    let (network, _) = choosers(&cli);
+    let mut resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
+    resolved
+        .values
+        .insert("p2p-upload-max", (Value::Integer(1), Source::Cli));
+    let err = link_limits(&resolved).unwrap_err();
+    assert!(err
+        .iter()
+        .any(|d| d.code == Code::ValueSyntax && d.option.as_deref() == Some("p2p-upload-max")));
+    let (upload, download) = link_limits(
+        &resolve(
+            &TABLE,
+            Network::Mainnet,
+            shekyl_options::read_cli(&TABLE, std::iter::empty::<OsString>()).unwrap(),
+            Vec::new(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!((upload, download), (None, None));
 }
 
 /// An integer past `u32::MAX` is the row's range, not a count of 1.

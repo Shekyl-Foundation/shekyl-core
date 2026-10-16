@@ -32,5 +32,5 @@ pub use marker::{MarkerOutcome, NetworkId};
 pub use network::Network;
 pub use platform::{Platform, RunMode};
 pub use resolve::{choosers, resolve, Resolved};
-pub use sections::{build, Clearnet, DaemonConfig, Tor};
-pub use table::{LEVELS, NETWORKS, TABLE};
+pub use sections::{apply_logging, build, link_limits, Clearnet, DaemonConfig, Tor};
+pub use table::{runtime_owner, RuntimeOwner, LEVELS, NETWORKS, TABLE};

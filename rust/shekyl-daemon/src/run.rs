@@ -130,7 +130,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     // Logging, from its section; then the announcements, to standard error
     // and the log file whatever the level (IG-14).
     let level = shekyl_logging::subsystem::level_from_word(config.logging.level)
-        .unwrap_or(tracing::Level::WARN);
+        .expect("the table admits only level words");
     let logging = shekyl_logging::Config::with_file_sink(level, config.logging.file_sink())
         .with_directive(config.logging.directive());
     let _logger = match shekyl_logging::init(logging) {

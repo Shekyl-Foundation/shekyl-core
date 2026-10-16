@@ -19,7 +19,9 @@
 use std::sync::Mutex;
 
 use shekyl_daemon_config::resolve::Resolved;
-use shekyl_daemon_config::{Network, TABLE};
+use shekyl_daemon_config::{
+    apply_logging, link_limits, runtime_owner, Network, RuntimeOwner, TABLE,
+};
 use shekyl_daemon_rpc::options::{
     OptionsFacts, Refusal, RowGrant, ShowRefusal, ShownRow, VisibleRow,
 };
@@ -128,42 +130,6 @@ fn build(name: &str, text: &str) -> Result<(&'static Row, Value), Diagnostic> {
     Ok((row, value))
 }
 
-/// The link owner's two rates from the live values: a word (`unlimited`)
-/// is no bound.
-fn rate(live: &Resolved, name: &str) -> Option<u64> {
-    match live.get(name) {
-        Some(Value::Rate(n)) => Some(*n),
-        _ => None,
-    }
-}
-
-/// The logging owner's words from the live values: the base level and the
-/// per-subsystem overrides, as the table admitted them.
-fn logging_words(
-    live: &Resolved,
-) -> (
-    tracing::Level,
-    Vec<(shekyl_logging::subsystem::Subsystem, tracing::Level)>,
-) {
-    use shekyl_logging::subsystem::{level_from_word, Subsystem};
-    let base = match live.get("log-level") {
-        Some(Value::Word(w)) => level_from_word(w),
-        _ => None,
-    }
-    .unwrap_or(tracing::Level::WARN);
-    let mut overrides = Vec::new();
-    if let Some(Value::Map(map)) = live.get("log-category") {
-        for (subsystem, level) in map {
-            if let (Some(s), Value::Word(w)) = (Subsystem::from_name(subsystem), level) {
-                if let Some(l) = level_from_word(w) {
-                    overrides.push((s, l));
-                }
-            }
-        }
-    }
-    (base, overrides)
-}
-
 impl OptionsFacts for DaemonOptions {
     fn set(&self, pairs: &[(String, String)]) -> Result<Vec<ShownRow>, Vec<Refusal>> {
         let mut live = self
@@ -195,21 +161,18 @@ impl OptionsFacts for DaemonOptions {
                 .map_or_else(|| "unset".to_owned(), Value::render);
             audit.push(format!("{}: {old} -> {}", row.name, value.render()));
             live.values.insert(row.name, (value, Source::Runtime));
-            match row.name {
-                "p2p-upload-max" | "p2p-download-max" => link = true,
-                "log-level" | "log-category" => logging = true,
-                _ => {}
+            match runtime_owner(row.name).expect("a runtime row has an owner") {
+                RuntimeOwner::Link => link = true,
+                RuntimeOwner::Logging => logging = true,
             }
         }
         if link {
-            shekyl_ffi::link_ffi::set_limits(
-                rate(&live, "p2p-upload-max"),
-                rate(&live, "p2p-download-max"),
-            );
+            let (upload, download) =
+                link_limits(&live).expect("the runtime constructor admitted both rates");
+            shekyl_ffi::link_ffi::set_limits(upload, download);
         }
         if logging {
-            let (base, overrides) = logging_words(&live);
-            shekyl_logging::subsystem::apply(base, &overrides);
+            apply_logging(&live).expect("the runtime constructor admitted the logging rows");
         }
         // The caller: the admin listener, the one that serves `option_set`
         // until RT-W10 names connections (RPC_CHANNEL §6.4).

@@ -21,6 +21,29 @@ pub const LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 /// The four networks, as `network` spells them.
 pub const NETWORKS: &[&str] = &["mainnet", "testnet", "stagenet", "regtest"];
 
+/// The owner that applies a runtime row after `option set` admits it.
+///
+/// The owner lives beside the table. The shared grammar does not know
+/// which part of the daemon a row belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeOwner {
+    /// `log-level` and `log-category`.
+    Logging,
+    /// `p2p-upload-max` and `p2p-download-max`.
+    Link,
+}
+
+/// The owner of a runtime row. Every other name, including a row the
+/// table has not marked runtime, is `None`.
+#[must_use]
+pub fn runtime_owner(name: &str) -> Option<RuntimeOwner> {
+    match name {
+        "log-level" | "log-category" => Some(RuntimeOwner::Logging),
+        "p2p-upload-max" | "p2p-download-max" => Some(RuntimeOwner::Link),
+        _ => None,
+    }
+}
+
 const LEVEL: Kind = Kind::OneOf(LEVELS);
 const ENDPOINT: Kind = Kind::Endpoint(EndpointRule::Any);
 const LOOPBACK: Kind = Kind::Endpoint(EndpointRule::Loopback);
@@ -342,6 +365,20 @@ mod tests {
             .iter()
             .filter(|r| r.runtime)
             .all(|r| !matches!(r.kind, Kind::Secret)));
+    }
+
+    /// A runtime row has one owner, and a name this function owns is a
+    /// runtime row. A fifth runtime row fails here until its owner is named.
+    #[test]
+    fn every_runtime_row_has_an_owner_and_every_owner_is_runtime() {
+        for row in TABLE.rows.iter().filter(|r| r.is_live()) {
+            assert_eq!(
+                runtime_owner(row.name).is_some(),
+                row.runtime,
+                "{}",
+                row.name
+            );
+        }
     }
 
     #[test]

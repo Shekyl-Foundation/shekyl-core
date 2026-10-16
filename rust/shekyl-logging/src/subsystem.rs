@@ -212,16 +212,24 @@ pub fn directive_from_words(base: &str, overrides: &[(&str, &str)]) -> Option<St
     Some(directive(base, &pairs))
 }
 
-/// Applies a base level and per-subsystem overrides to the live filter: the
-/// runtime owner of `log-level` and `log-category` (IG-12,
-/// `DAEMON_CONFIG_CUTOVER.md` §2.7). The directive is [`directive`]'s, so
-/// it is always one the filter accepts, and the swap goes through the
-/// handle the one `init` registered for the life of the process. The apply
-/// therefore cannot fail on its input; the only failure is a process with no
-/// subscriber, which is reported to standard error and leaves the filter as
-/// it was, so a caller that built its values first stays all or nothing.
+/// Applies a base level and per-subsystem overrides to the live filter.
+/// The directive is [`directive`]'s. See [`apply_directive`].
 pub fn apply(base: Level, overrides: &[(Subsystem, Level)]) {
-    let directive = directive(base, overrides);
+    apply_directive(directive(base, overrides));
+}
+
+/// Installs one directive on the live filter: the runtime owner of
+/// `log-level` and `log-category` (IG-12, `DAEMON_CONFIG_CUTOVER.md` §2.7).
+///
+/// The directive is the string [`directive`] and
+/// [`directive_from_words`] build, so a caller that already holds that
+/// string does not convert the words a second time. The swap goes through
+/// the handle the one `init` registered for the life of the process. The
+/// apply cannot fail on a directive those functions built; the only failure
+/// is a process with no subscriber, which is reported to standard error and
+/// leaves the filter as it was, so a caller that built its values first
+/// stays all or nothing.
+pub fn apply_directive(directive: String) {
     if let Err(reason) = crate::ffi::reload_directive(directive) {
         // No subscriber is the failure, so this cannot go through tracing.
         // The line is the operator's, on standard error.

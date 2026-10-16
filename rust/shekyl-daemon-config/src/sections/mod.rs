@@ -386,6 +386,21 @@ fn taken_path(r: &mut Reader<'_>, option: &str) -> PathBuf {
 }
 
 fn logging_section(r: &mut Reader<'_>, file: PathBuf) -> Option<Logging> {
+    let words = read_log_words(r);
+    let size_max = r.required_bytes("log-size-max");
+    let (level, categories) = words?;
+    Some(Logging {
+        file,
+        level,
+        categories,
+        size_max: size_max?,
+    })
+}
+
+/// The base level and the per-subsystem overrides, through the same reader
+/// the section uses. Both are read before either is required, so one bad
+/// row does not hide the other.
+fn read_log_words(r: &mut Reader<'_>) -> Option<(&'static str, Vec<(String, &'static str)>)> {
     let level = match r.required_word("log-level") {
         Some(word) if LEVELS.contains(&word) => Some(word),
         Some(word) => {
@@ -395,13 +410,33 @@ fn logging_section(r: &mut Reader<'_>, file: PathBuf) -> Option<Logging> {
         None => None,
     };
     let categories = r.level_map("log-category");
-    let size_max = r.required_bytes("log-size-max");
-    Some(Logging {
-        file,
-        level: level?,
-        categories,
-        size_max: size_max?,
-    })
+    Some((level?, categories))
+}
+
+/// Installs the logging rows on the live filter.
+///
+/// The directive is [`shekyl_logging::subsystem::directive_from_words`], the
+/// conversion [`Logging::directive`] uses at start. A word the reader
+/// admitted and that conversion refuses is a defect in the table, not a
+/// quieter level.
+///
+/// # Errors
+/// A logging row absent where the table fills it, or of the wrong arm.
+pub fn apply_logging(resolved: &Resolved) -> Result<(), Vec<Diagnostic>> {
+    let mut r = Reader::new(resolved);
+    let words = read_log_words(&mut r);
+    if !r.faults.is_empty() {
+        return Err(r.faults);
+    }
+    let (level, categories) = words.expect("the logging rows were read or a fault was recorded");
+    let overrides: Vec<(&str, &str)> = categories
+        .iter()
+        .map(|(subsystem, word)| (subsystem.as_str(), *word))
+        .collect();
+    let directive = shekyl_logging::subsystem::directive_from_words(level, &overrides)
+        .expect("the table admits only level words and subsystem keys");
+    shekyl_logging::subsystem::apply_directive(directive);
+    Ok(())
 }
 
 fn p2p_section(
@@ -419,14 +454,39 @@ fn p2p_section(
         },
         Read::Absent | Read::Unreadable => Vec::new(),
     };
+    let (upload_max, download_max) = read_rates(r);
     P2p {
         peers,
         closed_peers,
         local: r.switch("p2p-local"),
         disclose_early: r.switch("p2p-disclose-early"),
         bans,
-        upload_max: rate_cap(r.rate("p2p-upload-max")),
-        download_max: rate_cap(r.rate("p2p-download-max")),
+        upload_max,
+        download_max,
+    }
+}
+
+/// The two link rates, through the same reader the section uses.
+fn read_rates(r: &mut Reader<'_>) -> (Option<u64>, Option<u64>) {
+    (
+        rate_cap(r.rate("p2p-upload-max")),
+        rate_cap(r.rate("p2p-download-max")),
+    )
+}
+
+/// The link budget from the resolved rates: `(upload, download)`, each
+/// `None` when the row is `unlimited`.
+///
+/// # Errors
+/// A rate row absent where the table fills it, or of the wrong arm. An
+/// unreadable row is not treated as unlimited.
+pub fn link_limits(resolved: &Resolved) -> Result<(Option<u64>, Option<u64>), Vec<Diagnostic>> {
+    let mut r = Reader::new(resolved);
+    let limits = read_rates(&mut r);
+    if r.faults.is_empty() {
+        Ok(limits)
+    } else {
+        Err(r.faults)
     }
 }
 
