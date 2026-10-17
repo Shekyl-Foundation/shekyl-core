@@ -32,6 +32,10 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.h — the `sanitize_peerlist` declaration is deleted with its definition; `on_outbound_handshake` is declared (step 2). §3.2: `dial_result`, `connect_func` and `public_connect` are deleted; `m_connect` becomes the flag `m_outbound`. §3.1 of the consolidated brief's revision 2 (the same day): the `send_peerlist_sz` assignment is deleted with the field, which nothing read. Revision 3 §2.6: the `extern` declaration of `arg_p2p_disclose_early` (deleted by the daemon-config slice). The same day: the `extern` of `arg_p2p_seed_node` and the `m_seed_nodes` member with its two initialisers are deleted.
 
+**UNFREEZE (Rick, 2026-10-16):** src/p2p/net_node.inl — `on_outbound_handshake` returns `void`: its `return false` path, the confirm dial's `keep == 0` return, the `shekyl_zone_session_established` call and the closing `return true` are deleted, and `process_payload_sync_data` is called for its effect. Deletions only; the two edited lines (the signature and the call) are the cut, not new code.
+
+**UNFREEZE (Rick, 2026-10-16):** src/p2p/net_node.h — the `on_outbound_handshake` declaration returns `void`, with its definition.
+
 **UNFREEZE (Rick, 2026-10-14):** src/p2p/net_node.inl — the line that reads `--offline` records it through `shekyl_p2p_record_offline`, one Rust call in place of the read, so an offline daemon reports offline from its configuration and never infers it from the dialer's absence; no line is added.
 
 **UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.inl — the configuration cutover's commit (c) (`DAEMON_CONFIG_CUTOVER.md` §5.2: "a line it edits there rather than deletes carries a dated UNFREEZE line in the dialer brief"): `init` binds the seam once and builds both zones, `handle_command_line` reads the network, offline and the sync lever, `check_incoming_connections` reports without the C++-owned port; every listen, push, ceiling, UPnP and managed-Tor line is deleted, not edited.
@@ -155,6 +159,53 @@ and no number.* The spacing has the same shape on every connector.
 The connector changes which list is drawn, not the clock. The
 60-second housekeeping timer is not the pace. The owner does not block
 a p2p io worker.
+
+**Readiness comes before the draw (`TSR-F1`; `TOR_SUPERVISOR.md` §4.1,
+§4.6).** A wake draws only when its connector can dial: its link on the
+seam hub is usable, the core has published a tip, and the network id is
+set. That check is the first step of the plan, ahead of the settle and
+of every draw. A draw the connector cannot dial ends as
+`DialFailed(LocalClose)`, and the list rule drops a drawn gray address
+on that outcome, so a dead route used to cost one address per wake.
+
+While any of the three is missing, the owner loop arms no timer. It
+waits on the change: a link published, the tip published, the network
+id set, or the stop. It logs one line when it starts waiting and one
+when it resumes, and the wake spacing resumes with it. A parked loop
+does not run the thirty-minute store of the address file; another
+connector's loop does, and the stop writes it.
+
+The link is `shekyl_transport_layer::Link`: an incarnation, a route,
+and an outbound facet that is `Unknown`, `Usable` or `Down`. The zone
+host publishes clearnet's when its listener is up, with the route
+direct or the operator's `--proxy`. It publishes Tor's when it starts
+the Tor connector (`zone_ffi::start_tor`, `zone_ffi::dial_through_tor`).
+The daemon watches only the Tor it manages: `tor::watch_death` hands
+`DaemonTorControl::death` to `zone_ffi::watch_managed_tor`, and that
+Tor's death publishes the link down for the incarnation installed when
+the watch began, so a route published later is not taken down by it.
+An exit is `DownCause::ProcessExited`, and the daemon logs it as an
+error; a stop by `DaemonTorControl::shutdown` is
+`DownCause::ProcessStopped`, and the daemon reports nothing. The daemon
+stops the zone host before the Tor, so an orderly stop withdraws the
+link first. An operator's Tor stays usable until the supervisor brings
+its outbound evidence. Each connector reads its route from the link at every dial.
+`Dialer::dial`, the named draw, reads the same gate before it draws.
+
+Two races are accepted. A link that falls between the plan and the
+dial costs that one draw. A wake whose timer was armed before the fall
+runs once and draws nothing. Tests: `shekyl-dialer/tests/readiness.rs`.
+
+**A failed dial drops its draw, whatever the cause (Rick, 2026-10-16;
+closed in #1092).** A `DialFailed` gray draw is dropped, not returned to
+gray, including when the cause does not implicate the address. Whether
+a cause implicates the address decides whether the failed-address memory
+punishes it, never list membership. On clearnet no cause implicates the
+address, because nothing authenticates the destination. So a return to
+gray would keep every dead host that only ever times out on gray for
+good, and the drop is what clears them out. The case that made the drop
+costly, a node that could not dial at all, is the readiness gate's. What
+remains is one draw per link that falls between the plan and the dial.
 
 **The population.** A closed network (`--add-exclusive-node`) is not a
 dialer arm (Rick, 2026-10-11): an exclusive list is a network
@@ -335,7 +386,7 @@ tests keep one call. Callers of `Hub::connect` today are
 | Operation | What it does | Who calls it |
 | --- | --- | --- |
 | `dial_channel` | `Dial::connect`. Returns the channel. No row, no `adopt` | This slice's dialer |
-| `Hub::adopt` (`hub.rs:288`) | Registers a channel the connector already admitted. `write_row` (`:414`) inserts the row with `established: false` and `phase: Arming`, then posts `Post::Established` (`:41`) | The handshake owner, after every well-formed response (*records-was:* that is not a harvest; there is no harvest since 2026-10-11). `Post::Established` creates the strand handler. It is not promotion and it is not the relay flip |
+| `Hub::adopt` (`hub.rs:288`) | Registers a channel the connector already admitted. `write_row` (`:414`) inserts the row with `established: false` and `phase: Arming`, then posts `Post::Established` (`:41`) | The handshake owner, after a kept response Rust has accepted (*records-was:* after every well-formed response, and before that a harvest; there is no harvest since 2026-10-11, and a confirm no longer adopts, 2026-10-16). `Post::Established` creates the strand handler. It is not promotion and it is not the relay flip |
 | `Hub::connect` | `dial_channel`, then `adopt` | Seam tests. The outbound dialer does not call it |
 
 The dialer passes a `DialAim` with the channel. The aim is input. The
@@ -356,34 +407,65 @@ The handshake owner reads frames on the channel. Those frames are not
 `Post::Deliver`. On any failure before a well-formed response, the
 owner does not adopt. There is no strand and no established delivery.
 
-On a well-formed response whose aim is `Keep` or `Confirm`, the owner
-adopts, then posts one handshake result. That post is not
-`Post::Deliver`. `Post::Deliver` is one whole Levin message
-(`hub.rs:48`) and the adapter feeds those bytes to `handle_recv`. A
-handshake response arriving that way has no invoke handler on the
-new strand and is the "no active invoke" close. The handshake owner
-already decoded the response on the channel. The result post carries
-the support flags, including zero, and the sync payload, and the
-strand reads those fields. It does not parse them as a Levin
+On a well-formed response Rust has already checked — a
+`COMMAND_HANDSHAKE` response, this node's network id, and a peerlist
+the lists accept — the aim decides the rest. The response carries no
+nonce. The request's nonce is the inbound self-connection check, and
+the peer does not echo it, so there is nothing to match.
+
+`Keep` adopts, which posts `Post::Established`. If that poster already
+closed the session, the dial is `DialFailed` and no kept row is
+recorded. Otherwise the owner, in one lists-lock section, records
+`SessionAccepted` and the kept row, marks the session established on
+the hub (`Hub::session_established`, which fires the row's gap sender),
+then posts one handshake result. That post is a notification. Nothing
+waits for a reply. The strand still runs `on_outbound_handshake`, which
+returns nothing and keeps three things, each owned by a later slice:
+`process_payload_sync_data` (chain sync), the notifier's
+`on_session_established` (RD), and the support-flags write into the
+connection context (slice 4 and chain sync). `process_payload_sync_data`
+returns true on every path, so it judges nothing (Rick, 2026-10-16).
+
+`Confirm` does not adopt and does not post. The owner records
+`Confirmed` and closes the unadopted channel with
+`CloseKind::LocalClose`. The admission slot is released by that close.
+There is no row and no strand turn, so the height record and the chain
+request never land on a link that is about to close. A confirm dial is
+never a stem edge. The outbound target is the count of `Keep` rows on
+that connector.
+
+A later refusal of a kept session is the payload owner closing it.
+`CloseKind::SessionRefused` is the lists' `PayloadRefused`. The address
+stays white: `SessionAccepted` already wrote it, and `PayloadRefused`
+does not demote white.
+
+The result post is not `Post::Deliver`. `Post::Deliver` is one whole
+Levin message (`hub.rs:48`) and the adapter feeds those bytes to
+`handle_recv`. A handshake response arriving that way has no invoke
+handler on the new strand and is the "no active invoke" close. The
+handshake owner already decoded the response on the channel. The result
+post carries the support flags, including zero, and the sync payload,
+and the strand reads those fields. It does not parse them as a Levin
 response. The post is the first strand post after `Post::Established`,
 ahead of any later frame. The owner does not call
 `process_payload_sync_data`.
 
-In that one strand turn, before any later frame, the strand accepts or
-refuses. On accept, `Keep` sets the session-established flag, flips
-the relay registry (`shekyl_relay_zone_on_session_established`), and
-the dialer emits `SessionAccepted`. `Confirm` does not flip the relay
-and does not leave the row: the owner closes in that turn and emits
-`Confirmed`. A confirm dial is never a stem edge. The outbound target
-is the count of `Keep` rows on that connector. A `Confirm` row is
-outside that count for the turn it exists. On refuse, either
-aim closes the session and the dialer emits `PayloadRefused`. Nothing
-enters the relay's peer set before the payload is accepted, and a
-confirm dial does not enter it after.
+The dialer does not wait on the strand. A slow strand cannot stall the
+next wake. `SessionAccepted` and `Confirmed` are recorded before the
+owner returns, so the address is white before any strand turn. A
+confirm dial has no strand turn.
 
-The dialer does not wait on that turn. A slow strand cannot stall the
-next wake. Until `SessionAccepted` or `Confirmed`, the session may be
-up and the address is still gray.
+**The lists lock (Rick, 2026-10-16).** The dialer never calls into the
+hub while it holds its own lock. A ban snapshot and a board read are
+taken first. The hub's close poster runs after the table lock is
+released, because that poster calls the dialer and the strand, and the
+strand locks the table again.
+
+**An idle connector (Rick, 2026-10-16).** A connector under its target
+for 60 wakes with nothing dialed logs one warning naming why: a dial
+is in flight, no candidate, or a filter holds every address. The same
+reason logs nothing more until it changes, the connector draws, or it
+is no longer under its target.
 
 **The clock (Rick, 2026-10-08).** The outbound handshake's only clock
 is each connector's transport gap, from channel established to the
@@ -439,24 +521,29 @@ enum DialOutcome {
 | --- | --- | --- | --- | --- |
 | `DialFailed` | The channel never reached a well-formed response, or `network_id` is not ours (`net_node.inl:1370`). The cause is the one the connector closed with | An outstanding gray draw is dropped. A white address stays white | Tor only (R2): written when `implicates_address` is set for that cause and reply, which on clearnet it never is. A `network_id` mismatch is `LevinHandshakeRejected`; on Tor it writes, on clearnet it does not. *Records-was: written on every connector* | No subscription. The mismatch does not call `add_host_fail` |
 | `PeerlistRefused` | `handle_remote_peerlist` refuses (`net_node.inl:1377`). Same close as `LevinHandshakeRejected` | Same as `DialFailed` | Same as `DialFailed` with `LevinHandshakeRejected`: Tor only (R2) | The score owner subscribes. A peerlist this node refuses is the event the score records |
-| `PayloadRefused` | Levin was well-formed and the strand refused the sync payload | No promotion, no demotion, no gray drop. An outstanding draw stays gray | Not written. The peer answered | None |
+| `PayloadRefused` | A kept session closed with `CloseKind::SessionRefused`: the payload owner declined a delivery after `SessionAccepted` (*records-was:* the strand refused the sync payload before white was written) | White is unchanged. An outstanding draw that was never confirmed returns to drawable gray | Not written. The peer answered | None |
 | *`HarvestDone` — DELETED (Rick, 2026-10-11; no crate symbol)* | *Records-was: a harvest handshake completed, the session closed, no `adopt`.* Absorbed into `Confirmed`: a confirm-and-close dial learns the peer's sample as a harvest did and writes white. The variant, its `address()` arm, its `apply` arm and its test are gone. *Records-was: left for PR-3 as "more than one line"* | — | — |
-| `Confirmed` | Aim `Confirm`. The strand accepted the sync payload. The owner closed in that turn. The relay was not flipped | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address | None |
-| `SessionAccepted` | Aim `Keep`. The strand accepted the sync payload and the session stays | An outstanding gray draw moves to white and `last_observed` is set. An address that is already white, on a session this node opened, moves the clock. Anything else writes nothing | Cleared for that address | None |
+| `Confirmed` | Aim `Confirm`. Rust's handshake checks passed. The owner closed the unadopted channel. No adopt, no post, no row (*records-was:* the strand accepted and the owner closed in that turn) | An outstanding gray draw moves to white and `last_observed` is set. No session remains. Anything else writes nothing | Cleared for that address | None |
+| `SessionAccepted` | Aim `Keep`. Rust's handshake checks passed and the session was not already closed. Recorded in one lists-lock section before the handshake notification (*records-was:* the strand accepted and the session stays) | An outstanding gray draw moves to white and `last_observed` is set. An address that is already white, on a session this node opened, moves the clock. Anything else writes nothing | Cleared for that address | None |
 
 *Records-was: slice 1's `handshake_confirmed` and `draw_failed` were
 three endings sharing one name. Neither spelling is in Rust. They are
 not the contract.*
 
-A valid Levin response is not `SessionAccepted`. The strand can refuse
-the payload after the response was well-formed.
+A valid Levin response is not, by itself, a kept session. Rust refuses
+a frame that is not a well-formed handshake response, a network id that
+is not ours, and a peerlist the lists refuse. `process_payload_sync_data`
+returns true on every path, so the strand has no payload verdict to
+give (Rick, 2026-10-16).
 
-Wargame: a peer completes the handshake and sends a payload the sync
-driver refuses. `SessionAccepted` on the Levin response would put that
-peer on white and hand the next draw an address this node drops on
-sight. `PayloadRefused` keeps the peer on gray. The report does not
-block the dialer. A session that dies before the report is not white.
-A peer whose payload we refuse is never a stem edge.
+Wargame: a peer completes the handshake and the payload owner later
+closes the session. Recording `SessionAccepted` when the response was
+well-formed puts the peer on white before that close. `PayloadRefused`
+leaves that white address white; it does not demote it, and it does not
+keep an outstanding draw on gray once `SessionAccepted` has run. The
+report does not block the dialer. A session that dies before
+`SessionAccepted` is not white. A peer whose payload we refuse is never
+a stem edge.
 
 ---
 
@@ -668,17 +755,33 @@ of arm 5, and it is deleted with the dial path: the function, the
 `net_node.h:756`, the `idle_worker` call at `net_node.inl:2307`), and
 the comment at `:1091`. Leaving them would dial gray on a second
 clock, including while white is already above the refill line. Rule
-(c) confirms only while white is under that line, and only after the
-strand accepts the payload. The gray dial that keeps a session is
+(c) confirms only while white is under that line. The confirm is
+Rust's, after the handshake checks; the strand is not asked. The gray
+dial that keeps a session is
 `make_new_connection_from_peerlist` (`:1789`) through
 `try_to_connect_and_handshake_with_new_peer` (`:2019`,
 `just_take_peerlist` false). That is a keep under (a), (b) or (d).
 *Records-was: "arm 5" and "arm 4".*
 
-A confirm the strand accepts is `Confirmed`, whether reached under
-(c) with the pool thin or with every `Keep` slot full. One that fails
-is `DialFailed` or `PeerlistRefused`, with the connector's cause.
-*Records-was: a completed harvest was `HarvestDone`, deleted 2026-10-11.*
+A confirm whose handshake checks pass is `Confirmed`, whether reached
+under (c) with the pool thin or with every `Keep` slot full. The
+channel is closed in Rust, unadopted. One that fails is `DialFailed`
+or `PeerlistRefused`, with the connector's cause.
+*Records-was: a completed harvest was `HarvestDone`, deleted 2026-10-11.
+Records-was (until 2026-10-16): the strand accepted the payload and the
+owner closed in that turn.*
+
+**Confirm finishes in Rust (Rick, 2026-10-16).** After the handshake
+response passes Rust's checks, the dialer records `Confirmed` and
+closes the unadopted channel with its own cause
+(`CloseKind::LocalClose`). It does not adopt and it does not post.
+`process_payload_sync_data` returns true on every path, so a strand
+verdict on a confirm judged nothing, and its only effects — recording
+the peer's height and requesting the chain — landed on a link that was
+about to close (the startup "Failed to send message"). The admission
+slot is released by that close. There is no row, so the close is not
+the hub's. The response carries no nonce to check: the request nonce
+is the inbound self-connection check.
 
 ---
 
@@ -688,8 +791,9 @@ stranded: its lists cannot get it a peer. That wake re-admits the
 connector's configured addresses to gray as operator-named, under normal
 admission: the compiled seeds and `--add-peer`, or, when a closed
 network is declared (`--add-exclusive-node`), that list alone. It dials
-nothing itself; the next wake draws. The apply table and the address
-file are unchanged. The dialer logs one line on entering the state, with
+nothing itself; the next wake draws. Recovery runs only on a wake that
+is ready to dial: a connector whose link is down re-admits nothing. The
+apply table and the address file are unchanged. The dialer logs one line on entering the state, with
 the count re-admitted, and one on leaving it. A connector with a target
 of zero is never stranded. Tests: `shekyl-dialer/tests/recovery.rs` (a
 stranded connector re-admits and dials; a healthy one does not re-admit
@@ -698,7 +802,8 @@ a dead `--add-peer`; a declared closed network re-admits only its list).
 ## Support flags
 
 The handshake response carries `support_flags`. That value, including
-zero, is what the handshake result hands the strand.
+zero, is what the handshake result hands the strand on a kept dial. A
+confirm dial posts nothing.
 `try_get_support_flags` (`net_node.inl:1435`, defined at `:2677`) asks
 again when the field is zero. The field is optional on the wire
 (`KV_SERIALIZE_OPT`, default 0), and the second invoke is how an
@@ -764,9 +869,11 @@ which was the reviewer's imprecision, not a ruling. Records-was before
 that: "the Tor arms are unchanged", which also kept `DialFailed`
 writing on Tor.*
 
-Windows come from `failed_addr_cache::window` (`net_node.h:263`).
-Tor starts at the short window and doubles, capped at the hour.
-*Records-was: clearnet is the hour.*
+The suppression window is the same schedule on every operating system.
+Four minutes after the first failure, doubled for each consecutive
+failure, capped at one hour (`window_nanos` in `shekyl-dialer`).
+*Records-was: clearnet used the flat hour, from
+`failed_addr_cache::window`.*
 
 `implicates_address` decides the write, on `DialFailed` and on
 `PeerlistRefused`. On Tor a rejected handshake and an onion reply in
@@ -803,7 +910,7 @@ table.*
 | `shekyl_dial_take_handshake_nonce` (the self-connection check) | `detect_self_handshake` | slice 4 |
 | `shekyl_dialer_set_out_peers` (`--out-peers`, the anonymity caps) | `set_max_out_peers` | the daemon-config slice |
 | `shekyl_core_publish_tip` (the tip the next handshake carries) | `Blockchain::update_next_cumulative_weight_limit` | the DRS store cutover, or the chain-sync slice |
-| `shekyl_dialer_handshake_verdict` (the strand's accept or refuse) | `zone_server::on_strand` | the chain-sync slice |
+| `shekyl_dialer_handshake_verdict` — DELETED 2026-10-16 (Rick). `process_payload_sync_data` returns true on every path and the size check is this struct, so the reply was always accept and carried nothing. A kept dial notifies; a confirm finishes in Rust. No code symbol | was `zone_server::on_strand` | this change (*records-was:* the chain-sync slice) |
 | `shekyl::note_own_address` (the operator onion of `--anonymous-inbound`) | the `m_our_address` assignment in `init` | the daemon-config slice |
 
 The per-boot onion does not cross: `shekyl_daemon_tor_publish` hands
@@ -945,7 +1052,11 @@ keep the callers named below.
 | The timed-sync self-insertion (handshake-address ruling, 2026-10-09) | `net_node.inl:2717` to `:2735`: `outgoing_to_same_zone`, the `max_peerlist_size` subtraction, and the `local_peerlist_new.insert` of `zone.m_our_address` | `rg -n -e outgoing_to_same_zone src/p2p` returns nothing. Before deletion it hits `:2717`, `:2718` and `:2730` |
 | `peerlist_manager::is_host_allowed` and `m_allow_local_ip` (address-validity ruling, 2026-10-11) | `net_peerlist.h:273` and `:201`; they go with the C++ peerlist (slice 1 §11.4). The flag stays: `arg_p2p_allow_local_ip` (`net_node.cpp:123`) is read at `net_node.inl:486` through `shekyl_peerlist_allow_local_ip`, which makes it the Rust peer lists' constructor input (2026-10-13); `peerlist_manager::init` (`:1078`) stops reading it when the C++ peerlist goes. *Records-was: `sanitize_peerlist` was named here as not in this table, staying until slice 4; it has its own row below (2026-10-13).* | `rg -n -e is_host_allowed -e m_allow_local_ip src/p2p` returns nothing. `rg -n -e allow_local_ip src/p2p` still hits the argument and its read; zero hits fails, because the override was kept |
 | **C++ this PR adds (Rick, 2026-10-13, step 2): the strand's handshake-result branch** | `zone_server::on_strand`, the `SHEKYL_SEAM_HANDSHAKE` arm | Deleted by the chain-sync slice, or slice 4, whichever moves the sync payload's acceptance to Rust. Until then `rg -n -e SHEKYL_SEAM_HANDSHAKE src/p2p/zone_server.h` hits that arm; zero hits before that slice fails |
-| **C++ this PR adds: `node_server::on_outbound_handshake`** | `net_node.inl`, declared `net_node.h`; the lines kept from `do_handshake_with_peer`'s invoke callback | The same slice as the branch above. `rg -n -e on_outbound_handshake src/p2p` hits the declaration and the definition until then |
+| **C++ this PR adds: `node_server::on_outbound_handshake`** | `net_node.inl`, declared `net_node.h`; the lines kept from `do_handshake_with_peer`'s invoke callback. What is left (Rick, 2026-10-16), each with its owner: `process_payload_sync_data`, the chain-sync slice; the notifier's `on_session_established`, RD; the support-flags write, slice 4 and chain sync | The function goes when the last of those has moved. `rg -n -e on_outbound_handshake src/p2p` hits the declaration and the definition until then |
+| **Deleted 2026-10-16 (Rick): the confirm dial's return in `on_outbound_handshake`** | `if (result.keep == 0) return true;`, `net_node.inl:1469` at `dev` `d2ac8b45d`. A confirm dial is never posted since `dd53b3336` | `rg -n -e 'result\.keep' src` returns nothing |
+| **Deleted 2026-10-16 (Rick): the `keep` field of the handshake result** | `shekyl_seam_handshake_result::keep` and its pad (`src/shekyl/shekyl_ffi.h`); `ShekylSeamHandshakeResult::keep` (`rust/shekyl-ffi/src/seam_ffi.rs`); `Post::HandshakeResult::keep` (`rust/shekyl-seam/src/post.rs`) and the parameter of `Hub::post_handshake_result`. `support_flags` moves to offset 0 and an explicit four-byte pad follows it; the struct stays 64 bytes | `rg -n -F 'std::uint8_t keep;' src/shekyl/shekyl_ffi.h`, `rg -n -e 'pub keep:' rust/shekyl-ffi/src/seam_ffi.rs` and `rg -n -e 'keep: bool' rust/shekyl-seam/src` return nothing |
+| **Deleted 2026-10-16 (Rick): `on_outbound_handshake`'s verdict** | its `return false` path and `bool` return (`net_node.inl`, `net_node.h`); the `bool` of `levin_commands_handler`'s virtual (`contrib/epee/include/net/levin_base.h`); the `(void)` cast at its call (`src/p2p/zone_server.h`) | `rg -n -e 'bool on_outbound_handshake' src contrib/epee` returns nothing; `rg -n -F '(void)m_config->commands_handler()->on_outbound_handshake' src/p2p/zone_server.h` returns nothing |
+| **Deleted 2026-10-16 (Rick): the outbound `shekyl_zone_session_established` call** | `net_node.inl:1471` at `dev` `d2ac8b45d`, in `on_outbound_handshake`. The dialer calls `Hub::session_established` when it records `SessionAccepted`, before the notification. The inbound caller (`:1597` there, in `handle_handshake`) stays for slice 4 | `rg -n -e shekyl_zone_session_established src/p2p/net_node.inl` hits one line, the inbound caller |
 | **C++ this PR adds: the `levin_commands_handler` virtual and `commands_handler()`** | `contrib/epee/include/net/levin_base.h`, `levin_protocol_handler_async.h` | The same slice. `rg -n -e on_outbound_handshake -e commands_handler contrib/epee` hits both until then |
 | **C++ this PR adds: `seam_link::context_mut()`** | `src/p2p/seam_endpoint.h` | The same slice |
 | **C++ this PR adds: the `disclose` adapter** | `zone_server.h` | slice 4, with the two senders |
@@ -1003,9 +1114,9 @@ memory (R2: a TCP RST and, NN being unauthenticated, a forged
 either would have suppressed an honest address for an hour); on Tor
 only a reply in `0x04 0x05 0xF0 0xF1 0xF2` writes it, and those come
 from our own Tor process. A handshake timeout, a peer close, a local
-failure, and a clearnet proxy reply never did. The window is the one
-`failed_addr_cache::window` already derived. An attacker who can force
-reply 4 still buys only the short Tor window. That residual is
+failure, and a clearnet proxy reply never did. The window is that
+same schedule. An attacker who can force reply 4 still buys only the
+short first window. That residual is
 unchanged. The key is host and port, so a refused port does not
 suppress another port on the same host. The memory dies with the
 process. *Records-was: a refused dial and a rejected handshake wrote
@@ -1075,8 +1186,9 @@ dial on the 2-worker io pool can leave `get_connections` with claims
 unknown. After: the same dial leaves every io worker free, and the
 claim post lands.
 
-The handshake-result test above. `PayloadRefused` leaves the address
-off white and still on gray when it was an outstanding draw. The fill
+The handshake-result test above. `PayloadRefused` leaves white as
+`SessionAccepted` wrote it. An outstanding draw that was never
+confirmed returns to gray. The fill
 rule (R1), as properties: with no kept session the first success is
 kept whatever list it came from; with a kept session and under
 target, a keep draws white only at or above the floor and gray only at
@@ -1089,8 +1201,8 @@ harvest left white unchanged; `HarvestDone` is deleted).
 `Confirmed` of an outstanding gray draw writes white, leaves no
 session, and never appears in the relay registry. That dial, started
 while `Keep` rows are already at the target, leaves the `Keep` count
-unchanged: no `Keep` peer is closed to make room, and the adopt is
-not refused for being at the target. `SessionAccepted` of that draw
+unchanged: no `Keep` peer is closed to make room, and a confirm is
+not refused for being at the target, because it never adopts. `SessionAccepted` of that draw
 writes white and the session stays. When every white address is
 already an outbound session and white is under the refill line, the
 next wake draws gray, not another dial of a live white peer.

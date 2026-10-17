@@ -7,12 +7,21 @@
 //!
 //! The owner loop decides the address and the aim. This module opens the
 //! channel, writes the request, reads until the peer's handshake response,
-//! admits the list the response carries, and adopts the channel. A channel
-//! that ends before a well-formed response is dropped: the session's drop
-//! closes the queue, and the outcome carries the cause the connector stored.
-//! The handshake's only clock is the connector's transport gap, armed
-//! before `dial_channel` returns.
+//! and admits the list the response carries. A `Keep` dial then adopts the
+//! channel. A `Confirm` dial closes it here, with no adopt and no post.
+//! A channel the dial does not adopt is released, and the dialer that built
+//! it retires the id, on every path ([`Unadopted`]); the outcome carries the
+//! cause the connector stored. The handshake's only clock is the connector's
+//! transport gap, armed before `dial_channel` returns.
+//!
+//! The response carries no nonce. The request's nonce is the inbound
+//! self-connection check, not a value the peer echoes, so the response
+//! has nothing to match it against. Rust refuses three things: a frame
+//! that is not a well-formed `COMMAND_HANDSHAKE` response, a network id
+//! that is not ours, and a peerlist the lists refuse. A later refusal of
+//! a kept session is the payload owner closing it.
 
+use shekyl_capped_stream::Session;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
     invoke, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
@@ -21,19 +30,34 @@ use shekyl_levin::{
 use shekyl_peerlist::{
     CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress, SessionRow,
 };
-use shekyl_seam::SyncPayload;
+use shekyl_seam::{Channel, Hub, SocketId, SyncPayload};
 
 use super::address::endpoint_of;
 use super::{session_of, Dialer};
+use crate::bans::BanSnapshot;
 use crate::fill::DialAim;
 use crate::nonce::InFlightNonce;
 
 /// How one attempt ended on the owner's thread.
 pub(super) enum Attempt {
-    /// A total outcome, before any adopt.
+    /// A total outcome. The owner records it. Nothing was adopted, and
+    /// nothing is posted.
     Done(DialOutcome),
-    /// Adopted and posted; the strand's verdict completes it.
-    Posted(shekyl_seam::SocketId),
+    /// Adopted, and not already closed. The owner records `SessionAccepted`
+    /// and then notifies the strand.
+    Kept(KeptDial),
+}
+
+/// A kept dial the owner has not yet recorded.
+pub(super) struct KeptDial {
+    pub(super) id: SocketId,
+    /// The peer's support flags, zero included.
+    pub(super) support_flags: u32,
+    /// The peer's sync payload.
+    pub(super) sync: SyncPayload,
+    /// The pump's end of the session. The owner starts the pump after it
+    /// records the kept row and posts the notification.
+    pub(super) session: Session,
 }
 
 /// Why no well-formed handshake response was read.
@@ -45,11 +69,11 @@ enum Rejected {
 }
 
 impl Dialer {
-    /// Dial, handshake, adopt, post. Every end path is an [`Attempt`].
+    /// Dial and handshake. Every end path is an [`Attempt`].
     ///
     /// The shared lock is taken only to admit the received list, after the
-    /// response has been read. The dial and the read block this thread and
-    /// do not hold the lists.
+    /// bans have been copied out and the response has been read. The dial
+    /// and the read block this thread and do not hold the lists.
     pub(super) fn exchange<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -69,8 +93,8 @@ impl Dialer {
             );
             return failed(CloseCause::new(CloseKind::LocalClose));
         };
-        let channel = match self.hub.dial_channel(&endpoint) {
-            Ok(channel) => channel,
+        let mut channel = match self.hub.dial_channel(&endpoint) {
+            Ok(channel) => Unadopted::new(&self.hub, channel),
             Err(cause) => return failed(cause),
         };
         let connected_at = std::time::Instant::now();
@@ -83,40 +107,34 @@ impl Dialer {
             nonce: *nonce.bytes(),
         };
         let Ok(payload) = request.store() else {
-            drop(channel);
             return failed(CloseCause::new(CloseKind::LocalClose));
         };
         if let Err(kind) = channel
+            .held()
             .session
             .try_send(invoke(COMMAND_HANDSHAKE, &payload))
         {
-            let cause = CloseCause::new(kind);
-            drop(channel);
-            return failed(cause);
+            return failed(CloseCause::new(kind));
         }
         tracing::debug!(
             "{connector:?} dial {address:?}: handshake queued {} ns after the channel opened",
             u64::try_from(connected_at.elapsed().as_nanos()).unwrap_or(u64::MAX)
         );
 
-        let mut channel = channel;
-        let response = match read_response(&mut channel.session) {
+        let response = match read_response(&mut channel.held().session) {
             Ok(response) => response,
-            Err(Rejected::Closed) => return failed(channel.session.close_cause()),
+            Err(Rejected::Closed) => return failed(channel.held().session.close_cause()),
             Err(Rejected::ByLevin) => {
-                let cause = CloseCause::new(CloseKind::LevinHandshakeRejected);
-                drop(channel);
-                return failed(cause);
+                return failed(CloseCause::new(CloseKind::LevinHandshakeRejected));
             }
         };
         if response.node_data.network_id != network_id {
-            let cause = CloseCause::new(CloseKind::LevinHandshakeRejected);
-            drop(channel);
-            return failed(cause);
+            return failed(CloseCause::new(CloseKind::LevinHandshakeRejected));
         }
 
-        let id = channel.open.id();
+        let id = channel.held().open.id();
         let now = self.hub.now();
+        let mut bans = BanSnapshot::take(&self.hub);
         let addresses: Vec<NetworkAddress> = response
             .local_peerlist_new
             .iter()
@@ -129,40 +147,105 @@ impl Dialer {
                 connector,
             },
             now,
-            &mut crate::bans::HubBans(&self.hub),
+            &mut bans,
             rng,
         );
         if admitted.is_err() {
-            drop(channel);
             return Attempt::Done(DialOutcome::PeerlistRefused(address.clone()));
         }
 
-        let attached =
-            match self
-                .hub
-                .adopt(channel.open, channel.session, channel.endpoint, channel.gap)
-            {
-                Ok(attached) => attached,
-                Err(cause) => return failed(cause),
-            };
-        let keep = aim == DialAim::Keep;
-        self.hub.post_handshake_result(
+        if aim == DialAim::Confirm {
+            return Attempt::Done(DialOutcome::Confirmed(address.clone()));
+        }
+
+        // From here until the kept row is written, a close that reaches the
+        // dialer finds no kept row. It records its cause under this id
+        // instead, and the owner does not keep the dial.
+        self.shared().adopting.insert(id.get(), None);
+        let Channel {
+            open,
+            session,
+            endpoint,
+            gap,
+        } = channel.into_adopted();
+        let attached = match self.hub.adopt(open, session, endpoint, gap) {
+            Ok(attached) => attached,
+            Err(cause) => {
+                self.shared().adopting.remove(&id.get());
+                // The hub made no row, so nothing else retires the id.
+                self.hub.reap(id);
+                return failed(cause);
+            }
+        };
+        // `Established` runs its poster before `adopt` returns. A poster
+        // that closed the session has already won: recording a kept row
+        // would resurrect it.
+        if let Some(cause) = self.hub.cause(id) {
+            self.shared().adopting.remove(&id.get());
+            drop(attached);
+            return failed(cause);
+        }
+        Attempt::Kept(KeptDial {
             id,
-            connector,
-            keep,
-            response.node_data.support_flags.bits(),
-            SyncPayload {
+            support_flags: response.node_data.support_flags.bits(),
+            sync: SyncPayload {
                 current_height: response.payload_data.current_height,
                 cumulative_difficulty: response.payload_data.cumulative_difficulty,
                 cumulative_difficulty_top64: response.payload_data.cumulative_difficulty_top64,
                 top_id: response.payload_data.top_id,
             },
-        );
-        let hub = self.hub.clone();
-        let session = attached.session;
-        let pump = std::thread::spawn(move || shekyl_seam::drive_inbound(&hub, id, session));
-        self.hub.track_pump(id, pump);
-        Attempt::Posted(id)
+            session: attached.session,
+        })
+    }
+}
+
+/// A dialed channel the dialer holds until it adopts it. Every other end of
+/// the exchange (a refusal, a failed read, a confirm) releases it on drop:
+/// the session's drop closes the queue, the gap's drop ends the connector's
+/// wait, and the admission closes with the dialer's own cause. There is no
+/// row, so no `Closed` post. Then the dialer that built the channel retires
+/// what it holds for the id ([`Hub::reap`]; the loopback joins its writer
+/// thread). Only [`Self::into_adopted`] takes the channel out.
+struct Unadopted<'h> {
+    hub: &'h Hub,
+    channel: Option<Channel>,
+}
+
+impl<'h> Unadopted<'h> {
+    const fn new(hub: &'h Hub, channel: Channel) -> Self {
+        Self {
+            hub,
+            channel: Some(channel),
+        }
+    }
+
+    fn held(&mut self) -> &mut Channel {
+        self.channel
+            .as_mut()
+            .expect("a channel is held until it is adopted")
+    }
+
+    /// The channel, for `adopt`. Nothing is released.
+    fn into_adopted(mut self) -> Channel {
+        self.channel
+            .take()
+            .expect("a channel is held until it is adopted")
+    }
+}
+
+impl Drop for Unadopted<'_> {
+    fn drop(&mut self) {
+        let Some(Channel {
+            open, session, gap, ..
+        }) = self.channel.take()
+        else {
+            return;
+        };
+        let id = open.id();
+        drop(session);
+        drop(gap);
+        let _ = open.close(CloseCause::new(CloseKind::LocalClose));
+        self.hub.reap(id);
     }
 }
 
@@ -176,9 +259,7 @@ fn sync_data(snapshot: &SyncPayload) -> CoreSyncData {
 }
 
 /// Read frames until one whole `COMMAND_HANDSHAKE` response decodes.
-fn read_response(
-    session: &mut shekyl_capped_stream::Session,
-) -> Result<HandshakeResponse, Rejected> {
+fn read_response(session: &mut Session) -> Result<HandshakeResponse, Rejected> {
     let mut reader = BucketReader::new();
     loop {
         let Some(frame) = session.recv_blocking() else {
