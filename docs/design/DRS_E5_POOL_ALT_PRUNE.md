@@ -770,88 +770,83 @@ impl<'id, V: ChainView<'id>> ChainView<'id> for PoolView<'_, V> { has_key_image 
 
 Under FCMP++ a pool transaction's outputs are not in the tree, so the pool
 adds nothing a rule can reference except spent key images (M6 against the
-chain, M7 against the pool — one `has_key_image`). Admission is
-`tx_form(tx, TxSlot::Lone, rule_set)` then `tx_against(tx, TxSlot::Lone,
-&pool_view, rule_set)` — the same two functions `validate` runs per slot (M2:
-the full NIC set is `tx_form`), then `policy_form(tx, &AdmissionPolicy)` for
-the `PolicyRow`s (M3 fee floor, M4 extra cap, M5 unlock ban), which
-populates `PolicyCoverage` and lifts the policy gate off `implemented 0`.
-**Every transaction runs the whole door, policy included** — a transaction
-returned from a popped block (K10) as much as a relayed one (`E5-Q1`,
-reopened in part 2026-10-11, §8: the `kept_by_block` policy skip was the
-fee-floor bypass for block-carried transactions that the 2026-10-02
-reopening of C2-R2 Q9 names as a bug). K10's retention of a returned
-transaction that cannot currently be verified — kept, not relayable,
-evicted by M10 — is unaffected. M11 ("zero-fee never relayed") is not a
-row of this door: with the serve-credit carriers gone there is no zero-fee
-family to exempt from M3, and a second mechanism for M3's job is deleted
-(`05-system-thinking.mdc`, one mechanism one job; §3's M11 row).
+chain, M7 against the pool — one `has_key_image`).
+
+**The door is the validator's own judgement, at `TxSlot::Lone`** (PR-b
+brief, 2026-10-16). Three calls, in order:
+
+1. `judge_slot_stateless(tx, TxSlot::Lone, rule_set, &claims)` — the one
+   public function `form` runs per slot: `tx_form` (M2: the full NIC set),
+   the signatures (CEN-I17/I18), the proofs against the caller's reference
+   claims (CEN-I15, J26, J27's verify half), and — at `Lone` only — CEN-H19's
+   range-proof batch over the transaction's own proof. `form` never passes
+   `Lone`; its listed proofs are one block batch after the slot loop, so a
+   block's proofs are still verified once. The claims are read off the
+   pool's tip snapshot, as the ingest driver reads them off its header
+   ledger (`ReferenceClaims`, the third claim).
+2. `tx_against(tx, TxSlot::Lone, &pool_view, rule_set, verified, attempt)`
+   — the view-bound half `validate` runs per slot, over the decorator; it
+   compares the chain's `(height, root)` at the reference with the claim
+   step 1 verified, and a disagreement is the `Stale::Reference` fault (the
+   tip moved between snapshot and view), answered by judging again.
+3. `policy_form(tx, &AdmissionPolicy, …)` for the `PolicyRow`s (M3 fee
+   floor, M4 extra cap, M5 unlock ban), which populates `PolicyCoverage`
+   and lifts the policy gate off `implemented 0`.
+
+No proof or signature is verified anywhere in `shekyl-mempool`: the
+crate calls the two validator functions and holds no rule (`E5-Q2`'s
+condition). **Every transaction runs the whole door, policy included** — a
+transaction returned from a popped block (K10) as much as a relayed one
+(`E5-Q1`, reopened in part 2026-10-11, §8: the `kept_by_block` policy skip
+was the fee-floor bypass for block-carried transactions that the
+2026-10-02 reopening of C2-R2 Q9 names as a bug). K10's retention of a
+returned transaction that the chain-bound half refuses — kept, not
+relayable, never selected, evicted by M10 — is unaffected. M11 ("zero-fee
+never relayed") is not a row of this door: with the serve-credit carriers
+gone there is no zero-fee family to exempt from M3, and a second mechanism
+for M3's job is deleted (`05-system-thinking.mdc`, one mechanism one job;
+§3's M11 row).
+
+**The pool knows one relay fact: public yet** (DX-F6, 2026-10-16;
+`DAEMON_RELAY_PRIVACY.md` D++ acceptance criterion 2). A transaction that
+is not public is absent from the pool listing, from peer pool sync and
+from a block template, and the relay's fluff event is the only writer of
+the bit. Stem, fluff, embargo, the arrival connector and the originator's
+re-broadcast responsibility (F-10's disarm) are `shekyl-relay`'s:
+`Responsibility` moved there, keyed by transaction hash beside the stem
+watch, staged for the DRS-X flip's relay wiring. The pool record keeps
+what admission, eviction or template selection reads — weight, fee,
+receive time, the public bit, and a standing (admitted with M8's
+`(reference, height, root)` anchor, or kept under K10) — and nothing else
+(`codec/pool.rs`'s module docs give the reason per field; `SCHEMA_VERSION`
+27). Responsibility is in memory: after a restart the relay cannot tell
+this node's unpublished transactions from arrivals still in stem, and
+treats every non-public entry alike — the uniform handling is the privacy
+property. What the relay does with them at open is the relay's to decide
+at the flip.
 
 The decorator and the pool live in a **new crate `shekyl-mempool`**
-(default, `E5-Q2`): admission, the key-image conflict map, the relay FSM
-over `RelayState`/`Readiness`, M10 eviction, template selection
+(default, `E5-Q2`): admission, the key-image conflict map, the relay
+interface (the public bit), M10 eviction, template selection
 (`fill_block_template`'s successor), and the open-time reconcile (`E5-8`).
-It depends on `shekyl-chain-rules` and `shekyl-chain-store` and is depended
-on by `shekyl-chain-ingest` (the switch's pool returns) and `shekyl-ffi`
-(the daemon's door until the C++ is gone). It never implements `connect`'s
-view type, so rule 23's STAGED surface is clean: every symbol it mints has a
-caller in the same PR.
+It depends on `shekyl-chain-rules` and `shekyl-chain-store`, and
+`shekyl-chain-ingest` depends on it for the switch's returns. **No FFI
+crate depends on it** (DX-Q5, DX-Q7): the Rust daemon wires the pool at
+the DRS-X flip, and C++ never reaches it through the FFI. It
+never implements `connect`'s view type, so rule 23's STAGED surface is
+clean: every symbol it mints has a caller in the same PR, and the crate is
+staged whole for the flip.
 
-**Bundles are not transactions, and their queue is not the pool
-(2026-10-11, the Slice C bundle redesign handed to E5).** Each block `h`
-carries one *bundle* — the reveal (seed, `h`, the witness public key and
-signature) plus every pass record for `h` — admitted whole or not at all,
-in a block section beside the block and committed by the header root; no
-fee, no key images, no inputs. Slice C owns the **verifier** (a pure
-chain-rules function, bundle bytes × view → verdict + kept projection) and
-defines the two contracts E5 builds against — the **verifier view trait**
-and the **kept projection type** — in its spec PR; SO-D12 owns the recorded
-state and the cutover; **E5 owns transport**, in `shekyl-mempool`, built
-against those two contracts. Both are in the tree (`BundleView`,
-`archival/bundle.rs:206`; the kept projection `Admitted`, `:485`; #1047);
-what transport still waits on is SO-D12's — the bundle section on the block
-wire and `drawable_epoch`'s data source (`ARCHIVAL_SETTLEMENT_WRITER.md`
-§16.3 items 2 and 3). What E5 builds:
-
-- **A bundle body store keyed by hash (O1).** A block carries, per bundle,
-  a *reference* — `(h, kept bytes, prunable hash)`, under 100 B — and the
-  header root is computed from the references alone; bodies are held once.
-  A body is fetched from a peer when needed and accepted only if it hashes
-  to its reference; it is stored only if a block with valid proof of work
-  references it or the bundle queue admitted it — an unsolicited body is
-  dropped. The reference's pass bitmap has exactly `count(h)` bits, which
-  fixes the body's maximum size, so an oversized fetch is refused early.
-  *Holders:* a body stays while the queue, a stored alt block, or a
-  main-chain block not yet past `D_max` needs it, then is discarded (the
-  archivers keep it). The store invariant register gains "every stored body
-  has a holder; every reference has its body until past `D_max`". A node
-  that relays a block serves that block's bodies on request; refusing is
-  attributable misbehaviour.
-- **A bundle queue, separate from the transaction pool (O2).** Not a
-  `PoolRecord` arm — `PoolRecord` is shaped for transactions. Admission is
-  Slice C's verifier against the tip, through the view trait: the crate
-  *calls* the rule and holds none, which is `E5-Q2`'s condition. Keyed by
-  `h`, one per `h`, the first valid one wins (only `h`'s producer can sign a
-  valid one); bounded at `W₂` (500). Evicted on chain admission, when `h`
-  is popped, or when the window closes (`tip + 1 > h + W₂`). After a reorg
-  the queue is re-checked by the same verifier — there is no separate path
-  for a returned bundle. Persisted, and reconciled at open with the pool
-  (`E5-8`). The queue is an index into the body store. **No Dandelion++**
-  (Slice C B12): the relay FSM's stem phases do not apply; a bundle travels
-  the way block origination travels.
-- **Template selection (b6).** Bundles are taken earliest `h` first until
-  `Σ count(h)` reaches the section budget `c · 9·D/SEB` (`c = 2`,
-  provisional). No fee ordering; the section is outside the fee median and
-  the penalty curve.
-
-Not E5's: the block-relay Levin payload carrying references instead of
-bodies (the lane that owns the Levin block payload — flagged there, not
-built here); the verifier, the view trait's definition and the kept
-projection (Slice C); the recorded draw state (SO-D12). None of it touches
-C++: the C++ sidecar path — `cryptonote_protocol_defs.h:71`
-(`attestation_witness`), the demote/promote witness handling in
-`blockchain.cpp` (`:995–1065`), `db_lmdb`'s witness table — is a `DEL-008`
-deletion.
+**Bundles are not transactions, and their queue is not the pool.** The
+bundle body store (O1), the bundle queue (O2) and the template's bundle
+section left this lane on 2026-10-16 (the PR-b brief): they are SO-D12's,
+built with the bundle section on the block wire and `drawable_epoch`'s
+data source (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 items 2 and 3) against
+Slice C's verifier view trait and kept projection (`BundleView`,
+`archival/bundle.rs`; `Admitted`; #1047). None of it touches C++: the C++ sidecar path —
+`cryptonote_protocol_defs.h:71` (`attestation_witness`), the
+demote/promote witness handling in `blockchain.cpp` (`:995–1065`),
+`db_lmdb`'s witness table — is a `DEL-008` deletion.
 
 ### 2.3 The switch is one closure (`E5-Q5`, `E5-Q6`)
 
@@ -1019,13 +1014,13 @@ and site it lands in, and the witness. "slice 9" is the alt increment
 | CEN-K10 | `kept_by_block` admission skips policy, keeps consensus | writer behaviour — the returned transaction runs the **whole** door, `policy_form` included; `fcmp_cache` consulted (`E5-11`); what `kept_by_block` keeps is the retention — a returned transaction that cannot currently be verified stays, not relayable, until M10 evicts it. UPDATE 2026-10-11 (`E5-Q1` reopened in part, §8): *was* "`policy_form` skipped, `tx_form`/`tx_against` not" — the policy skip was the fee-floor bypass for block-carried transactions (C2-R2 Q9's 2026-10-02 reopening names it a bug), and with the carriers gone no family needs it | `shekyl-mempool` (slice 10) | a below-floor demoted tx is refused by the same door that refuses it on relay; a returned tx that cannot be verified is kept and never relayed, and M10 evicts it. *Was:* "a zero-fee demoted tx is admitted and not relayed (M11)". **Requirement (2026-10-11, subject-neutral):** a pop must not strand serve-credit evidence on the nodes that connected the popped block. What the evidence is, the mechanism that re-includes it, and which store holds it across the pop are Slice C's (under its direction the evidence may not be a pool transaction at all); K10 builds the pool's half of the pop's return path and no evidence-specific admission. The frozen C++'s behaviour — a popped zero-fee entry kept under `kept_by_block` past the ordinary lifetime, never relayed, re-mined only by a node that held it — is read in FOLLOWUPS ("A popped serve-credit carrier survives the C++ pool's pop path") as evidence for that round, not as a shape this row inherits |
 | CEN-D5 | alt-chain difficulty: the same LWMA-1 over the stitched window | rule — D4 over `AltView::header_at` (the subsumption `census.rs:353` wrote; `block_at` → `header_at` per `E5-13`) | rules `difficulty.rs` bound on `HeaderView` (slice 9) | a fixture drives D4 over a stitched view and over the main chain to the same target when the branches agree, different when they do not. UPDATE 2026-10-11 (a4 census arms): the site is `rules::alt::D5::target` wrapping `D4::target` (D4 records its own row); registry `enforced_at(crate::rules::alt::D5, "the_alt_target_follows_the_window_it_is_fed")` — recorded at the one site that feeds D4 an alt view, not per block |
 | CEN-E2 | an alt block at or below the last anchor is refused | rule in `alt_against` — `anchors.rs`'s E2 arm given its alt home | rules `anchors.rs` (slice 9) | a candidate forking below the anchor floor refused; above it admitted. UPDATE 2026-10-11 (a4 census arms): the site is `rules::alt::E2::check` (both bands over `Fork`, the cap through `RuleSet::reorg_cap()`); registry `enforced_at(crate::rules::alt::E2, "an_alternative_rooted_below_the_anchor_is_refused_and_one_at_or_above_it_is_not")` — the main chain satisfies both bands by construction, so the row is the alt tier's alone |
-| CEN-M1 | a tx already in the pool or on chain is refused | rule — `has_transaction` through `PoolView` (chain) and the pool's own set | `shekyl-mempool` (slice 10) | duplicate refused; `double_spend_seen` not set for a duplicate |
+| CEN-M1 | a tx already in the pool or on chain is refused | rule — `has_transaction` through `PoolView` (chain) and the pool's own set | `shekyl-mempool` (slice 10) | duplicate refused, the held entry unchanged |
 | CEN-M2 | pool admission runs the full NIC set | rule — `tx_form(TxSlot::Lone)` is the set | rules (landed) + mempool call (slice 10) | one NIC mutation refused at the door |
 | CEN-M3 | relay fee floor | rule — `policy_form`, `PolicyRow`; **no exemption** — the door is one for relayed and returned transactions alike (`E5-Q1` reopened in part 2026-10-11, §2.2), and with the serve-credit carriers gone (§2.2's redesign) there is no zero-fee family to carve out | rules `AdmissionPolicy` (slice 10) | below-floor refused, on relay and on return from a popped block. *Was* (2026-10-10): "admitted under `kept_by_block`" |
 | CEN-M4 | relay cap on `tx.extra` | rule — `policy_form` | rules (slice 10) | mutation at the cap |
 | CEN-M5 | relay ban on nonzero `unlock_time` | rule — `policy_form`; `kept_by_block` exempt | rules (slice 10) | nonzero refused for relay |
 | CEN-M6 | relay-side double-spend pre-check against the chain | rule — `tx_against`'s I7 through `PoolView.chain` | rules (landed) + decorator (slice 10) | a chain-spent key image refused |
-| CEN-M7 | pool-side key-image conflict tracking | rule — the same I7 through `PoolView.pool_key_images`; the map is the pool's | mempool (slice 10) | two pool txs on one key image: second refused, `double_spend_seen` set on the first |
+| CEN-M7 | pool-side key-image conflict tracking | rule — the same I7 through `PoolView.pool_key_images`; the map is the pool's | mempool (slice 10) | two pool txs on one key image: second refused, the first unchanged |
 | CEN-M8 | FCMP++ verification cache | writer behaviour — `fcmp_cache` written on admission, consulted on re-admission (SPL-10) | mempool (slice 10) | a re-admitted tx with a cache hit skips proof verification; a mismatched hash does not |
 | CEN-M9 | engine-attested local submit | writer behaviour — the submit engine's trait impl swapped (§1.6's planned reversion); `retention_vin`'s second spelling deleted | `shekyl-daemon-rpc` + mempool (slice 10) | `rg -n 'fn retention_vin' rust/` → one site |
 | CEN-M10 | pool lifetime / eviction | writer behaviour — age and weight eviction over P7; `kept_by_block` exempt from age | mempool (slice 10) | an aged relay tx evicted; an aged `kept_by_block` tx kept |
@@ -1113,10 +1108,13 @@ Adversarial items, each with the fixture that would notice:
   is the alt chain's — the transaction is not *invalid*, it is
   *unverifiable against the new chain* until re-built against a new root.
   The C++ returns such transactions to the pool and lets them age out. Rust:
-  `tx_against` over `PoolView` refuses with the root-mismatch verdict; the
-  pool keeps the entry under `kept_by_block` with `Readiness` marking it
-  not-relayable; M10 evicts it. Fixture: the demoted tx is in P7 after the
-  switch and not in any template.
+  the returned transaction runs the whole door (§2.2); when the chain-bound
+  half refuses it — its reference is not on the new chain (CEN-I10) or has
+  aged out of the window (CEN-I11) — the pool keeps it as
+  `Standing::Kept`, never relayed and never selected, and M10 evicts it. A
+  stateless or policy refusal is refused outright, as it is on relay.
+  Fixture: the demoted tx is in P7 after the switch and not in any
+  template.
 - **The cheap tier's wrong-chain archival read (`E5-6`) — dissolved.** No
   fixture: the Rust cheap tier makes no chain-state read (`E5-Q4` β), and
   the read exists only in the frozen C++ alt path (`DEL-009`). What is
@@ -1151,10 +1149,7 @@ and fixtures (a6), the reorg capture (a7) and its docs (a8), cut from `dev`
 after #1026 merges. Where this file says "PR-a" of the switch's work — the
 `Vec<Transaction>` return and its single caller (`E5-Q2`, `E5-Q10`), the
 DRS-X cutover's trigger (§7), SAL-13/14's carried-and-built flip — it names
-the switch PR. PR-b is unchanged. Bundle transport (O1, O2, B10) waits on SO-D12, not on
-Slice C: the view trait and the kept projection are in the tree (#1047);
-the bundle section on the block wire and `drawable_epoch`'s data source are
-not (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 items 2 and 3). **The switch PR
+the switch PR. Bundle transport (O1, O2, B10) and the template's bundle section are SO-D12's (2026-10-16), built with the bundle section on the block wire and `drawable_epoch`'s data source (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 items 2 and 3). **The switch PR
 is split (maintainer, 2026-10-15):** a5 without the bundle legs, a6, a8;
 a7 withdrawn (`E5-Q9`); the bundle legs land with SO-D12's merged increment
 (§2.3).
@@ -1169,20 +1164,20 @@ a7 withdrawn (`E5-Q9`); the bundle legs land with SO-D12's merged increment
 | a6 | the three refusals distinguished — the cap (local, before any pop, `PopBeyondReorgCap`), the floor (`StoreCannot::PopBelowFloor`, F-1 fail-stop), the verdict (a promoted block refused: the transaction rolls back, the main chain stays, the failing alt suffix is removed) — with §4's boundary and floor fixtures; SI-5's mutation control; the Rust self-differential that replaces a7 (`E5-Q9`): the digest after A then a switch to B equals the digest of B connected directly, A carrying a validating user spend, at the cap depth and at a shallow depth, one corrupted undo row as the mutation control; the cap-depth switch timed, coinbase-only and with spends, each figure with its basis Landed in the switch PR: fourteen switch tests and three ignored timing tests (`switch_timing_tests.rs`); the measured switch at the genesis cap is in the decision log's 2026-10-15 measurement row. | 3 | yes |
 | a7 | withdrawn (`E5-Q9`, 2026-10-15): no C++ capture; a6's self-differential is the switch's oracle | — | — |
 | a8 | docs: census K5, K5b, K6, K7 carry their Rust sites and the registry flips with them; D5/E2 re-pinned; `DRS_E1_SALT.md` SAL-13/14 carried-and-built; DEL-009's trigger restated at the store flip (the DRS-X Round 0); SI-5 and SI-27 `built` in the register; FOLLOWUPS' reorg-around-a-spend row's falsifier amended; index; CHANGELOG | 1 | yes |
-| b1 | `shekyl-mempool` crate; `PoolView` decorator; `compile_fail` negative control; `policy_form` and the `PolicyRow`s (M3, M4, M5); `PolicyCoverage` populated. UPDATE 2026-10-11 (Slice C bundle redesign, §2.2): *was* "(M3, M4, M5, M11)" — **M11 is deleted** in this commit: the census row CEN-M11 and the `PolicyRow` entry retire together (policy `0 / 9 → 0 / 8`; redundant with M3, §3). **The bundle body store (O1) and the bundle queue (O2)** land here too, as their own modules beside the pool and never as a `PoolRecord` arm: the body store keyed by hash with its holder rule, the fetch-and-check (a body accepted only if it hashes to its reference; unsolicited bodies dropped; `count(h)` bits bound the body size, oversized fetches refused early), the queue keyed by `h` bounded at `W₂` (500) with its three evictions (chain admission, `h` popped, window closed) and its admission through Slice C's verifier against the tip — the crate calls the rule and holds none (`E5-Q2`'s condition); no Dandelion++ (B12). The invariant register gains "every stored body has a holder; every reference has its body until past `D_max`". **Blocked on Slice C's spec PR** for the verifier view trait and the kept projection type (falsify: both exist under `rust/shekyl-chain-rules/`); until it lands b1 is the pool half only. Cost `2 → 3` | 3 | yes |
-| b2 | admission (M1, M2, M6, M7) over `tx_form`/`tx_against(Lone)`; the key-image map; P1–P3 after the chain's `Ok` | 3 | yes |
-| b3 | relay FSM over `RelayState`/`Readiness`; M9 — the submit engine's shim swapped, `retention_vin`'s second spelling deleted | 3 | yes |
-| b4 | M8 cache, M10 eviction, K10 returns (the pop's return path; §3 K10's requirement — a pop must not strand serve-credit evidence — is Slice C's to discharge, and this commit builds no evidence-specific admission or fixture) and K9 supplement (PR-a's `Vec` consumed). UPDATE 2026-10-11 (`E5-Q1` reopened in part; Slice C bundle redesign, §2.2): a returned transaction runs the **same door as any other, policy included** — no `policy_form` skip (the fixture: a below-floor demoted tx refused on return); what K10 keeps is the retention of a returned transaction that cannot currently be verified, not relayable, until M10 evicts it. The requirement above is now discharged in shape: serve-credit evidence is a bundle, held by the body store under its holder rule and re-admitted to the bundle queue by the same verifier after a reorg — there is no separate path for a returned bundle, and this commit builds the queue's post-reorg re-check beside the pool's returns. The FOLLOWUPS row ("A popped serve-credit carrier survives the C++ pool's pop path …") stays as evidence about the frozen C++ for Slice C's round | 2 | yes |
-| b5 | reconcile at open (`E5-8`) — one function, called at open and reused by the door | 1 | yes |
-| b6 | template selection from P7 (`fill_block_template`'s successor) behind the existing template FFI. UPDATE 2026-10-11 (Slice C bundle redesign, §2.2): **the bundle section** beside it — bundles taken from the queue earliest `h` first until `Σ count(h)` reaches the section budget `c · 9·D/SEB` (`c = 2`, provisional; the constant is Slice C's to pin); no fee ordering; the section is outside the fee median and the penalty curve, so the transaction fill is unchanged by it | 2 | yes |
-| b7 | docs: census 4.M re-pinned (CEN-M11 retired, K10's Rust disposition); `DRS_E1_SPOOL.md` SPL-7/`SPL-Q5` built; `DAEMON_SUBMIT_VERDICT.md` §11 row executed; FOLLOWUPS `:800` removed; index; CHANGELOG | 1 | yes |
+| b1 | `shekyl-mempool` crate, its `//!` doc stating `E5-Q2`'s never-a-rule condition; `PoolView` decorator (`has_key_image` = chain ∨ pool, every other read delegates) with its `compile_fail` negative control; `policy_form` and the `PolicyRow`s M3, M4, M5 in the rules crate, `PolicyCoverage` populated; **M11 deleted** with its census row (policy `0 / 9 → 0 / 8`; redundant with M3, §3). The first commit of the PR is the record's design commit ahead of it: `PoolRecord` carries `public: bool` and a standing, `Responsibility` moves to `shekyl-relay` keyed by transaction hash (DX-F6, §2.2), `SCHEMA_VERSION` 27 | 2 | yes |
+| b2 | admission (M1, M2, M6, M7) through the door (§2.2): `judge_slot_stateless` public and shared with `form`, at `TxSlot::Lone` with claims from the pool's tip snapshot (H19 verified there as a batch of one), then `tx_against(Lone)` over `PoolView`, then `policy_form`; the key-image conflict map; P1–P3 after the chain's `Ok`; M3 for every transaction, returned ones included | 3 | yes |
+| b3 | the relay interface: the public bit, set only by the relay's fluff event; a non-public transaction absent from the listing, peer sync and the template (D++ acceptance criterion 2); M9 — the submit engine's `SubmitStateShim` over the Rust pool prepared, not routed; `retention_vin`'s second spelling deleted | 3 | yes |
+| b4 | M8 cache (the `(reference hash, height, root)` triple; `E5-Q8` stands — no seeding), M10 eviction, K10 returns and K9 supplement: `SwitchDone::returned` gets its caller — a returned transaction runs the whole door, policy included; one the chain-bound half refuses is kept, not relayable, never selected, and evicted by M10 | 2 | yes |
+| b5 | reconcile at open (`E5-8`) — one function, called at open and reused by the door; the pool file stays discardable | 1 | yes |
+| b6 | template selection from P7 (`fill_block_template`'s successor) as a pure function: each selected transaction re-runs `tx_against(Lone)` against the template's parent; a transaction whose reference has aged out is not selected, and M10 evicts it. No bundle section (SO-D12's) | 2 | yes |
+| b7 | docs: census 4.M re-pinned (CEN-M11 retired, K9/K10 Rust sites); `DRS_E1_SPOOL.md` SPL-7/`SPL-Q5` built; `DAEMON_SUBMIT_VERDICT.md` §11 row marked prepared; FOLLOWUPS rows closed; index; CHANGELOG | 1 | yes |
 
 **Expectation: fifteen commits, 8 + 7, costs 17 + 15** (2026-10-11; *was*
 16 + 14 before the Slice C bundle redesign raised a5 and b1 by one each —
 estimates revised before landing, not overruns). **Across three PRs since
 the 2026-10-12 cut: #1026 a1–a4 (cost 8 = 1 + 2 + 2 + 3, no overrun
 written on any row), the switch PR a5, a6, a8 (cost 8 since the 2026-10-15 split), PR-b b1–b7 (cost
-15).** Every commit after a1/b1 carries the falsifier: if a landed cost
+14 since the bundle work left it for SO-D12, 2026-10-16).** Every commit after a1/b1 carries the falsifier: if a landed cost
 exceeds its estimate the overrun is written into the row as a finding,
 not absorbed (slice 7 §5.1). Each PR is under the rule-06 ceiling.
 
@@ -1516,10 +1511,11 @@ Not E5's; found while reading the census at the pin.
 - **CEN-J1** may be satisfied by a landed slice-8 row; worth a re-read.
 - **CEN-H19's verification half is a block fold, not a `tx_form` row**
   (landed 2026-10-15, [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §4.6).
-  `tx_form` / `tx_against` judge only the proof's layout, so a pool that
-  admits on those two alone admits a bad range proof. PR-b's door must also
-  call `shekyl_bulletproofs::verify_batch` over the transaction's proof as a
-  batch of one, the body the submit engine already calls.
+  `tx_form` judges only the proof's layout. The pool door does not call
+  the bulletproof verifier itself: it calls `judge_slot_stateless` at
+  `TxSlot::Lone`, which verifies a lone transaction's proof as a batch of
+  one, and `form`'s listed slots keep the block batch (§2.2). The door ==
+  validator test holds a bad range proof refused on H19 both ways.
 
 ---
 
@@ -1544,3 +1540,4 @@ Not E5's; found while reading the census at the pin.
 | 2026-10-15 | **Review rulings on the switch PR (maintainer).** (1) **CEN-E2's floor is the last anchor at or below the recorded tip**, kept as built; the C++'s `≤ tip + 1` is the count-versus-height confusion, recorded in the census row as a divergence adjudicated against the specification. (2) **SI-27 stays a halt; anchors cannot reach it**: CEN-E5 at open and E2 at offer under the same tip (`StalePlan` otherwise) stand between an anchor table and a demoted block; the register row names both mechanisms, and a test reopens the store under an agreeing release and sees the pending alternative refused at offer (E2) with the writer up. (3) **The switch must not re-hash blocks this node already hashed**: the proof-of-work hash is recorded beside the block (at `connect` and at AL1) and the switch forms through a substrate that answers from it, keyed by (identity, seed) — built in this PR, then re-measured. The floor-device run follows it. |
 | 2026-10-16 | **The switch at the genesis cap, re-measured after the recorded PoW** (`switch_timing_tests.rs`, release; every run also holds the switched store to the direct one, every table, the alt table exactly). **Development host** (16 threads, at `92c0a4403`): RandomX coinbase-only — form 0.085 s (was 109 s), `Reorganize` 1.9 s, **total 2.7 s** (was 114 s); RandomX with one validating spend per promoted block — form 0.047 s (was 70 s), `Reorganize` 21.4 s, **total 21.9 s** (was 91.5 s); FreeHash 1.26 s and 19.8 s. **Floor device** (4 threads, same commit; FreeHash, which with the recorded PoW is the same switch — it calls RandomX zero times — and spares the device hours of RandomX chain-building): coinbase-only **7.0 s** (`Reorganize` 6.5 s); with spends **110.1 s**, of which `Reorganize` **109.6 s**. Reading: the re-hash is gone; what is left is the closure, and with spends the closure holds the write transaction for ~110 s on the floor device — almost all of it promoted blocks' spend-proof verification inside `validate`, which needs the chain and so stays on the writer (the chain-independent checks move off it in #1081). At a 120 s block interval that is the figure `E5-Q8`'s falsifier names the shape of; it is recorded here as measured, not adjudicated. |
 | 2026-10-16 | **Round 3 (maintainer's consolidated brief): the switch claims targets, and every verification that needs no store runs in `form`.** Part 1: each `PlannedBlock` carries `target` beside `seed`, claimed through `target_claim` over the stitched `AltView` (promoted) or the recorded chain below (demoted); a D6 refusal is the entry's verdict at offer (the entry and its successors removed, K5's shape) or SI-27 on a demoted block; `Stale::Target` during a switch is `RunFault::StaleTarget`. Part 2: `form` takes `references: &ReferenceClaims` and runs the signature sequence and the verify rows (CEN-I15, J26, J27) per slot; `validate` compares the chain's `(height, root)` with the token's claim and faults `Stale::Reference` (`RunFault::StaleReference`), never verifying; the plan carries the post-switch header chain (`SwitchPlan::headers`) the caller claims off; the sequencer claims off its widened target ledger. Demoted blocks are formed with no reference claims (§2.3, the one discrepancy reported). **Re-measured on the development host** (16 threads, release, `dca5d66ad`; every run holds the switched store to the direct one, the alt table exactly): RandomX coinbase-only — offer 0.36 s, form 0.063 s, `Reorganize` 0.93 s, **total 1.35 s** (was 2.7 s); RandomX with one validating spend per promoted block — offer 0.34 s, form 3.0 s (the 721 proofs and their signatures, off the actor), `Reorganize` **1.93 s** (was 21.4 s), **total 5.3 s** (was 21.9 s); FreeHash 1.04 s and 4.9 s (`Reorganize` 0.94 s / 1.87 s). **Floor device** (4 threads, release, fresh clone at `3e0d72313`, FreeHash — the same switch, zero RandomX calls): coinbase-only — offer 0.13 s, form 1.05 s, `Reorganize` 5.34 s, **total 6.5 s** (was 7.0 s); one validating spend per promoted block — offer 0.17 s, form **62.0 s** (the 721 proofs and their signatures across four threads, off the actor), `Reorganize` **11.1 s** (was 109.6 s), total 73.3 s (was 110.1 s). The write transaction with spends on the floor device, the brief's success measure: 11.1 s against 109.6 s. What is left inside the closure is the pops with SI-5, 720 cheap-tier verdicts and alt rows, and 721 `validate` + `connect` verifying no proof. |
+| 2026-10-16 | **PR-b brief (design review): three scope changes, and the record's design commit.** Ground: `origin/dev` at `d2ac8b45d`. (1) **Bundles leave PR-b** — O1, O2 and the template's bundle section are SO-D12's; b1 and b6 carry none of it (b1 cost `3 → 2`, PR-b `15 → 14`). (2) **The door is the validator's own stateless judgement** — `judge_slot_stateless` becomes the one public function `form` and the door both call, at `TxSlot::Lone` with claims from the pool's tip snapshot, then `tx_against(Lone)` over `PoolView` (which compares the claims), then `policy_form` (§2.2). *Found while grounding:* the function as it stood verified no BP+ proof — CEN-H19's verification half is `form`'s block fold after the slot loop — so it verifies a `Lone` slot's proof as a batch of one, and `form`, which never passes `Lone`, keeps its block batch; §9's note is discharged by that, not by the function as it stood. (3) **DX-F6** — `RelayState` is refused by D++ acceptance criterion 2 and the no-zones ruling: `PoolRecord` carries `public: bool` and a standing (admitted with M8's `(reference, height, root)` anchor, or kept under K10); `relayed`, `double_spend_seen` and `Readiness` go, each with its reason in `codec/pool.rs` (no admission, eviction or template reader); `Responsibility` moves to `shekyl-relay` keyed by transaction hash, STAGED for the DRS-X flip; in memory, so after a restart every non-public entry is handled alike. `SCHEMA_VERSION` 27, refuse-not-migrate (the pool file recreates, `SPL-Q8`). `RelayCategory` and `FcmpVerificationHash` deleted with their last reader; `RelayMethod` / `NetZone` stay in `shekyl-types` because the C++ seam names that path until the flip. Also: CEN-I12's code doc and census row state the three-claim design; §2.2's FFI dependency is gone (DX-Q5, DX-Q7). *Not available to this lane:* the DRS-X Round 0 document — DX-Q5, DX-Q7 and DX-F6 are applied as the brief quotes them. |

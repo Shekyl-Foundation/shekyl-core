@@ -292,7 +292,21 @@ use super::{Canonical, CodecError};
 ///   mis-framed, so the bump refuses it at open; `alt_block.snap` re-pins
 ///   and `recorded_pow.snap` is new. Rebuild from the block corpus, as at
 ///   every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(26);
+/// - `27` — the pool record knows one relay fact (DRS-E5 PR-b, DX-F6,
+///   2026-10-16; `DAEMON_RELAY_PRIVACY.md` D++ acceptance criterion 2).
+///   `pool_record` drops the relay state (origin, phase and its clocks,
+///   responsibility — the relay's, which keeps `Responsibility` beside its
+///   stem watch), `relayed`, `double_spend_seen` and the readiness cache,
+///   none of which admission, eviction or template selection reads; it
+///   gains `public` and a `standing` (admitted, or kept under CEN-K10)
+///   whose admitted arm carries CEN-M8's cache as the `(reference, height,
+///   root)` triple the proof verified against, replacing the C++
+///   `H(proof ‖ referenceBlock ‖ key images)` and its null-hash sentinel.
+///   Only the pool file's rows move; a `26` pool file is recreated at open
+///   (`SPL-Q8`), and a `26` chain file is refused as at every bump — the
+///   two files share one layout number. `pool_record.snap` re-pins; no
+///   chain table, ordinal or property cell moves.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(27);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -349,10 +363,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(26));
-        assert_eq!(SCHEMA_VERSION.encode(), [26, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(27));
+        assert_eq!(SCHEMA_VERSION.encode(), [27, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[26, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[27, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }
