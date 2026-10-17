@@ -114,6 +114,10 @@ pub struct Pool {
     store: PoolStore,
     key_images: KeyImages,
     held: BTreeMap<TxHash, Held>,
+    /// The next reconcile's file write is refused by the store — the tests'
+    /// one way to fault a write (`reconcile_tests.rs`).
+    #[cfg(test)]
+    pub(crate) refuse_next_write: bool,
 }
 
 impl core::fmt::Debug for Pool {
@@ -134,6 +138,8 @@ impl Pool {
                 store,
                 key_images: KeyImages::default(),
                 held: BTreeMap::new(),
+                #[cfg(test)]
+                refuse_next_write: false,
             },
             how,
         ))
@@ -217,11 +223,27 @@ impl Pool {
         }
     }
 
-    /// Take every entry out of the index, emptying the key-image map with
-    /// it — the reconcile's start. The file is untouched.
-    pub(crate) fn take_all(&mut self) -> BTreeMap<TxHash, Held> {
-        self.key_images = KeyImages::default();
-        core::mem::take(&mut self.held)
+    /// Put a reconcile's outcome in the index once the file holds it: each
+    /// change (`None` drops the entry, `Some` is its new standing), and the
+    /// key-image map the reconcile built beside the live one.
+    pub(crate) fn install(
+        &mut self,
+        changes: &BTreeMap<TxHash, Option<Standing>>,
+        key_images: KeyImages,
+    ) {
+        for (txid, change) in changes {
+            match change {
+                None => {
+                    self.held.remove(txid);
+                }
+                Some(standing) => {
+                    if let Some(held) = self.held.get_mut(txid) {
+                        held.record.standing = *standing;
+                    }
+                }
+            }
+        }
+        self.key_images = key_images;
     }
 
     /// The pool file.

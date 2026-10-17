@@ -10,10 +10,10 @@
 //! connect commits the chain first and the pool second, so a crash between
 //! the two leaves a mined transaction still in the pool file. Nothing about
 //! the pool file is trusted on that account. Reconciling is **one function,
-//! and it is the door**: every held transaction is taken out of the index
-//! and offered to [`door::judge`] again, against the chain as it now
-//! stands, in the order the pool first held them (so where two entries
-//! spend one key image, the earlier keeps it). What the door admits stays;
+//! and it is the door**: every held transaction is offered to
+//! [`door::judge`] again, against the chain as it now stands, in the order
+//! the pool first held them (so where two entries spend one key image, the
+//! earlier keeps it). What the door admits stays;
 //! what the chain holds leaves; what the chain-bound half refuses is kept,
 //! never relayed and never selected, for CEN-M10 to evict — a later reorg
 //! may make it valid again (CEN-K10's retention); what the bytes or the
@@ -27,12 +27,13 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet};
-use shekyl_chain_store::pool::{PoolOpen, PoolRecord, ProvenReference, Standing};
+use shekyl_chain_store::pool::{PoolOpen, ProvenReference, Standing};
 use shekyl_types::TxHash;
 use shekyl_wire::Transaction;
 
 use crate::door::{self, Judged};
 use crate::pool::{Held, Pool, PoolFault};
+use crate::view::KeyImages;
 
 /// Why reconciling removed a transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,29 +109,33 @@ impl Pool {
     /// changed: removals (P3) and standings (P2). The public bit and the
     /// receive time are the entry's own and survive.
     ///
+    /// The judgements are made against a key-image map built beside the
+    /// live one, the file is written, and only then does the index take the
+    /// result: the index never runs ahead of the file.
+    ///
     /// # Errors
     ///
-    /// The chain view's or the store's. On a store fault the in-memory index
-    /// is the reconciled one and the file is behind it; the next reconcile
-    /// (at the latest, the next open) brings the file up.
+    /// The chain view's or the store's. Either way neither the index nor
+    /// the file changed, and the next reconcile makes the same judgements.
     pub fn reconcile<'id, V: ChainView<'id>>(
         &mut self,
         chain: &V,
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<Reconciled, PoolFault<V::Fault>> {
-        let mut order: Vec<(TxHash, Held)> = self.take_all().into_iter().collect();
-        order.sort_by_key(|(txid, held)| (held.record.receive_time, *txid));
+        let mut order: Vec<(&TxHash, &Held)> = self.held().iter().collect();
+        order.sort_by_key(|(txid, held)| (held.record.receive_time, **txid));
 
         let mut reconciled = Reconciled::default();
         let mut changes: BTreeMap<TxHash, Option<Standing>> = BTreeMap::new();
+        let mut key_images = KeyImages::default();
         for (txid, held) in order {
             if chain
-                .has_transaction(&txid)
+                .has_transaction(txid)
                 .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
             {
-                changes.insert(txid, None);
-                reconciled.removed.push((txid, Removed::Mined));
+                changes.insert(*txid, None);
+                reconciled.removed.push((*txid, Removed::Mined));
                 continue;
             }
             // CEN-M8: the anchor this node verified the proof against when it
@@ -140,7 +145,7 @@ impl Pool {
                 Standing::Admitted { proven } => proven.map(ProvenReference::verified),
                 Standing::Kept => None,
             };
-            let judged = door::judge(&held.tx, chain, self.key_images(), rule_set, policy, cached)
+            let judged = door::judge(&held.tx, chain, &key_images, rule_set, policy, cached)
                 .map_err(PoolFault::Chain)?;
             let standing = match judged {
                 Judged::Admitted { proven, .. } => Standing::Admitted {
@@ -148,37 +153,41 @@ impl Pool {
                 },
                 Judged::Chain(_) => Standing::Kept,
                 refused => {
-                    changes.insert(txid, None);
-                    reconciled.removed.push((txid, Removed::Refused(refused)));
+                    changes.insert(*txid, None);
+                    reconciled.removed.push((*txid, Removed::Refused(refused)));
                     continue;
                 }
             };
             if standing != held.record.standing {
-                changes.insert(txid, Some(standing));
+                changes.insert(*txid, Some(standing));
             }
             match standing {
-                Standing::Admitted { .. } => reconciled.admitted.push(txid),
-                Standing::Kept => reconciled.kept.push(txid),
+                Standing::Admitted { .. } => {
+                    key_images.insert(*txid, held.key_images());
+                    reconciled.admitted.push(*txid);
+                }
+                Standing::Kept => reconciled.kept.push(*txid),
             }
-            self.hold(
-                txid,
-                Held {
-                    record: PoolRecord {
-                        standing,
-                        ..held.record
-                    },
-                    tx: held.tx,
-                },
-            );
         }
         if !changes.is_empty() {
+            #[cfg(test)]
+            let refuse = core::mem::take(&mut self.refuse_next_write);
             self.store().write(|batch| {
                 changes.iter().try_for_each(|(txid, change)| match change {
                     None => batch.remove(txid),
                     Some(standing) => batch.stand(txid, *standing),
-                })
+                })?;
+                // The tests' write fault, after every real change so the
+                // abort is seen to take them back: a standing for an entry
+                // the file does not hold is the store's refusal.
+                #[cfg(test)]
+                if refuse {
+                    batch.stand(&TxHash::from_bytes([0; 32]), Standing::Kept)?;
+                }
+                Ok::<(), shekyl_chain_store::store::StoreError>(())
             })?;
         }
+        self.install(&changes, key_images);
         Ok(reconciled)
     }
 }
