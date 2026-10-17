@@ -57,7 +57,6 @@ fn submit_facts_filled(seed: u64) -> crate::ffi::SubmitFactsFfi {
         ref_height: submit_facts_field_value(seed, 4),
         root,
         fee_per_byte: submit_facts_field_value(seed, 6),
-        fee_quantization_mask: submit_facts_field_value(seed, 7),
         weight_limit: submit_facts_field_value(seed, 8),
         chain_height: submit_facts_field_value(seed, 9),
         in_chain_height: submit_facts_field_value(seed, 11),
@@ -107,11 +106,10 @@ pub unsafe extern "C" fn shekyl_submit_facts_rust_check(
 #[allow(clippy::cast_possible_truncation)]
 fn fee_estimate_facts_filled(seed: u64) -> crate::ffi::FeeEstimateFactsFfi {
     crate::ffi::FeeEstimateFactsFfi {
-        // Field indices 4 and 5 below are not fee-slot indexes: they seed a
-        // distinct value per POD field. Re-indexing them would move every
-        // expected value in the harness for no gain.
+        // Field index 5 below is not a fee-slot index: it seeds a distinct
+        // value for the count. Re-indexing it would move every expected
+        // value in the harness for no gain.
         fees: std::array::from_fn(|i| submit_facts_field_value(seed, i as u64)),
-        quantization_mask: submit_facts_field_value(seed, 4),
         fee_count: submit_facts_field_value(seed, 5) as u8,
         reserved: [0; 7],
     }
