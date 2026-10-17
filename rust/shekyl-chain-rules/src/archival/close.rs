@@ -15,7 +15,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_economics::ClosedShardCount;
 use shekyl_types::archival::{
-    BondRecord, RMarket, SettlementOutcome, SettlementRow, SigmaWorkMilli,
+    BondRecord, CompleteTreeSet, RMarket, SettlementOutcome, SettlementRow, SigmaWorkMilli,
 };
 use shekyl_types::{
     shard_start, ArchivalLength, BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId,
@@ -358,6 +358,15 @@ pub(crate) struct EpochSnapshot<'r> {
 /// then every open shard a credit names — it counts toward scarcity and
 /// has no age (`SHT-Q2`).
 ///
+/// `complete_trees` is where every bond's complete-tree flag comes from,
+/// and the record's holdings are never read for it (`SO-D12h`). The flag
+/// can change after the pass — a complete tree that is slashed or released
+/// holds a compact set — and the market membership it decides must not:
+/// the pass freezes the set it gathered with ([`freeze_complete_trees`])
+/// and a claim's re-gather reads that set back (A20). Taking the flag as
+/// an operand is what makes the two readers one read; a gather that
+/// consulted the record could not be told which of the two it was.
+///
 /// # Errors
 ///
 /// The view's, from `credited` or from [`shard_close`].
@@ -366,6 +375,7 @@ pub(crate) fn gather_epoch_snapshot<'id, 'r, V: ChainView<'id>>(
     universe: &ClosedUniverse<'id>,
     records: impl IntoIterator<Item = (&'r PCanonicalId, &'r BondRecord)>,
     claimant: Option<&PCanonicalId>,
+    complete_trees: &CompleteTreeSet,
     mut credited: impl FnMut(&PCanonicalId) -> Result<Vec<u64>, ViewRead<V::Fault>>,
 ) -> Result<EpochSnapshot<'r>, ViewRead<V::Fault>> {
     let mut shards = Vec::new();
@@ -391,7 +401,7 @@ pub(crate) fn gather_epoch_snapshot<'id, 'r, V: ChainView<'id>>(
         }
         bonds.push(EpochCloseBond {
             join_settlement_epoch: record.join_settlement_epoch.to_raw(),
-            is_foundation_complete_tree: record.is_complete_tree(),
+            is_foundation_complete_tree: complete_trees.contains(persona),
             bad_intervals: &record.bad_intervals,
         });
         for shard in shards_credited {
@@ -498,6 +508,10 @@ impl super::Transition {
     /// It runs for every settled epoch, Served pairs or none: an epoch
     /// with none gets a zero for each shard and a zero `Σwork` (`ARW-Q4`),
     /// and that row is what lets a claim cite the epoch at all.
+    ///
+    /// The complete-tree flag is the one record field a later block can
+    /// change under a settled epoch (`SO-D12h`), so this pass reads it once,
+    /// here, into the set it gathers with and writes beside `Σwork(E)`.
     pub(super) fn gather<'id, V: ChainView<'id>>(
         &mut self,
         view: &V,
@@ -505,20 +519,51 @@ impl super::Transition {
     ) -> Result<(), ViewRead<V::Fault>> {
         let universe = gather_universe(view, self.schedule, self.reorg_cap, epoch)?;
         let settled = &self.settled;
-        let records = self
-            .posts
-            .iter()
-            .map(|(persona, post)| (persona, &post.record));
-        let snapshot = gather_epoch_snapshot(view, &universe, records, None, |persona| {
-            Ok(settled_for(settled, epoch, persona)
+        let served = |persona: &PCanonicalId| -> Vec<u64> {
+            settled_for(settled, epoch, persona)
                 .filter(|(_, row)| row.outcome() == SettlementOutcome::Served)
                 .map(|(shard, _)| shard.to_raw())
-                .collect())
-        })?;
-        let gathered = fold_epoch(self.schedule, epoch, &snapshot);
+                .collect()
+        };
+        let records = || {
+            self.posts
+                .iter()
+                .map(|(persona, post)| (persona, &post.record))
+        };
+        let complete_trees =
+            freeze_complete_trees(records(), |persona| !served(persona).is_empty());
+        let snapshot = gather_epoch_snapshot(
+            view,
+            &universe,
+            records(),
+            None,
+            &complete_trees,
+            |persona| Ok(served(persona)),
+        )?;
+        let gathered = fold_epoch(self.schedule, epoch, &snapshot, complete_trees);
         self.gathers.push(gathered);
         Ok(())
     }
+}
+
+/// The set a slash pass freezes for its epoch (`SO-D12h`): every persona
+/// the gather credits whose record holds a complete tree as the pass left
+/// it — the bonds the gather excludes from the market **as complete
+/// trees**. A complete tree with no credit is not in the gather and not in
+/// the set; a bond excluded for a bad interval is in the set only if it is
+/// also a complete tree.
+///
+/// The one read of the record's complete-tree flag on the gather's path,
+/// and it is the pass's: the claim reads this set back (A20).
+pub(crate) fn freeze_complete_trees<'r>(
+    records: impl IntoIterator<Item = (&'r PCanonicalId, &'r BondRecord)>,
+    mut credited: impl FnMut(&PCanonicalId) -> bool,
+) -> CompleteTreeSet {
+    records
+        .into_iter()
+        .filter(|(persona, record)| record.is_complete_tree() && credited(persona))
+        .map(|(persona, _)| *persona)
+        .collect()
 }
 
 /// Rows this pass has settled for one persona in one epoch, in shard order.
@@ -617,6 +662,7 @@ fn fold_epoch(
     schedule: SettlementSchedule,
     epoch: SettlementEpoch,
     snapshot: &EpochSnapshot<'_>,
+    complete_trees: CompleteTreeSet,
 ) -> EpochGather {
     let close_height = schedule
         .close_height(epoch.to_raw())
@@ -641,5 +687,6 @@ fn fold_epoch(
         epoch,
         r_market,
         sigma_work: SigmaWorkMilli::from_raw(result.sigma_work_milli),
+        complete_trees,
     }
 }

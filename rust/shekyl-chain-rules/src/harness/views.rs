@@ -16,8 +16,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, DrawableDigest, Holdings, IndexedDraw, IssuedDigest, PassCount,
-    RMarket, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, Holdings, IndexedDraw, IssuedDigest,
+    PassCount, RMarket, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -507,5 +507,12 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
         epoch: SettlementEpoch,
     ) -> Result<Option<DrawableDigest>, Infallible> {
         self.inner.drawable_digest(epoch)
+    }
+
+    fn complete_trees(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<CompleteTreeSet>, Infallible> {
+        self.inner.complete_trees(epoch)
     }
 }

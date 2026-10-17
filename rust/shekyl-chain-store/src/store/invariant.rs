@@ -360,6 +360,31 @@ pub enum StoreInvariant {
         /// The lowest retained height under the caller's rule set.
         floor: shekyl_types::BlockHeight,
     },
+    /// **SI-28** — a settled epoch's market membership is frozen with its
+    /// `Σwork` (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`).
+    /// `archival_complete_trees[E]` is in the slash pass's write set beside
+    /// `archival_sigma_work[E]` (SI-21): written whole by the block that
+    /// settles `E`, the empty set included, insert-once
+    /// ([`FrozenFault::Rewritten`]), and present wherever `Σwork(E)` is —
+    /// a claim's re-gather that finds `Σwork(E)` without it
+    /// ([`FrozenFault::Absent`]) would have to read the record's
+    /// complete-tree flag, which a later slash or release can change.
+    /// Undone with the block through the journal.
+    CompleteTreesNotFrozen {
+        /// The settled epoch.
+        epoch: shekyl_types::SettlementEpoch,
+        /// Which half failed.
+        observed: FrozenFault,
+    },
+}
+
+/// What SI-28 observed (payload of [`StoreInvariant::CompleteTreesNotFrozen`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrozenFault {
+    /// The pass's write found a set already recorded for the epoch.
+    Rewritten,
+    /// A reader found `Σwork(E)` and no set: the write set is not whole.
+    Absent,
 }
 
 /// What an SI-25 check observed (payload of
@@ -512,6 +537,7 @@ impl StoreInvariant {
             Self::ArchivalLengthsDisagree { .. } => 24,
             Self::SettlementNotSound { .. } => 25,
             Self::SlashLogReadBelowFloor { .. } => 26,
+            Self::CompleteTreesNotFrozen { .. } => 28,
         }
     }
 }
@@ -707,6 +733,18 @@ impl core::fmt::Display for StoreInvariant {
                  {floor} may be retired; the slash pass reads outside the window its own rule \
                  set keeps — the schedule is mis-composed, not the data"
             ),
+            Self::CompleteTreesNotFrozen { epoch, observed } => match observed {
+                FrozenFault::Rewritten => write!(
+                    f,
+                    "archival_complete_trees already holds settlement epoch {epoch}; the slash \
+                     pass freezes an epoch's complete trees once"
+                ),
+                FrozenFault::Absent => write!(
+                    f,
+                    "settlement epoch {epoch} has a frozen Σwork and no frozen complete-tree \
+                     set; the slash pass writes the two together"
+                ),
+            },
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -751,6 +789,7 @@ impl core::error::Error for StoreInvariant {
             | Self::ArchivalLengthsDisagree { .. }
             | Self::SettlementNotSound { .. }
             | Self::SlashLogReadBelowFloor { .. }
+            | Self::CompleteTreesNotFrozen { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

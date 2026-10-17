@@ -58,8 +58,8 @@ use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::archival_reads::{
-    self, BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow,
+    self, BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
+    ServedShard, SettlementRow,
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -1224,6 +1224,16 @@ impl ReadSnapshot<'_> {
     ) -> Result<Option<DrawableDigest>, StoreError> {
         archival_reads::drawable_digest(&self.txn, epoch)
             .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A20.** The complete trees `epoch`'s slash pass excluded from its
+    /// market, as frozen beside `Σwork(E)`, or `None` for an epoch not
+    /// settled. An empty set is a value.
+    pub fn complete_trees(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<CompleteTreeSet>, StoreError> {
+        archival_reads::complete_trees(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// The archival state as of this snapshot, as the E2 trace carries it

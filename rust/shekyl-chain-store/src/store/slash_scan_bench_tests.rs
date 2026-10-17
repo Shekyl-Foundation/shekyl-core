@@ -130,7 +130,8 @@ use shekyl_chain_rules::{
 use shekyl_crypto_hash::keccak256;
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{
-    IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow, SlashedHolding,
+    CompleteTreeSet, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome, SettlementRow,
+    SigmaWorkMilli, SlashedHolding,
 };
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;

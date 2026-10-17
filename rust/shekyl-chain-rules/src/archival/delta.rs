@@ -7,7 +7,9 @@
 //! siblings build the delta — and private past that module. The doctest on
 //! [`ArchivalDelta`] is the pin. The store writes what it is given.
 
-use shekyl_types::archival::{BondRecord, RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry};
+use shekyl_types::archival::{
+    BondRecord, CompleteTreeSet, RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+};
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
@@ -243,6 +245,7 @@ pub struct EpochGather {
     pub(super) epoch: SettlementEpoch,
     pub(super) r_market: Vec<(ShardId, RMarket)>,
     pub(super) sigma_work: SigmaWorkMilli,
+    pub(super) complete_trees: CompleteTreeSet,
 }
 
 impl EpochGather {
@@ -265,5 +268,14 @@ impl EpochGather {
     #[must_use]
     pub const fn sigma_work(&self) -> SigmaWorkMilli {
         self.sigma_work
+    }
+
+    /// The bonds the gather credited at `E` that it excluded from the
+    /// market as complete trees — the flag frozen at the pass, which a
+    /// claim's re-gather reads in place of the record's (`SO-D12h`). The
+    /// empty set is written like any other.
+    #[must_use]
+    pub const fn complete_trees(&self) -> &CompleteTreeSet {
+        &self.complete_trees
     }
 }

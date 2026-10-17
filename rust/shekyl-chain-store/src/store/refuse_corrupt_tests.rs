@@ -544,6 +544,31 @@ fn an_accrual_overflow_is_the_fold_overflow_belt_on_budget_accruing() {
     cleanup(&path);
 }
 
+/// A claim's re-gather that finds `Σwork(E)` and no frozen complete-tree
+/// set (`Corrupt::CompleteTreesAbsent`) is SI-28's absent half. The pass
+/// writes the two in one write set, so no driven chain holds the state —
+/// exemption 3 — and the mapping is the arm's witness.
+#[test]
+fn a_settled_epoch_without_its_complete_tree_set_is_si28() {
+    use crate::store::FrozenFault;
+    let path = tmp("connect-refuse-corrupt-complete-trees");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let epoch = shekyl_types::SettlementEpoch::from_raw(4);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::CompleteTreesAbsent { epoch })
+            .into())
+    });
+    let row = StoreInvariant::CompleteTreesNotFrozen {
+        epoch,
+        observed: FrozenFault::Absent,
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 28);
+    cleanup(&path);
+}
+
 /// Settlement's integrity checks that the validator observes
 /// (`Corrupt::SettlementIntegrity`) are SI-25, each under its own fault:
 /// the index not folding to its digest, the fold counting more passes

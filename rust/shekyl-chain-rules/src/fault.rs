@@ -373,6 +373,16 @@ pub enum Corrupt {
         /// Which check failed.
         check: SettlementCheck,
     },
+    /// `epoch` has a frozen `Σwork(E)` and no frozen complete-tree set
+    /// (A20; SI-28). The slash pass writes the two in one write set, so a
+    /// settled epoch without the set is a file that lost a row, never an
+    /// epoch a claim may be judged on without it: the re-gather would have
+    /// to read the record's flag, which is the defect the set closes
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`).
+    CompleteTreesAbsent {
+        /// The settled epoch whose set is missing.
+        epoch: SettlementEpoch,
+    },
 }
 
 /// Which of settlement's integrity checks failed —
@@ -680,6 +690,11 @@ impl fmt::Display for Corrupt {
                      the connecting height (SI-25)"
                 ),
             },
+            Self::CompleteTreesAbsent { epoch } => write!(
+                f,
+                "settled epoch {epoch} has a frozen Σwork and no frozen complete-tree set \
+                 (SI-28)"
+            ),
         }
     }
 }

@@ -62,12 +62,12 @@
 //! builds a `BondRecord` from each field set and asserts nothing is lost.
 
 use shekyl_types::archival::{
-    BadInterval, BlockDraws, BondRecord, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
-    HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket, ReceiptSignPk, SettlementRow,
-    SettlementRowError, SigmaWorkMilli, SlashLogEntry, SlashedHolding, BLOCK_DRAWS_LEN,
-    DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN, MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES,
-    MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS, MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN,
-    SETTLEMENT_ROW_LEN,
+    BadInterval, BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, FirstPayingHeight,
+    HeldShard, Holdings, HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket,
+    ReceiptSignPk, SettlementRow, SettlementRowError, SigmaWorkMilli, SlashLogEntry,
+    SlashedHolding, BLOCK_DRAWS_LEN, DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN,
+    MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS,
+    MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN, SETTLEMENT_ROW_LEN,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -255,6 +255,45 @@ impl Canonical for SigmaWorkMilli {
         u64::decode(bytes)
             .map(Self::from_raw)
             .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+/// `archival_complete_trees`'s row (`SO-D12h`): the personas an epoch's
+/// slash pass excluded from its market as complete trees. Layout:
+///
+/// ```text
+/// n         u32 LE
+/// persona   [u8; 32] × n, strictly increasing
+/// ```
+///
+/// `n = 0` is the empty set, a written value. An order the type refuses,
+/// a count the bytes do not back, or trailing bytes is refused. No cap
+/// beyond the bytes: the set is a subset of the bond records, which have
+/// none.
+impl Canonical for CompleteTreeSet {
+    const NAME: &'static str = "complete_tree_set";
+    const FIXED_WIDTH: Option<usize> = None;
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        put_count(out, self.as_slice().len());
+        for persona in self.as_slice() {
+            out.extend_from_slice(persona.as_bytes());
+        }
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let n = r.count_bounded(32, usize::MAX, "unreachable: usize::MAX cap")?;
+        let mut ids = Vec::with_capacity(n);
+        for _ in 0..n {
+            ids.push(PCanonicalId::from_bytes(
+                r.array::<32>("buffer ends inside a persona")?,
+            ));
+        }
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the complete-tree set"));
+        }
+        CompleteTreeSet::new(ids).map_err(|_| r.invalid("personas are not strictly increasing"))
     }
 }
 

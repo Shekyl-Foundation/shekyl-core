@@ -634,8 +634,9 @@ mod slash;
 mod view;
 
 pub use bond::{
-    BondRecord, FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, RMarket,
-    ReceiptSignPk, SigmaWorkMilli, MAX_BOND_KEY_BYTES, RECEIPT_SIGN_PK_LEN,
+    BondRecord, CompleteTreeSet, CompleteTreeSetError, FirstPayingHeight, HeldShard, HeldShards,
+    Holdings, HoldingsError, RMarket, ReceiptSignPk, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+    RECEIPT_SIGN_PK_LEN,
 };
 pub use serve::{PassCount, ServedShard};
 pub use settlement::{

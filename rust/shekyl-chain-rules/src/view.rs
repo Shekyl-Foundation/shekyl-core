@@ -64,8 +64,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, RMarket,
-    ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
+    RMarket, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -684,9 +684,21 @@ pub trait ChainView<'id>: HeaderView<'id> {
         &self,
         epoch: SettlementEpoch,
     ) -> Result<Option<DrawableDigest>, Self::Fault>;
+
+    /// **A20.** The personas `epoch`'s slash pass excluded from the
+    /// epoch's market as complete trees, as it froze them beside `Σwork(E)`
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`), or `None` for an epoch
+    /// the pass has not settled. A written empty set is a value. CEN-J23's
+    /// re-gather takes every bond's complete-tree flag from it and never
+    /// from the record, which may have stopped holding a complete tree
+    /// since the pass.
+    fn complete_trees(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<CompleteTreeSet>, Self::Fault>;
 }
 
-/// Implement every archival [`ChainView`] read (A1–A9, A11–A19) as one policy.
+/// Implement every archival [`ChainView`] read (A1–A9, A11–A20) as one policy.
 ///
 /// Three policies, one method list. A new archival read is added here, once;
 /// every view that expands the macro then implements it. A view that answers
@@ -857,6 +869,11 @@ macro_rules! archival_reads {
             (::core::option::Option<shekyl_types::archival::DrawableDigest>);
             (epoch);
             (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; complete_trees;
+            (epoch: shekyl_types::SettlementEpoch);
+            (::core::option::Option<shekyl_types::archival::CompleteTreeSet>);
+            (epoch);
+            (::core::option::Option::None));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
@@ -876,6 +893,18 @@ macro_rules! archival_reads {
     (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; sigma_work; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn sigma_work(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             ::core::result::Result::Ok(self.$($sigma).+.get(&($($arg),*)).copied())
+        }
+    };
+    // A planted `Σwork(E)` is a settled epoch, and the pass froze its
+    // complete-tree set beside it: no planted view holds a complete tree,
+    // so the set is empty exactly where a `Σwork` is planted (SI-28).
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; complete_trees; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn complete_trees(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            ::core::result::Result::Ok(
+                self.$($sigma).+
+                    .contains_key(&($($arg),*))
+                    .then(shekyl_types::archival::CompleteTreeSet::default),
+            )
         }
     };
     (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; budget; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {

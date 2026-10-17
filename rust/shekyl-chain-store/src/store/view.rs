@@ -92,7 +92,8 @@ use shekyl_chain_rules::{
     SlashLogFloor, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
+    SettlementRow,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -453,5 +454,12 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         epoch: SettlementEpoch,
     ) -> Result<Option<DrawableDigest>, StoreError> {
         archival_reads::drawable_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    }
+
+    fn complete_trees(
+        &self,
+        epoch: SettlementEpoch,
+    ) -> Result<Option<CompleteTreeSet>, StoreError> {
+        archival_reads::complete_trees(self.batch.txn(), epoch).map_err(|f| self.arm(f))
     }
 }

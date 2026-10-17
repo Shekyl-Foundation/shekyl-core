@@ -167,10 +167,10 @@ use shekyl_units::AtomicUnits;
 
 use crate::codec::{
     AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo, BondRecord, Coded,
-    CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx,
-    Present, PropertyCellBytes, RMarket, RecordedPow, RuleSetInForce, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
-    TxPrunedSegment, UndoLog, Unshaped,
+    CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash,
+    LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RecordedPow, RuleSetInForce,
+    SettlementRow, SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
+    TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::ids::IssuedDrawTuple;
 use crate::lmdb_order::LmdbHashKey;
@@ -453,6 +453,14 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          already hashed without RandomX. The C++ kept a transient precompute table and no \
          per-block record, so LMDB never holds it. Out of the digest domain: a function of the \
          block the digest's hashes already fold",
+    ),
+    (
+        "archival_complete_trees",
+        "the personas each settled epoch's slash pass excluded from the epoch's market as \
+         complete trees (ARCHIVAL_SETTLEMENT_WRITER.md SO-D12h): the record does not keep the \
+         fact, since a complete tree slashed or released afterwards holds a compact set, so a \
+         claim's re-gather reads the flag here. The C++ gathers at the epoch close and reads \
+         the records as they are now, so LMDB never holds it",
     ),
 ];
 
@@ -800,6 +808,17 @@ tables! {
     /// 2026-10-15 ruling 3). Appended last (ordinal 42).
     pub const BLOCK_POW: TableDefinition<u64, Coded<RecordedPow>> =
         TableDefinition::new("block_pow");
+
+    /// `archival_complete_trees` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// epoch → the [`CompleteTreeSet`] its slash pass excluded from the
+    /// market as complete trees (`ARCHIVAL_SETTLEMENT_WRITER.md`
+    /// `SO-D12h`). Written by the pass beside `archival_sigma_work[E]`,
+    /// insert-once and whole (SI-21, SI-28), the empty set included, and
+    /// reversed by `pop` through the journal. A claim's re-gather reads it
+    /// for every bond's complete-tree flag. An epoch with no row was not
+    /// settled. Appended last (ordinal 43).
+    pub const ARCHIVAL_COMPLETE_TREES: TableDefinition<u64, Coded<CompleteTreeSet>> =
+        TableDefinition::new("archival_complete_trees");
 }
 
 #[cfg(test)]
@@ -878,6 +897,9 @@ mod tests {
             ("archival_drawable_digest", 41),
             // Layout 26 (DRS-E5 switch PR): the recorded proof-of-work.
             ("block_pow", 42),
+            // `SO-D12h`: the complete trees a settled epoch's market
+            // excluded, frozen at its slash pass.
+            ("archival_complete_trees", 43),
         ];
         for &(name, index) in pinned {
             assert_eq!(

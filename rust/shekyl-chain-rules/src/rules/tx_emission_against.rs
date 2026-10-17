@@ -26,15 +26,17 @@
 //! recompute of `Σwork(E)` is then over the rows the pass saw, and the
 //! compare with the frozen row (`EmissionVerifyError::SigmaWorkMismatch`)
 //! can fail only on a claim that lies, never on a snapshot that drifted.
-//! The bond records are read as they are now. The pass gathered after
-//! `E`'s own slashes, so a record slashed for `E` is out of `E`'s market
-//! in both readings, and a later interval opens at a later epoch. One
-//! field of a record can still move under a settled epoch: a complete
-//! tree that is slashed or released becomes a compact record, and
-//! `market_member_at_epoch` reads that flag. The epoch close had the same
-//! exposure and it is not closed here. The C++, consensus until `DEL-008`, gathers at the
-//! epoch close on any pass and reads the shard segments and bond values
-//! as they are now.
+//! The bond records are read as they are now, except for one field. The
+//! pass gathered after `E`'s own slashes, so a record slashed for `E` is
+//! out of `E`'s market in both readings, a later interval opens at a later
+//! epoch, and the join epoch never moves. The complete-tree flag can: a
+//! complete tree that is slashed or released afterwards holds a compact
+//! set, and `market_member_at_epoch` reads that flag. So the pass froze
+//! the flag beside `Σwork(E)` — the complete trees it excluded from `E`'s
+//! market (A20, SI-28; `SO-D12h`) — and the re-gather takes every bond's
+//! flag from that set and never from the record. The C++, consensus until
+//! `DEL-008`, gathers at the epoch close on any pass and reads the shard
+//! segments and bond values as they are now.
 //!
 //! **What the verify consumes and what it yields.** The crossing's inputs
 //! are the vin ([`J19::parse`]), the connecting height, the claimant's
@@ -75,12 +77,13 @@ use shekyl_archival_retention::{
     emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
     ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EpochCloseInputs,
 };
+use shekyl_types::archival::CompleteTreeSet;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use crate::archival::{gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::ViewRead;
+use crate::fault::{Corrupt, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::tx_against::ReferenceContext;
 use crate::rules::tx_emission::{the_emission, J19, J22, J24};
@@ -103,7 +106,10 @@ use crate::view::{ChainView, Tip};
 /// read ([`gather_universe`]) and A11's records, with the claimant named
 /// so its index among the bonds is the source's `claimant_bond_idx`; the
 /// credits are the Served rows ([`ServedAt`]) — a settled epoch's rows are
-/// all recorded, and one read per persona covers every epoch the claim cites.
+/// all recorded, and one read per persona covers every epoch the claim cites;
+/// the complete-tree flags are the set the pass froze (A20). A settled
+/// epoch without that set is a lost row, [`Corrupt::CompleteTreesAbsent`],
+/// never a refusal of the claim.
 pub(crate) struct J23;
 
 impl Rule for J23 {
@@ -121,6 +127,9 @@ struct CitedEpoch {
     close_height: BlockHeight,
     sigma_work_milli: u64,
     budget: u64,
+    /// The complete trees the epoch's pass froze (A20): every bond's
+    /// complete-tree flag in the re-gather.
+    complete_trees: CompleteTreeSet,
 }
 
 /// One claimed epoch's gathered source: the snapshot the slash pass read
@@ -158,12 +167,21 @@ impl J23 {
             ) else {
                 return Ok(Err(InvalidBlock::new(Self::ROW, cx.locus())));
             };
+            // Written in the pass's write set with `Σwork(E)` (SI-28): a
+            // settled epoch without it is a lost row, not a refusal.
+            let complete_trees = view
+                .complete_trees(settled)
+                .map_err(ViewRead::View)?
+                .ok_or(ViewRead::Corrupt(Corrupt::CompleteTreesAbsent {
+                    epoch: settled,
+                }))?;
             cited.push(CitedEpoch {
                 raw: epoch,
                 epoch: settled,
                 close_height,
                 sigma_work_milli: sigma_work.to_raw(),
                 budget: budget.to_raw(),
+                complete_trees,
             });
         }
         // The read's keys. The vin's epochs are already strictly increasing
@@ -174,14 +192,21 @@ impl J23 {
         for cited in cited {
             let universe = gather_universe(view, schedule, rule_set.reorg_cap(), cited.epoch)?;
             let rows = records.iter().map(|(persona, record)| (persona, record));
-            let snapshot = gather_epoch_snapshot(view, &universe, rows, Some(persona), |holder| {
-                Ok(credits
-                    .shards(holder, cited.epoch)
-                    .iter()
-                    .copied()
-                    .map(ShardId::to_raw)
-                    .collect())
-            })?;
+            let snapshot = gather_epoch_snapshot(
+                view,
+                &universe,
+                rows,
+                Some(persona),
+                &cited.complete_trees,
+                |holder| {
+                    Ok(credits
+                        .shards(holder, cited.epoch)
+                        .iter()
+                        .copied()
+                        .map(ShardId::to_raw)
+                        .collect())
+                },
+            )?;
             gathered.push(GatheredEpoch {
                 epoch: cited.raw,
                 close_height: cited.close_height,
