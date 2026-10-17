@@ -526,6 +526,15 @@ of its own, for the same reason as the negative one.
   removed per replay: the parser's default is the account's regtest
   directory, and a replay resets the store it opens. The retired carrier
   gate's dangling `run_one` line is gone from the grep-gates workflow.
+- **The notify runner takes the spawn lock (2026-10-17).** The Tor lane's
+  spawn-lock gate (`TOR_SUPERVISOR.md` §4.7) watched the crates whose
+  image launches a managed Tor, and the notify runner's crate was not
+  among them: `shekyl-ffi` spawns operator commands in the daemon's own
+  process, so on Windows a notify command started while the launch holds
+  Tor's end inheritable would inherit it and hide Tor's death (`TSR-F16`).
+  The runner spawns under the lock and waits outside it; the gate watches
+  `shekyl-daemon` and `shekyl-ffi`, the daemon image's two crates, and bit
+  at once on the runner's sibling-spawn test, which takes the lock too.
 - **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
   covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
   the other direction (the `extern "C"` block of

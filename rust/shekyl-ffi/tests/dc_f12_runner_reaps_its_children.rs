@@ -52,7 +52,9 @@ fn a_child_spawned_beside_the_runners_still_reports_its_status() {
     // The twin of the negative test's second spawn: under the disposition
     // the runner leaves in place, the status comes back.
     let status = runtime.block_on(async {
-        let mut child = Command::new("true").spawn().expect("spawn `true`");
+        let mut child =
+            shekyl_tor_control_client::spawn_lock::with(|| Command::new("true").spawn())
+                .expect("spawn `true`");
         tokio::time::timeout(Duration::from_secs(5), child.wait())
             .await
             .expect("wait() returned within the timeout")

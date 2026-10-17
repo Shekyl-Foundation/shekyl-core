@@ -114,6 +114,9 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # blocking facade over DaemonTorControl. The facade owns its tokio runtime,
 # so this crate takes no tokio edge of its own.
 shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
+# The spawn lock (TOR_SUPERVISOR.md §4.7): the notify runner spawns in the
+# daemon's process, which launches the managed Tor.
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # The p2p seam. C++ posts onto the connection strand; this crate
 # records the cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 shekyl-seam = { path = "../shekyl-seam" }

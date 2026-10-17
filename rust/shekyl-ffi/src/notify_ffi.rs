@@ -188,6 +188,12 @@ fn fill(command: &[String], fills: &[(&str, String)]) -> Vec<OsString> {
 /// Windows the one variable a program needs to start, `SystemRoot`, is set
 /// from the OS and never from this process's environment, the rule the Tor
 /// launcher follows (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part 2).
+///
+/// The spawn takes the spawn lock (`TOR_SUPERVISOR.md` §4.7): this runs in
+/// the daemon's process, which launches the managed Tor, and on Windows a
+/// child started while the launch holds Tor's end inheritable would inherit
+/// it and hide Tor's death (`TSR-F16`). The lock covers the spawn alone; the
+/// wait is outside it.
 async fn run(argv: &[OsString]) -> std::io::Result<std::process::ExitStatus> {
     let (program, args) = argv.split_first().expect("a command has its program first");
     let mut cmd = tokio::process::Command::new(PathBuf::from(program));
@@ -203,7 +209,8 @@ async fn run(argv: &[OsString]) -> std::io::Result<std::process::ExitStatus> {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         cmd.env("SystemRoot", root);
     }
-    cmd.status().await
+    let mut child = shekyl_tor_control_client::spawn_lock::with(|| cmd.spawn())?;
+    child.wait().await
 }
 
 fn hex(bytes: &[u8; 32]) -> String {
@@ -407,7 +414,12 @@ mod tests {
         // DC-F12's positive twin: a child spawned beside the runner's gets
         // its status back, so nothing reaped it from under us.
         let status = rt
-            .block_on(async { tokio::process::Command::new("true").status().await })
+            .block_on(async {
+                let mut child = shekyl_tor_control_client::spawn_lock::with(|| {
+                    tokio::process::Command::new("true").spawn()
+                })?;
+                child.wait().await
+            })
             .expect("a sibling child reports its status");
         assert!(status.success());
     }
