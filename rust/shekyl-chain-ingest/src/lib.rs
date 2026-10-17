@@ -121,6 +121,10 @@ mod mutation_tests;
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
+/// DRS-E5 PR-b (`DRS_E5_POOL_ALT_PRUNE.md` §2.2): the pool door held to
+/// the validator over real spends, and the pool's own rows over them.
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_door_tests;
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario;
 #[cfg(all(test, feature = "pipeline"))]

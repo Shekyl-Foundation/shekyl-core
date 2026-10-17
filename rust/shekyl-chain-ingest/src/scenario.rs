@@ -871,6 +871,47 @@ where
         self.connector = connector;
     }
 
+    /// Run `f` over the chain the store holds now, through the committed
+    /// snapshot's view (`SnapshotView`, what the pool door judges against),
+    /// with the rule set in force at the height the next block connects at.
+    /// The connector is stopped so the store can be opened here, and a
+    /// fresh one is started over the same file after, as
+    /// [`reopen`](Self::reopen) does.
+    ///
+    /// # Panics
+    ///
+    /// If the snapshot cannot be begun or its tip read: the store this
+    /// driver just held is unreadable, which is not a scenario outcome.
+    pub async fn read_chain<R>(
+        &mut self,
+        f: impl FnOnce(&shekyl_chain_store::store::SnapshotView<'_>, &RuleSet) -> R,
+    ) -> R {
+        let _already_stopped = self.connector.stop_gracefully().await.is_err();
+        if let Some(task) = self.task.take() {
+            drop(task.await.expect("the connector task joins"));
+        }
+        let out = {
+            let store = (self.opener)(&self.path);
+            let snapshot = store
+                .begin_read()
+                .expect("a snapshot of the scenario's store");
+            let view = shekyl_chain_store::store::SnapshotView::new(&snapshot);
+            let connecting = shekyl_chain_rules::Tip::connecting_height(
+                shekyl_chain_rules::HeaderView::tip(&view)
+                    .expect("the tip of the scenario's store")
+                    .as_ref(),
+            );
+            f(&view, &self.rules.in_force(connecting))
+        };
+        let (connector, task) = spawn_connector(ConnectorArgs {
+            store: (self.opener)(&self.path),
+            rules: self.rules,
+        });
+        self.task = Some(task);
+        self.connector = connector;
+        out
+    }
+
     /// Every table of the store as stored bytes (`TableRows`), for a
     /// differential against another driver's store.
     pub async fn table_rows(

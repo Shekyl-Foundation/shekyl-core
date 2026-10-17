@@ -206,18 +206,36 @@ pub fn form<S: Substrate>(
     )))
 }
 
-/// One slot's whole stateless judgement, in order: [`tx_form`] (4.H and
-/// the stateless 4.I/4.J rows), then the signatures (CEN-I17/I18,
-/// `judge_signatures` — a definition and the cheapest verification), then
-/// the proofs over the caller's claims (CEN-I15, J26, J27's verify half,
-/// `judge_proofs` — the expensive verification, last). Every one reads
-/// the transaction alone; since 2026-10-16 none of them runs inside the
-/// write transaction. A transaction wrong in two of these rows is named by
-/// the earlier one — a bad signature over a bad proof is CEN-I18's.
+/// One slot's whole stateless judgement — the function `form` runs at every
+/// slot and the pool door runs at [`TxSlot::Lone`] (DRS-E5 PR-b,
+/// `DRS_E5_POOL_ALT_PRUNE.md` §2.2), so the pool admits on exactly what a
+/// block is judged on. In order: [`tx_form`] (4.H and the stateless 4.I/4.J
+/// rows), then the signatures (CEN-I17/I18 — a definition and the cheapest
+/// verification), then the proofs over the caller's claims (CEN-I15, J26,
+/// J27's verify half — the expensive verification). Every one reads the
+/// transaction alone, and none runs inside the write transaction. A
+/// transaction wrong in two of these rows is named by the earlier one — a
+/// bad signature over a bad proof is CEN-I18's.
 ///
-/// Yields what the slot's proof was verified against, for `validate`'s
-/// comparison.
-fn judge_slot_stateless(
+/// At `Lone`, and only there, CEN-H19's verification half follows: the
+/// transaction's range proof verified as a batch of one
+/// (`rules::range_proof`). At a block's slots `form` verifies every listed
+/// proof in one batch after the slot loop, so the proof is verified once
+/// either way, and a transaction wrong on a proof and on its range proof is
+/// named by the proof row in both.
+///
+/// `references` is the caller's claims: the ingest driver's header ledger
+/// for a block, the pool's view of the chain for a transaction
+/// ([`ReferenceClaims::for_transaction`]). A reference with no claim is not
+/// verified here, and `tx_against` refuses or faults it.
+///
+/// Yields what the slot's proof was verified against, for `tx_against`'s
+/// comparison; `coverage` gains every row that passed.
+///
+/// # Errors
+///
+/// The refusal, at `slot`.
+pub fn judge_slot_stateless(
     tx: &Transaction,
     slot: TxSlot,
     rule_set: &RuleSet,
@@ -230,7 +248,12 @@ fn judge_slot_stateless(
     let mut scratch = RuleCoverage::EMPTY;
     let cx = rules::TxContext::derive(tx, slot, &mut scratch)?;
     judge_signatures(&cx, coverage)?;
-    judge_proofs(&cx, references, coverage)
+    let verified = judge_proofs(&cx, references, coverage)?;
+    if slot == TxSlot::Lone {
+        H19::verify_lone(tx)?;
+        coverage.insert(<H19 as rules::Rule>::ROW);
+    }
+    Ok(verified)
 }
 
 /// The view-bound stage: judge a [`StructurallyValid`] against the chain it

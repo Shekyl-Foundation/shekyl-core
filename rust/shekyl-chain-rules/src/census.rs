@@ -666,8 +666,12 @@ census_rows! {
         // nothing. The falsifier holds the verdict's logged slash to what
         // the fold reads back.
         L16 by_construction(shekyl_archival_retention::holds_shard_at, "l16_the_slash_the_verdict_logs_is_what_the_held_at_height_fold_reads"),
-        // 4.M Mempool admission (the `kept_by_block` axis) — consensus-flagged rows
-        M2 pending,
+        // 4.M Mempool admission — consensus-flagged rows. M2: the pool door
+        // runs the full NIC set because it *is* the validator's per-slot
+        // judgement at `Lone` (DRS-E5 PR-b b2); held by `shekyl-mempool`,
+        // witnessed where the real spends live — the door and a block of
+        // one agree, row for row.
+        M2 held_by_store("shekyl-chain-ingest", "the_door_and_a_block_of_one_agree_on_every_spend"),
         M8 pending,
     }
 }
@@ -683,12 +687,16 @@ census_rows! {
         // `policy_form`'s (the third call of the pool door, DRS-E5 PR-b b1).
         // CEN-M11 is deleted (bucket 3): redundant with M3, which refuses a
         // zero-fee transaction at the one door.
-        M1 pending,
+        // M1, M6 and M7 are the pool's own (`shekyl-mempool`, b2): a
+        // duplicate is not judged; the chain's spent images (M6) and the
+        // pool's (M7) are one I7 read through the decorator. Witnessed over
+        // real spends in `shekyl-chain-ingest`.
+        M1 held_by_store("shekyl-chain-ingest", "the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor"),
         M3 implemented(crate::policy::M3),
         M4 implemented(crate::policy::M4),
         M5 implemented(crate::policy::M5),
-        M6 pending,
-        M7 pending,
+        M6 held_by_store("shekyl-chain-ingest", "the_door_and_a_block_of_one_agree_on_every_spend"),
+        M7 held_by_store("shekyl-chain-ingest", "the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor"),
         M9 pending,
         M10 pending,
     }

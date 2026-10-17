@@ -314,13 +314,15 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::K5b,
             CenRow::K6,
             CenRow::K7,
-            CenRow::K8
+            CenRow::K8,
+            CenRow::M2
         ],
         "the rule-set belt at connect (B3, re-classed 2026-10-15, R4); DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
          insert (K3) and no supply word on an alt row (K8) are the store's structures, \
          proved by the store's tests; promotion (K5), the witness in the alt row (K5b), the \
          fork choice's match (K6) and the demoted rows (K7) are the switch's (DRS-E5 a5), \
-         proved by the ingest's switch tests"
+         proved by the ingest's switch tests; the pool door's full NIC set (M2, DRS-E5 \
+         PR-b), witnessed by the door and a block of one agreeing over real spends"
     );
     let policy_implemented: Vec<PolicyRow> = PolicyRow::ALL
         .iter()
@@ -332,6 +334,17 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         [PolicyRow::M3, PolicyRow::M4, PolicyRow::M5],
         "DRS-E5 PR-b b1: `policy_form`'s three rows — the fee floor, the extra cap, the \
          unlock ban"
+    );
+    let policy_held: Vec<PolicyRow> = PolicyRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::HeldByStore)
+        .collect();
+    assert_eq!(
+        policy_held,
+        [PolicyRow::M1, PolicyRow::M6, PolicyRow::M7],
+        "DRS-E5 PR-b b2: the pool's own rows — a duplicate (M1), a spent image on the \
+         chain (M6) or in the pool (M7)"
     );
     // SCW-18's compile-time pin is the check; this is the runtime echo so a
     // swapped `implemented(B2)` under the B1 entry cannot hide behind a

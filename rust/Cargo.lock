@@ -3966,6 +3966,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
+ "shekyl-mempool",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",

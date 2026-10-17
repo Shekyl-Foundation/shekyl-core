@@ -139,6 +139,10 @@ shekyl-block-template = { path = "../shekyl-block-template" }
 # a crate and not this crate's module.
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
+# The pool (DRS-E5 PR-b): the door's agreement with the validator is
+# witnessed here, over the scenario's real spends and the captured chains,
+# because this crate holds both and the pool's own crate holds neither.
+shekyl-mempool = { path = "../shekyl-mempool" }
 # The persona's keys (`derive_archival_p_keys`) and the emission claim's
 # assembly (`emission_assembly.rs`, also behind `harness` above).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }

@@ -32,6 +32,12 @@
 //! which wires this crate in and deletes the C++ (`DEL-010`). No FFI crate
 //! depends on this one (DX-Q5, DX-Q7).
 
+mod door;
+mod pool;
+mod reconcile;
 mod view;
 
+pub use door::{judge, Judged};
+pub use pool::{Admission, Arrival, Duplicate, Pool, PoolFault};
+pub use reconcile::{Reconciled, Removed};
 pub use view::{KeyImages, PoolView};
