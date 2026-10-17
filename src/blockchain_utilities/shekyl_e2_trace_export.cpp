@@ -342,8 +342,7 @@ int main(int argc, char* argv[])
     LOG_ERROR("Error opening database: " << e.what());
     return 1;
   }
-  const cryptonote::test_options regtest_test_options = {0};
-  if (!core_storage->init(db, net_type, network.regtest ? &regtest_test_options : nullptr))
+  if (!core_storage->init(db, net_type, network.chain_options()))
   {
     LOG_ERROR("Failed to initialize source blockchain storage");
     return 1;

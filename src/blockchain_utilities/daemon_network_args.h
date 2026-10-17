@@ -36,6 +36,7 @@
 #pragma once
 
 #include <array>
+#include <stdexcept>
 #include <string>
 
 #include <boost/filesystem/path.hpp>
@@ -44,6 +45,8 @@
 #include "common/command_line.h"
 #include "common/util.h"
 #include "cryptonote_config.h"
+#include "shekyl/shekyl_ffi.h"
+#include "cryptonote_core/cryptonote_core.h"
 
 namespace cryptonote
 {
@@ -62,25 +65,41 @@ namespace cryptonote
   , "Run in a regression testing mode."
   , false
   };
-  // The default is the daemon's layout (`shekyl-daemon-config` `paths`): the
-  // root for mainnet, and the network's own subdirectory for every other
-  // network, regtest included, so a regtest utility never opens the
-  // mainnet store. The three flags are the default's inputs. Register them
-  // with add_data_dir_args: adding this descriptor alone leaves a flag
-  // out of the variables map, and reading the directory then throws.
+  // The daemon's default data directory for one network word, from the
+  // daemon's own layout (`shekyl-daemon-config` `paths`, through
+  // `shekyl_daemon_data_dir_default`): there is no second layout here to
+  // drift from it. Throws when the daemon has none (no account home), so
+  // the utility names the fix instead of opening some other directory.
+  inline std::string daemon_data_dir_default(const char* network)
+  {
+    const size_t len = shekyl_daemon_data_dir_default(network, nullptr, 0);
+    if (len == 0)
+      throw std::runtime_error(std::string("the daemon has no default data directory for ") + network
+          + " (no account home); give --data-dir");
+    std::string path(len, '\0');
+    shekyl_daemon_data_dir_default(network, reinterpret_cast<uint8_t*>(path.data()), len);
+    return path;
+  }
+
+  // The data directory a utility opens: an explicit `--data-dir` as given
+  // (DAEMON_CONFIG_CUTOVER.md §2.6, DC-Q5: the daemon uses an explicit
+  // directory as given too, so a utility handed the daemon's directory opens
+  // the daemon's store), and otherwise the daemon's default for the network
+  // the three flags name. Register them with add_data_dir_args: adding this
+  // descriptor alone leaves a flag out of the variables map, and reading the
+  // directory then throws.
   inline const command_line::arg_descriptor<std::string, false, true, 3> arg_data_dir = {
     "data-dir"
-  , "Specify data directory"
-  , tools::get_default_data_dir()
+  , "The data directory; default: the daemon's for the network"
+  , ""
   , {{ &arg_testnet_on, &arg_stagenet_on, &arg_regtest_on }}
   , [](std::array<bool, 3> networks, bool defaulted, std::string val)->std::string {
-      if (networks[0])
-        return (boost::filesystem::path(val) / "testnet").string();
-      else if (networks[1])
-        return (boost::filesystem::path(val) / "stagenet").string();
-      else if (networks[2])
-        return (boost::filesystem::path(val) / "regtest").string();
-      return val;
+      if (!defaulted)
+        return val;
+      return daemon_data_dir_default(networks[0] ? "testnet"
+                                   : networks[1] ? "stagenet"
+                                   : networks[2] ? "regtest"
+                                   : "mainnet");
     }
   };
 
@@ -118,6 +137,13 @@ namespace cryptonote
       if (regtest)
         return FAKECHAIN;
       return MAINNET;
+    }
+
+    // What `Blockchain::init` takes beside the network: the regtest options
+    // on regtest (it refuses FAKECHAIN without them), none otherwise.
+    const test_options* chain_options() const
+    {
+      return regtest ? &regtest_test_options : nullptr;
     }
 
     const char* name() const

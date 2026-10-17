@@ -4610,6 +4610,14 @@ int32_t shekyl_daemon_main(const ShekylDaemonEntry* entry);
 int32_t shekyl_daemon_snapshot_parse(int argc, const char* const* argv, ShekylDaemonSnapshot** out);
 void shekyl_daemon_snapshot_free(ShekylDaemonSnapshot* snapshot);
 
+/// The daemon's default data directory for `network` (a NUL-terminated
+/// network word), as UTF-8 without a terminator, written into `out` when
+/// `capacity` holds it. Returns the path's length; ask with capacity 0, then
+/// with that length. 0 is a refusal: not a network, no account home, or a
+/// path that is not UTF-8 (DAEMON_CONFIG_CUTOVER.md §2.6; the C++ blockchain
+/// utilities' one default, rust/shekyl-ffi/src/data_dir_ffi.rs).
+size_t shekyl_daemon_data_dir_default(const char* network, uint8_t* out, size_t capacity);
+
 } // extern "C"
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h

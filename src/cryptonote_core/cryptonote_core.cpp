@@ -400,9 +400,6 @@ namespace cryptonote
     m_blockchain_storage.set_user_options(blocks_threads,
         sync_on_blocks, sync_threshold, sync_mode);
 
-    const cryptonote::test_options regtest_test_options = {
-      0
-    };
     const difficulty_type fixed_difficulty = snapshot.fixed_difficulty;
     r = m_blockchain_storage.init(db.release(), m_nettype, regtest ? &regtest_test_options : test_options, fixed_difficulty);
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize blockchain storage");

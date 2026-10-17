@@ -535,6 +535,23 @@ of its own, for the same reason as the negative one.
   The runner spawns under the lock and waits outside it; the gate watches
   `shekyl-daemon` and `shekyl-ffi`, the daemon image's two crates, and bit
   at once on the runner's sibling-spawn test, which takes the lock too.
+- **The utilities open the daemon's store (2026-10-17).** Copilot found
+  that export, stats, depth and ancestry, once they accept `--regtest`,
+  passed no chain options and `Blockchain::init` refuses FAKECHAIN without
+  them. A probe (a regtest store made by the daemon, opened by each
+  utility) found the layout behind it: the utilities' data-dir descriptor
+  appended the network's subdirectory to an explicit `--data-dir`, where
+  the daemon uses an explicit directory as given (DC-Q5), and its default
+  was a second C++ layout (`tools::get_default_data_dir`, `$HOME` on Unix,
+  `%ProgramData%` on Windows) where the daemon's is the account's root
+  from the operating system (`%LOCALAPPDATA%` on Windows). One layout now:
+  an explicit directory as given, the default from the daemon's Rust
+  `paths` through `shekyl_daemon_data_dir_default` (a gate surface), and
+  the C++ default with its Windows folder helper deleted. One regtest
+  options value, `cryptonote::regtest_test_options`, is read by
+  `core::init` and by all five store-opening utilities through
+  `UtilityNetwork::chain_options()`. The probe then opened the daemon's
+  store with all five.
 - **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
   covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
   the other direction (the `extern "C"` block of

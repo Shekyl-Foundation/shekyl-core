@@ -164,6 +164,9 @@ pub mod peerlist_ffi;
 pub mod rpc_peerlist_ffi;
 
 // Operator link rates and the byte-stamp clock the stall check reads.
+/// The daemon's default data directory for the C++ blockchain utilities
+/// (`DAEMON_CONFIG_CUTOVER.md` §2.6): one layout, the Rust one.
+pub mod data_dir_ffi;
 pub mod link_ffi;
 /// The notify runner: the owner of the three notify commands
 /// (`DAEMON_CONFIG_CUTOVER.md` §2.10); the C++ event sites push facts to it.

@@ -90,6 +90,11 @@ namespace cryptonote
      const size_t long_term_block_weight_window;
    };
 
+   /// The options a regtest chain runs under. `Blockchain::init` refuses
+   /// FAKECHAIN without options, so the daemon's `core::init` and every
+   /// utility that opens a regtest store pass this one value.
+   inline constexpr test_options regtest_test_options{0};
+
 
   /************************************************************************/
   /*                                                                      */

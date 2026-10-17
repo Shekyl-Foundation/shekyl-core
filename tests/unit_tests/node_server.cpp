@@ -352,9 +352,9 @@ TEST(ban, limit)
 namespace
 {
   // A private --data-dir for a test that runs node_server::init. The
-  // option's default is the operator's real data directory
-  // (tools::get_default_data_dir()), whose p2pstate.bin init_config would
-  // read and whose peerlist a test must neither depend on nor rewrite.
+  // daemon's default is the operator's real data directory, whose
+  // p2pstate.bin init_config would read and whose peerlist a test must
+  // neither depend on nor rewrite.
   boost::filesystem::path create_node_dir()
   {
     boost::system::error_code ec;

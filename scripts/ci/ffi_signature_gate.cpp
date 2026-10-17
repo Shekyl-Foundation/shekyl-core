@@ -44,6 +44,7 @@
 #include "shekyl_ffi_generated_daemon_entry.h"
 #include "shekyl_ffi_generated_daemon_rpc.h"
 #include "shekyl_ffi_generated_notify.h"
+#include "shekyl_ffi_generated_data_dir.h"
 #include "shekyl_ffi_generated_sync.h"
 
 int main()
