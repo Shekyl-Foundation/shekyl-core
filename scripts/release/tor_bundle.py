@@ -247,7 +247,11 @@ def load_pins(path):
         imports = row.get("imports")
         if row["os"] == "windows":
             if not isinstance(imports, list) or not imports:
-                raise Refused(f"{where}: a pinned Windows target lists the DLLs its executable imports")
+                problem = "is missing" if imports is None else "is not a non-empty list"
+                raise Refused(
+                    f"{where}: \"imports\" {problem}; a pinned Windows target must list "
+                    "the DLLs its executable may import"
+                )
             folded = []
             for name in imports:
                 if not is_plain_name(name):
@@ -413,6 +417,11 @@ def pe_imports(data, where):
             raise Refused(f"{where}: truncated PE image")
         return int.from_bytes(data[offset : offset + 4], "little")
 
+    def u64(offset):
+        if offset < 0 or offset + 8 > len(data):
+            raise Refused(f"{where}: truncated PE image")
+        return int.from_bytes(data[offset : offset + 8], "little")
+
     if data[:2] != b"MZ":
         raise Refused(f"{where}: not a PE image (no MZ header)")
     pe = u32(0x3C)
@@ -427,7 +436,7 @@ def pe_imports(data, where):
         image_base = u32(optional + 28)
         directory_count, directories = u32(optional + 92), optional + 96
     elif magic == 0x20B:  # PE32+
-        image_base = int.from_bytes(data[optional + 24 : optional + 32], "little")
+        image_base = u64(optional + 24)
         directory_count, directories = u32(optional + 108), optional + 112
     else:
         raise Refused(f"{where}: unknown PE optional-header magic {magic:#x}")

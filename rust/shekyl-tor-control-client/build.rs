@@ -136,7 +136,10 @@ fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
                 .as_array()
                 .filter(|list| !list.is_empty())
                 .unwrap_or_else(|| {
-                    panic!("{context}: \"imports\" lists the DLLs the executable imports")
+                    panic!(
+                        "{context}: \"imports\" is not a non-empty list; a pinned Windows \
+                         target must list the DLLs its executable may import"
+                    )
                 });
             let mut seen: Vec<String> = Vec::new();
             for import in imports {
@@ -151,9 +154,10 @@ fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
                 seen.push(identity);
             }
         }
-        None if fold_case => {
-            panic!("{context}: a pinned Windows target lists the DLLs its executable imports")
-        }
+        None if fold_case => panic!(
+            "{context}: \"imports\" is missing; a pinned Windows target must list the DLLs \
+             its executable may import"
+        ),
         Some(_) => {
             panic!("{context}: \"imports\" is the PE import list; only a Windows row has one")
         }

@@ -488,6 +488,9 @@ def _(b):
     expect(b.stage(), 1, "RVA 0x9000 is not backed by any section")
     b.windows(b"MZ" + bytes(62))
     expect(b.stage(), 1, "not a PE image")
+    # Cut inside the PE32+ optional header's ImageBase (offset 0x58 + 24).
+    b.windows(make_pe(WIN_IMPORTS)[: 0x58 + 28])
+    expect(b.stage(), 1, "truncated PE image")
 
 
 @case("pin file: the import list is a Windows row's, and well formed")
@@ -496,7 +499,10 @@ def _(b):
     row = b.pins["targets"][0]
     del row["imports"]
     b.write()
-    expect(b.stage(), 1, "lists the DLLs its executable imports")
+    expect(b.stage(), 1, '"imports" is missing; a pinned Windows target must list')
+    row["imports"] = []
+    b.write()
+    expect(b.stage(), 1, '"imports" is not a non-empty list')
     row["imports"] = ["KERNEL32.dll", "kernel32.DLL"]
     b.write()
     expect(b.stage(), 1, "an import is listed twice")
