@@ -526,6 +526,8 @@ mod tests {
             anchor_t0: ChainCount::from_raw(1),
             funding_gindexes: Vec::new(),
             state: PendingPostState::Pending,
+            reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+            terminal: None,
         }
     }
 

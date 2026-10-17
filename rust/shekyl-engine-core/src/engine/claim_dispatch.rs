@@ -339,7 +339,7 @@ where
 
         // Assemble through the production pipeline — the reply comes back
         // unbroadcast (CB-3); routing it is the step below, not the builder's.
-        let assembled = orchestrate_emission_claim(
+        let orchestrated = orchestrate_emission_claim(
             claim_rpc,
             handle,
             ClaimAssemblyContext {
@@ -359,6 +359,8 @@ where
             block_hash_at,
         )
         .await?;
+        let reference_height = orchestrated.reference_height;
+        let assembled = orchestrated.assembled;
 
         // Persist-before-dispatch (module docs; pin P-2's sibling): seal the
         // claim record — bytes and fee reservation — and its Dispatched
@@ -376,6 +378,8 @@ where
             tx_bytes: assembled.bound_tx.bytes().to_vec(),
             fee_gindexes: assembled.fee_gindexes.clone(),
             state: PendingPostState::Pending,
+            reference_height,
+            terminal: None,
         };
         let attempt = store
             .mutate(move |block| {

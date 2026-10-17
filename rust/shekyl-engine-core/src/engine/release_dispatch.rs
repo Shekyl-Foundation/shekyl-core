@@ -609,6 +609,8 @@ where
             tx_bytes: assembled.bound_tx.bytes().to_vec(),
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,
+            reference_height,
+            terminal: None,
         };
         let admission = store
             .mutate(move |block| {

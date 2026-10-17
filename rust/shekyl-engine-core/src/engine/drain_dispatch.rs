@@ -387,6 +387,7 @@ where
             block_hash_at,
         )
         .await?;
+        let reference_height = orchestrated.reference_height;
         let assembled = orchestrated.assembled;
 
         // Persist-before-dispatch (module docs): seal the drain record — bytes,
@@ -404,6 +405,8 @@ where
             tx_bytes: assembled.bound_tx.bytes().to_vec(),
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,
+            reference_height,
+            terminal: None,
         };
         let admission = store
             .mutate(move |block| {

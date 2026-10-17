@@ -272,6 +272,53 @@
                         ]
                       }
                     }
+                  },
+                  {
+                    "name": "reference_height",
+                    "ty": {
+                      "name": "BlockHeight",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "terminal",
+                    "ty": {
+                      "name": "Option<T>",
+                      "ty": {
+                        "Option": {
+                          "name": "TerminalCause",
+                          "ty": {
+                            "Enum": [
+                              {
+                                "name": "DoubleSpend",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "FeeTooLow",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "Malformed",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "Unrecognized",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "JoinMarketUnsupported",
+                                "ty": "UnitVariant"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
                   }
                 ]
               }
@@ -497,6 +544,53 @@
                             }
                           }
                         ]
+                      }
+                    }
+                  },
+                  {
+                    "name": "reference_height",
+                    "ty": {
+                      "name": "BlockHeight",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "terminal",
+                    "ty": {
+                      "name": "Option<T>",
+                      "ty": {
+                        "Option": {
+                          "name": "TerminalCause",
+                          "ty": {
+                            "Enum": [
+                              {
+                                "name": "DoubleSpend",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "FeeTooLow",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "Malformed",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "Unrecognized",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "JoinMarketUnsupported",
+                                "ty": "UnitVariant"
+                              }
+                            ]
+                          }
+                        }
                       }
                     }
                   }
@@ -726,6 +820,53 @@
                         ]
                       }
                     }
+                  },
+                  {
+                    "name": "reference_height",
+                    "ty": {
+                      "name": "BlockHeight",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "terminal",
+                    "ty": {
+                      "name": "Option<T>",
+                      "ty": {
+                        "Option": {
+                          "name": "TerminalCause",
+                          "ty": {
+                            "Enum": [
+                              {
+                                "name": "DoubleSpend",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "FeeTooLow",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "Malformed",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "Unrecognized",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "JoinMarketUnsupported",
+                                "ty": "UnitVariant"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
                   }
                 ]
               }
@@ -951,6 +1092,303 @@
                             }
                           }
                         ]
+                      }
+                    }
+                  },
+                  {
+                    "name": "reference_height",
+                    "ty": {
+                      "name": "BlockHeight",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "terminal",
+                    "ty": {
+                      "name": "Option<T>",
+                      "ty": {
+                        "Option": {
+                          "name": "TerminalCause",
+                          "ty": {
+                            "Enum": [
+                              {
+                                "name": "DoubleSpend",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "FeeTooLow",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "Malformed",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "Unrecognized",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "JoinMarketUnsupported",
+                                "ty": "UnitVariant"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "outcomes",
+        "ty": {
+          "name": "Vec<T>",
+          "ty": {
+            "Seq": {
+              "name": "StakingOutcome",
+              "ty": {
+                "Struct": [
+                  {
+                    "name": "kind",
+                    "ty": {
+                      "name": "RecordKind",
+                      "ty": {
+                        "Enum": [
+                          {
+                            "name": "Post",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "Claim",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "Drain",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "Release",
+                            "ty": "UnitVariant"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "name": "persona",
+                    "ty": {
+                      "name": "PCanonicalId",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "[T; N]",
+                          "ty": {
+                            "Tuple": [
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              },
+                              {
+                                "name": "u8",
+                                "ty": "U8"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "name": "outcome",
+                    "ty": {
+                      "name": "OutcomeKind",
+                      "ty": {
+                        "Enum": [
+                          {
+                            "name": "Rejected",
+                            "ty": {
+                              "NewtypeVariant": {
+                                "name": "TerminalCause",
+                                "ty": {
+                                  "Enum": [
+                                    {
+                                      "name": "DoubleSpend",
+                                      "ty": "UnitVariant"
+                                    },
+                                    {
+                                      "name": "FeeTooLow",
+                                      "ty": "UnitVariant"
+                                    },
+                                    {
+                                      "name": "Malformed",
+                                      "ty": "UnitVariant"
+                                    },
+                                    {
+                                      "name": "Unrecognized",
+                                      "ty": "UnitVariant"
+                                    },
+                                    {
+                                      "name": "JoinMarketUnsupported",
+                                      "ty": "UnitVariant"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "name": "Expired",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "EndedUnconfirmed",
+                            "ty": "UnitVariant"
+                          },
+                          {
+                            "name": "SpentElsewhere",
+                            "ty": "UnitVariant"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "name": "at_height",
+                    "ty": {
+                      "name": "BlockHeight",
+                      "ty": {
+                        "NewtypeStruct": {
+                          "name": "u64",
+                          "ty": "U64"
+                        }
                       }
                     }
                   }
