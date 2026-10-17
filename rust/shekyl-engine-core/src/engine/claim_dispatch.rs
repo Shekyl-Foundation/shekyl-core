@@ -61,8 +61,10 @@ use std::sync::Arc;
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{
-    PendingEmissionClaim, PendingPostState, SealAdmission,
+    PendingEmissionClaim, PendingPostState, RecordKind, SealAdmission,
 };
+
+use super::pscan::dispatch::terminal_cause;
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
@@ -433,10 +435,24 @@ where
         // `LocalBondBroadcast`. The operator's explicit ② posture choice
         // plugs in via the 2c config-source slice, which swaps this call,
         // not this seam. A submit failure leaves the sealed record live —
-        // the bytes may have reached the network, and the claim driver's
-        // byte-identical resubmit / terminal-reject retire owns its fate.
+        // the bytes may have reached the network; the claim ends at its end
+        // date (`release_ended`), and leg 4 owns any byte-identical resubmit.
+        // A terminal verdict is recorded on the record, which stays sealed
+        // with its reservation (BD-Q3 Rule 2): the daemon holds valid bytes,
+        // so only the record's end date ends it, and the cause names the
+        // outcome there.
         let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
-        let submit = submitter.submit_bound(assembled.bound_tx.clone()).await?;
+        let sent = submitter.submit_bound(assembled.bound_tx.clone()).await;
+        if let Some(cause) = sent.as_ref().err().and_then(terminal_cause) {
+            store
+                .mutate(|block| {
+                    let recorded = block.record_terminal(RecordKind::Claim, &persona, cause);
+                    (recorded, ())
+                })
+                .await
+                .map_err(|e| EmissionClaimRequestError::state("terminal verdict", e))?;
+        }
+        let submit = sent?;
 
         Ok(EmissionClaimReceipt {
             claim: assembled,

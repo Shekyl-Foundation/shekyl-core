@@ -68,7 +68,11 @@ use std::sync::Arc;
 
 use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_engine_file::WalletFile;
-use shekyl_engine_state::pending_post_block::{PendingDrain, PendingPostState, SealAdmission};
+use shekyl_engine_state::pending_post_block::{
+    PendingDrain, PendingPostState, RecordKind, SealAdmission,
+};
+
+use super::pscan::dispatch::terminal_cause;
 use shekyl_engine_state::pscan_state::PFundingOutputRecord;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
@@ -446,10 +450,25 @@ where
         // loopback on the operator's own box. The operator's explicit ②
         // posture choice plugs in via the 2c config-source slice, which swaps
         // this call, not this seam. A submit failure leaves the sealed record
-        // live — the bytes may have reached the network, and the drain driver's
-        // byte-identical resubmit / terminal-reject retire owns its fate.
+        // live — the bytes may have reached the network; the drain ends at its
+        // end date (`release_ended`), and leg 4 owns any byte-identical
+        // resubmit.
+        // A terminal verdict is recorded on the record, which stays sealed
+        // with its reservation (BD-Q3 Rule 2): the daemon holds valid bytes,
+        // so only the record's end date ends it, and the cause names the
+        // outcome there.
         let submitter = BroadcastSubmitter::local(persona, Arc::new(daemon));
-        let submit = submitter.submit_bound(assembled.bound_tx.clone()).await?;
+        let sent = submitter.submit_bound(assembled.bound_tx.clone()).await;
+        if let Some(cause) = sent.as_ref().err().and_then(terminal_cause) {
+            store
+                .mutate(|block| {
+                    let recorded = block.record_terminal(RecordKind::Drain, &persona, cause);
+                    (recorded, ())
+                })
+                .await
+                .map_err(|e| DrainRequestError::state("terminal verdict", e))?;
+        }
+        let submit = sent?;
 
         Ok(DrainReceipt {
             drain: assembled,

@@ -1256,12 +1256,18 @@ impl PendingPostBlock {
         }
     }
 
-    /// Release every record whose end date the sealed scan frontier has
-    /// reached, writing its outcome in the same mutation (WR-Q3, WR-Q4).
+    /// Release every record whose end date the sealed scan has covered,
+    /// writing its outcome in the same mutation (WR-Q3, WR-Q4).
+    ///
+    /// `scanned_through` is the highest height the sealed scan has covered,
+    /// **inclusive**. The scan's own frontier is exclusive (the first
+    /// unscanned height), so the caller passes one below it: a record is
+    /// released only once the block at its end date has itself been
+    /// scanned, since that block can still include the transaction.
     ///
     /// **Call it after [`Self::remove_confirmed`] and [`Self::remove_settled`],
     /// in the same pass and over the same evidence.** A record that landed has
-    /// landed at or below its end date, so at a frontier at or past the end
+    /// landed at or below its end date, so once the scan has covered the end
     /// date those two retires have already removed it; what is left here did
     /// not land. Two guards keep that true even if the order slips: a post is
     /// never released here as anything but an ending, and a reservation-kind
@@ -1270,7 +1276,7 @@ impl PendingPostBlock {
     ///
     /// The outcome, in precedence order:
     ///
-    /// | Evidence at the frontier | Outcome |
+    /// | Evidence at `scanned_through` | Outcome |
     /// | --- | --- |
     /// | some reserved input gone, not all (or, for a post, any) | [`OutcomeKind::SpentElsewhere`] |
     /// | a terminal verdict was recorded | [`OutcomeKind::Rejected`] |
@@ -1279,11 +1285,11 @@ impl PendingPostBlock {
     ///
     /// Releasing is safe at the end date because no block above it can
     /// include the transaction and every block at or below it is inside the
-    /// sealed, reorg-deep frontier the evidence came from.
+    /// sealed, reorg-deep scan the evidence came from.
     #[must_use]
     pub fn release_ended(
         &mut self,
-        frontier: BlockHeight,
+        scanned_through: BlockHeight,
         live_funding: &std::collections::BTreeSet<GlobalOutputIndex>,
         max_age: BlockCount,
         at_height: BlockHeight,
@@ -1294,11 +1300,11 @@ impl PendingPostBlock {
             reserved: &[GlobalOutputIndex],
             terminal: Option<TerminalCause>,
             is_post: bool,
-            frontier: BlockHeight,
+            scanned_through: BlockHeight,
             live: &std::collections::BTreeSet<GlobalOutputIndex>,
             max_age: BlockCount,
         ) -> Option<OutcomeKind> {
-            if frontier < end_date(reference_height, max_age) {
+            if scanned_through < end_date(reference_height, max_age) {
                 return None;
             }
             let gone = reserved.iter().filter(|g| !live.contains(g)).count();
@@ -1329,7 +1335,7 @@ impl PendingPostBlock {
                 &r.funding_gindexes,
                 r.terminal,
                 true,
-                frontier,
+                scanned_through,
                 live_funding,
                 max_age,
             );
@@ -1341,7 +1347,7 @@ impl PendingPostBlock {
                 &r.fee_gindexes,
                 r.terminal,
                 false,
-                frontier,
+                scanned_through,
                 live_funding,
                 max_age,
             );
@@ -1353,7 +1359,7 @@ impl PendingPostBlock {
                 &r.funding_gindexes,
                 r.terminal,
                 false,
-                frontier,
+                scanned_through,
                 live_funding,
                 max_age,
             );
@@ -1365,7 +1371,7 @@ impl PendingPostBlock {
                 &r.funding_gindexes,
                 r.terminal,
                 false,
-                frontier,
+                scanned_through,
                 live_funding,
                 max_age,
             );

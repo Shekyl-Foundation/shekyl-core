@@ -3482,9 +3482,10 @@ async fn e2e_staker_bond_post_accepted_and_applied() {
 ///   it answers `CommitOutcome::JoinMarketUnsupported` (`ffi_shim.rs`);
 /// - the engine turns that into `Rejected { JoinMarketUnsupported }`, the
 ///   one place that cause is authored, and the wallet's submitter maps it
-///   to `SubmitterError::RejectedTerminal { JoinMarketUnsupported }`, which
-///   the dispatch driver treats as terminal: the post is withdrawn and its
-///   funding reservation released, never resubmitted. Any other answer
+///   to `SubmitterError::RejectedTerminal { JoinMarketUnsupported }`. The
+///   dispatch driver records that cause on the post and never resubmits it;
+///   the post and its funding reservation are held to the post's end date
+///   (BD-Q3 Rule 2), where it ends `rejected`. Any other answer
 ///   (a Rust verdict on the post, a commit fault, a transport error) is a
 ///   different finding.
 ///
