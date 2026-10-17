@@ -261,6 +261,10 @@ And not a consumer of the mining JIT for validation (§1.3).
   naming the family and the key) beside the root oracle, and `RunReport`
   gains `archival` — `shekyl_e2_grade_v3`. A `0x00` trace grades the
   oracle as *not compared*, never as identical.
+  **UPDATE 2026-10-17:** a `PolicyRow` feeds no chain digest, so its
+  component is `NotFed` and a matching checkpoint does not grade it
+  (`shekyl_e2_grade_v4`). CEN-M3 is relay policy; a digest match is not
+  a reproduced defect.
 - `conformance.rs`: the CSR-3a grader exists as pure logic —
   `ConformanceState::{CheckedConformant, Divergent, Unreviewed}`, `Acceptance`,
   `FailureReason`, `ReviewedDivergence`, `FinalVerdict`, truth-table tested.
