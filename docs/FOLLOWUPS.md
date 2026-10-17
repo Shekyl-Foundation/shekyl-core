@@ -11,6 +11,10 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **The block template draws a fresh witness key for every template; the producer keeps one witness pair per parent block (`SO-D12` increment 1).** Rust's `shekyl_coinbase_extra` generates a hybrid scheme-3 witness key and a seed per call and keeps neither, so every block commits to a seed nobody reveals and a miner pays the key generation 2 to 11 times per template (`BA-T35`). The producer holds one pair per parent block in its Rust store and reuses it for every template on that parent, so the bundle it later files opens the `0x0C` the mined block committed to.
+  - Owner: the producer lane — [`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md) §16.3 (the producer side)
+  - Target: pre-genesis
+
 - **The bond-post delay does not decorrelate the funding transfer from the bond.** It is measured from the stake request (`anchor_t0`, `rust/shekyl-engine-core/src/engine/bond_orchestrator.rs:555-557`), and the post is signed at the request, so its FCMP++ reference reveals the signing time: a post sent `offset` blocks later carries reference age `offset + 6`, not the privacy-canonical 6 (`rust/shekyl-curve-tree/src/reference.rs:75-84`). The offset is uniform over 0..600 (`engine/stake_engine/actor.rs:154-170`), so about 84 % of posts exceed `PROOF_VALIDITY_HORIZON` (94) and can never land; the daemon answers `StaleRoot`, which is retryable, and the driver resends the dead bytes to the 900-block alarm. The funding→bond spacing guard, `MIN_COLD_START_SPACING`, is unwired (`engine/stake_timing.rs:192-203`). The C++ daemon hides it until `DEL-008` by refusing every kind-5 post first. Shown by the ignored test `a_bond_post_sent_past_its_proof_lifetime_is_resent_unchanged_to_the_horizon` (`engine/pscan/dispatch_tests.rs`). **Blocked on a bond-lane Round 0** on the delay's anchor, the window, and signing at the due time (Rick, 2026-10-15); `WALLET_RPC_STAKING_OUTCOMES.md` §1.1 records what it needs from that round.
   - Owner: the bond lane — [`ARCHIVAL_BOND_WI3_DISPATCH.md`](design/ARCHIVAL_BOND_WI3_DISPATCH.md)
   - Target: pre-genesis
