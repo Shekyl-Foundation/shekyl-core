@@ -31,12 +31,13 @@ measurement ledger (the rule-21 reopen recorded in RT-O21).
 
 ## Registered before the run
 
-*Amended twice, 2026-10-17, after the dry run and before any registered
-run. First: the traffic below states two waits the instrument needed
+*Amended three times, 2026-10-17, after the dry run and before any
+registered run. First: the traffic below states two waits the instrument needed
 (step 1's margin and step 3's unlock wait). Second: the wallet defect the
 dry run found is fixed in this PR, so the refusal it produced voids a run
 instead of being waited out, and the registered run is made from the fixed
-tree. "Dry run" says what forced each.*
+tree. Third: the maintainer ruled the host (below). "Dry run" says what
+forced the first two.*
 
 **Subject.** The bytes a stream adapter over the channel would carry
 between the wallet's daemon client and the daemon: every HTTP/1.1
@@ -183,20 +184,23 @@ voids the pair.
 recorded with its cause, the cause is fixed, and the second attempt is
 made under the same lines. Both are recorded in order.
 
-**Host — the one departure from a ruling.** RT-O21 ruled, as
-recommended, a testnet daemon on the floor device with the wallet on
-another internal host. The same day's ruling on which wallet replaced the
-testnet with a generated regtest chain, which the harness spawns on the
-machine the test runs on. Message sizes are a function of the bytes,
-not of the processor that produced them. This registration therefore
-runs on **the shared development workstation** (x86-64, 16 hardware
-threads), not on the floor device, which other lanes are waiting for and
-which RT-P6 needs under a quiet claim. No Foundation host is claimed. The
-registered run waits for the maintainer's word on this; the dry run
-does not.
+**Host — ruled by the maintainer, 2026-10-17.** RT-O21 recommended a
+testnet daemon on the floor device with the wallet on another internal
+host. The same day's ruling on which wallet replaced the testnet with a
+generated regtest chain, which the harness spawns on the machine the test
+runs on, and message sizes are a function of the bytes, not of the
+processor that produced them. The maintainer ruled the host: **one of the
+testnet estate's staker VMs** (x86-64, 8 vCPU, 15 GiB, Ubuntu 24.04),
+whose standing testnet daemon keeps running untouched. The run is claimed
+on the estate ledger as shared: a measurement of sizes is not bent by
+background load. The dry run was made on the development workstation;
+nothing it wrote is data.
 
-**The daemon** is built in Release from the commit the run is made from,
-and that commit is recorded with the results.
+**The build.** On that VM, from a fresh clone of the commit that carries
+this amendment: the daemon in Release, and the engine's test binary, with
+the workspace's pinned toolchain (1.94.0). The commit is recorded with the
+results, with the VM's load and the daemon's state at the start and the
+end.
 
 **What this trace does not carry**, so its classes are read with their
 reach:
