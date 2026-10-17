@@ -287,7 +287,7 @@ of its own, for the same reason as the negative one.
   `shekyl_link_get_up` and `shekyl_link_get_down` go with their callers:
   the bounds are set from Rust only. The Python framework gains
   `option_set` and `option_show` in place of its four methods.
-  `CORE_RPC_VERSION` is 3.57: the two methods, the JSON-RPC error's `data`
+  `CORE_RPC_VERSION` is 3.58 (dev took 3.57 for `get_fee_estimate`, so this change took the next minor): the two methods, the JSON-RPC error's `data`
   member under code `-26`, and the four routes gone.
 - **`mine start` carries built values (commit (d), §2.7's last bullet).**
   The Rust `/start_mining` handler builds `miner_address` through the
@@ -355,7 +355,7 @@ of its own, for the same reason as the negative one.
   `data-dir` in `src/blockchain_utilities/daemon_network_args.h` until
   the grammar's Part B rules each tool (§9, §10). `/start_mining` loses
   `do_background_mining` and `ignore_battery` with the background-mining
-  options (a 3.57 change, recorded in its note); the miner's own
+  options (a 3.58 change, recorded in its note); the miner's own
   background thread stays, the mining lane's (§10).
 - **The regtest arms, the environment levers and the reverse pulls (commit
   (e2), §2.6, §4.2).** The `/fake` subdirectory, the wipe on start and
