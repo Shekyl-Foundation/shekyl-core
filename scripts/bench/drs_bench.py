@@ -253,18 +253,29 @@ def measure(args):
         shutil.rmtree(seed_dir, ignore_errors=True)
         os.makedirs(seed_dir)
 
-    common = ["--regtest", "--keep-fakechain", "--fixed-difficulty=1",
-              f"--db-sync-mode={args.sync_mode}", "--allow-local-ip", "--no-igd",
-              "--non-interactive", f"--log-level={args.log_level}"]
+    # The grammar's spellings (INPUT_GRAMMAR.md §5). Nothing is wiped on start
+    # (a fresh chain is a fresh data directory), and the daemon takes no
+    # sync-mode option since the configuration cutover: `db-sync-mode` is the
+    # DRS lane's (IG-Q4), the daemon runs the lane's constant, and DRS-D9's
+    # `safe` cannot be imposed from here until that lane gives it a row.
+    # This bench therefore refuses before any daemon starts, naming the
+    # FOLLOWUPS row, rather than record a durability it did not impose.
+    raise SystemExit(
+        "REFUSE: the daemon takes no --db-sync-mode since the daemon-configuration "
+        "cutover (INPUT_GRAMMAR.md IG-Q4: the row is the DRS lane's), so DRS-D9's "
+        "safe mode cannot be imposed and the artifact gate would refuse the record. "
+        "Blocked on the DRS lane's row; see docs/FOLLOWUPS.md, the DRS bench row.")
+    common = ["--network", "regtest", "--dev-difficulty", "1", "--p2p-local",
+              "--tor", "off", "--log-level", args.log_level]
     (sp2p, srpc, bp2p, brpc), held = _reserve_ports(4)
     for sk in held:
         sk.close()
 
     def spawn(tag, d, argv_extra):
         p2p, rpcp = (sp2p, srpc) if tag == "seed" else (bp2p, brpc)
-        argv = [args.daemon] + common + [f"--data-dir={d}",
-                                         f"--p2p-bind-port={p2p}",
-                                         f"--rpc-bind-port={rpcp}"] + argv_extra
+        argv = [args.daemon] + common + ["--data-dir", d,
+                                         "--clearnet-listen", f"127.0.0.1:{p2p}",
+                                         "--rpc-admin-listen", f"127.0.0.1:{rpcp}"] + argv_extra
         with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
             fh.write(" ".join(argv) + "\n")
         # The SUBJECT's log is truncated; the seed's is appended. That asymmetry is
@@ -288,7 +299,7 @@ def measure(args):
 
     # Genesis alone is height 1; N generated blocks leave height N+1.
     target_h = args.height + 1
-    proc, _ = spawn("seed", seed_dir, ["--offline"])
+    proc, _ = spawn("seed", seed_dir, ["--clearnet", "off"])
     with running(proc, srpc) as seed:
         if not seed.ready:
             _fail(f"seed RPC on 127.0.0.1:{srpc} never came up "
@@ -325,7 +336,7 @@ def measure(args):
             _fail(f"networked seed RPC on 127.0.0.1:{srpc} never came up "
                   f"(exited={seed.proc.poll()}); see {work}/seed.log and seed.argv")
         subj_proc, subj_argv = spawn(
-            "subject", subj_dir, [f"--add-exclusive-node=127.0.0.1:{sp2p}"])
+            "subject", subj_dir, ["--p2p-closed-peer", f"127.0.0.1:{sp2p}"])
         with running(subj_proc, brpc) as subj:
             if not subj.ready:
                 _fail(f"subject RPC on 127.0.0.1:{brpc} never came up "
@@ -447,7 +458,7 @@ def measure(args):
             "prunable_region": A.PRUNABLE_ABSENT,
             "verify_exercised": {"pow": True, "fcmp_pp": False},
             "verify_note": "PoW longhash is computed and checked for every block with "
-                           "no nettype bypass; --fixed-difficulty lowers the TARGET "
+                           "no nettype bypass; --dev-difficulty lowers the TARGET "
                            "only. generateblocks produces coinbase-only blocks, so "
                            "FCMP++ verification is not exercised at all.",
             "seed_height": int(seed_h),
@@ -560,7 +571,8 @@ def main():
     m.add_argument("--daemon", default=os.path.join(ROOT, "build/bin/shekyld"))
     m.add_argument("--work-dir", required=True)
     m.add_argument("--sync-mode", default="safe")
-    m.add_argument("--log-level", type=int, default=1)
+    m.add_argument("--log-level", default="info",
+                   choices=["error", "warn", "info", "debug", "trace"])
     m.add_argument("--startup-timeout", type=float, default=1200.0)
     m.add_argument("--gen-timeout", type=float, default=14400.0)
     m.add_argument("--sync-timeout", type=float, default=14400.0)

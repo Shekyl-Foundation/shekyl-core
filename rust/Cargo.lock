@@ -4206,6 +4206,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-daemon"
+version = "3.1.0"
+dependencies = [
+ "shekyl-daemon-config",
+ "shekyl-daemon-rpc",
+ "shekyl-ffi",
+ "shekyl-logging",
+ "shekyl-onion-v3",
+ "shekyl-options",
+ "shekyl-runtime",
+ "shekyl-tor-control-client",
+ "shekyl-tor-control-daemon",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "shekyl-daemon-config"
+version = "3.1.0"
+dependencies = [
+ "rustix",
+ "shekyl-address",
+ "shekyl-logging",
+ "shekyl-onion-v3",
+ "shekyl-options",
+ "shekyl-win-sec",
+ "tempfile",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "shekyl-daemon-image"
 version = "3.1.0"
 dependencies = [
@@ -4213,6 +4245,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-chain-store",
  "shekyl-crypto-pq",
+ "shekyl-daemon",
  "shekyl-daemon-rpc",
  "shekyl-ffi",
  "shekyl-p-fetch",
@@ -4241,8 +4274,10 @@ dependencies = [
  "shekyl-curve-generators",
  "shekyl-curve-io",
  "shekyl-curve-tree",
+ "shekyl-daemon-config",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-options",
  "shekyl-peerlist",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
@@ -4551,6 +4586,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-curve-tree",
+ "shekyl-daemon-config",
  "shekyl-dialer",
  "shekyl-difficulty",
  "shekyl-draw-rng",
@@ -4562,6 +4598,7 @@ dependencies = [
  "shekyl-logging",
  "shekyl-net-address",
  "shekyl-onion-v3",
+ "shekyl-options",
  "shekyl-p2p-transport",
  "shekyl-peer-policy",
  "shekyl-peerlist",
@@ -4575,11 +4612,13 @@ dependencies = [
  "shekyl-thread-ledger",
  "shekyl-timing-engine",
  "shekyl-tor",
+ "shekyl-tor-control-client",
  "shekyl-tor-control-daemon",
  "shekyl-transport-layer",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-win-sec",
  "shekyl-wire",
  "tempfile",
  "tokio",
@@ -4714,6 +4753,16 @@ dependencies = [
  "shekyl-p-host",
  "shekyl-tor-control-wallet",
  "tokio",
+]
+
+[[package]]
+name = "shekyl-options"
+version = "3.1.0"
+dependencies = [
+ "shekyl-onion-v3",
+ "strsim",
+ "toml 0.8.23",
+ "zeroize",
 ]
 
 [[package]]
@@ -5197,6 +5246,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "shekyl-onion-v3",
+ "shekyl-win-sec",
  "tempfile",
  "tokio",
  "windows-sys 0.61.2",
