@@ -141,7 +141,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 - deletes:
   - LMDB and `BlockchainDB`;
   - `Blockchain` and `tx_memory_pool` (DEL-010);
-  - the archival C++ path (DEL-008);
+  - the archival C++ path (DEL-008), only once DEL-008's gate holds: Slice C's admission rows `implemented`, CEN-J8–J10 retired, the draw live;
   - the reorg path (DEL-009);
   - `rpc_facts_ffi.cpp`, `daemon_submit_ffi.cpp` and `miner.cpp`;
   - the C++ RPC server whole (DX-Q3's falsifier), with the interim console's commands that read its structs;
@@ -252,11 +252,12 @@ Each observed difference becomes one row.
 | **Design** | Rust implements a Shekyl ruling the C++ never had or had differently | Cite the ruling (date, document). No action |
 | **C++ defect** | Rust implements the specification; the C++ is wrong | Cite the specification clause. No C++ change (the C++ is deleted in this PR) |
 | **Removed** | A C++ mechanism Shekyl rejected or deleted (hard-fork table, zones, orphan store, scoring, pruning seeds, `kept_by_block` floor bypass) | Cite the ruling |
-| **Unbuilt by design** | A staged mechanism with a named owner and PR (SO-D12's bundle, chain sync's headers-first) | Owner and PR named, and the C++ behaviour is not needed meanwhile |
+| **Unbuilt by design** | A staged mechanism with a named owner and PR (chain sync's headers-first) | Owner and PR named, and the C++ behaviour is not needed meanwhile |
 | **Rust defect** | Rust is wrong against the design | **Blocks the merge.** Fixed in the flip PR |
 
 **Rules for the register.**
 - There is **no "unexplained" category.** A difference that cannot be placed blocks the merge until it is.
+- **Serve-credit acceptance is a prerequisite, never a row.** DEL-008 gates the flip (`DAEMON_REDB_STORE.md:2697`): no cutover until SO-D8 Slice C's admission rows are `implemented` in `census.rs` and CEN-J8–J10 are retired, and no Rust consensus before the secret draw is live (`SO-D11b`). Deleting `check_archival_serve_credit_input` removes the only serve-credit acceptance that runs, so its successor (SO-D12's bundle admission) cannot be staged at the flip, and a difference it leaves cannot be placed as **Unbuilt by design**.
 - A difference the C++ cannot exhibit (Rust-only state) is not a row.
 - The register lives in the flip's design record; the E2 grader's output is its input, not its verdict.
 - After the flip the corpus re-baselines from Rust (`DAEMON_REDB_STORE.md` §12.1). The register is the last record that compares the two, kept as records-was at its sha.
@@ -285,7 +286,7 @@ Each observed difference becomes one row.
 2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Briefed after PR-b's door lands, because the entry's pool calls are its shape.
 3. **PR 3** — briefed: the read-only RPC handlers, the store-backed facts and the miner loop. Runs beside PR-b.
 4. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge.
-5. **The flip** needs PR-b, PR 2, PR 3, PR 3b and #1088.
+5. **The flip** needs PR-b, PR 2, PR 3, PR 3b and #1088, and DEL-008's gate: SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`).
 6. **Chain sync's cutover** follows the flip and deletes the shell's protocol-handler half. **RD** deletes `levin_notify` and the relay entry.
 
 **Docs to fix in PR 2** (chain sync CS-F5):
