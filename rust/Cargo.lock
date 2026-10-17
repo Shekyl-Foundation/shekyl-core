@@ -4382,6 +4382,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-scanner",
  "shekyl-standoff",
+ "shekyl-tor-control-client",
  "shekyl-tor-control-wallet",
  "shekyl-tx-builder",
  "shekyl-tx-weight",
