@@ -49,8 +49,10 @@ answer, the view's own fault, which is neither. No store handle, no redb type,
 no `ChainStore` import — every rule is unit-testable against a mock view with no
 database (ruling §9.1). Pool admission (DRS-E5) calls the **same**
 per-slot judgement `form` runs — `judge_slot_stateless` at `TxSlot::Lone`,
-then `tx_against` over `shekyl_mempool::PoolView`, the decorator it defines
-— and `policy_form` for the policy rows; there is no second validator. Every `ChainValid` carries the set of census rows that were actually
+through `judge_lone_stateless`, whose `StatelessPass` the pool keeps so the
+bytes are judged once per process (CEN-M8) — then `tx_against` over
+`shekyl_mempool::PoolView`, the decorator it defines, and `policy_form` for
+the policy rows; there is no second validator. Every `ChainValid` carries the set of census rows that were actually
 evaluated (`RuleCoverage`), and only complete coverage is parity evidence
 (ruling §9.4).
 

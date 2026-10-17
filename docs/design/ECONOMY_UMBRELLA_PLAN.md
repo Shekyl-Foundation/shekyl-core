@@ -175,7 +175,7 @@ Monero number at 2 or above never ran, and those arms are deleted
 | Surge factor and the 100-block window | Verification time of a surge block | **Derived.** The inherited ×50 was re-derived from the device floor's verification time; the config carries 4 | C2-R2 Q3; GAP-7 |
 | Quadratic penalty and the 2× limit | Reward and weight, both as ratios | **Derived.** Scale-free in both operands; shape examined | C2-R2 Q4 |
 | Serialized-size cap, 1,000,000 B | Transaction weight | **Derived** as a parse bound: the weight cap binds first, and it admits 22 inputs of the measured shape | C2-R2 Q6; CEN-I4's measurement |
-| Pool lifetime, 3 days; pool cap, 648 MB | Block time; the zone | **Derived**, against the FCMP++ reference-age window. The cap is "3 days at the zone" and moves with it | C2-R2 Q11 |
+| Pool lifetime, 3 days; pool cap, 648 MB | Block time; the zone | **Derived**, against the FCMP++ reference-age window. The cap is "3 days at the zone" and moves with it. **Re-derived for the Rust pool 2026-10-17** (the review of #1102, B3; maintainer to confirm, since it replaces a signed value): no admitted-entry timer — the reference window evicts; the cap is `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit (60 MB at genesis); kept entries the reorg cap's blocks of it, for the reorg cap's blocks. The C++ pool keeps Q11's values until the flip | C2-R2 Q11; `DRS_E5_POOL_ALT_PRUNE.md` decision log 2026-10-17 |
 | `tx_extra` relay cap, 24,576 B | Transaction weight | **Derived**; Shekyl's own value | C2-R2 Q10 |
 | Fee correction `C` and the three rungs | Shekyl's `σ`, `M_r`, `b` | **Derived**, given the floor they multiply | FL-R11, FL-R17, FL-R20 |
 

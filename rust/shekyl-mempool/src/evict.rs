@@ -24,7 +24,8 @@
 //! An admitted entry has no lifetime of its own: its reference leaves
 //! CEN-I11's window `REFERENCE_BLOCK_MAX_AGE` blocks after the block it
 //! names, and the reconcile removes it on that refusal (S4) — sooner than
-//! the C++ timer (three days).
+//! the C++ timer (three days, C2-R2 Q11; superseded here, E5 decision log
+//! 2026-10-17).
 //!
 //! # The bound holds at admission
 //!
