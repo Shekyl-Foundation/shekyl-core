@@ -28,6 +28,7 @@ use shekyl_seam::{
     drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial, Direction, Endpoint,
     Hub, SocketId,
 };
+use shekyl_socks::Proxy;
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
 use shekyl_tor::{
     accept_inbound as accept_tor_inbound, dial_one as dial_tor, Admitted as TorAdmitted,
@@ -58,7 +59,7 @@ struct Host {
     /// gap sender lives on the connection row there.
     hub: Hub,
     clearnet: Mutex<Option<ClearnetReady>>,
-    tor_proxy: Mutex<Option<SocketAddr>>,
+    tor_proxy: Mutex<Option<Proxy>>,
     clearnet_tx: mpsc::UnboundedSender<ClearnetAdmitted>,
     tor_tx: mpsc::UnboundedSender<TorAdmitted>,
     shutdown_timeout: Duration,
@@ -75,7 +76,7 @@ struct Host {
 struct ClearnetReady {
     kind: shekyl_clearnet::ChannelChoice,
     tally: Arc<shekyl_clearnet::HandshakeTally>,
-    proxy: Option<SocketAddr>,
+    proxy: Option<Proxy>,
 }
 
 static HOST: LazyLock<Mutex<Option<Arc<Host>>>> = LazyLock::new(|| Mutex::new(None));
@@ -122,7 +123,7 @@ impl ZoneDial {
             .map(|ready| ClearnetReady {
                 kind: ready.kind,
                 tally: Arc::clone(&ready.tally),
-                proxy: ready.proxy,
+                proxy: ready.proxy.clone(),
             })
             .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let address = match ip {
@@ -173,6 +174,7 @@ impl ZoneDial {
             .tor_proxy
             .lock()
             .expect("tor proxy")
+            .clone()
             .ok_or_else(|| CloseCause::new(CloseKind::LocalClose))?;
         let address = NetworkAddress::Tor {
             host: shekyl_onion_v3::v3_onion_hostname(key),
@@ -460,7 +462,7 @@ fn spawn_lateness_report(engine: Handle<MonotonicClock>) {
 /// `params` is readable. `ipv4` is a NUL-terminated address. `ipv6` may be
 /// null. `out_port` and `out_port_v6` are writable.
 /// Starts the clearnet connector from its section: dials through `proxy`
-/// when one is given, and listens on every endpoint of `listen` (none is
+/// (with its RFC 1929 pair, if any) when one is given, and listens on every endpoint of `listen` (none is
 /// dial-only). Returns the bound endpoints. Fails when the seam is not
 /// bound, when a listener cannot bind, or when the channel is refused;
 /// nothing is started on failure.
@@ -469,7 +471,7 @@ fn spawn_lateness_report(engine: Handle<MonotonicClock>) {
 /// [`ZoneStart`].
 pub fn start_clearnet(
     listen: &[SocketAddr],
-    proxy: Option<SocketAddr>,
+    proxy: Option<Proxy>,
     encrypt: bool,
     network_id: [u8; 16],
 ) -> Result<Vec<SocketAddr>, ZoneStart> {
@@ -553,13 +555,12 @@ fn spawn_clearnet(
 /// # Errors
 /// [`ZoneStart`].
 pub fn start_tor(
-    socks: SocketAddr,
+    socks: Proxy,
     extra: Option<SocketAddr>,
     network_id: [u8; 16],
 ) -> Result<SocketAddr, ZoneStart> {
     let host = ensure(network_id)?;
-    *host.tor_proxy.lock().expect("tor proxy") = Some(socks);
-    tracing::info!("the Tor zone dials through the SOCKS proxy at {socks}");
+    install_tor_proxy(&host, socks);
     crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
     let forward_at = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
     let (forward, extra) = host.handle.block_on(async {
@@ -595,12 +596,26 @@ pub fn start_tor(
 ///
 /// # Errors
 /// [`ZoneStart`].
-pub fn dial_through_tor(socks: SocketAddr, network_id: [u8; 16]) -> Result<(), ZoneStart> {
+pub fn dial_through_tor(socks: Proxy, network_id: [u8; 16]) -> Result<(), ZoneStart> {
     let host = ensure(network_id)?;
-    *host.tor_proxy.lock().expect("tor proxy") = Some(socks);
-    tracing::info!("the Tor zone dials through the SOCKS proxy at {socks}");
+    install_tor_proxy(&host, socks);
     crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
     Ok(())
+}
+
+/// The Tor zone's proxy for every later dial, with the pair it presents
+/// there, if any (DC-Q7).
+fn install_tor_proxy(host: &Host, socks: Proxy) {
+    let (at, authenticates) = (socks.at(), socks.authenticates());
+    *host.tor_proxy.lock().expect("tor proxy") = Some(socks);
+    tracing::info!(
+        "the Tor zone dials through the SOCKS proxy at {at}{}",
+        if authenticates {
+            ", with the configured username and password"
+        } else {
+            ""
+        }
+    );
 }
 
 fn spawn_tor(host: &Host, listener: TcpListener) {

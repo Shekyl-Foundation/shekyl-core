@@ -63,12 +63,19 @@ fn the_engine_outlives_ensure() {
     // An outbound-only tor zone installs its proxy without listening.
     assert!(host.tor_proxy.lock().expect("tor proxy").is_none());
     dial_through_tor(
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050),
+        shekyl_socks::Proxy::unauthenticated(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9050,
+        )),
         network_id,
     )
     .expect("the proxy install");
     assert_eq!(
-        *host.tor_proxy.lock().expect("tor proxy"),
+        host.tor_proxy
+            .lock()
+            .expect("tor proxy")
+            .as_ref()
+            .map(shekyl_socks::Proxy::at),
         Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050)),
         "dial_tor reads this; None is DialFailed before the network"
     );
@@ -172,7 +179,10 @@ fn a_second_start_of_a_connectors_loop_starts_nothing() {
         "a second start finds it taken and starts nothing"
     );
     dial_through_tor(
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050),
+        shekyl_socks::Proxy::unauthenticated(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9050,
+        )),
         network_id,
     )
     .expect("the proxy install is not refused by the claimed loop");

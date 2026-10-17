@@ -60,7 +60,7 @@ fn config(
     on_cause: Arc<dyn Fn(CloseCause) + Send + Sync>,
 ) -> Config {
     Config {
-        proxy,
+        proxy: shekyl_socks::Proxy::unauthenticated(proxy),
         anonymous_inbound: inbound.into_iter().map(OperatorInbound::new).collect(),
         ceiling,
         dial_within: dial,

@@ -2232,6 +2232,84 @@ mod live_tests {
         );
     }
 
+    /// The managed launch hands the pinned tor its control end and nothing else of
+    /// this process's (`DAEMON_CONFIG_CUTOVER.md` §2.10): a file opened without
+    /// close-on-exec, as C++ in the daemon's process opens one, is not in tor's
+    /// descriptor table. The handshake is the evidence tor holds its control end.
+    /// Fails when the launch's `pre_exec` stops calling
+    /// [`crate::inherit::StdioOnly::apply`].
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY"]
+    async fn the_managed_tor_inherits_its_control_end_and_nothing_else() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data_dir = dir.path().to_path_buf();
+        let planted_dir = tempfile::tempdir().expect("tempdir");
+        let planted_path = planted_dir.path().join("planted");
+        std::fs::write(&planted_path, b"").expect("the planted file");
+        let planted_c = std::ffi::CString::new(planted_path.as_os_str().as_bytes())
+            .expect("a path without NUL");
+        // SAFETY: `open` on a NUL-terminated path, without `O_CLOEXEC`.
+        let planted = unsafe { libc::open(planted_c.as_ptr(), libc::O_RDONLY) };
+        assert!(planted >= 3, "a descriptor above stdio");
+        let (readiness, _ready_rx) = BootstrapReadiness::new();
+        let (events, _events) = EventSink::bounded();
+        let (exit_tx, exit_rx) = oneshot::channel();
+        let actor = TorControlClient::spawn(TorControlClientConfig {
+            launch: TorLaunch::Managed(ManagedTor {
+                tor_binary: crate::binary::VerifiedTorBinary::unchecked_for_test(tor_binary()),
+                data_dir: data_dir.clone(),
+                socks_port: super::SocksPort::Fixed(free_port()),
+                disable_network: true,
+                exit_observer: Some(exit_tx),
+                leak: None,
+            }),
+            events,
+            readiness,
+        });
+        let reply = actor
+            .ask(Command::GetInfo(vec!["version".to_owned()]))
+            .await
+            .expect("GETINFO version over tor's control end");
+        assert_eq!(reply.status(), 250);
+        let held = descriptor_targets_of_the_process_naming(&data_dir);
+        actor.stop_gracefully().await.expect("graceful stop");
+        actor.wait_for_shutdown().await;
+        await_reap_before_drop(exit_rx).await;
+        // SAFETY: closes the descriptor this test opened.
+        unsafe { libc::close(planted) };
+        assert!(!held.is_empty(), "tor's descriptor table was read");
+        assert!(
+            !held.iter().any(|target| target == &planted_path),
+            "tor holds the planted descriptor: {held:?}"
+        );
+    }
+
+    /// What every descriptor of the one process whose command line names `data_dir`
+    /// points at, from `/proc`.
+    #[cfg(target_os = "linux")]
+    fn descriptor_targets_of_the_process_naming(data_dir: &Path) -> Vec<PathBuf> {
+        use std::os::unix::ffi::OsStrExt;
+        let needle = data_dir.as_os_str().as_bytes();
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir("/proc").expect("/proc") {
+            let Ok(entry) = entry else { continue };
+            let Ok(cmdline) = std::fs::read(entry.path().join("cmdline")) else {
+                continue;
+            };
+            if cmdline.split(|b| *b == 0).any(|arg| arg == needle) {
+                found.push(entry.path());
+            }
+        }
+        assert_eq!(found.len(), 1, "one process names the data directory");
+        std::fs::read_dir(found[0].join("fd"))
+            .expect("the process's descriptors")
+            .filter_map(Result::ok)
+            .filter_map(|fd| std::fs::read_link(fd.path()).ok())
+            .collect()
+    }
+
     /// The supervisor's subscription against the pinned tor: everything tor sends for
     /// it is one of the events [`super::super::events`] types, and a published onion's
     /// first upload round reaches the trigger (`TSR-Q5`).

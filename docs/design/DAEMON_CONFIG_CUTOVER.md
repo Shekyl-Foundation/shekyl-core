@@ -269,6 +269,21 @@ a typed code. That closes the pre-created-directory hole of §7 item 7.
   ([`src/common/util.cpp:645-649`](../../src/common/util.cpp)). An account
   with no home has no default paths, and the paths it needs are named on
   the command line (the shipped unit already passes both).
+- A SOCKS proxy's username and password (`clearnet-socks-username` and
+  `-password`, `tor-socks-username` and `-password`; DC-Q7) are carried
+  on the dial as RFC 1929's sub-negotiation. They are given as a pair or
+  refused: a half names the other half, either without its proxy names the
+  proxy, and each is 1 to 255 bytes, the field RFC 1929 carries. They are
+  file only (the grammar's secret kind), shown as `set` in the
+  effective-configuration line, held as zeroized secrets in Rust, and
+  never in the snapshot. The pair is bound to its proxy's address
+  (`shekyl_socks::Proxy`), so it is presented there and nowhere else; the
+  managed Tor takes none (its rows refuse a pair). The daemon sets no
+  isolation key and dials onions only; personas live in the wallet's own
+  Tor (PWD-E9). A proxy that refuses the pair, or wants authentication
+  the node does not send, closes the dial as `ProxyUnavailable`, and a
+  warning naming the two rows is logged at most once a minute. Live
+  gate: `rust/shekyl-levin/tests/socks_credentials.rs`.
 - The per-user runtime directory, when an owner needs one, comes from the
   platform's own interface (IG-Q14). This slice reads none; the socket
   directory of RT-W10 is RPC_CHANNEL's.
@@ -458,7 +473,13 @@ blocks the chain path. The runner:
   (IG-Q5), with no shell;
 - clears the environment, the rule the Tor launcher already follows
   ([`rust/shekyl-tor-control-client/src/control/actor.rs:883`](../../rust/shekyl-tor-control-client/src/control/actor.rs));
-- gives the child a null standard input and no inherited descriptors;
+- gives the child a null standard input and no inherited descriptors:
+  on Unix its `pre_exec` marks every descriptor from 3 up close-on-exec
+  (`shekyl-tor-control-client`'s `inherit`), because C++ in the same
+  process opens sockets and files without that flag; the managed Tor's
+  launch does the same and then clears its control end alone. Marking,
+  not closing, keeps the channel std uses to report a failed `exec`. The
+  gate is `scripts/ci/check_spawn_children_inherit_stdio_only.py`;
 - reaps its own children and never changes a process-wide signal
   disposition (DC-F12);
 - keeps at most one command in flight per kind; an event that arrives
@@ -478,8 +499,8 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 | paths | `shekyl-daemon-config` (lock, marker); core through the snapshot | the run mode (`service`, DC-Q17), the resolved data directory and log file, and their sources | `data-dir`, `log-file`, `config-file`, `os-version` (folded into `version`) |
 | logging | `shekyl-logging` | the level, the per-category levels, the disk budget for the live file and its archives (IG-Q19) | `log-level`, `max-log-file-size`, `max-log-files` |
 | network | `shekyl-daemon-config`, read by every owner | the network and its params row | `testnet`, `stagenet`, `regtest` |
-| clearnet connector | the zone host and the dialer | the posture: `Off`, or `On` with listen endpoints, an optional SOCKS endpoint (credentials are refused until a dial sends them), and the advertised endpoints | `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6`, `p2p-ignore-ipv4`, `p2p-external-port`, `proxy`, and `offline` with the Tor connector |
-| Tor connector | `shekyl-tor` and the zone host | the posture: `Off`, `Managed` with the Tor binary's path, or `Operator` with a SOCKS endpoint (credentials are refused until a dial sends them) and an optional onion with its local listen endpoint | `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound`, `SHEKYL_TOR_BINARY` (environment) |
+| clearnet connector | the zone host and the dialer | the posture: `Off`, or `On` with listen endpoints, an optional SOCKS proxy with its RFC 1929 pair (§2.5), and the advertised endpoints | `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6`, `p2p-ignore-ipv4`, `p2p-external-port`, `proxy`, and `offline` with the Tor connector |
+| Tor connector | `shekyl-tor` and the zone host | the posture: `Off`, `Managed` with the Tor binary's path, or `Operator` with a SOCKS proxy and its RFC 1929 pair (§2.5) and an optional onion with its local listen endpoint | `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound`, `SHEKYL_TOR_BINARY` (environment) |
 | p2p policy | the dialer and the peer lists | the operator's peers, the closed-network declaration (absent or non-empty, DC-F11), the local-range override, early disclosure, the ban file's entries, the two rate bounds | `add-peer`, `seed-node`, `add-exclusive-node`, `allow-local-ip`, `p2p-disclose-early` (PR-3), `ban-list`, `in-peers`, `limit-rate-up`, `limit-rate-down`, `limit-rate`, `out-peers`, `tos-flag`, `no-igd`, `igd` |
 | rpc | `shekyl-daemon-rpc` | the admin and view listener sets, the origin list, the connection cap | `rpc-bind-ip`, `rpc-bind-ipv6-address`, `rpc-use-ipv6`, `rpc-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address`, `rpc-restricted-bind-port`, `restricted-rpc`, `rpc-access-control-origins`, `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip`, `rpc-response-soft-limit`, `disable-rpc-ban` |
 | txpool | core, through the snapshot | the weight bound | `max-txpool-weight` |
