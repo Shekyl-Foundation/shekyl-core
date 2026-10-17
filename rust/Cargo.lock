@@ -4236,6 +4236,7 @@ dependencies = [
  "shekyl-archival-bond-builder",
  "shekyl-archival-retention",
  "shekyl-bulletproofs",
+ "shekyl-chain-rules",
  "shekyl-consensus",
  "shekyl-crypto-pq",
  "shekyl-ct-balance",

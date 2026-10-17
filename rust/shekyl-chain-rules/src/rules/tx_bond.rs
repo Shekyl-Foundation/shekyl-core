@@ -672,13 +672,9 @@ fn reinstate_terms_hold(vin: &ArchivalBondPostVin, record: Option<&BondRecord>) 
 /// (duplicate, over cap) — the wire parse refuses those before any rule
 /// runs, so the arm is unreachable from bytes and fails closed.
 ///
-/// The submit pool's `retention_vin` (`shekyl-daemon-rpc`,
-/// `submit/verifier.rs`) is a different function. It takes a caller-supplied
-/// retention kind and a separate `bond_spend_pk`, and it does not classify
-/// the post. The two are not interchangeable, and neither is a copy of the
-/// other. The pool's deletes when pool admission calls [`crate::tx_against`]
-/// (DRS-E5); until that caller lands, the pool's stays. The follow-up names
-/// both shapes (`docs/FOLLOWUPS.md`).
+/// The one marshal: the submit engine's battery reads the same vin through
+/// [`bond_post_vin`] (DRS-E5 PR-b), so the block path and the engine cannot
+/// disagree about what a post says.
 pub(crate) fn retention_vin(arm: &BondArm<'_>) -> Option<ArchivalBondPostVin> {
     let post = arm.post();
     let (holdings_kind, shard_ids) = match &post.holdings {
@@ -714,6 +710,17 @@ pub(crate) fn retention_vin(arm: &BondArm<'_>) -> Option<ArchivalBondPostVin> {
         bond_credit: post.bond_credit,
         bond_debit: post.bond_debit,
     })
+}
+
+/// A wire bond post as the retention crate's verify view: the post
+/// classified into its arm ([`BondArm::of`]) and marshalled by
+/// [`retention_vin`] — the validator's own marshal, public for the submit
+/// engine's battery (`shekyl-daemon-rpc`, `submit/verifier.rs`), which
+/// reads the vin the block path reads. `None` for a post no arm names
+/// (CEN-L7's refusal) or a compact set that is not a [`ShardSet`].
+#[must_use]
+pub fn bond_post_vin(post: &BondPost) -> Option<ArchivalBondPostVin> {
+    BondArm::of(post).as_ref().and_then(retention_vin)
 }
 
 #[cfg(test)]

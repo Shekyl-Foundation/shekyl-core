@@ -22,7 +22,8 @@
 //!
 //! What this crate owns: which transactions the pool holds, the key images
 //! they spend ([`KeyImages`], CEN-M7's map), whether each is public yet
-//! (the relay's fluff event sets the bit; D++ acceptance criterion 2),
+//! (D++ acceptance criterion 2: the relay's fluff event sets the bit, and a
+//! block having carried the transaction does; [`shown`] is the one read),
 //! when one leaves (CEN-M10), which go into a template, and the pool file
 //! (S-POOL) with its reconcile at open.
 //!
@@ -35,9 +36,11 @@
 mod door;
 mod pool;
 mod reconcile;
+mod relay;
 mod view;
 
 pub use door::{judge, Judged};
 pub use pool::{Admission, Arrival, Duplicate, Pool, PoolFault};
 pub use reconcile::{Reconciled, Removed};
+pub use relay::shown;
 pub use view::{KeyImages, PoolView};

@@ -220,6 +220,17 @@ impl Pool {
         &self.store
     }
 
+    /// The index.
+    pub(crate) const fn held(&self) -> &BTreeMap<TxHash, Held> {
+        &self.held
+    }
+
+    /// The index, to change one entry's in-memory record after the file
+    /// holds the change.
+    pub(crate) fn held_mut(&mut self) -> &mut BTreeMap<TxHash, Held> {
+        &mut self.held
+    }
+
     /// The record the pool holds for `txid`.
     #[must_use]
     pub fn record(&self, txid: &TxHash) -> Option<PoolRecord> {

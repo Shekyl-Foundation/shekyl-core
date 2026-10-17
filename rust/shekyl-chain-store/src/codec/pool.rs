@@ -9,8 +9,10 @@
 //! **The pool knows one relay fact: whether a transaction is public yet**
 //! (`DAEMON_RELAY_PRIVACY.md` D++ acceptance criterion 2). A transaction
 //! that is not public is absent from the pool listing, from peer pool sync
-//! and from a block template. The relay sets the bit, on its fluff event,
-//! and nothing else does. Stem, fluff, embargo, the arrival connector and
+//! and from a block template. The relay's fluff event sets the bit for a
+//! relayed transaction; a transaction returned from a popped block is
+//! admitted public, because a block carried it. Nothing clears it. Stem,
+//! fluff, embargo, the arrival connector and
 //! the originator's re-broadcast responsibility (F-10's disarm) are
 //! `shekyl-relay`'s, which holds `Responsibility` keyed by transaction hash
 //! beside its stem watch. A zone is an attribute of a session, never of a
@@ -113,9 +115,10 @@ pub enum Standing {
         /// The reference the proof verified against, if any.
         proven: Option<ProvenReference>,
     },
-    /// Returned from a popped block and refused by the chain-bound half of
-    /// the door (CEN-K10): kept because a further reorg may make it valid
-    /// again, never relayed, never selected, and evicted by M10.
+    /// Refused by the chain-bound half of the door when judged again — on
+    /// return from a popped block (CEN-K10) or at a reconcile: kept because
+    /// a further reorg may make it valid again, never relayed, never
+    /// selected, and evicted by M10.
     Kept,
 }
 
@@ -129,9 +132,9 @@ pub struct PoolRecord {
     pub fee: AtomicUnits,
     /// When this node first held it (wall clock).
     pub receive_time: UnixSeconds,
-    /// Whether the relay has made it public (criterion 2). Only
-    /// [`PoolBatch::publish`](crate::pool::PoolBatch::publish) sets it, and
-    /// nothing clears it.
+    /// Whether it is public (criterion 2): set by the relay's fluff event
+    /// through [`PoolBatch::publish`](crate::pool::PoolBatch::publish), or at
+    /// insert for a transaction a block carried. Nothing clears it.
     pub public: bool,
     /// Whether the door admitted it or K10 kept it.
     pub standing: Standing,

@@ -355,3 +355,55 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
     drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
+
+/// D++ acceptance criterion 2: a transaction the relay has not fluffed is
+/// in no listing the node shows — the pool listing, peer pool sync — and
+/// is in both once the relay's fluff event sets the bit. The relay's own
+/// view of what it still holds back (`unpublished`) is the complement.
+#[tokio::test]
+async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
+    let (mut scenario, mined) = matured("pool-criterion-2").await;
+    let good = paying_the_floor(&mut scenario, &mined, 0).await;
+    let txid = good.txid_parts().hash;
+    let path = tmp("pool-criterion-2-pool");
+    let (before, after, reopened) = scenario
+        .read_chain(|view, rule_set| {
+            let policy = AdmissionPolicy::GENESIS;
+            let (mut pool, _, _) = Pool::open(&path, view, rule_set, &policy).expect("open");
+            let admitted = pool
+                .admit(
+                    good,
+                    Arrival::Relayed,
+                    UnixSeconds::from_raw(1),
+                    view,
+                    rule_set,
+                    &policy,
+                )
+                .expect("no fault");
+            assert_eq!(admitted, Admission::Admitted, "fixture: the spend is held");
+            let seen = |pool: &Pool| {
+                (
+                    pool.listing().any(|(id, _)| id == txid),
+                    pool.peer_sync().any(|(id, _)| id == txid),
+                    pool.unpublished().any(|(id, _)| id == txid),
+                )
+            };
+            let before = seen(&pool);
+            assert!(pool.fluffed(&txid).expect("publish"), "the pool holds it");
+            let after = seen(&pool);
+            drop(pool);
+            // The bit is the file's too: a reopen shows it.
+            let (pool, _, _) = Pool::open(&path, view, rule_set, &policy).expect("reopen");
+            (before, after, seen(&pool))
+        })
+        .await;
+    assert_eq!(before, (false, false, true), "unfluffed: shown nowhere");
+    assert_eq!(
+        after,
+        (true, true, false),
+        "fluffed: in the listing and peer sync"
+    );
+    assert_eq!(reopened, after, "the public bit survives a restart");
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}

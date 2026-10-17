@@ -1233,10 +1233,10 @@ the plan's closure.
   `fill_block_template` `:2077`, the relay FSM, the key-image map);
   `flush_txes_from_pool` (`blockchain.cpp:5067`); the `FfiSubmitShim` trait
   impl in `shekyl-daemon-rpc/src/submit/` (the §11 reversion executed, not
-  a deletion of the engine); `retention_vin`'s second spelling
-  (`verifier.rs:887`; FOLLOWUPS' *`retention_vin` … is spelled in two
-  places* row). Trigger: the DRS-X cutover, after PR-b. Falsifier: `rg -n 'fn retention_vin' rust/` → one site;
-  `git grep tx_memory_pool src/` → 0.
+  a deletion of the engine). `retention_vin`'s second spelling is not in
+  it: PR-b deleted it (b3), the engine reading the validator's marshal
+  (`shekyl_chain_rules::bond_post_vin`). Trigger: the DRS-X cutover, after
+  PR-b. Falsifier: `git grep tx_memory_pool src/` → 0.
 
 Both rows are in `DAEMON_REDB_STORE.md` §12 as of this commit.
 

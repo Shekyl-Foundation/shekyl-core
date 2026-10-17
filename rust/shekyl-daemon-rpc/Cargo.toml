@@ -54,6 +54,10 @@ shekyl-wire = { path = "../shekyl-wire" }
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# The validator's bond-post marshal (`bond_post_vin`): the battery reads the
+# vin the block path reads, through the validator's one function, never a
+# second spelling (DRS-E5 PR-b; the FOLLOWUPS `retention_vin` row closed).
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
