@@ -322,9 +322,17 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
          fork choice's match (K6) and the demoted rows (K7) are the switch's (DRS-E5 a5), \
          proved by the ingest's switch tests"
     );
-    assert!(PolicyRow::ALL
+    let policy_implemented: Vec<PolicyRow> = PolicyRow::ALL
         .iter()
-        .all(|r| r.status() == RowStatus::Pending));
+        .copied()
+        .filter(|r| r.status() == RowStatus::Implemented)
+        .collect();
+    assert_eq!(
+        policy_implemented,
+        [PolicyRow::M3, PolicyRow::M4, PolicyRow::M5],
+        "DRS-E5 PR-b b1: `policy_form`'s three rows — the fee floor, the extra cap, the \
+         unlock ban"
+    );
     // SCW-18's compile-time pin is the check; this is the runtime echo so a
     // swapped `implemented(B2)` under the B1 entry cannot hide behind a
     // matching status list.
@@ -383,8 +391,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // serve-credit bundle's nine admission rows, minted `pending` with the
     // pure verifier that names them as refusals (`archival/bundle.rs`,
     // STAGED — no rule type is bound until `SO-D12`'s cutover).
+    // Policy 9 → 8 on 2026-10-17: CEN-M11 (zero-fee never relayed) went to
+    // bucket 3 and its entry was deleted (DRS-E5 PR-b b1) — redundant with
+    // M3, which refuses a zero-fee transaction at the one pool door.
     assert_eq!(CenRow::ALL.len(), 163);
-    assert_eq!(PolicyRow::ALL.len(), 9);
+    assert_eq!(PolicyRow::ALL.len(), 8);
 }
 
 #[test]

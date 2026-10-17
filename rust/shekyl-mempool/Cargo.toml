@@ -1,0 +1,41 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-mempool"
+description = "The daemon's Rust transaction pool (DRS-E5 PR-b): admission through the validator's own door, the key-image conflict map, the public bit, eviction, template selection and the open-time reconcile. Holds the state machine and the store wiring, never a rule. Staged for the DRS-X store flip."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# `E5-Q2`, ruled 2026-10-10 with a condition: this crate calls the
+# validator and holds no rule (G10 forbids a second admission function).
+# It depends on the validator and the store and on nothing that relays: the
+# relay sets the public bit through this crate's interface, and the
+# dependency points from the relay's wiring to here, never back.
+[dependencies]
+# judge_slot_stateless / tx_against / policy_form — the door's three calls;
+# ChainView / HeaderView — what the decorator implements; ReferenceClaims.
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# PoolStore (P1–P7), PoolRecord / Standing / ProvenReference, and the
+# snapshot view the door judges against.
+shekyl-chain-store = { path = "../shekyl-chain-store" }
+# KeyImage, TxHash, BlockHeight, UnixSeconds.
+shekyl-types = { path = "../shekyl-types" }
+# AtomicUnits: a pool entry's fee.
+shekyl-units = { path = "../shekyl-units" }
+# Transaction parsing and hashing.
+shekyl-wire = { path = "../shekyl-wire" }
+
+[dev-dependencies]
+# The harness views and fixtures the door == validator tests run over.
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# The compile_fail negative controls with stderr snapshots (the
+# `CHAIN_RULES_CRATE.md` §8.3 form: a doctest cannot say why it failed).
+trybuild = "1"
+
+[lints]
+workspace = true

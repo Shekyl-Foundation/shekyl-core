@@ -4669,6 +4669,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-mempool"
+version = "3.1.0"
+dependencies = [
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-types",
+ "shekyl-units",
+ "shekyl-wire",
+ "trybuild",
+]
+
+[[package]]
 name = "shekyl-multisig"
 version = "3.1.0"
 dependencies = [

@@ -679,15 +679,17 @@ census_rows! {
     /// bucket ≠ 3, in census order. Applied by `AdmissionPolicy` (DRS-E5);
     /// a `PolicyRow` cannot enter a `RuleCoverage` — the type forbids it.
     pub enum PolicyRow: Policy {
-        // 4.M Mempool admission (the `kept_by_block` axis) — policy-flagged rows
+        // 4.M Mempool admission — policy-flagged rows. M3, M4 and M5 are
+        // `policy_form`'s (the third call of the pool door, DRS-E5 PR-b b1).
+        // CEN-M11 is deleted (bucket 3): redundant with M3, which refuses a
+        // zero-fee transaction at the one door.
         M1 pending,
-        M3 pending,
-        M4 pending,
-        M5 pending,
+        M3 implemented(crate::policy::M3),
+        M4 implemented(crate::policy::M4),
+        M5 implemented(crate::policy::M5),
         M6 pending,
         M7 pending,
         M9 pending,
         M10 pending,
-        M11 pending,
     }
 }

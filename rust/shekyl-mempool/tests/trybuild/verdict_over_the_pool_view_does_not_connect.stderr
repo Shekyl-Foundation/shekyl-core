@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+  --> tests/trybuild/verdict_over_the_pool_view_does_not_connect.rs:23:23
+   |
+23 |         batch.connect(valid, RuleSet::GENESIS).map(|_| ())
+   |               ------- ^^^^^ expected `ChainValid<'_, BatchView<'_, '_>>`, found `ChainValid<'_, PoolView<'_, ...>>`
+   |               |
+   |               arguments to this method are incorrect
+   |
+   = note: expected struct `ChainValid<'_, BatchView<'_, '_>>`
+              found struct `ChainValid<'_, PoolView<'_, BatchView<'_, '_>>>`
+note: method defined here
+  --> $WORKSPACE/shekyl-chain-store/src/store/connect.rs
+   |
+   |     pub fn connect(
+   |            ^^^^^^^
