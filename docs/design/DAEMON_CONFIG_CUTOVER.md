@@ -1,6 +1,6 @@
 # Daemon configuration cutover — the option surface moves to Rust
 
-**Status: OPEN — Round 0 brief, complete (2026-10-15; every DC-Q ruled, the grammar's Part B folded in, PR-3 merged).** Rule 26 is cited.
+**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §5.1's GUI spawn observation, §5.2's Ctrl-Break case, §9's utilities) and the §10 carries.** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 26 is cited.
 The input grammar is ruled and merged: Part A (#1067, merge `7cf70b7052`)
 and Part B (#1068, merge `cd1d0cc8ed`). Its rules are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc) and the
