@@ -7,9 +7,9 @@
 //! successor): which held transactions a block built on `parent` lists,
 //! as a pure function of the pool, the parent's chain and a weight budget.
 //!
-//! Candidates are what the node shows ([`shown`](crate::shown): public and
-//! admitted — a stem-phase transaction is never in a template, nor a kept
-//! one), most fee per unit of weight first (ties: the earliest held, then
+//! Candidates are what the node shows ([`shown`](crate::shown): public — a
+//! stem-phase transaction is never in a template), most fee per unit of
+//! weight first (ties: the earliest held, then
 //! the hash). Each is judged again by [`tx_against`] at `TxSlot::Lone`
 //! against the parent, over the parent plus the key images already
 //! selected — the view-bound half `validate` will run on the block, so a
@@ -37,7 +37,6 @@ use shekyl_chain_rules::{
     tx_against, BlockArchivalKeys, CenRow, ChainView, Fault, FormAttempt, InvalidBlock, RuleSet,
     TxSlot,
 };
-use shekyl_chain_store::pool::Standing;
 use shekyl_types::TxHash;
 use shekyl_wire::Transaction;
 
@@ -102,10 +101,7 @@ pub fn select<'id, V: ChainView<'id>>(
         if selected.weight.saturating_add(weight) > budget {
             continue;
         }
-        let anchor = match held.record.standing {
-            Standing::Admitted => held.pass.and_then(|pass| pass.proven()),
-            Standing::Kept { .. } => continue,
-        };
+        let anchor = held.pass.and_then(|pass| pass.proven());
         let view = PoolView::new(parent, &spent);
         match tx_against(
             &held.tx,

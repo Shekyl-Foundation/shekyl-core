@@ -66,7 +66,6 @@ use shekyl_chain_rules::{
     emission_epoch_facts, relay_floor_at, relay_floor_window, release_last_served, AdmissionPolicy,
     AtHeight, ChainView, EmissionEpochSnapshot, HeaderView, PolicyRow, RuleSet, Tip,
 };
-use shekyl_chain_store::pool::Standing;
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
 use shekyl_mempool::{shown, stateless, Admission, Judged, Pool, RelayView};
 use shekyl_types::archival::{BondRecord, Holdings, MAX_BOND_BAD_INTERVALS};
@@ -351,14 +350,8 @@ fn gather(
 ) -> Result<SubmitFacts, ShimFault> {
     let fault = |_| ShimFault;
     let view = SnapshotView::new(snapshot);
-    // The pool holds it, for the contract, only as an admitted entry: a
-    // kept one is a block's body the pool will never mine on this chain,
-    // and a submit of it is judged again at commit (`Pool::admit`). What
-    // the node shows is `shown`'s answer (S6).
-    let held = pool
-        .relay_view()
-        .record(txid)
-        .filter(|record| record.standing == Standing::Admitted);
+    // What the node shows is `shown`'s answer (S6).
+    let held = pool.relay_view().record(txid);
     let in_pool = held.is_some();
     let in_pool_broadcast = held.is_some_and(|record| shown(&record));
     let in_chain = snapshot
@@ -529,9 +522,7 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                 // paying at least as much — the C++ insert-tail prune's
                 // answer.
                 Ok(Admission::PoolFull) => CommitOutcome::PrunedOnInsert,
-                Ok(Admission::Refused(_) | Admission::Kept) | Err(_) => {
-                    CommitOutcome::InternalFault
-                }
+                Ok(Admission::Refused(_)) | Err(_) => CommitOutcome::InternalFault,
             }
         });
         outcome.unwrap_or(CommitOutcome::InternalFault)

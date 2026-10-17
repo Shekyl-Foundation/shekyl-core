@@ -122,7 +122,7 @@ use super::{
     Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
     IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord, ProbeCell,
     PropertyCell, RMarket, RecordedPow, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
-    SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, Standing, TreeDepth, TxIndex,
+    SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth, TxIndex,
     TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
@@ -690,29 +690,15 @@ impl Fixtures for PoolRecord {
         let stemmed = PoolRecord {
             received: ReceivedHour::from_raw(472_222),
             public: false,
-            standing: Standing::Admitted,
         };
         vec![
-            // Admitted and not yet public: the relay holds it in stem.
-            ("admitted_unpublished", stemmed),
-            // Fluffed.
+            // Not yet public: the relay holds it in stem.
+            ("unpublished", stemmed),
+            // Fluffed, or carried by a block.
             (
-                "admitted_public",
+                "public",
                 PoolRecord {
                     public: true,
-                    ..stemmed
-                },
-            ),
-            // Returned from a popped block and refused by the chain-bound
-            // half alone: kept (CEN-K10) from the height it was returned at,
-            // public because a block carried it.
-            (
-                "kept_public",
-                PoolRecord {
-                    public: true,
-                    standing: Standing::Kept {
-                        returned_at: BlockHeight::from_raw(41),
-                    },
                     ..stemmed
                 },
             ),

@@ -37,18 +37,12 @@ fn txid(n: u8) -> TxHash {
     TxHash::from_bytes([n; 32])
 }
 
-/// The kept standing the store tests write.
-const KEPT: Standing = Standing::Kept {
-    returned_at: shekyl_types::BlockHeight::from_raw(9),
-};
-
 /// A public, admitted entry — the shape most store tests
 /// need; the record's own facts are the codec's tests.
 fn admitted() -> PoolRecord {
     PoolRecord {
         received: crate::codec::ReceivedHour::from_raw(1),
         public: true,
-        standing: Standing::Admitted,
     }
 }
 
@@ -94,22 +88,18 @@ fn create_then_open_then_every_read_on_the_empty_file() {
 }
 
 #[test]
-fn insert_publish_stand_remove_and_their_refusals() {
+fn insert_publish_remove_and_their_refusals() {
     let path = tmp("ops");
     let (store, _) = PoolStore::create(&path).unwrap();
     let h = txid(7);
     let rec = unpublished();
 
-    // P2 on a stranger, both writes.
+    // P2 on a stranger.
     let err = store
         .write(|b| b.publish(&h))
         .expect_err("publish of an unheld entry");
     assert_eq!(cannot(&err), Some(PoolCannot::NotHeld));
     assert_eq!(err.class(), ErrorClass::Cannot);
-    let err = store
-        .write(|b| b.stand(&h, KEPT))
-        .expect_err("stand of an unheld entry");
-    assert_eq!(cannot(&err), Some(PoolCannot::NotHeld));
 
     // P1 with an empty blob.
     let err = store
@@ -138,21 +128,8 @@ fn insert_publish_stand_remove_and_their_refusals() {
         public: true,
         ..rec
     };
-    assert_eq!(
-        store.begin_read().unwrap().record(&h).unwrap(),
-        Some(published)
-    );
-
-    // P2 stand replaces the standing and leaves the bit and the blob.
-    store.write(|b| b.stand(&h, KEPT)).unwrap();
     let snap = store.begin_read().unwrap();
-    assert_eq!(
-        snap.record(&h).unwrap(),
-        Some(PoolRecord {
-            standing: KEPT,
-            ..published
-        })
-    );
+    assert_eq!(snap.record(&h).unwrap(), Some(published));
     assert_eq!(snap.blob(&h).unwrap().as_deref(), Some(&b"tx-bytes"[..]));
     drop(snap);
 

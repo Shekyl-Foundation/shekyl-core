@@ -47,7 +47,8 @@
 //! restart can leave a heavier valid chain unpromotable. A demoted block's
 //! bodies go back into the store with its row (AL1), and also come back as
 //! [`SwitchDone::returned`], for the pool's door — relay and templates only
-//! (`shekyl_mempool::Pool::returned`, CEN-K10).
+//! (`shekyl_mempool::Pool::returned`; there is no reorg retention, CEN-K10
+//! being deleted: the store is where a switch back finds them).
 //!
 //! Not here: the arrival router's other arms beyond answering an orphan or
 //! a held hash, the orphan policy, and A1/A4's Rust holder — the DRS-X
@@ -302,8 +303,8 @@ pub struct SwitchDone {
     pub demoted_kept: bool,
     /// The blocks connected, ascending.
     pub promoted: Vec<(BlockHeight, BlockHash)>,
-    /// The demoted blocks' listed transactions, in chain order — the
-    /// pool's (CEN-K10): `shekyl_mempool::Pool::returned` offers each to
+    /// The demoted blocks' listed transactions, in chain order — for the
+    /// pool's relay: `shekyl_mempool::Pool::returned` offers each to
     /// the door against the chain the switch left. The scenario driver's
     /// `reorganize_with_pool` is the caller in this crate; the DRS-X router
     /// is the live one.

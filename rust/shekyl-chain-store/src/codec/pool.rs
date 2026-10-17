@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! The pool record — DRS-E1 S-POOL (`DRS_E1_SPOOL.md` §3.4), reshaped by
-//! DRS-E5 PR-b under DX-F6 (2026-10-16) and the review of #1102 (S2, S7).
+//! DRS-E5 PR-b under DX-F6 (2026-10-16), the review of #1102 (S2, S7) and
+//! the deletion of reorg retention (2026-10-17).
 //!
 //! **The pool knows one relay fact: whether a transaction is public yet**
 //! (`DAEMON_RELAY_PRIVACY.md` D++ acceptance criterion 2). A transaction
@@ -30,9 +31,10 @@
 //!   second is an origin clock: an observer comparing many nodes' records
 //!   would find the earliest, the origin or the start of its stem path.
 //! - `public` — criterion 2: listing, peer sync and template.
-//! - `standing` — template selection takes only [`Standing::Admitted`]
-//!   entries; a [`Standing::Kept`] entry carries the height it was
-//!   returned at, which CEN-M10 ages it from, in blocks.
+//!
+//! Every entry is one the door admitted. A transaction a popped block
+//! returns is judged like any other and dropped if the door refuses it;
+//! its body stays in the chain store for any switch back (CEN-K10).
 //!
 //! What the record no longer carries, and why:
 //!
@@ -60,14 +62,9 @@
 //!   selects, so there is no cached readiness to consult.
 
 use shekyl_store_codec::{Canonical, CodecError};
-use shekyl_types::{BlockHeight, UnixSeconds};
+use shekyl_types::UnixSeconds;
 
 use shekyl_store_codec::reader::Reader;
-
-/// Wire tags of [`Standing`]. Zero is not a value: a zeroed record does
-/// not read as admitted.
-const TAG_ADMITTED: u8 = 1;
-const TAG_KEPT: u8 = 2;
 
 /// Seconds in the hour [`ReceivedHour`] counts.
 const HOUR: u64 = 3_600;
@@ -98,22 +95,6 @@ impl ReceivedHour {
     }
 }
 
-/// Whether the entry passed the door at the tip it was last judged at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Standing {
-    /// The door admitted it.
-    Admitted,
-    /// Returned from a block a switch popped and refused by the door's
-    /// chain-bound half alone (CEN-K10): kept because a switch back may make
-    /// it valid again, never relayed, never selected, and evicted by M10
-    /// once the reorg cap has passed since `returned_at` — no switch back
-    /// reaches further.
-    Kept {
-        /// The tip of the chain the switch left.
-        returned_at: BlockHeight,
-    },
-}
-
 /// One pool entry's metadata. See the module docs for why each field is
 /// here and what is not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,8 +105,6 @@ pub struct PoolRecord {
     /// through [`PoolBatch::publish`](crate::pool::PoolBatch::publish), or by
     /// a block carrying it. Nothing clears it.
     pub public: bool,
-    /// Whether the door admitted it or K10 kept it.
-    pub standing: Standing,
 }
 
 // ---- codec ---------------------------------------------------------------
@@ -138,51 +117,30 @@ fn take_bool(reader: &mut Reader<'_>, what: &'static str) -> Result<bool, CodecE
     }
 }
 
-/// Layout (variable width; every tag is bounded before use):
+/// Layout (fixed width, 9 bytes):
 ///
 /// ```text
 /// received u64 (hours) ‖ public u8
-/// ‖ standing:
-///     1  admitted
-///     2  kept: returned_at u64
 /// ```
 ///
-/// A `public` byte other than `0` or `1`, or a standing tag other than `1`
-/// or `2`, is a codec error. Trailing bytes are a codec error.
+/// A `public` byte other than `0` or `1` is a codec error, and so is any
+/// other length.
 impl Canonical for PoolRecord {
     const NAME: &'static str = "pool_record";
-    const FIXED_WIDTH: Option<usize> = None;
+    const FIXED_WIDTH: Option<usize> = Some(9);
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.received.to_raw().to_le_bytes());
         out.push(u8::from(self.public));
-        match self.standing {
-            Standing::Admitted => out.push(TAG_ADMITTED),
-            Standing::Kept { returned_at } => {
-                out.push(TAG_KEPT);
-                out.extend_from_slice(&returned_at.to_raw().to_le_bytes());
-            }
-        }
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::new(Self::NAME, bytes);
         let received = ReceivedHour::from_raw(reader.u64()?);
         let public = take_bool(&mut reader, "public byte is not 0 or 1")?;
-        let standing = match reader.u8()? {
-            TAG_ADMITTED => Standing::Admitted,
-            TAG_KEPT => Standing::Kept {
-                returned_at: BlockHeight::from_raw(reader.u64()?),
-            },
-            _ => return Err(reader.invalid("standing tag is not admitted or kept")),
-        };
         if !reader.is_empty() {
             return Err(reader.invalid("trailing bytes after the pool record"));
         }
-        Ok(Self {
-            received,
-            public,
-            standing,
-        })
+        Ok(Self { received, public })
     }
 }

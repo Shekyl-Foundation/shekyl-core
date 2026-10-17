@@ -615,7 +615,9 @@ census_rows! {
         // switch's — the single writer's sequencing of the store, in
         // `shekyl-chain-ingest` (DRS-E5 a5; `DRS_E5_POOL_ALT_PRUNE.md`
         // §2.3), `held_by_store` with the switch test that proves each. K9
-        // and K10 are the pool's (PR-b).
+        // is the pool's (PR-b). CEN-K10 is deleted (bucket 3, 2026-10-17):
+        // reorg retention parked an alternative chain's bodies in the pool,
+        // and the store holds them now.
         K1a held_by_store("shekyl-chain-store", "a_chain_through_two_alt_entries_reaches_a_recorded_row"),
         K1b enforced_at(crate::rules::alt::K1b, "a_height_zero_claim_is_refused_before_anything_is_read"),
         K2 held_by_store("shekyl-chain-store", "the_orphan_is_unlinked_at_the_first_unheld_hash"),
@@ -626,14 +628,11 @@ census_rows! {
         K6 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
         K7 held_by_store("shekyl-chain-ingest", "a_checkpoint_forced_switch_discards_the_demoted_chain"),
         K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),
-        // K9 and K10: a block's bodies (DRS-E5 PR-b b4; the review of
-        // #1102, B1) — an alternative's held by the store beside its row and
-        // promoted from it, then offered to the pool door for relay; a
-        // popped block's returned to the door after the switch, kept when
-        // the chain-bound half alone refuses them. Witnessed by the switch
-        // over the production stack.
+        // K9: an alternative block's bodies (DRS-E5 PR-b b4; the review of
+        // #1102, B1) — held by the store beside its row and promoted from
+        // it, then offered to the pool door for relay. Witnessed by the
+        // switch over the production stack.
         K9 held_by_store("shekyl-chain-ingest", "an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool"),
-        K10 held_by_store("shekyl-chain-ingest", "a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the_cap"),
         // 4.L Storage layer (constraints that reject chain data at write time)
         // L1 is the validator's (C2-R8 Q6): the intra-block half of key-image
         // uniqueness, run in `validate` after every slot; SI-1 is the store's
@@ -711,8 +710,10 @@ census_rows! {
         // (`shekyl_daemon_rpc::RustPoolShim`), prepared, not routed; its
         // commit is the pool door. Witnessed by the engine end to end.
         M9 held_by_store("shekyl-chain-ingest", "the_engine_submits_through_the_rust_pool_and_its_door"),
-        // M10: the pool's eviction (b4) — the lifetimes by standing, the
-        // weight cap, the template's refusals.
-        M10 held_by_store("shekyl-mempool", "a_kept_entry_ages_in_blocks_from_its_return"),
+        // M10: the pool's eviction (b4) — the weight limit the chain
+        // derives, the cheapest per weight first, the template's refusals;
+        // no timer (an entry leaves when its reference leaves CEN-I11's
+        // window, at the reconcile).
+        M10 held_by_store("shekyl-mempool", "the_cheapest_leave_first_under_weight_pressure"),
     }
 }

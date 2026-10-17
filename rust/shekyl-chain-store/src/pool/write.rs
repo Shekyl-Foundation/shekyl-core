@@ -10,12 +10,11 @@
 //! closure (SPL-16): the store constructs it, runs the closure, and commits
 //! on `Ok` or aborts on `Err` — no caller holds a batch it could drop.
 //!
-//! P2 is two writes, one per mutable fact of an entry, so the facts that
+//! P2 is one write, for the entry's one mutable fact, so the facts that
 //! may not change have no write: [`publish`](PoolBatch::publish) sets the
-//! public bit (criterion 2: the relay's fluff event, and nothing clears
-//! it), and [`stand`](PoolBatch::stand) replaces the entry's
-//! [`Standing`](super::Standing) when the door judges it again. Weight, fee
-//! and receive time are the entry's own and are written once, by P1.
+//! public bit (criterion 2: the relay's fluff event, or a block carrying
+//! the transaction, and nothing clears it). The receive time is written
+//! once, by P1.
 
 use redb::{ReadableTable, Table, WriteTransaction};
 use shekyl_store_codec::{Blob, BlobKind, Canonical, Coded, Raw};
@@ -24,7 +23,7 @@ use shekyl_types::TxHash;
 use crate::store::{EngineError, PoolCannot, StoreError, StoreInvariant};
 
 use super::schema::{PoolTxBytes, POOL_BLOB, POOL_META};
-use super::{undecodable_meta, PoolRecord, Standing};
+use super::{undecodable_meta, PoolRecord};
 
 /// A write batch on the pool file — handed only to a
 /// [`PoolStore::write`](super::PoolStore::write) closure, never returned to
@@ -131,27 +130,6 @@ impl PoolBatch {
     /// [`PoolCannot::NotHeld`] if the pool does not hold `txid`;
     /// [`StoreInvariant::CellCorrupt`] if the stored row does not decode.
     pub fn publish(&mut self, txid: &TxHash) -> Result<(), StoreError> {
-        self.rewrite(txid, |record| record.public = true)
-    }
-
-    /// **P2**, the standing: record what the door decided when it judged
-    /// the entry again — admitted with the reference its proof verified
-    /// against, or kept (CEN-K10).
-    ///
-    /// # Errors
-    ///
-    /// [`PoolCannot::NotHeld`] if the pool does not hold `txid`;
-    /// [`StoreInvariant::CellCorrupt`] if the stored row does not decode.
-    pub fn stand(&mut self, txid: &TxHash, standing: Standing) -> Result<(), StoreError> {
-        self.rewrite(txid, |record| record.standing = standing)
-    }
-
-    /// Read the stored record, change one fact, write it back.
-    fn rewrite(
-        &mut self,
-        txid: &TxHash,
-        change: impl FnOnce(&mut PoolRecord),
-    ) -> Result<(), StoreError> {
         let key = txid.to_bytes();
         let mut meta = self.meta()?;
         let mut record = {
@@ -160,7 +138,7 @@ impl PoolBatch {
             };
             guard.value().decode().map_err(undecodable_meta)?
         };
-        change(&mut record);
+        record.public = true;
         meta.insert(key, record.encoded().as_encoded())
             .map_err(EngineError::Storage)?;
         Ok(())

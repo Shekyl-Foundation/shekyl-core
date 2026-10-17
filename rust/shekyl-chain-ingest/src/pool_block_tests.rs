@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! The pool and blocks, over the production stack (DRS-E5 PR-b b4): a
-//! switch's returns run the door (CEN-K10); an alternative's bodies are
+//! switch's returns run the door and are dropped if refused (no reorg
+//! retention: CEN-K10 is deleted); an alternative's bodies are
 //! the store's, promoted from it whatever the pool decided, and offered to
 //! the pool for relay (CEN-K9); a connect past the cap retires an alt row
 //! and its bodies; CEN-M8's anchor spares a re-admission the proof; and the
@@ -17,7 +18,7 @@ use shekyl_chain_rules::{
     judge_slot_stateless, probes, AdmissionPolicy, CenRow, HeaderView, PolicyRow, ReferenceClaims,
     RuleCoverage, Tip, TxSlot,
 };
-use shekyl_chain_store::pool::{PoolStore, Standing};
+use shekyl_chain_store::pool::PoolStore;
 use shekyl_harness_spender::Spender;
 use shekyl_mempool::{
     judge, shown, Admission, Duplicate, Evicted, Judged, KeyImages, Limits, Pool,
@@ -61,7 +62,7 @@ async fn open_pool(x: &mut Scenario<FreeHash>, path: &std::path::Path) -> Pool {
     .await
 }
 
-/// CEN-K10 and CEN-M3 together: two transactions a popped block listed come
+/// A switch's returns and CEN-M3 together: two transactions a popped block listed come
 /// back through the door — the one paying the floor is admitted, public
 /// (a block carried it); the one paying one atomic unit is refused on the
 /// floor exactly as a relayed one is (no `kept_by_block` exemption).
@@ -116,17 +117,19 @@ async fn a_switchs_returns_run_the_door_and_the_floor_refuses_one_below_it() {
     y.close().await;
 }
 
-/// CEN-K10's retention: a returned spend whose reference has aged out of
-/// CEN-I11's window on the chain the switch left is kept — refused by the
-/// chain-bound half, held, shown nowhere — and CEN-M10 evicts it after the
-/// kept lifetime, not the admitted one.
+/// CEN-K10 has no retention (ruled 2026-10-17): a returned spend whose
+/// reference has aged out of CEN-I11's window on the chain the switch left
+/// is refused by the door like any arrival and not held — not kept, not
+/// shown, not filed, and its key image free. Its body is not lost: the
+/// demoted block's bodies are the chain store's (AL8), which is what a
+/// switch back connects. A relayed resubmit is judged again and refused.
 #[tokio::test]
-async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the_cap() {
+async fn a_returned_spend_the_chain_refuses_is_dropped_and_the_store_keeps_its_body() {
     let (mut x, prefix) = matured("pool-aged-x").await;
     let mut y = Scenario::open("pool-aged-y");
     y.mine(AT).await;
     let spend = paying_the_floor(&mut x, &prefix, 0).await;
-    let _a = x
+    let a = x
         .mine_listing(vec![spend.clone()])
         .await
         .unwrap_or_else(|o| panic!("the spend connects: {o}"));
@@ -146,23 +149,15 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
         .await
         .expect("switch");
     let txid = spend.txid_parts().hash;
-    assert_eq!(admissions, vec![(txid, Admission::Kept)]);
-    let record = pool.relay_view().record(&txid).expect("kept");
-    let Standing::Kept { returned_at } = record.standing else {
-        panic!("kept: {record:?}");
-    };
-    assert!(!shown(&record));
-    assert_eq!(pool.listing().count(), 0, "kept is shown nowhere");
-    assert_eq!(pool.peer_sync().count(), 0);
-    let template = x
-        .read_chain(|view, rule_set| {
-            shekyl_mempool::select(&pool, view, rule_set, u64::MAX).expect("template")
-        })
-        .await;
-    assert!(
-        template.transactions.is_empty() && template.refused.is_empty(),
-        "a kept entry is never a candidate: {template:?}"
-    );
+    match admissions.as_slice() {
+        [(id, Admission::Refused(Judged::Chain(refused)))] => {
+            assert_eq!(*id, txid);
+            assert_eq!(refused.rule, CenRow::I11, "its reference aged out");
+        }
+        other => panic!("the aged-out return is refused: {other:?}"),
+    }
+    assert!(pool.relay_view().record(&txid).is_none(), "not held");
+    assert_eq!(pool.relay_view().len(), 0);
     assert!(
         !pool
             .relay_view()
@@ -173,20 +168,14 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
                     _ => unreachable!("a spend"),
                 }
             )),
-        "a kept entry blocks no other spend"
+        "its key image blocks no other spend"
     );
-    // A reconcile leaves a kept entry kept: the door still refuses it on
-    // the chain-bound half, and only its age or its bytes remove it.
-    let reconciled = x
-        .read_chain(|view, rule_set| {
-            pool.reconcile(view, rule_set, &AdmissionPolicy::GENESIS)
-                .expect("reconcile")
-        })
-        .await;
-    assert_eq!(reconciled.kept, vec![txid]);
-    assert!(reconciled.removed.is_empty());
-    // Submitted again by relay, a kept entry is no duplicate (S6): the door
-    // judges it, and its refusal is the answer; it stays kept.
+    // The body is the store's: the demoted block's row carries it.
+    let demoted = stored_bodies(&mut x, a.hash)
+        .await
+        .expect("the demoted block's bodies are the store's");
+    assert!(demoted.transactions().contains(&spend));
+    // Submitted again by relay, it is judged like any arrival.
     let again = x
         .read_chain(|view, rule_set| {
             pool.admit(
@@ -200,28 +189,21 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
         })
         .await;
     match again {
-        Admission::Refused(Judged::Chain { refused, .. }) => {
+        Admission::Refused(Judged::Chain(refused)) => {
             assert_eq!(refused.rule, CenRow::I11, "its reference aged out");
         }
-        other => panic!("a kept entry resubmitted is judged again: {other:?}"),
+        other => panic!("a resubmit is judged again: {other:?}"),
     }
-    assert!(matches!(
-        pool.relay_view()
-            .record(&txid)
-            .expect("still held")
-            .standing,
-        Standing::Kept { .. }
-    ));
-    // Aged in blocks from its return: a block short of the cap it stays;
-    // at the cap — no switch back reaches further — it goes.
-    let kept_for = pool.limits().kept_for.to_raw();
-    let at = |blocks: u64| shekyl_types::BlockHeight::from_raw(returned_at.to_raw() + blocks);
-    assert!(pool.evict(at(kept_for - 1), &[]).expect("evict").is_empty());
-    assert_eq!(
-        pool.evict(at(kept_for), &[]).expect("evict"),
-        vec![(txid, Evicted::KeptAged)]
-    );
+    assert!(pool.relay_view().record(&txid).is_none());
     drop(pool);
+    let filed = PoolStore::create(&path)
+        .expect("the pool file")
+        .0
+        .begin_read()
+        .expect("a snapshot")
+        .len()
+        .expect("len");
+    assert_eq!(filed, 0, "nothing was filed");
     drop(std::fs::remove_file(&path));
     x.close().await;
     y.close().await;
@@ -664,8 +646,7 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     );
     let refused: Vec<_> = template.refused.iter().map(|(id, _)| *id).collect();
     assert_eq!(
-        pool.evict(shekyl_types::BlockHeight::ZERO, &refused)
-            .expect("evict"),
+        pool.evict(&refused).expect("evict"),
         vec![(id1, Evicted::Refused)]
     );
     assert!(pool.relay_view().record(&id2).is_some() && pool.relay_view().record(&id3).is_some());
@@ -703,10 +684,7 @@ async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
             let policy = AdmissionPolicy::GENESIS;
             let now = UnixSeconds::from_raw(1);
             let (mut pool, _, _) = Pool::open(&path, now, view, rule_set, &policy).expect("open");
-            pool.set_limits(Limits {
-                max_weight: room,
-                ..pool.limits()
-            });
+            pool.set_limits(Limits { max_weight: room });
             let mut admit = |tx: &shekyl_wire::Transaction| {
                 pool.admit(tx.clone(), now, view, rule_set, &policy)
                     .expect("no fault")
@@ -793,7 +771,7 @@ async fn an_admitted_entry_leaves_when_its_reference_leaves_the_window() {
         })
         .await;
     match reconciled.removed.as_slice() {
-        [(id, shekyl_mempool::Removed::Refused(Judged::Chain { refused, .. }))] => {
+        [(id, shekyl_mempool::Removed::Refused(Judged::Chain(refused)))] => {
             assert_eq!(*id, txid);
             assert_eq!(refused.rule, CenRow::I11, "the reference aged out");
         }

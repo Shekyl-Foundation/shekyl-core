@@ -20,9 +20,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet, StatelessPass};
-use shekyl_chain_store::pool::{PoolOpen, PoolRecord, PoolStore, ReceivedHour, Standing};
+use shekyl_chain_store::pool::{PoolOpen, PoolRecord, PoolStore, ReceivedHour};
 use shekyl_chain_store::store::StoreError;
-use shekyl_types::{BlockHeight, KeyImage, TxHash, UnixSeconds};
+use shekyl_types::{KeyImage, TxHash, UnixSeconds};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{Ct, Input};
 use shekyl_wire::Transaction;
@@ -31,31 +31,22 @@ use crate::door::{self, Judged};
 use crate::evict::Limits;
 use crate::view::KeyImages;
 
-/// How a transaction reached the door. Crate-private (the review of #1102,
-/// S6): only [`Pool::returned`] and [`Pool::supplement`] reach the block
-/// arms, so no caller can admit a peer's transaction as public and skip its
+/// How a transaction reached the door — which decides only whether it is
+/// public on admission. Crate-private (the review of #1102, S6): only
+/// [`Pool::returned`] and [`Pool::supplement`] reach [`Arrival::Carried`],
+/// so no caller can admit a peer's transaction as public and skip its
 /// embargo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Arrival {
     /// From a peer or this node's own submit: not public until the relay's
     /// fluff event says so.
     Relayed,
-    /// Returned from a block a switch popped (CEN-K10). Public, because a
-    /// block carried it, and kept if the chain-bound half alone refuses it:
-    /// a switch back may make it valid again.
-    Returned,
-    /// Listed by an alternative block the store holds (CEN-K9). Public,
-    /// because a block carried it. Held only if the door admits it: the
-    /// store holds the alternative's bodies for its promotion, so the pool's
-    /// answer decides relay and templates and nothing else.
-    Listed,
-}
-
-impl Arrival {
-    /// Whether a block carried the transaction, which makes it public.
-    const fn carried(self) -> bool {
-        !matches!(self, Self::Relayed)
-    }
+    /// A block carried it: returned from a block a switch popped, or
+    /// listed by an alternative block the store holds (CEN-K9). Public,
+    /// because the block published it. Held only if the door admits it: the
+    /// store holds every such block's bodies for any switch, so the pool's
+    /// answer decides relay and templates and nothing else (`block.rs`).
+    Carried,
 }
 
 /// A transaction the pool already accounts for (CEN-M1): nothing is
@@ -72,18 +63,13 @@ pub enum Duplicate {
 /// What [`Pool::admit`] did with a transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Admission {
-    /// The door admitted it; the pool holds it as [`Standing::Admitted`],
-    /// having evicted `evicted` in the same write to make room (CEN-M10,
-    /// kept entries first, then admitted ones paying less per weight).
+    /// The door admitted it, and the pool holds it, having evicted
+    /// `evicted` in the same write to make room (CEN-M10: entries paying
+    /// less per weight, the cheapest first).
     Admitted {
         /// What left to make room, in eviction order.
         evicted: Vec<TxHash>,
     },
-    /// A returned transaction the chain-bound half refused and the policy
-    /// did not: held as [`Standing::Kept`] — never relayed, never selected,
-    /// and evicted by CEN-M10 (CEN-K10). The only way an entry becomes
-    /// kept.
-    Kept,
     /// Already accounted for (CEN-M1).
     Duplicate(Duplicate),
     /// Refused, and not held: the door's answer.
@@ -122,9 +108,9 @@ pub(crate) struct Held {
     pub(crate) record: PoolRecord,
     pub(crate) weight: u64,
     pub(crate) fee: AtomicUnits,
-    /// The door's step 1 when it last judged this transaction, which holds
-    /// while its rule set and its claim do; `None` until a judgement here
-    /// (a row read back from the file).
+    /// The door's step 1 when it last admitted this transaction, which
+    /// holds while its rule set and its claim do; `None` until a judgement
+    /// here (a row read back from the file).
     pub(crate) pass: Option<StatelessPass>,
 }
 
@@ -207,10 +193,7 @@ impl Pool {
     /// event says so.
     ///
     /// CEN-M1 first: a transaction the pool or the chain already holds is
-    /// a [`Duplicate`] and nothing is judged — except one the pool holds
-    /// only as kept, which is not in the pool in any sense a submitter
-    /// means: the door judges it again, and either admits it (it is
-    /// promoted) or answers with its refusal. Then CEN-M10's rising
+    /// a [`Duplicate`] and nothing is judged. Then CEN-M10's rising
     /// minimum, then the door. An admitted transaction is written to the
     /// file (P1) and its key images enter the map (CEN-M7). Everything else
     /// is refused and leaves no trace.
@@ -255,11 +238,7 @@ impl Pool {
     /// public (P2): a block has published it on every node, and a pool
     /// that kept it hidden would answer peer sync differently for a
     /// transaction it held in its stem phase than for one it did not — a
-    /// possession oracle for anyone who can send an alternative block. A
-    /// block-carried transaction the chain-bound half alone refused is
-    /// written as kept, when a switch returned it, and spends nothing in
-    /// the map — it is not a pool-valid transaction, so it blocks no other
-    /// spend.
+    /// possession oracle for anyone who can send an alternative block.
     #[allow(
         clippy::too_many_arguments,
         reason = "admit's arguments, the prior pass and the arrival"
@@ -275,17 +254,13 @@ impl Pool {
         policy: &AdmissionPolicy,
     ) -> Result<Admission, PoolFault<V::Fault>> {
         let txid = tx.txid_parts().hash;
+        let carried = arrival == Arrival::Carried;
         if let Some(held) = self.held.get_mut(&txid) {
-            if arrival.carried() && !held.record.public {
+            if carried && !held.record.public {
                 self.store.write(|batch| batch.publish(&txid))?;
                 held.record.public = true;
             }
-            let kept = matches!(held.record.standing, Standing::Kept { .. });
-            if !(kept && arrival == Arrival::Relayed) {
-                return Ok(Admission::Duplicate(Duplicate::InPool));
-            }
-            let prior = prior.or(held.pass);
-            return self.promote(txid, prior, chain, rule_set, policy);
+            return Ok(Admission::Duplicate(Duplicate::InPool));
         }
         if chain
             .has_transaction(&txid)
@@ -298,72 +273,9 @@ impl Pool {
         // weight than its cheapest admitted entry.
         let weight = u64::try_from(tx.weight()).unwrap_or(u64::MAX);
         let rate = (fee_of(&tx), weight);
-        if self.room_for(weight, Some(rate), false).is_none() {
+        if self.room_for(weight, rate).is_none() {
             return Ok(Admission::PoolFull);
         }
-        let judged = door::judge(
-            &tx,
-            chain,
-            &self.key_images,
-            rule_set,
-            policy,
-            prior.as_ref(),
-        )
-        .map_err(PoolFault::Chain)?;
-        let (standing, pass) = match (judged, arrival) {
-            (Judged::Admitted { pass, .. }, _) => (Standing::Admitted, pass),
-            (
-                Judged::Chain {
-                    policy: None, pass, ..
-                },
-                Arrival::Returned,
-            ) => {
-                // Aged from the tip of the chain the switch left (CEN-M10).
-                let returned_at = chain
-                    .tip()
-                    .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
-                    .map_or(BlockHeight::ZERO, |tip| tip.height);
-                (Standing::Kept { returned_at }, pass)
-            }
-            (refused, _) => return Ok(Admission::Refused(refused)),
-        };
-        let kept = standing != Standing::Admitted;
-        let Some(evicted) = self.room_for(weight, (!kept).then_some(rate), kept) else {
-            return Ok(Admission::PoolFull);
-        };
-        let record = PoolRecord {
-            received: ReceivedHour::of(now),
-            public: arrival.carried(),
-            standing,
-        };
-        let blob = tx.serialize();
-        self.store.write(|batch| {
-            evicted.iter().try_for_each(|gone| batch.remove(gone))?;
-            batch.insert(txid, &record, &blob)
-        })?;
-        for gone in &evicted {
-            self.drop_held(gone);
-        }
-        self.hold(txid, Held::of(tx, record, Some(*pass)));
-        Ok(if kept {
-            Admission::Kept
-        } else {
-            Admission::Admitted { evicted }
-        })
-    }
-
-    /// A kept entry submitted again as relayed: the door judges it now, and
-    /// it is promoted to admitted (P2, and its key images enter the map) or
-    /// the door's refusal is the answer, the entry kept as it was.
-    fn promote<'id, V: ChainView<'id>>(
-        &mut self,
-        txid: TxHash,
-        prior: Option<StatelessPass>,
-        chain: &V,
-        rule_set: &RuleSet,
-        policy: &AdmissionPolicy,
-    ) -> Result<Admission, PoolFault<V::Fault>> {
-        let tx = self.held[&txid].tx.clone();
         let judged = door::judge(
             &tx,
             chain,
@@ -376,25 +288,28 @@ impl Pool {
         let Judged::Admitted { pass, .. } = judged else {
             return Ok(Admission::Refused(judged));
         };
-        self.store
-            .write(|batch| batch.stand(&txid, Standing::Admitted))?;
-        let held = self.held.get_mut(&txid).expect("held above");
-        held.record.standing = Standing::Admitted;
-        held.pass = Some(*pass);
-        let images = held.key_images();
-        self.key_images.insert(txid, images);
-        Ok(Admission::Admitted {
-            evicted: Vec::new(),
-        })
+        let Some(evicted) = self.room_for(weight, rate) else {
+            return Ok(Admission::PoolFull);
+        };
+        let record = PoolRecord {
+            received: ReceivedHour::of(now),
+            public: carried,
+        };
+        let blob = tx.serialize();
+        self.store.write(|batch| {
+            evicted.iter().try_for_each(|gone| batch.remove(gone))?;
+            batch.insert(txid, &record, &blob)
+        })?;
+        for gone in &evicted {
+            self.drop_held(gone);
+        }
+        self.hold(txid, Held::of(tx, record, Some(*pass)));
+        Ok(Admission::Admitted { evicted })
     }
 
-    /// Put `held` in the index: an admitted entry's key images enter the
-    /// map (CEN-M7); a kept one's do not — it is not a pool-valid
-    /// transaction, so it blocks no other spend.
+    /// Put `held` in the index and its key images in the map (CEN-M7).
     pub(crate) fn hold(&mut self, txid: TxHash, held: Held) {
-        if held.record.standing == Standing::Admitted {
-            self.key_images.insert(txid, held.key_images());
-        }
+        self.key_images.insert(txid, held.key_images());
         self.held.insert(txid, held);
     }
 
@@ -414,12 +329,11 @@ impl Pool {
     }
 
     /// Put a reconcile's outcome in the index once the file holds it: each
-    /// entry's judgement (`None` drops it, `Some` is its standing and the
-    /// door's pass), and the key-image map the reconcile built beside the
-    /// live one.
+    /// entry's judgement (`None` drops it, `Some` is the door's pass), and
+    /// the key-image map the reconcile built beside the live one.
     pub(crate) fn install(
         &mut self,
-        judged: &BTreeMap<TxHash, Option<(Standing, StatelessPass)>>,
+        judged: &BTreeMap<TxHash, Option<StatelessPass>>,
         key_images: KeyImages,
     ) {
         for (txid, outcome) in judged {
@@ -427,9 +341,8 @@ impl Pool {
                 None => {
                     self.held.remove(txid);
                 }
-                Some((standing, pass)) => {
+                Some(pass) => {
                     if let Some(held) = self.held.get_mut(txid) {
-                        held.record.standing = *standing;
                         held.pass = Some(*pass);
                     }
                 }
@@ -486,8 +399,8 @@ impl Pool {
         self.limits = limits;
     }
 
-    /// The key images the pool's admitted entries spend (CEN-M7's map), the
-    /// stem phase's included.
+    /// The key images the pool's entries spend (CEN-M7's map), the stem
+    /// phase's included.
     #[must_use]
     pub(crate) fn key_images(&self) -> &KeyImages {
         &self.key_images

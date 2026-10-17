@@ -16,15 +16,11 @@
 //! earlier keeps it). What the door admits stays; what the chain holds
 //! leaves.
 //!
-//! **Kept has one entry point**: [`Pool::admit`], for a transaction a
-//! switch returned (CEN-K10). The reconcile never makes an entry kept. An
-//! admitted entry the door now refuses leaves, whatever refused it: a
-//! relayed transaction a connect made invalid is a double spend already
-//! mined or a reference past CEN-I11's window, and neither comes back
-//! except through a switch that returns the block's own transaction — which
-//! the switch's returns offer again. A kept entry becomes admitted when the
-//! whole door admits it, leaves on a refusal on its bytes, and otherwise
-//! stays kept until CEN-M10 ages it out.
+//! An entry the door now refuses leaves, whatever refused it: a
+//! transaction a connect made invalid is a double spend already mined or a
+//! reference past CEN-I11's window, and neither comes back except through a
+//! switch that returns the block's own transaction — which the switch's
+//! returns offer again.
 //!
 //! No other path decides whether a held transaction is still valid, so the
 //! pool after a restart, after a switch and after a connect is the pool the
@@ -34,7 +30,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet, StatelessPass};
-use shekyl_chain_store::pool::{PoolOpen, ReceivedHour, Standing};
+use shekyl_chain_store::pool::{PoolOpen, ReceivedHour};
 use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 
@@ -48,7 +44,7 @@ use crate::view::KeyImages;
 pub enum Removed {
     /// The chain holds it: mined.
     Mined,
-    /// The door refused it on its bytes or by policy.
+    /// The door refused it.
     Refused(Judged),
     /// Its stored bytes do not parse. The file is the pool's own, so this
     /// is a file this binary did not write; the entry is dropped, which the
@@ -67,8 +63,6 @@ pub enum Removed {
 pub struct Reconciled {
     /// Held and admitted by the door against the current chain.
     pub admitted: Vec<TxHash>,
-    /// Held and kept: refused by the chain-bound half.
-    pub kept: Vec<TxHash>,
     /// Removed, with why.
     pub removed: Vec<(TxHash, Removed)>,
 }
@@ -96,7 +90,7 @@ impl Pool {
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<(Self, PoolOpen, Reconciled), PoolFault<V::Fault>> {
-        let limits = Limits::at(chain, rule_set).map_err(PoolFault::Chain)?;
+        let limits = Limits::at(chain).map_err(PoolFault::Chain)?;
         let (mut pool, how) = Self::create(path, limits)?;
         let latest = ReceivedHour::of(now);
         let mut dropped = Vec::new();
@@ -134,10 +128,9 @@ impl Pool {
     }
 
     /// Offer every held transaction to the door again against `chain`, in
-    /// the order the pool first held them (module docs), and write what
-    /// changed: removals (P3) and standings (P2). The public bit and the
-    /// receive hour are the entry's own and survive; CEN-M8's anchor is
-    /// the door's latest, in memory.
+    /// the order the pool first held them (module docs), and write the
+    /// removals (P3). The public bit and the receive hour are the entry's
+    /// own and survive; CEN-M8's anchor is the door's latest, in memory.
     ///
     /// The judgements are made against a key-image map built beside the
     /// live one, the file is written, and only then does the index take the
@@ -157,9 +150,9 @@ impl Pool {
         order.sort_by_key(|(txid, held)| (held.record.received, **txid));
 
         let mut reconciled = Reconciled::default();
-        // Every entry's outcome, for the index; `writes`, the file's changes.
-        let mut judged_all: BTreeMap<TxHash, Option<(Standing, StatelessPass)>> = BTreeMap::new();
-        let mut writes: BTreeMap<TxHash, Option<Standing>> = BTreeMap::new();
+        // Every entry's outcome, for the index; `removals`, the file's.
+        let mut judged_all: BTreeMap<TxHash, Option<StatelessPass>> = BTreeMap::new();
+        let mut removals: Vec<TxHash> = Vec::new();
         let mut key_images = KeyImages::default();
         for (txid, held) in order {
             if chain
@@ -167,7 +160,7 @@ impl Pool {
                 .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
             {
                 judged_all.insert(*txid, None);
-                writes.insert(*txid, None);
+                removals.push(*txid);
                 reconciled.removed.push((*txid, Removed::Mined));
                 continue;
             }
@@ -183,48 +176,27 @@ impl Pool {
                 held.pass.as_ref(),
             )
             .map_err(PoolFault::Chain)?;
-            let (standing, pass) = match judged {
-                Judged::Admitted { pass, .. } => (Standing::Admitted, *pass),
-                // A kept entry stays kept on the chain-bound half's refusal
-                // (module docs); an admitted one is never made kept.
-                Judged::Chain { pass, .. }
-                    if matches!(held.record.standing, Standing::Kept { .. }) =>
-                {
-                    (held.record.standing, *pass)
-                }
-                refused => {
-                    judged_all.insert(*txid, None);
-                    writes.insert(*txid, None);
-                    reconciled.removed.push((*txid, Removed::Refused(refused)));
-                    continue;
-                }
+            let Judged::Admitted { pass, .. } = judged else {
+                judged_all.insert(*txid, None);
+                removals.push(*txid);
+                reconciled.removed.push((*txid, Removed::Refused(judged)));
+                continue;
             };
-            judged_all.insert(*txid, Some((standing, pass)));
-            if standing != held.record.standing {
-                writes.insert(*txid, Some(standing));
-            }
-            match standing {
-                Standing::Admitted => {
-                    key_images.insert(*txid, held.key_images());
-                    reconciled.admitted.push(*txid);
-                }
-                Standing::Kept { .. } => reconciled.kept.push(*txid),
-            }
+            judged_all.insert(*txid, Some(*pass));
+            key_images.insert(*txid, held.key_images());
+            reconciled.admitted.push(*txid);
         }
-        if !writes.is_empty() {
+        if !removals.is_empty() {
             #[cfg(test)]
             let refuse = core::mem::take(&mut self.refuse_next_write);
             self.store().write(|batch| {
-                writes.iter().try_for_each(|(txid, change)| match change {
-                    None => batch.remove(txid),
-                    Some(standing) => batch.stand(txid, *standing),
-                })?;
+                removals.iter().try_for_each(|txid| batch.remove(txid))?;
                 // The tests' write fault, after every real change so the
-                // abort is seen to take them back: a standing for an entry
-                // the file does not hold is the store's refusal.
+                // abort is seen to take them back: publishing an entry the
+                // file does not hold is the store's refusal.
                 #[cfg(test)]
                 if refuse {
-                    batch.stand(&TxHash::from_bytes([0; 32]), Standing::Admitted)?;
+                    batch.publish(&TxHash::from_bytes([0; 32]))?;
                 }
                 Ok::<(), shekyl_chain_store::store::StoreError>(())
             })?;

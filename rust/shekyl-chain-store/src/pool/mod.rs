@@ -21,8 +21,8 @@
 //! # Seven operations (§3.2)
 //!
 //! Writes, inside [`PoolStore::write`]'s closure on a [`PoolBatch`]:
-//! **P1** [`insert`](PoolBatch::insert), **P2** [`publish`](PoolBatch::publish)
-//! and [`stand`](PoolBatch::stand), **P3** [`remove`](PoolBatch::remove). Reads, on a [`PoolSnapshot`]:
+//! **P1** [`insert`](PoolBatch::insert), **P2** [`publish`](PoolBatch::publish),
+//! **P3** [`remove`](PoolBatch::remove). Reads, on a [`PoolSnapshot`]:
 //! **P4** [`record`](PoolSnapshot::record), **P5** [`blob`](PoolSnapshot::blob),
 //! **P6** [`len`](PoolSnapshot::len), **P7** [`entries`](PoolSnapshot::entries).
 //! None of them relays, orders by fee,
@@ -92,7 +92,7 @@ mod read;
 mod schema_version;
 mod write;
 
-pub use crate::codec::{PoolRecord, ReceivedHour, Standing};
+pub use crate::codec::{PoolRecord, ReceivedHour};
 pub use header::{PoolOpen, POOL_VERSION_KEY};
 pub use read::{PoolEntry, PoolSnapshot};
 pub use schema::PoolTxBytes;

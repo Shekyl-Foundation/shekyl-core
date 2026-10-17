@@ -2,8 +2,7 @@
 #   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
 # and bump POOL_SCHEMA_VERSION in src/pool/schema_version.rs in the same PR.
 codec = pool_record
-fixed_width = variable
+fixed_width = 9
 [fixtures]
-admitted_unpublished = 9e340700000000000001
-admitted_public = 9e340700000000000101
-kept_public = 9e3407000000000001022900000000000000
+unpublished = 9e3407000000000000
+public = 9e3407000000000001

@@ -9,5 +9,5 @@
 use shekyl_mempool::Arrival;
 
 fn main() {
-    let _ = Arrival::Listed;
+    let _ = Arrival::Carried;
 }

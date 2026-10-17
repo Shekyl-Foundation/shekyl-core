@@ -4,26 +4,22 @@
 // BSD-3-Clause
 
 //! The pool record's codec — DRS-E1 S-POOL as reshaped by DRS-E5 PR-b
-//! (DX-F6; the review of #1102, S2 and S7).
+//! (DX-F6; the review of #1102, S2 and S7; reorg retention deleted
+//! 2026-10-17).
 //!
-//! Every standing round-trips public and not, every closed byte refuses
-//! what it does not name, a zeroed standing is not admitted, the receive
-//! time is whole hours, and the layout carries nothing the blob says.
+//! The record round-trips public and not, the public byte refuses what it
+//! does not name, the receive time is whole hours, and the layout carries
+//! nothing the blob says.
 
 use shekyl_store_codec::{Canonical, CodecError};
-use shekyl_types::{BlockHeight, UnixSeconds};
+use shekyl_types::UnixSeconds;
 
-use super::{PoolRecord, ReceivedHour, Standing};
+use super::{PoolRecord, ReceivedHour};
 
-const KEPT: Standing = Standing::Kept {
-    returned_at: BlockHeight::from_raw(61),
-};
-
-fn record(public: bool, standing: Standing) -> PoolRecord {
+fn record(public: bool) -> PoolRecord {
     PoolRecord {
         received: ReceivedHour::from_raw(472_222),
         public,
-        standing,
     }
 }
 
@@ -39,26 +35,23 @@ fn reason(err: &CodecError) -> &'static str {
     }
 }
 
-/// The public byte sits after the eight-byte receive hour; the standing
-/// tag after it.
+/// The public byte sits after the eight-byte receive hour.
 const PUBLIC_AT: usize = 8;
-const STANDING_AT: usize = 9;
 
 #[test]
-fn every_standing_round_trips_public_and_not() {
+fn the_record_round_trips_public_and_not() {
     for public in [false, true] {
-        round_trip(record(public, Standing::Admitted));
-        round_trip(record(public, KEPT));
+        round_trip(record(public));
     }
 }
 
-/// The record is the three facts the blob cannot say and nothing beside
-/// them: an admitted entry is 10 bytes, a kept one 18. A weight, a fee, an
-/// anchor, a relay state or a readiness cache would move every figure.
+/// The record is the two facts the blob cannot say and nothing beside
+/// them: 9 bytes. A weight, a fee, an anchor, a standing, a relay state or
+/// a readiness cache would move the figure.
 #[test]
 fn the_layout_carries_nothing_the_blob_says() {
-    assert_eq!(record(true, Standing::Admitted).encode().len(), 10);
-    assert_eq!(record(true, KEPT).encode().len(), 18);
+    assert_eq!(record(true).encode().len(), 9);
+    assert_eq!(<PoolRecord as Canonical>::FIXED_WIDTH, Some(9));
 }
 
 /// The receive time is the hour a second falls in: two arrivals an hour
@@ -74,26 +67,15 @@ fn the_receive_time_is_whole_hours() {
 
 #[test]
 fn the_public_byte_is_closed() {
-    let mut bytes = record(false, KEPT).encode();
+    let mut bytes = record(false).encode();
     bytes[PUBLIC_AT] = 2;
     let err = PoolRecord::decode(&bytes).expect_err("public byte 2 refused");
     assert_eq!(reason(&err), "public byte is not 0 or 1");
 }
 
-/// Zero is not a standing: a zeroed tag must not read as admitted.
-#[test]
-fn the_standing_tag_is_closed_and_zero_is_not_a_value() {
-    for tag in [0_u8, 3, 0xff] {
-        let mut bytes = record(true, Standing::Admitted).encode();
-        bytes[STANDING_AT] = tag;
-        let err = PoolRecord::decode(&bytes).expect_err("unknown standing refused");
-        assert_eq!(reason(&err), "standing tag is not admitted or kept");
-    }
-}
-
 #[test]
 fn truncated_and_trailing_bytes_are_refused() {
-    let full = record(true, KEPT).encode();
+    let full = record(true).encode();
     for cut in 0..full.len() {
         assert!(PoolRecord::decode(&full[..cut]).is_err(), "cut at {cut}");
     }

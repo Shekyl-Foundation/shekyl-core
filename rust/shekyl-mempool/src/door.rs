@@ -28,14 +28,10 @@
 //! re-reads the claim under the lock and runs step 1 again only if the
 //! claim moved in between.
 //!
-//! The answer says which half refused, because the pool treats them
-//! differently: a stateless or policy refusal is final, while a refusal by
-//! the chain-bound half is what CEN-K10 keeps a transaction returned from a
-//! popped block for — a later reorg may make it valid again. Step 3 runs
-//! whatever step 2 answered, and a chain-bound refusal carries the policy's
-//! refusal beside it: a policy refusal is final in this pool, so a
-//! transaction the policy also refuses is not kept on the chain-bound
-//! refusal's account.
+//! The answer names the step that refused, and the first refusal is the
+//! answer: the pool drops a refused transaction whichever step refused it.
+//! The submit engine reads the step to classify its reply (a chain-bound
+//! refusal may be a race with a block or a held spend, `rust_pool_shim`).
 //!
 //! Steps 2 and 3 read the view step 1's claim was read off, so the claim
 //! and the chain it is compared with cannot disagree: a
@@ -68,14 +64,7 @@ pub enum Judged {
     /// Refused on the transaction's bytes (step 1): no chain admits it.
     Stateless(InvalidBlock),
     /// Refused by the chain-bound half (step 2), against this chain.
-    Chain {
-        /// The consensus refusal.
-        refused: InvalidBlock,
-        /// The admission policy's refusal too, when it refuses (step 3).
-        policy: Option<PolicyRefused>,
-        /// Step 1's pass, which a kept entry holds for its next judgement.
-        pass: Box<StatelessPass>,
-    },
+    Chain(InvalidBlock),
     /// Admitted by the consensus rows and refused by the admission policy
     /// (step 3).
     Policy(PolicyRefused),
@@ -125,14 +114,17 @@ pub fn judge<'id, V: ChainView<'id>>(
     };
     let connecting = Tip::connecting_height(chain.tip().map_err(Fault::View)?.as_ref());
     let view = PoolView::new(chain, pool);
-    let against = tx_against(
+    let against = match tx_against(
         tx,
         TxSlot::Lone,
         &view,
         rule_set,
         pass.proven(),
         FormAttempt::FIRST,
-    )?;
+    )? {
+        Ok(against) => against,
+        Err(refused) => return Ok(Judged::Chain(refused)),
+    };
 
     let floors = match relay_floor_window(chain, connecting)? {
         AtHeight::Recorded(floors) => floors,
@@ -142,14 +134,9 @@ pub fn judge<'id, V: ChainView<'id>>(
         // transaction is refused, never admitted unpriced.
         AtHeight::AboveTip => Vec::new(),
     };
-    Ok(match (against, policy_form(tx, policy, &floors)) {
-        (Err(refused), policy) => Judged::Chain {
-            refused,
-            policy: policy.err(),
-            pass: Box::new(pass),
-        },
-        (Ok(_), Err(refused)) => Judged::Policy(refused),
-        (Ok(against), Ok(policy)) => Judged::Admitted {
+    Ok(match policy_form(tx, policy, &floors) {
+        Err(refused) => Judged::Policy(refused),
+        Ok(policy) => Judged::Admitted {
             pass: Box::new(pass),
             against,
             policy,

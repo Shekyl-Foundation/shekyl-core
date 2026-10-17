@@ -160,16 +160,16 @@ async fn the_pool_file_can_be_discarded() {
     scenario.close().await;
 }
 
-/// Kept has one entry point (the review of #1102, S4): the reconcile never
-/// makes an admitted entry kept. Two bodies over one coinbase's image are
+/// The reconcile removes an entry the door now refuses (the review of
+/// #1102, S4), whatever refused it. Two bodies over one coinbase's image are
 /// in the file as admitted (held before the chain moved), one paying above
 /// the floor and one paying one atomic unit; a third body over the same
-/// image is mined. At open both are refused by CEN-I7 — the cheap one with
-/// CEN-M3 beside it, in the door's one answer — and both leave.
+/// image is mined. At open both are refused by CEN-I7, the door's first
+/// refusal, and both leave.
 #[tokio::test]
 async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
-    use shekyl_chain_rules::{CenRow, PolicyRow};
-    use shekyl_chain_store::pool::{PoolRecord, PoolStore, Standing};
+    use shekyl_chain_rules::CenRow;
+    use shekyl_chain_store::pool::{PoolRecord, PoolStore};
     use shekyl_harness_spender::Spender;
     use shekyl_mempool::Judged;
 
@@ -198,7 +198,6 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
             let record = PoolRecord {
                 received: shekyl_chain_store::pool::ReceivedHour::from_raw(at),
                 public: true,
-                standing: Standing::Admitted,
             };
             store
                 .write(|batch| batch.insert(tx.txid_parts().hash, &record, &tx.serialize()))
@@ -224,27 +223,12 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
             .2
         })
         .await;
-    assert!(reconciled.kept.is_empty(), "the reconcile keeps nothing");
     assert!(reconciled.admitted.is_empty());
     match reconciled.removed.as_slice() {
-        [(
-            first,
-            Removed::Refused(Judged::Chain {
-                refused: a,
-                policy: None,
-                ..
-            }),
-        ), (
-            second,
-            Removed::Refused(Judged::Chain {
-                refused: b,
-                policy: Some(m3),
-                ..
-            }),
-        )] => {
+        [(first, Removed::Refused(Judged::Chain(a))), (second, Removed::Refused(Judged::Chain(b)))] =>
+        {
             assert_eq!((*first, *second), (idp, idc), "in the order held");
             assert_eq!((a.rule, b.rule), (CenRow::I7, CenRow::I7));
-            assert_eq!(m3.rule, PolicyRow::M3);
         }
         other => panic!("both leave, each on the door's answer: {other:?}"),
     }
@@ -257,7 +241,7 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
 /// `now`, and its weight and fee are read off its bytes.
 #[tokio::test]
 async fn an_open_clamps_a_receive_time_from_the_future() {
-    use shekyl_chain_store::pool::{PoolRecord, PoolStore, ReceivedHour, Standing};
+    use shekyl_chain_store::pool::{PoolRecord, PoolStore, ReceivedHour};
 
     let (mut scenario, mined) = matured("pool-clamp").await;
     let spend = paying_the_floor(&mut scenario, &mined, 0).await;
@@ -268,7 +252,6 @@ async fn an_open_clamps_a_receive_time_from_the_future() {
         let record = PoolRecord {
             received: ReceivedHour::from_raw(u64::MAX / 2),
             public: true,
-            standing: Standing::Admitted,
         };
         store
             .write(|batch| batch.insert(txid, &record, &spend.serialize()))

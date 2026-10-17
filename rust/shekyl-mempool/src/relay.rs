@@ -17,9 +17,7 @@
 //!
 //! **Read through one predicate** ([`shown`]): what the node shows the
 //! world — the pool listing, peer pool sync and the block template — is a
-//! public entry the door admitted. A stem-phase transaction is in none of
-//! them, and a kept one (CEN-K10) is in none of them either: it is not a
-//! pool-valid transaction.
+//! public entry. A stem-phase transaction is in none of them.
 //!
 //! Stem, fluff, embargo, the arrival connector and the originator's
 //! re-broadcast responsibility are `shekyl-relay`'s (DX-F6). The relay
@@ -27,7 +25,7 @@
 //! node's own transactions from arrivals still in stem, and the relay
 //! handles them alike.
 
-use shekyl_chain_store::pool::{PoolRecord, Standing};
+use shekyl_chain_store::pool::PoolRecord;
 use shekyl_chain_store::store::StoreError;
 use shekyl_types::TxHash;
 use shekyl_units::AtomicUnits;
@@ -36,12 +34,12 @@ use shekyl_wire::Transaction;
 use crate::pool::Pool;
 use crate::view::KeyImages;
 
-/// Whether the node may show `record`'s transaction to anyone: public, and
-/// admitted. Criterion 2's one check — the listing, peer sync and the
-/// template all ask it.
+/// Whether the node may show `record`'s transaction to anyone: public.
+/// Criterion 2's one check — the listing, peer sync and the template all
+/// ask it.
 #[must_use]
-pub fn shown(record: &PoolRecord) -> bool {
-    record.public && record.standing == Standing::Admitted
+pub const fn shown(record: &PoolRecord) -> bool {
+    record.public
 }
 
 /// The pool as the relay and the submit shim read it: every entry, those
@@ -145,12 +143,12 @@ impl Pool {
             .map(|(txid, held)| (*txid, &held.tx))
     }
 
-    /// What the relay still holds back: admitted entries not yet public —
-    /// what it takes at open (module docs).
+    /// What the relay still holds back: entries not yet public — what it
+    /// takes at open (module docs).
     pub fn unpublished(&self) -> impl Iterator<Item = (TxHash, &Transaction)> + '_ {
         self.held()
             .iter()
-            .filter(|(_, held)| !held.record.public && held.record.standing == Standing::Admitted)
+            .filter(|(_, held)| !held.record.public)
             .map(|(txid, held)| (*txid, &held.tx))
     }
 }

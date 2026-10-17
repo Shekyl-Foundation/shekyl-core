@@ -612,8 +612,8 @@ where
     }
 
     /// The switch, then the pool (DRS-E5 PR-b b4): the demoted blocks'
-    /// listed transactions go to `pool` after the switch lands (CEN-K10 —
-    /// `SwitchDone::returned`'s caller), through the door against the chain
+    /// listed transactions go to `pool` after the switch lands
+    /// (`SwitchDone::returned`'s caller), through the door against the chain
     /// the switch left, at `now`. The pool's answer decides their relay and
     /// templates only: the switch read every body it connected from the
     /// store.

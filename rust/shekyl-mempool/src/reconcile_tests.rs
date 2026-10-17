@@ -7,12 +7,12 @@
 //! named, and the pool opens. A reconcile that faults — on a chain read or
 //! on the file's write — changes nothing, in memory or in the file, and the
 //! next one makes the same judgements. Reconciling real entries — mined,
-//! admitted again, kept — needs real spends and is `shekyl-chain-ingest`'s.
+//! admitted again, refused — needs real spends and is `shekyl-chain-ingest`'s.
 
 use shekyl_chain_rules::harness::fixture::{listed_on, spendable_chain};
 use shekyl_chain_rules::harness::FaultingView;
 use shekyl_chain_rules::{AdmissionPolicy, RuleSet};
-use shekyl_chain_store::pool::{PoolRecord, PoolStore, ReceivedHour, Standing};
+use shekyl_chain_store::pool::{PoolRecord, PoolStore, ReceivedHour};
 use shekyl_types::{KeyImage, TxHash, UnixSeconds};
 
 use super::Removed;
@@ -35,7 +35,6 @@ const NOW: UnixSeconds = UnixSeconds::from_raw(7_200);
 const ADMITTED: PoolRecord = PoolRecord {
     received: ReceivedHour::from_raw(1),
     public: true,
-    standing: Standing::Admitted,
 };
 
 /// A pool at `path` holding two fixture spends as admitted entries — each
@@ -45,9 +44,7 @@ fn two_planted(path: &std::path::Path) -> (Pool, [TxHash; 2]) {
     let (mut pool, _) = Pool::create(
         path,
         crate::Limits {
-            kept_for: shekyl_types::BlockCount::from_raw(10),
             max_weight: u64::MAX,
-            kept_max_weight: u64::MAX,
         },
     )
     .unwrap();

@@ -74,15 +74,15 @@ fn a_refused_transaction_leaves_no_trace() {
             .admit_from(
                 tx,
                 None,
-                Arrival::Returned,
+                Arrival::Carried,
                 UnixSeconds::from_raw(1),
                 &view,
                 &RuleSet::GENESIS,
                 &AdmissionPolicy::GENESIS,
             )
             .unwrap();
-        // A returned body is not kept for a refusal on its bytes: only the
-        // chain-bound half's refusal is retained (CEN-K10).
+        // A block-carried body the door refuses is not held, whatever
+        // refused it (CEN-K10: no reorg retention).
         assert!(
             matches!(admission, Admission::Refused(Judged::Stateless(_))),
             "a fixture body is refused on its bytes: {admission:?}"

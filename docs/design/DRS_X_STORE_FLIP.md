@@ -251,7 +251,7 @@ Each observed difference becomes one row.
 | --- | --- | --- |
 | **Design** | Rust implements a Shekyl ruling the C++ never had or had differently | Cite the ruling (date, document). No action |
 | **C++ defect** | Rust implements the specification; the C++ is wrong | Cite the specification clause. No C++ change (the C++ is deleted in this PR) |
-| **Removed** | A C++ mechanism Shekyl rejected or deleted (hard-fork table, zones, orphan store, scoring, pruning seeds, `kept_by_block` floor bypass) | Cite the ruling |
+| **Removed** | A C++ mechanism Shekyl rejected or deleted (hard-fork table, zones, orphan store, scoring, pruning seeds, `kept_by_block` — its floor bypass and the whole reorg retention it served, CEN-K10, deleted 2026-10-17 on #1102) | Cite the ruling |
 | **Unbuilt by design** | A staged mechanism with a named owner and PR (chain sync's headers-first) | Owner and PR named, and the C++ behaviour is not needed meanwhile |
 | **Rust defect** | Rust is wrong against the design | **Blocks the merge.** Fixed in the flip PR |
 

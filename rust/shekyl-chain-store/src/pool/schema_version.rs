@@ -30,7 +30,12 @@ use shekyl_store_codec::{Canonical, CodecError};
 ///   `pool_meta` (`txid → pool_record`: the receive hour, the public bit
 ///   and a standing), `pool_blob`, `pool_header`. A file sealed at any
 ///   other number, the chain's included, is recreated at open.
-pub const POOL_SCHEMA_VERSION: PoolSchemaVersion = PoolSchemaVersion::new(1);
+/// - `2` — reorg retention is deleted (CEN-K10, ruled 2026-10-17): with
+///   alternative and demoted bodies in the chain store, a transaction a
+///   popped block returns is judged like any other and dropped if the
+///   door refuses it. `pool_record` loses its standing and is 9 bytes,
+///   fixed width: the receive hour and the public bit.
+pub const POOL_SCHEMA_VERSION: PoolSchemaVersion = PoolSchemaVersion::new(2);
 
 /// A pool file layout version, as stored in the header's
 /// [`POOL_VERSION_KEY`](super::POOL_VERSION_KEY) cell.
@@ -86,10 +91,10 @@ mod tests {
         // Moves with every pool layout bump, on purpose: the history list
         // above the constant is the record, and this line is what makes a
         // bump without a history entry visible in review.
-        assert_eq!(POOL_SCHEMA_VERSION, PoolSchemaVersion::new(1));
-        assert_eq!(POOL_SCHEMA_VERSION.encode(), [1, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(POOL_SCHEMA_VERSION, PoolSchemaVersion::new(2));
+        assert_eq!(POOL_SCHEMA_VERSION.encode(), [2, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            PoolSchemaVersion::decode(&[1, 0, 0, 0, 0, 0, 0, 0]),
+            PoolSchemaVersion::decode(&[2, 0, 0, 0, 0, 0, 0, 0]),
             Ok(POOL_SCHEMA_VERSION)
         );
     }

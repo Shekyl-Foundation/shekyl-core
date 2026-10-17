@@ -4,11 +4,17 @@
 // BSD-3-Clause
 
 //! Transactions a block carried (DRS-E5 PR-b b4): the switch's returns
-//! (CEN-K10) and an alternative block's bodies (CEN-K9), offered to the
+//! and an alternative block's bodies (CEN-K9), offered to the
 //! door for relay and templates. Both run the whole door, policy included
-//! (`E5-Q1`, reopened in part 2026-10-11): there is no `kept_by_block` skip.
-//! A block having carried them makes them public, and a returned one the
-//! chain-bound half alone refuses is kept.
+//! (`E5-Q1`): there is no `kept_by_block` skip. A block having carried them
+//! makes them public — the one way they differ from a relayed arrival —
+//! and the pool holds one only if the door admits it.
+//!
+//! **There is no reorg retention** (CEN-K10, ruled 2026-10-17). The C++
+//! pool kept a returned transaction the chain refused, because the pool
+//! was where the chain parked an alternative chain's bodies (CryptoNote,
+//! 2014). The store holds those now, so a refused return is dropped like
+//! any refused transaction; a switch back connects it from the store.
 //!
 //! **The pool holds no body a switch needs.** An alternative block's listed
 //! bodies are consensus data, and the store holds them beside its row
@@ -39,11 +45,10 @@ pub struct Offers<F> {
 impl Pool {
     /// The transactions a switch's popped blocks listed
     /// (`shekyl_chain_ingest::SwitchDone::returned`), offered to the door
-    /// in chain order against the chain the switch left (CEN-K10): each is
-    /// admitted, kept (refused by the chain-bound half alone — its reference
-    /// not on this chain or aged out of the window, its image spent here),
-    /// refused (on its bytes or by policy: a returned transaction below the
-    /// floor is refused as a relayed one is), or already accounted for.
+    /// in chain order against the chain the switch left: each is
+    /// admitted, refused (whatever step refused it: a returned transaction
+    /// below the floor, or whose reference is not on this chain, is refused
+    /// as a relayed one is), or already accounted for.
     pub fn returned<'id, V: ChainView<'id>>(
         &mut self,
         returned: Vec<Transaction>,
@@ -52,7 +57,7 @@ impl Pool {
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Offers<V::Fault> {
-        self.offer(returned, Arrival::Returned, now, chain, rule_set, policy)
+        self.offer(returned, Arrival::Carried, now, chain, rule_set, policy)
     }
 
     /// An alternative block's listed bodies, as the store holds them
@@ -72,7 +77,7 @@ impl Pool {
     ) -> Offers<V::Fault> {
         self.offer(
             listed.transactions().to_vec(),
-            Arrival::Listed,
+            Arrival::Carried,
             now,
             chain,
             rule_set,

@@ -316,7 +316,6 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::K7,
             CenRow::K8,
             CenRow::K9,
-            CenRow::K10,
             CenRow::M2,
             CenRow::M8
         ],
@@ -326,7 +325,7 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
          fork choice's match (K6) and the demoted rows (K7) are the switch's (DRS-E5 a5), \
          proved by the ingest's switch tests; the pool door's full NIC set (M2, DRS-E5 \
          PR-b), witnessed by the door and a block of one agreeing over real spends; a \
-         block's bodies through that door (K9, K10) and its verification cache (M8)"
+         block's bodies through that door (K9) and its verification cache (M8)"
     );
     let policy_implemented: Vec<PolicyRow> = PolicyRow::ALL
         .iter()
@@ -417,7 +416,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // Policy 9 → 8 on 2026-10-17: CEN-M11 (zero-fee never relayed) went to
     // bucket 3 and its entry was deleted (DRS-E5 PR-b b1) — redundant with
     // M3, which refuses a zero-fee transaction at the one pool door.
-    assert_eq!(CenRow::ALL.len(), 163);
+    // 163 → 162 the same day: CEN-K10 (reorg retention, `kept_by_block`'s
+    // stored-anyway admission) went to bucket 3 and its entry was deleted
+    // (the rulings on #1102) — the pool parked an alternative chain's
+    // bodies, and the chain store holds them now.
+    assert_eq!(CenRow::ALL.len(), 162);
     assert_eq!(PolicyRow::ALL.len(), 8);
 }
 
