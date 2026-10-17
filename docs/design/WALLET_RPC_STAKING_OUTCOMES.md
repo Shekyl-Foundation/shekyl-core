@@ -1,8 +1,9 @@
 # Wallet RPC — staking outcomes a user can see: Round 0, ruled
 
 **Status:** RULED — Round 0 posed and ruled 2026-10-15 (Rick): WR-Q1…WR-Q5
-accepted, with the amendments recorded in each ruling (§3). **No code in this
-PR**; the rulings are implemented in a separately authorized slice. One
+accepted, with the amendments recorded in each ruling (§3). **Implemented in
+#1109** (§7), with BD-Q3 Rule 2 folded in (`ARCHIVAL_BOND_POST_DELAY.md`,
+draft #1100). One
 dependency on the bond lane is open (§1.1), recorded in FOLLOWUPS and blocked
 on a bond-lane Round 0. One follow-on is not ruled here (§5).
 
@@ -728,5 +729,59 @@ the honest outcome for that one case.
 - No byte-identical resubmit for claims, drains or exits. That stays
   leg 4's.
 - No claim-match set (§5).
-- **No code in this PR.** The rulings are implemented in a separately
-  authorized slice, with the falsifiers above as its acceptance tests.
+- The rulings are implemented in #1109 (§7), with the falsifiers above as
+  its acceptance tests.
+
+## 7. Implementation — IMPLEMENTED in #1109
+
+The rulings and BD-Q3 Rule 2 land in five commits on #1109: the state
+(schema v13), the engine (Rule 2, no sends past the end date, the
+end-date release), the `spent_elsewhere` alarm, the wallet RPC and
+contract (`wallet_rpc.yaml` 0.14.0), and this section.
+
+### 7.1 Shapes the rulings left open — chosen in #1109
+
+- **An `in_flight` entry is one flat object.** `kind`, `state`,
+  `dispatched_at_height`, `attempts`, `funds_return_at` and `reason`
+  are all required. `null` means there is no answer (rule 43): no send
+  yet, no return expected, no refusal. `dispatched_at_height` and
+  `attempts` are facts about the record's sends, so a `rejected` or
+  `expired` record that was sent still reports them. `attempts` is `0`
+  for a record never sent.
+- **`rejected` is an `in_flight` state** (Rule 2): the record is held to
+  its end date, so the reason shows at once and the outcome is written at
+  the end date.
+- **The persisted outcome records whether the record was sent.** Only a
+  sent record published its inputs' key images, so only its ending carries
+  WR-Q5's linkage sentence. Most §1.1 posts reach their end date unsent.
+  The field rides this PR's own v13 bump.
+- **`acknowledge_staking_outcome` is idempotent.** It answers
+  `acknowledged: false` when there is nothing to clear, including on a
+  wallet with no active persona, so it adds no error code.
+- **`-29521` now means only a refusal before any byte was sent** (the
+  persona-pairing check). A daemon's terminal verdict on a sent exit is
+  `-29522`, held to its end date, because the exit seam keeps that record
+  (Rule 2).
+- **The CLI word is PROPOSED, not ruled:** `stake acknowledge
+  <stake|claim|return|release>`, the kind words `stake` prints
+  ([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) §12.3). The word is the grammar
+  round's to rule.
+
+### 7.2 The falsifiers, as tests
+
+| Ruling | Test |
+| --- | --- |
+| WR-Q1: no `in_flight`, or `null`, fails to decode; the two tightened fields are required | `types::tests::staking_info_refuses_a_reply_missing_a_required_member` (wallet RPC) |
+| WR-Q1: expired after a reload, `funds_return_at == r + 100` | `staking_outcomes::tests::an_expired_record_reads_the_same_after_a_reload`; the boundary at `tip == end date` in `a_record_reads_expired_from_a_tip_at_its_end_date` |
+| WR-Q1: no `stalled` | `rg -nw stalled` over the three paths returns only two comments about RPC concurrency in `send.rs`; without `-w` it also matches `installed` |
+| WR-Q2, amended by Rule 2 | `e2e_the_cxx_daemon_answers_join_market_unsupported` against the C++ daemon: one stake in flight, `rejected`, the refusal sentence, `funds_return_at` the end date, no outcome yet; the same after a restart. The WR-Q2 falsifier text in §3 predates Rule 2 |
+| WR-Q3 / WR-Q4: the release table, every kind | `pending_post_block` tests and `the_release_moves_each_kind_from_in_flight_to_outcomes` |
+| WR-Q5: no persona, slot, delay or funding output on the wire; `p_slot` refused | `types::tests::staking_outcome_wire_names_no_persona_slot_or_funding_output`, `staking_reads_on_fresh_wallet_are_zero_and_offline` |
+
+### 7.3 Raised, not ruled
+
+- **An exit's outcome for a persona that is not active cannot be
+  cleared.** `unstake` routinely exits a rotated-away persona
+  (`wallet_rpc.yaml`'s wire-activity pin), and that persona never seals
+  another exit, so its ending stays in `outcomes` for good. This is the
+  case WR-Q5's reopen clause names. Rick's to rule.

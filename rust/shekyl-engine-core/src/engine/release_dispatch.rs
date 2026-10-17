@@ -55,20 +55,23 @@
 //! dispatch driver's reservation-settlement pass, exactly as for a drain.
 //!
 //! **Failure disposition, and the recovery residue this lane shares.** A
-//! definite FIRST-send refusal (`RejectedTerminal`, or the pre-transport
+//! refusal before any byte left the wallet (the pre-transport
 //! `PersonaMismatch`) releases the seal it just took — see the dispatch
-//! site: the bytes were never admitted or relayed, so the record could
-//! never settle and holding it would brick the lane. A retryable or
-//! ambiguous failure, and a crash between seal and send, HOLD the record:
-//! funds-safe (reservation intact, stored bytes the only re-sendable
-//! form), not yet live — no driver resubmits claims, drains, or releases
-//! today, and that is the registered dispatch-driver slice
-//! (`docs/FOLLOWUPS.md`: terminal-reject prune + byte-identical resubmit,
-//! #572), which cannot land piecemeal because the prune half is a
-//! SECURITY item (the retained bytes are a replay channel; resubmit
-//! without the prune widens it). Until it lands, the stall alarm names a
-//! stuck record in the operator log — funds-safety over liveness, the
-//! posture all three reservation-observed lanes share.
+//! site: the bytes were never handed to a daemon, so the record could
+//! never settle and holding it would brick the lane. Every failure after
+//! the bytes went out HOLDS the record, funds-safe (reservation intact,
+//! stored bytes the only re-sendable form): a daemon's terminal verdict is
+//! recorded on it and stops sending, because the daemon holds valid bytes
+//! and only the chain decides (`ARCHIVAL_BOND_POST_DELAY.md` BD-Q3 Rule 2);
+//! a retryable or ambiguous failure, or a crash between seal and send,
+//! leaves it as it was. A held exit ends when it lands (reservation
+//! settlement) or at its end date, where the dispatch tick releases it
+//! with an outcome (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3); past the end
+//! date the retained bytes can never be mined, which closes their replay
+//! channel. No driver resubmits claims, drains or releases within that
+//! lifetime: that is leg 4's resubmit (`docs/FOLLOWUPS.md`
+//! "Drain/claim/release dispatch driver — byte-identical resubmit
+//! remains").
 //!
 //! ## Reachability (the gate PR-C lifted)
 //!
@@ -133,7 +136,8 @@ pub(crate) struct ReleaseReceipt {
     /// reservation) — the actor's reply embedded whole, not field-restated.
     // Staging (not tolerated dead code, `15-deletion-and-debt.mdc`): this
     // field's production reader is the dispatch driver's recovery slice
-    // (terminal-reject prune + byte-identical resubmit, `docs/FOLLOWUPS.md`)
+    // (leg 4's byte-identical resubmit, `docs/FOLLOWUPS.md`
+    // "Drain/claim/release dispatch driver")
     // — the same reader `DrainReceipt::drain` stages for; the daemon-walk
     // regtest e2e is the test consumer. The façade reads only `submit`.
     #[allow(dead_code)]
@@ -255,15 +259,14 @@ pub(crate) enum ReleaseRequestError {
     /// The assembled bytes' dispatch failed at (or behind) the submit choke
     /// point; the exit was assembled and sealed, and its network fate is the
     /// error's to name. **What happened to the sealed record depends on the
-    /// verdict class** (the dispatch site's disposition match):
-    /// a definite first-send refusal — [`SubmitterError::RejectedTerminal`](crate::engine::transaction_submitter::SubmitterError::RejectedTerminal)
-    /// or the pre-transport [`BroadcastSubmitError::PersonaMismatch`] — has
-    /// already RELEASED it (the bytes were never admitted or relayed, so
-    /// the record could never settle), and the caller may rebuild and retry
-    /// at will; a retryable or ambiguous failure HOLDS it (the bytes may
-    /// have propagated), and the one-live-exit lane stays shut until the
-    /// record settles or the recovery slice (`docs/FOLLOWUPS.md`,
-    /// dispatch-driver prune + resubmit) disposes of it.
+    /// verdict class** (the dispatch site's disposition match): the
+    /// pre-transport [`BroadcastSubmitError::PersonaMismatch`] has already
+    /// RELEASED it (the bytes were never handed to a daemon, so the record
+    /// could never settle), and the caller may rebuild and retry at will;
+    /// every other failure HOLDS it — the bytes may have propagated, or a
+    /// daemon refused bytes it still holds (BD-Q3 Rule 2) — and the
+    /// one-live-exit lane stays shut until the record lands or its end date
+    /// passes (WR-Q3).
     #[error("release broadcast: {0}")]
     Submit(#[from] BroadcastSubmitError),
 }

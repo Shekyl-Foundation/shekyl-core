@@ -171,10 +171,11 @@ pub(crate) type ServingSlot = Arc<std::sync::Mutex<Option<ServingHandle>>>;
 pub(crate) type WeakEngine<S, D, L, E, R, P, F> = Weak<RwLock<Engine<S, D, L, E, R, P, F>>>;
 
 /// Leg 4's registered slot (`ENGINE_CADENCE_DRIVER.md` §3 leg 4): the
-/// terminal-reject prune / byte-identical resubmit body is unbuilt —
-/// `docs/FOLLOWUPS.md` "Drain/claim/release dispatch driver —
-/// terminal-reject prune + byte-identical resubmit" (pre-genesis; the
-/// prune half is a security item). The slot is registered **now** so the
+/// byte-identical resubmit body is unbuilt — `docs/FOLLOWUPS.md`
+/// "Drain/claim/release dispatch driver — byte-identical resubmit
+/// remains" (pre-genesis). Its prune half landed as the dispatch tick's
+/// end-date release (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3). The slot is
+/// registered **now** so the
 /// body lands into proven wiring (tick, ordering, isolation) and must not
 /// grow its own timer; it is a STAGED surface with a named consumer
 /// (rule 23), not dead code. Its registration-and-invocation is asserted

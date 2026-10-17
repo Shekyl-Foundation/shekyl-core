@@ -596,10 +596,19 @@ The full staking surface is live in interactive `shekyl-cli` (type
 - **Release:** `stake release` posts the permanent release and `stake collect`
   returns the released collateral. `stake exit` and `unstake` name `stake release`
   and do not run. The wallet-rpc method is still `unstake`.
+- **Work in progress and endings:** `stake` also lists each stake, reward
+  claim, return or release still in progress, and how each last ended if it
+  did not complete. A node can refuse one; it is then never sent again, and
+  its funds stay set aside until the height `stake` shows, because only the
+  chain can say whether it was mined. If it was not, the funds come back on
+  their own after that height, with nothing to do and no fee. Once you have
+  read an ending, `stake acknowledge <stake|claim|return|release>` clears it.
+  (The command's name is proposed and may change before release.)
 
 **Wallet RPC** exposes the same verbs (`stake`, `get_staked_balance`,
 `get_staked_outputs`, `staking_info`, `stake_in`, `drain`,
-`get_drain_balance`, `unstake`, `collect_unstaked`); reward-related reads
+`get_drain_balance`, `unstake`, `collect_unstaked`,
+`acknowledge_staking_outcome`); reward-related reads
 never conflate bonded principal with received rewards. **The desktop GUI**
 exposes staker activation directly.
 
@@ -946,7 +955,8 @@ contract's `x-shekyl-method-registry`):
 - **Staking:** `stake` (activation), `get_staked_balance`,
   `get_staked_outputs`, `staking_info` (reads); `stake_in`, `drain`,
   `get_drain_balance` (WI-RPC-5); `unstake` and `collect_unstaked` (the
-  composed exit, PR-C). There is no `claim` RPC — emission claims are
+  composed exit, PR-C); `acknowledge_staking_outcome` (clears an ending
+  `staking_info` reports). There is no `claim` RPC — emission claims are
   engine-side automation, and that name is rejected, not reserved.
 - **Proofs and signing:** `get_tx_proof`, `check_tx_proof`,
   `get_reserve_proof`, `check_reserve_proof`, `sign_message`,
