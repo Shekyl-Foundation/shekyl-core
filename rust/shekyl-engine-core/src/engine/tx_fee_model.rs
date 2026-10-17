@@ -49,19 +49,17 @@ pub(crate) fn dust_threshold_for_rate(rate: &FeeRate) -> u64 {
 /// the caller's band — the snapshot's economy floor below, and above
 /// it exactly the [`absolute_fee_rate_cap()`] every named tier obeys.
 ///
-/// There is deliberately no `Custom`-only relative ceiling. One
-/// anchored on economy (the shipped "100× economy") banned the
-/// snapshot's own Priority rate: on the pinned KAT row
-/// `(333, 1332, 66_666)` it refused `Custom(66_666)` as the caller's
-/// error while `FeePriority::Priority` succeeded at that identical
-/// rate. Economy is the market *floor* and honest 2021-scaling
-/// `Fh / Fl` reaches 1077×, so no economy multiple can separate
-/// "user typo" from "honest top tier" — the same reason the 10×
-/// named-tier lock was withdrawn.
+/// There is deliberately no `Custom`-only relative ceiling. Economy is
+/// the market *floor*, and the honest priority / economy ratio is
+/// `2M/w_ref` — 200× at the zone (the pinned KAT row
+/// `(333, 1332, 66_666)`), growing with the median — so no economy
+/// multiple can separate "user typo" from "honest top tier": one would
+/// refuse `Custom(66_666)` as the caller's error while
+/// `FeePriority::Priority` succeeds at that identical rate.
 ///
 /// Snapshot well-formedness lives in
 /// [`ValidatedFeeEstimates::try_new`] — this function must not
-/// re-litigate it, or Custom dies when honest `Fh / Fl` is large.
+/// re-litigate it, or Custom dies when the honest ratio is large.
 pub(crate) fn fee_rate_for_priority(
     priority: super::fee_estimator::FeePriority,
     snapshot: &ValidatedFeeEstimates,
@@ -442,12 +440,11 @@ mod tests {
             .expect("exactly the absolute cap is payable");
     }
 
-    /// The withdrawn ceiling's exact vector: a `Custom` rate that the
-    /// snapshot's OWN `Priority` tier already charges must resolve. The
-    /// shipped "100× economy" band refused this as the *caller's*
-    /// error (`-32602`) while `FeePriority::Priority` returned the same
-    /// rate successfully — the wallet told the user their parameter was
-    /// invalid for asking to pay what the daemon was quoting.
+    /// A `Custom` rate that the snapshot's OWN `Priority` tier already
+    /// charges must resolve. An economy-anchored band would refuse it as
+    /// the *caller's* error (`-32602`) while `FeePriority::Priority`
+    /// returns the same rate — telling the user their parameter is
+    /// invalid for asking to pay what the daemon is quoting.
     ///
     /// This bites against an economy-anchored ceiling returning; it
     /// does NOT cover the absolute cap (that is the test above).
@@ -468,9 +465,9 @@ mod tests {
             .expect("named tiers inside the snapshot ceiling")
         };
 
-        // Served 2021-scaling KAT rows, at their own Priority rate and just
-        // above it ("priority, plus a little" — the ask the old band
-        // made inexpressible).
+        // Served-ladder KAT rows, at their own Priority rate and just above
+        // it ("priority, plus a little" — the ask an economy-anchored band
+        // would make inexpressible).
         for (e, s, p) in [(333, 1332, 66_666), (13, 52, 13_333)] {
             let snapshot = validated(e, s, p);
             let named = fee_rate_for_priority(FeePriority::Priority, &snapshot)
