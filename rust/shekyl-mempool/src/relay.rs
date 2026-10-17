@@ -34,6 +34,7 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
 use crate::pool::Pool;
+use crate::view::KeyImages;
 
 /// Whether the node may show `record`'s transaction to anyone: public, and
 /// admitted. Criterion 2's one check — the listing, peer sync and the
@@ -41,6 +42,44 @@ use crate::pool::Pool;
 #[must_use]
 pub fn shown(record: &PoolRecord) -> bool {
     record.public && record.standing == Standing::Admitted
+}
+
+/// The pool as the relay and the submit shim read it: every entry, those
+/// still in their stem phase included (the review of #1102, S6). Criterion 2
+/// is what such a reader enforces, not what it is given: nothing that
+/// answers a peer or a foreign caller reads the pool through this — a
+/// fluffy block's missing-transaction answer, `is_key_image_spent`, a
+/// listing — but through [`shown`] (the listing, peer sync and the
+/// template), as the C++ paths filter on `relay_category::broadcasted`.
+#[derive(Clone, Copy)]
+pub struct RelayView<'p> {
+    pool: &'p Pool,
+}
+
+impl RelayView<'_> {
+    /// The record the pool holds for `txid`.
+    #[must_use]
+    pub fn record(&self, txid: &TxHash) -> Option<PoolRecord> {
+        self.pool.record(txid)
+    }
+
+    /// The key images the pool's admitted entries spend (CEN-M7's map).
+    #[must_use]
+    pub fn key_images(&self) -> &KeyImages {
+        self.pool.key_images()
+    }
+
+    /// How many transactions the pool holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.pool.len()
+    }
+
+    /// Whether the pool holds none.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.pool.is_empty()
+    }
 }
 
 /// One entry of [`Pool::listing`]: what a pool listing says of a shown
@@ -54,6 +93,12 @@ pub struct Listed {
 }
 
 impl Pool {
+    /// The pool as the relay reads it ([`RelayView`]).
+    #[must_use]
+    pub const fn relay_view(&self) -> RelayView<'_> {
+        RelayView { pool: self }
+    }
+
     /// The relay's fluff event: `txid` is public now. `Ok(false)` when the
     /// pool does not hold it — the relay fluffed something the pool has
     /// already dropped, which is not an error. Idempotent.

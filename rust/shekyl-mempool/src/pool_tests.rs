@@ -43,7 +43,6 @@ fn a_transaction_the_chain_holds_is_a_duplicate_and_is_not_judged() {
         .unwrap();
         pool.admit(
             tx,
-            Arrival::Relayed,
             UnixSeconds::from_raw(1),
             &view,
             &RuleSet::GENESIS,
@@ -72,8 +71,9 @@ fn a_refused_transaction_leaves_no_trace() {
         )
         .unwrap();
         let admission = pool
-            .admit(
+            .admit_from(
                 tx,
+                None,
                 Arrival::Returned,
                 UnixSeconds::from_raw(1),
                 &view,

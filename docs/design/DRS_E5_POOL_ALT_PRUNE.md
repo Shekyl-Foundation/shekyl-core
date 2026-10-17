@@ -848,7 +848,14 @@ bytes, drops each row that does not read, does not parse or is not the
 transaction its key names, clamps a receive time from the future, and
 runs every entry through the whole door; M8's anchor lives in memory
 only. The listing carries no receive time (S7), and a layout recreate
-overwrites the old file before unlinking it. Responsibility is in memory: after a restart the relay cannot tell
+overwrites the old file before unlinking it. The API enforces criterion 2
+(S6): the block arrivals are crate-private, reached only through
+`Pool::returned` and `Pool::supplement`, so no caller can admit a peer's
+transaction as public; every read that sees the stem phase — a record,
+the key-image map, the count — is `RelayView`'s, named for the relay and
+the submit shim, while everything that answers a peer or a foreign
+caller reads `shown`. A transaction the pool holds only as kept is no
+duplicate to a submitter: the door judges it again. Responsibility is in memory: after a restart the relay cannot tell
 this node's unpublished transactions from arrivals still in stem, and
 treats every non-public entry alike — the uniform handling is the privacy
 property. What the relay does with them at open is the relay's to decide

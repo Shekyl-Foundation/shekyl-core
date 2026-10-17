@@ -97,7 +97,7 @@ impl Pool {
         };
         for tx in transactions {
             let txid = tx.txid_parts().hash;
-            match self.admit(tx, arrival, now, chain, rule_set, policy) {
+            match self.admit_from(tx, None, arrival, now, chain, rule_set, policy) {
                 Ok(admission) => offered.admissions.push((txid, admission)),
                 Err(fault) => offered.faults.push((txid, fault)),
             }

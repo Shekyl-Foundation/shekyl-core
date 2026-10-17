@@ -24,7 +24,7 @@
 
 use shekyl_chain_rules::{AdmissionPolicy, CenRow, InvalidBlock, Locus, PolicyRow, TxSlot};
 use shekyl_harness_spender::Spender;
-use shekyl_mempool::{judge, Admission, Arrival, Duplicate, Judged, KeyImages, Pool};
+use shekyl_mempool::{judge, Admission, Duplicate, Judged, KeyImages, Pool};
 use shekyl_types::{BlockHeight, UnixSeconds};
 use shekyl_wire::Transaction;
 
@@ -293,7 +293,6 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
             let mut admit = |tx: &Transaction| {
                 pool.admit(
                     tx.clone(),
-                    Arrival::Relayed,
                     UnixSeconds::from_raw(1),
                     view,
                     rule_set,
@@ -305,8 +304,15 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
             let again = admit(&good);
             let second_spender = admit(&twin);
             let below_floor = admit(&cheap);
-            let held = pool.record(&txid);
-            (first, again, second_spender, below_floor, held, pool.len())
+            let held = pool.relay_view().record(&txid);
+            (
+                first,
+                again,
+                second_spender,
+                below_floor,
+                held,
+                pool.relay_view().len(),
+            )
         })
         .await;
     let (first, again, second_spender, below_floor, held, len) = admissions;
@@ -359,15 +365,8 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
                 1,
                 "the reconcile at open removes the mined entry"
             );
-            pool.admit(
-                good,
-                Arrival::Relayed,
-                UnixSeconds::from_raw(2),
-                view,
-                rule_set,
-                &policy,
-            )
-            .expect("no fault")
+            pool.admit(good, UnixSeconds::from_raw(2), view, rule_set, &policy)
+                .expect("no fault")
         })
         .await;
     assert_eq!(mined_dup, Admission::Duplicate(Duplicate::OnChain));
@@ -398,14 +397,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
             )
             .expect("open");
             let admitted = pool
-                .admit(
-                    good,
-                    Arrival::Relayed,
-                    UnixSeconds::from_raw(1),
-                    view,
-                    rule_set,
-                    &policy,
-                )
+                .admit(good, UnixSeconds::from_raw(1), view, rule_set, &policy)
                 .expect("no fault");
             assert_eq!(
                 admitted,

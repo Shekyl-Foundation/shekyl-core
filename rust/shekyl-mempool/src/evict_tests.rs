@@ -15,7 +15,7 @@ use shekyl_types::{BlockCount, BlockHeight, UnixSeconds};
 
 use super::{Evicted, Limits};
 use crate::door::Judged;
-use crate::pool::{Admission, Arrival, Pool};
+use crate::pool::{Admission, Pool};
 
 /// Generous limits; each test narrows the one it is about.
 const ROOMY: Limits = Limits {
@@ -125,7 +125,6 @@ fn a_full_pool_refuses_at_or_below_its_cheapest_before_the_door() {
         chain.with_view(|view| {
             pool.admit(
                 body,
-                Arrival::Relayed,
                 UnixSeconds::from_raw(1),
                 &view,
                 &RuleSet::GENESIS,

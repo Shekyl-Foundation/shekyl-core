@@ -66,8 +66,9 @@ use shekyl_chain_rules::{
     emission_epoch_facts, relay_floor_at, relay_floor_window, release_last_served, AdmissionPolicy,
     AtHeight, ChainView, EmissionEpochSnapshot, HeaderView, PolicyRow, RuleSet, Tip,
 };
+use shekyl_chain_store::pool::Standing;
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
-use shekyl_mempool::{stateless, Admission, Arrival, Judged, Pool};
+use shekyl_mempool::{shown, stateless, Admission, Judged, Pool, RelayView};
 use shekyl_types::archival::{BondRecord, Holdings, MAX_BOND_BAD_INTERVALS};
 use shekyl_types::{
     BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, TxHash, UnixSeconds,
@@ -134,14 +135,16 @@ impl<C: ChainSource> RustPoolShim<C> {
         pool.fluffed(txid).map_err(|_| ShimFault)
     }
 
-    /// Read the pool under the shim's lock.
+    /// Read the pool under the shim's lock, as the relay reads it
+    /// ([`RelayView`]: every entry, the stem phase included — never for an
+    /// answer to a peer or a foreign caller; the review of #1102, S6).
     ///
     /// # Errors
     ///
     /// [`ShimFault`] when the lock is poisoned.
-    pub fn with_pool<R>(&self, f: impl FnOnce(&Pool) -> R) -> Result<R, ShimFault> {
+    pub fn with_pool<R>(&self, f: impl FnOnce(RelayView<'_>) -> R) -> Result<R, ShimFault> {
         let pool = self.pool.lock().map_err(|_| ShimFault)?;
-        Ok(f(&pool))
+        Ok(f(pool.relay_view()))
     }
 }
 
@@ -163,12 +166,16 @@ fn classify(
     if view.has_key_image(&image).map_err(|_| ShimFault)? {
         return Ok(KeyImageConflict::Other);
     }
-    let (spent, public) = match pool.key_images().spender(&image) {
+    let (spent, public) = match pool.relay_view().key_images().spender(&image) {
         None => (false, true),
-        Some(spender) if spender != *txid => {
-            (true, pool.record(&spender).is_some_and(|r| r.public))
-        }
-        Some(_) => (pool.record(txid).is_some_and(|r| r.public), true),
+        Some(spender) if spender != *txid => (
+            true,
+            pool.relay_view().record(&spender).is_some_and(|r| r.public),
+        ),
+        Some(_) => (
+            pool.relay_view().record(txid).is_some_and(|r| r.public),
+            true,
+        ),
     };
     Ok(match (spent, in_pool, public) {
         (false, _, _) => KeyImageConflict::Free,
@@ -344,9 +351,16 @@ fn gather(
 ) -> Result<SubmitFacts, ShimFault> {
     let fault = |_| ShimFault;
     let view = SnapshotView::new(snapshot);
-    let held = pool.record(txid);
+    // The pool holds it, for the contract, only as an admitted entry: a
+    // kept one is a block's body the pool will never mine on this chain,
+    // and a submit of it is judged again at commit (`Pool::admit`). What
+    // the node shows is `shown`'s answer (S6).
+    let held = pool
+        .relay_view()
+        .record(txid)
+        .filter(|record| record.standing == Standing::Admitted);
     let in_pool = held.is_some();
-    let in_pool_broadcast = held.is_some_and(|r| r.public);
+    let in_pool_broadcast = held.is_some_and(|record| shown(&record));
     let in_chain = snapshot
         .tx_location(txid)
         .map_err(fault)?
@@ -486,15 +500,8 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
         let now = (self.clock)();
         let outcome = self.chain.read(|snapshot, rule_set| {
             let view = SnapshotView::new(snapshot);
-            let admitted = pool.admit_judged(
-                parsed.tx.clone(),
-                prior,
-                Arrival::Relayed,
-                now,
-                &view,
-                rule_set,
-                &self.policy,
-            );
+            let admitted =
+                pool.admit_judged(parsed.tx.clone(), prior, now, &view, rule_set, &self.policy);
             match admitted {
                 Ok(Admission::Admitted { .. }) => CommitOutcome::Committed,
                 Ok(Admission::Duplicate(_) | Admission::Refused(Judged::Chain { .. })) => {

@@ -31,9 +31,12 @@ use crate::door::{self, Judged};
 use crate::evict::Limits;
 use crate::view::KeyImages;
 
-/// How a transaction reached the door.
+/// How a transaction reached the door. Crate-private (the review of #1102,
+/// S6): only [`Pool::returned`] and [`Pool::supplement`] reach the block
+/// arms, so no caller can admit a peer's transaction as public and skip its
+/// embargo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Arrival {
+pub(crate) enum Arrival {
     /// From a peer or this node's own submit: not public until the relay's
     /// fluff event says so.
     Relayed,
@@ -198,21 +201,19 @@ impl Pool {
         ))
     }
 
-    /// Admit `tx`, which arrived as `arrival` at `now`, against `chain`
-    /// under `rule_set` and `policy` — the one way into the pool.
+    /// Admit `tx`, relayed — from a peer or this node's own submit — at
+    /// `now`, against `chain` under `rule_set` and `policy`: the one way
+    /// into the pool from outside it. Not public until the relay's fluff
+    /// event says so.
     ///
     /// CEN-M1 first: a transaction the pool or the chain already holds is
-    /// a [`Duplicate`] and nothing is judged. A held one a block carries is
-    /// made public (P2): a block has published it on every node, and a pool
-    /// that kept it hidden would answer peer sync differently for a
-    /// transaction it held in its stem phase than for one it did not — a
-    /// possession oracle for anyone who can send an alternative block. Then
-    /// the door. An admitted
-    /// transaction is written to the file (P1) and its key images enter the
-    /// map (CEN-M7); a block-carried one the chain-bound half refused is
-    /// written as kept and spends nothing in the map — it is not a pool-valid
-    /// transaction, so it blocks no other spend. Everything else is refused
-    /// and leaves no trace.
+    /// a [`Duplicate`] and nothing is judged — except one the pool holds
+    /// only as kept, which is not in the pool in any sense a submitter
+    /// means: the door judges it again, and either admits it (it is
+    /// promoted) or answers with its refusal. Then CEN-M10's rising
+    /// minimum, then the door. An admitted transaction is written to the
+    /// file (P1) and its key images enter the map (CEN-M7). Everything else
+    /// is refused and leaves no trace.
     ///
     /// # Errors
     ///
@@ -221,13 +222,12 @@ impl Pool {
     pub fn admit<'id, V: ChainView<'id>>(
         &mut self,
         tx: Transaction,
-        arrival: Arrival,
         now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<Admission, PoolFault<V::Fault>> {
-        self.admit_judged(tx, None, arrival, now, chain, rule_set, policy)
+        self.admit_from(tx, None, Arrival::Relayed, now, chain, rule_set, policy)
     }
 
     /// [`Pool::admit`] with `prior`, a pass the caller computed for `tx`
@@ -239,11 +239,32 @@ impl Pool {
     /// # Errors
     ///
     /// As [`Pool::admit`].
+    pub fn admit_judged<'id, V: ChainView<'id>>(
+        &mut self,
+        tx: Transaction,
+        prior: Option<StatelessPass>,
+        now: UnixSeconds,
+        chain: &V,
+        rule_set: &RuleSet,
+        policy: &AdmissionPolicy,
+    ) -> Result<Admission, PoolFault<V::Fault>> {
+        self.admit_from(tx, prior, Arrival::Relayed, now, chain, rule_set, policy)
+    }
+
+    /// Admission by `arrival`. A held transaction a block carries is made
+    /// public (P2): a block has published it on every node, and a pool
+    /// that kept it hidden would answer peer sync differently for a
+    /// transaction it held in its stem phase than for one it did not — a
+    /// possession oracle for anyone who can send an alternative block. A
+    /// block-carried transaction the chain-bound half alone refused is
+    /// written as kept, when a switch returned it, and spends nothing in
+    /// the map — it is not a pool-valid transaction, so it blocks no other
+    /// spend.
     #[allow(
         clippy::too_many_arguments,
-        reason = "admit's arguments and the prior pass"
+        reason = "admit's arguments, the prior pass and the arrival"
     )]
-    pub fn admit_judged<'id, V: ChainView<'id>>(
+    pub(crate) fn admit_from<'id, V: ChainView<'id>>(
         &mut self,
         tx: Transaction,
         prior: Option<StatelessPass>,
@@ -259,7 +280,12 @@ impl Pool {
                 self.store.write(|batch| batch.publish(&txid))?;
                 held.record.public = true;
             }
-            return Ok(Admission::Duplicate(Duplicate::InPool));
+            let kept = matches!(held.record.standing, Standing::Kept { .. });
+            if !(kept && arrival == Arrival::Relayed) {
+                return Ok(Admission::Duplicate(Duplicate::InPool));
+            }
+            let prior = prior.or(held.pass);
+            return self.promote(txid, prior, chain, rule_set, policy);
         }
         if chain
             .has_transaction(&txid)
@@ -323,6 +349,42 @@ impl Pool {
             Admission::Kept
         } else {
             Admission::Admitted { evicted }
+        })
+    }
+
+    /// A kept entry submitted again as relayed: the door judges it now, and
+    /// it is promoted to admitted (P2, and its key images enter the map) or
+    /// the door's refusal is the answer, the entry kept as it was.
+    fn promote<'id, V: ChainView<'id>>(
+        &mut self,
+        txid: TxHash,
+        prior: Option<StatelessPass>,
+        chain: &V,
+        rule_set: &RuleSet,
+        policy: &AdmissionPolicy,
+    ) -> Result<Admission, PoolFault<V::Fault>> {
+        let tx = self.held[&txid].tx.clone();
+        let judged = door::judge(
+            &tx,
+            chain,
+            &self.key_images,
+            rule_set,
+            policy,
+            prior.as_ref(),
+        )
+        .map_err(PoolFault::Chain)?;
+        let Judged::Admitted { pass, .. } = judged else {
+            return Ok(Admission::Refused(judged));
+        };
+        self.store
+            .write(|batch| batch.stand(&txid, Standing::Admitted))?;
+        let held = self.held.get_mut(&txid).expect("held above");
+        held.record.standing = Standing::Admitted;
+        held.pass = Some(*pass);
+        let images = held.key_images();
+        self.key_images.insert(txid, images);
+        Ok(Admission::Admitted {
+            evicted: Vec::new(),
         })
     }
 
@@ -392,21 +454,22 @@ impl Pool {
         &mut self.held
     }
 
-    /// The record the pool holds for `txid`.
+    /// The record the pool holds for `txid` — every entry's, the stem phase
+    /// included; outside the crate, [`crate::RelayView::record`].
     #[must_use]
-    pub fn record(&self, txid: &TxHash) -> Option<PoolRecord> {
+    pub(crate) fn record(&self, txid: &TxHash) -> Option<PoolRecord> {
         self.held.get(txid).map(|held| held.record)
     }
 
-    /// How many transactions the pool holds.
+    /// How many transactions the pool holds, the stem phase included.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.held.len()
     }
 
     /// Whether the pool holds none.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.held.is_empty()
     }
 
@@ -423,9 +486,10 @@ impl Pool {
         self.limits = limits;
     }
 
-    /// The key images the pool's admitted entries spend (CEN-M7's map).
+    /// The key images the pool's admitted entries spend (CEN-M7's map), the
+    /// stem phase's included.
     #[must_use]
-    pub fn key_images(&self) -> &KeyImages {
+    pub(crate) fn key_images(&self) -> &KeyImages {
         &self.key_images
     }
 }

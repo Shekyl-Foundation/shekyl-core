@@ -10,7 +10,7 @@
 
 use shekyl_chain_rules::AdmissionPolicy;
 use shekyl_chain_store::pool::PoolOpen;
-use shekyl_mempool::{Admission, Arrival, Pool, Removed};
+use shekyl_mempool::{Admission, Pool, Removed};
 use shekyl_types::UnixSeconds;
 
 use crate::pool_door_tests::{matured, paying_the_floor};
@@ -42,15 +42,8 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
             assert_eq!(how, PoolOpen::Created);
             for tx in [a.clone(), b] {
                 assert_eq!(
-                    pool.admit(
-                        tx,
-                        Arrival::Relayed,
-                        UnixSeconds::from_raw(1),
-                        view,
-                        rule_set,
-                        &policy
-                    )
-                    .expect("no fault"),
+                    pool.admit(tx, UnixSeconds::from_raw(1), view, rule_set, &policy)
+                        .expect("no fault"),
                     Admission::Admitted {
                         evicted: Vec::new()
                     }
@@ -76,8 +69,8 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
             .expect("open");
             assert_eq!(how, PoolOpen::Opened);
             let held = (
-                pool.record(&ida).is_some(),
-                pool.record(&idb).map(|r| r.public),
+                pool.relay_view().record(&ida).is_some(),
+                pool.relay_view().record(&idb).map(|r| r.public),
             );
             drop(pool);
             let first = (reconciled, held);
@@ -127,7 +120,6 @@ async fn the_pool_file_can_be_discarded() {
             .expect("open");
             pool.admit(
                 spend.clone(),
-                Arrival::Relayed,
                 UnixSeconds::from_raw(1),
                 view,
                 rule_set,
@@ -148,16 +140,9 @@ async fn the_pool_file_can_be_discarded() {
             )
             .expect("open");
             assert_eq!(how, PoolOpen::Created, "a fresh file");
-            assert!(pool.is_empty() && reconciled.removed.is_empty());
-            pool.admit(
-                spend,
-                Arrival::Relayed,
-                UnixSeconds::from_raw(2),
-                view,
-                rule_set,
-                &policy,
-            )
-            .expect("no fault")
+            assert!(pool.relay_view().is_empty() && reconciled.removed.is_empty());
+            pool.admit(spend, UnixSeconds::from_raw(2), view, rule_set, &policy)
+                .expect("no fault")
         })
         .await;
     assert_eq!(
@@ -296,7 +281,10 @@ async fn an_open_clamps_a_receive_time_from_the_future() {
                 Pool::open(&path, now, view, rule_set, &AdmissionPolicy::GENESIS).expect("open");
             assert_eq!(reconciled.admitted, vec![txid]);
             let listed = pool.listing().find(|(id, _)| *id == txid).expect("shown").1;
-            (pool.record(&txid).expect("held").received, listed)
+            (
+                pool.relay_view().record(&txid).expect("held").received,
+                listed,
+            )
         })
         .await;
     assert_eq!(received, ReceivedHour::of(now));

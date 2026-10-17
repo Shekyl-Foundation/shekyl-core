@@ -322,7 +322,7 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
     use crate::archival_driver::ENDPOINT;
     use crate::scenario_archival::{complete_tree, shard_set, Persona};
     use shekyl_chain_rules::CenRow;
-    use shekyl_mempool::{select, Admission, Arrival};
+    use shekyl_mempool::{select, Admission};
 
     let (mut scenario, mined, shards, connecting, floor) =
         closed_shards_lane("pool-template-g10").await;
@@ -363,7 +363,6 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
                 let admission = pool
                     .admit(
                         tx.clone(),
-                        Arrival::Relayed,
                         UnixSeconds::from_raw(1),
                         view,
                         rule_set,

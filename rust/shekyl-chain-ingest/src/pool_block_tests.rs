@@ -20,7 +20,7 @@ use shekyl_chain_rules::{
 use shekyl_chain_store::pool::{PoolStore, Standing};
 use shekyl_harness_spender::Spender;
 use shekyl_mempool::{
-    judge, shown, Admission, Arrival, Duplicate, Evicted, Judged, KeyImages, Limits, Pool,
+    judge, shown, Admission, Duplicate, Evicted, Judged, KeyImages, Limits, Pool,
 };
 use shekyl_types::UnixSeconds;
 
@@ -104,7 +104,10 @@ async fn a_switchs_returns_run_the_door_and_the_floor_refuses_one_below_it() {
         }
         other => panic!("the cheap return is refused on M3: {other:?}"),
     }
-    let record = pool.record(&paid.txid_parts().hash).expect("held");
+    let record = pool
+        .relay_view()
+        .record(&paid.txid_parts().hash)
+        .expect("held");
     assert!(record.public, "a block carried it");
     assert!(shown(&record), "and the node shows it");
     drop(pool);
@@ -144,7 +147,7 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
         .expect("switch");
     let txid = spend.txid_parts().hash;
     assert_eq!(admissions, vec![(txid, Admission::Kept)]);
-    let record = pool.record(&txid).expect("kept");
+    let record = pool.relay_view().record(&txid).expect("kept");
     let Standing::Kept { returned_at } = record.standing else {
         panic!("kept: {record:?}");
     };
@@ -162,6 +165,7 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
     );
     assert!(
         !pool
+            .relay_view()
             .key_images()
             .contains(&shekyl_types::KeyImage::from_bytes(
                 match &spend.prefix.inputs[0] {
@@ -181,6 +185,33 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
         .await;
     assert_eq!(reconciled.kept, vec![txid]);
     assert!(reconciled.removed.is_empty());
+    // Submitted again by relay, a kept entry is no duplicate (S6): the door
+    // judges it, and its refusal is the answer; it stays kept.
+    let again = x
+        .read_chain(|view, rule_set| {
+            pool.admit(
+                spend.clone(),
+                UnixSeconds::from_raw(2),
+                view,
+                rule_set,
+                &AdmissionPolicy::GENESIS,
+            )
+            .expect("no fault")
+        })
+        .await;
+    match again {
+        Admission::Refused(Judged::Chain { refused, .. }) => {
+            assert_eq!(refused.rule, CenRow::I11, "its reference aged out");
+        }
+        other => panic!("a kept entry resubmitted is judged again: {other:?}"),
+    }
+    assert!(matches!(
+        pool.relay_view()
+            .record(&txid)
+            .expect("still held")
+            .standing,
+        Standing::Kept { .. }
+    ));
     // Aged in blocks from its return: a block short of the cap it stays;
     // at the cap — no switch back reaches further — it goes.
     let kept_for = pool.limits().kept_for.to_raw();
@@ -251,7 +282,7 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
     );
     let held = x
         .read_chain(|view, rule_set| {
-            pool.admit(stem.clone(), Arrival::Relayed, now, view, rule_set, &policy)
+            pool.admit(stem.clone(), now, view, rule_set, &policy)
                 .expect("no fault")
         })
         .await;
@@ -262,7 +293,7 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
         }
     );
     assert!(
-        !shown(&pool.record(&tid).expect("held")),
+        !shown(&pool.relay_view().record(&tid).expect("held")),
         "in its stem phase"
     );
 
@@ -294,8 +325,11 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
         offers.admissions[2],
         (tid, Admission::Duplicate(Duplicate::InPool))
     );
-    assert!(pool.record(&cid).is_none(), "the pool does not hold it");
-    let carried = pool.record(&tid).expect("held");
+    assert!(
+        pool.relay_view().record(&cid).is_none(),
+        "the pool does not hold it"
+    );
+    let carried = pool.relay_view().record(&tid).expect("held");
     assert!(carried.public, "a block published it");
     assert!(shown(&carried));
 
@@ -353,7 +387,7 @@ async fn a_switch_back_promotes_a_demoted_body_the_door_refused() {
         }
         other => panic!("the door refuses the cheap return: {other:?}"),
     }
-    assert!(pool.is_empty());
+    assert!(pool.relay_view().is_empty());
     assert!(
         stored_bodies(&mut x, a.hash).await.is_some(),
         "the demoted block's bodies went back with its row"
@@ -444,14 +478,7 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
             let now = UnixSeconds::from_raw(1);
             let (mut pool, _, _) = Pool::open(&path, now, view, rule_set, &policy).expect("open");
             let admitted = pool
-                .admit(
-                    spend,
-                    shekyl_mempool::Arrival::Relayed,
-                    now,
-                    view,
-                    rule_set,
-                    &policy,
-                )
+                .admit(spend, now, view, rule_set, &policy)
                 .expect("no fault");
             assert_eq!(
                 admitted,
@@ -565,7 +592,6 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
                 assert_eq!(
                     pool.admit(
                         tx,
-                        shekyl_mempool::Arrival::Relayed,
                         UnixSeconds::from_raw(1),
                         view,
                         rule_set,
@@ -642,7 +668,7 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
             .expect("evict"),
         vec![(id1, Evicted::Refused)]
     );
-    assert!(pool.record(&id2).is_some() && pool.record(&id3).is_some());
+    assert!(pool.relay_view().record(&id2).is_some() && pool.relay_view().record(&id3).is_some());
     drop(pool);
     drop(std::fs::remove_file(&path));
     scenario.close().await;
@@ -682,7 +708,7 @@ async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
                 ..pool.limits()
             });
             let mut admit = |tx: &shekyl_wire::Transaction| {
-                pool.admit(tx.clone(), Arrival::Relayed, now, view, rule_set, &policy)
+                pool.admit(tx.clone(), now, view, rule_set, &policy)
                     .expect("no fault")
             };
             let first = admit(&low);
@@ -743,7 +769,6 @@ async fn an_admitted_entry_leaves_when_its_reference_leaves_the_window() {
         .read_chain(|view, rule_set| {
             pool.admit(
                 spend,
-                Arrival::Relayed,
                 UnixSeconds::from_raw(1),
                 view,
                 rule_set,
@@ -774,7 +799,7 @@ async fn an_admitted_entry_leaves_when_its_reference_leaves_the_window() {
         }
         other => panic!("removed on CEN-I11: {other:?}"),
     }
-    assert!(pool.is_empty());
+    assert!(pool.relay_view().is_empty());
     drop(pool);
     drop(std::fs::remove_file(&path));
     scenario.close().await;
@@ -798,7 +823,6 @@ async fn a_connect_under_the_pool_verifies_nothing_again() {
                 let admitted = pool
                     .admit(
                         tx,
-                        Arrival::Relayed,
                         UnixSeconds::from_raw(1),
                         view,
                         rule_set,

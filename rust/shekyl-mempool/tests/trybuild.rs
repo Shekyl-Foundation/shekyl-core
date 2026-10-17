@@ -30,3 +30,13 @@ fn a_verdict_judged_over_the_pool_view_does_not_connect() {
     t.pass("tests/trybuild/verdict_over_the_batch_view_connects.rs");
     t.compile_fail("tests/trybuild/verdict_over_the_pool_view_does_not_connect.rs");
 }
+
+/// S6 (the review of #1102): the block arrivals and the every-entry reads
+/// are not the pool's public surface; `RelayView` is the one named reader.
+#[test]
+fn a_block_arrival_and_an_unfiltered_read_are_not_public() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/trybuild/the_relay_view_reads_every_entry.rs");
+    t.compile_fail("tests/trybuild/a_block_arrival_is_not_reachable.rs");
+    t.compile_fail("tests/trybuild/an_unfiltered_read_is_the_relay_views.rs");
+}
