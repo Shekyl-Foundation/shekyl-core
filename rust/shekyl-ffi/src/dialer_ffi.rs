@@ -14,8 +14,7 @@
 //! ([`shekyl_dial_take_handshake_nonce`]); the disclosure sample for the
 //! two responses the C++ still sends ([`shekyl_peerlist_disclose`]).
 //!
-//! Told: the strand's verdict on a posted handshake
-//! ([`shekyl_dialer_handshake_verdict`]); the core's tip
+//! Told: the core's tip
 //! ([`shekyl_core_publish_tip`]); `--out-peers`
 //! ([`shekyl_dialer_set_out_peers`]); an operator-named address
 //! ([`shekyl_peerlist_admit_operator`]); this node's own address on a
@@ -27,13 +26,13 @@ use std::ffi::{c_char, CStr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use shekyl_dialer::{seeds, Dialer, HubBans, LoadError, SeedNetwork, Shared};
+use shekyl_dialer::{seeds, BanSnapshot, Dialer, LoadError, SeedNetwork, Shared};
 use shekyl_levin::SupportFlags;
 use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_rpc_types::DaemonNetwork;
-use shekyl_seam::{connector_from_index, Hub, SocketId, SyncPayload};
-use shekyl_timing_engine::{Handle, MonotonicClock, OwnerClass};
+use shekyl_seam::{connector_from_index, CloseCause, Hub, SocketId, SyncPayload};
+use shekyl_timing_engine::{EngineError, Handle, MonotonicClock, OwnerClass};
 
 use crate::legacy_util::slice_from_typed_ptr;
 use crate::peerlist_ffi::{address_of, refused_set};
@@ -263,7 +262,13 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
     let spawned = std::thread::Builder::new().name(name).spawn(move || {
         running.run(connector, &owner, &mut SecureRelayRng);
         if let Err(err) = owner.deregister() {
-            tracing::warn!("{connector:?}: the dialer's wake did not deregister: {err:?}");
+            // The engine closes at shutdown and drops every owner. That is
+            // the loop's expected end, not a failure of the deregister.
+            if err == EngineError::Closed {
+                tracing::debug!("{connector:?}: the dialer's wake ended because the engine closed");
+            } else {
+                tracing::warn!("{connector:?}: the dialer's wake did not deregister: {err:?}");
+            }
         }
     });
     if let Err(err) = spawned {
@@ -291,29 +296,16 @@ pub(crate) fn stop() {
     }
 }
 
-/// A session closed. A kept session leaves the dialer's count; a dial
-/// awaiting its verdict fails with the cause the connector stored.
-pub(crate) fn on_closed(id: SocketId) {
+/// A session closed. A kept session leaves the dialer's count. A
+/// `SessionRefused` cause is the lists' `PayloadRefused`.
+pub(crate) fn on_closed(id: SocketId, cause: CloseCause) {
     if let Some(dialer) = dialer() {
-        dialer.session_closed(id, &mut SecureRelayRng);
+        dialer.session_closed(id, cause, &mut SecureRelayRng);
     }
 }
 
 fn with_shared<T>(f: impl FnOnce(MutexGuard<'_, Shared>) -> T) -> Option<T> {
     dialer().map(|dialer| f(dialer.shared()))
-}
-
-/// The strand accepted (1) or refused (0) the sync payload of the
-/// handshake posted for `id`. The dialer closes a confirm dial and a
-/// refused dial here; a kept and accepted dial stays.
-#[no_mangle]
-pub extern "C" fn shekyl_dialer_handshake_verdict(id: u64, accepted: i32) {
-    let Some(id) = SocketId::from_ffi(id) else {
-        return;
-    };
-    if let Some(dialer) = dialer() {
-        dialer.verdict(id, accepted != 0, &mut SecureRelayRng);
-    }
 }
 
 /// The inbound handshake's self-connection check: 1 when `nonce` is one
@@ -608,7 +600,7 @@ pub unsafe extern "C" fn shekyl_peerlist_disclose(
         return 0;
     };
     let now = hub.now();
-    let mut bans = HubBans(hub);
+    let mut bans = BanSnapshot::take(hub);
     let sample = with_shared(|mut shared| {
         shared
             .lists

@@ -4420,9 +4420,10 @@ constexpr int SHEKYL_PEERLIST_NO_HUB = 4;
 /// BAD_ARGUMENT: a null pointer with a non-zero count; nothing was admitted.
 constexpr int SHEKYL_PEERLIST_BAD_ARGUMENT = 5;
 /// The outbound handshake's result, posted by the Rust dialer as kind
-/// SHEKYL_SEAM_HANDSHAKE after `established` and ahead of any frame. The
-/// strand reads these fields and accepts or refuses the sync payload in
-/// that turn; it does not parse a Levin response.
+/// SHEKYL_SEAM_HANDSHAKE after `established` and ahead of any frame. Rust
+/// has already accepted the kept dial. The strand reads these fields and
+/// does not answer; it does not parse a Levin response. A confirm dial
+/// is not posted.
 struct shekyl_seam_handshake_result {
   std::uint8_t keep;
   std::uint8_t _pad[3];
@@ -4432,10 +4433,6 @@ struct shekyl_seam_handshake_result {
   std::uint64_t cumulative_difficulty_top64;
   std::uint8_t top_id[32];
 };
-/// The strand's verdict on the handshake posted for `id`: 1 accepted the
-/// sync payload, 0 refused it. The dialer closes a confirm dial and a
-/// refused dial; a kept and accepted dial stays.
-void shekyl_dialer_handshake_verdict(std::uint64_t id, int accepted);
 /// The inbound handshake's self-connection check: 1 when `nonce` (32 bytes)
 /// is one this node put in flight on `connector`, erasing it; 0 otherwise.
 int shekyl_dial_take_handshake_nonce(std::uint32_t connector, const std::uint8_t* nonce);

@@ -22,8 +22,8 @@ use shekyl_capped_stream::{SendHalf, Session};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 use shekyl_transport_layer::{
-    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet, Links, OpenSocket,
-    SocketId, Sockets,
+    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet, Links, ListedBan,
+    OpenSocket, SocketId, Sockets,
 };
 
 use crate::connection::{
@@ -243,9 +243,9 @@ impl Hub {
     /// The channel is admitted and built, and its gap deadline, when it
     /// has one, is already armed by the connector. Nothing here writes
     /// the board or tells the adapter: the outbound dialer holds the
-    /// channel through the handshake and calls [`Self::adopt`] only on a
-    /// well-formed response. A channel that is never adopted leaves no
-    /// trace in the registry.
+    /// channel through the handshake and calls [`Self::adopt`] only for a
+    /// kept response. A confirm closes the channel unadopted. A channel
+    /// that is never adopted leaves no trace in the registry.
     ///
     /// No dialer is [`CloseKind::LocalClose`].
     pub fn dial_channel(&self, endpoint: &Endpoint) -> Result<Channel, CloseCause> {
@@ -269,8 +269,10 @@ impl Hub {
     }
 
     /// Post the outbound handshake's result for `id`. The caller has
-    /// adopted the channel; this is the first post after its
-    /// `established`, ahead of any frame the pump will deliver.
+    /// adopted the channel and recorded the kept session. This notifies
+    /// the strand. Nothing waits on it. A confirm dial does not post.
+    /// It is the first post after `established`, ahead of any frame the
+    /// pump will deliver.
     pub fn post_handshake_result(
         &self,
         id: SocketId,
@@ -893,10 +895,21 @@ impl Hub {
         self.lock().sockets.is_banned(host, now)
     }
 
+    /// Bans still in force, copied out of the table.
+    ///
+    /// One wake's view: expiry is applied at this read, and the copy does
+    /// not expire again. Callers that also hold another lock take this
+    /// before that lock.
+    #[must_use]
+    pub fn listed_bans(&self) -> Vec<ListedBan> {
+        let now = self.now();
+        self.lock().sockets.listed(now)
+    }
+
     fn record(&self, id: SocketId, cause: CloseCause) -> CloseResult {
         let poster = Arc::clone(&self.post);
         let dial = self.current_dial();
-        let (open, send, gap) = {
+        let (open, send, gap, connector) = {
             let mut inner = self.lock();
             let Some(conn) = inner.conns.get_mut(&id) else {
                 return CloseResult::AlreadyClosed;
@@ -910,18 +923,15 @@ impl Hub {
             let send = conn.send.take();
             let gap = conn.gap.take();
             let connector = conn.connection.endpoint().connector();
-            poster(Post::Closed {
-                id,
-                connector,
-                cause,
-            });
             Self::wake_row(conn);
             self.wake();
             Self::republish(&mut inner);
-            (open, send, gap)
+            (open, send, gap, connector)
         };
         // The sender is dropped off the table lock: the connector task it
-        // wakes may call back into the hub.
+        // wakes may call back into the hub. The poster is after that
+        // release. It calls the dialer and the strand, and both may take
+        // this lock; a poster under the lock deadlocks on that re-entry.
         drop(gap);
         if let Some(open) = open {
             let _ = open.close(cause);
@@ -943,6 +953,11 @@ impl Hub {
         if let Some(dial) = dial {
             dial.reader_stopped(id);
         }
+        poster(Post::Closed {
+            id,
+            connector,
+            cause,
+        });
         CloseResult::Recorded(cause)
     }
 

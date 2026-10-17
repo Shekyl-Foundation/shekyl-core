@@ -6,14 +6,24 @@
 //! Dialer FFI tests.
 
 use std::ffi::{c_void, CString};
-use std::net::Ipv4Addr;
-use std::sync::PoisonError;
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, PoisonError};
+use std::thread;
+use std::time::Duration;
 
-use shekyl_seam::CloseCause;
+use shekyl_dialer::DialAim;
+use shekyl_levin::{
+    response, BasicNodeData, CoreSyncData, HandshakeResponse, PortableMap, SupportFlags,
+    COMMAND_HANDSHAKE,
+};
+use shekyl_timing_engine::Tick;
 
 use super::*;
 use crate::inbound_ceiling_ffi::{ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_UNLIMITED};
-use crate::seam_ffi::{seam_bind_lock, shekyl_seam_bind, ShekylSeamObserved, ADDR_IPV4};
+use crate::seam_ffi::{
+    seam_bind_lock, shekyl_seam_bind, shekyl_seam_install_loopback, ShekylSeamObserved, ADDR_IPV4,
+};
 
 /// A hub whose posts go nowhere: these tests never open a session.
 unsafe extern "C" fn no_post(
@@ -337,4 +347,194 @@ fn a_noted_network_survives_every_id_derivation() {
     );
     assert_eq!(shekyl_dialer_note_network(UNRECOGNIZED_NETTYPE), -1);
     assert_eq!(recorded(), SeedNetwork::Mainnet);
+}
+
+/// One handshake response and an empty peerlist, so admit is not a ban.
+fn handshake_frame() -> Vec<u8> {
+    let body = HandshakeResponse {
+        node_data: BasicNodeData {
+            network_id: [7; 16],
+            support_flags: SupportFlags::ADVERTISED,
+        },
+        payload_data: CoreSyncData {
+            current_height: 20,
+            cumulative_difficulty: 200,
+            cumulative_difficulty_top64: 0,
+            top_id: [2; 32],
+        },
+        local_peerlist_new: Vec::new(),
+    };
+    response(COMMAND_HANDSHAKE, &body.store().expect("encode"))
+}
+
+/// Unbind on the way out, including a panic. A timed-out deadlock exits
+/// the process instead, so the suite does not wait on a non-daemon thread.
+struct UnbindOnDrop;
+
+impl Drop for UnbindOnDrop {
+    fn drop(&mut self) {
+        unbind();
+    }
+}
+
+/// The three list paths — a wake, a confirm dial's received list, and the
+/// RPC listing — run together with closes and bans. Each takes its ban
+/// snapshot before the dialer's lock. A close poster that ran under the
+/// hub's lock and then took the dialer's would not return.
+#[test]
+fn the_list_paths_and_closes_do_not_deadlock() {
+    let _bind = seam_bind_lock()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    unbind();
+    let _unbind = UnbindOnDrop;
+    bind();
+    assert_eq!(shekyl_seam_install_loopback(), 0);
+    let dialer = dialer().expect("built at the bind");
+    ready(&dialer);
+
+    let peer = address(1);
+    let named = v4(1);
+    assert_eq!(
+        unsafe { shekyl_peerlist_admit_operator(&raw const named) },
+        1,
+        "the address entered gray"
+    );
+    assert_eq!(
+        unsafe { shekyl_peerlist_set_own_address(0, &raw const named) },
+        0,
+        "the wake's filter skips the only address; a named dial does not"
+    );
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let dial_done = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = mpsc::channel();
+    let frame = handshake_frame();
+    let hub = dialer.hub().clone();
+
+    let wake = {
+        let dialer = Arc::clone(&dialer);
+        let stop = Arc::clone(&stop);
+        let done = done_tx.clone();
+        thread::spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                dialer.wake(ConnectorId::Clearnet, &mut SecureRelayRng);
+                thread::sleep(Duration::from_millis(1));
+            }
+            let _sent = done.send(());
+        })
+    };
+    let dial = {
+        let dialer = Arc::clone(&dialer);
+        let stop = Arc::clone(&stop);
+        let dial_done = Arc::clone(&dial_done);
+        let done = done_tx.clone();
+        let peer = peer.clone();
+        thread::spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                // None is a dial that lost the race with a close. The next
+                // loop tries again.
+                let _id = dialer.dial(
+                    ConnectorId::Clearnet,
+                    &peer,
+                    DialAim::Confirm,
+                    &mut SecureRelayRng,
+                );
+            }
+            dial_done.store(true, Ordering::Release);
+            let _sent = done.send(());
+        })
+    };
+    let inject = {
+        let hub = hub.clone();
+        let dial_done = Arc::clone(&dial_done);
+        let done = done_tx.clone();
+        thread::spawn(move || {
+            let mut next = 1u64;
+            while !dial_done.load(Ordering::Acquire) {
+                let Some(id) = SocketId::from_ffi(next) else {
+                    break;
+                };
+                if hub.inject(id, frame.clone()) {
+                    next = next.saturating_add(1);
+                    continue;
+                }
+                // A finished confirm drops the session, so inject fails on
+                // that id while the next dial has already opened the one
+                // after it.
+                if let Some(ahead) = SocketId::from_ffi(next.saturating_add(1)) {
+                    if hub.inject(ahead, frame.clone()) {
+                        next = next.saturating_add(2);
+                        continue;
+                    }
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            let _sent = done.send(());
+        })
+    };
+    let list = {
+        let stop = Arc::clone(&stop);
+        let done = done_tx.clone();
+        thread::spawn(move || {
+            while !stop.load(Ordering::Acquire) {
+                let mut out: *const crate::rpc_peerlist_ffi::ShekylRpcPeerFacts = std::ptr::null();
+                let mut len = 0usize;
+                let mut owner: *mut c_void = std::ptr::null_mut();
+                let rc = unsafe {
+                    crate::rpc_peerlist_ffi::shekyl_rpc_peer_list(
+                        1,
+                        &raw mut out,
+                        &raw mut len,
+                        &raw mut owner,
+                    )
+                };
+                if rc == 0 {
+                    unsafe { crate::rpc_peerlist_ffi::shekyl_rpc_peer_list_free(owner) };
+                }
+                let mut white = 0u64;
+                let mut gray = 0u64;
+                let _ = unsafe {
+                    crate::rpc_peerlist_ffi::shekyl_rpc_peerlist_sizes(
+                        &raw mut white,
+                        &raw mut gray,
+                    )
+                };
+                thread::sleep(Duration::from_millis(1));
+            }
+            let _sent = done.send(());
+        })
+    };
+    let close = {
+        let stop = Arc::clone(&stop);
+        let done = done_tx.clone();
+        thread::spawn(move || {
+            let banned = IpAddr::V4(Ipv4Addr::new(11, 16, 9, 9));
+            let mut id = 1u64;
+            while !stop.load(Ordering::Acquire) {
+                if let Some(socket) = SocketId::from_ffi(id) {
+                    hub.close(socket);
+                }
+                let until = Tick::new(hub.now().get().saturating_add(60_000_000_000));
+                hub.ban_host(banned, until);
+                id = id.saturating_add(1);
+                thread::sleep(Duration::from_millis(1));
+            }
+            let _sent = done.send(());
+        })
+    };
+
+    thread::sleep(Duration::from_secs(10));
+    stop.store(true, Ordering::Release);
+    for _ in 0..5 {
+        if done_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+            eprintln!("the list paths and closes did not finish within 5s of stop");
+            std::process::exit(1);
+        }
+    }
+    wake.join().expect("wake");
+    dial.join().expect("dial");
+    inject.join().expect("inject");
+    list.join().expect("list");
+    close.join().expect("close");
 }

@@ -4275,6 +4275,7 @@ dependencies = [
  "shekyl-transport-layer",
  "tempfile",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

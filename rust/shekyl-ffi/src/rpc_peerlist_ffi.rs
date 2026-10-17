@@ -25,7 +25,7 @@ use std::ffi::c_void;
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use shekyl_dialer::HubBans;
+use shekyl_dialer::BanSnapshot;
 use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, Peerlist};
 
 use crate::dialer_ffi::dialer;
@@ -130,7 +130,7 @@ fn render(address: &NetworkAddress) -> (String, u32, u16) {
 /// `None` when there are no peer lists to read.
 fn entries(public_only: bool) -> Option<PeerListOwner> {
     let dialer = dialer()?;
-    let hub = dialer.hub();
+    let bans = BanSnapshot::take(dialer.hub());
     let snapshot = dialer.shared().lists.snapshot();
     let mut rows: Vec<(NetworkAddress, ListName)> = snapshot
         .into_iter()
@@ -144,8 +144,8 @@ fn entries(public_only: bool) -> Option<PeerListOwner> {
     for (address, list) in &rows {
         let (host, ip, port) = render(address);
         let blocked = match address {
-            NetworkAddress::Ipv4 { ip, .. } => hub.is_banned((*ip).into()),
-            NetworkAddress::Ipv6 { ip, .. } => hub.is_banned((*ip).into()),
+            NetworkAddress::Ipv4 { ip, .. } => bans.covers((*ip).into()),
+            NetworkAddress::Ipv6 { ip, .. } => bans.covers((*ip).into()),
             NetworkAddress::Tor { .. } => false,
         };
         facts.push(ShekylRpcPeerFacts {
@@ -243,14 +243,14 @@ pub unsafe extern "C" fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray
     let Some(dialer) = dialer() else {
         return FACTS_ERR_NULL;
     };
+    let now = dialer.hub().now();
+    let mut bans = BanSnapshot::take(dialer.hub());
     let (white, gray) = {
         let mut shared = dialer.shared();
-        let hub = dialer.hub();
-        let now = hub.now();
         let white = shared.lists.white_count(
             ConnectorId::Clearnet,
             now,
-            &mut HubBans(hub),
+            &mut bans,
             &mut crate::secure_relay_rng::SecureRelayRng,
         );
         let gray = shared.lists.gray_count(ConnectorId::Clearnet);

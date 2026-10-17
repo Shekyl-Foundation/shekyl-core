@@ -39,6 +39,8 @@ shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 # A directory of its own for each address-file test.
 tempfile = "3"
+# The idle-wake warning is asserted from the log line.
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
 
 [lints]
 workspace = true

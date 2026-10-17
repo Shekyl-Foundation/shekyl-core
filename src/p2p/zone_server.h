@@ -521,14 +521,17 @@ private:
     }
     else if (kind == SHEKYL_SEAM_HANDSHAKE && link)
     {
-      // The Rust dialer adopted the channel and posted the response's
-      // fields. One strand turn, before any frame: accept or refuse.
+      // A notification for a kept dial. Rust already recorded
+      // SessionAccepted; nothing waits for a reply. A confirm dial is
+      // finished in Rust and is not posted. process_payload_sync_data
+      // returns true on every path, and the size check is this struct,
+      // so a verdict carried nothing back.
       shekyl_seam_handshake_result result{};
-      const bool well_formed = bytes.size() == sizeof(result) && m_config->commands_handler();
-      if (well_formed)
+      if (bytes.size() == sizeof(result) && m_config->commands_handler())
+      {
         std::memcpy(&result, bytes.data(), sizeof(result));
-      const bool accepted = well_formed && m_config->commands_handler()->on_outbound_handshake(link->context_mut(), result);
-      shekyl_dialer_handshake_verdict(id, accepted ? 1 : 0);
+        (void)m_config->commands_handler()->on_outbound_handshake(link->context_mut(), result);
+      }
     }
     else if (kind == SHEKYL_SEAM_CLOSED && link)
     {

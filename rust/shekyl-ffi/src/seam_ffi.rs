@@ -774,9 +774,9 @@ fn post_one(bound: &Bound, item: Post) {
             connector,
             cause,
         } => {
-            // The dialer hears every close: a kept session leaves its
-            // count, a dial awaiting its verdict fails.
-            crate::dialer_ffi::on_closed(id);
+            // The dialer hears every close, with the cause. A kept session
+            // leaves its count; SessionRefused is the lists' PayloadRefused.
+            crate::dialer_ffi::on_closed(id, cause);
             let observed = routing_c(connector);
             unsafe {
                 (bound.post)(
