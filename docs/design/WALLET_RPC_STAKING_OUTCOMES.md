@@ -368,13 +368,13 @@ crash. The removal-ordering contract (`pending_post_block.rs:105-112`) is
 unaffected: a rejected post never carries a match, and a record released
 at its end date cannot gain one (WR-Q3).
 
-**How it is cleared.**
-- By the next successful seal of the same kind for the same persona.
-- Or by `acknowledge_staking_outcome { kind }`, which acts on the active
-  persona as every staking action does (WR-Q5).
-- An outcome for a persona that is not active shows in `outcomes` but
-  cannot be acknowledged; only that persona's next seal of the same kind
-  clears it.
+**How it is cleared** (the acknowledgement RULED 2026-10-17, §7.3).
+- By the next successful seal of the same kind for the same persona,
+  except `spent_elsewhere`, which clears only on acknowledgement.
+- Or by `acknowledge_staking_outcome { kind, through_height }`, which
+  clears every outcome of `kind`, for every persona, written at or below
+  `through_height`: the newest ending the owner was shown. No persona or
+  handle is named (WR-Q5).
 
 **Schema.** `PENDING_POST_VERSION` 12 → 13, refuse-not-migrate, schema
 snapshot (rule 42), shared with WR-Q3's `reference_height`.
@@ -645,11 +645,12 @@ bind (`shekyl-wallet-rpc/src/auth.rs:6-10`).
 **No slots, no handles.** Every staking action refuses a `p_slot`
 parameter (`handlers.rs:393-403`), and `stake` says "the user never names
 a slot" (`lifecycle.rs:836-838`, rule 81). So entries carry neither a
-slot nor a handle, and `acknowledge_staking_outcome` acts on the active
-persona. **Reopen** (rule 21) if a wallet must act on a record of a
-persona that is not active, including acknowledging that persona's
-outcome: the shape then is an opaque handle, random and persisted at
-seal time, never derived from the persona or the bytes.
+slot nor a handle. **The reopen clause fired and is resolved
+(RULED 2026-10-17, §7.3):** an exit's ending belongs to a persona that is
+routinely not active, so `acknowledge_staking_outcome` names no persona at
+all and clears by kind and height, across every persona. The opaque-handle
+shape stays the reopen if a wallet must ever act on one record of a
+persona that is not active.
 
 **Linkage, said to the user.** A broadcast record publishes the key
 images of its inputs to every node that saw it in a pool. When its funds
@@ -734,10 +735,10 @@ the honest outcome for that one case.
 
 ## 7. Implementation — IMPLEMENTED in #1109
 
-The rulings and BD-Q3 Rule 2 land in five commits on #1109: the state
-(schema v13), the engine (Rule 2, no sends past the end date, the
-end-date release), the `spent_elsewhere` alarm, the wallet RPC and
-contract (`wallet_rpc.yaml` 0.14.0), and this section.
+The rulings and BD-Q3 Rule 2 land on #1109: the state (schema v13), the
+engine (Rule 2, no sends past the end date, the end-date release), the
+integrity alarm, the wallet RPC and contract (`wallet_rpc.yaml` 0.14.0),
+and the review rulings of 2026-10-17 (§7.3).
 
 ### 7.1 Shapes the rulings left open — chosen in #1109
 
@@ -751,6 +752,9 @@ contract (`wallet_rpc.yaml` 0.14.0), and this section.
 - **`rejected` is an `in_flight` state** (Rule 2): the record is held to
   its end date, so the reason shows at once and the outcome is written at
   the end date.
+- **`held` is an `in_flight` state** (ruled 2026-10-17, §7.3): a stake past
+  its end date with every reserved input spent and no confirmation seen.
+  `funds_return_at` is `null`, because nothing reserved is left to return.
 - **The persisted outcome records whether the record was sent.** Only a
   sent record published its inputs' key images, so only its ending carries
   WR-Q5's linkage sentence. Sent means the record reached `Dispatched`,
@@ -758,33 +762,60 @@ contract (`wallet_rpc.yaml` 0.14.0), and this section.
   terminal verdict: a send that died in transport still counts, so the
   sentence errs toward warning. Most §1.1 posts reach their end date
   unsent. The field rides this PR's own v13 bump.
-- **`acknowledge_staking_outcome` is idempotent.** It answers
-  `acknowledged: false` when there is nothing to clear, including on a
-  wallet with no active persona, so it adds no error code.
+- **`acknowledge_staking_outcome` answers `cleared`**, the number of
+  endings cleared; `0` when there were none, so it adds no error code.
 - **`-29521` now means only a refusal before any byte was sent** (the
   persona-pairing check). A daemon's terminal verdict on a sent exit is
   `-29522`, held to its end date, because the exit seam keeps that record
   (Rule 2).
-- **The CLI word is PROPOSED, not ruled:** `stake acknowledge
-  <stake|claim|return|release>`, the kind words `stake` prints
-  ([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) §12.3). The word is the grammar
-  round's to rule.
+- **The CLI remembers what it showed.** `stake` records, per kind, the
+  newest `at_height` it displayed; `stake acknowledge <kind>` sends that
+  as `through_height`, and refuses with "run `stake` first" when nothing
+  of that kind has been shown. Opening or closing a wallet forgets the
+  heights.
 
 ### 7.2 The falsifiers, as tests
 
 | Ruling | Test |
 | --- | --- |
-| WR-Q1: no `in_flight`, or `null`, fails to decode; the two tightened fields are required | `types::tests::staking_info_refuses_a_reply_missing_a_required_member` (wallet RPC) |
+| WR-Q1: no `in_flight`, or `null`, fails to decode; the tightened fields (`pscan_synced_height`, `recovery_pending_reopen`, `posture`, `serving_priority_not_lowered`) are required | `types::tests::staking_info_refuses_a_reply_missing_a_required_member` (wallet RPC) |
 | WR-Q1: expired after a reload, `funds_return_at == r + 100` | `staking_outcomes::tests::an_expired_record_reads_the_same_after_a_reload`; the boundary at `tip == end date` in `a_record_reads_expired_from_a_tip_at_its_end_date` |
 | WR-Q1: no `stalled` | `rg -nw stalled` over the three paths returns only two comments about RPC concurrency in `send.rs`; without `-w` it also matches `installed` |
 | WR-Q2, amended by Rule 2 | `e2e_the_cxx_daemon_answers_join_market_unsupported` against the C++ daemon: one stake in flight, `rejected`, the refusal sentence, `funds_return_at` the end date, no outcome yet; the same after a restart. The WR-Q2 falsifier text in §3 predates Rule 2 |
+| WR-Q2: the acknowledgement by kind and height | `pending_post_block` `an_acknowledgement_clears_every_persona_through_the_height_shown`; through the facade and the seal, `an_acknowledgement_clears_every_personas_outcome_through_the_height_shown`; the CLI default, `acknowledge_defaults_to_the_newest_ending_shown` |
 | WR-Q3 / WR-Q4: the release table, every kind | `pending_post_block` tests and `the_release_moves_each_kind_from_in_flight_to_outcomes` |
+| §7.3: a stake with every input spent holds; a partly spent one releases | `the_release_outcome_follows_the_precedence_table`; `a_stake_with_every_input_spent_reads_held`; the alarm from the two seals, `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
+| §7.3: `spent_elsewhere` clears only on acknowledgement | `spent_elsewhere_survives_a_new_seal_and_a_new_ending`; its alarm survives a new seal in `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
 | WR-Q5: no persona, slot, delay or funding output on the wire; `p_slot` refused | `types::tests::staking_outcome_wire_names_no_persona_slot_or_funding_output`, `staking_reads_on_fresh_wallet_are_zero_and_offline` |
 
-### 7.3 Raised, not ruled
+### 7.3 Review rulings — RULED 2026-10-17 (Rick, on #1109 at `c9ac6bf52`)
 
-- **An exit's outcome for a persona that is not active cannot be
-  cleared.** `unstake` routinely exits a rotated-away persona
-  (`wallet_rpc.yaml`'s wire-activity pin), and that persona never seals
-  another exit, so its ending stays in `outcomes` for good. This is the
-  case WR-Q5's reopen clause names. Rick's to rule.
+- **A stake whose reserved inputs are all spent is held, not released.**
+  A transaction spends all its inputs or none, so this is the stake
+  itself, landed and unmatched, or a total spend elsewhere. Releasing it
+  would remove the bridge the phantom-slot cleanup relies on
+  (`engine/stake_persist.rs` `reconcile_phantom_bonded_slots`), the slot
+  could never be adopted again, and nothing would be returned. The record
+  stays; `in_flight` reads `held`; the `PendingFundsIntegrity` alarm is
+  raised, re-derived on every cadence fire from the two seals
+  (`ReservationSpentElsewhere`, `held_stakes`). A stake with only part of
+  its inputs spent still releases as `spent_elsewhere`.
+- **`spent_elsewhere` clears only on acknowledgement.** A new seal or a
+  new ending of the same kind for that persona leaves it, and its alarm,
+  in place.
+- **The acknowledgement, and WR-Q5's reopen resolved.** An exit's ending
+  belongs to a persona that is routinely not active (`unstake` exits a
+  rotated-away persona, `wallet_rpc.yaml`'s wire-activity pin), and that
+  persona never seals another exit, so an acknowledgement scoped to the
+  active persona could never clear it. Ruled: `acknowledge_staking_outcome
+  { kind, through_height }` clears every outcome of `kind`, across all
+  personas, with `at_height <= through_height`. Idempotent, and no persona
+  or handle on the wire. The CLI form is `stake acknowledge <kind>`,
+  through the height last shown.
+- **`posture` and `serving_priority_not_lowered`** become required and
+  `null` when no host or serving process is running (rule 43), in the same
+  0.14.0 contract.
+- **The CLI word `stake acknowledge` is RULED as proposed**
+  ([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) §12.3).
+- **Order:** #1109 merges before the bond slice, which takes pending-post
+  schema v14.

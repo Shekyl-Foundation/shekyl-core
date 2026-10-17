@@ -602,8 +602,11 @@ The full staking surface is live in interactive `shekyl-cli` (type
   its funds stay set aside until the height `stake` shows, because only the
   chain can say whether it was mined. If it was not, the funds come back on
   their own after that height, with nothing to do and no fee. Once you have
-  read an ending, `stake acknowledge <stake|claim|return|release>` clears it.
-  (The command's name is proposed and may change before release.)
+  read the endings `stake` showed, `stake acknowledge <stake|claim|return|release>`
+  clears those of that kind; an ending that arrives later stays until you
+  have seen it. A stake whose set-aside funds were all spent without the
+  stake confirming is kept, not withdrawn, and the wallet raises an alarm:
+  check its logs.
 
 **Wallet RPC** exposes the same verbs (`stake`, `get_staked_balance`,
 `get_staked_outputs`, `staking_info`, `stake_in`, `drain`,
