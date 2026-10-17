@@ -340,12 +340,12 @@ fn supervise(
             tor_control = control;
             let tor_socks = match (&config.tor, &tor_control) {
                 (Tor::Managed { .. }, Some(control)) => network::TorSocks::At {
-                    socks: control.socks_addr(),
+                    socks: shekyl_socks::Proxy::unauthenticated(control.socks_addr()),
                     onion_listen: None,
                     managed: true,
                 },
                 (Tor::Operator { socks, onion }, _) => network::TorSocks::At {
-                    socks: socks.endpoint,
+                    socks: network::proxy_of(socks),
                     onion_listen: onion.as_ref().map(|o| o.listen),
                     managed: false,
                 },

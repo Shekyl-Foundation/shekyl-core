@@ -24,7 +24,7 @@ use shekyl_levin::{HandshakeFrame, HandshakeKind};
 use shekyl_net_address::NetworkAddress;
 use shekyl_p2p_transport::NetworkId;
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
+use shekyl_socks::{connect as socks_connect, Destination, Proxy, ProxyWarn, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, OwnerHandle, Tick};
 use shekyl_transport_layer::{
     check_dial, CloseCause, CloseKind, CloseResult, ConnectorId, OpenError, OpenSocket, Sockets,
@@ -63,7 +63,7 @@ pub struct Admitted {
 
 pub struct Dial {
     pub address: NetworkAddress,
-    pub proxy: Option<SocketAddr>,
+    pub proxy: Option<Proxy>,
     pub sockets: Sockets,
     pub kind: ChannelChoice,
     pub network_id: NetworkId,
@@ -208,6 +208,26 @@ where
     on_cause(cause);
 }
 
+/// The operator's clearnet SOCKS proxy refused the dial's authentication,
+/// named once a minute at most.
+static AUTH_WARN: std::sync::Mutex<ProxyWarn> = std::sync::Mutex::new(ProxyWarn::new());
+
+/// The proxy refused this node's authentication (`DAEMON_CONFIG_CUTOVER.md`
+/// DC-Q7): this node's own proxy failing, so it names the rows that fix it
+/// and not the peer, and its kind does not feed the peer's forget.
+fn proxy_refused_authentication(proxy: &Proxy, error: &SocksError) -> CloseCause {
+    let due = AUTH_WARN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .due(Instant::now());
+    if let (Some(unnamed), Some(text)) =
+        (due, proxy.authentication_refused(error, "clearnet-socks"))
+    {
+        tracing::warn!(failed_dials_since_last_warning = unnamed, "{text}");
+    }
+    CloseCause::new(CloseKind::ProxyUnavailable)
+}
+
 pub async fn dial_one<C>(dial: Dial, engine: Handle<C>)
 where
     C: Clock + Clone + Send + 'static,
@@ -236,7 +256,7 @@ where
         return;
     };
     let dest = SocketAddr::new(ip, port);
-    let target = proxy.unwrap_or(dest);
+    let target = proxy.as_ref().map_or(dest, Proxy::at);
     // The engine refused. That is the host, not the peer, so it does not
     // feed the address forget the way DialFailed does.
     let Ok(owner) = engine.register(OwnerClass::Transport) else {
@@ -286,19 +306,18 @@ where
                 return Err(CloseCause::new(kind));
             }
         };
-        if proxy.is_some() {
-            match socks_connect(&mut stream, Isolation::Principal, Destination::Ip(dest)).await {
+        if let Some(proxy) = &proxy {
+            match socks_connect(&mut stream, proxy.isolation(), Destination::Ip(dest)).await {
                 Ok(()) => {}
                 Err(SocksError::Refused { reply }) => {
                     drop(stream.shutdown().await);
                     return Err(CloseCause::proxy_refused(u16::from(reply)));
                 }
-                Err(
-                    SocksError::Io(_)
-                    | SocksError::Malformed
-                    | SocksError::AuthRejected { .. }
-                    | SocksError::AuthFailed { .. },
-                ) => {
+                Err(error @ (SocksError::AuthRejected { .. } | SocksError::AuthFailed { .. })) => {
+                    drop(stream.shutdown().await);
+                    return Err(proxy_refused_authentication(proxy, &error));
+                }
+                Err(SocksError::Io(_) | SocksError::Malformed) => {
                     drop(stream.shutdown().await);
                     return Err(CloseCause::new(CloseKind::LocalClose));
                 }

@@ -306,8 +306,18 @@ done
 #     extra peer was admitted and the test panicked at "must be refused".
 #     Unix only (PWD-B1: Windows has no per-process descriptor limit); this
 #     script runs on Linux.
+#   socks_credentials — the SOCKS username and password ride the dial
+#     (DAEMON_CONFIG_CUTOVER.md DC-Q7; Rick, 2026-10-17): a daemon behind a
+#     SOCKS5 proxy that takes only RFC 1929 presents the configured pair on
+#     the clearnet and the operator-Tor dial, and a refused pair is named by
+#     its rows while the daemon keeps running. Observed red 2026-10-17 with
+#     both dials forced to no-auth: all three timed out with the proxy
+#     seeing only method 0x00. Unix only (the configuration file's mode).
 ARMED_LEVIN=(
   refused_inbound:the_inbound_ceiling_derived_from_the_descriptor_limit_refuses_the_next_peer
+  socks_credentials:the_clearnet_dial_presents_its_pair_and_tunnels_through_the_proxy
+  socks_credentials:a_refused_pair_names_its_rows_and_the_daemon_keeps_running
+  socks_credentials:the_operator_tor_dial_presents_its_pair
 )
 
 for entry in "${ARMED_LEVIN[@]}"; do
