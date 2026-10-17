@@ -427,7 +427,11 @@ pub struct GetBlockResponse {
     pub tx_hashes: Vec<HashHex>,
     /// The block in its consensus encoding, lowercase hex.
     pub blob: String,
-    pub json: String,
+    /// epee's rendering of the block (RK-D11). It duplicates `blob`; a
+    /// daemon with no epee renderer — the store-backed handlers of
+    /// `DRS_X_STORE_FLIP.md` DX-Q3 — omits it, and RK-W retires it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json: Option<String>,
 }
 
 /// Params of `get_block_header_by_height` (alias `getblockheaderbyheight`).

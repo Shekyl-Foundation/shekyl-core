@@ -403,7 +403,7 @@ fn get_block_full_matches_the_oracle() {
         miner_tx_hash: tagged_hash(31),
         tx_hashes: vec![tagged_hash(61), tagged_hash(67)],
         blob: BLOB_HEX.to_owned(),
-        json: BLOCK_JSON.to_owned(),
+        json: Some(BLOCK_JSON.to_owned()),
     };
     assert_parity(include_str!("vectors/rpc/get_block_full_v1.json"), &built);
 }
@@ -418,7 +418,7 @@ fn get_block_by_hash_matches_the_oracle() {
         miner_tx_hash: tagged_hash(31),
         tx_hashes: vec![tagged_hash(61), tagged_hash(67)],
         blob: BLOB_HEX.to_owned(),
-        json: BLOCK_JSON.to_owned(),
+        json: Some(BLOCK_JSON.to_owned()),
     };
     assert_parity(
         include_str!("vectors/rpc/get_block_by_hash_v1.json"),
@@ -463,7 +463,7 @@ fn get_block_without_transactions_omits_the_list() {
         miner_tx_hash: tagged_hash(31),
         tx_hashes: Vec::new(),
         blob: BLOB_HEX.to_owned(),
-        json: BLOCK_JSON.to_owned(),
+        json: Some(BLOCK_JSON.to_owned()),
     };
     assert_parity(
         include_str!("vectors/rpc/get_block_no_txes_v1.json"),
