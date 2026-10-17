@@ -62,7 +62,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_chain_rules::{
     emission_epoch_facts, relay_floor_at, release_last_served, AdmissionPolicy, AtHeight,
-    ChainView, HeaderView, PolicyRow, RuleSet, Tip,
+    ChainView, EmissionEpochSnapshot, HeaderView, PolicyRow, RuleSet, Tip,
 };
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
 use shekyl_mempool::{Admission, Arrival, Judged, Pool};
@@ -262,38 +262,48 @@ fn emission_facts(
     let snapshots = emission_epoch_facts(view, rule_set, persona, epochs)
         .map_err(|_| ShimFault)?
         .into_iter()
-        .map(|facts| EmissionEpochSnapshotFacts {
-            has_budget_row: facts.budget.is_some(),
-            settlement_epoch: facts.settlement_epoch,
-            close_block_height: facts.close_height.map_or(0, BlockHeight::to_raw),
-            sigma_work_milli: facts.sigma_work_milli.unwrap_or(0),
-            budget_atomic: facts.budget.unwrap_or(0),
-            claimant_bond_idx: facts.claimant_bond_idx,
-            bonds: facts
-                .bonds
-                .into_iter()
-                .map(|bond| EmissionCloseBondFacts {
-                    join_settlement_epoch: bond.join_settlement_epoch,
-                    is_foundation_complete_tree: bond.is_foundation_complete_tree,
-                    bad_intervals: bond.bad_intervals,
-                })
-                .collect(),
-            shards: facts
-                .shards
-                .into_iter()
-                .map(|shard| EmissionShardFacts {
-                    shard_id: shard.shard_id,
-                    close: shard.close,
-                })
-                .collect(),
-            credit_pairs: facts
-                .pairs
-                .into_iter()
-                .map(|pair| EmissionCreditPairFacts {
-                    bond_idx: pair.bond_idx,
-                    shard_idx: pair.shard_idx,
-                })
-                .collect(),
+        .map(|facts| {
+            // An epoch that has not settled has no snapshot: the engine reads
+            // the absent budget row and refuses the claim (§8.7.2 E7).
+            let snapshot = facts.snapshot.unwrap_or(EmissionEpochSnapshot {
+                bonds: Vec::new(),
+                shards: Vec::new(),
+                pairs: Vec::new(),
+                claimant_bond_idx: None,
+            });
+            EmissionEpochSnapshotFacts {
+                has_budget_row: facts.budget.is_some(),
+                settlement_epoch: facts.settlement_epoch,
+                close_block_height: facts.close_height.map_or(0, BlockHeight::to_raw),
+                sigma_work_milli: facts.sigma_work_milli.unwrap_or(0),
+                budget_atomic: facts.budget.unwrap_or(0),
+                claimant_bond_idx: snapshot.claimant_bond_idx,
+                bonds: snapshot
+                    .bonds
+                    .into_iter()
+                    .map(|bond| EmissionCloseBondFacts {
+                        join_settlement_epoch: bond.join_settlement_epoch,
+                        is_foundation_complete_tree: bond.is_foundation_complete_tree,
+                        bad_intervals: bond.bad_intervals,
+                    })
+                    .collect(),
+                shards: snapshot
+                    .shards
+                    .into_iter()
+                    .map(|shard| EmissionShardFacts {
+                        shard_id: shard.shard_id,
+                        close: shard.close,
+                    })
+                    .collect(),
+                credit_pairs: snapshot
+                    .pairs
+                    .into_iter()
+                    .map(|pair| EmissionCreditPairFacts {
+                        bond_idx: pair.bond_idx,
+                        shard_idx: pair.shard_idx,
+                    })
+                    .collect(),
+            }
         })
         .collect();
     Ok((conflict, EmissionFacts { bond, snapshots }))
