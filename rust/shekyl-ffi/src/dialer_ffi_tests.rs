@@ -14,7 +14,7 @@
 
 use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, PoisonError};
 use std::thread;
 use std::time::Duration;
@@ -457,10 +457,14 @@ fn a_kept_session_closed_from_cxx_returns_and_leaves_the_kept_count() {
     );
 }
 
-/// The three list paths — a wake, a confirm dial's received list, and the
-/// RPC listing — run together with closes and bans. Each takes its ban
-/// snapshot before the dialer's lock. A close poster that ran under the
-/// hub's lock and then took the dialer's would not return.
+/// The three list paths (a wake, a dial's received list, and the RPC
+/// listing) run together with bans and with closes of kept sessions from
+/// C++. Each list path takes its ban snapshot before the dialer's lock. A
+/// close goes through `shekyl_seam_close`, the entry the alpha.10 fleet
+/// froze on, to the dialer's close callback, while the list paths hold and
+/// release the dialer's lock around it. A close poster that ran under the
+/// hub's lock and then took the dialer's would not return. The closer reads
+/// the kept sessions' ids off the hub's board, so it closes what exists.
 #[test]
 fn the_list_paths_and_closes_do_not_deadlock() {
     let _bind = seam_bind_lock()
@@ -473,14 +477,17 @@ fn the_list_paths_and_closes_do_not_deadlock() {
     install_answering_loopback(dialer.hub());
     ready(&dialer);
 
-    let peer = address(1);
+    // Address 1 is confirmed by name only: it is this node's own, so the
+    // wake skips it. Addresses 20 to 23 are kept, by name and by the wake.
+    const KEPT: [u8; 4] = [20, 21, 22, 23];
     let dir = tempfile::tempdir().expect("a directory");
-    apply_p2p(&section(&[1], &[], false), &dir.path().join("p2pstate.bin")).expect("applied");
-    assert!(
-        dialer.shared().lists.is_gray(&address(1)),
-        "the address entered gray"
-    );
-    // The wake's filter skips the only address; a named dial does not.
+    let mut named = vec![1];
+    named.extend(KEPT);
+    apply_p2p(
+        &section(&named, &[], false),
+        &dir.path().join("p2pstate.bin"),
+    )
+    .expect("applied");
     set_own_addresses(ConnectorId::Clearnet, vec![address(1)]).expect("the dialer exists");
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -503,17 +510,24 @@ fn the_list_paths_and_closes_do_not_deadlock() {
         let dialer = Arc::clone(&dialer);
         let stop = Arc::clone(&stop);
         let done = done_tx.clone();
-        let peer = peer.clone();
         thread::spawn(move || {
+            let mut turn = 0usize;
             while !stop.load(Ordering::Acquire) {
-                // None is a dial that lost the race with a close. The next
-                // loop tries again.
-                let _id = dialer.dial(
+                // None is a dial that lost a race: a close, or an address
+                // still kept from the last turn. The next turn tries again.
+                let _confirmed = dialer.dial(
                     ConnectorId::Clearnet,
-                    &peer,
+                    &address(1),
                     DialAim::Confirm,
                     &mut SecureRelayRng,
                 );
+                let _kept = dialer.dial(
+                    ConnectorId::Clearnet,
+                    &address(KEPT[turn % KEPT.len()]),
+                    DialAim::Keep,
+                    &mut SecureRelayRng,
+                );
+                turn = turn.wrapping_add(1);
             }
             let _sent = done.send(());
         })
@@ -550,19 +564,21 @@ fn the_list_paths_and_closes_do_not_deadlock() {
             let _sent = done.send(());
         })
     };
+    let closed = Arc::new(AtomicU64::new(0));
     let close = {
         let stop = Arc::clone(&stop);
         let done = done_tx.clone();
+        let hub = hub.clone();
+        let closed = Arc::clone(&closed);
         thread::spawn(move || {
             let banned = IpAddr::V4(Ipv4Addr::new(11, 16, 9, 9));
-            let mut id = 1u64;
             while !stop.load(Ordering::Acquire) {
-                if let Some(socket) = SocketId::from_ffi(id) {
-                    hub.close(socket);
+                for row in hub.board().rows().iter().filter(|row| row.established()) {
+                    crate::seam_ffi::shekyl_seam_close(row.id().get());
+                    closed.fetch_add(1, Ordering::Relaxed);
                 }
                 let until = Tick::new(hub.now().get().saturating_add(60_000_000_000));
                 hub.ban_host(banned, until);
-                id = id.saturating_add(1);
                 thread::sleep(Duration::from_millis(1));
             }
             let _sent = done.send(());
@@ -581,4 +597,19 @@ fn the_list_paths_and_closes_do_not_deadlock() {
     dial.join().expect("dial");
     list.join().expect("list");
     close.join().expect("close");
+
+    assert!(
+        closed.load(Ordering::Relaxed) > 0,
+        "kept sessions were closed from C++ while the list paths ran"
+    );
+    // What the last turns kept is closed the same way, and every close
+    // reaches the dialer.
+    for row in hub.board().rows().iter().filter(|row| row.established()) {
+        crate::seam_ffi::shekyl_seam_close(row.id().get());
+    }
+    assert_eq!(
+        dialer.kept_sessions(ConnectorId::Clearnet),
+        0,
+        "every close reached the dialer's callback"
+    );
 }
