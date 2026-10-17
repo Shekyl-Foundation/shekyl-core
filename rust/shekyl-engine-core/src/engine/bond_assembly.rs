@@ -423,7 +423,8 @@ pub(crate) struct FundingSelection {
 /// `required` is `bond_floor(holdings) + fee`, computed by the caller with
 /// checked arithmetic. `reference_height` is the sweep's spendability
 /// anchor: the chain height the assemble path builds against (a record is in
-/// the tree iff `spendable_height <= reference_height`).
+/// the tree iff [`in_tree_at_reference`](shekyl_curve_tree::in_tree_at_reference)
+/// holds for its `spendable_height`).
 ///
 /// **Why the witness parameter (do not remove without the FOLLOWUP):**
 /// `reserved` covers only *live pending posts*. A funding output spent by a
@@ -489,7 +490,7 @@ where
         .filter(|r| {
             r.p_slot == p_slot
                 && !reserved.contains(&r.gindex)
-                && r.spendable_height <= reference_height
+                && shekyl_curve_tree::in_tree_at_reference(r.spendable_height, reference_height)
         })
         .collect();
     // Oldest-first: height, then gindex. Distinct outputs have distinct

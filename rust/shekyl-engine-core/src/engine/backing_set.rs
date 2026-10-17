@@ -145,15 +145,19 @@ impl BackingSet {
     {
         // Enforce the slot + spendability preconditions here rather than
         // trust the caller (type docs; GF4b-6): only the claimant slot's
-        // records, and a record is in the tree iff `spendable_height <=
-        // reference_height`, exactly as the sweep applies both. Filtering
+        // records, and a record is in the tree iff
+        // `in_tree_at_reference(spendable_height, reference_height)`, exactly
+        // as the sweep applies both. Filtering
         // before the survivor tripwire drops the immature and foreign-slot
         // subsets of its false positives by construction, and makes the
         // type's guarantees hold for every member rather than by
         // remembered contract.
         let spendable: Vec<&PFundingOutputRecord> = records
             .into_iter()
-            .filter(|r| r.p_slot == p_slot && r.spendable_height <= reference_height)
+            .filter(|r| {
+                r.p_slot == p_slot
+                    && shekyl_curve_tree::in_tree_at_reference(r.spendable_height, reference_height)
+            })
             .collect();
 
         debug_assert!(
@@ -737,7 +741,8 @@ mod tests {
         let remainder: Vec<&PFundingOutputRecord> = pre_sweep
             .iter()
             .filter(|r| {
-                !swept.contains(&r.gindex.to_raw()) && r.spendable_height <= reference_height
+                !swept.contains(&r.gindex.to_raw())
+                    && shekyl_curve_tree::in_tree_at_reference(r.spendable_height, reference_height)
             })
             .collect();
         assert!(

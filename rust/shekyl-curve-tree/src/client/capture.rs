@@ -234,7 +234,7 @@ impl CurveTreeClient {
                 OwnedRegistration::BeforeDrain
             };
         };
-        let cutoff = Self::drained_through(tip);
+        let cutoff = crate::reference::drained_through(tip);
         // `entries` is strictly increasing in `gindex`.
         let drained = self
             .entries
@@ -447,7 +447,7 @@ impl CurveTreeClient {
         let Some(tip) = self.ingested_tip_height else {
             return Ok(CaptureReconciliation::default());
         };
-        let cutoff = Self::drained_through(tip);
+        let cutoff = crate::reference::drained_through(tip);
         let drained = drained_sorted(&self.entries, cutoff);
         let drained_count = u64::try_from(drained.len()).expect("drained count fits u64");
 
