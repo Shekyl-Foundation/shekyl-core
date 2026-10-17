@@ -321,10 +321,13 @@ mod tests {
         let (heard_tx, heard) = mpsc::channel();
         killed.on_death(move |death| heard_tx.send(death).expect("heard"));
         let pid = tor_under(dir.path()).expect("the tor under this directory");
-        let status = std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .status()
-            .expect("kill");
+        // Under the spawn lock, as every spawn in a crate that launches tor
+        // is (TOR_SUPERVISOR.md 4.7): a child started in the launch window
+        // would inherit tor's end.
+        let status = shekyl_tor_control_client::spawn_lock::status(
+            std::process::Command::new("kill").args(["-9", &pid.to_string()]),
+        )
+        .expect("kill");
         assert!(status.success());
         assert_eq!(
             heard.recv_timeout(Duration::from_secs(30)),
