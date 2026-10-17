@@ -309,8 +309,9 @@ python3 scripts/release/tor_bundle.py stage --host x86_64-linux-gnu \
 one, and extracts only the files the pin lists. The daemon then finds
 `tor/tor` beside itself.
 
-`SHEKYL_TOR_BINARY=/path/to/tor` overrides where the daemon looks. It does
-not relax what it checks. The path must name the `tor` inside a directory
+`--tor-file /path/to/tor` (or `tor-file` in the configuration file) names
+where the daemon looks; nothing is read from the environment. It does not
+relax what it checks. The path must name the `tor` inside a directory
 that holds **exactly** the pinned files:
 
 - **Pointing it at a full extracted Expert Bundle is refused.** That

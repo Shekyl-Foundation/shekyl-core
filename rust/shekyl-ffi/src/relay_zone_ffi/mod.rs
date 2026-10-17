@@ -560,6 +560,64 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
     (b != NIL).then(|| ConnectionId::from_bytes(b))
 }
 
+/// The relay half of the remnant's preparation: one bit per connector
+/// index, and whether the development cover carrier runs. The mask is
+/// computed here, next to [`connectors_from_mask`], so the preparation
+/// stores no dialer type.
+#[must_use]
+pub fn relay_identity(
+    connectors: &[ConnectorId],
+    cover: bool,
+) -> crate::remnant_prep::RelayIdentity {
+    let connectors = connectors
+        .iter()
+        .fold(0u32, |mask, connector| mask | (1u32 << connector.index()));
+    crate::remnant_prep::RelayIdentity { connectors, cover }
+}
+
+/// The C++ test harness writer (`tests/unit_tests/levin.cpp`,
+/// `tests/unit_tests/node_server.cpp`). It overwrites the relay half
+/// between notifiers and does not touch the reservation. Returns 0, or -1
+/// for a bit past the connector count.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_posture_record(configured: u32, cover: bool) -> i32 {
+    if connectors_from_mask(configured).is_err() {
+        return -1;
+    }
+    crate::remnant_prep::state_relay(crate::remnant_prep::RelayIdentity {
+        connectors: configured,
+        cover,
+    });
+    0
+}
+
+/// Opens the relay zone from the remnant's preparation. Null when no
+/// identity is installed: a relay with no identity is not built.
+#[no_mangle]
+pub extern "C" fn shekyl_relay_zone_new(
+    now_ms: u64,
+    stems: usize,
+    min_epoch_secs: u32,
+    epoch_jitter_secs: u32,
+) -> *mut RelayZoneHandle {
+    let Some(identity) = crate::remnant_prep::relay() else {
+        return std::ptr::null_mut();
+    };
+    let flags = if identity.cover {
+        SHEKYL_RELAY_ZONE_NOISE_ENABLED
+    } else {
+        0
+    };
+    new_zone(
+        now_ms,
+        stems,
+        min_epoch_secs,
+        epoch_jitter_secs,
+        flags,
+        identity.connectors,
+    )
+}
+
 /// Open a zone. Release with [`shekyl_relay_zone_free`].
 ///
 /// The epoch length is a parameter because it is C++-owned and already
@@ -588,8 +646,10 @@ unsafe fn read_id(p: *const u8) -> Option<ConnectionId> {
 /// count other than the inherited width, and a noise epoch too short to
 /// carry a full-size message. Every [`shekyl_relay::RelayNewError`] maps
 /// to null because that is the only channel a C ABI has.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_new(
+///
+/// The production export reads the flags and the mask from the remnant's
+/// preparation. The tests state them.
+pub(crate) fn new_zone(
     now_ms: u64,
     stems: usize,
     min_epoch_secs: u32,
@@ -1120,33 +1180,6 @@ pub unsafe extern "C" fn shekyl_relay_zone_floor_snapshot(
         }
         None => false,
     }
-}
-
-/// The outbound-connection floor the embargo provisioning assumes (F-8b, §45).
-///
-/// `fluff_return_ms` is measured at usable degree 12; a zone configured below
-/// that has a real fluff first-passage the embargo was not derived for, in the
-/// privacy-losing direction. The `--tx-proxy` parser refuses counts below this
-/// value. Handle-free: the floor is a property of the derivation, not of any
-/// zone instance.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_zone_min_provisioned_out_peers() -> u32 {
-    shekyl_relay_privacy::params::MIN_PROVISIONED_OUT_PEERS
-}
-
-/// Outbound connections a node opens per zone by default (rule 20: Rust owns
-/// the value, C++ consumes it).
-///
-/// Replaces `#define P2P_DEFAULT_CONNECTIONS_COUNT`. The relay-privacy
-/// instruments simulate the deployed out-degree, so a `#define` C++ could move
-/// without any Rust test failing left the measurements free to describe a
-/// network that does not exist. Not the same quantity as
-/// `shekyl_relay_zone_min_provisioned_out_peers`: this is the configuration
-/// the privacy numbers are measured **at**, that one is a floor derived
-/// **from** those measurements.
-#[no_mangle]
-pub extern "C" fn shekyl_p2p_default_out_peers() -> u32 {
-    shekyl_relay_privacy::params::P2P_DEFAULT_OUT_PEERS
 }
 
 #[no_mangle]

@@ -153,9 +153,7 @@ namespace
 
   void bind_harness(pool& ex)
   {
-    shekyl_inbound_ceiling ceiling{};
-    shekyl_inbound_ceiling_resolve(0, 0, &ceiling);
-    ASSERT_EQ(shekyl_seam_bind(&ex, &post_to_strand, &ceiling), 0);
+    ASSERT_EQ(shekyl_seam_bind(&ex, &post_to_strand), 0);
     ASSERT_EQ(shekyl_seam_install_loopback(), 0);
   }
 
@@ -236,7 +234,7 @@ TEST(seam_endpoint, connect_from_the_executor_completes_at_the_floor)
 
   ex.io.stop();
   threads.join_all();
-  shekyl_seam_bind(nullptr, nullptr, nullptr);
+  shekyl_seam_bind(nullptr, nullptr);
   shekyl_executor_release(handle);
 }
 
@@ -287,7 +285,7 @@ TEST(seam_endpoint, an_unestablished_clearnet_dial_counts_before_the_handshake)
   wait_until_links_close(ex);
   ex.io.stop();
   runner.join();
-  shekyl_seam_bind(nullptr, nullptr, nullptr);
+  shekyl_seam_bind(nullptr, nullptr);
 }
 
 TEST(seam_endpoint, a_delivery_posted_before_closed_is_parsed)
@@ -333,7 +331,7 @@ TEST(seam_endpoint, a_delivery_posted_before_closed_is_parsed)
   EXPECT_TRUE(cause->second.kind == SHEKYL_CLOSE_LOCAL_CLOSE
       || cause->second.kind == SHEKYL_CLOSE_SESSION_REFUSED);
   EXPECT_TRUE(ex.links.find(id) == ex.links.end());
-  shekyl_seam_bind(nullptr, nullptr, nullptr);
+  shekyl_seam_bind(nullptr, nullptr);
 }
 
 TEST(seam_endpoint, two_connections_keep_distinct_registry_keys)
@@ -378,7 +376,7 @@ TEST(seam_endpoint, two_connections_keep_distinct_registry_keys)
   wait_until_links_close(ex);
   ex.io.stop();
   runner.join();
-  shekyl_seam_bind(nullptr, nullptr, nullptr);
+  shekyl_seam_bind(nullptr, nullptr);
 }
 
 TEST(seam_endpoint, a_relay_send_on_the_strand_reaches_the_seam_connection)
@@ -439,7 +437,7 @@ TEST(seam_endpoint, a_relay_send_on_the_strand_reaches_the_seam_connection)
   wait_until_links_close(ex);
   ex.io.stop();
   runner.join();
-  shekyl_seam_bind(nullptr, nullptr, nullptr);
+  shekyl_seam_bind(nullptr, nullptr);
 }
 
 TEST(seam_endpoint, a_second_established_does_not_replace_the_link)
@@ -480,7 +478,7 @@ TEST(seam_endpoint, a_second_established_does_not_replace_the_link)
   wait_until_links_close(ex);
   ex.io.stop();
   runner.join();
-  shekyl_seam_bind(nullptr, nullptr, nullptr);
+  shekyl_seam_bind(nullptr, nullptr);
 }
 
 TEST(seam_endpoint, add_ref_fails_once_closed_and_does_not_use_a_destroyed_handler)

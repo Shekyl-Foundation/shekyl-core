@@ -383,8 +383,8 @@ impl std::fmt::Display for TorBinaryError {
             Self::NotFound => write!(
                 f,
                 "no tor binary found (install the pinned bundle in the tor/ directory beside \
-                 the executable or under /opt/shekyl/<version>-<target>/, or set \
-                 SHEKYL_TOR_BINARY to the tor inside such a directory)"
+                 the executable or under /opt/shekyl/<version>-<target>/, or name \
+                 the tor inside such a directory with tor-file)"
             ),
             Self::NotAFile(p) => {
                 write!(f, "not a regular file: {}", p.display())
@@ -451,12 +451,10 @@ impl std::error::Error for TorBinaryError {}
 /// Discover a `tor` binary and verify its directory against the pin,
 /// returning a [`VerifiedTorBinary`] only if it passes.
 ///
-/// Exactly **one** candidate is chosen, in this order, and it is the one verified:
-///   1. the `SHEKYL_TOR_BINARY` env override (an operator, packager or
-///      developer naming a specific binary — still gated in full: the override
-///      changes *where* we look, never *whether* we verify, so it must name
-///      the `tor` inside a directory holding exactly the pinned files; a
-///      set-but-empty value is treated as unset),
+/// Exactly **one** candidate is chosen, in this order, and it is the one
+/// verified (an operator who names a binary does so with the daemon's
+/// `tor-file` row, through [`discover_and_verify_at`]; nothing is read
+/// from the environment, `INPUT_GRAMMAR.md` IG-Q41):
 ///   2. `tor/tor` next to the running executable (the layout of an unpacked
 ///      release archive — note `std::env::current_exe` is best-effort by its
 ///      own docs, and if it errors this tier is skipped),
@@ -487,29 +485,23 @@ pub fn discover_and_verify() -> Result<VerifiedTorBinary, TorBinaryError> {
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
     let well_known = well_known_candidate(&pin);
-    let path = candidate_from(
-        std::env::var_os("SHEKYL_TOR_BINARY"),
-        exe_dir.as_deref(),
-        well_known.as_deref(),
-        pin.executable,
-    )
-    .ok_or(TorBinaryError::NotFound)?;
+    let path = candidate_from(exe_dir.as_deref(), well_known.as_deref(), pin.executable)
+        .ok_or(TorBinaryError::NotFound)?;
     verify_candidate(&path, &pin)
 }
 
 /// Verify a **caller-supplied** tor path (e.g. from a settings file)
 /// against the pin — the same gate as [`discover_and_verify`], minus discovery.
-/// This is the sanctioned route for configuration: never plumb a config value
-/// through the `SHEKYL_TOR_BINARY` env var (process-global, race-prone).
+/// This is the route for configuration: the daemon's `tor-file` row and the
+/// wallet's setting arrive here, never through the process environment.
 pub fn discover_and_verify_at(path: &Path) -> Result<VerifiedTorBinary, TorBinaryError> {
     let pin = current_pin()?;
     verify_candidate(path, &pin)
 }
 
 /// Select the single `tor` candidate from explicit inputs — the pure core of
-/// discovery, separated from the process globals (env, `current_exe`) so the
-/// precedence rules are unit-testable without racing the parallel test harness
-/// over `std::env`.
+/// discovery, separated from `current_exe` so the precedence rules are
+/// unit-testable.
 ///
 /// Precedence: a non-empty override wins unconditionally (an explicit choice is
 /// never bypassed by a fall-through — even if the file does not exist, so a typo
@@ -519,19 +511,10 @@ pub fn discover_and_verify_at(path: &Path) -> Result<VerifiedTorBinary, TorBinar
 /// a staged non-executable file surfaces as *its* `NotExecutable` error rather
 /// than as "not found".
 fn candidate_from(
-    override_var: Option<OsString>,
     exe_dir: Option<&Path>,
     well_known: Option<&Path>,
     executable: &str,
 ) -> Option<PathBuf> {
-    if let Some(p) = override_var {
-        // A set-but-empty override means unset (`SHEKYL_TOR_BINARY= wallet`, an
-        // unexpanded variable in a wrapper script) — fall through to discovery
-        // rather than "verifying" the empty path.
-        if !p.is_empty() {
-            return Some(PathBuf::from(p));
-        }
-    }
     if let Some(beside) = exe_dir.map(|dir| dir.join(BESIDE_TOR_DIR).join(executable)) {
         if beside.is_file() {
             return Some(beside);

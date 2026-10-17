@@ -82,41 +82,6 @@ namespace cryptonote
 {
 namespace levin
 {
-  /*! Development opt-in for the noise carrier. Defaults OFF, and the
-      default is the shipped behaviour.
-
-      A RUNTIME switch rather than a compile-time one, and that is the
-      difference between a gate and a hope. Behind `#ifdef` the only
-      configuration that reaches the carrier is the one CI never builds, so
-      the code would be untestable by the repository's own gate — the
-      failure mode a reviewer named on the first draft. Defaulting off and
-      letting a test turn it on means the carrier's path is exercised by the
-      ordinary suite, and every existing `has_noise == false` fixture keeps
-      passing untouched because the default did not move.
-
-      NOT an operator switch, and §3.1 of `COVER_TRAFFIC_RESTORATION.md` is
-      the ruling rather than the caution: one encrypted zone has ONE embargo
-      distribution, the carrier moves `hop` by ~9x, and a carrier-adaptive
-      embargo is refused by §18's argument at its third application. Enabling
-      this under today's constants runs the zone's alpha below the 0.90 pin.
-      It exists so the mechanism can be built and tested before the two
-      reopening criteria are met, not so an operator can choose it. */
-  std::atomic<bool>& carrier_development_flag() noexcept
-  {
-    static std::atomic<bool> enabled{false};
-    return enabled;
-  }
-
-  bool carrier_development_enabled() noexcept
-  {
-    return carrier_development_flag().load(std::memory_order_relaxed);
-  }
-
-  bool set_carrier_development(const bool enabled) noexcept
-  {
-    return carrier_development_flag().exchange(enabled, std::memory_order_relaxed);
-  }
-
   namespace
   {
     constexpr const std::size_t connection_id_reserve_size = 100;
@@ -210,13 +175,13 @@ namespace levin
 
     /*! Build the Rust relay zone for `nzone`.
 
-        **The noise flag is set here again, behind a development opt-in.**
+        **The noise flag is set here again, behind a development lever.**
         #515 deleted the C++ machinery that used to execute the carrier and
         `NoiseQueues` is the port; what this function now does is turn the
-        Rust-owned carrier ON for an encrypted zone when
-        `set_carrier_development` says so.
+        Rust-owned carrier ON for an encrypted zone when the recorded posture
+        says so (`dev-relay-cover`, recorded by the daemon's Rust main()).
 
-        BY DEFAULT IT DOES NOT. The opt-in is off unless a test or a developer
+        BY DEFAULT IT DOES NOT. The lever is off unless a test or a developer
         sets it, so in a shipped build `get_status().has_noise` still reads
         false everywhere and `select_anonymity`'s noise-priority arm stays
         dormant — the property every `has_noise == false` fixture leans on.
@@ -257,16 +222,18 @@ namespace levin
         Carrying opaque bytes OUTWARD, chosen by Rust after the cadence has
         already decided when and to whom, tells the scheduler nothing. See
         `NoiseSendCb`'s own note, which is about the inbound direction. */
-    RelayZoneHandle* make_relay(const std::uint32_t configured)
+    RelayZoneHandle* make_relay()
     {
       const relay_zone_params params = public_zone_params();
 
       /* Noise stays the development opt-in. Rust refuses the ask when no
          configured connector is an open link. Tor is volume cover and
          takes no envelope. This side does not scan encryption cells. */
-      std::uint32_t flags = 0;
-      if (carrier_development_enabled())
-        flags |= SHEKYL_RELAY_ZONE_NOISE_ENABLED;
+      /* The relay's identity (which connectors are configured) and the
+         development cover carrier are the recorded posture, which the
+         daemon's Rust main() records from its sections before this is
+         built (dev-relay-cover; DAEMON_CONFIG_CUTOVER.md §3). Nothing
+         about them is decided here. */
 
       /* A DEVELOPMENT FLAG, and deliberately not an operator switch. The
          distinction is a ruling, not caution.
@@ -296,8 +263,7 @@ namespace levin
          criteria that turn it into a shippable switch. */
       return shekyl_relay_zone_new(
         now_ms(), params.stems,
-        std::uint32_t(params.min_epoch.count()), std::uint32_t(params.epoch_range.count()),
-        flags, configured
+        std::uint32_t(params.min_epoch.count()), std::uint32_t(params.epoch_range.count())
       );
     }
 
@@ -418,11 +384,11 @@ namespace levin
   {
     struct zone
     {
-      explicit zone(boost::asio::io_context& io_service, std::vector<connector_registry> registries_in, std::uint32_t configured, bool pad_txs)
+      explicit zone(boost::asio::io_context& io_service, std::vector<connector_registry> registries_in, bool pad_txs)
         : registries(std::move(registries_in)),
           wake(io_service),
           strand(io_service),
-          relay(make_relay(configured), &shekyl_relay_zone_free),
+          relay(make_relay(), &shekyl_relay_zone_free),
           pending_wakes(0),
           pad_txs(pad_txs)
       {}
@@ -1524,12 +1490,11 @@ namespace levin
   } // anonymous
 
   notify::notify(boost::asio::io_context& service, std::shared_ptr<connections> p2p, epee::net_utils::connector_id connector, const bool pad_txs, i_core_events& core)
-    : notify(service, std::vector<connector_registry>{connector_registry{connector_byte(connector), std::move(p2p)}},
-        std::uint32_t{1} << connector_byte(connector), pad_txs, core)
+    : notify(service, std::vector<connector_registry>{connector_registry{connector_byte(connector), std::move(p2p)}}, pad_txs, core)
   {}
 
-  notify::notify(boost::asio::io_context& service, std::vector<connector_registry> registries, const std::uint32_t configured, const bool pad_txs, i_core_events& core)
-    : zone_(std::make_shared<detail::zone>(service, std::move(registries), configured, pad_txs))
+  notify::notify(boost::asio::io_context& service, std::vector<connector_registry> registries, const bool pad_txs, i_core_events& core)
+    : zone_(std::make_shared<detail::zone>(service, std::move(registries), pad_txs))
     , core_(std::addressof(core))
   {
     if (zone_->registries.empty())

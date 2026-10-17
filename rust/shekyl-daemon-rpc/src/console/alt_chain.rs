@@ -16,9 +16,9 @@ use crate::chain_facts::FfiChainFacts;
 ///
 /// **A bridged leg, on purpose** (§2.1.1): `get_alternate_chains` is RK-8's
 /// and is still served from the C++ table (`core_rpc_ffi.cpp:284`). Required
-/// fields for the reason [`GetLimitReplyProvisional`] gives — a defaulted
-/// `length` would make every alt chain read as zero blocks long, which is a
-/// sentence about the chain rather than about the reply.
+/// fields (no `#[serde(default)]`): a renamed field is an error naming it,
+/// where a defaulted `length` would make every alt chain read as zero blocks
+/// long, which is a sentence about the chain rather than about the reply.
 #[derive(serde::Deserialize)]
 struct AltChainProvisional {
     block_hash: shekyl_rpc_types::HashHex,
@@ -41,7 +41,7 @@ fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainProvisional>, String> {
     let reply: AltChainsReplyProvisional = match src {
         Source::Live(core) => {
             let raw = core
-                .json_rpc("get_alternate_chains", "{}")
+                .json_rpc("get_alternate_chains", "{}", false)
                 .ok_or_else(|| "no reply from get_alternate_chains".to_owned())?;
             ffi_json_rpc_result(&raw, "get_alternate_chains")?
         }

@@ -114,6 +114,9 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # blocking facade over DaemonTorControl. The facade owns its tokio runtime,
 # so this crate takes no tokio edge of its own.
 shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
+# The spawn lock (TOR_SUPERVISOR.md §4.7): the notify runner spawns in the
+# daemon's process, which launches the managed Tor.
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # The p2p seam. C++ posts onto the connection strand; this crate
 # records the cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 shekyl-seam = { path = "../shekyl-seam" }
@@ -130,6 +133,9 @@ shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-net-address = { path = "../shekyl-net-address" }
 shekyl-peerlist = { path = "../shekyl-peerlist" }
 shekyl-dialer = { path = "../shekyl-dialer" }
+# The sections the daemon's owners read (DAEMON_CONFIG_CUTOVER.md §3).
+shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+shekyl-options = { path = "../shekyl-options" }
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 curve25519-dalek = "4"
 postcard = { version = "1", features = ["alloc"] }
@@ -140,7 +146,7 @@ rcgen = "0.14"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
-tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["macros", "net", "process", "rt", "sync", "time"] }
 zeroize = { workspace = true }
 libc = "0.2"
 dalek-ff-group = "0.5"
@@ -185,3 +191,7 @@ harness = false
 [[bench]]
 name = "block_connect_verify"
 harness = false
+
+[target.'cfg(windows)'.dependencies]
+# The known-folder roots for the daemon configuration (IG-13).
+shekyl-win-sec = { path = "../shekyl-win-sec" }

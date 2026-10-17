@@ -38,7 +38,6 @@ using namespace epee;
 #include "cryptonote_core.h"
 #include "common/util.h"
 #include "common/threadpool.h"
-#include "common/command_line.h"
 #include "cryptonote_basic/events.h"
 #include "warnings.h"
 #include "crypto/crypto.h"
@@ -50,7 +49,6 @@ using namespace epee;
 #include "fcmp/ct_types.h"
 #include "blockchain_db/blockchain_db.h"
 #include "fcmp/ct_semantics.h"
-#include "common/notify.h"
 #include "tx_verification_utils.h"
 #include "version.h"
 #include "shekyl/shekyl_ffi.h"
@@ -71,122 +69,6 @@ DISABLE_VS_WARNINGS(4355)
 
 namespace cryptonote
 {
-  const command_line::arg_descriptor<bool, false> arg_testnet_on  = {
-    "testnet"
-  , "Run on testnet. The wallet must be launched with --testnet flag."
-  , false
-  };
-  const command_line::arg_descriptor<bool, false> arg_stagenet_on  = {
-    "stagenet"
-  , "Run on stagenet. The wallet must be launched with --stagenet flag."
-  , false
-  };
-  const command_line::arg_descriptor<bool> arg_regtest_on  = {
-    "regtest"
-  , "Run in a regression testing mode."
-  , false
-  };
-  const command_line::arg_descriptor<bool> arg_keep_fakechain = {
-    "keep-fakechain"
-  , "Don't delete any existing database when in fakechain mode."
-  , false
-  };
-  const command_line::arg_descriptor<difficulty_type> arg_fixed_difficulty  = {
-    "fixed-difficulty"
-  , "Fixed difficulty used for testing."
-  , 0
-  };
-  const command_line::arg_descriptor<std::string, false, true, 2> arg_data_dir = {
-    "data-dir"
-  , "Specify data directory"
-  , tools::get_default_data_dir()
-  , {{ &arg_testnet_on, &arg_stagenet_on }}
-  , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
-      if (testnet_stagenet[0])
-        return (boost::filesystem::path(val) / "testnet").string();
-      else if (testnet_stagenet[1])
-        return (boost::filesystem::path(val) / "stagenet").string();
-      return val;
-    }
-  };
-  const command_line::arg_descriptor<bool> arg_offline = {
-    "offline"
-  , "Do not listen for peers, nor connect to any"
-  };
-  const command_line::arg_descriptor<size_t> arg_block_download_max_size  = {
-    "block-download-max-size"
-  , "Set maximum size of block download queue in bytes (0 for default)"
-  , 0
-  };
-  const command_line::arg_descriptor<size_t> arg_span_limit  = {
-    "span-limit"
-  , "Defines how many minutes of block synchronization data to request at a time (default is 2 minutes)"
-  , 2
-  };
-  static const command_line::arg_descriptor<bool> arg_test_drop_download = {
-    "test-drop-download"
-  , "For net tests: in download, discard ALL blocks instead checking/saving them (very fast)"
-  };
-  static const command_line::arg_descriptor<uint64_t> arg_test_drop_download_height = {
-    "test-drop-download-height"
-  , "Like test-drop-download but discards only after around certain height"
-  , 0
-  };
-  static const command_line::arg_descriptor<int> arg_test_dbg_lock_sleep = {
-    "test-dbg-lock-sleep"
-  , "Sleep time in ms, defaults to 0 (off), used to debug before/after locking mutex. Values 100 to 1000 are good for tests."
-  , 0
-  };
-  static const command_line::arg_descriptor<uint64_t> arg_prep_blocks_threads = {
-    "prep-blocks-threads"
-  , "Max number of threads to use when preparing block hashes in groups."
-  , 4
-  };
-  static const command_line::arg_descriptor<uint64_t> arg_show_time_stats  = {
-    "show-time-stats"
-  , "Show time-stats when processing blocks/txs and disk synchronization."
-  , 0
-  };
-  static const command_line::arg_descriptor<size_t> arg_block_sync_size  = {
-    "block-sync-size"
-  , "How many blocks to sync at once during chain synchronization (0 = adaptive)."
-  , 0
-  };
-  static const command_line::arg_descriptor<size_t> arg_max_txpool_weight  = {
-    "max-txpool-weight"
-  , "Set maximum txpool weight in bytes."
-  , DEFAULT_TXPOOL_MAX_WEIGHT
-  };
-  static const command_line::arg_descriptor<std::string> arg_block_notify = {
-    "block-notify"
-  , "Run a program for each new block, '%s' will be replaced by the block hash"
-  , ""
-  };
-  static const command_line::arg_descriptor<std::string> arg_reorg_notify = {
-    "reorg-notify"
-  , "Run a program for each reorg, '%s' will be replaced by the split height, "
-    "'%h' will be replaced by the new blockchain height, '%n' will be "
-    "replaced by the number of new blocks in the new chain, and '%d' will be "
-    "replaced by the number of blocks discarded from the old chain"
-  , ""
-  };
-  static const command_line::arg_descriptor<std::string> arg_block_rate_notify = {
-    "block-rate-notify"
-  , "Run a program when the block rate undergoes large fluctuations. This might "
-    "be a sign of large amounts of hash rate going on and off the Shekyl network, "
-    "and thus be of potential interest in predicting attacks. %t will be replaced "
-    "by the number of minutes for the observation window, %b by the number of "
-    "blocks observed within that window, and %e by the number of blocks that was "
-    "expected in that window. It is suggested that this notification is used to "
-    "automatically increase the number of confirmations required before a payment "
-    "is acted upon."
-  , ""
-  };
-  static const command_line::arg_descriptor<bool> arg_keep_alt_blocks  = {
-    "keep-alt-blocks"
-  , "Keep alternative blocks on restart"
-  , false
-  };
 
   //-----------------------------------------------------------------------------------------------
   // m_mempool and m_blockchain_storage hold references to each other.
@@ -234,72 +116,6 @@ namespace cryptonote
     m_blockchain_storage.cancel();
   }
   //-----------------------------------------------------------------------------------
-  void core::init_options(boost::program_options::options_description& desc)
-  {
-    command_line::add_arg(desc, arg_data_dir);
-
-    command_line::add_arg(desc, arg_test_drop_download);
-    command_line::add_arg(desc, arg_test_drop_download_height);
-
-    command_line::add_arg(desc, arg_testnet_on);
-    command_line::add_arg(desc, arg_stagenet_on);
-    command_line::add_arg(desc, arg_regtest_on);
-    command_line::add_arg(desc, arg_keep_fakechain);
-    command_line::add_arg(desc, arg_fixed_difficulty);
-    command_line::add_arg(desc, arg_prep_blocks_threads);
-    command_line::add_arg(desc, arg_show_time_stats);
-    command_line::add_arg(desc, arg_block_sync_size);
-    command_line::add_arg(desc, arg_test_dbg_lock_sleep);
-    command_line::add_arg(desc, arg_offline);
-    command_line::add_arg(desc, arg_block_download_max_size);
-    command_line::add_arg(desc, arg_span_limit);
-    command_line::add_arg(desc, arg_max_txpool_weight);
-    command_line::add_arg(desc, arg_block_notify);
-    command_line::add_arg(desc, arg_reorg_notify);
-    command_line::add_arg(desc, arg_block_rate_notify);
-    command_line::add_arg(desc, arg_keep_alt_blocks);
-
-    miner::init_options(desc);
-    BlockchainDB::init_options(desc);
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::handle_command_line(const boost::program_options::variables_map& vm)
-  {
-    if (m_nettype != FAKECHAIN)
-    {
-      const bool testnet = command_line::get_arg(vm, arg_testnet_on);
-      const bool stagenet = command_line::get_arg(vm, arg_stagenet_on);
-      m_nettype = testnet ? TESTNET : stagenet ? STAGENET : MAINNET;
-    }
-
-    m_config_folder = command_line::get_arg(vm, arg_data_dir);
-
-    // Uniform across every network (C2-R1b-Q2a, rule 71): checkpoint
-    // wiring is identical on mainnet, testnet and stagenet. Data may
-    // differ per network (the compiled-in list, when one ever exists);
-    // the code path may not. The compiled-in table is the only source --
-    // the data-dir checkpoints.json channel was deleted (PDM-Q-F23).
-    {
-      cryptonote::checkpoints checkpoints;
-      if (!checkpoints.init_default_checkpoints(m_nettype))
-      {
-        throw std::runtime_error("Failed to initialize checkpoints");
-      }
-      set_checkpoints(std::move(checkpoints));
-    }
-
-
-    test_drop_download_height(command_line::get_arg(vm, arg_test_drop_download_height));
-    m_offline = get_arg(vm, arg_offline);
-
-    if (command_line::get_arg(vm, arg_test_drop_download) == true)
-      test_drop_download();
-
-    epee::debug::g_test_dbg_lock_sleep() = command_line::get_arg(vm, arg_test_dbg_lock_sleep);
-
-    return true;
-  }
-  //-----------------------------------------------------------------------------------------------
   uint64_t core::get_current_blockchain_height() const
   {
     return m_blockchain_storage.get_current_blockchain_height();
@@ -454,17 +270,30 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
-  bool core::init(const boost::program_options::variables_map& vm, const cryptonote::test_options *test_options)
+  bool core::init(const ShekylDaemonSnapshot& snapshot, const cryptonote::test_options *test_options)
   {
     start_time = std::time(nullptr);
 
-    const bool regtest = command_line::get_arg(vm, arg_regtest_on);
-    if (test_options != NULL || regtest)
+    // The snapshot's network code is `network_type`'s (DAEMON_CONFIG_CUTOVER.md
+    // §2.9); a test's own options select FAKECHAIN as regtest does.
+    const bool regtest = snapshot.network == static_cast<std::uint8_t>(FAKECHAIN);
+    m_nettype = (test_options != NULL || regtest) ? FAKECHAIN : static_cast<network_type>(snapshot.network);
+    m_config_folder = snapshot.data_dir;
+    // Uniform across every network (C2-R1b-Q2a, rule 71): checkpoint
+    // wiring is identical on mainnet, testnet and stagenet. Data may
+    // differ per network (the compiled-in list, when one ever exists);
+    // the code path may not. The compiled-in table is the only source --
+    // the data-dir checkpoints.json channel was deleted (PDM-Q-F23).
     {
-      m_nettype = FAKECHAIN;
+      cryptonote::checkpoints checkpoints;
+      if (!checkpoints.init_default_checkpoints(m_nettype))
+      {
+        throw std::runtime_error("Failed to initialize checkpoints");
+      }
+      set_checkpoints(std::move(checkpoints));
     }
-    bool r = handle_command_line(vm);
-    CHECK_AND_ASSERT_MES(r, false, "Failed to handle command line");
+    m_offline = snapshot.offline;
+    bool r = true;
 
     // Seeds follow the network just settled, including FAKECHAIN. The id
     // derivation is pure (`get_config` builds every network's id on first
@@ -473,16 +302,21 @@ namespace cryptonote
       shekyl_dialer_note_network(static_cast<std::uint8_t>(m_nettype)) == 0,
       false, "Failed to record the dialer's network");
 
-    std::string db_sync_mode = command_line::get_arg(vm, cryptonote::arg_db_sync_mode);
-    bool db_salvage = command_line::get_arg(vm, cryptonote::arg_db_salvage) != 0;
-    uint64_t blocks_threads = command_line::get_arg(vm, arg_prep_blocks_threads);
-    size_t max_txpool_weight = command_line::get_arg(vm, arg_max_txpool_weight);
-    bool keep_alt_blocks = command_line::get_arg(vm, arg_keep_alt_blocks);
-    bool keep_fakechain = command_line::get_arg(vm, arg_keep_fakechain);
+    // Lane-owned knobs (INPUT_GRAMMAR.md §5, IG-Q4): not ported; today's
+    // defaults, as constants, until their lanes decide. `db-sync-mode` and
+    // `db-salvage` are the DRS lane's, `prep-blocks-threads` the chain-sync
+    // lane's, `keep-alt-blocks` DRS-E5's.
+    const std::string db_sync_mode = "fast:async:250000000bytes";
+    const bool db_sync_mode_is_default = true;
+    const bool db_salvage = false;
+    const uint64_t blocks_threads = 4;
+    const size_t max_txpool_weight = static_cast<size_t>(snapshot.txpool_weight_max);
+    const bool keep_alt_blocks = false;
 
+    // The network selects the default data subdirectory in the Rust
+    // configuration (DAEMON_CONFIG_CUTOVER.md §2.6); the folder is used as
+    // given on every network, FAKECHAIN included.
     boost::filesystem::path folder(m_config_folder);
-    if (m_nettype == FAKECHAIN)
-      folder /= "fake";
 
     // make sure the data directory exists, and try to lock it
     CHECK_AND_ASSERT_MES (boost::filesystem::exists(folder) || boost::filesystem::create_directories(folder), false,
@@ -520,20 +354,8 @@ namespace cryptonote
     bool sync_on_blocks = true;
     uint64_t sync_threshold = 1;
 
-    if (m_nettype == FAKECHAIN && !keep_fakechain)
-    {
-      // reset the db by removing the database file before opening it
-      if (!db->remove_data_file(filename))
-      {
-        MERROR("Failed to remove data file in " << filename);
-        return false;
-      }
-    }
-
     try
     {
-      const bool db_sync_mode_is_default = command_line::is_arg_defaulted(vm, cryptonote::arg_db_sync_mode);
-
       db_sync_settings resolved;
       std::string db_sync_error;
       if (!parse_db_sync_mode(db_sync_mode, db_sync_mode_is_default, resolved, db_sync_error))
@@ -578,54 +400,8 @@ namespace cryptonote
     m_blockchain_storage.set_user_options(blocks_threads,
         sync_on_blocks, sync_threshold, sync_mode);
 
-    try
-    {
-      if (!command_line::is_arg_defaulted(vm, arg_block_notify))
-      {
-        struct hash_notify
-        {
-          tools::Notify cmdline;
-
-          void operator()(std::uint64_t, epee::span<const block> blocks) const
-          {
-            for (const block& bl : blocks)
-              cmdline.notify("%s", epee::string_tools::pod_to_hex(get_block_hash(bl)).c_str(), NULL);
-          }
-        };
-
-        m_blockchain_storage.add_block_notify(hash_notify{{command_line::get_arg(vm, arg_block_notify).c_str()}});
-      }
-    }
-    catch (const std::exception &e)
-    {
-      MERROR("Failed to parse block notify spec: " << e.what());
-    }
-
-    try
-    {
-      if (!command_line::is_arg_defaulted(vm, arg_reorg_notify))
-        m_blockchain_storage.set_reorg_notify(std::shared_ptr<tools::Notify>(new tools::Notify(command_line::get_arg(vm, arg_reorg_notify).c_str())));
-    }
-    catch (const std::exception &e)
-    {
-      MERROR("Failed to parse reorg notify spec: " << e.what());
-    }
-
-    try
-    {
-      if (!command_line::is_arg_defaulted(vm, arg_block_rate_notify))
-        m_block_rate_notify.reset(new tools::Notify(command_line::get_arg(vm, arg_block_rate_notify).c_str()));
-    }
-    catch (const std::exception &e)
-    {
-      MERROR("Failed to parse block rate notify spec: " << e.what());
-    }
-
-    const cryptonote::test_options regtest_test_options = {
-      0
-    };
-    const difficulty_type fixed_difficulty = command_line::get_arg(vm, arg_fixed_difficulty);
-    r = m_blockchain_storage.init(db.release(), m_nettype, m_offline, regtest ? &regtest_test_options : test_options, fixed_difficulty);
+    const difficulty_type fixed_difficulty = snapshot.fixed_difficulty;
+    r = m_blockchain_storage.init(db.release(), m_nettype, regtest ? &regtest_test_options : test_options, fixed_difficulty);
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize blockchain storage");
 
     r = m_mempool.init(max_txpool_weight, m_nettype == FAKECHAIN);
@@ -635,13 +411,8 @@ namespace cryptonote
     // the persisted pool and drop what this binary refuses
     m_mempool.validate();
 
-    bool show_time_stats = command_line::get_arg(vm, arg_show_time_stats) != 0;
-    m_blockchain_storage.set_show_time_stats(show_time_stats);
-    CHECK_AND_ASSERT_MES(r, false, "Failed to initialize blockchain storage");
-
-    block_sync_size = command_line::get_arg(vm, arg_block_sync_size);
-    if (block_sync_size > BLOCKS_SYNCHRONIZING_MAX_COUNT)
-      MERROR("Error --block-sync-size cannot be greater than " << BLOCKS_SYNCHRONIZING_MAX_COUNT);
+    // `block-sync-size` is the chain-sync lane's (IG-Q4): 0, adaptive.
+    block_sync_size = 0;
 
     MGINFO("Enforcing checkpoints");
 
@@ -650,7 +421,7 @@ namespace cryptonote
     // (C2-R1b F-1(b)).
     CHECK_AND_ASSERT_MES(m_blockchain_storage.enforce_checkpoints(), false, "A compiled-in checkpoint conflicts with the local chain and could not be resolved by rollback.");
 
-    r = m_miner.init(vm, m_nettype);
+    r = m_miner.init(snapshot, m_nettype);
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize miner instance");
 
     if (!keep_alt_blocks && !m_blockchain_storage.get_db().is_read_only())
@@ -678,31 +449,6 @@ namespace cryptonote
     return true;
   }
   //-----------------------------------------------------------------------------------------------
-  void core::test_drop_download()
-  {
-    m_test_drop_download = false;
-  }
-  //-----------------------------------------------------------------------------------------------
-  void core::test_drop_download_height(uint64_t height)
-  {
-    m_test_drop_download_height = height;
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::get_test_drop_download() const
-  {
-    return m_test_drop_download;
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::get_test_drop_download_height() const
-  {
-    if (m_test_drop_download_height == 0)
-      return true;
-
-    if (get_blockchain_storage().get_current_blockchain_height() <= m_test_drop_download_height)
-      return true;
-
-    return false;
-  }
   //-----------------------------------------------------------------------------------------------
   bool core::handle_incoming_tx(const blobdata& tx_blob, tx_verification_context& tvc, relay_method tx_relay, bool relayed)
   {
@@ -1625,7 +1371,7 @@ namespace cryptonote
   //-----------------------------------------------------------------------------------------------
   bool core::check_block_rate()
   {
-    if (m_offline || m_nettype == FAKECHAIN || m_target_blockchain_height > get_current_blockchain_height() || m_target_blockchain_height == 0)
+    if (m_offline || m_target_blockchain_height > get_current_blockchain_height() || m_target_blockchain_height == 0)
     {
       MDEBUG("Not checking block rate, offline or syncing");
       return true;
@@ -1663,12 +1409,7 @@ namespace cryptonote
       {
         MWARNING("There were " << b << (b == max_blocks_checked ? " or more" : "") << " blocks in the last " << seconds[n] / 60 << " minutes, there might be large hash rate changes, or we might be partitioned, cut off from the Shekyl network or under attack, or your computer's time is off. Or it could be just sheer bad luck.");
 
-        std::shared_ptr<tools::Notify> block_rate_notify = m_block_rate_notify;
-        if (block_rate_notify)
-        {
-          auto expected = seconds[n] / SHEKYL_DAA_TARGET_SECONDS;
-          block_rate_notify->notify("%t", std::to_string(seconds[n] / 60).c_str(), "%b", std::to_string(b).c_str(), "%e", std::to_string(expected).c_str(), NULL);
-        }
+        shekyl_notify_block_rate(seconds[n], b, seconds[n] / SHEKYL_DAA_TARGET_SECONDS);
 
         break; // no need to look further
       }

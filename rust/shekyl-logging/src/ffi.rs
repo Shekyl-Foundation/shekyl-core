@@ -801,6 +801,30 @@ pub unsafe extern "C" fn shekyl_log_last_error_message(
 // attempt correctly returns `SHEKYL_LOG_ERR_ALREADY_INIT`.
 // -----------------------------------------------------------------
 
+/// Swaps the live filter for `directive` through the handle `init` or the
+/// C init registered, and records the directive so
+/// [`shekyl_log_get_categories`] and the stateful translator read what is
+/// live. The Rust runtime owner ([`crate::subsystem::apply`]) builds the
+/// directive from typed words, so it is always one `EnvFilter` accepts; the
+/// two `Err`s here are a subscriber that was never installed and a reload
+/// layer that is gone, neither of which a daemon reaches after start.
+pub(crate) fn reload_directive(directive: String) -> Result<(), String> {
+    let Some(cell) = FFI_STATE.get() else {
+        return Err("no subscriber is installed".to_owned());
+    };
+    let mut state = cell
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let filter = EnvFilter::try_new(&directive)
+        .map_err(|e| format!("the directive {directive:?} is not a filter: {e}"))?;
+    state
+        .reload_handle
+        .reload(filter)
+        .map_err(|e| format!("the reload layer is gone: {}", reload_error_text(&e)))?;
+    state.current_directive = directive;
+    Ok(())
+}
+
 #[doc(hidden)]
 pub fn __test_only_reset_ffi_state() {
     if let Some(cell) = FFI_STATE.get() {
