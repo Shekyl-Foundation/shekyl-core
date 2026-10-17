@@ -124,9 +124,9 @@ pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use connect::Connected;
 pub use error::{
-    AccrualFault, AltCannot, CellFault, EdgeFault, EngineError, ErrorClass, LeafCountFault,
-    LeafDensity, PoolCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant,
-    UndoFault,
+    AccrualFault, AltCannot, CellFault, DigestFault, DrawableFault, EdgeFault, EngineError,
+    ErrorClass, LeafCountFault, LeafDensity, PoolCannot, SettlementFault, SlashFault, StoreCannot,
+    StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{

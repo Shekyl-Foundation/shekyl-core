@@ -172,7 +172,7 @@ use crate::codec::{
     SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
     TxPrunedSegment, UndoLog, Unshaped,
 };
-use crate::ids::IssuedDrawTuple;
+use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple};
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
 
@@ -304,7 +304,10 @@ pub const NOT_PORTED: &[(&str, &str)] = &[
         "archival_bond_unbond_log",
         "held by `undo_log`, as the record's and the total's pre-images: the C++ pop journal \
          for a Release (db_lmdb.cpp:6198, `release_pop` reconstructs the pre-image) rebuilt \
-         what the log stores outright, and the pop fold has no caller (DRS-E4 ARW-2, ARW-Q2)",
+         what the log stores outright, and the pop fold has no caller (DRS-E4 ARW-2, ARW-Q2). \
+         The record's pre-image is also kept past the undo window, as history, by the Rust-only \
+         archival_release_journal: a different key and retention, read by the walk that \
+         rebuilds an epoch's drawable set and never by pop (SO-D12 increment 2)",
     ),
     (
         "archival_bond_holdings_update_log",
@@ -453,6 +456,16 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          already hashed without RandomX. The C++ kept a transient precompute table and no \
          per-block record, so LMDB never holds it. Out of the digest domain: a function of the \
          block the digest's hashes already fold",
+    ),
+    (
+        "archival_release_journal",
+        "each Release's pre-image, the bond record as it stood before the Release emptied its \
+         holdings, keyed by the releasing height and persona and retired at the slash log's \
+         floor (SO-D12b): the walk that rebuilds an epoch's drawable set at its settlement, two \
+         epochs after it opened, restores it, as it gives back the shards the slash log says \
+         were taken. The undo log holds the same pre-image only for its window. The C++ \
+         archival_bond_unbond_log is a pop journal with no reader past pop (NOT_PORTED), so \
+         LMDB holds nothing a reader past the window can use",
     ),
 ];
 
@@ -800,6 +813,17 @@ tables! {
     /// 2026-10-15 ruling 3). Appended last (ordinal 42).
     pub const BLOCK_POW: TableDefinition<u64, Coded<RecordedPow>> =
         TableDefinition::new("block_pow");
+
+    /// `archival_release_journal` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(height, persona)` → the [`BondRecord`] a Release at that height
+    /// replaced, exactly as it stood before the Release arm changed it.
+    /// Written insert-once by `connect` beside the record's post-image and
+    /// reversed by `pop` through the journal; retired at the slash log's
+    /// floor in the same boundary batch, so the walk that rebuilds an
+    /// epoch's drawable set reads both journals over one span (A20,
+    /// `SO-D12` increment 2). Appended last (ordinal 43).
+    pub const ARCHIVAL_RELEASE_JOURNAL: TableDefinition<ReleaseJournalTuple, Coded<BondRecord>> =
+        TableDefinition::new("archival_release_journal");
 }
 
 #[cfg(test)]
@@ -878,6 +902,8 @@ mod tests {
             ("archival_drawable_digest", 41),
             // Layout 26 (DRS-E5 switch PR): the recorded proof-of-work.
             ("block_pow", 42),
+            // Layout 27 (`SO-D12` increment 2): the Release journal.
+            ("archival_release_journal", 43),
         ];
         for &(name, index) in pinned {
             assert_eq!(
