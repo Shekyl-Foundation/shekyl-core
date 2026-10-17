@@ -72,6 +72,11 @@ shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, f
 # caller's structural floor (the transport's 2 and 1), not Tokio's unset
 # defaults. The D5 pin replaces them.
 shekyl-runtime = { path = "../shekyl-runtime" }
+# DRS-X PR 3 (DRS_X_STORE_FLIP.md DX-Q3): the store-backed facts read the
+# chain store and derive through the rules crate; staged until the flip.
+shekyl-chain-store = { path = "../shekyl-chain-store" }
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+shekyl-difficulty = { path = "../shekyl-difficulty" }
 
 [dev-dependencies]
 # Real consensus-valid spend fixture for the production-verifier oracle test

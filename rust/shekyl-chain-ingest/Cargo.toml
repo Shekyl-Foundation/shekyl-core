@@ -165,6 +165,11 @@ redb = { workspace = true }
 # DRS_E2_REPLAY_DRIVER.md §3.10): already in the normal graph via shekyl-wire;
 # named here only so the test can call it directly.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# DRS-X PR 3: the RPC's store-backed facts, tested here over the scenario
+# chain and the captured chains (`rpc_store_facts_tests.rs`).
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+hex = "0.4"
 
 [lints]
 workspace = true
