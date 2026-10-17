@@ -242,12 +242,14 @@ extracted-binary digest as 15.0.19 — two bundle releases that moved the label 
 **15.0.16** recorded 2026-06-29 / Tor `0.4.9.9`, tarball SHA256
 `71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1`.)
 
-**`linux-aarch64` pin (RULED 2026-09-29; re-pinned 2026-10-07): Expert Bundle 16.0a13, tor
-`0.4.9.13`, an alpha.** Verified `tor-expert-bundle-linux-aarch64-16.0a13.tar.gz` — tarball SHA256
-`e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517`, Good signature under
+**`linux-aarch64` pin (RULED 2026-09-29; re-pinned 2026-10-17): Expert Bundle 16.0a14, tor
+`0.4.9.14`, an alpha.** Verified `tor-expert-bundle-linux-aarch64-16.0a14.tar.gz` — tarball SHA256
+`6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2`, `VALIDSIG` under
 `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`; the runtime gate is the four per-file digests in the
 `linux`/`aarch64` row of `config/tor_pins.json` (`tor`
-`5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477`). (Superseded: **16.0a12** recorded
+`0acff9cc36f225adf6f068187ec620712ca838ad12c19d69259623effc0ea17b`; the three libraries are byte-identical to 16.0a13's). (Superseded: **16.0a13** recorded
+2026-10-07 / tor `0.4.9.13`, tarball SHA256 `e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517`, `tor` SHA256
+`5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477`; **16.0a12** recorded
 2026-09-29 / tor `0.4.9.12`, tarball SHA256
 `e84426c96aca0934d2c8d92980f850e508e367aea431a1f9367312cbb2655a26`, extracted-binary SHA256
 `e703a978324938d62ed0b39bae299a6aa285dde4f08d5b3ebbd127311ac54a56`.) The Tor Project does **not** publish a `linux-aarch64` Expert Bundle on the stable line:

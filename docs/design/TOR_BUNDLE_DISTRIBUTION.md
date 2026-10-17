@@ -141,7 +141,7 @@ said about a row on its own.
 | **TB-7** | **The pin covers every file in tor's directory, the directory holds nothing else, and the launcher lets nothing else in.** Three parts. (1) Each pinned file has its own digest through the same canonicalize-then-hash gate: on Linux `tor`, `libevent-2.1.so.7`, `libssl.so.3`, `libcrypto.so.3`; on macOS `tor` and `libevent-2.1.7.dylib`; on Windows `tor.exe`. (2) The launcher clears the environment and then sets a closed set, each value from a trusted source and none from the parent's environment: `OPENSSL_CONF` on every platform, to the launcher's blank file in the data directory; on Linux the library path, to the verified binary's own directory; on Windows `SystemRoot`, from the OS (`GetSystemWindowsDirectoryW`). Every Expert Bundle's OpenSSL compiles in `OPENSSLDIR` `/var/tmp/dist/openssl/ssl` and tor does not opt out of OpenSSL's configuration loading, so without `OPENSSL_CONF` a file any local account can create there could make OpenSSL load a module into tor (§2 finding 13). (3) **The tor directory contains exactly the pinned files and nothing else**: no other entry, no subdirectory, names compared without regard to case on Windows. It is an allowlist, not a scan for library-looking names, because the loader does not confine itself to names a scan would think of or to the top level — §2 findings 10 to 12. It is also why the bundle needs a directory of its own. Three negative tests, each of which must refuse: a planted file at the top level, a planted `glibc-hwcaps/<level>/libz.so.1`, and a planted `VERSION.DLL` | Rick, 2026-10-06 (part 3 in this form is his amendment at ratification; part 2's Windows variable, 2026-10-15, from the TSR-Q7 Windows run, landed in #1083; part 2 amended 2026-10-16 from "at most one variable" to the closed set, adding `OPENSSL_CONF`) |
 | **TB-8** | **The `PATH` tier is deleted for a `Pinned` target.** A `tor` found on `PATH` has its libraries elsewhere and cannot pass a four-file pin, and `PATH` is the widest check-to-exec window the resolver has. The override, beside-the-executable and `/opt/shekyl` tiers remain | Rick, 2026-10-06 |
 | **TB-9** | **The pins are one data file.** `build.rs` reads it and emits constants: the pin stays compiled in and is never read at runtime. The file is the only source for what the packaging side needs — tarball digest, per-file digests, bundle and tor versions, target label, the `Unavailable` dispositions — and the build recipe and the packaging check read it, they do not copy it. Two gates: the packaging job hashes the files it is about to pack against the file and fails on a difference (a test edits a digest and sees the build fail), and the file's set of targets equals the set of compiled arms | Rick, 2026-10-06 |
-| **TB-10** | **Re-pin to the current stable Expert Bundle**, 15.0.25 (tor 0.4.9.14), with the digests in §4. `linux-aarch64` stays on the alpha line, at 16.0a13 (tor 0.4.9.13), under DQ-T0.5's existing ruling and reopen criterion | Rick, 2026-10-06; re-pinned from 15.0.24 to 15.0.25 on the stable targets, Rick, 2026-10-16 |
+| **TB-10** | **Re-pin to tor 0.4.9.14** with the digests in §4: the stable Expert Bundle 15.0.25, and on `linux-aarch64` the alpha line's 16.0a14, under DQ-T0.5's existing ruling and reopen criterion | Rick, 2026-10-06; re-pinned from 15.0.24 to 15.0.25 on the stable targets, Rick, 2026-10-16; `linux-aarch64` from 16.0a13 to 16.0a14, Rick, 2026-10-17 |
 | **TB-11** | **Windows and macOS become `Pinned` only with a launch test each.** Their digests are verified (§4); what is missing is evidence that the pinned binary starts under Shekyl's launcher on those platforms. The Windows test also asserts that `tor.exe`'s import table names only operating-system libraries, so that a future bundle which starts shipping its own DLL is noticed. The macOS test establishes what the signature on the pinned binary is and whether it carries the hardened runtime; inside a macOS `.app` the tor binary falls under Shekyl's code signing and notarization | Rick, 2026-10-06. **Windows half satisfied 2026-10-17**: the `tor-pin-verify` Windows entry, [run 39006957604](https://github.com/Shekyl-Foundation/shekyl-core/actions/runs/39006957604) |
 | **TB-12** | **TB-2 lands last, and "every published target" includes the GUI wallet's installers.** The refusal is merged only after every published target is `Pinned` with its bundle shipped, or `Unavailable`. That set is `shekyl-core`'s own artifacts **and** `shekyl-gui-wallet`'s (`.deb`, AppImage, Windows setup, macOS `.dmg`), which carry `shekyld` as a sidecar built from the core tag and therefore inherit its pin and need the bundle beside it. That work is in another repository and is tracked there; without it the refusal stops the GUI's daemon on every platform, and nothing in this repository would show it | Rick, 2026-10-06 |
 | **TB-13** | **Licences travel with the binary.** Every artifact that carries tor carries the bundle's licence texts and the location and signature of the source of the tor version its pin names. Whether a pointer to the signed upstream source meets the GPL's source obligation is to be confirmed before beta, not assumed | Rick, 2026-10-06 |
@@ -153,21 +153,20 @@ said about a row on its own.
 | `--tor-pin-override <sha256>` | **REJECTED** | It is flexibility provisioned ahead of need, and it turns a structural gate into one a unit-file edit opens. **Reopen** if a Tor security advisory cannot be answered by a Shekyl release in time |
 | A signed pin manifest that moves between releases | **REJECTED** | It is an update channel: one key becomes "run this binary on every node", and a startup fetch is a beacon. A Tor CVE costs a patch release, as a CVE in any shipped dependency does. **Reopen** on the same criterion as above |
 | Depending on a distribution's `tor` | **REJECTED** | A distribution build cannot match the pin; "our tor, their OpenSSL" is the same objection one layer down (finding 5) |
-| Building tor from the signed source inside gitian | not this round | The route to a pinned FreeBSD and a stable `linux-aarch64`. A round of its own; `docs/FOLLOWUPS.md` carries its reopen trigger for `linux-aarch64` |
+| Building tor from the signed source inside gitian | not this round | The route to a pinned FreeBSD and a stable `linux-aarch64`. A round of its own |
 
 ## 4. The pins TB-10 and TB-11 adopt
 
 Every tarball carries a valid signature (`VALIDSIG`, not only `GOODSIG`) from
 the Tor Browser Developers key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`
 (signing subkey `022DA248432D2A0E0F54E65E316C1FACD62D07D9`), the key
-`binary.rs`'s `TOR_SIGNING_KEY_FPR` names. The stable bundles were downloaded
-from the Tor Project's archive on 2026-10-17 and ship tor `0.4.9.14`; the
-`linux-aarch64` alpha was downloaded on 2026-10-06 and ships tor `0.4.9.13`.
+`binary.rs`'s `TOR_SIGNING_KEY_FPR` names. Every bundle below was downloaded
+from the Tor Project's archive on 2026-10-17 and ships tor `0.4.9.14`.
 
 | Target | Bundle | Tarball SHA-256 |
 | --- | --- | --- |
 | `linux-x86_64` | 15.0.25 (stable) | `19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a` |
-| `linux-aarch64` | 16.0a13 (alpha) | `e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517` |
+| `linux-aarch64` | 16.0a14 (alpha) | `6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2` |
 | `windows-x86_64` | 15.0.25 (stable) | `c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252` |
 | `macos-aarch64` | 15.0.25 (stable) | `a3febb6179152b0b4f56a0f5cc57bf5cc8ecef7db35e7c3e9d5a044c8158c26c` |
 | `macos-x86_64` | 15.0.25 (stable) | `e1ae4d4a734d28bb590839188511deb3cebc26fcbce9df66d01b2c452060fe95` |
@@ -180,7 +179,7 @@ Extracted files, by target:
 | | `libevent-2.1.so.7` | `b51ca562ec232785856c454ce4f3621d957f39d0db87919e237590b0331544ff` |
 | | `libssl.so.3` | `9c2438d086d6c299db04b0bc337bbc8c0acd26c19c71eada2173a5b2ef7cecac` |
 | | `libcrypto.so.3` | `418208c5c738864cb5653f3eeab650debcc71afbe50d08b0bd5a04b20f1d3c05` |
-| `linux-aarch64` | `tor` | `5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477` |
+| `linux-aarch64` | `tor` | `0acff9cc36f225adf6f068187ec620712ca838ad12c19d69259623effc0ea17b` |
 | | `libevent-2.1.so.7` | `097958f586ffce01273a57557e17062357d92343724e1f112ea61ad8261ce577` |
 | | `libssl.so.3` | `080e70629ffe87e3c5bbbb59bc231da4c5d68100dd6b43b522bcaf8447d85eaf` |
 | | `libcrypto.so.3` | `f50977cdfd82a28ab7ac327daa11841486193888365a149f1409ce5a3b1e61b3` |
@@ -321,7 +320,7 @@ The pin cannot cover a file Shekyl has no source for. With the loader pointed
 at the bundle, the Linux `tor` still takes these from the system (observed on
 `linux-x86_64`; the `linux-aarch64` `tor` names the same set — `readelf -d`
 lists `libz.so.1` as `NEEDED` in both, so neither links zlib statically. The
-16.0a13 bundle carries a `docs/zlib.txt` that the 15.0.25 bundle does not;
+16.0a14 bundle carries a `docs/zlib.txt` that the 15.0.25 bundle does not;
 that is a licence text for a library the bundle does not ship, and Shekyl
 does not stage it):
 

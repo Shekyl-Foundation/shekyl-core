@@ -40,13 +40,13 @@
       "arch": "aarch64",
       "gitian_host": "aarch64-linux-gnu",
       "disposition": "pinned",
-      "bundle_version": "16.0a13",
+      "bundle_version": "16.0a14",
       "bundle_target": "linux-aarch64",
-      "tor_version": "0.4.9.13",
-      "tarball_sha256": "e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2",
       "executable": "tor",
       "files": [
-        { "name": "tor", "sha256": "5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477" },
+        { "name": "tor", "sha256": "0acff9cc36f225adf6f068187ec620712ca838ad12c19d69259623effc0ea17b" },
         { "name": "libevent-2.1.so.7", "sha256": "097958f586ffce01273a57557e17062357d92343724e1f112ea61ad8261ce577" },
         { "name": "libssl.so.3", "sha256": "080e70629ffe87e3c5bbbb59bc231da4c5d68100dd6b43b522bcaf8447d85eaf" },
         { "name": "libcrypto.so.3", "sha256": "f50977cdfd82a28ab7ac327daa11841486193888365a149f1409ce5a3b1e61b3" }
