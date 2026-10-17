@@ -5,6 +5,13 @@
 
 //! Dialer FFI tests.
 
+// Whole-file test module: the parent already gates it with
+// `#[cfg(test)] mod tests;`, and this inner marker is how the file declares
+// the same thing to `build.yml`'s debug-macro lint, whose scan keys on the
+// first `#[cfg(test)]` / `#![cfg(test)]` in the file. The watchdogs'
+// `eprintln!` are test-only output and must not read as production.
+#![cfg(test)]
+
 use std::ffi::{c_void, CString};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
