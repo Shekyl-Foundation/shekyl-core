@@ -419,7 +419,7 @@ public:
     MTRACE(m_connection_context << "[levin_protocol] -->> start_outer_call");
     if(!m_pservice_endpoint->add_ref())
     {
-      MERROR(m_connection_context << "[levin_protocol] -->> start_outer_call failed");
+      MDEBUG(m_connection_context << "[levin_protocol] -->> start_outer_call refused");
       return false;
     }
     ++m_wait_count;

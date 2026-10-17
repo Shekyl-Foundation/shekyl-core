@@ -64,8 +64,10 @@ pub(crate) fn refused_set() -> RefusedSet {
 /// network whose nodes find each other by peerlist exchange. The set is
 /// fixed for the life of the lists, so a call after they exist that would
 /// change it is logged and ignored.
-#[no_mangle]
-pub extern "C" fn shekyl_peerlist_allow_local_ip(allow: bool) -> bool {
+/// Records `p2p-local` (IG: accept peers at private addresses) before the
+/// lists are built; after the build a change is refused and logged. Called
+/// by the daemon's Rust `main()` before the remnant binds the seam.
+pub fn allow_local(allow: bool) -> bool {
     let wanted = if allow {
         RefusedSet::EMPTY
     } else {
@@ -384,7 +386,7 @@ mod tests {
     fn allow_local_ip_returns_what_it_was_given() {
         // The process statics are shared; this test only reads the return.
         let before = refused_set();
-        assert!(!shekyl_peerlist_allow_local_ip(false));
+        assert!(!allow_local(false));
         *REFUSED.lock().expect("refused set") = before;
     }
 }

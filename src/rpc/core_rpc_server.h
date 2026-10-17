@@ -33,8 +33,6 @@
 #include <memory>
 #include <vector>
 
-#include <boost/program_options/options_description.hpp>
-#include <boost/program_options/variables_map.hpp>
 
 #include "net/net_utils_base.h"
 #include "net/jsonrpc_structs.h"
@@ -48,6 +46,11 @@
 
 namespace cryptonote
 {
+  /// Whether a bridged request's origin is the view listener's. Defined
+  /// with the origins it compares against (`core_rpc_ffi.cpp`); declared
+  /// here because `core_rpc_server::caller_is_restricted` reads it.
+  bool rpc_origin_is_restricted(const epee::net_utils::connection_context_base* ctx);
+
   /************************************************************************/
   /*                                                                      */
   /************************************************************************/
@@ -63,14 +66,6 @@ namespace cryptonote
     //! (public) listener.
     std::string stem_tallies_json() const;
 
-    static const command_line::arg_descriptor<std::string, false, true, 2> arg_rpc_bind_port;
-    static const command_line::arg_descriptor<std::string> arg_rpc_restricted_bind_port;
-    static const command_line::arg_descriptor<bool> arg_restricted_rpc;
-    static const command_line::arg_descriptor<std::size_t> arg_rpc_max_connections_per_public_ip;
-    static const command_line::arg_descriptor<std::size_t> arg_rpc_max_connections_per_private_ip;
-    static const command_line::arg_descriptor<std::size_t> arg_rpc_max_connections;
-    static const command_line::arg_descriptor<std::size_t> arg_rpc_response_soft_limit;
-
     typedef epee::net_utils::connection_context_base connection_context;
 
     core_rpc_server(
@@ -79,30 +74,7 @@ namespace cryptonote
       );
     ~core_rpc_server();
 
-    static void init_options(boost::program_options::options_description& desc);
-    bool init(
-        const boost::program_options::variables_map& vm,
-        const bool restricted,
-        const std::string& port
-      );
     network_type nettype() const { return m_core.get_nettype(); }
-    // The operator's --rpc-bind-ip (or --rpc-restricted-bind-ip) as given,
-    // unparsed; valid after init(). Rust parses, classifies and binds it.
-    const std::string& get_rpc_bind_ip() const { return m_rpc_bind_ip; }
-    // --rpc-bind-ipv6-address (or the restricted twin), as given; meaningful
-    // when get_rpc_use_ipv6(). Passed to Rust verbatim — an empty value
-    // included, so Rust refuses it rather than C++ dropping the family.
-    const std::string& get_rpc_bind_ipv6() const { return m_rpc_bind_ipv6; }
-    bool get_rpc_use_ipv6() const { return m_rpc_use_ipv6; }
-    const std::vector<std::string>& get_access_control_origins() const {
-      return m_access_control_origins;
-    }
-    // Connection caps (0 = unlimited). Passed to the Rust Axum listener via
-    // shekyl_daemon_rpc_start, which validates (ConnLimits::checked) and
-    // enforces them; valid after init() runs.
-    std::size_t get_rpc_max_connections() const { return m_rpc_max_connections; }
-    std::size_t get_rpc_max_connections_per_public_ip() const { return m_rpc_max_connections_per_public_ip; }
-    std::size_t get_rpc_max_connections_per_private_ip() const { return m_rpc_max_connections_per_private_ip; }
     // Core access for the Rust submit shims (daemon_submit_ffi.cpp), which
     // resolve pool/blockchain/protocol from the same handle the Axum
     // transport already holds. See DAEMON_SUBMIT_VERDICT.md §4.
@@ -117,16 +89,10 @@ namespace cryptonote
     bool on_mining_status(const COMMAND_RPC_MINING_STATUS::request& req, COMMAND_RPC_MINING_STATUS::response& res, const connection_context *ctx = NULL);
     bool on_save_bc(const COMMAND_RPC_SAVE_BC::request& req, COMMAND_RPC_SAVE_BC::response& res, const connection_context *ctx = NULL);
     bool on_set_log_hash_rate(const COMMAND_RPC_SET_LOG_HASH_RATE::request& req, COMMAND_RPC_SET_LOG_HASH_RATE::response& res, const connection_context *ctx = NULL);
-    bool on_set_log_level(const COMMAND_RPC_SET_LOG_LEVEL::request& req, COMMAND_RPC_SET_LOG_LEVEL::response& res, const connection_context *ctx = NULL);
-    bool on_set_log_categories(const COMMAND_RPC_SET_LOG_CATEGORIES::request& req, COMMAND_RPC_SET_LOG_CATEGORIES::response& res, const connection_context *ctx = NULL);
     bool on_get_transaction_pool(const COMMAND_RPC_GET_TRANSACTION_POOL::request& req, COMMAND_RPC_GET_TRANSACTION_POOL::response& res, const connection_context *ctx = NULL);
     bool on_get_transaction_pool_hashes(const COMMAND_RPC_GET_TRANSACTION_POOL_HASHES::request& req, COMMAND_RPC_GET_TRANSACTION_POOL_HASHES::response& res, const connection_context *ctx = NULL);
     bool on_get_transaction_pool_stats(const COMMAND_RPC_GET_TRANSACTION_POOL_STATS::request& req, COMMAND_RPC_GET_TRANSACTION_POOL_STATS::response& res, const connection_context *ctx = NULL);
     bool on_stop_daemon(const COMMAND_RPC_STOP_DAEMON::request& req, COMMAND_RPC_STOP_DAEMON::response& res, const connection_context *ctx = NULL);
-    bool on_get_limit(const COMMAND_RPC_GET_LIMIT::request& req, COMMAND_RPC_GET_LIMIT::response& res, const connection_context *ctx = NULL);
-    bool on_set_limit(const COMMAND_RPC_SET_LIMIT::request& req, COMMAND_RPC_SET_LIMIT::response& res, const connection_context *ctx = NULL);
-    bool on_out_peers(const COMMAND_RPC_OUT_PEERS::request& req, COMMAND_RPC_OUT_PEERS::response& res, const connection_context *ctx = NULL);
-    bool on_in_peers(const COMMAND_RPC_IN_PEERS::request& req, COMMAND_RPC_IN_PEERS::response& res, const connection_context *ctx = NULL);
     bool on_pop_blocks(const COMMAND_RPC_POP_BLOCKS::request& req, COMMAND_RPC_POP_BLOCKS::response& res, const connection_context *ctx = NULL);
     
     //json_rpc
@@ -176,36 +142,27 @@ namespace cryptonote
      */
     bool caller_is_restricted(const connection_context* ctx) const
     {
-      return m_restricted && ctx;
+      return ctx && rpc_origin_is_restricted(ctx);
     }
 
 private:
     bool check_core_busy();
     bool check_core_ready();
-    bool add_host_fail(const connection_context *ctx, unsigned int score = 1);
 
     //utils
     bool get_block_template(const account_public_address &address, const cryptonote::blobdata &extra_nonce, size_t &reserved_offset, cryptonote::difficulty_type &difficulty, uint64_t &height, uint64_t &expected_reward, block &b, uint64_t &seed_height, crypto::hash &seed_hash, crypto::hash &next_seed_hash, epee::json_rpc::error &error_resp);
 
     core& m_core;
     nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >& m_p2p;
-    bool m_restricted;
-    epee::critical_section m_host_fails_score_lock;
-    std::map<std::string, uint64_t> m_host_fails_score;
-    bool disable_rpc_ban;
-    // The operator's bind strings as given (the restricted variant uses its
-    // own flags); recorded unparsed in init(). Rust parses and binds.
-    std::string m_rpc_bind_ip;
-    std::string m_rpc_bind_ipv6; // as given; see get_rpc_bind_ipv6()
-    bool m_rpc_use_ipv6 = false;
-    // CORS allow-list from --rpc-access-control-origins (empty = deny).
-    std::vector<std::string> m_access_control_origins;
-    // Connection caps (0 = unlimited); set in init(), enforced by the Rust
-    // Axum listener.
-    std::size_t m_rpc_max_connections = 0;
-    std::size_t m_rpc_max_connections_per_public_ip = 0;
-    std::size_t m_rpc_max_connections_per_private_ip = 0;
   };
+
+  /// The origin the bridge hands every bridged handler: the admin
+  /// listener's or the view listener's. One `core_rpc_server` answers
+  /// every listener (one RPC start), so the posture is the origin's,
+  /// carried per call by the bridge (`core_rpc_ffi.cpp`), never the
+  /// server's. The in-process console is the admin arm.
+  const core_rpc_server::connection_context* rpc_origin(bool restricted);
+
 }
 
 BOOST_CLASS_VERSION(nodetool::node_server<cryptonote::t_cryptonote_protocol_handler<cryptonote::core> >, 1);

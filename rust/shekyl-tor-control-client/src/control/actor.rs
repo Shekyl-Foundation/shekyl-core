@@ -138,17 +138,6 @@ pub enum SystemDirectoryError {
     UnusableLength,
 }
 
-impl SystemDirectoryError {
-    /// The OS error from the failed call, read before any further call.
-    #[cfg(windows)]
-    pub(crate) fn from_last_os_error() -> Self {
-        let Some(code) = std::io::Error::last_os_error().raw_os_error() else {
-            return Self::UnusableLength;
-        };
-        u32::try_from(code).map_or(Self::UnusableLength, Self::Os)
-    }
-}
-
 /// A failure in the control connection — handshake or runtime.
 ///
 /// **Content-free**: every variant carries only a protocol status code, or the

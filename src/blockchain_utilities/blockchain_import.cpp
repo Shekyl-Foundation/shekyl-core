@@ -45,6 +45,7 @@
 #include "serialization/json_utils.h" // dump_json()
 #include "include_base_utils.h"
 #include "cryptonote_core/cryptonote_core.h"
+#include "blockchain_utilities/daemon_network_args.h"
 #include "cryptonote_basic/block_ingest.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
@@ -56,9 +57,6 @@ namespace
 bool opt_batch   = true;
 bool opt_verify  = true; // use add_new_block, which does verification before calling add_block
 bool opt_resume  = true;
-bool opt_testnet = true;
-bool opt_stagenet = true;
-
 // number of blocks per batch transaction
 // adjustable through command-line argument according to available RAM
 uint64_t db_batch_size = 20000;
@@ -644,6 +642,9 @@ int main(int argc, char* argv[])
   command_line::add_arg(desc_cmd_sett, arg_log_level);
   command_line::add_arg(desc_cmd_sett, arg_batch_size);
   command_line::add_arg(desc_cmd_sett, arg_block_stop);
+  // The utility's own network and data directory (DAEMON_CONFIG_CUTOVER.md
+  // §9). The daemon's option set is not registered here.
+  cryptonote::add_data_dir_args(desc_cmd_sett);
 
   command_line::add_arg(desc_cmd_only, arg_count_blocks);
   command_line::add_arg(desc_cmd_only, arg_pop_blocks);
@@ -659,7 +660,6 @@ int main(int argc, char* argv[])
 
   po::options_description desc_options("Allowed options");
   desc_options.add(desc_cmd_only).add(desc_cmd_sett);
-  cryptonote::core::init_options(desc_options);
 
   po::variables_map vm;
   bool r = command_line::handle_error_helper(desc_options, [&]()
@@ -707,11 +707,10 @@ int main(int argc, char* argv[])
     }
   }
 
-  opt_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
-  opt_stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-  if (opt_testnet && opt_stagenet)
+  const cryptonote::UtilityNetwork network = cryptonote::utility_network(vm);
+  if (!network.one_network())
   {
-    std::cerr << "Error: Can't specify more than one of --testnet and --stagenet" << ENDL;
+    std::cerr << "Error: " << cryptonote::utility_network_exclusive << ENDL;
     return 1;
   }
   m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
@@ -752,7 +751,7 @@ int main(int argc, char* argv[])
     MINFO("batch:   " << std::boolalpha << opt_batch << std::noboolalpha);
   }
   MINFO("resume:  " << std::boolalpha << opt_resume  << std::noboolalpha);
-  MINFO("nettype: " << (opt_testnet ? "testnet" : opt_stagenet ? "stagenet" : "mainnet"));
+  MINFO("nettype: " << network.name());
 
   MINFO("bootstrap file path: " << import_file_path);
   MINFO("database path:       " << m_config_folder);
@@ -775,7 +774,25 @@ int main(int argc, char* argv[])
   try
   {
 
-  if (!core.init(vm, nullptr))
+  // The snapshot core::init takes is built by the daemon's own parser from
+  // the utility's network and data directory (DAEMON_CONFIG_CUTOVER.md §9):
+  // one source of defaults, the table's, and no second set spelled here.
+  // Both connectors off: the utility serves no peer. The directory is made
+  // absolute because a path row is absolute only.
+  const std::string data_dir_absolute = std::filesystem::absolute(m_config_folder).string();
+  const char *network_word = network.name();
+  const char *snapshot_argv[] = {
+    "blockchain_import", "--network", network_word, "--data-dir", data_dir_absolute.c_str(),
+    "--clearnet", "off", "--tor", "off"};
+  ShekylDaemonSnapshot *snapshot = nullptr;
+  if (shekyl_daemon_snapshot_parse(static_cast<int>(sizeof(snapshot_argv) / sizeof(snapshot_argv[0])), snapshot_argv, &snapshot) != 0 || snapshot == nullptr)
+  {
+    std::cerr << "Failed to build the daemon snapshot for " << network_word << " at " << data_dir_absolute << ENDL;
+    return 1;
+  }
+  const bool initialised = core.init(*snapshot, nullptr);
+  shekyl_daemon_snapshot_free(snapshot);
+  if (!initialised)
   {
     std::cerr << "Failed to initialize core" << ENDL;
     return 1;

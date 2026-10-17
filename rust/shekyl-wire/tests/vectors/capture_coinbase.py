@@ -77,8 +77,10 @@ def start_daemon(workdir, attempts=5):
         url = f"http://127.0.0.1:{port}/json_rpc"
         log = open(os.path.join(workdir, f"daemon.{attempt}.log"), "w")
         daemon = subprocess.Popen(
-            [SHEKYLD, "--regtest", "--offline", "--non-interactive", "--fixed-difficulty", "1",
-             "--data-dir", workdir, "--rpc-bind-port", str(port), "--log-level", "0"],
+            [SHEKYLD, "--network", "regtest", "--clearnet", "off", "--tor", "off",
+             "--dev-difficulty", "1", "--data-dir", workdir,
+             "--log-file", os.path.join(workdir, "shekyld.log"),
+             "--rpc-admin-listen", f"127.0.0.1:{port}", "--log-level", "warn"],
             stdout=log, stderr=subprocess.STDOUT)
         for _ in range(120):
             if daemon.poll() is not None:
