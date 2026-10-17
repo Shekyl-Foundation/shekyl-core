@@ -129,6 +129,7 @@ mod block;
 mod census;
 mod coverage;
 mod drain;
+mod epoch_floor;
 mod fault;
 mod header_ladder;
 mod reorg;
@@ -179,6 +180,7 @@ pub use block::{
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use drain::{tree_after, Drain, DrainedOutput};
+pub use epoch_floor::{Claimable, EpochFamily, EpochFloor, Pricing, Settling};
 pub use fault::{
     Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, ReferenceMismatch, Retry,
     SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,

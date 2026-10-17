@@ -376,6 +376,28 @@ pub enum StoreInvariant {
         /// Which half failed.
         observed: FrozenFault,
     },
+    /// **SI-29** — a per-epoch table is read only where it is kept
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`). Each read of
+    /// `archival_sigma_work`, `archival_budget`, `archival_complete_trees`,
+    /// `archival_settlement`, `archival_issued_draw`,
+    /// `archival_issued_digest`, `archival_drawable_digest`,
+    /// `archival_slash_applied` and `archival_r_market` takes its family's
+    /// floor from the caller (`shekyl_chain_rules::EpochFloor`, a consensus
+    /// expression the store compares and does not source) and refuses an
+    /// epoch below it rather than answer "absent": absent is *never
+    /// written*, and a row below the floor may have been written and
+    /// retired. Every reader asks inside its family by construction — a
+    /// claim's epochs are checked against the claim window before any read
+    /// (CEN-J23) — so a hit is a mis-composed schedule, never data. Fatal,
+    /// never a verdict on the block.
+    EpochReadBelowFloor {
+        /// The table the read was of.
+        table: &'static str,
+        /// The epoch asked for.
+        asked: shekyl_types::SettlementEpoch,
+        /// The lowest retained epoch of the table's family.
+        floor: shekyl_types::SettlementEpoch,
+    },
 }
 
 /// What SI-28 observed (payload of [`StoreInvariant::CompleteTreesNotFrozen`]).
@@ -538,6 +560,7 @@ impl StoreInvariant {
             Self::SettlementNotSound { .. } => 25,
             Self::SlashLogReadBelowFloor { .. } => 26,
             Self::CompleteTreesNotFrozen { .. } => 28,
+            Self::EpochReadBelowFloor { .. } => 29,
         }
     }
 }
@@ -745,6 +768,16 @@ impl core::fmt::Display for StoreInvariant {
                      set; the slash pass writes the two together"
                 ),
             },
+            Self::EpochReadBelowFloor {
+                table,
+                asked,
+                floor,
+            } => write!(
+                f,
+                "{table} was asked for settlement epoch {asked} while rows below {floor} may be \
+                 retired; a reader asked outside the window its own rule set keeps — the \
+                 schedule is mis-composed, not the data"
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -790,6 +823,7 @@ impl core::error::Error for StoreInvariant {
             | Self::SettlementNotSound { .. }
             | Self::SlashLogReadBelowFloor { .. }
             | Self::CompleteTreesNotFrozen { .. }
+            | Self::EpochReadBelowFloor { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

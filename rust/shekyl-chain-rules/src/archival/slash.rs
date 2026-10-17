@@ -218,7 +218,9 @@ impl super::Transition {
         epoch: SettlementEpoch,
         snapshot: &[(PCanonicalId, BondRecord)],
     ) -> Result<(), ViewRead<V::Fault>> {
-        let draws = view.issued_draws(epoch).map_err(ViewRead::View)?;
+        let draws = view
+            .issued_draws(epoch, self.floor())
+            .map_err(ViewRead::View)?;
         // Every stored draw, before any is dropped: the digest was folded
         // over issuance, and a pair that later stopped holding its shard
         // still had its draws issued. An epoch with no draw must have the
@@ -233,7 +235,11 @@ impl super::Transition {
                 draw.draw,
             ));
         }
-        if folded != view.issued_digest(epoch).map_err(ViewRead::View)? {
+        if folded
+            != view
+                .issued_digest(epoch, self.floor())
+                .map_err(ViewRead::View)?
+        {
             return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
                 epoch,
                 check: SettlementCheck::IssuedIndexDigest,
@@ -399,7 +405,7 @@ impl super::Transition {
             return Ok(Some(row.outcome()));
         }
         Ok(view
-            .settlement_row(&persona, shard, epoch)
+            .settlement_row(&persona, shard, epoch, self.floor())
             .map_err(ViewRead::View)?
             .map(SettlementRow::outcome))
     }
@@ -426,7 +432,7 @@ impl super::Transition {
             return Ok(false);
         }
         let applied = view
-            .slash_applied(&persona, shard, epoch)
+            .slash_applied(&persona, shard, epoch, self.floor())
             .map_err(ViewRead::View)?
             || self.slashes.iter().any(|s| {
                 s.entry.persona == persona && s.entry.shard == shard && s.entry.epoch == epoch

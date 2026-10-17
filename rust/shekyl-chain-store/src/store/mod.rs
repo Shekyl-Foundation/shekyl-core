@@ -135,7 +135,7 @@ pub use keyed::{
 };
 pub use output_reads::RecordedOutput;
 pub use pop::Popped;
-pub use prune::{Horizons, Pruned};
+pub use prune::{EpochFloors, Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
 pub use shard_reads::{ClosedShardRows, ShardFold};
 pub use tx_reads::{PqcAuths, Prunable, SegmentBytes, TxLocation, TxRecord};

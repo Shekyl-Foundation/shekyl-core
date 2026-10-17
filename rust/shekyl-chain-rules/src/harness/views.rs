@@ -31,6 +31,7 @@ use crate::view::{
     AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
     Tip,
 };
+use crate::{Claimable, EpochFloor, Pricing, Settling};
 
 /// The fault a [`FaultingView`] raises.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -431,16 +432,25 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
         &self,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Pricing>,
     ) -> Result<Option<RMarket>, Infallible> {
-        self.inner.r_market(shard, epoch)
+        self.inner.r_market(shard, epoch, floor)
     }
 
-    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Infallible> {
-        self.inner.sigma_work(epoch)
+    fn sigma_work(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SigmaWorkMilli>, Infallible> {
+        self.inner.sigma_work(epoch, floor)
     }
 
-    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
-        self.inner.budget(epoch)
+    fn budget(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<AtomicUnits>, Infallible> {
+        self.inner.budget(epoch, floor)
     }
 
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, Infallible> {
@@ -465,8 +475,9 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<bool, Infallible> {
-        self.inner.slash_applied(persona, shard, epoch)
+        self.inner.slash_applied(persona, shard, epoch, floor)
     }
 
     fn budget_accruing(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Infallible> {
@@ -478,24 +489,34 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
     ) -> Result<Option<SettlementRow>, Infallible> {
-        self.inner.settlement_row(persona, shard, epoch)
+        self.inner.settlement_row(persona, shard, epoch, floor)
     }
 
-    fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, Infallible> {
-        self.inner.issued_draws(epoch)
+    fn issued_draws(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, Infallible> {
+        self.inner.issued_draws(epoch, floor)
     }
 
-    fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, Infallible> {
-        self.inner.issued_digest(epoch)
+    fn issued_digest(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<IssuedDigest, Infallible> {
+        self.inner.issued_digest(epoch, floor)
     }
 
     fn served_at(
         &self,
         persona: &PCanonicalId,
         epochs: &BTreeSet<SettlementEpoch>,
+        floor: EpochFloor<Claimable>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Infallible> {
-        self.inner.served_at(persona, epochs)
+        self.inner.served_at(persona, epochs, floor)
     }
 
     fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, Infallible> {
@@ -505,14 +526,16 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
     fn drawable_digest(
         &self,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, Infallible> {
-        self.inner.drawable_digest(epoch)
+        self.inner.drawable_digest(epoch, floor)
     }
 
     fn complete_trees(
         &self,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
     ) -> Result<Option<CompleteTreeSet>, Infallible> {
-        self.inner.complete_trees(epoch)
+        self.inner.complete_trees(epoch, floor)
     }
 }

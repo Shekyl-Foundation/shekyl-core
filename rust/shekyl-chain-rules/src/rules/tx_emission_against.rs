@@ -74,8 +74,9 @@ use std::collections::BTreeSet;
 
 use shekyl_archival_retention::{
     emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
-    ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EpochCloseInputs,
+    emission_vin_verify_claims_under, epoch_is_claim_expired, p_canonical_id_from_hybrid_pubkey,
+    ArchivalRewardEmissionVin, ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext,
+    EpochCloseInputs,
 };
 use shekyl_types::archival::CompleteTreeSet;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -90,6 +91,7 @@ use crate::rules::tx_emission::{the_emission, J19, J22, J24};
 use crate::rules::{Rule, TxContext};
 use crate::verdict::{InvalidBlock, Verdict};
 use crate::view::{ChainView, Tip};
+use crate::{Claimable, EpochFloor};
 
 /// CEN-J23: every claimed epoch is **closed and settled** — it has its
 /// frozen budget row (A8) and its `Σwork` row (A7) — and its snapshot is
@@ -153,16 +155,20 @@ impl J23 {
         vin: &ArchivalRewardEmissionVin,
         persona: &PCanonicalId,
         records: &'r [(PCanonicalId, shekyl_types::archival::BondRecord)],
+        connecting: BlockHeight,
     ) -> Result<Verdict<Vec<GatheredEpoch<'r>>>, ViewRead<V::Fault>> {
         let schedule = rule_set.settlement_schedule();
+        // Every cited epoch passed [`J25::window`], so none is below the
+        // claimable floor and no read here can reach a retired row.
+        let floor = EpochFloor::<Claimable>::under(connecting, schedule);
         // The citing gate first. A missing budget or Σwork refuses the
         // claim before any persona's settlement rows are read.
         let mut cited = Vec::with_capacity(vin.settlement_epochs.len());
         for &epoch in &vin.settlement_epochs {
             let settled = SettlementEpoch::from_raw(epoch);
             let (Some(budget), Some(sigma_work), Some(close_height)) = (
-                view.budget(settled).map_err(ViewRead::View)?,
-                view.sigma_work(settled).map_err(ViewRead::View)?,
+                view.budget(settled, floor).map_err(ViewRead::View)?,
+                view.sigma_work(settled, floor).map_err(ViewRead::View)?,
                 schedule.close_height(epoch).map(BlockHeight::from_raw),
             ) else {
                 return Ok(Err(InvalidBlock::new(Self::ROW, cx.locus())));
@@ -170,7 +176,7 @@ impl J23 {
             // Written in the pass's write set with `Σwork(E)` (SI-28): a
             // settled epoch without it is a lost row, not a refusal.
             let complete_trees = view
-                .complete_trees(settled)
+                .complete_trees(settled, floor)
                 .map_err(ViewRead::View)?
                 .ok_or(ViewRead::Corrupt(Corrupt::CompleteTreesAbsent {
                     epoch: settled,
@@ -187,7 +193,12 @@ impl J23 {
         // The read's keys. The vin's epochs are already strictly increasing
         // (`EpochsNotStrictlyIncreasing`), so the set is that list.
         let epochs: BTreeSet<SettlementEpoch> = cited.iter().map(|cited| cited.epoch).collect();
-        let credits = ServedAt::read(view, records.iter().map(|(persona, _)| *persona), &epochs)?;
+        let credits = ServedAt::read(
+            view,
+            records.iter().map(|(persona, _)| *persona),
+            &epochs,
+            floor,
+        )?;
         let mut gathered = Vec::with_capacity(cited.len());
         for cited in cited {
             let universe = gather_universe(view, schedule, rule_set.reorg_cap(), cited.epoch)?;
@@ -246,6 +257,35 @@ impl Rule for J25 {
 }
 
 impl J25 {
+    /// The claim window, before anything is read: every cited epoch is at
+    /// or above `claim_window_floor` of the connecting height's epoch, by
+    /// the retention crate's own predicate ([`epoch_is_claim_expired`], the
+    /// one the verify's step 1 refuses `EpochClaimExpired` with). Run ahead
+    /// of CEN-J23 because J23 reads the cited epochs' rows, and the rows of
+    /// an expired epoch may be retired (`ARCHIVAL_SETTLEMENT_WRITER.md`
+    /// §17): the store refuses a read below the claimable floor as a fault
+    /// (SI-29), and a claim's epochs are the sender's to choose. An expired
+    /// claim is this row's refusal, as it was when the verify reached it
+    /// first; the verify still checks the window itself.
+    fn window(
+        cx: &TxContext<'_>,
+        rule_set: &RuleSet,
+        vin: &ArchivalRewardEmissionVin,
+        connecting: BlockHeight,
+    ) -> Verdict<()> {
+        let current = rule_set
+            .settlement_schedule()
+            .epoch_at_height(connecting.to_raw());
+        if vin
+            .settlement_epochs
+            .iter()
+            .any(|&epoch| epoch_is_claim_expired(epoch, current))
+        {
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+
     /// The verify over the gathered epochs. `Ok(Err)` is this row's
     /// refusal, or J24's where the commit set is not well-defined; `Err`
     /// is the view's fault from the record read.
@@ -364,12 +404,12 @@ impl Rule for J26 {
 /// ([`crate::rules::proofs::judge_proofs`]), which records it, vacuous or judged.
 const CLAIM_ROWS: [CenRow; 2] = [CenRow::J23, CenRow::J25];
 
-/// The emission's view-bound sequence: J23's gathers, J25's verify, then
-/// J26's fee-input proof. Off the `Emission` class all three rows are
-/// recorded **vacuous**. On it, `reference` is J21's context from
-/// `judge_reference`; an emission the caller reached here without one is
-/// a sequence wired wrong, and the claim is refused under J25 rather than
-/// verified against nothing.
+/// The emission's view-bound sequence: J25's claim window (before any
+/// read), J23's gathers, J25's verify, then J26's fee-input proof. Off the
+/// `Emission` class all three rows are recorded **vacuous**. On it,
+/// `reference` is J21's context from `judge_reference`; an emission the
+/// caller reached here without one is a sequence wired wrong, and the claim
+/// is refused under J25 rather than verified against nothing.
 ///
 /// A vin this sequence cannot read — J19 has refused it in `tx_form`;
 /// asked alone, the parse fails here — is refused under J23, the first row
@@ -392,8 +432,13 @@ pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
             return Ok(Err(InvalidBlock::new(J23::ROW, cx.locus())));
         };
         let persona = p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey);
+        let connecting = Tip::connecting_height(view.tip().map_err(ViewRead::View)?.as_ref());
+        if let Err(expired) = J25::window(cx, rule_set, &vin, connecting) {
+            return Ok(Err(expired));
+        }
         let records = view.bond_records().map_err(ViewRead::View)?;
-        let gathered = match J23::gather(cx, view, rule_set, &vin, &persona, &records)? {
+        let gathered = match J23::gather(cx, view, rule_set, &vin, &persona, &records, connecting)?
+        {
             Ok(gathered) => gathered,
             Err(refused) => return Ok(Err(refused)),
         };

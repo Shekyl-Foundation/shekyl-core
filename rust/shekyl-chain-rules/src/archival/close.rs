@@ -26,6 +26,7 @@ use crate::fault::{Corrupt, ViewRead};
 use crate::rules::miner::{closed_shards_before, closed_shards_through};
 use crate::rules::recorded;
 use crate::view::ChainView;
+use crate::{Claimable, EpochFloor};
 
 use super::{Accrual, EpochClose, EpochGather};
 
@@ -622,7 +623,9 @@ pub(crate) struct ServedAt {
 }
 
 impl ServedAt {
-    /// Read `epochs` for each persona. An empty `epochs` reads nothing.
+    /// Read `epochs` for each persona, each at or above `floor` (the
+    /// claimable family's at the caller's connecting height; SI-29). An
+    /// empty `epochs` reads nothing.
     ///
     /// # Errors
     ///
@@ -631,10 +634,13 @@ impl ServedAt {
         view: &V,
         personas: impl IntoIterator<Item = PCanonicalId>,
         epochs: &BTreeSet<SettlementEpoch>,
+        floor: EpochFloor<Claimable>,
     ) -> Result<Self, ViewRead<V::Fault>> {
         let mut by_persona = BTreeMap::new();
         for persona in personas {
-            let served = view.served_at(&persona, epochs).map_err(ViewRead::View)?;
+            let served = view
+                .served_at(&persona, epochs, floor)
+                .map_err(ViewRead::View)?;
             if served.is_empty() {
                 continue;
             }

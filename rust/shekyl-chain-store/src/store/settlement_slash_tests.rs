@@ -45,8 +45,13 @@ fn an_empty_index_settles_nothing_and_slashes_nothing() {
             .is_complete_tree());
         for e in 0..=last {
             assert_eq!(
-                snap.settlement_row(&p, ShardId::from_raw(0), SettlementEpoch::from_raw(e))
-                    .expect("read"),
+                snap.settlement_row(
+                    &p,
+                    ShardId::from_raw(0),
+                    SettlementEpoch::from_raw(e),
+                    EpochFloor::NONE
+                )
+                .expect("read"),
                 None
             );
         }
@@ -97,9 +102,15 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
     let shard = ShardId::from_raw(0);
     let epoch = SettlementEpoch::from_raw;
     let snap = chain.store.begin_read().expect("read");
+    // Read off the slash log, which keeps `k + n` epochs: the applied set
+    // is the settling family's and its old epochs are retired by now
+    // (`EpochFloor`, §17).
+    let floor = slash_floor_at(&snap);
     let slashed_at = |i: u64| -> Vec<u64> {
-        (0..=m + 2)
-            .filter(|e| snap.slash_applied(&id(i), shard, epoch(*e)).expect("read"))
+        snap.slash_log_after(&id(i), whole_log_from(floor), floor)
+            .expect("read")
+            .iter()
+            .map(|entry| entry.epoch.to_raw())
             .collect()
     };
     assert_eq!(slashed_at(0), [m], "every epoch missed: slashed at M");
@@ -117,7 +128,7 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
 
     // The rows the verdicts were read from.
     let outcome = |i: u64, e: u64| {
-        snap.settlement_row(&id(i), shard, epoch(e))
+        snap.settlement_row(&id(i), shard, epoch(e), EpochFloor::NONE)
             .expect("read")
             .map(SettlementRow::outcome)
     };
@@ -136,7 +147,7 @@ fn the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one() {
     assert_eq!(outcome(0, m + 1), Some(SettlementOutcome::Missed));
     assert_eq!(outcome(0, m + 2), None);
     assert_eq!(
-        snap.issued_draws(epoch(m + 2))
+        snap.issued_draws(epoch(m + 2), EpochFloor::NONE)
             .expect("read")
             .iter()
             .filter(|d| d.persona == id(0))
@@ -162,7 +173,11 @@ fn an_index_that_does_not_fold_to_its_digest_halts_the_slash_pass() {
     fn a_draw_gained(store: &ChainStore, epoch: SettlementEpoch) {
         let mut extra = planned_draws(epoch.to_raw(), 2, every_epoch_missed)[0];
         extra.draw = 9;
-        let digest = store.begin_read().unwrap().issued_digest(epoch).unwrap();
+        let digest = store
+            .begin_read()
+            .unwrap()
+            .issued_digest(epoch, EpochFloor::NONE)
+            .unwrap();
         store
             .regtest_issue_draws(Trust::UNANCHORED, epoch, &[extra], digest)
             .expect("issued");
@@ -243,7 +258,10 @@ fn popping_the_deadline_connect_unsettles_the_epoch() {
         let snap = store.begin_read().expect("read");
         ids_in_table_order(2)
             .iter()
-            .map(|p| snap.settlement_row(p, shard, epoch).expect("read"))
+            .map(|p| {
+                snap.settlement_row(p, shard, epoch, EpochFloor::NONE)
+                    .expect("read")
+            })
             .collect()
     };
     let missed = Some(SettlementRow::settle(0, 3).expect("a row"));
@@ -252,7 +270,7 @@ fn popping_the_deadline_connect_unsettles_the_epoch() {
         store
             .begin_read()
             .expect("read")
-            .complete_trees(epoch)
+            .complete_trees(epoch, EpochFloor::NONE)
             .expect("read")
     };
     assert_eq!(
@@ -281,7 +299,12 @@ fn popping_the_deadline_connect_unsettles_the_epoch() {
         Some(SettlementEpoch::from_raw(0)),
         "the watermark is the epoch before"
     );
-    assert_eq!(snap.issued_draws(epoch).expect("read").len(), 6);
+    assert_eq!(
+        snap.issued_draws(epoch, EpochFloor::NONE)
+            .expect("read")
+            .len(),
+        6
+    );
     drop(snap);
     chain.finish();
 }
@@ -358,7 +381,7 @@ fn a_settled_epoch_freezes_the_complete_trees_its_gather_excluded() {
     let snap = chain.store.begin_read().expect("read");
     let served = Persona::at(slot(0)).id();
     assert_eq!(
-        snap.complete_trees(SettlementEpoch::from_raw(1))
+        snap.complete_trees(SettlementEpoch::from_raw(1), EpochFloor::NONE)
             .expect("read")
             .as_ref()
             .map(CompleteTreeSet::as_slice),
@@ -366,20 +389,21 @@ fn a_settled_epoch_freezes_the_complete_trees_its_gather_excluded() {
         "the credited complete tree, and not the missed one"
     );
     assert_eq!(
-        snap.sigma_work(SettlementEpoch::from_raw(1)).expect("read"),
+        snap.sigma_work(SettlementEpoch::from_raw(1), EpochFloor::NONE)
+            .expect("read"),
         Some(SigmaWorkMilli::from_raw(0)),
         "a complete tree is no market member"
     );
     for e in [0, 2] {
         assert_eq!(
-            snap.complete_trees(SettlementEpoch::from_raw(e))
+            snap.complete_trees(SettlementEpoch::from_raw(e), EpochFloor::NONE)
                 .expect("read"),
             Some(CompleteTreeSet::default()),
             "epoch {e} credited nothing: its set is written empty"
         );
     }
     assert_eq!(
-        snap.complete_trees(SettlementEpoch::from_raw(3))
+        snap.complete_trees(SettlementEpoch::from_raw(3), EpochFloor::NONE)
             .expect("read"),
         None,
         "an epoch not settled has no row"

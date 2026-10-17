@@ -67,9 +67,10 @@
 
 use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{
-    claimant_reward_share, emission_vin_verify_auth, emission_vin_verify_backing,
-    epoch_close_compute, good_through, shard_contribution_micro, CreditPair, EmissionEpochSource,
-    EpochCloseBond, EpochCloseInputs, EpochCloseShard, ShardClose, ShardWorkEntry, WorkEpochClaim,
+    claim_window_floor, claimant_reward_share, emission_vin_verify_auth,
+    emission_vin_verify_backing, epoch_close_compute, good_through, shard_contribution_micro,
+    CreditPair, EmissionEpochSource, EpochCloseBond, EpochCloseInputs, EpochCloseShard, ShardClose,
+    ShardWorkEntry, WorkEpochClaim, MAX_CLAIM_AGE_W,
 };
 use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, TxSlot};
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
@@ -551,14 +552,17 @@ async fn issue_on_shard_zero(
         .expect("the door issues the draws");
 }
 
-/// `SO-D12h` on the driven chain (module docs). The compact persona `P`
+/// `SO-D12h` on the driven chain (module docs), and the claim window's
+/// edge under the per-epoch retirement (§17). The compact persona `P`
 /// joins shard 0 beside two complete trees, `T1` and `T2`; all three are
 /// Served on shard 0 in `served`. The pass excludes `T1` and `T2` from the
 /// market as complete trees and freezes the set beside `Σwork(served)`.
 /// After the pass `T1` releases (an empty compact record, a clean
 /// zero-length interval) and `T2` misses eleven epochs and is slashed (an
 /// empty compact record, an interval that opens eleven epochs after
-/// `served`). Neither change reaches `served`'s market: the claim connects.
+/// `served`). Neither change reaches `served`'s market: the claim connects,
+/// at the first block where `served` is the oldest claimable epoch. A claim
+/// one epoch older is refused there as expired at CEN-J25, before any read.
 ///
 /// Red edit: take the flag in CEN-J23 from the records
 /// (`freeze_complete_trees` over A11's rows in place of A20) — `T1` and
@@ -774,36 +778,64 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
         "its interval opens after `served`"
     );
 
-    // The claim on `served`, in the block after the slash.
-    catch_up(&mut spender, &mined, &mut seen);
-    let connecting = slash_height + BlockCount::ONE;
-    let terms = ClaimTerms {
-        holdings: shard_set(vec![0]),
-        settlement_epochs: vec![served.to_raw()],
-        work_claim: vec![WorkEpochClaim {
-            epoch: served.to_raw(),
-            shard_entries: vec![ShardWorkEntry {
-                shard_id: 0,
-                serve_credit_bit: true,
-                scarcity_micro: u32::try_from(scarcity).expect("a per-entry term fits (F-C)"),
-            }],
-        }],
-        reward_amount_plain: vec![share.reward],
-    };
-    let owner = Owner::persona(persona.keys());
-    let backing = spender.owned_input(&owner, backing_key, connecting);
-    let fee_input = spender.owned_input(&owner, fee_key, connecting);
-    let claim = assemble_emission_claim(
-        persona.keys(),
-        &Zeroizing::new(CLAIM_TX_KEY),
-        vec![fee_input.input],
-        backing.input,
-        terms,
-        FEE,
-        &backing.tree,
+    // The claim, at the first block where `served` is the oldest epoch the
+    // window admits: `served + W`'s first block (`claim_window_floor`). The
+    // claimable family's rows of `served` are kept there; the batch of that
+    // boundary retired below `served − 1` (`EpochFloor`, §17).
+    let connecting =
+        BlockHeight::from_raw(levered_schedule().open_height(served.to_raw() + MAX_CLAIM_AGE_W));
+    assert_eq!(
+        claim_window_floor(levered_schedule().epoch_at(connecting).to_raw()),
+        served.to_raw(),
+        "`served` is the oldest still-claimable epoch at the claim"
     );
-    let claim_tx =
-        Transaction::from_bytes(&claim.bytes).expect("the encoder's bytes parse as a transaction");
+    mine_to(&mut scenario, &mut mined, connecting).await;
+    catch_up(&mut spender, &mined, &mut seen);
+    let owner = Owner::persona(persona.keys());
+    let claim_for = |epoch: SettlementEpoch, tx_key: [u8; 32]| {
+        let terms = ClaimTerms {
+            holdings: shard_set(vec![0]),
+            settlement_epochs: vec![epoch.to_raw()],
+            work_claim: vec![WorkEpochClaim {
+                epoch: epoch.to_raw(),
+                shard_entries: vec![ShardWorkEntry {
+                    shard_id: 0,
+                    serve_credit_bit: true,
+                    scarcity_micro: u32::try_from(scarcity).expect("a per-entry term fits (F-C)"),
+                }],
+            }],
+            reward_amount_plain: vec![share.reward],
+        };
+        let backing = spender.owned_input(&owner, backing_key, connecting);
+        let fee_input = spender.owned_input(&owner, fee_key, connecting);
+        let claim = assemble_emission_claim(
+            persona.keys(),
+            &Zeroizing::new(tx_key),
+            vec![fee_input.input],
+            backing.input,
+            terms,
+            FEE,
+            &backing.tree,
+        );
+        Transaction::from_bytes(&claim.bytes).expect("the encoder's bytes parse as a transaction")
+    };
+
+    // One epoch older is expired: refused at CEN-J25's window, before any
+    // row is read — not CEN-J23's missing row, and not the store's SI-29
+    // fault a read below the claimable floor would be. The block does not
+    // connect.
+    let expired = SettlementEpoch::from_raw(served.to_raw() - 1);
+    refused_at(
+        scenario
+            .mine_listing(vec![claim_for(expired, TWIN_TX_KEY)])
+            .await,
+        CenRow::J25,
+        Locus::Tx {
+            slot: TxSlot::Listed(0),
+        },
+    );
+
+    let claim_tx = claim_for(served, CLAIM_TX_KEY);
     let block = scenario
         .mine_listing(vec![claim_tx])
         .await

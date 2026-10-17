@@ -290,6 +290,14 @@ impl Transition {
         ChainCount::with_tip(self.connecting).expect("a connecting height below u64::MAX")
     }
 
+    /// A per-epoch family's floor at this block (`EpochFloor`, SI-29): the
+    /// oldest epoch the pass may ask the family for. The pass reads the
+    /// settling family for the epoch it settles and the claimable family
+    /// back to the failure window's bound, both at their floors exactly.
+    fn floor<F: crate::EpochFamily>(&self) -> crate::EpochFloor<F> {
+        crate::EpochFloor::under(self.connecting, self.schedule)
+    }
+
     /// `persona`'s working copy, read from the view on first touch;
     /// `None` for a persona with no bond.
     ///

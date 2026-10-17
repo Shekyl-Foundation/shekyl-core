@@ -90,6 +90,15 @@
 //! floor, because the horizon is a consensus expression and a store setting
 //! must not be able to move it.
 //!
+//! # SI-29 is armed here
+//!
+//! The per-epoch tables are read only where they are kept. Each read of
+//! A6–A8, A12, A14–A17, A19 and A20 takes its family's floor
+//! (`EpochFloor`, `ARCHIVAL_SETTLEMENT_WRITER.md` §17) from its caller and
+//! refuses an epoch below it ([`StoreInvariant::EpochReadBelowFloor`]),
+//! as A2 does for the slash log. The store compares; the floor is the
+//! consensus side's expression.
+//!
 //! # SI-15 is armed here
 //!
 //! Every serve-credit row names a persona with a bond record (the connect
@@ -112,7 +121,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use redb::ReadableTable;
-use shekyl_chain_rules::{AtHeight, SlashLogFloor};
+use shekyl_chain_rules::{
+    AtHeight, Claimable, EpochFamily, EpochFloor, Pricing, Settling, SlashLogFloor,
+};
 use shekyl_store_codec::{BlobKind, CodecError};
 use shekyl_types::archival::SettlementOutcome;
 pub use shekyl_types::archival::{
@@ -150,6 +161,8 @@ const BUDGET: &str = "archival_budget";
 const BUDGET_ACCRUING: &str = "archival_budget_accruing";
 /// The `archival_settlement` cell as faults name it.
 const SETTLEMENT: &str = "archival_settlement";
+/// The `archival_slash_applied` table as faults name it.
+const SLASH_APPLIED: &str = "archival_slash_applied";
 /// The `archival_issued_draw` cell as faults name it.
 const ISSUED_DRAW: &str = "archival_issued_draw";
 /// The `archival_issued_digest` cell as faults name it.
@@ -160,6 +173,26 @@ const BLOCK_DRAWS: &str = "archival_block_draws";
 const DRAWABLE_DIGEST: &str = "archival_drawable_digest";
 /// The `archival_complete_trees` cell as faults name it.
 const COMPLETE_TREES: &str = "archival_complete_trees";
+
+/// SI-29: `epoch` is at or above its family's `floor`, or the read is
+/// refused before the table is opened — a row below the floor may have
+/// been retired, and reading it as absent would answer "never written".
+fn kept<F: EpochFamily>(
+    table: &'static str,
+    epoch: SettlementEpoch,
+    floor: EpochFloor<F>,
+) -> Result<(), ReadFault> {
+    match floor.kept_from() {
+        Some(kept_from) if epoch < kept_from => {
+            Err(ReadFault::Invariant(StoreInvariant::EpochReadBelowFloor {
+                table,
+                asked: epoch,
+                floor: kept_from,
+            }))
+        }
+        _ => Ok(()),
+    }
+}
 /// The `archival_attestation_witness` cell as faults name it.
 const WITNESS: &str = "archival_attestation_witness";
 
@@ -347,7 +380,9 @@ pub(super) fn r_market<T: ReadTables>(
     txn: &T,
     shard: ShardId,
     epoch: SettlementEpoch,
+    floor: EpochFloor<Pricing>,
 ) -> Result<Option<RMarket>, ReadFault> {
+    kept(R_MARKET, epoch, floor)?;
     chain_reads::cell(
         txn,
         ARCHIVAL_R_MARKET,
@@ -361,7 +396,9 @@ pub(super) fn r_market<T: ReadTables>(
 pub(super) fn sigma_work<T: ReadTables>(
     txn: &T,
     epoch: SettlementEpoch,
+    floor: EpochFloor<Claimable>,
 ) -> Result<Option<SigmaWorkMilli>, ReadFault> {
+    kept(SIGMA_WORK, epoch, floor)?;
     chain_reads::cell(txn, ARCHIVAL_SIGMA_WORK, epoch.to_raw(), SIGMA_WORK)
 }
 
@@ -371,7 +408,9 @@ pub(super) fn sigma_work<T: ReadTables>(
 pub(super) fn budget<T: ReadTables>(
     txn: &T,
     epoch: SettlementEpoch,
+    floor: EpochFloor<Claimable>,
 ) -> Result<Option<AtomicUnits>, ReadFault> {
+    kept(BUDGET, epoch, floor)?;
     chain_reads::cell(txn, ARCHIVAL_BUDGET, epoch.to_raw(), BUDGET)
 }
 
@@ -440,7 +479,9 @@ pub(super) fn slash_applied<T: ReadTables>(
     persona: &PCanonicalId,
     shard: ShardId,
     epoch: SettlementEpoch,
+    floor: EpochFloor<Settling>,
 ) -> Result<bool, ReadFault> {
+    kept(SLASH_APPLIED, epoch, floor)?;
     Ok(txn
         .table(ARCHIVAL_SLASH_APPLIED)?
         .get(SlashAppliedKey::new(*persona, shard, epoch).key())?
@@ -472,7 +513,9 @@ pub(super) fn settlement_row<T: ReadTables>(
     persona: &PCanonicalId,
     shard: ShardId,
     epoch: SettlementEpoch,
+    floor: EpochFloor<Claimable>,
 ) -> Result<Option<SettlementRow>, ReadFault> {
+    kept(SETTLEMENT, epoch, floor)?;
     chain_reads::cell(
         txn,
         ARCHIVAL_SETTLEMENT,
@@ -487,7 +530,9 @@ pub(super) fn settlement_row<T: ReadTables>(
 pub(super) fn issued_draws<T: ReadTables>(
     txn: &T,
     epoch: SettlementEpoch,
+    floor: EpochFloor<Settling>,
 ) -> Result<Vec<IndexedDraw>, ReadFault> {
+    kept(ISSUED_DRAW, epoch, floor)?;
     let table = txn.table(ARCHIVAL_ISSUED_DRAW)?;
     let mut out = Vec::new();
     for row in table.range(IssuedDrawKey::epoch(epoch))? {
@@ -514,7 +559,9 @@ pub(super) fn issued_draws<T: ReadTables>(
 pub(super) fn issued_digest<T: ReadTables>(
     txn: &T,
     epoch: SettlementEpoch,
+    floor: EpochFloor<Settling>,
 ) -> Result<IssuedDigest, ReadFault> {
+    kept(ISSUED_DIGEST, epoch, floor)?;
     chain_reads::cell(txn, ARCHIVAL_ISSUED_DIGEST, epoch.to_raw(), ISSUED_DIGEST)
         .map(Option::unwrap_or_default)
 }
@@ -533,7 +580,11 @@ pub(super) fn served_at<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
     epochs: &BTreeSet<SettlementEpoch>,
+    floor: EpochFloor<Claimable>,
 ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, ReadFault> {
+    if let Some(&lowest) = epochs.first() {
+        kept(SETTLEMENT, lowest, floor)?;
+    }
     let mut out = BTreeMap::new();
     if epochs.is_empty() {
         return Ok(out);
@@ -587,7 +638,9 @@ pub(super) fn block_draws<T: ReadTables>(
 pub(super) fn drawable_digest<T: ReadTables>(
     txn: &T,
     epoch: SettlementEpoch,
+    floor: EpochFloor<Settling>,
 ) -> Result<Option<DrawableDigest>, ReadFault> {
+    kept(DRAWABLE_DIGEST, epoch, floor)?;
     chain_reads::cell(
         txn,
         ARCHIVAL_DRAWABLE_DIGEST,
@@ -603,7 +656,9 @@ pub(super) fn drawable_digest<T: ReadTables>(
 pub(super) fn complete_trees<T: ReadTables>(
     txn: &T,
     epoch: SettlementEpoch,
+    floor: EpochFloor<Claimable>,
 ) -> Result<Option<CompleteTreeSet>, ReadFault> {
+    kept(COMPLETE_TREES, epoch, floor)?;
     chain_reads::cell(txn, ARCHIVAL_COMPLETE_TREES, epoch.to_raw(), COMPLETE_TREES)
 }
 

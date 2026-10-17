@@ -50,7 +50,7 @@
 
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Candidate, FakechainSchedule, RuleSet, SlashLogFloor};
+use shekyl_chain_rules::{Candidate, EpochFloor, FakechainSchedule, RuleSet, SlashLogFloor};
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, ShardId, SHARD_LENGTH};
 use shekyl_wire::{Ct, Transaction};
 
@@ -2527,5 +2527,360 @@ fn a_deeper_undo_retention_moves_the_undo_floor_and_not_the_slash_floor() {
         "and not the slash floor's: the cap is the rule set's"
     );
     assert_eq!(slash_rows(&store), vec![(floor, 0)]);
+    cleanup(&path);
+}
+
+// ---------------------------------------------------------------------------
+// The per-epoch retirement (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`)
+// ---------------------------------------------------------------------------
+
+/// The boundary whose batch first retires a claimable row under the window
+/// pair: `(B − 1) − W = 2`. Every family's floor is above zero there.
+const EPOCH_RETIRING_BOUNDARY: u64 = (shekyl_archival_retention::MAX_CLAIM_AGE_W + 3) * WINDOW_SEB;
+
+/// Each family's floor at that boundary, as the rule set states it.
+fn epoch_floors_at(boundary: u64) -> super::prune::EpochFloors {
+    let at = BlockHeight::from_raw(boundary);
+    let schedule = WINDOW_RULES.settlement_schedule();
+    super::prune::EpochFloors {
+        claimable: EpochFloor::at_boundary(at, schedule),
+        settling: EpochFloor::at_boundary(at, schedule),
+        pricing: EpochFloor::at_boundary(at, schedule),
+    }
+}
+
+/// The epochs a `u64`-keyed table holds, ascending.
+fn epochs_of<V: redb::Value + 'static>(
+    store: &ChainStore,
+    table: redb::TableDefinition<'static, u64, V>,
+) -> Vec<u64> {
+    let snap = store.begin_read().expect("read");
+    let table = snap.open_table(table).expect("table");
+    table
+        .range::<u64>(..)
+        .expect("range")
+        .map(|item| item.expect("row").0.value())
+        .collect()
+}
+
+/// The epochs `archival_settlement`, `archival_slash_applied`,
+/// `archival_issued_draw` and `archival_r_market` hold, each ascending.
+fn keyed_epochs(store: &ChainStore) -> [Vec<u64>; 4] {
+    let snap = store.begin_read().expect("read");
+    let mut settlement: Vec<u64> = snap
+        .open_table(crate::schema::ARCHIVAL_SETTLEMENT)
+        .expect("table")
+        .iter()
+        .expect("iter")
+        .map(|item| item.expect("row").0.value().2)
+        .collect();
+    let mut applied: Vec<u64> = snap
+        .open_table(crate::schema::ARCHIVAL_SLASH_APPLIED)
+        .expect("table")
+        .iter()
+        .expect("iter")
+        .map(|item| item.expect("row").0.value().2)
+        .collect();
+    let mut issued: Vec<u64> = snap
+        .open_table(crate::schema::ARCHIVAL_ISSUED_DRAW)
+        .expect("table")
+        .iter()
+        .expect("iter")
+        .map(|item| item.expect("row").0.value().0)
+        .collect();
+    let mut priced: Vec<u64> = snap
+        .open_table(crate::schema::ARCHIVAL_R_MARKET)
+        .expect("table")
+        .iter()
+        .expect("iter")
+        .map(|item| item.expect("row").0.value().1)
+        .collect();
+    for v in [&mut settlement, &mut applied, &mut issued, &mut priced] {
+        v.sort_unstable();
+    }
+    [settlement, applied, issued, priced]
+}
+
+/// Each per-epoch table retires at its family's floor (`SO-D12h`, §17): at
+/// the first boundary that retires a claimable row, every family loses the
+/// epochs below its floor and keeps the one at it. The rows the chain's
+/// own passes and closes wrote (`Σwork`, the complete-tree sets, the
+/// budgets) start at the claimable floor afterwards; the rows planted on
+/// either side of each floor keep only the side at or above it. A read
+/// below a family's floor is SI-29, with the table and both epochs in it;
+/// a read at the floor answers. Then a pop across the boundary and a
+/// different block reconnected: nothing comes back (the retirement is not
+/// journaled), and the batch re-derives the same floors.
+///
+/// **Falsifiers:** delete `retire_epoch_rows` and the first table assertion
+/// fails with every row intact; delete the `kept` check in
+/// `archival_reads` and the reads below the floor answer `None` or empty —
+/// "never written" for rows that were.
+#[test]
+fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
+    use crate::codec::{IssuedDigest, IssuedDraw, Present, RMarket, SettlementRow};
+    use crate::ids::{IssuedDrawKey, SettlementKey, SlashAppliedKey};
+    use crate::schema::{
+        ARCHIVAL_BUDGET, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
+        ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK,
+        ARCHIVAL_SLASH_APPLIED,
+    };
+    use shekyl_types::archival::DrawableDigest;
+    use shekyl_types::SettlementEpoch;
+
+    let path = tmp("epoch-retire");
+    let boundary = EPOCH_RETIRING_BOUNDARY;
+    let floors = epoch_floors_at(boundary);
+    let raw = |f: Option<SettlementEpoch>| f.expect("a floor above zero").to_raw();
+    let (claim, settle, price) = (
+        raw(floors.claimable.kept_from()),
+        raw(floors.settling.kept_from()),
+        raw(floors.pricing.kept_from()),
+    );
+    assert_eq!((claim, settle, price), (2, 27, 26), "W = 26, k = 1, B = 29");
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+
+    let p = persona(0x61);
+    let s0 = ShardId::from_raw(0);
+    let e = SettlementEpoch::from_raw;
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_SETTLEMENT).expect("t");
+        for epoch in [claim - 1, claim] {
+            t.insert(
+                SettlementKey::new(p, s0, e(epoch)).key(),
+                SettlementRow::settle(2, 3)
+                    .expect("a row")
+                    .encoded()
+                    .as_encoded(),
+            )
+            .expect("insert");
+        }
+        let mut t = txn.open_table(ARCHIVAL_SLASH_APPLIED).expect("t");
+        for epoch in [settle - 1, settle] {
+            t.insert(SlashAppliedKey::new(p, s0, e(epoch)).key(), Present)
+                .expect("insert");
+        }
+        let mut t = txn.open_table(ARCHIVAL_ISSUED_DRAW).expect("t");
+        for epoch in [settle - 1, settle] {
+            let draw = IssuedDraw {
+                revealed_at: BlockHeight::from_raw(1),
+                passed: true,
+            };
+            t.insert(
+                IssuedDrawKey::new(e(epoch), p, s0, BlockHeight::ZERO, 0).key(),
+                draw.encoded().as_encoded(),
+            )
+            .expect("insert");
+        }
+        let mut t = txn.open_table(ARCHIVAL_ISSUED_DIGEST).expect("t");
+        for epoch in [settle - 1, settle] {
+            t.insert(epoch, IssuedDigest::ZERO.encoded().as_encoded())
+                .expect("insert");
+        }
+        let mut t = txn.open_table(ARCHIVAL_DRAWABLE_DIGEST).expect("t");
+        for epoch in [settle - 1, settle] {
+            t.insert(
+                epoch,
+                DrawableDigest::from_bytes([7; 32]).encoded().as_encoded(),
+            )
+            .expect("insert");
+        }
+        let mut t = txn.open_table(ARCHIVAL_R_MARKET).expect("t");
+        for epoch in [price - 1, price] {
+            t.insert((0, epoch), RMarket::from_raw(1).encoded().as_encoded())
+                .expect("insert");
+        }
+    });
+
+    let store = window_store(&path, WINDOW_CAP);
+    let before = epochs_of(&store, ARCHIVAL_SIGMA_WORK);
+    assert_eq!(
+        before.first(),
+        Some(&(claim - 1)),
+        "every pass wrote its Σwork, and the boundary before retired below claim − 1"
+    );
+    let first = b
+        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+        .remove(0);
+    let pruned = first.pruned.expect("a boundary");
+    assert_eq!(
+        pruned.epochs, floors,
+        "the batch's floors are the rule set's"
+    );
+
+    let retained = |store: &ChainStore| {
+        (
+            epochs_of(store, ARCHIVAL_SIGMA_WORK),
+            epochs_of(store, ARCHIVAL_COMPLETE_TREES),
+            epochs_of(store, ARCHIVAL_BUDGET),
+            epochs_of(store, ARCHIVAL_ISSUED_DIGEST),
+            epochs_of(store, ARCHIVAL_DRAWABLE_DIGEST),
+            keyed_epochs(store),
+        )
+    };
+    let after = retained(&store);
+    assert_eq!(
+        after.0.first(),
+        Some(&claim),
+        "Σwork kept from the claimable floor"
+    );
+    assert_eq!(
+        after.0,
+        before[1..],
+        "exactly the one epoch below the floor went"
+    );
+    assert_eq!(after.1, after.0, "a complete-tree set beside every Σwork");
+    assert_eq!(
+        after.2.first(),
+        Some(&claim),
+        "budgets kept from the claimable floor"
+    );
+    assert_eq!(after.3, vec![settle]);
+    assert_eq!(after.4, vec![settle]);
+    assert_eq!(
+        after.5,
+        [vec![claim], vec![settle], vec![settle], vec![price]],
+        "settlement, slash-applied, issued draws, R_market: each at its floor"
+    );
+
+    // The reads, with the floors the batch used.
+    let snap = store.begin_read().expect("read");
+    let below = |err: StoreError, table: &str, asked: u64, floor: u64| {
+        assert!(
+            matches!(
+                err,
+                StoreError::InvariantViolated(StoreInvariant::EpochReadBelowFloor {
+                    table: t, asked: a, floor: f
+                }) if t == table && a == e(asked) && f == e(floor)
+            ),
+            "{table} at {asked} is SI-29, not an absent row: {err}"
+        );
+    };
+    assert!(snap
+        .sigma_work(e(claim), floors.claimable)
+        .expect("at the floor")
+        .is_some());
+    below(
+        snap.sigma_work(e(claim - 1), floors.claimable).unwrap_err(),
+        "archival_sigma_work",
+        claim - 1,
+        claim,
+    );
+    below(
+        snap.complete_trees(e(claim - 1), floors.claimable)
+            .unwrap_err(),
+        "archival_complete_trees",
+        claim - 1,
+        claim,
+    );
+    below(
+        snap.settlement_row(&p, s0, e(claim - 1), floors.claimable)
+            .unwrap_err(),
+        "archival_settlement",
+        claim - 1,
+        claim,
+    );
+    assert_eq!(
+        snap.issued_draws(e(settle), floors.settling)
+            .expect("at the floor")
+            .len(),
+        1
+    );
+    below(
+        snap.issued_draws(e(settle - 1), floors.settling)
+            .unwrap_err(),
+        "archival_issued_draw",
+        settle - 1,
+        settle,
+    );
+    below(
+        snap.issued_digest(e(settle - 1), floors.settling)
+            .unwrap_err(),
+        "archival_issued_digest",
+        settle - 1,
+        settle,
+    );
+    below(
+        snap.slash_applied(&p, s0, e(settle - 1), floors.settling)
+            .unwrap_err(),
+        "archival_slash_applied",
+        settle - 1,
+        settle,
+    );
+    assert_eq!(
+        snap.r_market(s0, e(price), floors.pricing)
+            .expect("at the floor"),
+        Some(RMarket::from_raw(1))
+    );
+    below(
+        snap.r_market(s0, e(price - 1), floors.pricing).unwrap_err(),
+        "archival_r_market",
+        price - 1,
+        price,
+    );
+    drop(snap);
+
+    // Across the boundary and back, on another block.
+    let popped_hash = *b.hashes().last().expect("the boundary's block");
+    let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+    assert_eq!(out.map(|popped| popped.height.to_raw()), Ok(boundary));
+    b.forget(1);
+    assert_eq!(
+        retained(&store),
+        after,
+        "a pop restores no retired row: the retirement is not journaled"
+    );
+    let again = b
+        .connect_sized(&store, boundary, boundary, 0, |_| vec![credit(1_000)])
+        .remove(0);
+    assert_ne!(*b.hashes().last().expect("re-connected"), popped_hash);
+    assert_eq!(
+        again.pruned.expect("the boundary fires again").epochs,
+        floors
+    );
+    assert_eq!(retained(&store), after, "the same, already empty, ranges");
+    cleanup(&path);
+}
+
+/// A session that stubs a per-epoch table's family does not retire it
+/// (`ARW-9`), as the slash log: `R_market` planted below its floor stays
+/// under a stubbed `RMarket`, while the families the session applies are
+/// retired as ever.
+#[test]
+fn a_stubbed_per_epoch_family_is_not_retired_at_the_boundary() {
+    use crate::codec::RMarket;
+    use crate::schema::{ARCHIVAL_R_MARKET, ARCHIVAL_SIGMA_WORK};
+
+    let path = tmp("epoch-retire-stub");
+    let boundary = EPOCH_RETIRING_BOUNDARY;
+    let floors = epoch_floors_at(boundary);
+    let price = floors.pricing.kept_from().expect("a floor").to_raw();
+    let claim = floors.claimable.kept_from().expect("a floor").to_raw();
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+    plant(&path, |txn| {
+        let mut t = txn.open_table(ARCHIVAL_R_MARKET).expect("t");
+        t.insert((0, price - 1), RMarket::from_raw(1).encoded().as_encoded())
+            .expect("insert");
+    });
+    let policy = ApplyPolicy::stubbed(&[crate::apply_policy::ArchivalFamily::RMarket])
+        .expect("a named family");
+    let horizons = Horizons::new(
+        WINDOW_RULES.settlement_schedule().blocks(),
+        BlockCount::from_raw(WINDOW_CAP),
+        WINDOW_RULES.reorg_cap(),
+    )
+    .expect("cap ≤ retention < epoch");
+    let store = ChainStore::with_horizons(&path, policy, horizons).expect("reopen stubbed");
+    b.connect_sized(&store, boundary, boundary, 0, |_| Vec::new());
+    assert_eq!(
+        keyed_epochs(&store)[3],
+        vec![price - 1],
+        "a stubbed family's rows below its floor stay"
+    );
+    assert_eq!(
+        epochs_of(&store, ARCHIVAL_SIGMA_WORK).first(),
+        Some(&claim),
+        "an applied family is retired"
+    );
     cleanup(&path);
 }

@@ -70,6 +70,7 @@ use crate::rules::tx::TxClass;
 use crate::rules::{Rule, TxContext};
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::{ChainView, Tip};
+use crate::{EpochFloor, Pricing};
 
 /// CEN-J4: the persona a serve-credit vin names has a bond record on the
 /// view. The C++'s `get_archival_bond_hybrid_pubkey` miss; the fold's L7
@@ -505,7 +506,14 @@ fn holding_admissible<'id, V: ChainView<'id>>(
         if !closed_and_final(view, shard, parent, rule_set.reorg_cap())? {
             return Ok(false);
         }
-        let Some(r_market) = view.r_market(shard, settled).map_err(ViewRead::View)? else {
+        let Some(r_market) = view
+            .r_market(
+                shard,
+                settled,
+                EpochFloor::<Pricing>::under(connecting, schedule),
+            )
+            .map_err(ViewRead::View)?
+        else {
             return Ok(false);
         };
         // The close the predicate found: closed through the parent, so the

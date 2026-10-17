@@ -75,6 +75,7 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::BlockHeader;
 
 use crate::tree_growth::TreeFrontier;
+use crate::{Claimable, EpochFloor, Pricing, Settling};
 
 /// The two weights the store records for one block (`block_info.weight`,
 /// `block_info.long_term_weight`) — what CEN-G6's two rolling medians are
@@ -562,21 +563,36 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// keeps the two apart; what a rule does with `None` is that rule's to
     /// say (`SAR-Q6`). CEN-J15's admission operand, CEN-J25's work
     /// arithmetic.
+    ///
+    /// `floor` is the pricing family's floor at the caller's connecting
+    /// height ([`EpochFloor`]); a read below it is refused (SI-29), never
+    /// answered `None` — the rows below it may have been retired.
     fn r_market(
         &self,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Pricing>,
     ) -> Result<Option<RMarket>, Self::Fault>;
 
     /// **A7.** The frozen `Σwork(E)` for `epoch`, in milli-units, or `None`
     /// for an epoch its slash pass has not gathered (SAR-8; `SO-D11`). Its
     /// existence is what lets a claim cite the epoch (CEN-J23), and it is
     /// the stored denominator CEN-J25 compares its recompute with.
-    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, Self::Fault>;
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-29).
+    fn sigma_work(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SigmaWorkMilli>, Self::Fault>;
 
     /// **A8.** The frozen `budget(E)` for `epoch`, or `None` for an epoch
     /// that never closed. CEN-J23: every claimed epoch must have one.
-    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, Self::Fault>;
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-29).
+    fn budget(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<AtomicUnits>, Self::Fault>;
 
     /// **A9.** The slash watermark — the latest settlement epoch whose
     /// slashes have been applied — or `None` when no epoch has settled yet
@@ -604,11 +620,14 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// applied — the scan's dedup, read before anything else about the
     /// triple (`archival_challenge_failed_at_height`'s first probe,
     /// `db_lmdb.cpp:5471`). A set membership, so `bool` and never `Option`.
+    ///
+    /// `floor`: the settling family's ([`EpochFloor`]; SI-29).
     fn slash_applied(
         &self,
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<bool, Self::Fault>;
 
     /// **A13.** The staker inflow accrued so far in `epoch` while it is
@@ -628,11 +647,15 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// (`archival_settlement`). `None` is a pair no draw was issued to in
     /// that epoch, or an epoch the slash pass has not settled: **never a
     /// miss**. A caller that counts misses reads the row's outcome.
+    ///
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-29) — the
+    /// failure window reads back to it.
     fn settlement_row(
         &self,
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
     ) -> Result<Option<SettlementRow>, Self::Fault>;
 
     /// **A15.** Every draw issued in `epoch`, in `(persona, shard, issuing
@@ -640,12 +663,25 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// operand: one pair's rows are adjacent and already in the `(h, j)`
     /// order the selection is defined over, and the whole answer is what
     /// the epoch's digest (A16) covers.
-    fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, Self::Fault>;
+    ///
+    /// `floor`: the settling family's ([`EpochFloor`]; SI-29).
+    fn issued_draws(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, Self::Fault>;
 
     /// **A16.** The running digest of the draws issued in `epoch`, as
     /// folded when each was indexed. [`IssuedDigest::ZERO`] for an epoch
     /// with none: the digest of no draws.
-    fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, Self::Fault>;
+    ///
+    /// `floor`: the settling family's ([`EpochFloor`]; SI-29). Below it
+    /// the read is refused, never [`IssuedDigest::ZERO`].
+    fn issued_digest(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<IssuedDigest, Self::Fault>;
 
     /// **A17.** The shards `persona`'s settlement rows say were Served at
     /// each of `epochs`, ascending per epoch. An epoch with no Served shard
@@ -662,10 +698,14 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// The table is keyed `(P, shard, E)` (`SO-D2`). A store hops the
     /// persona's shards once and point-reads each requested epoch. CEN-J23
     /// asks once per bonded persona, for every epoch the claim cites.
+    ///
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-29); every
+    /// requested epoch must be at or above it.
     fn served_at(
         &self,
         persona: &PCanonicalId,
         epochs: &BTreeSet<SettlementEpoch>,
+        floor: EpochFloor<Claimable>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Self::Fault>;
 
     /// **A18.** What the secret draw's count rule recorded for the block at
@@ -680,9 +720,14 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// epoch opened (`SO-D10g`). `None` for an epoch whose set was never
     /// recorded. Every 32-byte value is a digest: an all-zero one is not
     /// an absent one.
+    ///
+    /// `floor`: the settling family's ([`EpochFloor`]; SI-29), the floor
+    /// of its ruled reader, the pass's re-walk compare (`SO-D10g`), which
+    /// is not built yet.
     fn drawable_digest(
         &self,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, Self::Fault>;
 
     /// **A20.** The personas `epoch`'s slash pass excluded from the
@@ -692,9 +737,12 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// re-gather takes every bond's complete-tree flag from it and never
     /// from the record, which may have stopped holding a complete tree
     /// since the pass.
+    ///
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-29).
     fn complete_trees(
         &self,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
     ) -> Result<Option<CompleteTreeSet>, Self::Fault>;
 }
 
@@ -789,19 +837,29 @@ macro_rules! archival_reads {
             (persona, shard, epoch);
             (shekyl_types::archival::PassCount::ZERO));
         $crate::archival_reads!(@emit $policy; r_market;
-            (shard: shekyl_types::ShardId, epoch: shekyl_types::SettlementEpoch);
+            (
+                shard: shekyl_types::ShardId,
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Pricing>
+            );
             (::core::option::Option<shekyl_types::archival::RMarket>);
-            (shard, epoch);
+            (shard, epoch, floor);
             (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; sigma_work;
-            (epoch: shekyl_types::SettlementEpoch);
+            (
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Claimable>
+            );
             (::core::option::Option<shekyl_types::archival::SigmaWorkMilli>);
-            (epoch);
+            (epoch, floor);
             (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; budget;
-            (epoch: shekyl_types::SettlementEpoch);
+            (
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Claimable>
+            );
             (::core::option::Option<shekyl_units::AtomicUnits>);
-            (epoch);
+            (epoch, floor);
             (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; last_settled_slash_epoch;
             ();
@@ -817,10 +875,11 @@ macro_rules! archival_reads {
             (
                 persona: &shekyl_types::PCanonicalId,
                 shard: shekyl_types::ShardId,
-                epoch: shekyl_types::SettlementEpoch
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Settling>
             );
             (bool);
-            (persona, shard, epoch);
+            (persona, shard, epoch, floor);
             (false));
         $crate::archival_reads!(@emit $policy; budget_accruing;
             (epoch: shekyl_types::SettlementEpoch);
@@ -831,25 +890,33 @@ macro_rules! archival_reads {
             (
                 persona: &shekyl_types::PCanonicalId,
                 shard: shekyl_types::ShardId,
-                epoch: shekyl_types::SettlementEpoch
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Claimable>
             );
             (::core::option::Option<shekyl_types::archival::SettlementRow>);
-            (persona, shard, epoch);
+            (persona, shard, epoch, floor);
             (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; issued_draws;
-            (epoch: shekyl_types::SettlementEpoch);
+            (
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Settling>
+            );
             (::std::vec::Vec<shekyl_types::archival::IndexedDraw>);
-            (epoch);
+            (epoch, floor);
             (::std::vec::Vec::new()));
         $crate::archival_reads!(@emit $policy; issued_digest;
-            (epoch: shekyl_types::SettlementEpoch);
+            (
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Settling>
+            );
             (shekyl_types::archival::IssuedDigest);
-            (epoch);
+            (epoch, floor);
             (shekyl_types::archival::IssuedDigest::ZERO));
         $crate::archival_reads!(@emit $policy; served_at;
             (
                 persona: &shekyl_types::PCanonicalId,
-                epochs: &::std::collections::BTreeSet<shekyl_types::SettlementEpoch>
+                epochs: &::std::collections::BTreeSet<shekyl_types::SettlementEpoch>,
+                floor: $crate::EpochFloor<$crate::Claimable>
             );
             (
                 ::std::collections::BTreeMap<
@@ -857,7 +924,7 @@ macro_rules! archival_reads {
                     ::std::vec::Vec<shekyl_types::ShardId>,
                 >
             );
-            (persona, epochs);
+            (persona, epochs, floor);
             (::std::collections::BTreeMap::new()));
         $crate::archival_reads!(@emit $policy; block_draws;
             (height: shekyl_types::BlockHeight);
@@ -865,14 +932,20 @@ macro_rules! archival_reads {
             (height);
             (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; drawable_digest;
-            (epoch: shekyl_types::SettlementEpoch);
+            (
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Settling>
+            );
             (::core::option::Option<shekyl_types::archival::DrawableDigest>);
-            (epoch);
+            (epoch, floor);
             (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; complete_trees;
-            (epoch: shekyl_types::SettlementEpoch);
+            (
+                epoch: shekyl_types::SettlementEpoch,
+                floor: $crate::EpochFloor<$crate::Claimable>
+            );
             (::core::option::Option<shekyl_types::archival::CompleteTreeSet>);
-            (epoch);
+            (epoch, floor);
             (::core::option::Option::None));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
@@ -882,34 +955,40 @@ macro_rules! archival_reads {
         }
     };
     // The planted reads: matched before the generic `planted` arm below,
+    // and reading past their floors — the floors are the store's to
+    // compare, and a planted view keeps every row it was given.
     // so only `r_market`, `sigma_work`, `budget` and
     // `last_settled_slash_epoch` read their fields and every other read is
     // `empty`'s.
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; r_market; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; r_market; ($($params:tt)*); ($ok:ty); ($shard:expr, $epoch:expr, $floor:expr); ($empty:expr)) => {
         fn r_market(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
-            ::core::result::Result::Ok(self.$($price).+.get(&($($arg),*)).copied())
+            let _ = $floor;
+            ::core::result::Result::Ok(self.$($price).+.get(&($shard, $epoch)).copied())
         }
     };
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; sigma_work; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; sigma_work; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
         fn sigma_work(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
-            ::core::result::Result::Ok(self.$($sigma).+.get(&($($arg),*)).copied())
+            let _ = $floor;
+            ::core::result::Result::Ok(self.$($sigma).+.get(&$epoch).copied())
         }
     };
     // A planted `Σwork(E)` is a settled epoch, and the pass froze its
     // complete-tree set beside it: no planted view holds a complete tree,
     // so the set is empty exactly where a `Σwork` is planted (SI-28).
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; complete_trees; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; complete_trees; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
         fn complete_trees(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            let _ = $floor;
             ::core::result::Result::Ok(
                 self.$($sigma).+
-                    .contains_key(&($($arg),*))
+                    .contains_key(&$epoch)
                     .then(shekyl_types::archival::CompleteTreeSet::default),
             )
         }
     };
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; budget; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; budget; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
         fn budget(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
-            ::core::result::Result::Ok(self.$($budget).+.get(&($($arg),*)).copied())
+            let _ = $floor;
+            ::core::result::Result::Ok(self.$($budget).+.get(&$epoch).copied())
         }
     };
     (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; last_settled_slash_epoch; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
