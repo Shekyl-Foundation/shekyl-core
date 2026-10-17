@@ -368,6 +368,32 @@ fn handshake_frame() -> Vec<u8> {
     response(COMMAND_HANDSHAKE, &body.store().expect("encode"))
 }
 
+/// The first socket id a dial made after this call can take. Socket ids are
+/// the process's (`process_sockets`; a new binding does not mint them
+/// again), so a test cannot assume its first dial is id 1: the sockets of
+/// tests that ran before it come first. A probe socket, opened and closed
+/// here, says where the counter stands.
+fn first_unused_socket_id(now: Tick) -> u64 {
+    let probe = crate::seam_ffi::process_sockets()
+        .open_clearnet(IpAddr::V4(Ipv4Addr::new(11, 17, 0, 1)), now)
+        .expect("a probe socket");
+    let id = probe.id().get();
+    let _closed = probe.close(CloseCause::new(CloseKind::LocalClose));
+    id.saturating_add(1)
+}
+
+/// How far past `from` [`answer_from`] looks: sockets another test opens in
+/// the meantime take ids too.
+const ANSWER_WINDOW: u64 = 64;
+
+/// Inject `frame` into the first channel this hub holds open in
+/// `from..from + ANSWER_WINDOW`, the way the peer's reader would. The id
+/// answered, or `None` when no channel there is open yet.
+fn answer_from(hub: &Hub, from: u64, frame: &[u8]) -> Option<u64> {
+    (from..from.saturating_add(ANSWER_WINDOW))
+        .find(|&n| SocketId::from_ffi(n).is_some_and(|id| hub.inject(id, frame.to_vec())))
+}
+
 /// Unbind on the way out, including a panic. A timed-out deadlock exits
 /// the process instead, so the suite does not wait on a non-daemon thread.
 struct UnbindOnDrop;
@@ -406,21 +432,13 @@ fn a_kept_session_closed_from_cxx_returns_and_leaves_the_kept_count() {
         "the address entered gray"
     );
 
-    // The peer answers the handshake as soon as the channel is open. Ids are
-    // the process's, so a probe socket says where this dial's id starts.
-    let probe_socket = crate::seam_ffi::process_sockets()
-        .open_clearnet(IpAddr::V4(Ipv4Addr::new(11, 17, 0, 1)), dialer.hub().now())
-        .expect("a probe socket");
-    let probe = probe_socket.id().get();
-    let _probe_closed = probe_socket.close(CloseCause::new(CloseKind::LocalClose));
+    // The peer answers the handshake as soon as the channel is open.
     let hub = dialer.hub().clone();
+    let from = first_unused_socket_id(hub.now());
     let frame = handshake_frame();
     let answer = thread::spawn(move || {
         for _ in 0..5_000 {
-            let answered = (1..=16u64)
-                .filter_map(|ahead| SocketId::from_ffi(probe.saturating_add(ahead)))
-                .any(|id| hub.inject(id, frame.clone()));
-            if answered {
+            if answer_from(&hub, from, &frame).is_some() {
                 return;
             }
             thread::sleep(Duration::from_millis(1));
@@ -526,26 +544,16 @@ fn the_list_paths_and_closes_do_not_deadlock() {
         let hub = hub.clone();
         let dial_done = Arc::clone(&dial_done);
         let done = done_tx.clone();
+        // Ids are the process's: start where the counter stands, not at 1.
+        // A dial whose handshake is never answered blocks for good, since
+        // the loopback has no gap.
+        let mut next = first_unused_socket_id(hub.now());
         thread::spawn(move || {
-            let mut next = 1u64;
             while !dial_done.load(Ordering::Acquire) {
-                let Some(id) = SocketId::from_ffi(next) else {
-                    break;
-                };
-                if hub.inject(id, frame.clone()) {
-                    next = next.saturating_add(1);
-                    continue;
+                match answer_from(&hub, next, &frame) {
+                    Some(answered) => next = answered.saturating_add(1),
+                    None => thread::sleep(Duration::from_millis(1)),
                 }
-                // A finished confirm drops the session, so inject fails on
-                // that id while the next dial has already opened the one
-                // after it.
-                if let Some(ahead) = SocketId::from_ffi(next.saturating_add(1)) {
-                    if hub.inject(ahead, frame.clone()) {
-                        next = next.saturating_add(2);
-                        continue;
-                    }
-                }
-                thread::sleep(Duration::from_millis(1));
             }
             let _sent = done.send(());
         })
