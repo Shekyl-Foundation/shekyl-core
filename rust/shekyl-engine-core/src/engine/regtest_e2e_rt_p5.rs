@@ -181,23 +181,17 @@ struct Built {
 }
 
 /// Build `request` from `wallet`, mining to `mine_to` while the outputs the
-/// wallet would select are not yet spendable at the reference block.
-///
-/// Two refusals mean "wait a block": the wallet's own
-/// `OutputNotYetSpendable`, and an output its gate admitted that the tree at
-/// the reference block does not hold yet (`OutputNotDrained`, surfacing as
-/// `CurveTreeUnavailable`). The second is a wallet defect found by this
-/// harness's dry run (registration, "Dry run"): the gate should have
-/// classified that output as not yet spendable. Each one is counted in
-/// `drain_retries` and written to `run.json`, so the defect stays visible in
-/// every run rather than being absorbed.
+/// wallet would select are not yet spendable at the reference block (the
+/// wallet's `OutputNotYetSpendable`). Any other refusal fails the run: an
+/// output the wallet's gate admits but the tree at the reference does not
+/// hold (`CurveTreeUnavailable` with `OutputNotDrained`) is the defect this
+/// harness's dry run found and this PR fixed (registration, "Dry run").
 async fn build(
     daemon: &RegtestDaemon,
     wallet: &Arc<RwLock<Engine<SoloSigner>>>,
     who: &'static str,
     request: &TxRequest,
     mine_to: &str,
-    drain_retries: &mut Vec<(&'static str, u64, String)>,
 ) -> Built {
     for _ in 0..48 {
         let attempt = wallet.read().await.build_pending_tx_async(request).await;
@@ -217,13 +211,6 @@ async fn build(
                 };
             }
             Err(super::super::error::SendError::OutputNotYetSpendable { .. }) => {
-                daemon.generate_blocks(1, mine_to).await;
-                refresh(wallet).await;
-            }
-            Err(super::super::error::SendError::CurveTreeUnavailable { detail })
-                if detail.contains("OutputNotDrained") =>
-            {
-                drain_retries.push((who, daemon.height().await, detail));
                 daemon.generate_blocks(1, mine_to).await;
                 refresh(wallet).await;
             }
@@ -300,7 +287,6 @@ async fn run_cell(cell: &Cell) {
         "the funder's balance is too small for the fan-out"
     );
     let mut built = Vec::new();
-    let mut drain_retries = Vec::new();
     for _ in 0..cell.fanout_txs {
         let request = TxRequest {
             recipients: (0..FANOUT_RECIPIENTS)
@@ -312,15 +298,7 @@ async fn run_cell(cell: &Cell) {
                 .collect(),
             priority: FeePriority::Standard,
         };
-        let mut tx = build(
-            &daemon,
-            &funder,
-            "funder",
-            &request,
-            &funder_address,
-            &mut drain_retries,
-        )
-        .await;
+        let mut tx = build(&daemon, &funder, "funder", &request, &funder_address).await;
         eprintln!(
             "rt-p5: fan-out {}: {} in, {} out, {} bytes, at height {}",
             built.len(),
@@ -376,15 +354,7 @@ async fn run_cell(cell: &Cell) {
                 .collect(),
             priority: FeePriority::Standard,
         };
-        let mut tx = build(
-            &daemon,
-            &wallet,
-            "wallet",
-            &request,
-            &funder_address,
-            &mut drain_retries,
-        )
-        .await;
+        let mut tx = build(&daemon, &wallet, "wallet", &request, &funder_address).await;
         assert_eq!(
             (tx.inputs, tx.outputs),
             (inputs, outputs),
@@ -448,15 +418,7 @@ async fn run_cell(cell: &Cell) {
     }
 
     check_subjects(&messages, &built);
-    write_outputs(
-        &out,
-        cell,
-        &messages,
-        &built,
-        &depth,
-        chain_height,
-        &drain_retries,
-    );
+    write_outputs(&out, cell, &messages, &built, &depth, chain_height);
 }
 
 /// The gates of the registration that read the messages (rule 47: the
@@ -514,7 +476,6 @@ fn write_outputs(
     built: &[Built],
     depth: &serde_json::Value,
     chain_height: u64,
-    drain_retries: &[(&'static str, u64, String)],
 ) {
     let mut csv = String::from("cell,wallet,conn,seq,direction,label,head,body,framing,total\n");
     for m in messages {
@@ -580,14 +541,6 @@ fn write_outputs(
             "shapes": cell.shapes,
             "chain_height": chain_height,
             "curve_tree_info": depth,
-            "drain_retries": drain_retries
-                .iter()
-                .map(|(who, height, detail)| serde_json::json!({
-                    "wallet": who,
-                    "height": height,
-                    "detail": detail,
-                }))
-                .collect::<Vec<_>>(),
         }))
         .expect("encode run.json"),
     )

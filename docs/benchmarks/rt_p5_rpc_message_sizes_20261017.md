@@ -31,10 +31,12 @@ measurement ledger (the rule-21 reopen recorded in RT-O21).
 
 ## Registered before the run
 
-*Amended once, 2026-10-17, after the dry run and before any registered
-run: the traffic below now states two waits the instrument needed (step 1's
-margin and step 3's unlock wait), and how a refusal the dry run found is
-handled. "Dry run" says what forced each.*
+*Amended twice, 2026-10-17, after the dry run and before any registered
+run. First: the traffic below states two waits the instrument needed
+(step 1's margin and step 3's unlock wait). Second: the wallet defect the
+dry run found is fixed in this PR, so the refusal it produced voids a run
+instead of being waited out, and the registered run is made from the fixed
+tree. "Dry run" says what forced each.*
 
 **Subject.** The bytes a stream adapter over the channel would carry
 between the wallet's daemon client and the daemon: every HTTP/1.1
@@ -93,12 +95,10 @@ spawned regtest daemon:
 **When a build is refused for an output not yet in the tree.** The wallet
 refuses a build that would spend an output not yet spendable at the
 reference block with `OutputNotYetSpendable`; the instrument then mines one
-block and builds again, as a user waits. The dry run found a second form of
-that refusal, a wallet defect (below): an output the wallet's gate admitted
-but that the tree at the reference block does not hold yet, refused at
-assembly as `CurveTreeUnavailable` with `OutputNotDrained`. The instrument
-treats it the same way, and records each one, with its height, in the run's
-`run.json`.
+block and builds again, as a user waits. Any other refusal fails the run,
+among them `CurveTreeUnavailable` with `OutputNotDrained`: an output the
+wallet's gate admitted that the tree at the reference block does not hold,
+the defect the dry run found (below) and this PR fixes.
 
 Blocks are mined with the daemon's armed test lever `generateblocks`,
 over the harness's own connection, which is not traced: it is not a
@@ -122,6 +122,7 @@ recorded:
   `/get_transactions` and `/get_o_indexes.bin`, and every JSON-RPC request
   names its method.
 - At least one message is larger than one record's payload, 65,533 bytes.
+- No build is refused except as not yet spendable (above).
 - The fan-out block carries all four fan-out transactions; each of the
   measured wallet's spends has its registered shape, read back from the
   built transaction, and is in the block mined after it.
@@ -243,8 +244,11 @@ whose root is committed at height `H` holds only leaves matured by
 `H − 1` (`drained_through`,
 `rust/shekyl-curve-tree/src/client.rs:1551`, pinned by the CT-2 vectors),
 and the daemon agrees. So an output exactly at the boundary is selected,
-and assembly refuses it. The same comparison is in three more wallet
-paths. The fix is in this PR, with a test that reproduces the boundary.
+and assembly refuses it. The same comparison was in five more places on
+the wallet's paths: the drain projection and selection, the bond funding
+filter, the claim pre-filter and the backing set. The fix is in this PR:
+one predicate, `shekyl_curve_tree::in_tree_at_reference`, used at all of
+them, with a test that reproduces the boundary and was seen failing first.
 
 ## Results
 
