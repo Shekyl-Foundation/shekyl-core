@@ -43,6 +43,7 @@ bonded `P` service is hard to connect to its funding transaction.
 | A funding output can be swept only once its leaf is in the tree at the reference height: `spendable_height ≤ reference_height`. | `engine/backing_set.rs:156` |
 | `spendable_height = height + SPENDABLE_AGE` (10) for an ordinary output. | `shekyl-engine-state/src/transfer.rs:33-34`, `:65-71`; `shekyl-consensus/src/lib.rs:28` |
 | The wallet records the funding output's block height and its spendable height. | `shekyl-engine-state/src/pscan_state.rs:237`, `:259` |
+| The stake request sweeps only funding records the sealed P-scan has found (`engine/bond_orchestrator.rs:742-777`), and that scan covers only blocks below `claimed count − ARCHIVAL_REORG_DEPTH_BLOCKS` (720): a funding output at height `h_f` is first sweepable at tip `h_f + 720`. | `engine/pscan/task.rs:245-252`; `engine/pscan/start.rs:91-99` |
 | The delay is drawn at the request: `bond_post_offset_blocks ~ U[0, 600]`, one unbiased draw. | `engine/stake_engine/actor.rs:154-170`; `shekyl-standoff/src/draw.rs:96-98` |
 | `anchor_t0` is the daemon-claimed tip at the request. The reference is `min(synced tip, ingested tip) − REF_ANCHOR_AGE` (6). | `engine/bond_orchestrator.rs:443-461`, `:555-557` |
 | The signed bytes are sealed with `anchor_t0` and the offset; `due = anchor_t0 + offset`. | `engine/bond_orchestrator.rs:662-670`; `engine/pscan/dispatch.rs:265-272` |
@@ -68,11 +69,11 @@ bonded `P` service is hard to connect to its funding transaction.
   is measured from.
 - **For a staker who stakes as soon as funding allows, the reference
   points at the funding block.** The earliest request is at tip
-  `h_f + 16`, where `h_f` is the funding output's block:
-  `spendable_height = h_f + 10` must be at or below `tip − 6`. That post's
-  reference height is `h_f + 10`, so `reference − SPENDABLE_AGE = h_f`
-  whatever the offset. A chain-only observer reads the funding block off
-  the bond post. No product path spaces the two calls: `stake_in` and
+  `h_f + 720`, where `h_f` is the funding output's block: the sealed P-scan
+  must have covered it (§1.1). That post's reference height is `h_f + 714`,
+  so `reference − 714 = h_f`, to within one scan tick (60 s, under one
+  block), whatever the offset. A chain-only observer reads the funding
+  block off the bond post. No product path spaces the two calls: `stake_in` and
   `first_stake` are separate (`shekyl-wallet-rpc/src/staking_actions.rs:79-96`;
   the GUI calls `first_stake` alone, `shekyl-gui-wallet`
   `src-tauri/src/engine_session.rs:395`). A user who stakes as soon as
@@ -131,7 +132,7 @@ the funding transfer is an event.
 | Observer | What it sees (`T` and its channel) | Anchor precision |
 | --- | --- | --- |
 | **Chain-only** | The bond post, which names `P`. The funding transfer is an unattributable FCMP++ transfer. | None once BD-Q3 is built. Until then the reference age gives it the request height and, for an instant staker, the funding block (§1.2). |
-| **Network origin** of the principal's transfer: the ISP or first stem edge of the principal's node, a GPA-lite relay fraction, or the remote daemon and its link when the wallet does not use its own node | The funding transaction leaving the principal. It learns the transaction and so its block. | One block for an IP link to the transaction. What the default Tor posture leaves of this vantage is BD-Q4 input 2. |
+| **Network origin** of the principal's transfer: the ISP or first stem edge of the principal's node, a GPA-lite relay fraction, or the remote daemon and its link when the wallet does not use its own node | The funding transaction leaving the principal. It learns the transaction and so its block. | One block for an IP link to the transaction. What the default Tor posture leaves of this vantage is BD-Q4 input 1. |
 | **Funding counterparty**: whoever delivered the coins the principal funds `P` with (the "on-ramp witness", `ARCHIVAL_BOND_WI4_MEASUREMENT.md:4097-4099`) | Its own delivery to the principal. "The chain goes dark to the counterparty too": it does not see the principal's later transfer to `P`. | Coarse, set by the principal's own behaviour between receiving and funding. It reaches block precision only if it also holds the network-origin position. |
 
 Method note 8's "invisible to every observer the posture admits" holds for
@@ -151,7 +152,7 @@ retired: the chain still carries one attributable event, and the delay is
 a jitter against the funding anchor, not a permutation.
 
 **Reopens if** the principal's funding transfer reaches the network with
-its origin hidden from every network vantage by default. BD-Q4 input 2
+its origin hidden from every network vantage by default. BD-Q4 input 1
 records what the default does today.
 
 ### BD-Q2 — What the delay is measured from — RULED 2026-10-16
@@ -160,18 +161,25 @@ records what the default does today.
 funding can be spent into a bond. Elapsed time counts, and no fresh draw
 is added.
 
-- **The anchor** `a = spendable_height + REF_ANCHOR_AGE` of the reserved
-  funding output with the greatest `spendable_height`. For an ordinary
-  output that is `h_f + 16`, the earliest height a bond spending it can be
-  signed. The wallet reads `spendable_height` from its own record
-  (`pscan_state.rs:259`).
+- **The anchor** `a` is the first tip height at which the funding can be
+  swept into a bond, taken over the reserved funding outputs (the latest
+  governs):
+  `a = max(spendable_height + REF_ANCHOR_AGE, height + ARCHIVAL_REORG_DEPTH_BLOCKS)`.
+  The first term puts the output's leaf in the tree at the canonical
+  reference; the second is the sealed P-scan covering its block (§1.1).
+  For an ordinary output that is `h_f + 720`. Both terms come from the
+  wallet's own record (`pscan_state.rs:237`, `:259`) and are the same for
+  every wallet, so the observer gains nothing from them.
 - **The draw** `s ~ U[0, W]`, taken once at the request and persisted.
   The wallet persists `s`, not the due. A re-draw is refused: a second
   sample biases the post earlier.
-- **`due = max(a + s, the request's tick)`.** If `a + s` has already passed
-  at the request, the post goes at the next tick.
+- **The due, on the dispatch clock.** The dispatch clock is a claimed
+  *count*, whose tip is `count − 1` (`engine/pscan/block_source.rs:94-109`),
+  so the anchor's count is `a + 1`: `due = max(a + 1 + s, the request's
+  count)`. If it has already passed at the request, the post goes at the
+  next tick.
 - **The clock.** `a` is recomputed from the live funding record at each
-  tick (count = height + 1) and compared on the daemon-claimed count clock.
+  tick and compared on the daemon-claimed count clock.
   A reorg that moves the funding output moves the anchor with it.
   `block_source.rs:179-182` keeps the synced and ingested *tip* clocks out
   of the due; a record's `spendable_height` is a block's height, not a tip
@@ -185,28 +193,29 @@ is added.
   request adds the principal's reaction time, which is not
   wallet-controlled; for a staker who stakes as soon as allowed it is a
   constant.
-- **`+16` is a constant, so it buys nothing.** Every wallet shares
-  `SPENDABLE_AGE + REF_ANCHOR_AGE`, so the observer subtracts it.
-  Measuring from `a` rather than `h_f` keeps the whole window drawn; from
-  `h_f`, every draw below 16 would collapse onto `h_f + 16`, a point mass
-  at a public offset from the observer's anchor.
+- **`+720` is a constant, so it buys nothing.** Every wallet shares
+  `ARCHIVAL_REORG_DEPTH_BLOCKS` and `SPENDABLE_AGE + REF_ANCHOR_AGE`, so the
+  observer subtracts the anchor's offset. Measuring from `a` rather than
+  `h_f` keeps the whole window drawn. From `h_f`, every draw below 720
+  would collapse onto the first sweepable tip, a point mass at a public
+  offset from the observer's anchor; with `W ≤ 720` that is every draw.
 - **Elapsed time counts.** A request at elapsed age `e` past `a` lands at
   `a + max(e, s)`. What the observer sees of `post − a` is uniform over
   `(e, W]` with a point mass at `e`, and `e` is the principal's private
   choice, so the point mass falls where the observer cannot name it.
-- **The greatest `spendable_height` governs a multi-input bond** (the
+- **The latest anchor governs a multi-input bond** (the
   logged exception, `engine/bond_orchestrator.rs:581-586`). The window
   covers the last funding transfer the observer may hold; earlier ones are
   separated by more.
 
-**Wargame: a stake made the instant funding confirms.** The request comes
-at `a = h_f + 16` (`e = 0`).
+**Wargame: a stake made the instant funding is sweepable.** The request
+comes at `a = h_f + 720` (`e = 0`).
 
-- **Today:** the post is signed at `a` with reference `h_f + 10` and sent
+- **Today:** the post is signed at `a` with reference `h_f + 714` and sent
   at `a + s`. Its reference age `s + 6` gives away `a`, and so `h_f`. The
   network observer's link is exact whatever `s` is, and the chain observer
   learns the funding block.
-- **Under the ruling:** the post lands at `a + s`, signed then, with
+- **Under the ruling:** the post lands at tip `a + s`, signed then, with
   reference age 6. The observer's candidates are the JoinMarket posts in
   `[a, a + W]`.
 - A request anchor with signing at due would give the same result here,
@@ -263,7 +272,7 @@ whenever the wallet is open, and no secret is persisted.
 | --- | --- | --- |
 | `p_slot` | Names the persona the actor signs for. | Held. |
 | The reservation, `funding_gindexes` | Keeps the cadence driver's claims and drains off the funding until the bond spends it. `reserved_gindexes()` already unions it (`shekyl-engine-state/src/pending_post_block.rs:536-555`). | Held. |
-| The draw `s` (BD-Q2) | The due is `max(a + s, request)`. A re-draw is refused. | `bond_post_offset_blocks` |
+| The draw `s` (BD-Q2) | The due is `max(a + 1 + s, request)` on the count clock. A re-draw is refused. | `bond_post_offset_blocks` |
 | The holdings descriptor (the posture) | Assembly moves to the due tick, and the posture is the caller's. Today "nothing posture-shaped is persisted" (`engine/bond_orchestrator.rs:827`) because the posture is consumed at once. | Not held. New. |
 | Not the fee | Estimated at the due tick from the daemon's live estimate, as `first_stake` does now (`engine/bond_orchestrator.rs:958-962`). | — |
 | Not the tx bytes, the reference or the key image | Produced at the due tick. | `tx_bytes` |
@@ -292,11 +301,16 @@ then.
 **Rule 1 — one submitted version per record.**
 
 - **Never sent.** No submit was attempted. The post may be re-anchored
-  and re-signed freely: `REBUILD_AT` and `should_reanchor`
-  (`shekyl-curve-tree/src/reference.rs:116`, `:249`) apply as on the
-  ordinary pre-broadcast path (CT-5d, `engine/traits/pending_tx.rs:218-232`).
-  This covers a post signed and sealed at due whose send did not happen
-  before the wallet closed.
+  and re-signed freely, and it is re-signed before its first send whenever
+  its reference is not the canonical one for the current tip
+  (`select_reference_height`, `shekyl-curve-tree/src/reference.rs:135`),
+  so the first send carries reference age 6 and the full 94-block
+  lifetime. This covers a post signed and sealed at due whose send did not
+  happen before the wallet closed. The ordinary pre-broadcast threshold,
+  `should_reanchor` at `REBUILD_AT` (`reference.rs:116`, `:249-257`; CT-5d,
+  `engine/traits/pending_tx.rs:218-232`), is too loose here: a post sealed
+  at age 6 and sent after a restart ten blocks later would go out at
+  age 16.
 - **Sent** means a submit was *attempted*. The state is recorded durably
   before the submit call, so a crash during the call counts as sent. That
   is conservative: it can only hold funds longer, never create a second
@@ -446,7 +460,7 @@ directions.
   `600` was sized here.
 - **Targeted (forward).** It knows a principal and saw it send at `T`
   (the intent's adversary, and WI-4's). It searches the JoinMarket posts
-  in `[a, a + W]`, with `a = h_f + 16`. Its cover is other JoinMarkets,
+  in `[a, a + W]`, with `a = h_f + 720`. Its cover is other JoinMarkets,
   which are far scarcer.
 
 With `ρ ≈ N_P × c / SEB`, `N_P ∈ 79–154` and `c ∈ [0.02, 0.2]`
@@ -483,9 +497,10 @@ recorded here and not decided.
 
 **What decides it.** If the join rate reaches 0.015 per block (about 150
 joins per epoch), `600` reaches `N_t = 10` forward and the cost side picks
-it. If TRC-1 measures the burst-timing anchor as too coarse to name a
-block, the forward observer under the default posture loses its anchor and
-the window is weighed against the remote-daemon case alone. If the
+it. A coarser anchor does not remove the forward observer: with TRC-1's
+measured anchor uncertainty `u` (in blocks), its candidates are the
+JoinMarkets in `[a − u, a + W]`, so the window is sized with `W + u`, and
+the remote-daemon case is weighed alongside it, not instead of it. If the
 homeostasis run shows a one-epoch entry delay moves the equilibrium, the
 window comes down and the concession is stated.
 
@@ -524,8 +539,13 @@ object from a window ("uniform from funding").
   nobody, and it contradicts GATE6 §10.1 and the shipped defaults.
 - **BD-Q2, anchor at the request:** adds the principal's reaction time,
   costs late stakes latency, and buys no cover.
-- **BD-Q2, anchor at `h_f`:** every draw below 16 collapses onto a point
-  mass at a public offset from the observer's anchor.
+- **BD-Q2, anchor at `h_f`, or at `spendable_height + REF_ANCHOR_AGE`
+  alone:** the funding is not sweepable until the sealed P-scan covers it
+  (`h_f + 720`), so every draw of a window up to 720 collapses onto that
+  point, a public offset from the observer's anchor.
+- **BD-Q3, re-anchor a never-sent post only at `REBUILD_AT`:** a restart
+  below 50 blocks sends a non-canonical reference age and a shorter
+  lifetime.
 - **BD-Q2, the least-spendable output as the anchor:** under-delays the
   newest funding transfer of a multi-input bond.
 - **BD-Q2, a fresh draw for a late request:** latency with nothing the
@@ -593,10 +613,11 @@ wallet-RPC slice's (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q4).
 **Its tests:**
 
 
-- A post due at `a + s` is signed at its first send and carries reference
-  age 6 (it replaces the ignored test, `engine/pscan/dispatch_tests.rs:1293`).
-- A never-sent sealed post past `REBUILD_AT` re-anchors before its first
-  send.
+- A post due at count `a + 1 + s` is signed at its first send and carries
+  reference age 6 (it replaces the ignored test, `engine/pscan/dispatch_tests.rs:1293`).
+- A never-sent sealed post whose reference is no longer canonical is
+  re-signed before its first send at reference age 6, including after a
+  restart ten blocks later (below `REBUILD_AT`).
 - A sent post is resent unchanged to its end date and is never re-signed;
   at the end date the record ends `expired` and the reservation is
   released.
@@ -608,14 +629,16 @@ wallet-RPC slice's (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q4).
   reason; at the release the outcome is `rejected` with the reason.
 - A post that lands after a terminal verdict takes the confirmed path.
 - Re-staking after `expired` posts on the first tick, with no draw.
-- **Instant staker:** a request at `a` produces a post whose reference
-  height is not `h_f + 10`.
+- **Instant staker, at production depth:** a funding output found by the
+  P-scan at its 720-block horizon anchors at `a = h_f + 720`; a request at
+  `a` produces a post at `a + 1 + s` with `s` drawn in full over `[0, W]`,
+  and its reference height is not `h_f + 714`.
 - **Restart between request and due:** the plan reloads, `s` is unchanged,
   and the post assembles from the re-derived bundle.
-- **Elapsed age:** a request past `a + s` posts at the next tick, with no
-  added draw.
-- **Multi-input:** the anchor is the greatest `spendable_height` among the
-  reserved outputs.
+- **Elapsed age:** a request past count `a + 1 + s` posts at the next tick,
+  with no added draw.
+- **Multi-input:** the anchor is the latest `a` among the reserved
+  outputs.
 - **Schema:** the version bump and snapshot, and a v12 seal failing closed.
 - **No dead code:** `rg -n 'MIN_COLD_START_SPACING|EconomicSpacing|SebSpan' rust`
   returns nothing.
@@ -651,9 +674,10 @@ built. Each carry below is recorded in both documents (rule 26 A5);
   ends at its end date. While a record that saw a terminal verdict can
   still land, its `in_flight` state is `refused` (then `expired` past the
   end date, with the `reason` kept). `rejected` is only the outcome: a
-  terminal verdict was seen and
-  the record reached its end date without landing; its funds are
-  `returned` and the reason sentence stays. Per kind, at source: the stake
+  terminal verdict was seen and a record holding reserved inputs reached
+  its end date without landing; its funds are `returned` and the reason
+  sentence stays. A record with no reserved inputs, the Q11 zero-fee
+  claim, ends `ended_unconfirmed` instead, keeping the reason. Per kind, at source: the stake
   and the exit release on a daemon verdict today and change; the claim and
   the drain already do not (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q4).
 - **WR-Q5 (what the response reveals).** The wire carries no due count,

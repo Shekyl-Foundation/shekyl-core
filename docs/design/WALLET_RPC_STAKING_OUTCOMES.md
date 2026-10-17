@@ -361,9 +361,9 @@ entry with:
 
   | `outcome` | When | `funds` |
   | --- | --- | --- |
-  | `rejected` | a terminal verdict was seen and the record reached its end date without landing (WR-Q3) | `returned` |
+  | `rejected` | a terminal verdict was seen and a record holding reserved inputs reached its end date without landing (WR-Q3) | `returned` |
   | `expired` | the end date passed with every reserved input still live: the transaction never landed | `returned` |
-  | `ended_unconfirmed` | the end date passed for a record with **no** reserved inputs, the Q11 zero-fee claim, whose landing the scan cannot see (WR-Q3) | none were held |
+  | `ended_unconfirmed` | the end date passed for a record with **no** reserved inputs, the Q11 zero-fee claim, whose landing the scan cannot see (WR-Q3). It takes precedence over `rejected` when a terminal verdict was seen | none were held |
   | `spent_elsewhere` | the end date passed with the record's reserved inputs **partly** spent by another transaction (WR-Q3) | the unspent rest is `returned` |
 
 - **`reason`**: a user sentence, never an enum name (rule 81):
@@ -376,7 +376,9 @@ entry with:
     stake was not accepted in time and has been withdrawn. Its funds are
     spendable again."
   - `ended_unconfirmed`: "This reward claim could not be confirmed. If it
-    was accepted, the reward it earned will appear in your balance."
+    was accepted, the reward it earned will appear in your balance." When
+    a terminal verdict was recorded, the daemon's refusal sentence is kept
+    with it.
   - `spent_elsewhere`: "Some of the funds set aside for this were spent by
     another transaction. The rest are spendable again. This should not
     happen; check the wallet's logs and your keys."
@@ -490,6 +492,11 @@ evidence shows no bond and no pending record bridges it.
 - **Why the outcome is `ended_unconfirmed`, not `expired`.** The scan
   cannot tell whether this claim landed. If it did, the reward arrives
   through the scan like any other.
+- **A terminal verdict does not make it `rejected`.** A daemon can relay
+  the claim and still answer a refusal, and nothing the wallet holds shows
+  whether it landed, so asserting `rejected` (funds `returned`) could be
+  false for a claim that landed and held no funds. The outcome stays
+  `ended_unconfirmed`, funds `none_held`, with the daemon's reason kept.
 - **After the gate reopens.** The next claim is built from the daemon's
   claim source (`fetch_vouched_claim_source`, `emission_source.rs:752`).
   Since the release waits for a reorg-deep frontier, that source already
@@ -584,6 +591,9 @@ a record was signed under the limit in force then.
 - A zero-fee claim with no reserved inputs is released at the frontier
   `r + 100`, `outcomes[0].outcome == "ended_unconfirmed"` is written, and
   `has_live_claim_for` for its persona returns `false`.
+- A zero-fee claim with a recorded terminal verdict is released at the
+  frontier `r + 100` as `ended_unconfirmed`, funds `none_held`, with the
+  daemon's reason kept; never as `rejected`.
 - A due tick past `r + 100` sends nothing.
 - Changing `fcmp_reference_block_max_age` fails the release module's own
   sentinel.
@@ -603,7 +613,7 @@ kind that does it today:
 | --- | --- | --- |
 | Stake | yes: the dispatch driver's terminal arm removes the record and releases its reservation (`pscan/dispatch.rs:794-803`) | held to the end date as `refused`; the outcome is `rejected` with its reason if it did not land |
 | Exit | yes, on a definite first-send `RejectedTerminal` (`release_dispatch.rs:303-309`, `:657-669`), on the premise that such bytes "were never admitted to any pool and never relayed" (`:640-649`), true only for an honest daemon, and to avoid bricking the one-live-exit lane, which the end date now prevents | held to the end date as `refused`; the outcome is `rejected` with its reason if it did not land. The `PersonaMismatch` release stays: it is refused before any transport, so no byte left the wallet and no daemon gave a verdict |
-| Claim | no: a submit failure leaves the sealed record live (`claim_dispatch.rs:428-435`); `remove_claim` has no production caller, and retirement is `remove_settled` on chain evidence (`pscan/dispatch.rs:561`) | unchanged; one that saw a terminal verdict reports `rejected` with its reason at the end date, not `expired` |
+| Claim | no: a submit failure leaves the sealed record live (`claim_dispatch.rs:428-435`); `remove_claim` has no production caller, and retirement is `remove_settled` on chain evidence (`pscan/dispatch.rs:561`) | unchanged; one that saw a terminal verdict reports `rejected` with its reason at the end date, not `expired`, except the zero-fee claim, which reports `ended_unconfirmed` with the reason kept |
 | Drain | no: as the claim (`drain_dispatch.rs:443-449`; `remove_drain` has no production caller) | as the claim |
 
 **Each kind carries a reference, and none re-proves.**
@@ -634,11 +644,14 @@ including the empty and the partly spent reservation.
   state is `refused`, with `reason` and `funds_return_at` (the end
   date). At the end date the chain decides: a record the scan saw land
   takes the confirmed path; one that did not ends `rejected` with its
-  reason.
+  reason. The exception is a record with no reserved inputs, the Q11
+  zero-fee claim, whose landing the scan cannot see: it ends
+  `ended_unconfirmed`, with the daemon's reason kept.
 - **What it costs.** The `reference_height` field on all four kinds (the
   one shared v13 bump), with the terminal verdict seen, if any. A refused
   stake, claim, drain or exit holds its funds until about a day after its
-  end date, and then reports `rejected` with its reason.
+  end date, and then reports `rejected` with its reason (the zero-fee
+  claim holds none and reports `ended_unconfirmed`).
 
 **The exit's "fate unknown" gets an end.** `unstake`'s
 `-29522 UNSTAKE_FATE_UNKNOWN` today has no way to resolve. Its message
