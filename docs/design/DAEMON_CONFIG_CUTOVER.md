@@ -408,7 +408,7 @@ switch (RT-O9.2; DC-F14).
 
 `clearnet-advertise` (`INPUT_GRAMMAR.md` §5) is read by the peer lists at
 construction and given to the same own-address entry the onion uses
-(`shekyl_peerlist_set_own_address`, `rust/shekyl-ffi/src/dialer_ffi.rs:563`), so both
+(`set_own_addresses`, `rust/shekyl-ffi/src/dialer_ffi.rs:408`), so both
 connectors obey one rule. Unset, clearnet stays dial-only, as it is today,
 and the posture line says so.
 
