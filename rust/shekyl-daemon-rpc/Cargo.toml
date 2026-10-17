@@ -58,6 +58,12 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # vin the block path reads, through the validator's one function, never a
 # second spelling (DRS-E5 PR-b; the FOLLOWUPS `retention_vin` row closed).
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# CEN-M9's prepared reversion (`submit/rust_pool_shim.rs`): the
+# `SubmitStateShim` over the Rust pool, reading the committed chain through
+# the store's `SnapshotView`. Not routed until the DRS-X flip; no FFI crate
+# reaches either edge (`shekyl-ffi` does not depend on this crate).
+shekyl-chain-store = { path = "../shekyl-chain-store" }
+shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }

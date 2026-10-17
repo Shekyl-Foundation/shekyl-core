@@ -705,7 +705,10 @@ census_rows! {
         M5 implemented(crate::policy::M5),
         M6 held_by_store("shekyl-chain-ingest", "the_door_and_a_block_of_one_agree_on_every_spend"),
         M7 held_by_store("shekyl-chain-ingest", "the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor"),
-        M9 pending,
+        // M9: the submit engine's seam over the Rust pool
+        // (`shekyl_daemon_rpc::RustPoolShim`), prepared, not routed; its
+        // commit is the pool door. Witnessed by the engine end to end.
+        M9 held_by_store("shekyl-chain-ingest", "the_engine_submits_through_the_rust_pool_and_its_door"),
         // M10: the pool's eviction (b4) — the lifetimes by standing, the
         // weight cap, the template's refusals.
         M10 held_by_store("shekyl-mempool", "each_standing_ages_on_its_own_lifetime"),

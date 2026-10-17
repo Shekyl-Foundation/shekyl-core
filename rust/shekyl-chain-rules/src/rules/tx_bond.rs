@@ -603,22 +603,7 @@ fn release_terms_hold<'id, V: ChainView<'id>>(
     let (bonded_total, bad_interval_count, last_served) = match record {
         None => (None, 0, None),
         Some(record) => {
-            let maxima: Vec<u64> = match &record.holdings {
-                Holdings::ShardSet(held) => {
-                    let mut maxima = Vec::with_capacity(held.len());
-                    for h in held.iter() {
-                        if let Some(epoch) = view.last_served_epoch(&persona, h.shard)? {
-                            maxima.push(epoch.to_raw());
-                        }
-                    }
-                    maxima
-                }
-                Holdings::CompleteTree => view
-                    .served_shards(&persona)?
-                    .into_iter()
-                    .map(|s| s.last_served.to_raw())
-                    .collect(),
-            };
+            let maxima = release_last_served(view, &persona, record)?;
             (
                 Some(record.bonded_total.to_raw()),
                 record.bad_intervals.len(),
@@ -663,6 +648,42 @@ fn reinstate_terms_hold(vin: &ArchivalBondPostVin, record: Option<&BondRecord>) 
         &record.bad_intervals,
     )
     .is_ok()
+}
+
+/// The last-served epoch of every shard `persona`'s record holds and has
+/// served — a release's cooldown operand, before
+/// `whole_record_last_served` folds it: for a shard set, each held shard's
+/// latest pass in held order, a never-served shard omitted (the C++'s
+/// `archival_bond_last_served_epochs` over `held_shard_ids`); for a complete
+/// tree, every served shard's latest pass in shard order (its
+/// `archival_bond_all_last_served_epochs`). Public for the submit engine's
+/// Release facts over the Rust pool (DRS-E5 PR-b M9), so the block path and
+/// the engine read one gather.
+///
+/// # Errors
+///
+/// The view's fault.
+pub fn release_last_served<'id, V: ChainView<'id>>(
+    view: &V,
+    persona: &PCanonicalId,
+    record: &BondRecord,
+) -> Result<Vec<u64>, V::Fault> {
+    Ok(match &record.holdings {
+        Holdings::ShardSet(held) => {
+            let mut maxima = Vec::with_capacity(held.len());
+            for h in held.iter() {
+                if let Some(epoch) = view.last_served_epoch(persona, h.shard)? {
+                    maxima.push(epoch.to_raw());
+                }
+            }
+            maxima
+        }
+        Holdings::CompleteTree => view
+            .served_shards(persona)?
+            .into_iter()
+            .map(|s| s.last_served.to_raw())
+            .collect(),
+    })
 }
 
 /// The classified arm as the retention crate's vin — the marshal the three

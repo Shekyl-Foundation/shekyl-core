@@ -346,9 +346,15 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
         .collect();
     assert_eq!(
         policy_held,
-        [PolicyRow::M1, PolicyRow::M6, PolicyRow::M7, PolicyRow::M10],
+        [
+            PolicyRow::M1,
+            PolicyRow::M6,
+            PolicyRow::M7,
+            PolicyRow::M9,
+            PolicyRow::M10
+        ],
         "DRS-E5 PR-b b2: the pool's own rows — a duplicate (M1), a spent image on the \
-         chain (M6) or in the pool (M7); b4: eviction (M10)"
+         chain (M6) or in the pool (M7); b3: the engine's seam (M9); b4: eviction (M10)"
     );
     // SCW-18's compile-time pin is the check; this is the runtime echo so a
     // swapped `implemented(B2)` under the B1 entry cannot hide behind a

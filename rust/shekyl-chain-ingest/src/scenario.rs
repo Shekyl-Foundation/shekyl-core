@@ -921,10 +921,8 @@ where
 
     /// Run `f` over the chain the store holds now, through the committed
     /// snapshot's view (`SnapshotView`, what the pool door judges against),
-    /// with the rule set in force at the height the next block connects at.
-    /// The connector is stopped so the store can be opened here, and a
-    /// fresh one is started over the same file after, as
-    /// [`reopen`](Self::reopen) does.
+    /// with the rule set in force at the height the next block connects at
+    /// ([`Self::with_store`]).
     ///
     /// # Panics
     ///
@@ -934,12 +932,7 @@ where
         &mut self,
         f: impl FnOnce(&shekyl_chain_store::store::SnapshotView<'_>, &RuleSet) -> R,
     ) -> R {
-        let _already_stopped = self.connector.stop_gracefully().await.is_err();
-        if let Some(task) = self.task.take() {
-            drop(task.await.expect("the connector task joins"));
-        }
-        let out = {
-            let store = (self.opener)(&self.path);
+        self.with_store(|store, rules| {
             let snapshot = store
                 .begin_read()
                 .expect("a snapshot of the scenario's store");
@@ -949,7 +942,24 @@ where
                     .expect("the tip of the scenario's store")
                     .as_ref(),
             );
-            f(&view, &self.rules.in_force(connecting))
+            f(&view, &rules.in_force(connecting))
+        })
+        .await
+    }
+
+    /// Lend `f` the store itself and the rules it runs under — for a reader
+    /// that begins its own snapshots (the submit engine's shim over the
+    /// pool). The connector is stopped so the store can be opened here, and
+    /// a fresh one is started over the same file after, as
+    /// [`reopen`](Self::reopen) does.
+    pub async fn with_store<R>(&mut self, f: impl FnOnce(&ChainStore, ChainRules) -> R) -> R {
+        let _already_stopped = self.connector.stop_gracefully().await.is_err();
+        if let Some(task) = self.task.take() {
+            drop(task.await.expect("the connector task joins"));
+        }
+        let out = {
+            let store = (self.opener)(&self.path);
+            f(&store, self.rules)
         };
         let (connector, task) = spawn_connector(ConnectorArgs {
             store: (self.opener)(&self.path),

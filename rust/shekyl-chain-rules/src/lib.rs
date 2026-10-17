@@ -212,7 +212,10 @@ pub use rules::tx_against::{
     admissible_references, newest_admissible_reference, REFERENCE_BLOCK_MAX_AGE,
     REFERENCE_BLOCK_MIN_AGE,
 };
-pub use rules::tx_bond::bond_post_vin;
+pub use rules::tx_bond::{bond_post_vin, release_last_served};
+pub use rules::tx_emission_against::{
+    emission_epoch_facts, EmissionEpochFacts, EpochCloseBondFacts,
+};
 pub use rules::{recorded, recorded_header};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;

@@ -1517,6 +1517,23 @@ Not E5's; found while reading the census at the pin.
   one, and `form`'s listed slots keep the block batch (§2.2). The door ==
   validator test holds a bad range proof refused on H19 both ways.
 
+- **CEN-M9's seam over the Rust pool, prepared (PR-b b3): three things the
+  DX round decides at the swap.** `shekyl_daemon_rpc::RustPoolShim`
+  implements `SubmitStateShim`; its commit is the pool door, not the
+  certificate (`E5-Q2`'s one validator), and the archival facts it hands
+  the engine come from the validator's own gathers
+  (`release_last_served`, `emission_epoch_facts`). (a) The engine's
+  Phase C verifies what the door verifies again at commit: the swap
+  either retires Phase C's crypto for the door's verdict or keeps the
+  engine as the pre-lock filter it is today, and that choice is the DX
+  round's. (b) The engine's fee gate reads `fee_per_byte` at the tip
+  (`relay_floor_at`, the pre-FL-R23 `needed/50` rule) while M3 reads the
+  floor window's minimum; the shim answers a door M3 refusal as
+  `PrunedOnInsert` (`FeeTooLow`), so the door is the truth, and the
+  engine's gate wants `relay_floor_admits` over the window
+  (`relay_floor.rs`'s note). (c) `relay()` is a no-op: the relay driver
+  takes the pool's unpublished entries at the flip.
+
 ---
 
 ## 10. Decision log

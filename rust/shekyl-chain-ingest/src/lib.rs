@@ -130,6 +130,8 @@ mod pool_door_tests;
 #[cfg(all(test, feature = "pipeline"))]
 mod pool_restart_tests;
 #[cfg(all(test, feature = "pipeline"))]
+mod pool_submit_tests;
+#[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario;
 #[cfg(all(test, feature = "pipeline"))]
 pub(crate) mod scenario_archival;

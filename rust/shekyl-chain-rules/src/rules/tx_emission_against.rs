@@ -172,16 +172,8 @@ impl J23 {
         let credits = ServedAt::read(view, records.iter().map(|(persona, _)| *persona), &epochs)?;
         let mut gathered = Vec::with_capacity(cited.len());
         for cited in cited {
-            let universe = gather_universe(view, schedule, rule_set.reorg_cap(), cited.epoch)?;
-            let rows = records.iter().map(|(persona, record)| (persona, record));
-            let snapshot = gather_epoch_snapshot(view, &universe, rows, Some(persona), |holder| {
-                Ok(credits
-                    .shards(holder, cited.epoch)
-                    .iter()
-                    .copied()
-                    .map(ShardId::to_raw)
-                    .collect())
-            })?;
+            let snapshot =
+                gather_claimed_epoch(view, rule_set, records, persona, &credits, cited.epoch)?;
             gathered.push(GatheredEpoch {
                 epoch: cited.raw,
                 close_height: cited.close_height,
@@ -192,6 +184,126 @@ impl J23 {
         }
         Ok(Ok(gathered))
     }
+}
+
+/// One claimed epoch's snapshot: the universe the epoch's slash pass read
+/// and A11's records, the claimant named, the Served rows as credits — the
+/// one gather [`J23`] and [`emission_epoch_facts`] share.
+fn gather_claimed_epoch<'id, 'r, V: ChainView<'id>>(
+    view: &V,
+    rule_set: &RuleSet,
+    records: &'r [(PCanonicalId, shekyl_types::archival::BondRecord)],
+    persona: &PCanonicalId,
+    credits: &ServedAt,
+    epoch: SettlementEpoch,
+) -> Result<EpochSnapshot<'r>, ViewRead<V::Fault>> {
+    let universe = gather_universe(
+        view,
+        rule_set.settlement_schedule(),
+        rule_set.reorg_cap(),
+        epoch,
+    )?;
+    let rows = records.iter().map(|(persona, record)| (persona, record));
+    gather_epoch_snapshot(view, &universe, rows, Some(persona), |holder| {
+        Ok(credits
+            .shards(holder, epoch)
+            .iter()
+            .copied()
+            .map(ShardId::to_raw)
+            .collect())
+    })
+}
+
+/// One settlement epoch's close facts as CEN-J23 gathers them for an
+/// emission claim — what [`emission_epoch_facts`] hands a reader outside
+/// the validator that must present the same facts (the submit engine over
+/// the Rust pool, DRS-E5 PR-b M9), so the gather has one implementation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmissionEpochFacts {
+    /// The epoch.
+    pub settlement_epoch: u64,
+    /// Its close height under the rule set, `None` past a `u64`.
+    pub close_height: Option<BlockHeight>,
+    /// The frozen `Σwork(E)` (A7), `None` before the slash pass writes it.
+    pub sigma_work_milli: Option<u64>,
+    /// The frozen budget (A8), `None` before the close freezes it.
+    pub budget: Option<u64>,
+    /// Every bond with a credit at the epoch: join epoch, whether it is the
+    /// foundation's complete-tree bond, and its bad intervals.
+    pub bonds: Vec<EpochCloseBondFacts>,
+    /// Every closed shard, then each open shard a bond holds a credit on.
+    pub shards: Vec<shekyl_archival_retention::EpochCloseShard>,
+    /// One pair per `(bond, credited shard)`.
+    pub pairs: Vec<shekyl_archival_retention::CreditPair>,
+    /// The claimant's index into `bonds`, when it has a credit.
+    pub claimant_bond_idx: Option<usize>,
+}
+
+/// One bond in an [`EmissionEpochFacts`], owned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EpochCloseBondFacts {
+    /// The bond's join epoch.
+    pub join_settlement_epoch: u64,
+    /// The foundation's complete-tree bond.
+    pub is_foundation_complete_tree: bool,
+    /// Its bad intervals.
+    pub bad_intervals: Vec<shekyl_types::archival::BadInterval>,
+}
+
+/// The close facts of every epoch in `epochs` for `persona`'s emission
+/// claim, read off `view` under `rule_set` — CEN-J23's gather
+/// ([`gather_claimed_epoch`]), for every epoch, without the citing gate:
+/// an epoch missing its budget or `Σwork` answers `None` there rather than
+/// refusing, because the caller presents facts and the validator judges.
+///
+/// # Errors
+///
+/// The view's fault, or a shard close the gather cannot place
+/// ([`crate::Corrupt::ShardCloseUnplaced`]).
+pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
+    view: &V,
+    rule_set: &RuleSet,
+    persona: &PCanonicalId,
+    epochs: &[u64],
+) -> Result<Vec<EmissionEpochFacts>, ViewRead<V::Fault>> {
+    let schedule = rule_set.settlement_schedule();
+    let records = view.bond_records().map_err(ViewRead::View)?;
+    let settled: BTreeSet<SettlementEpoch> = epochs
+        .iter()
+        .copied()
+        .map(SettlementEpoch::from_raw)
+        .collect();
+    let credits = ServedAt::read(view, records.iter().map(|(persona, _)| *persona), &settled)?;
+    let mut out = Vec::with_capacity(epochs.len());
+    for &raw in epochs {
+        let epoch = SettlementEpoch::from_raw(raw);
+        let snapshot = gather_claimed_epoch(view, rule_set, &records, persona, &credits, epoch)?;
+        out.push(EmissionEpochFacts {
+            settlement_epoch: raw,
+            close_height: schedule.close_height(raw).map(BlockHeight::from_raw),
+            sigma_work_milli: view
+                .sigma_work(epoch)
+                .map_err(ViewRead::View)?
+                .map(shekyl_types::archival::SigmaWorkMilli::to_raw),
+            budget: view
+                .budget(epoch)
+                .map_err(ViewRead::View)?
+                .map(shekyl_units::AtomicUnits::to_raw),
+            bonds: snapshot
+                .bonds
+                .iter()
+                .map(|bond| EpochCloseBondFacts {
+                    join_settlement_epoch: bond.join_settlement_epoch,
+                    is_foundation_complete_tree: bond.is_foundation_complete_tree,
+                    bad_intervals: bond.bad_intervals.to_vec(),
+                })
+                .collect(),
+            shards: snapshot.shards,
+            pairs: snapshot.pairs,
+            claimant_bond_idx: snapshot.claimant_bond_idx,
+        });
+    }
+    Ok(out)
 }
 
 /// CEN-J25: the coarse verify — `shekyl_emission_vin_verify`

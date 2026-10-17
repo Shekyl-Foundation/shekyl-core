@@ -13,13 +13,10 @@
 
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_types::{BlockHeight, ChainCount};
-use shekyl_wire::transaction::Ct;
 
 use crate::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
 use crate::submit::certificate::VerificationCertificate;
-use crate::submit::facts::{
-    BondProbe, CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta,
-};
+use crate::submit::facts::{CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta};
 use crate::submit::fee::fee_meets_floor;
 use crate::submit::phase_a::{parse_submission, ParsedSubmission, SubmitTxKind};
 use crate::submit::verifier::verify_debit_slot_possession;
@@ -210,34 +207,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // (§8.7.1.1). The other non-JoinMarket kinds have no producer and
         // are refused in Phase C, so they ask JoinMarket's question and
         // never reach a verdict that consumes the answer.
-        let bond_probe_id = parsed.bond_post().map(|(_, bond)| bond.p_canonical_id);
-        // The debit arm's probe carries the bond slot's auth key so the
-        // gather can run the cheap pin before its expensive scan (§8.7.1.1);
-        // Phase C still runs UB3 itself.
-        let bond_auth = parsed
-            .bond_post()
-            .and_then(|(index, _)| match &parsed.tx.ct {
-                Ct::Fcmp { pqc_auths, .. } => {
-                    pqc_auths.get(index).map(|a| a.hybrid_public_key.as_slice())
-                }
-                _ => None,
-            });
-        let bond_probe = bond_probe_id.as_ref().map(|id| {
-            match (parsed.bond_post_is_release(), bond_auth) {
-                (true, Some(auth_pubkey)) => BondProbe::Release {
-                    p_canonical_id: id,
-                    auth_pubkey,
-                    bond_debit: parsed
-                        .bond_post()
-                        .map(|(_, bond)| bond.bond_debit)
-                        .unwrap_or(0),
-                },
-                // No auth slot for the bond vin is a malformed submission the
-                // battery refuses anyway; ask the cheap question rather than
-                // inventing a key, and let Phase C issue the verdict.
-                _ => BondProbe::Join(id),
-            }
-        });
+        let bond_probe = parsed.bond_probe();
         // An emission claim asks for the §8.7.2 E6/E7 facts, keyed on the
         // vin-derived claimant id + claimed epochs (E2 pins the derivation
         // to the auth key in Phase C).
