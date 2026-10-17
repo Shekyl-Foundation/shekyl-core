@@ -291,6 +291,29 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_pinned_anchors.py --selftest
 
+      - name: Run daemon option docs gate
+        # The daemon's option table and configuration example are generated
+        # from its table (INPUT_GRAMMAR.md IG-9; docs/generated/, held equal
+        # to the rendering by a shekyl-daemon-config test); the guides embed
+        # them verbatim, and every flag a guide gives to shekyld is a row.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_daemon_option_docs.py
+
+      - name: Run daemon option docs gate selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_daemon_option_docs.py --selftest
+
+      - name: Run launch recipe gate
+        # DAEMON_CONFIG_CUTOVER.md DC-Q8: the shipped unit and the fleet's
+        # units and generators pass only rows of the daemon's table, and a
+        # unit's data and log paths are its StateDirectory and LogsDirectory.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_launch_recipes.py
+
+      - name: Run launch recipe gate selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_launch_recipes.py --selftest
+
       - name: Run code-citation resolver
         # Every code citation in the pinned review documents must resolve to
         # exactly one tracked file at the era that document declares — its

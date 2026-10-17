@@ -299,3 +299,62 @@ for t in "${LANE_GATES[@]}"; do
     exit 1
   }
 done
+
+# The armed gates that live outside regtest_e2e, as `<test binary>:<name>`
+# in shekyl-levin's integration tests. Same ratchet, per binary: every
+# ignored test the binary lists is on this list, and every name here is
+# listed, so a rename or a new ignored test fails here rather than going
+# dark. PR lane only: each is a short live run.
+#
+#   refused_inbound — the refused-inbound gate (DAEMON_CONFIG_CUTOVER.md
+#     §5.2; Rick, 2026-10-14): the daemon under a lowered soft descriptor
+#     limit derives its inbound ceiling and refuses the peer past it.
+#     Observed red 2026-10-15 by filling one short of the ceiling: the
+#     extra peer was admitted and the test panicked at "must be refused".
+#     Unix only (PWD-B1: Windows has no per-process descriptor limit); this
+#     script runs on Linux.
+ARMED_LEVIN=(
+  refused_inbound:the_inbound_ceiling_derived_from_the_descriptor_limit_refuses_the_next_peer
+)
+
+for entry in "${ARMED_LEVIN[@]}"; do
+  binary="${entry%%:*}"
+  name="${entry#*:}"
+  cargo test -p shekyl-levin --test "$binary" -- --list --ignored >"$ignored" 2>&1
+  listed=$(grep -c ': test$' "$ignored" || true)
+  [ "${listed:-0}" -gt 0 ] || {
+    echo "FATAL: shekyl-levin --test $binary lists no ignored test — the binary moved or the enumeration broke" >&2
+    exit 1
+  }
+  grep -qx "$name: test" "$ignored" || {
+    echo "FATAL: listed gate '$entry' names no ignored test — it was renamed or deleted" >&2
+    exit 1
+  }
+  armed_here=$(printf '%s\n' "${ARMED_LEVIN[@]}" | grep -c "^$binary:" || true)
+  if [ "$listed" -ne "$armed_here" ]; then
+    echo "FATAL: shekyl-levin --test $binary lists $listed ignored test(s), but $armed_here are armed here." >&2
+    echo "A new #[ignore]d test in that binary must be armed (observe it red first) or moved." >&2
+    exit 1
+  fi
+done
+
+if [ "$GATE_LANE" = pr ]; then
+  for entry in "${ARMED_LEVIN[@]}"; do
+    binary="${entry%%:*}"
+    name="${entry#*:}"
+    set +e
+    cargo test -p shekyl-levin --test "$binary" "$name" \
+      -- --ignored --exact --nocapture >"$gate_log" 2>&1
+    status=$?
+    set -e
+    cat "$gate_log"
+    if [ "$status" -ne 0 ]; then
+      echo "FATAL: $entry failed" >&2
+      exit "$status"
+    fi
+    grep -qE '^test result: ok\. 1 passed' "$gate_log" || {
+      echo "FATAL: $entry selected no test — the filter or the name moved" >&2
+      exit 1
+    }
+  done
+fi

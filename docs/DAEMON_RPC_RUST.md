@@ -44,12 +44,11 @@ port — it is not part of this Phase 1 transport deletion.
 | `src/rpc/core_rpc_ffi.h` | C API header for the FFI facade |
 | `src/rpc/core_rpc_ffi.cpp` | Dispatch tables mapping URIs/methods to `on_*` handlers |
 | `rust/shekyl-daemon-rpc/` | Axum crate: server, routes, handlers, types |
-| `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start/stop` FFI exports (daemon-only) |
+| `rust/shekyl-daemon-rpc/src/ffi_exports.rs` | `shekyl_daemon_rpc_start(core)` and `shekyl_daemon_rpc_stop()`: the one start, reading the RPC section the Rust `main()` recorded (`DAEMON_CONFIG_CUTOVER.md` §2.3) |
 | `rust/shekyl-daemon-rpc/src/ctl_client.rs` | `shekyl_daemon_ctl_post/free` — the `shekyld <command>` control client's transport (daemon-only) |
 | `src/daemon/rpc_client.h` | `tools::t_rpc_client`: request/response framing for the control client over that export |
 | `src/shekyl/shekyl_ffi.h` | C++ declarations for Rust FFI functions |
-| `src/daemon/daemon.cpp` | Daemon lifecycle: always starts Axum on the configured RPC port |
-| `src/rpc/rpc_args.cpp` | Shared CLI; daemon registers bind/CORS only (`include_listener_tls_auth=false`) |
+| `src/daemon/daemon.cpp` | The C++ remnant's `run`: calls the one RPC start on the core; the listeners are the RPC section's |
 
 ## Endpoint Coverage
 

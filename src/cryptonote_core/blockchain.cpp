@@ -69,7 +69,6 @@
 #include "cryptonote_basic/drop_verdict.h"
 #include "cryptonote_basic/block_ingest.h"
 #include "common/perf_timer.h"
-#include "common/notify.h"
 #include "common/varint.h"
 #include "time_helper.h"
 
@@ -219,7 +218,7 @@ namespace
 //------------------------------------------------------------------
 Blockchain::Blockchain(tx_memory_pool& tx_pool) :
   m_db(), m_tx_pool(tx_pool), m_timestamps_and_difficulties_height(0), m_reset_timestamps_and_difficulties_height(true), m_current_block_cumul_weight_limit(0), m_current_block_cumul_weight_median(0),
-  m_max_prepare_blocks_threads(4), m_db_sync_on_blocks(true), m_db_sync_threshold(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_show_time_stats(false), m_sync_counter(0), m_bytes_to_sync(0), m_cancel(false),
+  m_max_prepare_blocks_threads(4), m_db_sync_on_blocks(true), m_db_sync_threshold(1), m_db_sync_mode(db_async), m_db_default_sync(false), m_sync_counter(0), m_bytes_to_sync(0), m_cancel(false),
   m_long_term_block_weights_window(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE),
   m_long_term_effective_median_block_weight(0),
   m_long_term_block_weights_cache_tip_hash(crypto::null_hash),
@@ -275,7 +274,7 @@ uint64_t Blockchain::get_current_blockchain_height() const
 //------------------------------------------------------------------
 //FIXME: possibly move this into the constructor, to avoid accidentally
 //       dereferencing a null BlockchainDB pointer
-bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline, const cryptonote::test_options *test_options, difficulty_type fixed_difficulty)
+bool Blockchain::init(BlockchainDB* db, const network_type nettype, const cryptonote::test_options *test_options, difficulty_type fixed_difficulty)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
@@ -299,55 +298,12 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   m_db = db;
 
   m_nettype = test_options != NULL ? FAKECHAIN : nettype;
-  m_offline = offline;
   m_fixed_difficulty = fixed_difficulty;
 
-  if (shekyl_archival_settlement_epoch_override_present())
-  {
-    // Same shape as the SEEDHASH_EPOCH_* gate below: the settlement-epoch
-    // schedule is consensus (epoch close boundaries, serve-credit epochs,
-    // bond join epochs, emission claim windows all derive from it), and
-    // SHEKYL_SETTLEMENT_EPOCH_BLOCKS is the fakechain-only lever that
-    // makes epoch-close e2e coverage affordable. A node inheriting it
-    // from a leaked environment would close epochs at wrong heights and
-    // fork every public peer — refuse on the lever's PRESENCE, before
-    // any question of its validity.
-    //
-    // This gate runs BEFORE anything touches the DB: arming must precede
-    // the process's first epoch arithmetic, and on a fresh datadir the
-    // genesis add below reaches it (add_block →
-    // process_archival_epoch_close_at_height) — arming after that latches
-    // the genesis schedule first and the arm refuses as ArmedTooLate
-    // (caught live by the PR-4c emission e2e's first daemon spawn).
-    if (m_nettype != FAKECHAIN)
-    {
-      MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS / SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS override active on a public network: the settlement schedule and the reorg cap are consensus-critical and the overrides are fakechain-only (regtest) levers; refusing to start. Unset them to run this node.");
-      return false;
-    }
-    // FAKECHAIN: arm the override. An unarmed process ignores the lever
-    // wholesale, so this is the single gate a regtest schedule passes
-    // through — and an invalid value refuses loudly here instead of
-    // silently running the genesis schedule until the harness times out.
-    const uint8_t arm_rc = shekyl_archival_settlement_epoch_arm_regtest();
-    if (arm_rc != SHEKYL_ARCHIVAL_SEB_ARM_OK)
-    {
-      // The two refusals have different remedies, so they get different
-      // messages: a bad value is the operator's to fix, while a late arm
-      // means this gate ran after something already latched the schedule —
-      // a daemon-side initialization-order defect the operator cannot fix
-      // by editing the variable.
-      const char *raw = getenv("SHEKYL_SETTLEMENT_EPOCH_BLOCKS");
-      const char *raw_cap = getenv("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS");
-      if (arm_rc == SHEKYL_ARCHIVAL_SEB_ARM_ERR_TOO_LATE)
-        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " could not be armed: the settlement-epoch schedule had already latched before this gate ran. The value is fine; this is an initialization-order defect in the daemon (arming must precede every epoch-arithmetic call, including the genesis add). Refusing to start — please report it.");
-      else if (arm_rc == SHEKYL_ARCHIVAL_SEB_ARM_ERR_INVALID_REORG_CAP)
-        MERROR("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS=" << (raw_cap ? raw_cap : "?") << " is not a valid override: expected an integer between 1 and the genesis reorg depth; refusing to start. Fix the value or unset the variable.");
-      else
-        MERROR("SHEKYL_SETTLEMENT_EPOCH_BLOCKS=" << (raw ? raw : "?") << " is not a valid override: expected an integer strictly above the reorg cap in force (" << (raw_cap ? raw_cap : "the genesis reorg depth") << ") and at most the genesis settlement-epoch length — a fakechain whose epoch is not above its reorg cap is a configuration mainnet cannot reach; refusing to start. Lower SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS with the epoch, fix the value, or unset the variable.");
-      return false;
-    }
-    MWARNING("regtest schedule override active on fakechain: settlement epochs are " << shekyl_archival_settlement_epoch_blocks() << " blocks and the reorg cap is " << shekyl_archival_reorg_depth_blocks() << " instead of the genesis pins — epoch closes, serve-credit windows, emission claims and the reorg depth computed under this schedule are valid only among fakechain nodes running the same override");
-  }
+  // The settlement schedule's regtest levers are the Rust configuration's
+  // (`dev-settlement-epoch-blocks`, `dev-archival-reorg-depth`): recorded
+  // and armed by the Rust main() before this core exists, refused there on
+  // every network but regtest (IG-8). Nothing here reads an environment.
 
   // if the blockchain is new, add the genesis block
   // this feels kinda kludgy to do it this way, but can be looked at later.
@@ -413,25 +369,10 @@ bool Blockchain::init(BlockchainDB* db, const network_type nettype, bool offline
   }
 
   {
-    if (shekyl_pow_randomx_v2_seed_epoch_overridden())
-    {
-      // The seed-epoch schedule is consensus; SEEDHASH_EPOCH_* is a
-      // fakechain-only lever (regtest daemons and test fixtures both run
-      // nettype FAKECHAIN). Fail closed on every public network, not just
-      // mainnet: a node that inherits the lever from a leaked environment
-      // (shared systemd template, container base layer) computes wrong
-      // seedheights and silently rejects every block its peers accept —
-      // and on testnet/stagenet that forks the genesis-rehearsal
-      // infrastructure exactly when it matters most. The lever's
-      // legitimate use, fast epochs for local development, is what
-      // FAKECHAIN exists for.
-      if (m_nettype != FAKECHAIN)
-      {
-        MERROR("SEEDHASH_EPOCH_* override active on a public network: the RandomX seed-epoch schedule is consensus-critical and the override is a fakechain-only (regtest) lever; refusing to start. Unset SEEDHASH_EPOCH_BLOCKS / SEEDHASH_EPOCH_LAG to run this node.");
-        return false;
-      }
-      MWARNING("SEEDHASH_EPOCH_* override active on fakechain: the RandomX seed-epoch schedule differs from mainnet defaults — blocks produced under this schedule validate only among fakechain nodes running the same override, and captured vectors will not match mainnet seedheights");
-    }
+    // The seed-epoch schedule's regtest levers are the Rust configuration's
+    // (`dev-pow-seed-epoch-blocks`, `dev-pow-seed-epoch-lag`): recorded by
+    // the Rust main() before this core exists, refused on every network but
+    // regtest (IG-8). Nothing here reads an environment.
     if (m_nettype == FAKECHAIN)
     {
       // Datadir schedule pin: persisted epoch-derived state (bond join
@@ -488,8 +429,7 @@ bool Blockchain::store_blockchain()
   }
 
   TIME_MEASURE_FINISH(save);
-  if(m_show_time_stats)
-    MINFO("Blockchain stored OK, took: " << save << " ms");
+  MDEBUG("Blockchain stored OK, took: " << save << " ms");
   return true;
 }
 //------------------------------------------------------------------
@@ -1173,10 +1113,10 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
     m_db->remove_alt_block(cryptonote::get_block_hash(bei.bl));
   }
 
-  std::shared_ptr<tools::Notify> reorg_notify = m_reorg_notify;
-  if (reorg_notify)
-    reorg_notify->notify("%s", std::to_string(split_height).c_str(), "%h", std::to_string(m_db->height()).c_str(),
-        "%n", std::to_string(m_db->height() - split_height).c_str(), "%d", std::to_string(discarded_blocks).c_str(), NULL);
+  // The Rust notify runner renders the glossary terms from these facts
+  // (DAEMON_CONFIG_CUTOVER.md §2.10): the first block of the new chain, the
+  // new count, the blocks added and the blocks discarded.
+  shekyl_notify_reorg(split_height, m_db->height(), m_db->height() - split_height, discarded_blocks);
 
   const uint64_t new_height = m_db->height();
   const crypto::hash seedhash = get_block_id_by_height(shekyl_pow_randomx_v2_seedheight(new_height));
@@ -1203,12 +1143,14 @@ bool Blockchain::switch_to_alternative_blockchain(std::list<block_extended_info>
     send_miner_notifications(new_height, seedhash, prev_id,
                              m_db->get_block_already_generated_coins(new_height - 1));
 
-  for (const auto& notifier : m_block_notifiers)
+  // Each promoted block goes to the Rust notify runner (DAEMON_CONFIG_CUTOVER.md
+  // §2.10), which owns the command and drops the push when none is set.
   {
-    std::size_t notify_height = split_height;
+    std::uint64_t notify_height = split_height;
     for (const auto& bei: alt_chain)
     {
-      notifier(notify_height, {std::addressof(bei.bl), 1});
+      const crypto::hash promoted = get_block_hash(bei.bl);
+      shekyl_notify_block(notify_height, reinterpret_cast<const std::uint8_t*>(promoted.data));
       ++notify_height;
     }
   }
@@ -3057,9 +2999,8 @@ bool Blockchain::check_tx_inputs(transaction& tx, uint64_t& max_used_block_heigh
   TIME_MEASURE_START(a);
   bool res = check_tx_inputs(tx, tvc, &max_used_block_height);
   TIME_MEASURE_FINISH(a);
-  if(m_show_time_stats)
   {
-    MINFO("HASH: " <<  get_transaction_hash(tx) << " I/O: " << tx.vin.size() << "/" << tx.vout.size() << " H: " << max_used_block_height << " ms: " << a + m_fake_scan_time << " B: " << get_object_blobsize(tx) << " W: " << get_transaction_weight(tx));
+    MDEBUG("HASH: " <<  get_transaction_hash(tx) << " I/O: " << tx.vin.size() << "/" << tx.vout.size() << " H: " << max_used_block_height << " ms: " << a + m_fake_scan_time << " B: " << get_object_blobsize(tx) << " W: " << get_transaction_weight(tx));
   }
   if (!res)
     return false;
@@ -5853,9 +5794,8 @@ leave:
   }
 
   MINFO("+++++ BLOCK SUCCESSFULLY ADDED" << std::endl << "id:\t" << id << std::endl << "PoW:\t" << proof_of_work << std::endl << "HEIGHT " << new_height-1 << ", difficulty:\t" << current_diffic << std::endl << "block reward: " << print_money(fee_summary + base_reward) << "(" << print_money(base_reward) << " + " << print_money(fee_summary) << "), coinbase_weight: " << coinbase_weight << ", cumulative weight: " << cumulative_block_weight << ", " << block_processing_time << "(" << target_calculating_time << "/" << longhash_calculating_time << ")ms");
-  if(m_show_time_stats)
   {
-    MINFO("Height: " << new_height << " coinbase weight: " << coinbase_weight << " cumm: "
+    MDEBUG("Height: " << new_height << " coinbase weight: " << coinbase_weight << " cumm: "
         << cumulative_block_weight << " p/t: " << block_processing_time << " ("
         << target_calculating_time << "/" << longhash_calculating_time << "/"
         << t1 << "/" << t2 << "/" << t3 << "/" << t_exists << "/" << t_pool
@@ -5878,9 +5818,8 @@ leave:
   // send miner notifications to switch as soon as possible
   send_miner_notifications(new_height, seedhash, id, already_generated_coins);
 
-  // then send block notifications
-  for (const auto& notifier: m_block_notifiers)
-    notifier(new_height - 1, {std::addressof(bl), 1});
+  // then the block event, to the Rust notify runner
+  shekyl_notify_block(new_height - 1, reinterpret_cast<const std::uint8_t*>(id.data));
 
   shekyl_pow_randomx_v2_set_canonical(reinterpret_cast<const uint8_t (*)[32]>(seedhash.data));
 
@@ -6403,7 +6342,7 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   TIME_MEASURE_FINISH(prepare);
   m_fake_pow_calc_time = prepare / blocks_entry.size();
 
-  if (blocks_entry.size() > 1 && threads > 1 && m_show_time_stats)
+  if (blocks_entry.size() > 1 && threads > 1)
     MDEBUG("Prepare blocks took: " << prepare << " ms");
 
 #define PREPARE_QUIT(m, verdict) \
@@ -6531,15 +6470,6 @@ void Blockchain::set_txpool_notify(TxpoolNotifyCallback&& notify)
 {
   std::lock_guard<decltype(m_txpool_notifier_mutex)> lg(m_txpool_notifier_mutex);
   m_txpool_notifier = notify;
-}
-
-void Blockchain::add_block_notify(BlockNotifyCallback&& notify)
-{
-  if (notify)
-  {
-    CRITICAL_REGION_LOCAL(m_blockchain_lock);
-    m_block_notifiers.push_back(std::move(notify));
-  }
 }
 
 void Blockchain::add_miner_notify(MinerNotifyCallback&& notify)

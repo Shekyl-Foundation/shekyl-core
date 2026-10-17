@@ -745,7 +745,7 @@ record and is not restated to cover it.
 **Fifteen** archival apply/revert hooks — fourteen plus
 `process_archival_segment_freezes_at_height` — are declared on `BlockchainDB`
 and defined out-of-line with empty `{}` bodies
-(`src/blockchain_db/blockchain_db.cpp:1725`–`:1810`), so a subclass that
+(`src/blockchain_db/blockchain_db.cpp:1708`–`:1810`), so a subclass that
 forgets one inherits a silent no-op. The contrast is deliberate and one file
 away: `get_archival_last_slash_epoch` (`:1799`) returns `UINT64_MAX` with a
 comment saying the sentinel "fails the release verify closed rather than
@@ -791,8 +791,8 @@ rather than by the patch. Rust: no default methods on consensus hooks —
 
 The curve-tree pop reconstructs each drained leaf's `TreePosition`
 arithmetically — `TreePosition tree_pos{leaf_count - drained_count + j}`
-(`src/blockchain_db/blockchain_db.cpp:887`) — because the drain journal never
-recorded it: `drain_entry_t` (`src/blockchain_db/blockchain_db.h:2512`)
+(`src/blockchain_db/blockchain_db.cpp:870`) — because the drain journal never
+recorded it: `drain_entry_t` (`src/blockchain_db/blockchain_db.h:2509`)
 carries `maturity`, `output` and the 128-byte `leaf`, and no position. The
 forward path *has* the value and drops it, assigning
 `tree_pos{tree_leaf_base + count}` at `src/blockchain_db/lmdb/db_lmdb.cpp:8678`
@@ -844,7 +844,7 @@ one site read them: `db.get_hard_fork_version(height)` inside
 was about it and not about the table in general.
 
 **What the read-back is worth, per caller.** `pop_block_from_blockchain`
-(`src/cryptonote_core/blockchain.cpp:814`) is the only caller of
+(`src/cryptonote_core/blockchain.cpp:812`) is the only caller of
 `on_block_popped`, always with a literal `1` (`:846`), so the loop runs once
 and the multi-block arm is dead. It has four callers of its own:
 

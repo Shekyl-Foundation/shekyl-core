@@ -33,8 +33,6 @@
 #include <ctime>
 
 #include <boost/function.hpp>
-#include <boost/program_options/options_description.hpp>
-#include <boost/program_options/variables_map.hpp>
 
 #include "cryptonote_basic/fwd.h"
 #include "cryptonote_core/i_core_events.h"
@@ -45,6 +43,7 @@
 #include "tx_pool.h"
 #include "blockchain.h"
 #include "cryptonote_basic/miner.h"
+#include "shekyl/shekyl_ffi.h"
 #include "cryptonote_basic/connection_context.h"
 #include "warnings.h"
 #include "crypto/hash.h"
@@ -91,14 +90,11 @@ namespace cryptonote
      const size_t long_term_block_weight_window;
    };
 
-  extern const command_line::arg_descriptor<std::string, false, true, 2> arg_data_dir;
-  extern const command_line::arg_descriptor<bool, false> arg_testnet_on;
-  extern const command_line::arg_descriptor<bool, false> arg_stagenet_on;
-  extern const command_line::arg_descriptor<bool, false> arg_regtest_on;
-  extern const command_line::arg_descriptor<difficulty_type> arg_fixed_difficulty;
-  extern const command_line::arg_descriptor<bool> arg_offline;
-  extern const command_line::arg_descriptor<size_t> arg_block_download_max_size;
-  extern const command_line::arg_descriptor<size_t> arg_span_limit;
+   /// The options a regtest chain runs under. `Blockchain::init` refuses
+   /// FAKECHAIN without options, so the daemon's `core::init` and every
+   /// utility that opens a regtest store pass this one value.
+   inline constexpr test_options regtest_test_options{0};
+
 
   /************************************************************************/
   /*                                                                      */
@@ -304,7 +300,6 @@ namespace cryptonote
       *
       * @param desc return-by-reference the command line options set to add to
       */
-     static void init_options(boost::program_options::options_description& desc);
 
      /**
       * @brief initializes the core as needed
@@ -317,7 +312,7 @@ namespace cryptonote
       *
       * @return false if one of the init steps fails, otherwise true
       */
-     bool init(const boost::program_options::variables_map& vm, const test_options *test_options = NULL);
+     bool init(const ShekylDaemonSnapshot& snapshot, const test_options *test_options = NULL);
 
      /**
       * @copydoc Blockchain::reset_and_set_genesis_block
@@ -335,34 +330,9 @@ namespace cryptonote
       */
      bool deinit();
 
-     /**
-      * @brief sets to drop blocks downloaded (for testing)
-      */
-     void test_drop_download();
 
-     /**
-      * @brief sets to drop blocks downloaded below a certain height
-      *
-      * @param height height below which to drop blocks
-      */
-     void test_drop_download_height(uint64_t height);
 
-     /**
-      * @brief gets whether or not to drop blocks (for testing)
-      *
-      * @return whether or not to drop blocks
-      */
-     bool get_test_drop_download() const;
 
-     /**
-      * @brief gets whether or not to drop blocks
-      *
-      * If the current blockchain height <= our block drop threshold
-      * and test drop blocks is set, return true
-      *
-      * @return see above
-      */
-     bool get_test_drop_download_height() const;
 
      /**
       * @copydoc Blockchain::get_current_blockchain_height
@@ -872,7 +842,6 @@ namespace cryptonote
       *
       * @return true
       */
-     bool handle_command_line(const boost::program_options::variables_map& vm);
 
      /**
       * @brief attempts to relay any transactions in the mempool which need it
@@ -902,9 +871,7 @@ namespace cryptonote
       */
      bool check_block_rate();
 
-     bool m_test_drop_download = true; //!< whether or not to drop incoming blocks (for testing)
 
-     uint64_t m_test_drop_download_height = 0; //!< height under which to drop incoming blocks, if doing so
 
      tx_memory_pool m_mempool; //!< transaction pool instance
      Blockchain m_blockchain_storage; //!< Blockchain instance
@@ -935,8 +902,6 @@ namespace cryptonote
      time_t start_time;
 
      bool m_offline;
-
-     std::shared_ptr<tools::Notify> m_block_rate_notify;
    };
 }
 

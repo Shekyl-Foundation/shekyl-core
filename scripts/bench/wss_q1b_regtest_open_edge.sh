@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Drive `open_edge` (WSS-Q1(b), WSS_Q1B_BENCH_SPEC.md §4) against a live
-# `shekyld --regtest`.
+# `shekyld --network regtest`.
 #
 # Get the mining address from the deterministic regtest wallet:
 #
@@ -37,15 +37,12 @@ fi
 rm -rf "$DATA"; mkdir -p "$DATA"
 # The daemon exits on stdin EOF (its own log says so: "EOF on stdin, exiting"),
 # which is why the Rust harness gives it a piped stdin and holds the handle.
-# A background job inherits the script's stdin, so `< /dev/null` -- or a closed
-# pipe -- kills it the moment it starts. A FIFO held open on fd 3 is the shell
-# equivalent of holding the pipe.
-FIFO="$DATA/stdin.fifo"
-mkfifo "$FIFO"
-exec 3<>"$FIFO"
-"$BIN" --regtest --offline --no-igd --fixed-difficulty 1 \
-  --rpc-bind-ip 127.0.0.1 --rpc-bind-port "$PORT" \
-  --data-dir "$DATA" --log-level 1 <&3 > "$DATA/daemon.out" 2>&1 &
+# Nothing reads the daemon's stdin without `--console`, so a closed stdin
+# is fine. The grammar's spellings (INPUT_GRAMMAR.md §5): both connectors
+# off is the offline posture.
+"$BIN" --network regtest --clearnet off --tor off --dev-difficulty 1 \
+  --rpc-admin-listen "127.0.0.1:$PORT" \
+  --data-dir "$DATA" --log-file "$DATA/shekyld.log" --log-level info < /dev/null > "$DATA/daemon.out" 2>&1 &
 DPID=$!
 echo "daemon pid $DPID, port $PORT"
 

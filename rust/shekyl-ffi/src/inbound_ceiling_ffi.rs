@@ -39,13 +39,25 @@ pub struct ShekylInboundCeiling {
     pub held: u64,
 }
 
+/// The inbound ceiling for this process, from its descriptor limit and the
+/// reservation in the remnant's preparation, with nothing held yet: what
+/// the seam binds with. An unset reservation reads as 0, which is what a
+/// harness that binds with no daemon reserves.
+pub fn configured() -> InboundCeiling {
+    InboundCeiling::resolve(
+        observe_descriptors(),
+        crate::remnant_prep::reserved_descriptors(),
+        0,
+    )
+}
+
 /// Resolve the inbound safety bound from this process and `reserved`.
 ///
 /// `reserved` is descriptors the caller has promised but not opened.
 ///
 /// `inbound_held` is how many descriptors this process currently spends on
 /// inbound connections it has already accepted. They are excluded from the
-/// observed count, because this bound MEASURES inbound: leaving them in would
+/// observed count, because this bound measures inbound: leaving them in would
 /// charge them twice and make the answer depend on how loaded the node was
 /// when the call happened. Pass `0` when nothing is connected yet.
 ///

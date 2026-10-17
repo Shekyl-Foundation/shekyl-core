@@ -142,7 +142,7 @@ struct BlockchainAndPool
 bool init_blockchain(Blockchain& bc, BlockchainDB* db)
 {
   const cryptonote::test_options test_options = {5000};
-  return bc.init(db, cryptonote::FAKECHAIN, true, &test_options, 0);
+  return bc.init(db, cryptonote::FAKECHAIN, &test_options, 0);
 }
 
 } // namespace
