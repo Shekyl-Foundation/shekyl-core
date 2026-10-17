@@ -3968,10 +3968,13 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
+ "shekyl-miner",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
+ "shekyl-thread-ledger",
+ "shekyl-thread-priority",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
@@ -4671,6 +4674,22 @@ dependencies = [
  "tracing-core",
  "tracing-subscriber",
  "trybuild",
+]
+
+[[package]]
+name = "shekyl-miner"
+version = "3.1.0"
+dependencies = [
+ "shekyl-address",
+ "shekyl-block-template",
+ "shekyl-crypto-pq",
+ "shekyl-difficulty",
+ "shekyl-pow-randomx",
+ "shekyl-thread-ledger",
+ "shekyl-thread-priority",
+ "shekyl-types",
+ "shekyl-wire",
+ "tracing",
 ]
 
 [[package]]

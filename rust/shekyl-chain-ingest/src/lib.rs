@@ -113,6 +113,11 @@ pub mod fetch;
 #[cfg(feature = "pipeline")]
 pub mod grader;
 pub mod metrics;
+/// The RPC's store-backed facts over the scenario chain and the captured
+/// chains (DRS-X PR 3, `DRS_X_STORE_FLIP.md` DX-Q3).
+/// The Rust miner loop over scenario chains (DRS-X PR 3, DX-Q4).
+#[cfg(all(test, feature = "pipeline"))]
+mod miner_tests;
 pub mod mutation;
 #[cfg(all(test, feature = "pipeline"))]
 #[path = "mutation_tests.rs"]
@@ -121,8 +126,6 @@ mod mutation_tests;
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
-/// The RPC's store-backed facts over the scenario chain and the captured
-/// chains (DRS-X PR 3, `DRS_X_STORE_FLIP.md` DX-Q3).
 #[cfg(all(test, feature = "pipeline"))]
 mod rpc_store_facts_tests;
 /// The store flip's native read handlers over scenario chains (DRS-X
