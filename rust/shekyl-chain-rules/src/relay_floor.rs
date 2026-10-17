@@ -27,7 +27,10 @@
 //! 725-block blob walk and its rolling median over 100 000 weights are what
 //! the flip deletes.
 
-use shekyl_economics::{relay_floor_from, CirculatingSupply, FeeOperands, RELAY_FLOOR_LOOKBACK};
+use shekyl_economics::{
+    fee_ladder_from, relay_floor_from, CirculatingSupply, FeeLadder, FeeOperands,
+    RELAY_FLOOR_LOOKBACK,
+};
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 
@@ -125,6 +128,32 @@ pub fn relay_floor_at<'id, V: ChainView<'id>>(
 ) -> Result<AtHeight<u64>, ViewRead<V::Fault>> {
     match fee_operands_at(view, height)? {
         AtHeight::Recorded(operands) => relay_floor_from(operands, economics())
+            .map(AtHeight::Recorded)
+            .ok_or(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
+                at: height,
+                operands,
+            })),
+        AtHeight::AboveTip => Ok(AtHeight::AboveTip),
+    }
+}
+
+/// The served fee ladder at `height` — economy, standard, priority — read
+/// off `view` through the same operands [`relay_floor_at`] prices the floor
+/// from, so the estimate a wallet is quoted and the floor a node admits
+/// against are one composition over one block's operands (FL-R6: the
+/// economy rung is the floor). `get_fee_estimate`'s store-backed answer at
+/// the connecting height (`DRS_X_STORE_FLIP.md` DX-Q10).
+///
+/// # Errors
+///
+/// As [`relay_floor_at`]: [`Corrupt::RelayFloorUnpriceable`] when the
+/// owner answers `None`, for the same two causes.
+pub fn fee_ladder_at<'id, V: ChainView<'id>>(
+    view: &V,
+    height: BlockHeight,
+) -> Result<AtHeight<FeeLadder>, ViewRead<V::Fault>> {
+    match fee_operands_at(view, height)? {
+        AtHeight::Recorded(operands) => fee_ladder_from(operands, economics())
             .map(AtHeight::Recorded)
             .ok_or(ViewRead::Corrupt(Corrupt::RelayFloorUnpriceable {
                 at: height,
