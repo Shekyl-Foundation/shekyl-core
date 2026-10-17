@@ -1763,11 +1763,11 @@ snapshot with a gate, not a second authority.
 | C | bound | 10 | 2 | 7 | 2 | 21 |
 | C | free | 88 | 39 | 7 | 22 | 156 |
 | P | bound | 0 | 0 | 0 | 0 | 0 |
-| P | free | 1 | 4 | 0 | 4 | 9 |
+| P | free | 1 | 4 | 1 | 3 | 9 |
 
 Consensus **enforced** (bucket ≠ 3) = 163 = **14 bound + 149 free** (154 / 14 / 140 between CEN-J28's minting, 2026-10-12 (FN-DSA increment 3), and CEN-J29–J37, the bundle's nine admission rows, minted `pending` the same day; 153 / 14 / 139 between CEN-B7 going to bucket 3, 2026-10-08, and CEN-J28's minting; 154 / 14 / 140 until CEN-B7 went to bucket 3 with the hard-fork mechanism, 2026-10-08; 153 / 14 / 139 between CEN-J17's move to bucket 3, 2026-10-04 (E6 slice 8 Q1), and CEN-J27's minting, 2026-10-08 (PR #1003); 154 / 14 / 140 before CEN-J17 moved; 153 / 13 / 140 between CEN-I20's minting and CEN-L16's, both 2026-09-23; 152 / 12 / 140 between CEN-F12's deletion on 2026-09-21 and CEN-I20; 153 / 141 before);
-consensus **ratified** (bucket 1 + 2) = 139 (98 + 41, table 1's bucket-1 and bucket-2 columns; 130 = 89 + 41 with CEN-J28 and before CEN-J29–J37 joined bucket 1 on 2026-10-12; 129 = 88 + 41 before CEN-J28 joined bucket 1 the same day, FN-DSA increment 3 — this sentence had read 128 = 88 + 40, one short of table 1's bucket-2 column (39 free + 2 bound), and is brought to the table with the move; 127 = 87 + 40 between CEN-J17 leaving bucket 1 on 2026-10-04 and CEN-J27 joining it on 2026-10-08, PR #1003; 128 = 88 + 40 before CEN-J17 left bucket 1 on 2026-10-04 (E6 slice 8 Q1), and 126 before CEN-I20 and CEN-L16 joined bucket 1 on 2026-09-23). Policy enforced = 9, ratified
-= 5 — all nine are 4.M and all arrive through E5's `AdmissionPolicy`. The
+consensus **ratified** (bucket 1 + 2) = 139 (98 + 41, table 1's bucket-1 and bucket-2 columns; 130 = 89 + 41 with CEN-J28 and before CEN-J29–J37 joined bucket 1 on 2026-10-12; 129 = 88 + 41 before CEN-J28 joined bucket 1 the same day, FN-DSA increment 3 — this sentence had read 128 = 88 + 40, one short of table 1's bucket-2 column (39 free + 2 bound), and is brought to the table with the move; 127 = 87 + 40 between CEN-J17 leaving bucket 1 on 2026-10-04 and CEN-J27 joining it on 2026-10-08, PR #1003; 128 = 88 + 40 before CEN-J17 left bucket 1 on 2026-10-04 (E6 slice 8 Q1), and 126 before CEN-I20 and CEN-L16 joined bucket 1 on 2026-09-23). Policy enforced = 8, ratified
+= 5 — all eight are 4.M and all arrive through E5's `AdmissionPolicy` (nine until CEN-M11's deletion to bucket 3, DRS-E5 PR-b, 2026-10-17). The
 completeness gate's denominators are exactly these two `enforced` figures;
 the bound/free split is a **schedule** view of the same rows, never a third
 denominator.
