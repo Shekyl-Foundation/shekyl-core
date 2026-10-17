@@ -54,10 +54,12 @@ libc = "0.2"
 # Cargo.lock at 0.61.2 through tokio and mio, so this adds no supply-chain
 # surface; both symbols were read in that version's source.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_SystemInformation",
-] }
+# The system directory for the managed tor's `SystemRoot` is shekyl-win-sec's
+# (`GetSystemWindowsDirectoryW`), shared with the notify runner. The socket
+# handle's inheritance flag (`SetHandleInformation`) is set here, beside the
+# socket the launch hands tor.
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+windows-sys = { version = "0.61", features = ["Win32_Foundation"] }
 
 [dev-dependencies]
 hex-literal = "1"

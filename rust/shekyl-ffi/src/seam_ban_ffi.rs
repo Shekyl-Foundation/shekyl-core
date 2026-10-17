@@ -12,6 +12,9 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use shekyl_seam::{deadline_after, BanLeft, Ipv4Subnet, ListedBan};
 
+/// The subnet a ban names, for the daemon's owners.
+pub use shekyl_seam::Ipv4Subnet as Subnet;
+
 use super::{ban_now, hub, process_sockets};
 
 /// One ban, as `getbans` reads it. `text` is a host or `address/prefix`.
@@ -110,6 +113,36 @@ pub unsafe extern "C" fn shekyl_ban_for(text: *const c_char, subnet: i32, durati
 ///
 /// # Safety
 /// `text` is a NUL-terminated string.
+/// Bans `subnet` for the life of the process: the ban file's subnet
+/// entries, applied by the daemon's Rust `main()`. Before the seam binds,
+/// the process table carries it into the hub.
+pub fn ban_subnet_permanent(subnet: Ipv4Subnet) {
+    if let Some(hub) = hub() {
+        let _closed = hub.ban_subnet_permanent(subnet);
+    } else {
+        let _closed = process_sockets().ban_subnet_permanent(subnet);
+    }
+}
+
+/// Whether `host` is banned with no deadline (a ban file entry, by host
+/// or by subnet), read off the process table.
+#[must_use]
+pub fn is_banned_permanently(host: IpAddr) -> bool {
+    matches!(
+        process_sockets().remaining(host, ban_now()),
+        Some(BanLeft::Permanent)
+    )
+}
+
+/// Bans `host` for the life of the process: the ban file's host entries.
+pub fn ban_host_permanent(host: IpAddr) {
+    if let Some(hub) = hub() {
+        let _closed = hub.ban_host_permanent(host);
+    } else {
+        let _closed = process_sockets().ban_host_permanent(host);
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_ban_permanent(text: *const c_char, subnet: i32) -> i32 {
     let Some(text) = c_text(text) else {
@@ -119,20 +152,12 @@ pub unsafe extern "C" fn shekyl_ban_permanent(text: *const c_char, subnet: i32) 
         let Some(prefix) = parse_subnet(&text) else {
             return -2;
         };
-        if let Some(hub) = hub() {
-            let _closed = hub.ban_subnet_permanent(prefix);
-        } else {
-            let _closed = process_sockets().ban_subnet_permanent(prefix);
-        }
+        ban_subnet_permanent(prefix);
     } else {
         let Some(host) = text.parse::<IpAddr>().ok() else {
             return -2;
         };
-        if let Some(hub) = hub() {
-            let _closed = hub.ban_host_permanent(host);
-        } else {
-            let _closed = process_sockets().ban_host_permanent(host);
-        }
+        ban_host_permanent(host);
     }
     0
 }

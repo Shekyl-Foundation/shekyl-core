@@ -86,7 +86,6 @@ namespace cryptonote
   };
 
   typedef boost::function<void(std::vector<txpool_event>)> TxpoolNotifyCallback;
-  typedef boost::function<void(uint64_t /* height */, epee::span<const block> /* blocks */)> BlockNotifyCallback;
   typedef boost::function<void(uint8_t /* major_version */, uint64_t /* height */, const crypto::hash& /* prev_id */, const crypto::hash& /* seed_hash */, difficulty_type /* diff */, uint64_t /* median_weight */, uint64_t /* already_generated_coins */, const std::vector<tx_block_template_backlog_entry>& /* tx_backlog */)> MinerNotifyCallback;
 
   /************************************************************************/
@@ -130,7 +129,7 @@ namespace cryptonote
      *
      * @return true on success, false if any initialization steps fail
      */
-    bool init(BlockchainDB* db, const network_type nettype = MAINNET, bool offline = false, const cryptonote::test_options *test_options = NULL, difficulty_type fixed_difficulty = 0);
+    bool init(BlockchainDB* db, const network_type nettype = MAINNET, const cryptonote::test_options *test_options = NULL, difficulty_type fixed_difficulty = 0);
 
     /**
      * @brief Uninitializes the blockchain state
@@ -777,25 +776,11 @@ namespace cryptonote
     void set_txpool_notify(TxpoolNotifyCallback&& notify);
 
     /**
-     * @brief sets a block notify object to call for every new block
-     *
-     * @param notify the notify object to call at every new block
-     */
-    void add_block_notify(BlockNotifyCallback&& notify);
-
-    /**
      * @brief sets a miner notify object to call for every new block
      *
      * @param notify the notify object to call at every new block
      */
     void add_miner_notify(MinerNotifyCallback&& notify);
-
-    /**
-     * @brief sets a reorg notify object to call for every reorg
-     *
-     * @param notify the notify object to call at every reorg
-     */
-    void set_reorg_notify(const std::shared_ptr<tools::Notify> &notify) { m_reorg_notify = notify; }
 
     /**
      * @brief Notify this Blockchain's txpool notifier about a txpool event
@@ -812,7 +797,6 @@ namespace cryptonote
      *
      * @param stats the new time stats setting
      */
-    void set_show_time_stats(bool stats) { m_show_time_stats = stats; }
 
     /**
      * @brief get difficulty target
@@ -1086,7 +1070,6 @@ namespace cryptonote
 
     std::atomic<bool> m_following_degraded{false}; //!< C2-R1b F-1(a): switch refused at the prune watermark
     blockchain_db_sync_mode m_db_sync_mode;
-    bool m_show_time_stats;
     bool m_db_default_sync;
     bool m_db_sync_on_blocks;
     uint64_t m_db_sync_threshold;
@@ -1130,7 +1113,6 @@ namespace cryptonote
 
 
     network_type m_nettype;
-    bool m_offline;
     difficulty_type m_fixed_difficulty;
 
     std::atomic<bool> m_cancel;
@@ -1166,9 +1148,7 @@ namespace cryptonote
        the callable object has a single `std::shared_ptr` or `std::weap_ptr`
        internally. Whereas, the libstdc++ `std::function` will allocate. */
 
-    std::vector<BlockNotifyCallback> m_block_notifiers;
     std::vector<MinerNotifyCallback> m_miner_notifiers;
-    std::shared_ptr<tools::Notify> m_reorg_notify;
 
     // for prepare_handle_incoming_blocks
     uint64_t m_prepare_height;

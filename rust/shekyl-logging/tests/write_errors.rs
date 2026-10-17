@@ -16,7 +16,7 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use shekyl_logging::{Config, __test_only_init_with_stderr};
+use shekyl_logging::{Config, LineColour, __test_only_init_with_stderr};
 use tracing::Level;
 
 /// Writes the sink refuses before it accepts. Enough that a summary
@@ -58,8 +58,14 @@ fn a_sink_that_refuses_writes_reports_them_once_it_accepts() {
         refusals_left: REFUSALS,
         written: Arc::clone(&written),
     };
-    let guard = __test_only_init_with_stderr(Config::stderr_only(Level::DEBUG), sink, QUEUE_LINES)
-        .expect("init");
+    // Plain so the report's "WARN shekyl_logging: " stays one span.
+    let guard = __test_only_init_with_stderr(
+        Config::stderr_only(Level::DEBUG),
+        sink,
+        QUEUE_LINES,
+        LineColour::Plain,
+    )
+    .expect("init");
 
     for logged in 1..=LINES {
         tracing::debug!(logged, "a line");

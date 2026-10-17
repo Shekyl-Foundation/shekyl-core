@@ -119,6 +119,13 @@ target_link_libraries(blockchain_import
 set_property(TARGET blockchain_import
 	PROPERTY
 	OUTPUT_NAME "shekyl-blockchain-import")
+# The snapshot the importer constructs the core from comes from the real
+# Rust parse (`shekyl_daemon_snapshot_parse`, in the daemon image, not in
+# libshekyl_ffi.a): this binary links the daemon image, as core_tests does.
+set_property(TARGET blockchain_import PROPERTY SHEKYL_RUST_IMAGE_DAEMON ON)
+if(TARGET shekyl_daemon_image_rust)
+  add_dependencies(blockchain_import shekyl_daemon_image_rust)
+endif()
 install(TARGETS blockchain_import DESTINATION bin)
 
 shekyl_add_executable(blockchain_export

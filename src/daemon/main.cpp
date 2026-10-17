@@ -1,4 +1,5 @@
-// Copyright (c) 2014-2022, The Monero Project
+// Copyright (c) 2025-2026, The Shekyl Foundation
+// Copyright (c) 2014-2024, The Monero Project
 //
 // All rights reserved.
 //
@@ -22,391 +23,172 @@
 // THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
 // SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
 // PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
-// STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
-// THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
-// Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+// The daemon's `main`, and the C++ remnant's entry pair
+// (DAEMON_CONFIG_CUTOVER.md §2.2, DC-Q13). Rust owns the process:
+// `main` hands `shekyl_daemon_main` an entry holding the version strings and
+// two functions, `run` and `stop`, and returns its status. Rust reads the
+// arguments, the configuration file, takes the lock, checks the marker,
+// starts logging, makes the announcements and owns every signal; `run`
+// receives the snapshot of the values whose reader is still C++ and parses
+// nothing.
 
 #include <boost/filesystem/operations.hpp>
-
-#include "common/command_line.h"
-#include "common/removed_flags.h"
 #include "common/scoped_message_writer.h"
 #include "common/util.h"
 #include "cryptonote_core/cryptonote_core.h"
-#include "cryptonote_protocol/levin_notify.h"
 #include "cryptonote_basic/miner.h"
 #include "daemon/command_server.h"
 #include "daemon/daemon.h"
 #include "misc_log_ex.h"
 #include "p2p/net_node.h"
-#include "string_tools_lexical.h"
 #include "rpc/core_rpc_server.h"
-#include "rpc/rpc_args.h"
-#include "daemon/command_line_args.h"
 #include "cryptonote_config.h"
 #include "version.h"
-
 #ifdef STACK_TRACE
 #include "common/stack_trace.h"
 #endif // STACK_TRACE
-
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
-
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon"
+#include "shekyl/shekyl_ffi.h"
 
-namespace po = boost::program_options;
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <iostream>
+#include <string>
+#include <vector>
+
 namespace bf = boost::filesystem;
+
+namespace {
 
 #ifdef WIN32
 bool isFat32(const wchar_t* root_path)
 {
   std::vector<wchar_t> fs(MAX_PATH + 1);
-  if (!::GetVolumeInformationW(root_path, nullptr, 0, nullptr, 0, nullptr, &fs[0], MAX_PATH))
+  if (!::GetVolumeInformationW(root_path, nullptr, 0, nullptr, 0, nullptr, &fs[0], fs.size()))
   {
     MERROR("Failed to get '" << root_path << "' filesystem name. Error code: " << ::GetLastError());
     return false;
   }
-
   return wcscmp(L"FAT32", &fs[0]) == 0;
 }
 #endif
 
-int main(int argc, char const * argv[])
+// The remnant's `run`: `noexcept`, every C++ exception caught and turned
+// into a status. Takes what C++ still reads from the snapshot, runs the
+// client command or the daemon, and returns.
+int remnant_run(const ShekylDaemonSnapshot* snapshot) noexcept
 {
   try {
-
-    // TODO parse the debug options like set log level right here at start
+    if (snapshot == nullptr)
+      return 1;
+    if (shekyl_daemon_snapshot_field_count() != SHEKYL_DAEMON_SNAPSHOT_FIELDS)
+    {
+      std::cerr << "shekyld: the C++ reads a snapshot of " << SHEKYL_DAEMON_SNAPSHOT_FIELDS
+                << " fields and Rust filled " << shekyl_daemon_snapshot_field_count()
+                << "; the two sides were built from different definitions" << std::endl;
+      return 1;
+    }
 
     tools::on_startup();
-
 #ifdef __linux__
     prctl(PR_SET_DUMPABLE, 0);
 #endif
 
-    epee::string_tools::set_module_name_and_folder(argv[0]);
+    const bool testnet = snapshot->network == 1;
+    const bool stagenet = snapshot->network == 2;
+    const bool regtest = snapshot->network == 3;
 
-    // Build argument description
-    po::options_description all_options("All");
-    po::options_description hidden_options("Hidden");
-    po::options_description visible_options("Options");
-    po::options_description core_settings("Settings");
-    po::positional_options_description positional_options;
+    // Client mode: a command for a running daemon, at the admin endpoint
+    // Rust resolved. No lock, no marker, no log file. The endpoint is four
+    // octets and a port; this does not parse a string.
+    if (snapshot->command.len > 0)
     {
-      // Misc Options
-
-      command_line::add_arg(visible_options, command_line::arg_help);
-      command_line::add_arg(visible_options, command_line::arg_version);
-      command_line::add_arg(visible_options, daemon_args::arg_os_version);
-      command_line::add_arg(visible_options, daemon_args::arg_config_file);
-
-      // Settings
-      command_line::add_arg(core_settings, daemon_args::arg_log_file);
-      command_line::add_arg(core_settings, daemon_args::arg_log_level);
-      command_line::add_arg(core_settings, daemon_args::arg_max_log_file_size);
-      command_line::add_arg(core_settings, daemon_args::arg_max_log_files);
-      command_line::add_arg(core_settings, daemon_args::arg_max_concurrency);
-      command_line::add_arg(core_settings, daemon_args::arg_proxy);
-      command_line::add_arg(visible_options, daemon_args::arg_non_interactive);
-
-      daemonize::Daemon::init_options(core_settings);
-
-      // Hidden options
-      command_line::add_arg(hidden_options, daemon_args::arg_command);
-      command_line::add_arg(hidden_options, daemon_args::arg_carrier_development);
-
-      visible_options.add(core_settings);
-      all_options.add(visible_options);
-      all_options.add(hidden_options);
-
-      // Positional
-      positional_options.add(daemon_args::arg_command.name, -1); // -1 for unlimited arguments
-    }
-
-    // Do command line parsing
-    po::variables_map vm;
-    bool ok = command_line::handle_error_helper(visible_options, [&]()
-    {
-      try
-      {
-        boost::program_options::store(
-          boost::program_options::command_line_parser(argc, argv)
-            .options(all_options).positional(positional_options).run()
-        , vm
-        );
-      }
-      catch (boost::program_options::unknown_option const & e)
-      {
-        if (shekyl::cli::handle_removed_flag(e, "shekyld"))
-        {
-          return false;
-        }
-        throw;
-      }
-
-      return true;
-    });
-    if (!ok) return 1;
-
-    if (command_line::get_arg(vm, command_line::arg_help))
-    {
-      std::cout << "Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")" << ENDL << ENDL;
-      std::cout << "Usage: " + std::string{argv[0]} + " [options|settings] [daemon_command...]" << std::endl << std::endl;
-      std::cout << visible_options << std::endl;
-      return 0;
-    }
-
-    // Shekyl Version
-    if (command_line::get_arg(vm, command_line::arg_version))
-    {
-      std::cout << "Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL
-                << ", protocol " << SHEKYL_PROTOCOL_VERSION << ")" << ENDL;
-      return 0;
-    }
-
-    // OS
-    if (command_line::get_arg(vm, daemon_args::arg_os_version))
-    {
-      std::cout << "OS: " << tools::get_os_version_string() << ENDL;
-      return 0;
-    }
-
-    std::string config = command_line::get_arg(vm, daemon_args::arg_config_file);
-    boost::filesystem::path config_path(config);
-    boost::system::error_code ec;
-    if (bf::exists(config_path, ec))
-    {
-      try
-      {
-        po::store(po::parse_config_file<char>(config_path.string<std::string>().c_str(), core_settings), vm);
-      }
-      catch (const po::unknown_option &e)
-      {
-        // A retired flag in the config file is refused by name with its
-        // reason, the same as on the command line: every shipped unit file
-        // sends its operator through --config-file.
-        if (shekyl::cli::handle_removed_flag(e, "shekyld"))
-          return 1;
-        std::string unrecognized_option = e.get_option_name();
-        if (all_options.find_nothrow(unrecognized_option, false))
-        {
-          std::cerr << "Option '" << unrecognized_option << "' is not allowed in the config file, please use it as a command line flag." << std::endl;
-        }
-        else
-        {
-          std::cerr << "Unrecognized option '" << unrecognized_option << "' in config file." << std::endl;
-        }
+      if (!snapshot->client_endpoint.present)
         return 1;
-      }
-      catch (const std::exception &e)
-      {
-        // log system isn't initialized yet
-        std::cerr << "Error parsing config file: " << e.what() << std::endl;
-        throw;
-      }
-    }
-    else if (!command_line::is_arg_defaulted(vm, daemon_args::arg_config_file))
-    {
-      std::cerr << "Can't find config file " << config << std::endl;
+      std::vector<std::string> command;
+      command.reserve(snapshot->command.len);
+      for (size_t i = 0; i < snapshot->command.len; ++i)
+        command.emplace_back(snapshot->command.items[i]);
+      // Network order, the bit pattern inet_addr returns.
+      uint32_t rpc_ip;
+      std::memcpy(&rpc_ip, snapshot->client_endpoint.octets,
+                  sizeof snapshot->client_endpoint.octets);
+      uint16_t rpc_port = snapshot->client_endpoint.port;
+      const cryptonote::network_type console_nettype =
+        testnet ? cryptonote::TESTNET
+        : stagenet ? cryptonote::STAGENET
+        : regtest ? cryptonote::FAKECHAIN
+        : cryptonote::MAINNET;
+      daemonize::t_command_server rpc_commands{rpc_ip, rpc_port, console_nettype};
+      if (rpc_commands.process_command_vec(command))
+        return rpc_commands.rpc_request_failed() ? 1 : 0;
+      PAUSE_READLINE();
+      std::cerr << "Unknown command: " << command.front() << std::endl;
       return 1;
     }
 
-    const bool testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
-    const bool stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-    const bool regtest = command_line::get_arg(vm, cryptonote::arg_regtest_on);
-    if (testnet + stagenet + regtest > 1)
-    {
-      std::cerr << "Can't specify more than one of --tesnet and --stagenet and --regtest" << ENDL;
-      return 1;
-    }
-
-    // data_dir
-    //   default: e.g. ~/.shekyl/ or ~/.shekyl/testnet
-    //   if data-dir argument given:
-    //     absolute path
-    //     relative path: relative to cwd
-
-    // Create data dir if it doesn't exist
-    boost::filesystem::path data_dir = boost::filesystem::absolute(
-        command_line::get_arg(vm, cryptonote::arg_data_dir));
-
+    const bf::path data_dir(snapshot->data_dir);
 #ifdef WIN32
     if (isFat32(data_dir.root_path().c_str()))
-    {
       MERROR("Data directory resides on FAT32 volume that has 4GiB file size limit, blockchain might get corrupted.");
-    }
 #endif
+    tools::create_directories_if_necessary(data_dir.string());
 
-    bf::path relative_path_base = data_dir;
-
-    po::notify(vm);
-
-    // log_file_path
-    //   default: ~/.shekyl/logs/<binary>.log, resolved via
-    //     `mlog_get_default_log_path` so the file lives on the
-    //     Rust-owned logs tree (`<home>/.shekyl/logs/`) rather than
-    //     next to the blockchain data. On testnet / stagenet the
-    //     base name is suffixed so the three networks can run
-    //     side-by-side without clobbering each other's log file.
-    //     This matches the V4 contract promised in
-    //     `docs/USER_GUIDE.md` §"Logging" and is what the Rust FFI
-    //     already returns from `shekyl_log_default_path` when
-    //     shekyl-cli / shekyl-wallet-rpc default their paths.
-    //   if `--log-file` argument given: use it as-is
-    //     (absolute, or relative to data_dir).
-    //
-    // File rotation is driven by `--max-log-file-size` (default 100
-    // MB minus 7.6 KB headroom, see `MAX_LOG_FILE_SIZE` in
-    // `misc_log_ex.h`) and `--max-log-files` (default 50). POSIX
-    // mode `0600` on the live file and every rotated archive is
-    // enforced unconditionally by the Rust side; see the `init_file`
-    // contract in `src/shekyl/shekyl_log.h`.
-    bf::path log_file_path;
-    if (!command_line::is_arg_defaulted(vm, daemon_args::arg_log_file))
-    {
-      log_file_path = command_line::get_arg(vm, daemon_args::arg_log_file);
-    }
-    else
-    {
-      std::string default_name = CRYPTONOTE_NAME;
-      if (testnet)
-        default_name += "-testnet";
-      else if (stagenet)
-        default_name += "-stagenet";
-      else if (regtest)
-        default_name += "-regtest";
-      log_file_path = mlog_get_default_log_path(default_name.c_str());
-    }
-    if (!log_file_path.has_parent_path())
-      log_file_path = bf::absolute(log_file_path, relative_path_base);
-    mlog_configure(log_file_path.string(), true, command_line::get_arg(vm, daemon_args::arg_max_log_file_size), command_line::get_arg(vm, daemon_args::arg_max_log_files));
-
-    // Wire the Rust-side tracing surface into the subscriber that
-    // mlog_configure just installed. Required ordering: init (inside
-    // mlog_configure) first, then install. ALREADY_INSTALLED is the
-    // benign re-configure arm; anything else means daemon-rpc tracing
-    // events would be dropped, which is worth a loud warning but not
-    // an abort (C++-side logging is unaffected).
+    // The tracing forwarder: C++ log calls reach the subscriber Rust
+    // installed. Logging itself is Rust's (§2.2 step 5).
     {
       const int32_t fwd_rc = shekyl_log_install_tracing_forwarder();
       if (fwd_rc != SHEKYL_LOG_OK && fwd_rc != SHEKYL_LOG_ERR_ALREADY_INSTALLED)
         std::cerr << "Warning: tracing forwarder install failed (code " << fwd_rc
-                  << "); Rust daemon-rpc log events will be dropped" << std::endl;
+                  << "); C++ log events will be dropped" << std::endl;
     }
 
-    // Set log level
-    if (!command_line::is_arg_defaulted(vm, daemon_args::arg_log_level))
-    {
-      mlog_set_log(command_line::get_arg(vm, daemon_args::arg_log_level).c_str());
-    }
-
-    // after logs initialized
-    tools::create_directories_if_necessary(data_dir.string());
-
-    if (!command_line::is_arg_defaulted(vm, daemon_args::arg_max_concurrency))
-      tools::set_max_concurrency(command_line::get_arg(vm, daemon_args::arg_max_concurrency));
-
-    // logging is now set up
-    MGINFO("Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")");
-
-    /* THE CARRIER OPT-IN, and it is read HERE for two reasons.
-
-       After `mlog_configure`, because arming it changes this node's network
-       posture and the warning below is the only thing that says so — read it
-       before logging exists and the operator gets silence. And before the
-       daemon is constructed, because the flag is process-wide state that
-       `make_relay_zone` consults as each zone is built; set it after and the
-       zones are already made.
-
-       No `else` branch: OFF is the default in every build and needs no
-       announcement. See `COVER_TRAFFIC_RESTORATION.md` §3.1 for why this is a
-       development switch rather than a product one, and §3.1c for the
-       measurement it exists to make runnable. */
-    if (command_line::get_arg(vm, daemon_args::arg_carrier_development))
-    {
-      cryptonote::levin::set_carrier_development(true);
-      MWARNING("--" << daemon_args::arg_carrier_development.name
-               << " is set: the Dandelion++ noise carrier is ARMED on every "
-                  "encrypted zone. This node now emits sustained cover traffic "
-                  "(~16 KiB/s, ~42 GB/month) it does not emit by default, and "
-                  "its traffic profile differs from an unarmed node's. This is "
-                  "a DEVELOPMENT switch for the COVER_TRAFFIC_RESTORATION.md "
-                  "§3.1c measurement, not an operator setting.");
-    }
-
-    // If there are positional options, we're running a daemon command
-    {
-      auto command = command_line::get_arg(vm, daemon_args::arg_command);
-
-      if (command.size())
-      {
-        const cryptonote::rpc_args::descriptors arg{};
-        auto rpc_ip_str = command_line::get_arg(vm, arg.rpc_bind_ip);
-        auto rpc_port_str = command_line::get_arg(vm, cryptonote::core_rpc_server::arg_rpc_bind_port);
-
-        uint32_t rpc_ip;
-        uint16_t rpc_port;
-        if (!epee::string_tools::get_ip_int32_from_string(rpc_ip, rpc_ip_str))
-        {
-          std::cerr << "Invalid IP: " << rpc_ip_str << std::endl;
-          return 1;
-        }
-        if (!epee::string_tools::get_xtype_from_string(rpc_port, rpc_port_str))
-        {
-          std::cerr << "Invalid port: " << rpc_port_str << std::endl;
-          return 1;
-        }
-
-        // The shekyld RPC listener is plaintext loopback with no digest auth
-        // (rpc_args is registered with include_listener_tls_auth=false), so the
-        // control client has no login or TLS to carry: the former --rpc-login /
-        // --rpc-ssl* flags are not registered for shekyld. Remote/authenticated
-        // access is fronted by an onion service or reverse proxy outside the
-        // daemon (docs/DAEMON_RPC_RUST.md).
-        // `net_type` is this process's network, from the same flags the daemon
-        // parses. It is the console's half of the VC-2 identity handshake.
-        const cryptonote::network_type console_nettype =
-          testnet ? cryptonote::TESTNET
-          : stagenet ? cryptonote::STAGENET
-          : regtest ? cryptonote::FAKECHAIN
-          : cryptonote::MAINNET;
-        daemonize::t_command_server rpc_commands{rpc_ip, rpc_port, console_nettype};
-        if (rpc_commands.process_command_vec(command))
-        {
-          // A recognized command that could not get its answer from the
-          // daemon (unreachable, refused, non-OK status) exits non-zero: the
-          // failure is already on stderr, and a script must be able to see
-          // it without parsing that text.
-          return rpc_commands.rpc_request_failed() ? 1 : 0;
-        }
-        else
-        {
-          PAUSE_READLINE();
-          std::cerr << "Unknown command: " << command.front() << std::endl;
-          return 1;
-        }
-      }
-    }
+    MGINFO("Shekyl '" << SHEKYL_RELEASE_NAME << "' (v" << SHEKYL_VERSION_FULL << ")");
 
     MINFO("Constructing daemon.");
-
-    LOG_PRINT_L0("Shekyl '" << MONERO_RELEASE_NAME << "' (v" << MONERO_VERSION_FULL << ")");
-
-    daemonize::Daemon daemon{vm};
-    const bool interactive = !command_line::get_arg(vm, daemon_args::arg_non_interactive);
-    return daemon.run(interactive) ? 0 : 1;
+    daemonize::Daemon daemon{*snapshot};
+    return daemon.run(snapshot->console) ? 0 : 1;
   }
   catch (std::exception const & ex)
   {
-    LOG_ERROR("Exception in main! " << ex.what());
+    LOG_ERROR("Exception in the daemon's run! " << ex.what());
   }
   catch (...)
   {
-    LOG_ERROR("Exception in main!");
+    LOG_ERROR("Exception in the daemon's run!");
   }
   return 1;
+}
+
+// The remnant's `stop`: requests the stop `run` is waiting for and returns
+// at once. `noexcept`.
+void remnant_stop() noexcept
+{
+  daemonize::request_stop();
+}
+
+
+} // namespace
+
+int main(int argc, char const * argv[])
+{
+  (void)argc;
+  (void)argv;
+  ShekylDaemonEntry entry;
+  entry.release_name = SHEKYL_RELEASE_NAME;
+  entry.version_full = SHEKYL_VERSION_FULL;
+  entry.protocol_version = SHEKYL_PROTOCOL_VERSION;
+  entry.run = &remnant_run;
+  entry.stop = &remnant_stop;
+  return shekyl_daemon_main(&entry);
 }
