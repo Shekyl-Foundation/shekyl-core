@@ -116,6 +116,17 @@ impl Dial for ZoneDial {
             Endpoint::TorInbound => Err(CloseCause::new(CloseKind::LocalClose)),
         }
     }
+
+    /// One task per connection on the transport runtime, in both
+    /// directions: a thread held for the life of a connection is outside
+    /// the thread ledger, and on the pool's blocking lane it made every
+    /// connection past the cap deaf.
+    fn drive(&self, hub: &Hub, id: SocketId, session: Session) {
+        let hub = hub.clone();
+        self.host
+            .handle
+            .spawn(async move { drive_inbound_async(&hub, id, session).await });
+    }
 }
 
 impl ZoneDial {
@@ -364,7 +375,7 @@ fn adopt_clearnet(hub: &Hub, admitted: ClearnetAdmitted) {
     let Ok(attached) = hub.adopt(admitted.open, admitted.session, endpoint, admitted.gap) else {
         return;
     };
-    spawn_drive(hub, id, attached.session);
+    hub.drive(id, attached.session);
 }
 
 fn adopt_tor(hub: &Hub, admitted: TorAdmitted) {
@@ -383,15 +394,7 @@ fn adopt_tor(hub: &Hub, admitted: TorAdmitted) {
     else {
         return;
     };
-    spawn_drive(hub, id, attached.session);
-}
-
-/// One task per connection, not one blocking thread: the pool has the
-/// caller's cap, and a thread held for the life of a connection made
-/// every connection past that cap deaf.
-fn spawn_drive(hub: &Hub, id: SocketId, session: Session) {
-    let hub = hub.clone();
-    tokio::spawn(async move { drive_inbound_async(&hub, id, session).await });
+    hub.drive(id, attached.session);
 }
 
 /// Every 60 s, the engine's lateness totals for each class that has fired,

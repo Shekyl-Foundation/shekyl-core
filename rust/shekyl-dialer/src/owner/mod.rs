@@ -568,11 +568,7 @@ impl Dialer {
         self.hub.session_established(kept.id);
         self.hub
             .post_handshake_result(kept.id, connector, kept.support_flags, kept.sync);
-        let id = kept.id;
-        let hub = self.hub.clone();
-        let session = kept.session;
-        let pump = std::thread::spawn(move || shekyl_seam::drive_inbound(&hub, id, session));
-        self.hub.track_pump(id, pump);
+        self.hub.drive(kept.id, kept.session);
         true
     }
 

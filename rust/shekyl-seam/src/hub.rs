@@ -261,8 +261,8 @@ impl Hub {
     /// `established` post in one call.
     ///
     /// The seam tests and the harness use this. The outbound dialer does
-    /// not: it runs the handshake between the two. The caller drives
-    /// [`crate::drive_inbound`] on the returned session.
+    /// not: it runs the handshake between the two. The caller starts the
+    /// returned session's pump with [`Self::drive`].
     pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
         let channel = self.dial_channel(endpoint)?;
         self.adopt(channel.open, channel.session, channel.endpoint, channel.gap)
@@ -577,10 +577,16 @@ impl Hub {
             .is_some_and(|dial| dial.inject(id, frame))
     }
 
-    /// Remember the harness pump so [`Self::reap`] can join it.
-    pub fn track_pump(&self, id: SocketId, pump: std::thread::JoinHandle<()>) {
-        if let Some(dial) = self.current_dial() {
-            dial.track_pump(id, pump);
+    /// Start the inbound pump of `id`, an adopted session, where the
+    /// installed dialer runs pumps ([`Dial::drive`]). With no dialer the
+    /// hub is shutting down, and the row closes as [`CloseKind::LocalClose`].
+    pub fn drive(&self, id: SocketId, session: Session) {
+        match self.current_dial() {
+            Some(dial) => dial.drive(self, id, session),
+            None => {
+                drop(session);
+                let _ = self.finish(id, CloseCause::new(CloseKind::LocalClose));
+            }
         }
     }
 
@@ -770,7 +776,7 @@ impl Hub {
     /// The Levin handshake finished. Fires this row's gap sender, if it
     /// still has one.
     ///
-    /// A missing row, and a row already in [`Phase::Closed`], are left
+    /// A missing row, and a row already closed, are left
     /// alone. A close is not a handshake, and the closed row stays until
     /// [`Self::reap`].
     pub fn session_established(&self, id: SocketId) {

@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use tracing_subscriber::fmt::MakeWriter;
 
+use shekyl_capped_stream::Session;
 use shekyl_dialer::{DialAim, Dialer};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_levin::{
@@ -486,10 +487,12 @@ fn a_close_between_adopt_and_the_kept_row_is_not_kept() {
 }
 
 /// The loopback dial with a real gap: each channel carries a gap sender, and
-/// its receiver is kept so a test can see whether the sender fired.
+/// its receiver is kept so a test can see whether the sender fired. It also
+/// records each session whose pump it was asked to run.
 struct GapDial {
     inner: Loopback,
     receivers: Mutex<Vec<(SocketId, oneshot::Receiver<()>)>>,
+    driven: Mutex<Vec<SocketId>>,
 }
 
 impl Dial for GapDial {
@@ -521,8 +524,9 @@ impl Dial for GapDial {
         self.inner.retired(id);
     }
 
-    fn track_pump(&self, id: SocketId, pump: thread::JoinHandle<()>) {
-        self.inner.track_pump(id, pump);
+    fn drive(&self, hub: &Hub, id: SocketId, session: Session) {
+        self.driven.lock().expect("driven").push(id);
+        self.inner.drive(hub, id, session);
     }
 }
 
@@ -539,6 +543,7 @@ fn a_kept_dial_is_established_and_its_gap_fired_before_any_strand_turn() {
     let gaps: Arc<GapDial> = Arc::new(GapDial {
         inner: Loopback::new(Sockets::new(), SEND_CAP),
         receivers: Mutex::new(Vec::new()),
+        driven: Mutex::new(Vec::new()),
     });
     let gaps_post = Arc::clone(&gaps);
     let hubs: Arc<Mutex<Option<Hub>>> = Arc::new(Mutex::new(None));
@@ -568,19 +573,23 @@ fn a_kept_dial_is_established_and_its_gap_fired_before_any_strand_turn() {
         Arc::new(ManualClock::new(Tick::new(1))),
     );
     *hubs.lock().expect("hub") = Some(hub.clone());
-    hub.install_dial(gaps);
+    hub.install_dial(Arc::clone(&gaps) as Arc<dyn Dial>);
     let dialer = dialer_for(&hub);
     let mut rng = SplitMix64::new(12);
     dialer
         .admit_operator(&peer(1), Tick::new(1), &mut rng)
         .expect("admitted");
     let rig = Rig { hub, posts, dialer };
-    dial_with(&rig, &peer(1), DialAim::Keep, vec![reply(NETWORK, vec![])]).expect("kept");
+    let kept =
+        dial_with(&rig, &peer(1), DialAim::Keep, vec![reply(NETWORK, vec![])]).expect("kept");
     assert_eq!(
         *seen.lock().expect("seen"),
         Some((true, true)),
         "at the notification the row is established and its gap sender has fired"
     );
+    // The dialer starts no pump of its own: the installed dialer runs it,
+    // as a task on the transport runtime in the zone.
+    assert_eq!(*gaps.driven.lock().expect("driven"), vec![kept]);
 }
 
 #[test]

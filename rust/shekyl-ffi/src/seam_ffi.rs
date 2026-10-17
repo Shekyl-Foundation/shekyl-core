@@ -18,12 +18,11 @@
 use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
 
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
-    connector_from_index, direction_from_index, drive_inbound, CloseCause, CloseKind, ConnectorId,
-    Direction, Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
+    connector_from_index, direction_from_index, CloseCause, CloseKind, ConnectorId, Direction,
+    Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
 };
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 
@@ -341,8 +340,8 @@ pub extern "C" fn shekyl_seam_install_loopback() -> i32 {
 /// Returns as soon as the row exists, without waiting for the strand to
 /// arm its handler (the C++ dial path that needed the wait is deleted,
 /// 2026-10-13). `id` is zero and `cause_kind` is the D12 cause when the
-/// dial fails. The inbound pump runs on a thread this call starts;
-/// [`shekyl_seam_reap`] joins it.
+/// dial fails. The inbound pump runs where the installed dialer runs
+/// pumps; the harness's thread is joined by [`shekyl_seam_reap`].
 ///
 /// # Safety
 /// `addr` is readable.
@@ -372,10 +371,7 @@ pub unsafe extern "C" fn shekyl_seam_open(
         Err(cause) => return refused(cause),
     };
     let id = attached.id;
-    let session = attached.session;
-    let hub_pump = hub.clone();
-    let pump = thread::spawn(move || drive_inbound(&hub_pump, id, session));
-    hub.track_pump(id, pump);
+    hub.drive(id, attached.session);
     ShekylSeamOpenResult {
         id: id.get(),
         cause_kind: 0,
