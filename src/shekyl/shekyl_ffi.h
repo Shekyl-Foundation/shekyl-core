@@ -3575,7 +3575,7 @@ struct ShekylStemTallyRow
   std::uint64_t silent;
   std::uint64_t distinct_sources;
   std::uint8_t connector;
-  std::uint8_t pad[7];
+  std::uint8_t _pad[7];
 };
 static_assert(sizeof(ShekylStemTallyRow) == 48, "stem tally row layout");
 

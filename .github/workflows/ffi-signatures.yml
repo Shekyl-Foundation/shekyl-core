@@ -14,7 +14,10 @@
 # controls run at introduction: scripts/ci/ffi_signature_gate.cpp.
 #
 # Scope is the file list in the gate script (SURFACES): the relay surface
-# and the tx_extra codec with the coinbase writer.
+# and the tx_extra codec with the coinbase writer. A second limb compares
+# every struct the header defines against its #[repr(C)] twin (LAYOUTS):
+# member names in order, size, alignment, and each member's offset and
+# type. Mechanism note and controls: scripts/ci/ffi_layout_gate.cpp.
 # Full-surface generation is blocked on a named cbindgen limitation
 # (cross-crate constant re-exports); docs/FOLLOWUPS.md tracks the extension.
 #
@@ -42,6 +45,10 @@ on:
       - "scripts/ci/check_ffi_signatures.sh"
       - "scripts/ci/cbindgen-ffi-signatures.toml"
       - "scripts/ci/ffi_signature_gate.cpp"
+      - "scripts/ci/cbindgen-ffi-layouts.toml"
+      - "scripts/ci/cbindgen-ffi-bounds.toml"
+      - "scripts/ci/ffi_layout_gate.py"
+      - "scripts/ci/ffi_layout_gate.cpp"
       - ".github/workflows/ffi-signatures.yml"
 
 concurrency:

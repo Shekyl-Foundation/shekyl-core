@@ -21,7 +21,7 @@
 //! ([`shekyl_p2p_record_offline`]), never inferred from the dialer's
 //! absence: an online daemon with no dialer is a fault, and says so.
 
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -95,7 +95,7 @@ pub extern "C" fn shekyl_rpc_p2p_state() -> i32 {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ShekylRpcPeerFacts {
-    pub host: *const u8,
+    pub host: *const c_char,
     pub host_len: usize,
     pub ip: u32,
     pub port: u16,
@@ -163,7 +163,7 @@ fn entries(public_only: bool) -> Option<PeerListOwner> {
         entries: facts,
     };
     for (entry, host) in owner.entries.iter_mut().zip(&owner.hosts) {
-        entry.host = host.as_ptr();
+        entry.host = host.as_ptr().cast();
     }
     Some(owner)
 }
@@ -342,7 +342,8 @@ mod tests {
         let mut out = Vec::new();
         for i in 0..len {
             let e = unsafe { rows.add(i).read() };
-            let host = unsafe { slice_from_typed_ptr(e.host, e.host_len) }.expect("a host");
+            let host =
+                unsafe { slice_from_typed_ptr(e.host.cast::<u8>(), e.host_len) }.expect("a host");
             out.push((
                 String::from_utf8(host.to_vec()).expect("utf-8"),
                 e.ip,
