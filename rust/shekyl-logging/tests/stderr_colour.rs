@@ -3,19 +3,20 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Lines written to a stderr that is not a terminal carry no colour codes.
+//! Plain stderr lines from the installed subscriber carry no colour codes.
 //!
-//! Under systemd the daemon's stderr is the journal. With colour on, every
-//! journal line carried escape sequences around its timestamp, level and
-//! target, and each `grep` over the journal had to strip them first. The
-//! stand-in sink here is never a terminal, as the journal is not.
+//! `LineColour::stderr` decides when lines are plain. This test installs
+//! `LineColour::Plain` through the test hook and checks the subscriber
+//! actually writes that way. `NO_COLOR` is removed first: tracing-subscriber
+//! colours by default when that variable is unset, so a layer that forgot
+//! `with_ansi` fails here.
 
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use shekyl_logging::{Config, __test_only_init_with_stderr};
+use shekyl_logging::{Config, LineColour, __test_only_init_with_stderr};
 use tracing::Level;
 
 /// How long to wait for the queued writer to deliver the line.
@@ -39,12 +40,17 @@ impl Write for Recorder {
 }
 
 #[test]
-fn a_stderr_that_is_not_a_terminal_carries_no_escape_bytes() {
+fn plain_stderr_lines_carry_no_escape_bytes() {
+    // SAFETY: this file is its own process, and this is its only test.
+    unsafe { std::env::remove_var(shekyl_logging::SHEKYL_LOG_ENV) };
+    unsafe { std::env::remove_var("NO_COLOR") };
+
     let written = Arc::new(Mutex::new(Vec::new()));
     let guard = __test_only_init_with_stderr(
         Config::stderr_only(Level::INFO),
         Recorder(Arc::clone(&written)),
         shekyl_logging::SINK_QUEUE_LINES,
+        LineColour::Plain,
     )
     .expect("init");
 
