@@ -48,125 +48,29 @@ certificates, also preventing MitM attacks.
 > certificates must be strictly provided.
 
 ## Daemon
-The daemon has two options for proxies `--proxy` and `--tx-proxy` which can be
-used in isolation or together. The `--proxy` option controls how
-IPv4/IPv6/hostname connections are performed, whereas `--tx-proxy` controls
-how local transactions are relayed. Both options support Socks 4, 4a, and 5.
 
-### `--proxy`
-This option should be used when outbound connections to IPv4/IPv6 addresses and
-hostnames  (other than `.onion`) need to be proxied. Common examples
-include using Tor exit nodes or a VPN to conceal your local IP. This option
-will **not** use Tor onion services for P2P connections; this is
-primarily used for proxying standard IPv4 or IPv6 connections to some remote
-host. Hidden services are not used because this is designed to be more general
-purpose (i.e. a standard socks VPN can be used). 
+The daemon does not take a proxy option. It has two connectors, each a row
+of its configuration (`shekyld --help`; `docs/EXECUTABLES.md`):
 
-> An additional option for hidden services (separate from `--tx-proxy`) could
-> arguably be added, which could optionally turn off IPv4/IPv6 connections for
-> P2P.
+- **Tor** (`tor`): `managed` runs the bundled Tor (the default; `tor-file`
+  names the binary); `operator` uses a Tor you run, named by `tor-socks`,
+  with `tor-onion` and `tor-onion-listen` for the onion service that makes
+  the node reachable; `off` is clearnet only. Transactions this node
+  originates leave over Tor when the connector is on.
+- **Clearnet** (`clearnet`): `on` (the default) or `off`. `clearnet-socks`
+  names a SOCKS proxy for clearnet dials, with `clearnet-socks-username`
+  and `clearnet-socks-password` in the configuration file only; a proxy
+  cannot forward inbound connections, so `clearnet-listen none` is the
+  matching posture when every dial leaves through one.
 
-The format for `--proxy` usage: `[socks5://[user:pass]]@127.0.0.1`. The square
-bracket indicate optional portion. See [wallet](#wallet) section above for
-examples and other information on the format. The option can only be specified
-once. The restrictions for MitM attacks apply only to the wallet usage, and not
-to the daemon.
+```bash
+# The operator's own Tor, reachable as an onion service
+shekyld --tor operator --tor-socks 127.0.0.1:9050 \
+    --tor-onion <your-onion>.onion:11021 --tor-onion-listen 127.0.0.1:11021
 
-> When using `--proxy`, inbound connections will be impossible unless the
-> proxy server is somehow setup to forward connections. This setup is a
-> difficult because each outgoing socks connections can have a unique binding
-> port. Such a setup is currently out-of-scope for this document.
-
-### `--tx-proxy`
-This option should be used to specify a proxy that can resolve hidden service
-hostnames, so that local transactions can be forwarded over a privacy
-preserving network. Tor is the network this option accepts. I2P is not.
-This option can be specified once for Tor.
-
-The format for `--tx-proxy` is
-`network,[socks5://[user:pass@]]ip:port[,max_connections]`.
-Examples:
-
-```
---tx-proxy tor,127.0.0.1:1050
---tx-proxy tor,127.0.0.1:1050,100
---tx-proxy tor,socks5://127.0.0.1:1050
---tx-proxy tor,socks5://127.0.0.1:1050,100
---tx-proxy tor,socks5://username:password@127.0.0.1:1050
---tx-proxy tor,socks5://username:password@127.0.0.1:1050,100
---tx-proxy tor,[::1]:1050
---tx-proxy tor,[::1]:1050,100
---tx-proxy tor,socks5://[::1]:1050
---tx-proxy tor,socks5://[::1]:1050,100
---tx-proxy tor,socks5://username:password@[::1]:1050
---tx-proxy tor,socks5://username:password@[::1]:1050,100
+# Clearnet dials through a SOCKS proxy, no inbound
+shekyld --clearnet-socks 192.168.0.10:1050 --clearnet-listen none
 ```
 
-The above examples are fairly exhaustive of all the possible option scenarios
-that will be incurred by the typical user. 
-
-#### The `network` portion of the option
-The first section (before the first `,`) indicates the network. Only `tor`
-is valid.
-
-This portion of the option tells the `--add-peer` and
-`--add-exclusive-node` options to use the specified proxy for those nodes. In
-other words, command-line specified hidden services are forwarded to their
-corresponding `--tx-proxy` server. Hidden services do **NOT** have to be
-specified on the command-line, there are built-in seed nodes for each network.
-
-#### The `ip:port` portion of the option
-The second portion of the option (after the first `,` and _optionally_ ending
-in the next `,`) indicates the location of the socks server. The location
-**must** include an IPv4/IPv6 AND port. The location can optionally include the
-socks version  - `socks4`, `socks4a`, and `socks5` are all valid here. If
-the socks version is not specified, `socks4a` is assumed.
-
-An optional username and password can also be included. These fields support
-percent-encoding, see [wallet](#wallet) section for more information.
-
-#### The last portion of the option
-After the ip:port section, the maximum number of outgoing connections to the
-proxy can be specified.
-
-The max connections does exactly as advertised, it limits the number of
-outgoing connections to the proxy. Values below 12 are refused at startup:
-the transaction-relay embargo is derived from a fluff first passage measured
-at outbound degree 12, and a smaller cap would under-provision that embargo
-in the privacy-losing direction. Omit the value to use the default (12).
-
-A legacy `disable_noise` token is still accepted — and ignored, with a
-warning — for command-line compatibility. The covert ("noise") channels it
-used to disable were removed entirely: they let a peer holding a covert slot
-enumerate transaction origins (see
-`docs/design/DAEMON_RELAY_PRIVACY.md` §§25, 29–31, 41). Every `--tx-proxy`
-zone now behaves as the old `disable_noise` configuration did — P2P links
-send data only for peerlist information and local outgoing transactions — and
-the daemon warns at startup that relay activity on the node↔proxy wire is
-not masked by cover traffic.
-
-### `--anonymous-inbound`
-Currently the daemon cannot configure incoming hidden services connections.
-Instead, the user must manually configure Tor to accept inbound
-connections. Then, `--anonymous-inbound` must be used to tell the daemon where
-to listen for incoming connections, and the incoming hidden service address.
-The option can be specified once for each network type. The format for usage
-is: `hidden-service-address,[bind-ip:]port[,max_connections]`. Examples:
-
-```
---anonymous-inbound rveahdfho7wo4b2m.onion:18083,18083
---anonymous-inbound rveahdfho7wo4b2m.onion:18083,18083,100
---anonymous-inbound rveahdfho7wo4b2m.onion:18083,127.0.0.1:18083
---anonymous-inbound rveahdfho7wo4b2m.onion:18083,127.0.0.1:18083,100
-```
-
-Everything before the first `,` is the hidden service hostname. This must be
-a valid Tor onion address. This tells the daemon the **inbound** hidden
-service as configured for the local Tor daemon.
-
-Everything between `,`s specify the bind ip and bind port. The IP address is
-optional, and defaults to `127.0.0.1`. The Tor daemon must be
-configured to forward incoming hidden service connections to this IP/Port pair.
-
-Everything after the second `,` is used to specify the number of max inbound
-connections. The field is optional.
+Hidden-service peers given by `p2p-peer` or `p2p-closed-peer` are dialled
+through the Tor connector; there are built-in seed nodes for each network.

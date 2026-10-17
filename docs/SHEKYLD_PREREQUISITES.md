@@ -36,9 +36,9 @@ fee_policy_version daemon-side exposure`.
 
 ### Verdict: PRESENT — usable, with V3-specific caveats
 
-`shekyld` inherits Monero's `FAKECHAIN` network type, the `--regtest`
-CLI flag, the `generateblocks` JSON-RPC method, and the
-`--fixed-difficulty` knob. A Rust integration-test harness can spawn
+`shekyld` inherits Monero's `FAKECHAIN` network type (`--network
+regtest`), the `generateblocks` JSON-RPC method, and a fixed-difficulty
+lever (the `dev-difficulty` row, regtest only). A Rust integration-test harness can spawn
 `shekyld` and drive an end-to-end transfer cycle without waiting for
 real-network PoW, but several Shekyl-genesis differences mean the
 regtest path is **not** a free pass on V3 consensus rules.
@@ -51,28 +51,27 @@ regtest path is **not** a free pass on V3 consensus rules.
 borrows mainnet constants for genesis, ports, and network id
 (`src/cryptonote_config.h:338–343`).
 
-**CLI activation.** Passing `--regtest` to `shekyld` sets
-`m_nettype = FAKECHAIN` (`src/cryptonote_core/cryptonote_core.cpp:472–475`).
-The flag is mutually exclusive with `--testnet` / `--stagenet`
-(`src/daemon/main.cpp:267–273, 329–330`). Companion flags:
+**CLI activation.** `--network regtest` selects `FAKECHAIN`
+(`src/cryptonote_core/cryptonote_core.cpp:472–475`). The `network` row
+takes one word, so no second network can be named. Companion rows:
 
-- `--fixed-difficulty <N>` — pin difficulty to a constant. Default `0`
-  means "use adaptive difficulty," so for instant-mining the harness
-  must pass `--fixed-difficulty 1` (or another small value)
+- `--dev-difficulty <N>` — pin difficulty to a constant. Unset means
+  "use adaptive difficulty," so for instant-mining the harness must pass
+  `--dev-difficulty 1` (or another small value)
   (`src/cryptonote_core/blockchain.cpp:895–897, 1263–1265`).
-- `--keep-fakechain` — preserve LMDB across runs; without it, the DB
-  is wiped each launch (`src/cryptonote_core/cryptonote_core.cpp:531–538`).
-- `--offline` — disable peer dialing (recommended for hermetic tests).
+- `--clearnet off --tor off` — no listener and no dial (recommended for
+  hermetic tests). The store persists across runs in the data directory;
+  a fresh chain is a fresh directory.
 
 **On-demand block generation.** The JSON-RPC method `generateblocks`
-exists (`src/rpc/core_rpc_server.h:153`,
+exists (`src/rpc/core_rpc_server.h:139`,
 `src/rpc/core_rpc_server.cpp:2234–2305`). It loops
 `getblocktemplate` → `find_nonce_for_given_block` (RandomX longhash) →
 `submitblock` for the requested count. The handler refuses with
 `CORE_RPC_ERROR_CODE_REGTEST_REQUIRED` outside `FAKECHAIN`
-(`src/rpc/core_rpc_server.cpp:2242–2246`), and the RPC map gates it on
-`!m_restricted` (`src/rpc/core_rpc_server.h:153`), so the integration
-harness must connect to an unrestricted RPC port.
+(`src/rpc/core_rpc_server.cpp:2242–2246`), and the view listener does
+not serve it (`RPC_CHANNEL.md` §6.1), so the integration harness must
+connect to the admin listener.
 
 **Proof-of-life tests.** The Python functional tests that
 historically demonstrated `--regtest` + `generateblocks` invocation
@@ -92,17 +91,15 @@ per [`FOLLOWUPS.md`](./FOLLOWUPS.md) V3.1
 
 ```bash
 shekyld \
-  --regtest \
-  --offline \
-  --fixed-difficulty 1 \
+  --network regtest \
+  --clearnet off --tor off \
+  --dev-difficulty 1 \
   --data-dir /tmp/shekyl-regtest-XXXX \
-  --rpc-bind-port 28081 \
-  --p2p-bind-port 28080 \
-  --no-zmq
+  --log-file /tmp/shekyl-regtest-XXXX/shekyld.log \
+  --rpc-admin-listen 127.0.0.1:28081
 ```
 
-Use `--keep-fakechain` if you want the chain to persist across daemon
-restarts within a single test run.
+The chain persists across daemon restarts in the data directory.
 
 ### V3-specific caveats
 
@@ -242,7 +239,7 @@ struct COMMAND_RPC_GET_BASE_FEE_ESTIMATE
 
 Internal C++ name: `COMMAND_RPC_GET_BASE_FEE_ESTIMATE` /
 `on_get_base_fee_estimate`. JSON-RPC method name on the wire:
-`get_fee_estimate` (`src/rpc/core_rpc_server.h:173–174`).
+`get_fee_estimate` (`core_rpc_server.h`, lines 173 to 174 at the audit's tree; served by Rust since).
 
 ### Filling logic
 
@@ -478,13 +475,15 @@ already exists; only the flag is missing — surfacing the signal is
 mechanical, not a verification rewrite.)
 
 **The RPC reply collapses it.** `on_send_raw_transaction`
-(`src/rpc/core_rpc_server.cpp:1334–1368`) maps the verification context to
+(`core_rpc_server.cpp`, lines 1334 to 1368 at the audit's tree; the handler
+is gone with the C++ submit path, `DAEMON_SUBMIT_VERDICT.md`) maps the
+verification context to
 the reply: it sets dedicated booleans only for `double_spend`, `invalid_input`,
 `invalid_output`, `too_big`, `overspend`, `fee_too_low`, `too_few_outputs`,
 `tx_extra_too_big`, and `nonzero_unlock_time`. A generic
 `m_verifivation_failed` (which a stale root produces) yields
 `status == "Failed"` with **no flag set and an empty `reason`** — the specific
-cause is only `LOG_PRINT_L0`'d server-side (line 1361), never propagated to
+cause is only logged server-side, never propagated to
 the client.
 
 ### Why this matters and why it is deferrable

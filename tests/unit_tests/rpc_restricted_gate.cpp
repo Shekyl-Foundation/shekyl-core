@@ -48,9 +48,9 @@
 // unit test of the helper cannot observe its call sites, so such a test stays
 // green through exactly the regression it advertises. That assertion lives on
 // the production path instead, in Rust:
-// `restricted_listener_applies_request_caps_through_the_ffi_bridge`
-// (rust/shekyl-engine-core/src/engine/regtest_e2e.rs) spawns a daemon with
-// both listeners and puts a real over-cap request to each.
+// `restricted_listener_hides_a_transaction_this_node_has_not_broadcast`
+// (rust/shekyl-engine-core/src/engine/regtest_e2e_origin.rs) spawns two
+// daemons and asks the bridged pool routes on both listeners of one.
 
 #include <gtest/gtest.h>
 
@@ -75,21 +75,39 @@
 // default-constructed is what prevents that, and this asserts the epee
 // property that makes it work.
 //
-// The other half of the contract — that the dispatchers actually pass this
-// context, so `m_restricted && ctx` means `m_restricted` — is deliberately
-// NOT tested here. A unit test of the helper cannot see its call sites:
-// reverting any dispatcher to `nullptr` would leave such a test green, which
-// makes it decorative on exactly the boundary it claims to guard. That guard
-// is `restricted_listener_applies_request_caps_through_the_ffi_bridge` in
-// rust/shekyl-engine-core/src/engine/regtest_e2e.rs, which puts a real
-// over-cap request to a real `--restricted-rpc` listener and goes red when a
-// dispatcher stops passing the origin.
-TEST(rpc_restricted_gate, the_shared_origin_is_not_a_bannable_host)
+// The other half of the contract — that the dispatchers actually pass the
+// calling listener's origin, so `caller_is_restricted(ctx)` reads that
+// listener's posture — is deliberately NOT tested here. A unit test of the
+// helper cannot see its call sites: reverting any dispatcher to `nullptr`, or
+// to the admin origin, would leave such a test green, which makes it
+// decorative on exactly the boundary it claims to guard. That guard is
+// `restricted_listener_hides_a_transaction_this_node_has_not_broadcast` in
+// rust/shekyl-engine-core/src/engine/regtest_e2e_origin.rs, which asks the
+// three bridged pool routes on a real `--rpc-view-listen` listener and goes
+// red when a dispatcher stops passing that listener's origin.
+TEST(rpc_restricted_gate, the_shared_origins_are_not_bannable_hosts)
 {
-  const cryptonote::core_rpc_server::connection_context ctx{};
-  EXPECT_FALSE(ctx.m_remote_address.is_blockable())
-    << "a default-constructed address must not be blockable, or every bridged "
-       "request would score RPC ban points against one shared empty address";
+  for (const bool restricted : {false, true})
+  {
+    const auto* ctx = cryptonote::rpc_origin(restricted);
+    ASSERT_NE(ctx, nullptr);
+    EXPECT_FALSE(ctx->m_remote_address.is_blockable())
+      << "a default-constructed address must not be blockable, or every bridged "
+         "request would score RPC ban points against one shared empty address";
+  }
+}
+
+// The posture is the origin's identity: the view origin is restricted, the
+// admin origin is not, and a request with no origin (none reaches the bridge;
+// the in-process console passes the admin origin) is not. Two origins, not
+// a flag on one, so a handler cannot be handed the admin origin with the
+// view posture or the reverse.
+TEST(rpc_restricted_gate, the_posture_is_the_origins_identity)
+{
+  EXPECT_TRUE(cryptonote::rpc_origin_is_restricted(cryptonote::rpc_origin(true)));
+  EXPECT_FALSE(cryptonote::rpc_origin_is_restricted(cryptonote::rpc_origin(false)));
+  EXPECT_FALSE(cryptonote::rpc_origin_is_restricted(nullptr));
+  EXPECT_NE(cryptonote::rpc_origin(true), cryptonote::rpc_origin(false));
 }
 
 // ─── What the flag actually gates ────────────────────────────────────────────

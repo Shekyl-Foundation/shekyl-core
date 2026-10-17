@@ -711,7 +711,7 @@ Slice 2 is a small diff with a **larger** ripple than its size suggests:
   [`daemon/main.cpp:186-202`](../../src/daemon/main.cpp#L186) catches and exits
   `1` on. **But the same catch block first calls
   [`shekyl::cli::handle_removed_flag`](../../src/daemon/main.cpp#L191)** — a **retired-flag registry**
-  (`REMOVED_FLAGS`, [`common/removed_flags.cpp:69`](../../src/common/removed_flags.cpp#L69),
+  (`REMOVED_FLAGS`, line 69 of `src/common/removed_flags.cpp` at `d26148535e`,
   23 entries today, with a `TODO(v3.2)` sunset) that refuses a deleted flag **by
   name, with its reason**. So the ripple is **a registry row**, not a
   coordinated config change and not an invented deprecation window. **This is

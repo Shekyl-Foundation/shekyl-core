@@ -340,18 +340,9 @@ bool t_rpc_command_executor::mining_status() {
   }
 
   tools::msg_writer() << "PoW algorithm: " << mres.pow_algorithm;
-  if (mres.active || mres.is_background_mining_enabled)
+  if (mres.active)
   {
     tools::msg_writer() << "Mining address: " << mres.address;
-  }
-
-  if (mres.is_background_mining_enabled)
-  {
-    tools::msg_writer() << "Smart mining enabled:";
-    tools::msg_writer() << "  Target: " << (unsigned)mres.bg_target << "% CPU";
-    tools::msg_writer() << "  Idle threshold: " << (unsigned)mres.bg_idle_threshold << "% CPU";
-    tools::msg_writer() << "  Min idle time: " << (unsigned)mres.bg_min_idle_seconds << " seconds";
-    tools::msg_writer() << "  Ignore battery: " << (mres.bg_ignore_battery ? "yes" : "no");
   }
 
   if (!mining_busy && mres.active && mres.speed > 0 && mres.block_target > 0 && mres.difficulty > 0)
@@ -383,62 +374,6 @@ bool t_rpc_command_executor::print_blockchain_info(int64_t start_block_index, ui
   // Rust side reads the tip beside the rest of the command.
   return run_rust_console({"print_blockchain_info",
     std::to_string(start_block_index), std::to_string(end_block_index)});
-}
-
-bool t_rpc_command_executor::set_log_level(int8_t level) {
-  cryptonote::COMMAND_RPC_SET_LOG_LEVEL::request req;
-  cryptonote::COMMAND_RPC_SET_LOG_LEVEL::response res;
-  req.level = level;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/set_log_level", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_set_log_level(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  tools::success_msg_writer() << "Log level is now " << std::to_string(level);
-
-  return true;
-}
-
-bool t_rpc_command_executor::set_log_categories(const std::string &categories) {
-  cryptonote::COMMAND_RPC_SET_LOG_CATEGORIES::request req;
-  cryptonote::COMMAND_RPC_SET_LOG_CATEGORIES::response res;
-  req.categories = categories;
-
-  std::string fail_message = "Unsuccessful";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/set_log_categories", fail_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_set_log_categories(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(fail_message, res.status);
-      return true;
-    }
-  }
-
-  tools::success_msg_writer() << "Log categories are now " << res.categories;
-
-  return true;
 }
 
 bool t_rpc_command_executor::print_height() {
@@ -623,13 +558,11 @@ bool t_rpc_command_executor::print_transaction_pool_stats() {
   return run_rust_console({"print_pool_stats"});
 }
 
-bool t_rpc_command_executor::start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype, bool do_background_mining, bool ignore_battery) {
+bool t_rpc_command_executor::start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype) {
   cryptonote::COMMAND_RPC_START_MINING::request req;
   cryptonote::COMMAND_RPC_START_MINING::response res;
   req.miner_address = address;
   req.threads_count = num_threads;
-  req.do_background_mining = do_background_mining;
-  req.ignore_battery = ignore_battery;
   
   std::string fail_message = "Mining did not start";
 
@@ -738,187 +671,6 @@ bool t_rpc_command_executor::print_status()
   }
 
   return true;
-}
-
-bool t_rpc_command_executor::get_limit()
-{
-  cryptonote::COMMAND_RPC_GET_LIMIT::request req;
-  cryptonote::COMMAND_RPC_GET_LIMIT::response res;
-
-  std::string failure_message = "Couldn't get limit";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/get_limit", failure_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_limit(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(failure_message, res.status);
-      return true;
-    }
-  }
-
-  tools::msg_writer() << "limit-down is " << res.limit_down << " kB/s";
-  tools::msg_writer() << "limit-up is " << res.limit_up << " kB/s";
-  return true;
-}
-
-bool t_rpc_command_executor::set_limit(int64_t limit_down, int64_t limit_up)
-{
-  cryptonote::COMMAND_RPC_SET_LIMIT::request req;
-  cryptonote::COMMAND_RPC_SET_LIMIT::response res;
-
-  req.limit_down = limit_down;
-  req.limit_up = limit_up;
-
-  std::string failure_message = "Couldn't set limit";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/set_limit", failure_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_set_limit(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(failure_message, res.status);
-      return true;
-    }
-  }
-
-  tools::msg_writer() << "Set limit-down to " << res.limit_down << " kB/s";
-  tools::msg_writer() << "Set limit-up to " << res.limit_up << " kB/s";
-  return true;
-}
-
-bool t_rpc_command_executor::get_limit_up()
-{
-  cryptonote::COMMAND_RPC_GET_LIMIT::request req;
-  cryptonote::COMMAND_RPC_GET_LIMIT::response res;
-
-  std::string failure_message = "Couldn't get limit";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/get_limit", failure_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_limit(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(failure_message, res.status);
-      return true;
-    }
-  }
-
-  tools::msg_writer() << "limit-up is " << res.limit_up << " kB/s";
-  return true;
-}
-
-bool t_rpc_command_executor::get_limit_down()
-{
-  cryptonote::COMMAND_RPC_GET_LIMIT::request req;
-  cryptonote::COMMAND_RPC_GET_LIMIT::response res;
-
-  std::string failure_message = "Couldn't get limit";
-
-  if (m_is_rpc)
-  {
-    if (!m_rpc_client->rpc_request(req, res, "/get_limit", failure_message.c_str()))
-    {
-      return true;
-    }
-  }
-  else
-  {
-    if (!m_rpc_server->on_get_limit(req, res) || res.status != CORE_RPC_STATUS_OK)
-    {
-      tools::fail_msg_writer() << make_error(failure_message, res.status);
-      return true;
-    }
-  }
-
-  tools::msg_writer() << "limit-down is " << res.limit_down << " kB/s";
-  return true;
-}
-
-bool t_rpc_command_executor::out_peers(bool set, uint32_t limit)
-{
-	cryptonote::COMMAND_RPC_OUT_PEERS::request req;
-	cryptonote::COMMAND_RPC_OUT_PEERS::response res;
-	
-	epee::json_rpc::error error_resp;
-
-	req.set = set;
-	req.out_peers = limit;
-	
-	std::string fail_message = "Unsuccessful";
-
-	if (m_is_rpc)
-	{
-		if (!m_rpc_client->rpc_request(req, res, "/out_peers", fail_message.c_str()))
-		{
-			return true;
-		}
-	}
-	else
-	{
-		if (!m_rpc_server->on_out_peers(req, res) || res.status != CORE_RPC_STATUS_OK)
-		{
-			tools::fail_msg_writer() << make_error(fail_message, res.status);
-			return true;
-		}
-	}
-
-	const std::string s = res.out_peers == (uint32_t)-1 ? "unlimited" : std::to_string(res.out_peers);
-	tools::msg_writer() << "Max number of out peers set to " << s << std::endl;
-
-	return true;
-}
-
-bool t_rpc_command_executor::in_peers(bool set, uint32_t limit)
-{
-	cryptonote::COMMAND_RPC_IN_PEERS::request req;
-	cryptonote::COMMAND_RPC_IN_PEERS::response res;
-
-	epee::json_rpc::error error_resp;
-
-	req.set = set;
-	req.in_peers = limit;
-
-	std::string fail_message = "Unsuccessful";
-
-	if (m_is_rpc)
-	{
-		if (!m_rpc_client->rpc_request(req, res, "/in_peers", fail_message.c_str()))
-		{
-			return true;
-		}
-	}
-	else
-	{
-		if (!m_rpc_server->on_in_peers(req, res) || res.status != CORE_RPC_STATUS_OK)
-		{
-			tools::fail_msg_writer() << make_error(fail_message, res.status);
-			return true;
-		}
-	}
-
-	const std::string s = res.in_peers == (uint32_t)-1 ? "unlimited" : std::to_string(res.in_peers);
-	tools::msg_writer() << "Max number of in peers set to " << s << std::endl;
-
-	return true;
 }
 
 bool t_rpc_command_executor::print_bans()

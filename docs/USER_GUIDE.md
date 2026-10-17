@@ -114,67 +114,201 @@ progress. Let it run until you see "SYNCHRONIZED OK" in the output.
 
 ### Configuration file
 
-Instead of passing flags on the command line, you can write them in a config
-file. The syntax is `optionname=value`, one per line. Boolean flags use
-`optionname=1`.
+Instead of passing options on the command line, you can write them in a
+configuration file. The file is TOML; each key is an option's name, spelled
+as on the command line without the leading dashes, and a switch is `true`
+or `false`. The daemon reads `/etc/shekyl/shekyld-<network>.toml` by
+default (`shekyld-mainnet.toml` on mainnet; on Windows the file sits in the
+daemon's root), and `--config-file /path/to/file.toml` names another. The
+network itself is always given on the command line, because it chooses the
+file. A file that anyone but root and the daemon's account can write is
+refused.
 
+<!-- shekyld-example: begin -->
+```toml
+# shekyld configuration file. Every key is an option's name, spelled
+# as on the command line without the leading dashes. The network is
+# always given on the command line, because it chooses the file.
+# Every line below is commented out: uncomment one to set it.
+
+# The data directory. An explicit path is used as given.
+# Default: the daemon's root and the network's subdirectory.
+# data-dir = "/path"
+
+# The log file.
+# Default: the daemon's root, logs/shekyld-<network>.log.
+# log-file = "/path"
+
+# The log level: error, warn, info, debug or trace.
+# log-level = "warn"
+
+# A log level for one subsystem, as subsystem=level; `none` is no
+# overrides.
+# log-category = "none"
+
+# The disk the log may use, live file and archives together.
+# log-size-max = "1GiB"
+
+# The clearnet connector.
+# clearnet = "on"
+
+# The Tor connector: a managed Tor, the operator's own Tor, or off.
+# tor = "managed"
+
+# The operator's Tor SOCKS endpoint; required with tor = operator.
+# tor-socks = "127.0.0.1:11029"
+
+# The SOCKS username for tor-socks.
+# tor-socks-username = "<secret>"
+
+# The SOCKS password for tor-socks.
+# tor-socks-password = "<secret>"
+
+# This node's onion service and virtual port, on the operator's Tor.
+# tor-onion = "<56 characters>.onion:11021"
+
+# The local endpoint the operator's Tor forwards tor-onion to; required
+# with it.
+# tor-onion-listen = "127.0.0.1:11029"
+
+# The managed Tor binary; tor = managed only. It is verified against the
+# pin wherever it is.
+# Default: tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix.
+# tor-file = "/path"
+
+# A SOCKS proxy for clearnet dials.
+# clearnet-socks = "127.0.0.1:11029"
+
+# The SOCKS username for clearnet-socks.
+# clearnet-socks-username = "<secret>"
+
+# The SOCKS password for clearnet-socks.
+# clearnet-socks-password = "<secret>"
+
+# The clearnet listen endpoints; `none` is dial-only on clearnet.
+# Default: 0.0.0.0 and the network's p2p port.
+# clearnet-listen = ["127.0.0.1:11029"]
+
+# The clearnet endpoints peers can reach this node at; at most one per
+# address family.
+# clearnet-advertise = ["<public-address>:11021"]
+
+# Accept peers at private addresses, for a private test network.
+# p2p-local = true
+
+# Peers to connect to, by IP or onion.
+# p2p-peer = "none"
+
+# The only peers to connect to; non-empty declares a closed network.
+# p2p-closed-peer = "none"
+
+# Disclose known peers and this node's address below the white-diversity
+# floor, for bootstrapping a small network.
+# p2p-disclose-early = true
+
+# A file of addresses to refuse, one per line.
+# p2p-ban-file = "/path"
+
+# The upload rate limit, or `unlimited`.
+# p2p-upload-max = "unlimited"
+
+# The download rate limit, or `unlimited`.
+# p2p-download-max = "unlimited"
+
+# The transaction pool's weight bound.
+# txpool-weight-max = "648000000B"
+
+# A command to run on a new block, with {height} and {hash}.
+# notify-block = ["/path/to/command", "{height}"]
+
+# A command to run on a reorganization, with {split-height}, {height},
+# {added} and {removed}.
+# notify-reorg = ["/path/to/command", "{split-height}"]
+
+# A command to run on a block-rate warning, with {window}, {observed} and
+# {expected}.
+# notify-block-rate = ["/path/to/command", "{window}"]
+
+# Mine to this address from start.
+# mine-address = "<address>"
+
+# The mining thread count, or `auto`.
+# mine-threads = "auto"
+
+# The plaintext full-access listeners, loopback only; `none` is no admin
+# listener.
+# Default: 127.0.0.1 and the network's rpc port.
+# rpc-admin-listen = ["127.0.0.1:11029"]
+
+# The plaintext view listeners, loopback only.
+# rpc-view-listen = "none"
+
+# Web origins allowed to call the RPC; `none` denies all. `*` is refused.
+# rpc-cors-origin = "none"
+
+# The RPC connection cap.
+# rpc-connections-max = 25
 ```
-# shekyld.conf
-data-dir=/var/lib/shekyl
-log-file=/var/log/shekyl/shekyld.log
-log-level=0
-# RPC defaults to loopback. For your own wallet on another machine you
-# control, bind a view-only second listener (not a public remote node):
-# rpc-restricted-bind-port=11030
-```
+<!-- shekyld-example: end -->
 
-Load a config file with `--config-file /path/to/shekyld.conf`. See
-[`utils/conf/shekyld.conf`](../utils/conf/shekyld.conf) for a minimal
-example.
+Every option's name, kind and default is in `shekyld --help`.
 
-### Key daemon flags
+### Daemon options
 
-**Data and logging**
+Generated from the daemon's table (`INPUT_GRAMMAR.md` IG-9); `shekyld
+--help` prints the same rows. "Where" says whether an option is given on
+the command line, in the configuration file, or either; "Runtime" says
+whether `option_set` changes it while the daemon runs.
 
-| Flag | Description |
-|------|-------------|
-| `--data-dir <path>` | Override the blockchain data directory |
-| `--log-file <path>` | Write logs to a specific file |
-| `--log-level <0-4>` | Verbosity: 0 = minimal, 4 = trace |
-| `--max-log-file-size <bytes>` | Rotate logs when they exceed this size (default 104857600) |
-| `--max-log-files <n>` | Number of rotated log files to keep |
+<!-- shekyld-options: begin -->
+| Option | Kind | Default | Where | Runtime | Description |
+|--------|------|---------|-------|---------|-------------|
+| `help` | switch | — | command line | no | Print the options and exit. |
+| `version` | switch | — | command line | no | Print the version and the operating system, and exit. |
+| `network` | `mainnet` / `testnet` / `stagenet` / `regtest` | `mainnet` | command line | no | The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file. |
+| `config-file` | absolute path | /etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows | command line | no | The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused. |
+| `data-dir` | absolute path | the daemon's root and the network's subdirectory | both | no | The data directory. An explicit path is used as given. |
+| `log-file` | absolute path | the daemon's root, logs/shekyld-<network>.log | both | no | The log file. |
+| `log-level` | `error` / `warn` / `info` / `debug` / `trace` | `warn` | both | yes | The log level: error, warn, info, debug or trace. |
+| `log-category` | map to `error` / `warn` / `info` / `debug` / `trace` | `none` | both | yes | A log level for one subsystem, as subsystem=level; `none` is no overrides. |
+| `log-size-max` | bytes, such as `512MiB` (at least 1) | `1GiB` | both | no | The disk the log may use, live file and archives together. |
+| `clearnet` | `on` / `off` | `on` | both | no | The clearnet connector. |
+| `tor` | `managed` / `operator` / `off` | `managed` | both | no | The Tor connector: a managed Tor, the operator's own Tor, or off. |
+| `tor-socks` | IP endpoint (`address:port`) | — | both | no | The operator's Tor SOCKS endpoint; required with tor = operator. |
+| `tor-socks-username` | secret (file only, never shown) | — | file | no | The SOCKS username for tor-socks. |
+| `tor-socks-password` | secret (file only, never shown) | — | file | no | The SOCKS password for tor-socks. |
+| `tor-onion` | v3 onion with a port | — | both | no | This node's onion service and virtual port, on the operator's Tor. |
+| `tor-onion-listen` | IP endpoint (`address:port`) | — | both | no | The local endpoint the operator's Tor forwards tor-onion to; required with it. |
+| `tor-file` | absolute path | tor/tor beside the executable, else the version-exact bundle directory under /opt/shekyl/ on Unix | both | no | The managed Tor binary; tor = managed only. It is verified against the pin wherever it is. |
+| `clearnet-socks` | IP endpoint (`address:port`) | — | both | no | A SOCKS proxy for clearnet dials. |
+| `clearnet-socks-username` | secret (file only, never shown) | — | file | no | The SOCKS username for clearnet-socks. |
+| `clearnet-socks-password` | secret (file only, never shown) | — | file | no | The SOCKS password for clearnet-socks. |
+| `clearnet-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 0.0.0.0 and the network's p2p port | both | no | The clearnet listen endpoints; `none` is dial-only on clearnet. |
+| `clearnet-advertise` | list of IP endpoint (`address:port`) (`none` for empty) | — | both | no | The clearnet endpoints peers can reach this node at; at most one per address family. |
+| `p2p-local` | switch | — | both | no | Accept peers at private addresses, for a private test network. |
+| `p2p-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | Peers to connect to, by IP or onion. |
+| `p2p-closed-peer` | list of IP endpoint or v3 onion with a port (`none` for empty) | `none` | both | no | The only peers to connect to; non-empty declares a closed network. |
+| `p2p-disclose-early` | switch | — | both | no | Disclose known peers and this node's address below the white-diversity floor, for bootstrapping a small network. |
+| `p2p-ban-file` | absolute path | — | both | no | A file of addresses to refuse, one per line. |
+| `p2p-upload-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The upload rate limit, or `unlimited`. |
+| `p2p-download-max` | rate, such as `1MiB/s` (at least 1), or `unlimited` | `unlimited` | both | yes | The download rate limit, or `unlimited`. |
+| `txpool-weight-max` | bytes, such as `512MiB` (at least 1) | `648000000B` | both | no | The transaction pool's weight bound. |
+| `notify-block` | command (an array of words; placeholders `{height}`, `{hash}`) | — | file | no | A command to run on a new block, with {height} and {hash}. |
+| `notify-reorg` | command (an array of words; placeholders `{split-height}`, `{height}`, `{added}`, `{removed}`) | — | file | no | A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}. |
+| `notify-block-rate` | command (an array of words; placeholders `{window}`, `{observed}`, `{expected}`) | — | file | no | A command to run on a block-rate warning, with {window}, {observed} and {expected}. |
+| `mine-address` | Shekyl address | — | both | no | Mine to this address from start. |
+| `mine-threads` | integer ≥ 1, or `auto` | `auto` | both | no | The mining thread count, or `auto`. |
+| `rpc-admin-listen` | list of IP endpoint (`address:port`) (`none` for empty) | 127.0.0.1 and the network's rpc port | both | no | The plaintext full-access listeners, loopback only; `none` is no admin listener. |
+| `rpc-view-listen` | list of IP endpoint (`address:port`) (`none` for empty) | `none` | both | no | The plaintext view listeners, loopback only. |
+| `rpc-cors-origin` | list of web origin (`none` for empty) | `none` | both | no | Web origins allowed to call the RPC; `none` denies all. `*` is refused. |
+| `rpc-connections-max` | integer ≥ 1 | `25` | both | no | The RPC connection cap. |
+| `console` | switch | — | command line | no | Run the interactive console. |
+<!-- development rows, live on the named networks only and not in --help: dev-clearnet-encrypt (testnet, stagenet, regtest); dev-sync (regtest); dev-relay-cover (testnet, stagenet, regtest); dev-difficulty (regtest); dev-pow-seed-epoch-blocks (regtest); dev-pow-seed-epoch-lag (regtest); dev-settlement-epoch-blocks (regtest); dev-archival-reorg-depth (regtest) -->
+<!-- shekyld-options: end -->
 
-**Synchronization and storage**
-
-| Flag | Description |
-|------|-------------|
-| `--db-sync-mode <mode>` | LMDB sync mode: `safe`, `fast`, `fastest` |
-| `--block-sync-size <n>` | Number of blocks per sync batch |
-
-**RPC**
-
-| Flag | Description |
-|------|-------------|
-| `--rpc-bind-port <port>` | HTTP RPC listen port (default: 11029 mainnet); Axum is the sole transport |
-| `--rpc-bind-ip <addr>` | Bind address for RPC (default: 127.0.0.1). IPv4 or IPv6 (`::1`). Loopback only: a wildcard (`0.0.0.0`, `::`) is refused, and so is a network address — the daemon RPC has no authentication. `--rpc-use-ipv6` also binds `--rpc-bind-ipv6-address` (default `::1`) on the same start. Another machine of yours reaches this node through its onion service |
-| `--restricted-rpc` | Disable admin endpoints on the main listener (view-only for *your* wallet; not a public remote node) |
-| `--rpc-restricted-bind-port <port>` | Second view-only listener for a wallet you operate |
-| `--rpc-access-control-origins <list>` | Comma-separated CORS allow-list (default: deny) |
-
-shekyld does **not** accept `--rpc-login` or `--rpc-ssl*` (inbound RPC is
-plaintext). Use loopback locally; for remote access prefer an onion service
-or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
-
-**Peer-to-peer**
-
-| Flag | Description |
-|------|-------------|
-| `--p2p-bind-port <port>` | P2P listen port (default: 11021 mainnet) |
-| `--out-peers <n>` | Maximum outbound peer connections |
-| `--in-peers <n>` | Maximum inbound peer connections |
-| `--add-peer <host:port>` | Manually add a peer |
-| `--p2p-disclose-early` | For the first nodes of a new network: below the floor of 48 peers this node discloses its known peers and its own address, on each connector until that connector reaches the floor or 24 hours pass. While it holds, this node is recognisable. Leave it off on an established network. |
-| `--ban-list <path>` | File of banned IP addresses |
+The daemon's RPC takes no login and no TLS: inbound RPC is plaintext, on
+loopback only. For remote access use an onion service or a reverse proxy.
+Wallet-RPC has login and TLS options for its own listener.
 
 **Background operation**
 
@@ -182,12 +316,8 @@ or a reverse proxy. Wallet-RPC retains login/SSL flags for its own listener.
 manager for background operation (systemd on Linux, launchd on macOS,
 Task Scheduler on Windows); the GUI wallet supervises its own bundled
 `shekyld` via the Tauri sidecar. An example systemd unit lives at
-`contrib/packaging/linux/shekyld.service`. The `--detach`, `--pidfile`,
-and `--*-service` flags were removed in V3.1.
-
-| Flag | Description |
-|------|-------------|
-| `--non-interactive` | Disable the interactive console (required under a service manager) |
+`contrib/packaging/linux/shekyld.service`. Nothing reads the daemon's
+stdin unless `--console` is given, so a unit needs no flag for that.
 
 ### Interactive console
 
@@ -196,7 +326,7 @@ Type `help` to list all commands. The most useful ones, grouped by purpose:
 
 The same commands work from a second shell against a running daemon —
 `shekyld status`, `shekyld exit` — over its local RPC port (pass
-`--rpc-bind-port` / `--testnet` if the daemon is not on the defaults). The
+`--network` and `--rpc-admin-listen` if the daemon is not on the defaults). The
 exit status is `0` when the daemon answered, `1` when the command is unknown
 or the request failed (daemon not running, connection refused, error reply),
 so scripts can check it without parsing the output.
@@ -231,8 +361,11 @@ so scripts can check it without parsing the output.
 | `bans` | List all banned peers |
 | `ban <ip> [seconds]` | Ban a peer |
 | `unban <ip>` | Remove a ban |
-| `limit_up <kB/s>` / `limit_down <kB/s>` | Set bandwidth limits |
-| `out_peers <n>` / `in_peers <n>` | Adjust peer count at runtime |
+
+Bandwidth limits and log settings change at runtime through the admin
+RPC's `option_set` and `option_show` (`p2p-upload-max`, `p2p-download-max`,
+`log-level`, `log-category`), with the same spellings as the command line
+and the configuration file; the console has no words for them.
 
 **Chain inspection**
 
@@ -358,7 +491,7 @@ By default the wallet connects to a daemon on this machine, at the RPC
 port for the selected network (`127.0.0.1:11029` on mainnet; `--testnet`
 and `--stagenet` pick the matching port automatically). If no daemon is
 answering there, the wallet says so when it starts and names the command
-that would fix it (`shekyld --testnet`, and the port it answers on).
+that would fix it (`shekyld --network testnet`, and the port it answers on).
 
 `shekyld` serves RPC on loopback only, so a node of yours on another
 machine is reached through a Tor onion service you run in front of its
@@ -665,19 +798,16 @@ reminds you that mining control is admin RPC, then continues. If the
 daemon is still syncing, `mine start` refuses — the daemon will not
 mine until it has caught up.
 
-### Background mining
+### Mining from start
 
-Launch the daemon with background mining flags:
+To mine from the moment the daemon starts, give it the address and the
+thread count (`mine-threads` defaults to `auto`, one per core):
 
 ```bash
-./shekyld --bg-mining-enable \
-    --bg-mining-idle-threshold 90 \
-    --bg-mining-min-idle-interval 10 \
-    --start-mining <address> --mining-threads 2
+./shekyld --mine-address <address> --mine-threads 2
 ```
 
-Background mining runs at the lowest CPU priority and pauses when system
-utilisation exceeds the idle threshold.
+The same two rows go in the configuration file.
 
 ### The 60-block lock
 
@@ -776,24 +906,21 @@ link your IP address to your transactions. I2P is not a network this
 daemon dials. Regular block sync and peer communication still uses IPv4
 to resist Sybil attacks.
 
-### Daemon: outbound transaction proxy
+### Daemon: Tor
+
+The Tor connector is on by default: `tor = managed` runs the bundled Tor
+(`tor-file` names the binary). To use a Tor you run, name its SOCKS
+endpoint and, to be reachable over Tor, your onion service and the local
+endpoint it forwards to:
 
 ```bash
-./shekyld --tx-proxy tor,127.0.0.1:9050
+./shekyld --tor operator --tor-socks 127.0.0.1:9050 \
+    --tor-onion <your-onion>.onion:11021 --tor-onion-listen 127.0.0.1:11021
 ```
 
-Omit the outbound count to use the default. An explicit count below 12 is
-refused at start (the relay-embargo floor). For Tor-zone *cover*, that
-SocksPort must be the non-exit relay process — see [TOR_RELAY.md](TOR_RELAY.md)
-— not a second client Tor.
-
-### Daemon: inbound hidden service
-
-To receive connections over Tor:
-
-```bash
-./shekyld --anonymous-inbound <your-onion>.onion:11021,127.0.0.1:11021,25
-```
+`--tor off` is clearnet only. For Tor-zone *cover*, that SocksPort must be
+the non-exit relay process — see [TOR_RELAY.md](TOR_RELAY.md) — not a
+second client Tor.
 
 ### Wallet through Tor
 
@@ -825,17 +952,18 @@ operator sees what it asks for — true of your own node too; see
 
 Shekyl runs four networks. Use the right one for your purpose:
 
-| Network | Flag | P2P Port | RPC Port | Use |
-|---------|------|----------|----------|-----|
+| Network | Daemon | P2P Port | RPC Port | Use |
+|---------|--------|----------|----------|-----|
 | Mainnet | *(default)* | 11021 | 11029 | Production -- real money |
-| Testnet | `--testnet` | 12021 | 12029 | Protocol experiments |
-| Stagenet | `--stagenet` | 13021 | 13029 | Integration testing (exchange, wallet) |
-| Fakechain | `--regtest` | n/a | n/a | Local deterministic testing |
+| Testnet | `--network testnet` | 12021 | 12029 | Protocol experiments |
+| Stagenet | `--network stagenet` | 13021 | 13029 | Integration testing (exchange, wallet) |
+| Regtest | `--network regtest` | n/a | n/a | Local deterministic testing |
 
-Both the daemon and wallet must be started with the same network flag:
+Both the daemon and wallet must be started on the same network (the
+wallet's `--testnet` / `--stagenet` are shorthand for `--network …`):
 
 ```bash
-./shekyld --testnet
+./shekyld --network testnet
 ./shekyl-cli --testnet
 ```
 
@@ -1264,7 +1392,7 @@ Behavior changes to be aware of when upgrading:
 | **Block** | A bundle of transactions added to the blockchain roughly every 2 minutes. |
 | **Block height** | The sequential number of a block, starting from 0. |
 | **Block reward** | New SKL created and given to the miner who finds a valid block. |
-| **Config file** | A text file (`shekyld.conf`) containing daemon options in `name=value` format, loaded with `--config-file`. |
+| **Config file** | A TOML file (`/etc/shekyl/shekyld-<network>.toml` by default) holding daemon options under their command-line names, or another file named with `--config-file`. |
 | **Console** | The interactive command prompt inside `shekyld` when running in foreground mode. |
 | **Daemon** | The background program (`shekyld`) that connects to the Shekyl network and maintains the blockchain. |
 | **Difficulty** | A measure of how hard mining puzzles are. Adjusts automatically to target ~2-minute blocks. |
