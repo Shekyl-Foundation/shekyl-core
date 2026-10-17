@@ -48,8 +48,9 @@
 //!
 //! # Below the daemon
 //!
-//! Every worker is its own `shekyl-thread-ledger` row ([`spawn_dedicated`]
-//! (shekyl_thread_ledger::spawn_dedicated), named `sk-miner`) and lowers
+//! Every worker is its own `shekyl-thread-ledger` row
+//! ([`spawn_dedicated`](shekyl_thread_ledger::spawn_dedicated), named
+//! `sk-miner`) and lowers
 //! its own CPU priority as it starts (`SH-3`'s mechanism,
 //! `shekyl-thread-priority`: nice 19 on Linux, never `SCHED_IDLE`). A
 //! platform that refuses leaves the worker at normal priority, counted in
