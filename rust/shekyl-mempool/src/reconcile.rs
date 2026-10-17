@@ -13,11 +13,11 @@
 //! and it is the door**: every held transaction is offered to
 //! [`door::judge`] again, against the chain as it now stands, in the order
 //! the pool first held them (so where two entries spend one key image, the
-//! earlier keeps it). What the door admits stays;
-//! what the chain holds leaves; what the chain-bound half refuses is kept,
-//! never relayed and never selected, for CEN-M10 to evict — a later reorg
-//! may make it valid again (CEN-K10's retention); what the bytes or the
-//! policy refuse leaves.
+//! earlier keeps it). What the door admits stays; what the chain holds
+//! leaves; what the chain-bound half refuses and the policy does not is
+//! kept, never relayed and never selected, for CEN-M10 to evict — a later
+//! reorg may make it valid again (CEN-K10's retention); what the bytes or
+//! the policy refuse leaves.
 //!
 //! No other path decides whether a held transaction is still valid, so the
 //! pool after a restart, after a switch and after a connect is the pool the
@@ -80,7 +80,7 @@ impl Pool {
             let entry = entry?;
             let blob = entry.blob(&snapshot)?;
             match Transaction::from_bytes(&blob) {
-                Ok(tx) => pool.hold(
+                Ok(tx) => pool.load(
                     entry.txid,
                     Held {
                         tx,
@@ -151,7 +151,9 @@ impl Pool {
                 Judged::Admitted { proven, .. } => Standing::Admitted {
                     proven: proven.map(ProvenReference::of),
                 },
-                Judged::Chain(_) => Standing::Kept,
+                // Kept only on the chain-bound refusal's account: a policy
+                // refusal beside it is final (door module docs).
+                Judged::Chain { policy: None, .. } => Standing::Kept,
                 refused => {
                     changes.insert(*txid, None);
                     reconciled.removed.push((*txid, Removed::Refused(refused)));

@@ -457,7 +457,7 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
             );
             match admitted {
                 Ok(Admission::Admitted) => CommitOutcome::Committed,
-                Ok(Admission::Duplicate(_) | Admission::Refused(Judged::Chain(_))) => {
+                Ok(Admission::Duplicate(_) | Admission::Refused(Judged::Chain { .. })) => {
                     let emission_probe = parsed.emission_probe();
                     match gather(
                         snapshot,

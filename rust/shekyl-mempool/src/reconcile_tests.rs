@@ -165,3 +165,33 @@ fn an_entry_that_does_not_parse_is_dropped_at_open() {
     drop(store);
     drop(std::fs::remove_file(&path));
 }
+
+/// The file is not trusted: two admitted entries in it claiming one key
+/// image open without a panic, and the reconcile judges both — here each is
+/// refused on its bytes.
+#[test]
+fn two_filed_entries_claiming_one_image_open_and_are_judged() {
+    let path = tmp("reconcile-shared-image");
+    let chain = spendable_chain();
+    let image = [0x43; 32];
+    let first = listed_on(&chain, image);
+    let mut second = first.clone();
+    second.prefix.unlock_time = 1;
+    let ids = [first.txid_parts().hash, second.txid_parts().hash];
+    assert_ne!(ids[0], ids[1]);
+    {
+        let (store, _) = PoolStore::create(&path).unwrap();
+        for tx in [&first, &second] {
+            store
+                .write(|batch| batch.insert(tx.txid_parts().hash, &ADMITTED, &tx.serialize()))
+                .unwrap();
+        }
+    }
+    let reconciled = chain.with_view(|view| {
+        Pool::open(&path, &view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS)
+            .unwrap()
+            .2
+    });
+    assert_eq!(reconciled.removed.len(), 2, "both judged");
+    drop(std::fs::remove_file(&path));
+}

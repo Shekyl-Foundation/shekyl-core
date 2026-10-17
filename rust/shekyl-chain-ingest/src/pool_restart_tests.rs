@@ -133,3 +133,83 @@ async fn the_pool_file_can_be_discarded() {
     drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
+
+/// The reconcile keeps an entry on the chain-bound half's refusal only when
+/// the policy admits it: the policy's refusal is final. Two bodies over one
+/// coinbase's image are in the file (held before the chain moved), one
+/// paying above the floor and one paying one atomic unit; a third body over
+/// the same image is mined. At open both are refused by CEN-I7. The one
+/// above the floor is kept (CEN-K10's retention); the one below it is
+/// removed, with the door's answer naming both refusals.
+#[tokio::test]
+async fn a_reconcile_keeps_a_chain_refused_entry_only_when_the_policy_admits_it() {
+    use shekyl_chain_rules::{CenRow, PolicyRow};
+    use shekyl_chain_store::pool::{PoolRecord, PoolStore, Standing};
+    use shekyl_harness_spender::Spender;
+    use shekyl_mempool::Judged;
+    use shekyl_units::AtomicUnits;
+
+    use crate::pool_door_tests::AT;
+    use crate::test_support::h;
+
+    let (mut scenario, mined) = matured("pool-keep-policy").await;
+    let good = paying_the_floor(&mut scenario, &mined, 0).await;
+    let fee = match &good.ct {
+        shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
+        shekyl_wire::transaction::Ct::Null(_) => unreachable!("a spend"),
+    };
+    let (paid, cheap) = {
+        let spender = Spender::over(&mined);
+        let wallet = scenario.wallet();
+        (
+            spender.spend_coinbase(wallet, h(0), h(AT), fee + 1_000),
+            spender.spend_coinbase(wallet, h(0), h(AT), 1),
+        )
+    };
+    let (idp, idc) = (paid.txid_parts().hash, cheap.txid_parts().hash);
+    let path = tmp("pool-keep-policy-pool");
+    {
+        let (store, _) = PoolStore::create(&path).expect("create");
+        for (at, tx) in [(1, &paid), (2, &cheap)] {
+            let record = PoolRecord {
+                weight: u64::try_from(tx.weight()).expect("fits"),
+                fee: AtomicUnits::from_raw(1),
+                receive_time: UnixSeconds::from_raw(at),
+                public: true,
+                standing: Standing::Admitted { proven: None },
+            };
+            store
+                .write(|batch| batch.insert(tx.txid_parts().hash, &record, &tx.serialize()))
+                .expect("planted");
+        }
+    }
+    let _mined = scenario
+        .mine_listing(vec![good])
+        .await
+        .unwrap_or_else(|o| panic!("the third body connects: {o}"));
+    let reconciled = scenario
+        .read_chain(|view, rule_set| {
+            Pool::open(&path, view, rule_set, &AdmissionPolicy::GENESIS)
+                .expect("open")
+                .2
+        })
+        .await;
+    assert_eq!(reconciled.kept, vec![idp], "above the floor: kept");
+    assert!(reconciled.admitted.is_empty());
+    match reconciled.removed.as_slice() {
+        [(
+            txid,
+            Removed::Refused(Judged::Chain {
+                refused,
+                policy: Some(policy),
+            }),
+        )] => {
+            assert_eq!(*txid, idc);
+            assert_eq!(refused.rule, CenRow::I7);
+            assert_eq!(policy.rule, PolicyRow::M3);
+        }
+        other => panic!("below the floor: removed on both refusals, not kept: {other:?}"),
+    }
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}

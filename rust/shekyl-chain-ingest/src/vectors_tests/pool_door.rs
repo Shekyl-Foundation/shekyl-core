@@ -78,7 +78,7 @@ async fn every_captured_body_passes_the_doors_consensus_halves_against_its_paren
                 {
                     Judged::Admitted { .. } => admitted += 1,
                     Judged::Policy(_) => priced_out += 1,
-                    refused @ (Judged::Stateless(_) | Judged::Chain(_)) => panic!(
+                    refused @ (Judged::Stateless(_) | Judged::Chain { .. }) => panic!(
                         "{}: a body block {tip:?} connected is refused by the door: {refused:?}",
                         manifest.shape
                     ),

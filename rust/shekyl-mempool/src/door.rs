@@ -23,7 +23,11 @@
 //! The answer says which half refused, because the pool treats them
 //! differently: a stateless or policy refusal is final, while a refusal by
 //! the chain-bound half is what CEN-K10 keeps a transaction returned from a
-//! popped block for — a later reorg may make it valid again.
+//! popped block for — a later reorg may make it valid again. Step 3 runs
+//! whatever step 2 answered, and a chain-bound refusal carries the policy's
+//! refusal beside it: a policy refusal is final in this pool, so a
+//! transaction the policy also refuses is not kept on the chain-bound
+//! refusal's account.
 //!
 //! Every input is read off one chain view, so the claim and the chain it
 //! is compared with cannot disagree: a [`Stale`](shekyl_chain_rules::Stale)
@@ -56,8 +60,14 @@ pub enum Judged {
     /// Refused on the transaction's bytes (step 1): no chain admits it.
     Stateless(InvalidBlock),
     /// Refused by the chain-bound half (step 2), against this chain.
-    Chain(InvalidBlock),
-    /// Refused by the admission policy (step 3).
+    Chain {
+        /// The consensus refusal.
+        refused: InvalidBlock,
+        /// The admission policy's refusal too, when it refuses (step 3).
+        policy: Option<PolicyRefused>,
+    },
+    /// Admitted by the consensus rows and refused by the admission policy
+    /// (step 3).
     Policy(PolicyRefused),
 }
 
@@ -92,17 +102,14 @@ pub fn judge<'id, V: ChainView<'id>>(
         };
 
     let view = PoolView::new(chain, pool);
-    let against = match tx_against(
+    let against = tx_against(
         tx,
         TxSlot::Lone,
         &view,
         rule_set,
         proven,
         FormAttempt::FIRST,
-    )? {
-        Ok(against) => against,
-        Err(refused) => return Ok(Judged::Chain(refused)),
-    };
+    )?;
 
     let floors = match relay_floor_window(chain, connecting)? {
         AtHeight::Recorded(floors) => floors,
@@ -112,15 +119,19 @@ pub fn judge<'id, V: ChainView<'id>>(
         // transaction is refused, never admitted unpriced.
         AtHeight::AboveTip => Vec::new(),
     };
-    match policy_form(tx, policy, &floors) {
-        Ok(policy) => Ok(Judged::Admitted {
+    Ok(match (against, policy_form(tx, policy, &floors)) {
+        (Err(refused), policy) => Judged::Chain {
+            refused,
+            policy: policy.err(),
+        },
+        (Ok(_), Err(refused)) => Judged::Policy(refused),
+        (Ok(against), Ok(policy)) => Judged::Admitted {
             proven,
             stateless,
             against,
             policy,
-        }),
-        Err(refused) => Ok(Judged::Policy(refused)),
-    }
+        },
+    })
 }
 
 #[cfg(test)]

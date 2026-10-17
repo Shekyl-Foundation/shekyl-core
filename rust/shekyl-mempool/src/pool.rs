@@ -188,7 +188,7 @@ impl Pool {
                 },
                 Admission::Admitted,
             ),
-            (Judged::Chain(_), Arrival::Block) => (Standing::Kept, Admission::Kept),
+            (Judged::Chain { .. }, Arrival::Block) => (Standing::Kept, Admission::Kept),
             (refused, _) => return Ok(Admission::Refused(refused)),
         };
         let record = PoolRecord {
@@ -212,6 +212,13 @@ impl Pool {
         if matches!(held.record.standing, Standing::Admitted { .. }) {
             self.key_images.insert(txid, held.key_images());
         }
+        self.held.insert(txid, held);
+    }
+
+    /// Put `held`, read back from the file at open, in the index — and not
+    /// its key images: the file is not trusted (two entries in it may claim
+    /// one image), and the reconcile that follows builds the map.
+    pub(crate) fn load(&mut self, txid: TxHash, held: Held) {
         self.held.insert(txid, held);
     }
 

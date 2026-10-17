@@ -84,7 +84,7 @@ async fn door(scenario: &mut Scenario<FreeHash>, tx: &Transaction) -> (Verdict, 
         .await;
     let verdict = match &judged {
         Judged::Admitted { .. } | Judged::Policy(_) => Verdict::Admitted,
-        Judged::Stateless(r) | Judged::Chain(r) => refused(r),
+        Judged::Stateless(r) | Judged::Chain { refused: r, .. } => refused(r),
     };
     (verdict, judged)
 }
@@ -306,7 +306,7 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
     assert_eq!(first, Admission::Admitted);
     assert_eq!(again, Admission::Duplicate(Duplicate::InPool), "CEN-M1");
     match second_spender {
-        Admission::Refused(Judged::Chain(r)) => {
+        Admission::Refused(Judged::Chain { refused: r, .. }) => {
             assert_eq!(
                 r.rule,
                 CenRow::I7,
