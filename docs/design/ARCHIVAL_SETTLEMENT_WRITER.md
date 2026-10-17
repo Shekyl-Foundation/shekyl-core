@@ -8,8 +8,10 @@ assigned out of this round. **`SO-D10` RULED 2026-10-08** — the writer's
 wiring ahead of the secret draw, §14. **`SO-D11` RULED 2026-10-09** —
 accrual reads the row and the gather moves to the slash pass, §15.
 **`SO-D12` RULED 2026-10-10** — admission and the draw, §16: ten
-questions, ruled the day they were posed (§16.6, §16.7). Nothing in §16
-is built. Increment 1 is cleared to start.
+questions, ruled the day they were posed (§16.6, §16.7). Increment 1 is
+built (§16.8, §16.9). **`SO-D12h` RULED 2026-10-17 and BUILT** — a
+settled epoch's market membership is frozen at its pass, and the
+per-epoch tables are retired at their last reader's horizon, §17.
 
 **Implementation began 2026-08-24 and the first hour changed two dispositions.**
 That is the intended use of the round, not a failure of it: the ruling that the
@@ -1079,10 +1081,10 @@ change.
 - **CEN-J15 refuses when no epoch is settled**, as it refuses an absent
   price row.
 - **A complete tree that is slashed or released becomes a compact
-  record, and market membership reads that flag.** A settled epoch's
-  `Σwork` can therefore be recomputed differently after such a change.
-  The epoch close had the same exposure; it is not introduced here and
-  not closed here. It needs its own look.
+  record, and market membership reads that flag.** The pass therefore
+  freezes the complete trees it excluded beside `Σwork(E)`, and a
+  claim's re-gather reads the flag from that set and never from the
+  record (`SO-D12h`, §17).
 - **CEN-J25's driven negative moved.** The claim at `h_close(E)` was
   refused by the finalisation bound; CEN-J23 now refuses every height
   from there to the pass first. The bound's KAT in the retention crate
@@ -1281,7 +1283,7 @@ key, scheduling the reads and filing the bundle. It needs only increment
 | `SO-D12e` | The deletions of the specification's §11.1 | **Rust side in the increment that replaces each; C++ side at `DEL-008`**, as `SO-D10e` ruled. Increment 1: the leaf-path preimage, replaced by the record. Increment 2: the public urn, once the enumerator no longer shares its pair type's home; the urn's assert against the settlement count (§14.4 step 2) goes with it, and the selection vectors pin the draw after it. Increment 4: the attestation path's pass records, the anchor window, the fire height, the Rust CEN-B4 rule, and the witness root in the header under that increment's rule-42 bump. `DEL-008`: the C++ CEN-B4 verify and the beacon gate |
 | `SO-D12f` | Where the visible shortfall comes from. The specification's §10 stores it per block; it is also derivable from the index (`h_reveal < h`) | **Store it**, as the specification says. Deriving it is a walk of the epoch's index per block |
 | `SO-D12g` | The census: the rows for the seven checks of §9.1, and the retired-by-ruling status for CEN-J8, J9 and J10 | **Mint the rows with increment 1's design text, add the `RowStatus` arm with increment 3**, when the first successor row is implemented |
-| `SO-D12h` | The complete-tree exposure of §15.9: a complete tree that is slashed or released reads as compact afterwards, and market membership reads that flag | **Fix it in increment 2.** The same pre-image that fixes the drawable set says what the record was at `E`. It is the same defect on a second reader |
+| `SO-D12h` | The complete-tree exposure of §15.9: a complete tree that is slashed or released reads as compact afterwards, and market membership reads that flag | **Freeze the fact at the pass** (§17). The reference point is the pass, not `h_open(E)`, and a claim reaches back over the whole claim window, past the slash log's retirement |
 | `SO-D12i` | Whether a coinbase must carry `0x0C` from increment 1, or may. The coinbase grammar is an exact ordered tag list, so this is a rule on every block | **Required from increment 1.** Admitting it first and requiring it later is a consensus change at the later point (the reasoning of `SO-D10b` as amended). Increment 1 therefore carries the smallest writer: the template draws a seed and a witness key, commits to them, and drops them. The ring that keeps them, the reads and the carriers stay with the producer lane. Until that lane lands every block commits to a seed nobody reveals, which issues nothing (the specification's §9.2) |
 | `SO-D12j` | What the latest-pass-epoch read and the ever-served-shards read become when the serve-credit table is deleted (`SO-D10c`). The Release's served anchor reads them | **Posed without a recommendation yet.** The settlement rows are the natural source (the latest Served epoch per pair) but they are pruned at the retention horizon and the serve-credit rows are not. It is grounded and recommended in increment 4's design text, before that increment is built. It does not affect increments 1 to 3 |
 
@@ -1302,7 +1304,7 @@ The settlement-timing question `ESR-12`.
 | `SO-D12e` | **Agreed.** Rust deletions in the increment that replaces each piece; C++ deletions at `DEL-008` |
 | `SO-D12f` | **Agreed.** The shortfall is stored, with undo |
 | `SO-D12g` | **Agreed** |
-| `SO-D12h` | **Agreed.** The same journal fixes the complete-tree flag |
+| `SO-D12h` | **Ruled 2026-10-17: freeze the fact at the pass**, in its own PR beside increment 2 and sharing no code with it. **The per-epoch tables are retired in the same PR** at their last reader's horizon. Both are §17 |
 | `SO-D12i` | **Required from increment 1, with no height gate.** The testnet runs tagged releases and the next tag is a regenesis, so nothing on `dev` reaches a running chain and there is no compatibility window. One condition, on correctness: the grammar that requires `0x0C` lands for the validator that judges blocks in that release. The C++ daemon is that validator until `DEL-008` and must accept the tag in increment 1 itself. What the change touches is in §16.7 |
 | `SO-D12j` | **Deferred** to the design text of the increment that deletes the table (the merged increment, §16.3) |
 
@@ -1542,3 +1544,179 @@ commitment with `seed[32] ‖ h_le[8]`, and every vector there carries
 both. The condition is met by construction; increment 1 adds the test
 that the bytes fed to the commitment are the `0x0D` field's own seed and
 `h`, so the field and the commitment cannot name different values.
+
+---
+
+## 17. `SO-D12h` — a settled epoch's market membership, and the per-epoch retirement — RULED 2026-10-17, BUILT
+
+**Status:** RULED 2026-10-17 (§17.1) and built in one PR, beside
+increment 2 and sharing no code with it. Grounded at `dev@09402ea19`.
+
+### 17.1 Rulings (maintainer, 2026-10-17)
+
+| # | Ruling |
+| --- | --- |
+| `SO-D12h` (A) | **Freeze the fact at the pass.** The slash pass for `E` writes the set of personas its gather excluded from `E`'s market as complete trees; a claim's re-gather reads the flag from that set. The Release journal cannot carry it: the slash log retires after `k + n` epochs plus the reorg cap, a claim reaches back over the 26-epoch claim window, and the reference point is the pass, not `h_open(E)` |
+| `SO-D12h` (retirement) | **Retire the per-epoch tables in this PR.** Each per-epoch table is retired below the epoch where its last reader stops, in the boundary batch, unjournaled, every horizon a function of the epoch calendar and the rule set. A read below a table's horizon is refused, never answered as absent. A table with no derivable horizon is reported, not given one |
+
+### 17.2 The defect
+
+The slash pass for `E` gathers `Σwork(E)` over the bond records as it
+left them (`close.rs`, `Transition::gather`). A claim on `E` re-gathers
+with the records as they are at the claim (`tx_emission_against.rs`,
+`J23::gather`). Market membership (`market_member_at_epoch`) excludes a
+complete tree, and the gather read that flag off the record's holdings.
+A complete tree that is slashed or released after the pass holds a
+compact set, so it was a member in the claim's re-gather and not in the
+pass's. The recomputed `Σwork(E)` then differed from the frozen row and
+an honest claim failed CEN-J25 at any epoch of the claim window.
+
+### 17.3 What the pass freezes
+
+- **The set.** `CompleteTreeSet` (`shekyl_types::archival`): persona
+  ids, strictly increasing. It holds the bonds the gather **credited** at
+  `E` (a Served settlement row) whose record held a complete tree as the
+  pass left them — the gather's exclusions as complete trees
+  (`freeze_complete_trees`). A complete tree with no credit is not in the
+  gather and not in the set. A bond excluded for a bad interval is in the
+  set only if it is also a complete tree.
+- **One source for both readers.** `gather_epoch_snapshot` takes the set
+  as an operand and never reads a record's holdings for the flag. The pass
+  computes the set from its post-images and gathers with it; CEN-J23
+  reads it back (A20) and gathers with it. The pass's
+  `freeze_complete_trees` is the one read of the record's flag on the
+  gather's path.
+- **The table.** `archival_complete_trees` (Rust-only, ordinal 43): epoch
+  → the set. Written by the pass in its write set beside
+  `archival_sigma_work[E]`, insert-once, the empty set written and not
+  skipped (`ARW-Q4`), undone with the block through the journal. An epoch
+  with no row was not settled. Governed by `ArchivalFamily::SigmaWork`,
+  the family whose reader needs it.
+- **SI-28** (`StoreInvariant::CompleteTreesNotFrozen`): a second write
+  is refused at the insert; a settled epoch whose `Σwork` has no set is
+  `Corrupt::CompleteTreesAbsent` at the claim's read, a fault and never a
+  refusal of the claim.
+
+**No other field the gather reads moves under a settled epoch.** The
+gather reads the join epoch, the complete-tree flag and the interval
+log. The join epoch is immutable, and SI-19 makes a join insert once. A
+slash opens `[E', ∞)` at the epoch it slashes for, and a later pass
+slashes for a later epoch. A Release appends the zero-length `[R, R)`,
+which `good_through` skips. A Reinstate closes the one open interval at
+`R + 1` (`bond_connect.rs`, `reinstate_connect`), and `R` is after every
+settled epoch. No Rust path removes a bond record.
+
+### 17.4 Retiring the per-epoch tables
+
+**The rule.** A per-epoch table is retired below the epoch where its last
+reader stops (`shekyl_chain_rules::EpochFloor`; the boundary batch,
+`store/prune.rs`, `retire_epoch_rows`). Tables that share a last reader
+form a family. Its `LAG` is how far back from the connecting block's
+epoch that reader reaches. A block connecting at `h` asks a family for no
+epoch below `epoch(h) − LAG`, and each read takes that floor
+(`EpochFloor::under`).
+
+| Family | Tables | Last reader | `LAG` | Tight at |
+| --- | --- | --- | --- | --- |
+| Claimable | `archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement` | a claim (CEN-J23, after the window check); the failure window (`settlement_retention_floor`) | `W` = `MAX_CLAIM_AGE_W` = 26 | a claim on the window's floor; the window's own bound, which is `epoch(h) − W` |
+| Settling | `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied` | the slash pass of the epoch, in epoch `E + k` | `k` = `SLASH_GRACE_EPOCHS` = 1 | the pass reads its own epoch |
+| Pricing | `archival_r_market` | CEN-J15, at the slash watermark as of the parent | `k + 1` = 2 | the first block of an epoch, whose parent ran the pass of `epoch − 1 − k` |
+
+`archival_drawable_digest`'s reader, the pass's compare against a
+re-walk (`SO-D10g`), is ruled and not built in Rust. Its horizon is that
+reader's.
+
+**Where the batch retires, and why one epoch lower.** After the boundary
+of `B` connects, a reorg can pop back to the undo floor,
+`B·SEB − retention`, and reconnect. The store holds `retention < SEB` at
+open and at every connect (`Horizons::new`), so the undo floor is inside
+epoch `B − 1` whatever retention an operator chose. The batch therefore
+retires below the floor of the lowest height that can connect again,
+`(B − 1)·SEB + 1`, which is `(B − 1) − LAG` (`EpochFloor::at_boundary`).
+Every block that can connect after the batch reads every family at or
+above what it retired. The retirement is not pop-reversible, like the
+body and slash-log retirements, and this epoch of slack is what makes
+that safe.
+
+**The compile-time check.** Every height that writes or reads a
+family's row of `E` lies in an epoch no later than `E + LAG`: the close
+writes `budget(E)` in `E`, the pass writes the claimable rows in `E + k`
+and the settling rows are read there, and J15 reads `R_market(E)` until
+the pass of `E + 1`. A retired `E` has `E + LAG < B − 1`, so all of those
+heights are below `(B − 1)·SEB`, under the undo floor. The one inequality
+that is not a definition is asserted: `SLASH_GRACE_EPOCHS ≤
+MAX_CLAIM_AGE_W` (`epoch_floor.rs`). Its runtime half, `retention < SEB`,
+is the refusal at open above.
+
+**A read below a floor is refused (SI-29,
+`StoreInvariant::EpochReadBelowFloor`).** Each read of these tables (A6–A8,
+A12, A14–A17, A19, A20) takes its family's floor from the caller, as A2
+takes the slash log's (SI-26). The store compares and does not source the
+floor, and refuses an epoch below it rather than answer "absent": absent
+means never written, and a retired row was written. Every reader asks
+inside its family by construction, so the refusal fires on a
+mis-composed schedule, never on data.
+
+**The claim window runs before any read.** A claim's epochs are the
+sender's to choose, and CEN-J23 reads the cited epochs' rows. So
+CEN-J25's window, `epoch_is_claim_expired` (the predicate the verify's
+`EpochClaimExpired` uses), now runs ahead of CEN-J23 (`J25::window`). An
+expired claim is refused at CEN-J25, as before, and never reaches a read
+the store would refuse.
+
+**Every node retires the same rows.** The floors are a function of the
+schedule in the rule set and two consensus constants. Nothing a node
+holds enters them, so a node that pruned, skeleton-synced or replayed
+from the pruned corpus retires what an archival node retires.
+
+**Cost.** The epoch-keyed tables and the epoch-major issued-draw index
+each lose one range. `archival_settlement` and `archival_slash_applied`
+are keyed persona-first and `archival_r_market` shard-first, so their
+retirement walks the table once per epoch, a cost linear in the rows the
+family keeps.
+
+### 17.5 Tables with no derivable horizon (reported, not retired)
+
+| Table | Why no horizon is derived here | Blocker |
+| --- | --- | --- |
+| `archival_serve_credit` | A3 and A4 (CEN-J16, the Release cooldown) ask for the latest epoch a pair *ever* served. Retiring a row turns "served 30 epochs ago" into "never served", which changes the cooldown's verdict. The C++ retires it at `tip − W`, which is a horizon for a different read | `SO-D12j`, deferred to the merged increment's design text, which decides what the served anchor reads |
+| `archival_block_draws` | Per height, not per epoch. Its readers, admission's draw-index bound and the next block's count, are not built | Admission (the merged increment) |
+| `archival_budget_accruing` | Holds the open epoch's row and no other (SI-23); the close deletes it | None needed: it retires itself |
+
+### 17.6 Pruning
+
+The frozen set and the claim's read of it come from kept state: bond
+records and settlement rows, themselves built from the kept transaction
+prefix. A node that replays from the pruned corpus, or syncs below an
+anchor, builds the same row. Neither reads prunable transaction bytes or
+bundle bytes.
+
+### 17.7 Tests
+
+- **The defect, driven** (`shekyl-chain-ingest`, live lane,
+  `a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed`).
+  Two complete trees are Served beside the claimant in `E`. After `E`'s
+  pass one releases and the other is slashed at its eleventh miss. The
+  claim on `E` connects at the first block where `E` is the oldest
+  claimable epoch. A claim one epoch older is refused there at CEN-J25.
+  With the flag read from the records in CEN-J23, the same claim is
+  refused at CEN-J25.
+- **The frozen set** (`settlement_slash_tests`): a Served complete tree is
+  in it, a Missed one is not, and an epoch that credited nothing writes
+  the empty set. The pop of the settling block removes the row. A second
+  write is SI-28, and the absent half maps to SI-28.
+- **Retirement** (`prune_tests`): each table retires at its family's floor
+  at the boundary. A read below a floor is SI-29 with the table and both
+  epochs; a read at it answers. A pop and a reconnect restore nothing and
+  re-derive the same floors. A stubbed family is not retired.
+- **The window checks** (`epoch_floor_tests`, over every height of a short
+  schedule): the claimable floor is the claim window and the failure
+  window's bound; the settling floor is the epoch the pass settles; the
+  pricing floor is the lowest watermark a block reads at; every height
+  that can follow a batch reads at or above what it retired.
+
+### 17.8 Open
+
+- **#1102's `emission_epoch_facts`** (DRS-E5 PR-b) is a third reader of
+  the gather, for the submit engine. Whichever PR lands second routes it
+  through the frozen set, the claimable floor and the window check.

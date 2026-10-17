@@ -2015,6 +2015,17 @@ must keep to *verify new blocks* versus which it may retire.
 | `archival_bond_unbond_log`, `archival_bond_holdings_update_log` *(empty by construction since 2026-09-20 — kind REJECTED; deletion owed, `FOLLOWUPS.md`)*, `archival_bond_reinstate_log`, `archival_emission_claim_log`, `archival_epoch_close_log` | AppendMostly | pop path only (`revert_*_at_height`) | **nothing today** | LOCAL-BOUNDED in principle (reorg window); unbounded on disk (F16) — Q1 |
 | `archival_slash_log` | AppendMostly | pop path + `archival_slash_removed_holding_after` (`:5243`, scans above `at_height`); `at_height = h_fire` on both entry paths, bounded by credit deadline / watermark + window, not by a check (F19) | **nothing today** | LOCAL-BOUNDED — horizon `tip − (CRB + n·SEB + reorg)`, minted with its check (F19) — Q1 |
 
+The table above is the C++ store's. The Rust store retires the per-epoch
+tables by their last reader, not at one `tip − W`
+([`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md) §17):
+the claimable family (`archival_sigma_work`, `archival_budget`,
+`archival_complete_trees`, `archival_settlement`) `W` epochs back, the
+settling family (the issued-draw index and digest, the drawable digest,
+`archival_slash_applied`) `k`, and `archival_r_market` `k + 1`, each below
+the epoch before the boundary's, with reads below each floor refused
+(SI-29). `archival_serve_credit` is not retired there: its "ever served"
+reader has no horizon until `SO-D12j` is ruled.
+
 ### 9.5 Node-local, never chain state
 
 `alt_blocks`, `txpool_meta`, `txpool_blob` (all `Excluded`). Bounded by
