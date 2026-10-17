@@ -57,7 +57,7 @@ the Foundation's hosts showed what that costs once Tor is not optional.
    directory it took the bundle's. What that meant on the hosts probed on
    2026-10-06, as they were that day and not as a property of any
    distribution: the internal Ubuntu 24.04 hosts would have run tor on their
-   own OpenSSL (3.0.13 there) in place of the bundle's (3.5.8), and the floor
+   own OpenSSL (3.0.13 there) in place of the bundle's (3.5.8 in 15.0.24), and the floor
    device's image (Ubuntu 26.04) had no `libevent-2.1.so.7`, so tor would not
    have started on it. The pin covers the `tor` file only.
 6. **The macOS `tor` names its one library by `@executable_path`**
@@ -188,6 +188,13 @@ Extracted files, by target:
 | | `libevent-2.1.7.dylib` | `6dde3faf59255b7cf0cc20d0b3cdf78622266fbf13c534300b8884c76d89b739` |
 | `macos-x86_64` | `tor` | `e249a521aa5b0ff44a39c1dc4b5707ae8cb109d8a26c637b6acbbf6832bf2f14` |
 | | `libevent-2.1.7.dylib` | `38aea0316e01e1fc52a15941bf523c8bc018ca90655cfa90de568b4a86a82b4b` |
+
+Every pinned bundle carries OpenSSL **3.5.9** (29 Sep 2026), read on
+2026-10-17 from the version string in the staged files: `libcrypto.so.3` in
+both Linux bundles, and the statically linked copy in `tor.exe` and in both
+macOS `tor` binaries. The `linux-aarch64` libraries are byte-identical to
+16.0a13's, so the floor device already ran 3.5.9; the 15.0.24 `tor.exe`
+reads 3.5.8.
 
 The Windows bundle's `tor/` also holds `tor-gencert.exe`, a directory
 authority's tool that Shekyl does not ship. `tor.exe` links OpenSSL, libevent
