@@ -457,15 +457,20 @@ pub enum OperatorAlarm {
         /// Total value forfeited this session, in atomic units.
         forfeited_atomic: u64,
     },
-    /// Pending staking records reached their end date with part of their
-    /// reserved funds spent by another transaction. The wallet released the
-    /// unspent rest and recorded a `spent_elsewhere` outcome for each
-    /// (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3). Nothing outside the wallet
-    /// can spend those outputs, so the operator should check the wallet's
-    /// logs and keys.
+    /// Pending staking records reached their end date with reserved funds
+    /// spent by another transaction (`WALLET_RPC_STAKING_OUTCOMES.md`
+    /// WR-Q3). A record with part of its funds spent was released, its
+    /// unspent rest returned and a `spent_elsewhere` outcome recorded. A
+    /// stake with every input spent and no confirmation seen is held instead:
+    /// it may be the stake itself, landed and unmatched, and releasing it
+    /// would drop a slot that can never be adopted again. Nothing outside the
+    /// wallet can spend those outputs, so the operator should check the
+    /// wallet's logs and keys.
     ReservationSpentElsewhere {
-        /// How many records currently carry the outcome.
+        /// How many records currently carry a `spent_elsewhere` outcome.
         records: u64,
+        /// How many stakes are held with every reserved input spent.
+        held_stakes: u64,
     },
     /// The persona's attestation key refused to countersign during the last
     /// refresh tick, so passes were lost on shards the host *holds*. Passes

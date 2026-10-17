@@ -200,13 +200,12 @@
 #                                                   -29534..-29536, never an
 #                                                   empty result)
 #   SPECIFIED (WR-Q2 — staking outcomes a user can see):
-#     acknowledge_staking_outcome                  (clear the active
-#                                                   persona's last staking
-#                                                   ending of one kind from
-#                                                   staking_info.outcomes.
-#                                                   Names no slot; false
-#                                                   when there was nothing
-#                                                   to clear)
+#     acknowledge_staking_outcome                  (clear the staking
+#                                                   endings of one kind,
+#                                                   every identity, through
+#                                                   the height shown. Names
+#                                                   no identity or slot;
+#                                                   idempotent)
 #
 #   RESERVED: none at present. (sign_message / verify_message shipped with
 #     PR-SM-2; match_transfer_to_request was re-ruled REJECTED 2026-09-07 —
@@ -452,8 +451,12 @@ info:
   # ending per kind (kind, outcome, reason, at_height, funds). kind, state
   # and outcome are open strings. pscan_synced_height becomes required and
   # null when the wallet never scanned as a staker; recovery_pending_reopen
-  # is listed and required. New method acknowledge_staking_outcome { kind }
-  # clears the active persona's ending of that kind. -29521 now means only
+  # is listed and required; posture and serving_priority_not_lowered are
+  # required and null when no host or serving process is running. in_flight
+  # has a held state: a stake whose every reserved input is spent with no
+  # confirmation seen is kept, not withdrawn. New method
+  # acknowledge_staking_outcome { kind, through_height } clears every
+  # ending of that kind at or below the height shown. -29521 now means only
   # a refusal before any byte was sent; a daemon's terminal verdict on a
   # sent exit is -29522, held until its end date. api_version stays 1.
   version: 0.14.0
@@ -2829,6 +2832,8 @@ components:
         - recovery_pending_reopen
         - in_flight
         - outcomes
+        - posture
+        - serving_priority_not_lowered
       properties:
         staking_enabled:
           type: boolean
@@ -2872,19 +2877,21 @@ components:
           description: >
             The last ending for each kind of staking action, per staking
             identity the wallet holds (WR-Q2). An entry stays until the
-            same kind succeeds again for that identity or the owner
-            acknowledges it (acknowledge_staking_outcome, which acts on the
-            active one). Empty means there is nothing to report.
+            same kind is started again for that identity or the owner
+            acknowledges it (acknowledge_staking_outcome). A
+            `spent_elsewhere` entry stays until it is acknowledged. Empty
+            means there is nothing to report.
           items:
             $ref: "#/components/schemas/StakingOutcomeEntry"
         posture:
           type: string
+          nullable: true
           description: >
             What this wallet's serving host is currently obligated to
-            serve. **Absent means no host is running** — a non-staker, a
+            serve. **`null` means no host is running** — a non-staker, a
             staker still inside its launch standoff, or a wallet whose
             serving path failed — and renders as "not serving" rather than
-            as either posture.
+            as either posture. Required: "no host" is an answer (rule 43).
 
             Values defined at this contract version: `market`,
             `foundation_complete_tree`.
@@ -2905,16 +2912,17 @@ components:
             from a stored setting: no posture is durable wallet-side, and
             the connected bond record lives daemon-side, so this answers
             "what is being served now" rather than "what was intended".
-            Consequently it can be absent for a wallet that is bonded —
+            Consequently it can be `null` for a wallet that is bonded —
             which is the honest reading, not a gap.
         serving_priority_not_lowered:
           type: integer
           minimum: 0
+          nullable: true
           description: >
             How many threads of this wallet's serving host are still at
             normal CPU priority because the operating system refused to
-            lower them. **Absent means no serving lifecycle is parked** —
-            the same reading as an absent `posture`. **Zero is the steady
+            lower them. **`null` means no serving process is running**;
+            the field is required (rule 43). **Zero is the steady
             reading**: every serving thread that is running was lowered.
             Blocking threads start only when a connection needs one, so
             zero does not claim that every thread which will ever exist
@@ -2962,8 +2970,13 @@ components:
             aside until funds_return_at because only the chain can say
             whether it landed. `expired`: the end date has passed, so the
             transaction can never be mined; its funds return at
-            funds_return_at. A record that lands leaves the list without
-            an outcome; its effect shows in the balance.
+            funds_return_at. `held`: a stake past its end date whose every
+            reserved input has been spent with no confirmation seen; it is
+            kept rather than withdrawn, so a stake that did land keeps its
+            place, nothing is returned because nothing reserved is left,
+            and the wallet raises an integrity alarm. A record that lands
+            leaves the list without an outcome; its effect shows in the
+            balance.
         dispatched_at_height:
           type: integer
           format: int64
@@ -2988,8 +3001,9 @@ components:
           type: string
           nullable: true
           description: >
-            For `rejected`: what the node said, as a sentence for the user.
-            `null` in the other states.
+            For `rejected`, what the node said, and for `held`, why the
+            stake is kept, as a sentence for the user. `null` in the other
+            states.
 
     StakingOutcomeEntry:
       type: object
@@ -3029,29 +3043,37 @@ components:
 
     AcknowledgeStakingOutcomeParams:
       type: object
-      required: [kind]
+      required: [kind, through_height]
       additionalProperties: false
       description: >
-        Clear the active persona's last ending of `kind` from
-        staking_info.outcomes. No slot or record is named (WR-Q5); a
-        request carrying anything but `kind` is -32602. An ending of a
-        persona that is not active cannot be cleared here; that persona's
-        next successful action of the same kind clears it.
+        Clear every ending of `kind` in staking_info.outcomes, for every
+        staking identity the wallet holds, whose at_height is at or below
+        `through_height` (WR-Q2, ruled 2026-10-17). No identity, slot or
+        record is named (WR-Q5); a request carrying anything else is
+        -32602.
       properties:
         kind:
           type: string
           enum: [stake, claim, drain, exit]
+        through_height:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            The newest at_height the owner was shown, so an ending written
+            after it is never cleared unseen. The CLI sends the newest
+            height its last `stake` showed for the kind.
 
     AcknowledgeStakingOutcomeResult:
       type: object
-      required: [acknowledged]
+      required: [cleared]
       properties:
-        acknowledged:
-          type: boolean
+        cleared:
+          type: integer
+          minimum: 0
           description: >
-            `true` when there was an ending to clear. `false` when there
-            was none, including on a wallet with no active persona;
-            acknowledging twice is harmless.
+            How many endings were cleared. `0` when there were none, so a
+            repeated acknowledgement is harmless.
 
     # ── Archival principal staking actions — WI-RPC-5 ────────────────
     # The principal↔P money legs that already exist in Engine: stake_in

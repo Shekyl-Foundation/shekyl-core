@@ -4,13 +4,16 @@
 // BSD-3-Clause
 
 //! The pending-outcomes leg: re-derives the pending-funds integrity alarm
-//! from the durable `spent_elsewhere` outcomes on every fire
-//! (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3).
+//! on every fire from durable state: the `spent_elsewhere` outcomes, and the
+//! stakes the end-date release holds because every reserved input is spent
+//! with no confirmation seen (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3).
 //!
 //! The outcome is written by the dispatch driver when a record reaches its
-//! end date with part of its reservation spent by another transaction. It is
+//! end date with part of its reservation spent by another transaction; a
+//! stake with all of it spent is held instead, in the pending seal. Both are
 //! the system of record; the board's alarm is `LatchedRederived`, so this leg
-//! re-raises it after every restart until the outcome is acknowledged.
+//! re-raises it after every restart until the outcome is acknowledged and no
+//! held stake remains.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -22,6 +25,7 @@ use shekyl_engine_state::PendingPostBlock;
 use shekyl_operator_alarm::{AlarmCondition, OperatorAlarms};
 
 use crate::engine::signer::EngineSignerKind;
+use crate::engine::staking_outcomes::held_spent_stakes;
 use crate::engine::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine,
 };
@@ -39,7 +43,7 @@ pub(super) fn spent_elsewhere_count(block: &PendingPostBlock) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
 }
 
-/// One read of the sealed pending block per chain advance, mapped onto the
+/// One read of the two sealed staking files per chain advance, mapped onto the
 /// board by `shekyl_operator_alarm::cadence::apply_pending_outcomes`.
 ///
 /// A wallet with no pending seal (a non-staker) reports nothing: its board has
@@ -84,13 +88,17 @@ where
             let Some(engine) = weak.upgrade() else {
                 return;
             };
-            let read = engine.read().await.sealed_pending_block();
+            let read = engine.read().await.sealed_staking_records();
             match read {
-                Ok(Some(block)) => shekyl_operator_alarm::cadence::apply_pending_outcomes(
-                    &alarms,
-                    spent_elsewhere_count(&block),
-                ),
-                Ok(None) => {}
+                Ok((pscan, Some(block))) => {
+                    let held = held_spent_stakes(&block, pscan.as_ref());
+                    shekyl_operator_alarm::cadence::apply_pending_outcomes(
+                        &alarms,
+                        spent_elsewhere_count(&block),
+                        u64::try_from(held.len()).unwrap_or(u64::MAX),
+                    );
+                }
+                Ok((_, None)) => {}
                 Err(e) => {
                     tracing::warn!(error = %e, "pending-outcomes leg: the pending seal did not open");
                 }

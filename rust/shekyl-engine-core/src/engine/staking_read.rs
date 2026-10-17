@@ -323,9 +323,9 @@ fn staked_outputs_from_state(state: &PScanState) -> Vec<StakedOutput> {
         .collect()
 }
 
-// `F = WalletFile`, any ledger: the sealed pending-post block alone, for the
+// `F = WalletFile`, any ledger: the two sealed sibling files raw, for the
 // cadence driver's outcome leg (its legs are generic over the ledger) and the
-// staking projections.
+// exit resolutions.
 #[allow(private_bounds)]
 impl<
         S: EngineSignerKind,
@@ -336,18 +336,28 @@ impl<
         P: PendingTxEngine,
     > Engine<S, D, L, E, R, P, shekyl_engine_file::WalletFile>
 {
-    /// Open the sealed `.wallet.pending` block alone. `None` is the ordinary
-    /// non-staker case (no seal written); a corrupt or version-mismatched seal
-    /// fails closed. A plain read: callers that act on it leave every race to
-    /// the seal's own admission.
-    pub(crate) fn sealed_pending_block(
+    /// Open the two sealed sibling files raw — the decoded [`PScanState`] and
+    /// [`PendingPostBlock`] — for consumers that need the **sets** rather
+    /// than the aggregated view (the `unstake_facade` resolutions and the
+    /// cadence driver's outcome leg, whose legs are generic over the ledger).
+    /// Same fail-closed posture as the staking read view: an absent seal is
+    /// the ordinary empty case; a corrupt or version-mismatched one errors.
+    /// A plain read, not the dispatch seams' generation-coherent basis —
+    /// callers that only *propose* on it must leave every race to the seam's
+    /// seal admission.
+    pub(crate) fn sealed_staking_records(
         &self,
-    ) -> Result<Option<PendingPostBlock>, StakingReadError> {
+    ) -> Result<(Option<PScanState>, Option<PendingPostBlock>), StakingReadError> {
         let wrap_key = self.state_wrap_key().as_bytes();
-        match self.persistence.open_pending_posts(wrap_key)? {
-            Some(body) => Ok(Some(PendingPostBlock::from_postcard_bytes(&body)?)),
-            None => Ok(None),
-        }
+        let pscan = match self.persistence.open_pscan_state(wrap_key)? {
+            Some(body) => Some(PScanState::from_postcard_bytes(&body)?),
+            None => None,
+        };
+        let pending = match self.persistence.open_pending_posts(wrap_key)? {
+            Some(body) => Some(PendingPostBlock::from_postcard_bytes(&body)?),
+            None => None,
+        };
+        Ok((pscan, pending))
     }
 }
 
@@ -371,29 +381,6 @@ impl<
     /// lock).
     pub fn staking_recovery_pending_reopen(&self) -> bool {
         self.ledger.read().recovery_pending_reopen()
-    }
-
-    /// Open the two sealed sibling files raw — the decoded [`PScanState`] and
-    /// [`PendingPostBlock`] — for consumers that need the **sets** rather
-    /// than the aggregated view (the `unstake_facade` resolutions). Same
-    /// fail-closed posture as [`Self::staking_read_view`]: an absent seal is
-    /// the ordinary empty case; a corrupt or version-mismatched one errors.
-    /// A plain read, not the dispatch seams' generation-coherent basis —
-    /// callers that only *propose* on it must leave every race to the seam's
-    /// seal admission.
-    pub(crate) fn exit_seal_snapshot(
-        &self,
-    ) -> Result<(Option<PScanState>, Option<PendingPostBlock>), StakingReadError> {
-        let wrap_key = self.state_wrap_key().as_bytes();
-        let pscan = match self.persistence.open_pscan_state(wrap_key)? {
-            Some(body) => Some(PScanState::from_postcard_bytes(&body)?),
-            None => None,
-        };
-        let pending = match self.persistence.open_pending_posts(wrap_key)? {
-            Some(body) => Some(PendingPostBlock::from_postcard_bytes(&body)?),
-            None => None,
-        };
-        Ok((pscan, pending))
     }
 
     /// Ledger facts under one read guard, then the sealed staking read.
@@ -500,8 +487,9 @@ impl<
         let (in_flight, outcomes) = pending.as_ref().map_or_else(
             || (Vec::new(), Vec::new()),
             |block| {
+                let held = staking_outcomes::held_spent_stakes(block, pscan.as_ref());
                 (
-                    staking_outcomes::in_flight(block, ledger_tip),
+                    staking_outcomes::in_flight(block, ledger_tip, &held),
                     staking_outcomes::outcomes(block),
                 )
             },

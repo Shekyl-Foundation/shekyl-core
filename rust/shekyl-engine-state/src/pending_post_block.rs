@@ -211,7 +211,10 @@ pub enum OutcomeKind {
 ///
 /// Written in the same seal that removes the record, replaced by a later
 /// ending of the same kind for the same persona, and cleared by that
-/// persona's next admitted seal of the kind or by an acknowledgement.
+/// persona's next admitted seal of the kind or by an acknowledgement
+/// ([`PendingPostBlock::acknowledge_outcomes`]). A `spent_elsewhere`
+/// outcome is the exception: neither a later ending nor a new seal touches
+/// it, and only an acknowledgement clears it.
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct StakingOutcome {
     /// The record kind that ended.
@@ -252,6 +255,15 @@ impl std::fmt::Debug for StakingOutcome {
 #[must_use]
 pub const fn end_date(reference_height: BlockHeight, max_age: BlockCount) -> BlockHeight {
     reference_height.saturating_add(max_age)
+}
+
+/// Whether a record reserves inputs and every one of them is gone from the
+/// live funding set.
+fn all_reserved_gone(
+    reserved: &[GlobalOutputIndex],
+    live: &std::collections::BTreeSet<GlobalOutputIndex>,
+) -> bool {
+    !reserved.is_empty() && reserved.iter().all(|g| !live.contains(g))
 }
 
 /// What [`PendingPostBlock::release_ended`] released, one entry per record.
@@ -1029,7 +1041,7 @@ impl PendingPostBlock {
             SealAdmission::Admit => {}
             refused => return refused,
         }
-        self.clear_outcome(RecordKind::Post, &post.persona);
+        self.replace_outcome(RecordKind::Post, &post.persona);
         self.posts.push(post);
         SealAdmission::Admit
     }
@@ -1059,7 +1071,7 @@ impl PendingPostBlock {
             refused => return refused,
         }
         claim.state = PendingPostState::Dispatched { at, attempts: 1 };
-        self.clear_outcome(RecordKind::Claim, &claim.persona);
+        self.replace_outcome(RecordKind::Claim, &claim.persona);
         self.claims.push(claim);
         SealAdmission::Admit
     }
@@ -1082,7 +1094,7 @@ impl PendingPostBlock {
             refused => return refused,
         }
         drain.state = PendingPostState::Dispatched { at, attempts: 1 };
-        self.clear_outcome(RecordKind::Drain, &drain.persona);
+        self.replace_outcome(RecordKind::Drain, &drain.persona);
         self.drains.push(drain);
         SealAdmission::Admit
     }
@@ -1109,7 +1121,7 @@ impl PendingPostBlock {
             refused => return refused,
         }
         release.state = PendingPostState::Dispatched { at, attempts: 1 };
-        self.clear_outcome(RecordKind::Release, &release.persona);
+        self.replace_outcome(RecordKind::Release, &release.persona);
         self.releases.push(release);
         SealAdmission::Admit
     }
@@ -1278,16 +1290,27 @@ impl PendingPostBlock {
     /// in the same pass and over the same evidence.** A record that landed has
     /// landed at or below its end date, so once the scan has covered the end
     /// date those two retires have already removed it; what is left here did
-    /// not land. Two guards keep that true even if the order slips: a post is
-    /// never released here as anything but an ending, and a reservation-kind
-    /// record whose every reserved input is gone is left for
-    /// [`Self::remove_settled`].
+    /// not land. Two guards keep that true even if the order slips: a
+    /// reservation-kind record whose every reserved input is gone is left for
+    /// [`Self::remove_settled`], and a post whose every reserved input is gone
+    /// is held (below).
+    ///
+    /// **A post whose every reserved input is gone is held, never released.**
+    /// A transaction spends all of its inputs or none, so it is either the
+    /// post itself, landed with no match seen, or one other transaction that
+    /// spent them all. Releasing it would return nothing and would remove the
+    /// pending record the phantom-slot cleanup reads as its bridge
+    /// (`engine/stake_persist.rs` `reconcile_phantom_bonded_slots`): if the
+    /// post did land, its slot would be dropped and could never be adopted
+    /// again. [`Self::held_spent_posts`] names such posts, so the integrity
+    /// alarm is re-derived from this durable state.
     ///
     /// The outcome, in precedence order:
     ///
     /// | Evidence at `scanned_through` | Outcome |
     /// | --- | --- |
-    /// | some reserved input gone, not all (or, for a post, any) | [`OutcomeKind::SpentElsewhere`] |
+    /// | a post with every reserved input gone | held: no outcome, not released |
+    /// | some reserved input gone, not all | [`OutcomeKind::SpentElsewhere`] |
     /// | a terminal verdict was recorded | [`OutcomeKind::Rejected`] |
     /// | the record reserves no inputs (the Q11 zero-fee claim) | [`OutcomeKind::EndedUnconfirmed`] |
     /// | every reserved input still live | [`OutcomeKind::Expired`] |
@@ -1308,7 +1331,6 @@ impl PendingPostBlock {
             reference_height: BlockHeight,
             reserved: &[GlobalOutputIndex],
             terminal: Option<TerminalCause>,
-            is_post: bool,
             scanned_through: BlockHeight,
             live: &std::collections::BTreeSet<GlobalOutputIndex>,
             max_age: BlockCount,
@@ -1316,10 +1338,12 @@ impl PendingPostBlock {
             if scanned_through < end_date(reference_height, max_age) {
                 return None;
             }
-            let gone = reserved.iter().filter(|g| !live.contains(g)).count();
-            if !is_post && !reserved.is_empty() && gone == reserved.len() {
+            // Every reserved input gone: a reservation-kind record settled
+            // (`remove_settled`'s), and a post is held (see above).
+            if all_reserved_gone(reserved, live) {
                 return None;
             }
+            let gone = reserved.iter().filter(|g| !live.contains(g)).count();
             Some(if gone > 0 {
                 OutcomeKind::SpentElsewhere
             } else if let Some(cause) = terminal {
@@ -1351,7 +1375,6 @@ impl PendingPostBlock {
                 r.reference_height,
                 &r.funding_gindexes,
                 r.terminal,
-                true,
                 scanned_through,
                 live_funding,
                 max_age,
@@ -1363,7 +1386,6 @@ impl PendingPostBlock {
                 r.reference_height,
                 &r.fee_gindexes,
                 r.terminal,
-                false,
                 scanned_through,
                 live_funding,
                 max_age,
@@ -1375,7 +1397,6 @@ impl PendingPostBlock {
                 r.reference_height,
                 &r.funding_gindexes,
                 r.terminal,
-                false,
                 scanned_through,
                 live_funding,
                 max_age,
@@ -1387,7 +1408,6 @@ impl PendingPostBlock {
                 r.reference_height,
                 &r.funding_gindexes,
                 r.terminal,
-                false,
                 scanned_through,
                 live_funding,
                 max_age,
@@ -1397,7 +1417,7 @@ impl PendingPostBlock {
         if !out.is_empty() {
             self.generation += 1;
             for (&(kind, persona, outcome), sent) in out.released.iter().zip(sent_flags) {
-                self.clear_outcome(kind, &persona);
+                self.replace_outcome(kind, &persona);
                 self.outcomes.push(StakingOutcome {
                     kind,
                     persona,
@@ -1410,18 +1430,46 @@ impl PendingPostBlock {
         out
     }
 
-    /// Clear `persona`'s outcome of `kind` (an acknowledgement). Returns
-    /// `true` when there was one to clear.
-    #[must_use]
-    pub fn acknowledge_outcome(&mut self, kind: RecordKind, persona: &PCanonicalId) -> bool {
-        let before = self.outcomes.len();
-        self.clear_outcome(kind, persona);
-        self.outcomes.len() != before
+    /// Posts held at their end date because every reserved input is gone
+    /// and no confirmation retired them (see [`Self::release_ended`]). The
+    /// same predicate the release uses, over the same evidence, so the
+    /// integrity alarm and the read view agree with what the release kept.
+    ///
+    /// Run it over evidence from which confirmed posts are already excluded:
+    /// a post whose match the scan has sealed is the dispatch tick's to
+    /// retire, not a held post.
+    pub fn held_spent_posts<'a>(
+        &'a self,
+        scanned_through: BlockHeight,
+        live_funding: &'a std::collections::BTreeSet<GlobalOutputIndex>,
+        max_age: BlockCount,
+    ) -> impl Iterator<Item = &'a PendingBondPost> + 'a {
+        self.posts.iter().filter(move |p| {
+            scanned_through >= end_date(p.reference_height, max_age)
+                && all_reserved_gone(&p.funding_gindexes, live_funding)
+        })
     }
 
-    fn clear_outcome(&mut self, kind: RecordKind, persona: &PCanonicalId) {
+    /// Clear every outcome of `kind`, for every persona, written at or below
+    /// `through_height` (the acknowledgement, WR-Q2 as ruled 2026-10-17).
+    /// The height is the newest ending the owner was shown, so an ending
+    /// written after that is never cleared unseen. Returns how many were
+    /// cleared; acknowledging twice clears nothing the second time.
+    #[must_use]
+    pub fn acknowledge_outcomes(&mut self, kind: RecordKind, through_height: BlockHeight) -> usize {
+        let before = self.outcomes.len();
         self.outcomes
-            .retain(|o| !(o.kind == kind && &o.persona == persona));
+            .retain(|o| !(o.kind == kind && o.at_height <= through_height));
+        before - self.outcomes.len()
+    }
+
+    /// A new seal or a new ending of `kind` for `persona` replaces its last
+    /// outcome, except `spent_elsewhere`: that one is an integrity signal and
+    /// clears only on acknowledgement.
+    fn replace_outcome(&mut self, kind: RecordKind, persona: &PCanonicalId) {
+        self.outcomes.retain(|o| {
+            !(o.kind == kind && &o.persona == persona) || o.outcome == OutcomeKind::SpentElsewhere
+        });
     }
 
     /// Serialize to postcard bytes (the inner half of the seal; the engine
@@ -2573,6 +2621,8 @@ mod tests {
             );
             // claim, nothing reserved, a verdict seen -> rejected
             assert!(b.push_claim(claim(0x15, &[])));
+            // stake, every input gone, no match -> held, not released
+            assert!(b.push_post(post(0x16, &[7, 8])));
         });
         assert!(block.record_terminal(RecordKind::Drain, &p(0x13), TerminalCause::FeeTooLow));
         assert!(block.record_terminal(RecordKind::Claim, &p(0x15), TerminalCause::Malformed));
@@ -2603,8 +2653,22 @@ mod tests {
             OutcomeKind::Rejected(TerminalCause::Malformed)
         );
         assert!(
-            block.reserved_gindexes().is_empty(),
-            "every reservation, partly spent ones included, is freed"
+            !got.contains_key(&(RecordKind::Post, 0x16)),
+            "a stake with every input gone is held"
+        );
+        assert!(
+            block.has_live_post_for(&p(0x16)),
+            "its record stays the bridge"
+        );
+        let held: Vec<u8> = block
+            .held_spent_posts(TEST_END, &live(&[1, 3, 4, 6]), TEST_MAX_AGE)
+            .map(|post| post.persona.to_bytes()[0])
+            .collect();
+        assert_eq!(held, vec![0x16], "the held query names it, and only it");
+        assert_eq!(
+            block.reserved_gindexes(),
+            gindexes(&[7, 8]).into_iter().collect(),
+            "every other reservation, partly spent ones included, is freed"
         );
         assert!(
             !block.has_live_claim_for(&p(0x12)),
@@ -2679,7 +2743,6 @@ mod tests {
     /// acknowledgement.
     #[test]
     fn an_outcome_is_replaced_cleared_by_a_new_seal_and_acknowledged() {
-        let who = PCanonicalId::from_bytes([0x40; 32]);
         let mut block = sealed(|b| assert!(b.push_drain(drain(0x40, &[12]))));
         assert_eq!(
             block
@@ -2708,16 +2771,94 @@ mod tests {
             1
         );
         assert_eq!(block.outcomes().len(), 1, "one outcome per (kind, persona)");
-        assert!(
-            !block.acknowledge_outcome(RecordKind::Claim, &who),
+        assert_eq!(
+            block.acknowledge_outcomes(RecordKind::Claim, TEST_END),
+            0,
             "another kind's is untouched"
         );
-        assert!(block.acknowledge_outcome(RecordKind::Drain, &who));
+        assert_eq!(block.acknowledge_outcomes(RecordKind::Drain, TEST_END), 1);
         assert!(block.outcomes().is_empty());
-        assert!(
-            !block.acknowledge_outcome(RecordKind::Drain, &who),
+        assert_eq!(
+            block.acknowledge_outcomes(RecordKind::Drain, TEST_END),
+            0,
             "nothing left to acknowledge"
         );
+    }
+
+    /// The acknowledgement as ruled 2026-10-17: every outcome of the kind,
+    /// across personas, written at or below the height shown; a newer one is
+    /// never cleared unseen.
+    #[test]
+    fn an_acknowledgement_clears_every_persona_through_the_height_shown() {
+        let mut block = sealed(|b| {
+            assert!(b.push_drain(drain(0x41, &[20])));
+            assert!(b.push_drain(drain(0x42, &[21])));
+            assert!(b.push_claim(claim(0x43, &[])));
+        });
+        let shown = BlockHeight::from_raw(TEST_END.to_raw() + 10);
+        let ended = block.release_ended(TEST_END, &live(&[20, 21]), TEST_MAX_AGE, shown);
+        assert_eq!(ended.released.len(), 3);
+        let mut late = drain(0x44, &[22]);
+        late.reference_height = BlockHeight::from_raw(TEST_REFERENCE.to_raw() + 50);
+        assert!(block.push_drain(late));
+        let later_end = BlockHeight::from_raw(TEST_END.to_raw() + 50);
+        let after = BlockHeight::from_raw(shown.to_raw() + 1);
+        assert_eq!(
+            block
+                .release_ended(later_end, &live(&[22]), TEST_MAX_AGE, after)
+                .released
+                .len(),
+            1
+        );
+
+        assert_eq!(
+            block.acknowledge_outcomes(RecordKind::Drain, shown),
+            2,
+            "both personas' drains at or below the height shown"
+        );
+        let left: Vec<_> = block
+            .outcomes()
+            .iter()
+            .map(|o| (o.kind, o.persona.to_bytes()[0]))
+            .collect();
+        assert_eq!(
+            left,
+            vec![(RecordKind::Claim, 0x43), (RecordKind::Drain, 0x44)],
+            "the other kind, and the drain written after the height shown, stay"
+        );
+        assert_eq!(block.acknowledge_outcomes(RecordKind::Drain, shown), 0);
+    }
+
+    /// `spent_elsewhere` clears only on acknowledgement: a new seal, or a new
+    /// ending, of the same kind for that persona leaves it in place.
+    #[test]
+    fn spent_elsewhere_survives_a_new_seal_and_a_new_ending() {
+        let mut block = sealed(|b| assert!(b.push_drain(drain(0x45, &[30, 31]))));
+        let ended = block.release_ended(TEST_END, &live(&[30]), TEST_MAX_AGE, TEST_END);
+        assert_eq!(
+            ended.released[0].2,
+            OutcomeKind::SpentElsewhere,
+            "one of two inputs gone"
+        );
+
+        let g = block.generation();
+        assert_eq!(
+            block.seal_drain(drain(0x45, &[32]), ChainCount::from_raw(6_000), g),
+            SealAdmission::Admit
+        );
+        assert_eq!(block.outcomes().len(), 1, "the seal leaves it");
+        assert_eq!(block.outcomes()[0].outcome, OutcomeKind::SpentElsewhere);
+
+        let next = block.release_ended(TEST_END, &live(&[32]), TEST_MAX_AGE, TEST_END);
+        assert_eq!(next.released[0].2, OutcomeKind::Expired);
+        let kinds: Vec<_> = block.outcomes().iter().map(|o| o.outcome).collect();
+        assert_eq!(
+            kinds,
+            vec![OutcomeKind::SpentElsewhere, OutcomeKind::Expired],
+            "a later ending is added beside it, not over it"
+        );
+        assert_eq!(block.acknowledge_outcomes(RecordKind::Drain, TEST_END), 2);
+        assert!(block.outcomes().is_empty());
     }
 
     /// The outcome and its cause survive the codec, and `Debug` names no

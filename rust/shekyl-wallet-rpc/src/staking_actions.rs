@@ -181,11 +181,12 @@ pub(crate) async fn drain(
         .map_err(|e| WalletRpcError::InternalError(format!("serialize drain: {e}")))
 }
 
-/// `acknowledge_staking_outcome` — clear the active persona's last ending of
-/// `kind`, so `staking_info.outcomes` stops reporting it (WR-Q2). Names no
-/// slot (WR-Q5): `deny_unknown_fields` refuses `p_slot` with `-32602`.
-/// Idempotent: `acknowledged: false` when there was nothing to clear,
-/// including on a wallet with no active persona.
+/// `acknowledge_staking_outcome` — clear every ending of `kind`, across the
+/// wallet's staking identities, written at or below `through_height`, so
+/// `staking_info.outcomes` stops reporting it (WR-Q2, ruled 2026-10-17).
+/// Names no identity or slot (WR-Q5): `deny_unknown_fields` refuses
+/// `p_slot` with `-32602`. Idempotent: `cleared: 0` when there was nothing
+/// to clear.
 pub(crate) async fn acknowledge_staking_outcome(
     tenants: &tokio::sync::Mutex<TenantState>,
     params: &Value,
@@ -199,13 +200,15 @@ pub(crate) async fn acknowledge_staking_outcome(
         StakingRecordKind::Exit => RecordKind::Release,
     };
     let shared = require_open_engine(tenants).await?;
-    let acknowledged = StakeFacade::acknowledge_staking_outcome(shared, kind)
+    let through = shekyl_types::BlockHeight::from_raw(p.through_height);
+    let cleared = StakeFacade::acknowledge_staking_outcome(shared, kind, through)
         .await
         .map_err(|e| {
             tracing::warn!(error = %e, "acknowledge_staking_outcome failed");
             WalletRpcError::InternalError("staking state failed to load".into())
         })?;
-    serde_json::to_value(AcknowledgeStakingOutcomeResult { acknowledged }).map_err(|e| {
+    let cleared = u64::try_from(cleared).unwrap_or(u64::MAX);
+    serde_json::to_value(AcknowledgeStakingOutcomeResult { cleared }).map_err(|e| {
         WalletRpcError::InternalError(format!("serialize acknowledge_staking_outcome: {e}"))
     })
 }

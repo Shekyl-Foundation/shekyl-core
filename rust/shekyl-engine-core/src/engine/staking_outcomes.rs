@@ -16,13 +16,15 @@
 
 use std::sync::Arc;
 
-use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{
     end_date, OutcomeKind, RecordKind, StakingOutcome, TerminalCause,
 };
+use std::collections::BTreeSet;
+
+use shekyl_engine_state::pscan_state::PScanState;
 use shekyl_engine_state::{PendingPostBlock, PendingPostState};
-use shekyl_types::{BlockHeight, ChainCount};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId};
 use tokio::sync::RwLock;
 
 use super::local_ledger::LocalLedger;
@@ -77,11 +79,17 @@ pub enum InFlightState {
         /// The end date.
         funds_return_at: BlockHeight,
     },
+    /// A stake past its end date whose every reserved input is spent, with
+    /// no confirmation seen. It is either the stake itself, landed and not
+    /// matched, or a spend elsewhere; the record is held so a stake that did
+    /// land keeps its slot, and the integrity alarm is raised. Nothing is
+    /// returned, because nothing reserved is left.
+    Held,
 }
 
 impl InFlightState {
-    /// The user sentence for a rejected record (rule 81); `None` for every
-    /// other state, which needs none.
+    /// The user sentence for a rejected or held record (rule 81); `None` for
+    /// every other state, which needs none.
     #[must_use]
     pub fn reason(&self) -> Option<String> {
         match self {
@@ -90,6 +98,12 @@ impl InFlightState {
                  its transaction can no longer be mined.",
                 refusal(*cause)
             )),
+            Self::Held => Some(
+                "Every input this stake set aside has been spent, but the wallet has not \
+                 seen the stake confirm. It is kept rather than withdrawn, so a stake that \
+                 did land is not lost. This should not happen; check the wallet's logs."
+                    .to_owned(),
+            ),
             Self::Pending | Self::Dispatched | Self::Expired { .. } => None,
         }
     }
@@ -206,15 +220,18 @@ fn refusal(cause: TerminalCause) -> &'static str {
 
 /// The state of one record against the ledger clock.
 ///
-/// Precedence: a recorded verdict reads `Rejected` whatever the clock says,
-/// so its reason shows at once; otherwise a tip at or past the end date reads
-/// `Expired`, because the next block cannot include the transaction (the
-/// driver's no-send rule on the same clock); otherwise the sealed state.
+/// Precedence: a held stake reads `Held` (its inputs are spent, so neither a
+/// verdict nor the clock describes it); a recorded verdict reads `Rejected`
+/// whatever the clock says, so its reason shows at once; otherwise a tip at or
+/// past the end date reads `Expired`, because the next block cannot include
+/// the transaction (the driver's no-send rule on the same clock); otherwise
+/// the sealed state.
 fn record(
     kind: RecordKind,
     state: PendingPostState,
     reference_height: BlockHeight,
     terminal: Option<TerminalCause>,
+    held: bool,
     ledger_tip: BlockHeight,
 ) -> InFlightRecord {
     let sends = match state {
@@ -225,7 +242,9 @@ fn record(
         }),
     };
     let funds_return_at = end_date(reference_height, REFERENCE_MAX_AGE);
-    let state = if let Some(cause) = terminal {
+    let state = if held {
+        InFlightState::Held
+    } else if let Some(cause) = terminal {
         InFlightState::Rejected {
             cause,
             funds_return_at,
@@ -249,28 +268,83 @@ fn tip_of(at: ChainCount) -> BlockHeight {
 }
 
 /// Every live record in `block`, judged at `ledger_tip` (the wallet ledger's
-/// synced height, inclusive).
-pub(crate) fn in_flight(block: &PendingPostBlock, ledger_tip: BlockHeight) -> Vec<InFlightRecord> {
-    let entry = |kind, state, reference_height, terminal| {
-        record(kind, state, reference_height, terminal, ledger_tip)
+/// synced height, inclusive). `held` is [`held_spent_stakes`] over the same
+/// seals.
+pub(crate) fn in_flight(
+    block: &PendingPostBlock,
+    ledger_tip: BlockHeight,
+    held: &BTreeSet<PCanonicalId>,
+) -> Vec<InFlightRecord> {
+    let entry = |kind, state, reference_height, terminal, held| {
+        record(kind, state, reference_height, terminal, held, ledger_tip)
     };
-    let posts = block
-        .posts()
-        .iter()
-        .map(|r| entry(RecordKind::Post, r.state, r.reference_height, r.terminal));
-    let claims = block
-        .claims()
-        .iter()
-        .map(|r| entry(RecordKind::Claim, r.state, r.reference_height, r.terminal));
-    let drains = block
-        .drains()
-        .iter()
-        .map(|r| entry(RecordKind::Drain, r.state, r.reference_height, r.terminal));
-    let releases = block
-        .releases()
-        .iter()
-        .map(|r| entry(RecordKind::Release, r.state, r.reference_height, r.terminal));
+    let posts = block.posts().iter().map(|r| {
+        entry(
+            RecordKind::Post,
+            r.state,
+            r.reference_height,
+            r.terminal,
+            held.contains(&r.persona),
+        )
+    });
+    let claims = block.claims().iter().map(|r| {
+        entry(
+            RecordKind::Claim,
+            r.state,
+            r.reference_height,
+            r.terminal,
+            false,
+        )
+    });
+    let drains = block.drains().iter().map(|r| {
+        entry(
+            RecordKind::Drain,
+            r.state,
+            r.reference_height,
+            r.terminal,
+            false,
+        )
+    });
+    let releases = block.releases().iter().map(|r| {
+        entry(
+            RecordKind::Release,
+            r.state,
+            r.reference_height,
+            r.terminal,
+            false,
+        )
+    });
     posts.chain(claims).chain(drains).chain(releases).collect()
+}
+
+/// The stakes the end-date release holds because every reserved input is
+/// spent and no confirmation retired them, read from the two seals: the
+/// sealed scan's frontier, its live funding set and its JoinMarket matches,
+/// the same evidence the dispatch tick releases on. A stake whose match is
+/// sealed is the tick's to retire, so it is not counted. No scan seal, or a
+/// frontier at zero, holds nothing.
+pub(crate) fn held_spent_stakes(
+    pending: &PendingPostBlock,
+    pscan: Option<&PScanState>,
+) -> BTreeSet<PCanonicalId> {
+    let Some(pscan) = pscan else {
+        return BTreeSet::new();
+    };
+    let Some(scanned_through) = pscan.synced_height().checked_sub_count(BlockCount::ONE) else {
+        return BTreeSet::new();
+    };
+    let live: BTreeSet<_> = pscan.funding_outputs().iter().map(|f| f.gindex).collect();
+    let confirmed: BTreeSet<_> = pscan
+        .bond_post_matches()
+        .iter()
+        .filter(|m| shekyl_wire::transaction::is_join_market_post_kind(m.post_kind))
+        .map(|m| m.p_canonical_id)
+        .collect();
+    pending
+        .held_spent_posts(scanned_through, &live, REFERENCE_MAX_AGE)
+        .map(|p| p.persona)
+        .filter(|persona| !confirmed.contains(persona))
+        .collect()
 }
 
 /// Every durable outcome in `block`, persona dropped.
@@ -283,9 +357,8 @@ pub(crate) fn outcomes(block: &PendingPostBlock) -> Vec<ReportedOutcome> {
 /// answers `false`.
 #[derive(Debug, thiserror::Error)]
 pub enum AcknowledgeOutcomeError {
-    /// The stake engine could not answer which persona is active, or the
-    /// pending seal could not be read or written. The detail is for the log;
-    /// it can name filesystem paths.
+    /// The pending seal could not be read or written. The detail is for the
+    /// log; it can name filesystem paths.
     #[error("staking state failed ({context}): {detail}")]
     State {
         /// Which step failed.
@@ -305,55 +378,31 @@ where
     P: PendingTxEngine,
     Engine<S, D, LocalLedger, E, R, P, WalletFile>: Send + Sync,
 {
-    /// Clear the active persona's last outcome of `kind` (WR-Q2), so
-    /// `staking_info` stops reporting it. Returns whether there was one.
+    /// Clear every outcome of `kind`, for every persona, written at or
+    /// below `through_height` (WR-Q2, ruled 2026-10-17), so `staking_info`
+    /// stops reporting it. Returns how many were cleared.
     ///
-    /// Acts on the active persona, as every staking action does (WR-Q5): the
-    /// caller names no slot or record. `false` covers every case where the
-    /// active persona has no such outcome, including a wallet that is not a
-    /// staker or has no active persona, and an outcome that belongs to a
-    /// persona that is not active; only that persona's next admitted seal of
-    /// the kind clears such an outcome. Acknowledging twice is harmless.
+    /// `through_height` is the newest ending the owner was shown, so one
+    /// written after it is never cleared unseen. The caller names no persona,
+    /// slot or record (WR-Q5), so an ending of a persona that is no longer
+    /// active, such as an exited one, can be cleared too. Acknowledging twice
+    /// clears nothing the second time; a wallet with no pending seal clears
+    /// nothing and writes nothing.
     ///
     /// # Errors
     ///
-    /// [`AcknowledgeOutcomeError::State`] when the active persona or the
-    /// pending seal cannot be read, or the seal cannot be rewritten.
+    /// [`AcknowledgeOutcomeError::State`] when the pending seal cannot be
+    /// read or rewritten.
     pub async fn acknowledge_staking_outcome(
         engine: Arc<RwLock<Engine<S, D, LocalLedger, E, R, P, WalletFile>>>,
         kind: RecordKind,
-    ) -> Result<bool, AcknowledgeOutcomeError> {
-        let (stake, gate) = {
-            let g = engine.read().await;
-            (g.stake_handle(), g.pending_gate.clone())
-        };
-        let Some(stake) = stake else {
-            return Ok(false);
-        };
-        let identity =
-            stake
-                .active_persona()
-                .await
-                .map_err(|e| AcknowledgeOutcomeError::State {
-                    context: "active persona",
-                    detail: e.to_string(),
-                })?;
-        let Some(identity) = identity else {
-            return Ok(false);
-        };
-        let bond_id =
-            identity
-                .bond_id
-                .to_canonical_bytes()
-                .map_err(|e| AcknowledgeOutcomeError::State {
-                    context: "persona identity",
-                    detail: e.to_string(),
-                })?;
-        let persona = p_canonical_id_from_hybrid_pubkey(&bond_id);
+        through_height: BlockHeight,
+    ) -> Result<usize, AcknowledgeOutcomeError> {
+        let gate = engine.read().await.pending_gate.clone();
         pending_post_store_for_engine(engine, gate)
             .mutate(|block| {
-                let cleared = block.acknowledge_outcome(kind, &persona);
-                (cleared, cleared)
+                let cleared = block.acknowledge_outcomes(kind, through_height);
+                (cleared > 0, cleared)
             })
             .await
             .map_err(|e| AcknowledgeOutcomeError::State {
@@ -452,7 +501,7 @@ mod tests {
         let mut block = PendingPostBlock::empty();
         seal(&mut block, Record::Post(post(1, &[1])));
         assert_eq!(
-            in_flight(&block, at(5_010)),
+            in_flight(&block, at(5_010), &BTreeSet::new()),
             vec![InFlightRecord {
                 kind: RecordKind::Post,
                 state: InFlightState::Pending,
@@ -466,7 +515,7 @@ mod tests {
         assert!(block
             .mark_dispatched(&persona(1), ChainCount::from_raw(5_012))
             .is_some());
-        let dispatched = in_flight(&block, at(5_020))[0];
+        let dispatched = in_flight(&block, at(5_020), &BTreeSet::new())[0];
         assert_eq!(dispatched.state, InFlightState::Dispatched);
         assert_eq!(
             dispatched.sends,
@@ -487,11 +536,11 @@ mod tests {
         seal(&mut block, Record::Drain(drain(2, &[2])));
         let before = BlockHeight::from_raw(END.to_raw() - 1);
         assert_eq!(
-            in_flight(&block, before)[0].state,
+            in_flight(&block, before, &BTreeSet::new())[0].state,
             InFlightState::Dispatched
         );
         for tip in [END, at(END.to_raw() + 900)] {
-            let expired = in_flight(&block, tip)[0];
+            let expired = in_flight(&block, tip, &BTreeSet::new())[0];
             assert_eq!(
                 expired.state,
                 InFlightState::Expired {
@@ -522,8 +571,11 @@ mod tests {
             cause: TerminalCause::JoinMarketUnsupported,
             funds_return_at: END,
         };
-        assert_eq!(in_flight(&block, at(5_010))[0].state, rejected);
-        assert_eq!(in_flight(&block, END)[0].state, rejected);
+        assert_eq!(
+            in_flight(&block, at(5_010), &BTreeSet::new())[0].state,
+            rejected
+        );
+        assert_eq!(in_flight(&block, END, &BTreeSet::new())[0].state, rejected);
     }
 
     /// Every kind is reported, and the release moves a record from
@@ -547,7 +599,10 @@ mod tests {
             }),
         );
 
-        let mut kinds: Vec<_> = in_flight(&block, END).iter().map(|r| r.kind).collect();
+        let mut kinds: Vec<_> = in_flight(&block, END, &BTreeSet::new())
+            .iter()
+            .map(|r| r.kind)
+            .collect();
         kinds.sort();
         assert_eq!(
             kinds,
@@ -567,14 +622,14 @@ mod tests {
             .release_ended(scanned_through, &live, REFERENCE_MAX_AGE, END)
             .is_empty());
         assert_eq!(
-            in_flight(&block, END).len(),
+            in_flight(&block, END, &BTreeSet::new()).len(),
             4,
             "still held at the end date"
         );
 
         let ended = block.release_ended(END, &live, REFERENCE_MAX_AGE, at(5_900));
         assert_eq!(ended.released.len(), 4);
-        assert!(in_flight(&block, at(5_900)).is_empty());
+        assert!(in_flight(&block, at(5_900), &BTreeSet::new()).is_empty());
         let mut reported = outcomes(&block);
         reported.sort_by_key(|o| o.kind);
         assert_eq!(
@@ -608,42 +663,33 @@ mod tests {
         );
     }
 
-    /// The acknowledgement clears only the active persona's outcome of the
-    /// named kind, durably, and a second one is a harmless `false`. A wallet
-    /// with no active persona clears nothing.
+    /// The acknowledgement as ruled 2026-10-17, through the facade and the
+    /// seal: every persona's outcome of the kind at or below the height
+    /// shown, durably, with no active persona needed; a second call clears
+    /// nothing.
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_acknowledgement_clears_only_the_active_personas_outcome_of_its_kind() {
-        use crate::engine::test_support::{activate_persona, staker_engine};
+    async fn an_acknowledgement_clears_every_personas_outcome_through_the_height_shown() {
+        use crate::engine::test_support::staker_engine;
 
         let (_tmp, engine) = staker_engine(3, 21);
         let wrap = *engine.state_wrap_key().as_bytes();
-        let stake = engine.stake_handle().expect("staker");
         let engine = Arc::new(RwLock::new(engine));
-        assert!(
-            !StakeFacade::acknowledge_staking_outcome(engine.clone(), RecordKind::Claim)
+        assert_eq!(
+            StakeFacade::acknowledge_staking_outcome(engine.clone(), RecordKind::Claim, END)
                 .await
-                .expect("idle staker"),
-            "no active persona: nothing to clear"
+                .expect("no seal yet"),
+            0,
+            "nothing sealed: nothing to clear, nothing written"
         );
 
-        activate_persona(&*engine.read().await, 3).await;
-        let identity = stake.active_persona().await.expect("ask").expect("active");
-        let active = p_canonical_id_from_hybrid_pubkey(
-            &identity.bond_id.to_canonical_bytes().expect("bond id"),
-        );
-        let other = persona(0x77);
-
-        // Two ended claims (the active persona's and another's) and the
-        // active persona's ended drain, written by the release itself.
+        // Two personas' ended claims and one ended drain, written by the
+        // release itself at END, and a third claim ending after the height
+        // the owner was shown.
         let mut block = PendingPostBlock::empty();
-        for who in [active, other] {
-            let mut c = claim(0, &[]);
-            c.persona = who;
-            seal(&mut block, Record::Claim(c));
+        for b in [0x71, 0x72] {
+            seal(&mut block, Record::Claim(claim(b, &[])));
         }
-        let mut d = drain(0, &[9]);
-        d.persona = active;
-        seal(&mut block, Record::Drain(d));
+        seal(&mut block, Record::Drain(drain(0x73, &[9])));
         let live: BTreeSet<_> = gindexes(&[9]).into_iter().collect();
         assert_eq!(
             block
@@ -651,6 +697,17 @@ mod tests {
                 .released
                 .len(),
             3
+        );
+        let mut late = claim(0x74, &[]);
+        late.reference_height = at(5_050);
+        seal(&mut block, Record::Claim(late));
+        let after = at(END.to_raw() + 1);
+        assert_eq!(
+            block
+                .release_ended(at(5_150), &live, REFERENCE_MAX_AGE, after)
+                .released
+                .len(),
+            1
         );
         // Through the locked write path, the only writer of the seal.
         let gate = engine.read().await.pending_gate.clone();
@@ -662,10 +719,10 @@ mod tests {
             .await
             .expect("seal");
 
-        let ack = |kind| StakeFacade::acknowledge_staking_outcome(engine.clone(), kind);
-        assert!(ack(RecordKind::Claim).await.expect("ack"));
-        assert!(!ack(RecordKind::Claim).await.expect("ack twice"));
-        assert!(!ack(RecordKind::Post).await.expect("no stake outcome"));
+        let ack = |kind| StakeFacade::acknowledge_staking_outcome(engine.clone(), kind, END);
+        assert_eq!(ack(RecordKind::Claim).await.expect("ack"), 2);
+        assert_eq!(ack(RecordKind::Claim).await.expect("ack twice"), 0);
+        assert_eq!(ack(RecordKind::Post).await.expect("no stake outcome"), 0);
 
         let reread = PendingPostBlock::from_postcard_bytes(
             &engine
@@ -680,13 +737,78 @@ mod tests {
         let left: Vec<_> = reread
             .outcomes()
             .iter()
-            .map(|o| (o.kind, o.persona == active))
+            .map(|o| (o.kind, o.persona.to_bytes()[0]))
             .collect();
         assert_eq!(
             left,
-            vec![(RecordKind::Claim, false), (RecordKind::Drain, true)],
-            "the other persona's claim and the active persona's drain stay"
+            vec![(RecordKind::Drain, 0x73), (RecordKind::Claim, 0x74)],
+            "the drain, and the claim written after the height shown, stay"
         );
+    }
+
+    /// A stake past its end date with every input spent and no match reads
+    /// `Held`, from the two seals alone; a matched stake is the tick's to
+    /// retire and is not held; a partly spent one is not held either.
+    #[test]
+    fn a_stake_with_every_input_spent_reads_held() {
+        use shekyl_engine_state::pscan_cursor::PScanCursor;
+        use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
+        const JOIN: u8 = shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET;
+
+        let mut block = PendingPostBlock::empty();
+        seal(&mut block, Record::Post(post(0x81, &[40])));
+        seal(&mut block, Record::Post(post(0x82, &[41])));
+        seal(&mut block, Record::Post(post(0x83, &[42, 43])));
+        let funding = |g: u64| PFundingOutputRecord {
+            p_slot: PSlot::from_raw(0),
+            index_in_transaction: 0,
+            gindex: GlobalOutputIndex::from_raw(g),
+            output_key: [0; 32],
+            commitment: [0; 32],
+            ciphertext_x25519: [0; 32],
+            ciphertext_ml_kem: Vec::new(),
+            amount: shekyl_units::AtomicUnits::from_raw(1),
+            height: BlockHeight::from_raw(2_000),
+            epoch: shekyl_types::SettlementEpoch::from_raw(1),
+            lineage: shekyl_engine_state::pscan_state::MintLineageOutput::ExternalTransfer,
+            spendable_height: BlockHeight::from_raw(2_010),
+        };
+        let matched = BondPostRecord {
+            height: BlockHeight::from_raw(5_090),
+            p_canonical_id: persona(0x82),
+            post_kind: JOIN,
+        };
+        let state = |frontier: u64| {
+            PScanState::new(
+                PScanCursor::at(BlockHeight::from_raw(frontier), [0; 32]),
+                Default::default(),
+                Default::default(),
+                vec![matched.clone()],
+                vec![funding(43)],
+                Vec::new(),
+                Default::default(),
+            )
+        };
+
+        let before = held_spent_stakes(&block, Some(&state(END.to_raw())));
+        assert!(
+            before.is_empty(),
+            "the block at the end date is not yet scanned"
+        );
+        let held = held_spent_stakes(&block, Some(&state(END.to_raw() + 1)));
+        assert_eq!(held, [persona(0x81)].into_iter().collect());
+        assert!(
+            held_spent_stakes(&block, None).is_empty(),
+            "no scan, nothing held"
+        );
+
+        let entry = in_flight(&block, END, &held)
+            .into_iter()
+            .find(|r| r.state == InFlightState::Held)
+            .expect("the held stake is reported");
+        assert_eq!(entry.kind, RecordKind::Post);
+        let reason = entry.state.reason().expect("a held stake has a reason");
+        assert!(reason.contains("not lost"), "{reason}");
     }
 
     const CAUSES: [TerminalCause; 5] = [
@@ -775,7 +897,7 @@ mod tests {
             PendingPostBlock::from_postcard_bytes(&block.to_postcard_bytes().expect("encode"))
                 .expect("decode");
         assert_eq!(
-            in_flight(&reloaded, at(5_101))[0].state,
+            in_flight(&reloaded, at(5_101), &BTreeSet::new())[0].state,
             InFlightState::Expired {
                 funds_return_at: BlockHeight::from_raw(REFERENCE.to_raw() + 100),
             }

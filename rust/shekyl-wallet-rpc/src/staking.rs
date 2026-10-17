@@ -209,8 +209,8 @@ pub(crate) fn staking_info_result(
         recovery_pending_reopen: view.recovery_pending_reopen,
         in_flight: view.in_flight.iter().map(in_flight_entry).collect(),
         outcomes: view.outcomes.iter().map(outcome_entry).collect(),
-        posture,
-        serving_priority_not_lowered,
+        posture: posture.into(),
+        serving_priority_not_lowered: serving_priority_not_lowered.into(),
     }
 }
 
@@ -237,6 +237,7 @@ fn in_flight_entry(r: &InFlightRecord) -> InFlightEntry {
             funds_return_at, ..
         } => ("rejected", Some(funds_return_at)),
         InFlightState::Expired { funds_return_at } => ("expired", Some(funds_return_at)),
+        InFlightState::Held => ("held", None),
     };
     InFlightEntry {
         kind: kind_wire(r.kind).to_owned(),

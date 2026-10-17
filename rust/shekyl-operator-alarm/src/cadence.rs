@@ -121,20 +121,23 @@ pub fn record_forfeit(alarms: &OperatorAlarms, epoch: u64, forfeited_atomic_tota
     });
 }
 
-/// Map one reading of the durable staking outcomes onto the board
+/// Map one reading of the durable staking state onto the board
 /// (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3): `spent_elsewhere` is how many
-/// records currently carry a `spent_elsewhere` outcome. The cadence driver
-/// reads it from the sealed pending block on every fire, so the condition is
-/// re-derived after a restart; it clears once every such outcome has been
-/// acknowledged, and the board then holds it for the operator's own
+/// records currently carry a `spent_elsewhere` outcome, and `held_stakes` how
+/// many stakes the end-date release holds because every reserved input is
+/// spent with no confirmation seen. The cadence driver reads both from the
+/// sealed files on every fire, so the condition is re-derived after a
+/// restart; it clears once neither remains (the outcomes acknowledged, the
+/// stakes matched), and the board then holds it for the operator's own
 /// acknowledgement (`LatchedRederived`).
-pub fn apply_pending_outcomes(alarms: &OperatorAlarms, spent_elsewhere: u64) {
+pub fn apply_pending_outcomes(alarms: &OperatorAlarms, spent_elsewhere: u64, held_stakes: u64) {
     alarms.arm(AlarmCondition::PendingFundsIntegrity);
-    if spent_elsewhere == 0 {
+    if spent_elsewhere == 0 && held_stakes == 0 {
         alarms.clear(AlarmCondition::PendingFundsIntegrity);
     } else {
         alarms.raise(OperatorAlarm::ReservationSpentElsewhere {
             records: spent_elsewhere,
+            held_stakes,
         });
     }
 }
@@ -304,27 +307,30 @@ mod tests {
         );
     }
 
-    /// A `spent_elsewhere` outcome raises the integrity alarm, re-raising
-    /// updates the count in place, and a reading of zero arms the row
-    /// without leaving a live alarm.
+    /// A `spent_elsewhere` outcome or a held stake raises the integrity
+    /// alarm, re-raising updates the counts in place, and a reading of zero
+    /// for both arms the row without leaving a live alarm.
     #[test]
     fn a_spent_elsewhere_outcome_raises_and_zero_reads_armed_and_quiet() {
         let alarms = OperatorAlarms::new();
-        apply_pending_outcomes(&alarms, 0);
+        apply_pending_outcomes(&alarms, 0, 0);
         let quiet = state(&alarms, AlarmCondition::PendingFundsIntegrity);
         assert!(quiet.live().is_none(), "zero is armed and quiet");
 
-        apply_pending_outcomes(&alarms, 1);
+        apply_pending_outcomes(&alarms, 1, 0);
         let first = state(&alarms, AlarmCondition::PendingFundsIntegrity)
             .live()
             .expect("an outcome raises");
         assert_eq!(
             first.alarm(),
-            OperatorAlarm::ReservationSpentElsewhere { records: 1 }
+            OperatorAlarm::ReservationSpentElsewhere {
+                records: 1,
+                held_stakes: 0
+            }
         );
         assert_eq!(first.lifetime(), crate::AlarmLifetime::LatchedRederived);
 
-        apply_pending_outcomes(&alarms, 2);
+        apply_pending_outcomes(&alarms, 2, 1);
         let second = state(&alarms, AlarmCondition::PendingFundsIntegrity)
             .live()
             .expect("still raised");
@@ -335,7 +341,23 @@ mod tests {
         );
         assert_eq!(
             second.alarm(),
-            OperatorAlarm::ReservationSpentElsewhere { records: 2 }
+            OperatorAlarm::ReservationSpentElsewhere {
+                records: 2,
+                held_stakes: 1
+            }
+        );
+
+        let held_only = OperatorAlarms::new();
+        apply_pending_outcomes(&held_only, 0, 1);
+        assert_eq!(
+            state(&held_only, AlarmCondition::PendingFundsIntegrity)
+                .live()
+                .expect("a held stake alone raises")
+                .alarm(),
+            OperatorAlarm::ReservationSpentElsewhere {
+                records: 0,
+                held_stakes: 1
+            }
         );
     }
 }

@@ -360,24 +360,29 @@ async fn staking_reads_on_fresh_wallet_are_zero_and_offline() {
     );
     assert_eq!(result.get("recovery_pending_reopen"), Some(&json!(false)));
     assert_eq!(result.get("in_flight"), Some(&json!([])));
+    assert!(result.get("posture") == Some(&Value::Null), "{info}");
+    assert!(
+        result.get("serving_priority_not_lowered") == Some(&Value::Null),
+        "{info}"
+    );
     assert_eq!(result.get("outcomes"), Some(&json!([])));
     let typed: shekyl_wallet_rpc::types::StakingInfoResult =
         serde_json::from_value(info["result"].clone()).expect("the reply decodes as its type");
     assert!(typed.in_flight.is_empty() && typed.outcomes.is_empty());
 
-    // The acknowledgement acts on the active persona; a fresh wallet has
-    // none, so there is nothing to clear and the answer is `false`.
+    // A fresh wallet has no endings, so there is nothing to clear.
     let ack = rpc(
         state.clone(),
         "acknowledge_staking_outcome",
-        json!({"kind": "stake"}),
+        json!({"kind": "stake", "through_height": 100}),
     )
     .await;
-    assert_eq!(ack["result"], json!({"acknowledged": false}), "{ack}");
-    // No slot, and no unknown kind (WR-Q5).
+    assert_eq!(ack["result"], json!({"cleared": 0}), "{ack}");
+    // No slot, no unknown kind, and the height is required (WR-Q5).
     for params in [
-        json!({"kind": "stake", "p_slot": 0}),
-        json!({"kind": "bond"}),
+        json!({"kind": "stake", "through_height": 100, "p_slot": 0}),
+        json!({"kind": "bond", "through_height": 100}),
+        json!({"kind": "stake"}),
         json!({}),
     ] {
         let r = rpc(state.clone(), "acknowledge_staking_outcome", params.clone()).await;
@@ -390,7 +395,10 @@ async fn staking_reads_on_fresh_wallet_are_zero_and_offline() {
         ("get_staked_balance", json!({})),
         ("get_staked_outputs", json!({})),
         ("staking_info", json!({})),
-        ("acknowledge_staking_outcome", json!({"kind": "claim"})),
+        (
+            "acknowledge_staking_outcome",
+            json!({"kind": "claim", "through_height": 100}),
+        ),
     ] {
         let r = rpc(state.clone(), method, params).await;
         assert_eq!(r["error"]["code"], -29001, "{method}: {r}");

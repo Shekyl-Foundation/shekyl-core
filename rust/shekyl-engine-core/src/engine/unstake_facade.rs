@@ -917,7 +917,7 @@ where
             .map(|(&slot, &id)| (PSlot::from_raw(slot), id))
             .collect()
     };
-    let (pscan, pending) = g.exit_seal_snapshot()?;
+    let (pscan, pending) = g.sealed_staking_records()?;
     Ok(ExitEvidence {
         pscan,
         pending,

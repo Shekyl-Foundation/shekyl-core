@@ -314,8 +314,25 @@ pub(crate) fn show_staked_outputs(val: &Value) {
 pub fn cmd_staking_info(rpc: &RpcSession) -> CommandResult {
     require_open(rpc)?;
     match rpc.call("staking_info", json!({})) {
-        Ok(val) => Ok(val),
+        Ok(val) => {
+            note_shown_endings(rpc, &val);
+            Ok(val)
+        }
         Err(e) => Err(rpc.report("Failed to get staking info", &e)),
+    }
+}
+
+/// Remember the newest ending of each kind this reply shows, so
+/// `stake acknowledge <kind>` clears through exactly what the owner saw.
+fn note_shown_endings(rpc: &RpcSession, val: &Value) {
+    let outcomes: Vec<StakingOutcomeEntry> = val
+        .get("outcomes")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for entry in &outcomes {
+        if let Ok(height) = u64::try_from(entry.at_height) {
+            rpc.note_shown_ending(&entry.kind, height);
+        }
     }
 }
 
@@ -421,29 +438,38 @@ fn in_flight_line(entry: &InFlightEntry) -> String {
             "{kind}: can no longer be mined. {}",
             returns.unwrap_or_default()
         ),
+        ("held", _) => format!("{kind}: kept. {}", entry.reason.0.as_deref().unwrap_or("")),
         (other, _) => format!("{kind}: {other}"),
     }
 }
 
-/// `stake acknowledge <kind>` — clear the active persona's last ending of
-/// that kind from `stake status`. Not a money action, so no confirmation.
+/// `stake acknowledge <kind>` — clear the endings of that kind that `stake`
+/// has shown this session, through the newest one shown (WR-Q2, ruled
+/// 2026-10-17). An ending written after that stays until it has been seen.
+/// Not a money action, so no confirmation.
 pub fn cmd_acknowledge_outcome(rpc: &RpcSession, kind: &str) -> CommandResult {
     require_open(rpc)?;
-    match rpc.call("acknowledge_staking_outcome", json!({ "kind": kind })) {
+    let Some(through_height) = rpc.shown_ending_height(kind) else {
+        return Err(refusal(format!(
+            "No {} ending has been shown yet. Run \"stake\" to see the endings, then \
+             acknowledge them.",
+            kind_word(kind)
+        )));
+    };
+    match rpc.call(
+        "acknowledge_staking_outcome",
+        json!({ "kind": kind, "through_height": through_height }),
+    ) {
         Ok(val) => Ok(val),
-        Err(e) => Err(rpc.report("Failed to clear the ending", &e)),
+        Err(e) => Err(rpc.report("Failed to clear the endings", &e)),
     }
 }
 
 pub(crate) fn show_acknowledged(val: &Value) {
-    if val.get("acknowledged").and_then(Value::as_bool) == Some(true) {
-        println!("Cleared.");
-    } else {
-        println!(
-            "Nothing to clear: the active staking identity has no ending of that kind. \
-             An ending that belongs to another identity clears when that identity next \
-             completes the same action."
-        );
+    match val.get("cleared").and_then(Value::as_u64) {
+        Some(0) | None => println!("Nothing to clear: those endings were already cleared."),
+        Some(1) => println!("Cleared 1 ending."),
+        Some(n) => println!("Cleared {n} endings."),
     }
 }
 
@@ -713,6 +739,36 @@ mod tests {
                 .then(|| "The node refused its fee as too low.".to_owned())
                 .into(),
         }
+    }
+
+    /// `stake acknowledge` clears through the newest ending `stake` showed,
+    /// per kind; with nothing shown it refuses rather than clear unseen
+    /// endings; opening another wallet forgets the heights.
+    #[test]
+    fn acknowledge_defaults_to_the_newest_ending_shown() {
+        let rpc = crate::rpc_client::RpcSession::offline_for_test();
+        rpc.set_open("w");
+        let reply = serde_json::json!({ "outcomes": [
+            {"kind": "drain", "outcome": "expired", "reason": "r", "at_height": 5_100, "funds": "returned"},
+            {"kind": "drain", "outcome": "rejected", "reason": "r", "at_height": 5_300, "funds": "returned"},
+            {"kind": "stake", "outcome": "expired", "reason": "r", "at_height": 5_200, "funds": "returned"},
+        ]});
+        super::note_shown_endings(&rpc, &reply);
+        assert_eq!(rpc.shown_ending_height("drain"), Some(5_300));
+        assert_eq!(rpc.shown_ending_height("stake"), Some(5_200));
+        assert_eq!(rpc.shown_ending_height("exit"), None);
+        let refused = super::cmd_acknowledge_outcome(&rpc, "exit").unwrap_err();
+        assert!(
+            refused.message.contains("Run \"stake\""),
+            "{}",
+            refused.message
+        );
+        rpc.set_open("other");
+        assert_eq!(
+            rpc.shown_ending_height("drain"),
+            None,
+            "another wallet starts fresh"
+        );
     }
 
     /// Each state reads in the user's words, the kind as the command a

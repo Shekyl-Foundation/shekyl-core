@@ -805,14 +805,14 @@ pub struct StakingInfoResult {
     /// The last ending per kind of staking action (WR-Q2). Empty means none.
     pub outcomes: Vec<StakingOutcomeEntry>,
     /// What the serving host is currently obligated to serve
-    /// (`"market"` / `"foundation_complete_tree"`), or absent when no host
+    /// (`"market"` / `"foundation_complete_tree"`), or `null` when no host
     /// is running — see the contract's `StakingInfoResult.posture`.
+    /// Required: "no host" is an answer (rule 43).
     ///
-    /// Absent for a bonded wallet is a legitimate reading, not a gap: the
+    /// `null` for a bonded wallet is a legitimate reading, not a gap: the
     /// field reports the live serving truth, and a host inside its launch
     /// standoff is not yet serving anything.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub posture: Option<String>,
+    pub posture: Nullable<String>,
     /// Serving-runtime threads currently at normal priority because the OS
     /// refused to lower them (`SH-3`: serving runs below the daemon's
     /// priority by default). It reports the result of that call for the
@@ -826,8 +826,8 @@ pub struct StakingInfoResult {
     /// run at normal priority, serving continues, and the wallet logged
     /// one warning naming the cause. It does not say whether the daemon
     /// received more CPU (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub serving_priority_not_lowered: Option<u32>,
+    /// Required, and `null` when no serving process is running (rule 43).
+    pub serving_priority_not_lowered: Nullable<u32>,
 }
 
 /// One `staking_info.in_flight` entry (WR-Q1). `kind` and `state` are open
@@ -839,7 +839,7 @@ pub struct StakingInfoResult {
 pub struct InFlightEntry {
     /// `stake`, `claim`, `drain` or `exit`.
     pub kind: String,
-    /// `pending`, `dispatched`, `rejected` or `expired`.
+    /// `pending`, `dispatched`, `rejected`, `expired` or `held`.
     pub state: String,
     /// The tip height of the record's first send; `null` when it was never
     /// sent.
@@ -851,8 +851,8 @@ pub struct InFlightEntry {
     /// `pscan_synced_height` is greater than it. `null` in the other states,
     /// where no return is expected.
     pub funds_return_at: Nullable<i64>,
-    /// For `rejected`: what the node said, as a user sentence. `null` in the
-    /// other states.
+    /// For `rejected`, what the node said, and for `held`, why the stake is
+    /// kept, as a user sentence. `null` in the other states.
     pub reason: Nullable<String>,
 }
 
@@ -872,13 +872,18 @@ pub struct StakingOutcomeEntry {
     pub funds: String,
 }
 
-/// `acknowledge_staking_outcome` params (WR-Q2). The active persona is
-/// implied (WR-Q5): a request naming a slot or anything else is refused.
+/// `acknowledge_staking_outcome` params (WR-Q2, ruled 2026-10-17): clear
+/// every ending of `kind`, for every staking identity the wallet holds,
+/// written at or below `through_height`. Nothing names an identity, slot or
+/// record (WR-Q5): a request carrying anything else is refused.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AcknowledgeStakingOutcomeParams {
     /// Which kind of ending to clear.
     pub kind: StakingRecordKind,
+    /// The newest `at_height` the owner was shown, so an ending written
+    /// after it is never cleared unseen.
+    pub through_height: u64,
 }
 
 /// A staking record kind, as a request names it. Closed: an unknown kind in
@@ -899,8 +904,9 @@ pub enum StakingRecordKind {
 /// `acknowledge_staking_outcome` result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AcknowledgeStakingOutcomeResult {
-    /// Whether the active persona had an ending of that kind to clear.
-    pub acknowledged: bool,
+    /// How many endings were cleared; `0` when there were none, so a
+    /// repeated acknowledgement is harmless.
+    pub cleared: u64,
 }
 
 /// `get_drain_balance` result (WI-RPC-5 archival staking actions).
@@ -1089,6 +1095,8 @@ mod tests {
             "staked_output_count": 0,
             "pscan_synced_height": null,
             "recovery_pending_reopen": false,
+            "posture": null,
+            "serving_priority_not_lowered": null,
             "in_flight": [{
                 "kind": "stake",
                 "state": "rejected",
@@ -1120,11 +1128,15 @@ mod tests {
         later["in_flight"][0]["state"] = json!("some_later_state");
         assert!(serde_json::from_value::<StakingInfoResult>(later).is_ok());
 
+        assert_eq!(ok.posture, Nullable::NULL);
+        assert_eq!(ok.serving_priority_not_lowered, Nullable::NULL);
         for field in [
             "in_flight",
             "outcomes",
             "pscan_synced_height",
             "recovery_pending_reopen",
+            "posture",
+            "serving_priority_not_lowered",
         ] {
             let mut missing = staking_info_reply();
             missing.as_object_mut().unwrap().remove(field);
@@ -1158,14 +1170,21 @@ mod tests {
     /// carries a persona, slot, delay or funding-output field.
     #[test]
     fn staking_outcome_wire_names_no_persona_slot_or_funding_output() {
+        for refused in [
+            json!({"kind": "stake", "through_height": 9, "p_slot": 0}),
+            json!({"kind": "stake", "through_height": 9, "persona": "00"}),
+            json!({"kind": "exit"}),
+            json!({"kind": "exit", "through_height": -1}),
+        ] {
+            assert!(
+                serde_json::from_value::<AcknowledgeStakingOutcomeParams>(refused.clone()).is_err(),
+                "{refused}"
+            );
+        }
         assert!(serde_json::from_value::<AcknowledgeStakingOutcomeParams>(
-            json!({"kind": "stake", "p_slot": 0})
+            json!({"kind": "exit", "through_height": 9})
         )
-        .is_err());
-        assert!(
-            serde_json::from_value::<AcknowledgeStakingOutcomeParams>(json!({"kind": "exit"}))
-                .is_ok()
-        );
+        .is_ok());
         let reply = staking_info_reply();
         let keys: Vec<&String> = [&reply["in_flight"][0], &reply["outcomes"][0]]
             .iter()
