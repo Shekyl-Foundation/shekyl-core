@@ -14,8 +14,11 @@ a8's docs — is on `feat/drs-e5-switch`; a7's C++ capture is withdrawn
 on `BatchView`, the bundle verifier inside `validate` at the switch) land
 with SO-D12's merged increment, which puts the bundle section on the block
 wire (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 item 3; the wire's `Block`
-carries no section, `shekyl-wire/src/block.rs:117–124`). PR-b is unchanged
-(§5).** Round 0 posed
+carries no section, `shekyl-wire/src/block.rs:117–124`). PR-b (b1–b7,
+#1102, `feat/drs-e5-pool-prb`) builds the Rust pool staged for the DRS-X
+flip: the door is the validator's own judgement at `TxSlot::Lone`, the pool
+record knows one relay fact (DX-F6), the bundle work is SO-D12's (§2.2,
+§5). This file stays open for the residue §9 names for its owners.** Round 0 posed
 2026-10-10 at `dev@14d68c00fc`, merged to `dev@ac95d6d04` before the PR
 opened. Pre-flight in §1.1, findings `E5-1…E5-18` (`E5-13…E5-15` are PR-a
 commit 1's measurement, §1.7; `E5-16` and `E5-17` are the review's;
@@ -1057,6 +1060,16 @@ regression:
   `Coverage::is_complete_for`), and `validate` never runs the tier. So
   the per-block denominator fell `E − 19 → E − 27` while `implemented`
   rose — the reading the gate prints as `at-open` exists for exactly this.
+
+**Measured 2026-10-17 (PR-b, `check_chain_rules_coverage.py` on
+`feat/drs-e5-pool-prb`):** consensus `implemented 139 / 161` → **`143 /
+161`** — M2, M8, K9, K10 `held_by_store`, cited at the tests in
+`shekyl-chain-ingest` that witness them (`held-by-store 9 → 13`); policy
+`0 / 9` → **`8 / 8`** — M11 deleted (`9 → 8`), M3, M4, M5 `implemented`
+(`policy_form`), M1, M6, M7, M9, M10 `held_by_store`. The slice-10 half of
+the 2026-10-11 projection was `+4` consensus and `9 / 9` policy; the
+policy denominator is the one difference, and it is M11's deletion, which
+the projection preceded.
 
 ---
 

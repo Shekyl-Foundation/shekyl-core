@@ -47,9 +47,10 @@ transactions' bodies), a `ChainView<'id>` (narrow, read-only trait over
 `InvalidBlock { rule: CenRow, locus }` — or, when the view's substrate could not
 answer, the view's own fault, which is neither. No store handle, no redb type,
 no `ChainStore` import — every rule is unit-testable against a mock view with no
-database (ruling §9.1). Pool admission (DRS-E5) calls the **same** `tx_form` /
-`tx_against` over a `PoolView` decorator it defines; there is no second
-validator. Every `ChainValid` carries the set of census rows that were actually
+database (ruling §9.1). Pool admission (DRS-E5) calls the **same**
+per-slot judgement `form` runs — `judge_slot_stateless` at `TxSlot::Lone`,
+then `tx_against` over `shekyl_mempool::PoolView`, the decorator it defines
+— and `policy_form` for the policy rows; there is no second validator. Every `ChainValid` carries the set of census rows that were actually
 evaluated (`RuleCoverage`), and only complete coverage is parity evidence
 (ruling §9.4).
 
@@ -2195,7 +2196,7 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   "persisted with anything it writes").
 - `ChainView` store-side implementor (`Fault = StoreError`), `connect`,
   `ChainTip.connect` — S-CHAIN-W.
-- `PoolView`, `AdmissionPolicy` application, `PolicyCoverage` consumer — DRS-E5.
+- `PoolView` (`shekyl-mempool`), `AdmissionPolicy` application (`policy_form`), `PolicyCoverage` consumer (the pool door) — DRS-E5 PR-b.
 - Replay harness feeding `grade()` — DRS-E2.
 - **A below-anchor validation mode** — owed to **slice 3 (4.E) or slice 6
   (4.I), whichever opens first**; consumer the band-1 sync driver
