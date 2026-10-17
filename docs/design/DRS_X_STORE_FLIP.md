@@ -218,7 +218,7 @@ The C++ hits are all in files the flip deletes (`blockchain.{h,cpp}`, `tx_pool.c
 - One Rust → C++ call hands `levin_notify` what the pool's readiness says is due. That is the only new C++ entry, and RD deletes it with `levin_notify`.
 
 **DX-F6 — the landed pool record holds the relay state machine, against D++ acceptance criterion 2.**
-- `RelayState` (`shekyl-chain-store/src/codec/pool.rs:155–171`) stores:
+- `RelayState` (`shekyl-chain-store/src/codec/pool.rs` at the ground, `d2ac8b45d`, lines 155–171; PR-b replaced it with the public bit) stores:
   - a stem/fluff phase;
   - an arrival `zone: NetZone`.
 - Criterion 2 (`DAEMON_RELAY_PRIVACY.md:113–125`) rules: "**The pool knows one bit: public yet** … owned by the relay and read by the pool", and that `NetZone` is "not a pool field". There are no zones in Shekyl (2026-09-30).
