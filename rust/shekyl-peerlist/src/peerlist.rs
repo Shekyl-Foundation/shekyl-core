@@ -526,6 +526,10 @@ impl Peerlist {
                 partition.confirm(address, now, rng, WhiteClock::Hold);
                 Self::end_disclose_early_if_due(connector, partition, now);
             }
+            // Dropped whatever the cause (Rick, 2026-10-16; #1092). The
+            // cause decides the failed-address memory, not membership, and
+            // on clearnet no cause implicates the address: the drop is what
+            // clears a dead host that only ever times out.
             DialOutcome::DialFailed(address, _) | DialOutcome::PeerlistRefused(address) => {
                 partition.drop_outstanding(address);
             }

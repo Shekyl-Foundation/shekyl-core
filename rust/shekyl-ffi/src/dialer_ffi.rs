@@ -14,10 +14,9 @@
 //! ([`shekyl_dial_take_handshake_nonce`]); the disclosure sample for the
 //! two responses the C++ still sends ([`shekyl_peerlist_disclose`]).
 //!
-//! Told: the strand's verdict on a posted handshake
-//! ([`shekyl_dialer_handshake_verdict`]); the core's tip
-//! ([`shekyl_core_publish_tip`]); the network the daemon chose
-//! ([`shekyl_dialer_note_network`]), which selects the compiled seeds.
+//! Told: the core's tip ([`shekyl_core_publish_tip`]); the network the
+//! daemon chose ([`shekyl_dialer_note_network`]), which selects the
+//! compiled seeds.
 //!
 //! The configuration is not told from C++. The daemon's Rust `main()`
 //! applies the p2p section ([`apply_p2p`]) and this node's own addresses
@@ -28,7 +27,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use shekyl_daemon_config::sections::P2p;
-use shekyl_dialer::{seeds, Dialer, HubBans, LoadError, SeedNetwork, Shared};
+use shekyl_dialer::{seeds, BanSnapshot, Dialer, LoadError, SeedNetwork, Shared};
 use shekyl_levin::SupportFlags;
 use shekyl_options::PeerEndpoint;
 use std::net::SocketAddr;
@@ -36,8 +35,8 @@ use std::net::SocketAddr;
 pub use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_rpc_types::DaemonNetwork;
-use shekyl_seam::{connector_from_index, Hub, SocketId, SyncPayload};
-use shekyl_timing_engine::{Handle, MonotonicClock, OwnerClass};
+use shekyl_seam::{connector_from_index, CloseCause, Hub, SocketId, SyncPayload};
+use shekyl_timing_engine::{EngineError, Handle, MonotonicClock, OwnerClass};
 
 use crate::legacy_util::slice_from_typed_ptr;
 use crate::peerlist_ffi::refused_set;
@@ -187,7 +186,13 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
     let spawned = std::thread::Builder::new().name(name).spawn(move || {
         running.run(connector, &owner, &mut SecureRelayRng);
         if let Err(err) = owner.deregister() {
-            tracing::warn!("{connector:?}: the dialer's wake did not deregister: {err:?}");
+            // The engine closes at shutdown and drops every owner. That is
+            // the loop's expected end, not a failure of the deregister.
+            if err == EngineError::Closed {
+                tracing::debug!("{connector:?}: the dialer's wake ended because the engine closed");
+            } else {
+                tracing::warn!("{connector:?}: the dialer's wake did not deregister: {err:?}");
+            }
         }
     });
     if let Err(err) = spawned {
@@ -220,29 +225,16 @@ pub(crate) fn stop() {
     }
 }
 
-/// A session closed. A kept session leaves the dialer's count; a dial
-/// awaiting its verdict fails with the cause the connector stored.
-pub(crate) fn on_closed(id: SocketId) {
+/// A session closed. A kept session leaves the dialer's count. A
+/// `SessionRefused` cause is the lists' `PayloadRefused`.
+pub(crate) fn on_closed(id: SocketId, cause: CloseCause) {
     if let Some(dialer) = dialer() {
-        dialer.session_closed(id, &mut SecureRelayRng);
+        dialer.session_closed(id, cause, &mut SecureRelayRng);
     }
 }
 
 fn with_shared<T>(f: impl FnOnce(MutexGuard<'_, Shared>) -> T) -> Option<T> {
     dialer().map(|dialer| f(dialer.shared()))
-}
-
-/// The strand accepted (1) or refused (0) the sync payload of the
-/// handshake posted for `id`. The dialer closes a confirm dial and a
-/// refused dial here; a kept and accepted dial stays.
-#[no_mangle]
-pub extern "C" fn shekyl_dialer_handshake_verdict(id: u64, accepted: i32) {
-    let Some(id) = SocketId::from_ffi(id) else {
-        return;
-    };
-    if let Some(dialer) = dialer() {
-        dialer.verdict(id, accepted != 0, &mut SecureRelayRng);
-    }
 }
 
 /// The inbound handshake's self-connection check: 1 when `nonce` is one
@@ -295,6 +287,9 @@ pub unsafe extern "C" fn shekyl_core_publish_tip(
         cumulative_difficulty_top64,
         top_id,
     });
+    if let Some(dialer) = dialer() {
+        dialer.tip_published();
+    }
 }
 
 /// The tip the core last published: 1 and the fields written, or 0 and
@@ -446,7 +441,7 @@ pub unsafe extern "C" fn shekyl_peerlist_disclose(
         return 0;
     };
     let now = hub.now();
-    let mut bans = HubBans(hub);
+    let mut bans = BanSnapshot::take(hub);
     let sample = with_shared(|mut shared| {
         shared
             .lists
@@ -505,288 +500,5 @@ fn entry_of(address: &NetworkAddress) -> Option<ShekylSeamAddress> {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::seam_ffi::shekyl_seam_set_ceiling;
-    use std::ffi::c_void;
-    use std::net::Ipv4Addr;
-    use std::sync::PoisonError;
-
-    use shekyl_seam::CloseCause;
-
-    use super::*;
-    use crate::inbound_ceiling_ffi::{ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_UNLIMITED};
-    use crate::seam_ffi::{seam_bind_lock, shekyl_seam_bind, ShekylSeamObserved};
-
-    /// A hub whose posts go nowhere: these tests never open a session.
-    unsafe extern "C" fn no_post(
-        _ctx: *mut c_void,
-        _id: u64,
-        _kind: u32,
-        _observed: *const ShekylSeamObserved,
-        _bytes: *const u8,
-        _len: usize,
-        _cause: *const CloseCause,
-    ) {
-    }
-
-    fn address(n: u8) -> NetworkAddress {
-        NetworkAddress::Ipv4 {
-            ip: Ipv4Addr::new(11, 16, 0, n),
-            port: 18080,
-        }
-    }
-
-    /// Unbind the seam: the dialer, if any, is stopped and dropped.
-    fn unbind() {
-        unsafe { shekyl_seam_bind(std::ptr::null_mut(), None) };
-        assert!(dialer().is_none());
-    }
-
-    /// Bind a hub, which builds the dialer and applies what was held.
-    fn bind() {
-        let ceiling = ShekylInboundCeiling {
-            kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
-            ceiling: 0,
-            soft_limit: 0,
-            held: 0,
-        };
-        let mut ctx = 0u8;
-        let bound = unsafe { shekyl_seam_bind((&raw mut ctx).cast::<c_void>(), Some(no_post)) };
-        assert_eq!(bound, 0);
-        assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
-    }
-
-    /// On a clearnet-only start the command line is parsed before the
-    /// seam binds, so the file, `--add-peer` and the own address arrive
-    /// before the dialer exists. Each is held and applied at the build.
-    fn peer(n: u8) -> PeerEndpoint {
-        PeerEndpoint::Ip(SocketAddr::from(([11, 16, 0, n], 18080)))
-    }
-
-    fn section(peers: &[u8], closed: &[u8], disclose_early: bool) -> P2p {
-        P2p {
-            peers: peers.iter().copied().map(peer).collect(),
-            closed_peers: closed.iter().copied().map(peer).collect(),
-            local: false,
-            disclose_early,
-            bans: Vec::new(),
-            upload_max: None,
-            download_max: None,
-        }
-    }
-
-    /// The section is applied once the dialer exists; before that it is a
-    /// refusal the caller sees, not a push held for a build.
-    #[test]
-    fn a_push_before_the_dialer_exists_is_refused_not_held() {
-        let _bind = seam_bind_lock()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        unbind();
-        let dir = tempfile::tempdir().expect("a directory");
-        assert_eq!(
-            apply_p2p(&section(&[2], &[], false), &dir.path().join("p2pstate.bin")),
-            Err(NoDialer)
-        );
-        assert_eq!(
-            set_own_addresses(ConnectorId::Clearnet, vec![address(4)]),
-            Err(NoDialer)
-        );
-    }
-
-    /// The address file's entries and the operator's peers enter gray, never
-    /// white: a named address has not been dialled, and white is disclosed.
-    #[test]
-    fn the_section_enters_the_file_and_the_operators_peers_as_gray() {
-        let _bind = seam_bind_lock()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        unbind();
-        let dir = tempfile::tempdir().expect("a directory");
-        let file = dir.path().join("p2pstate.bin");
-        std::fs::write(&file, shekyl_peerlist::address_file::encode(&[address(1)]))
-            .expect("written");
-        bind();
-        apply_p2p(&section(&[2], &[], false), &file).expect("the dialer exists");
-        let dialer = dialer().expect("built at the bind");
-        let shared = dialer.shared();
-        assert!(shared.lists.is_gray(&address(1)), "from the file");
-        assert!(shared.lists.is_gray(&address(2)), "from p2p-peer");
-        assert!(!shared.lists.is_white(&address(1)));
-        assert!(!shared.lists.is_white(&address(2)));
-        drop(shared);
-        unbind();
-    }
-
-    #[test]
-    fn an_own_address_is_never_a_candidate() {
-        let _bind = seam_bind_lock()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        unbind();
-        bind();
-        let dir = tempfile::tempdir().expect("a directory");
-        set_own_addresses(ConnectorId::Clearnet, vec![address(4)]).expect("the dialer exists");
-        apply_p2p(&section(&[4], &[], false), &dir.path().join("p2pstate.bin")).expect("applied");
-        let dialer = dialer().expect("built at the bind");
-        assert!(dialer.shared().lists.is_gray(&address(4)));
-        assert!(
-            dialer
-                .choose(ConnectorId::Clearnet, &mut SecureRelayRng)
-                .is_none(),
-            "the one gray address is our own, so nothing is drawn"
-        );
-        unbind();
-    }
-
-    /// An empty closed-network declaration is no declaration: the
-    /// population stays open (the §4 run, 2026-10-13).
-    #[test]
-    fn an_empty_declaration_declares_no_closed_network() {
-        let _bind = seam_bind_lock()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        unbind();
-        bind();
-        let dir = tempfile::tempdir().expect("a directory");
-        apply_p2p(&section(&[7], &[], false), &dir.path().join("p2pstate.bin")).expect("applied");
-        let dialer = dialer().expect("built at the bind");
-        let drawn = dialer
-            .choose(ConnectorId::Clearnet, &mut SecureRelayRng)
-            .map(|(address, _aim, _nonce)| address);
-        assert_eq!(drawn, Some(address(7)), "nothing is held back");
-        unbind();
-    }
-
-    #[test]
-    fn disclose_early_runs_from_the_section() {
-        let _bind = seam_bind_lock()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        unbind();
-        bind();
-        let dir = tempfile::tempdir().expect("a directory");
-        apply_p2p(&section(&[], &[], true), &dir.path().join("p2pstate.bin")).expect("applied");
-        let dialer = dialer().expect("built at the bind");
-        for connector in ConnectorId::ALL {
-            assert!(
-                matches!(
-                    dialer.shared().lists.disclose_early(*connector),
-                    Some(shekyl_peerlist::DiscloseEarly::Running { .. })
-                ),
-                "{connector:?} runs the flag"
-            );
-        }
-        unbind();
-    }
-
-    #[test]
-    fn a_closed_network_is_the_population() {
-        let _bind = seam_bind_lock()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        unbind();
-        bind();
-        let dir = tempfile::tempdir().expect("a directory");
-        apply_p2p(
-            &section(&[5], &[6], false),
-            &dir.path().join("p2pstate.bin"),
-        )
-        .expect("applied");
-        let dialer = dialer().expect("built at the bind");
-        let drawn = dialer
-            .choose(ConnectorId::Clearnet, &mut SecureRelayRng)
-            .map(|(address, _aim, _nonce)| address);
-        assert_eq!(drawn, Some(address(6)));
-        unbind();
-    }
-
-    #[test]
-    fn a_noted_network_survives_every_id_derivation() {
-        const DERIVATION_ORDER: [DaemonNetwork; 3] = [
-            DaemonNetwork::Mainnet,
-            DaemonNetwork::Testnet,
-            DaemonNetwork::Stagenet,
-        ];
-        /// The first byte past `cryptonote::FAKECHAIN`.
-        const UNRECOGNIZED_NETTYPE: u8 = DaemonNetwork::Fakechain.to_cryptonote() + 1;
-
-        struct Restore;
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                note_network(DaemonNetwork::Stagenet);
-            }
-        }
-        let _restore = Restore;
-        let recorded = || *NETWORK.lock().expect("network");
-
-        assert_eq!(recorded(), SeedNetwork::None);
-
-        let derive_each_static = || {
-            for network in DERIVATION_ORDER {
-                let mut out = [0u8; 16];
-                assert_eq!(
-                    crate::network_id_ffi::shekyl_network_id(
-                        network.to_cryptonote(),
-                        out.as_mut_ptr()
-                    ),
-                    0
-                );
-            }
-        };
-
-        assert_eq!(
-            shekyl_dialer_note_network(DaemonNetwork::Mainnet.to_cryptonote()),
-            0
-        );
-        derive_each_static();
-        assert_eq!(recorded(), SeedNetwork::Mainnet);
-        assert_eq!(seeds(recorded()), seeds(SeedNetwork::Mainnet));
-
-        assert_eq!(
-            shekyl_dialer_note_network(DaemonNetwork::Testnet.to_cryptonote()),
-            0
-        );
-        derive_each_static();
-        assert_eq!(recorded(), SeedNetwork::Testnet);
-        assert_eq!(seeds(recorded()), seeds(SeedNetwork::Testnet));
-
-        assert_eq!(
-            shekyl_dialer_note_network(DaemonNetwork::Stagenet.to_cryptonote()),
-            0
-        );
-        derive_each_static();
-        assert_eq!(recorded(), SeedNetwork::None);
-        assert!(seeds(recorded()).is_empty());
-
-        assert_eq!(
-            shekyl_dialer_note_network(DaemonNetwork::Fakechain.to_cryptonote()),
-            0
-        );
-        let mut mainnet_id = [0u8; 16];
-        let mut fakechain_id = [0u8; 16];
-        assert_eq!(
-            crate::network_id_ffi::shekyl_network_id(
-                DaemonNetwork::Mainnet.to_cryptonote(),
-                mainnet_id.as_mut_ptr()
-            ),
-            0
-        );
-        assert_eq!(
-            crate::network_id_ffi::shekyl_network_id(
-                DaemonNetwork::Fakechain.to_cryptonote(),
-                fakechain_id.as_mut_ptr()
-            ),
-            0
-        );
-        assert_eq!(mainnet_id, fakechain_id);
-        assert_eq!(recorded(), SeedNetwork::None);
-
-        assert_eq!(
-            shekyl_dialer_note_network(DaemonNetwork::Mainnet.to_cryptonote()),
-            0
-        );
-        assert_eq!(shekyl_dialer_note_network(UNRECOGNIZED_NETTYPE), -1);
-        assert_eq!(recorded(), SeedNetwork::Mainnet);
-    }
-}
+#[path = "dialer_ffi_tests.rs"]
+mod tests;
