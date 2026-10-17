@@ -34,19 +34,16 @@ pub enum Post {
         bytes: Vec<u8>,
     },
     /// The outbound handshake finished with a well-formed response, and the
-    /// channel was adopted. The strand reads these fields and accepts or
-    /// refuses the sync payload in that turn, before any later frame. It
-    /// is not a delivery: the handshake owner already decoded the response
-    /// on the channel, and the strand does not parse it again.
+    /// channel was adopted. The dialer has already recorded the kept
+    /// session. The strand reads these fields and does not answer: nothing
+    /// waits on a reply. A confirm dial does not post this. It is not a
+    /// delivery: the handshake owner already decoded the response on the
+    /// channel, and the strand does not parse it again.
     HandshakeResult {
         /// The admission id.
         id: SocketId,
         /// The connector this id was established on, as on `Deliver`.
         connector: ConnectorId,
-        /// What the dial was for. A kept dial sets the session-established
-        /// flag and flips the relay on accept; a confirm dial does neither,
-        /// and the owner closes it in that turn.
-        keep: bool,
         /// The peer's support flags, zero included.
         support_flags: u32,
         /// The peer's sync payload.

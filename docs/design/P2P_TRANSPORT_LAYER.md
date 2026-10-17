@@ -359,8 +359,8 @@ names them.
 Both connectors are in. The seam is the handler boundary they attach to:
 one `Sockets` table, the connector's `Session`, and the posts onto that
 connection's strand. A `Dial` is how a channel is born. Zone bind, which
-installs the connector dialer and runs `drive_inbound` on the transport
-runtime, is the cutover and is not in this change. The loopback dialer is
+installs the connector dialer, whose `Dial::drive` runs each session's
+pump as a task on the transport runtime, is the cutover and is not in this change. The loopback dialer is
 the strand harness: it admits on the hub's table and discards outbound
 bytes. It is not a connector. epee still owns every production socket.
 This note is the build before the differential harness and the cutover.

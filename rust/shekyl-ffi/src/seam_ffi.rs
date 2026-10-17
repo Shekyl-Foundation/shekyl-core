@@ -18,12 +18,11 @@
 use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
 
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
-    connector_from_index, direction_from_index, drive_inbound, CloseCause, CloseKind, ConnectorId,
-    Direction, Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
+    connector_from_index, direction_from_index, CloseCause, CloseKind, ConnectorId, Direction,
+    Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
 };
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 
@@ -85,16 +84,14 @@ pub struct ShekylSeamAddress {
     pub bytes: [u8; TOR_HOST_MAX],
 }
 
-/// What the outbound handshake's result post carries: the strand reads
-/// these fields and accepts or refuses the sync payload in that turn.
+/// What a kept dial's handshake notification carries. The strand reads
+/// these fields and does not answer. Only a kept dial is posted.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ShekylSeamHandshakeResult {
-    /// 1 for a kept dial, 0 for a confirm-and-close dial.
-    pub keep: u8,
-    pub _pad: [u8; 3],
     /// The peer's support flags, zero included.
     pub support_flags: u32,
+    pub _pad: [u8; 4],
     /// The peer's `CORE_SYNC_DATA`.
     pub current_height: u64,
     pub cumulative_difficulty: u64,
@@ -107,8 +104,7 @@ impl ShekylSeamHandshakeResult {
     /// post carries no padding read from the stack.
     fn to_bytes(self) -> [u8; 64] {
         let mut out = [0u8; 64];
-        out[0] = self.keep;
-        out[4..8].copy_from_slice(&self.support_flags.to_ne_bytes());
+        out[0..4].copy_from_slice(&self.support_flags.to_ne_bytes());
         out[8..16].copy_from_slice(&self.current_height.to_ne_bytes());
         out[16..24].copy_from_slice(&self.cumulative_difficulty.to_ne_bytes());
         out[24..32].copy_from_slice(&self.cumulative_difficulty_top64.to_ne_bytes());
@@ -119,7 +115,7 @@ impl ShekylSeamHandshakeResult {
 
 const _: () = {
     assert!(std::mem::size_of::<ShekylSeamHandshakeResult>() == 64);
-    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, support_flags) == 4);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, support_flags) == 0);
     assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, current_height) == 8);
     assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, top_id) == 32);
 };
@@ -336,8 +332,8 @@ pub extern "C" fn shekyl_seam_install_loopback() -> i32 {
 /// Returns as soon as the row exists, without waiting for the strand to
 /// arm its handler (the C++ dial path that needed the wait is deleted,
 /// 2026-10-13). `id` is zero and `cause_kind` is the D12 cause when the
-/// dial fails. The inbound pump runs on a thread this call starts;
-/// [`shekyl_seam_reap`] joins it.
+/// dial fails. The inbound pump runs where the installed dialer runs
+/// pumps; the harness's thread is joined by [`shekyl_seam_reap`].
 ///
 /// # Safety
 /// `addr` is readable.
@@ -367,10 +363,7 @@ pub unsafe extern "C" fn shekyl_seam_open(
         Err(cause) => return refused(cause),
     };
     let id = attached.id;
-    let session = attached.session;
-    let hub_pump = hub.clone();
-    let pump = thread::spawn(move || drive_inbound(&hub_pump, id, session));
-    hub.track_pump(id, pump);
+    hub.drive(id, attached.session);
     ShekylSeamOpenResult {
         id: id.get(),
         cause_kind: 0,
@@ -735,15 +728,13 @@ fn post_one(bound: &Bound, item: Post) {
         Post::HandshakeResult {
             id,
             connector,
-            keep,
             support_flags,
             sync,
         } => {
             let observed = routing_c(connector);
             let result = ShekylSeamHandshakeResult {
-                keep: u8::from(keep),
-                _pad: [0; 3],
                 support_flags,
+                _pad: [0; 4],
                 current_height: sync.current_height,
                 cumulative_difficulty: sync.cumulative_difficulty,
                 cumulative_difficulty_top64: sync.cumulative_difficulty_top64,
@@ -767,9 +758,9 @@ fn post_one(bound: &Bound, item: Post) {
             connector,
             cause,
         } => {
-            // The dialer hears every close: a kept session leaves its
-            // count, a dial awaiting its verdict fails.
-            crate::dialer_ffi::on_closed(id);
+            // The dialer hears every close, with the cause. A kept session
+            // leaves its count; SessionRefused is the lists' PayloadRefused.
+            crate::dialer_ffi::on_closed(id, cause);
             let observed = routing_c(connector);
             unsafe {
                 (bound.post)(
