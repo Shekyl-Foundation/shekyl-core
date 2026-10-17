@@ -58,6 +58,13 @@ target_link_libraries(core_tests
     device
     ${CMAKE_THREAD_LIBS_INIT}
     ${EXTRA_LIBRARIES})
+# The snapshot the tests construct the core from comes from the real Rust
+# parse (`shekyl_daemon_snapshot_parse`, in the daemon image, not in
+# libshekyl_ffi.a): this binary links the daemon image, as unit_tests does.
+set_property(TARGET core_tests PROPERTY SHEKYL_RUST_IMAGE_DAEMON ON)
+if(TARGET shekyl_daemon_image_rust)
+  add_dependencies(core_tests shekyl_daemon_image_rust)
+endif()
 enable_stack_trace(core_tests)
 set_property(TARGET core_tests
   PROPERTY

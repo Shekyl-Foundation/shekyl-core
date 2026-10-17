@@ -45,6 +45,22 @@
 #include "cryptonote_core/i_core_events.h"
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
 #include "cryptonote_protocol/levin_notify.h"
+#include "shekyl/shekyl_ffi.h"
+
+namespace cryptonote { namespace levin {
+  /* The test harness's carrier switch. The daemon records `dev-relay-cover`
+     from its sections (the posture `shekyl_relay_zone_new` reads); these
+     cases record it per notifier through `shekyl_relay_posture_record`, so
+     the switch lives here and the fixtures that flip it restore it. Default
+     off, as the shipped posture is. */
+  inline bool& carrier_development_for_tests() { static bool on = false; return on; }
+  inline bool set_carrier_development(bool enabled)
+  {
+    const bool prior = carrier_development_for_tests();
+    carrier_development_for_tests() = enabled;
+    return prior;
+  }
+} }
 #include "int-util.h"
 #include "p2p/net_node.h"
 #include "net/levin_base.h"
@@ -509,6 +525,10 @@ namespace
         {
             epee::net_utils::connector_id zone = is_public ? epee::net_utils::connector_id::clearnet : epee::net_utils::connector_id::tor;
             receiver_.session_zone = zone;
+            /* The relay's identity is the recorded posture (the daemon's
+               Rust main() records it from its sections); the harness
+               records it for this one connector, cover off. */
+            shekyl_relay_posture_record(std::uint32_t{1} << cryptonote::levin::notify::connector_byte(zone), cryptonote::levin::carrier_development_for_tests());
             receiver_.notifier.reset(
               new cryptonote::levin::notify{io_service_, connections_, zone, pad_txs, events_}
             );
@@ -529,11 +549,12 @@ namespace
                 cryptonote::levin::notify::connector_byte(epee::net_utils::connector_id::clearnet),
                 connections_}};
             const std::uint32_t configured = (std::uint32_t{1} << 0) | (std::uint32_t{1} << 1);
+            shekyl_relay_posture_record(configured, cryptonote::levin::carrier_development_for_tests());
             /* Later `add_connection` registers as clearnet. The test that
                wants a TCP session passes connector 0 itself. */
             receiver_.session_zone = epee::net_utils::connector_id::clearnet;
             receiver_.notifier.reset(new cryptonote::levin::notify{
-              io_service_, std::move(registries), configured, false, events_});
+              io_service_, std::move(registries), false, events_});
             return receiver_.notifier;
         }
 

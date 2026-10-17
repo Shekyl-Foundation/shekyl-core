@@ -148,6 +148,9 @@ pub mod levin_ffi;
 // Inbound descriptor ceiling (PWD-I7). One call: Rust probes the process
 // and returns the admission decision. C++ passes reservations only.
 pub mod inbound_ceiling_ffi;
+/// The relay identity and the reserved descriptor count, installed once
+/// before the remnant runs. Not a snapshot field (§2.9).
+pub mod remnant_prep;
 
 // The p2p seam. C++ posts onto the connection strand. Rust records the
 // cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
@@ -161,7 +164,16 @@ pub mod peerlist_ffi;
 pub mod rpc_peerlist_ffi;
 
 // Operator link rates and the byte-stamp clock the stall check reads.
+/// The daemon's default data directory for the C++ blockchain utilities
+/// (`DAEMON_CONFIG_CUTOVER.md` §2.6): one layout, the Rust one.
+pub mod data_dir_ffi;
 pub mod link_ffi;
+/// The notify runner: the owner of the three notify commands
+/// (`DAEMON_CONFIG_CUTOVER.md` §2.10); the C++ event sites push facts to it.
+pub mod notify_ffi;
+/// The chain-sync heuristics that read the outbound target
+/// (`DAEMON_CONFIG_CUTOVER.md` §4.2): decided here, the C++ hands over counts.
+pub mod sync_ffi;
 
 // The published board. Counts are integers. Address walks receive a
 // snapshot whose row is the id, the handshake flag, and the endpoint.
@@ -188,6 +200,12 @@ pub mod peer_policy_ffi;
 // (`P2P_2_ENDPOINT_ROUND.md` PWD-E7/E9). `node_server::init` obtains the
 // per-boot overlay inbound (managed tor, in-memory key, DiscardPK) here.
 pub mod daemon_tor_ffi;
+
+/// The account's home from the operating system's account interface (IG-13).
+pub mod platform;
+
+/// The daemon's panic hook: a panic is never silent under `panic = "abort"`.
+pub mod panic_hook;
 
 // Single-Rust-image contract: re-export shekyl-logging so its
 // `#[no_mangle]` C exports (`shekyl_log_init_*`, `shekyl_log_emit`,
