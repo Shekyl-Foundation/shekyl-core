@@ -20,11 +20,22 @@
 //! the reference moved since is a stale anchor, not a refusal, and the
 //! transaction waits for the reconcile to judge it again.
 //!
+//! The rows that hold across a block's transactions are asked as each is
+//! selected: CEN-L1 by the key images already selected (above), and CEN-G7,
+//! G9 and G10 — one serve credit per `(P, shard, E)`, one emission claim per
+//! `(P, E)`, one bond post per `P` — by the validator's
+//! [`BlockArchivalKeys`]. Two transactions each valid against the parent
+//! may still be refused together: two JoinMarket posts by one persona,
+//! funded by different key images, is the case. The later one is not
+//! selected and not evicted — it is valid alone, and a block without the
+//! earlier one may list it.
+//!
 //! The coinbase, the header and the section budget are the template
 //! builder's (`shekyl-block-template`); this selects the listed bodies.
 
 use shekyl_chain_rules::{
-    tx_against, ChainView, Fault, FormAttempt, InvalidBlock, RuleSet, TxSlot,
+    tx_against, BlockArchivalKeys, CenRow, ChainView, Fault, FormAttempt, InvalidBlock, RuleSet,
+    TxSlot,
 };
 use shekyl_chain_store::pool::{ProvenReference, Standing};
 use shekyl_types::TxHash;
@@ -48,6 +59,10 @@ pub struct Selected {
     /// Candidates whose recorded anchor the parent no longer claims: not
     /// refused, not selected — the reconcile judges them again.
     pub stale: Vec<TxHash>,
+    /// Candidates valid against the parent that a block listing them after
+    /// the selected ones is refused on, with the row (G7, G9 or G10): not
+    /// selected, and not evicted.
+    pub conflicted: Vec<(TxHash, CenRow)>,
 }
 
 /// Select from `pool` the bodies a block on `parent` lists under
@@ -81,6 +96,7 @@ pub fn select<'id, V: ChainView<'id>>(
 
     let mut selected = Selected::default();
     let mut spent = KeyImages::default();
+    let mut archival = BlockArchivalKeys::default();
     for (txid, held) in candidates {
         let weight = held.record.weight;
         if selected.weight.saturating_add(weight) > budget {
@@ -100,6 +116,10 @@ pub fn select<'id, V: ChainView<'id>>(
             FormAttempt::FIRST,
         ) {
             Ok(Ok(_)) => {
+                if let Err(row) = archival.add(&held.tx) {
+                    selected.conflicted.push((*txid, row));
+                    continue;
+                }
                 spent.insert(*txid, key_images_of(&held.tx));
                 selected.weight += weight;
                 selected.fees = selected.fees.saturating_add(held.record.fee.to_raw());

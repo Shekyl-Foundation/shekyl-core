@@ -168,23 +168,26 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
     scenario.close().await;
 }
 
-/// The bond arm of the seam, in the live lane: two JoinMarket posts (a
-/// compact shard set, a complete tree) over closed shards, priced at the
-/// chain's floor, are accepted through the shim — the BP3 record-absent
-/// fact the shim reads off the store, the validator's door at commit.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored join_posts_are_accepted_through"]
-async fn join_posts_are_accepted_through_the_rust_pool_shim() {
-    use crate::archival_driver::{first_spending_height, ENDPOINT, FEE};
+/// The live lane's archival setup: two shards closed with real proofs,
+/// the chain mined to where a compact join over both is admissible, and
+/// the relay floor a transaction connecting next pays.
+async fn closed_shards_lane(
+    name: &str,
+) -> (
+    crate::scenario::Scenario<crate::scenario::FreeHash>,
+    Vec<crate::scenario::Mined>,
+    Vec<u64>,
+    shekyl_types::BlockHeight,
+    u64,
+) {
+    use crate::archival_driver::first_spending_height;
     use crate::scenario::{FreeHash, Scenario};
-    use crate::scenario_archival::{complete_tree, shard_set, Persona};
     use crate::scenario_shard::{
         close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, mine_to,
     };
-    use shekyl_types::BlockHeight;
 
     let rules = levered_rules();
-    let mut scenario = Scenario::open_under("pool-submit-join", FreeHash, rules);
+    let mut scenario = Scenario::open_under(name, FreeHash, rules);
     let mut mined = scenario.mine(first_spending_height().to_raw()).await;
     let filled = close_shards(&mut scenario, &mut mined, 10, 2).await;
     let shards: Vec<u64> = filled.closed.iter().map(|c| c.shard.to_raw()).collect();
@@ -207,6 +210,49 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
             }
         })
         .await;
+    (scenario, mined, shards, connecting, floor)
+}
+
+/// A post spending coinbase `coinbase`, paying the relay floor `floor`.
+fn priced_post(
+    spender: &shekyl_harness_spender::Spender,
+    wallet: &shekyl_harness_spender::MinerWallet,
+    coinbase: u64,
+    connecting: shekyl_types::BlockHeight,
+    floor: u64,
+    post: &shekyl_harness_spender::PostedBond<'_>,
+) -> shekyl_wire::Transaction {
+    let mut fee = crate::archival_driver::FEE;
+    for _ in 0..8 {
+        let tx = spender.spend_coinbase_posting(
+            wallet,
+            shekyl_types::BlockHeight::from_raw(coinbase),
+            connecting,
+            fee,
+            Some(post),
+        );
+        let weight = u64::try_from(tx.weight()).expect("fits");
+        let needed = shekyl_economics::quantized_fee(weight, floor).expect("priced");
+        if needed <= fee {
+            return tx;
+        }
+        fee = needed;
+    }
+    panic!("the floor price did not settle")
+}
+
+/// The bond arm of the seam, in the live lane: two JoinMarket posts (a
+/// compact shard set, a complete tree) over closed shards, priced at the
+/// chain's floor, are accepted through the shim — the BP3 record-absent
+/// fact the shim reads off the store, the validator's door at commit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored join_posts_are_accepted_through"]
+async fn join_posts_are_accepted_through_the_rust_pool_shim() {
+    use crate::archival_driver::ENDPOINT;
+    use crate::scenario_archival::{complete_tree, shard_set, Persona};
+
+    let (mut scenario, mined, shards, connecting, floor) =
+        closed_shards_lane("pool-submit-join").await;
     let spender = shekyl_harness_spender::Spender::over(&mined);
     let (compact, whole) = (Persona::at(1), Persona::at(2));
     let posts = [
@@ -216,23 +262,14 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
     let listed: Vec<shekyl_wire::Transaction> = posts
         .iter()
         .map(|(coinbase, post)| {
-            let mut fee = FEE;
-            for _ in 0..8 {
-                let tx = spender.spend_coinbase_posting(
-                    scenario.wallet(),
-                    BlockHeight::from_raw(*coinbase),
-                    connecting,
-                    fee,
-                    Some(post),
-                );
-                let weight = u64::try_from(tx.weight()).expect("fits");
-                let needed = shekyl_economics::quantized_fee(weight, floor).expect("priced");
-                if needed <= fee {
-                    return tx;
-                }
-                fee = needed;
-            }
-            panic!("the floor price did not settle")
+            priced_post(
+                &spender,
+                scenario.wallet(),
+                *coinbase,
+                connecting,
+                floor,
+                post,
+            )
         })
         .collect();
     let path = tmp("pool-submit-join-pool");
@@ -266,6 +303,99 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
     for verdict in verdicts {
         assert_eq!(verdict.expect("no engine fault"), SubmitVerdict::Accepted);
     }
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
+/// CEN-G10 at template selection, in the live lane: two JoinMarket posts by
+/// one persona, funded by different coinbases, are each valid against the
+/// chain — the door admits both, and the pool holds both — but a block
+/// listing both is refused. The template selects one, names the other
+/// conflicted on G10 (neither refused nor evicted), selects the other
+/// persona's post beside it, and the block it lists connects.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "fills two shards with real proofs; minutes. Run in the live lane: cargo test -p shekyl-chain-ingest --features pipeline -- --ignored two_posts_by_one_persona"]
+async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
+    use crate::archival_driver::ENDPOINT;
+    use crate::scenario_archival::{complete_tree, shard_set, Persona};
+    use shekyl_chain_rules::CenRow;
+    use shekyl_mempool::{select, Admission, Arrival};
+
+    let (mut scenario, mined, shards, connecting, floor) =
+        closed_shards_lane("pool-template-g10").await;
+    let spender = shekyl_harness_spender::Spender::over(&mined);
+    let (compact, whole) = (Persona::at(1), Persona::at(2));
+    let posts = [
+        (0, compact.join(shard_set(shards), ENDPOINT)),
+        (1, compact.join(complete_tree(), ENDPOINT)),
+        (2, whole.join(complete_tree(), ENDPOINT)),
+    ];
+    let listed: Vec<shekyl_wire::Transaction> = posts
+        .iter()
+        .map(|(coinbase, post)| {
+            priced_post(
+                &spender,
+                scenario.wallet(),
+                *coinbase,
+                connecting,
+                floor,
+                post,
+            )
+        })
+        .collect();
+    let txids: Vec<_> = listed.iter().map(|tx| tx.txid_parts().hash).collect();
+    let path = tmp("pool-template-g10-pool");
+    let selected = scenario
+        .read_chain(|view, rule_set| {
+            let mut pool = Pool::open(&path, view, rule_set, &AdmissionPolicy::GENESIS)
+                .expect("open")
+                .0;
+            for tx in &listed {
+                let admission = pool
+                    .admit(
+                        tx.clone(),
+                        Arrival::Relayed,
+                        UnixSeconds::from_raw(1),
+                        view,
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("no fault");
+                assert_eq!(admission, Admission::Admitted, "each post is valid alone");
+                assert!(pool.fluffed(&tx.txid_parts().hash).expect("published"));
+            }
+            select(&pool, view, rule_set, u64::MAX).expect("no fault")
+        })
+        .await;
+    assert!(selected.refused.is_empty(), "{:?}", selected.refused);
+    assert!(selected.stale.is_empty());
+    let chosen: Vec<_> = selected
+        .transactions
+        .iter()
+        .map(|(txid, _)| *txid)
+        .collect();
+    assert_eq!(
+        chosen.len(),
+        2,
+        "one of the persona's posts and the other persona's"
+    );
+    assert!(chosen.contains(&txids[2]));
+    let (kept, other) = if chosen.contains(&txids[0]) {
+        (txids[0], txids[1])
+    } else {
+        (txids[1], txids[0])
+    };
+    assert!(chosen.contains(&kept));
+    assert_eq!(selected.conflicted, vec![(other, CenRow::G10)]);
+    let bodies = selected
+        .transactions
+        .into_iter()
+        .map(|(_, tx)| tx)
+        .collect();
+    scenario
+        .mine_listing(bodies)
+        .await
+        .unwrap_or_else(|o| panic!("the selected template connects: {o}"));
     drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
