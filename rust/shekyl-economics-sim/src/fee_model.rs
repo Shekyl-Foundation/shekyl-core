@@ -19,10 +19,10 @@
 //! order of the calls and the three places the run still departs from the
 //! chain, each named below so that none is silent:
 //!
-//! - the fee is paid **unrounded** — the product above carries no quantization
-//!   mask. The wallet rounds up to the daemon's mask (1 000 atomic), which
-//!   has no Rust owner, and the fee-floor instrument in this crate already
-//!   pays exactly (FL-R22);
+//! - the fee is paid **unrounded** — the product above is not rounded to the
+//!   fee lattice. The wallet rounds up to it
+//!   ([`shekyl_economics::quantized_fee`], 1 000 atomic), and the fee-floor
+//!   instrument in this crate pays exactly too (FL-R22);
 //! - the volume, split, burn and median operands are the fold's own, so they
 //!   carry whatever that fold carries (the design document's ESR-3, ESR-4
 //!   and ESR-6).
