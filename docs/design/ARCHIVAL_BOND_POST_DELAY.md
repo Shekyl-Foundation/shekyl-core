@@ -270,11 +270,12 @@ whenever the wallet is open, and no secret is persisted.
 
 That is a persisted-schema change: a planned state (or kind) in the
 pending-post block, the posture added, `anchor_t0` replaced by the anchor
-rule, and each sent version's reference height durable (below).
+rule, and the record's `reference_height` durable (one per record).
 `PENDING_POST_VERSION` (12, `pending_post_block.rs:94`) bumps under rule
 42 with its snapshot (`shekyl-engine-state/schemas/pending_post_block.snap`).
 WR-Q2 and WR-Q3 take v13 for a durable `reference_height` (ruled, not
-built); this change shares that bump or takes the next. A mismatched seal
+built); that is this record's field, and this change shares that bump or
+takes the next. A mismatched seal
 fails closed, as today (`:91-93`).
 
 **The states.** W1 (preflight, nothing durable) and W2 (`bonded_slots`
@@ -288,50 +289,63 @@ driver has the engine assemble, then seals the signed bytes, then sends.
 A wallet closed at due posts on the first tick after reopening, signed
 then.
 
-**Re-signing: two states, derived from whether any byte left the wallet.**
+**Rule 1 — one submitted version per record.**
 
-1. **Never sent.** No byte left the wallet. The post is re-anchored and
-   re-signed freely; `REBUILD_AT` and `should_reanchor`
-   (`shekyl-curve-tree/src/reference.rs:116`, `:249`) apply as on the
-   ordinary pre-broadcast path (CT-5d, `engine/traits/pending_tx.rs:218-232`).
-   This covers a post signed and sealed at due whose send did not happen
-   before the wallet closed.
-2. **Sent.** The same bytes are resent until the sent version is provably
-   dead: `proof_expired(tip, reference_height)`
-   (`shekyl-curve-tree/src/reference.rs:225-233`). That is the boundary
-   consensus enforces (`shekyl-chain-rules/src/rules/tx_against.rs:319-341`)
-   and the pool evicts at (`src/cryptonote_core/tx_pool.cpp:1082-1101`,
-   `DAEMON_SUBMIT_VERDICT.md` §6 leg 1). Only then is the post re-signed.
-   The shared predicate is used; the arithmetic is not re-derived.
+- **Never sent.** No submit was attempted. The post may be re-anchored
+  and re-signed freely: `REBUILD_AT` and `should_reanchor`
+  (`shekyl-curve-tree/src/reference.rs:116`, `:249`) apply as on the
+  ordinary pre-broadcast path (CT-5d, `engine/traits/pending_tx.rs:218-232`).
+  This covers a post signed and sealed at due whose send did not happen
+  before the wallet closed.
+- **Sent** means a submit was *attempted*. The state is recorded durably
+  before the submit call, so a crash during the call counts as sent. That
+  is conservative: it can only hold funds longer, never create a second
+  version.
+- **A sent record is never re-signed.** It resends the same bytes until
+  its end date and ends there through WR-Q3 (`reference_height +
+  MAX_AGE`, released when the scan's sealed frontier reaches it).
+- **Why.** Re-signing after a send moves the end date, so a post that
+  never lands (a censoring daemon) would re-sign forever and the record
+  would never end. Re-signing is also the only source of two live versions
+  spending the same key images. A sent post that expires on a healthy
+  network is a real failure the user should see (rule 82): its outcome is
+  `expired`.
+- **Re-staking after `expired`.** The new post goes on its first tick,
+  with no fresh draw. The first broadcast already showed network observers
+  when the post went out, so a second delay hides nothing and only adds
+  latency.
 
-A sent post is not re-signed at `REBUILD_AT`. At age 50 the first version
-is still mineable (consensus accepts to `MAX_AGE`, 100) and still in the
-pool. The re-signed version spends the same key images, so the daemon
-answers it `DoubleSpendConflict`, "a *different* transaction consumed one
-of our inputs" (`shekyl-daemon-rpc/src/submit/engine.rs:505-511`). The
-dispatch driver's terminal arm then removes the record and releases the
-funding reservation (`engine/pscan/dispatch.rs:794-803`) while the first
-version can still land, and the cadence driver may claim or drain funding
-a live bond is about to spend.
+**Rule 2 — no daemon verdict releases a submitted record.**
 
-**After any broadcast, a key-image conflict holds the record.** Once a
-version has been broadcast, `DoubleSpendConflict` on a later version means
-one of three things: the pool has not yet evicted our own expired version
-(eviction runs on the pool's sweep, not at the exact boundary), an earlier
-version was mined, or the daemon is lying. The reservation excludes every
-other spender of `P`'s funding, so it is never a foreign spend. So after
-any broadcast a key-image conflict holds the record and the reservation.
-Release happens only on the P-scan's reorg-deep observation: the key image
-spent by one of our versions takes the confirmed path; not spent, with the
-version expired, takes the re-sign. The terminal-release arm stays only
-for a record that has never had a second version. Each sent version's
-reference height is durable; WR-Q2/WR-Q3's `reference_height` (v13) is
-that field, and the bump is shared.
+- On a terminal verdict the wallet stops sending and raises the alarm; no
+  automatic re-assembly (`ARCHIVAL_BOND_WI3_DISPATCH.md` §3.6). It keeps
+  the record and the reservation.
+- **The verdict never decides the outcome; the chain does.** At the end
+  date, if the scan saw the post land, the confirmed path wins, whatever
+  the daemon said. If it did not land, the outcome is `rejected` with the
+  daemon's reason as a user sentence (rule 81), and `funds_return_at` is
+  the end date.
+- **Why.** From the first submit the daemon holds valid bytes. A lying
+  daemon can report a terminal verdict, wait for the wallet to release the
+  reservation and drop the slot, then relay the bond inside the window. A
+  bond then lands for a dropped slot, and "a dropped slot stays burned"
+  (`engine/stake_persist.rs:212-214`): the harm WR-Q3's own rejected
+  alternatives name. A conflict on the very first send is no exception:
+  with one version and the reservation held, its only honest cause is
+  another wallet holding the same seed, and the chain resolves that too.
+- **Cost.** A rejected stake holds its funds until its end date is final,
+  about 94 + 720 blocks after it was signed. The user sees the reason at
+  once, with `funds_return_at`.
+
+Today's dispatch driver does the opposite on both counts: it resends the
+same bytes past the end date, and its terminal arm removes the record and
+releases the reservation (`engine/pscan/dispatch.rs:794-803`). The
+implementation slice changes both.
 
 **What changes for WI-3.** The dispatch driver "never constructs or
 signs" (`ARCHIVAL_BOND_WI3_DISPATCH.md:34-35`). Under this ruling it
-triggers assembly through the engine at due, and its conflict handling
-follows the two rules above. The single-writer seal discipline (§3.3) and
+triggers assembly through the engine at due, and its verdict handling
+follows Rules 1 and 2. The single-writer seal discipline (§3.3) and
 seal-before-send are kept.
 
 **Reopens if** signing at due needs something unavailable at the due
@@ -354,10 +368,10 @@ known, at no fingerprint cost.
 BD-Q2, BD-Q3 and BD-Q5 build against it, and the ruling changes one
 constant and its golden vector.
 
-**What has to be answered first.**
+**Answered at source.**
 
 1. **What the default network posture leaves of the network-origin
-   observer.** Answered at source:
+   observer.**
    - **Own-origin broadcast over Tor is designed and default-on.** The
      default P2P posture runs clearnet and Tor together
      (`INPUT_GRAMMAR.md:361`, IG-Q3). A node's own transactions ride a
@@ -385,8 +399,8 @@ constant and its golden vector.
    ISP's burst-timing vantage plus the remote-daemon case, not an IP link
    at the first stem edge; under the operator-relay posture it is
    residue. The window's cost, every staker waiting, is weighed against
-   the burst-timing anchor's precision, which TRC-1 measures.
-2. **The cover count.** Answered at source. The targeted observer's
+   the burst-timing anchor's precision. Input: **TRC-1**.
+2. **The cover count.** The targeted observer's
    cover is **every JoinMarket post**, and only those.
    - The `post_kind` byte is cleartext; a JoinMarket is `0x05` and nothing
      else is (`shekyl-wire/src/transaction.rs:96`, `:664-695`).
@@ -403,15 +417,20 @@ constant and its golden vector.
    FD4's churn `c` counts unbonds and holdings drops
    (`docs/completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md:273`). Under the
    immutable bond each drop is a rotation, which emits a JoinMarket. So
-   the join rate is FD4's box as an estimate, not a bound below it, and
-   any wallet-driven persona rotation outside `c` adds to it.
-3. **The homeostasis run.** Anything above about 1,000 blocks is on the
-   economic axis (the sim treats the standoff as free only up to 0.10
-   epoch, `STAKER_ARCHIVAL_SIM.md:3494-3501`). The staking sim runs the
-   candidate in verification mode against the production lever before the
-   ruling. Not yet run.
-4. **The join rate itself.** No bond-post rate figure exists; the box
-   below is FD4's model. A testnet read replaces it.
+   the join rate is FD4's box as an estimate, not a bound, and any
+   wallet-driven persona rotation outside `c` adds to it.
+
+**Still owed:**
+
+- **TRC-1's burst-timing result**: the precision of the ISP's
+  burst-timing anchor (input 1).
+- **A measured join rate**: no bond-post rate figure exists; the box below
+  is FD4's model.
+- **The homeostasis run.** Anything above about 1,000 blocks is on the
+  economic axis (the sim treats the standoff as free only up to 0.10
+  epoch, `STAKER_ARCHIVAL_SIM.md:3494-3501`). The staking sim runs the
+  candidate in verification mode against the production lever before the
+  ruling.
 
 **The candidates as they stand.** The observer from BD-Q1 can work in two
 directions.
@@ -513,9 +532,15 @@ object from a window ("uniform from funding").
 - **BD-Q3, cap the offset at 94 and keep signing at the request:** every
   post lands, but the reference age stays `offset + 6`, which the daemon
   checks and the transaction names.
-- **BD-Q3, re-sign a sent post at `REBUILD_AT`:** the first version is
-  still mineable and pool-resident, and the conflict on the second
-  releases the reservation while the first can land.
+- **BD-Q3, re-sign a sent post (at `REBUILD_AT` or once `proof_expired`):**
+  it moves the end date, so a post a censoring daemon never lands re-signs
+  forever, and it is the only source of two live versions with the same
+  key images.
+- **BD-Q3, release a submitted record on a terminal verdict:** the daemon
+  holds valid bytes from the first submit and can relay the bond after the
+  release, landing it for a dropped slot.
+- **BD-Q3, a fresh draw when re-staking after `expired`:** the first
+  broadcast already showed the post time; a second delay only adds latency.
 - **BD-Q5, wire the floor with the window (`due = a + SEB + s`):** an epoch
   of latency for no cover.
 - **BD-Q5, the floor alone:** a constant offset from the funding, no cover.
@@ -528,11 +553,12 @@ object from a window ("uniform from funding").
 | --- | --- |
 | **O1.** Link principal to `P` from the funding broadcast (network origin, forward). | BD-Q4: the window is sized against it, with the default posture's vantage as input 1. |
 | **O2.** Read the request height, or the funding block, off the bond's reference. | BD-Q3: absorbed. The reference age at broadcast is 6. |
-| **O3.** Have the wallet resend a dead post until the alarm, keeping the funding reserved and the stake unlanded. | BD-Q3: absorbed. A post is signed at due; a sent post is re-signed once `proof_expired`. WR-Q3's release covers any residue. |
+| **O3.** Keep a dead post resending and the funds reserved. | Absorbed: signed at due; one version (Rule 1); it ends at its end date (WR-Q3). |
 | **O4.** Tie the post's send to the wallet opening, when the due fell while the wallet was closed. | Discipline note. Today's sealed post sends at reopen too. Whether the post rides the serving-launch standoff (`engine/stake_timing.rs:206`, SH-2b-2) is posed in the implementation slice. |
 | **O5.** Fingerprint wallets by window cohort after a window change. | BD-Q4: the window is fixed at genesis. |
 | **O6.** A remote daemon (no own node) receives both the funding transfer and the bond post from one client. | No window helps: it sees the post submitted. Conceded under the own-node posture (`engine/transaction_submitter.rs:479-483`). The routes are the principal-side Tor flip (`ARCHIVAL_BOND_WI4_MEASUREMENT.md:1988`) and the per-`P` submit posture (2d-2). Recorded, not absorbed. |
-| **O7.** A malicious daemon answers `DoubleSpendConflict` to a live post to make the wallet release its reservation and spend the funding elsewhere. | BD-Q3: after any broadcast a conflict never releases; only the P-scan's reorg-deep observation does. |
+| **O7.** A malicious daemon reports a terminal verdict to make the wallet release its reservation and drop the slot while the bond can still land. | Absorbed by Rule 2: no daemon verdict releases a submitted record; the chain decides at the end date. |
+| **O8.** Censor or falsely reject the post to deny the stake. | Bounded, not absorbed: one window per attempt, surfaced as `expired` or `rejected` with `funds_return_at`. The route is the own-node posture (O6). Repeated denial costs the user latency, never funds. |
 
 ---
 
@@ -540,16 +566,19 @@ object from a window ("uniform from funding").
 
 Tests that land with the implementation slice:
 
-- **Replace** the ignored test (`engine/pscan/dispatch_tests.rs:1293`). A
-  post due at `max(a + s, request)` is signed at its first send and
-  carries reference age 6.
-- **Re-signing:** a sent post is resent unchanged until `proof_expired`,
-  then re-signed. A never-sent post re-anchors at `REBUILD_AT`.
-- **Conflict after broadcast:** a `DoubleSpendConflict` after a broadcast
-  leaves the record and the reservation in place; release happens only on
-  the P-scan's observation.
-- **Re-signed while pool-resident:** a re-signed post submitted while the
-  earlier version is still in the pool does not release the reservation.
+- A post due at `a + s` is signed at its first send and carries reference
+  age 6 (it replaces the ignored test, `engine/pscan/dispatch_tests.rs:1293`).
+- A never-sent sealed post past `REBUILD_AT` re-anchors before its first
+  send.
+- A sent post is resent unchanged to its end date and is never re-signed;
+  at the end date the record ends `expired` and the reservation is
+  released.
+- A crash between recording the send and the submit call leaves the
+  record treated as sent.
+- A terminal verdict stops sending and keeps the record and the
+  reservation; at the end date the record ends `rejected` with the reason.
+- A post that lands after a terminal verdict takes the confirmed path.
+- Re-staking after `expired` posts on the first tick, with no draw.
 - **Instant staker:** a request at `a` produces a post whose reference
   height is not `h_f + 10`.
 - **Restart between request and due:** the plan reloads, `s` is unchanged,
@@ -576,11 +605,10 @@ built. Each carry below is recorded in both documents (rule 26 A5);
   sent", so it fits the ruled `pending` state. No new state is needed
   unless BD-Q4's width forces one.
 - **WR-Q3 (release at the end date).** The end date is `reference_height
-  + MAX_AGE`, written at assembly. Under BD-Q3 a stake can carry more than
-  one version, so its end date is its newest sent version's, and the
-  durable `reference_height` is per sent version (the shared v13 bump). A
-  planned stake has no reference until it is signed at due, so it cannot
-  expire before then. Two cases need WR-Q3's rule:
+  + MAX_AGE`, written at assembly, one `reference_height` per record (the
+  shared v13 field): under Rule 1 a sent record has one version. A planned
+  stake has no reference until it is signed at due, so it cannot expire
+  before then. Two cases need WR-Q3's rule:
   - **A plan that cannot be signed at due**: funding spent elsewhere, or a
     posture refused. It needs an outcome (WR-Q2) and a release.
   - **Withdrawing a plan by dropping the record.** No byte of it was ever
@@ -589,6 +617,13 @@ built. Each carry below is recorded in both documents (rule 26 A5);
     can still land") and to cancelling by spending (a fee and an on-chain
     linkage event). Whether the owner may withdraw a plan is WR-Q3's to
     rule.
+- **The WR-Q3 amendment (Rule 2), recorded in both documents.** No daemon
+  verdict releases a submitted record of any kind; every submitted record
+  ends at its end date. `rejected` means a terminal verdict was seen and
+  the record reached its end date without landing; its funds are
+  `returned` and the reason sentence stays. Per kind, at source: the stake
+  and the exit release on a daemon verdict today and change; the claim and
+  the drain already do not (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q4).
 - **WR-Q5 (what the response reveals).** The wire carries no due count,
   and a `pending` entry says nothing about when it will be sent. If BD-Q4
   rules a window far above `600`, the user waits up to that long with no

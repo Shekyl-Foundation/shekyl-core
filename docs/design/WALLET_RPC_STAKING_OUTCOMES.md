@@ -1,7 +1,9 @@
 # Wallet RPC — staking outcomes a user can see: Round 0, ruled
 
 **Status:** RULED — Round 0 posed and ruled 2026-10-15 (Rick): WR-Q1…WR-Q5
-accepted, with the amendments recorded in each ruling (§3). **No code in this
+accepted, with the amendments recorded in each ruling (§3). **WR-Q3 amended
+2026-10-16:** no daemon verdict releases a submitted record of any kind
+([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q3). **No code in this
 PR**; the rulings are implemented in a separately authorized slice. One
 dependency on the bond lane is open (§1.1), recorded in FOLLOWUPS and posed
 in the bond lane's Round 0 ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md)). One follow-on is not ruled here (§5).
@@ -269,10 +271,13 @@ one entry per live pending record, in no meaningful order.
     staking scan reaches `funds_return_at`, which is the end date itself
     (WR-Q3). It is a scan height, comparable with `pscan_synced_height`
     in the same response.
+  - `rejected`, with `reason` and `funds_return_at`: a terminal verdict
+    was seen and sending stopped. The record and its reservation are
+    held to the end date, where the chain decides (WR-Q3).
 - **No per-record handle** (WR-Q5).
 
 There is no `stalled` state. Under WR-Q3 and WR-Q4 every record ends by
-confirmation, rejection or release at its end date, so no state is left
+confirmation or release at its end date, so no state is left
 for it to describe (rule 15). The log alarm for a reservation past the
 900-block horizon is not a reported state and stays an operator signal.
 
@@ -341,7 +346,7 @@ entry with:
 
   | `outcome` | When | `funds` |
   | --- | --- | --- |
-  | `rejected` | a terminal verdict removed the record | `returned` |
+  | `rejected` | a terminal verdict was seen and the record reached its end date without landing (WR-Q3) | `returned` |
   | `expired` | the end date passed with every reserved input still live: the transaction never landed | `returned` |
   | `ended_unconfirmed` | the end date passed for a record with **no** reserved inputs, the Q11 zero-fee claim, whose landing the scan cannot see (WR-Q3) | none were held |
   | `spent_elsewhere` | the end date passed with the record's reserved inputs **partly** spent by another transaction (WR-Q3) | the unspent rest is `returned` |
@@ -364,9 +369,11 @@ entry with:
 - **`funds`**: `returned`, or `none_held` for `ended_unconfirmed`.
 
 **How it is written.** In the same `mutate` closure that removes the
-record (`dispatch.rs:800-802` for a rejection; the end-date release of
-WR-Q3 for the other three): one seal, so the two cannot disagree after a
-crash. The removal-ordering contract (`pending_post_block.rs:105-112`) is
+record, which for every outcome is the end-date release of WR-Q3: one
+seal, so the two cannot disagree after a crash. No daemon verdict removes
+a submitted record (WR-Q3). A terminal verdict is recorded on the record
+when it is seen, its `TerminalErrorKind` in the shared v13 bump, so the
+end-date outcome can be `rejected` with its reason. The removal-ordering contract (`pending_post_block.rs:105-112`) is
 unaffected: a rejected post never carries a match, and a record released
 at its end date cannot gain one (WR-Q3).
 
@@ -384,11 +391,13 @@ snapshot (rule 42), shared with WR-Q3's `reference_height`.
 **Falsifier.** The armed tripwire
 `e2e_the_cxx_daemon_answers_join_market_unsupported`
 (`engine/regtest_e2e.rs:3481`) drives a terminal rejection end to end
-against the real C++ daemon. Extended: after the rejection,
-`staking_info` shows `outcomes[0].outcome == "rejected"` for
-`kind == "stake"`, `reason` is the shipped sentence,
-`funds == "returned"` and `in_flight` is empty. After a restart it still
-does.
+against the real C++ daemon. Extended: after the rejection the record
+stays in `in_flight` with its reservation, showing the reason and
+`funds_return_at`; at its end date `staking_info` shows
+`outcomes[0].outcome == "rejected"` for `kind == "stake"`, with the
+reason, `funds == "returned"` and `in_flight` empty. After a restart it
+still does. The shipped sentence's "its funds are spendable again"
+(`dispatch.rs:53-56`) becomes the return at `funds_return_at`.
 
 ### WR-Q3 — How a record that will never land ends — RULED 2026-10-15
 
@@ -527,6 +536,8 @@ a record was signed under the limit in force then.
     record is the bridge that stops the phantom-slot cleanup from
     dropping a real bond, and a dropped slot can never be re-adopted
     (`stake_persist.rs:211-214`).
+- **Prune on a definite terminal verdict — REJECTED:** the daemon holds
+  valid bytes from the first submit; only the end date ends a record.
 - **Cancel by spending the reserved inputs, through a `Cancelling` state
   arm — REJECTED.**
   - It costs a fee.
@@ -563,6 +574,17 @@ exit rejected on its one send is removed at the seam, and a rejected
 claim or drain is **held**, because the prune that would remove it is
 leg 4's empty body.
 
+**Release on a daemon verdict, per kind, at source.** The WR-Q3
+amendment (no daemon verdict releases a submitted record) covers every
+kind that does it today:
+
+| Kind | Releases on a daemon verdict today? | Under the amendment |
+| --- | --- | --- |
+| Stake | yes: the dispatch driver's terminal arm removes the record and releases its reservation (`pscan/dispatch.rs:794-803`) | held to the end date; `rejected` with its reason if it did not land |
+| Exit | yes, on a definite first-send `RejectedTerminal` (`release_dispatch.rs:303-309`, `:657-669`), on the premise that such bytes "were never admitted to any pool and never relayed" (`:640-649`), true only for an honest daemon, and to avoid bricking the one-live-exit lane, which the end date now prevents | held to the end date; `rejected` with its reason if it did not land. The `PersonaMismatch` release stays: it is refused before any transport, so no byte left the wallet and no daemon gave a verdict |
+| Claim | no: a submit failure leaves the sealed record live (`claim_dispatch.rs:428-435`); `remove_claim` has no production caller, and retirement is `remove_settled` on chain evidence (`pscan/dispatch.rs:561`) | unchanged; one that saw a terminal verdict reports `rejected` with its reason at the end date, not `expired` |
+| Drain | no: as the claim (`drain_dispatch.rs:443-449`; `remove_drain` has no production caller) | as the claim |
+
 **Each kind carries a reference, and none re-proves.**
 
 | Kind | Carries an FCMP++ reference | On `StaleRoot` |
@@ -580,12 +602,22 @@ including the empty and the partly spent reservation.
   alone". That row's security note names the reference age window as the
   other bound on the replay channel. Past the end date the retained copy
   cannot be mined by anyone, so pruning it then loses nothing.
-- **What leg 4 keeps.** Byte-identical resubmit within the lifetime, and
-  an earlier prune on a definite terminal verdict.
+- **What leg 4 keeps.** Byte-identical resubmit within the lifetime.
+- **No daemon verdict releases a submitted record, of any kind** (the
+  amendment of 2026-10-16, [`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q3 Rule 2). From the first
+  submit the daemon holds valid bytes; a lying daemon can report a
+  terminal verdict, wait for the release, and relay the transaction
+  inside the window. Every submitted record ends at its end date. On a
+  terminal verdict the wallet stops sending, keeps the record and the
+  reservation, and shows the reason at once: the record's `in_flight`
+  entry is `rejected`, with `reason` and `funds_return_at` (the end
+  date). At the end date the chain decides: a record the scan saw land
+  takes the confirmed path; one that did not ends `rejected` with its
+  reason.
 - **What it costs.** The `reference_height` field on all four kinds (the
-  one shared v13 bump). A rejected claim, drain or exit holds its funds
-  until about a day after its end date, and then reports `expired`, not
-  `rejected`.
+  one shared v13 bump), with the terminal verdict seen, if any. A rejected
+  stake, claim, drain or exit holds its funds until about a day after its
+  end date, and then reports `rejected` with its reason.
 
 **The exit's "fate unknown" gets an end.** `unstake`'s
 `-29522 UNSTAKE_FATE_UNKNOWN` today has no way to resolve. Its message

@@ -62,8 +62,8 @@ inert by 2c-2a.
 | --- | --- | --- | --- |
 | S1 | **Parallel StakeEngine JoinMarket bond request type** — a typed-separate request to the StakeEngine actor, *not* a `TxRequest` variant, so bond construction never threads the `LedgerEngine` transfer pipeline (cross-assignment unrepresentable). | §11.1 Q3 (CLOSED, lines 766–780); §9.6/§10.1 | `SignBond` message on `StakeEngine` (`stake_engine.rs:662`, landed) alongside `MintPersonaHandle` / `ActivatePersona` (`stake_engine.rs:539,572`). Consumes `PersonaHandle` (`stake_engine.rs:247`). Drives `build_join_market_vin` (`shekyl-archival-bond-builder/src/lib.rs:109`). *(Round-5 re-pin §3.5(b)/(c).)* |
 | S2 | **`sign_bond(ticket: PersistedBondTicket, …)`** — the consumer half of the persist-before-use typestate; sign-before-persist is uncallable (no ticket to pass). | §10.2 typed contract #1 (lines 567–582); `stake_persist.rs:22–27,70` | Consumes `PersistedBondTicket` **by value** (`stake_persist.rs:70`, `!Clone`) via `SignBond.ticket` (`stake_engine.rs:662`). Producer `Engine::persist_bond_record` (`stake_persist.rs:138`) landed + tested. *(Round-5 re-pin §3.5(b).)* |
-| S3 | **Funding-selection *design* (design-now / wire-later)** — settle the two-regime split: cold-start = principal-funded, ≥ 1-SEB-spaced + standoff-decorrelated; steady-state = `P`-local fund-from-earnings ramp (≥ 2 settlement epochs). **The genesis-adjacent firewall *logic* lands now; neither real funding source is wired** (principal-output access and `P`-scanning both deferred — SP-2.d / SP-2.e). Selection logic is **fixture-validated** over Bond-PR 2c-1's `funded_ledger_and_tree`, not real sources. | §10 (lines 454–456); `ARCHIVAL_TIMING_CONSTANTS.md` §7 (lines 253, 256) | `verify_credit_funding` (`builder/src/lib.rs:173`) is the amount-level invariant the selection must satisfy. Consumes economics SEB/epoch constants (B6, §4). |
-| S4 | **Two typed timing seams** — `NetworkGap(BlockSpan)` (`draw_entry_gap(window=600)`) vs `EconomicSpacing(SebSpan)` (≥ 1 SEB / ramp); cross-apply is a **compile error**. Entry seam only; exit seam deferred to the release slice. | §10 (line 457–462); FOLLOWUPS (lines 914–917) | **Landed** in `stake_timing.rs`: `BlockSpan:81`, `SebSpan:98`, `NetworkGap:111`, `EconomicSpacing:137`, `DEFAULT_ENTRY_GAP:152` (typed `NetworkGap`; renamed from `…_WINDOW` to avoid collision with raw `shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW`, PR #163 re-review), `MIN_COLD_START_SPACING:166`; accessors `BlockSpan::as_u64:86` / `NetworkGap::as_blocks:118`. All are crate-local `pub(crate)` `u64` newtypes — `BlockSpan` is **standalone, not** built on `shekyl-types::BlockCount` (Round 2 §3.2; rule-18 promote-on-second-consumer). *(Round-5 §3.5(c)/(d).)* |
+| S3 | **Funding-selection *design* (design-now / wire-later)** — settle the two-regime split: cold-start = principal-funded, amount-decoupled, and delayed from the funding ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q2); steady-state = `P`-local fund-from-earnings ramp (≥ 2 settlement epochs). **The genesis-adjacent firewall *logic* lands now; neither real funding source is wired** (principal-output access and `P`-scanning both deferred — SP-2.d / SP-2.e). Selection logic is **fixture-validated** over Bond-PR 2c-1's `funded_ledger_and_tree`, not real sources. | §10 (lines 454–456); `ARCHIVAL_TIMING_CONSTANTS.md` §7 (lines 253, 256) | `verify_credit_funding` (`builder/src/lib.rs:173`) is the amount-level invariant the selection must satisfy. Consumes economics SEB/epoch constants (B6, §4). |
+| S4 | **The typed timing seam** — `NetworkGap(BlockSpan)` carries the window of the bond-post delay (`draw_entry_gap`), measured from the funding (BD-Q2; width BD-Q4). The funding → bond-post guard is that anchor; `EconomicSpacing(SebSpan)` is deleted in the implementation slice (BD-Q5). Entry seam only; exit seam deferred to the release slice. | §10 (line 457–462); FOLLOWUPS (lines 914–917) | **Landed** in `stake_timing.rs`: `BlockSpan:81`, `SebSpan:98`, `NetworkGap:111`, `EconomicSpacing:137`, `DEFAULT_ENTRY_GAP:152` (typed `NetworkGap`; renamed from `…_WINDOW` to avoid collision with raw `shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW`, PR #163 re-review), `MIN_COLD_START_SPACING:166`; accessors `BlockSpan::as_u64:86` / `NetworkGap::as_blocks:118`. All are crate-local `pub(crate)` `u64` newtypes — `BlockSpan` is **standalone, not** built on `shekyl-types::BlockCount` (Round 2 §3.2; rule-18 promote-on-second-consumer). *(Round-5 §3.5(c)/(d).)* |
 | S5 | **Live RNG degeneracy check (float-free, fail-loud)** — the cheap integer-only guard, distinct from the statistical self-cert. | §10 (lines 457–462); FOLLOWUPS (line 917–918) | Runs against `draw_entry_gap` output (`shekyl-standoff/src/draw.rs:57`). Negative-control shapes already exist: `draw_entry_gap_double_jitter_trap` (`conformance.rs:135`), `correlated_walk` (`conformance.rs:208`). |
 | S6 | **`certify_draw` self-cert against the shipping wallet's CSPRNG (gated)** — proves the *shipping wallet's RNG* produces conformant draws, not merely the reference. | §10 (lines 457–462) | `certify_draw` (`conformance.rs:377`) over a `GapRng` (`draw.rs:13`) adapter on `rand_core::OsRng` (the shipping CSPRNG — `shekyl-tx-builder/src/sign.rs:17`, `engine/sign_bridge.rs:14`). |
 | S7 | **Request-path composition KAT + own-surface negatives.** Accept: mint handle → `persist_bond_record` → `sign_bond` → `build_join_market_vin` → verify, over 2c-1's `funded_ledger_and_tree` fixture. **Not** a new prover round-trip (closed by Bond-PR 2a #156 / 2c-1 #158 — arc §5; the prove-half tampering negatives — wrong `bond_credit`, tampered commitment/preimage, replay — live in 2a). 2c-2b's **new** failure surfaces, all uncovered upstream, must be asserted here: **(a)** funding violating `verify_credit_funding` is rejected; **(b)** the RNG degeneracy guard **fires** on a degenerate draw (assert it bites, via the `double_jitter_trap` / `correlated_walk` controls, not just that the shapes exist); **(c)** ~~`trybuild` **compile-fail** tests~~ **→ RETIRED, replaced by an in-crate `!Clone` guard (§4.1 `R0-D1`)**: the tokens are `pub(crate)` with module-private fields, so `trybuild` (external crate) cannot reach them without re-exposing firewall internals; the unrepresentability is type-system-enforced unconditionally, and the `!Clone` half is pinned by an always-on `const _` guard verified to bite. Real-tree verify half stays `#[ignore]`/CT-5-gated. | arc §5; §11.1 Q4 (lines 782–789); FOLLOWUPS (lines 918–924); §4.1 `R0-D1`; §4 typed contracts | Builder dev-deps `shekyl-archival-retention` verify path. No `trybuild` dep (retired). |
@@ -194,8 +194,8 @@ its own mechanism, to settle in Round 1:
   **not** from a principal spend shaped like `bond_floor`. That converts one
   linkable event ("principal spends bond-shaped amount → `P` posts", linkable on
   amount **and** timing) into **two unremarkable events**. Cold-start therefore
-  carries **three** guards — amount-decoupling, SEB spacing, standoff timing — not
-  just the SEB spacing. **Feasibility note (interacts with SP-2.e):** the
+  carries **two** guards — amount-decoupling, and the bond-post delay measured
+  from the funding (BD-Q2) — not timing alone. **Feasibility note (interacts with SP-2.e):** the
   cold-start funding output is a **self-payment** — the wallet owns both the
   principal and `P`, so it **knows** the seeding UTXO without scanning. So
   amount-decoupling is implementable in 2c-2b **even with `P`-scanning deferred**;
@@ -252,10 +252,10 @@ unfundable**; SP-2.e surfaced that the steady-state funding source (`P`-scanning
 **is not built**, bounding what 2c-2b can test to synthetic `P`-outputs. The one
 live contradiction (shared transport, SP-2.b) is structurally fenced by 2c-2b
 shipping **no broadcast path** (§1.4 land-inert). The transport contradiction
-(network layer) and the economic-correlation guard (SEB spacing, SP-2.d) are
-**complements** — `draw_entry_gap` decorrelates *when* `P` acts, the SEB spacing
-decorrelates the *funding link*, the isolated transport (2d) decorrelates *over
-what link*. Net: the genesis-adjacent **firewall logic** (the funding-regime
+(network layer) and the funding-timing guard (the bond-post delay measured from
+the funding, SP-2.d, BD-Q2) are **complements** — the delay decorrelates the
+post from the *funding*, the isolated transport (2d) decorrelates *over what
+link*. Net: the genesis-adjacent **firewall logic** (the funding-regime
 design) must be right in 2c-2b; the **wiring** of both real sources is deferred.
 
 ---
@@ -267,10 +267,11 @@ Per the user's framing and rule 26 §"Part A" / `A3` (threat-model addenda is a
 
 1. **Round 1 (anchor) — the funding-regime design (design-now / wire-later).**
    The headline. Settle the **two-regime split** (SP-2.d): cold-start =
-   principal-funded, ≥ 1-SEB-spaced + standoff-decorrelated; steady-state =
-   `P`-local fund-from-earnings. Make the **design-now / wire-later** boundary
-   explicit: the firewall *logic* (which regime, which guard, the SEB-spacing as
-   the principal↔`P` decorrelation) is genesis-adjacent and must be right **now**;
+   principal-funded, amount-decoupled, and delayed from the funding (BD-Q2);
+   steady-state = `P`-local fund-from-earnings. Make the **design-now /
+   wire-later** boundary explicit: the firewall *logic* (which regime, which
+   guard, the bond-post delay measured from the funding as the principal↔`P`
+   decorrelation) is genesis-adjacent and must be right **now**;
    the two real sources are **deferred** — principal-output access (cold-start)
    and `P`-scanning (steady-state, SP-2.e). Name the KAT posture:
    **synthetic-`P`-outputs over 2c-1's `funded_ledger_and_tree`** vs
@@ -286,10 +287,9 @@ Per the user's framing and rule 26 §"Part A" / `A3` (threat-model addenda is a
    (cross-apply = compile error). `BlockSpan` on `BlockCount`? `SebSpan` home
    (`shekyl-economics` vs `shekyl-units`). The types prevent *confusing* the two;
    the round must also **pin which governs which event** (finding 6) so the
-   funding+timing composition is unambiguous: **`EconomicSpacing` gates the
-   principal-funding-spend → bond-post interval** (the cold-start seam from
-   Round 1); **`NetworkGap` gates the prep-spend / announce / bond-post events**
-   (the standoff `draw_entry_gap(600)` window).
+   funding+timing composition is unambiguous: the bond-post delay, measured
+   from the funding, is the one timing seam on the one chain event, and
+   **`NetworkGap` carries its window** ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q2, BD-Q4).
 3. **Round 3 — RNG seams (output *and* source).** Live degeneracy guard
    (fail-loud) vs gated `certify_draw`; the `GapRng`-over-`OsRng` adapter; when
    each runs (per-draw vs per-session). Negative controls (`double_jitter_trap`,
