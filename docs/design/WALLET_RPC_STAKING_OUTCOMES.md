@@ -753,8 +753,11 @@ contract (`wallet_rpc.yaml` 0.14.0), and this section.
   the end date.
 - **The persisted outcome records whether the record was sent.** Only a
   sent record published its inputs' key images, so only its ending carries
-  WR-Q5's linkage sentence. Most §1.1 posts reach their end date unsent.
-  The field rides this PR's own v13 bump.
+  WR-Q5's linkage sentence. Sent means the record reached `Dispatched`,
+  which is sealed before the first send, or a daemon answered it with a
+  terminal verdict: a send that died in transport still counts, so the
+  sentence errs toward warning. Most §1.1 posts reach their end date
+  unsent. The field rides this PR's own v13 bump.
 - **`acknowledge_staking_outcome` is idempotent.** It answers
   `acknowledged: false` when there is nothing to clear, including on a
   wallet with no active persona, so it adds no error code.

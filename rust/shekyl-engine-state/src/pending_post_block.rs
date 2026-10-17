@@ -222,10 +222,14 @@ pub struct StakingOutcome {
     pub outcome: OutcomeKind,
     /// The tip height when the outcome was written.
     pub at_height: BlockHeight,
-    /// Whether the record's bytes were ever handed to a daemon (its state
-    /// reached `Dispatched`). Only a sent record published its inputs' key
-    /// images, so only its ending carries the linkage sentence (WR-Q5); a
-    /// post that reached its end date before it was due was never seen.
+    /// Whether the record's bytes may have reached a daemon: its state
+    /// reached `Dispatched`, which is sealed *before* the first send, or a
+    /// daemon answered it with a terminal verdict. A first send that died in
+    /// transport still counts, the same "maybe sent" reading as
+    /// `Dispatched` itself, so the linkage sentence errs toward warning.
+    /// Only a sent record published its inputs' key images, so only its
+    /// ending carries that sentence (WR-Q5); a post that reached its end
+    /// date before it was due was never seen.
     pub sent: bool,
 }
 
@@ -1332,10 +1336,13 @@ impl PendingPostBlock {
         let mut take = |kind: RecordKind,
                         persona: PCanonicalId,
                         state: PendingPostState,
+                        terminal: Option<TerminalCause>,
                         outcome: Option<OutcomeKind>| {
             outcome.is_some_and(|outcome| {
                 out.released.push((kind, persona, outcome));
-                sent_flags.push(matches!(state, PendingPostState::Dispatched { .. }));
+                sent_flags.push(
+                    matches!(state, PendingPostState::Dispatched { .. }) || terminal.is_some(),
+                );
                 true
             })
         };
@@ -1349,7 +1356,7 @@ impl PendingPostBlock {
                 live_funding,
                 max_age,
             );
-            !take(RecordKind::Post, r.persona, r.state, o)
+            !take(RecordKind::Post, r.persona, r.state, r.terminal, o)
         });
         self.claims.retain(|r| {
             let o = classify(
@@ -1361,7 +1368,7 @@ impl PendingPostBlock {
                 live_funding,
                 max_age,
             );
-            !take(RecordKind::Claim, r.persona, r.state, o)
+            !take(RecordKind::Claim, r.persona, r.state, r.terminal, o)
         });
         self.drains.retain(|r| {
             let o = classify(
@@ -1373,7 +1380,7 @@ impl PendingPostBlock {
                 live_funding,
                 max_age,
             );
-            !take(RecordKind::Drain, r.persona, r.state, o)
+            !take(RecordKind::Drain, r.persona, r.state, r.terminal, o)
         });
         self.releases.retain(|r| {
             let o = classify(
@@ -1385,7 +1392,7 @@ impl PendingPostBlock {
                 live_funding,
                 max_age,
             );
-            !take(RecordKind::Release, r.persona, r.state, o)
+            !take(RecordKind::Release, r.persona, r.state, r.terminal, o)
         });
         if !out.is_empty() {
             self.generation += 1;
@@ -2604,12 +2611,17 @@ mod tests {
             "the zero-fee claim's gate reopens"
         );
         assert_eq!(block.outcomes().len(), 6);
-        // Only the exit was sealed as dispatched (seal-before-send); the
-        // others were never handed to a daemon, so their endings say nothing
-        // about linkage (WR-Q5).
+        // Sent: the exit (sealed as dispatched, seal-before-send) and the two
+        // records a daemon answered with a verdict. The others were never
+        // handed to a daemon, so their endings say nothing about linkage
+        // (WR-Q5).
         for o in block.outcomes() {
             let byte = o.persona.to_bytes()[0];
-            assert_eq!(o.sent, byte == 0x14, "sent flag for {byte:#x}");
+            assert_eq!(
+                o.sent,
+                matches!(byte, 0x13 | 0x14 | 0x15),
+                "sent flag for {byte:#x}"
+            );
         }
     }
 
