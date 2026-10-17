@@ -39,6 +39,7 @@ mod evict;
 mod pool;
 mod reconcile;
 mod relay;
+mod template;
 mod view;
 
 pub use door::{judge, Judged};
@@ -46,4 +47,5 @@ pub use evict::{Evicted, Limits};
 pub use pool::{Admission, Arrival, Duplicate, Pool, PoolFault};
 pub use reconcile::{Reconciled, Removed};
 pub use relay::shown;
+pub use template::{select, Selected};
 pub use view::{KeyImages, PoolView};

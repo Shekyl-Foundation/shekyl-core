@@ -132,6 +132,15 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
     assert!(!shown(&record));
     assert_eq!(pool.listing().count(), 0, "kept is shown nowhere");
     assert_eq!(pool.peer_sync().count(), 0);
+    let template = x
+        .read_chain(|view, rule_set| {
+            shekyl_mempool::select(&pool, view, rule_set, u64::MAX).expect("template")
+        })
+        .await;
+    assert!(
+        template.transactions.is_empty() && template.refused.is_empty(),
+        "a kept entry is never a candidate: {template:?}"
+    );
     assert!(
         !pool
             .key_images()
@@ -360,5 +369,117 @@ async fn the_door_verifies_exactly_what_the_shared_function_verifies() {
         "the door's verifies are the shared function's"
     );
     assert!(door.0 >= 1 && door.1 >= 1, "the subject exists: {door:?}");
+    scenario.close().await;
+}
+
+fn fee_of(tx: &shekyl_wire::Transaction) -> u64 {
+    match &tx.ct {
+        shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
+        shekyl_wire::transaction::Ct::Null(_) => 0,
+    }
+}
+
+/// Template selection (b6) as a pure function of the pool and the parent:
+/// most fee per weight first, a candidate too heavy for what is left
+/// skipped; each candidate judged again by `tx_against` against the
+/// parent, so an admitted entry whose image the chain spent since it was
+/// admitted is not selected, and CEN-M10 evicts it from the template's
+/// refusals.
+#[tokio::test]
+async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses() {
+    let (mut scenario, mined) = matured("pool-template").await;
+    let first = paying_the_floor(&mut scenario, &mined, 0).await;
+    let second = paying_the_floor(&mut scenario, &mined, 1).await;
+    let dear = {
+        let floor = fee_of(&second);
+        Spender::over(&mined).spend_coinbase(scenario.wallet(), h(2), h(AT), floor * 10)
+    };
+    let (id1, id2, id3) = (
+        first.txid_parts().hash,
+        second.txid_parts().hash,
+        dear.txid_parts().hash,
+    );
+    let path = tmp("pool-template-pool");
+    let mut pool = open_pool(&mut scenario, &path).await;
+    let (ordered, budgeted) = scenario
+        .read_chain(|view, rule_set| {
+            for tx in [first.clone(), second.clone(), dear.clone()] {
+                let txid = tx.txid_parts().hash;
+                assert_eq!(
+                    pool.admit(
+                        tx,
+                        shekyl_mempool::Arrival::Relayed,
+                        UnixSeconds::from_raw(1),
+                        view,
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("no fault"),
+                    Admission::Admitted
+                );
+                assert!(pool.fluffed(&txid).expect("publish"));
+            }
+            let all = shekyl_mempool::select(&pool, view, rule_set, u64::MAX).expect("template");
+            let weight = pool.record(&id3).expect("held").weight;
+            let one = shekyl_mempool::select(&pool, view, rule_set, weight).expect("template");
+            (all, one)
+        })
+        .await;
+    assert_eq!(
+        ordered.transactions[0].0, id3,
+        "the dearest per weight first"
+    );
+    assert_eq!(ordered.transactions.len(), 3);
+    assert_eq!(
+        budgeted
+            .transactions
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>(),
+        vec![id3],
+        "the budget holds only the first"
+    );
+
+    // Another body over `first`'s image connects; the pool is not told.
+    let twin = Spender::over(&mined).spend_coinbase(
+        scenario.wallet(),
+        h(0),
+        h(AT),
+        fee_of(&first) + 1_000,
+    );
+    let _connected = scenario
+        .mine_listing(vec![twin])
+        .await
+        .unwrap_or_else(|o| panic!("the twin connects: {o}"));
+    let template = scenario
+        .read_chain(|view, rule_set| {
+            shekyl_mempool::select(&pool, view, rule_set, u64::MAX).expect("template")
+        })
+        .await;
+    assert_eq!(
+        template
+            .transactions
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>(),
+        vec![id3, id2],
+        "the spent one is not selected"
+    );
+    assert_eq!(template.refused.len(), 1);
+    assert_eq!(template.refused[0].0, id1);
+    assert_eq!(
+        template.refused[0].1.rule,
+        CenRow::I7,
+        "judged against the parent"
+    );
+    let refused: Vec<_> = template.refused.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        pool.evict(UnixSeconds::from_raw(2), &Limits::GENESIS, &refused)
+            .expect("evict"),
+        vec![(id1, Evicted::Refused)]
+    );
+    assert!(pool.record(&id2).is_some() && pool.record(&id3).is_some());
+    drop(pool);
+    drop(std::fs::remove_file(&path));
     scenario.close().await;
 }

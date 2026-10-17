@@ -358,8 +358,9 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
 }
 
 /// D++ acceptance criterion 2: a transaction the relay has not fluffed is
-/// in no listing the node shows — the pool listing, peer pool sync — and
-/// is in both once the relay's fluff event sets the bit. The relay's own
+/// in nothing the node shows — the pool listing, peer pool sync, the block
+/// template — and is in all three once the relay's fluff event sets the
+/// bit. The relay's own
 /// view of what it still holds back (`unpublished`) is the complement.
 #[tokio::test]
 async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
@@ -383,9 +384,12 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 .expect("no fault");
             assert_eq!(admitted, Admission::Admitted, "fixture: the spend is held");
             let seen = |pool: &Pool| {
+                let template = shekyl_mempool::select(pool, view, rule_set, u64::MAX)
+                    .expect("the template reads the chain");
                 (
                     pool.listing().any(|(id, _)| id == txid),
                     pool.peer_sync().any(|(id, _)| id == txid),
+                    template.transactions.iter().any(|(id, _)| *id == txid),
                     pool.unpublished().any(|(id, _)| id == txid),
                 )
             };
@@ -398,11 +402,15 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
             (before, after, seen(&pool))
         })
         .await;
-    assert_eq!(before, (false, false, true), "unfluffed: shown nowhere");
+    assert_eq!(
+        before,
+        (false, false, false, true),
+        "unfluffed: shown nowhere"
+    );
     assert_eq!(
         after,
-        (true, true, false),
-        "fluffed: in the listing and peer sync"
+        (true, true, true, false),
+        "fluffed: in the listing, peer sync and the template"
     );
     assert_eq!(reopened, after, "the public bit survives a restart");
     drop(std::fs::remove_file(&path));
