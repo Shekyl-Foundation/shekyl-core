@@ -41,6 +41,8 @@ shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 tempfile = "3"
 # The idle-wake warning is asserted from the log line.
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
+# A test dial carries a real gap sender, a tokio oneshot, as the connectors do.
+tokio = { version = "1", default-features = false, features = ["sync"] }
 
 [lints]
 workspace = true

@@ -32,6 +32,10 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.h — the `sanitize_peerlist` declaration is deleted with its definition; `on_outbound_handshake` is declared (step 2). §3.2: `dial_result`, `connect_func` and `public_connect` are deleted; `m_connect` becomes the flag `m_outbound`. §3.1 of the consolidated brief's revision 2 (the same day): the `send_peerlist_sz` assignment is deleted with the field, which nothing read. Revision 3 §2.6: the `extern` declaration of `arg_p2p_disclose_early` (deleted by the daemon-config slice). The same day: the `extern` of `arg_p2p_seed_node` and the `m_seed_nodes` member with its two initialisers are deleted.
 
+**UNFREEZE (Rick, 2026-10-16):** src/p2p/net_node.inl — `on_outbound_handshake` returns `void`: its `return false` path, the confirm dial's `keep == 0` return, the `shekyl_zone_session_established` call and the closing `return true` are deleted, and `process_payload_sync_data` is called for its effect. Deletions only; the two edited lines (the signature and the call) are the cut, not new code.
+
+**UNFREEZE (Rick, 2026-10-16):** src/p2p/net_node.h — the `on_outbound_handshake` declaration returns `void`, with its definition.
+
 **UNFREEZE (Rick, 2026-10-14):** src/p2p/net_node.inl — the line that reads `--offline` records it through `shekyl_p2p_record_offline`, one Rust call in place of the read, so an offline daemon reports offline from its configuration and never infers it from the dialer's absence; no line is added.
 
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
@@ -405,11 +409,15 @@ the peer does not echo it, so there is nothing to match.
 `Keep` adopts, which posts `Post::Established`. If that poster already
 closed the session, the dial is `DialFailed` and no kept row is
 recorded. Otherwise the owner, in one lists-lock section, records
-`SessionAccepted` and the kept row, then posts one handshake result.
-That post is a notification. Nothing waits for a reply. The strand
-still runs `on_outbound_handshake`: the session-established flag, the
-notifier and the support flags. `process_payload_sync_data` returns
-true on every path, so that call judges nothing (Rick, 2026-10-16).
+`SessionAccepted` and the kept row, marks the session established on
+the hub (`Hub::session_established`, which fires the row's gap sender),
+then posts one handshake result. That post is a notification. Nothing
+waits for a reply. The strand still runs `on_outbound_handshake`, which
+returns nothing and keeps three things, each owned by a later slice:
+`process_payload_sync_data` (chain sync), the notifier's
+`on_session_established` (RD), and the support-flags write into the
+connection context (slice 4 and chain sync). `process_payload_sync_data`
+returns true on every path, so it judges nothing (Rick, 2026-10-16).
 
 `Confirm` does not adopt and does not post. The owner records
 `Confirmed` and closes the unadopted channel with
@@ -1037,7 +1045,11 @@ keep the callers named below.
 | The timed-sync self-insertion (handshake-address ruling, 2026-10-09) | `net_node.inl:2717` to `:2735`: `outgoing_to_same_zone`, the `max_peerlist_size` subtraction, and the `local_peerlist_new.insert` of `zone.m_our_address` | `rg -n -e outgoing_to_same_zone src/p2p` returns nothing. Before deletion it hits `:2717`, `:2718` and `:2730` |
 | `peerlist_manager::is_host_allowed` and `m_allow_local_ip` (address-validity ruling, 2026-10-11) | `net_peerlist.h:273` and `:201`; they go with the C++ peerlist (slice 1 §11.4). The flag stays: `arg_p2p_allow_local_ip` (`net_node.cpp:123`) is read at `net_node.inl:486` through `shekyl_peerlist_allow_local_ip`, which makes it the Rust peer lists' constructor input (2026-10-13); `peerlist_manager::init` (`:1078`) stops reading it when the C++ peerlist goes. *Records-was: `sanitize_peerlist` was named here as not in this table, staying until slice 4; it has its own row below (2026-10-13).* | `rg -n -e is_host_allowed -e m_allow_local_ip src/p2p` returns nothing. `rg -n -e allow_local_ip src/p2p` still hits the argument and its read; zero hits fails, because the override was kept |
 | **C++ this PR adds (Rick, 2026-10-13, step 2): the strand's handshake-result branch** | `zone_server::on_strand`, the `SHEKYL_SEAM_HANDSHAKE` arm | Deleted by the chain-sync slice, or slice 4, whichever moves the sync payload's acceptance to Rust. Until then `rg -n -e SHEKYL_SEAM_HANDSHAKE src/p2p/zone_server.h` hits that arm; zero hits before that slice fails |
-| **C++ this PR adds: `node_server::on_outbound_handshake`** | `net_node.inl`, declared `net_node.h`; the lines kept from `do_handshake_with_peer`'s invoke callback | The same slice as the branch above. `rg -n -e on_outbound_handshake src/p2p` hits the declaration and the definition until then |
+| **C++ this PR adds: `node_server::on_outbound_handshake`** | `net_node.inl`, declared `net_node.h`; the lines kept from `do_handshake_with_peer`'s invoke callback. What is left (Rick, 2026-10-16), each with its owner: `process_payload_sync_data`, the chain-sync slice; the notifier's `on_session_established`, RD; the support-flags write, slice 4 and chain sync | The function goes when the last of those has moved. `rg -n -e on_outbound_handshake src/p2p` hits the declaration and the definition until then |
+| **Deleted 2026-10-16 (Rick): the confirm dial's return in `on_outbound_handshake`** | `if (result.keep == 0) return true;`, `net_node.inl:1469` at `dev` `d2ac8b45d`. A confirm dial is never posted since `dd53b3336` | `rg -n -e 'result\.keep' src` returns nothing |
+| **Deleted 2026-10-16 (Rick): the `keep` field of the handshake result** | `shekyl_seam_handshake_result::keep` and its pad (`src/shekyl/shekyl_ffi.h`); `ShekylSeamHandshakeResult::keep` (`rust/shekyl-ffi/src/seam_ffi.rs`); `Post::HandshakeResult::keep` (`rust/shekyl-seam/src/post.rs`) and the parameter of `Hub::post_handshake_result`. `support_flags` moves to offset 0 and an explicit four-byte pad follows it; the struct stays 64 bytes | `rg -n -F 'std::uint8_t keep;' src/shekyl/shekyl_ffi.h`, `rg -n -e 'pub keep:' rust/shekyl-ffi/src/seam_ffi.rs` and `rg -n -e 'keep: bool' rust/shekyl-seam/src` return nothing |
+| **Deleted 2026-10-16 (Rick): `on_outbound_handshake`'s verdict** | its `return false` path and `bool` return (`net_node.inl`, `net_node.h`); the `bool` of `levin_commands_handler`'s virtual (`contrib/epee/include/net/levin_base.h`); the `(void)` cast at its call (`src/p2p/zone_server.h`) | `rg -n -e 'bool on_outbound_handshake' src contrib/epee` returns nothing; `rg -n -F '(void)m_config->commands_handler()->on_outbound_handshake' src/p2p/zone_server.h` returns nothing |
+| **Deleted 2026-10-16 (Rick): the outbound `shekyl_zone_session_established` call** | `net_node.inl:1471` at `dev` `d2ac8b45d`, in `on_outbound_handshake`. The dialer calls `Hub::session_established` when it records `SessionAccepted`, before the notification. The inbound caller (`:1597` there, in `handle_handshake`) stays for slice 4 | `rg -n -e shekyl_zone_session_established src/p2p/net_node.inl` hits one line, the inbound caller |
 | **C++ this PR adds: the `levin_commands_handler` virtual and `commands_handler()`** | `contrib/epee/include/net/levin_base.h`, `levin_protocol_handler_async.h` | The same slice. `rg -n -e on_outbound_handshake -e commands_handler contrib/epee` hits both until then |
 | **C++ this PR adds: `seam_link::context_mut()`** | `src/p2p/seam_endpoint.h` | The same slice |
 | **C++ this PR adds: the `disclose` adapter** | `zone_server.h` | slice 4, with the two senders |

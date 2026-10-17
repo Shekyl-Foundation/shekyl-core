@@ -530,7 +530,7 @@ private:
       if (bytes.size() == sizeof(result) && m_config->commands_handler())
       {
         std::memcpy(&result, bytes.data(), sizeof(result));
-        (void)m_config->commands_handler()->on_outbound_handshake(link->context_mut(), result);
+        m_config->commands_handler()->on_outbound_handshake(link->context_mut(), result);
       }
     }
     else if (kind == SHEKYL_SEAM_CLOSED && link)

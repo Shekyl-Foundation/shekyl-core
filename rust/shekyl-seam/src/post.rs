@@ -44,10 +44,6 @@ pub enum Post {
         id: SocketId,
         /// The connector this id was established on, as on `Deliver`.
         connector: ConnectorId,
-        /// What the dial was for. A kept dial sets the session-established
-        /// flag and flips the relay. Only a kept dial is posted, so this
-        /// is set.
-        keep: bool,
         /// The peer's support flags, zero included.
         support_flags: u32,
         /// The peer's sync payload.

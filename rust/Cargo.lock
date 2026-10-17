@@ -4274,6 +4274,7 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "tempfile",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

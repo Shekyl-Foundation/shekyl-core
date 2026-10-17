@@ -1457,21 +1457,16 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::on_outbound_handshake(p2p_connection_context& context, const shekyl_seam_handshake_result& result)
+  void node_server<t_payload_net_handler>::on_outbound_handshake(p2p_connection_context& context, const shekyl_seam_handshake_result& result)
   {
     cryptonote::CORE_SYNC_DATA payload{};
     payload.current_height = result.current_height;
     payload.cumulative_difficulty = result.cumulative_difficulty;
     payload.cumulative_difficulty_top64 = result.cumulative_difficulty_top64;
     std::memcpy(payload.top_id.data, result.top_id, sizeof(payload.top_id.data));
-    if(!m_payload_handler.process_payload_sync_data(payload, context, true))
-      return false;
-    if (result.keep == 0)
-      return true;
-    shekyl_zone_session_established(shekyl::seam_socket_id(context.m_connection_id));
+    m_payload_handler.process_payload_sync_data(payload, context, true);
     m_notifier.on_session_established(context.m_connection_id, context.m_is_income, context.m_connector);
     context.support_flags = result.support_flags;
-    return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>

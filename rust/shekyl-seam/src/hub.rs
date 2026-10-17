@@ -269,22 +269,21 @@ impl Hub {
     }
 
     /// Post the outbound handshake's result for `id`. The caller has
-    /// adopted the channel and recorded the kept session. This notifies
-    /// the strand. Nothing waits on it. A confirm dial does not post.
+    /// adopted the channel, recorded the kept session and marked it
+    /// established. This notifies the strand. Nothing waits on it. Only a
+    /// kept dial is posted: a confirm dial finishes in the dialer.
     /// It is the first post after `established`, ahead of any frame the
     /// pump will deliver.
     pub fn post_handshake_result(
         &self,
         id: SocketId,
         connector: ConnectorId,
-        keep: bool,
         support_flags: u32,
         sync: SyncPayload,
     ) {
         (self.post)(Post::HandshakeResult {
             id,
             connector,
-            keep,
             support_flags,
             sync,
         });

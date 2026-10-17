@@ -32,9 +32,12 @@ use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{
     CloseCause, CloseKind, ConnectorId, Direction, NetworkAddress, RefusedSet, Tick,
 };
-use shekyl_seam::{Hub, Post, Route, RoutePublish, SocketId, SyncPayload};
+use shekyl_seam::{
+    Channel, Dial, Endpoint, Hub, Loopback, Post, Route, RoutePublish, SocketId, SyncPayload,
+};
 use shekyl_timing_engine::ManualClock;
 use shekyl_transport_layer::Sockets;
+use tokio::sync::oneshot;
 
 const NETWORK: [u8; 16] = [7; 16];
 const SEND_CAP: usize = 64 * 1024;
@@ -217,7 +220,6 @@ fn a_well_formed_response_is_adopted_and_its_result_is_posted_before_any_frame()
     assert_eq!(kinds(&posts), vec!["established", "handshake", "deliver"]);
     let Some(Post::HandshakeResult {
         id: posted,
-        keep,
         support_flags,
         sync,
         ..
@@ -226,18 +228,16 @@ fn a_well_formed_response_is_adopted_and_its_result_is_posted_before_any_frame()
         panic!("the second post is the handshake result");
     };
     assert_eq!(*posted, id);
-    assert!(keep);
     assert_eq!(*support_flags, SupportFlags::ADVERTISED.bits());
     assert_eq!(sync.current_height, 20);
     assert_eq!(sync.top_id, [2; 32]);
     drop(posts);
 
-    // The seam's established flag is the strand's. This poster arms the
-    // handler and does not run on_outbound_handshake, so the flag stays
-    // clear. The dialer has already accepted.
+    // The dialer marks a kept session established before it posts the
+    // notification (Rick, 2026-10-16); no strand turn is needed for it.
     let row = rig.hub.board().get(id).copied().expect("adopted row");
     assert_eq!(row.direction(), Direction::Outbound);
-    assert!(!row.established());
+    assert!(row.established());
 
     // The peer's sample entered gray. The drawn address is white: the
     // dialer recorded SessionAccepted before it returned.
@@ -430,6 +430,104 @@ fn a_dial_that_cannot_open_is_dial_failed_with_the_cause() {
     assert!(
         !dialer.shared().lists.is_gray(&peer(1)),
         "the draw was dropped"
+    );
+}
+
+/// The loopback dial with a real gap: each channel carries a gap sender, and
+/// its receiver is kept so a test can see whether the sender fired.
+struct GapDial {
+    inner: Loopback,
+    receivers: Mutex<Vec<(SocketId, oneshot::Receiver<()>)>>,
+}
+
+impl Dial for GapDial {
+    fn connect(
+        &self,
+        endpoint: &Endpoint,
+        ceiling: InboundCeiling,
+        now: Tick,
+    ) -> Result<Channel, CloseCause> {
+        let mut channel = self.inner.connect(endpoint, ceiling, now)?;
+        let (sender, receiver) = oneshot::channel();
+        channel.gap = Some(sender);
+        self.receivers
+            .lock()
+            .expect("receivers")
+            .push((channel.open.id(), receiver));
+        Ok(channel)
+    }
+
+    fn inject(&self, id: SocketId, frame: Vec<u8>) -> bool {
+        self.inner.inject(id, frame)
+    }
+
+    fn reader_stopped(&self, id: SocketId) {
+        self.inner.reader_stopped(id);
+    }
+
+    fn retired(&self, id: SocketId) {
+        self.inner.retired(id);
+    }
+
+    fn track_pump(&self, id: SocketId, pump: thread::JoinHandle<()>) {
+        self.inner.track_pump(id, pump);
+    }
+}
+
+/// **A kept dial is established before any strand turn** (Rick,
+/// 2026-10-16). The dialer marks the session established on the hub when it
+/// records `SessionAccepted`, before it posts the notification: when that
+/// post reaches the poster, ahead of any strand turn, the row is already
+/// established and its gap sender has fired. The C++ strand no longer
+/// does either.
+#[test]
+fn a_kept_dial_is_established_and_its_gap_fired_before_any_strand_turn() {
+    let seen: Arc<Mutex<Option<(bool, bool)>>> = Arc::new(Mutex::new(None));
+    let seen_post = Arc::clone(&seen);
+    let gaps: Arc<GapDial> = Arc::new(GapDial {
+        inner: Loopback::new(Sockets::new(), SEND_CAP),
+        receivers: Mutex::new(Vec::new()),
+    });
+    let gaps_post = Arc::clone(&gaps);
+    let hubs: Arc<Mutex<Option<Hub>>> = Arc::new(Mutex::new(None));
+    let hubs_post = Arc::clone(&hubs);
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let posts_in = Arc::clone(&posts);
+    let hub = Hub::new(
+        Sockets::new(),
+        InboundCeiling::Bounded(8),
+        Arc::new(move |post| {
+            // The notification is the first strand work for the session;
+            // what the hub shows here is what the strand would see.
+            if let Post::HandshakeResult { id, .. } = &post {
+                let hub = hubs_post.lock().expect("hub").clone().expect("hub set");
+                let established = hub.board().get(*id).is_some_and(|row| row.established());
+                let fired = gaps_post
+                    .receivers
+                    .lock()
+                    .expect("receivers")
+                    .iter_mut()
+                    .find(|(gap_id, _)| gap_id == id)
+                    .is_some_and(|(_, receiver)| receiver.try_recv().is_ok());
+                *seen_post.lock().expect("seen") = Some((established, fired));
+            }
+            posts_in.lock().expect("posts").push_back(post);
+        }),
+        Arc::new(ManualClock::new(Tick::new(1))),
+    );
+    *hubs.lock().expect("hub") = Some(hub.clone());
+    hub.install_dial(gaps);
+    let dialer = dialer_for(&hub);
+    let mut rng = SplitMix64::new(12);
+    dialer
+        .admit_operator(&peer(1), Tick::new(1), &mut rng)
+        .expect("admitted");
+    let rig = Rig { hub, posts, dialer };
+    dial_with(&rig, &peer(1), DialAim::Keep, vec![reply(NETWORK, vec![])]).expect("kept");
+    assert_eq!(
+        *seen.lock().expect("seen"),
+        Some((true, true)),
+        "at the notification the row is established and its gap sender has fired"
     );
 }
 

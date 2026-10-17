@@ -515,10 +515,12 @@ impl Dialer {
         Self::record(&mut shared, connector, outcome, now, rng);
     }
 
-    /// Record `SessionAccepted` and the kept row in one lock section, then
-    /// notify the strand and start the pump. The poster of that
-    /// notification already sees the kept session and an empty in-flight
-    /// count. `Post::Established` was posted by `adopt`, before this runs.
+    /// Record `SessionAccepted` and the kept row in one lock section, mark
+    /// the session established on the hub, then notify the strand and start
+    /// the pump. The poster of that notification already sees the kept
+    /// session, an empty in-flight count, and an established row whose gap
+    /// sender has fired. `Post::Established` was posted by `adopt`, before
+    /// this runs.
     fn accept_and_notify<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
@@ -534,8 +536,9 @@ impl Dialer {
             shared.kept.insert(kept.id.get(), address.clone());
         }
         tracing::debug!("{connector:?} dial {address:?} kept as {:?}", kept.id);
+        self.hub.session_established(kept.id);
         self.hub
-            .post_handshake_result(kept.id, connector, true, kept.support_flags, kept.sync);
+            .post_handshake_result(kept.id, connector, kept.support_flags, kept.sync);
         let id = kept.id;
         let hub = self.hub.clone();
         let session = kept.session;
