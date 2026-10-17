@@ -168,55 +168,52 @@ impl FeeTiers {
     }
 }
 
-/// Request of `get_fee_estimate`.
+/// Request of `get_fee_estimate`: no parameters.
+///
+/// The ladder is a function of chain state alone (FL-R20); the lookahead
+/// parameter, which moved no rung, is deleted rather than ignored (FL-R26,
+/// 3.57), so a request still naming a member is refused as a wrong
+/// parameter.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct GetFeeEstimateRequest {
-    /// Blocks of grace to assume when estimating. The daemon refuses a value
-    /// above the reward window rather than letting the estimator throw.
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
-    pub grace_blocks: u64,
-}
-
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde's skip_serializing_if hands the field by reference"
-)]
-const fn is_zero_u64(v: &u64) -> bool {
-    *v == 0
-}
+pub struct GetFeeEstimateRequest {}
 
 /// Result of `get_fee_estimate`.
 ///
 /// **The scalar `fee` is gone.** It was `fees[0]` under a second name, and it
 /// existed only because the unreachable non-scaling arm had nothing else to
 /// return. Callers name the tier they mean via [`FeeTiers::get`].
+///
+/// **`quantization_mask` is gone (3.57).** The lattice a fee is rounded up
+/// to is `shekyl_economics::FEE_QUANTIZATION_MASK`, one constant the wallet
+/// and the daemon's admission share; a daemon serving its own would have
+/// put its wallets' fees on a lattice of its choosing.
 // Not `Copy`: `RpcStatus` owns a `String`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GetFeeEstimateResponse {
     pub status: RpcStatus,
     pub fees: FeeTiers,
-    /// `OPT(1)`.
-    #[serde(default = "one", skip_serializing_if = "is_one")]
-    pub quantization_mask: u64,
-}
-
-const fn one() -> u64 {
-    1
-}
-
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde's skip_serializing_if hands the field by reference"
-)]
-const fn is_one(v: &u64) -> bool {
-    *v == 1
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetFeeEstimateResponse};
+    use super::{
+        FeeTier, FeeTiers, GetBlockHeaderByHashRequest, GetFeeEstimateRequest,
+        GetFeeEstimateResponse,
+    };
+
+    /// The two retired members are refused, not ignored: a reply carrying
+    /// `quantization_mask`, a request carrying `grace_blocks` (3.57).
+    #[test]
+    fn the_retired_fee_members_do_not_parse() {
+        let with_mask = r#"{"status":"OK","fees":[1,2,4],"quantization_mask":8}"#;
+        assert!(serde_json::from_str::<GetFeeEstimateResponse>(with_mask).is_err());
+        let with_grace = r#"{"grace_blocks":5}"#;
+        assert!(serde_json::from_str::<GetFeeEstimateRequest>(with_grace).is_err());
+        let empty: GetFeeEstimateRequest = serde_json::from_str("{}").expect("no parameters");
+        assert_eq!(empty, GetFeeEstimateRequest::default());
+    }
 
     /// The arity is enforced by the type, not trusted. A reply carrying any
     /// count but three is a parse error, including the four-slot shape that
@@ -229,7 +226,6 @@ mod tests {
         assert_eq!(parsed.fees.get(FeeTier::Low), 1);
         assert_eq!(parsed.fees.get(FeeTier::Normal), 2);
         assert_eq!(parsed.fees.get(FeeTier::High), 4);
-        assert_eq!(parsed.quantization_mask, 1, "OPT(1) when absent");
 
         for wrong in [
             r#"{"status":"OK","fees":[1,2]}"#,

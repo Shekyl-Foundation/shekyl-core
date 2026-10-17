@@ -373,25 +373,27 @@ uint64_t shekyl_long_term_block_weight(
 /// Base block subsidy before weight penalty and release multiplier (0h KAT export).
 uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
-// Admit iff fee >= mask_round_up(weight * min(floors)) - slack_bp.
+// Admit iff fee >= weight * min(floors) rounded up to the fee lattice
+// (shekyl_economics::FEE_QUANTIZATION_MASK), less the admission slack
+// (RELAY_ADMISSION_SLACK_BP, 0); both are the predicate's own constants.
 // floors is at most shekyl_relay_floor_lookback()+1 values; only the
 // minimum is read. A short window is stricter; empty refuses.
 // Returns 1 admit, 0 refuse, -1 bad pointer/length.
 int32_t shekyl_relay_floor_admits(
     uint64_t fee,
     uint64_t weight,
-    uint64_t mask,
     const uint64_t* floors,
-    size_t floors_len,
-    uint32_t slack_bp);
+    size_t floors_len);
 
 // F = R*C*w_ref/M^2, floored at 1. Same function as the ladder's economy
-// rung. The penalty-free zone is EconomicParams::full_reward_zone, not an
-// argument. Returns 0 written, -1 null out_floor, -2 out of u128 domain.
+// rung. w_ref is shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT, not an
+// argument — the same move the lattice and the slack made on
+// shekyl_relay_floor_admits. The penalty-free zone is
+// EconomicParams::full_reward_zone, not an argument.
+// Returns 0 written, -1 null out_floor, -2 out of u128 domain.
 int32_t shekyl_relay_fee_floor(
     uint64_t base_reward,
     uint64_t median,
-    uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t* out_floor);
 
@@ -404,17 +406,15 @@ uint64_t shekyl_fee_correction(
 
 // G — lookback depth. Rust is the owner.
 uint64_t shekyl_relay_floor_lookback(void);
-// Admission slack, basis points. Rust is the owner; pinned at 0.
-uint32_t shekyl_relay_admission_slack_bp(void);
 
 // Three-slot ladder [economy, standard, priority]. Economy is the relay
-// floor at the same operands. The penalty-free zone is
-// EconomicParams::full_reward_zone, not an argument.
-// Returns 0 written, -1 null, -2 out of domain.
+// floor at the same operands. w_ref is
+// shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT, not an argument.
+// The penalty-free zone is EconomicParams::full_reward_zone, not an
+// argument. Returns 0 written, -1 null, -2 out of domain.
 int32_t shekyl_corrected_fee_ladder(
     uint64_t base_reward,
     uint64_t median,
-    uint64_t ref_tx_weight,
     uint64_t c_scaled,
     uint64_t *out_fees);
 
@@ -3023,7 +3023,8 @@ int32_t shekyl_difficulty_lwma1_next(
 /// The fork-choice comparison (C2-R1b-Q1a): strictly greater cumulative
 /// difficulty switches, equality keeps the incumbent, an operator-
 /// checkpoint match forces the switch. Writes
-/// `SHEKYL_FORK_CHOICE_KEEP_CURRENT` or `SHEKYL_FORK_CHOICE_SWITCH` to
+/// `SHEKYL_FORK_CHOICE_KEEP_CURRENT`, `SHEKYL_FORK_CHOICE_SWITCH` or
+/// `SHEKYL_FORK_CHOICE_FORCED_SWITCH` to
 /// `*out_verdict`; returns 0 on success or
 /// `SHEKYL_DIFFICULTY_ERR_NULL_PTR`.
 int32_t shekyl_difficulty_fork_choice(
@@ -4237,6 +4238,9 @@ struct ShekylOwnedBuffer {
 #define SHEKYL_FORK_CHOICE_KEEP_CURRENT      INT32_C(0)
 /// `shekyl_difficulty_fork_choice`: reorganize onto the alternative.
 #define SHEKYL_FORK_CHOICE_SWITCH            INT32_C(1)
+/// `shekyl_difficulty_fork_choice`: reorganize onto the alternative because
+/// a checkpoint names it; the demoted blocks are discarded (CEN-K7).
+#define SHEKYL_FORK_CHOICE_FORCED_SWITCH     INT32_C(2)
 
 /// `shekyl_pow_randomx_v2_hash` wrote `*out_hash`, or
 /// `shekyl_pow_randomx_v2_set_canonical` pinned the seedhash.

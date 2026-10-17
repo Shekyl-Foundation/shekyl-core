@@ -90,7 +90,6 @@ fn facts_from_ffi(
         key_image_conflicts,
         reference,
         fee_per_byte: pod.fee_per_byte,
-        fee_quantization_mask: pod.fee_quantization_mask,
         weight_limit: pod.weight_limit,
         chain_height: ChainCount::from_raw(pod.chain_height),
         // bond_record_exists is valid iff the BP3 probe ran (§8.7.1) —
@@ -608,7 +607,6 @@ mod tests {
             ref_height: 150,
             root: [0xAA; 32],
             fee_per_byte: 7,
-            fee_quantization_mask: 10,
             weight_limit: 149_400,
             chain_height: 200,
             in_chain_height: 0,

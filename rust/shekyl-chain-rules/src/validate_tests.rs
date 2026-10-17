@@ -8,8 +8,7 @@ use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, Retry, Stale};
 use crate::harness::fixture::{candidate, candidate_on, coinbase, spendable_chain};
 use crate::harness::{
-    defined, expected_target, formed, formed_on, formed_under, judged, Faulted, MockChain,
-    MockSubstrate,
+    expected_target, formed, formed_on, formed_under, judged, Faulted, MockChain, MockSubstrate,
 };
 use crate::rule_set::RuleSetId;
 use crate::substrate::Substrate;
@@ -324,19 +323,27 @@ fn tx_entry_points_record_the_landed_rows() {
     );
     // `tx_against` at the miner slot: the class derivation records H5/H6
     // here too (it derives its own context, so it evaluated them), and the
-    // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I13 and I15
-    // (the regular-spend reference rows and the proof over the context
-    // they yield), I17 and I18 (the signing preimage and
-    // the signatures over it, of which a coinbase has none), J4–J6 (the
-    // bond state behind a serve-credit vin, of which a coinbase has none),
-    // J13–J16 and J18 (the bond post against its record and the join's
-    // admission, of which a coinbase has none), J27 (the post's funding
-    // half, likewise), J21, J23, J25 and J26 (the emission's reference
-    // context, gathers, verify and fee-input proof, of which a coinbase
-    // has none) — are recorded vacuous on a coinbase.
+    // view-bound rows landed so far — I7 (`NonCoinbase`), I10–I13 (the
+    // regular-spend reference rows), J4–J6 (the bond state behind a
+    // serve-credit vin, of which a coinbase has none), J13–J16 and J18
+    // (the bond post against its record and the join's admission, of
+    // which a coinbase has none), J27 (the post's funding half's reads,
+    // likewise), J21, J23 and J25 (the emission's reference context,
+    // gathers and verify, of which a coinbase has none) — are recorded
+    // vacuous on a coinbase. The verify rows I15, J26 and J27's verify
+    // half, and the signature sequence I17/I18, are `form`'s since
+    // 2026-10-16 (`CHAIN_RULES_CRATE.md` §4.6): `tx_against` records none
+    // of them.
     MockChain::default().with_view(|view| {
-        let against = defined(tx_against(&tx, TxSlot::Miner, &view, &RuleSet::GENESIS))
-            .expect("the coinbase reads nothing from the view");
+        let against = judged(tx_against(
+            &tx,
+            TxSlot::Miner,
+            &view,
+            &RuleSet::GENESIS,
+            None,
+            FormAttempt::FIRST,
+        ))
+        .expect("the coinbase reads nothing from the view");
         assert_eq!(
             against.iter().collect::<Vec<_>>(),
             vec![
@@ -347,9 +354,6 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::I11,
                 CenRow::I12,
                 CenRow::I13,
-                CenRow::I15,
-                CenRow::I17,
-                CenRow::I18,
                 CenRow::J4,
                 CenRow::J5,
                 CenRow::J6,
@@ -361,8 +365,7 @@ fn tx_entry_points_record_the_landed_rows() {
                 CenRow::J27,
                 CenRow::J21,
                 CenRow::J23,
-                CenRow::J25,
-                CenRow::J26
+                CenRow::J25
             ]
         );
     });
@@ -383,6 +386,7 @@ fn form_carries_the_clock_the_seed_the_target_and_the_attempt_it_was_given() {
         &substrate,
         seed,
         expected_target(&MockChain::default(), &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     )
     .expect("the mock substrate answers")
@@ -402,9 +406,12 @@ fn form_carries_the_clock_the_seed_the_target_and_the_attempt_it_was_given() {
     // identity) and D2 (the longhash), D1 (the proof against the claimed
     // target), the coinbase's stateless shape (F1, F3, F7, F9, F10), the
     // body's pairing (G2, slice 7), every row `tx_form` records at the
-    // miner slot, and CEN-H19's batch (vacuous: nothing is listed). The
-    // transaction stage moved here from `validate` (#1081's review, item 1),
-    // so `tx_form`'s own coverage is the reference rather than a list.
+    // miner slot, the signature sequence (I17, I18) and the verify rows
+    // (I15, J26, J27) — all five vacuous on a coinbase, and `form`'s
+    // since 2026-10-16 (`CHAIN_RULES_CRATE.md` §4.6) — and CEN-H19's
+    // batch (vacuous: nothing is listed). The transaction stage moved here
+    // from `validate` (#1081's review, item 1), so `tx_form`'s own
+    // coverage is the reference rather than a list.
     let mut expected = crate::coverage::RuleCoverage::EMPTY;
     for row in [
         CenRow::B1,
@@ -419,6 +426,11 @@ fn form_carries_the_clock_the_seed_the_target_and_the_attempt_it_was_given() {
         CenRow::F10,
         CenRow::G2,
         CenRow::H19,
+        CenRow::I15,
+        CenRow::I17,
+        CenRow::I18,
+        CenRow::J26,
+        CenRow::J27,
     ] {
         expected.insert(row);
     }
@@ -458,6 +470,7 @@ fn a_substrate_that_cannot_read_the_clock_is_a_fault_not_a_verdict() {
         &NoClock,
         shekyl_types::BlockHash::NULL,
         expected_target(&MockChain::default(), &RuleSet::GENESIS),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     );
     assert!(matches!(result, Err(Faulted)));
@@ -475,6 +488,7 @@ fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
         &MockSubstrate::default(),
         shekyl_types::BlockHash::NULL,
         expected_target(&MockChain::default(), &admits_two),
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -517,6 +531,7 @@ fn a_target_claim_the_view_does_not_derive_is_stale_with_a_bounded_retry() {
         &MockSubstrate::default(),
         crate::harness::expected_seed(&chain),
         wrong,
+        &crate::block::ReferenceClaims::EMPTY,
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -550,6 +565,7 @@ fn the_last_attempt_is_terminal() {
         &MockSubstrate::default(),
         shekyl_types::BlockHash::NULL,
         expected_target(&MockChain::default(), &admits_two),
+        &crate::block::ReferenceClaims::EMPTY,
         last,
     )
     .expect("no fault")
@@ -579,6 +595,7 @@ fn a_fakechain_rule_set_mints_at_genesis_with_d6_in_coverage() {
             &seven,
             shekyl_types::BlockHash::NULL,
             expected_target(&MockChain::default(), &seven),
+            &crate::block::ReferenceClaims::EMPTY,
         );
         let valid = judged(validate(formed, &view, &seven, &Trust::UNANCHORED))
             .expect("fakechain genesis mints");
@@ -604,6 +621,7 @@ fn a_fakechain_set_is_stale_against_genesis_even_at_the_same_id() {
         &seven,
         shekyl_types::BlockHash::NULL,
         expected_target(&MockChain::default(), &seven),
+        &crate::block::ReferenceClaims::EMPTY,
     );
     MockChain::default().with_view(|view| {
         let fault = validate(formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
@@ -637,6 +655,7 @@ fn two_fakechain_targets_are_distinct_sets() {
         &three,
         shekyl_types::BlockHash::NULL,
         expected_target(&MockChain::default(), &three),
+        &crate::block::ReferenceClaims::EMPTY,
     );
     MockChain::default().with_view(|view| {
         let fault = validate(formed, &view, &seven, &Trust::UNANCHORED)

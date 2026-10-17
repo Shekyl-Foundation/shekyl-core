@@ -117,10 +117,10 @@ use super::{
     post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockDraws, BlockInfo, BlockRef, BondRecord,
     Canonical, Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard,
     Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OriginatedPhase, OutKey, OutTx,
-    PoolRecord, ProbeCell, PropertyCell, RMarket, Readiness, RelayState, Responsibility,
-    RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry, SlashedHolding, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
-    PROPERTY_CELLS, SCHEMA_VERSION,
+    PoolRecord, ProbeCell, PropertyCell, RMarket, Readiness, RecordedPow, RelayState,
+    Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SettlementRow,
+    SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth, TxIndex, TxOutputIndices, UndoEntry,
+    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -551,6 +551,14 @@ impl Fixtures for AltBlock {
             height: BlockHeight::from_raw(41),
             block_weight: BlockWeight::from_raw(weight),
             cumulative_difficulty: CumulativeDifficulty::from_raw((5u128 << 64) | 4), // lo = 4, hi = 5
+            pow: crate::codec::RecordedPow {
+                seed: shekyl_types::BlockHash::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i).expect("fits")
+                })),
+                pow: shekyl_types::PowHash::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(0x80 + i).expect("fits")
+                })),
+            },
         };
         let block = super::alt::test_block_bytes(41);
         vec![
@@ -729,6 +737,21 @@ impl Fixtures for IssuedDigest {
                 })),
             ),
         ]
+    }
+}
+impl Fixtures for RecordedPow {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![(
+            "distinct",
+            RecordedPow {
+                seed: shekyl_types::BlockHash::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i).expect("fits")
+                })),
+                pow: shekyl_types::PowHash::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(0xA0 + i).expect("fits")
+                })),
+            },
+        )]
     }
 }
 impl Fixtures for BlockDraws {
@@ -1371,6 +1394,7 @@ snapshotted_codecs! {
     ArchivalLength => codec_snapshot_archival_length,
     PoolRecord => codec_snapshot_pool_record,
     AltBlock => codec_snapshot_alt_block,
+    RecordedPow => codec_snapshot_recorded_pow,
 }
 
 /// The gate asserts its own arming state (rule 47). `UPDATE_SNAPSHOTS`

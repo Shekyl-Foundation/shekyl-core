@@ -99,6 +99,7 @@ pub(crate) mod miner;
 pub(crate) mod pow;
 pub(crate) mod range_proof;
 pub use pow::seed_height;
+pub(crate) mod proofs;
 pub(crate) mod reward;
 pub(crate) mod timestamps;
 pub(crate) mod topology;

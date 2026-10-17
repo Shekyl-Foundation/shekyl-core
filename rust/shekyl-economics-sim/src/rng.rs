@@ -26,8 +26,8 @@ const STAFFORD_MIX_2: u64 = 0x94D0_49BB_1331_11EB;
 /// Vigna's xorshift64* multiplier. The shifts 12, 25, 27 are the triple.
 const XORSHIFT64_STAR_MUL: u64 = 0x2545_F491_4F6C_DD1D;
 
-/// Seed both fee instruments use, so a dwell trace and a floor trace are
-/// the same block sequence.
+/// Seed of the fee-floor slew traces, fixed so every scenario and every run
+/// sees the same block sequence.
 pub(crate) const POISSON_TRACE_SEED: u64 = 0x5EED_F1FE_ED1E_5EED;
 
 /// Knuth's product underflows past a mean near 745 and would silently cap
@@ -79,11 +79,11 @@ impl SplitMix64 {
     }
 }
 
-/// xorshift64* for the fee instruments' Poisson traffic.
+/// xorshift64* for the fee-floor slew traces' Poisson traffic.
 pub(crate) struct PoissonTrace(u64);
 
 impl PoissonTrace {
-    /// The shared fee-instrument stream.
+    /// The slew traces' fixed stream.
     pub(crate) fn trace() -> Self {
         Self(POISSON_TRACE_SEED)
     }

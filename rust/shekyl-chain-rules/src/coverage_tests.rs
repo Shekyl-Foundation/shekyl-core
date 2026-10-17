@@ -135,9 +135,9 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
     // slice 1) are not the validator's to evaluate; the rows this crate
     // enforces at another site (E5 at writer open, slice 3; the alt tier's
     // rows, DRS-E5 slice 9), the rows that hold by construction (F2, F8,
-    // F19, slice 4) and the rows the store holds (K1a, K2, K3, K8, slice 9;
-    // B3, the 2026-10-15 re-class)
-    // can never be in a per-block coverage. The census denominator itself
+    // F19, slice 4) and the rows the store and its writer hold (K1a, K2,
+    // K3, K8, slice 9; B3, the 2026-10-15 re-class; K5, K5b, K6, K7, the
+    // switch, DRS-E5 a5) can never be in a per-block coverage. The census denominator itself
     // moves for none of them.
     assert_eq!(
         coverage.len(),
@@ -153,8 +153,8 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
         "slice 4: F2, F8, F19, F21; slice 5: H2, H8, H12, H13, H23; slice 6: I2, I3; slice 7: G3, G4, G5; DRS-E4: L8, L9; the 2026-10-15 re-class: A3, A6, A7, L11, L12, L16 hold by construction"
     );
     assert_eq!(
-        held_by_store, 5,
-        "DRS-E5 slice 9: K1a, K2, K3, K8, and the 2026-10-15 re-class's B3, are held by the store"
+        held_by_store, 9,
+        "DRS-E5 slice 9: K1a, K2, K3, K8, and the 2026-10-15 re-class's B3, are held by the store; K5, K5b, K6, K7 by its writer's switch"
     );
     for row in [
         CenRow::A1,

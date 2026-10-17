@@ -99,6 +99,7 @@ mod at_index;
 mod chain_reads;
 mod connect;
 mod curve_reads;
+mod edge;
 mod error;
 mod grow;
 mod halt;
@@ -123,8 +124,9 @@ pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use connect::Connected;
 pub use error::{
-    AccrualFault, AltCannot, CellFault, EngineError, ErrorClass, LeafCountFault, LeafDensity,
-    PoolCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant, UndoFault,
+    AccrualFault, AltCannot, CellFault, EdgeFault, EngineError, ErrorClass, LeafCountFault,
+    LeafDensity, PoolCannot, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant,
+    UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{
@@ -137,7 +139,7 @@ pub use prune::{Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
 pub use shard_reads::{ClosedShardRows, ShardFold};
 pub use tx_reads::{PqcAuths, Prunable, SegmentBytes, TxLocation, TxRecord};
-pub use undo::Restorable;
+pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
 pub use write::WriteBatch;
 
@@ -752,8 +754,17 @@ mod conformance_tests;
 mod pop_tests;
 
 #[cfg(test)]
+#[path = "edge_tests.rs"]
+mod edge_tests;
+
+#[cfg(test)]
 #[path = "prune_tests.rs"]
 mod prune_tests;
+
+/// Where the proofs are verified: `form`, never `validate` (2026-10-16).
+#[cfg(test)]
+#[path = "verify_site_tests.rs"]
+mod verify_site_tests;
 
 #[cfg(test)]
 #[path = "amendments_tests.rs"]

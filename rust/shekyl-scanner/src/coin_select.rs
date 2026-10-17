@@ -207,7 +207,7 @@ mod tests {
     /// A stand-in economy rate. Fixture only — production callers pass
     /// the rate from the live `ValidatedFeeEstimates` snapshot.
     fn test_rate() -> FeeRate {
-        FeeRate::new(1, 1).expect("fixture fee rate is non-zero")
+        FeeRate::new(1).expect("fixture fee rate is non-zero")
     }
 
     fn make_candidate(global_idx: u64, amount: u64, height: u64) -> TransferDetails {

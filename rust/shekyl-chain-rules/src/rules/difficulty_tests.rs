@@ -403,6 +403,7 @@ fn cen_d7_fakechain_validate_mints_past_n() {
         &crate::harness::MockSubstrate::default(),
         seed,
         crate::harness::expected_target(&chain, &seven),
+        &crate::block::ReferenceClaims::EMPTY,
         crate::fault::FormAttempt::FIRST,
     )
     .expect("no fault")

@@ -90,7 +90,7 @@ pub use archival::{
 };
 pub(crate) use chain::stored_timelock;
 pub use chain::{
-    BlockBody, BlockInfo, OutKey, OutTx, RuleSetInForce, TxIndex, TxOutputIndices,
+    BlockBody, BlockInfo, OutKey, OutTx, RecordedPow, RuleSetInForce, TxIndex, TxOutputIndices,
     TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
 pub use curve::{CurveTreeState, LayerHash, LeafCount, TreeDepth};

@@ -2320,7 +2320,7 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
       reject_block_internal(bvc);
       return false;
     }
-    if (fc_verdict == SHEKYL_FORK_CHOICE_SWITCH)
+    if (fc_verdict == SHEKYL_FORK_CHOICE_SWITCH || fc_verdict == SHEKYL_FORK_CHOICE_FORCED_SWITCH)
     {
       // C2-R1b F-1(a): pre-check the whole rollback against the prune
       // watermark BEFORE the switch mutates anything -- a mid-pop refusal
@@ -4180,7 +4180,6 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward
   const int32_t rc = shekyl_corrected_fee_ladder(
       base_reward,
       median,
-      DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT,
       c,
       slots);
   CHECK_AND_ASSERT_THROW_MES(rc == 0,
@@ -4193,11 +4192,9 @@ void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward
   fees.assign(slots, slots + (sizeof(slots) / sizeof(slots[0])));
 }
 
-void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees) const
+void Blockchain::get_dynamic_base_fee_estimate_2021_scaling(std::vector<uint64_t> &fees) const
 {
   const uint64_t db_height = m_db->height();
-
-  CHECK_AND_ASSERT_THROW_MES(grace_blocks <= CRYPTONOTE_REWARD_BLOCKS_WINDOW, "Grace blocks invalid In 2021 fee scaling estimate.");
 
   // Long-term effective median. S clamps the short-term median in
   // update_next_cumulative_weight_limit and never reaches this path.

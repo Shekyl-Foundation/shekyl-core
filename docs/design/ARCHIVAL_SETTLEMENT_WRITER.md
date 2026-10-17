@@ -1231,8 +1231,10 @@ The work is split by what is checked, not by who owns the tables
   defines the view trait the verifier reads through and the type of the
   `h_open(E)` snapshot.
 - **This lane** owns the state and the wiring.
-- **The E5 lane** owns the bundle queue and the body store, and
-  implements the view trait on its switch batch view.
+- **The E5 lane** owns the bundle queue and the body store. The view
+  trait has one implementation, on the store's `BatchView` — the switch's
+  batch view is that view — built once, with this lane's merged increment
+  (item 3; `DRS_E5_POOL_ALT_PRUNE.md` §2.3).
 
 This lane's increments, each its own change:
 

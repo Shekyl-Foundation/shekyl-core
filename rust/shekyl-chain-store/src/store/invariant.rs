@@ -49,6 +49,31 @@ pub enum StoreInvariant {
     /// once per connect and is the root the verdict derived
     /// (`ValidatedBlock::root_after`, DRS-E3 `CTW-Q1`).
     RootRewritten,
+    /// **SI-5** — after a pop, the tree's right edge is what its children
+    /// say: every layer's last chunk, rebuilt from its stored children with
+    /// the rules crate's arithmetic, equals the stored chunk, and the rebuilt
+    /// top equals the live root `curve_tree_roots[tip + 1]`
+    /// (`DRS_E5_POOL_ALT_PRUNE.md` §2.3). A pop only trims leaves at the end,
+    /// so these chunks are the only ones it can change. SI-12 compares the
+    /// summary with the same root, but both come back from one undo log; a
+    /// pre-image journaled wrong is visible here and not there. Armed by
+    /// [`WriteBatch::pop_many`](super::WriteBatch::pop_many) after its pops.
+    RightEdgeDiverged {
+        /// Where the rebuild and the stored tree first disagree.
+        observed: EdgeFault,
+    },
+    /// **SI-27** — a recorded block passes its own cheap tier. When a
+    /// switch demotes the block at `height`, `alt_against` judges it over
+    /// the chain below it on a snapshot taken before the switch's write;
+    /// a refusal means the store holds a chain that fails its own rules —
+    /// the tier is a subset of `validate`, over the same history, under the
+    /// same rule set by height, and the local clock only moves the
+    /// future-time limit in the block's favour (`DRS_E5_POOL_ALT_PRUNE.md`
+    /// §2.3). Armed by [`WriteBatch::refuse_demotion`](super::WriteBatch::refuse_demotion).
+    DemotedBlockRefused {
+        /// The recorded height the tier refused.
+        height: shekyl_types::BlockHeight,
+    },
     /// **SI-6** — the undo log's top entry is the tip height, and a pop
     /// consumes exactly that entry.
     ///
@@ -423,6 +448,17 @@ pub enum SlashFault {
     },
 }
 
+/// Where an SI-5 rebuild first disagrees with the stored tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EdgeFault {
+    /// The chunk rebuilt at `layer` (`0` is the leaf chunk) is not the
+    /// stored last chunk of that layer.
+    Chunk { layer: u8 },
+    /// Every stored last chunk matched its rebuild, and the rebuilt top is
+    /// not the live root.
+    Root,
+}
+
 /// What an SI-11 observation was. A length comparison does not know which
 /// position is missing, and a walk knows the position and not the table's
 /// length. The writer has two more, and neither of them is a length: the
@@ -454,6 +490,8 @@ impl StoreInvariant {
             Self::TipMismatch => 2,
             Self::TxHashNotFresh => 3,
             Self::RootRewritten => 4,
+            Self::RightEdgeDiverged { .. } => 5,
+            Self::DemotedBlockRefused { .. } => 27,
             Self::UndoLogIncoherent { .. } => 6,
             Self::WorkNotIncreasing { .. } => 10,
             Self::LeavesNotDense { .. } => 11,
@@ -545,6 +583,23 @@ impl core::fmt::Display for StoreInvariant {
                      overlap the dense range, rebuild from the block corpus",
                 ),
             },
+            Self::RightEdgeDiverged { observed } => match observed {
+                EdgeFault::Chunk { layer } => write!(
+                    f,
+                    "after a pop, curve_tree_layers' last chunk at layer {layer} is not the chunk \
+                     its stored children rebuild to; a pre-image was journaled wrong, rebuild from \
+                     the block corpus"
+                ),
+                EdgeFault::Root => f.write_str(
+                    "after a pop, the tree's rebuilt top is not the live root at \
+                     curve_tree_roots[tip + 1]; rebuild from the block corpus",
+                ),
+            },
+            Self::DemotedBlockRefused { height } => write!(
+                f,
+                "the recorded block at height {height} fails the cheap tier over the chain below \
+                 it; the store holds a chain that fails its own rules, rebuild from the block corpus"
+            ),
             Self::SummaryRootDiverged => f.write_str(
                 "the grown curve_tree_meta root is not the live root at curve_tree_roots[tip + 1]; \
                  the summary and the recorded root disagree, rebuild from the block corpus",
@@ -669,7 +724,7 @@ impl core::error::Error for StoreInvariant {
                 ..
             } => Some(e),
             Self::CellCorrupt {
-                fault: CellFault::Absent,
+                fault: CellFault::Absent | CellFault::OutsideDomain { .. },
                 ..
             }
             | Self::KeyImageNotFresh
@@ -682,6 +737,8 @@ impl core::error::Error for StoreInvariant {
             | Self::IdNotFresh
             | Self::LeavesNotDense { .. }
             | Self::SummaryRootDiverged
+            | Self::RightEdgeDiverged { .. }
+            | Self::DemotedBlockRefused { .. }
             | Self::ServeCreditWithoutBond { .. }
             | Self::PoolEntryUnpaired { .. }
             | Self::PositionMapsNotBijective
@@ -778,13 +835,26 @@ impl core::fmt::Display for UndoFault {
     }
 }
 
-/// What is wrong with a typed `properties` cell.
+/// What is wrong with a typed cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellFault {
     /// The cell is not in the table.
     Absent,
     /// The cell's bytes are not an encoding of its value type.
     Undecodable(CodecError),
+    /// The cell decoded, and the value is outside the domain its reader
+    /// can price. `at` is the height of that row. A codec reason is
+    /// `'static`, so it cannot carry the height, and the batch's
+    /// connecting height is the block being connected — a window read can
+    /// fault an earlier row.
+    OutsideDomain {
+        /// Height of the row, raw.
+        at: u64,
+        /// Which value left its domain, in the codec's vocabulary.
+        codec: &'static str,
+        /// Why the value is outside the domain.
+        reason: &'static str,
+    },
 }
 
 impl core::fmt::Display for CellFault {
@@ -792,6 +862,9 @@ impl core::fmt::Display for CellFault {
         match self {
             Self::Absent => f.write_str("absent"),
             Self::Undecodable(e) => write!(f, "undecodable ({e})"),
+            Self::OutsideDomain { at, codec, reason } => {
+                write!(f, "outside its domain at height {at} ({codec}: {reason})")
+            }
         }
     }
 }

@@ -18,6 +18,7 @@ use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault, FormAttempt};
+use crate::harness::expected_references;
 use crate::harness::fixture::{
     candidate, candidate_on, coinbase, coinbase_extra, recorded, recorded_with_work, G, TWO_G,
 };
@@ -46,12 +47,14 @@ const MINER: Locus = Locus::Tx {
 /// Judge through both stages against `chain`, claiming the seed the chain
 /// expects (D3); the mock never faults.
 fn judge_on(chain: &MockChain, candidate: Candidate) -> Verdict<()> {
+    let references = expected_references(chain, &candidate);
     let formed = match form(
         candidate,
         &RuleSet::GENESIS,
         &MockSubstrate::default(),
         expected_seed(chain),
         expected_target(chain, &RuleSet::GENESIS),
+        &references,
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,

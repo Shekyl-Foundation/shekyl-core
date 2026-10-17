@@ -95,11 +95,11 @@ public:
   // 9 475 100 461 579 156 132 in one ordering and sane in another — which then
   // set `m_long_term_effective_median_block_weight` and both fee paths from it.
   //
-  // It stayed hidden because the pre-FL-R20 estimate inserted `grace_blocks`
-  // zeroes into a COPY of that window before taking the median, which made the
-  // value well-defined (0) and `max(0, Zm)` sane. The relay floor had no such
-  // accident and was already reading the garbage. FL-R20 deletes the grace
-  // insertion, so the fixture had to stop lying.
+  // It stayed hidden while the estimate inserted a lookahead of zeroes into a
+  // COPY of that window before taking the median, which made the value
+  // well-defined (0) and `max(0, Zm)` sane. The relay floor had no such
+  // accident and was already reading the garbage. FL-R20 deleted the
+  // lookahead, so the fixture had to stop lying.
   virtual std::vector<uint64_t> get_long_term_block_weights(uint64_t start_height, size_t count) const override {
     return std::vector<uint64_t>(count, get_block_long_term_weight(start_height));
   }

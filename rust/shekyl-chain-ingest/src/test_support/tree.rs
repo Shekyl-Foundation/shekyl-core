@@ -423,6 +423,29 @@ impl<'id> ChainView<'id> for GrownTree {
         Ok(self.total_burned)
     }
 
+    /// The median derived for the block when it was pushed — the row the
+    /// store's connect writes.
+    fn long_term_effective_median_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, Infallible> {
+        Ok(Self::recorded(&self.medians, height))
+    }
+
+    /// The burned fold through `height`: the per-block burns summed, which
+    /// is what the store's fold less the rows above `height` comes to.
+    fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, Infallible> {
+        Ok(match Self::recorded(&self.burned, height) {
+            AtHeight::Recorded(_) => AtHeight::Recorded(AtomicUnits::from_raw(
+                self.burned[..=at(height.to_raw())]
+                    .iter()
+                    .map(|b| b.to_raw())
+                    .sum(),
+            )),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
+    }
+
     // A grown tree posts no bond (`DRS_E4_ARCHIVAL_WRITER.md` §5.2).
     shekyl_chain_rules::archival_reads!(empty);
 }

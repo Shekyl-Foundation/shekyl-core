@@ -61,11 +61,11 @@ use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
     recorded, validate, ArchivalDelta, AtHeight, CenRow, ChainView, Corrupt, EffectiveMedian,
-    Fault, HeaderRecord, HeaderView, InvalidBlock, PaidEmission, PerHeightRecord, Retry, Stale,
-    StructurallyValid, Target, Verdict, ViewRead, Weights,
+    Fault, HeaderRecord, HeaderView, InvalidBlock, PaidEmission, PerHeightRecord,
+    StructurallyValid, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
-use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
+use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, WriteBatch};
 use shekyl_types::archival::{BondRecord, IndexedDraw, IssuedDigest};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch,
@@ -75,134 +75,18 @@ use shekyl_units::AtomicUnits;
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
 
-/// Why the writer is over: store-terminal faults only. `Copy` data, so it
-/// can be repeated on every later `Apply` / `Rewind`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunEnd {
-    /// The store halted (a belt, or SI-10 through `refuse_corrupt`).
-    Halted(StoreInvariant),
-    /// A store engine or capability error ended the writer.
-    StoreFaulted,
-}
-
-impl RunEnd {
-    /// The end a fault brings, if it is store-terminal: a store error ends
-    /// the writer; a driver defect, a missing fact and a bad rewind target
-    /// are replies the driver owns, and the writer stays up.
-    const fn of(fault: &RunFault) -> Option<Self> {
-        match fault {
-            RunFault::Store(StoreError::InvariantViolated(row)) => Some(Self::Halted(*row)),
-            RunFault::Store(_) => Some(Self::StoreFaulted),
-            RunFault::StaleSeed { .. }
-            | RunFault::StaleTarget { .. }
-            | RunFault::StaleRuleSet { .. }
-            | RunFault::HeightClaim { .. }
-            | RunFault::NoNextHeight { .. }
-            | RunFault::RewindTarget { .. }
-            | RunFault::InjectOffRegtest { .. }
-            | RunFault::IssueOffRegtest { .. }
-            | RunFault::Over(_) => None,
-        }
-    }
-}
-
-/// The reply error of a connector message: the first occurrence carries
-/// its detail, every later message carries [`RunFault::Over`].
-#[derive(Debug, thiserror::Error)]
-pub enum RunFault {
-    /// The store refused or failed (a belt's halt is
-    /// `StoreError::InvariantViolated`).
-    #[error(transparent)]
-    Store(#[from] StoreError),
-    /// The driver's seed claim disagreed with the store (RD-Q5: a defect).
-    #[error("driver defect: seed claim at height {height} was {claimed:?}, the chain holds {expected:?} ({retry:?})")]
-    StaleSeed {
-        /// The connecting height.
-        height: BlockHeight,
-        /// What the driver claimed.
-        claimed: BlockHash,
-        /// What the store holds at the seed height.
-        expected: BlockHash,
-        /// What the validator would allow next.
-        retry: Retry,
-    },
-    /// The driver's target claim disagreed with the target the store's
-    /// headers derive (RD-Q5's class: a defect — the ledger and the store
-    /// described different chains).
-    #[error("driver defect: target claim at height {height} was {claimed}, the chain derives {expected} ({retry:?})")]
-    StaleTarget {
-        /// The connecting height.
-        height: BlockHeight,
-        /// What the driver claimed.
-        claimed: Target,
-        /// What the store's headers derive.
-        expected: Target,
-        /// What the validator would allow next.
-        retry: Retry,
-    },
-    /// `form` and `validate` were handed different rule sets.
-    #[error(
-        "driver defect: rule set handed to form differs from the one in force at height {height}"
-    )]
-    StaleRuleSet {
-        /// The connecting height.
-        height: BlockHeight,
-    },
-    /// The source's height for an `Extend` is not the height the chain
-    /// connects at (`tip + 1` on the batch's view). Nothing is judged: the
-    /// rule set and the record are both keyed by the connecting height,
-    /// and a block judged under the claimed one would be judged
-    /// under the wrong schedule. A driver defect; the writer stays up.
-    #[error(
-        "driver defect: the source claims height {claimed} for a block the chain connects at {connecting}"
-    )]
-    HeightClaim {
-        /// The source's height for the event.
-        claimed: BlockHeight,
-        /// `tip + 1` as the store holds it.
-        connecting: BlockHeight,
-    },
-    /// The recorded tip is `u64::MAX`: there is no next height to build at.
-    /// A chain that long has no successor; the writer stays up.
-    #[error("tip {tip} has no successor height")]
-    NoNextHeight {
-        /// The tip that cannot be extended.
-        tip: BlockHeight,
-    },
-    /// A rewind to `to` when the tip is `tip`.
-    #[error("rewind to {to} is not below the tip {tip:?}")]
-    RewindTarget {
-        /// The target.
-        to: BlockHeight,
-        /// The tip at the time.
-        tip: Option<BlockHeight>,
-    },
-    /// An [`Inject`] under rules other than regtest. The out-of-band write
-    /// has one producer — the regtest injector — and no chain but a
-    /// regtest chain can carry one (DRS-E4 §3.8 item 3); refused here,
-    /// before the store sees it, so a source that carries one into a
-    /// scheduled replay is a driver fault and not a store-terminal one.
-    #[error("inject for {persona} (shard {shard}, epoch {epoch}) under {rules:?}: the out-of-band serve credit is regtest-only", persona = credit.persona, shard = credit.shard, epoch = credit.epoch)]
-    InjectOffRegtest {
-        /// The credit refused.
-        credit: ServeCredit,
-        /// The rules the connector runs under.
-        rules: ChainRules,
-    },
-    /// An [`IssueDraws`] under rules other than regtest: the door has one
-    /// producer, as [`Inject`]'s has, and is refused here for the same
-    /// reason.
-    #[error("issue of draws for epoch {epoch} under {rules:?}: the out-of-band draw issue is regtest-only")]
-    IssueOffRegtest {
-        /// The epoch the draws were for.
-        epoch: SettlementEpoch,
-        /// The rules the connector runs under.
-        rules: ChainRules,
-    },
-    /// The writer is over: a store-terminal fault was already replied.
-    #[error("the writer is over: {0:?}")]
-    Over(RunEnd),
-}
+#[path = "run_fault.rs"]
+mod run_fault;
+#[path = "switch.rs"]
+mod switch;
+pub(crate) use run_fault::fault_reply;
+pub use run_fault::{PlanMismatchReason, RunEnd, RunFault};
+#[cfg(test)]
+pub use switch::AnchorForTests;
+pub use switch::{
+    AltBlocksHeld, OfferAlt, Offered, PlannedBlock, PlannedDemotion, PlannedPromotion,
+    PopBeyondReorgCap, RefusePromotion, Reorganize, SwitchDone, SwitchPlan, Switched, TableRows,
+};
 
 /// What an [`Apply`] did: the blocks that landed, and the refusal that
 /// stopped the run of `Extend`s if one did.
@@ -535,6 +419,21 @@ impl Writer {
         self.latch(result)
     }
 
+    /// The store for one operation that reads a snapshot and then writes —
+    /// the switch, which judges on a snapshot before its write closure and
+    /// keeps the verdicts alive through it (`switch.rs`). The same latch as
+    /// [`Self::write`]: refused once over, armed by a terminal fault.
+    fn with_store<R, F>(&mut self, f: F) -> Result<R, RunFault>
+    where
+        F: FnOnce(&ChainStore) -> Result<R, RunFault>,
+    {
+        if let Some(end) = self.over {
+            return Err(RunFault::Over(end));
+        }
+        let result = f(&self.store);
+        self.latch(result)
+    }
+
     /// Arm the latch on a terminal fault; the first stands.
     fn latch<R>(&mut self, result: Result<R, RunFault>) -> Result<R, RunFault> {
         if let Some(end) = result.as_ref().err().and_then(RunEnd::of) {
@@ -554,6 +453,11 @@ impl Writer {
 pub struct Connector {
     writer: Writer,
     rules: ChainRules,
+    /// What the run takes on the release's word — `rules.trust()`, read
+    /// once at start. A field rather than a call so a test can reach the
+    /// checkpoint arm of the fork choice with a fixture table no regtest
+    /// run carries ([`AnchorForTests`]).
+    trust: shekyl_chain_rules::Trust,
 }
 
 impl Actor for Connector {
@@ -564,6 +468,7 @@ impl Actor for Connector {
         Ok(Self {
             writer: Writer::live(args.store),
             rules: args.rules,
+            trust: args.rules.trust(),
         })
     }
 
@@ -584,6 +489,7 @@ impl Message<Apply> for Connector {
 
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let rules = self.rules;
+        let trust = self.trust;
         self.writer.write(|batch| {
             let view = batch.chain_view();
             let mut applied = Applied::default();
@@ -612,7 +518,7 @@ impl Message<Apply> for Connector {
                     }
                 };
                 let in_force = rules.in_force(height);
-                match validate(formed, &view, &in_force, &rules.trust()) {
+                match validate(formed, &view, &in_force, &trust) {
                     Ok(Ok(valid)) => {
                         let hash = valid.block().hash();
                         let root_after = valid.block().root_after();
@@ -633,43 +539,7 @@ impl Message<Apply> for Connector {
                         applied.refused = Some((height, refused));
                         break;
                     }
-                    Err(Fault::View(e)) => return Err(RunFault::Store(e)),
-                    // SI-10: the refusal arms the halt and *is* the error —
-                    // `ChainStore::write` makes an `InvariantViolated` win
-                    // over anything else the closure returns, so the row
-                    // (which carries the validator's `Corrupt` value) is
-                    // what the caller sees, with no second wrapper to drift
-                    // from it.
-                    Err(Fault::Corrupt(observed)) => {
-                        return Err(RunFault::Store(batch.refuse_corrupt(observed)))
-                    }
-                    Err(Fault::Stale(Stale::Seed {
-                        claimed,
-                        expected,
-                        retry,
-                    })) => {
-                        return Err(RunFault::StaleSeed {
-                            height,
-                            claimed,
-                            expected,
-                            retry,
-                        })
-                    }
-                    Err(Fault::Stale(Stale::Target {
-                        claimed,
-                        expected,
-                        retry,
-                    })) => {
-                        return Err(RunFault::StaleTarget {
-                            height,
-                            claimed,
-                            expected,
-                            retry,
-                        })
-                    }
-                    Err(Fault::Stale(Stale::RuleSet { .. })) => {
-                        return Err(RunFault::StaleRuleSet { height })
-                    }
+                    Err(fault) => return Err(validate_fault(batch, height, fault)),
                 }
             }
             Ok(applied)
@@ -683,18 +553,15 @@ impl Message<Rewind> for Connector {
     async fn handle(&mut self, msg: Rewind, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let to = msg.to;
         self.writer.write(|batch| {
-            let mut popped = 0u64;
-            loop {
-                let tip = batch.chain_view().tip()?.map(|t| t.height);
-                match tip {
-                    Some(tip) if tip > to => {
-                        batch.pop()?;
-                        popped += 1;
-                    }
-                    Some(tip) if tip == to => return Ok(Rewound { popped }),
-                    other => return Err(RunFault::RewindTarget { to, tip: other }),
-                }
-            }
+            let tip = batch.chain_view().tip()?.map(|t| t.height);
+            let popped = match tip {
+                Some(tip) if tip >= to => tip.to_raw() - to.to_raw(),
+                other => return Err(RunFault::RewindTarget { to, tip: other }),
+            };
+            // One run of pops, then SI-5 over the tree they left
+            // (`pop_many`): the belt is the run's, not each pop's.
+            batch.pop_many(popped)?;
+            Ok(Rewound { popped })
         })
     }
 }
@@ -710,7 +577,7 @@ impl Message<Inject> for Connector {
                 rules: self.rules,
             });
         }
-        let at = self.writer.inject(self.rules.trust(), credit)?;
+        let at = self.writer.inject(self.trust, credit)?;
         Ok(Injected { at })
     }
 }
@@ -729,7 +596,7 @@ impl Message<IssueDraws> for Connector {
                 rules: self.rules,
             });
         }
-        self.writer.issue_draws(self.rules.trust(), &msg)
+        self.writer.issue_draws(self.trust, &msg)
     }
 }
 
@@ -825,6 +692,19 @@ impl Message<TemplateFacts> for Connector {
             })
         })
     }
+}
+
+/// A `validate` fault on the connect batch, as the connector's reply — one
+/// mapping for `Apply` and the switch's promotion. The corrupt arm arms the
+/// halt on this batch (SI-10); [`fault_reply`] maps the rest.
+fn validate_fault(
+    batch: &WriteBatch<'_, '_>,
+    height: BlockHeight,
+    fault: Fault<StoreError>,
+) -> RunFault {
+    fault_reply(height, fault, |observed| {
+        RunFault::Store(batch.refuse_corrupt(observed))
+    })
 }
 
 /// The height the next block connects at and the hash it must name as its

@@ -203,7 +203,19 @@ pub(crate) trait UndoTarget {
     ///
     /// [`EngineError::Table`] on any refusal other than *does not exist*.
     fn exists(&self, txn: &ReadTransaction) -> Result<bool, EngineError>;
+
+    /// Every row as stored bytes, in key order; `None` when the table does
+    /// not exist in `txn`'s view. The byte form of the table for
+    /// [`ReadSnapshot::table_rows`](super::ReadSnapshot::table_rows).
+    ///
+    /// # Errors
+    ///
+    /// Engine errors.
+    fn raw_rows(&self, txn: &ReadTransaction) -> Result<Option<RawRows>, EngineError>;
 }
+
+/// One table's rows as stored bytes, `(key, value)` in key order.
+pub type RawRows = Vec<(Vec<u8>, Vec<u8>)>;
 
 /// Map redb's *does not exist* onto `false`, every other refusal onto the
 /// engine error, for the two `exists` impls.
@@ -237,6 +249,22 @@ where
 
     fn exists(&self, txn: &ReadTransaction) -> Result<bool, EngineError> {
         exists_or(txn.open_table(*self))
+    }
+
+    fn raw_rows(&self, txn: &ReadTransaction) -> Result<Option<RawRows>, EngineError> {
+        if !self.exists(txn)? {
+            return Ok(None);
+        }
+        let table = txn.open_table(*self).map_err(EngineError::Table)?;
+        let mut rows = Vec::new();
+        for row in table.iter().map_err(EngineError::Storage)? {
+            let (key, value) = row.map_err(EngineError::Storage)?;
+            rows.push((
+                K::as_bytes(&key.value()).as_ref().to_vec(),
+                V::as_bytes(&value.value()).as_ref().to_vec(),
+            ));
+        }
+        Ok(Some(rows))
     }
 
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {

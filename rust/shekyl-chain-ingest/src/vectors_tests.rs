@@ -47,33 +47,30 @@
 // replay summary below is a test's report line, not production output.
 #![cfg(test)]
 
-use std::num::{NonZeroU128, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Deserialize;
 use shekyl_chain_rules::harness::MockSubstrate;
-use shekyl_chain_rules::{
-    FakechainSchedule, InvalidBlock, ReleaseAnchors, SettlementEpochBlocks, Substrate,
-};
+use shekyl_chain_rules::{InvalidBlock, ReleaseAnchors, Substrate};
 use shekyl_types::{BlockCount, BlockHeight};
 
 use crate::corpus::CorpusReader;
 use crate::metrics::Metrics;
-use crate::mutation::{ArchivalKind, Before, Environment, Mutation, Unmutable};
-use crate::pipeline::{run, PipelineConfig, RunReport};
-use crate::schedule::ChainRules;
+use crate::pipeline::RunReport;
 use crate::source::{IngestEvent, Injection, Source};
 use crate::substrate::ProductionSubstrate;
-use crate::test_support::h;
-use crate::test_support::{cleanup, open_store_under, tmp};
-use crate::trace::Trace;
-use shekyl_chain_rules::Candidate;
+use crate::test_support::cleanup;
 use shekyl_chain_store::apply_policy::{ApplyPolicy, ArchivalFamily};
 use shekyl_pow_randomx::CacheStore;
 
+/// Which mutations a captured chain can carry (`CHAIN_RULES_SLICE_7.md` §3.7).
+mod corpus_census;
 mod h19_cost;
+mod relay_floor;
+mod replay;
 mod retired_keyless_join;
+pub(crate) use replay::replay_keeping_store;
 pub(crate) use retired_keyless_join::{retired_keyless_join, UntilRetiredJoin};
 
 /// `manifest.json`, as the capture writes it (format 4).
@@ -285,56 +282,9 @@ where
     S: Substrate + Send + Sync + 'static,
     S::Fault: Send + std::fmt::Debug + 'static,
 {
-    let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    let trace = std::fs::read(dir.join("trace.e2")).expect("read trace.e2");
-    let mut source = UntilRetiredJoin::new(
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
-    );
-    let trace = Arc::new(Trace::read(std::io::Cursor::new(trace.as_slice())).expect("read trace"));
-    let schedule = FakechainSchedule::new(
-        SettlementEpochBlocks::new(manifest.settlement_epoch_blocks)
-            .expect("a captured chain's epoch is non-zero"),
-        BlockCount::from_raw(manifest.reorg_cap_blocks),
-    )
-    .unwrap_or_else(|e| {
-        panic!(
-            "{}: the manifest's pair is not a schedule: {e}",
-            manifest.shape
-        )
-    });
-    let rules = ChainRules::Regtest {
-        fixed_difficulty: Some(
-            NonZeroU128::new(manifest.fixed_difficulty).expect("a regtest difficulty is non-zero"),
-        ),
-        schedule,
-    };
-    let path = tmp(&format!(
-        "vectors-{}-{}",
-        manifest.shape,
-        policy_tag(policy)
-    ));
-    // The store runs the pair the chain was mined under, read off the same
-    // rule set `connect` judges by — not the production epoch the other
-    // tests' stores pin, which `connect` would refuse at block 0.
-    let store = open_store_under(&path, &rules.in_force(BlockHeight::from_raw(0)), policy);
-    let report = run(
-        &mut source,
-        substrate,
-        Arc::new(Metrics::new()),
-        rules,
-        store,
-        trace,
-        PipelineConfig {
-            window: NonZeroUsize::new(64).expect("non-zero"),
-            hashers: NonZeroUsize::new(4).expect("non-zero"),
-        },
-    )
-    .await
-    .map_err(|e| format!("{e:?}"));
+    let (report, path, _) =
+        replay_keeping_store(dir, manifest, substrate, policy, &policy_tag(policy)).await;
     cleanup(&path);
-    if report.is_ok() {
-        source.finish(&manifest.shape);
-    }
     report
 }
 
@@ -801,196 +751,4 @@ async fn replays_every_captured_chain_under_the_production_substrate() {
         let report = replay(&dir, &manifest, substrate.clone()).await;
         hold(&dir, &manifest, &report);
     }
-}
-
-/// What one mutation can do on one captured chain: apply at some height,
-/// or report why it cannot at every height.
-#[derive(Debug, PartialEq, Eq)]
-enum Reach {
-    /// The first height the mutation applies at.
-    Applies { first: u64 },
-    /// Every distinct cause the corpus reported, over every height, in
-    /// first-seen order.
-    Unmutable(Vec<Unmutable>),
-}
-
-fn note(causes: &mut Vec<Unmutable>, cause: Unmutable) {
-    if !causes.contains(&cause) {
-        causes.push(cause);
-    }
-}
-/// Every candidate of one captured chain in connect order, with what the
-/// chain strictly below it established (`Before`: the key images spent,
-/// the first listed body) — the operands `Mutation::apply` takes. A
-/// `Rewind` truncates, as the pipeline would, and the state after it is
-/// the retained tip's **post-block** state: its `before` plus its own
-/// contribution (the first cut took `spent_before` alone, which would have
-/// called a `DoubleSpend` of the retained tip's image `NothingSpentBefore`
-/// — Copilot on #880; no captured chain rewinds, so the census's answer
-/// did not move).
-fn corpus_candidates(dir: &Path) -> Vec<(u64, Candidate, Before)> {
-    let corpus = std::fs::read(dir.join("corpus.e2")).expect("read corpus.e2");
-    let mut reader = UntilRetiredJoin::new(
-        CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
-    );
-    let mut height = reader.first_height().to_raw();
-    let mut chain: Vec<(u64, Candidate, Before)> = Vec::new();
-    let mut below = Before::default();
-    while let Some(event) = reader.next().expect("corpus reads") {
-        match event.event {
-            IngestEvent::Extend(candidate) => {
-                let before = below.clone();
-                below.remember(&candidate);
-                chain.push((height, *candidate, before));
-                height += 1;
-            }
-            IngestEvent::Rewind { to } => {
-                chain.truncate(usize::try_from(to.to_raw() + 1).expect("small"));
-                below = match chain.last() {
-                    None => Before::default(),
-                    Some((_, tip, before)) => {
-                        let mut after = before.clone();
-                        after.remember(tip);
-                        after
-                    }
-                };
-                height = to.to_raw() + 1;
-            }
-            // An inject occupies no height and lists no body: nothing a
-            // block mutation could take as an operand.
-            IngestEvent::Inject(_) => {}
-        }
-    }
-    reader.finish(&shape_of(dir));
-    chain
-}
-
-/// E6 slice 7 commit 2 (d): **the `Unmutable` census** (`CHAIN_RULES_SLICE_7.md`
-/// §3.7). The E2 family is judged over the harness chain, never over these
-/// captured chains; this test asks, for every mutation and every captured
-/// chain, whether the mutation *could* apply there at all — and holds the
-/// answer, so a mutation that is `Unmutable` on every chain in the corpus
-/// is a recorded fact about the corpus's shape rather than a status a
-/// reader mistakes for coverage.
-///
-/// Two causes are not the corpus's and are named apart: `PowUnderWrongSeed`
-/// needs a PoW environment this census does not supply, and `DoubleSpend`
-/// at a chain's first spend has nothing spent before it (it applies from
-/// the second). Everything else that is `Unmutable` everywhere is a hole in
-/// what the corpus carries.
-#[test]
-fn the_family_over_the_corpus_names_what_it_cannot_reach() {
-    let chains = captured_chains();
-    // A corpus chain brings no spare bodies and no twins, and the bound
-    // is the validator's: the weight and the signed-twin mutation are
-    // `Unmutable` here by construction, and the census says so below.
-    let env = Environment {
-        clock: MockSubstrate::CLOCK,
-        pow: None,
-        overweight: None,
-        twins: &[],
-    };
-    // Per mutation (by its position in `Mutation::ALL`): `Some(causes)`
-    // while it has been unreachable on every chain so far, `None` once one
-    // chain carried it.
-    let mut everywhere_unmutable: Vec<Option<Vec<Unmutable>>> =
-        vec![Some(Vec::new()); Mutation::ALL.len()];
-    let mut table = String::new();
-    for (dir, manifest) in &chains {
-        let candidates = corpus_candidates(dir);
-        assert!(
-            !candidates.is_empty(),
-            "{}: the corpus has blocks",
-            manifest.shape
-        );
-        for (i, mutation) in Mutation::ALL.into_iter().enumerate() {
-            let mut causes = Vec::new();
-            let mut reach = None;
-            for (height, candidate, before) in &candidates {
-                match mutation.apply(candidate.clone(), &env, before, h(*height)) {
-                    Ok(_) => {
-                        reach = Some(Reach::Applies { first: *height });
-                        break;
-                    }
-                    Err(cause) => note(&mut causes, cause),
-                }
-            }
-            let reach = reach.unwrap_or(Reach::Unmutable(causes));
-            use std::fmt::Write as _;
-            writeln!(
-                table,
-                "{:<16} {:<22} {reach:?}",
-                manifest.shape,
-                format!("{mutation:?}")
-            )
-            .expect("String write");
-            match (reach, &mut everywhere_unmutable[i]) {
-                (Reach::Unmutable(causes), Some(all)) => {
-                    for cause in causes {
-                        note(all, cause);
-                    }
-                }
-                (Reach::Applies { .. }, slot) => *slot = None,
-                (Reach::Unmutable(_), None) => {}
-            }
-        }
-    }
-    eprintln!(
-        "Unmutable census over {} captured chains:\n{table}",
-        chains.len()
-    );
-
-    let unreachable: Vec<(Mutation, Vec<Unmutable>)> = Mutation::ALL
-        .into_iter()
-        .zip(everywhere_unmutable)
-        .filter_map(|(m, causes)| causes.map(|c| (m, c)))
-        .collect();
-    // Four entries, and the census says whose — the environment's or the
-    // corpus's, never the family's. `PowUnderWrongSeed`: this census
-    // carries no PoW leg. `OverweightBlock`: no body supply — the corpus
-    // census judges captured blocks as they are. `DuplicateBondPost`: this
-    // census supplies no twins, and the *other* cause —
-    // `NoArchivalBodyToDuplicate` — is the heights that carry no post,
-    // which is a reading of the corpus: *until 2026-10-12* the bond-post
-    // capture did carry the body, so a twin supply would have reached it
-    // (see the entry below). (`DuplicateClaim` was the
-    // fifth until slice 8 row 9 retired it to the driver — `Mutation`
-    // docs.) `DuplicateServeCredit` needs no supply (its
-    // twin is the body itself) and is unreachable on the corpus alone: no
-    // captured chain carries a serve credit. `ReorderedBodies` was the
-    // corpus's until 2026-09-28 — every captured block listed at most one
-    // body (slice 6 §5 row 8 measured it; slice 7 §3.7 names the class) —
-    // and is reachable since the `median-full` capture (slice 7 commit
-    // 4 (c)): its block 211 lists 23 bodies, so the mutations that need two
-    // have a corpus witness there. A change here is a change in the
-    // corpus's shape or in the family, and §3.7 moves with it.
-    assert_eq!(
-        unreachable,
-        vec![
-            (
-                Mutation::PowUnderWrongSeed,
-                vec![Unmutable::NoPowEnvironment]
-            ),
-            (
-                Mutation::DuplicateServeCredit,
-                vec![Unmutable::NoArchivalBodyToDuplicate {
-                    kind: ArchivalKind::ServeCredit
-                }]
-            ),
-            (
-                Mutation::DuplicateBondPost,
-                // *Moved 2026-10-12:* this also listed `NoTwinSupplied`
-                // — the bond-post capture carried the body, so only the
-                // twin was missing. That body is a keyless JoinMarket and
-                // the chain is read only below it now
-                // (`retired_keyless_join::RETIRED_KEYLESS_JOINS`), so no captured chain carries a
-                // post at all and the one cause is the corpus's.
-                vec![Unmutable::NoArchivalBodyToDuplicate {
-                    kind: ArchivalKind::BondPost
-                }]
-            ),
-            (Mutation::OverweightBlock, vec![Unmutable::NoBodySupply]),
-        ],
-        "the mutations no captured chain can carry, with why"
-    );
 }

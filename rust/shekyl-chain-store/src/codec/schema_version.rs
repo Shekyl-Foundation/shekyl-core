@@ -282,7 +282,17 @@ use super::{Canonical, CodecError};
 ///   the layout this change ends on; it is `25` because the draw-state
 ///   tables took `23` and the alt record `24` while it was open, and it
 ///   is independent of both.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(25);
+/// - `26` — the proof-of-work hash is recorded beside the block (DRS-E5
+///   switch PR; `DRS_E5_POOL_ALT_PRUNE.md` 2026-10-15 ruling 3).
+///   `block_pow` (`u64 → recorded_pow`, 64 bytes: seed ‖ pow) is born
+///   Rust-only, appended at ordinal 42, written by `connect` for every
+///   block; `alt_block` gains the same 64 bytes after its cumulative
+///   difficulty, written by AL1 from the cheap tier's verdict. A `25` file
+///   lacks the table and its alt rows would decode with the block bytes
+///   mis-framed, so the bump refuses it at open; `alt_block.snap` re-pins
+///   and `recorded_pow.snap` is new. Rebuild from the block corpus, as at
+///   every bump.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(26);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -339,10 +349,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(25));
-        assert_eq!(SCHEMA_VERSION.encode(), [25, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(26));
+        assert_eq!(SCHEMA_VERSION.encode(), [26, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[25, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[26, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

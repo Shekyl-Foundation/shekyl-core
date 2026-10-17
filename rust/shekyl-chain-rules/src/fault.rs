@@ -49,9 +49,11 @@ use shekyl_types::{
 };
 use shekyl_units::AtomicUnits;
 
+use crate::block::ReferenceClaim;
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::Target;
 use crate::tree_growth::FrontierFault;
+use crate::verdict::TxSlot;
 
 /// What `validate` can fail with: the view's own fault, or one of the two
 /// kinds this crate defines. Matched arm by arm — `?` on the caller's side
@@ -132,6 +134,39 @@ pub enum Stale {
         /// Whether `form` may be run again.
         retry: Retry,
     },
+    /// The reference claim a listed transaction's proof was verified
+    /// against in `form` — or the absence of one — is not what this view
+    /// holds at the reference: CEN-I10's height and CEN-I12's anchor
+    /// disagree with it. `form` verified the proof under the claim; the
+    /// chain says the proof should have been verified under something
+    /// else, so the block was not judged against its real anchor. A
+    /// fault, never a refusal — a wrong claim admits nothing, because the
+    /// comparison is what `validate` does instead of verifying again
+    /// (`CHAIN_RULES_CRATE.md` §4.6, the third claim). Reachable with a
+    /// correct driver only by a reorg between the stages; otherwise a
+    /// driver defect, bounded like the seed's and the target's.
+    Reference {
+        /// The listed slot whose transaction names the reference.
+        slot: TxSlot,
+        /// The `reference_block` the transaction names.
+        reference: BlockHash,
+        /// The two claims, boxed so the fault stays small on every path
+        /// that carries it.
+        claims: Box<ReferenceMismatch>,
+        /// Whether `form` may be run again.
+        retry: Retry,
+    },
+}
+
+/// What [`Stale::Reference`] compared: what `form` verified under against
+/// what the view holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReferenceMismatch {
+    /// What `form` verified under; `None` when nothing was claimed for
+    /// this reference and the proof was not verified.
+    pub claimed: Option<ReferenceClaim>,
+    /// What the view holds at the reference.
+    pub expected: ReferenceClaim,
 }
 
 /// Which per-height record a [`Corrupt::HoleBelowTip`] failed to find.
@@ -250,6 +285,21 @@ pub enum Corrupt {
         at: BlockHeight,
         /// Which record was missing. The store maps this onto the cell.
         record: PerHeightRecord,
+    },
+    /// The relay floor at a height cannot be priced from the operands the
+    /// view holds: `shekyl_economics::relay_floor_from` answered `None`,
+    /// because `R·C·w_ref/M²` left its `u128` domain. The parameters' tail
+    /// is priced before any rule runs, and `R` and `C` are bounded by the
+    /// parameters, so the operand that can leave the domain is the stored
+    /// median. A median is a block weight, bounded by the weight limit; a
+    /// `block_info` row holding one past the domain is bytes no conforming
+    /// store writes — reported as the row's fault, never a panic in the
+    /// reader.
+    RelayFloorUnpriceable {
+        /// The height whose floor was asked for.
+        at: BlockHeight,
+        /// The operands the view yielded at that height.
+        operands: shekyl_economics::FeeOperands,
     },
     /// A recorded output's points do not decompress — `construct_leaf`
     /// refused them (DRS-E3 §3.2). Every admitted output's key, commitment
@@ -534,6 +584,25 @@ impl fmt::Display for Stale {
                 f,
                 "stale target: formed against {claimed}, the headers derive {expected} ({retry})"
             ),
+            Self::Reference {
+                slot,
+                reference,
+                claims,
+                retry,
+            } => match &claims.claimed {
+                Some(claimed) => write!(
+                    f,
+                    "stale reference at {slot:?}: {reference:?} was verified under height \
+                     {} root {:?}, the chain holds height {} root {:?} ({retry})",
+                    claimed.height, claimed.root, claims.expected.height, claims.expected.root
+                ),
+                None => write!(
+                    f,
+                    "stale reference at {slot:?}: {reference:?} was not claimed, so its proof \
+                     was not verified; the chain holds it at height {} root {:?} ({retry})",
+                    claims.expected.height, claims.expected.root
+                ),
+            },
         }
     }
 }
@@ -575,6 +644,10 @@ impl fmt::Display for Corrupt {
             Self::HoleBelowTip { at, record } => write!(
                 f,
                 "no {record} recorded at height {at:?}, below the connecting height (SI-7)"
+            ),
+            Self::RelayFloorUnpriceable { at, operands } => write!(
+                f,
+                "the relay floor at height {at:?} cannot be priced from {operands:?}: the floor's arithmetic leaves its domain (a stored median no block can carry)"
             ),
             Self::LeafNotConstructible { output, input } => write!(
                 f,
