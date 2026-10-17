@@ -13,14 +13,15 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
-
 use crate::config::{FileSink, Rotation};
 use crate::InitError;
 
-/// Open the file sink described by `sink` and return the non-blocking
-/// writer plus its worker guard.
-pub(crate) fn open(sink: &FileSink, lines: usize) -> Result<(NonBlocking, WorkerGuard), InitError> {
+/// Open the file sink described by `sink` and return its queue's writer
+/// plus the guard that stops it.
+pub(crate) fn open(
+    sink: &FileSink,
+    lines: usize,
+) -> Result<(crate::queue::Producer, crate::queue::SinkGuard), InitError> {
     let dir = sink.directory.as_path();
 
     // Ensure the directory exists. If the caller passed a path that
@@ -86,7 +87,7 @@ pub(crate) fn open(sink: &FileSink, lines: usize) -> Result<(NonBlocking, Worker
         }
     }
 
-    let (non_blocking, guard) = match sink.rotation {
+    let queued = match sink.rotation {
         Rotation::Never => {
             let appender = tracing_appender::rolling::never(dir, &sink.filename_prefix);
             crate::queue::queued(appender, crate::queue::Sink::File, lines)
@@ -110,7 +111,7 @@ pub(crate) fn open(sink: &FileSink, lines: usize) -> Result<(NonBlocking, Worker
             crate::queue::queued(writer, crate::queue::Sink::File, lines)
         }
     };
-    Ok((non_blocking, guard))
+    queued.map_err(InitError::WriterThread)
 }
 
 #[cfg(unix)]

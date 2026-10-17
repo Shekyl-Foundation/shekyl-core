@@ -81,6 +81,7 @@
 
 #include "gtest/gtest.h"
 #include "misc_log_ex.h"
+#include "shekyl/shekyl_log.h"
 
 #if !defined(_WIN32)
 #include <cerrno>
@@ -95,11 +96,17 @@ namespace
   /// RAII stderr redirector. Constructs a pipe, points
   /// `STDERR_FILENO` at its write end, and restores the original fd
   /// on destruction. `drain()` pulls whatever the Rust subscriber
-  /// has written so far. Non-blocking with a short polling loop
-  /// because the subscriber's stderr path is synchronous but libc's
-  /// scheduling between our `MINFO(...)` call and the pipe read is
-  /// not — a tight `read` loop with a ~50 ms ceiling is empirically
-  /// enough on every CI runner that currently hosts `unit_tests`.
+  /// has written so far.
+  ///
+  /// The subscriber's stderr sink is a queue with its own writer
+  /// thread (`rust/shekyl-logging/src/queue.rs`), so a line reaches
+  /// the fd some time after the call that logged it returns. The
+  /// capture flushes that queue (`shekyl_log_flush`) before it points
+  /// stderr at the pipe, so lines logged earlier (the binary's startup
+  /// line, an earlier test's) go to the real stderr, and again before
+  /// it reads, so every line the test logged is in the pipe. A line a
+  /// background thread logs while the capture is open still lands in
+  /// it; that is the emitting test's leak.
   class stderr_capture
   {
   public:
@@ -124,6 +131,11 @@ namespace
       read_fd_ = pipefd[0];
       write_fd_ = pipefd[1];
 
+      if (shekyl_log_flush(flush_within_ms) != SHEKYL_LOG_OK)
+      {
+        setup_error_ = "shekyl_log_flush: earlier lines were still queued at the deadline";
+        return;
+      }
       std::fflush(stderr);
       saved_stderr_ = ::dup(STDERR_FILENO);
       if (saved_stderr_ < 0)
@@ -155,6 +167,7 @@ namespace
     /// resident after the emit returns.
     std::string drain(std::chrono::milliseconds timeout = std::chrono::milliseconds(100))
     {
+      flushed_ = shekyl_log_flush(flush_within_ms) == SHEKYL_LOG_OK;
       std::fflush(stderr);
       const auto deadline = std::chrono::steady_clock::now() + timeout;
       std::string out;
@@ -217,12 +230,20 @@ namespace
     /// `setup_error()` instead of a silently passing no-op test.
     bool usable() const { return usable_; }
     const std::string &setup_error() const { return setup_error_; }
+    /// Whether the last `drain()` found the queue flushed before it
+    /// read. A test asserting what is absent must gate on it too.
+    bool flushed() const { return flushed_; }
+
+    /// Generous on a loaded runner; a flush returns as soon as the
+    /// queue is written.
+    static constexpr uint32_t flush_within_ms = 5000;
 
   private:
     int read_fd_ = -1;
     int write_fd_ = -1;
     int saved_stderr_ = -1;
     bool usable_ = false;
+    bool flushed_ = false;
     std::string setup_error_;
   };
 #endif // !_WIN32
@@ -272,6 +293,8 @@ TEST(logging, no_logs)
   MTRACE("marker-no-logs-trace");
   const std::string out = cap.drain();
   cap.restore();
+  ASSERT_TRUE(cap.flushed())
+    << "the log queue was not flushed before the read; an empty drain would be a false negative.";
 
   // Empty-spec routes through the translator's `"off"` branch (see
   // `rust/shekyl-logging/src/legacy.rs::translate`); `"off"` disables
@@ -377,6 +400,7 @@ TEST(logging, concurrent_emits_do_not_deadlock)
 
   const std::string out = cap.drain();
   cap.restore();
+  ASSERT_TRUE(cap.flushed()) << "the log queue was not flushed before the read.";
 
   EXPECT_NE(out.find("marker-concurrent-thread-1"), std::string::npos)
     << "thread 1 emit missing from captured stderr:\n" << out;

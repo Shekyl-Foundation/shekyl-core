@@ -136,7 +136,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         .expect("the table admits only level words");
     let logging = shekyl_logging::Config::with_file_sink(level, config.logging.file_sink())
         .with_directive(config.logging.directive());
-    let _logger = match shekyl_logging::init(logging) {
+    let logger = match shekyl_logging::init(logging) {
         Ok(guard) => guard,
         Err(e) => {
             tell(
@@ -209,6 +209,12 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     let status = supervise(entry, &config, &pool, network_id, options);
     pool.shutdown_background();
     drop(lock);
+    // Last: every sink is a queue, and the lines logged up to here (the
+    // stop's own included) reach it before the process exits. Bounded: a
+    // stalled sink costs at most the flush's deadline, and nothing is said
+    // about it, because the only place to say it is the stalled sink.
+    let _flushed = shekyl_logging::flush(shekyl_logging::FLUSH_WITHIN);
+    drop(logger);
     status
 }
 
