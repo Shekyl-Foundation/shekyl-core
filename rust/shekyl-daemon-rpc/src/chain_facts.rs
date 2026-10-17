@@ -64,7 +64,7 @@
 //!     cumulative_difficulty: 0,
 //!     reward: 0,
 //!     block_weight: 0,
-//!     long_term_weight: 0,
+//!     long_term_weight: None,
 //!     num_txes: 0,
 //!     nonce: 0,
 //!     major_version: 0,
@@ -164,7 +164,11 @@ pub struct BlockHeaderFacts {
     pub cumulative_difficulty: u128,
     pub reward: u64,
     pub block_weight: u64,
-    pub long_term_weight: u64,
+    /// `None` for a block that is not on the main chain: a long-term weight
+    /// is a function of the chain the block sits on (CEN-G6), and an alt
+    /// block's chain has no recorded medians until it is promoted. The wire
+    /// omits a zero long-term weight, and `None` is that omission.
+    pub long_term_weight: Option<u64>,
     pub num_txes: u64,
     pub nonce: u32,
     pub major_version: u8,
@@ -312,8 +316,10 @@ pub struct BlockFacts {
     /// The block in its consensus encoding. Hex is the handler's job.
     pub blob: Vec<u8>,
     /// epee's rendering of the whole block, produced in C++ and carried
-    /// through untouched (RK-D11).
-    pub json: String,
+    /// through untouched (RK-D11). `None` from a reader with no epee
+    /// renderer — the store-backed facts (`DRS_X_STORE_FLIP.md` DX-Q3):
+    /// the field duplicates `blob`, and RK-W retires it.
+    pub json: Option<String>,
     pub tx_hashes: Vec<TxHash>,
 }
 
@@ -415,7 +421,7 @@ fn header_facts_from_pod(pod: &ffi::BlockHeaderFactsFfi) -> BlockHeaderFacts {
             | u128::from(pod.cumulative_difficulty_lo),
         reward: pod.reward,
         block_weight: pod.block_weight,
-        long_term_weight: pod.long_term_weight,
+        long_term_weight: Some(pod.long_term_weight),
         num_txes: pod.num_txes,
         nonce: pod.nonce,
         major_version: pod.major_version,
@@ -548,7 +554,7 @@ impl ChainFacts for FfiChainFacts {
             block: Some(BlockFacts {
                 header: header_facts_from_pod(&pod),
                 blob,
-                json,
+                json: Some(json),
                 tx_hashes: tx_hashes.into_iter().map(TxHash::from_bytes).collect(),
             }),
             chain_height,

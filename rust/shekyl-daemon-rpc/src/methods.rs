@@ -551,7 +551,9 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
         block_weight: facts.block_weight,
         num_txes: facts.num_txes,
         pow_hash: facts.pow_hash.map(HashHex::from_bytes),
-        long_term_weight: facts.long_term_weight,
+        // The wire omits a zero long-term weight; `None` (an alt block) is
+        // that omission.
+        long_term_weight: facts.long_term_weight.unwrap_or(0),
         miner_tx_hash: HashHex::from_bytes(facts.miner_tx_hash.to_bytes()),
         curve_tree_root: HashHex::from_bytes(facts.curve_tree_root.to_bytes()),
         attestation_root: HashHex::from_bytes(facts.attestation_root.to_bytes()),
@@ -1570,7 +1572,7 @@ pub(crate) mod tests {
                 block: Some(BlockFacts {
                     header,
                     blob: vec![0x01, 0x02, 0xab, 0xff],
-                    json: "{\n  \"major_version\": 1\n}".to_owned(),
+                    json: Some("{\n  \"major_version\": 1\n}".to_owned()),
                     tx_hashes: vec![
                         TxHash::from_bytes(tagged_bytes(61)),
                         TxHash::from_bytes(tagged_bytes(67)),
@@ -1709,7 +1711,7 @@ pub(crate) mod tests {
             cumulative_difficulty: (1u128 << 71) + 99,
             reward: 600_000_000_000,
             block_weight: 98765,
-            long_term_weight: 87654,
+            long_term_weight: Some(87654),
             num_txes: 7,
             nonce: 305_419_896,
             major_version: 1,
@@ -2389,7 +2391,7 @@ pub(crate) mod tests {
             out.blob, "0102abff",
             "the blob is lowercase hex of the bytes"
         );
-        assert_eq!(out.json, "{\n  \"major_version\": 1\n}");
+        assert_eq!(out.json.as_deref(), Some("{\n  \"major_version\": 1\n}"));
         assert_eq!(out.tx_hashes.len(), 2);
         assert_eq!(out.tx_hashes[0], HashHex::from_bytes(tagged_bytes(61)));
     }

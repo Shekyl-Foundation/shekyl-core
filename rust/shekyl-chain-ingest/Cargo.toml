@@ -116,6 +116,12 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The Rust miner loop (DRS-X PR 3), driven over the scenario chain with the
+# production template builder and connector (`miner_tests.rs`).
+shekyl-miner = { path = "../shekyl-miner" }
+# Its workers' ledger rows, counted by the same tests.
+shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
+shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 # `shekyl-chain-rules`' fixtures are behind `harness`, a TEST_ONLY feature
 # (check_test_only_features.py) — never enabled from [dependencies].
 # The rules crate's fixtures — MockSubstrate, the always-satisfying
@@ -165,6 +171,11 @@ redb = { workspace = true }
 # DRS_E2_REPLAY_DRIVER.md §3.10): already in the normal graph via shekyl-wire;
 # named here only so the test can call it directly.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# DRS-X PR 3: the RPC's store-backed facts, tested here over the scenario
+# chain and the captured chains (`rpc_store_facts_tests.rs`).
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+hex = "0.4"
 
 [lints]
 workspace = true
