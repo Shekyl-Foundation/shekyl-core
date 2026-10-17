@@ -438,7 +438,7 @@ defect.
 | Budget disposition (b) is unpenalised | (b) is the unmodulated subsidy, a counterfactual of the release multiplier. The penalty in (a) is bounded by the fees of the transactions that crossed the median, since the fill rule admits no other | Stated in `budget.rs` |
 | Every ordinary transaction pays Standard | No wallet escalates its rung under congestion; the user chooses. Blocks past the median are what Priority pays for | ESR-10's rung mix |
 | A claim is one ordinary transaction at the admission rate | The claim's own envelope and the wallet's claim hold floor (`EMISSION_CLAIM_FEE_FLOOR`) are not modelled | Stated here |
-| Fee paid unrounded | The product is the fixed point of `shekyl_tx_weight::converge_weight_fee` — the wallet's iteration without the lattice. The wallet rounds each fee up to the lattice, `shekyl_economics::FEE_QUANTIZATION_MASK` (1 000 atomic), through `quantized_fee`, the function relay admission runs. The fee-floor instrument in this crate pays unrounded too (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here. The lattice has its owner, so calling `quantized_fee` closes the row; that moves every fold, so it is its own step with its predictions written first |
+| Fee paid unrounded | The product is the fixed point of `shekyl_tx_weight::converge_weight_fee` — the wallet's iteration without the lattice. The wallet rounds each fee up to the lattice, `shekyl_economics::FEE_QUANTIZATION_MASK` (1 000 atomic), through `quantized_fee`, the function relay admission runs. The fee-floor instrument in this crate pays unrounded too (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here. The lattice has its owner, so calling `quantized_fee` closes the row. That changes both narration fixtures in their last printed digits, so it is its own step with its predictions written first |
 | Fee floor enforced in consensus | Not the current system: the floor is relay policy (C2-R2 Q9, reopened 2026-10-02) | Second arm of ESR-7 |
 | Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each declared at its definition |
 | The fee-floor instrument's floor at `SCALE` resolution | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` |
@@ -1955,7 +1955,7 @@ found. It built nothing and ran nothing.
   reporting environment and one local path, its headings demoted one
   level to sit under the appendix heading. Nothing else is edited, so a
   claim in it is the pass's, not this document's. The economics sim's
-  first report as returned is in this document at `9527276a0`;
+  first report as returned is in this document at `486c754e6`;
   Appendix A2 carries each of its rows forward.
 - The census did not sweep the design documents that quote sim output;
   ESR-9 did.
