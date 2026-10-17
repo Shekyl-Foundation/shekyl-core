@@ -7,15 +7,15 @@ state — a persona's bonded key — is promotion-tier on the ground §2.1
 already gives CEN-B5's root, an unexecuted alt chain cannot answer it; §8);
 **PR #1026 (a1–a4: the header partition, the cheap tier, AL1, the census
 arms, and the Slice C transport-handoff docs, §2.2/§2.3) merged
-2026-10-12. The switch PR is split (maintainer, 2026-10-15): its reorg
-half — a5's closure, a6's refusals, fixtures and Rust self-differential,
-a8's docs — is on `feat/drs-e5-switch`; a7's C++ capture is withdrawn
+2026-10-12. The switch PR's reorg half — a5's closure, a6's refusals,
+fixtures and Rust self-differential, a8's docs — merged 2026-10-16
+(#1082); a7's C++ capture is withdrawn
 (`E5-Q9`); the bundle legs (B10, the pre-closure body fetch, `BundleView`
 on `BatchView`, the bundle verifier inside `validate` at the switch) land
 with SO-D12's merged increment, which puts the bundle section on the block
 wire (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 item 3; the wire's `Block`
-carries no section, `shekyl-wire/src/block.rs:117–124`). PR-b is unchanged
-(§5).** Round 0 posed
+carries no section, `shekyl-wire/src/block.rs:117–124`). PR-b (§5) is
+next, as DRS-X's PR 1 (`DRS_X_STORE_FLIP.md` DX-Q7, ruled 2026-10-16).** Round 0 posed
 2026-10-10 at `dev@14d68c00fc`, merged to `dev@ac95d6d04` before the PR
 opened. Pre-flight in §1.1, findings `E5-1…E5-18` (`E5-13…E5-15` are PR-a
 commit 1's measurement, §1.7; `E5-16` and `E5-17` are the review's;
