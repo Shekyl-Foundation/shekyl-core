@@ -626,8 +626,14 @@ census_rows! {
         K6 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
         K7 held_by_store("shekyl-chain-ingest", "a_checkpoint_forced_switch_discards_the_demoted_chain"),
         K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),
-        K9 pending,
-        K10 pending,
+        // K9 and K10: a block's bodies (DRS-E5 PR-b b4; the review of
+        // #1102, B1) — an alternative's held by the store beside its row and
+        // promoted from it, then offered to the pool door for relay; a
+        // popped block's returned to the door after the switch, kept when
+        // the chain-bound half alone refuses them. Witnessed by the switch
+        // over the production stack.
+        K9 held_by_store("shekyl-chain-ingest", "an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool"),
+        K10 held_by_store("shekyl-chain-ingest", "a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the_cap"),
         // 4.L Storage layer (constraints that reject chain data at write time)
         // L1 is the validator's (C2-R8 Q6): the intra-block half of key-image
         // uniqueness, run in `validate` after every slot; SI-1 is the store's
@@ -666,9 +672,17 @@ census_rows! {
         // nothing. The falsifier holds the verdict's logged slash to what
         // the fold reads back.
         L16 by_construction(shekyl_archival_retention::holds_shard_at, "l16_the_slash_the_verdict_logs_is_what_the_held_at_height_fold_reads"),
-        // 4.M Mempool admission (the `kept_by_block` axis) — consensus-flagged rows
-        M2 pending,
-        M8 pending,
+        // 4.M Mempool admission — consensus-flagged rows. M2: the pool door
+        // runs the full NIC set because it *is* the validator's per-slot
+        // judgement at `Lone` (DRS-E5 PR-b b2); held by `shekyl-mempool`,
+        // witnessed where the real spends live — the door and a block of
+        // one agree, row for row.
+        M2 held_by_store("shekyl-chain-ingest", "the_door_and_a_block_of_one_agree_on_every_spend"),
+        // M8: the pool's verification cache — the `(reference, height,
+        // root)` triple the proof verified against, held in memory and
+        // consulted at a reconcile (b4); an open trusts no anchor from the
+        // file. `form` never consults it (`E5-Q8`).
+        M8 held_by_store("shekyl-chain-ingest", "a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it"),
     }
 }
 
@@ -679,15 +693,26 @@ census_rows! {
     /// bucket ≠ 3, in census order. Applied by `AdmissionPolicy` (DRS-E5);
     /// a `PolicyRow` cannot enter a `RuleCoverage` — the type forbids it.
     pub enum PolicyRow: Policy {
-        // 4.M Mempool admission (the `kept_by_block` axis) — policy-flagged rows
-        M1 pending,
-        M3 pending,
-        M4 pending,
-        M5 pending,
-        M6 pending,
-        M7 pending,
-        M9 pending,
-        M10 pending,
-        M11 pending,
+        // 4.M Mempool admission — policy-flagged rows. M3, M4 and M5 are
+        // `policy_form`'s (the third call of the pool door, DRS-E5 PR-b b1).
+        // CEN-M11 is deleted (bucket 3): redundant with M3, which refuses a
+        // zero-fee transaction at the one door.
+        // M1, M6 and M7 are the pool's own (`shekyl-mempool`, b2): a
+        // duplicate is not judged; the chain's spent images (M6) and the
+        // pool's (M7) are one I7 read through the decorator. Witnessed over
+        // real spends in `shekyl-chain-ingest`.
+        M1 held_by_store("shekyl-chain-ingest", "the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor"),
+        M3 implemented(crate::policy::M3),
+        M4 implemented(crate::policy::M4),
+        M5 implemented(crate::policy::M5),
+        M6 held_by_store("shekyl-chain-ingest", "the_door_and_a_block_of_one_agree_on_every_spend"),
+        M7 held_by_store("shekyl-chain-ingest", "the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor"),
+        // M9: the submit engine's seam over the Rust pool
+        // (`shekyl_daemon_rpc::RustPoolShim`), prepared, not routed; its
+        // commit is the pool door. Witnessed by the engine end to end.
+        M9 held_by_store("shekyl-chain-ingest", "the_engine_submits_through_the_rust_pool_and_its_door"),
+        // M10: the pool's eviction (b4) — the lifetimes by standing, the
+        // weight cap, the template's refusals.
+        M10 held_by_store("shekyl-mempool", "a_kept_entry_ages_in_blocks_from_its_return"),
     }
 }

@@ -21,11 +21,11 @@
 //! # Seven operations (§3.2)
 //!
 //! Writes, inside [`PoolStore::write`]'s closure on a [`PoolBatch`]:
-//! **P1** [`insert`](PoolBatch::insert), **P2** [`update`](PoolBatch::update),
-//! **P3** [`remove`](PoolBatch::remove). Reads, on a [`PoolSnapshot`]:
+//! **P1** [`insert`](PoolBatch::insert), **P2** [`publish`](PoolBatch::publish)
+//! and [`stand`](PoolBatch::stand), **P3** [`remove`](PoolBatch::remove). Reads, on a [`PoolSnapshot`]:
 //! **P4** [`record`](PoolSnapshot::record), **P5** [`blob`](PoolSnapshot::blob),
 //! **P6** [`len`](PoolSnapshot::len), **P7** [`entries`](PoolSnapshot::entries).
-//! None of them classifies (applies a `RelayCategory`), orders by fee,
+//! None of them relays, orders by fee,
 //! parses a transaction, decides eviction or holds an index: those are the
 //! pool's (E5), and the C++ `tx_memory_pool` rebuilds every one of its
 //! in-memory structures from a full enumeration at `init` (SPL-9), so P7 is
@@ -89,10 +89,7 @@ mod header;
 mod read;
 mod write;
 
-pub use crate::codec::{
-    ArrivedPhase, BlockRef, Origin, OriginatedPhase, PoolRecord, Readiness, RelayRefusal,
-    RelayState, Responsibility,
-};
+pub use crate::codec::{PoolRecord, ReceivedHour, Standing};
 pub use header::{PoolOpen, POOL_VERSION_KEY};
 pub use read::{PoolEntry, PoolSnapshot};
 pub use schema::PoolTxBytes;

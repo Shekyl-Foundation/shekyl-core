@@ -114,13 +114,12 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockDraws, BlockInfo, BlockRef, BondRecord,
-    Canonical, Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard,
-    Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OriginatedPhase, OutKey, OutTx,
-    PoolRecord, ProbeCell, PropertyCell, RMarket, Readiness, RecordedPow, RelayState,
-    Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth, TxIndex, TxOutputIndices, UndoEntry,
-    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, AltBlock, AltBlockFacts, AltBodies, BlockDraws, BlockInfo, BondRecord, Canonical,
+    Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
+    IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord, ProbeCell,
+    PropertyCell, RMarket, RecordedPow, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
+    SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, Standing, TreeDepth, TxIndex,
+    TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -544,6 +543,23 @@ impl Fixtures for BondRecord {
         ]
     }
 }
+impl Fixtures for AltBodies {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // The alt block fixture's own coinbase, as a listed body: the codec
+        // carries transactions as bytes it parses, and these are this
+        // snapshot's literals (`test_block_bytes`).
+        let block = crate::codec::BlockBody::parse(&super::alt::test_block_bytes(41))
+            .expect("the fixture block parses");
+        vec![
+            ("none_listed", AltBodies::of(Vec::new())),
+            (
+                "one_listed",
+                AltBodies::of(vec![block.miner_transaction.clone()]),
+            ),
+        ]
+    }
+}
+
 impl Fixtures for AltBlock {
     fn fixtures() -> Vec<(&'static str, Self)> {
         use shekyl_types::BlockWeight;
@@ -577,79 +593,34 @@ impl Fixtures for AltBlock {
 
 impl Fixtures for PoolRecord {
     fn fixtures() -> Vec<(&'static str, Self)> {
-        use shekyl_types::{FcmpVerificationHash, NetZone, UnixSeconds};
-        let arrived = PoolRecord {
-            weight: 1_500,
-            fee: AtomicUnits::from_raw(30_000),
-            receive_time: UnixSeconds::from_raw(1_700_000_000),
-            relay_state: RelayState::Arrived {
-                zone: NetZone::Public,
-                phase: ArrivedPhase::Stem {
-                    next_attempt: UnixSeconds::from_raw(1_700_000_190),
-                },
-            },
-            relayed: false,
-            double_spend_seen: false,
-            readiness: Readiness::default(),
-            fcmp_cache: None,
+        use crate::codec::ReceivedHour;
+        let stemmed = PoolRecord {
+            received: ReceivedHour::from_raw(472_222),
+            public: false,
+            standing: Standing::Admitted,
         };
         vec![
-            // An arrival in stem: the embargo deadline is the phase's clock,
-            // no responsibility, no cache, no readiness.
-            ("arrived_stem_at_admission", arrived),
-            // The same entry fluffed and relayed once, with every optional
-            // part present: a Tor arrival, a last relay, a readiness cache
-            // on both legs, a verified FCMP++ proof, a double-spend seen.
+            // Admitted and not yet public: the relay holds it in stem.
+            ("admitted_unpublished", stemmed),
+            // Fluffed.
             (
-                "arrived_fluff_fully_populated",
+                "admitted_public",
                 PoolRecord {
-                    relay_state: RelayState::Arrived {
-                        zone: NetZone::Tor,
-                        phase: ArrivedPhase::Fluff {
-                            last_relayed: Some(UnixSeconds::from_raw(1_700_000_300)),
-                        },
-                    },
-                    relayed: true,
-                    double_spend_seen: true,
-                    readiness: Readiness {
-                        max_used: Some(BlockRef {
-                            height: BlockHeight::from_raw(41),
-                            hash: BlockHash::from_bytes([0x41; 32]),
-                        }),
-                        last_failed: Some(BlockRef {
-                            height: BlockHeight::from_raw(40),
-                            hash: BlockHash::from_bytes([0x40; 32]),
-                        }),
-                    },
-                    fcmp_cache: Some(FcmpVerificationHash::from_bytes([0xfc; 32])),
-                    ..arrived
+                    public: true,
+                    ..stemmed
                 },
             ),
-            // Originated and held, admitted through the engine's attested
-            // path (the fallback clock starts at receive_time), responsibility
-            // armed.
+            // Returned from a popped block and refused by the chain-bound
+            // half alone: kept (CEN-K10) from the height it was returned at,
+            // public because a block carried it.
             (
-                "originated_held_armed",
+                "kept_public",
                 PoolRecord {
-                    relay_state: RelayState::Originated {
-                        phase: OriginatedPhase::Held {
-                            last_attempt: Some(UnixSeconds::from_raw(1_700_000_000)),
-                        },
-                        responsibility: Responsibility::Armed,
+                    public: true,
+                    standing: Standing::Kept {
+                        returned_at: BlockHeight::from_raw(41),
                     },
-                    ..arrived
-                },
-            ),
-            // Originated, yielded to proof of work (a Block arrival), the
-            // responsibility disarmed by observation; never relayed since.
-            (
-                "originated_block_disarmed",
-                PoolRecord {
-                    relay_state: RelayState::Originated {
-                        phase: OriginatedPhase::Block { last_relayed: None },
-                        responsibility: Responsibility::Disarmed,
-                    },
-                    ..arrived
+                    ..stemmed
                 },
             ),
         ]
@@ -1394,6 +1365,7 @@ snapshotted_codecs! {
     ArchivalLength => codec_snapshot_archival_length,
     PoolRecord => codec_snapshot_pool_record,
     AltBlock => codec_snapshot_alt_block,
+    AltBodies => codec_snapshot_alt_bodies,
     RecordedPow => codec_snapshot_recorded_pow,
 }
 

@@ -292,7 +292,27 @@ use super::{Canonical, CodecError};
 ///   mis-framed, so the bump refuses it at open; `alt_block.snap` re-pins
 ///   and `recorded_pow.snap` is new. Rebuild from the block corpus, as at
 ///   every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(26);
+/// - `27` — the pool record knows one relay fact (DRS-E5 PR-b, DX-F6,
+///   2026-10-16; `DAEMON_RELAY_PRIVACY.md` D++ acceptance criterion 2).
+///   `pool_record` drops the relay state (origin, phase and its clocks,
+///   responsibility — the relay's, which keeps `Responsibility` beside its
+///   stem watch), `relayed`, `double_spend_seen` and the readiness cache,
+///   none of which admission, eviction or template selection reads, and
+///   everything the transaction's bytes say (weight, fee) or an untrusted
+///   file must not supply (CEN-M8's anchor, held in memory; the review of
+///   #1102, S2): it is `received` (whole hours, S7), `public` and a
+///   `standing` (admitted, or kept under CEN-K10 with the height it was
+///   returned at).
+///   A `26` pool file is recreated at open (`SPL-Q8`), and a `26` chain
+///   file is refused as at every bump — the two files share one layout
+///   number. `pool_record.snap` re-pins. In the chain file,
+///   `alt_block_bodies` (`LmdbHashKey → alt_bodies`, Rust-only, ordinal 43)
+///   is born: an alternative block's listed bodies are consensus data the
+///   switch connects, so the store holds them beside the alt row instead of
+///   the pool (the review of #1102, B1). `alt_bodies.snap` is new and
+///   `tables.snap` re-pins; no existing table, ordinal or property cell
+///   moves.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(27);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -349,10 +369,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(26));
-        assert_eq!(SCHEMA_VERSION.encode(), [26, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(27));
+        assert_eq!(SCHEMA_VERSION.encode(), [27, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[26, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[27, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

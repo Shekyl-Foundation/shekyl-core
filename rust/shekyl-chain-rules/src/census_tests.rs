@@ -314,17 +314,48 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::K5b,
             CenRow::K6,
             CenRow::K7,
-            CenRow::K8
+            CenRow::K8,
+            CenRow::K9,
+            CenRow::K10,
+            CenRow::M2,
+            CenRow::M8
         ],
         "the rule-set belt at connect (B3, re-classed 2026-10-15, R4); DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
          insert (K3) and no supply word on an alt row (K8) are the store's structures, \
          proved by the store's tests; promotion (K5), the witness in the alt row (K5b), the \
          fork choice's match (K6) and the demoted rows (K7) are the switch's (DRS-E5 a5), \
-         proved by the ingest's switch tests"
+         proved by the ingest's switch tests; the pool door's full NIC set (M2, DRS-E5 \
+         PR-b), witnessed by the door and a block of one agreeing over real spends; a \
+         block's bodies through that door (K9, K10) and its verification cache (M8)"
     );
-    assert!(PolicyRow::ALL
+    let policy_implemented: Vec<PolicyRow> = PolicyRow::ALL
         .iter()
-        .all(|r| r.status() == RowStatus::Pending));
+        .copied()
+        .filter(|r| r.status() == RowStatus::Implemented)
+        .collect();
+    assert_eq!(
+        policy_implemented,
+        [PolicyRow::M3, PolicyRow::M4, PolicyRow::M5],
+        "DRS-E5 PR-b b1: `policy_form`'s three rows — the fee floor, the extra cap, the \
+         unlock ban"
+    );
+    let policy_held: Vec<PolicyRow> = PolicyRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::HeldByStore)
+        .collect();
+    assert_eq!(
+        policy_held,
+        [
+            PolicyRow::M1,
+            PolicyRow::M6,
+            PolicyRow::M7,
+            PolicyRow::M9,
+            PolicyRow::M10
+        ],
+        "DRS-E5 PR-b b2: the pool's own rows — a duplicate (M1), a spent image on the \
+         chain (M6) or in the pool (M7); b3: the engine's seam (M9); b4: eviction (M10)"
+    );
     // SCW-18's compile-time pin is the check; this is the runtime echo so a
     // swapped `implemented(B2)` under the B1 entry cannot hide behind a
     // matching status list.
@@ -383,8 +414,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // serve-credit bundle's nine admission rows, minted `pending` with the
     // pure verifier that names them as refusals (`archival/bundle.rs`,
     // STAGED — no rule type is bound until `SO-D12`'s cutover).
+    // Policy 9 → 8 on 2026-10-17: CEN-M11 (zero-fee never relayed) went to
+    // bucket 3 and its entry was deleted (DRS-E5 PR-b b1) — redundant with
+    // M3, which refuses a zero-fee transaction at the one pool door.
     assert_eq!(CenRow::ALL.len(), 163);
-    assert_eq!(PolicyRow::ALL.len(), 9);
+    assert_eq!(PolicyRow::ALL.len(), 8);
 }
 
 #[test]

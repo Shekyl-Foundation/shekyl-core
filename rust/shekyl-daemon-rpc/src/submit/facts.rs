@@ -23,9 +23,10 @@ use crate::submit::certificate::VerificationCertificate;
 /// (§4.1: `none | own_txid | other`).
 ///
 /// `OwnTx` means the pool's spender of this key image *is* the submitted
-/// txid (an identity fact, paired with `in_pool`); `Other` means a
-/// different transaction consumes the input — the only arm that can ever
-/// classify as `DoubleSpendConflict`, and only from Phase-D fresh facts.
+/// txid (an identity fact, paired with `in_pool`); `Other` and `Embargoed`
+/// mean a different transaction consumes the input — the only arms that can
+/// ever classify as `DoubleSpendConflict`, only from Phase-D fresh facts,
+/// and `Embargoed` only for the owner tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyImageConflict {
     /// No pool- or chain-level spender for this key image.
@@ -34,6 +35,13 @@ pub enum KeyImageConflict {
     OwnTx,
     /// A different transaction consumes this key image.
     Other,
+    /// A different transaction consumes this key image, and this node holds
+    /// it unpublished — in its stem phase. Disclosed to the owner tier only:
+    /// a foreign caller is answered as a fresh accept would be, or the
+    /// public submit endpoint maps which stem transactions this node holds
+    /// (the review of #1102, B2). The Rust pool's shim reports it; the C++
+    /// shim, deleted at the flip, reports `Other`.
+    Embargoed,
 }
 
 /// Facts about the submitted reference block, present iff the daemon knows
@@ -93,6 +101,13 @@ pub struct SubmitFacts {
     pub reference: Option<ReferenceFacts>,
     /// Dynamic per-byte fee floor parameter (moves every block — F34).
     pub fee_per_byte: u64,
+    /// The relay floor window at the connecting height (FL-R23's lookback,
+    /// `shekyl_chain_rules::relay_floor_window`), when the shim reads it:
+    /// the engine then judges the fee by the door's own predicate,
+    /// `relay_floor_admits` (CEN-M3), and `fee_per_byte` is not read for
+    /// the gate. `None` from the C++ shim, whose tip-floor rule stands
+    /// until the flip deletes it (DX-Q10; the review of #1102, S5).
+    pub fee_floor_window: Option<Vec<u64>>,
     /// Transaction weight limit (compile-time constant on Shekyl:
     /// `min_block_weight / 2 − COINBASE_BLOB_RESERVED_SIZE` = 149 400; §3.1).
     pub weight_limit: u64,

@@ -20,15 +20,31 @@
 //! twice: Phase C against the snapshot params, and again over the **fresh**
 //! params when a Phase-D race returns them.
 
-use shekyl_economics::quantized_fee;
+use shekyl_economics::{quantized_fee, relay_floor_admits};
+
+use crate::submit::facts::SubmitFacts;
+
+/// The engine's fee gate over `facts`: the door's own predicate over the
+/// relay floor window when the shim supplied it (CEN-M3,
+/// `relay_floor_admits` — the same transaction gets the same fee verdict
+/// from the engine and from the pool), and the interim tip-floor rule when
+/// it did not (the C++ shim; the review of #1102, S5).
+#[must_use]
+pub fn fee_clears(tx_weight: u64, fee: u64, facts: &SubmitFacts) -> bool {
+    match &facts.fee_floor_window {
+        Some(floors) => relay_floor_admits(fee, tx_weight, floors),
+        None => fee_meets_floor(tx_weight, fee, facts.fee_per_byte),
+    }
+}
 
 /// Whether `fee` clears the dynamic floor for `tx_weight` at
 /// `fee_per_byte` — the pre-FL-R23 acceptance predicate: the tip floor
 /// alone, on the lattice, with the 2 % buffer. Rick accepted this interim
-/// for testnet (2026-10-16). **Replaced at the DRS-X store flip** by
-/// `shekyl_economics::relay_floor_admits` over
-/// `shekyl_chain_rules::relay_floor_window`: lookback-min over `G` = 5
-/// floors read off the store, zero slack.
+/// for testnet (2026-10-16), and the gate's answer only when the shim gives
+/// no window — the C++ shim, until the DRS-X flip deletes it (DX-Q10).
+/// [`fee_clears`] judges by `shekyl_economics::relay_floor_admits` over
+/// `shekyl_chain_rules::relay_floor_window` (lookback-min over `G` = 5
+/// floors read off the store, zero slack) whenever the window is given.
 ///
 /// A requirement that overflows `u64` is a floor no fee can meet, so it
 /// refuses (rule 20 §4: checked where the C++ wrapped).

@@ -403,6 +403,37 @@ fn raced_in_pool_classifies_already_in_pool() {
     );
 }
 
+/// B2 (the review of #1102): a conflict against a spender this node holds
+/// in its stem phase is disclosed to the owner tier and answered to a
+/// foreign caller exactly as a fresh accept — so the public endpoint is no
+/// map of the stem graph. A public spender's conflict is disclosed to both.
+#[test]
+fn an_embargoed_conflict_is_the_owners_alone() {
+    let raced = |conflict| {
+        let submit = |caller| {
+            let mut fresh = base_facts();
+            fresh.key_image_conflicts = vec![conflict, KeyImageConflict::Free];
+            let (engine, _shim, _verifier) =
+                engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
+            engine.submit(&spend_hex(), caller).unwrap()
+        };
+        (submit(SubmitCaller::Owner), submit(SubmitCaller::Foreign))
+    };
+    let conflict = SubmitVerdict::Rejected {
+        cause: RejectCause::DoubleSpendConflict,
+    };
+    assert_eq!(
+        raced(KeyImageConflict::Embargoed),
+        (conflict.clone(), SubmitVerdict::Accepted),
+        "the stem spender is concealed from a foreign caller"
+    );
+    assert_eq!(
+        raced(KeyImageConflict::Other),
+        (conflict.clone(), conflict),
+        "a public spender is not"
+    );
+}
+
 #[test]
 fn raced_key_image_conflict_beats_stale_root() {
     // Competing spend AND root drift in the same race window: the terminal
@@ -647,4 +678,54 @@ fn emission_claim_slot_race_classifies_double_spend_conflict() {
         },
     );
     assert_eq!(shim.relay_count(), 0, "raced ⇒ no relay nudge");
+}
+
+/// S5 (the review of #1102): given the relay floor window, the engine's fee
+/// gate is CEN-M3's own predicate, `relay_floor_admits` — so the engine and
+/// the pool's door give one transaction one fee verdict — at a window whose
+/// floors differ by far more than the 2 % the tip-floor rule allows. A fee
+/// of exactly the requirement at the window's minimum is accepted; one
+/// lattice step below it is `FeeTooLow`. Without the window (the C++ shim)
+/// the tip-floor rule stands and refuses the first.
+#[test]
+fn with_the_window_the_engines_fee_gate_is_the_doors() {
+    use shekyl_economics::{quantized_fee, relay_floor_admits, FEE_QUANTIZATION_MASK};
+
+    let (low, tip) = (1_000, 2_000);
+    let floors = vec![tip, low, tip];
+    let weight_of = |fee| {
+        parse_submission(&hexify(&spend_tx(fee)))
+            .expect("parses")
+            .weight
+    };
+    // A fee in the varint width the requirement will have (2^21..2^28).
+    let weight = weight_of(10_000_000);
+    let exact = quantized_fee(weight, low).expect("priced");
+    assert_eq!(
+        weight_of(exact),
+        weight,
+        "the fee's varint keeps the weight"
+    );
+    let below = exact - (FEE_QUANTIZATION_MASK + 1);
+    assert_eq!(weight_of(below), weight);
+
+    let verdict = |fee, window: Option<Vec<u64>>| {
+        let hex = hexify(&spend_tx(fee));
+        let mut facts = admitting_facts(&parse_submission(&hex).expect("parses"));
+        facts.fee_per_byte = tip;
+        facts.fee_floor_window = window;
+        let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
+        engine.submit(&hex, SubmitCaller::Owner).unwrap()
+    };
+    let too_low = SubmitVerdict::Rejected {
+        cause: RejectCause::FeeTooLow,
+    };
+    assert!(relay_floor_admits(exact, weight, &floors));
+    assert_eq!(
+        verdict(exact, Some(floors.clone())),
+        SubmitVerdict::Accepted
+    );
+    assert!(!relay_floor_admits(below, weight, &floors));
+    assert_eq!(verdict(below, Some(floors)), too_low.clone());
+    assert_eq!(verdict(exact, None), too_low, "the tip rule refuses it");
 }

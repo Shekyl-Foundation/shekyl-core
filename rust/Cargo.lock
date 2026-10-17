@@ -3961,11 +3961,13 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
+ "shekyl-daemon-rpc",
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-fcmp",
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
+ "shekyl-mempool",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
@@ -4268,6 +4270,8 @@ dependencies = [
  "shekyl-archival-bond-builder",
  "shekyl-archival-retention",
  "shekyl-bulletproofs",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
  "shekyl-consensus",
  "shekyl-crypto-pq",
  "shekyl-ct-balance",
@@ -4277,6 +4281,7 @@ dependencies = [
  "shekyl-daemon-config",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-mempool",
  "shekyl-options",
  "shekyl-peerlist",
  "shekyl-rpc-client",
@@ -4704,6 +4709,20 @@ dependencies = [
  "tracing-appender",
  "tracing-core",
  "tracing-subscriber",
+ "trybuild",
+]
+
+[[package]]
+name = "shekyl-mempool"
+version = "3.1.0"
+dependencies = [
+ "redb",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-store-codec",
+ "shekyl-types",
+ "shekyl-units",
+ "shekyl-wire",
  "trybuild",
 ]
 

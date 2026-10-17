@@ -82,7 +82,7 @@ mod pool_tests;
 #[path = "alt_tests.rs"]
 mod alt_tests;
 
-pub use alt::{AltBlock, AltBlockError, AltBlockFacts};
+pub use alt::{AltBlock, AltBlockError, AltBlockFacts, AltBodies};
 pub use archival::{
     AttestationWitnessBytes, BlockDraws, BondRecord, DrawableDigest, FirstPayingHeight, HeldShard,
     HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw, RMarket, SettlementRow,
@@ -95,10 +95,7 @@ pub use chain::{
 };
 pub use curve::{CurveTreeState, LayerHash, LeafCount, TreeDepth};
 pub use evidence::CoverageGaps;
-pub use pool::{
-    ArrivedPhase, BlockRef, Origin, OriginatedPhase, PoolRecord, Readiness, RelayRefusal,
-    RelayState, Responsibility,
-};
+pub use pool::{PoolRecord, ReceivedHour, Standing};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{

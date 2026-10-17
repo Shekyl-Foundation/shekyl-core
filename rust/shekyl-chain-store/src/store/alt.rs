@@ -5,8 +5,26 @@
 
 //! The alt-chain write surface (DRS-E1 S-ALT, `DRS_E1_SALT.md` §3.2): **AL1**
 //! `insert_alt_block`, **AL2** `remove_alt_block`, **AL3** `drop_alt_blocks`,
-//! on the same [`WriteBatch`] that connects and pops — and the batch-side
-//! reads (AL4, AL5) a switch decides against.
+//! the dead-row sweep `retire_alt_blocks` — on the same [`WriteBatch`] that
+//! connects and pops — and the batch-side reads (AL4–AL8) a switch decides
+//! against.
+//!
+//! Every write touches both alt tables: `alt_blocks` and
+//! `alt_block_bodies` (the block's listed bodies, consensus data a switch
+//! connects — [`AltBodies`]) are written and removed together, and AL8
+//! holds them to each other at every read.
+//!
+//! # The death rule
+//!
+//! An alternative row at height `h` can be promoted only by a switch whose
+//! fork point is at or above `h − 1`, which pops `tip − h + 1` blocks. Once
+//! that exceeds the reorg cap in force, no switch reaches it: the cap is
+//! checked before any pop (`E5-Q6`), and the tip only rises. So the connect
+//! that advances the tip to `t` removes, in its own write, every row at or
+//! below `t − cap` with its bodies ([`WriteBatch::retire_alt_blocks`]); the
+//! writer also removes every row at or below the anchor floor (CEN-E2),
+//! which the store does not know. The lifetime of an alt row is the cap —
+//! no constant of its own.
 //!
 //! # One transaction, or it is not a switch
 //!
@@ -58,11 +76,11 @@ use shekyl_chain_rules::AltValid;
 use shekyl_store_codec::{Canonical, Coded};
 use shekyl_types::{BlockHash, BlockHeight};
 
-use crate::codec::AltBlock;
+use crate::codec::{AltBlock, AltBodies};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::ALT_BLOCKS;
+use crate::schema::{ALT_BLOCKS, ALT_BLOCK_BODIES};
 
-use super::alt_reads::{self, key, AltEntry, ALT_BLOCKS_CELL};
+use super::alt_reads::{self, key, AltEntry, ALT_BLOCKS_CELL, ALT_BODIES_CELL};
 use super::error::{AltCannot, EngineError, StoreError, StoreInvariant};
 use super::keyed::check_row;
 use super::write::WriteBatch;
@@ -83,6 +101,19 @@ impl WriteBatch<'_, '_> {
             .map_err(|e| EngineError::Table(e).into())
     }
 
+    /// The bodies table, under [`Self::alt_table`]'s rule.
+    fn alt_bodies_table(
+        &self,
+    ) -> Result<redb::Table<'_, LmdbHashKey, Coded<AltBodies>>, StoreError> {
+        assert!(
+            !self.journal().is_recording(),
+            "alt writes are not chain state and must not run inside a connect's recording"
+        );
+        self.txn()
+            .open_table(ALT_BLOCK_BODIES)
+            .map_err(|e| EngineError::Table(e).into())
+    }
+
     /// **AL1.** Store the block the cheap tier `admitted`, under its hash.
     ///
     /// The only way a row enters `alt_blocks`: the argument is the verdict
@@ -94,7 +125,8 @@ impl WriteBatch<'_, '_> {
     /// token is minted on a snapshot, and the snapshot stays live through
     /// the write (a later switch judges, then pops, then inserts). The row
     /// is [`AltBlock::admitted`] of the verdict — the block, its witness,
-    /// and the height, cumulative difficulty and weight the tier derived.
+    /// and the height, cumulative difficulty and weight the tier derived —
+    /// and its listed bodies go to `alt_block_bodies` under the same key.
     /// The key is the verdict's hash (CEN-B6 over the block it stores), so
     /// there is no caller-supplied identity for the store to verify
     /// (`DRS_E5_POOL_ALT_PRUNE.md` §2.1, `AltValid → AL1`).
@@ -106,15 +138,22 @@ impl WriteBatch<'_, '_> {
     /// usefully) pre-read (SAL-4). Engine faults otherwise.
     pub fn insert_alt_block(&self, admitted: AltValid<'_, AltView<'_>>) -> Result<(), StoreError> {
         let id = admitted.hash();
-        let encoded = AltBlock::admitted(admitted).encoded();
+        let (row, bodies) = AltBlock::admitted(admitted);
+        let encoded = row.encoded();
+        let bodies = bodies.encoded();
         check_row::<Coded<AltBlock>>(ALT_BLOCKS_CELL, &encoded.as_encoded())?;
-        let mut table = self.alt_table()?;
+        check_row::<Coded<AltBodies>>(ALT_BODIES_CELL, &bodies.as_encoded())?;
         let key = key(&id);
+        let mut table = self.alt_table()?;
         if table.get(key).map_err(EngineError::Storage)?.is_some() {
             return Err(AltCannot::AlreadyHeld.into());
         }
         table
             .insert(key, encoded.as_encoded())
+            .map_err(EngineError::Storage)?;
+        drop(table);
+        self.alt_bodies_table()?
+            .insert(key, bodies.as_encoded())
             .map_err(EngineError::Storage)?;
         Ok(())
     }
@@ -145,7 +184,34 @@ impl WriteBatch<'_, '_> {
         if removed.is_none() {
             return Err(AltCannot::NotHeld.into());
         }
+        drop(removed);
+        drop(table);
+        self.alt_bodies_table()?
+            .remove(key(id))
+            .map_err(EngineError::Storage)?;
         Ok(())
+    }
+
+    /// **The death rule** (module docs): remove every alt block at or below
+    /// `through`, with its bodies; returns how many. `connect` calls it with
+    /// the tip less the cap in force; the writer calls it with the anchor
+    /// floor.
+    ///
+    /// # Errors
+    ///
+    /// [`super::StoreInvariant::CellCorrupt`] for a row that does not
+    /// decode; engine faults.
+    pub fn retire_alt_blocks(&self, through: BlockHeight) -> Result<u64, StoreError> {
+        let dead: Vec<BlockHash> = self
+            .alt_blocks()?
+            .into_iter()
+            .filter(|entry| entry.block.height() <= through)
+            .map(|entry| entry.id)
+            .collect();
+        for id in &dead {
+            self.remove_alt_block(id)?;
+        }
+        Ok(u64::try_from(dead.len()).expect("fewer than 2^64 alt rows"))
     }
 
     /// **AL3.** Remove every alt block; returns how many there were. The
@@ -159,6 +225,10 @@ impl WriteBatch<'_, '_> {
         let mut table = self.alt_table()?;
         let count = table.len().map_err(EngineError::Storage)?;
         table.retain(|_, _| false).map_err(EngineError::Storage)?;
+        drop(table);
+        self.alt_bodies_table()?
+            .retain(|_, _| false)
+            .map_err(EngineError::Storage)?;
         Ok(count)
     }
 
@@ -208,5 +278,15 @@ impl WriteBatch<'_, '_> {
     /// decode or whose block does not hash to its key; engine faults.
     pub fn alt_blocks(&self) -> Result<Vec<AltEntry>, StoreError> {
         alt_reads::alt_blocks(self.txn()).map_err(|f| self.arm_read_fault(f))
+    }
+
+    /// **AL8**, on this batch: the alt block's listed bodies, held to its
+    /// row, seeing this batch's own writes.
+    ///
+    /// # Errors
+    ///
+    /// [`super::StoreInvariant::CellCorrupt`]; engine faults.
+    pub fn alt_block_bodies(&self, id: &BlockHash) -> Result<Option<AltBodies>, StoreError> {
+        alt_reads::alt_block_bodies(self.txn(), id).map_err(|f| self.arm_read_fault(f))
     }
 }

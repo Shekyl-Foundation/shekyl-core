@@ -598,22 +598,62 @@ where
 
     /// Carry out `plan` (DRS-E5 §2.3 step 1, then [`Reorganize`]): form the
     /// demoted blocks unless the verdict is the checkpoint's, and the alt
-    /// entries from their rows' blocks and witnesses with the listed bodies
-    /// `bodies` holds by block hash — the pool's role from PR-b on. A
-    /// promoted block `form` refuses under the plan's claims is
+    /// entries from their rows' blocks, witnesses and listed bodies (the
+    /// store's, AL8). A promoted block `form` refuses under the plan's claims is
     /// [`RefusePromotion`]: the failing suffix is removed and nothing is
     /// popped. A demoted block this node connected forms without claims; a
     /// refusal there is an invariant, not a verdict. After
     /// [`Switched::Done`], the header ledger drops every height above the
     /// fork, so the next claim reloads the chain this switch connected.
-    pub async fn reorganize(
-        &mut self,
-        plan: &SwitchPlan,
-        bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
-    ) -> Result<Switched, RunFault> {
-        self.reorganize_timed(plan, bodies)
+    pub async fn reorganize(&mut self, plan: &SwitchPlan) -> Result<Switched, RunFault> {
+        self.reorganize_timed(plan)
             .await
             .map(|(switched, _)| switched)
+    }
+
+    /// The switch, then the pool (DRS-E5 PR-b b4): the demoted blocks'
+    /// listed transactions go to `pool` after the switch lands (CEN-K10 —
+    /// `SwitchDone::returned`'s caller), through the door against the chain
+    /// the switch left, at `now`. The pool's answer decides their relay and
+    /// templates only: the switch read every body it connected from the
+    /// store.
+    pub async fn reorganize_with_pool(
+        &mut self,
+        plan: &SwitchPlan,
+        pool: &mut shekyl_mempool::Pool,
+        now: shekyl_types::UnixSeconds,
+    ) -> Result<
+        (
+            Switched,
+            Vec<(shekyl_types::TxHash, shekyl_mempool::Admission)>,
+        ),
+        RunFault,
+    > {
+        let switched = self.reorganize(plan).await?;
+        let admissions = match &switched {
+            Switched::Done(done) => {
+                let returned = done.returned.clone();
+                let offers = self
+                    .read_chain(|view, rule_set| {
+                        pool.returned(
+                            returned,
+                            now,
+                            view,
+                            rule_set,
+                            &shekyl_chain_rules::AdmissionPolicy::GENESIS,
+                        )
+                    })
+                    .await;
+                assert!(
+                    offers.faults.is_empty(),
+                    "the pool faulted on the returns: {:?}",
+                    offers.faults
+                );
+                offers.admissions
+            }
+            _ => Vec::new(),
+        };
+        Ok((switched, admissions))
     }
 
     /// [`Self::reorganize`], reporting how long the forming (step 1, the
@@ -624,7 +664,6 @@ where
     pub async fn reorganize_timed(
         &mut self,
         plan: &SwitchPlan,
-        bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
     ) -> Result<(Switched, ReorgTiming), RunFault> {
         let started = std::time::Instant::now();
         // Demoted blocks carry no reference claims: the cheap tier never
@@ -642,9 +681,8 @@ where
         }
         let demoted_len = work.len();
         work.extend(plan.promoted.iter().map(|p| {
-            let listed = bodies.get(&p.at.hash).cloned().unwrap_or_default();
-            let candidate =
-                Candidate::new(p.block.clone(), listed).with_attestation_witness(p.witness.clone());
+            let candidate = Candidate::new(p.block.clone(), p.transactions.clone())
+                .with_attestation_witness(p.witness.clone());
             let references = plan.references_for(&p.at, &candidate);
             (candidate, p.at.clone(), references)
         }));
@@ -869,6 +907,57 @@ where
         });
         self.task = Some(task);
         self.connector = connector;
+    }
+
+    /// Run `f` over the chain the store holds now, through the committed
+    /// snapshot's view (`SnapshotView`, what the pool door judges against),
+    /// with the rule set in force at the height the next block connects at
+    /// ([`Self::with_store`]).
+    ///
+    /// # Panics
+    ///
+    /// If the snapshot cannot be begun or its tip read: the store this
+    /// driver just held is unreadable, which is not a scenario outcome.
+    pub async fn read_chain<R>(
+        &mut self,
+        f: impl FnOnce(&shekyl_chain_store::store::SnapshotView<'_>, &RuleSet) -> R,
+    ) -> R {
+        self.with_store(|store, rules| {
+            let snapshot = store
+                .begin_read()
+                .expect("a snapshot of the scenario's store");
+            let view = shekyl_chain_store::store::SnapshotView::new(&snapshot);
+            let connecting = shekyl_chain_rules::Tip::connecting_height(
+                shekyl_chain_rules::HeaderView::tip(&view)
+                    .expect("the tip of the scenario's store")
+                    .as_ref(),
+            );
+            f(&view, &rules.in_force(connecting))
+        })
+        .await
+    }
+
+    /// Lend `f` the store itself and the rules it runs under — for a reader
+    /// that begins its own snapshots (the submit engine's shim over the
+    /// pool). The connector is stopped so the store can be opened here, and
+    /// a fresh one is started over the same file after, as
+    /// [`reopen`](Self::reopen) does.
+    pub async fn with_store<R>(&mut self, f: impl FnOnce(&ChainStore, ChainRules) -> R) -> R {
+        let _already_stopped = self.connector.stop_gracefully().await.is_err();
+        if let Some(task) = self.task.take() {
+            drop(task.await.expect("the connector task joins"));
+        }
+        let out = {
+            let store = (self.opener)(&self.path);
+            f(&store, self.rules)
+        };
+        let (connector, task) = spawn_connector(ConnectorArgs {
+            store: (self.opener)(&self.path),
+            rules: self.rules,
+        });
+        self.task = Some(task);
+        self.connector = connector;
+        out
     }
 
     /// Every table of the store as stored bytes (`TableRows`), for a
