@@ -54,6 +54,7 @@ use crate::info_facts::{
     store_file_size, InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope,
     SessionCounts,
 };
+use crate::read_facts::PowHasher;
 
 /// The node's state that the chain store does not hold, read per call.
 ///
@@ -130,16 +131,20 @@ pub struct StoreFacts {
     rules: Arc<dyn RulesAt>,
     node: Arc<dyn NodeFacts>,
     identity: NodeIdentity,
+    pow: Arc<dyn PowHasher>,
 }
 
 impl StoreFacts {
-    /// The facts over `store`, whose data file is `store_file`.
+    /// The facts over `store`, whose data file is `store_file`, hashing
+    /// `calc_pow` with `pow` — the substrate the connector proves blocks
+    /// with.
     pub fn new(
         store: Arc<ChainStore>,
         store_file: PathBuf,
         rules: Arc<dyn RulesAt>,
         node: Arc<dyn NodeFacts>,
         identity: NodeIdentity,
+        pow: Arc<dyn PowHasher>,
     ) -> Self {
         Self {
             store,
@@ -147,6 +152,7 @@ impl StoreFacts {
             rules,
             node,
             identity,
+            pow,
         }
     }
 
@@ -154,6 +160,9 @@ impl StoreFacts {
         self.store.begin_read().map_err(store_fault)
     }
 }
+
+#[path = "store_read_facts.rs"]
+mod reads;
 
 /// A store error as the facts layer reports it: a row the store holds
 /// broken is this node's inconsistency, never a fact about the request;

@@ -35,10 +35,11 @@ use shekyl_daemon_rpc::methods::{
     get_block_header_by_height, get_block_headers_range, get_fee_estimate, get_height,
     get_last_block_header, RpcFault,
 };
+use shekyl_daemon_rpc::read_methods::{get_coinbase_tx_sum, get_curve_tree_checkpoint};
 use shekyl_daemon_rpc::store_facts::{NodeFacts, NodeIdentity, StoreFacts, SyncFacts};
 use shekyl_rpc_types::{
     GetBlockHeaderByHashRequest, GetBlockHeadersRangeRequest, GetBlockRequest,
-    GetFeeEstimateRequest, HashHex, Hidden,
+    GetCoinbaseTxSumRequest, GetCurveTreeCheckpointRequest, GetFeeEstimateRequest, HashHex, Hidden,
 };
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, PowHash};
 use shekyl_wire::Block;
@@ -130,18 +131,19 @@ fn identity() -> NodeIdentity {
 }
 
 /// The store-backed facts over the store at `path`, under `rules`.
-fn facts_over(store: Arc<ChainStore>, path: &Path, rules: ChainRules) -> StoreFacts {
+pub(crate) fn facts_over(store: Arc<ChainStore>, path: &Path, rules: ChainRules) -> StoreFacts {
     StoreFacts::new(
         store,
         path.to_path_buf(),
         Arc::new(move |h| rules.in_force(h)),
         Arc::new(TestNode::synced()),
         identity(),
+        Arc::new(KeccakPow),
     )
 }
 
 /// A hash a refusal echoes, as the wire spells it.
-fn hex(hash: BlockHash) -> HashHex {
+pub(crate) fn hex(hash: BlockHash) -> HashHex {
     HashHex::from_bytes(hash.to_bytes())
 }
 
@@ -153,7 +155,7 @@ fn hex(hash: BlockHash) -> HashHex {
 /// the scenario's fixed difficulty of one every hash satisfies the target,
 /// so the chain mines as it would over the free hash — but a recorded PoW
 /// that is not this block's own is visible, which an all-zero hash hides.
-struct KeccakPow;
+pub(crate) struct KeccakPow;
 
 impl Substrate for KeccakPow {
     type Fault = std::convert::Infallible;
@@ -167,7 +169,7 @@ impl Substrate for KeccakPow {
     }
 }
 
-fn keccak_pow(pow_blob: &[u8], seed: &BlockHash) -> [u8; 32] {
+pub(crate) fn keccak_pow(pow_blob: &[u8], seed: &BlockHash) -> [u8; 32] {
     let mut preimage = pow_blob.to_vec();
     preimage.extend_from_slice(&seed.to_bytes());
     shekyl_crypto_hash::keccak256(&preimage)
@@ -594,6 +596,8 @@ struct Difference {
 async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_captured_chain() {
     let mut differences: Vec<Difference> = Vec::new();
     let mut heights_read = 0u64;
+    let mut coinbase_figure_differs = 0u64;
+    let mut coinbase_figure_wraps = 0u64;
     for (dir, manifest) in crate::vectors_tests::captured_chains() {
         let (report, path, rules) = crate::vectors_tests::replay_keeping_store(
             &dir,
@@ -616,12 +620,23 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
         let mut reader = crate::corpus::CorpusReader::open(std::io::Cursor::new(corpus.as_slice()))
             .expect("open corpus");
         let mut corpus_blocks: Vec<Block> = Vec::new();
+        let mut corpus_fees: Vec<u128> = Vec::new();
         while corpus_blocks.len() < report.connected.len() {
             let item = reader
                 .next()
                 .expect("the corpus reads as far as the replay connected")
                 .expect("the corpus holds every connected block");
             if let IngestEvent::Extend(candidate) = item.event {
+                corpus_fees.push(
+                    candidate
+                        .transactions
+                        .iter()
+                        .map(|tx| match tx.ct {
+                            shekyl_wire::Ct::Fcmp { fee, .. } => u128::from(fee),
+                            shekyl_wire::Ct::Null(_) => 0,
+                        })
+                        .sum(),
+                );
                 corpus_blocks.push(candidate.block);
             }
         }
@@ -644,6 +659,7 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
             }
         };
         let mut previous_cumulative = 0u128;
+        let mut previous_coins = 0u128;
         for (height, hash) in &report.connected {
             let h = height.to_raw();
             heights_read += 1;
@@ -706,6 +722,58 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
                 format!("{:?}", served.header.curve_tree_root),
                 format!("{:?}", header.curve_tree_root),
             );
+
+            // The read handlers' values at this height.
+            // The tree after the block: the C++ recorded root after it.
+            let checkpoint = get_curve_tree_checkpoint(
+                &facts,
+                &GetCurveTreeCheckpointRequest { block_height: h },
+            )
+            .expect("through the tip");
+            push(
+                h,
+                "checkpoint_root",
+                hex::encode(cxx.root_after.to_bytes()),
+                checkpoint.root,
+            );
+            // One block's coinbase sum: its fees are the corpus bodies'; its
+            // emission is the C++ accumulator's growth at this height.
+            let one = get_coinbase_tx_sum(
+                &facts,
+                &GetCoinbaseTxSumRequest {
+                    height: h,
+                    count: 1,
+                },
+            )
+            .expect("coinbase sum");
+            let fees = corpus_fees[usize::try_from(h).expect("fits")];
+            push(
+                h,
+                "coinbase_sum_fees",
+                fees.to_string(),
+                ((u128::from(one.fee_amount_top64) << 64) | u128::from(one.fee_amount)).to_string(),
+            );
+            let coins = u128::from(cxx.coins_generated.to_raw());
+            let emission =
+                (u128::from(one.emission_amount_top64) << 64) | u128::from(one.emission_amount);
+            push(
+                h,
+                "coinbase_sum_emission",
+                (coins - previous_coins).to_string(),
+                emission.to_string(),
+            );
+            previous_coins = coins;
+            // The C++ handler's own figure, the coinbase less the fees —
+            // the divergence register's C++-defect row, tallied apart: it
+            // is placed, so it is not a difference this test refuses on.
+            let cxx_figure =
+                i128::from(template_reward(served)) - i128::try_from(fees).expect("fits");
+            if cxx_figure != i128::try_from(emission).expect("fits") {
+                coinbase_figure_differs += 1;
+                if cxx_figure < 0 {
+                    coinbase_figure_wraps += 1;
+                }
+            }
         }
         // At the tip: the accumulator and the burn total.
         if let Some((tip, _)) = report.connected.last() {
@@ -749,6 +817,11 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
     eprintln!(
         "store-facts differential: {heights_read} heights over the captured chains, {} differences",
         differences.len()
+    );
+    eprintln!(
+        "get_coinbase_tx_sum: the C++ emission figure (coinbase less fees) differs from the coins \
+         minted at {coinbase_figure_differs} of {heights_read} heights; it would wrap below zero at \
+         {coinbase_figure_wraps}"
     );
     assert!(differences.is_empty(), "{} differences", differences.len());
 }

@@ -67,6 +67,7 @@ use serde::{Deserialize, Serialize};
 pub mod archival;
 pub mod bin_commands;
 pub mod chain;
+pub mod chain_reads;
 pub mod consensus_digest;
 pub mod hash;
 pub mod headers;
@@ -92,6 +93,12 @@ pub use chain::{
     CORE_RPC_ERROR_CODE_INTERNAL_ERROR, CORE_RPC_ERROR_CODE_RESTRICTED,
     CORE_RPC_ERROR_CODE_TOO_BIG_HEIGHT, CORE_RPC_ERROR_CODE_WRONG_PARAM, CORE_RPC_VERSION,
     CORE_RPC_VERSION_MAJOR, CORE_RPC_VERSION_MINOR,
+};
+pub use chain_reads::{
+    AltChainInfo, CalcPowRequest, GetAltBlocksHashesResponse, GetAlternateChainsResponse,
+    GetCoinbaseTxSumRequest, GetCoinbaseTxSumResponse, GetCurveTreeCheckpointRequest,
+    GetCurveTreeCheckpointResponse, GetCurveTreeInfoResponse, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
+    CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
 };
 pub use consensus_digest::{
     DaemonNetwork, CONSENSUS_CONSTANTS_DIGEST, CONSENSUS_CONSTANTS_DIGEST_HASH,
