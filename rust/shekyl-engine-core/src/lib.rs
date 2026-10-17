@@ -22,18 +22,20 @@ pub use engine::payment_requests::{NewPaymentRequest, PaymentRequestFilter};
 #[cfg(feature = "multisig")]
 pub use engine::MultisigSignerV2;
 pub use engine::{
-    Capability, CapabilityInput, ChangePasswordError, CollectOutcome, CollectUnstakedError,
-    Credentials, CurveTreeIngestFault, DaemonClient, DaemonExpectation, DaemonOp, DiagnosticSink,
-    DrainBalanceReadError, DrainOutcome, DrainToPrincipalError, Engine, EngineCreateParams,
-    EngineSignerKind, FakechainPolicy, FeePriority, FeeTierQuote, FirstStakeError,
-    FirstStakeOutcome, InputCount, IoError, KeyError, LocalRefresh, MalformedKind, Network,
-    NoopDiagnosticSink, OpenError, OpenedEngine, OutputCount, PScanHandle, PScanStartError,
-    PendingTx, PendingTxError, PersistenceError, ProtocolErrorKind, RefreshDiagnostic,
-    RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent,
-    RefreshSummary, ReservationId, ScannableBlock, SendError, SoloSigner, StakeInError,
-    StakePosture, StakedBalance, StakedOutput, StakingReadError, StakingReadView, StateWrapKey,
-    SubmitOutcome, SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient,
-    TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
+    AcknowledgeOutcomeError, Capability, CapabilityInput, ChangePasswordError, CollectOutcome,
+    CollectUnstakedError, Credentials, CurveTreeIngestFault, DaemonClient, DaemonExpectation,
+    DaemonOp, DiagnosticSink, DrainBalanceReadError, DrainOutcome, DrainToPrincipalError, Engine,
+    EngineCreateParams, EngineSignerKind, FakechainPolicy, FeePriority, FeeTierQuote,
+    FirstStakeError, FirstStakeOutcome, InFlightRecord, InFlightState, InputCount, IoError,
+    KeyError, LocalRefresh, MalformedKind, Network, NoopDiagnosticSink, OpenError, OpenedEngine,
+    OutputCount, PScanHandle, PScanStartError, PendingTx, PendingTxError, PersistenceError,
+    ProtocolErrorKind, RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions,
+    RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary, ReportedOutcome,
+    ReservationId, ScannableBlock, SendError, SoloSigner, StakeInError, StakePosture,
+    StakedBalance, StakedOutput, StakingLedgerSnapshot, StakingReadError, StakingReadView,
+    StateWrapKey, SubmitOutcome, SuppressedClass, TracingDiagnosticSink, TxError, TxHash,
+    TxRecipient, TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome,
+    ViewMaterial,
 };
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The fault [`IoError::CurveTreeStore`] carries, re-exported so a consumer can

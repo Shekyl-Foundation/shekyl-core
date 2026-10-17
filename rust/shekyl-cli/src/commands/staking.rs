@@ -18,7 +18,8 @@
 use crate::outcome::{failed, refusal, CommandFailed, CommandResult, Presentation};
 use serde_json::{json, Value};
 use shekyl_wallet_rpc::types::{
-    CollectUnstakedResult, DrainResult, DrainVerdictView, UnstakeResult,
+    CollectUnstakedResult, DrainResult, DrainVerdictView, InFlightEntry, StakingOutcomeEntry,
+    UnstakeResult,
 };
 
 use super::{format_amount, opt_amount, require_open, transfers};
@@ -313,8 +314,25 @@ pub(crate) fn show_staked_outputs(val: &Value) {
 pub fn cmd_staking_info(rpc: &RpcSession) -> CommandResult {
     require_open(rpc)?;
     match rpc.call("staking_info", json!({})) {
-        Ok(val) => Ok(val),
+        Ok(val) => {
+            note_shown_endings(rpc, &val);
+            Ok(val)
+        }
         Err(e) => Err(rpc.report("Failed to get staking info", &e)),
+    }
+}
+
+/// Remember the newest ending of each kind this reply shows, so
+/// `stake acknowledge <kind>` clears through exactly what the owner saw.
+fn note_shown_endings(rpc: &RpcSession, val: &Value) {
+    let outcomes: Vec<StakingOutcomeEntry> = val
+        .get("outcomes")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    for entry in &outcomes {
+        if let Ok(height) = u64::try_from(entry.at_height) {
+            rpc.note_shown_ending(&entry.kind, height);
+        }
     }
 }
 
@@ -327,6 +345,7 @@ pub(crate) fn show_staking_info(val: &Value) {
     if !enabled {
         println!("Use \"stake\" to make this wallet a staker.");
         print_serving_posture(val);
+        print_staking_work(val);
         return;
     }
     if let Some(balance) = val.get("balance") {
@@ -343,6 +362,115 @@ pub(crate) fn show_staking_info(val: &Value) {
         None => println!("Staking scan height: not yet scanned"),
     }
     print_serving_posture(val);
+    print_staking_work(val);
+}
+
+/// The word a person types for each wire kind (`stake add`, `stake return`,
+/// `stake release`; claims are the wallet's own). An unknown kind is a newer
+/// server: echo it.
+fn kind_word(kind: &str) -> &str {
+    match kind {
+        "drain" => "return",
+        "exit" => "release",
+        other => other,
+    }
+}
+
+/// `in_flight` and `outcomes` (WR-Q1, WR-Q2), one line each. Nothing is
+/// printed when both are empty. An unknown state or outcome is echoed, never
+/// hidden.
+fn print_staking_work(val: &Value) {
+    let in_flight: Vec<InFlightEntry> = val
+        .get("in_flight")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let outcomes: Vec<StakingOutcomeEntry> = val
+        .get("outcomes")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    if !in_flight.is_empty() {
+        println!("In progress:");
+        for entry in &in_flight {
+            println!("  {}", in_flight_line(entry));
+        }
+    }
+    if !outcomes.is_empty() {
+        println!("Ended without completing:");
+        for entry in &outcomes {
+            println!(
+                "  {} {} at height {}: {}",
+                kind_word(&entry.kind),
+                entry.outcome.replace('_', " "),
+                entry.at_height,
+                entry.reason
+            );
+        }
+        println!(
+            "Use \"stake acknowledge <{}>\" to clear an ending once you have read it.",
+            outcomes
+                .iter()
+                .map(|e| kind_word(&e.kind))
+                .collect::<Vec<_>>()
+                .join("|")
+        );
+    }
+}
+
+fn in_flight_line(entry: &InFlightEntry) -> String {
+    let kind = kind_word(&entry.kind);
+    let returns = entry
+        .funds_return_at
+        .0
+        .map(|h| format!("Its funds return once the staking scan passes height {h}."));
+    match (entry.state.as_str(), entry.dispatched_at_height.0) {
+        ("pending", _) => format!("{kind}: waiting to be sent"),
+        ("dispatched", Some(h)) => format!(
+            "{kind}: sent at height {h}, {} attempt{}",
+            entry.attempts,
+            if entry.attempts == 1 { "" } else { "s" }
+        ),
+        ("rejected", _) => format!(
+            "{kind}: refused. {} {}",
+            entry.reason.0.as_deref().unwrap_or(""),
+            returns.unwrap_or_default()
+        ),
+        ("expired", _) => format!(
+            "{kind}: can no longer be mined. {}",
+            returns.unwrap_or_default()
+        ),
+        ("held", _) => format!("{kind}: kept. {}", entry.reason.0.as_deref().unwrap_or("")),
+        (other, _) => format!("{kind}: {other}"),
+    }
+}
+
+/// `stake acknowledge <kind>` — clear the endings of that kind that `stake`
+/// has shown this session, through the newest one shown (WR-Q2, ruled
+/// 2026-10-17). An ending written after that stays until it has been seen.
+/// Not a money action, so no confirmation.
+pub fn cmd_acknowledge_outcome(rpc: &RpcSession, kind: &str) -> CommandResult {
+    require_open(rpc)?;
+    let Some(through_height) = rpc.shown_ending_height(kind) else {
+        return Err(refusal(format!(
+            "No {} ending has been shown yet. Run \"stake\" to see the endings, then \
+             acknowledge them.",
+            kind_word(kind)
+        )));
+    };
+    match rpc.call(
+        "acknowledge_staking_outcome",
+        json!({ "kind": kind, "through_height": through_height }),
+    ) {
+        Ok(val) => Ok(val),
+        Err(e) => Err(rpc.report("Failed to clear the endings", &e)),
+    }
+}
+
+pub(crate) fn show_acknowledged(val: &Value) {
+    match val.get("cleared").and_then(Value::as_u64) {
+        Some(0) | None => println!("Nothing to clear: those endings were already cleared."),
+        Some(1) => println!("Cleared 1 ending."),
+        Some(n) => println!("Cleared {n} endings."),
+    }
 }
 
 /// Wire `posture` → the line an operator reads.
@@ -565,7 +693,11 @@ pub fn cmd_stake_join(_rpc: &crate::rpc_client::RpcSession, shard_ids: &[u64]) -
 
 #[cfg(test)]
 mod tests {
-    use super::{serving_posture_display, serving_priority_line, FOUNDATION_PHRASE};
+    use super::{
+        in_flight_line, kind_word, serving_posture_display, serving_priority_line,
+        FOUNDATION_PHRASE,
+    };
+    use shekyl_wallet_rpc::types::InFlightEntry;
     use shekyl_wallet_rpc::FOUNDATION_POSTURE_WARNING;
 
     /// **The phrase shown and the phrase required are one string.**
@@ -594,6 +726,73 @@ mod tests {
         // contain has to be rejected, or the assertion above would pass
         // over any string at all.
         assert!(!FOUNDATION_POSTURE_WARNING.contains("serve for profit"));
+    }
+
+    fn entry(state: &str, sent: Option<i64>, returns: Option<i64>) -> InFlightEntry {
+        InFlightEntry {
+            kind: "drain".into(),
+            state: state.into(),
+            dispatched_at_height: sent.into(),
+            attempts: u32::from(sent.is_some()),
+            funds_return_at: returns.into(),
+            reason: (state == "rejected")
+                .then(|| "The node refused its fee as too low.".to_owned())
+                .into(),
+        }
+    }
+
+    /// `stake acknowledge` clears through the newest ending `stake` showed,
+    /// per kind; with nothing shown it refuses rather than clear unseen
+    /// endings; opening another wallet forgets the heights.
+    #[test]
+    fn acknowledge_defaults_to_the_newest_ending_shown() {
+        let rpc = crate::rpc_client::RpcSession::offline_for_test();
+        rpc.set_open("w");
+        let reply = serde_json::json!({ "outcomes": [
+            {"kind": "drain", "outcome": "expired", "reason": "r", "at_height": 5_100, "funds": "returned"},
+            {"kind": "drain", "outcome": "rejected", "reason": "r", "at_height": 5_300, "funds": "returned"},
+            {"kind": "stake", "outcome": "expired", "reason": "r", "at_height": 5_200, "funds": "returned"},
+        ]});
+        super::note_shown_endings(&rpc, &reply);
+        assert_eq!(rpc.shown_ending_height("drain"), Some(5_300));
+        assert_eq!(rpc.shown_ending_height("stake"), Some(5_200));
+        assert_eq!(rpc.shown_ending_height("exit"), None);
+        let refused = super::cmd_acknowledge_outcome(&rpc, "exit").unwrap_err();
+        assert!(
+            refused.message.contains("Run \"stake\""),
+            "{}",
+            refused.message
+        );
+        rpc.set_open("other");
+        assert_eq!(
+            rpc.shown_ending_height("drain"),
+            None,
+            "another wallet starts fresh"
+        );
+    }
+
+    /// Each state reads in the user's words, the kind as the command a
+    /// person typed, and an unknown state is echoed rather than hidden.
+    #[test]
+    fn in_flight_lines_name_the_state_and_when_funds_return() {
+        assert_eq!(
+            in_flight_line(&entry("pending", None, None)),
+            "return: waiting to be sent"
+        );
+        assert_eq!(
+            in_flight_line(&entry("dispatched", Some(5_010), None)),
+            "return: sent at height 5010, 1 attempt"
+        );
+        let refused = in_flight_line(&entry("rejected", Some(5_010), Some(5_100)));
+        assert!(refused.contains("fee as too low"), "{refused}");
+        assert!(refused.contains("passes height 5100"), "{refused}");
+        assert!(in_flight_line(&entry("expired", None, Some(5_100))).contains("5100"));
+        assert_eq!(
+            in_flight_line(&entry("some_later_state", None, None)),
+            "return: some_later_state"
+        );
+        assert_eq!(kind_word("exit"), "release");
+        assert_eq!(kind_word("stake"), "stake");
     }
 
     #[test]

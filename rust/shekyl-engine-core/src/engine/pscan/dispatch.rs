@@ -32,9 +32,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS;
+use shekyl_engine_state::pending_post_block::{end_date, EndedRelease, RecordKind, TerminalCause};
+
+use super::end_date::log_ended;
+pub(crate) use super::end_date::{terminal_cause, REFERENCE_MAX_AGE};
 use shekyl_engine_state::{PendingBondPost, PendingPostBlock, PendingPostState};
 use shekyl_standoff::draw::bounded_uniform;
-use shekyl_types::{BlockCount, ChainCount, PCanonicalId};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::pending_post_gate::PendingPostGate;
@@ -52,8 +56,9 @@ use crate::engine::transaction_submitter::{BroadcastSubmitError, SubmitSuccess, 
 /// the branch fails that test.
 const STAKING_UNAVAILABLE_ON_THIS_DAEMON: &str = "\
 staking is not available on this daemon: it cannot accept the transaction \
-that joins the archival market yet. The pending stake was withdrawn and its \
-funds are spendable again. Stake again once the daemon is updated";
+that joins the archival market yet. The pending stake is held, and its funds \
+become spendable again once its transaction can no longer be mined; \
+staking_info shows the height. Stake again once the daemon is updated";
 
 // ---------------------------------------------------------------------------
 // The sealed-block store (trait + locked write path)
@@ -182,12 +187,15 @@ pub(crate) trait BondBroadcast: Send + Sync + 'static {
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// The unconfirmed-dispatch alarm horizon, in blocks past the tip the
-/// due-check first fired against (`Dispatched::at`). A dispatched post with
-/// no pscan confirmation after this many blocks stops resubmitting and
-/// raises the operator alarm (§3.4 resubmit bound: beyond it, resending is
-/// pointless by construction — F31, the pool either has the bytes or is
-/// censoring — and the escalation is the alarm, never a faster loop).
+/// The reservation-stall alarm horizon, in blocks past the tip a record was
+/// first dispatched at (`Dispatched::at`). A dispatched claim, drain or exit
+/// whose reservation has not settled after this many blocks raises the
+/// operator alarm once per session.
+///
+/// It no longer governs bond posts (WR-Q3): a post's end date,
+/// `reference_height + FCMP_REFERENCE_BLOCK_MAX_AGE`, always comes first,
+/// and the driver stops sending at it. The rationale below was written for
+/// the post and still sizes this horizon against the confirmation floor.
 ///
 /// **Default rationale (rule 75), resolving `ARCHIVAL_BOND_WI3_DISPATCH.md`
 /// §6(b).** §6(b) proposed reusing the submit-watchdog's escape horizon;
@@ -218,8 +226,8 @@ pub(crate) const DISPATCH_ALARM_HORIZON_BLOCKS: u64 =
 /// Tuning knobs for the dispatch driver.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DispatchConfig {
-    /// Blocks past `Dispatched::at` after which an unconfirmed post alarms
-    /// and stops resubmitting. Production is
+    /// Blocks past `Dispatched::at` after which an unsettled claim, drain or
+    /// exit raises the reservation-stall alarm. Production is
     /// [`DISPATCH_ALARM_HORIZON_BLOCKS`]; see its rationale.
     pub alarm_horizon_blocks: BlockCount,
     /// Upper bound (exclusive) of the send-time dispersal draw (§3.2
@@ -273,16 +281,21 @@ fn due_count(post: &PendingBondPost) -> ChainCount {
 
 /// Select the single post to dispatch this tick, or `None` (§3.2 part 2).
 ///
-/// Candidates are live posts whose due count has arrived at `tip` and that
-/// still have a send to make:
+/// Candidates are live posts whose due count has arrived at `tip`, that saw
+/// no terminal verdict, and whose transaction can still land:
 ///
 /// - [`PendingPostState::Pending`] — the first dispatch;
 /// - [`PendingPostState::Dispatched`] — the byte-identical resubmit probe,
 ///   unless the persona is **held** (a success-equivalent verdict was
 ///   observed this session; the record is awaiting pscan confirmation and
-///   resending adds nothing — F31 early-returns, F40 re-claims), **alarmed**
-///   (past the horizon; the escalation is the alarm, not a faster loop), or
-///   past the alarm horizon (the alarm pass this tick will catch it).
+///   resending adds nothing — F31 early-returns, F40 re-claims).
+///
+/// Excluded, durably: a post with a **terminal verdict recorded** (BD-Q3
+/// Rule 2), held to its end date and never resent; and a post **past its end
+/// date** (WR-Q3), first send included. `tip.next_height()` is the earliest
+/// height a send can land at, and past [`end_date`] every daemon refuses the
+/// reference: the send would waste traffic and show one origin re-offering
+/// dead bytes. The scan's own frontier, not the tip, decides the release.
 ///
 /// Ordering: lowest due count; ties broken by lowest `anchor_t0`, then
 /// persona id — pinned so a catch-up backlog replays deterministically. The
@@ -291,19 +304,16 @@ fn due_count(post: &PendingBondPost) -> ChainCount {
 fn select_dispatch_candidate<'a>(
     posts: &'a [PendingBondPost],
     tip: ChainCount,
-    alarm_horizon: BlockCount,
     held: &BTreeSet<PCanonicalId>,
-    alarmed: &BTreeSet<PCanonicalId>,
 ) -> Option<&'a PendingBondPost> {
     posts
         .iter()
         .filter(|p| due_count(p) <= tip)
-        .filter(|p| !alarmed.contains(&p.persona))
+        .filter(|p| p.terminal.is_none())
+        .filter(|p| tip.next_height() <= end_date(p.reference_height, REFERENCE_MAX_AGE))
         .filter(|p| match p.state {
             PendingPostState::Pending => true,
-            PendingPostState::Dispatched { at, .. } => {
-                !held.contains(&p.persona) && tip < at.saturating_add(alarm_horizon)
-            }
+            PendingPostState::Dispatched { .. } => !held.contains(&p.persona),
         })
         .min_by_key(|p| (due_count(p), p.anchor_t0, p.persona))
 }
@@ -339,6 +349,12 @@ pub(crate) struct TickEvidence<'a> {
     /// equivalence is why this is a second field rather than a second driver
     /// with its own notion of "confirmed".
     pub(crate) live_funding: &'a BTreeSet<shekyl_types::GlobalOutputIndex>,
+    /// The highest height the sealed scan has covered, inclusive (`None`
+    /// before its first block). Same provenance and depth as the two sets
+    /// above. The end-date release (WR-Q3) fires once this reaches a
+    /// record's end date: every block that could include the record is then
+    /// scanned, so a record that landed has already been retired above.
+    pub(crate) scanned_through: Option<BlockHeight>,
 }
 
 /// The sweep-facing seam for the end-of-sweep dispatch tick: the driving
@@ -378,9 +394,8 @@ struct TickPlan {
     /// Dispatched-but-unsettled claims/drains newly past the alarm horizon:
     /// `(kind, persona, first-dispatch tip)`.
     reservation_alarms: Vec<(ReservationKind, PCanonicalId, ChainCount)>,
-    /// Dispatched-but-unconfirmed posts newly past the alarm horizon:
-    /// `(persona, first-dispatch tip, total attempts)`.
-    alarms: Vec<(PCanonicalId, ChainCount, u32)>,
+    /// Records released at their end date this tick, with their outcomes.
+    ended: EndedRelease,
     /// The post sealed as `Dispatched` this tick (a clone of the sealed
     /// record) and its post-transition attempt count.
     dispatched: Option<(PendingBondPost, u32)>,
@@ -425,14 +440,11 @@ pub(crate) struct DispatchDriver<S, T> {
     /// restart clears it, and the resume re-probes once with the same bytes
     /// (safe by P-2 idempotence), exactly the watchdog's probe discipline.
     held_this_session: BTreeSet<PCanonicalId>,
-    /// Personas already alarmed this session (alarm once, not once per
-    /// tick — alarm fatigue is itself an attack surface). In-memory only:
-    /// the durable record stays held (funds-safety over liveness), so a
-    /// restart re-raises the alarm, which is the desired resume behavior.
-    alarmed_this_session: BTreeSet<PCanonicalId>,
-    /// Claims/drains already alarmed this session, keyed by kind AND persona.
-    /// Same alarm-once discipline as the post set, and the same resume
-    /// behaviour: the record is held, so a restart re-raises.
+    /// Claims/drains already alarmed this session, keyed by kind AND persona
+    /// (alarm once, not once per tick — alarm fatigue is itself an attack
+    /// surface). In-memory only: the record is held, so a restart re-raises.
+    /// Bond posts have no such alarm: their end date ends them first
+    /// (WR-Q3), and the `expired` outcome is their operator signal.
     alarmed_reservations: BTreeSet<(ReservationKind, PCanonicalId)>,
     /// GF-7 timeline seam (hooks-spec §3/§4 discipline): production injects
     /// [`NoOpObserver`](shekyl_standoff::gf7::NoOpObserver); only the sim
@@ -457,7 +469,6 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchDriver<S, T> {
             broadcast,
             config,
             held_this_session: BTreeSet::new(),
-            alarmed_this_session: BTreeSet::new(),
             alarmed_reservations: BTreeSet::new(),
             #[cfg(feature = "gf7-hooks")]
             observer: Box::new(shekyl_standoff::gf7::NoOpObserver),
@@ -502,19 +513,21 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
     /// with opposite sensitivities to a lying daemon** (finding A-1,
     /// 2026-07-06): the *due-check* (`due_count(p) <= tip`), where
     /// inflation is benign-later (monotone noise, posts dispatch late);
-    /// and the *alarm horizon* (`tip < at.saturating_add(alarm_horizon)`), where
-    /// inflation is **premature-alarm** — a tip reported
-    /// `alarm_horizon_blocks` ahead trips the operator alarm on posts
-    /// that are propagating normally. The 2d-2 clamp must therefore cover
-    /// **both** tip reads, not just the due-check the invariant's
-    /// monotone-noise argument was written against.
+    /// the *end-date stop* (`tip.next_height() <= end_date`), where inflation
+    /// withholds a send that could still land; and the reservation *alarm
+    /// horizon* (`tip >= at + alarm_horizon`), where inflation is
+    /// **premature-alarm**. The 2d-2 clamp must therefore cover every tip
+    /// read, not just the due-check the invariant's monotone-noise argument
+    /// was written against. The end-date **release** reads the scan's own
+    /// frontier, never the tip.
     ///
     /// `confirmed` is the set of personas whose bond post the pscan has
     /// **observed on-chain, reorg-deep** (JoinMarket `BondPostMatch`es from
     /// the sweep's own scan — never a daemon claim, §3.5).
     ///
     /// Per tick: retire confirmed records (one seal, releasing bytes +
-    /// derived reservation together), raise past-horizon alarms, then
+    /// derived reservation together), release records past their end date
+    /// with their outcomes, raise reservation-stall alarms, then
     /// dispatch at most one due post — seal the `Dispatched` transition
     /// first, sleep the dispersal draw, submit, and absorb the outcome
     /// (§3.4).
@@ -531,7 +544,6 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         // discipline). Session sets are read inside, mutated after (the
         // closure is sync; the sets are this driver's own fields).
         let held = &self.held_this_session;
-        let alarmed = &self.alarmed_this_session;
         let reservation_alarmed = &self.alarmed_reservations;
         let horizon = self.config.alarm_horizon_blocks;
         let plan = self
@@ -560,6 +572,25 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 // drain left the lane refusing `-29511` across sessions.
                 let settled = block.remove_settled(evidence.live_funding);
                 if !settled.is_empty() {
+                    changed = true;
+                }
+
+                // End-date release (WR-Q3, WR-Q4): LAST, after both retires,
+                // in the same pass over the same evidence. A record that
+                // landed did so at or below its end date, so once the scan
+                // has covered the end date the retires above have already
+                // removed it; what reaches here did not land. Each released
+                // record's outcome is written in this same seal (WR-Q2).
+                let ended = match evidence.scanned_through {
+                    Some(scanned_through) => block.release_ended(
+                        scanned_through,
+                        evidence.live_funding,
+                        REFERENCE_MAX_AGE,
+                        tip.tip().unwrap_or(BlockHeight::from_raw(0)),
+                    ),
+                    None => EndedRelease::default(),
+                };
+                if !ended.is_empty() {
                     changed = true;
                 }
 
@@ -598,23 +629,11 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                     }
                 }
 
-                // Alarm scan (§3.4 resubmit bound): dispatched, unconfirmed,
-                // past the horizon, not yet alarmed this session.
-                let mut alarms = Vec::new();
-                for post in block.posts() {
-                    if let PendingPostState::Dispatched { at, attempts } = post.state {
-                        if tip >= at.saturating_add(horizon) && !alarmed.contains(&post.persona) {
-                            alarms.push((post.persona, at, attempts));
-                        }
-                    }
-                }
-
                 // Select + mark (§3.2 part 2 / §3.3 step 2): at most one,
                 // deterministic order, sealed as `Dispatched` BEFORE any
                 // send.
                 let candidate =
-                    select_dispatch_candidate(block.posts(), tip, horizon, held, alarmed)
-                        .map(|p| p.persona);
+                    select_dispatch_candidate(block.posts(), tip, held).map(|p| p.persona);
                 let dispatched = candidate.map(|persona| {
                     // `mark_dispatched` returns the transitioned post from the
                     // same lookup it mutates — no second scan to re-find it.
@@ -631,7 +650,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                         retired,
                         settled,
                         reservation_alarms,
-                        alarms,
+                        ended,
                         dispatched,
                     },
                 )
@@ -642,7 +661,6 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         // -- Phase 2: session bookkeeping -----------------------------------
         for persona in &plan.retired {
             self.held_this_session.remove(persona);
-            self.alarmed_this_session.remove(persona);
         }
         if !plan.retired.is_empty() {
             tracing::info!(
@@ -716,23 +734,26 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
             );
         }
 
-        for (persona, at, attempts) in &plan.alarms {
-            self.alarmed_this_session.insert(*persona);
-            // Truncated `Debug` on `PCanonicalId` — enough for the operator
-            // to correlate with their own records, never the full id in a log.
-            tracing::error!(
-                persona = ?persona,
-                dispatched_at = at.to_raw(),
-                tip = tip.to_raw(),
-                attempts,
-                horizon_blocks = self.config.alarm_horizon_blocks.to_raw(),
-                "bond-post dispatch ALARM: dispatched post unconfirmed past the alarm horizon — \
-                 resubmits stop (F31: the pool either holds the bytes or is censoring); the \
-                 record and its funding reservation are HELD (funds-safety over liveness). \
-                 Operator action: check daemon connectivity / chain health; a manual re-anchor \
-                 is a fresh assemble (§3.6), never automatic"
-            );
+        for &(kind, persona, _) in &plan.ended.released {
+            match kind {
+                RecordKind::Post => {
+                    self.held_this_session.remove(&persona);
+                }
+                RecordKind::Claim => {
+                    self.alarmed_reservations
+                        .remove(&(ReservationKind::Claim, persona));
+                }
+                RecordKind::Drain => {
+                    self.alarmed_reservations
+                        .remove(&(ReservationKind::Drain, persona));
+                }
+                RecordKind::Release => {
+                    self.alarmed_reservations
+                        .remove(&(ReservationKind::Release, persona));
+                }
+            }
         }
+        log_ended(&plan.ended);
 
         // -- Phase 3: the single dispatch (dispersal → emit → send) ---------
         let Some((post, attempts)) = plan.dispatched else {
@@ -796,12 +817,28 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
             // the same seal (R2-4) — and surface the alarm. No automatic
             // re-assembly (§3.6: a rejection-driven re-assemble loop is a
             // probe amplifier for a malicious daemon).
+            // Terminal verify rejection (BD-Q3 Rule 2): stop sending, keep
+            // the record AND its reservation, and record the cause in one
+            // seal. From the first submit the daemon holds valid bytes: a
+            // lying daemon could report a verdict, wait for a release, and
+            // relay the bond inside its window onto a dropped slot. So the
+            // verdict never ends the record; its end date does, and the
+            // chain decides there (`release_ended`). The recorded cause
+            // keeps the selector from ever resending it, across restarts.
+            // No automatic re-assembly (§3.6: a rejection-driven re-assemble
+            // loop is a probe amplifier for a malicious daemon).
             Err(BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal { kind })) => {
                 self.store
-                    .mutate(|block| (block.remove_post(&persona).is_some(), ()))
+                    .mutate(|block| {
+                        let recorded = block.record_terminal(
+                            RecordKind::Post,
+                            &persona,
+                            TerminalCause::from(kind),
+                        );
+                        (recorded, ())
+                    })
                     .await
                     .map_err(|e| DispatchError::Store(Box::new(e)))?;
-                self.held_this_session.remove(&persona);
                 if kind == TerminalErrorKind::JoinMarketUnsupported {
                     // FND-20: nothing was wrong with the post. Say so, in
                     // the words a staker can act on.
@@ -810,16 +847,17 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                     tracing::error!(
                         ?kind,
                         attempts,
-                        "bond-post dispatch ALARM: terminal verify rejection — record removed, \
-                         bytes pruned, funding reservation released (one seal). Re-anchor is a \
-                         fresh assemble on the next natural bond-attempt trigger (§3.6), never \
+                        "bond-post dispatch ALARM: terminal verify rejection — sending stops; \
+                         the record and its funding reservation are HELD to the post's end \
+                         date, where the chain decides (a daemon verdict never releases a \
+                         submitted record). Re-anchor is a fresh assemble after that, never \
                          automatic"
                     );
                 }
             }
             // Retryable / ambiguous: unknown or transient outcome. The state
             // already says `Dispatched` (sealed before the send), so the
-            // next due tick resubmits the same bytes; the alarm horizon
+            // next due tick resubmits the same bytes; the post's end date
             // bounds the loop.
             Err(BroadcastSubmitError::Submit(SubmitterError::RejectedRetryable { cause })) => {
                 tracing::warn!(

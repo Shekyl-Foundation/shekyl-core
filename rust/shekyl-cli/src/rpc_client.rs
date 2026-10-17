@@ -128,6 +128,10 @@ pub struct RpcSession {
     hosted: Option<Hosted>,
     next_id: Cell<u64>,
     open_wallet: RefCell<Option<String>>,
+    /// The newest staking ending this session has shown, per wire kind: the
+    /// default height `stake acknowledge` clears through, so an ending
+    /// written after the owner last looked is never cleared unseen.
+    shown_endings: RefCell<std::collections::BTreeMap<String, u64>>,
     /// When set, RPC error reports include the structured `error.data`.
     pub debug: bool,
 }
@@ -313,6 +317,7 @@ impl RpcSession {
             }),
             next_id: Cell::new(1),
             open_wallet: RefCell::new(None),
+            shown_endings: RefCell::new(std::collections::BTreeMap::new()),
             debug,
         })
     }
@@ -338,6 +343,7 @@ impl RpcSession {
             hosted: None,
             next_id: Cell::new(1),
             open_wallet: RefCell::new(None),
+            shown_endings: RefCell::new(std::collections::BTreeMap::new()),
             debug,
         };
         // A remote server may already have a wallet open (opened by the
@@ -387,11 +393,43 @@ impl RpcSession {
     /// Record that `name` is now the open wallet.
     pub fn set_open(&self, name: &str) {
         *self.open_wallet.borrow_mut() = Some(name.to_owned());
+        self.shown_endings.borrow_mut().clear();
     }
 
     /// Record that no wallet is open.
     pub fn set_closed(&self) {
         *self.open_wallet.borrow_mut() = None;
+        self.shown_endings.borrow_mut().clear();
+    }
+
+    /// Record that an ending of `kind` written at `at_height` was shown.
+    /// Keeps the newest per kind; another wallet's heights never carry over
+    /// (opening or closing a wallet forgets them).
+    pub fn note_shown_ending(&self, kind: &str, at_height: u64) {
+        let mut shown = self.shown_endings.borrow_mut();
+        let entry = shown.entry(kind.to_owned()).or_insert(at_height);
+        *entry = (*entry).max(at_height);
+    }
+
+    /// The newest ending of `kind` this session has shown, if any.
+    pub fn shown_ending_height(&self, kind: &str) -> Option<u64> {
+        self.shown_endings.borrow().get(kind).copied()
+    }
+
+    /// A session that never dials: for tests of session-side state.
+    #[cfg(test)]
+    pub(crate) fn offline_for_test() -> Self {
+        Self {
+            transport: Transport::Http {
+                url: "http://127.0.0.1:9".to_owned(),
+                agent: build_http_agent(None).expect("agent"),
+            },
+            hosted: None,
+            next_id: Cell::new(1),
+            open_wallet: RefCell::new(None),
+            shown_endings: RefCell::new(std::collections::BTreeMap::new()),
+            debug: false,
+        }
     }
 
     /// Perform a JSON-RPC call and return the `result` value.

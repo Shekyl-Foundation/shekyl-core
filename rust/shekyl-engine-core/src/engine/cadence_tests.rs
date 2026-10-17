@@ -315,6 +315,7 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
         "submit-lifecycle",
         "serving-liveness",
         "terminal-reject",
+        "pending-outcomes",
         "epoch-claim",
     ] {
         assert!(
@@ -324,11 +325,12 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
     }
     // Fire order is the §3 retire-before-assemble registration order.
     assert_eq!(
-        fired[..4],
+        fired[..5],
         [
             ("submit-lifecycle", 1),
             ("serving-liveness", 1),
             ("terminal-reject", 1),
+            ("pending-outcomes", 1),
             ("epoch-claim", 1)
         ],
         "registration order must be preserved per tick"
@@ -796,4 +798,203 @@ async fn claim_leg_evaluates_once_per_settled_epoch() {
         1,
         "a new settled epoch must re-open the evaluation gate"
     );
+}
+
+/// The pending-outcomes leg (WR-Q3): a sealed `spent_elsewhere` outcome
+/// raises the pending-funds integrity alarm, a fresh board after a restart
+/// re-derives it from the same seal, and once the outcome is acknowledged a
+/// fresh board reads armed and quiet.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal() {
+    use shekyl_engine_state::pending_post_block::{
+        PendingDrain, PendingPostState, RecordKind, SealAdmission,
+    };
+    use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
+
+    fn live(alarms: &OperatorAlarms) -> Option<OperatorAlarm> {
+        alarms
+            .board()
+            .condition(AlarmCondition::PendingFundsIntegrity)
+            .and_then(shekyl_operator_alarm::ConditionState::live)
+            .map(shekyl_operator_alarm::RaisedAlarm::alarm)
+    }
+
+    let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 11);
+    let arc = Arc::new(RwLock::new(engine));
+    let leg_on = |alarms: &Arc<OperatorAlarms>| outcomes::PendingOutcomeLeg {
+        engine: Arc::downgrade(&arc),
+        alarms: Arc::clone(alarms),
+    };
+
+    let before = Arc::new(OperatorAlarms::new());
+    leg_on(&before).fire(1).await;
+    assert_eq!(live(&before), None, "nothing to report before any outcome");
+
+    // A drain reserving two inputs reaches its end date (reference 94 + 100)
+    // with one of them spent by something else.
+    let who = PCanonicalId::from_bytes([0x09; 32]);
+    let gate = arc.read().await.pending_gate.clone();
+    let store = crate::engine::pscan::start::pending_post_store_for_engine(Arc::clone(&arc), gate);
+    let released = store
+        .mutate(move |block| {
+            let g = block.generation();
+            let drain = PendingDrain {
+                persona: who,
+                tx_bytes: vec![0x09],
+                funding_gindexes: vec![
+                    GlobalOutputIndex::from_raw(1),
+                    GlobalOutputIndex::from_raw(2),
+                ],
+                state: PendingPostState::Pending,
+                reference_height: BlockHeight::from_raw(94),
+                terminal: None,
+            };
+            assert_eq!(
+                block.seal_drain(drain, ChainCount::from_raw(100), g),
+                SealAdmission::Admit
+            );
+            let out = block.release_ended(
+                BlockHeight::from_raw(194),
+                &[GlobalOutputIndex::from_raw(2)].into(),
+                BlockCount::from_raw(100),
+                BlockHeight::from_raw(194),
+            );
+            (true, out.released.len())
+        })
+        .await
+        .expect("seal the outcome");
+    assert_eq!(released, 1);
+
+    let board = Arc::new(OperatorAlarms::new());
+    leg_on(&board).fire(2).await;
+    assert_eq!(
+        live(&board),
+        Some(OperatorAlarm::ReservationSpentElsewhere {
+            records: 1,
+            held_stakes: 0
+        })
+    );
+
+    let restarted = Arc::new(OperatorAlarms::new());
+    leg_on(&restarted).fire(3).await;
+    assert_eq!(
+        live(&restarted),
+        Some(OperatorAlarm::ReservationSpentElsewhere {
+            records: 1,
+            held_stakes: 0
+        }),
+        "a fresh board re-derives the alarm from the durable outcome"
+    );
+
+    // A new drain sealed for the same persona does not clear it: a
+    // `spent_elsewhere` outcome clears only on acknowledgement.
+    store
+        .mutate(move |block| {
+            let g = block.generation();
+            let next = PendingDrain {
+                persona: who,
+                tx_bytes: vec![0x0B],
+                funding_gindexes: vec![GlobalOutputIndex::from_raw(3)],
+                state: PendingPostState::Pending,
+                reference_height: BlockHeight::from_raw(200),
+                terminal: None,
+            };
+            let admitted =
+                block.seal_drain(next, ChainCount::from_raw(206), g) == SealAdmission::Admit;
+            (admitted, admitted)
+        })
+        .await
+        .map(|admitted| assert!(admitted))
+        .expect("seal a new drain");
+    let resealed = Arc::new(OperatorAlarms::new());
+    leg_on(&resealed).fire(3).await;
+    assert_eq!(
+        live(&resealed),
+        Some(OperatorAlarm::ReservationSpentElsewhere {
+            records: 1,
+            held_stakes: 0
+        }),
+        "a new seal of the kind leaves the outcome and its alarm"
+    );
+
+    store
+        .mutate(move |block| {
+            let acked = block.acknowledge_outcomes(RecordKind::Drain, BlockHeight::from_raw(194));
+            (acked > 0, acked)
+        })
+        .await
+        .expect("acknowledge");
+    let after = Arc::new(OperatorAlarms::new());
+    leg_on(&after).fire(4).await;
+    let row = after
+        .board()
+        .condition(AlarmCondition::PendingFundsIntegrity)
+        .expect("a staker's seal still arms the row");
+    assert!(row.live().is_none(), "acknowledged: armed and quiet");
+
+    // A stake reaches its end date (reference 94 + 100) with its one input
+    // spent and no match: held, and the alarm is re-derived from the two
+    // seals. Once the scan seals its match, the stake is the dispatch tick's
+    // to retire and the alarm is quiet.
+    let staker = PCanonicalId::from_bytes([0x0A; 32]);
+    store
+        .mutate(move |block| {
+            let g = block.generation();
+            let post = shekyl_engine_state::PendingBondPost {
+                p_slot: shekyl_types::PSlot::from_raw(3),
+                persona: staker,
+                tx_bytes: vec![0x0A],
+                bond_post_offset_blocks: BlockCount::from_raw(0),
+                anchor_t0: ChainCount::from_raw(100),
+                funding_gindexes: vec![GlobalOutputIndex::from_raw(5)],
+                state: PendingPostState::Pending,
+                reference_height: BlockHeight::from_raw(94),
+                terminal: None,
+            };
+            let admitted = block.seal_post(post, g) == SealAdmission::Admit;
+            (admitted, admitted)
+        })
+        .await
+        .map(|admitted| assert!(admitted))
+        .expect("seal the stake");
+    let seal_scan = |matches: Vec<shekyl_engine_state::pscan_state::BondPostRecord>| {
+        let state = shekyl_engine_state::pscan_state::PScanState::new(
+            shekyl_engine_state::pscan_cursor::PScanCursor::at(BlockHeight::from_raw(195), [0; 32]),
+            Default::default(),
+            Default::default(),
+            matches,
+            Vec::new(),
+            Vec::new(),
+            Default::default(),
+        );
+        let bytes = state.to_postcard_bytes().expect("encode pscan state");
+        let arc = Arc::clone(&arc);
+        async move {
+            let g = arc.read().await;
+            g.persistence()
+                .save_pscan_state(g.state_wrap_key().as_bytes(), &bytes)
+                .expect("seal the scan");
+        }
+    };
+    seal_scan(Vec::new()).await;
+    let held = Arc::new(OperatorAlarms::new());
+    leg_on(&held).fire(5).await;
+    assert_eq!(
+        live(&held),
+        Some(OperatorAlarm::ReservationSpentElsewhere {
+            records: 0,
+            held_stakes: 1
+        }),
+        "a held stake raises the alarm from durable state"
+    );
+
+    seal_scan(vec![shekyl_engine_state::pscan_state::BondPostRecord {
+        height: BlockHeight::from_raw(150),
+        p_canonical_id: staker,
+        post_kind: shekyl_wire::transaction::BOND_POST_KIND_JOINMARKET,
+    }])
+    .await;
+    let matched = Arc::new(OperatorAlarms::new());
+    leg_on(&matched).fire(6).await;
+    assert_eq!(live(&matched), None, "a matched stake is not held");
 }

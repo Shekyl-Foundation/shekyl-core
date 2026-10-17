@@ -28,6 +28,7 @@ use shekyl_types::{BlockCount, ChainCount, PSlot, TxHash};
 
 use super::*;
 use crate::engine::transaction_submitter::BroadcastKind;
+use shekyl_engine_state::pending_post_block::OutcomeKind;
 
 /// One scripted submit verdict (the `BondBroadcast` return shape).
 type Verdict = Result<SubmitSuccess, BroadcastSubmitError>;
@@ -124,6 +125,8 @@ fn post(persona_byte: u8, anchor: u64, offset: u64, gindexes: &[u64]) -> Pending
             .map(shekyl_types::GlobalOutputIndex::from_raw)
             .collect(),
         state: PendingPostState::Pending,
+        reference_height: shekyl_types::BlockHeight::from_raw(anchor.saturating_sub(6)),
+        terminal: None,
     }
 }
 
@@ -201,11 +204,50 @@ async fn tick(driver: &mut TestDriver, tip: u64) {
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &BTreeSet::new(),
+                scanned_through: None,
             },
             &CancellationToken::new(),
         )
         .await
         .expect("tick");
+}
+
+/// A tick with scan evidence: the confirmed personas, the live funding, and
+/// the highest height the sealed scan has covered.
+async fn tick_with(
+    driver: &mut TestDriver,
+    tip: u64,
+    confirmed: &[u8],
+    live: &[u64],
+    scanned_through: u64,
+) {
+    let confirmed: BTreeSet<PCanonicalId> = confirmed.iter().map(|b| persona(*b)).collect();
+    let live: BTreeSet<shekyl_types::GlobalOutputIndex> = live
+        .iter()
+        .copied()
+        .map(shekyl_types::GlobalOutputIndex::from_raw)
+        .collect();
+    driver
+        .on_tick(
+            ChainCount::from_raw(tip),
+            TickEvidence {
+                confirmed_posts: &confirmed,
+                live_funding: &live,
+                scanned_through: Some(shekyl_types::BlockHeight::from_raw(scanned_through)),
+            },
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("tick");
+}
+
+fn sealed_block(store: &MemStore) -> PendingPostBlock {
+    store
+        .block
+        .lock()
+        .expect("mem store")
+        .clone()
+        .expect("sealed")
 }
 
 // -- gate 1: due-check boundaries ----------------------------------------
@@ -231,7 +273,9 @@ async fn due_check_boundaries() {
     // accepted verdict holds it — covered below. Late-first-dispatch:
     let (mut late_driver, _s, late_broadcast) =
         driver_with_posts(vec![post(2, 100, 10, &[8])], vec![accepted()]);
-    tick(&mut late_driver, 500).await;
+    // Late, but before the end date (reference 94 + 100 = 194). Past it the
+    // post is never sent (`selector_skips_held_resubmits_recorded_verdicts_and_dead_posts`).
+    tick(&mut late_driver, 190).await;
     assert_eq!(
         late_broadcast.sent().len(),
         1,
@@ -257,9 +301,10 @@ async fn one_per_tick_and_deterministic_ordering() {
     let (mut driver, _store, broadcast) =
         driver_with_posts(posts, (0..4).map(|_| accepted()).collect());
 
-    // Every post overdue at once — the downtime catch-up shape (§3.2).
+    // Every post overdue at once — the downtime catch-up shape (§3.2) — and
+    // still inside every end date (the earliest, C's and D's, is 174).
     for _ in 0..4 {
-        tick(&mut driver, 1_000).await;
+        tick(&mut driver, 150).await;
     }
     let sent: Vec<PCanonicalId> = broadcast.sent().iter().map(|(p, _)| *p).collect();
     assert_eq!(
@@ -309,6 +354,7 @@ async fn failed_seal_sends_nothing() {
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &BTreeSet::new(),
+                scanned_through: None,
             },
             &CancellationToken::new(),
         )
@@ -423,6 +469,7 @@ async fn confirmation_retires_bytes_and_reservation_in_one_seal() {
             TickEvidence {
                 confirmed_posts: &confirmed,
                 live_funding: &BTreeSet::new(),
+                scanned_through: None,
             },
             &CancellationToken::new(),
         )
@@ -460,6 +507,8 @@ fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
                 tx_bytes: vec![0xCD; 8],
                 fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             at,
             g,
@@ -473,6 +522,8 @@ fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
                 tx_bytes: vec![0xEF; 8],
                 funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             at,
             g,
@@ -486,6 +537,8 @@ fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
                 tx_bytes: vec![0xEB; 8],
                 funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(33)],
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             at,
             g,
@@ -525,6 +578,7 @@ async fn a_bond_post_confirmation_never_retires_a_reservation_observed_record() 
             TickEvidence {
                 confirmed_posts: &confirmed,
                 live_funding: &live,
+                scanned_through: None,
             },
             &CancellationToken::new(),
         )
@@ -571,6 +625,7 @@ async fn a_settled_reservation_retires_the_claim_the_drain_and_the_release() {
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &BTreeSet::new(),
+                scanned_through: None,
             },
             &CancellationToken::new(),
         )
@@ -629,6 +684,8 @@ async fn a_stalled_claim_drain_and_release_on_one_persona_all_alarm() {
                 tx_bytes: vec![0xCD; 8],
                 fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             at,
             g,
@@ -642,6 +699,8 @@ async fn a_stalled_claim_drain_and_release_on_one_persona_all_alarm() {
                 tx_bytes: vec![0xEF; 8],
                 funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             at,
             g,
@@ -655,6 +714,8 @@ async fn a_stalled_claim_drain_and_release_on_one_persona_all_alarm() {
                 tx_bytes: vec![0xEB; 8],
                 funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(33)],
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             at,
             g,
@@ -681,6 +742,7 @@ async fn a_stalled_claim_drain_and_release_on_one_persona_all_alarm() {
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &live,
+                scanned_through: None,
             },
             &CancellationToken::new(),
         )
@@ -750,6 +812,8 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
                 tx_bytes: vec![0xCD; 8],
                 fee_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(11)],
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             at,
             g,
@@ -763,6 +827,8 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
                 tx_bytes: vec![0xEF; 8],
                 funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(22)],
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             at,
             g,
@@ -776,6 +842,8 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
                 tx_bytes: vec![0xEB; 8],
                 funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(33)],
                 state: PendingPostState::Pending,
+                reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+                terminal: None,
             },
             at,
             g,
@@ -803,6 +871,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &all_live,
+                scanned_through: None,
             },
             &CancellationToken::new(),
         )
@@ -827,6 +896,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &claim_gone,
+                scanned_through: None,
             },
             &CancellationToken::new(),
         )
@@ -874,6 +944,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &drain_only,
+                scanned_through: None,
             },
             &CancellationToken::new(),
         )
@@ -1048,7 +1119,7 @@ fn every_reservation_writer_rechecks_the_union_under_the_seal_lock() {
 /// A terminal verify rejection removes the record (releasing bytes +
 /// reservation, R2-4) and never resends.
 #[tokio::test]
-async fn terminal_rejection_removes_and_never_resends() {
+async fn a_terminal_verdict_holds_the_post_and_never_resends() {
     let terminal = Err(BroadcastSubmitError::Submit(
         SubmitterError::RejectedTerminal {
             kind: crate::engine::error::TerminalErrorKind::DoubleSpend,
@@ -1060,30 +1131,56 @@ async fn terminal_rejection_removes_and_never_resends() {
     tick(&mut driver, 100).await;
     assert_eq!(broadcast.sent().len(), 1);
 
-    let block = store
-        .block
-        .lock()
-        .expect("mem store")
-        .clone()
-        .expect("sealed");
-    assert!(
-        block.posts().is_empty(),
-        "terminal reject prunes the signed bytes at rest (no resurrection on restart)"
+    // BD-Q3 Rule 2: the verdict never removes a submitted record.
+    let block = sealed_block(&store);
+    assert_eq!(block.posts().len(), 1, "the record is held");
+    assert_eq!(block.posts()[0].terminal, Some(TerminalCause::DoubleSpend));
+    assert_eq!(
+        block.reserved_gindexes(),
+        [7, 8].map(shekyl_types::GlobalOutputIndex::from_raw).into(),
+        "and so is its reservation"
     );
-    assert!(block.reserved_gindexes().is_empty(), "reservation released");
+    assert!(block.outcomes().is_empty(), "no outcome until the end date");
 
     tick(&mut driver, 101).await;
-    assert_eq!(broadcast.sent().len(), 1, "never resends after terminal");
+    assert_eq!(broadcast.sent().len(), 1, "never resent after a verdict");
+
+    // The cause is durable: a restarted driver over the same seal does not
+    // resend either.
+    let mut restarted =
+        DispatchDriver::new(store.clone(), broadcast.clone(), test_config(), test_lock());
+    tick(&mut restarted, 102).await;
+    assert_eq!(broadcast.sent().len(), 1, "a restart does not resend it");
+
+    // At the end date (reference 94 + 100), with the post unmatched and its
+    // inputs live, the chain has decided: it did not land.
+    tick_with(&mut restarted, 900, &[], &[7, 8], 193).await;
+    assert_eq!(
+        sealed_block(&store).posts().len(),
+        1,
+        "a block short of the end date: held"
+    );
+    tick_with(&mut restarted, 900, &[], &[7, 8], 194).await;
+    let block = sealed_block(&store);
+    assert!(block.posts().is_empty(), "released at the end date");
+    assert!(
+        block.reserved_gindexes().is_empty(),
+        "its reservation with it"
+    );
+    assert_eq!(
+        block.outcomes()[0].outcome,
+        OutcomeKind::Rejected(TerminalCause::DoubleSpend),
+        "the outcome carries the daemon's reason"
+    );
 }
 
 /// A daemon that cannot hold a JoinMarket (FND-20) answers a definite
-/// rejection, and the driver treats it as terminal: the post and its
-/// funding reservation go in one seal, it is never resent, and the log
-/// tells the staker staking is not available on this daemon. Before the
-/// daemon answered this way, the same refusal was a commit fault, which
-/// the driver resubmits until the alarm horizon and then holds for good.
+/// rejection. The driver records it and stops sending, and keeps the post and
+/// its funding reservation to the end date (BD-Q3 Rule 2); the log tells the
+/// staker staking is not available on this daemon and that the funds come
+/// back when the transaction can no longer be mined.
 #[tokio::test]
-async fn a_daemon_that_cannot_hold_a_join_market_releases_the_post() {
+async fn a_daemon_that_cannot_hold_a_join_market_holds_the_post() {
     use std::io::Write;
     use std::sync::Arc;
 
@@ -1118,10 +1215,10 @@ async fn a_daemon_that_cannot_hold_a_join_market_releases_the_post() {
     // the first pass registers it, the rebuild recomputes interest
     // against this subscriber, and the second pass is what we read.
     let _guard = tracing::subscriber::set_default(subscriber);
-    drive_one_unsupported_release().await;
+    drive_one_unsupported_post().await;
     tracing::callsite::rebuild_interest_cache();
     sink.0.lock().expect("buffer lock").clear();
-    drive_one_unsupported_release().await;
+    drive_one_unsupported_post().await;
 
     let text = String::from_utf8(sink.0.lock().expect("buffer lock").clone())
         .expect("fmt output is UTF-8");
@@ -1131,7 +1228,7 @@ async fn a_daemon_that_cannot_hold_a_join_market_releases_the_post() {
     );
 }
 
-async fn drive_one_unsupported_release() {
+async fn drive_one_unsupported_post() {
     let unsupported = Err(BroadcastSubmitError::Submit(
         SubmitterError::RejectedTerminal {
             kind: crate::engine::error::TerminalErrorKind::JoinMarketUnsupported,
@@ -1142,16 +1239,15 @@ async fn drive_one_unsupported_release() {
 
     tick(&mut driver, 100).await;
     assert_eq!(broadcast.sent().len(), 1);
-    let block = store
-        .block
-        .lock()
-        .expect("mem store")
-        .clone()
-        .expect("sealed");
-    assert!(block.posts().is_empty(), "the post is withdrawn");
+    let block = sealed_block(&store);
+    assert_eq!(block.posts().len(), 1, "the post is held");
+    assert_eq!(
+        block.posts()[0].terminal,
+        Some(TerminalCause::JoinMarketUnsupported)
+    );
     assert!(
-        block.reserved_gindexes().is_empty(),
-        "its funding is spendable again"
+        !block.reserved_gindexes().is_empty(),
+        "its funding stays reserved until the end date"
     );
 
     tick(&mut driver, 101).await;
@@ -1160,63 +1256,134 @@ async fn drive_one_unsupported_release() {
 
 // -- §3.4 resubmit bound: the alarm horizon ---------------------------------
 
-/// A dispatched post unconfirmed past the alarm horizon stops
-/// resubmitting and alarms once; the record and its reservation are held
-/// (funds-safety over liveness).
+/// Resends stop at the post's end date, not at an alarm horizon (WR-Q3): the
+/// next block's height is the earliest a send can land at, and past the end
+/// date every daemon refuses the reference. The record stays until the scan
+/// covers the end date.
 #[tokio::test]
-async fn alarm_horizon_stops_resubmits_and_holds_the_record() {
+async fn resends_stop_at_the_end_date_and_the_record_waits_for_the_scan() {
     let (mut driver, store, broadcast) = driver_with_posts(
         vec![post(1, 100, 0, &[7])],
         vec![ambiguous(), ambiguous(), ambiguous()],
     );
 
     tick(&mut driver, 100).await; // dispatch, at = 100
-    tick(&mut driver, 150).await; // unknown outcome ⇒ resubmit
+    tick(&mut driver, 194).await; // ambiguous: the last height it can land at
     assert_eq!(broadcast.sent().len(), 2);
 
-    // horizon = 100 (test config): past-horizon at tip 200.
-    tick(&mut driver, 200).await;
-    tick(&mut driver, 201).await;
+    tick(&mut driver, 195).await;
+    tick(&mut driver, 196).await;
     assert_eq!(
         broadcast.sent().len(),
         2,
-        "past the horizon, resubmits stop (the escalation is the alarm, not a faster loop)"
+        "nothing is sent past the end date"
     );
 
-    let block = store
-        .block
-        .lock()
-        .expect("mem store")
-        .clone()
-        .expect("sealed");
-    assert_eq!(block.posts().len(), 1, "the record is held, not removed");
+    let block = sealed_block(&store);
+    assert_eq!(block.posts().len(), 1, "the record waits for the scan");
     assert_eq!(
         block.reserved_gindexes(),
         [shekyl_types::GlobalOutputIndex::from_raw(7)].into(),
-        "the funding reservation stays intact (funds-safety over liveness)"
+        "with its reservation"
     );
+
+    tick_with(&mut driver, 1_000, &[], &[7], 194).await;
+    let block = sealed_block(&store);
+    assert!(block.posts().is_empty());
+    assert_eq!(block.outcomes()[0].outcome, OutcomeKind::Expired);
+}
+
+/// Both retires run before the end-date release in the same pass, so a
+/// record that landed leaves as landed, never as an ending: a post the scan
+/// matched is retired as confirmed, a drain whose inputs are all gone as
+/// settled. A drain with part of its inputs gone ends `SpentElsewhere`.
+#[tokio::test]
+async fn a_record_that_landed_is_retired_before_the_end_date_release() {
+    use shekyl_engine_state::pending_post_block::{PendingDrain, SealAdmission};
+    let (mut driver, store, _broadcast) = driver_with_posts(
+        vec![post(1, 100, 0, &[7]), post(2, 100, 0, &[8])],
+        Vec::new(),
+    );
+    store
+        .block
+        .lock()
+        .expect("mem store")
+        .as_mut()
+        .map(|block| {
+            for (who, inputs) in [(3u8, vec![20u64, 21]), (4u8, vec![30u64, 31])] {
+                let g = block.generation();
+                let drain = PendingDrain {
+                    persona: persona(who),
+                    tx_bytes: vec![who],
+                    funding_gindexes: inputs
+                        .into_iter()
+                        .map(shekyl_types::GlobalOutputIndex::from_raw)
+                        .collect(),
+                    state: PendingPostState::Pending,
+                    reference_height: shekyl_types::BlockHeight::from_raw(94),
+                    terminal: None,
+                };
+                assert_eq!(
+                    block.seal_drain(drain, ChainCount::from_raw(100), g),
+                    SealAdmission::Admit
+                );
+            }
+        })
+        .expect("seeded");
+
+    // Post 1 confirmed; post 2 not, inputs live. Drain 3 settled (both
+    // inputs gone); drain 4 has one of two gone.
+    tick_with(&mut driver, 1_000, &[1], &[8, 30], 194).await;
+    let block = sealed_block(&store);
+    assert!(block.posts().is_empty() && block.drains().is_empty());
+    let outcomes: Vec<_> = block
+        .outcomes()
+        .iter()
+        .map(|o| (o.kind, o.persona, o.outcome))
+        .collect();
+    assert_eq!(
+        outcomes.len(),
+        2,
+        "only the two that did not land: {outcomes:?}"
+    );
+    assert!(outcomes.contains(&(RecordKind::Post, persona(2), OutcomeKind::Expired)));
+    assert!(outcomes.contains(&(RecordKind::Drain, persona(4), OutcomeKind::SpentElsewhere)));
 }
 
 // -- selection unit coverage -------------------------------------------------
 
-/// The pure selector: held and alarmed personas are excluded; `Pending`
-/// posts are always candidates when due.
+/// The pure selector: a held persona's resubmit is skipped, a post with a
+/// terminal verdict recorded is never selected (BD-Q3 Rule 2), and a post
+/// whose transaction can no longer land is never selected, first send
+/// included (WR-Q3). `Pending` posts ignore the held set.
 #[test]
-fn selector_excludes_held_and_alarmed() {
+fn selector_skips_held_resubmits_recorded_verdicts_and_dead_posts() {
     let posts = vec![post(1, 100, 0, &[1]), post(2, 100, 0, &[2])];
     let tip = ChainCount::from_raw(100);
 
     let held: BTreeSet<PCanonicalId> = [persona(1)].into();
-    let none = BTreeSet::new();
-    // Pending posts ignore the held set (it only gates resubmits).
-    let picked = select_dispatch_candidate(&posts, tip, BlockCount::from_raw(100), &held, &none)
-        .expect("a candidate exists");
+    let picked = select_dispatch_candidate(&posts, tip, &held).expect("a candidate exists");
     assert_eq!(picked.persona, persona(1), "Pending ignores held");
 
-    let alarmed: BTreeSet<PCanonicalId> = [persona(1)].into();
-    let picked = select_dispatch_candidate(&posts, tip, BlockCount::from_raw(100), &none, &alarmed)
-        .expect("a candidate exists");
-    assert_eq!(picked.persona, persona(2), "alarmed personas are excluded");
+    let mut verdict = posts.clone();
+    verdict[0].terminal = Some(TerminalCause::FeeTooLow);
+    let picked = select_dispatch_candidate(&verdict, tip, &BTreeSet::new()).expect("one left");
+    assert_eq!(
+        picked.persona,
+        persona(2),
+        "a recorded verdict is never resent"
+    );
+
+    // Reference 94 (anchor 100 − 6): the end date is 194. A send at tip
+    // count 194 lands at height 194 at the soonest: still in. At 195 it
+    // cannot land anywhere.
+    let last = ChainCount::from_raw(194);
+    assert!(select_dispatch_candidate(&posts, last, &BTreeSet::new()).is_some());
+    let dead = ChainCount::from_raw(195);
+    assert!(
+        select_dispatch_candidate(&posts, dead, &BTreeSet::new()).is_none(),
+        "nothing is sent past the end date"
+    );
 }
 
 /// GF-7 emission-completeness, driver edition (§3.7 / gate 8, the
@@ -1275,96 +1442,41 @@ async fn gf7_emits_bond_post_dispatched_per_submit() {
     );
 }
 
-/// **The bond-post delay outlives the proof it delays** (FOLLOWUPS row "The
-/// bond-post delay does not decorrelate the funding transfer from the bond").
-///
-/// The post is signed at the stake request, `anchor_t0`, with its reference
-/// at most `anchor_t0 − REF_ANCHOR_AGE` (`bond_orchestrator.rs:455-461`), and
-/// first sent `bond_post_offset_blocks` later. With an offset of 300 the
-/// reference is already past `FCMP_REFERENCE_BLOCK_MAX_AGE` at the first
-/// send, the daemon answers `StaleRoot`, which is retryable, and the driver
-/// resends the same dead bytes until the alarm horizon.
-///
-/// Ignored because it asserts the defect, not the intended behaviour: it
-/// documents what the bond lane's Round 0 has to change. That round inverts
-/// or replaces it.
+/// **A post due after its end date is never sent, and ends `expired`**
+/// (WR-Q3; the FOLLOWUPS row "The bond-post delay does not decorrelate the
+/// funding transfer from the bond" is the defect behind it). The post is
+/// signed at the stake request with its reference at `anchor − 6` and due
+/// `offset` blocks later; with an offset of 300 its end date (`anchor + 94`)
+/// passes before it is due. The driver never sends it, holds the reservation
+/// until the scan covers the end date, and releases it there.
 #[tokio::test]
-#[ignore = "documents a bond-lane defect (FOLLOWUPS: the bond-post delay does not decorrelate the funding transfer from the bond); passes while the defect stands"]
-async fn a_bond_post_sent_past_its_proof_lifetime_is_resent_unchanged_to_the_horizon() {
-    use crate::engine::error::RetryableRejectCause;
-    let stale = || -> Verdict {
-        Err(BroadcastSubmitError::Submit(
-            SubmitterError::RejectedRetryable {
-                cause: RetryableRejectCause::StaleRoot,
-            },
-        ))
-    };
+async fn a_post_due_after_its_end_date_is_never_sent_and_expires() {
     let anchor: u64 = 10_000;
     let offset: u64 = 300;
-    let store = std::sync::Arc::new(MemStore::default());
-    let mut block = PendingPostBlock::empty();
-    let g = block.generation();
-    assert_eq!(
-        block.seal_post(post(1, anchor, offset, &[7]), g),
-        shekyl_engine_state::pending_post_block::SealAdmission::Admit
-    );
-    *store.block.lock().expect("mem store") = Some(block);
-    let broadcast = std::sync::Arc::new(ScriptedBroadcast::scripted(
-        std::iter::repeat_with(stale).take(64).collect(),
-    ));
-    let mut driver = DispatchDriver::new(
-        store.clone(),
-        broadcast.clone(),
-        DispatchConfig {
-            alarm_horizon_blocks: BlockCount::from_raw(DISPATCH_ALARM_HORIZON_BLOCKS),
-            dispersal_bound: Duration::ZERO,
-        },
-        test_lock(),
-    );
-
-    // Not due one block early.
-    tick(&mut driver, anchor + offset - 1).await;
-    assert!(broadcast.sent().is_empty());
-
-    // The first send, at the due tip. The reference the bytes carry is at
-    // most anchor − REF_ANCHOR_AGE, so its age here is at least offset + 6.
-    let first_send_tip = anchor + offset;
-    tick(&mut driver, first_send_tip).await;
-    assert_eq!(broadcast.sent().len(), 1);
-    let reference_at_most = anchor - shekyl_curve_tree::REF_ANCHOR_AGE.to_raw();
-    let max_age = shekyl_curve_tree::REF_ANCHOR_AGE.to_raw()
-        + shekyl_curve_tree::PROOF_VALIDITY_HORIZON.to_raw();
-    assert_eq!(max_age, 100, "FCMP_REFERENCE_BLOCK_MAX_AGE");
-    let age_at_first_send = first_send_tip - reference_at_most;
+    let (mut driver, store, broadcast) =
+        driver_with_posts(vec![post(1, anchor, offset, &[7])], Vec::new());
+    let end = anchor - 6 + 100;
     assert!(
-        age_at_first_send > max_age,
-        "dead on arrival: reference age {age_at_first_send} > MAX_AGE {max_age} at the first send"
+        anchor + offset > end,
+        "the fixture's premise: due after the end date"
     );
 
-    // StaleRoot is retryable: the same bytes go out on every due tick until
-    // the horizon (at + 900), then stop with the record held.
-    let horizon_end = first_send_tip + DISPATCH_ALARM_HORIZON_BLOCKS;
-    for tip in (first_send_tip + 100..horizon_end).step_by(100) {
-        tick(&mut driver, tip).await;
-    }
-    let before_horizon = broadcast.sent().len();
-    tick(&mut driver, horizon_end).await;
-    tick(&mut driver, horizon_end + 1).await;
-    let sent = broadcast.sent();
-    assert_eq!(sent.len(), before_horizon, "resends stop at the horizon");
-    assert_eq!(
-        before_horizon, 9,
-        "one first send and eight resends at 100-block ticks"
-    );
+    tick(&mut driver, anchor + offset).await;
+    tick(&mut driver, anchor + offset + 1).await;
     assert!(
-        sent.windows(2).all(|w| w[0].1 == w[1].1),
-        "every resend is byte-identical, so every one is refused the same way"
+        broadcast.sent().is_empty(),
+        "a post that cannot land is never sent"
     );
-    match sealed_state(&store, &persona(1)) {
-        Some(PendingPostState::Dispatched { at, attempts }) => {
-            assert_eq!(at.to_raw(), first_send_tip);
-            assert_eq!(attempts, 9);
-        }
-        other => panic!("expected the record held as Dispatched, got {other:?}"),
-    }
+    assert_eq!(
+        sealed_block(&store).posts().len(),
+        1,
+        "held until the scan decides"
+    );
+
+    tick_with(&mut driver, anchor + offset + 2, &[], &[7], end - 1).await;
+    assert_eq!(sealed_block(&store).posts().len(), 1);
+    tick_with(&mut driver, anchor + offset + 3, &[], &[7], end).await;
+    let block = sealed_block(&store);
+    assert!(block.posts().is_empty() && block.reserved_gindexes().is_empty());
+    assert_eq!(block.outcomes()[0].outcome, OutcomeKind::Expired);
 }

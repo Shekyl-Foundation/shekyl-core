@@ -149,6 +149,7 @@ fn parse_ready(id: CommandId, tail: Tail<'_>, args: &[&str]) -> ResolvedCommand 
         StakeRelease => parse_yes_only(id, args, |yes| ResolvedCommand::Unstake { yes }),
         StakeCollect => parse_yes_only(id, args, |yes| ResolvedCommand::CollectUnstaked { yes }),
         StakeJoin => parse_stake_join(args),
+        StakeAcknowledge => one_word(id, args, parse_stake_acknowledge),
         ShardListAll => bare(id, args, ResolvedCommand::ShardListAll),
         ShardListMine => bare(id, args, ResolvedCommand::ShardListMine),
         ShardShow => one_id(id, args, |shard_id| ResolvedCommand::ShardShow { shard_id }),
@@ -535,6 +536,23 @@ fn parse_stake_join(args: &[&str]) -> ResolvedCommand {
     ResolvedCommand::StakeJoin { shard_ids: ids }
 }
 
+/// The word a person types for each kind of ending, as `stake status`
+/// renders it, onto the wire kind. The user never sees `drain` or `exit`.
+fn parse_stake_acknowledge(word: &str) -> ResolvedCommand {
+    let kind = match word {
+        "stake" => "stake",
+        "claim" => "claim",
+        "return" => "drain",
+        "release" => "exit",
+        other => {
+            return diag(format!(
+                "stake acknowledge: {other:?} is not one of stake, claim, return, release"
+            ))
+        }
+    };
+    ResolvedCommand::AcknowledgeStakingOutcome { kind }
+}
+
 fn parse_mine_start(args: &[&str]) -> ResolvedCommand {
     let threads = match args {
         [] | ["auto"] => None,
@@ -689,6 +707,35 @@ mod tests {
             parse("uri make garbage"),
             ResolvedCommand::Diagnostic { .. }
         ));
+    }
+
+    /// The person types the words `stake status` shows; the wire kind is
+    /// the server's. A slot or an unknown word is refused at parse.
+    #[test]
+    fn stake_acknowledge_maps_the_typed_word_to_the_wire_kind() {
+        for (word, kind) in [
+            ("stake", "stake"),
+            ("claim", "claim"),
+            ("return", "drain"),
+            ("release", "exit"),
+        ] {
+            match parse(&format!("stake acknowledge {word}")) {
+                ResolvedCommand::AcknowledgeStakingOutcome { kind: got } => {
+                    assert_eq!(got, kind, "{word}")
+                }
+                other => panic!("{word}: {other:?}"),
+            }
+        }
+        for line in [
+            "stake acknowledge",
+            "stake acknowledge drain",
+            "stake acknowledge stake 0",
+        ] {
+            assert!(
+                matches!(parse(line), ResolvedCommand::Diagnostic { .. }),
+                "{line}"
+            );
+        }
     }
 
     #[test]

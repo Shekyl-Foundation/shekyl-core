@@ -616,6 +616,10 @@ pub(crate) struct OrchestratedDrain {
     pub assembled: AssembledDrain,
     /// What this drain moved.
     pub moved: DrainMoved,
+    /// The FCMP++ reference height every input's membership path was proved
+    /// against; the seam seals it on the pending record, whose end date it
+    /// sets (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3).
+    pub reference_height: shekyl_types::BlockHeight,
 }
 
 /// The exit-fee reserve a drain of a persona in this liveness state must leave
@@ -923,7 +927,11 @@ pub(crate) async fn orchestrate_drain(
             fee: ctx.fee,
         })
         .await?;
-    Ok(OrchestratedDrain { assembled, moved })
+    Ok(OrchestratedDrain {
+        assembled,
+        moved,
+        reference_height,
+    })
 }
 
 #[cfg(test)]
