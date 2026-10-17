@@ -28,6 +28,7 @@ use shekyl_types::{BlockCount, ChainCount, PSlot, TxHash};
 
 use super::*;
 use crate::engine::transaction_submitter::BroadcastKind;
+use shekyl_engine_state::pending_post_block::OutcomeKind;
 
 /// One scripted submit verdict (the `BondBroadcast` return shape).
 type Verdict = Result<SubmitSuccess, BroadcastSubmitError>;
@@ -1478,24 +1479,4 @@ async fn a_post_due_after_its_end_date_is_never_sent_and_expires() {
     let block = sealed_block(&store);
     assert!(block.posts().is_empty() && block.reserved_gindexes().is_empty());
     assert_eq!(block.outcomes()[0].outcome, OutcomeKind::Expired);
-}
-
-/// WR-Q3's invariant, beside the compile-time sentinel on
-/// [`REFERENCE_MAX_AGE`]: a record's end date is computed with the limit
-/// read now, so a raised limit would release records that can still land.
-/// This fails if the limit moves without the end-date release being
-/// revisited, and pins that the release uses the consensus constant.
-#[test]
-fn the_end_date_release_assumes_the_consensus_age_limit() {
-    assert_eq!(
-        crate::consensus_constants::FCMP_REFERENCE_BLOCK_MAX_AGE,
-        100
-    );
-    assert_eq!(REFERENCE_MAX_AGE.to_raw(), 100);
-    assert_eq!(
-        REFERENCE_MAX_AGE.to_raw(),
-        shekyl_curve_tree::REF_ANCHOR_AGE.to_raw()
-            + shekyl_curve_tree::PROOF_VALIDITY_HORIZON.to_raw(),
-        "the wallet's proof horizon and the release's limit are one number"
-    );
 }

@@ -32,9 +32,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS;
-use shekyl_engine_state::pending_post_block::{
-    end_date, EndedRelease, OutcomeKind, RecordKind, TerminalCause,
-};
+use shekyl_engine_state::pending_post_block::{end_date, EndedRelease, RecordKind, TerminalCause};
+
+use super::end_date::log_ended;
+pub(crate) use super::end_date::{terminal_cause, REFERENCE_MAX_AGE};
 use shekyl_engine_state::{PendingBondPost, PendingPostBlock, PendingPostState};
 use shekyl_standoff::draw::bounded_uniform;
 use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId};
@@ -222,41 +223,6 @@ pub(crate) trait BondBroadcast: Send + Sync + 'static {
 pub(crate) const DISPATCH_ALARM_HORIZON_BLOCKS: u64 =
     ARCHIVAL_REORG_DEPTH_BLOCKS + ARCHIVAL_REORG_DEPTH_BLOCKS / 4;
 
-/// The consensus reference age limit, `FCMP_REFERENCE_BLOCK_MAX_AGE`, as the
-/// span a pending record's end date is computed with
-/// ([`end_date`]`(reference_height, REFERENCE_MAX_AGE)`, WR-Q3).
-///
-/// **The end date assumes this limit never rises** (WR-Q3's invariant). A
-/// record is signed under the limit in force then and its end date computed
-/// under the limit read now. Raise the limit and a stored record's end date
-/// comes out too early: the wallet would release it, and the phantom-slot
-/// cleanup (`stake_persist.rs`) could then drop a bond that can still land,
-/// for good. Lowering it only holds funds longer. The sentinel below fails
-/// the build if the limit moves, so this module is revisited with it; if the
-/// limit ever becomes per-era, store the limit in force at signing beside
-/// `reference_height` (rule 21).
-pub(crate) const REFERENCE_MAX_AGE: BlockCount =
-    BlockCount::from_raw(crate::consensus_constants::FCMP_REFERENCE_BLOCK_MAX_AGE);
-
-const _: () = assert!(
-    crate::consensus_constants::FCMP_REFERENCE_BLOCK_MAX_AGE == 100,
-    "FCMP_REFERENCE_BLOCK_MAX_AGE moved: a pending record's end date assumes the limit \
-     never rises (WALLET_RPC_STAKING_OUTCOMES.md WR-Q3). A raised limit releases records \
-     whose transaction can still land; revisit the end-date release before updating this"
-);
-
-/// Map a submit failure to the cause a pending record keeps (BD-Q3 Rule 2),
-/// or `None` when the failure is not a terminal daemon verdict. The record is
-/// held either way; a terminal cause stops sends and names the outcome.
-pub(crate) fn terminal_cause(e: &BroadcastSubmitError) -> Option<TerminalCause> {
-    match e {
-        BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal { kind }) => {
-            Some(TerminalCause::from(*kind))
-        }
-        _ => None,
-    }
-}
-
 /// Tuning knobs for the dispatch driver.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DispatchConfig {
@@ -324,18 +290,12 @@ fn due_count(post: &PendingBondPost) -> ChainCount {
 ///   observed this session; the record is awaiting pscan confirmation and
 ///   resending adds nothing — F31 early-returns, F40 re-claims).
 ///
-/// Excluded, durably:
-///
-/// - a post with a **terminal verdict recorded** (BD-Q3 Rule 2): it is held
-///   to its end date and never resent;
-/// - a post **past its end date** (WR-Q3): the next block's height is
-///   `tip.next_height()`, the earliest height a send can land at, and past
-///   [`end_date`] every daemon refuses the reference as too old. Such a
-///   send wastes traffic and shows one origin re-offering dead bytes. This
-///   includes a first send: a post due after its end date is never sent.
-///   This is the second consumer of the claimed tip here; an inflated tip
-///   withholds sends that could still land, and the scan's own frontier,
-///   not the tip, decides the release.
+/// Excluded, durably: a post with a **terminal verdict recorded** (BD-Q3
+/// Rule 2), held to its end date and never resent; and a post **past its end
+/// date** (WR-Q3), first send included. `tip.next_height()` is the earliest
+/// height a send can land at, and past [`end_date`] every daemon refuses the
+/// reference: the send would waste traffic and show one origin re-offering
+/// dead bytes. The scan's own frontier, not the tip, decides the release.
 ///
 /// Ordering: lowest due count; ties broken by lowest `anchor_t0`, then
 /// persona id — pinned so a catch-up backlog replays deterministically. The
@@ -774,7 +734,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
             );
         }
 
-        for &(kind, persona, outcome) in &plan.ended.released {
+        for &(kind, persona, _) in &plan.ended.released {
             match kind {
                 RecordKind::Post => {
                     self.held_this_session.remove(&persona);
@@ -792,31 +752,8 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                         .remove(&(ReservationKind::Release, persona));
                 }
             }
-            if outcome == OutcomeKind::SpentElsewhere {
-                // Nothing outside the wallet can spend `P`'s outputs, so a
-                // reservation another transaction spent part of is a wallet
-                // bug or a compromised key. The durable outcome is the system
-                // of record; the cadence driver re-raises the operator alarm
-                // from it on every start.
-                tracing::error!(
-                    kind = ?kind,
-                    persona = ?persona,
-                    "pending record released at its end date with part of its reserved \
-                     funds spent by ANOTHER transaction — nothing outside this wallet can \
-                     spend them, so this is a wallet defect or a compromised key; the \
-                     unspent rest is spendable again. Operator action: check this \
-                     wallet's logs and keys"
-                );
-            } else {
-                tracing::info!(
-                    kind = ?kind,
-                    outcome = ?outcome,
-                    "pending record released at its end date: its transaction can no \
-                     longer be mined and did not land; record and reservation released in \
-                     one seal, outcome recorded"
-                );
-            }
         }
+        log_ended(&plan.ended);
 
         // -- Phase 3: the single dispatch (dispersal → emit → send) ---------
         let Some((post, attempts)) = plan.dispatched else {
