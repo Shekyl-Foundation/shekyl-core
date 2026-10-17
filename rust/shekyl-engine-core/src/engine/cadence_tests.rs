@@ -315,6 +315,7 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
         "submit-lifecycle",
         "serving-liveness",
         "terminal-reject",
+        "pending-outcomes",
         "epoch-claim",
     ] {
         assert!(
@@ -324,11 +325,12 @@ async fn production_legs_are_registered_and_invoked_each_tick() {
     }
     // Fire order is the §3 retire-before-assemble registration order.
     assert_eq!(
-        fired[..4],
+        fired[..5],
         [
             ("submit-lifecycle", 1),
             ("serving-liveness", 1),
             ("terminal-reject", 1),
+            ("pending-outcomes", 1),
             ("epoch-claim", 1)
         ],
         "registration order must be preserved per tick"
@@ -796,4 +798,100 @@ async fn claim_leg_evaluates_once_per_settled_epoch() {
         1,
         "a new settled epoch must re-open the evaluation gate"
     );
+}
+
+/// The pending-outcomes leg (WR-Q3): a sealed `spent_elsewhere` outcome
+/// raises the pending-funds integrity alarm, a fresh board after a restart
+/// re-derives it from the same seal, and once the outcome is acknowledged a
+/// fresh board reads armed and quiet.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal() {
+    use shekyl_engine_state::pending_post_block::{
+        PendingDrain, PendingPostState, RecordKind, SealAdmission,
+    };
+    use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
+
+    fn live(alarms: &OperatorAlarms) -> Option<OperatorAlarm> {
+        alarms
+            .board()
+            .condition(AlarmCondition::PendingFundsIntegrity)
+            .and_then(shekyl_operator_alarm::ConditionState::live)
+            .map(shekyl_operator_alarm::RaisedAlarm::alarm)
+    }
+
+    let (_tmp, engine) = crate::engine::test_support::staker_engine(3, 11);
+    let arc = Arc::new(RwLock::new(engine));
+    let leg_on = |alarms: &Arc<OperatorAlarms>| outcomes::PendingOutcomeLeg {
+        engine: Arc::downgrade(&arc),
+        alarms: Arc::clone(alarms),
+    };
+
+    let before = Arc::new(OperatorAlarms::new());
+    leg_on(&before).fire(1).await;
+    assert_eq!(live(&before), None, "nothing to report before any outcome");
+
+    // A drain reserving two inputs reaches its end date (reference 94 + 100)
+    // with one of them spent by something else.
+    let who = PCanonicalId::from_bytes([0x09; 32]);
+    let gate = arc.read().await.pending_gate.clone();
+    let store = crate::engine::pscan::start::pending_post_store_for_engine(Arc::clone(&arc), gate);
+    let released = store
+        .mutate(move |block| {
+            let g = block.generation();
+            let drain = PendingDrain {
+                persona: who,
+                tx_bytes: vec![0x09],
+                funding_gindexes: vec![
+                    GlobalOutputIndex::from_raw(1),
+                    GlobalOutputIndex::from_raw(2),
+                ],
+                state: PendingPostState::Pending,
+                reference_height: BlockHeight::from_raw(94),
+                terminal: None,
+            };
+            assert_eq!(
+                block.seal_drain(drain, ChainCount::from_raw(100), g),
+                SealAdmission::Admit
+            );
+            let out = block.release_ended(
+                BlockHeight::from_raw(194),
+                &[GlobalOutputIndex::from_raw(2)].into(),
+                BlockCount::from_raw(100),
+                BlockHeight::from_raw(194),
+            );
+            (true, out.released.len())
+        })
+        .await
+        .expect("seal the outcome");
+    assert_eq!(released, 1);
+
+    let board = Arc::new(OperatorAlarms::new());
+    leg_on(&board).fire(2).await;
+    assert_eq!(
+        live(&board),
+        Some(OperatorAlarm::ReservationSpentElsewhere { records: 1 })
+    );
+
+    let restarted = Arc::new(OperatorAlarms::new());
+    leg_on(&restarted).fire(3).await;
+    assert_eq!(
+        live(&restarted),
+        Some(OperatorAlarm::ReservationSpentElsewhere { records: 1 }),
+        "a fresh board re-derives the alarm from the durable outcome"
+    );
+
+    store
+        .mutate(move |block| {
+            let acked = block.acknowledge_outcome(RecordKind::Drain, &who);
+            (acked, acked)
+        })
+        .await
+        .expect("acknowledge");
+    let after = Arc::new(OperatorAlarms::new());
+    leg_on(&after).fire(4).await;
+    let row = after
+        .board()
+        .condition(AlarmCondition::PendingFundsIntegrity)
+        .expect("a staker's seal still arms the row");
+    assert!(row.live().is_none(), "acknowledged: armed and quiet");
 }

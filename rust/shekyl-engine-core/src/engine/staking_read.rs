@@ -58,7 +58,7 @@ use crate::consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 use super::local_ledger::LocalLedger;
 use super::signer::EngineSignerKind;
-use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
+use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
 
 /// Staked-balance breakdown (WI-RPC-1 DECISION default). See the module docs
@@ -297,6 +297,34 @@ fn staked_outputs_from_state(state: &PScanState) -> Vec<StakedOutput> {
             confirmed: true,
         })
         .collect()
+}
+
+// `F = WalletFile`, any ledger: the sealed pending-post block alone, for the
+// cadence driver's outcome leg (its legs are generic over the ledger) and the
+// staking projections.
+#[allow(private_bounds)]
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        E: EconomicsEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, L, E, R, P, shekyl_engine_file::WalletFile>
+{
+    /// Open the sealed `.wallet.pending` block alone. `None` is the ordinary
+    /// non-staker case (no seal written); a corrupt or version-mismatched seal
+    /// fails closed. A plain read: callers that act on it leave every race to
+    /// the seal's own admission.
+    pub(crate) fn sealed_pending_block(
+        &self,
+    ) -> Result<Option<PendingPostBlock>, StakingReadError> {
+        let wrap_key = self.state_wrap_key().as_bytes();
+        match self.persistence.open_pending_posts(wrap_key)? {
+            Some(body) => Ok(Some(PendingPostBlock::from_postcard_bytes(&body)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 // `F = WalletFile` specialization: the sealed `.wallet.pscan` /

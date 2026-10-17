@@ -121,6 +121,24 @@ pub fn record_forfeit(alarms: &OperatorAlarms, epoch: u64, forfeited_atomic_tota
     });
 }
 
+/// Map one reading of the durable staking outcomes onto the board
+/// (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3): `spent_elsewhere` is how many
+/// records currently carry a `spent_elsewhere` outcome. The cadence driver
+/// reads it from the sealed pending block on every fire, so the condition is
+/// re-derived after a restart; it clears once every such outcome has been
+/// acknowledged, and the board then holds it for the operator's own
+/// acknowledgement (`LatchedRederived`).
+pub fn apply_pending_outcomes(alarms: &OperatorAlarms, spent_elsewhere: u64) {
+    alarms.arm(AlarmCondition::PendingFundsIntegrity);
+    if spent_elsewhere == 0 {
+        alarms.clear(AlarmCondition::PendingFundsIntegrity);
+    } else {
+        alarms.raise(OperatorAlarm::ReservationSpentElsewhere {
+            records: spent_elsewhere,
+        });
+    }
+}
+
 /// Park a cadence leg's condition after the leg panicked: disarmed, never
 /// healthy-looking, for the rest of the session (§3 leg isolation).
 pub fn park_condition(alarms: &OperatorAlarms, condition: AlarmCondition) {
@@ -283,6 +301,41 @@ mod tests {
         assert!(
             parked.live().is_some(),
             "disarming stops the watch; it does not declare the fault fixed"
+        );
+    }
+
+    /// A `spent_elsewhere` outcome raises the integrity alarm, re-raising
+    /// updates the count in place, and a reading of zero arms the row
+    /// without leaving a live alarm.
+    #[test]
+    fn a_spent_elsewhere_outcome_raises_and_zero_reads_armed_and_quiet() {
+        let alarms = OperatorAlarms::new();
+        apply_pending_outcomes(&alarms, 0);
+        let quiet = state(&alarms, AlarmCondition::PendingFundsIntegrity);
+        assert!(quiet.live().is_none(), "zero is armed and quiet");
+
+        apply_pending_outcomes(&alarms, 1);
+        let first = state(&alarms, AlarmCondition::PendingFundsIntegrity)
+            .live()
+            .expect("an outcome raises");
+        assert_eq!(
+            first.alarm(),
+            OperatorAlarm::ReservationSpentElsewhere { records: 1 }
+        );
+        assert_eq!(first.lifetime(), crate::AlarmLifetime::LatchedRederived);
+
+        apply_pending_outcomes(&alarms, 2);
+        let second = state(&alarms, AlarmCondition::PendingFundsIntegrity)
+            .live()
+            .expect("still raised");
+        assert_eq!(
+            second.incident(),
+            first.incident(),
+            "one incident, updated in place"
+        );
+        assert_eq!(
+            second.alarm(),
+            OperatorAlarm::ReservationSpentElsewhere { records: 2 }
         );
     }
 }

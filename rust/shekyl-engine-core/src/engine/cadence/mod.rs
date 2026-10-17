@@ -42,6 +42,7 @@
 //! [`AlarmCondition::ChainProgress`]: shekyl_operator_alarm::AlarmCondition::ChainProgress
 
 mod claim;
+mod outcomes;
 mod serving;
 mod submit;
 
@@ -351,7 +352,9 @@ where
 /// Complete as of commit 6: leg 1 (submit lifecycle), leg 2 (serving
 /// liveness), the leg-4 slot (terminal-reject, body staged), leg 3
 /// (per-epoch claim) — registered last so every retire-class leg has
-/// already run when it snapshots the funding set.
+/// already run when it snapshots the funding set. The pending-outcomes leg
+/// (WR-Q3) only reads, so its place is free; it sits before leg 3 with the
+/// other non-assembling legs.
 ///
 /// `WalletFile`-specialized because legs 2 and 3's construction sites
 /// (`start_serving_if_staker`, `submit_emission_claim`) are;
@@ -382,6 +385,10 @@ where
             slot: Arc::clone(serving),
         }),
         Box::new(TerminalRejectSlot),
+        Box::new(outcomes::PendingOutcomeLeg {
+            engine: Weak::clone(&engine),
+            alarms: Arc::clone(alarms),
+        }),
         Box::new(EpochClaimLeg {
             engine,
             daemon_address: daemon_address.to_owned(),

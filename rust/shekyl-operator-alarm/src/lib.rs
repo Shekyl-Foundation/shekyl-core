@@ -167,6 +167,15 @@ pub enum AlarmCondition {
     /// one live alarm — folding them would make the newer reading overwrite
     /// the record of lost value.
     ClaimForfeiture,
+    /// Whether the funds the wallet reserved for its pending staking records
+    /// (bond posts, claims, drains, exits) were spent only by those records
+    /// (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3).
+    ///
+    /// Nothing outside the wallet can spend `P`'s outputs, so a reservation
+    /// another transaction spent part of is a wallet defect or a compromised
+    /// key. Its own condition: every other staking row is about timeliness
+    /// or a counterparty, and this one is about the key.
+    PendingFundsIntegrity,
 }
 
 /// Whether a condition's tripwire can currently fire.
@@ -448,6 +457,16 @@ pub enum OperatorAlarm {
         /// Total value forfeited this session, in atomic units.
         forfeited_atomic: u64,
     },
+    /// Pending staking records reached their end date with part of their
+    /// reserved funds spent by another transaction. The wallet released the
+    /// unspent rest and recorded a `spent_elsewhere` outcome for each
+    /// (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3). Nothing outside the wallet
+    /// can spend those outputs, so the operator should check the wallet's
+    /// logs and keys.
+    ReservationSpentElsewhere {
+        /// How many records currently carry the outcome.
+        records: u64,
+    },
     /// The persona's attestation key refused to countersign during the last
     /// refresh tick, so passes were lost on shards the host *holds*. Passes
     /// are what the bond is paid for; a host that serves bytes nobody can
@@ -515,6 +534,10 @@ impl OperatorAlarm {
             Self::VanguardStateRedrawn | Self::ServeSetBytesPruned { .. } => {
                 AlarmLifetime::LatchedRederived
             }
+            // The spend that caused it is on chain and stays there; the
+            // durable `spent_elsewhere` outcome is re-read on every start, so
+            // the condition re-derives until that outcome is acknowledged.
+            Self::ReservationSpentElsewhere { .. } => AlarmLifetime::LatchedRederived,
             // The rest genuinely end when their condition does — sustained
             // recovery, a successful write, a complete consensus view, a
             // refresh that runs and re-pins.
@@ -571,6 +594,7 @@ impl OperatorAlarm {
             Self::ChainProgressStalled { .. } => AlarmCondition::ChainProgress,
             Self::EpochUnclaimed { .. } => AlarmCondition::EpochClaim,
             Self::ClaimForfeited { .. } => AlarmCondition::ClaimForfeiture,
+            Self::ReservationSpentElsewhere { .. } => AlarmCondition::PendingFundsIntegrity,
             Self::ServeSigningRefused { .. }
             | Self::ServeLookupsFailing { .. }
             | Self::ServeListenerFailing { .. } => AlarmCondition::ServeHealth,
