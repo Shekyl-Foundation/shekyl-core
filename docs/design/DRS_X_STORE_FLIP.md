@@ -94,9 +94,10 @@ The join rule: no FFI built for a C++ handler that dies a PR later.
 
 ### DX-Q4 — The miner loop is Rust
 
-- The local miner becomes a Rust loop over `randomx-v2-sys`. The binding is extended with the full-mode dataset and JIT symbols; today it is light-mode, software-only (`lib.rs:76–144`).
+- The local miner becomes a Rust loop over `shekyl-pow-randomx`, the pure-Rust light-cache hasher that already serves production PoW, for verification **and** for the built-in miner: `miner.cpp` hashes each nonce through its `get_block_hash` callback → `get_block_longhash` → `hash_pow_randomx` → `shekyl_pow_randomx_v2_hash` (`src/crypto/pow_randomx.cpp`; `src/cryptonote_core/cryptonote_tx_utils.cpp:242`, `:264`).
+- `randomx-v2-sys` does not change. The C reference library is not configured into `shekyld`: it is built only for the differential harness and the miner KATs (`CMakeLists.txt:517–525`).
+- A fast miner is an external miner's job, over `get_block_template` / `submit_block`. The built-in miner is a testnet convenience.
 - `miner.cpp` (1,107 lines) deletes.
-- **What survives in C++** is the RandomX library behind the binding, as ruled 2026-09-19. The new symbols join the binding's parity-vector gate.
 
 ### DX-Q5 — The pool goes live at the flip
 
