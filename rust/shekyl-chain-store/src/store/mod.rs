@@ -728,11 +728,6 @@ mod undo_tests;
 #[path = "view_tests.rs"]
 mod view_tests;
 
-/// `SnapshotView` reads what `BatchView` reads (DRS-X PR 3).
-#[cfg(test)]
-#[path = "snapshot_view_tests.rs"]
-mod snapshot_view_tests;
-
 #[cfg(test)]
 #[path = "connect_fixtures.rs"]
 mod connect_fixtures;

@@ -385,7 +385,7 @@ fn header_for(
 /// median, and the reply is the clock. The median is the rules crate's
 /// (CEN-C3's window); only the projection is here.
 fn adjusted_time(
-    view: &SnapshotView<'_, '_>,
+    view: &SnapshotView<'_>,
     connecting: BlockHeight,
     tip_timestamp: u64,
     now: u64,
