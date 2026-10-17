@@ -778,7 +778,7 @@ fn j27_refuses_a_proof_the_yielded_context_does_not_verify() {
         );
         let claims: ReferenceClaims = [(reference, claim)].into_iter().collect();
         assert_refused(
-            judge_proofs(&cx, &claims, None, &mut coverage),
+            judge_proofs(&cx, &claims, &mut coverage),
             CenRow::J27,
             Locus::Tx { slot: TxSlot::Lone },
         );

@@ -150,6 +150,8 @@ impl ListedProof {
 
     /// The proof verified as a batch of one, under its own derived seed.
     fn verifies_alone(&self) -> bool {
+        #[cfg(any(test, feature = "harness"))]
+        crate::rules::proofs::probes::count_range_proof();
         self.entry()
             .is_some_and(|entry| verify_batch(core::slice::from_ref(&entry)))
     }

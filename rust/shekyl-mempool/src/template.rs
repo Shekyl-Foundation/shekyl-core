@@ -103,7 +103,7 @@ pub fn select<'id, V: ChainView<'id>>(
             continue;
         }
         let anchor = match held.record.standing {
-            Standing::Admitted => held.proven,
+            Standing::Admitted => held.pass.and_then(|pass| pass.proven()),
             Standing::Kept { .. } => continue,
         };
         let view = PoolView::new(parent, &spent);

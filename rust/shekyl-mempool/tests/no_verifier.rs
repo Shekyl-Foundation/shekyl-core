@@ -113,7 +113,7 @@ fn the_crate_calls_no_verifying_export_of_the_validator() {
     );
     let door = std::fs::read_to_string(src.join("door.rs")).expect("door.rs");
     // The door's three calls are what it does name.
-    for call in ["judge_slot_stateless(", "tx_against(", "policy_form("] {
+    for call in ["judge_lone_stateless(", "tx_against(", "policy_form("] {
         assert!(door.contains(call), "the door calls {call}");
     }
 }

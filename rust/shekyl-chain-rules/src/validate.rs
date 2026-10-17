@@ -186,7 +186,7 @@ pub fn form<S: Substrate>(
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
     let mut verified = Vec::with_capacity(candidate.transactions.len());
     for (slot, tx) in core::iter::once(miner).chain(listed) {
-        match judge_slot_stateless(tx, slot, rule_set, references, None, &mut coverage) {
+        match judge_slot_stateless(tx, slot, rule_set, references, &mut coverage) {
             Ok(reference) => {
                 if slot != TxSlot::Miner {
                     verified.push(reference);
@@ -229,12 +229,6 @@ pub fn form<S: Substrate>(
 /// ([`ReferenceClaims::for_transaction`]). A reference with no claim is not
 /// verified here, and `tx_against` refuses or faults it.
 ///
-/// `cached` is CEN-M8's cache, the pool's at a re-admission: the triple
-/// this node verified the transaction's FCMP++ proof against when it last
-/// judged it. Equal to the claim, the proof is not verified again (the
-/// signatures and the range proof are); `form` passes `None` (`E5-Q8`:
-/// nothing is trusted into a block's judgement).
-///
 /// Yields what the slot's proof was verified against, for `tx_against`'s
 /// comparison; `coverage` gains every row that passed.
 ///
@@ -246,7 +240,6 @@ pub fn judge_slot_stateless(
     slot: TxSlot,
     rule_set: &RuleSet,
     references: &ReferenceClaims,
-    cached: Option<VerifiedReference>,
     coverage: &mut RuleCoverage,
 ) -> Verdict<Option<VerifiedReference>> {
     coverage.union(&tx_form(tx, slot, rule_set)?);
@@ -255,12 +248,94 @@ pub fn judge_slot_stateless(
     let mut scratch = RuleCoverage::EMPTY;
     let cx = rules::TxContext::derive(tx, slot, &mut scratch)?;
     judge_signatures(&cx, coverage)?;
-    let verified = judge_proofs(&cx, references, cached, coverage)?;
+    let verified = judge_proofs(&cx, references, coverage)?;
     if slot == TxSlot::Lone {
         H19::verify_lone(tx)?;
         coverage.insert(<H19 as rules::Rule>::ROW);
     }
     Ok(verified)
+}
+
+/// What a transaction's whole stateless judgement at [`TxSlot::Lone`]
+/// established — the pool's (DRS-E5 PR-b; the review of #1102, S1), and
+/// CEN-M8's cache. Only [`judge_lone_stateless`] constructs one.
+///
+/// The judgement is a function of the transaction's bytes, the rule set,
+/// and the claim the chain made for its reference: the transaction's hash
+/// commits to every byte (the prunable hash and the PQC-auth component
+/// included), so a pass for one hash, under one rule set, against one claim
+/// stays the answer for as long as all three do. The pool keeps it beside
+/// each held transaction and judges again only the view-bound half
+/// (`tx_against`, and the policy) while the chain moves under it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatelessPass {
+    txid: shekyl_types::TxHash,
+    rule_set: RuleSet,
+    proven: Option<VerifiedReference>,
+    coverage: RuleCoverage,
+}
+
+impl StatelessPass {
+    /// What the proof was verified against, for `tx_against`'s comparison;
+    /// `None` when the judgement verified no reference (its reference had
+    /// no claim, or the class carries no proof).
+    #[must_use]
+    pub const fn proven(&self) -> Option<VerifiedReference> {
+        self.proven
+    }
+
+    /// The rows the judgement recorded.
+    #[must_use]
+    pub const fn coverage(&self) -> RuleCoverage {
+        self.coverage
+    }
+
+    /// Whether this pass is still `tx`'s judgement under `rule_set` against
+    /// `claims`: the same transaction, the same rule set, and the claim its
+    /// reference has now is the one the proof was verified against — or it
+    /// had none then and has none now.
+    #[must_use]
+    pub fn holds_under(
+        &self,
+        tx: &Transaction,
+        rule_set: &RuleSet,
+        claims: &ReferenceClaims,
+    ) -> bool {
+        let now = crate::rules::tx_against::proof_reference(tx).and_then(|reference| {
+            claims
+                .get(&reference)
+                .map(|claim| VerifiedReference { reference, claim })
+        });
+        self.rule_set == *rule_set && self.proven == now && self.txid == tx.txid_parts().hash
+    }
+}
+
+/// [`judge_slot_stateless`] at [`TxSlot::Lone`], as a [`StatelessPass`] —
+/// or `prior` itself when it [still holds](StatelessPass::holds_under), and
+/// nothing is verified again: no signature, no range proof, no FCMP++
+/// proof. `form` never passes a prior: a block's proofs are verified in
+/// its own judgement (`E5-Q8`).
+///
+/// # Errors
+///
+/// The refusal, at `Lone`.
+pub fn judge_lone_stateless(
+    tx: &Transaction,
+    rule_set: &RuleSet,
+    claims: &ReferenceClaims,
+    prior: Option<&StatelessPass>,
+) -> Verdict<StatelessPass> {
+    if let Some(pass) = prior.filter(|pass| pass.holds_under(tx, rule_set, claims)) {
+        return Ok(*pass);
+    }
+    let mut coverage = RuleCoverage::EMPTY;
+    let proven = judge_slot_stateless(tx, TxSlot::Lone, rule_set, claims, &mut coverage)?;
+    Ok(StatelessPass {
+        txid: tx.txid_parts().hash,
+        rule_set: *rule_set,
+        proven,
+        coverage,
+    })
 }
 
 /// The view-bound stage: judge a [`StructurallyValid`] against the chain it

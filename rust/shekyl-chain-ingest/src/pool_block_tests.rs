@@ -512,7 +512,7 @@ async fn the_door_verifies_exactly_what_the_shared_function_verifies() {
             let claims =
                 ReferenceClaims::for_transaction(view, connecting, &spend).expect("claims");
             let mut coverage = RuleCoverage::EMPTY;
-            judge_slot_stateless(&spend, TxSlot::Lone, rule_set, &claims, None, &mut coverage)
+            judge_slot_stateless(&spend, TxSlot::Lone, rule_set, &claims, &mut coverage)
                 .expect("the shared function admits it");
             let after_shared = count();
             (
@@ -775,6 +775,68 @@ async fn an_admitted_entry_leaves_when_its_reference_leaves_the_window() {
         other => panic!("removed on CEN-I11: {other:?}"),
     }
     assert!(pool.is_empty());
+    drop(pool);
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
+/// The bytes are judged once per process (the review of #1102, S1): a
+/// block connecting under a pool of admitted spends, and the reconcile that
+/// follows it, verify no signature, no range proof and no FCMP++ proof
+/// again — only the view-bound half and the policy run. Counted by the
+/// validator's own probes.
+#[tokio::test]
+async fn a_connect_under_the_pool_verifies_nothing_again() {
+    let (mut scenario, mined) = matured("pool-once").await;
+    let a = paying_the_floor(&mut scenario, &mined, 0).await;
+    let b = paying_the_floor(&mut scenario, &mined, 1).await;
+    let path = tmp("pool-once-pool");
+    let mut pool = open_pool(&mut scenario, &path).await;
+    scenario
+        .read_chain(|view, rule_set| {
+            for tx in [a.clone(), b.clone()] {
+                let admitted = pool
+                    .admit(
+                        tx,
+                        Arrival::Relayed,
+                        UnixSeconds::from_raw(1),
+                        view,
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("no fault");
+                assert_eq!(
+                    admitted,
+                    Admission::Admitted {
+                        evicted: Vec::new()
+                    }
+                );
+            }
+        })
+        .await;
+    scenario.mine(1).await;
+    let (counts, reconciled) = scenario
+        .read_chain(|view, rule_set| {
+            let count = || {
+                (
+                    probes::signature_verifies(),
+                    probes::range_proof_verifies(),
+                    probes::fcmp_verifies(),
+                )
+            };
+            let before = count();
+            let reconciled = pool
+                .reconcile(view, rule_set, &AdmissionPolicy::GENESIS)
+                .expect("reconcile");
+            let after = count();
+            (
+                (after.0 - before.0, after.1 - before.1, after.2 - before.2),
+                reconciled,
+            )
+        })
+        .await;
+    assert_eq!(reconciled.admitted.len(), 2, "both still admitted");
+    assert_eq!(counts, (0, 0, 0), "signatures, range proofs, FCMP++ proofs");
     drop(pool);
     drop(std::fs::remove_file(&path));
     scenario.close().await;

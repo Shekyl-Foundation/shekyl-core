@@ -224,7 +224,9 @@ pub use tree_growth::{
     TreeFrontier, TreeGrowth,
 };
 pub use trust::Trust;
-pub use validate::{form, judge_slot_stateless, tx_against, tx_form, validate};
+pub use validate::{
+    form, judge_lone_stateless, judge_slot_stateless, tx_against, tx_form, validate, StatelessPass,
+};
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 pub use view::{
     AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, LeafSource, RecordedBlock,

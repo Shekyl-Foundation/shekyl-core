@@ -67,7 +67,7 @@ use shekyl_chain_rules::{
     ChainView, EmissionEpochSnapshot, HeaderView, PolicyRow, RuleSet, Tip,
 };
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
-use shekyl_mempool::{Admission, Arrival, Judged, Pool};
+use shekyl_mempool::{stateless, Admission, Arrival, Judged, Pool};
 use shekyl_types::archival::{BondRecord, Holdings, MAX_BOND_BAD_INTERVALS};
 use shekyl_types::{
     BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, TxHash, UnixSeconds,
@@ -443,14 +443,28 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
         if parsed.txid != *txid {
             return CommitOutcome::InternalFault;
         }
+        // The door's step 1 — the signatures, the range proof, the FCMP++
+        // proof — on a snapshot of its own, before the pool's lock: the lock
+        // guards the view-bound half alone (the review of #1102, S1). Every
+        // submit pays it, a duplicate the pool holds unpublished included,
+        // so a concealed answer costs what a fresh accept does (B2).
+        let prior = self
+            .chain
+            .read(|snapshot, rule_set| {
+                stateless(&parsed.tx, &SnapshotView::new(snapshot), rule_set, None)
+            })
+            .ok()
+            .and_then(Result::ok)
+            .and_then(Result::ok);
         let Ok(mut pool) = self.pool.lock() else {
             return CommitOutcome::InternalFault;
         };
         let now = (self.clock)();
         let outcome = self.chain.read(|snapshot, rule_set| {
             let view = SnapshotView::new(snapshot);
-            let admitted = pool.admit(
+            let admitted = pool.admit_judged(
                 parsed.tx.clone(),
+                prior,
                 Arrival::Relayed,
                 now,
                 &view,

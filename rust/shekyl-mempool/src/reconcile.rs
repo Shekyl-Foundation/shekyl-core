@@ -33,7 +33,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet, VerifiedReference};
+use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet, StatelessPass};
 use shekyl_chain_store::pool::{PoolOpen, ReceivedHour, Standing};
 use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
@@ -158,8 +158,7 @@ impl Pool {
 
         let mut reconciled = Reconciled::default();
         // Every entry's outcome, for the index; `writes`, the file's changes.
-        let mut judged_all: BTreeMap<TxHash, Option<(Standing, Option<VerifiedReference>)>> =
-            BTreeMap::new();
+        let mut judged_all: BTreeMap<TxHash, Option<(Standing, StatelessPass)>> = BTreeMap::new();
         let mut writes: BTreeMap<TxHash, Option<Standing>> = BTreeMap::new();
         let mut key_images = KeyImages::default();
         for (txid, held) in order {
@@ -172,23 +171,26 @@ impl Pool {
                 reconciled.removed.push((*txid, Removed::Mined));
                 continue;
             }
-            // CEN-M8: the anchor this node verified the proof against when it
-            // last admitted the entry; the door skips the FCMP++ verify when
-            // the chain still claims exactly that.
-            let cached = match held.record.standing {
-                Standing::Admitted => held.proven,
-                Standing::Kept { .. } => None,
-            };
-            let judged = door::judge(&held.tx, chain, &key_images, rule_set, policy, cached)
-                .map_err(PoolFault::Chain)?;
-            let (standing, proven) = match judged {
-                Judged::Admitted { proven, .. } => (Standing::Admitted, proven),
-                // A kept entry stays kept on any refusal but its bytes'
+            // The door's pass from the entry's last judgement (S1, CEN-M8):
+            // while its rule set and its claim hold, nothing is verified
+            // again — only the view-bound half and the policy run.
+            let judged = door::judge(
+                &held.tx,
+                chain,
+                &key_images,
+                rule_set,
+                policy,
+                held.pass.as_ref(),
+            )
+            .map_err(PoolFault::Chain)?;
+            let (standing, pass) = match judged {
+                Judged::Admitted { pass, .. } => (Standing::Admitted, *pass),
+                // A kept entry stays kept on the chain-bound half's refusal
                 // (module docs); an admitted one is never made kept.
-                Judged::Chain { .. } | Judged::Policy(_)
+                Judged::Chain { pass, .. }
                     if matches!(held.record.standing, Standing::Kept { .. }) =>
                 {
-                    (held.record.standing, None)
+                    (held.record.standing, *pass)
                 }
                 refused => {
                     judged_all.insert(*txid, None);
@@ -197,7 +199,7 @@ impl Pool {
                     continue;
                 }
             };
-            judged_all.insert(*txid, Some((standing, proven)));
+            judged_all.insert(*txid, Some((standing, pass)));
             if standing != held.record.standing {
                 writes.insert(*txid, Some(standing));
             }

@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet, VerifiedReference};
+use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet, StatelessPass};
 use shekyl_chain_store::pool::{PoolOpen, PoolRecord, PoolStore, ReceivedHour, Standing};
 use shekyl_chain_store::store::StoreError;
 use shekyl_types::{BlockHeight, KeyImage, TxHash, UnixSeconds};
@@ -110,32 +110,30 @@ impl<F> From<StoreError> for PoolFault<F> {
 
 /// One held transaction: the parsed body, its record (what the file holds),
 /// and what the pool derives and keeps in memory only — the weight and fee,
-/// which the bytes say, and CEN-M8's anchor, which an untrusted file must
-/// not let a row skip the FCMP++ verify on (`codec/pool.rs`).
+/// which the bytes say, and the door's stateless pass (CEN-M8's cache and
+/// more: the review of #1102, S1), which an untrusted file must not supply
+/// (`codec/pool.rs`).
 #[derive(Clone, Debug)]
 pub(crate) struct Held {
     pub(crate) tx: Transaction,
     pub(crate) record: PoolRecord,
     pub(crate) weight: u64,
     pub(crate) fee: AtomicUnits,
-    /// What the proof verified against when the door last admitted it, or
-    /// `None`: CEN-M8's cache.
-    pub(crate) proven: Option<VerifiedReference>,
+    /// The door's step 1 when it last judged this transaction, which holds
+    /// while its rule set and its claim do; `None` until a judgement here
+    /// (a row read back from the file).
+    pub(crate) pass: Option<StatelessPass>,
 }
 
 impl Held {
     /// `tx` under `record`, its weight and fee read off its bytes.
-    pub(crate) fn of(
-        tx: Transaction,
-        record: PoolRecord,
-        proven: Option<VerifiedReference>,
-    ) -> Self {
+    pub(crate) fn of(tx: Transaction, record: PoolRecord, pass: Option<StatelessPass>) -> Self {
         Self {
             weight: u64::try_from(tx.weight()).unwrap_or(u64::MAX),
             fee: AtomicUnits::from_raw(fee_of(&tx)),
             tx,
             record,
-            proven,
+            pass,
         }
     }
 
@@ -229,6 +227,32 @@ impl Pool {
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<Admission, PoolFault<V::Fault>> {
+        self.admit_judged(tx, None, arrival, now, chain, rule_set, policy)
+    }
+
+    /// [`Pool::admit`] with `prior`, a pass the caller computed for `tx`
+    /// before taking the pool ([`crate::stateless`]): the door uses it when
+    /// its claim still holds here and judges step 1 again otherwise, so a
+    /// submit's verification runs outside whatever lock guards the pool
+    /// (the review of #1102, S1).
+    ///
+    /// # Errors
+    ///
+    /// As [`Pool::admit`].
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "admit's arguments and the prior pass"
+    )]
+    pub fn admit_judged<'id, V: ChainView<'id>>(
+        &mut self,
+        tx: Transaction,
+        prior: Option<StatelessPass>,
+        arrival: Arrival,
+        now: UnixSeconds,
+        chain: &V,
+        rule_set: &RuleSet,
+        policy: &AdmissionPolicy,
+    ) -> Result<Admission, PoolFault<V::Fault>> {
         let txid = tx.txid_parts().hash;
         if let Some(held) = self.held.get_mut(&txid) {
             if arrival.carried() && !held.record.public {
@@ -251,17 +275,29 @@ impl Pool {
         if self.room_for(weight, Some(rate), false).is_none() {
             return Ok(Admission::PoolFull);
         }
-        let judged = door::judge(&tx, chain, &self.key_images, rule_set, policy, None)
-            .map_err(PoolFault::Chain)?;
-        let (standing, proven) = match (judged, arrival) {
-            (Judged::Admitted { proven, .. }, _) => (Standing::Admitted, proven),
-            (Judged::Chain { policy: None, .. }, Arrival::Returned) => {
+        let judged = door::judge(
+            &tx,
+            chain,
+            &self.key_images,
+            rule_set,
+            policy,
+            prior.as_ref(),
+        )
+        .map_err(PoolFault::Chain)?;
+        let (standing, pass) = match (judged, arrival) {
+            (Judged::Admitted { pass, .. }, _) => (Standing::Admitted, pass),
+            (
+                Judged::Chain {
+                    policy: None, pass, ..
+                },
+                Arrival::Returned,
+            ) => {
                 // Aged from the tip of the chain the switch left (CEN-M10).
                 let returned_at = chain
                     .tip()
                     .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
                     .map_or(BlockHeight::ZERO, |tip| tip.height);
-                (Standing::Kept { returned_at }, None)
+                (Standing::Kept { returned_at }, pass)
             }
             (refused, _) => return Ok(Admission::Refused(refused)),
         };
@@ -282,7 +318,7 @@ impl Pool {
         for gone in &evicted {
             self.drop_held(gone);
         }
-        self.hold(txid, Held::of(tx, record, proven));
+        self.hold(txid, Held::of(tx, record, Some(*pass)));
         Ok(if kept {
             Admission::Kept
         } else {
@@ -316,12 +352,12 @@ impl Pool {
     }
 
     /// Put a reconcile's outcome in the index once the file holds it: each
-    /// entry's judgement (`None` drops it, `Some` is its standing and
-    /// CEN-M8's anchor), and the key-image map the reconcile built beside
-    /// the live one.
+    /// entry's judgement (`None` drops it, `Some` is its standing and the
+    /// door's pass), and the key-image map the reconcile built beside the
+    /// live one.
     pub(crate) fn install(
         &mut self,
-        judged: &BTreeMap<TxHash, Option<(Standing, Option<VerifiedReference>)>>,
+        judged: &BTreeMap<TxHash, Option<(Standing, StatelessPass)>>,
         key_images: KeyImages,
     ) {
         for (txid, outcome) in judged {
@@ -329,10 +365,10 @@ impl Pool {
                 None => {
                     self.held.remove(txid);
                 }
-                Some((standing, proven)) => {
+                Some((standing, pass)) => {
                     if let Some(held) = self.held.get_mut(txid) {
                         held.record.standing = *standing;
-                        held.proven = *proven;
+                        held.pass = Some(*pass);
                     }
                 }
             }

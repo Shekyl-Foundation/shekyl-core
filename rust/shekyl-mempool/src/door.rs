@@ -8,17 +8,25 @@
 //!
 //! Three calls, in order:
 //!
-//! 1. [`judge_slot_stateless`] at [`TxSlot::Lone`] — the function `form`
-//!    runs at every slot: `tx_form` (CEN-M2: the full NIC set), the
+//! 1. [`judge_lone_stateless`] — the function `form` runs at every slot,
+//!    at [`TxSlot::Lone`]: `tx_form` (CEN-M2: the full NIC set), the
 //!    signatures, the proofs against the claim read off this chain
-//!    ([`ReferenceClaims::for_transaction`]), and at `Lone` the range proof
-//!    as a batch of one.
+//!    ([`ReferenceClaims::for_transaction`]), and the range proof as a
+//!    batch of one. Its answer is a [`StatelessPass`], and a pass the pool
+//!    already holds for the transaction is the answer again while its rule
+//!    set and its claim hold (CEN-M8; the review of #1102, S1): nothing is
+//!    verified twice.
 //! 2. [`tx_against`] at `Lone` over [`PoolView`] — the view-bound half
 //!    `validate` runs per slot, with the pool's key images added (CEN-M6,
 //!    CEN-M7); it compares the chain's `(height, root)` at the reference
 //!    with the claim step 1 verified.
 //! 3. [`policy_form`] — CEN-M3, M4 and M5 over the relay floor window at
 //!    the connecting height.
+//!
+//! Step 1 is [`stateless`], which needs no pool: a caller holding a lock
+//! runs it before taking the lock and hands its pass to [`judge`], which
+//! re-reads the claim under the lock and runs step 1 again only if the
+//! claim moved in between.
 //!
 //! The answer says which half refused, because the pool treats them
 //! differently: a stateless or policy refusal is final, while a refusal by
@@ -29,14 +37,15 @@
 //! transaction the policy also refuses is not kept on the chain-bound
 //! refusal's account.
 //!
-//! Every input is read off one chain view, so the claim and the chain it
-//! is compared with cannot disagree: a [`Stale`](shekyl_chain_rules::Stale)
-//! here is a view that moved under its reader, and comes back as the fault.
+//! Steps 2 and 3 read the view step 1's claim was read off, so the claim
+//! and the chain it is compared with cannot disagree: a
+//! [`Stale`](shekyl_chain_rules::Stale) here is a view that moved under its
+//! reader, and comes back as the fault.
 
 use shekyl_chain_rules::{
-    judge_slot_stateless, policy_form, relay_floor_window, tx_against, AdmissionPolicy, AtHeight,
+    judge_lone_stateless, policy_form, relay_floor_window, tx_against, AdmissionPolicy, AtHeight,
     ChainView, Fault, FormAttempt, InvalidBlock, PolicyCoverage, PolicyRefused, ReferenceClaims,
-    RuleCoverage, RuleSet, Tip, TxSlot, VerifiedReference,
+    RuleCoverage, RuleSet, StatelessPass, Tip, TxSlot,
 };
 use shekyl_wire::Transaction;
 
@@ -47,11 +56,10 @@ use crate::view::{KeyImages, PoolView};
 pub enum Judged {
     /// Every row passed.
     Admitted {
-        /// What the proof verified against — CEN-M8's anchor — or `None`
-        /// for a transaction whose judgement verified no reference.
-        proven: Option<VerifiedReference>,
-        /// The consensus rows step 1 recorded.
-        stateless: RuleCoverage,
+        /// Step 1's pass: what the proof verified against (CEN-M8's
+        /// anchor) and the consensus rows it recorded. Boxed: every enum
+        /// that carries a judgement would otherwise carry its size.
+        pass: Box<StatelessPass>,
         /// The consensus rows step 2 recorded.
         against: RuleCoverage,
         /// The policy rows step 3 recorded.
@@ -65,17 +73,37 @@ pub enum Judged {
         refused: InvalidBlock,
         /// The admission policy's refusal too, when it refuses (step 3).
         policy: Option<PolicyRefused>,
+        /// Step 1's pass, which a kept entry holds for its next judgement.
+        pass: Box<StatelessPass>,
     },
     /// Admitted by the consensus rows and refused by the admission policy
     /// (step 3).
     Policy(PolicyRefused),
 }
 
+/// Step 1 for `tx` against `chain` under `rule_set`, at the height a block
+/// carrying it would connect at: `prior` when it still holds, else the
+/// judgement itself (module docs).
+///
+/// # Errors
+///
+/// The view's fault. None is a judgement about the transaction.
+pub fn stateless<'id, V: ChainView<'id>>(
+    tx: &Transaction,
+    chain: &V,
+    rule_set: &RuleSet,
+    prior: Option<&StatelessPass>,
+) -> Result<Result<StatelessPass, InvalidBlock>, Fault<V::Fault>> {
+    let connecting = Tip::connecting_height(chain.tip().map_err(Fault::View)?.as_ref());
+    let claims = ReferenceClaims::for_transaction(chain, connecting, tx).map_err(Fault::View)?;
+    Ok(judge_lone_stateless(tx, rule_set, &claims, prior))
+}
+
 /// Judge `tx` for the pool holding `pool`, against `chain` under
 /// `rule_set` and `policy`: the three calls of the module docs, at the
-/// height a block carrying `tx` would connect at. `cached` is CEN-M8's
-/// cache — the triple the pool recorded when it last admitted `tx`, at a
-/// re-admission; `None` for a transaction the pool has not judged.
+/// height a block carrying it would connect at. `prior` is a pass the
+/// caller already holds for `tx` — the pool's, at a reconcile, or one a
+/// submit computed before taking the pool's lock; `None` judges afresh.
 ///
 /// # Errors
 ///
@@ -89,25 +117,20 @@ pub fn judge<'id, V: ChainView<'id>>(
     pool: &KeyImages,
     rule_set: &RuleSet,
     policy: &AdmissionPolicy,
-    cached: Option<VerifiedReference>,
+    prior: Option<&StatelessPass>,
 ) -> Result<Judged, Fault<V::Fault>> {
+    let pass = match stateless(tx, chain, rule_set, prior)? {
+        Ok(pass) => pass,
+        Err(refused) => return Ok(Judged::Stateless(refused)),
+    };
     let connecting = Tip::connecting_height(chain.tip().map_err(Fault::View)?.as_ref());
-    let claims = ReferenceClaims::for_transaction(chain, connecting, tx).map_err(Fault::View)?;
-
-    let mut stateless = RuleCoverage::EMPTY;
-    let proven =
-        match judge_slot_stateless(tx, TxSlot::Lone, rule_set, &claims, cached, &mut stateless) {
-            Ok(proven) => proven,
-            Err(refused) => return Ok(Judged::Stateless(refused)),
-        };
-
     let view = PoolView::new(chain, pool);
     let against = tx_against(
         tx,
         TxSlot::Lone,
         &view,
         rule_set,
-        proven,
+        pass.proven(),
         FormAttempt::FIRST,
     )?;
 
@@ -123,11 +146,11 @@ pub fn judge<'id, V: ChainView<'id>>(
         (Err(refused), policy) => Judged::Chain {
             refused,
             policy: policy.err(),
+            pass: Box::new(pass),
         },
         (Ok(_), Err(refused)) => Judged::Policy(refused),
         (Ok(against), Ok(policy)) => Judged::Admitted {
-            proven,
-            stateless,
+            pass: Box::new(pass),
             against,
             policy,
         },

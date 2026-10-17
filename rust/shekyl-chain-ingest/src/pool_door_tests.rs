@@ -237,13 +237,13 @@ async fn an_admitted_spend_carries_its_anchor_and_the_range_proof_row() {
     let (mut scenario, mined) = matured("pool-door-anchor").await;
     let good = paying_the_floor(&mut scenario, &mined, 0).await;
     let (_, judged) = door(&mut scenario, &good).await;
-    let Judged::Admitted {
-        proven, stateless, ..
-    } = judged
-    else {
+    let Judged::Admitted { pass, .. } = judged else {
         panic!("a well-formed spend paying the floor is admitted: {judged:?}");
     };
-    let proven = proven.expect("a spend's proof verified against its reference");
+    let proven = pass
+        .proven()
+        .expect("a spend's proof verified against its reference");
+    let stateless = pass.coverage();
     assert_eq!(Some(proven.reference), reference_of(&good));
     assert!(stateless.contains(CenRow::H19), "the batch of one decided");
     assert!(stateless.contains(CenRow::I15), "the proof verified");

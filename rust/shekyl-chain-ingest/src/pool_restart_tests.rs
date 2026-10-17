@@ -247,12 +247,14 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
             Removed::Refused(Judged::Chain {
                 refused: a,
                 policy: None,
+                ..
             }),
         ), (
             second,
             Removed::Refused(Judged::Chain {
                 refused: b,
                 policy: Some(m3),
+                ..
             }),
         )] => {
             assert_eq!((*first, *second), (idp, idc), "in the order held");
