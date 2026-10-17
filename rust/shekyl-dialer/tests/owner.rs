@@ -433,6 +433,58 @@ fn a_dial_that_cannot_open_is_dial_failed_with_the_cause() {
     );
 }
 
+/// **A close between `adopt` and the kept row is remembered** (Copilot on
+/// #1092). The close reaches the dialer after `adopt` posted `Established`
+/// and after `exchange` found no cause on the hub, but before the kept row
+/// is written: here the `Established` poster delivers it, as a close
+/// notification does. Before, `session_closed` found no kept row and
+/// returned, the row was written anyway, and since the hub posts a close
+/// once, it never left: a phantom kept session holding an outbound slot.
+/// Now the dial is `DialFailed` with that cause, nothing is kept, and
+/// nothing is posted for it.
+#[test]
+fn a_close_between_adopt_and_the_kept_row_is_not_kept() {
+    let slot: Arc<Mutex<Option<Arc<Dialer>>>> = Arc::new(Mutex::new(None));
+    let slot_post = Arc::clone(&slot);
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let posts_in = Arc::clone(&posts);
+    let hub = Hub::new(
+        Sockets::new(),
+        InboundCeiling::Bounded(8),
+        Arc::new(move |post| {
+            if let Post::Established { id, .. } = &post {
+                if let Some(dialer) = slot_post.lock().expect("slot").clone() {
+                    dialer.session_closed(
+                        *id,
+                        CloseCause::new(CloseKind::PeerClosed),
+                        &mut SplitMix64::new(13),
+                    );
+                }
+            }
+            posts_in.lock().expect("posts").push_back(post);
+        }),
+        Arc::new(ManualClock::new(Tick::new(1))),
+    );
+    hub.install_loopback(SEND_CAP);
+    let dialer = dialer_for(&hub);
+    *slot.lock().expect("slot") = Some(Arc::clone(&dialer));
+    let mut rng = SplitMix64::new(14);
+    dialer
+        .admit_operator(&peer(1), Tick::new(1), &mut rng)
+        .expect("admitted");
+    let rig = Rig { hub, posts, dialer };
+    assert!(
+        dial_with(&rig, &peer(1), DialAim::Keep, vec![reply(NETWORK, vec![])]).is_none(),
+        "a dial closed before its kept row is not a kept dial"
+    );
+    assert_eq!(rig.dialer.kept_sessions(ConnectorId::Clearnet), 0);
+    assert_eq!(rig.dialer.in_flight(ConnectorId::Clearnet), 0);
+    assert!(
+        !kinds(&rig.posts.lock().expect("posts")).contains(&"handshake"),
+        "nothing is posted for a dial that was not kept"
+    );
+}
+
 /// The loopback dial with a real gap: each channel carries a gap sender, and
 /// its receiver is kept so a test can see whether the sender fired.
 struct GapDial {

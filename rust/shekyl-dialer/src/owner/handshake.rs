@@ -167,18 +167,26 @@ impl Dialer {
             return Attempt::Done(DialOutcome::Confirmed(address.clone()));
         }
 
+        // From here until the kept row is written, a close that reaches the
+        // dialer finds no kept row. It records its cause under this id
+        // instead, and the owner does not keep the dial.
+        self.shared().adopting.insert(id.get(), None);
         let attached =
             match self
                 .hub
                 .adopt(channel.open, channel.session, channel.endpoint, channel.gap)
             {
                 Ok(attached) => attached,
-                Err(cause) => return failed(cause),
+                Err(cause) => {
+                    self.shared().adopting.remove(&id.get());
+                    return failed(cause);
+                }
             };
         // `Established` runs its poster before `adopt` returns. A poster
         // that closed the session has already won: recording a kept row
         // would resurrect it.
         if let Some(cause) = self.hub.cause(id) {
+            self.shared().adopting.remove(&id.get());
             drop(attached);
             return failed(cause);
         }

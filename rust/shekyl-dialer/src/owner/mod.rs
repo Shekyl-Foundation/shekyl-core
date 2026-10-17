@@ -103,6 +103,10 @@ pub struct Shared {
     own: Vec<Vec<NetworkAddress>>,
     /// Kept sessions by id, so a close can name the address.
     kept: BTreeMap<u64, NetworkAddress>,
+    /// Kept dials from just before `adopt` until their kept row is written,
+    /// by socket id. A close in that window finds no kept row; it records
+    /// its cause here instead, and the kept row is never written for it.
+    adopting: BTreeMap<u64, Option<CloseCause>>,
     /// Under-target wakes that dialed nothing, one slot per connector.
     idle: [Option<IdleWatch>; ConnectorId::COUNT],
     /// A closed network (`--add-exclusive-node`): the candidate
@@ -193,6 +197,7 @@ impl Dialer {
                 targets,
                 own: vec![Vec::new(); ConnectorId::COUNT],
                 kept: BTreeMap::new(),
+                adopting: BTreeMap::new(),
                 idle: [None; ConnectorId::COUNT],
                 exclusive: None,
                 configured: Vec::new(),
@@ -418,6 +423,10 @@ impl Dialer {
     ) {
         let now = self.hub.now();
         let mut shared = self.shared();
+        if let Some(adopting) = shared.adopting.get_mut(&id.get()) {
+            *adopting = Some(cause);
+            return;
+        }
         let Some(address) = shared.kept.remove(&id.get()) else {
             return;
         };
@@ -521,19 +530,39 @@ impl Dialer {
     /// session, an empty in-flight count, and an established row whose gap
     /// sender has fired. `Post::Established` was posted by `adopt`, before
     /// this runs.
+    ///
+    /// A close that reached the dialer after `adopt` and before this lock
+    /// section left its cause in `adopting`. The dial is then
+    /// `DialFailed` with that cause, no kept row is written, nothing is
+    /// posted, and this returns `false`: the hub posts a close once, so a
+    /// kept row written after it would never leave.
     fn accept_and_notify<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         address: &NetworkAddress,
         kept: KeptDial,
         rng: &mut R,
-    ) {
+    ) -> bool {
         let now = self.hub.now();
-        {
+        let closed = {
             let mut shared = self.shared();
-            let outcome = DialOutcome::SessionAccepted(address.clone());
+            let closed = shared.adopting.remove(&kept.id.get()).flatten();
+            let outcome = match closed {
+                Some(cause) => DialOutcome::DialFailed(address.clone(), cause),
+                None => DialOutcome::SessionAccepted(address.clone()),
+            };
             Self::record(&mut shared, connector, &outcome, now, rng);
-            shared.kept.insert(kept.id.get(), address.clone());
+            if closed.is_none() {
+                shared.kept.insert(kept.id.get(), address.clone());
+            }
+            closed
+        };
+        if let Some(cause) = closed {
+            tracing::debug!(
+                "{connector:?} dial {address:?} closed before it was kept ({:?})",
+                cause.kind()
+            );
+            return false;
         }
         tracing::debug!("{connector:?} dial {address:?} kept as {:?}", kept.id);
         self.hub.session_established(kept.id);
@@ -544,6 +573,7 @@ impl Dialer {
         let session = kept.session;
         let pump = std::thread::spawn(move || shekyl_seam::drive_inbound(&hub, id, session));
         self.hub.track_pump(id, pump);
+        true
     }
 
     /// Run the owner loop for `connector` on the calling thread, until
@@ -620,7 +650,9 @@ impl Dialer {
                 tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
                 self.settle(connector, &outcome, rng);
             }
-            Attempt::Kept(kept) => self.accept_and_notify(connector, &address, kept, rng),
+            Attempt::Kept(kept) => {
+                self.accept_and_notify(connector, &address, kept, rng);
+            }
         }
         // The nonce leaves the set here: the attempt ended, by any path.
         drop(nonce);
@@ -679,8 +711,8 @@ impl Dialer {
             }
             Attempt::Kept(kept) => {
                 let id = kept.id;
-                self.accept_and_notify(connector, address, kept, rng);
-                Some(id)
+                self.accept_and_notify(connector, address, kept, rng)
+                    .then_some(id)
             }
         }
     }
