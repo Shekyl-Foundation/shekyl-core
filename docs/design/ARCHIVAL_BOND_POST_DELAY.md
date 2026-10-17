@@ -333,9 +333,11 @@ then.
   alternatives name. A conflict on the very first send is no exception:
   with one version and the reservation held, its only honest cause is
   another wallet holding the same seed, and the chain resolves that too.
-- **Cost.** A rejected stake holds its funds until its end date is final,
+- **Cost.** A refused stake holds its funds until its end date is final,
   about 94 + 720 blocks after it was signed. The user sees the reason at
-  once, with `funds_return_at`.
+  once: its `in_flight` state is `refused`, with `reason` and
+  `funds_return_at`, until the end date, and `expired` with the same
+  `reason` after it. `rejected` is only the end-date outcome.
 
 Today's dispatch driver does the opposite on both counts: it resends the
 same bytes past the end date, and its terminal arm removes the record and
@@ -558,13 +560,38 @@ object from a window ("uniform from funding").
 | **O5.** Fingerprint wallets by window cohort after a window change. | BD-Q4: the window is fixed at genesis. |
 | **O6.** A remote daemon (no own node) receives both the funding transfer and the bond post from one client. | No window helps: it sees the post submitted. Conceded under the own-node posture (`engine/transaction_submitter.rs:479-483`). The routes are the principal-side Tor flip (`ARCHIVAL_BOND_WI4_MEASUREMENT.md:1988`) and the per-`P` submit posture (2d-2). Recorded, not absorbed. |
 | **O7.** A malicious daemon reports a terminal verdict to make the wallet release its reservation and drop the slot while the bond can still land. | Absorbed by Rule 2: no daemon verdict releases a submitted record; the chain decides at the end date. |
-| **O8.** Censor or falsely reject the post to deny the stake. | Bounded, not absorbed: one window per attempt, surfaced as `expired` or `rejected` with `funds_return_at`. The route is the own-node posture (O6). Repeated denial costs the user latency, never funds. |
+| **O8.** Censor or falsely reject the post to deny the stake. | Bounded, not absorbed: one window per attempt, surfaced at once as the `in_flight` state `refused` (or `expired` past the end date) and at the end date as the outcome `rejected` or `expired`, each with `funds_return_at`. The route is the own-node posture (O6). Repeated denial costs the user latency, never funds. |
 
 ---
 
-## 5. Proving it
+## 5. The implementation slice
 
-Tests that land with the implementation slice:
+**Its work** (BD-Q2, BD-Q3, the BD-Q5 deletion):
+
+- The planned state and the schema bump: the posture, the draw `s`, one
+  `reference_height` and the recorded terminal verdict (`TerminalErrorKind`)
+  per record, shared with or following WR-Q2/WR-Q3's v13.
+- The anchor and the due (BD-Q2), on the daemon-claimed count clock.
+- Assembly, proof and signature at the due tick inside the actor, sealed
+  before the first send (BD-Q3).
+- Rule 1 in the dispatch driver: the send recorded before the submit
+  call, and no re-sign after it.
+- Rule 2 in the dispatch driver: the terminal arm
+  (`engine/pscan/dispatch.rs:794-803`) stops sending and keeps the record
+  and the reservation.
+- **Rewrite the shipped `STAKING_UNAVAILABLE_ON_THIS_DAEMON` sentence**
+  (`engine/pscan/dispatch.rs:53-56`). Its "its funds are spendable
+  again" is false under Rule 2: the funds return at `funds_return_at`.
+- The BD-Q5 deletion (`MIN_COLD_START_SPACING`, `EconomicSpacing`,
+  `SebSpan`), with the drifted citation at `engine/stake_timing.rs:160-163`
+  and the 2C2B inventory of landed types
+  (`ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md:379-385`, `:580`).
+
+The exit, claim and drain changes of the WR-Q3 amendment are the
+wallet-RPC slice's (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q4).
+
+**Its tests:**
+
 
 - A post due at `a + s` is signed at its first send and carries reference
   age 6 (it replaces the ignored test, `engine/pscan/dispatch_tests.rs:1293`).
@@ -576,7 +603,9 @@ Tests that land with the implementation slice:
 - A crash between recording the send and the submit call leaves the
   record treated as sent.
 - A terminal verdict stops sending and keeps the record and the
-  reservation; at the end date the record ends `rejected` with the reason.
+  reservation. Its `in_flight` state is `refused` with the reason and
+  `funds_return_at` until the end date, then `expired` with the same
+  reason; at the release the outcome is `rejected` with the reason.
 - A post that lands after a terminal verdict takes the confirmed path.
 - Re-staking after `expired` posts on the first tick, with no draw.
 - **Instant staker:** a request at `a` produces a post whose reference
@@ -619,7 +648,10 @@ built. Each carry below is recorded in both documents (rule 26 A5);
     rule.
 - **The WR-Q3 amendment (Rule 2), recorded in both documents.** No daemon
   verdict releases a submitted record of any kind; every submitted record
-  ends at its end date. `rejected` means a terminal verdict was seen and
+  ends at its end date. While a record that saw a terminal verdict can
+  still land, its `in_flight` state is `refused` (then `expired` past the
+  end date, with the `reason` kept). `rejected` is only the outcome: a
+  terminal verdict was seen and
   the record reached its end date without landing; its funds are
   `returned` and the reason sentence stays. Per kind, at source: the stake
   and the exit release on a daemon verdict today and change; the claim and

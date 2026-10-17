@@ -271,9 +271,16 @@ one entry per live pending record, in no meaningful order.
     staking scan reaches `funds_return_at`, which is the end date itself
     (WR-Q3). It is a scan height, comparable with `pscan_synced_height`
     in the same response.
-  - `rejected`, with `reason` and `funds_return_at`: a terminal verdict
-    was seen and sending stopped. The record and its reservation are
-    held to the end date, where the chain decides (WR-Q3).
+  - `refused`, with `reason` and `funds_return_at`: a terminal verdict
+    was seen and sending stopped. Not final: the record and its
+    reservation are held to the end date, and a post that lands before
+    it takes the confirmed path (WR-Q3). `rejected` is only an outcome
+    (WR-Q2), never a state.
+
+  **Precedence follows whether the transaction can still land:** a record
+  that saw a terminal verdict is `refused` until its end date and
+  `expired` after it. `reason` is present whenever a terminal verdict was
+  recorded, so an `expired` entry carries it too.
 - **No per-record handle** (WR-Q5).
 
 There is no `stalled` state. Under WR-Q3 and WR-Q4 every record ends by
@@ -287,8 +294,10 @@ ignores unknown keys; a reader that refuses unknown keys updates in the
 same change.
 
 **Every state comes from sealed records.** `pending` and `dispatched` are
-the record's `PendingPostState`. `expired` is the record's durable
-`reference_height` (WR-Q3) against the clock below. No state is read
+the record's `PendingPostState`. `refused` is the terminal verdict
+recorded on the record (its `TerminalErrorKind`) while the end date has
+not passed. `expired` is the record's durable `reference_height` (WR-Q3)
+against the clock below. No state is read
 from the in-memory alarm sets (§2), so each one survives a restart.
 
 **The clock is the wallet ledger's synced height**, the one
@@ -326,6 +335,12 @@ affected.
 - A test seals a `Dispatched` record with reference height `r`, advances
   the ledger clock past `r + 100`, restarts the engine, and reads
   `expired` with `funds_return_at == r + 100`.
+- A test seals a record with reference height `r` and a recorded
+  terminal verdict. Below `r + 100` it reads `refused` with the verdict's
+  `reason` and `funds_return_at == r + 100`; past `r + 100` it reads
+  `expired` with the same `reason`.
+- The `in_flight` state set in `docs/api/wallet_rpc.yaml` lists `refused`
+  and no `rejected`; `rejected` appears only in the `outcomes` set.
 - `rg -n 'stalled' rust/shekyl-wallet-rpc/src rust/shekyl-wallet-contract/src docs/api/wallet_rpc.yaml`
   returns nothing.
 - `rg -n 'alarmed_this_session|alarmed_reservations' rust/shekyl-wallet-rpc`
@@ -374,8 +389,9 @@ seal, so the two cannot disagree after a crash. No daemon verdict removes
 a submitted record (WR-Q3). A terminal verdict is recorded on the record
 when it is seen, its `TerminalErrorKind` in the shared v13 bump, so the
 end-date outcome can be `rejected` with its reason. The removal-ordering contract (`pending_post_block.rs:105-112`) is
-unaffected: a rejected post never carries a match, and a record released
-at its end date cannot gain one (WR-Q3).
+unaffected: a `refused` record that the scan sees land takes the confirmed
+path and writes no outcome, and a record released at its end date cannot
+gain a match (WR-Q3).
 
 **How it is cleared.**
 - By the next successful seal of the same kind for the same persona.
@@ -391,9 +407,10 @@ snapshot (rule 42), shared with WR-Q3's `reference_height`.
 **Falsifier.** The armed tripwire
 `e2e_the_cxx_daemon_answers_join_market_unsupported`
 (`engine/regtest_e2e.rs:3481`) drives a terminal rejection end to end
-against the real C++ daemon. Extended: after the rejection the record
-stays in `in_flight` with its reservation, showing the reason and
-`funds_return_at`; at its end date `staking_info` shows
+against the real C++ daemon. Extended: after the refusal the record
+stays in `in_flight` as `refused`, with its reservation, the reason and
+`funds_return_at`; past the end date, until the release, it shows
+`expired` with the reason; at the release `staking_info` shows
 `outcomes[0].outcome == "rejected"` for `kind == "stake"`, with the
 reason, `funds == "returned"` and `in_flight` empty. After a restart it
 still does. The shipped sentence's "its funds are spendable again"
@@ -552,7 +569,11 @@ a record was signed under the limit in force then.
   writes `outcomes[0].outcome == "expired"` in the same seal, and
   releases its gindexes.
 - A post matched by the scan at or below `r + 100` is retired as
-  confirmed, and no outcome is written.
+  confirmed, and no outcome is written, whether or not a terminal verdict
+  was recorded on it.
+- A post with a recorded terminal verdict and no match at the frontier
+  `r + 100` is released, writing `outcomes[0].outcome == "rejected"` with
+  its reason in the same seal.
 - A drain whose inputs are all absent from live funding at that frontier
   is retired as settled, with no outcome.
 - A drain with part of its inputs absent is released at the frontier
@@ -569,9 +590,9 @@ a record was signed under the limit in force then.
 
 ### WR-Q4 — One surface for claims, drains and exits — RULED 2026-10-15
 
-The kinds fail differently today (§2): a rejected stake is removed, an
-exit rejected on its one send is removed at the seam, and a rejected
-claim or drain is **held**, because the prune that would remove it is
+The kinds fail differently today (§2): a stake the daemon refuses is
+removed, an exit refused on its one send is removed at the seam, and a
+refused claim or drain is **held**, because the prune that would remove it is
 leg 4's empty body.
 
 **Release on a daemon verdict, per kind, at source.** The WR-Q3
@@ -580,8 +601,8 @@ kind that does it today:
 
 | Kind | Releases on a daemon verdict today? | Under the amendment |
 | --- | --- | --- |
-| Stake | yes: the dispatch driver's terminal arm removes the record and releases its reservation (`pscan/dispatch.rs:794-803`) | held to the end date; `rejected` with its reason if it did not land |
-| Exit | yes, on a definite first-send `RejectedTerminal` (`release_dispatch.rs:303-309`, `:657-669`), on the premise that such bytes "were never admitted to any pool and never relayed" (`:640-649`), true only for an honest daemon, and to avoid bricking the one-live-exit lane, which the end date now prevents | held to the end date; `rejected` with its reason if it did not land. The `PersonaMismatch` release stays: it is refused before any transport, so no byte left the wallet and no daemon gave a verdict |
+| Stake | yes: the dispatch driver's terminal arm removes the record and releases its reservation (`pscan/dispatch.rs:794-803`) | held to the end date as `refused`; the outcome is `rejected` with its reason if it did not land |
+| Exit | yes, on a definite first-send `RejectedTerminal` (`release_dispatch.rs:303-309`, `:657-669`), on the premise that such bytes "were never admitted to any pool and never relayed" (`:640-649`), true only for an honest daemon, and to avoid bricking the one-live-exit lane, which the end date now prevents | held to the end date as `refused`; the outcome is `rejected` with its reason if it did not land. The `PersonaMismatch` release stays: it is refused before any transport, so no byte left the wallet and no daemon gave a verdict |
 | Claim | no: a submit failure leaves the sealed record live (`claim_dispatch.rs:428-435`); `remove_claim` has no production caller, and retirement is `remove_settled` on chain evidence (`pscan/dispatch.rs:561`) | unchanged; one that saw a terminal verdict reports `rejected` with its reason at the end date, not `expired` |
 | Drain | no: as the claim (`drain_dispatch.rs:443-449`; `remove_drain` has no production caller) | as the claim |
 
@@ -610,12 +631,12 @@ including the empty and the partly spent reservation.
   inside the window. Every submitted record ends at its end date. On a
   terminal verdict the wallet stops sending, keeps the record and the
   reservation, and shows the reason at once: the record's `in_flight`
-  entry is `rejected`, with `reason` and `funds_return_at` (the end
+  state is `refused`, with `reason` and `funds_return_at` (the end
   date). At the end date the chain decides: a record the scan saw land
   takes the confirmed path; one that did not ends `rejected` with its
   reason.
 - **What it costs.** The `reference_height` field on all four kinds (the
-  one shared v13 bump), with the terminal verdict seen, if any. A rejected
+  one shared v13 bump), with the terminal verdict seen, if any. A refused
   stake, claim, drain or exit holds its funds until about a day after its
   end date, and then reports `rejected` with its reason.
 
@@ -640,6 +661,9 @@ completed or been withdrawn with its funds returned."
   hits on `PendingBondPost`, `PendingEmissionClaim`, `PendingDrain` and
   `PendingRelease`.
 - The `-29522` message names `staking_info`.
+- An exit answered `RejectedTerminal` on its first send stays sealed with
+  its reservation and reads `refused`; a `PersonaMismatch` refusal
+  releases it.
 
 ### WR-Q5 — What the response reveals, and to whom — RULED 2026-10-15
 
@@ -708,7 +732,7 @@ on each start (WR-Q3), which names no persona.
 The ruled shape is proved against a real daemon (regtest), not mocks,
 where a daemon can produce the case.
 
-- **Now:** the terminal rejection, end to end. The #1075 tripwire already
+- **Now:** a terminal refusal, end to end. The #1075 tripwire already
   drives it against the C++ daemon (WR-Q2's falsifier).
 - **At `DEL-008`:** a dispatched stake, a late landing and an end-date
   release all need a daemon that admits a kind-5 JoinMarket post. That is
