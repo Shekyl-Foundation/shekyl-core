@@ -98,6 +98,54 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
     scenario.close().await;
 }
 
+/// Stem-phase entries persist (ruled 2026-10-17 on #1102): a spend this
+/// node holds unpublished survives a restart unpublished, at the whole hour
+/// it was received — a restart does not drop a wallet's own submission, and
+/// the file says nothing finer than the hour. It is still not shown (the
+/// listing, peer sync), and the relay finds it in `unpublished`.
+#[tokio::test]
+async fn a_stem_phase_entry_survives_a_restart_unpublished_at_its_hour() {
+    use shekyl_chain_store::pool::ReceivedHour;
+
+    let (mut scenario, mined) = matured("pool-stem-restart").await;
+    let spend = paying_the_floor(&mut scenario, &mined, 0).await;
+    let txid = spend.txid_parts().hash;
+    let path = tmp("pool-stem-restart-pool");
+    let policy = AdmissionPolicy::GENESIS;
+    let received = UnixSeconds::from_raw(1_700_000_000 + 1_234);
+    let later = UnixSeconds::from_raw(1_700_000_000 + 10_000);
+    let (record, unpublished, listed, admitted) = scenario
+        .read_chain(|view, rule_set| {
+            {
+                let (mut pool, _, _) =
+                    Pool::open(&path, received, view, rule_set, &policy).expect("open");
+                assert_eq!(
+                    pool.admit(spend.clone(), received, view, rule_set, &policy)
+                        .expect("no fault"),
+                    Admission::Admitted {
+                        evicted: Vec::new()
+                    }
+                );
+            }
+            let (pool, how, reconciled) =
+                Pool::open(&path, later, view, rule_set, &policy).expect("reopen");
+            assert_eq!(how, PoolOpen::Opened);
+            let record = pool.relay_view().record(&txid);
+            let unpublished = pool.unpublished().any(|(id, _)| id == txid);
+            let listed = pool.listing().any(|(id, _)| id == txid);
+            (record, unpublished, listed, reconciled.admitted)
+        })
+        .await;
+    assert_eq!(admitted, vec![txid], "the reconcile admits it again");
+    let record = record.expect("held across the restart");
+    assert!(!record.public, "still in its stem phase");
+    assert_eq!(record.received, ReceivedHour::of(received), "to the hour");
+    assert!(unpublished, "the relay's view holds it back");
+    assert!(!listed, "and the node shows it to no one");
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
 /// The file is discardable (`SPL-Q8`): removed between runs, the pool opens
 /// empty on a fresh file, the chain is untouched, and the transaction the
 /// lost file held is admitted again when it arrives again.

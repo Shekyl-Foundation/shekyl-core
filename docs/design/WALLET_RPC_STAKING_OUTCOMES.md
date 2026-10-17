@@ -226,13 +226,18 @@ cadence driver:
   contract has no reject-cause type.
 - **The exit is the one kind pruned at its seam.** A definite first-send
   refusal removes it (§2's table). Claims and drains are held.
-- **The pool's three-day clock is per node, from that node's admission.**
-  `CRYPTONOTE_MEMPOOL_TX_LIVETIME` is three days
-  (`src/cryptonote_config.h:104`), about 2,160 blocks at 120 s. Age is
-  measured from `receive_time` (`src/cryptonote_core/tx_pool.cpp:1080`).
-  A byte-identical resend to a node that still holds the transaction does
-  not reset it. Only re-admission after eviction, or a relay-method
-  upgrade, does (`tx_pool.cpp:498-512`). The pool is not what ends a
+- **The pool's clock is per node, and the Rust pool has none.** The C++
+  pool's is three days from that node's admission
+  (`CRYPTONOTE_MEMPOOL_TX_LIVETIME`, `src/cryptonote_config.h:104`), about
+  2,160 blocks at 120 s, measured from `receive_time`
+  (`src/cryptonote_core/tx_pool.cpp:1080`); a byte-identical resend to a
+  node that still holds the transaction does not reset it, and only
+  re-admission after eviction, or a relay-method upgrade, does
+  (`tx_pool.cpp:498-512`). The Rust pool, live from the DRS-X flip, drops
+  an entry when its reference leaves CEN-I11's window,
+  `REFERENCE_BLOCK_MAX_AGE` (100) blocks after the block it names, about
+  3.3 hours, or sooner under weight pressure (`DRS_E5_POOL_ALT_PRUNE.md`,
+  CEN-M10, ruled 2026-10-17). Either way the pool is not what ends a
   transaction; its reference window is (§2).
 - **The dispatcher's clock is not one the RPC has.** The driver judges
   against the sweep's claimed daemon count (`pscan/task.rs:435-437`).
