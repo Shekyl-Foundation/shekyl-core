@@ -186,7 +186,7 @@ pub fn form<S: Substrate>(
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
     let mut verified = Vec::with_capacity(candidate.transactions.len());
     for (slot, tx) in core::iter::once(miner).chain(listed) {
-        match judge_slot_stateless(tx, slot, rule_set, references, &mut coverage) {
+        match judge_slot_stateless(tx, slot, rule_set, references, None, &mut coverage) {
             Ok(reference) => {
                 if slot != TxSlot::Miner {
                     verified.push(reference);
@@ -229,6 +229,12 @@ pub fn form<S: Substrate>(
 /// ([`ReferenceClaims::for_transaction`]). A reference with no claim is not
 /// verified here, and `tx_against` refuses or faults it.
 ///
+/// `cached` is CEN-M8's cache, the pool's at a re-admission: the triple
+/// this node verified the transaction's FCMP++ proof against when it last
+/// judged it. Equal to the claim, the proof is not verified again (the
+/// signatures and the range proof are); `form` passes `None` (`E5-Q8`:
+/// nothing is trusted into a block's judgement).
+///
 /// Yields what the slot's proof was verified against, for `tx_against`'s
 /// comparison; `coverage` gains every row that passed.
 ///
@@ -240,6 +246,7 @@ pub fn judge_slot_stateless(
     slot: TxSlot,
     rule_set: &RuleSet,
     references: &ReferenceClaims,
+    cached: Option<VerifiedReference>,
     coverage: &mut RuleCoverage,
 ) -> Verdict<Option<VerifiedReference>> {
     coverage.union(&tx_form(tx, slot, rule_set)?);
@@ -248,7 +255,7 @@ pub fn judge_slot_stateless(
     let mut scratch = RuleCoverage::EMPTY;
     let cx = rules::TxContext::derive(tx, slot, &mut scratch)?;
     judge_signatures(&cx, coverage)?;
-    let verified = judge_proofs(&cx, references, coverage)?;
+    let verified = judge_proofs(&cx, references, cached, coverage)?;
     if slot == TxSlot::Lone {
         H19::verify_lone(tx)?;
         coverage.insert(<H19 as rules::Rule>::ROW);

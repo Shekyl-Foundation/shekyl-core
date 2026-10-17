@@ -626,8 +626,13 @@ census_rows! {
         K6 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
         K7 held_by_store("shekyl-chain-ingest", "a_checkpoint_forced_switch_discards_the_demoted_chain"),
         K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),
-        K9 pending,
-        K10 pending,
+        // K9 and K10: a block's bodies through the pool door (DRS-E5 PR-b
+        // b4) — an alternative's supplemented before it is held, a popped
+        // block's returned after the switch, kept when the chain-bound half
+        // refuses them. Held by `shekyl-mempool`, witnessed by the switch
+        // over the production stack.
+        K9 held_by_store("shekyl-chain-ingest", "an_alternatives_bodies_are_supplemented_through_the_door_and_promoted_from_the_pool"),
+        K10 held_by_store("shekyl-chain-ingest", "a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the_week"),
         // 4.L Storage layer (constraints that reject chain data at write time)
         // L1 is the validator's (C2-R8 Q6): the intra-block half of key-image
         // uniqueness, run in `validate` after every slot; SI-1 is the store's
@@ -672,7 +677,10 @@ census_rows! {
         // witnessed where the real spends live — the door and a block of
         // one agree, row for row.
         M2 held_by_store("shekyl-chain-ingest", "the_door_and_a_block_of_one_agree_on_every_spend"),
-        M8 pending,
+        // M8: the pool's verification cache — the `(reference, height,
+        // root)` triple the proof verified against, consulted at a
+        // re-admission (b4). `form` never consults it (`E5-Q8`).
+        M8 held_by_store("shekyl-chain-ingest", "a_readmission_on_the_same_anchor_skips_the_proof_and_a_moved_anchor_verifies_it"),
     }
 }
 
@@ -698,6 +706,8 @@ census_rows! {
         M6 held_by_store("shekyl-chain-ingest", "the_door_and_a_block_of_one_agree_on_every_spend"),
         M7 held_by_store("shekyl-chain-ingest", "the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor"),
         M9 pending,
-        M10 pending,
+        // M10: the pool's eviction (b4) — the lifetimes by standing, the
+        // weight cap, the template's refusals.
+        M10 held_by_store("shekyl-mempool", "each_standing_ages_on_its_own_lifetime"),
     }
 }

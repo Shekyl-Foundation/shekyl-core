@@ -133,7 +133,14 @@ impl Pool {
                 reconciled.removed.push((txid, Removed::Mined));
                 continue;
             }
-            let judged = door::judge(&held.tx, chain, self.key_images(), rule_set, policy)
+            // CEN-M8: the anchor this node verified the proof against when it
+            // last admitted the entry; the door skips the FCMP++ verify when
+            // the chain still claims exactly that.
+            let cached = match held.record.standing {
+                Standing::Admitted { proven } => proven.map(ProvenReference::verified),
+                Standing::Kept => None,
+            };
+            let judged = door::judge(&held.tx, chain, self.key_images(), rule_set, policy, cached)
                 .map_err(PoolFault::Chain)?;
             let standing = match judged {
                 Judged::Admitted { proven, .. } => Standing::Admitted {

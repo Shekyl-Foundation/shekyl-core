@@ -72,6 +72,7 @@ async fn every_captured_body_passes_the_doors_consensus_halves_against_its_paren
                     &KeyImages::default(),
                     &rule_set,
                     &AdmissionPolicy::GENESIS,
+                    None,
                 )
                 .unwrap_or_else(|fault| panic!("{}: the door faulted: {fault:?}", manifest.shape))
                 {

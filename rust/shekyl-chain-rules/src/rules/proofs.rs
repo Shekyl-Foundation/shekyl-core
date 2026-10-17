@@ -87,9 +87,21 @@ const PROOF_ROWS: [CenRow; 3] = [I15::ROW, J26::ROW, J27::ROW];
 ///
 /// Yields what the proof was verified against, for `validate` to compare
 /// with the chain's context.
+///
+/// `cached` is CEN-M8's cache: the triple this node verified this
+/// transaction's proof against when it last judged it, read back by the
+/// pool at a re-admission (DRS-E5 PR-b b4). When it is exactly the claim
+/// this judgement would verify under, the proof is not verified again —
+/// the transaction's identity commits to the proof's bytes, and the triple
+/// is the whole of what the verify reads besides them — and the row is
+/// recorded as verified. Only the FCMP++ verify is skipped: the
+/// signatures and, at `Lone`, the range proof run as always. `form` passes
+/// `None`: a block's proofs are verified in its own judgement, never
+/// trusted from a pool (`E5-Q8`).
 pub(crate) fn judge_proofs(
     cx: &TxContext<'_>,
     claims: &ReferenceClaims,
+    cached: Option<VerifiedReference>,
     coverage: &mut RuleCoverage,
 ) -> Verdict<Option<VerifiedReference>> {
     let (row, verifies) = match cx.class {
@@ -127,6 +139,11 @@ pub(crate) fn judge_proofs(
     if tree_depth == 0 {
         return Ok(None);
     }
+    let verified = VerifiedReference { reference, claim };
+    if cached == Some(verified) {
+        coverage.insert(row);
+        return Ok(Some(verified));
+    }
     let context = ReferenceContext {
         ref_height: claim.height,
         anchor: claim.root,
@@ -136,7 +153,7 @@ pub(crate) fn judge_proofs(
         return Err(InvalidBlock::new(row, cx.locus()));
     }
     coverage.insert(row);
-    Ok(Some(VerifiedReference { reference, claim }))
+    Ok(Some(verified))
 }
 
 /// CEN-I17, a **definition**: what each input's hybrid signature is over —

@@ -63,7 +63,9 @@ pub enum Judged {
 
 /// Judge `tx` for the pool holding `pool`, against `chain` under
 /// `rule_set` and `policy`: the three calls of the module docs, at the
-/// height a block carrying `tx` would connect at.
+/// height a block carrying `tx` would connect at. `cached` is CEN-M8's
+/// cache — the triple the pool recorded when it last admitted `tx`, at a
+/// re-admission; `None` for a transaction the pool has not judged.
 ///
 /// # Errors
 ///
@@ -77,15 +79,17 @@ pub fn judge<'id, V: ChainView<'id>>(
     pool: &KeyImages,
     rule_set: &RuleSet,
     policy: &AdmissionPolicy,
+    cached: Option<VerifiedReference>,
 ) -> Result<Judged, Fault<V::Fault>> {
     let connecting = Tip::connecting_height(chain.tip().map_err(Fault::View)?.as_ref());
     let claims = ReferenceClaims::for_transaction(chain, connecting, tx).map_err(Fault::View)?;
 
     let mut stateless = RuleCoverage::EMPTY;
-    let proven = match judge_slot_stateless(tx, TxSlot::Lone, rule_set, &claims, &mut stateless) {
-        Ok(proven) => proven,
-        Err(refused) => return Ok(Judged::Stateless(refused)),
-    };
+    let proven =
+        match judge_slot_stateless(tx, TxSlot::Lone, rule_set, &claims, cached, &mut stateless) {
+            Ok(proven) => proven,
+            Err(refused) => return Ok(Judged::Stateless(refused)),
+        };
 
     let view = PoolView::new(chain, pool);
     let against = match tx_against(

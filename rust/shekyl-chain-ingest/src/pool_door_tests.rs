@@ -32,7 +32,7 @@ use crate::scenario::{FreeHash, Mined, Scenario, StepOutcome};
 use crate::test_support::{h, tmp, Family, FIRST_SPEND_HEIGHT};
 
 /// The spending height: block 0's, 1's and 2's coinbases have matured.
-const AT: u64 = FIRST_SPEND_HEIGHT + 2;
+pub(crate) const AT: u64 = FIRST_SPEND_HEIGHT + 2;
 
 /// What one judgement said, reduced to what the door and a block must
 /// agree on: admitted on consensus, or the row and the locus at `Lone`.
@@ -77,6 +77,7 @@ async fn door(scenario: &mut Scenario<FreeHash>, tx: &Transaction) -> (Verdict, 
                 &KeyImages::default(),
                 rule_set,
                 &AdmissionPolicy::GENESIS,
+                None,
             )
             .unwrap_or_else(|fault| panic!("the door faulted: {fault:?}"))
         })
@@ -110,7 +111,7 @@ async fn block(scenario: &mut Scenario<FreeHash>, tx: Transaction) -> Verdict {
 /// requirement the chain prices now: `quantized_fee(weight, min F)` over
 /// the floor window at the connecting height (CEN-M3's predicate), re-priced
 /// until the fee's varint holds the weight still.
-async fn paying_the_floor(
+pub(crate) async fn paying_the_floor(
     scenario: &mut Scenario<FreeHash>,
     mined: &[Mined],
     coinbase: u64,
@@ -145,7 +146,7 @@ async fn paying_the_floor(
     panic!("the floor price did not settle");
 }
 
-async fn matured(name: &str) -> (Scenario<FreeHash>, Vec<Mined>) {
+pub(crate) async fn matured(name: &str) -> (Scenario<FreeHash>, Vec<Mined>) {
     let mut scenario = Scenario::open(name);
     let mined = scenario.mine(AT).await;
     (scenario, mined)

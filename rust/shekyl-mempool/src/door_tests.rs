@@ -24,6 +24,7 @@ fn judged(tx: &shekyl_wire::Transaction) -> Judged {
             &KeyImages::default(),
             &RuleSet::GENESIS,
             &AdmissionPolicy::GENESIS,
+            None,
         ) {
             Ok(judged) => judged,
             Err(fault) => panic!("the harness view never faults: {fault:?}"),

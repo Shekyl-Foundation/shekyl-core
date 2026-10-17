@@ -36,9 +36,10 @@ pub enum Arrival {
     /// From a peer or this node's own submit: not public until the relay's
     /// fluff event says so.
     Relayed,
-    /// From a block the chain popped (CEN-K10): public, because a block
+    /// Carried by a block: returned from one the chain popped (CEN-K10), or
+    /// listed by an alternative block (CEN-K9). Public, because a block
     /// carried it, and kept if the chain-bound half refuses it.
-    Returned,
+    Block,
 }
 
 /// A transaction the pool already accounts for (CEN-M1): nothing is
@@ -56,7 +57,7 @@ pub enum Duplicate {
 pub enum Admission {
     /// The door admitted it; the pool holds it as [`Standing::Admitted`].
     Admitted,
-    /// A returned transaction the chain-bound half refused: held as
+    /// A block-carried transaction the chain-bound half refused: held as
     /// [`Standing::Kept`] — never relayed, never selected, and evicted by
     /// CEN-M10 (CEN-K10).
     Kept,
@@ -144,8 +145,8 @@ impl Pool {
     /// CEN-M1 first: a transaction the pool or the chain already holds is
     /// a [`Duplicate`] and nothing is judged. Then the door. An admitted
     /// transaction is written to the file (P1) and its key images enter the
-    /// map (CEN-M7); a returned one the chain-bound half refused is written
-    /// as kept and spends nothing in the map — it is not a pool-valid
+    /// map (CEN-M7); a block-carried one the chain-bound half refused is
+    /// written as kept and spends nothing in the map — it is not a pool-valid
     /// transaction, so it blocks no other spend. Everything else is refused
     /// and leaves no trace.
     ///
@@ -172,7 +173,7 @@ impl Pool {
         {
             return Ok(Admission::Duplicate(Duplicate::OnChain));
         }
-        let judged = door::judge(&tx, chain, &self.key_images, rule_set, policy)
+        let judged = door::judge(&tx, chain, &self.key_images, rule_set, policy, None)
             .map_err(PoolFault::Chain)?;
         let (standing, admission) = match (judged, arrival) {
             (Judged::Admitted { proven, .. }, _) => (
@@ -181,14 +182,14 @@ impl Pool {
                 },
                 Admission::Admitted,
             ),
-            (Judged::Chain(_), Arrival::Returned) => (Standing::Kept, Admission::Kept),
+            (Judged::Chain(_), Arrival::Block) => (Standing::Kept, Admission::Kept),
             (refused, _) => return Ok(Admission::Refused(refused)),
         };
         let record = PoolRecord {
             weight: u64::try_from(tx.weight()).unwrap_or(u64::MAX),
             fee: AtomicUnits::from_raw(fee_of(&tx)),
             receive_time: now,
-            public: arrival == Arrival::Returned,
+            public: arrival == Arrival::Block,
             standing,
         };
         let blob = tx.serialize();
@@ -206,6 +207,14 @@ impl Pool {
             self.key_images.insert(txid, held.key_images());
         }
         self.held.insert(txid, held);
+    }
+
+    /// Drop `txid` from the index and its key images from the map — after
+    /// the file has dropped it.
+    pub(crate) fn drop_held(&mut self, txid: &TxHash) {
+        if let Some(held) = self.held.remove(txid) {
+            self.key_images.remove(txid, held.key_images());
+        }
     }
 
     /// Take every entry out of the index, emptying the key-image map with
@@ -253,6 +262,22 @@ impl Pool {
     #[must_use]
     pub fn key_images(&self) -> &KeyImages {
         &self.key_images
+    }
+}
+
+#[cfg(test)]
+impl Pool {
+    /// Hold `tx` under `record` without the door — for the tests of what the
+    /// pool does with what it holds (eviction's arithmetic), never of what
+    /// it admits. Written to the file and the index as `admit` would.
+    pub(crate) fn plant(&mut self, tx: Transaction, record: PoolRecord) -> TxHash {
+        let txid = tx.txid_parts().hash;
+        let blob = tx.serialize();
+        self.store
+            .write(|batch| batch.insert(txid, &record, &blob))
+            .expect("plant");
+        self.hold(txid, Held { tx, record });
+        txid
     }
 }
 

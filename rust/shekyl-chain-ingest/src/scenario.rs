@@ -616,6 +616,54 @@ where
             .map(|(switched, _)| switched)
     }
 
+    /// The switch with the pool in both its roles (DRS-E5 PR-b b4): the
+    /// promoted blocks' listed bodies come from `pool` (CEN-K9 — what it
+    /// holds from each alternative's supplement; a body it does not hold is
+    /// missing, and the promoted block is refused on its pairing), and the
+    /// demoted blocks' listed transactions go back to it after the switch
+    /// lands (CEN-K10 — `SwitchDone::returned`'s caller), through the door
+    /// against the chain the switch left, at `now`.
+    pub async fn reorganize_with_pool(
+        &mut self,
+        plan: &SwitchPlan,
+        pool: &mut shekyl_mempool::Pool,
+        now: shekyl_types::UnixSeconds,
+    ) -> Result<
+        (
+            Switched,
+            Vec<(shekyl_types::TxHash, shekyl_mempool::Admission)>,
+        ),
+        RunFault,
+    > {
+        let bodies: std::collections::HashMap<BlockHash, Vec<Transaction>> = plan
+            .promoted
+            .iter()
+            .filter_map(|p| {
+                pool.bodies_for(&p.block.transaction_hashes)
+                    .map(|bodies| (p.at.hash, bodies))
+            })
+            .collect();
+        let switched = self.reorganize(plan, &bodies).await?;
+        let admissions = match &switched {
+            Switched::Done(done) => {
+                let returned = done.returned.clone();
+                self.read_chain(|view, rule_set| {
+                    pool.returned(
+                        returned,
+                        now,
+                        view,
+                        rule_set,
+                        &shekyl_chain_rules::AdmissionPolicy::GENESIS,
+                    )
+                    .unwrap_or_else(|fault| panic!("the pool faulted on the returns: {fault:?}"))
+                })
+                .await
+            }
+            _ => Vec::new(),
+        };
+        Ok((switched, admissions))
+    }
+
     /// [`Self::reorganize`], reporting how long the forming (step 1, the
     /// RandomX) and the [`Reorganize`] message (the judging, the closure)
     /// each took — the switch PR's cap-depth measurement. A switch that

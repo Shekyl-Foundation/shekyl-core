@@ -43,9 +43,10 @@
 //!
 //! The listed bodies of an alt block are not the alt row's (`AltValid`'s
 //! `into_candidate`: the bodies are the pool's to hold until promotion), so
-//! the caller supplies them with the formed blocks; the pool is that caller
-//! from PR-b on. The demoted blocks' bodies come back as
-//! [`SwitchDone::returned`], which the caller drops until PR-b (`E5-Q10`).
+//! the caller supplies them with the formed blocks, from the pool
+//! (`shekyl_mempool::Pool::bodies_for`, CEN-K9). The demoted blocks' bodies
+//! come back as [`SwitchDone::returned`], for the pool's door
+//! (`shekyl_mempool::Pool::returned`, CEN-K10).
 //!
 //! Not here: the arrival router's other arms beyond answering an orphan or
 //! a held hash, the orphan policy, and A1/A4's Rust holder — the DRS-X
@@ -299,7 +300,10 @@ pub struct SwitchDone {
     /// The blocks connected, ascending.
     pub promoted: Vec<(BlockHeight, BlockHash)>,
     /// The demoted blocks' listed transactions, in chain order — the
-    /// pool's from PR-b; dropped by the one caller until then (`E5-Q10`).
+    /// pool's (CEN-K10): `shekyl_mempool::Pool::returned` offers each to
+    /// the door against the chain the switch left. The scenario driver's
+    /// `reorganize_with_pool` is the caller in this crate; the DRS-X router
+    /// is the live one.
     pub returned: Vec<Transaction>,
     /// The census rows the promoted blocks' verdicts exercised.
     pub exercised: BTreeSet<&'static str>,
