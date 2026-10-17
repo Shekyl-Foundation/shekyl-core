@@ -57,7 +57,7 @@ The C++ that has no Rust owner yet — the protocol handler and `levin_notify` �
 2. **One FFI entry, used by the protocol handler only.** `submit_block` and the miner enter the router natively (DX-Q3, DX-Q4).
    - The entry takes a span and returns at once. Every arrival gets one reply, tagged with the arrival, posted to the connection's strand.
    - The reply variants: `Connected`, `Refused(InvalidBlock)`, `Unlinked { at }`, `AlreadyHeld`, `Held`, `BeyondCap`, and the switch outcomes.
-3. **Capacity (chain sync's requirement, `CHAIN_SYNC_ROUND0_DECISIONS.md` §A).**
+3. **Capacity (chain sync's Round 0 requirement, ruled 2026-10, carried here).**
    - The entry reports room. A caller asks before sending.
    - An arrival the entry accepted is **never dropped**. A span offered without room is `NoRoom`, before acceptance, and is never a peer fault.
    - Until the chain-sync cutover the C++ handler's span scheduler asks once per span.
@@ -70,7 +70,7 @@ The C++ that has no Rust owner yet — the protocol handler and `levin_notify` �
      - the miner's template refresh;
      - the sync owner;
      - the RPC.
-6. **One RandomX budget.** The pipeline's `Form` workers and chain sync's header PoW draw from one bounded hasher budget, so the two never exceed the scratchpads the floor device holds (chain sync §A.3).
+6. **One RandomX budget.** The pipeline's `Form` workers and chain sync's header PoW draw from one bounded hasher budget, so the two never exceed the scratchpads the floor device holds (chain sync's Round 0 requirement, carried here).
 7. **Deleted:** `prepare_handle_incoming_blocks` / `cleanup_handle_incoming_blocks` (Monero's batch preprocessing) and `try_add_next_blocks`' connect loop. The `Form` workers replace them.
 
 ### DX-Q3 — The C++ RPC server moves to Rust in the flip, whole
@@ -130,8 +130,8 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 | --- | --- | --- |
 | 1 | **PR-b**: the Rust pool (`DRS_E5_POOL_ALT_PRUNE.md` §5 b1–b7, as amended in its brief) | staged |
 | 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged |
-| 3 | **The Rust RPC handlers (DX-Q3) and the miner loop (DX-Q4)**, unrouted | staged |
-| 3b | **The handlers over the pool, the router and the node**: the pool's (RK-6), `get_block_template`, `submit_block`, `generateblocks`, mining control, bans and `stop_daemon` (DX-Q3), unrouted | staged |
+| 3 | **Briefed: the read-only RPC handlers and the store-backed facts (DX-Q3), and the miner loop (DX-Q4)**, unrouted | staged |
+| 3b | **The pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` / `stop_mining` (with `mining_status`), the bans and `stop_daemon`** (DX-Q3), unrouted. Briefed after PR-b and PR 2 merge | staged |
 | 4 | **The flip** (below) | live |
 
 **The flip PR:**
@@ -151,7 +151,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 - deletes every LMDB-bound C++ test, each with a sentence naming the rule it tested and where Rust covers it now;
 - applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements.
 
-PRs 1, 2, 3 and 3b may run in parallel. PR 4 needs all four, plus #1088 merged.
+PR-b, PR 2 and PR 3 may run in parallel; PR 3b is briefed after PR-b and PR 2 merge. The flip needs PR-b, PR 2, PR 3, PR 3b and #1088.
 
 ### DX-Q9 — CEN-L14's remaining sites
 
@@ -182,9 +182,23 @@ Each site's semantics are named, and L14 closes. Owner: PR 2's first commit, a c
 
 This discharges FOLLOWUPS "FL-R3-STORE (consumer half)".
 
-**One divergence the flip makes on purpose.** The C++ prices the burn on gross `already_generated_coins`. The Rust owner prices it on the validator's net circulating supply (FL-R16c; `FEE_LADDER_DERIVATION.md` §11.1 item 10). Quote and admission move to the net supply together. On a chain that has burned, every floor moves at the flip: down, because b falls with supply. It is a **Design** row in DX-Q8's divergence register, citing FL-R16c — expected, not a regression.
+**One divergence the flip makes on purpose.** The C++ prices the burn on gross `already_generated_coins`. The Rust owner prices it on the validator's net circulating supply (FL-R16c; `FEE_LADDER_DERIVATION.md` §11.1 item 10). Quote and admission move to the net supply together. It is a **Design** row in DX-Q8's divergence register, citing FL-R16c. Its evidence is a comparison across the E2 corpus: the Rust floor is at most the C++ floor at every height, and equal wherever the burn through the parent is 0. No trace exports the C++ ring's floor today (`rust/shekyl-chain-ingest/src/vectors_tests/relay_floor.rs:18`–`:19`), so the flip PR builds that export and runs the comparison.
 
-**Falsifier:** after the flip, `rg -n 'relay_floor_ring|check_fee|get_current_fee_per_byte|fee_meets_floor' src rust` returns nothing outside history.
+**The flip updates FL-R16c's "Not in scope" note** (`FEE_LADDER_DERIVATION.md:1602`): `ChainView::burned_through` (`rust/shekyl-chain-rules/src/view.rs:480`) is the per-height fact the note says no store had, and the ring is deleted.
+
+**Doc comments the flip rewrites.** Each names the deleted C++ (lines read at `09402ea19`):
+- `rust/shekyl-tx-weight/tests/weight_gate.rs:9` (`check_fee`);
+- `rust/shekyl-economics/src/fee/relay.rs:38` (`get_current_fee_per_byte`);
+- `rust/shekyl-economics/src/fee/floor.rs:11` (`relay_floor_ring.cpp`);
+- `rust/shekyl-economics-sim/src/fee_floor.rs:43` (`get_current_fee_per_byte`);
+- `rust/shekyl-chain-rules/src/relay_floor.rs:142` (`fee_meets_floor`);
+- `rust/shekyl-chain-store/src/store/read.rs:490` (`rebuild_relay_floor_ring`);
+- `rust/shekyl-chain-store/src/codec/chain.rs:101` (`relay_floor_ring.cpp`);
+- `rust/shekyl-daemon-rpc/src/submit/facts.rs:563` (`check_fee`).
+
+The C++ hits are all in files the flip deletes (`blockchain.{h,cpp}`, `tx_pool.cpp`, `relay_floor_ring.cpp`, `daemon_submit_ffi.{h,cpp}`) or in the ring's `CMakeLists.txt` entry. The Rust code hits are `submit/fee.rs` and its callers in `submit/engine.rs`, which the wiring above replaces.
+
+**Falsifier:** after the flip, `rg -n 'relay_floor_ring|check_fee|get_current_fee_per_byte|fee_meets_floor' src rust` returns nothing, with no exceptions.
 
 ---
 
@@ -267,11 +281,12 @@ Each observed difference becomes one row.
 
 ## 4. Order of work
 
-1. **PR-b**, brief: `claude/DRS_E5_PR_B_POOL_BRIEF.md`. Starts now.
+1. **PR-b**, brief issued 2026-10-16. Starts now.
 2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Briefed after PR-b's door lands, because the entry's pool calls are its shape.
-3. **PR 3** — Rust RPC handlers and the miner loop. Starts now, beside PR-b; brief follows.
-4. **The flip**, after #1088, PR-b, PR 2 and PR 3.
-5. **Chain sync's cutover** follows the flip and deletes the shell's protocol-handler half. **RD** deletes `levin_notify` and the relay entry.
+3. **PR 3** — briefed: the read-only RPC handlers, the store-backed facts and the miner loop. Runs beside PR-b.
+4. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge.
+5. **The flip** needs PR-b, PR 2, PR 3, PR 3b and #1088.
+6. **Chain sync's cutover** follows the flip and deletes the shell's protocol-handler half. **RD** deletes `levin_notify` and the relay entry.
 
 **Docs to fix in PR 2** (chain sync CS-F5):
 - `shekyl-chain-ingest/src/source.rs:28` and `:43` still say the p2p source computes the switch and emits `Rewind`.
