@@ -1,7 +1,8 @@
 # `RT-P5`, sizes: HTTP message sizes per method on a generated wallet's traffic. Registration of 2026-10-17
 
-**State of this record: registered; not yet run.** A dry run is
-recorded below the registration once it has been made, and it is not data.
+**State of this record: registered; dry run made; registered run not
+yet made.** The dry run is recorded below the registration, and it is not
+data.
 The registered run starts only after the maintainer has answered the one
 departure this registration names (the host, below). Results are added
 under "Results" and the section "Registered before the run" is not edited
@@ -30,6 +31,11 @@ measurement ledger (the rule-21 reopen recorded in RT-O21).
 
 ## Registered before the run
 
+*Amended once, 2026-10-17, after the dry run and before any registered
+run: the traffic below now states two waits the instrument needed (step 1's
+margin and step 3's unlock wait), and how a refusal the dry run found is
+handled. "Dry run" says what forced each.*
+
 **Subject.** The bytes a stream adapter over the channel would carry
 between the wallet's daemon client and the daemon: every HTTP/1.1
 message whole (start line, headers, body, and chunked framing if any), in
@@ -56,7 +62,11 @@ and run in every CI build of the crate.
 spawned regtest daemon:
 
 1. **A funding wallet matures.** Blocks are mined to it in batches of ten,
-   the wallet refreshing after each, until it can spend.
+   the wallet refreshing after each, until it can spend; then twenty more
+   (`FANOUT_MARGIN_BLOCKS`). Its selection is largest-first and its oldest
+   coinbases are its largest, so the margin puts the fan-out's inputs well
+   past the reference block's spendability boundary, and no block is mined
+   between the four fan-out builds.
 2. **The fan-out.** The funder builds four transactions, each paying the
    measured wallet fifteen outputs of one amount `unit` (sixteen outputs
    with the change), submits all four, and they are mined together in one
@@ -65,7 +75,8 @@ spawned regtest daemon:
    sixteen-output transactions is what makes a `get_transactions` reply
    larger than one record.
 3. **The measured wallet syncs and spends.** It refreshes from genesis,
-   then spends eight shapes in turn, as (inputs × outputs): 1 × 2, 2 × 2,
+   blocks are mined one at a time until every fan-out output is unlocked,
+   and then it spends eight shapes in turn, as (inputs × outputs): 1 × 2, 2 × 2,
    4 × 2, 8 × 2, 1 × 16, 2 × 16, 4 × 16, 8 × 16. Eight inputs and sixteen
    outputs are the maxima (`shekyl_fcmp::MAX_INPUTS`,
    `shekyl_wire::transaction::MAX_OUTPUTS`). A spend of `k` inputs asks for
@@ -78,6 +89,16 @@ spawned regtest daemon:
 4. **A restored wallet syncs the whole chain.** A new wallet from the
    measured wallet's seed refreshes from genesis, over blocks that carry
    every shape above.
+
+**When a build is refused for an output not yet in the tree.** The wallet
+refuses a build that would spend an output not yet spendable at the
+reference block with `OutputNotYetSpendable`; the instrument then mines one
+block and builds again, as a user waits. The dry run found a second form of
+that refusal, a wallet defect (below): an output the wallet's gate admitted
+but that the tree at the reference block does not hold yet, refused at
+assembly as `CurveTreeUnavailable` with `OutputNotDrained`. The instrument
+treats it the same way, and records each one, with its height, in the run's
+`run.json`.
 
 Blocks are mined with the daemon's armed test lever `generateblocks`,
 over the harness's own connection, which is not traced: it is not a
@@ -194,7 +215,36 @@ from a registered mainnet trace.
 
 ## Dry run
 
-None yet.
+Made 2026-10-17 on the development workstation, daemon in Release from
+this branch, seeds `0xD1` and `0xD2`. It is a check of the instrument, not
+data, and its sizes are not read here.
+
+- **First attempts, each stopped by a gate or a refusal, each fixed before
+  the next:**
+  - The funder's second fan-out build was refused at assembly:
+    `CurveTreeUnavailable` with `OutputNotDrained` for global output 8, at
+    height 71. This is the wallet defect below.
+  - Mining a block on that refusal let the earlier fan-out transactions
+    land in separate blocks, so the gate requiring all four in one block
+    failed. The fix is step 1's margin.
+  - The measured wallet's first spend was refused as `InsufficientFunds`
+    with nothing available: its fan-out outputs had not reached
+    `SPENDABLE_AGE`. The fix is step 3's unlock wait.
+- **Final dry run: passed**, in 262 s. Every gate held. The chain reached
+  height 117, and the daemon reported curve-tree depth 1. One refusal of
+  the defect's form occurred, in the measured wallet's spends at height
+  108, and was recorded. `rt_p5_classes.py derive` ran end to end on the
+  trace, including the fit of the submission encoding.
+
+**The wallet defect the dry run found.** The wallet's spend gate (`C2`)
+admits an output when its eligible height equals the reference height
+(`rust/shekyl-engine-core/src/engine/transfer/engine.rs:462`). The tree
+whose root is committed at height `H` holds only leaves matured by
+`H − 1` (`drained_through`,
+`rust/shekyl-curve-tree/src/client.rs:1551`, pinned by the CT-2 vectors),
+and the daemon agrees. So an output exactly at the boundary is selected,
+and assembly refuses it. The same comparison is in three more wallet
+paths. The fix is in this PR, with a test that reproduces the boundary.
 
 ## Results
 

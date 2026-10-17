@@ -62,6 +62,13 @@ const RECORD_PAYLOAD_MAX: usize = 65_535 - 2;
 /// Outputs per fan-out transaction: fifteen recipients and the change.
 const FANOUT_RECIPIENTS: usize = 15;
 
+/// Blocks mined to the funder after it can first spend, before the fan-out.
+/// Its selection is largest-first and its oldest coinbases are its largest,
+/// so with this margin the fan-out's inputs are well past the reference
+/// block's spendability boundary, and no block is mined between the four
+/// fan-out builds; the gate that they share one block depends on that.
+const FANOUT_MARGIN_BLOCKS: u64 = 20;
+
 /// One registered cell: the traffic one run generates.
 struct Cell {
     /// Written into every output file, so a dry run's files can never be
@@ -175,12 +182,22 @@ struct Built {
 
 /// Build `request` from `wallet`, mining to `mine_to` while the outputs the
 /// wallet would select are not yet spendable at the reference block.
+///
+/// Two refusals mean "wait a block": the wallet's own
+/// `OutputNotYetSpendable`, and an output its gate admitted that the tree at
+/// the reference block does not hold yet (`OutputNotDrained`, surfacing as
+/// `CurveTreeUnavailable`). The second is a wallet defect found by this
+/// harness's dry run (registration, "Dry run"): the gate should have
+/// classified that output as not yet spendable. Each one is counted in
+/// `drain_retries` and written to `run.json`, so the defect stays visible in
+/// every run rather than being absorbed.
 async fn build(
     daemon: &RegtestDaemon,
     wallet: &Arc<RwLock<Engine<SoloSigner>>>,
     who: &'static str,
     request: &TxRequest,
     mine_to: &str,
+    drain_retries: &mut Vec<(&'static str, u64, String)>,
 ) -> Built {
     for _ in 0..48 {
         let attempt = wallet.read().await.build_pending_tx_async(request).await;
@@ -203,7 +220,17 @@ async fn build(
                 daemon.generate_blocks(1, mine_to).await;
                 refresh(wallet).await;
             }
-            Err(e) => panic!("{who}: build a transaction: {e:?}"),
+            Err(super::super::error::SendError::CurveTreeUnavailable { detail })
+                if detail.contains("OutputNotDrained") =>
+            {
+                drain_retries.push((who, daemon.height().await, detail));
+                daemon.generate_blocks(1, mine_to).await;
+                refresh(wallet).await;
+            }
+            Err(e) => panic!(
+                "{who}: build a transaction at daemon height {}: {e:?}",
+                daemon.height().await
+            ),
         }
     }
     panic!("{who}: the outputs never became spendable at the reference block");
@@ -248,7 +275,19 @@ async fn run_cell(cell: &Cell) {
             break;
         }
     }
+    assert!(
+        unlocked(&funder).await > AtomicUnits::ZERO,
+        "the funder never matured"
+    );
+    daemon
+        .generate_blocks(FANOUT_MARGIN_BLOCKS, &funder_address)
+        .await;
+    refresh(&funder).await;
     let funded = unlocked(&funder).await;
+    eprintln!(
+        "rt-p5: funder unlocked {funded:?} at height {}",
+        daemon.height().await
+    );
     assert!(funded > AtomicUnits::ZERO, "the funder never matured");
 
     // 2. The fan-out: every transaction pays the wallet fifteen outputs of
@@ -261,6 +300,7 @@ async fn run_cell(cell: &Cell) {
         "the funder's balance is too small for the fan-out"
     );
     let mut built = Vec::new();
+    let mut drain_retries = Vec::new();
     for _ in 0..cell.fanout_txs {
         let request = TxRequest {
             recipients: (0..FANOUT_RECIPIENTS)
@@ -272,7 +312,23 @@ async fn run_cell(cell: &Cell) {
                 .collect(),
             priority: FeePriority::Standard,
         };
-        let mut tx = build(&daemon, &funder, "funder", &request, &funder_address).await;
+        let mut tx = build(
+            &daemon,
+            &funder,
+            "funder",
+            &request,
+            &funder_address,
+            &mut drain_retries,
+        )
+        .await;
+        eprintln!(
+            "rt-p5: fan-out {}: {} in, {} out, {} bytes, at height {}",
+            built.len(),
+            tx.inputs,
+            tx.outputs,
+            tx.tx_len,
+            daemon.height().await
+        );
         submit(&funder, &mut tx).await;
         built.push(tx);
     }
@@ -290,7 +346,21 @@ async fn run_cell(cell: &Cell) {
     //    change it makes is below `unit`), and its selection is largest
     //    first, so `k` of them are the fewest that cover it. The shape is
     //    read back from the built transaction and checked, never assumed.
+    // The fan-out's outputs are spendable once they are `SPENDABLE_AGE`
+    // deep; mine one block at a time until all of them are unlocked.
+    let received = unit * u64::try_from(cell.fanout_txs * FANOUT_RECIPIENTS).expect("small count");
     refresh(&wallet).await;
+    for _ in 0..40 {
+        if unlocked(&wallet).await.to_raw() >= received {
+            break;
+        }
+        daemon.generate_blocks(1, &funder_address).await;
+        refresh(&wallet).await;
+    }
+    assert!(
+        unlocked(&wallet).await.to_raw() >= received,
+        "the fan-out's outputs never unlocked"
+    );
     for &(inputs, outputs) in cell.shapes {
         let k = u64::try_from(inputs).expect("small count");
         let amount = (k - 1) * unit + unit / 2;
@@ -306,7 +376,15 @@ async fn run_cell(cell: &Cell) {
                 .collect(),
             priority: FeePriority::Standard,
         };
-        let mut tx = build(&daemon, &wallet, "wallet", &request, &funder_address).await;
+        let mut tx = build(
+            &daemon,
+            &wallet,
+            "wallet",
+            &request,
+            &funder_address,
+            &mut drain_retries,
+        )
+        .await;
         assert_eq!(
             (tx.inputs, tx.outputs),
             (inputs, outputs),
@@ -370,7 +448,15 @@ async fn run_cell(cell: &Cell) {
     }
 
     check_subjects(&messages, &built);
-    write_outputs(&out, cell, &messages, &built, &depth, chain_height);
+    write_outputs(
+        &out,
+        cell,
+        &messages,
+        &built,
+        &depth,
+        chain_height,
+        &drain_retries,
+    );
 }
 
 /// The gates of the registration that read the messages (rule 47: the
@@ -428,6 +514,7 @@ fn write_outputs(
     built: &[Built],
     depth: &serde_json::Value,
     chain_height: u64,
+    drain_retries: &[(&'static str, u64, String)],
 ) {
     let mut csv = String::from("cell,wallet,conn,seq,direction,label,head,body,framing,total\n");
     for m in messages {
@@ -450,8 +537,9 @@ fn write_outputs(
     // Each submitted transaction, the tree depth its wire size matches,
     // and its wire size at every depth up to eight from the weight crate's
     // structural predictor, which mirrors `Transaction::write`.
-    let mut txs =
-        String::from("cell,tx,wallet,inputs,outputs,tx_len,fee,built_depth,depth,predicted_tx_len\n");
+    let mut txs = String::from(
+        "cell,tx,wallet,inputs,outputs,tx_len,fee,built_depth,depth,predicted_tx_len\n",
+    );
     for (index, b) in built.iter().enumerate() {
         // `clamped` would hide an out-of-range count; a built
         // transaction's counts are in range, so equality is checked.
@@ -492,6 +580,14 @@ fn write_outputs(
             "shapes": cell.shapes,
             "chain_height": chain_height,
             "curve_tree_info": depth,
+            "drain_retries": drain_retries
+                .iter()
+                .map(|(who, height, detail)| serde_json::json!({
+                    "wallet": who,
+                    "height": height,
+                    "detail": detail,
+                }))
+                .collect::<Vec<_>>(),
         }))
         .expect("encode run.json"),
     )
