@@ -1585,6 +1585,26 @@ Not E5's; found while reading the census at the pin.
   (`relay_floor.rs`'s note). (c) `relay()` is a no-op: the relay driver
   takes the pool's unpublished entries at the flip.
 
+- **The public submit endpoint discloses nothing the stem phase holds**
+  (the review of #1102, B2). A conflict against a spender this node holds
+  unpublished is `KeyImageConflict::Embargoed`: the owner tier is told
+  (`DoubleSpendConflict`), a foreign caller is answered as a fresh accept
+  and the transaction is not admitted; once the spender is fluffed it is
+  `Other`, disclosed to both. Every concealed answer does a fresh accept's
+  verification: the shim runs the door's step 1 before the pool's lock for
+  every submit, a duplicate it holds unpublished included (S1). The C++
+  shim never reports `Embargoed`; it has the same gap and is deleted at the
+  flip (`DEL-010`).
+
+- **For the flip (recorded here, built there):** the relay's
+  `Responsibilities` is an unbounded map released only by a `release()`
+  nothing calls yet — the flip drives `release` from eviction (`Evicted`,
+  and `Admission::Admitted { evicted }`), the reconcile's removals and
+  mining, and asserts `len() ≤ pool.len()`; and the relay nudge stays on
+  `CommitOutcome::Committed` only (`engine.rs`), never on a concealed
+  `Accepted` — a peer's stem transaction resubmitted over RPC must never
+  make this node its originator.
+
 ---
 
 ## 10. Decision log

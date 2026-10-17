@@ -403,6 +403,37 @@ fn raced_in_pool_classifies_already_in_pool() {
     );
 }
 
+/// B2 (the review of #1102): a conflict against a spender this node holds
+/// in its stem phase is disclosed to the owner tier and answered to a
+/// foreign caller exactly as a fresh accept — so the public endpoint is no
+/// map of the stem graph. A public spender's conflict is disclosed to both.
+#[test]
+fn an_embargoed_conflict_is_the_owners_alone() {
+    let raced = |conflict| {
+        let submit = |caller| {
+            let mut fresh = base_facts();
+            fresh.key_image_conflicts = vec![conflict, KeyImageConflict::Free];
+            let (engine, _shim, _verifier) =
+                engine(base_facts(), CommitOutcome::Raced(Box::new(fresh)));
+            engine.submit(&spend_hex(), caller).unwrap()
+        };
+        (submit(SubmitCaller::Owner), submit(SubmitCaller::Foreign))
+    };
+    let conflict = SubmitVerdict::Rejected {
+        cause: RejectCause::DoubleSpendConflict,
+    };
+    assert_eq!(
+        raced(KeyImageConflict::Embargoed),
+        (conflict.clone(), SubmitVerdict::Accepted),
+        "the stem spender is concealed from a foreign caller"
+    );
+    assert_eq!(
+        raced(KeyImageConflict::Other),
+        (conflict.clone(), conflict),
+        "a public spender is not"
+    );
+}
+
 #[test]
 fn raced_key_image_conflict_beats_stale_root() {
     // Competing spend AND root drift in the same race window: the terminal

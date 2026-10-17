@@ -23,9 +23,10 @@ use crate::submit::certificate::VerificationCertificate;
 /// (§4.1: `none | own_txid | other`).
 ///
 /// `OwnTx` means the pool's spender of this key image *is* the submitted
-/// txid (an identity fact, paired with `in_pool`); `Other` means a
-/// different transaction consumes the input — the only arm that can ever
-/// classify as `DoubleSpendConflict`, and only from Phase-D fresh facts.
+/// txid (an identity fact, paired with `in_pool`); `Other` and `Embargoed`
+/// mean a different transaction consumes the input — the only arms that can
+/// ever classify as `DoubleSpendConflict`, only from Phase-D fresh facts,
+/// and `Embargoed` only for the owner tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyImageConflict {
     /// No pool- or chain-level spender for this key image.
@@ -34,6 +35,13 @@ pub enum KeyImageConflict {
     OwnTx,
     /// A different transaction consumes this key image.
     Other,
+    /// A different transaction consumes this key image, and this node holds
+    /// it unpublished — in its stem phase. Disclosed to the owner tier only:
+    /// a foreign caller is answered as a fresh accept would be, or the
+    /// public submit endpoint maps which stem transactions this node holds
+    /// (the review of #1102, B2). The Rust pool's shim reports it; the C++
+    /// shim, deleted at the flip, reports `Other`.
+    Embargoed,
 }
 
 /// Facts about the submitted reference block, present iff the daemon knows

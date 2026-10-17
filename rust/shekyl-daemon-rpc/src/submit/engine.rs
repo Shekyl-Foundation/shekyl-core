@@ -474,6 +474,22 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
                 cause: RejectCause::DoubleSpendConflict,
             });
         }
+        // 3a. The same, against a spender this node holds in its stem phase
+        //     (the review of #1102, B2): the owner tier is told, a foreign
+        //     caller is answered as a fresh accept — the transaction is not
+        //     admitted — so the public endpoint is no map of the stem
+        //     graph. Once the spender is public it is `Other`, above.
+        if fresh
+            .key_image_conflicts
+            .contains(&KeyImageConflict::Embargoed)
+        {
+            return Ok(match caller {
+                SubmitCaller::Owner => SubmitVerdict::Rejected {
+                    cause: RejectCause::DoubleSpendConflict,
+                },
+                SubmitCaller::Foreign => SubmitVerdict::Accepted,
+            });
+        }
         // 3b. Claim-slot conflict, the §8.7.1 BP3 re-check: a bond-post
         //     block for the same P landed while we verified (Phase C
         //     required the record absent). Same terminality as the

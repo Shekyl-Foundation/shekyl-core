@@ -414,3 +414,118 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
     drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
+
+/// B2 (the review of #1102), the foreign tier of every verdict over the
+/// Rust pool. A spend this node submitted is held in its stem phase. To a
+/// foreign caller its bytes again are a fresh accept, a twin over its image
+/// is a fresh accept that is not admitted, an unrelated spend is admitted,
+/// and one paying a unit is `FeeTooLow` — and the three accepts verify the
+/// same proofs, counted (never timed). Once the spend is fluffed, its bytes
+/// are `AlreadyInPool` and the twin is a `DoubleSpendConflict`.
+#[tokio::test]
+async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
+    use shekyl_chain_rules::probes;
+
+    let (mut scenario, mined) = matured("pool-submit-foreign").await;
+    let paid = paying_the_floor(&mut scenario, &mined, 0).await;
+    let fresh = paying_the_floor(&mut scenario, &mined, 2).await;
+    let (twin, cheap) = {
+        let spender = shekyl_harness_spender::Spender::over(&mined);
+        let wallet = scenario.wallet();
+        let fee = match &paid.ct {
+            shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
+            shekyl_wire::transaction::Ct::Null(_) => unreachable!("a spend"),
+        };
+        (
+            spender.spend_coinbase(wallet, h(0), h(AT), fee + 1_000),
+            spender.spend_coinbase(wallet, h(1), h(AT), 1),
+        )
+    };
+    let path = tmp("pool-submit-foreign-pool");
+    let (stem, after) = scenario
+        .with_store(|store, rules| {
+            let chain = Store { store, rules };
+            let pool = chain
+                .read(|snapshot, rule_set| {
+                    Pool::open(
+                        &path,
+                        UnixSeconds::from_raw(1),
+                        &SnapshotView::new(snapshot),
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("open")
+                    .0
+                })
+                .expect("a snapshot");
+            let shim = Arc::new(RustPoolShim::new(
+                chain,
+                pool,
+                AdmissionPolicy::GENESIS,
+                || UnixSeconds::from_raw(1),
+            ));
+            let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+            let counted = |tx: &shekyl_wire::Transaction, caller| {
+                let before = (probes::fcmp_verifies(), probes::signature_verifies());
+                let verdict = engine.submit(&hex(tx), caller).expect("no engine fault");
+                let after = (probes::fcmp_verifies(), probes::signature_verifies());
+                (verdict, (after.0 - before.0, after.1 - before.1))
+            };
+            let owned = counted(&paid, SubmitCaller::Owner);
+            assert_eq!(owned.0, SubmitVerdict::Accepted);
+            let stem = (
+                counted(&paid, SubmitCaller::Foreign),
+                counted(&twin, SubmitCaller::Foreign),
+                counted(&fresh, SubmitCaller::Foreign),
+                counted(&cheap, SubmitCaller::Foreign).0,
+                shim.with_pool(|pool| (pool.len(), pool.record(&twin.txid_parts().hash).is_some()))
+                    .expect("the lock"),
+            );
+            assert!(shim.fluffed(&paid.txid_parts().hash).expect("fluffed"));
+            let after = (
+                counted(&paid, SubmitCaller::Foreign).0,
+                counted(&twin, SubmitCaller::Foreign).0,
+            );
+            (stem, after)
+        })
+        .await;
+    let (duplicate, conflict, accepted, below, (held, twin_held)) = stem;
+    assert_eq!(
+        duplicate.0,
+        SubmitVerdict::Accepted,
+        "a held stem duplicate is concealed"
+    );
+    assert_eq!(
+        conflict.0,
+        SubmitVerdict::Accepted,
+        "a stem spender's conflict is concealed"
+    );
+    assert_eq!(accepted.0, SubmitVerdict::Accepted);
+    assert_eq!(
+        below,
+        SubmitVerdict::Rejected {
+            cause: RejectCause::FeeTooLow
+        }
+    );
+    assert!(!twin_held, "the concealed twin is not admitted");
+    assert_eq!(held, 2, "the stem spend and the fresh one");
+    assert_eq!(
+        (duplicate.1, conflict.1),
+        (accepted.1, accepted.1),
+        "a concealed answer verifies what a fresh accept does"
+    );
+    assert!(
+        accepted.1 .0 > 0,
+        "the subject exists: proofs were verified"
+    );
+    assert_eq!(after.0, SubmitVerdict::AlreadyInPool, "fluffed: disclosed");
+    assert_eq!(
+        after.1,
+        SubmitVerdict::Rejected {
+            cause: RejectCause::DoubleSpendConflict
+        },
+        "fluffed: the conflict is disclosed"
+    );
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}

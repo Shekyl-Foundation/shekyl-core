@@ -122,6 +122,18 @@ impl<C: ChainSource> RustPoolShim<C> {
         }
     }
 
+    /// The relay's fluff event for `txid`, through the shim's lock
+    /// ([`Pool::fluffed`]): the relay driver's entry point at the flip.
+    /// `Ok(false)` when the pool does not hold it.
+    ///
+    /// # Errors
+    ///
+    /// [`ShimFault`] when the lock is poisoned or the pool file faults.
+    pub fn fluffed(&self, txid: &TxHash) -> Result<bool, ShimFault> {
+        let mut pool = self.pool.lock().map_err(|_| ShimFault)?;
+        pool.fluffed(txid).map_err(|_| ShimFault)
+    }
+
     /// Read the pool under the shim's lock.
     ///
     /// # Errors
@@ -136,9 +148,10 @@ impl<C: ChainSource> RustPoolShim<C> {
 /// The C++ `classify_key_image` over the pool and the chain: spent on the
 /// chain is another's; spent in the pool by another transaction is
 /// another's (own when the submission itself is pooled, as the C++
-/// answers); spent in the pool only by the submission itself counts once it
-/// is public — before that the image reads free, so the snapshot discloses
-/// no embargoed spend.
+/// answers) — embargoed while that transaction is unpublished, which the
+/// engine discloses to the owner tier alone; spent in the pool only by the
+/// submission itself counts once it is public — before that the image reads
+/// free, so the snapshot discloses no embargoed spend.
 fn classify(
     view: &SnapshotView<'_>,
     pool: &Pool,
@@ -150,15 +163,18 @@ fn classify(
     if view.has_key_image(&image).map_err(|_| ShimFault)? {
         return Ok(KeyImageConflict::Other);
     }
-    let spent = match pool.key_images().spender(&image) {
-        None => false,
-        Some(spender) if spender != *txid => true,
-        Some(_) => pool.record(txid).is_some_and(|r| r.public),
+    let (spent, public) = match pool.key_images().spender(&image) {
+        None => (false, true),
+        Some(spender) if spender != *txid => {
+            (true, pool.record(&spender).is_some_and(|r| r.public))
+        }
+        Some(_) => (pool.record(txid).is_some_and(|r| r.public), true),
     };
-    Ok(match (spent, in_pool) {
-        (false, _) => KeyImageConflict::Free,
-        (true, true) => KeyImageConflict::OwnTx,
-        (true, false) => KeyImageConflict::Other,
+    Ok(match (spent, in_pool, public) {
+        (false, _, _) => KeyImageConflict::Free,
+        (true, true, _) => KeyImageConflict::OwnTx,
+        (true, false, true) => KeyImageConflict::Other,
+        (true, false, false) => KeyImageConflict::Embargoed,
     })
 }
 
