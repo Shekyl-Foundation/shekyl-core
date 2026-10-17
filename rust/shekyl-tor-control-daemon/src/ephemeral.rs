@@ -61,8 +61,8 @@ use crate::data_dir::EphemeralDataDir;
 /// Bound on the whole teardown sequence (graceful actor stop + child reap),
 /// mirroring the wallet supervisor's reap bound: `stop_gracefully` rides the
 /// actor's bounded mailbox, so bounding only the reap wait could still hang a
-/// caller. On timeout the actor is killed; `kill_on_drop` and `TAKEOWNERSHIP`
-/// backstop the child reap.
+/// caller. On timeout the actor is killed; `kill_on_drop` and the owning control
+/// connection, whose close exits tor, backstop the child reap.
 const REAP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Spawn-time configuration for [`DaemonTorControl::start`].
@@ -210,7 +210,8 @@ fn pow_refusal(pow: OnionPow, status: u16, lines: &[String]) -> Option<DaemonTor
 /// A live managed-tor incarnation: bootstrapped, SOCKS address known, and —
 /// after a successful [`Self::publish`] — an onion service published. Dropping
 /// the handle without [`DaemonTorControl::shutdown`] still reaps the child
-/// (`kill_on_drop`, `TAKEOWNERSHIP`) and wipes the DataDirectory, but the
+/// (`kill_on_drop`, and the owning control connection, whose close exits tor) and
+/// wipes the DataDirectory, but the
 /// bounded graceful path is the intended exit.
 pub struct DaemonTorControl {
     actor: kameo::actor::ActorRef<TorControlClient>,
@@ -397,8 +398,8 @@ impl DaemonTorControl {
     /// Bounded teardown: graceful actor stop (which `DEL_ONION`s the published
     /// service and SIGTERM→wait→SIGKILL→reaps the child), then the exit
     /// telemetry, then the DataDirectory wipe. On a wedged actor, kill and
-    /// proceed — the child reap is backstopped by `kill_on_drop` /
-    /// `TAKEOWNERSHIP`.
+    /// proceed — the child reap is backstopped by `kill_on_drop` and by the owning
+    /// control connection, whose close exits tor.
     pub async fn shutdown(mut self) -> Option<TorExit> {
         self.teardown().await
     }

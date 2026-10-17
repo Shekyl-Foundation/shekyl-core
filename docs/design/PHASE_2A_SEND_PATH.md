@@ -407,21 +407,16 @@ the band and the selected feerate are mutually consistent.
 | `Economy` | `economy` |
 | `Standard` | `standard` |
 | `Priority` | `priority` |
-| `Custom(rate)` | `FeeRate::new(rate, snapshot.quantization_mask)` — mask carried once on the snapshot (see below), clamped to the §3.3 sanity band |
+| `Custom(rate)` | `FeeRate::from_nonzero(rate)`, clamped to the §3.3 sanity band; the lattice a fee is rounded to is `shekyl_economics::FEE_QUANTIZATION_MASK`, a constant (FL-R27), not a snapshot field |
 
 **Atomic single-RPC snapshot.** `DaemonEngine::get_fee_estimates` issues **one**
 `get_fee_estimate` JSON-RPC call (via `Rpc::json_rpc_call`), not three
-`get_fee_rate` calls. The response carries a fee array plus one
-`quantization_mask`; the impl maps the array to all tiers (`economy`,
-`standard`, `priority` → indices 0, 1, 3 per decision log) and stores the single
-`quantization_mask` **once** on the `FeeEstimates` snapshot. This guarantees the
-four-tier band and the `Custom` mask all derive from the same daemon view (no
-tier-vs-tier skew from interleaved calls).
-
-`shekyl-rpc` is Shekyl-owned (renamed crate, Shekyl/FCMP++ divergence, primitive
-deps only) — if a per-tier mask is ever needed, exposing a `FeeRate::mask()`
-accessor is permitted. For Phase 2a the mask is a single snapshot-level quantity,
-so it lives on `FeeEstimates`.
+`get_fee_rate` calls. The response carries the fee array; the impl maps it to
+the three tiers (`economy`, `standard`, `priority` → indices 0, 1, 2). This
+guarantees the tier band derives from one daemon view (no tier-vs-tier skew
+from interleaved calls). The rounding lattice is not served: it is
+`shekyl_economics::FEE_QUANTIZATION_MASK`, read by the wallet's fee
+arithmetic and by the daemon's admission alike (FL-R27).
 
 ### 3.4 Signing context assembly
 
@@ -1415,8 +1410,8 @@ The concrete surface deltas, now that W and D are pinned:
   calls the structural estimator twice — `output_count = N` and `N+1` — to
   produce both candidate fees. Public; no secret; consistent with the
   estimator's existing contract. **Also add the §3.3 `FeeEstimates` snapshot to
-  the context** (`fee_snapshot: FeeEstimates`, carrying the single
-  `quantization_mask`): the V3.0 `FeeEstimator::estimate_fee` is **synchronous**
+  the context** (`fee_snapshot: FeeEstimates`): the V3.0
+  `FeeEstimator::estimate_fee` is **synchronous**
   and `DaemonFeeEstimator` is **zero-sized** (`fee_estimator.rs:199, 225`), so
   the daemon-derived feerate cannot be fetched *inside* `estimate_fee` without
   re-opening the frozen sync trait surface. Instead `build`'s async block

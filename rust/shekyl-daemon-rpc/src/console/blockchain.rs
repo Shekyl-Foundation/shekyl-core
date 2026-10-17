@@ -101,11 +101,8 @@ fn render_blockchain_info_entry(h: &shekyl_rpc_types::BlockHeader) -> String {
 }
 
 /// Fetch `get_fee_estimate` — native here, over `/json_rpc` remotely.
-fn fetch_fee_estimate(
-    src: &Source,
-    grace_blocks: u64,
-) -> Result<shekyl_rpc_types::GetFeeEstimateResponse, String> {
-    let request = shekyl_rpc_types::GetFeeEstimateRequest { grace_blocks };
+fn fetch_fee_estimate(src: &Source) -> Result<shekyl_rpc_types::GetFeeEstimateResponse, String> {
+    let request = shekyl_rpc_types::GetFeeEstimateRequest::default();
     let reply = native_json_rpc(src, "get_fee_estimate", &request, |core| {
         crate::methods::get_fee_estimate(&FfiChainFacts::new(core.clone()), &request)
     })?;
@@ -147,7 +144,7 @@ pub(super) fn median(values: &mut [u64]) -> u64 {
 pub(super) fn print_blockchain_dynamic_stats(src: &Source, nblocks: u64) -> Result<String, String> {
     let info = fetch_get_info(src)?;
     let height = info.health.height;
-    let fees = fetch_fee_estimate(src, 0)?;
+    let fees = fetch_fee_estimate(src)?;
     // `res.fee = res.fees[0]` — `on_get_base_fee_estimate` set the scalar
     // from the first tier, which is why RK-5b could retire it. The console
     // read the scalar, so it reads tier 0.

@@ -3,14 +3,24 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The managed tor's command line, environment, and the one file it may read.
+//! The managed tor's command line, environment, control connection, and the one
+//! file it may read.
 //!
 //! [`managed_tor_command`] is the whole launch a user gets. It is infallible:
-//! the only fallible step is [`LaunchEnvironment::resolve`], and on Windows
-//! that step is the system-directory lookup. The environment is a closed set
-//! (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part 2, as amended 2026-10-16). The blank file and the data
-//! directory are prepared before the command is spawned
-//! ([`prepare_data_directory`], [`install_blank_config`]).
+//! the fallible steps come before it. [`LaunchEnvironment::resolve`] is, on
+//! Windows, the system-directory lookup; [`ControlPair::new`] makes the control
+//! connection; the blank file and the data directory are prepared
+//! ([`prepare_data_directory`], [`install_blank_config`]). [`ControlPair::spawn`]
+//! runs the command with tor's end handed over. The environment is a closed set
+//! (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part 2, as amended 2026-10-16).
+//!
+//! **The control connection is inherited, not dialled** (`TOR_SUPERVISOR.md`
+//! `TSR-Q7`, §4.7). Tor is started with `__OwningControllerFD` naming its end of a
+//! connected socket pair, and treats it as an owning control connection that is
+//! already authenticated. So the managed launch opens no control port, writes no
+//! port file and no cookie, and sends no `TAKEOWNERSHIP`: there is no window between
+//! the spawn and ownership, and no listener another local process could reach.
+//! Tor exits when the connection closes, which is what a parent's death does.
 //!
 //! The option list is closed. Non-anonymous onion serving is one of the things
 //! it holds shut; the other half is [`super::onion::OnionFlags`].
@@ -20,11 +30,11 @@ use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 #[cfg(windows)]
 use super::actor::SystemDirectoryError;
-use super::actor::{ControlError, ManagedTor};
+use super::actor::{ControlError, ControlRead, ControlWrite, ManagedTor};
 
 /// Where OpenSSL reads its configuration. Tor initialises OpenSSL without
 /// `OPENSSL_INIT_NO_LOAD_CONFIG` (`crypto_openssl_mgt.c` at `tor-0.4.9.13` and
@@ -55,6 +65,20 @@ const LAUNCH_OWNED_FILES: [&str; 4] = [
     "--GeoIPFile",
     "--GeoIPv6File",
 ];
+
+/// The number tor is told its end of the control connection has: a file
+/// descriptor on Unix, a socket on Windows.
+#[cfg(unix)]
+pub(crate) type TorEndNumber = std::os::fd::RawFd;
+/// The number tor is told its end of the control connection has: a file
+/// descriptor on Unix, a socket on Windows.
+#[cfg(windows)]
+pub(crate) type TorEndNumber = std::os::windows::io::RawSocket;
+
+/// The highest standard stream. Std moves the child's stdin, stdout and stderr
+/// onto 0, 1 and 2 before it runs `pre_exec`, so tor's end must be above them.
+#[cfg(unix)]
+const LAST_STANDARD_STREAM: std::os::fd::RawFd = 2;
 
 /// Name of the one zero-length file those four options share.
 pub(crate) const BLANK_FILE_NAME: &str = "blank";
@@ -160,7 +184,7 @@ impl LaunchEnvironment {
 /// Infallible. [`LaunchEnvironment::resolve`] has already produced `environment`.
 pub(crate) fn managed_tor_command(
     managed: &ManagedTor,
-    port_file: &Path,
+    tor_end: TorEndNumber,
     environment: &LaunchEnvironment,
 ) -> Command {
     // The witness type guarantees this path passed the hash-pin gate and is
@@ -176,11 +200,12 @@ pub(crate) fn managed_tor_command(
     environment.apply(&mut cmd);
     cmd.arg("--DataDirectory")
         .arg(&managed.data_dir)
-        .arg("--ControlPort")
-        .arg("auto")
-        .arg("--ControlPortWriteToFile")
-        .arg(port_file)
-        .arg("--CookieAuthentication")
+        // The control connection: tor's end of the pair, already authenticated and
+        // owning. No control port, port file or cookie exists.
+        .arg("--__OwningControllerFD")
+        .arg(tor_end.to_string())
+        // Tor writes `state` and its caches less often (TSR §1, Disk).
+        .arg("--AvoidDiskWrites")
         .arg("1")
         .arg("--SocksPort")
         .arg(managed.socks_port.as_arg())
@@ -245,7 +270,475 @@ pub(crate) fn managed_tor_command(
     if managed.disable_network {
         cmd.arg("--DisableNetwork").arg("1");
     }
+    inherit_in_the_child_only(&mut cmd, tor_end);
     cmd
+}
+
+/// Clear `FD_CLOEXEC` on `fd`.
+///
+/// Async-signal-safe: `fcntl` only, and [`std::io::Error::last_os_error`] reads
+/// `errno` into an inline value. Both the managed tor and the test sleeper call
+/// this from `pre_exec`, in the child, between `fork` and `exec`.
+///
+/// # Errors
+///
+/// The `fcntl` error.
+#[cfg(unix)]
+fn clear_cloexec(fd: TorEndNumber) -> std::io::Result<()> {
+    // SAFETY: `fcntl` with `F_GETFD` / `F_SETFD` reads and writes only this
+    // descriptor's flags. The caller is `pre_exec`, so no other thread exists
+    // in the child and nothing else touches `fd`.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Unix: clear close-on-exec on tor's end in the child, after `fork`. The parent's
+/// copy keeps it, so no other spawn can inherit tor's end, concurrent or not.
+#[cfg(unix)]
+fn inherit_in_the_child_only(cmd: &mut Command, tor_end: TorEndNumber) {
+    // SAFETY: the closure runs in the child between `fork` and `exec`, and
+    // [`clear_cloexec`] is async-signal-safe.
+    unsafe {
+        cmd.pre_exec(move || clear_cloexec(tor_end));
+    }
+}
+
+/// The test sleeper's copy of the same clear. `std`'s `Command`, where the tor
+/// launch uses tokio's; one [`clear_cloexec`] underneath both.
+#[cfg(all(test, unix))]
+fn inherit_in_the_sleeper(sleeper: &mut std::process::Command, tor_end: TorEndNumber) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: as [`inherit_in_the_child_only`].
+    unsafe {
+        sleeper.pre_exec(move || clear_cloexec(tor_end));
+    }
+}
+
+/// Windows marks tor's end inheritable around the spawn instead
+/// ([`ControlPair::spawn`]); nothing is set on the command.
+#[cfg(not(unix))]
+fn inherit_in_the_child_only(_cmd: &mut Command, _tor_end: TorEndNumber) {}
+
+/// The managed tor's control connection before the spawn: our end, and tor's.
+///
+/// Unix: a `socketpair`, both ends close-on-exec as std makes them. Windows: a
+/// loopback TCP pair, accepted only from our own connect, both ends not inheritable
+/// as std makes them.
+pub(crate) struct ControlPair {
+    ours: OurEnd,
+    tors: OurEnd,
+}
+
+#[cfg(unix)]
+type OurEnd = std::os::unix::net::UnixStream;
+#[cfg(windows)]
+type OurEnd = std::net::TcpStream;
+
+impl ControlPair {
+    /// Make the connected pair.
+    #[cfg(unix)]
+    pub(crate) fn new() -> Result<Self, ControlError> {
+        use std::os::fd::AsRawFd;
+        let (ours, tors) = OurEnd::pair().map_err(|_| ControlError::Spawn)?;
+        // A process started with a standard stream closed hands those numbers out
+        // again; tor's end there would be overwritten by the child's stdio.
+        if tors.as_raw_fd() <= LAST_STANDARD_STREAM {
+            return Err(ControlError::Spawn);
+        }
+        Ok(Self { ours, tors })
+    }
+
+    /// Make the connected pair. The listener is bound to loopback and accepts one
+    /// connection; one that does not come from our own connect is refused, so
+    /// another local process that races into the accept gets nothing and the launch
+    /// fails instead.
+    #[cfg(windows)]
+    pub(crate) fn new() -> Result<Self, ControlError> {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .map_err(|_| ControlError::Spawn)?;
+        let address = listener.local_addr().map_err(|_| ControlError::Spawn)?;
+        let ours = OurEnd::connect(address).map_err(|_| ControlError::Spawn)?;
+        let (tors, peer) = listener.accept().map_err(|_| ControlError::Spawn)?;
+        if Some(peer) != ours.local_addr().ok() {
+            return Err(ControlError::Spawn);
+        }
+        Ok(Self { ours, tors })
+    }
+
+    /// The number tor is given in `--__OwningControllerFD`.
+    pub(crate) fn tor_end(&self) -> TorEndNumber {
+        raw_end(&self.tors)
+    }
+
+    /// Spawn `cmd` with tor's end handed to the child, then close our copy of it.
+    ///
+    /// **Our copy of tor's end is closed before this returns, and before the spawn
+    /// lock is released.** While the parent holds it, the socket stays open whatever
+    /// tor does, and a read on our end would never see tor's death. The death path
+    /// depends on the close. On Windows the lock depends on it too: a failed
+    /// inherit-bit clear must not leave the socket open and inheritable after the
+    /// guard drops (`TSR-F16`).
+    ///
+    /// `leak` (test builds) is the `TSR-F16` sleeper. It is spawned in this same
+    /// locked window, before tor, and it does not take the lock again — the lock is
+    /// not reentrant. The sleeper is handed to the test, or killed and reaped, only
+    /// after the lock is released. A wait under the lock would stall every other
+    /// spawn.
+    pub(crate) fn spawn(
+        self,
+        cmd: &mut Command,
+        #[cfg(test)] leak: Option<LeakTorEnd>,
+    ) -> Result<(Child, ControlRead, ControlWrite), ControlError> {
+        let Self { ours, tors } = self;
+        // Unix: tor's end reaches the children named here, through `pre_exec`.
+        // Windows: the parent's copy is inheritable only while `ParentTorEnd` is
+        // open inside this closure. The closure owns that copy, so it is closed
+        // before `spawn_lock::with` drops the guard, on every path.
+        let outcome = crate::spawn_lock::with(|| -> Result<SpawnedInWindow, WindowError> {
+            let window = match ParentTorEnd::open(tors) {
+                Ok(window) => window,
+                Err(error) => return Err(WindowError::bare(error)),
+            };
+            #[cfg(test)]
+            let sleeper = match leak {
+                None => None,
+                Some(leak) => {
+                    let mut sleeper = sleeper_command(window.number(), leak.lives);
+                    match sleeper.spawn() {
+                        Ok(child) => Some(LeakedSleeper {
+                            child,
+                            slot: leak.sleeper,
+                        }),
+                        Err(_) => return Err(fail_launch(ControlError::Spawn, window, None)),
+                    }
+                }
+            };
+            match cmd.spawn() {
+                Ok(child) => match window.close() {
+                    Ok(()) => Ok(SpawnedInWindow {
+                        child,
+                        #[cfg(test)]
+                        sleeper,
+                    }),
+                    Err(error) => {
+                        // `kill_on_drop`: a tor that did start does not outlive a
+                        // launch that is still failing closed.
+                        drop(child);
+                        Err(fail_after_close(
+                            error,
+                            #[cfg(test)]
+                            sleeper,
+                        ))
+                    }
+                },
+                Err(_) => Err(fail_launch(
+                    ControlError::Spawn,
+                    window,
+                    #[cfg(test)]
+                    sleeper,
+                )),
+            }
+        });
+        let child = finish_spawn(outcome)?;
+        let (read, write) = into_halves(ours)?;
+        Ok((child, read, write))
+    }
+}
+
+/// Test builds only: a sleeper process that inherits a copy of tor's end and lives
+/// `lives`, handed to the test through `sleeper` (`TSR-F16`, case C6b).
+///
+/// Passed to [`ControlPair::spawn`]. The sleeper and tor share one inherit window.
+#[cfg(test)]
+pub(crate) struct LeakTorEnd {
+    pub(crate) lives: std::time::Duration,
+    pub(crate) sleeper: tokio::sync::oneshot::Sender<std::process::Child>,
+}
+
+/// `sleep` with a zero argument returns at once. A leak lives at least this long.
+#[cfg(test)]
+const SHORTEST_SLEEPER_SECS: u64 = 1;
+
+#[cfg(all(test, unix))]
+const SLEEPER_PROGRAM: &str = "/bin/sleep";
+
+/// `ping -n N` waits about `N - 1` seconds, so the count is one past the seconds
+/// the sleeper must live.
+#[cfg(all(test, windows))]
+const PING_COUNT_BEYOND_SECONDS: u64 = 1;
+
+#[cfg(all(test, windows))]
+const SLEEPER_PROGRAM: &str = "ping";
+
+#[cfg(all(test, windows))]
+const SLEEPER_PING_TARGET: &str = "127.0.0.1";
+
+/// The command the test sleeper runs. It does not spawn: the spawn stays inside
+/// [`ControlPair::spawn`]'s lock, and this lock is not reentrant.
+#[cfg(test)]
+fn sleeper_command(tor_end: TorEndNumber, lives: std::time::Duration) -> std::process::Command {
+    let seconds = lives.as_secs().max(SHORTEST_SLEEPER_SECS);
+    #[cfg(any(unix, windows))]
+    {
+        let mut sleeper = std::process::Command::new(SLEEPER_PROGRAM);
+        #[cfg(unix)]
+        {
+            sleeper.arg(seconds.to_string());
+            inherit_in_the_sleeper(&mut sleeper, tor_end);
+        }
+        #[cfg(windows)]
+        {
+            let _ = tor_end;
+            let count = seconds + PING_COUNT_BEYOND_SECONDS;
+            sleeper.args(["-n", &count.to_string(), SLEEPER_PING_TARGET]);
+        }
+        sleeper
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        sleeper
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (tor_end, seconds);
+        panic!("the tor-end sleeper has no form on this target")
+    }
+}
+
+/// The parent's copy of tor's end for the duration of one locked launch.
+///
+/// On Windows the copy is inheritable from [`open`](Self::open) until it is closed.
+/// Closing clears the inherit bit and then drops the socket. A failed clear still
+/// drops the socket, so the bit cannot outlive the value. The value is created and
+/// dropped inside [`crate::spawn_lock::with`], which is what keeps the window
+/// private to that spawn.
+struct ParentTorEnd {
+    socket: Option<OurEnd>,
+}
+
+impl ParentTorEnd {
+    fn open(socket: OurEnd) -> Result<Self, ControlError> {
+        set_inherit_bit(&socket, true)?;
+        Ok(Self {
+            socket: Some(socket),
+        })
+    }
+
+    #[cfg(test)]
+    fn number(&self) -> TorEndNumber {
+        raw_end(
+            self.socket
+                .as_ref()
+                .expect("the parent's copy of tor's end is open"),
+        )
+    }
+
+    /// Clear the inherit bit if this platform has one, then close. The clear's
+    /// error is returned only after the socket is gone.
+    fn close(mut self) -> Result<(), ControlError> {
+        self.close_socket()
+    }
+
+    fn close_socket(&mut self) -> Result<(), ControlError> {
+        let Some(socket) = self.socket.take() else {
+            return Ok(());
+        };
+        let cleared = set_inherit_bit(&socket, false);
+        drop(socket);
+        cleared
+    }
+}
+
+impl Drop for ParentTorEnd {
+    fn drop(&mut self) {
+        // A path that left early still closes inside the spawn lock: this value
+        // is a local of the `spawn_lock::with` closure. Drop cannot report a
+        // failed clear; [`ParentTorEnd::close`] is the path that does, and it
+        // too closes before it returns the error.
+        self.close_socket().ok();
+    }
+}
+
+/// Set or clear the Windows inherit bit. Other targets have no such bit: tor's
+/// end becomes inheritable only in the child, after `fork`.
+///
+/// # Errors
+///
+/// [`ControlError::Spawn`] when `SetHandleInformation` fails. The call does not
+/// close `socket`; the caller does, including when this fails.
+#[cfg_attr(
+    not(windows),
+    allow(
+        clippy::unnecessary_wraps,
+        reason = "Windows can fail SetHandleInformation; other targets have no inherit bit"
+    )
+)]
+fn set_inherit_bit(socket: &OurEnd, inherit: bool) -> Result<(), ControlError> {
+    #[cfg(windows)]
+    return set_inheritable(socket, inherit);
+    #[cfg(not(windows))]
+    {
+        let _ = (socket, inherit);
+        Ok(())
+    }
+}
+
+/// Tor, and the test sleeper when this build asked for one, after the parent's
+/// copy of tor's end has been closed.
+struct SpawnedInWindow {
+    child: Child,
+    #[cfg(test)]
+    sleeper: Option<LeakedSleeper>,
+}
+
+/// The launch failed. `sleeper`, when present, has not been handed to the test
+/// and must be reaped after the lock is released.
+struct WindowError {
+    error: ControlError,
+    #[cfg(test)]
+    sleeper: Option<std::process::Child>,
+}
+
+impl WindowError {
+    fn bare(error: ControlError) -> Self {
+        Self {
+            error,
+            #[cfg(test)]
+            sleeper: None,
+        }
+    }
+}
+
+/// Close `window`, then fail. The socket is closed even when the inherit-bit
+/// clear fails; that clear's error replaces `error` because it is the window
+/// failing open.
+fn fail_launch(
+    error: ControlError,
+    window: ParentTorEnd,
+    #[cfg(test)] sleeper: Option<LeakedSleeper>,
+) -> WindowError {
+    let error = window.close().err().unwrap_or(error);
+    fail_after_close(
+        error,
+        #[cfg(test)]
+        sleeper,
+    )
+}
+
+fn fail_after_close(
+    error: ControlError,
+    #[cfg(test)] sleeper: Option<LeakedSleeper>,
+) -> WindowError {
+    WindowError {
+        error,
+        #[cfg(test)]
+        sleeper: sleeper.map(LeakedSleeper::into_unsent),
+    }
+}
+
+/// Hand the sleeper to the test, or reap it, after the spawn lock is released.
+fn finish_spawn(outcome: Result<SpawnedInWindow, WindowError>) -> Result<Child, ControlError> {
+    match outcome {
+        Ok(spawned) => {
+            #[cfg(test)]
+            if let Some(sleeper) = spawned.sleeper {
+                sleeper.hand_off();
+            }
+            Ok(spawned.child)
+        }
+        Err(failed) => {
+            #[cfg(test)]
+            if let Some(sleeper) = failed.sleeper {
+                reap_sleeper(sleeper);
+            }
+            Err(failed.error)
+        }
+    }
+}
+
+/// The sleeper process and the oneshot the test is waiting on.
+#[cfg(test)]
+struct LeakedSleeper {
+    child: std::process::Child,
+    slot: tokio::sync::oneshot::Sender<std::process::Child>,
+}
+
+#[cfg(test)]
+impl LeakedSleeper {
+    fn into_unsent(self) -> std::process::Child {
+        self.child
+    }
+
+    fn hand_off(self) {
+        let Self { child, slot } = self;
+        if let Err(child) = slot.send(child) {
+            reap_sleeper(child);
+        }
+    }
+}
+
+/// Kill the sleeper and wait for it. The caller's copy of tor's end dies with
+/// the process. Runs only after the spawn lock is released.
+#[cfg(test)]
+fn reap_sleeper(mut sleeper: std::process::Child) {
+    sleeper.kill().ok();
+    sleeper.wait().ok();
+}
+
+#[cfg(unix)]
+fn raw_end(socket: &OurEnd) -> TorEndNumber {
+    use std::os::fd::AsRawFd;
+    socket.as_raw_fd()
+}
+
+#[cfg(windows)]
+fn raw_end(socket: &OurEnd) -> TorEndNumber {
+    use std::os::windows::io::AsRawSocket;
+    socket.as_raw_socket()
+}
+
+#[cfg(windows)]
+fn set_inheritable(socket: &OurEnd, inherit: bool) -> Result<(), ControlError> {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+    let flags = if inherit { HANDLE_FLAG_INHERIT } else { 0 };
+    // A socket from the base provider is a kernel handle. The value is `usize`-wide
+    // on every Windows target; the cast restores it.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "a SOCKET is pointer-sized on Windows"
+    )]
+    let handle = socket.as_raw_socket() as usize as windows_sys::Win32::Foundation::HANDLE;
+    // SAFETY: `handle` is the socket `socket` holds open for the call's duration.
+    if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, flags) } == 0 {
+        return Err(ControlError::Spawn);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn into_halves(ours: OurEnd) -> Result<(ControlRead, ControlWrite), ControlError> {
+    ours.set_nonblocking(true)
+        .map_err(|_| ControlError::Spawn)?;
+    let (read, write) = tokio::net::UnixStream::from_std(ours)
+        .map_err(|_| ControlError::Spawn)?
+        .into_split();
+    Ok((Box::pin(read), Box::pin(write)))
+}
+
+#[cfg(windows)]
+fn into_halves(ours: OurEnd) -> Result<(ControlRead, ControlWrite), ControlError> {
+    ours.set_nonblocking(true)
+        .map_err(|_| ControlError::Spawn)?;
+    let (read, write) = tokio::net::TcpStream::from_std(ours)
+        .map_err(|_| ControlError::Spawn)?
+        .into_split();
+    Ok((Box::pin(read), Box::pin(write)))
 }
 
 /// The zero-length file the managed tor is given as its torrc, its defaults
@@ -584,7 +1077,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("fixture directory");
         let managed = managed_fixture(dir.path(), disable_network);
         let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
-        managed_tor_command(&managed, &dir.path().join("control_port"), &environment)
+        let pair = ControlPair::new().expect("control pair");
+        managed_tor_command(&managed, pair.tor_end(), &environment)
             .as_std()
             .get_args()
             .map(|arg| {
@@ -603,6 +1097,7 @@ mod tests {
             socks_port: super::super::actor::SocksPort::Auto,
             disable_network,
             exit_observer: None,
+            leak: None,
         }
     }
 
@@ -631,9 +1126,8 @@ mod tests {
     fn the_managed_launch_surface_is_the_typed_options() {
         let base = [
             "--DataDirectory",
-            "--ControlPort",
-            "--ControlPortWriteToFile",
-            "--CookieAuthentication",
+            "--__OwningControllerFD",
+            "--AvoidDiskWrites",
             "--SocksPort",
             "--Log",
             "--torrc-file",
@@ -655,7 +1149,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("fixture directory");
         let managed = managed_fixture(dir.path(), false);
         let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
-        let cmd = managed_tor_command(&managed, &dir.path().join("control_port"), &environment);
+        let pair = ControlPair::new().expect("control pair");
+        let cmd = managed_tor_command(&managed, pair.tor_end(), &environment);
         let args: Vec<&OsStr> = cmd.as_std().get_args().collect();
         let blank = blank_config_path(&managed.data_dir);
         for option in [
@@ -676,6 +1171,121 @@ mod tests {
         }
     }
 
+    /// The control connection is tor's inherited end, named by number, and the
+    /// value of each fixed option is what §4.7 rules.
+    #[test]
+    fn the_launch_hands_tor_its_end_and_avoids_disk_writes() {
+        let dir = tempfile::tempdir().expect("fixture directory");
+        let managed = managed_fixture(dir.path(), false);
+        let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
+        let pair = ControlPair::new().expect("control pair");
+        let cmd = managed_tor_command(&managed, pair.tor_end(), &environment);
+        let args: Vec<&OsStr> = cmd.as_std().get_args().collect();
+        let value = |option: &str| {
+            let at = args
+                .iter()
+                .position(|arg| *arg == option)
+                .unwrap_or_else(|| panic!("{option} is not on the launch"));
+            args.get(at + 1).copied()
+        };
+        let number = pair.tor_end().to_string();
+        assert_eq!(
+            value("--__OwningControllerFD"),
+            Some(OsStr::new(&number)),
+            "tor is told its own end"
+        );
+        assert_eq!(value("--AvoidDiskWrites"), Some(OsStr::new("1")));
+    }
+
+    /// The spawn hands tor its end, and closes the parent's copy: a read on our end
+    /// sees EOF once the child exits. If the parent kept its copy, the read would wait
+    /// forever, which is the property the death path rests on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_parent_closes_its_copy_of_tors_end() {
+        use tokio::io::AsyncReadExt;
+        let pair = ControlPair::new().expect("control pair");
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "exit 0"]);
+        inherit_in_the_child_only(&mut cmd, pair.tor_end());
+        let (mut child, mut read, _write) = pair.spawn(&mut cmd, None).expect("spawn");
+        child.wait().await.expect("the child exits");
+        let mut byte = [0u8; 1];
+        let eof = tokio::time::timeout(std::time::Duration::from_secs(5), read.read(&mut byte))
+            .await
+            .expect("EOF, not a wait on our own copy")
+            .expect("read");
+        assert_eq!(eof, 0);
+    }
+
+    /// The launch's spawn waits for the spawn lock: while another holder has it, the
+    /// launch starts no child, and it does once the lock is free. On Windows this is
+    /// what keeps tor's inheritable end out of every other spawn. The gate
+    /// (`check_spawn_sites_take_the_lock.py`) checks the code; this checks the
+    /// behaviour (Copilot on #1091).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_launch_spawns_only_under_the_spawn_lock() {
+        /// Long enough for an unlocked spawn to have happened.
+        const HELD: std::time::Duration = std::time::Duration::from_millis(300);
+        /// Long enough for the spawn once the lock is free.
+        const FREED: std::time::Duration = std::time::Duration::from_secs(10);
+        let runtime = tokio::runtime::Handle::current();
+        let (spawned_tx, spawned_rx) = std::sync::mpsc::channel();
+        let launcher = crate::spawn_lock::with(|| {
+            let launcher = std::thread::spawn(move || {
+                let _runtime = runtime.enter();
+                let pair = ControlPair::new().expect("control pair");
+                let mut cmd = Command::new("/bin/sh");
+                cmd.args(["-c", "exit 0"]);
+                inherit_in_the_child_only(&mut cmd, pair.tor_end());
+                spawned_tx
+                    .send(pair.spawn(&mut cmd, None).map(|(child, _, _)| child))
+                    .ok();
+            });
+            assert!(
+                spawned_rx.recv_timeout(HELD).is_err(),
+                "the launch spawned while another holder had the lock"
+            );
+            launcher
+        });
+        let mut child = spawned_rx
+            .recv_timeout(FREED)
+            .expect("the launch spawns once the lock is free")
+            .expect("spawn");
+        child.wait().await.expect("the child exits");
+        launcher.join().expect("the launching thread");
+    }
+
+    /// Tor's end reaches the child it is meant for, and no other. The first child is
+    /// handed it and finds it open; a second spawned while the pair exists, which is
+    /// not handed it, finds it closed: close-on-exec is cleared in the first child
+    /// only.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn only_the_child_handed_tors_end_holds_it() {
+        let pair = ControlPair::new().expect("control pair");
+        let number = pair.tor_end();
+        let probe = format!("test -e /dev/fd/{number}");
+
+        let mut other = std::process::Command::new("/bin/sh");
+        other.args(["-c", &probe]);
+        let other_status = crate::spawn_lock::status(&mut other).expect("the other spawn runs");
+        assert!(
+            !other_status.success(),
+            "a spawn not handed tor's end does not hold it"
+        );
+
+        let mut handed = Command::new("/bin/sh");
+        handed.args(["-c", &probe]);
+        inherit_in_the_child_only(&mut handed, number);
+        let (mut child, _read, _write) = pair.spawn(&mut handed, None).expect("spawn");
+        assert!(
+            child.wait().await.expect("exits").success(),
+            "the child handed tor's end holds it"
+        );
+    }
+
     /// The variable set on the built command, against an oracle written out
     /// here rather than read from [`LaunchEnvironment::variables`].
     ///
@@ -689,7 +1299,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("fixture directory");
         let managed = managed_fixture(dir.path(), false);
         let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
-        let cmd = managed_tor_command(&managed, &dir.path().join("control_port"), &environment);
+        let pair = ControlPair::new().expect("control pair");
+        let cmd = managed_tor_command(&managed, pair.tor_end(), &environment);
         let mut envs: Vec<(&OsStr, Option<&OsStr>)> = cmd.as_std().get_envs().collect();
         envs.sort();
         let blank = blank_config_path(&managed.data_dir);
@@ -727,9 +1338,17 @@ mod tests {
     const SHELL_OWN_VARIABLES: [&str; 3] = ["PWD", "SHLVL", "_"];
 
     /// A directory that is not the Windows directory. The re-executed test
-    /// process is given it as `SystemRoot`; the managed child must not keep it.
+    /// process sets it as its own `SystemRoot` before the launch; the managed
+    /// child must not keep it.
     #[cfg(windows)]
     const POISON_SYSTEM_ROOT: &str = r"C:\shekyl-not-a-windows-directory";
+
+    /// Tells the re-executed process to poison its `SystemRoot` once the control
+    /// pair exists. It cannot start with the poison: Winsock loads its providers
+    /// from the Windows directory, so the pair's loopback bind fails under a wrong
+    /// `SystemRoot` (`WSAEPROVIDERFAILEDINIT`, 10106; seen on Windows, 2026-10-16).
+    #[cfg(windows)]
+    const POISON_AFTER_PAIR: &str = "SHEKYL_TEST_POISON_SYSTEM_ROOT";
 
     #[cfg(windows)]
     const SHIM_FILE_NAME: &str = "tor.exe";
@@ -745,7 +1364,8 @@ mod tests {
     /// reads what the shim wrote, the inner half is the process whose
     /// environment is dirty.
     ///
-    /// On Windows the outer half poisons `SystemRoot`. The shim is a small
+    /// On Windows the inner half poisons its own `SystemRoot` once the control
+    /// pair exists (Winsock needs the real one to make it). The shim is a small
     /// Rust program, because `CreateProcess` will not run a `.cmd` the way
     /// Unix runs a shell script. The dump's `SystemRoot` has to be the system
     /// call's value.
@@ -759,12 +1379,6 @@ mod tests {
     }
 
     async fn run_inner_half(dir: &OsStr) {
-        #[cfg(windows)]
-        assert_eq!(
-            std::env::var(SYSTEM_ROOT_VARIABLE).as_deref(),
-            Ok(POISON_SYSTEM_ROOT),
-            "the inner half must be the process that holds the poisoned SystemRoot"
-        );
         assert!(
             std::env::var_os(ENV_SENTINEL_NAME).is_some(),
             "the inner half's environment is not dirty"
@@ -780,14 +1394,29 @@ mod tests {
             socks_port: super::super::actor::SocksPort::Auto,
             disable_network: true,
             exit_observer: None,
+            leak: None,
         };
+        let pair = ControlPair::new().expect("control pair");
+        // From here on this process's own `SystemRoot` is wrong, through the
+        // resolve and the spawn: the child's must still be the system call's.
+        // A single-test process, so the `set_var` races nothing.
+        #[cfg(windows)]
+        {
+            assert!(
+                std::env::var_os(POISON_AFTER_PAIR).is_some(),
+                "the outer half asks for the poison"
+            );
+            std::env::set_var(SYSTEM_ROOT_VARIABLE, POISON_SYSTEM_ROOT);
+            assert_eq!(
+                std::env::var(SYSTEM_ROOT_VARIABLE).as_deref(),
+                Ok(POISON_SYSTEM_ROOT),
+                "the inner half holds the poisoned SystemRoot"
+            );
+        }
         let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
-        let status = managed_tor_command(&managed, &dir.join("control_port"), &environment)
-            .spawn()
-            .expect("spawn the shim")
-            .wait()
-            .await
-            .expect("wait for the shim");
+        let mut cmd = managed_tor_command(&managed, pair.tor_end(), &environment);
+        let (mut child, _read, _write) = pair.spawn(&mut cmd, None).expect("spawn the shim");
+        let status = child.wait().await.expect("wait for the shim");
         assert!(status.success(), "shim exited {status}");
     }
 
@@ -815,8 +1444,8 @@ mod tests {
             .env(PRELOAD_NAME, PRELOAD_VALUE)
             .env(ENV_SENTINEL_NAME, ENV_SENTINEL_VALUE);
         #[cfg(windows)]
-        reexec.env(SYSTEM_ROOT_VARIABLE, POISON_SYSTEM_ROOT);
-        let output = reexec.output().expect("re-execute the test binary");
+        reexec.env(POISON_AFTER_PAIR, "1");
+        let output = crate::spawn_lock::output(&mut reexec).expect("re-execute the test binary");
         assert!(
             output.status.success(),
             "inner half failed:\n{}\n{}",
@@ -960,11 +1589,12 @@ fn main() {
 "#;
         let source = dir.join("env_dump_shim.rs");
         std::fs::write(&source, ENV_DUMP_SHIM).expect("write the shim source");
-        let compiled = std::process::Command::new("rustc")
+        let mut rustc = std::process::Command::new("rustc");
+        rustc
             .args(["--edition", "2021", "-o"])
             .arg(dir.join(SHIM_FILE_NAME))
-            .arg(&source)
-            .output()
+            .arg(&source);
+        let compiled = crate::spawn_lock::output(&mut rustc)
             .expect("rustc is on PATH for the environment shim");
         assert!(
             compiled.status.success(),
@@ -991,7 +1621,7 @@ fn main() {
         )
     }
 
-    /// How long a launch gets to either write its control-port file or exit.
+    /// How long a launch gets to either answer on its control connection or exit.
     const LAUNCH_VERDICT_WINDOW: std::time::Duration = std::time::Duration::from_secs(30);
 
     /// How a launch ended within [`LAUNCH_VERDICT_WINDOW`].
@@ -1001,19 +1631,24 @@ fn main() {
         TimedOut,
     }
 
-    /// `true` when the launched tor wrote its control-port file (it came up),
-    /// `false` when it exited first. The child is killed and reaped on every
-    /// verdict, a timeout included, before this returns or panics, so the
-    /// caller's temporary directory never drops under a live tor.
-    async fn launch_comes_up(mut cmd: Command, port_file: &Path) -> bool {
-        let mut child = cmd.spawn().expect("spawn the managed tor");
+    /// `true` when the launched tor answered `GETINFO version` on its inherited
+    /// control connection (it came up), the check the actor's own start makes;
+    /// `false` when it exited, or closed the connection, first. The child is killed
+    /// and reaped on every verdict, a timeout included, before this returns or
+    /// panics, so the caller's temporary directory never drops under a live tor.
+    async fn launch_comes_up(pair: ControlPair, mut cmd: Command) -> bool {
+        let (mut child, mut read, mut write) =
+            pair.spawn(&mut cmd, None).expect("spawn the managed tor");
         let verdict = tokio::select! {
             _ = child.wait() => LaunchVerdict::Exited,
-            () = async {
-                while !port_file.exists() {
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
-            } => LaunchVerdict::CameUp,
+            answered = async {
+                let mut framer = super::super::framing::ReplyFramer::default();
+                super::super::actor::confirm_driveable(&mut read, &mut write, &mut framer).await
+            } => if answered.is_ok() {
+                LaunchVerdict::CameUp
+            } else {
+                LaunchVerdict::Exited
+            },
             () = tokio::time::sleep(LAUNCH_VERDICT_WINDOW) => LaunchVerdict::TimedOut,
         };
         child.start_kill().ok();
@@ -1053,6 +1688,7 @@ fn main() {
             socks_port: super::super::actor::SocksPort::Auto,
             disable_network: true,
             exit_observer: None,
+            leak: None,
         };
         prepare_data_directory(&managed.data_dir)
             .await
@@ -1062,21 +1698,21 @@ fn main() {
             .expect("the blank file");
         let environment = LaunchEnvironment::resolve(&managed).expect("launch environment");
 
-        let port_file = dir.path().join("control_port_as_built");
-        let as_built = managed_tor_command(&managed, &port_file, &environment);
+        let pair = ControlPair::new().expect("control pair");
+        let as_built = managed_tor_command(&managed, pair.tor_end(), &environment);
         assert!(
-            launch_comes_up(as_built, &port_file).await,
+            launch_comes_up(pair, as_built).await,
             "the launch as built must start: its OPENSSL_CONF is the blank file"
         );
 
         let config = dir.path().join("loads-a-missing-provider.cnf");
         let module = dir.path().join("no-such-provider-module");
         std::fs::write(&config, provider_loading_config(&module)).expect("write the config");
-        let port_file = dir.path().join("control_port_with_provider");
-        let mut with_provider = managed_tor_command(&managed, &port_file, &environment);
+        let pair = ControlPair::new().expect("control pair");
+        let mut with_provider = managed_tor_command(&managed, pair.tor_end(), &environment);
         with_provider.env(OPENSSL_CONF_VARIABLE, &config);
         assert!(
-            !launch_comes_up(with_provider, &port_file).await,
+            !launch_comes_up(pair, with_provider).await,
             "a configuration naming a provider module must stop tor: OpenSSL reads OPENSSL_CONF"
         );
     }

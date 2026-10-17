@@ -154,6 +154,7 @@ mod view;
 /// dependency enabling the feature is a review finding.
 #[cfg(any(test, feature = "harness"))]
 pub mod harness;
+pub mod relay_floor;
 
 pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
 pub use anchors::{Anchor, ReleaseAnchors};
@@ -182,6 +183,7 @@ pub use fault::{
     Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, ReferenceMismatch, Retry,
     SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,
 };
+pub use relay_floor::{fee_operands_at, relay_floor_at, relay_floor_window};
 pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
     AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule,

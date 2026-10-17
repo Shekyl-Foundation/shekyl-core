@@ -14,7 +14,6 @@
 use core::{fmt::Debug, future::Future, num::NonZeroU64};
 use std_shims::{
     alloc::format,
-    io,
     string::{String, ToString},
     vec,
     vec::Vec,
@@ -25,21 +24,9 @@ use zeroize::Zeroize;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use shekyl_curve_io::*;
 use shekyl_rpc_types::core_rpc_version_string;
 use shekyl_types::ChainCount;
-// Number of blocks the fee estimate will be valid for
-// https://github.com/monero-project/monero/blob/94e67bf96bbc010241f29ada6abc89f49a81759c
-//   /src/wallet/wallet2.cpp#L121
-/// Grace-block horizon for the daemon's `get_fee_estimate` JSON-RPC:
-/// the daemon estimates a rate expected to stay above the relay floor
-/// for this many blocks. `pub` because this crate is the single owner
-/// of the value (inherited from wallet2's constant of the same intent);
-/// `shekyl-engine-core`'s snapshot path imports it rather than keeping
-/// a shadow copy that could drift.
-pub const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
 
-/// Phase 2a canonical dust threshold (§3.10.2).
 pub mod tx_fee;
 
 /// An error from the RPC.
@@ -200,104 +187,51 @@ fn identity_refusal(mismatch: &IdentityMismatch) -> String {
     }
 }
 
-/// A struct containing a fee rate.
+/// A fee rate: atomic units per weight unit.
 ///
-/// The fee rate is defined as a per-weight cost, along with a mask for rounding purposes.
+/// A fee from a rate is `weight × per_weight` rounded up to the fee lattice
+/// ([`shekyl_economics::FEE_QUANTIZATION_MASK`], the daemon's admission
+/// lattice); the arithmetic is [`tx_fee::fee_from_weight`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
 pub struct FeeRate {
     /// The fee per-weight of the transaction.
     per_weight: u64,
-    /// The mask to round with.
-    mask: u64,
 }
 
 impl FeeRate {
-    /// Construct a fee rate whose non-zero invariants the caller's own
-    /// types already carry.
+    /// Construct a fee rate whose non-zero invariant the caller's own type
+    /// already carries.
     ///
-    /// Total, so a caller holding the proof — a `Custom` rate that
-    /// arrived as [`NonZeroU64`], against the mask of an
-    /// already-validated snapshot — gets no unreachable error arm to
-    /// misclassify. [`Self::new`] is the fallible edge, for the bare
-    /// `u64` fields that come off the daemon wire.
+    /// Total, so a caller holding the proof — a `Custom` rate that arrived
+    /// as [`NonZeroU64`] — gets no unreachable error arm to misclassify.
+    /// [`Self::new`] is the fallible edge, for the bare `u64` that comes
+    /// off the daemon wire.
     #[must_use]
-    pub const fn from_nonzero(per_weight: NonZeroU64, mask: NonZeroU64) -> FeeRate {
+    pub const fn from_nonzero(per_weight: NonZeroU64) -> FeeRate {
         FeeRate {
             per_weight: per_weight.get(),
-            mask: mask.get(),
         }
     }
 
-    /// Construct a new fee rate, rejecting a zero rate or zero mask.
-    pub fn new(per_weight: u64, mask: u64) -> Result<FeeRate, RpcError> {
-        match (NonZeroU64::new(per_weight), NonZeroU64::new(mask)) {
-            (Some(per_weight), Some(mask)) => Ok(Self::from_nonzero(per_weight, mask)),
-            _ => Err(RpcError::InvalidFee),
+    /// Construct a new fee rate, rejecting a zero rate.
+    pub fn new(per_weight: u64) -> Result<FeeRate, RpcError> {
+        match NonZeroU64::new(per_weight) {
+            Some(per_weight) => Ok(Self::from_nonzero(per_weight)),
+            None => Err(RpcError::InvalidFee),
         }
     }
 
-    /// Atomic units charged per weight unit, before mask rounding.
+    /// Atomic units charged per weight unit, before lattice rounding.
     #[must_use]
     pub fn per_weight(&self) -> u64 {
         self.per_weight
     }
 
-    /// Quantization mask the fee is rounded up to.
+    /// The fee for `weight`: [`tx_fee::fee_from_weight`], which fails
+    /// closed at `u64::MAX` on overflow rather than panicking.
     #[must_use]
-    pub fn mask(&self) -> u64 {
-        self.mask
-    }
-
-    /// Write the FeeRate.
-    ///
-    /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
-    /// defined serialization.
-    pub fn write(&self, w: &mut impl io::Write) -> io::Result<()> {
-        w.write_all(&self.per_weight.to_le_bytes())?;
-        w.write_all(&self.mask.to_le_bytes())
-    }
-
-    /// Serialize the FeeRate to a `Vec<u8>`.
-    ///
-    /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
-    /// defined serialization.
-    pub fn serialize(&self) -> Vec<u8> {
-        let mut res = Vec::with_capacity(16);
-        self.write(&mut res)
-            .expect("write failed but <Vec as io::Write> doesn't fail");
-        res
-    }
-
-    /// Read a FeeRate.
-    ///
-    /// This is not a Monero protocol defined struct, and this is accordingly not a Monero protocol
-    /// defined serialization.
-    pub fn read(r: &mut impl io::Read) -> io::Result<FeeRate> {
-        let per_weight = read_u64(r)?;
-        let mask = read_u64(r)?;
-        FeeRate::new(per_weight, mask).map_err(io::Error::other)
-    }
-
-    /// Calculate the fee to use from the weight.
-    ///
-    /// This function may panic upon overflow.
     pub fn calculate_fee_from_weight(&self, weight: usize) -> u64 {
-        let fee = self.per_weight
-            * u64::try_from(weight).expect("couldn't convert weight (usize) to u64");
-        let fee = fee.div_ceil(self.mask) * self.mask;
-        debug_assert_eq!(
-            Some(weight),
-            self.calculate_weight_from_fee(fee),
-            "Miscalculated weight from fee"
-        );
-        fee
-    }
-
-    /// Calculate the weight from the fee.
-    ///
-    /// Returns `None` if the weight would not fit within a `usize`.
-    pub fn calculate_weight_from_fee(&self, fee: u64) -> Option<usize> {
-        usize::try_from(fee / self.per_weight).ok()
+        tx_fee::fee_from_weight(self, weight)
     }
 }
 
@@ -656,12 +590,10 @@ pub trait Rpc: Sync + Clone {
             // cannot skew", and a hand-rolled duplicate is how the skew got
             // in. Reading the shared type makes the next wire change a
             // compile error here.
-            let res: shekyl_rpc_types::GetFeeEstimateResponse = self
-                .json_rpc_call(
-                    "get_fee_estimate",
-                    Some(json!({ "grace_blocks": GRACE_BLOCKS_FOR_FEE_ESTIMATE })),
-                )
-                .await?;
+            // No parameters: the ladder is a function of chain state alone
+            // (FL-R20, FL-R26; wire 3.57).
+            let res: shekyl_rpc_types::GetFeeEstimateResponse =
+                self.json_rpc_call("get_fee_estimate", None).await?;
 
             if !res.status.is_ok() {
                 Err(RpcError::InvalidFee)?;
@@ -674,7 +606,7 @@ pub trait Rpc: Sync + Clone {
             // so "no tiers" is unrepresentable rather than merely
             // unreachable (rule 60). It also carried the only unchecked
             // multiply in this function, on a daemon-supplied number.
-            FeeRate::new(res.fees.get(fee_tier_for(priority)), res.quantization_mask)
+            FeeRate::new(res.fees.get(fee_tier_for(priority)))
         }
     }
 

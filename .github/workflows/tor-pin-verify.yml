@@ -131,12 +131,12 @@ jobs:
           grep -qE '(^|[[:space:]])binary::tests::bundled_tor_matches_recorded_pin \.\.\. ok$' ignored-control.out
           # And guard the FULL set — not just that one — against a silent
           # coverage drop. Floor = this crate's current linux ignored
-          # count (5: pin + 4 actor). `-ge` so a new live test does not
+          # count (8: pin + 6 actor + 1 launch). `-ge` so a new live test does not
           # fail the lane before this floor is raised with it. Lower the
           # floor only when a test is deliberately removed.
           passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored-control.out | head -1)
           echo "ran ${passed:-0} pinned-tor control tests"
-          [ "${passed:-0}" -ge 5 ]
+          [ "${passed:-0}" -ge 8 ]
 
       - name: live supervisor lifecycle (shekyl-tor-control-wallet)
         run: |

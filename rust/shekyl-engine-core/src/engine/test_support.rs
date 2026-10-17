@@ -396,10 +396,9 @@ impl State {
 /// ceiling tests build their own violating snapshots explicitly.
 fn default_fee_estimates() -> FeeEstimates {
     FeeEstimates {
-        economy: FeeRate::new(5, 1).expect("economy fee rate is non-zero"),
-        standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
-        priority: FeeRate::new(40, 1).expect("priority fee rate is non-zero"),
-        quantization_mask: 1,
+        economy: FeeRate::new(5).expect("economy fee rate is non-zero"),
+        standard: FeeRate::new(10).expect("standard fee rate is non-zero"),
+        priority: FeeRate::new(40).expect("priority fee rate is non-zero"),
     }
 }
 
@@ -1375,19 +1374,18 @@ mod tests {
         // FeeRate exposes no public per_weight accessor; verify
         // shape by round-tripping through equality against the
         // documented default constants.
-        assert_eq!(fees.economy, FeeRate::new(5, 1).unwrap());
-        assert_eq!(fees.standard, FeeRate::new(10, 1).unwrap());
-        assert_eq!(fees.priority, FeeRate::new(40, 1).unwrap());
+        assert_eq!(fees.economy, FeeRate::new(5).unwrap());
+        assert_eq!(fees.standard, FeeRate::new(10).unwrap());
+        assert_eq!(fees.priority, FeeRate::new(40).unwrap());
     }
 
     #[tokio::test]
     async fn fee_estimates_override_persists_across_calls() {
         let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let custom = FeeEstimates {
-            economy: FeeRate::new(7, 1).unwrap(),
-            standard: FeeRate::new(70, 1).unwrap(),
-            priority: FeeRate::new(700, 1).unwrap(),
-            quantization_mask: 1,
+            economy: FeeRate::new(7).unwrap(),
+            standard: FeeRate::new(70).unwrap(),
+            priority: FeeRate::new(700).unwrap(),
         };
         daemon.set_fee_estimates(custom);
         for _ in 0..3 {

@@ -20,8 +20,8 @@ use shekyl_types::archival::{
     RMarket, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PCanonicalId, SettlementEpoch,
-    ShardId, TxHash,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
+    SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -58,6 +58,17 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
     }
 
     fn total_burned(&self) -> Result<AtomicUnits, Faulted> {
+        Err(Faulted)
+    }
+
+    fn long_term_effective_median_at(
+        &self,
+        _: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn burned_through(&self, _: BlockHeight) -> Result<AtHeight<AtomicUnits>, Faulted> {
         Err(Faulted)
     }
 
@@ -172,6 +183,17 @@ impl<'id> ChainView<'id> for WithholdingView<'_, 'id> {
 
     fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
         self.inner.total_burned()
+    }
+
+    fn long_term_effective_median_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, Infallible> {
+        self.inner.long_term_effective_median_at(height)
+    }
+
+    fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, Infallible> {
+        self.inner.burned_through(height)
     }
 
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
@@ -318,6 +340,17 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
 
     fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
         self.inner.total_burned()
+    }
+
+    fn long_term_effective_median_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, Infallible> {
+        self.inner.long_term_effective_median_at(height)
+    }
+
+    fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, Infallible> {
+        self.inner.burned_through(height)
     }
 
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
