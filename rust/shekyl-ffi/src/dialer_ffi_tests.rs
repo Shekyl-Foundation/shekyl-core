@@ -24,14 +24,12 @@ use shekyl_levin::{
     response, BasicNodeData, CoreSyncData, HandshakeResponse, PortableMap, SupportFlags,
     COMMAND_HANDSHAKE,
 };
-use shekyl_seam::CloseKind;
+use shekyl_seam::{Channel, Dial, Loopback};
 use shekyl_timing_engine::Tick;
 
 use super::*;
 use crate::inbound_ceiling_ffi::{ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_UNLIMITED};
-use crate::seam_ffi::{
-    seam_bind_lock, shekyl_seam_bind, shekyl_seam_install_loopback, ShekylSeamObserved, ADDR_IPV4,
-};
+use crate::seam_ffi::{seam_bind_lock, shekyl_seam_bind, ShekylSeamObserved, ADDR_IPV4};
 
 /// A hub whose posts go nowhere: these tests never open a session.
 unsafe extern "C" fn no_post(
@@ -375,30 +373,53 @@ fn handshake_frame() -> Vec<u8> {
     response(COMMAND_HANDSHAKE, &body.store().expect("encode"))
 }
 
-/// The first socket id a dial made after this call can take. Socket ids are
-/// the process's (`process_sockets`; a new binding does not mint them
-/// again), so a test cannot assume its first dial is id 1: the sockets of
-/// tests that ran before it come first. A probe socket, opened and closed
-/// here, says where the counter stands.
-fn first_unused_socket_id(now: Tick) -> u64 {
-    let probe = crate::seam_ffi::process_sockets()
-        .open_clearnet(IpAddr::V4(Ipv4Addr::new(11, 17, 0, 1)), now)
-        .expect("a probe socket");
-    let id = probe.id().get();
-    let _closed = probe.close(CloseCause::new(CloseKind::LocalClose));
-    id.saturating_add(1)
+/// The harness loopback, answering each channel it opens with the
+/// handshake response the way the peer would. A test that guessed a dial's
+/// socket id to answer it could miss: ids are the process's, and a dial the
+/// loopback does not answer waits for good, since it has no gap.
+struct AnsweringLoopback {
+    inner: Loopback,
+    frame: Vec<u8>,
 }
 
-/// How far past `from` [`answer_from`] looks: sockets another test opens in
-/// the meantime take ids too.
-const ANSWER_WINDOW: u64 = 64;
+impl Dial for AnsweringLoopback {
+    fn connect(
+        &self,
+        endpoint: &shekyl_seam::Endpoint,
+        ceiling: shekyl_peer_policy::InboundCeiling,
+        now: Tick,
+    ) -> Result<Channel, CloseCause> {
+        let channel = self.inner.connect(endpoint, ceiling, now)?;
+        assert!(
+            self.inner.inject(channel.open.id(), self.frame.clone()),
+            "a channel the loopback just opened takes its answer"
+        );
+        Ok(channel)
+    }
 
-/// Inject `frame` into the first channel this hub holds open in
-/// `from..from + ANSWER_WINDOW`, the way the peer's reader would. The id
-/// answered, or `None` when no channel there is open yet.
-fn answer_from(hub: &Hub, from: u64, frame: &[u8]) -> Option<u64> {
-    (from..from.saturating_add(ANSWER_WINDOW))
-        .find(|&n| SocketId::from_ffi(n).is_some_and(|id| hub.inject(id, frame.to_vec())))
+    fn inject(&self, id: SocketId, frame: Vec<u8>) -> bool {
+        self.inner.inject(id, frame)
+    }
+
+    fn reader_stopped(&self, id: SocketId) {
+        self.inner.reader_stopped(id);
+    }
+
+    fn retired(&self, id: SocketId) {
+        self.inner.retired(id);
+    }
+
+    fn drive(&self, hub: &Hub, id: SocketId, session: shekyl_capped_stream::Session) {
+        self.inner.drive(hub, id, session);
+    }
+}
+
+/// Install [`AnsweringLoopback`] on the bound hub.
+fn install_answering_loopback(hub: &Hub) {
+    hub.install_dial(Arc::new(AnsweringLoopback {
+        inner: Loopback::new(crate::seam_ffi::process_sockets(), 64 * 1024),
+        frame: handshake_frame(),
+    }));
 }
 
 /// Unbind on the way out, including a panic. A timed-out deadlock exits
@@ -429,8 +450,8 @@ fn a_kept_session_closed_from_cxx_returns_and_leaves_the_kept_count() {
     unbind();
     let _unbind = UnbindOnDrop;
     bind();
-    assert_eq!(shekyl_seam_install_loopback(), 0);
     let dialer = dialer().expect("built at the bind");
+    install_answering_loopback(dialer.hub());
     ready(&dialer);
     let named = v4(2);
     assert_eq!(
@@ -439,18 +460,6 @@ fn a_kept_session_closed_from_cxx_returns_and_leaves_the_kept_count() {
         "the address entered gray"
     );
 
-    // The peer answers the handshake as soon as the channel is open.
-    let hub = dialer.hub().clone();
-    let from = first_unused_socket_id(hub.now());
-    let frame = handshake_frame();
-    let answer = thread::spawn(move || {
-        for _ in 0..5_000 {
-            if answer_from(&hub, from, &frame).is_some() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-    });
     let id = dialer
         .dial(
             ConnectorId::Clearnet,
@@ -459,7 +468,6 @@ fn a_kept_session_closed_from_cxx_returns_and_leaves_the_kept_count() {
             &mut SecureRelayRng,
         )
         .expect("a kept dial");
-    answer.join().expect("answered");
     assert_eq!(dialer.kept_sessions(ConnectorId::Clearnet), 1);
 
     let (closed_tx, closed) = mpsc::channel();
@@ -491,8 +499,8 @@ fn the_list_paths_and_closes_do_not_deadlock() {
     unbind();
     let _unbind = UnbindOnDrop;
     bind();
-    assert_eq!(shekyl_seam_install_loopback(), 0);
     let dialer = dialer().expect("built at the bind");
+    install_answering_loopback(dialer.hub());
     ready(&dialer);
 
     let peer = address(1);
@@ -509,9 +517,7 @@ fn the_list_paths_and_closes_do_not_deadlock() {
     );
 
     let stop = Arc::new(AtomicBool::new(false));
-    let dial_done = Arc::new(AtomicBool::new(false));
     let (done_tx, done_rx) = mpsc::channel();
-    let frame = handshake_frame();
     let hub = dialer.hub().clone();
 
     let wake = {
@@ -529,7 +535,6 @@ fn the_list_paths_and_closes_do_not_deadlock() {
     let dial = {
         let dialer = Arc::clone(&dialer);
         let stop = Arc::clone(&stop);
-        let dial_done = Arc::clone(&dial_done);
         let done = done_tx.clone();
         let peer = peer.clone();
         thread::spawn(move || {
@@ -542,25 +547,6 @@ fn the_list_paths_and_closes_do_not_deadlock() {
                     DialAim::Confirm,
                     &mut SecureRelayRng,
                 );
-            }
-            dial_done.store(true, Ordering::Release);
-            let _sent = done.send(());
-        })
-    };
-    let inject = {
-        let hub = hub.clone();
-        let dial_done = Arc::clone(&dial_done);
-        let done = done_tx.clone();
-        // Ids are the process's: start where the counter stands, not at 1.
-        // A dial whose handshake is never answered blocks for good, since
-        // the loopback has no gap.
-        let mut next = first_unused_socket_id(hub.now());
-        thread::spawn(move || {
-            while !dial_done.load(Ordering::Acquire) {
-                match answer_from(&hub, next, &frame) {
-                    Some(answered) => next = answered.saturating_add(1),
-                    None => thread::sleep(Duration::from_millis(1)),
-                }
             }
             let _sent = done.send(());
         })
@@ -618,7 +604,7 @@ fn the_list_paths_and_closes_do_not_deadlock() {
 
     thread::sleep(Duration::from_secs(10));
     stop.store(true, Ordering::Release);
-    for _ in 0..5 {
+    for _ in 0..4 {
         if done_rx.recv_timeout(Duration::from_secs(5)).is_err() {
             eprintln!("the list paths and closes did not finish within 5s of stop");
             std::process::exit(1);
@@ -626,7 +612,6 @@ fn the_list_paths_and_closes_do_not_deadlock() {
     }
     wake.join().expect("wake");
     dial.join().expect("dial");
-    inject.join().expect("inject");
     list.join().expect("list");
     close.join().expect("close");
 }
