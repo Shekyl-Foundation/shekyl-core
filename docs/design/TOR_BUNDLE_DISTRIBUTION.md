@@ -104,8 +104,13 @@ the Foundation's hosts showed what that costs once Tor is not optional.
     whenever `OPENSSL_CONF` is unset. A configuration can name a provider or
     engine module by absolute path, and OpenSSL loads it into tor. Given a
     configuration that names a missing provider module, with diagnostics on,
-    the pinned tor aborts at start on Linux x86 and on Windows (both builds,
-    `0xC0000409`), while a merely malformed file is ignored. On Windows `C:\`
+    tor aborts at start (`subsysmgr.c:147`) on every target run, while a
+    merely malformed file is ignored: Linux x86 (15.0.24), Linux aarch64 on
+    the floor device (16.0a13), macOS aarch64 (15.0.24 and 15.0.25) and
+    Windows (both builds, `0xC0000409`). macOS x86_64 was not run. The macOS
+    arms ran on an ad-hoc-signed copy of the pinned files: as shipped, the
+    aarch64 `tor` and its `libevent` carry no code signature, and Apple
+    Silicon kills them at exec (TB-11's launch test). On Windows `C:\`
     lets any authenticated user create a directory, and a new `C:\var`
     inherits Modify for all of them, so any local user can write
     `C:\var\tmp\dist\openssl\ssl\openssl.cnf`; with `OPENSSL_CONF` unset, a
