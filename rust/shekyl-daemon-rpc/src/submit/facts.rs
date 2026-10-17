@@ -93,8 +93,6 @@ pub struct SubmitFacts {
     pub reference: Option<ReferenceFacts>,
     /// Dynamic per-byte fee floor parameter (moves every block — F34).
     pub fee_per_byte: u64,
-    /// Fee quantization mask (`get_fee_quantization_mask`, always ≥ 1).
-    pub fee_quantization_mask: u64,
     /// Transaction weight limit (compile-time constant on Shekyl:
     /// `min_block_weight / 2 − COINBASE_BLOB_RESERVED_SIZE` = 149 400; §3.1).
     pub weight_limit: u64,

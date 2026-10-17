@@ -98,7 +98,8 @@ impl std::error::Error for BlockingStartError {}
 ///
 /// A handle dropped **without** [`Self::shutdown`] still tears the
 /// incarnation down: dropping the runtime aborts the actor's tasks, and the
-/// child reap is backstopped by `kill_on_drop`/`TAKEOWNERSHIP`. That is the
+/// child reap is backstopped by `kill_on_drop` and by the owning control
+/// connection, whose close exits tor. That is the
 /// unclean path — no `DEL_ONION`, no bounded reap, no exit telemetry — but it
 /// means no exit route leaks a running tor, and the DataDirectory wipe still
 /// runs on `DaemonTorControl` drop.

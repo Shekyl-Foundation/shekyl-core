@@ -95,19 +95,20 @@ use shekyl_types::archival::{
     BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
 };
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PCanonicalId, SettlementEpoch,
-    ShardId, TxHash,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
+    SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    ArchivalLastSlashEpochCell, BlockInfo, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry,
+    ArchivalLastSlashEpochCell, BlockInfo, BondRecord, CodecError, RMarket, SigmaWorkMilli,
+    SlashLogEntry,
 };
 
 use super::archival_reads;
 use super::chain_reads::{self, ReadFault};
 use super::curve_reads;
-use super::error::StoreError;
+use super::error::{CellFault, StoreError, StoreInvariant};
 use super::leaf_reads;
 use super::tx_reads;
 use super::write::WriteBatch;
@@ -288,6 +289,52 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     /// [`WriteBatch::refuse_corrupt`]: super::write::WriteBatch::refuse_corrupt
     fn total_burned(&self) -> Result<AtomicUnits, StoreError> {
         self.batch.total_burned()
+    }
+
+    /// `block_info[height].long_term_effective_median` — the row connect
+    /// wrote for the block (FL-R3-STORE), through the same classified read
+    /// as every other height-keyed projection here.
+    fn long_term_effective_median_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, StoreError> {
+        let tip = self.tip_row()?;
+        Ok(
+            match chain_reads::info_at(self.batch.txn(), tip.as_ref(), height.to_raw())
+                .map_err(|f| self.arm(f))?
+            {
+                AtHeight::Recorded(info) => AtHeight::Recorded(info.long_term_effective_median),
+                AtHeight::AboveTip => AtHeight::AboveTip,
+            },
+        )
+    }
+
+    /// The `total_burned` fold less the `block_burn` rows in
+    /// `(height, tip]` ([`chain_reads::burned_in`]): the fold as it stood
+    /// after the block at `height` connected. A fold below the rows above
+    /// it is a register that does not hold the sum of its rows — SI-7 on
+    /// the `total_burned` cell, its reason spelled — and arms the batch's
+    /// poison.
+    fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, StoreError> {
+        let Some((tip, _)) = self.tip_row()? else {
+            return Ok(AtHeight::AboveTip);
+        };
+        if height.to_raw() > tip {
+            return Ok(AtHeight::AboveTip);
+        }
+        let fold = self.batch.total_burned()?;
+        let above = chain_reads::burned_in(self.batch.txn(), height.to_raw(), tip)
+            .map_err(|f| self.arm(f))?;
+        match fold.checked_sub(above) {
+            Some(through) => Ok(AtHeight::Recorded(through)),
+            None => Err(self.arm(ReadFault::Invariant(StoreInvariant::CellCorrupt {
+                key: "total_burned",
+                fault: CellFault::Undecodable(CodecError::Invalid {
+                    codec: "total_burned",
+                    reason: "the burned fold is below the block_burn rows it sums",
+                }),
+            }))),
+        }
     }
 
     // The archival reads (DRS-E4 commit 2): the same bodies

@@ -44,7 +44,11 @@ use crate::nullable::Nullable;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.54: `get_info` stops repeating the daemon's
+/// `CORE_RPC_VERSION_MINOR`. 3.57: `get_fee_estimate` takes no
+/// parameters and answers `status` and `fees` alone. `grace_blocks` moved
+/// no rung (FL-R26) and `quantization_mask` is a Rust constant the wallet
+/// shares (`shekyl_economics::FEE_QUANTIZATION_MASK`). `get_version` gains
+/// nothing. 3.54: `get_info` stops repeating the daemon's
 /// network (RK-Q6). `nettype` and the booleans `mainnet`, `testnet` and
 /// `stagenet` are gone from it; `get_version.nettype` is the one place a
 /// daemon names its network. `get_version` gains nothing.
@@ -182,13 +186,13 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// reports that state: `get_info`'s Peers part is `"p2p": "offline"` with
 /// no count (and `"p2p": "running"` with its counts), and `get_peer_list`,
 /// `get_connections` and `sync_info` answer `offline` alone.
-/// 3.57: `option_set` and `option_show` (RT-O23…RT-O27); the JSON-RPC
+/// 3.58: `option_set` and `option_show` (RT-O23…RT-O27); the JSON-RPC
 /// error object gains `data`, and `-26` is a configuration refusal.
 /// `/set_limit`, `/get_limit`, `/set_log_level` and `/set_log_categories`
 /// are gone (`DAEMON_CONFIG_CUTOVER.md` §2.7), and `/start_mining` no longer
 /// takes `do_background_mining` or `ignore_battery` (§4.2: background
 /// mining's options and runtime arguments).
-pub const CORE_RPC_VERSION_MINOR: u32 = 57;
+pub const CORE_RPC_VERSION_MINOR: u32 = 58;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -597,13 +601,16 @@ mod tests {
         // 3.53 writes `get_info`'s amounts as decimal strings.
         // 3.54 retires the network's four names from `get_info`. 3.55 drops
         // `last_seen` from `get_peer_list`: the Rust lists carry no clock.
-        // 3.56 reports offline as a state, never a zero. 3.57 adds
-        // `option_set` / `option_show` and the error object's `data`, and
-        // retires the four runtime endpoints (DAEMON_CONFIG_CUTOVER §2.7).
-        assert_eq!(CORE_RPC_VERSION, 196_665);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 57);
+        // 3.56 reports offline as a state, never a zero. 3.57 takes
+        // `grace_blocks` and `quantization_mask` off `get_fee_estimate`.
+        // 3.58 adds `option_set` / `option_show` and the error object's
+        // `data`, and retires the four runtime endpoints
+        // (DAEMON_CONFIG_CUTOVER §2.7). Both branches had written 57, so the
+        // later merge took the next minor, as 3.44 did.
+        assert_eq!(CORE_RPC_VERSION, 196_666);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 58);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 57);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 58);
     }
 
     #[test]

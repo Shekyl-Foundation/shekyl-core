@@ -102,29 +102,17 @@ int chain_tip(cryptonote::Blockchain& bc, uint8_t synchronized,
 // Body of `shekyl_rpc_fee_estimate`.
 //
 // One estimator: the 2021-scaling one.
-int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
-  shekyl_rpc_fee_estimate_facts* out) noexcept
+int fee_estimate(cryptonote::Blockchain& bc, shekyl_rpc_fee_estimate_facts* out) noexcept
 {
   if (!out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
   try
   {
     std::memset(out, 0, sizeof(*out));
-    // The estimator asserts this and throws; refusing here makes the bound a
-    // reported refusal rather than an exception the caller reads as internal.
-    // The caller is expected to refuse first — `shekyl_rpc_fee_grace_blocks_max`
-    // exists so it can — and this is the backstop for a caller that did not.
-    if (grace_blocks > CRYPTONOTE_REWARD_BLOCKS_WINDOW)
-    {
-      MERROR("fee estimate facts: grace_blocks " << grace_blocks
-        << " exceeds the reward window " << CRYPTONOTE_REWARD_BLOCKS_WINDOW);
-      return SHEKYL_RPC_FACTS_ERR_INCONSISTENT;
-    }
     std::vector<uint64_t> fees;
     {
       const std::lock_guard<cryptonote::Blockchain> guard(bc);
-      bc.get_dynamic_base_fee_estimate_2021_scaling(grace_blocks, fees);
-      out->quantization_mask = cryptonote::Blockchain::get_fee_quantization_mask();
+      bc.get_dynamic_base_fee_estimate_2021_scaling(fees);
     }
     // Arity lives on the POD array, not a second magic number. The
     // estimator writes `FeeLadder::as_slots`; a length that does not fill
@@ -1675,18 +1663,11 @@ int shekyl_rpc_block_hash_at(core_rpc_handle* h, uint64_t height,
     h->rpc->get_core().get_blockchain_storage(), height, out);
 }
 
-int shekyl_rpc_fee_estimate(core_rpc_handle* h, uint64_t grace_blocks,
-  shekyl_rpc_fee_estimate_facts* out)
+int shekyl_rpc_fee_estimate(core_rpc_handle* h, shekyl_rpc_fee_estimate_facts* out)
 {
   if (!h || !h->rpc || !out)
     return SHEKYL_RPC_FACTS_ERR_NULL;
-  return daemon_rpc_facts::fee_estimate(
-    h->rpc->get_core().get_blockchain_storage(), grace_blocks, out);
-}
-
-uint64_t shekyl_rpc_fee_grace_blocks_max(void)
-{
-  return CRYPTONOTE_REWARD_BLOCKS_WINDOW;
+  return daemon_rpc_facts::fee_estimate(h->rpc->get_core().get_blockchain_storage(), out);
 }
 
 int shekyl_rpc_block_header_at(core_rpc_handle* h, const uint8_t* block_hash,
@@ -1811,13 +1792,12 @@ void shekyl_rpc_fee_estimate_facts_test_fill(shekyl_rpc_fee_estimate_facts* out,
   if (!out)
     return;
   std::memset(out, 0, sizeof(*out));
-  // Field indices 4 and 5 below are not fee-slot indexes: they seed a
-  // distinct value per POD field. The Rust twin (`ffi_exports.rs`) keeps
-  // the same indices, so both halves still fill identically.
+  // Field index 5 below is not a fee-slot index: it seeds a distinct value
+  // for the count. The Rust twin (`ffi_exports.rs`) keeps the same index,
+  // so both halves still fill identically.
   constexpr size_t kSlots = sizeof(out->fees) / sizeof(out->fees[0]);
   for (size_t i = 0; i < kSlots; ++i)
     out->fees[i] = field_value(seed, i);
-  out->quantization_mask = field_value(seed, 4);
   out->fee_count = static_cast<uint8_t>(field_value(seed, 5));
 }
 

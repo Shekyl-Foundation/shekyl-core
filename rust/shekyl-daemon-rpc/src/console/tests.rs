@@ -1429,7 +1429,6 @@ fn fee_reply(fees: [u64; 3]) -> String {
         "result": shekyl_rpc_types::GetFeeEstimateResponse {
             status: RpcStatus::ok(),
             fees: shekyl_rpc_types::FeeTiers(fees),
-            quantization_mask: 10_000,
         },
     }))
 }

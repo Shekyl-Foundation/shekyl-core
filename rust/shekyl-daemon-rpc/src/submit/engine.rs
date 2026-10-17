@@ -423,12 +423,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // consensus and the floor is never 0, so the non-spending arm
         // terminates here today — the SP-T4a contradiction, recorded in
         // FOLLOWUPS, reproduced for parity rather than resolved.
-        if !fee_meets_floor(
-            parsed.weight,
-            parsed.fee,
-            facts.fee_per_byte,
-            facts.fee_quantization_mask,
-        ) {
+        if !fee_meets_floor(parsed.weight, parsed.fee, facts.fee_per_byte) {
             return Ok(Err(RejectCause::FeeTooLow));
         }
 
@@ -594,12 +589,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         }
         // 5. Dynamic fee floor moved (F34): re-run the same arithmetic
         //    over the fresh params.
-        if !fee_meets_floor(
-            parsed.weight,
-            parsed.fee,
-            fresh.fee_per_byte,
-            fresh.fee_quantization_mask,
-        ) {
+        if !fee_meets_floor(parsed.weight, parsed.fee, fresh.fee_per_byte) {
             return Ok(SubmitVerdict::Rejected {
                 cause: RejectCause::FeeTooLow,
             });

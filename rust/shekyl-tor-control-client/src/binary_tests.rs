@@ -358,6 +358,10 @@ fn verify_refuses_a_directory_the_loader_would_read_as_a_list() {
     }
 }
 
+/// The fixtures are Unix paths. On Windows `/opt/…` has no drive or UNC prefix,
+/// so it is not absolute and the rule rightly refuses it; the loader path is a
+/// Linux variable in any case.
+#[cfg(unix)]
 #[test]
 fn loader_path_rule_accepts_ordinary_directories_only() {
     for ok in [

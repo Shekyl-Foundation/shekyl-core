@@ -498,10 +498,10 @@ un-revised number wearing a different face.
 **`VC-R17` splits the seam instead of managing the churn.** The identity facts
 go in their own POD: `ChainTipFactsFfi` does not move, so its layout twins,
 its `_test_fill` / `_rust_fill` seeded indices and its offset pins do not move
-either. The precedent is already in the header — `shekyl_rpc_fee_grace_blocks_max`,
-and `shekyl_rpc_peerlist_limits` (`ffi.rs:741`, `:776`) are narrow exports for
-facts with no business in a bigger POD (`shekyl_rpc_span_pruning_seed` was a
-third until the stripe engine's deletion, 2026-09-21).
+either. The precedent is already in the header — `shekyl_rpc_peerlist_limits`
+(`ffi.rs:741`, `:776`) is a narrow export for facts with no business in a
+bigger POD (`shekyl_rpc_span_pruning_seed` was another until the stripe
+engine's deletion, 2026-09-21).
 `nettype` and the genesis hash are process-lifetime constants — fixed at
 daemon start and per network — while the tip POD's contract is "what the chain
 tip looks like right now"; five of its six callers want a tip and one wants

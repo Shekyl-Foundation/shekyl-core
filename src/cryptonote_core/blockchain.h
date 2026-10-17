@@ -574,18 +574,6 @@ namespace cryptonote
      */
     bool check_tx_inputs(transaction& tx, uint64_t& pmax_used_block_height, crypto::hash& max_used_block_id, tx_verification_context &tvc, bool kept_by_block = false) const;
 
-    /**
-     * @brief get fee quantization mask
-     *
-     * The dynamic fee may be quantized, to mask out the last decimal places
-     *
-     * @return the fee quantized mask
-     */
-    static uint64_t get_fee_quantization_mask()
-    {
-      return tools::PowerOf<10, CRYPTONOTE_DISPLAY_DECIMAL_POINT - PER_KB_FEE_QUANTIZATION_DECIMALS>::Value;
-    }
-
     /// Raw C at `db_height` from the memoized tip window.
     uint64_t fee_correction_at(uint64_t db_height, uint64_t already_generated_coins) const;
 
@@ -611,9 +599,9 @@ namespace cryptonote
     /// fee median; `c` is raw C in SCALE units. `base_reward` is M_r-neutral.
     void get_dynamic_base_fee_estimate_2021_scaling(uint64_t base_reward, uint64_t median, uint64_t c, std::vector<uint64_t> &fees) const;
 
-    /// Three-tier estimate from chain state. `grace_blocks` is accepted and
-    /// ignored (FL-R26 deletes it from the RPC).
-    void get_dynamic_base_fee_estimate_2021_scaling(uint64_t grace_blocks, std::vector<uint64_t> &fees) const;
+    /// Three-tier estimate from chain state at the tip: a function of chain
+    /// state alone (FL-R20), with no lookahead parameter (FL-R26).
+    void get_dynamic_base_fee_estimate_2021_scaling(std::vector<uint64_t> &fees) const;
 
     /**
      * @brief validate a transaction's fee

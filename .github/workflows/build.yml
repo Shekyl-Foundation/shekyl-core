@@ -570,6 +570,28 @@ jobs:
             exit 1
           }
 
+      # TSR-Q7 on Windows: the launch module's tests compiled for Windows,
+      # among them the loopback control pair (`ControlPair::new`, which
+      # accepts only its own connect) and the spawn that marks tor's end
+      # inheritable under the spawn lock (the environment test above spawns
+      # through it). Floor = the module's Windows test count (6), so a test
+      # that is cfg'd away or renamed fails here instead of passing as
+      # nothing run.
+      - name: "TSR-Q7: the launch module's tests (Windows)"
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          cargo test --locked -p shekyl-tor-control-client --lib -- control::launch::tests:: *> tsr-q7-launch.out
+          $rc = $LASTEXITCODE
+          Get-Content tsr-q7-launch.out
+          if ($rc -ne 0) { exit $rc }
+          $passed = Select-String -Path tsr-q7-launch.out -Pattern 'test result: ok\. (\d+) passed' | ForEach-Object { [int]$_.Matches[0].Groups[1].Value } | Select-Object -First 1
+          if (-not $passed -or $passed -lt 6) {
+            Write-Error "the launch module ran $passed tests on Windows; the floor is 6"
+            exit 1
+          }
+
       # The pre-registered probes (docs/design/WINDOWS_WALLET_PROBE_SHEET.md).
       # BLOCKING, and that is the point of writing them down first: each probe
       # carries a prediction made before any Windows machine ran it, and the

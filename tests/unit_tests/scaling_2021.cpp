@@ -55,15 +55,11 @@ public:
 
 // A chain whose LONG-TERM median clears the penalty-free zone.
 //
-// It exists because the plain `TestDB` cannot observe FL-R20's un-gracing of
-// `Mlw`. That fixture reports one block, so the long-term median is `max(128,
-// Zm)` = Zm — pinned at the floor, where inserting `grace_blocks` zeroes moves
-// nothing. A test written over it passes identically before and after the
-// change, which is worse than no test: it reads as coverage.
-//
-// With every long-term weight at 2 * Zm the median sits above the floor, zeroes
-// inserted by the old graced shape pull it DOWN, and the served ladder moves —
-// so `grace_blocks_do_not_move_the_served_ladder` below can actually fail.
+// The plain `TestDB` reports one block, so its long-term median is `max(128,
+// Zm)` = Zm — pinned at the floor, where the estimate and the relay floor
+// agree for a reason unrelated to their arithmetic. With every long-term
+// weight at 2 * Zm the median sits above the floor, so the FL-R6 identity
+// below is tested where the median is an operand that can move.
 class HighLongTermMedianTestDB: public cryptonote::BaseTestDB
 {
 public:
@@ -217,7 +213,7 @@ TEST(fee_2021_scaling, wallet_fee_estimate)
   // FL round §5.2 shape (FL-R17 signed): three tiers, Fh main arm
   // UNCONDITIONAL. C = SCALE is the neutral correction.
   //
-  // Values moved with FL-R20/FL-R21: round_money_up_2 is off the served path,
+  // Values moved with FL-R20/FL-R21: no rounding step on the served path,
   // so each rung is the arithmetic's own answer rather than that answer
   // rounded up to two significant digits, and standard is 4x economy exactly.
 
@@ -264,12 +260,12 @@ TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
   // ever part company instead of silently tolerating it.
   //
   // Falsifier, restated for the new shape: anything that gives the estimate
-  // and the relay floor different operands — re-introducing the grace
-  // lookahead on Mlw, a second C derivation, a rounding step on one side —
-  // breaks this, which is the intent.
+  // and the relay floor different operands — a lookahead on Mlw, a second C
+  // derivation, a rounding step on one side — breaks this, which is the
+  // intent.
   PREFIX_WINDOW(CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE);
   std::vector<uint64_t> fees;
-  bc->get_dynamic_base_fee_estimate_2021_scaling(10, fees);
+  bc->get_dynamic_base_fee_estimate_2021_scaling(fees);
   ASSERT_EQ(fees.size(), 3);
   ASSERT_LE(fees[0], fees[1]);
   ASSERT_LE(fees[1], fees[2]);
@@ -279,55 +275,28 @@ TEST(fee_2021_scaling, state_computed_estimate_holds_the_acceptance_identity)
   ASSERT_EQ(fees[1], 4 * fees[0]);
 }
 
-// FL-R20's un-gracing of `Mlw`, tested where it can actually fail.
+// FL-R6's identity on a fixture whose median is above the floor: the served
+// economy rung IS the relay floor there too, not only on the empty chain
+// (where both are floored at Zm for a reason unrelated to the arithmetic).
 //
-// The inherited estimate copied the long-term rolling median and inserted
-// `grace_blocks` zeroes, pulling M down and the quoted fee UP — a deliberate
-// over-quote so a wallet's quote survived the next few blocks. FL-R23 does that
-// job exactly rather than probabilistically, so the lookahead is deleted and the
-// served ladder must not depend on `grace_blocks` at all.
-//
-// WHY THE WINDOW IS SHRUNK, which is a finding and not a convenience. At the
-// production window the lookahead was ALREADY almost inert: `grace_blocks` is
-// capped at CRYPTONOTE_REWARD_BLOCKS_WINDOW = 100 and the long-term window is
-// CRYPTONOTE_LONG_TERM_BLOCK_WEIGHT_WINDOW_SIZE = 100 000, so the zeroes move the
-// median by at most 100 ranks in 100 000 — and on any locally flat stretch of the
-// weight distribution, by nothing whatever. Two bites confirmed it: restoring the
-// graced shape verbatim left both a floor-pinned fixture and a 5 000-block
-// high-median fixture bit-for-bit unchanged. So a test of this property written
-// at production constants CANNOT FAIL, and would have been a green that
-// establishes nothing.
-//
-// Setting the long-term window to the grace cap makes the zeroes saturate it, so
-// the graced and un-graced medians genuinely differ and the assertion below has
-// teeth. What it pins is the MECHANISM — the served ladder is a function of chain
-// state and not of a caller-supplied lookahead — which is the property FL-R20
-// actually rules on; the production-scale magnitude of the thing being deleted is
-// the paragraph above, not this test's subject.
-//
-// SUBJECT ASSERTION FIRST (rule 47), because the floor makes this easy to get
-// wrong: where the long-term median sits at the penalty-free zone, inserting
-// zeroes changes nothing no matter how many, since `Mlw` is floored there. The
-// fixture is checked for a median above the floor before anything is asserted.
-TEST(fee_2021_scaling, grace_blocks_do_not_move_the_served_ladder)
+// SUBJECT ASSERTION FIRST (rule 47): the fixture is checked for a median
+// above the floor before anything is asserted, because at the floor the
+// identity holds for the wrong reason.
+TEST(fee_2021_scaling, the_served_economy_rung_is_the_relay_floor_above_the_zone)
 {
   PREFIX_WINDOW_DB(CRYPTONOTE_REWARD_BLOCKS_WINDOW, HighLongTermMedianTestDB);
 
   uint64_t long_term_effective_median = 0;
   ASSERT_TRUE(bc->update_next_cumulative_weight_limit(&long_term_effective_median));
   ASSERT_GT(long_term_effective_median, CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5)
-      << "fixture median is at the floor, where grace is inert for reasons "
-         "unrelated to this change — the assertions below would prove nothing";
+      << "fixture median is at the floor, where the identity holds for reasons "
+         "unrelated to this test — the assertion below would prove nothing";
 
-  std::vector<uint64_t> no_grace, max_grace;
-  bc->get_dynamic_base_fee_estimate_2021_scaling(0, no_grace);
-  bc->get_dynamic_base_fee_estimate_2021_scaling(CRYPTONOTE_REWARD_BLOCKS_WINDOW, max_grace);
-  ASSERT_EQ(no_grace.size(), 3);
-  ASSERT_EQ(no_grace, max_grace)
-      << "grace_blocks still moves the served ladder; FL-R20 deletes the lookahead";
-
-  // And FL-R6's identity holds on this fixture too, not only on the empty one.
-  ASSERT_EQ(no_grace[0], bc->get_current_fee_per_byte());
+  std::vector<uint64_t> fees;
+  bc->get_dynamic_base_fee_estimate_2021_scaling(fees);
+  ASSERT_EQ(fees.size(), 3);
+  ASSERT_EQ(fees[0], bc->get_current_fee_per_byte());
+  ASSERT_EQ(fees[1], 4 * fees[0]);
 }
 
 // The FL-R23 ring's two paths agree — the gate that turns "a warm node and a

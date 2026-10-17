@@ -283,7 +283,8 @@ impl SpawnedDaemon {
         let port = rpc_port.to_string();
         // Both connectors off is the offline posture: no listener, no
         // dial, so no p2p port to pick (INPUT_GRAMMAR.md §5).
-        let child = Command::new(bin)
+        let mut child = Command::new(bin);
+        child
             .args([
                 "--network",
                 "testnet",
@@ -301,8 +302,8 @@ impl SpawnedDaemon {
                 "info",
             ])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+            .stderr(std::process::Stdio::null());
+        let child = child.spawn();
         match child {
             Ok(child) => Self { child, data_dir },
             Err(error) => {
