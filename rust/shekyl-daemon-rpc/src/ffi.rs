@@ -86,7 +86,6 @@ pub struct SubmitFactsFfi {
     pub ref_height: u64,
     pub root: [u8; 32],
     pub fee_per_byte: u64,
-    pub fee_quantization_mask: u64,
     pub weight_limit: u64,
     pub chain_height: u64,
     /// Main-chain height of the block containing the submitted txid — the
@@ -121,7 +120,6 @@ impl SubmitFactsFfi {
             ref_height: 0,
             root: [0; 32],
             fee_per_byte: 0,
-            fee_quantization_mask: 0,
             weight_limit: 0,
             chain_height: 0,
             in_chain_height: 0,
@@ -131,7 +129,7 @@ impl SubmitFactsFfi {
 
 // §4.5 layout pins — the Rust twins of daemon_submit_ffi.cpp's
 // static_asserts. A drift on either side fails that side's build.
-const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 104);
+const _: () = assert!(std::mem::size_of::<SubmitFactsFfi>() == 96);
 const _: () = assert!(std::mem::align_of::<SubmitFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_pool) == 0);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain) == 1);
@@ -142,15 +140,14 @@ const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_probed) =
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_exists) == 6);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, emission_probed) == 7);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, emission_claim_conflict) == 8);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_bonded_total) == 96);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, bond_record_bonded_total) == 88);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, reserved) == 9);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, ref_height) == 16);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, root) == 24);
 const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_per_byte) == 56);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, fee_quantization_mask) == 64);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, weight_limit) == 72);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, chain_height) == 80);
-const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain_height) == 88);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, weight_limit) == 64);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, chain_height) == 72);
+const _: () = assert!(std::mem::offset_of!(SubmitFactsFfi, in_chain_height) == 80);
 
 // ── §8.7.2 emission fact marshal (rows E6/E7) ──────────────────────────────
 // Mirrors of `daemon_submit_ffi.h`'s emission PODs; the row shapes are the
@@ -538,21 +535,21 @@ impl BlockHeaderFactsFfi {
 /// `fees` is one slot per priced tier: `[economy, standard, priority]`.
 /// `fee_count` reports how many the estimator actually wrote, so a change
 /// to that contract is a refusal rather than a shorter answer read as a
-/// base fee.
+/// base fee. The lattice the wallet rounds a fee to is
+/// `shekyl_economics::FEE_QUANTIZATION_MASK`, a constant; it does not
+/// cross here.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeeEstimateFactsFfi {
     pub fees: [u64; 3],
-    pub quantization_mask: u64,
     pub fee_count: u8,
     pub reserved: [u8; 7],
 }
 
-const _: () = assert!(std::mem::size_of::<FeeEstimateFactsFfi>() == 40);
+const _: () = assert!(std::mem::size_of::<FeeEstimateFactsFfi>() == 32);
 const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fees) == 0);
-const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, quantization_mask) == 24);
-const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fee_count) == 32);
-const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, reserved) == 33);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, fee_count) == 24);
+const _: () = assert!(std::mem::offset_of!(FeeEstimateFactsFfi, reserved) == 25);
 
 /// Twin of `shekyl_rpc_net_stats_facts` (RK-5a). Layout pinned both
 /// directions by `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` via
@@ -781,14 +778,8 @@ const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, white) == 22);
 const _: () = assert!(std::mem::offset_of!(PeerFactsFfi, blocked) == 23);
 
 extern "C" {
-    pub fn shekyl_rpc_fee_estimate(
-        h: *mut CoreRpcHandle,
-        grace_blocks: u64,
-        out: *mut FeeEstimateFactsFfi,
-    ) -> i32;
-    /// The grace-blocks ceiling the estimator asserts on. Handle-free.
+    pub fn shekyl_rpc_fee_estimate(h: *mut CoreRpcHandle, out: *mut FeeEstimateFactsFfi) -> i32;
     pub fn shekyl_rpc_identity(h: *mut CoreRpcHandle, out: *mut IdentityFactsFfi) -> i32;
-    pub fn shekyl_rpc_fee_grace_blocks_max() -> u64;
     pub fn shekyl_rpc_net_stats(h: *mut CoreRpcHandle, out: *mut NetStatsFactsFfi) -> i32;
     /// Fills a C++-owned view of the live p2p connections plus the single
     /// instant they were read at; release the owner with
@@ -1107,14 +1098,9 @@ mod unit_test_link_stubs {
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_fee_estimate(
         _h: *mut CoreRpcHandle,
-        _grace_blocks: u64,
         _out: *mut FeeEstimateFactsFfi,
     ) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_fee_grace_blocks_max() -> u64 {
-        0
     }
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_net_stats(

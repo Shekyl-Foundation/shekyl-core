@@ -332,6 +332,16 @@ jobs:
           # a previous tag at a cut, so this lane holds its rule instead.
           run_one "Frozen-tuple gate self-test" \
             python3 scripts/ci/test_check_frozen_tuple.py
+          # TOR_SUPERVISOR.md §4.7: on Windows the managed tor inherits its
+          # control socket inside a window the spawn lock keeps private.
+          # Every Rust spawn in a crate whose image launches a managed tor
+          # takes the lock. A crate that merely links the client does not:
+          # the socket is not in its address space. A build script is its
+          # own process. `--selftest` first (rule 47).
+          run_one "Spawn sites take the spawn lock (selftest)" \
+            python3 scripts/ci/check_spawn_sites_take_the_lock.py --selftest
+          run_one "Spawn sites take the spawn lock" \
+            python3 scripts/ci/check_spawn_sites_take_the_lock.py
 
           # ESR-14 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.20): the economics
           # sim's fold files form chain quantities in production's integers

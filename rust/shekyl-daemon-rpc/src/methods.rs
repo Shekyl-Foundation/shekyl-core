@@ -881,8 +881,8 @@ pub fn block_headers_range_request(
 pub fn fee_estimate_request(params: &serde_json::Value) -> Result<GetFeeEstimateRequest, RpcFault> {
     object_params(
         params,
-        "Wrong parameters, expected an object with optional grace_blocks \
-         (a non-negative integer)",
+        "Wrong parameters, expected an object with no members (grace_blocks was \
+         deleted at 3.57)",
     )
 }
 
@@ -1087,28 +1087,17 @@ pub fn get_block_headers_range(
     })
 }
 
-/// `get_fee_estimate`.
-///
-/// The grace-blocks ceiling is refused **here**, before an FFI call, because
-/// the estimator's own bound is an assertion that throws — and a caller that
-/// learns "invalid parameter" can fix its request, where one that learns
-/// "internal error" cannot.
+/// `get_fee_estimate`: the served ladder at the tip, a function of chain
+/// state alone. The request has no members; one naming the retired
+/// `grace_blocks` is refused by [`fee_estimate_request`] (3.57, FL-R26).
 pub fn get_fee_estimate(
     facts: &dyn ChainFacts,
-    request: &GetFeeEstimateRequest,
+    GetFeeEstimateRequest {}: &GetFeeEstimateRequest,
 ) -> Result<GetFeeEstimateResponse, RpcFault> {
-    let ceiling = facts.fee_grace_blocks_max();
-    if request.grace_blocks > ceiling {
-        return Err(RpcFault::Refused(RpcRefusal {
-            code: CORE_RPC_ERROR_CODE_WRONG_PARAM,
-            message: format!("grace_blocks must not exceed {ceiling}"),
-        }));
-    }
-    let estimate = facts.fee_estimate(request.grace_blocks)?;
+    let estimate = facts.fee_estimate()?;
     Ok(GetFeeEstimateResponse {
         status: RpcStatus::ok(),
         fees: FeeTiers(estimate.fees),
-        quantization_mask: estimate.quantization_mask,
     })
 }
 
@@ -1470,8 +1459,6 @@ pub(crate) mod tests {
         pub alt_declared_height: Option<BlockHeight>,
         /// The last `fill_pow_hash` `block_header_at` was asked for.
         pub asked_pow: AtomicBool,
-        /// The last `grace_blocks` `fee_estimate` was asked for.
-        pub asked_grace: AtomicU64,
         /// The hash `block_at` was asked for, when it was asked by hash.
         pub asked_hash: std::sync::Mutex<Option<[u8; 32]>>,
         /// When set, `block_at` faults instead of answering.
@@ -1522,18 +1509,8 @@ pub(crate) mod tests {
             })
         }
 
-        fn fee_grace_blocks_max(&self) -> u64 {
-            // The real constant's value, stated by the double rather than
-            // read through a link stub that answers 0 under test.
-            100
-        }
-
-        fn fee_estimate(&self, grace_blocks: u64) -> Result<FeeEstimate, FactsFault> {
-            self.asked_grace.store(grace_blocks, Ordering::SeqCst);
-            Ok(FeeEstimate {
-                fees: [10, 20, 40],
-                quantization_mask: 8,
-            })
+        fn fee_estimate(&self) -> Result<FeeEstimate, FactsFault> {
+            Ok(FeeEstimate { fees: [10, 20, 40] })
         }
 
         fn block_hash_at(&self, height: BlockHeight) -> Result<BlockHashAt, FactsFault> {
@@ -1699,7 +1676,6 @@ pub(crate) mod tests {
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
-            asked_grace: AtomicU64::new(u64::MAX),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
         }
@@ -2082,10 +2058,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v33` = 3.56). A bump that
+        // Head of the `get_version` chain (`_v34` = 3.57). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v33.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v34.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {
@@ -2140,7 +2116,6 @@ pub(crate) mod tests {
             header: sample_header(),
             alt_declared_height: None,
             asked_pow: AtomicBool::new(false),
-            asked_grace: AtomicU64::new(u64::MAX),
             asked_hash: std::sync::Mutex::new(None),
             block_fault: None,
         };
@@ -2338,11 +2313,13 @@ pub(crate) mod tests {
             );
         }
 
+        assert!(
+            fee_estimate_request(&json!({"grace_blocks": 5})).is_err(),
+            "grace_blocks was deleted at 3.57 and is refused, not ignored"
+        );
         assert_eq!(
-            fee_estimate_request(&json!({"grace_blocks": 5}))
-                .unwrap()
-                .grace_blocks,
-            5
+            fee_estimate_request(&json!({})).unwrap(),
+            GetFeeEstimateRequest::default()
         );
         assert_eq!(
             block_header_by_hash_request(&json!({"hashes": []}))
@@ -2717,7 +2694,7 @@ pub(crate) mod tests {
             fill_pow_hash: false,
         };
         assert!(get_block_headers_range(&unsynced, &range, false).is_ok());
-        assert!(get_fee_estimate(&unsynced, &GetFeeEstimateRequest { grace_blocks: 0 }).is_ok());
+        assert!(get_fee_estimate(&unsynced, &GetFeeEstimateRequest::default()).is_ok());
         assert!(get_block_header_by_hash(
             &unsynced,
             &GetBlockHeaderByHashRequest {
@@ -2873,35 +2850,18 @@ pub(crate) mod tests {
         assert!(refusal.message.contains("999"), "{}", refusal.message);
     }
 
-    /// `grace_blocks` past the ceiling is refused before the FFI call, so a
-    /// caller learns "invalid parameter" rather than "internal error".
-    #[test]
-    fn an_oversized_grace_window_is_refused_before_the_facts_call() {
-        let f = facts(false, 0);
-        let ceiling = f.fee_grace_blocks_max();
-        let out = get_fee_estimate(
-            &f,
-            &GetFeeEstimateRequest {
-                grace_blocks: ceiling.saturating_add(1),
-            },
-        );
-        assert!(matches!(out, Err(RpcFault::Refused(_))));
-        assert_eq!(
-            f.asked_grace.load(Ordering::SeqCst),
-            u64::MAX,
-            "the facts layer must not have been called at all"
-        );
-    }
-
-    /// The tiers are reachable by name and the scalar `fee` is gone.
+    /// The tiers are reachable by name; the scalar `fee` and the mask are
+    /// gone, and the reply is the three tiers and the status alone.
     #[test]
     fn the_fee_reply_names_its_tiers() {
         let f = facts(false, 0);
-        let out = get_fee_estimate(&f, &GetFeeEstimateRequest { grace_blocks: 3 }).expect("fees");
-        assert_eq!(f.asked_grace.load(Ordering::SeqCst), 3);
+        let out = get_fee_estimate(&f, &GetFeeEstimateRequest::default()).expect("fees");
         assert_eq!(out.fees.get(shekyl_rpc_types::FeeTier::Low), 10);
         assert_eq!(out.fees.get(shekyl_rpc_types::FeeTier::High), 40);
-        assert_eq!(out.quantization_mask, 8);
+        assert_eq!(
+            serde_json::to_value(&out).expect("serializes"),
+            json!({"status": "OK", "fees": [10, 20, 40]})
+        );
     }
 
     // ── RK-5a: the p2p methods ─────────────────────────────────────────────

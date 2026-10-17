@@ -35,8 +35,8 @@ use shekyl_types::archival::{
     ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PCanonicalId, SettlementEpoch,
-    ShardId, TxHash,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
+    SettlementEpoch, ShardId, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -111,6 +111,15 @@ impl<'id, T> ChainView<'id> for Stub<T> {
     }
     fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
         Ok(AtomicUnits::ZERO)
+    }
+    fn long_term_effective_median_at(
+        &self,
+        _: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
+    fn burned_through(&self, _: BlockHeight) -> Result<AtHeight<AtomicUnits>, Infallible> {
+        Ok(AtHeight::AboveTip)
     }
     fn bond_record(&self, _: &PCanonicalId) -> Result<Option<BondRecord>, Infallible> {
         Ok(None)

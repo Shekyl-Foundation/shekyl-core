@@ -282,7 +282,6 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
             tree_depth: 8,
         }),
         fee_per_byte: 1,
-        fee_quantization_mask: 1,
         weight_limit: 149_400,
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,

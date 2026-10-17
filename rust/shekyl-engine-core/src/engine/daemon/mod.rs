@@ -68,15 +68,9 @@ use shekyl_wire::Transaction;
 use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
 use crate::engine::transaction_submitter::submit_outcome_from_verdict;
 
-// One owner for the grace-block horizon: the constant lives in
-// `shekyl-rpc-client` (a first-class workspace crate since the
-// un-vendoring — the old "not re-exporting vendored internals"
-// rationale for a local copy no longer applies).
-use shekyl_rpc_client::GRACE_BLOCKS_FOR_FEE_ESTIMATE;
-
 /// Map a daemon `get_fee_estimate` reply onto the three-tier
-/// [`FeeEstimates`] snapshot, deriving every tier and the rounding mask
-/// from this **one** response.
+/// [`FeeEstimates`] snapshot, deriving every tier from this **one**
+/// response.
 ///
 /// Parses through [`GetFeeEstimateResponse`] so a wire-arity change is a
 /// type error here rather than a local JSON destructure the shared
@@ -90,12 +84,10 @@ fn fee_estimates_from_reply(reply: &GetFeeEstimateResponse) -> Result<FeeEstimat
     if !reply.status.is_ok() {
         return Err(RpcError::InvalidFee);
     }
-    let mask = reply.quantization_mask;
     Ok(FeeEstimates {
-        economy: FeeRate::new(reply.fees.get(FeeTier::Low), mask)?,
-        standard: FeeRate::new(reply.fees.get(FeeTier::Normal), mask)?,
-        priority: FeeRate::new(reply.fees.get(FeeTier::High), mask)?,
-        quantization_mask: mask,
+        economy: FeeRate::new(reply.fees.get(FeeTier::Low))?,
+        standard: FeeRate::new(reply.fees.get(FeeTier::Normal))?,
+        priority: FeeRate::new(reply.fees.get(FeeTier::High))?,
     })
 }
 
@@ -353,18 +345,16 @@ impl DaemonEngine for DaemonClient {
     ///
     /// Issues **one** `get_fee_estimate` JSON-RPC call and maps its
     /// response onto all three non-`Custom`
-    /// [`FeePriority`](super::FeePriority) tiers plus the snapshot
-    /// `quantization_mask` via [`GetFeeEstimateResponse`] — not three
+    /// [`FeePriority`](super::FeePriority) tiers via
+    /// [`GetFeeEstimateResponse`] — not three
     /// per-tier [`Rpc::get_fee_rate`] calls, so the tier band carries no
     /// tier-vs-tier skew from interleaved reads.
     fn get_fee_estimates(&self) -> impl Send + Future<Output = Result<FeeEstimates, Self::Error>> {
         async move {
-            let reply: GetFeeEstimateResponse = self
-                .json_rpc_call(
-                    "get_fee_estimate",
-                    Some(json!({ "grace_blocks": GRACE_BLOCKS_FOR_FEE_ESTIMATE })),
-                )
-                .await?;
+            // No parameters: the ladder is a function of chain state alone
+            // (FL-R20, FL-R26; wire 3.57).
+            let reply: GetFeeEstimateResponse =
+                self.json_rpc_call("get_fee_estimate", None).await?;
             fee_estimates_from_reply(&reply)
         }
     }
@@ -820,20 +810,17 @@ mod tests {
         );
     }
 
-    /// Tiers map Low/Normal/High onto `[economy, standard, priority]`,
-    /// and the shared `quantization_mask` lands on the snapshot.
+    /// Tiers map Low/Normal/High onto `[economy, standard, priority]`.
     #[test]
     fn fee_estimates_array_maps_the_three_priced_tiers() {
         let result = json!({
             "status": "OK",
             "fees": [100u64, 200, 400],
-            "quantization_mask": 8u64,
         });
         let est = fee_estimates_from_value(&result).expect("well-formed fee array");
-        assert_eq!(est.economy, FeeRate::new(100, 8).unwrap());
-        assert_eq!(est.standard, FeeRate::new(200, 8).unwrap());
-        assert_eq!(est.priority, FeeRate::new(400, 8).unwrap());
-        assert_eq!(est.quantization_mask, 8);
+        assert_eq!(est.economy, FeeRate::new(100).unwrap());
+        assert_eq!(est.standard, FeeRate::new(200).unwrap());
+        assert_eq!(est.priority, FeeRate::new(400).unwrap());
         assert_ne!(est.economy, est.priority);
     }
 
@@ -842,8 +829,8 @@ mod tests {
     #[test]
     fn fee_estimates_refuses_a_scalar_only_reply() {
         for reply in [
-            json!({"status": "OK", "fee": 10u64, "quantization_mask": 4u64}),
-            json!({"status": "OK", "fees": null, "fee": 10u64, "quantization_mask": 4u64}),
+            json!({"status": "OK", "fee": 10u64}),
+            json!({"status": "OK", "fees": null, "fee": 10u64}),
         ] {
             assert!(
                 matches!(fee_estimates_from_value(&reply), Err(RpcError::InvalidFee)),
@@ -857,7 +844,6 @@ mod tests {
         let result = json!({
             "status": "BUSY",
             "fees": [100u64, 200, 400],
-            "quantization_mask": 8u64,
         });
         assert!(matches!(
             fee_estimates_from_value(&result),
@@ -879,7 +865,6 @@ mod tests {
             let result = json!({
                 "status": "OK",
                 "fees": fees,
-                "quantization_mask": 8u64,
             });
             assert!(
                 matches!(fee_estimates_from_value(&result), Err(RpcError::InvalidFee)),
@@ -896,7 +881,6 @@ mod tests {
             "status": "OK",
             "fees": "oops",
             "fee": 10u64,
-            "quantization_mask": 8u64,
         });
         assert!(matches!(
             fee_estimates_from_value(&result),
@@ -904,27 +888,16 @@ mod tests {
         ));
     }
 
-    /// Absent `quantization_mask` is the wire default (`OPT(1)`), matching
-    /// [`GetFeeEstimateResponse`].
+    /// A reply still carrying the retired `quantization_mask` is refused:
+    /// the lattice is `shekyl_economics::FEE_QUANTIZATION_MASK`, a
+    /// constant the wallet and the daemon share, and a daemon that still
+    /// serves one is a daemon this wallet does not read a lattice from.
     #[test]
-    fn fee_estimates_absent_mask_is_the_wire_default() {
+    fn fee_estimates_refuses_a_reply_carrying_the_retired_mask() {
         let result = json!({
             "status": "OK",
             "fees": [100u64, 200, 400],
-        });
-        let est = fee_estimates_from_value(&result).expect("mask OPT(1)");
-        assert_eq!(est.quantization_mask, 1);
-        assert_eq!(est.priority, FeeRate::new(400, 1).unwrap());
-    }
-
-    /// `quantization_mask == 0` would make `FeeRate::new` reject; the
-    /// mapping surfaces that as `InvalidFee` rather than panicking.
-    #[test]
-    fn fee_estimates_rejects_zero_mask() {
-        let result = json!({
-            "status": "OK",
-            "fees": [100u64, 200, 400],
-            "quantization_mask": 0u64,
+            "quantization_mask": 8u64,
         });
         assert!(matches!(
             fee_estimates_from_value(&result),

@@ -232,6 +232,62 @@ fn a_hole_below_the_tip_seen_by_the_validator_is_si7_and_halts_the_writer() {
     cleanup(&path);
 }
 
+/// A relay floor the arithmetic cannot price is SI-7 on the `block_info`
+/// row that held the median, and the halt names that row's height. The
+/// batch's connecting height is the next block, not the bad row: a window
+/// read can fault an earlier `block_info` (FL PR C).
+#[test]
+fn an_unpriceable_relay_floor_keeps_the_rows_height_on_si7() {
+    let path = tmp("connect-refuse-corrupt-relay-floor");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new(), Vec::new()]);
+    let at = BlockHeight::from_raw(7);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::RelayFloorUnpriceable {
+                at,
+                operands: relay_floor_operands(at),
+            })
+            .into())
+    });
+    let row = StoreInvariant::CellCorrupt {
+        key: "block_info",
+        fault: CellFault::OutsideDomain {
+            at: at.to_raw(),
+            codec: "long_term_effective_median",
+            reason: "the median leaves the relay floor's arithmetic domain",
+        },
+    };
+    expect_row(&out, row);
+    assert_eq!(row.row(), 7, "still SI-7");
+    assert!(core::error::Error::source(&row).is_none());
+    let shown = row.to_string();
+    assert!(shown.contains("outside its domain at height 7"), "{shown}");
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(2),
+            row,
+        }
+    );
+    cleanup(&path);
+}
+
+fn relay_floor_operands(at: BlockHeight) -> shekyl_economics::FeeOperands {
+    shekyl_economics::FeeOperands {
+        height: at.to_raw(),
+        parent_coins_generated: 0,
+        supply: shekyl_economics::CirculatingSupply::derive(
+            shekyl_units::AtomicUnits::ZERO,
+            shekyl_units::AtomicUnits::ZERO,
+        )
+        .expect("nothing generated, nothing burned"),
+        tx_volume: shekyl_economics::TxVolume::per_block(0),
+        long_term_effective_median: 0,
+    }
+}
+
 /// The same class, the other record. CEN-I12's root read and the producer's
 /// `root_at` both raise `HoleBelowTip` for the curve-tree root; mapping
 /// every hole onto `block_info` would halt the writer against the wrong

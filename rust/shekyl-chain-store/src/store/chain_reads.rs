@@ -72,11 +72,12 @@ use std::borrow::Borrow;
 use redb::{Key, ReadTransaction, ReadableTable, TableDefinition, Value, WriteTransaction};
 use shekyl_chain_rules::{AtHeight, RecordedWeights};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, KeyImage};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
 use crate::codec::{BlockBody, BlockInfo, Canonical, CodecError, Coded};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCKS, BLOCK_HEIGHTS, BLOCK_INFO, SPENT_KEYS};
+use crate::schema::{BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, SPENT_KEYS};
 
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
 
@@ -409,6 +410,39 @@ pub(super) fn weights_below<T: ReadTables>(
         return Err(absent("block_info"));
     }
     Ok(AtHeight::Recorded(out))
+}
+
+/// Atomic units the `block_burn` rows in `(after, through]` hold: what the
+/// `total_burned` fold gained after the block at `after` connected, up to
+/// and including the block at `through`. An absent row is a zero burn (the
+/// writer's convention, R8). The relay floor's `burned_through(h)` is the
+/// fold less this at `(h, tip]` — a projection bounded by how far below
+/// the tip `h` lies, never a recomputation. Rows whose sum leaves `u64`
+/// are rows the `total_burned` fold could not have folded under its
+/// checked arithmetic: SI-8, [`StoreInvariant::FoldOverflow`].
+pub(super) fn burned_in<T: ReadTables>(
+    txn: &T,
+    after: u64,
+    through: u64,
+) -> Result<AtomicUnits, ReadFault> {
+    if through <= after {
+        return Ok(AtomicUnits::ZERO);
+    }
+    let table = txn.table(BLOCK_BURN)?;
+    let mut sum = AtomicUnits::ZERO;
+    for row in table.range((after + 1)..=through)? {
+        let (_, value) = row?;
+        let burned = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable("block_burn", cause))?;
+        sum =
+            sum.checked_add(burned)
+                .ok_or(ReadFault::Invariant(StoreInvariant::FoldOverflow {
+                    cell: "total_burned",
+                }))?;
+    }
+    Ok(sum)
 }
 
 /// The recorded `blocks` blob at `height`, **unverified** — R5's body. The

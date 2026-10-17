@@ -109,14 +109,11 @@ fn test_ledger() -> LocalLedger {
 }
 
 fn test_fee_estimates() -> FeeEstimates {
-    // mask=1 keeps `FeeRate`'s fee↔weight roundtrip consistent with the
-    // structural predictor's fee varint term under `converge_fee`.
-    let tiny = FeeRate::new(1, 1).expect("tiny test fee rate is non-zero");
+    let tiny = FeeRate::new(1).expect("tiny test fee rate is non-zero");
     FeeEstimates {
         economy: tiny,
         standard: tiny,
         priority: tiny,
-        quantization_mask: 1,
     }
 }
 
@@ -2041,8 +2038,11 @@ async fn concurrent_builds_serialize_on_the_build_permit() {
     use std::future::Future;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    // Two inputs, each funding one build's amount and its fee on the fee
+    // lattice with room to spare: the second input is the smaller one and
+    // its build pays 7 000 plus a fee rounded up to the next 1 000.
     let (ledger, _tree_dir, tree) =
-        funded_ledger_and_tree(&[(1, 50_000), (2, 30_000)], 1, 20).await;
+        funded_ledger_and_tree(&[(1, 50_000), (2, 40_000)], 1, 20).await;
     let entered = Arc::new(AtomicUsize::new(0));
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let pending = Arc::new(test_pending_tx_with_tree_and_fee_source(
@@ -3420,10 +3420,9 @@ fn populate_ledger_scan_only(
 fn daemon_fee_estimates_distinct() -> FeeEstimates {
     // Distinct, monotonic, under the absolute cap.
     FeeEstimates {
-        economy: FeeRate::new(5, 1).expect("economy rate"),
-        standard: FeeRate::new(10, 1).expect("standard rate"),
-        priority: FeeRate::new(40, 1).expect("priority rate"),
-        quantization_mask: 1,
+        economy: FeeRate::new(5).expect("economy rate"),
+        standard: FeeRate::new(10).expect("standard rate"),
+        priority: FeeRate::new(40).expect("priority rate"),
     }
 }
 
@@ -3491,7 +3490,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
         20,
     );
     let request = standard_request(7_000);
-    let rate = FeeRate::new(10, 1).expect("rate");
+    let rate = FeeRate::new(10).expect("rate");
     let fee_directive = build_fee_directive(
         &rate,
         InputCount::clamped(1),

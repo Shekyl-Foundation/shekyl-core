@@ -48,8 +48,7 @@ int shekyl_rpc_chain_tip(core_rpc_handle* h, shekyl_rpc_chain_tip_facts* out);
 // hash are fixed at startup and per network, five of the tip POD's six
 // callers want a tip and not identity, and widening the tip would move its
 // layout twins, its seeded fill indices and its size pin for every one of
-// them. The precedent is the narrow exports below
-// (`shekyl_rpc_fee_grace_blocks_max`).
+// them. The precedent is the narrow exports below.
 //
 // The rules digest is NOT here: it is compiled into the Rust image from
 // `config/`, so the handler reads its own constant and never asks C++ for it.
@@ -413,28 +412,22 @@ void shekyl_rpc_sync_spans_free(void* owner);
 
 // ── RK-5b: the header remainder's two non-header facts ──────────────────────
 
-// The dynamic base-fee estimate.
+// The dynamic base-fee estimate at the tip.
 //
-// One estimator: the 2021-scaling one.
+// One estimator: the 2021-scaling one. A function of chain state alone
+// (FL-R20); the lattice a fee is rounded to is a Rust constant
+// (shekyl_economics::FEE_QUANTIZATION_MASK) and does not cross here.
 //
 // `fees` is one slot per priced tier: [economy, standard, priority].
 // `fee_count` reports what was actually written so a change in that
 // contract is caught here rather than read as a shorter answer.
 typedef struct shekyl_rpc_fee_estimate_facts {
     uint64_t fees[3];
-    uint64_t quantization_mask;
     uint8_t  fee_count;
     uint8_t  reserved[7];
 } shekyl_rpc_fee_estimate_facts;
 
-int shekyl_rpc_fee_estimate(core_rpc_handle* h, uint64_t grace_blocks,
-    shekyl_rpc_fee_estimate_facts* out);
-
-// The ceiling the estimator asserts on (`CRYPTONOTE_REWARD_BLOCKS_WINDOW`).
-// Handle-free for the reason the peerlist limits are: a caller needs it to
-// refuse an out-of-range request *before* the estimator throws, and it is
-// C++ configuration that must not get a second definition in Rust.
-uint64_t shekyl_rpc_fee_grace_blocks_max(void);
+int shekyl_rpc_fee_estimate(core_rpc_handle* h, shekyl_rpc_fee_estimate_facts* out);
 
 // ── A constant the console renders with ─────────────────────────────────────
 //
@@ -606,8 +599,7 @@ namespace cryptonote { class Blockchain; class core; class tx_memory_pool; }
 
 namespace daemon_rpc_facts {
 
-int fee_estimate(cryptonote::Blockchain& bc, uint64_t grace_blocks,
-    shekyl_rpc_fee_estimate_facts* out) noexcept;
+int fee_estimate(cryptonote::Blockchain& bc, shekyl_rpc_fee_estimate_facts* out) noexcept;
 
 // `get_info`'s chain snapshot. The four scalars are what the adapter reads
 // from `core` and the p2p payload object; everything else is read here, under
