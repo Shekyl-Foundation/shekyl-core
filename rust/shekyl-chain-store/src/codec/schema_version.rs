@@ -292,26 +292,17 @@ use super::{Canonical, CodecError};
 ///   mis-framed, so the bump refuses it at open; `alt_block.snap` re-pins
 ///   and `recorded_pow.snap` is new. Rebuild from the block corpus, as at
 ///   every bump.
-/// - `27` — the pool record knows one relay fact (DRS-E5 PR-b, DX-F6,
-///   2026-10-16; `DAEMON_RELAY_PRIVACY.md` D++ acceptance criterion 2).
-///   `pool_record` drops the relay state (origin, phase and its clocks,
-///   responsibility — the relay's, which keeps `Responsibility` beside its
-///   stem watch), `relayed`, `double_spend_seen` and the readiness cache,
-///   none of which admission, eviction or template selection reads, and
-///   everything the transaction's bytes say (weight, fee) or an untrusted
-///   file must not supply (CEN-M8's anchor, held in memory; the review of
-///   #1102, S2): it is `received` (whole hours, S7), `public` and a
-///   `standing` (admitted, or kept under CEN-K10 with the height it was
-///   returned at).
-///   A `26` pool file is recreated at open (`SPL-Q8`), and a `26` chain
-///   file is refused as at every bump — the two files share one layout
-///   number. `pool_record.snap` re-pins. In the chain file,
-///   `alt_block_bodies` (`LmdbHashKey → alt_bodies`, Rust-only, ordinal 43)
-///   is born: an alternative block's listed bodies are consensus data the
-///   switch connects, so the store holds them beside the alt row instead of
-///   the pool (the review of #1102, B1). `alt_bodies.snap` is new and
-///   `tables.snap` re-pins; no existing table, ordinal or property cell
-///   moves.
+/// - `27` — `alt_block_bodies` (`LmdbHashKey → alt_bodies`, Rust-only,
+///   ordinal 43) is born: an alternative block's listed bodies are
+///   consensus data the switch connects, so the store holds them beside the
+///   alt row instead of the pool (DRS-E5 PR-b; the review of #1102, B1).
+///   `alt_bodies.snap` is new and `tables.snap` re-pins; no existing table,
+///   ordinal or property cell moves. The pool file leaves this number
+///   (`SPL-Q8` as ruled, 2026-10-17): `pool_record.snap` and
+///   `pool_tables.snap` move to `pool_schemas/` under the pool file's own
+///   `POOL_SCHEMA_VERSION` (`crate::pool`), whose history records the
+///   record's reshaping in the same PR. A `26` chain file is refused, as
+///   at every bump.
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(27);
 
 /// A layout version as stored in the `schema_version` cell.

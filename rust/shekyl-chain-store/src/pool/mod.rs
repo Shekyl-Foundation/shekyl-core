@@ -58,8 +58,10 @@
 //!
 //! # The header, and the one case that recreates (`SPL-Q8`)
 //!
-//! A fresh file is sealed with the crate's `SCHEMA_VERSION` in its own
-//! header cell. On reopen the cell is read first. A sealed pool file at
+//! A fresh file is sealed with its own layout number,
+//! [`POOL_SCHEMA_VERSION`] — not the chain file's, so a pool-only change
+//! recreates the pool file and leaves the chain alone — in its own header
+//! cell. On reopen the cell is read first. A sealed pool file at
 //! **another** version is **recreated** — the file is discardable by ruling
 //! and has no corpus to rebuild from — and [`PoolOpen::Recreated`] tells the
 //! caller so it can say so in one log line. Everything else is
@@ -87,12 +89,14 @@ pub mod schema;
 
 mod header;
 mod read;
+mod schema_version;
 mod write;
 
 pub use crate::codec::{PoolRecord, ReceivedHour, Standing};
 pub use header::{PoolOpen, POOL_VERSION_KEY};
 pub use read::{PoolEntry, PoolSnapshot};
 pub use schema::PoolTxBytes;
+pub use schema_version::{PoolSchemaVersion, POOL_SCHEMA_VERSION};
 pub use write::PoolBatch;
 
 use std::path::Path;

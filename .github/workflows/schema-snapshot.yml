@@ -308,6 +308,61 @@ jobs:
             echo "::endgroup::"
           fi
 
+          # The pool file (DRS_E1_SPOOL.md SPL-Q8). The crate's second file
+          # has its own layout number, because a mismatch recreates it (it
+          # is discardable) where the chain file refuses and is rebuilt: a
+          # pool-only change bumps POOL_SCHEMA_VERSION and leaves the chain
+          # file, and every node's synced chain, alone. Its snapshots live
+          # in a sibling of the chain store's `schemas/`, so the block above
+          # never sees them. Same rule: if any snapshot under the pool
+          # directory changed, the VALUE must be greater at head than base.
+          PS_SNAP_DIR="rust/shekyl-chain-store/pool_schemas/"
+          PS_SRC="rust/shekyl-chain-store/src/pool/schema_version.rs"
+          PS_CONST="POOL_SCHEMA_VERSION"
+          # Prints the decimal value declared at revision $1, or nothing.
+          # The value is the verdict; the pipe only shapes it (rule 46).
+          ps_version_at() {
+            git show "$1:${PS_SRC}" \
+              | sed -nE "s/^pub const ${PS_CONST}: PoolSchemaVersion = PoolSchemaVersion::new\(([0-9_]+)\).*/\1/p" \
+              | tr -d '_'
+          }
+          PS_TOUCHED=$(echo "${CHANGED}" | grep -F "${PS_SNAP_DIR}" | grep -E '\.snap$' || true)
+          if [ -n "${PS_TOUCHED}" ]; then
+            echo "::group::pool file: snapshot(s) changed, checking ${PS_CONST} bump"
+            echo "${PS_TOUCHED}" | sed 's/^/  snapshot:  /'
+            echo "  source:    ${PS_SRC}"
+            echo "  constant:  ${PS_CONST}"
+            HEAD_V=""
+            if git cat-file -e "${HEAD_SHA}:${PS_SRC}" 2>/dev/null; then
+              HEAD_V=$(ps_version_at "${HEAD_SHA}")
+            fi
+            if [ -z "${HEAD_V}" ]; then
+              echo "::error file=${PS_SRC}::${PS_CONST} not parsable at the PR head"
+              echo "  FATAL: expected exactly one line of the form"
+              echo "    pub const ${PS_CONST}: PoolSchemaVersion = PoolSchemaVersion::new(<decimal>);"
+              echo "  at column 0 of ${PS_SRC}. The gate cannot compare what it cannot read."
+              FAIL=1
+            elif ! git cat-file -e "${BASE_SHA}:${PS_SRC}" 2>/dev/null; then
+              echo "  OK: ${PS_SRC} is born in this PR (${PS_CONST} = ${HEAD_V}); nothing older to bump from."
+            else
+              BASE_V=$(ps_version_at "${BASE_SHA}")
+              if [ -z "${BASE_V}" ]; then
+                echo "::error file=${PS_SRC}::${PS_CONST} not parsable at the PR base"
+                echo "  FATAL: ${PS_SRC} exists at ${BASE_SHA} but declares no readable ${PS_CONST}."
+                FAIL=1
+              elif [ "${HEAD_V}" -le "${BASE_V}" ]; then
+                echo "::error file=${PS_SRC}::${PS_CONST} not bumped alongside a pool snapshot (base ${BASE_V}, head ${HEAD_V})"
+                echo "  FATAL: a snapshot under ${PS_SNAP_DIR} changed — the pool file's bytes"
+                echo "  or its table catalogue moved — but ${PS_CONST} is ${HEAD_V} at head and"
+                echo "  ${BASE_V} at base. Bump in the same PR."
+                FAIL=1
+              else
+                echo "  OK: ${PS_CONST} ${BASE_V} → ${HEAD_V}."
+              fi
+            fi
+            echo "::endgroup::"
+          fi
+
           # Peer lists' address file (P2P-3 slice 1 increment 3). One
           # format, one constant: if the snapshot under the crate's
           # schemas/ directory changed, the VALUE of ADDRESS_FILE_VERSION
@@ -378,6 +433,9 @@ jobs:
                `rust/shekyl-chain-store/src/codec/schema_version.rs` and:
                  UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store \
                    codec::snapshot_tests
+               For the pool file, bump `POOL_SCHEMA_VERSION` in
+               `rust/shekyl-chain-store/src/pool/schema_version.rs` (the
+               same regeneration command).
                For the peer lists' address file, bump `ADDRESS_FILE_VERSION`
                in `rust/shekyl-peerlist/src/address_file.rs` and:
                  UPDATE_SNAPSHOTS=1 cargo test -p shekyl-peerlist \

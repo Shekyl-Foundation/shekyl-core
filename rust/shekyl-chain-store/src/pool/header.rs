@@ -7,7 +7,8 @@
 //! header decides (`DRS_E1_SPOOL.md` `SPL-Q8`, with the precondition from
 //! PR #851's review).
 //!
-//! A fresh file is sealed with the crate's `SCHEMA_VERSION` in its own cell
+//! A fresh file is sealed with the pool file's own `POOL_SCHEMA_VERSION` in
+//! its own cell
 //! and both data tables created, in one transaction, so a reader never has
 //! to read *absent table* as *empty pool*. On reopen the cell is read first:
 //! a seal at **another** version **recreates** the file (it is discardable
@@ -21,10 +22,11 @@ use std::path::Path;
 use redb::{Database, ReadTransaction, ReadableDatabase, TableDefinition};
 use shekyl_store_codec::{Canonical, Raw};
 
-use crate::codec::{PropertyCellBytes, SchemaVersion, SCHEMA_VERSION};
+use crate::codec::PropertyCellBytes;
 use crate::store::{EngineError, StoreCannot, StoreError};
 
 use super::schema::{POOL_BLOB, POOL_HEADER, POOL_META};
+use super::schema_version::{PoolSchemaVersion, POOL_SCHEMA_VERSION};
 use super::{arm_write, POOL_CACHE_SIZE};
 
 /// The header cell that carries the layout version the file was sealed at.
@@ -34,7 +36,7 @@ pub const POOL_VERSION_KEY: &str = "pool_schema_version";
 /// file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoolOpen {
-    /// No file existed; one was created and sealed at [`SCHEMA_VERSION`].
+    /// No file existed; one was created and sealed at [`POOL_SCHEMA_VERSION`].
     Created,
     /// A sealed file at the current version, over its sealed tables, was
     /// opened.
@@ -44,7 +46,7 @@ pub enum PoolOpen {
     /// the old file carried — the caller's one log line names it.
     Recreated {
         /// The layout the discarded file was sealed at.
-        from: SchemaVersion,
+        from: PoolSchemaVersion,
     },
 }
 
@@ -53,7 +55,7 @@ enum Header {
     /// Sealed at the current version, over its sealed tables.
     Current,
     /// Sealed at another version: recreate.
-    Other(SchemaVersion),
+    Other(PoolSchemaVersion),
 }
 
 /// The one entry point: claim `path` if it is free, else read what is there.
@@ -139,7 +141,7 @@ fn seal_fresh(
             header
                 .insert(
                     POOL_VERSION_KEY,
-                    Raw::<PropertyCellBytes>::new(&SCHEMA_VERSION.encode()),
+                    Raw::<PropertyCellBytes>::new(&POOL_SCHEMA_VERSION.encode()),
                 )
                 .map_err(EngineError::Storage)?;
             txn.open_table(POOL_META).map_err(EngineError::Table)?;
@@ -168,10 +170,10 @@ fn read_header(db: &Database) -> Result<Header, StoreError> {
     let Some(cell) = table.get(POOL_VERSION_KEY).map_err(EngineError::Storage)? else {
         return Err(StoreCannot::PoolFileForeign.into());
     };
-    let Ok(found) = SchemaVersion::decode(cell.value().bytes()) else {
+    let Ok(found) = PoolSchemaVersion::decode(cell.value().bytes()) else {
         return Err(StoreCannot::PoolFileForeign.into());
     };
-    if found != SCHEMA_VERSION {
+    if found != POOL_SCHEMA_VERSION {
         // Another layout recreates, whatever its table set: the seal is
         // this store's, the version is not, and the file is discardable.
         return Ok(Header::Other(found));

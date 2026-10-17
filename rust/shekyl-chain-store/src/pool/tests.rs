@@ -322,7 +322,7 @@ fn another_version_recreates_and_everything_else_is_refused() {
         let txn = store.db.begin_write().unwrap();
         {
             let mut header = txn.open_table(POOL_HEADER).unwrap();
-            let other = crate::codec::SchemaVersion::new(SCHEMA_VERSION.get() + 1);
+            let other = PoolSchemaVersion::new(POOL_SCHEMA_VERSION.get() + 1);
             header
                 .insert(
                     POOL_VERSION_KEY,
@@ -337,10 +337,40 @@ fn another_version_recreates_and_everything_else_is_refused() {
     assert_eq!(
         how,
         PoolOpen::Recreated {
-            from: crate::codec::SchemaVersion::new(SCHEMA_VERSION.get() + 1)
+            from: PoolSchemaVersion::new(POOL_SCHEMA_VERSION.get() + 1)
         }
     );
     assert_eq!(store.begin_read().unwrap().len().unwrap(), 0);
+    drop(store);
+    drop(std::fs::remove_file(&path));
+
+    // (1b) A file sealed at the chain store's number — what every pool file
+    // carried before the two numbers split — is another pool layout too:
+    // the pool's number is its own, and the chain's is never read here.
+    assert_ne!(SCHEMA_VERSION.get(), POOL_SCHEMA_VERSION.get());
+    let path = tmp("chain-number");
+    let (store, _) = PoolStore::create(&path).unwrap();
+    {
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut header = txn.open_table(POOL_HEADER).unwrap();
+            header
+                .insert(
+                    POOL_VERSION_KEY,
+                    Raw::<PropertyCellBytes>::new(&SCHEMA_VERSION.encode()),
+                )
+                .unwrap();
+        }
+        txn.commit().unwrap();
+    }
+    drop(store);
+    let (store, how) = PoolStore::create(&path).unwrap();
+    assert_eq!(
+        how,
+        PoolOpen::Recreated {
+            from: PoolSchemaVersion::new(SCHEMA_VERSION.get())
+        }
+    );
     drop(store);
     drop(std::fs::remove_file(&path));
 
