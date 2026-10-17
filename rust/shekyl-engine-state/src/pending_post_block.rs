@@ -2619,7 +2619,7 @@ mod tests {
             let byte = o.persona.to_bytes()[0];
             assert_eq!(
                 o.sent,
-                matches!(byte, 0x13 | 0x14 | 0x15),
+                (0x13..=0x15).contains(&byte),
                 "sent flag for {byte:#x}"
             );
         }
