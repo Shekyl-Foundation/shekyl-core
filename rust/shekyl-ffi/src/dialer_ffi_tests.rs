@@ -17,6 +17,7 @@ use shekyl_levin::{
     response, BasicNodeData, CoreSyncData, HandshakeResponse, PortableMap, SupportFlags,
     COMMAND_HANDSHAKE,
 };
+use shekyl_seam::CloseKind;
 use shekyl_timing_engine::Tick;
 
 use super::*;
@@ -375,6 +376,82 @@ impl Drop for UnbindOnDrop {
     fn drop(&mut self) {
         unbind();
     }
+}
+
+/// **A kept session closed from C++ returns, and leaves the kept count.**
+/// The alpha.10 fleet's freeze, as three nodes showed it: an ordinary close
+/// from C++ (`drop_connection`, or a Levin callback) reaches
+/// `shekyl_seam_close`, then `Hub::finish`. At the release tag `finish` ran
+/// its close poster with the hub's lock held. The poster ran
+/// `Dialer::session_closed`, which asked `Hub::cause` for the cause, which
+/// waited on that same lock, and p2p and RPC froze for good. The close now
+/// carries its cause, and the poster runs after the lock is released. A
+/// close that does not return in five seconds ends the process, so the
+/// suite fails instead of waiting.
+#[test]
+fn a_kept_session_closed_from_cxx_returns_and_leaves_the_kept_count() {
+    let _bind = seam_bind_lock()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    unbind();
+    let _unbind = UnbindOnDrop;
+    bind();
+    assert_eq!(shekyl_seam_install_loopback(), 0);
+    let dialer = dialer().expect("built at the bind");
+    ready(&dialer);
+    let named = v4(2);
+    assert_eq!(
+        unsafe { shekyl_peerlist_admit_operator(&raw const named) },
+        1,
+        "the address entered gray"
+    );
+
+    // The peer answers the handshake as soon as the channel is open. Ids are
+    // the process's, so a probe socket says where this dial's id starts.
+    let probe_socket = crate::seam_ffi::process_sockets()
+        .open_clearnet(IpAddr::V4(Ipv4Addr::new(11, 17, 0, 1)), dialer.hub().now())
+        .expect("a probe socket");
+    let probe = probe_socket.id().get();
+    let _probe_closed = probe_socket.close(CloseCause::new(CloseKind::LocalClose));
+    let hub = dialer.hub().clone();
+    let frame = handshake_frame();
+    let answer = thread::spawn(move || {
+        for _ in 0..5_000 {
+            let answered = (1..=16u64)
+                .filter_map(|ahead| SocketId::from_ffi(probe.saturating_add(ahead)))
+                .any(|id| hub.inject(id, frame.clone()));
+            if answered {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    });
+    let id = dialer
+        .dial(
+            ConnectorId::Clearnet,
+            &address(2),
+            DialAim::Keep,
+            &mut SecureRelayRng,
+        )
+        .expect("a kept dial");
+    answer.join().expect("answered");
+    assert_eq!(dialer.kept_sessions(ConnectorId::Clearnet), 1);
+
+    let (closed_tx, closed) = mpsc::channel();
+    let closing = thread::spawn(move || {
+        crate::seam_ffi::shekyl_seam_close(id.get());
+        let _sent = closed_tx.send(());
+    });
+    if closed.recv_timeout(Duration::from_secs(5)).is_err() {
+        eprintln!("a kept session closed from C++ did not return within 5s");
+        std::process::exit(1);
+    }
+    closing.join().expect("closed");
+    assert_eq!(
+        dialer.kept_sessions(ConnectorId::Clearnet),
+        0,
+        "the close reached the dialer, and the kept row went"
+    );
 }
 
 /// The three list paths — a wake, a confirm dial's received list, and the
