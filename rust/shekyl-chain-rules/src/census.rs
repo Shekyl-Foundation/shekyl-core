@@ -626,12 +626,13 @@ census_rows! {
         K6 held_by_store("shekyl-chain-ingest", "a_heavier_branch_switches_and_equals_the_branch_connected_directly"),
         K7 held_by_store("shekyl-chain-ingest", "a_checkpoint_forced_switch_discards_the_demoted_chain"),
         K8 held_by_store("shekyl-chain-store", "an_alt_row_has_no_supply_word"),
-        // K9 and K10: a block's bodies through the pool door (DRS-E5 PR-b
-        // b4) — an alternative's supplemented before it is held, a popped
-        // block's returned after the switch, kept when the chain-bound half
-        // refuses them. Held by `shekyl-mempool`, witnessed by the switch
+        // K9 and K10: a block's bodies (DRS-E5 PR-b b4; the review of
+        // #1102, B1) — an alternative's held by the store beside its row and
+        // promoted from it, then offered to the pool door for relay; a
+        // popped block's returned to the door after the switch, kept when
+        // the chain-bound half alone refuses them. Witnessed by the switch
         // over the production stack.
-        K9 held_by_store("shekyl-chain-ingest", "an_alternatives_bodies_are_supplemented_through_the_door_and_promoted_from_the_pool"),
+        K9 held_by_store("shekyl-chain-ingest", "an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool"),
         K10 held_by_store("shekyl-chain-ingest", "a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the_week"),
         // 4.L Storage layer (constraints that reject chain data at write time)
         // L1 is the validator's (C2-R8 Q6): the intra-block half of key-image

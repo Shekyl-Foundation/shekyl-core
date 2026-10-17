@@ -114,8 +114,8 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, AltBlock, AltBlockFacts, BlockDraws, BlockInfo, BondRecord, Canonical, Coded,
-    CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
+    post_image, AltBlock, AltBlockFacts, AltBodies, BlockDraws, BlockInfo, BondRecord, Canonical,
+    Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
     IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord, ProbeCell,
     PropertyCell, ProvenReference, RMarket, RecordedPow, RuleSetInForce, SchemaVersion,
     SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, Standing,
@@ -543,6 +543,23 @@ impl Fixtures for BondRecord {
         ]
     }
 }
+impl Fixtures for AltBodies {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // The alt block fixture's own coinbase, as a listed body: the codec
+        // carries transactions as bytes it parses, and these are this
+        // snapshot's literals (`test_block_bytes`).
+        let block = crate::codec::BlockBody::parse(&super::alt::test_block_bytes(41))
+            .expect("the fixture block parses");
+        vec![
+            ("none_listed", AltBodies::of(Vec::new())),
+            (
+                "one_listed",
+                AltBodies::of(vec![block.miner_transaction.clone()]),
+            ),
+        ]
+    }
+}
+
 impl Fixtures for AltBlock {
     fn fixtures() -> Vec<(&'static str, Self)> {
         use shekyl_types::BlockWeight;
@@ -1356,6 +1373,7 @@ snapshotted_codecs! {
     ArchivalLength => codec_snapshot_archival_length,
     PoolRecord => codec_snapshot_pool_record,
     AltBlock => codec_snapshot_alt_block,
+    AltBodies => codec_snapshot_alt_bodies,
     RecordedPow => codec_snapshot_recorded_pow,
 }
 

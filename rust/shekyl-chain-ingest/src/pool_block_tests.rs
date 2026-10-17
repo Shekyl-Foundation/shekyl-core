@@ -4,10 +4,11 @@
 // BSD-3-Clause
 
 //! The pool and blocks, over the production stack (DRS-E5 PR-b b4): a
-//! switch's returns run the door (CEN-K10), an alternative's bodies are
-//! supplemented through it and promoted from the pool (CEN-K9), CEN-M8's
-//! anchor spares a re-admission the proof, and the door verifies nothing
-//! the shared function does not.
+//! switch's returns run the door (CEN-K10); an alternative's bodies are
+//! the store's, promoted from it whatever the pool decided, and offered to
+//! the pool for relay (CEN-K9); a connect past the cap retires an alt row
+//! and its bodies; CEN-M8's anchor spares a re-admission the proof; and the
+//! door verifies nothing the shared function does not.
 //!
 //! Two drivers mine one prefix and then different branches; one's blocks
 //! arrive at the other as alternatives (the switch tests' shape).
@@ -18,7 +19,9 @@ use shekyl_chain_rules::{
 };
 use shekyl_chain_store::pool::{PoolStore, ProvenReference, Standing};
 use shekyl_harness_spender::Spender;
-use shekyl_mempool::{judge, shown, Admission, Evicted, Judged, KeyImages, Limits, Pool};
+use shekyl_mempool::{
+    judge, shown, Admission, Arrival, Duplicate, Evicted, Judged, KeyImages, Limits, Pool,
+};
 use shekyl_types::{CurveTreeRoot, UnixSeconds};
 
 use crate::connector::{Offered, Switched};
@@ -167,86 +170,229 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
     y.close().await;
 }
 
-/// CEN-K9: an alternative's listed bodies are offered to the door before
-/// the block is held. A body refused on its bytes refuses the alternative
-/// (the answer is the door's, at `Lone`); one the door admits is held, and
-/// the switch that promotes the block reads it from the pool.
+/// The bodies the store holds for the alt block `hash` (AL8).
+async fn stored_bodies(
+    x: &mut Scenario<FreeHash>,
+    hash: shekyl_types::BlockHash,
+) -> Option<shekyl_chain_store::codec::AltBodies> {
+    x.with_store(|store, _| {
+        store
+            .begin_read()
+            .expect("a snapshot")
+            .alt_block_bodies(&hash)
+            .expect("the alt rows agree")
+    })
+    .await
+}
+
+/// CEN-K9 (the review of #1102, B1): an alternative's listed bodies are the
+/// store's, so no pool decision can stop its promotion. The alternative
+/// lists three bodies: one this node's branch also mined, one paying one
+/// atomic unit (below this node's floor, which no consensus rule sets), and
+/// one this node holds unpublished. The store holds all three under the
+/// block's hash. Offered to the pool for relay, the first is on the chain,
+/// the second is refused on the floor, and the third is made public — a
+/// block published it, and a pool that kept it hidden would tell an
+/// alternative's sender which stem transactions it held. Then the pool file
+/// is discarded, and the switch still lands.
 #[tokio::test]
-async fn an_alternatives_bodies_are_supplemented_through_the_door_and_promoted_from_the_pool() {
-    let (mut x, prefix) = matured("pool-supplement-x").await;
-    let mut y = Scenario::open("pool-supplement-y");
+async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool() {
+    let (mut x, prefix) = matured("pool-alt-bodies-x").await;
+    let mut y = Scenario::open("pool-alt-bodies-y");
     y.mine(AT).await;
-    let _a = x.mine(1).await;
-    let spend = paying_the_floor(&mut y, &prefix, 0).await;
+    let shared = paying_the_floor(&mut x, &prefix, 0).await;
+    let stem = paying_the_floor(&mut x, &prefix, 2).await;
+    let cheap = Spender::over(&prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
+    let _a = x
+        .mine_listing(vec![shared.clone()])
+        .await
+        .unwrap_or_else(|o| panic!("the shared spend connects here: {o}"));
     y.idle();
     let mut b = vec![y
-        .mine_listing(vec![spend.clone()])
+        .mine_listing(vec![shared.clone(), cheap.clone(), stem.clone()])
         .await
-        .unwrap_or_else(|o| panic!("the spend connects on the alternative: {o}"))];
+        .unwrap_or_else(|o| panic!("the alternative connects all three: {o}"))];
     b.extend(y.mine(1).await);
 
-    let path = tmp("pool-supplement-pool");
+    let path = tmp("pool-alt-bodies-pool");
     let mut pool = open_pool(&mut x, &path).await;
     let now = UnixSeconds::from_raw(10);
-    // A moved body in the alternative's listing refuses it.
-    let mut moved = spend.clone();
-    moved.prefix.unlock_time += 1;
-    let refused = x
+    let policy = AdmissionPolicy::GENESIS;
+    let (sid, cid, tid) = (
+        shared.txid_parts().hash,
+        cheap.txid_parts().hash,
+        stem.txid_parts().hash,
+    );
+    let held = x
         .read_chain(|view, rule_set| {
-            pool.supplement(vec![moved], now, view, rule_set, &AdmissionPolicy::GENESIS)
+            pool.admit(stem.clone(), Arrival::Relayed, now, view, rule_set, &policy)
                 .expect("no fault")
         })
         .await;
-    match refused {
-        Err(r) => {
-            assert_eq!(r.rule, CenRow::I18);
-            assert_eq!(
-                r.locus,
-                shekyl_chain_rules::Locus::Input {
-                    slot: TxSlot::Lone,
-                    input: 0
-                }
-            );
-        }
-        Ok(()) => panic!("a moved body refuses the alternative"),
-    }
-    assert!(pool.is_empty(), "a refused body is not held");
-    // The real bodies are supplemented and held, public.
-    for mined in &b {
-        let listed = mined.template.transactions.clone();
-        let supplemented = x
-            .read_chain(|view, rule_set| {
-                pool.supplement(listed, now, view, rule_set, &AdmissionPolicy::GENESIS)
-                    .expect("no fault")
-            })
-            .await;
-        assert_eq!(supplemented, Ok(()));
-    }
-    let txid = spend.txid_parts().hash;
-    assert!(pool.record(&txid).expect("held").public);
-    // The switch reads the promoted bodies from the pool.
-    let plan = offer_branch(&x, &b).await;
-    let (switched, _) = x
-        .reorganize_with_pool(&plan, &mut pool, now)
-        .await
-        .expect("switch");
+    assert_eq!(held, Admission::Admitted);
     assert!(
-        matches!(switched, Switched::Done(_)),
-        "promoted from the pool's bodies"
+        !shown(&pool.record(&tid).expect("held")),
+        "in its stem phase"
     );
-    // Mined now: the reconcile removes it.
-    let reconciled = x
-        .read_chain(|view, rule_set| {
-            pool.reconcile(view, rule_set, &AdmissionPolicy::GENESIS)
-                .expect("reconcile")
-        })
+
+    assert!(
+        matches!(x.offer(&b[0]).await.expect("offer"), Offered::Held { .. }),
+        "equal work: held"
+    );
+    let bodies = stored_bodies(&mut x, b[0].hash)
+        .await
+        .expect("AL1 wrote the bodies");
+    assert_eq!(bodies.transactions(), b[0].template.transactions.as_slice());
+    let offers = x
+        .read_chain(|view, rule_set| pool.supplement(&bodies, now, view, rule_set, &policy))
         .await;
-    assert!(reconciled
-        .removed
-        .iter()
-        .any(|(id, why)| *id == txid && *why == shekyl_mempool::Removed::Mined));
+    assert!(offers.faults.is_empty(), "{:?}", offers.faults);
+    assert_eq!(offers.admissions.len(), 3);
+    assert_eq!(
+        offers.admissions[0],
+        (sid, Admission::Duplicate(Duplicate::OnChain))
+    );
+    match &offers.admissions[1] {
+        (txid, Admission::Refused(Judged::Policy(r))) => {
+            assert_eq!(*txid, cid);
+            assert_eq!(r.rule, PolicyRow::M3);
+        }
+        other => panic!("the cheap body is refused on the floor: {other:?}"),
+    }
+    assert_eq!(
+        offers.admissions[2],
+        (tid, Admission::Duplicate(Duplicate::InPool))
+    );
+    assert!(pool.record(&cid).is_none(), "the pool does not hold it");
+    let carried = pool.record(&tid).expect("held");
+    assert!(carried.public, "a block published it");
+    assert!(shown(&carried));
+
+    // The pool file is discardable (SPL-Q8): discard it.
     drop(pool);
     drop(std::fs::remove_file(&path));
+    let plan = offer_branch(&x, &b[1..]).await;
+    let switched = x.reorganize(&plan).await.expect("switch");
+    assert!(
+        matches!(switched, Switched::Done(_)),
+        "promoted from the store's bodies: {switched:?}"
+    );
+    assert_eq!(x.hash_at(b[0].height).await.expect("read"), Some(b[0].hash));
+    x.close().await;
+    y.close().await;
+}
+
+/// The other direction (B1): a switch returns a demoted block's bodies to
+/// the pool's door, which refuses one below the floor — and the store keeps
+/// the demoted block's bodies with its row, so a switch back to that branch
+/// lands. A third driver re-mines the first branch and extends it.
+#[tokio::test]
+async fn a_switch_back_promotes_a_demoted_body_the_door_refused() {
+    let (mut x, prefix) = matured("pool-switch-back-x").await;
+    let mut y = Scenario::open("pool-switch-back-y");
+    y.mine(AT).await;
+    let mut z = Scenario::open("pool-switch-back-z");
+    z.mine(AT).await;
+    let cheap = Spender::over(&prefix).spend_coinbase(x.wallet(), h(1), h(AT), 1);
+    let a = x
+        .mine_listing(vec![cheap.clone()])
+        .await
+        .unwrap_or_else(|o| panic!("a block may carry a transaction below the floor: {o}"));
+    let a_again = z
+        .mine_listing(vec![cheap.clone()])
+        .await
+        .unwrap_or_else(|o| panic!("z re-mines it: {o}"));
+    assert_eq!(a_again.hash, a.hash, "the driver is deterministic");
+    let a_ext = z.mine(2).await;
+    y.idle();
+    let b = y.mine(2).await;
+
+    let path = tmp("pool-switch-back-pool");
+    let mut pool = open_pool(&mut x, &path).await;
+    let plan = offer_branch(&x, &b).await;
+    let (switched, admissions) = x
+        .reorganize_with_pool(&plan, &mut pool, UnixSeconds::from_raw(10))
+        .await
+        .expect("switch");
+    assert!(matches!(switched, Switched::Done(_)));
+    match admissions.as_slice() {
+        [(txid, Admission::Refused(Judged::Policy(r)))] => {
+            assert_eq!(*txid, cheap.txid_parts().hash);
+            assert_eq!(r.rule, PolicyRow::M3);
+        }
+        other => panic!("the door refuses the cheap return: {other:?}"),
+    }
+    assert!(pool.is_empty());
+    assert!(
+        stored_bodies(&mut x, a.hash).await.is_some(),
+        "the demoted block's bodies went back with its row"
+    );
+
+    let plan = offer_branch(&x, &a_ext).await;
+    let switched = x.reorganize(&plan).await.expect("switch back");
+    assert!(
+        matches!(switched, Switched::Done(_)),
+        "the switch back lands on the store's bodies: {switched:?}"
+    );
+    assert_eq!(x.digest().await.expect("d"), z.digest().await.expect("d"));
+    drop(pool);
+    drop(std::fs::remove_file(&path));
+    x.close().await;
+    y.close().await;
+    z.close().await;
+}
+
+/// The death rule (B1): the connect that advances the tip to `t` removes
+/// every alt row at or below `t − cap`, with its bodies — no switch reaches
+/// it — and keeps the one at `t − cap + 1`. Under the genesis cap of 720 a
+/// test would mine hundreds of blocks; the levered rules' cap is the same
+/// rule at a small number.
+#[tokio::test]
+async fn the_connect_past_the_cap_retires_an_alt_row_and_its_bodies() {
+    use crate::scenario_shard::{levered_rules, REORG_CAP_BLOCKS};
+    let mut x = Scenario::open_under("pool-death-x", FreeHash, levered_rules());
+    let mut y = Scenario::open_under("pool-death-y", FreeHash, levered_rules());
+    x.mine(30).await;
+    y.mine(30).await;
+    // x's two new blocks and the alternative's two sit at the same heights,
+    // so the alternative is no heavier: both are held and nothing switches.
+    x.mine(2).await;
+    y.idle();
+    let b = y.mine(2).await;
+    for mined in &b {
+        assert!(matches!(
+            x.offer(mined).await.expect("offer"),
+            Offered::Held { .. }
+        ));
+    }
+    // One block at a time, so each connect's sweep is the one under test:
+    // until the tip reaches `b[0] + cap` both rows are reachable. x's tip is
+    // the alternative's second height.
+    let mut tip = b[1].height.to_raw();
+    while tip + 1 < b[0].height.to_raw() + REORG_CAP_BLOCKS {
+        x.mine(1).await;
+        tip += 1;
+        let first = stored_bodies(&mut x, b[0].hash).await;
+        let second = stored_bodies(&mut x, b[1].hash).await;
+        assert!(
+            first.is_some() && second.is_some(),
+            "both reachable at tip {tip}"
+        );
+    }
+    x.mine(1).await;
+    // The tip is `b[0] + cap`: that row is at `tip − cap` and leaves with
+    // its bodies; `b[1]`'s, at `tip − cap + 1`, stays.
+    let first = stored_bodies(&mut x, b[0].hash).await;
+    let second = stored_bodies(&mut x, b[1].hash).await;
+    assert!(
+        first.is_none(),
+        "the row at tip − cap and its bodies are gone"
+    );
+    assert!(second.is_some(), "the row at tip − cap + 1 stays");
+    assert_eq!(x.alt_blocks_held().await.expect("count"), 1);
+    x.mine(1).await;
+    assert!(stored_bodies(&mut x, b[1].hash).await.is_none());
+    assert_eq!(x.alt_blocks_held().await.expect("count"), 0);
     x.close().await;
     y.close().await;
 }

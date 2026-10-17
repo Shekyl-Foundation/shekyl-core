@@ -804,7 +804,27 @@ transaction returned from a popped block (K10) as much as a relayed one
 was the fee-floor bypass for block-carried transactions that the
 2026-10-02 reopening of C2-R2 Q9 names as a bug). K10's retention of a
 returned transaction that the chain-bound half refuses — kept, not
-relayable, never selected, evicted by M10 — is unaffected. M11 ("zero-fee
+relayable, never selected, evicted by M10 — is unaffected.
+
+**An alternative block's bodies are the store's, not the pool's** (K9;
+the review of #1102, B1, 2026-10-17). A switch connects the promoted
+blocks' listed bodies, so they are consensus data. A pool refuses,
+evicts and discards by local policy, and a fee floor no consensus rule
+sets moves every block, so a body left to the pool could leave a heavier
+valid chain unpromotable. AL1 writes an alt row's bodies to
+`alt_block_bodies` beside it, from the cheap tier's verdict (whose
+candidate `form` paired with its header, CEN-G2), for an offered
+alternative and for a demoted block alike; AL2 and AL3 remove them with
+the row; AL8 reads them back, held to the row's listed hashes. The pool
+is offered them (`Pool::supplement`, which takes the stored `AltBodies`,
+and `Pool::returned`) for relay and templates only: its refusal costs a
+transaction its relay, never the chain its switch. A held transaction a
+block carries is made public — a block published it, and a pool that kept
+it in its stem phase would answer peer sync differently for a stem
+transaction it held, which anyone able to send an alternative block could
+read.
+
+M11 ("zero-fee
 never relayed") is not a row of this door: with the serve-credit carriers
 gone there is no zero-fee family to exempt from M3, and a second mechanism
 for M3's job is deleted (`05-system-thinking.mdc`, one mechanism one job;
@@ -852,6 +872,17 @@ demote/promote witness handling in `blockchain.cpp` (`:995–1065`),
 `db_lmdb`'s witness table — is a `DEL-008` deletion.
 
 ### 2.3 The switch is one closure (`E5-Q5`, `E5-Q6`)
+
+**The death rule.** An alternative row at height `h` can be promoted only
+by a switch that pops `tip − h + 1` blocks at least, and the cap refuses
+any switch deeper than it before a pop (`E5-Q6`); the tip only rises. So
+the connect that advances the tip to `t` removes, in its own write, every
+alt row at or below `t − cap`, with its bodies — after the journal's seal,
+since alt rows are not chain state — and the writer removes, beside it,
+every row at or below the last anchor at or below `t`, which CEN-E2 would
+refuse. A row's lifetime is the cap: no constant of its own. A switch
+removes each promoted row as it connects that block, so a promoted chain
+longer than the cap never has a row swept before its own removal.
 
 ```text
 // On the actor, before any write. The actor is the only writer, so nothing
@@ -938,8 +969,9 @@ promotion verdict's suffix does (K5); on a demoted block it is SI-27),
 and the plan carries the post-switch **header chain** a promoted block
 may reference — CEN-I11's window below the first promoted height and the
 entries themselves, each with its header's root (`SwitchPlan::headers`).
-The caller, who holds the bodies, claims each promoted block's references
-off it (`SwitchPlan::references_for`) and `form` verifies the proofs and
+The plan carries each promoted block's bodies from the store (AL8), and
+the caller claims each promoted block's references off its header chain
+(`SwitchPlan::references_for`) and `form` verifies the proofs and
 signatures off the actor; inside the closure `validate` compares the
 claim with the chain and faults `Stale::Reference` — `RunFault::StaleReference`,
 a driver defect like a stale target, the transaction rolled back and the
@@ -1013,7 +1045,7 @@ and site it lands in, and the witness. "slice 9" is the alt increment
 | CEN-K6 | switch iff alt cumulative difficulty strictly greater (checkpoint forces) | rule — `fork_choice`'s verdict matched; the crossing is Q1b's | `shekyl-difficulty` (landed) + ingest match (slice 9) | equal keeps; greater switches; checkpoint-forced promotes a lighter chain Built (switch PR): the match in `switch.rs` (`offer`, re-derived in `switch`); test `a_heavier_branch_switches_and_equals_the_branch_connected_directly`; the checkpoint arm in `a_checkpoint_forced_switch_discards_the_demoted_chain`, reachable once CEN-E2 floors on the last anchor the tip has reached. |
 | CEN-K7 | demoted blocks re-enter as alt blocks; discard on checkpoint-forced | sequencing — step 3 under the verdict's arm (`E5-12`) | ingest switch (slice 9) | after a switch AL7 lists the demoted blocks; after a forced switch it does not Built (switch PR): the demoted rows from the tier's verdicts on the `Switch` arm, none on `ForcedSwitch` (AL6 = 0); a refusal of a recorded block is SI-27, by ruling (§2.3), not the C++'s log-and-continue; test `a_checkpoint_forced_switch_discards_the_demoted_chain`. |
 | CEN-K8 | alt `already_generated_coins` is bookkeeping, not a consensus read | held by store — the alt row carries no supply word (a4, `SCHEMA_VERSION` 24, §2.1); the row's layout is the witness, pinned by `codec::alt_tests::an_alt_row_has_no_supply_word` | store `codec/alt.rs` (landed a4) | UPDATE 2026-10-11: the field is deleted; the a2 witness below (the view's type) stands and is no longer the only one; the registry flips `pending` → `held_by_store` in the census-arms commit (`E5-18`). UPDATE 2026-10-10: Round 0's witness (`rg coins_generated rust/shekyl-chain-rules/` → 0) was wrong at the pin — `RecordedBlock.coins_generated` is F13's operand (`view.rs:177`, `miner.rs:469`). The witness is the type: `rg 'coins_generated' rust/shekyl-chain-rules/src/view.rs` names only `RecordedBlock`'s field, never `HeaderRecord`'s, and `AltView` implements `HeaderView` only |
-| CEN-K9 | supplement txs must pass NIC or the block is rejected | sequencing — the supplement goes through the pool door (§2.2) under `kept_by_block`; a refusal refuses the block | `shekyl-mempool` + ingest (slice 10) | a supplement tx failing `tx_form` refuses the alt block |
+| CEN-K9 | supplement txs must pass NIC or the block is rejected | sequencing — `form` judges every listed body on its bytes at its slot before the cheap tier runs, so a body that fails NIC refuses the alternative there; AL1 stores the bodies beside the row and the switch promotes from them (§2.2, the review of #1102 B1, 2026-10-17); the pool is offered them for relay only | store + ingest (slice 10) | an alternative listing a body below the floor, one the main branch mined and one held in stem is promoted with the pool file discarded; a demoted body the door refused is promoted on a switch back |
 | CEN-K10 | `kept_by_block` admission skips policy, keeps consensus | writer behaviour — the returned transaction runs the **whole** door, `policy_form` included; `fcmp_cache` consulted (`E5-11`); what `kept_by_block` keeps is the retention — a returned transaction that cannot currently be verified stays, not relayable, until M10 evicts it. UPDATE 2026-10-11 (`E5-Q1` reopened in part, §8): *was* "`policy_form` skipped, `tx_form`/`tx_against` not" — the policy skip was the fee-floor bypass for block-carried transactions (C2-R2 Q9's 2026-10-02 reopening names it a bug), and with the carriers gone no family needs it | `shekyl-mempool` (slice 10) | a below-floor demoted tx is refused by the same door that refuses it on relay; a returned tx that cannot be verified is kept and never relayed, and M10 evicts it. *Was:* "a zero-fee demoted tx is admitted and not relayed (M11)". **Requirement (2026-10-11, subject-neutral):** a pop must not strand serve-credit evidence on the nodes that connected the popped block. What the evidence is, the mechanism that re-includes it, and which store holds it across the pop are Slice C's (under its direction the evidence may not be a pool transaction at all); K10 builds the pool's half of the pop's return path and no evidence-specific admission. The frozen C++'s behaviour — a popped zero-fee entry kept under `kept_by_block` past the ordinary lifetime, never relayed, re-mined only by a node that held it — is read in FOLLOWUPS ("A popped serve-credit carrier survives the C++ pool's pop path") as evidence for that round, not as a shape this row inherits |
 | CEN-D5 | alt-chain difficulty: the same LWMA-1 over the stitched window | rule — D4 over `AltView::header_at` (the subsumption `census.rs:353` wrote; `block_at` → `header_at` per `E5-13`) | rules `difficulty.rs` bound on `HeaderView` (slice 9) | a fixture drives D4 over a stitched view and over the main chain to the same target when the branches agree, different when they do not. UPDATE 2026-10-11 (a4 census arms): the site is `rules::alt::D5::target` wrapping `D4::target` (D4 records its own row); registry `enforced_at(crate::rules::alt::D5, "the_alt_target_follows_the_window_it_is_fed")` — recorded at the one site that feeds D4 an alt view, not per block |
 | CEN-E2 | an alt block at or below the last anchor is refused | rule in `alt_against` — `anchors.rs`'s E2 arm given its alt home | rules `anchors.rs` (slice 9) | a candidate forking below the anchor floor refused; above it admitted. UPDATE 2026-10-11 (a4 census arms): the site is `rules::alt::E2::check` (both bands over `Fork`, the cap through `RuleSet::reorg_cap()`); registry `enforced_at(crate::rules::alt::E2, "an_alternative_rooted_below_the_anchor_is_refused_and_one_at_or_above_it_is_not")` — the main chain satisfies both bands by construction, so the row is the alt tier's alone |

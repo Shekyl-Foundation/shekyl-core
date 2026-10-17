@@ -62,7 +62,7 @@ fn a_refused_transaction_leaves_no_trace() {
         let admission = pool
             .admit(
                 tx,
-                Arrival::Block,
+                Arrival::Returned,
                 UnixSeconds::from_raw(1),
                 &view,
                 &RuleSet::GENESIS,

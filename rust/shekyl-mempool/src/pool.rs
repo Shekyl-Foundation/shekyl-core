@@ -36,14 +36,27 @@ pub enum Arrival {
     /// From a peer or this node's own submit: not public until the relay's
     /// fluff event says so.
     Relayed,
-    /// Carried by a block: returned from one the chain popped (CEN-K10), or
-    /// listed by an alternative block (CEN-K9). Public, because a block
-    /// carried it, and kept if the chain-bound half refuses it.
-    Block,
+    /// Returned from a block a switch popped (CEN-K10). Public, because a
+    /// block carried it, and kept if the chain-bound half alone refuses it:
+    /// a switch back may make it valid again.
+    Returned,
+    /// Listed by an alternative block the store holds (CEN-K9). Public,
+    /// because a block carried it. Held only if the door admits it: the
+    /// store holds the alternative's bodies for its promotion, so the pool's
+    /// answer decides relay and templates and nothing else.
+    Listed,
+}
+
+impl Arrival {
+    /// Whether a block carried the transaction, which makes it public.
+    const fn carried(self) -> bool {
+        !matches!(self, Self::Relayed)
+    }
 }
 
 /// A transaction the pool already accounts for (CEN-M1): nothing is
-/// judged again and nothing changes.
+/// judged again. A held one a block carries is made public; nothing else
+/// changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Duplicate {
     /// The pool holds it.
@@ -57,9 +70,9 @@ pub enum Duplicate {
 pub enum Admission {
     /// The door admitted it; the pool holds it as [`Standing::Admitted`].
     Admitted,
-    /// A block-carried transaction the chain-bound half refused: held as
-    /// [`Standing::Kept`] — never relayed, never selected, and evicted by
-    /// CEN-M10 (CEN-K10).
+    /// A returned transaction the chain-bound half refused and the policy
+    /// did not: held as [`Standing::Kept`] — never relayed, never selected,
+    /// and evicted by CEN-M10 (CEN-K10).
     Kept,
     /// Already accounted for (CEN-M1).
     Duplicate(Duplicate),
@@ -149,7 +162,12 @@ impl Pool {
     /// under `rule_set` and `policy` — the one way into the pool.
     ///
     /// CEN-M1 first: a transaction the pool or the chain already holds is
-    /// a [`Duplicate`] and nothing is judged. Then the door. An admitted
+    /// a [`Duplicate`] and nothing is judged. A held one a block carries is
+    /// made public (P2): a block has published it on every node, and a pool
+    /// that kept it hidden would answer peer sync differently for a
+    /// transaction it held in its stem phase than for one it did not — a
+    /// possession oracle for anyone who can send an alternative block. Then
+    /// the door. An admitted
     /// transaction is written to the file (P1) and its key images enter the
     /// map (CEN-M7); a block-carried one the chain-bound half refused is
     /// written as kept and spends nothing in the map — it is not a pool-valid
@@ -170,7 +188,11 @@ impl Pool {
         policy: &AdmissionPolicy,
     ) -> Result<Admission, PoolFault<V::Fault>> {
         let txid = tx.txid_parts().hash;
-        if self.held.contains_key(&txid) {
+        if let Some(held) = self.held.get_mut(&txid) {
+            if arrival.carried() && !held.record.public {
+                self.store.write(|batch| batch.publish(&txid))?;
+                held.record.public = true;
+            }
             return Ok(Admission::Duplicate(Duplicate::InPool));
         }
         if chain
@@ -188,14 +210,16 @@ impl Pool {
                 },
                 Admission::Admitted,
             ),
-            (Judged::Chain { .. }, Arrival::Block) => (Standing::Kept, Admission::Kept),
+            (Judged::Chain { policy: None, .. }, Arrival::Returned) => {
+                (Standing::Kept, Admission::Kept)
+            }
             (refused, _) => return Ok(Admission::Refused(refused)),
         };
         let record = PoolRecord {
             weight: u64::try_from(tx.weight()).unwrap_or(u64::MAX),
             fee: AtomicUnits::from_raw(fee_of(&tx)),
             receive_time: now,
-            public: arrival == Arrival::Block,
+            public: arrival.carried(),
             standing,
         };
         let blob = tx.serialize();

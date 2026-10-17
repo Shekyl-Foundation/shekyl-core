@@ -598,31 +598,25 @@ where
 
     /// Carry out `plan` (DRS-E5 §2.3 step 1, then [`Reorganize`]): form the
     /// demoted blocks unless the verdict is the checkpoint's, and the alt
-    /// entries from their rows' blocks and witnesses with the listed bodies
-    /// `bodies` holds by block hash — the pool's role from PR-b on. A
-    /// promoted block `form` refuses under the plan's claims is
+    /// entries from their rows' blocks, witnesses and listed bodies (the
+    /// store's, AL8). A promoted block `form` refuses under the plan's claims is
     /// [`RefusePromotion`]: the failing suffix is removed and nothing is
     /// popped. A demoted block this node connected forms without claims; a
     /// refusal there is an invariant, not a verdict. After
     /// [`Switched::Done`], the header ledger drops every height above the
     /// fork, so the next claim reloads the chain this switch connected.
-    pub async fn reorganize(
-        &mut self,
-        plan: &SwitchPlan,
-        bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
-    ) -> Result<Switched, RunFault> {
-        self.reorganize_timed(plan, bodies)
+    pub async fn reorganize(&mut self, plan: &SwitchPlan) -> Result<Switched, RunFault> {
+        self.reorganize_timed(plan)
             .await
             .map(|(switched, _)| switched)
     }
 
-    /// The switch with the pool in both its roles (DRS-E5 PR-b b4): the
-    /// promoted blocks' listed bodies come from `pool` (CEN-K9 — what it
-    /// holds from each alternative's supplement; a body it does not hold is
-    /// missing, and the promoted block is refused on its pairing), and the
-    /// demoted blocks' listed transactions go back to it after the switch
-    /// lands (CEN-K10 — `SwitchDone::returned`'s caller), through the door
-    /// against the chain the switch left, at `now`.
+    /// The switch, then the pool (DRS-E5 PR-b b4): the demoted blocks'
+    /// listed transactions go to `pool` after the switch lands (CEN-K10 —
+    /// `SwitchDone::returned`'s caller), through the door against the chain
+    /// the switch left, at `now`. The pool's answer decides their relay and
+    /// templates only: the switch read every body it connected from the
+    /// store.
     pub async fn reorganize_with_pool(
         &mut self,
         plan: &SwitchPlan,
@@ -635,29 +629,27 @@ where
         ),
         RunFault,
     > {
-        let bodies: std::collections::HashMap<BlockHash, Vec<Transaction>> = plan
-            .promoted
-            .iter()
-            .filter_map(|p| {
-                pool.bodies_for(&p.block.transaction_hashes)
-                    .map(|bodies| (p.at.hash, bodies))
-            })
-            .collect();
-        let switched = self.reorganize(plan, &bodies).await?;
+        let switched = self.reorganize(plan).await?;
         let admissions = match &switched {
             Switched::Done(done) => {
                 let returned = done.returned.clone();
-                self.read_chain(|view, rule_set| {
-                    pool.returned(
-                        returned,
-                        now,
-                        view,
-                        rule_set,
-                        &shekyl_chain_rules::AdmissionPolicy::GENESIS,
-                    )
-                    .unwrap_or_else(|fault| panic!("the pool faulted on the returns: {fault:?}"))
-                })
-                .await
+                let offers = self
+                    .read_chain(|view, rule_set| {
+                        pool.returned(
+                            returned,
+                            now,
+                            view,
+                            rule_set,
+                            &shekyl_chain_rules::AdmissionPolicy::GENESIS,
+                        )
+                    })
+                    .await;
+                assert!(
+                    offers.faults.is_empty(),
+                    "the pool faulted on the returns: {:?}",
+                    offers.faults
+                );
+                offers.admissions
             }
             _ => Vec::new(),
         };
@@ -672,7 +664,6 @@ where
     pub async fn reorganize_timed(
         &mut self,
         plan: &SwitchPlan,
-        bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
     ) -> Result<(Switched, ReorgTiming), RunFault> {
         let started = std::time::Instant::now();
         // Demoted blocks carry no reference claims: the cheap tier never
@@ -690,9 +681,8 @@ where
         }
         let demoted_len = work.len();
         work.extend(plan.promoted.iter().map(|p| {
-            let listed = bodies.get(&p.at.hash).cloned().unwrap_or_default();
-            let candidate =
-                Candidate::new(p.block.clone(), listed).with_attestation_witness(p.witness.clone());
+            let candidate = Candidate::new(p.block.clone(), p.transactions.clone())
+                .with_attestation_witness(p.witness.clone());
             let references = plan.references_for(&p.at, &candidate);
             (candidate, p.at.clone(), references)
         }));

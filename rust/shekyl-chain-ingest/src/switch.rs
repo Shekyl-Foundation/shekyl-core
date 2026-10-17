@@ -41,11 +41,12 @@
 //!    before this message, and the alt stays — the same class as a stale
 //!    reference.
 //!
-//! The listed bodies of an alt block are not the alt row's (`AltValid`'s
-//! `into_candidate`: the bodies are the pool's to hold until promotion), so
-//! the caller supplies them with the formed blocks, from the pool
-//! (`shekyl_mempool::Pool::bodies_for`, CEN-K9). The demoted blocks' bodies
-//! come back as [`SwitchDone::returned`], for the pool's door
+//! The listed bodies of an alt block are consensus data the store holds
+//! beside its row (`alt_block_bodies`, AL8): the plan carries them
+//! ([`PlannedPromotion::transactions`]), so no pool policy, eviction or
+//! restart can leave a heavier valid chain unpromotable. A demoted block's
+//! bodies go back into the store with its row (AL1), and also come back as
+//! [`SwitchDone::returned`], for the pool's door — relay and templates only
 //! (`shekyl_mempool::Pool::returned`, CEN-K10).
 //!
 //! Not here: the arrival router's other arms beyond answering an orphan or
@@ -126,8 +127,8 @@ pub enum Offered {
 /// One block a switch will judge, with what `form` needs beside the
 /// substrate: the height (which rule set), the seed claim (CEN-D3) and the
 /// target claim (CEN-D4) on the chain the block is on. The third claim —
-/// the references — needs the listed bodies, which the plan does not
-/// carry; the caller makes it from the plan's header chain
+/// the references — reads the listed bodies, so the caller makes it from
+/// the candidate it forms and the plan's header chain
 /// ([`SwitchPlan::references_for`]).
 #[derive(Clone, Debug)]
 pub struct PlannedBlock {
@@ -163,8 +164,8 @@ pub struct PlannedDemotion {
     pub candidate: shekyl_chain_rules::Candidate,
 }
 
-/// An alt entry the switch will promote. The block and witness are the
-/// alt row's; the listed bodies are the caller's (module docs).
+/// An alt entry the switch will promote: the block, its witness and its
+/// listed bodies, as the store holds them (module docs).
 #[derive(Clone, Debug)]
 pub struct PlannedPromotion {
     /// Height, identity, seed claim.
@@ -173,6 +174,8 @@ pub struct PlannedPromotion {
     pub block: Block,
     /// The witness the alt row carries (CEN-K5b).
     pub witness: Option<AttestationWitness>,
+    /// The listed bodies, in listed order (AL8).
+    pub transactions: Vec<Transaction>,
 }
 
 /// One header of the chain a switch promotes onto, as a reference claim
@@ -593,6 +596,10 @@ fn plan(
             },
             block: entry.block.block().clone(),
             witness,
+            transactions: snap
+                .alt_block_bodies(&entry.id)?
+                .expect("an entry of the alternative chain was read from its row")
+                .into_transactions(),
         });
     }
     // The header chain the promoted blocks may reference: CEN-I11's window
@@ -749,7 +756,8 @@ fn switch(
 
     // The demoted blocks: the recorded chain above the fork point, read
     // before the closure (SAL-13). Their bodies return to the pool either
-    // way; their rows are written only on the difficulty arm (K7).
+    // way; their rows — and with them their bodies, AL1 — are written only
+    // on the difficulty arm (K7).
     let depth = tip.height.to_raw() - root.height.to_raw();
     let mut demoted = Vec::new();
     let mut witnesses = Vec::new();
@@ -825,6 +833,12 @@ fn switch(
                     done.exercised
                         .extend(valid.coverage().iter().map(CenRow::as_str));
                     batch.connect(valid, in_force)?;
+                    // Its alt row leaves with its connect, before the next
+                    // connect's death rule could reach it: a promoted chain
+                    // longer than the cap would otherwise lose a row it is
+                    // about to remove (`store/alt.rs`).
+                    batch.remove_alt_block(&entry.id)?;
+                    super::retire_below_the_anchor(batch, &trust, height)?;
                     done.promoted.push((height, hash));
                 }
                 Ok(Err(refused)) => {
@@ -837,9 +851,6 @@ fn switch(
                 }
                 Err(fault) => return Err(Stop::Fault(super::validate_fault(batch, height, fault))),
             }
-        }
-        for entry in &entries {
-            batch.remove_alt_block(&entry.id)?;
         }
         done.returned = returned;
         Ok(done)

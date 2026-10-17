@@ -42,6 +42,7 @@ mod relay;
 mod template;
 mod view;
 
+pub use block::Offers;
 pub use door::{judge, Judged};
 pub use evict::{Evicted, Limits};
 pub use pool::{Admission, Arrival, Duplicate, Pool, PoolFault};

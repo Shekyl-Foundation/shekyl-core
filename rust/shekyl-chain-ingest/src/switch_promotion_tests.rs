@@ -20,18 +20,16 @@
 //! it lacks, so a spend whose reference and whose target window sit on the
 //! promoted chain connects only once those headers have been dropped.
 
-use std::collections::HashMap;
-
 use shekyl_chain_rules::{CenRow, Locus, TxSlot, REFERENCE_BLOCK_MIN_AGE};
 use shekyl_harness_spender::Spender;
-use shekyl_types::{BlockCount, BlockHash, BlockHeight};
-use shekyl_wire::{Ct, Transaction};
+use shekyl_types::{BlockCount, BlockHeight};
+use shekyl_wire::Ct;
 
 use crate::connector::{Offered, Switched};
 use crate::scenario::{Mined, Scenario};
 use crate::test_support::Family;
 
-use super::{bodies, offer_branch, AT};
+use super::{offer_branch, AT};
 
 #[tokio::test]
 async fn a_promotion_form_refusal_removes_the_alt_suffix_and_does_not_pop() {
@@ -86,9 +84,7 @@ async fn a_promotion_form_refusal_removes_the_alt_suffix_and_does_not_pop() {
     assert_eq!(plan.demoted.len(), 1, "the one incumbent block");
     assert_eq!(plan.promoted.len(), 2, "the broken block and its child");
 
-    let listed: HashMap<BlockHash, Vec<Transaction>> =
-        HashMap::from([(broken.hash, broken.candidate.transactions.clone())]);
-    match x.reorganize(&plan, &listed).await.expect("form refusal") {
+    match x.reorganize(&plan).await.expect("form refusal") {
         Switched::Refused {
             at,
             hash,
@@ -139,7 +135,7 @@ async fn a_switch_drops_the_losing_branch_from_the_target_ledger() {
     y.idle();
     let won = y.mine(min_age + 1).await;
     let plan = offer_branch(&x, &won).await;
-    let Switched::Done(_) = x.reorganize(&plan, &bodies(&won)).await.expect("switch") else {
+    let Switched::Done(_) = x.reorganize(&plan).await.expect("switch") else {
         panic!("the switch did not land");
     };
 

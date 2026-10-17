@@ -302,10 +302,15 @@ use super::{Canonical, CodecError};
 ///   whose admitted arm carries CEN-M8's cache as the `(reference, height,
 ///   root)` triple the proof verified against, replacing the C++
 ///   `H(proof ‖ referenceBlock ‖ key images)` and its null-hash sentinel.
-///   Only the pool file's rows move; a `26` pool file is recreated at open
-///   (`SPL-Q8`), and a `26` chain file is refused as at every bump — the
-///   two files share one layout number. `pool_record.snap` re-pins; no
-///   chain table, ordinal or property cell moves.
+///   A `26` pool file is recreated at open (`SPL-Q8`), and a `26` chain
+///   file is refused as at every bump — the two files share one layout
+///   number. `pool_record.snap` re-pins. In the chain file,
+///   `alt_block_bodies` (`LmdbHashKey → alt_bodies`, Rust-only, ordinal 43)
+///   is born: an alternative block's listed bodies are consensus data the
+///   switch connects, so the store holds them beside the alt row instead of
+///   the pool (the review of #1102, B1). `alt_bodies.snap` is new and
+///   `tables.snap` re-pins; no existing table, ordinal or property cell
+///   moves.
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(27);
 
 /// A layout version as stored in the `schema_version` cell.
