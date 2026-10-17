@@ -23,6 +23,14 @@ use crate::harness::MockChain;
 use crate::rule_set::RuleSet;
 use crate::view::RecordedBlock;
 
+/// The height the rewind tests journal an event at, above the open they
+/// rewind to (the rewind reads no open: its rows are already the ones
+/// above it).
+const AFTER_OPEN: BlockHeight = BlockHeight::from_raw(12);
+/// A height below [`AFTER_OPEN`], for the test where two events' order
+/// matters.
+const EARLIER: BlockHeight = BlockHeight::from_raw(10);
+
 const P1: PCanonicalId = PCanonicalId::from_bytes([0xa1; 32]);
 const P2: PCanonicalId = PCanonicalId::from_bytes([0xa2; 32]);
 const E1: SettlementEpoch = SettlementEpoch::from_raw(1);
@@ -102,17 +110,22 @@ fn emitted(
     pairs_of(&drawable)
 }
 
-fn released(height: u64, record: &(PCanonicalId, BondRecord)) -> ReleasedRecord {
+fn released(height: BlockHeight, record: &(PCanonicalId, BondRecord)) -> ReleasedRecord {
     ReleasedRecord {
-        height: BlockHeight::from_raw(height),
+        height,
         persona: record.0,
         pre_image: record.1.clone(),
     }
 }
 
-fn slashed(height: u64, persona: PCanonicalId, shard: u64, took: SlashedHolding) -> LoggedSlash {
+fn slashed(
+    height: BlockHeight,
+    persona: PCanonicalId,
+    shard: u64,
+    took: SlashedHolding,
+) -> LoggedSlash {
     LoggedSlash {
-        height: BlockHeight::from_raw(height),
+        height,
         entry: SlashLogEntry {
             persona,
             shard: ShardId::from_raw(shard),
@@ -259,7 +272,12 @@ fn a_release_is_undone_by_its_pre_image() {
     let before = compact(P1, &[0, 1], 0);
     let mut at_tip = before.clone();
     at_tip.1.holdings = held(&[], 0);
-    let at_open = rewind(vec![at_tip], vec![released(12, &before)], Vec::new()).expect("undoable");
+    let at_open = rewind(
+        vec![at_tip],
+        vec![released(AFTER_OPEN, &before)],
+        Vec::new(),
+    )
+    .expect("undoable");
     assert_eq!(holdings_of(&at_open, P1), &before.1.holdings);
 }
 
@@ -272,7 +290,7 @@ fn a_compact_slash_gives_the_shard_back_with_its_add_epoch() {
         vec![at_tip],
         Vec::new(),
         vec![slashed(
-            12,
+            AFTER_OPEN,
             P1,
             3,
             SlashedHolding::Shard {
@@ -293,7 +311,7 @@ fn a_complete_tree_demotion_is_undone() {
     let at_open = rewind(
         vec![(persona, record)],
         Vec::new(),
-        vec![slashed(12, P1, 4, SlashedHolding::CompleteTree)],
+        vec![slashed(AFTER_OPEN, P1, 4, SlashedHolding::CompleteTree)],
     )
     .expect("undoable");
     assert_eq!(holdings_of(&at_open, P1), &Holdings::CompleteTree);
@@ -311,9 +329,9 @@ fn events_are_undone_newest_first() {
     at_tip.1.holdings = held(&[], 0);
     let at_open = rewind(
         vec![at_tip],
-        vec![released(12, &pre_release)],
+        vec![released(AFTER_OPEN, &pre_release)],
         vec![slashed(
-            10,
+            EARLIER,
             P1,
             3,
             SlashedHolding::Shard {
@@ -331,8 +349,8 @@ fn events_are_undone_newest_first() {
 /// the Release.
 #[test]
 fn at_one_height_the_slash_pass_is_newer_than_the_inputs() {
-    let release = Undo::Release(released(12, &compact(P1, &[0], 0)));
-    let slash = Undo::Slash(slashed(12, P2, 0, SlashedHolding::CompleteTree));
+    let release = Undo::Release(released(AFTER_OPEN, &compact(P1, &[0], 0)));
+    let slash = Undo::Slash(slashed(AFTER_OPEN, P2, 0, SlashedHolding::CompleteTree));
     assert!(release.connected_at() < slash.connected_at());
 }
 
@@ -341,13 +359,13 @@ fn at_one_height_the_slash_pass_is_newer_than_the_inputs() {
 /// either.
 #[test]
 fn rows_the_records_contradict_are_faults() {
-    let release = released(12, &compact(P2, &[0], 0));
+    let release = released(AFTER_OPEN, &compact(P2, &[0], 0));
     assert_eq!(
         rewind(vec![compact(P1, &[0], 0)], vec![release], Vec::new()),
         Err(DrawableEpochFault::NoRecord { persona: P2 })
     );
     let shard_still_held = slashed(
-        12,
+        AFTER_OPEN,
         P1,
         0,
         SlashedHolding::Shard {
@@ -365,7 +383,7 @@ fn rows_the_records_contradict_are_faults() {
             shard: ShardId::from_raw(0),
         })
     );
-    let demotion_of_a_non_empty_set = slashed(12, P1, 4, SlashedHolding::CompleteTree);
+    let demotion_of_a_non_empty_set = slashed(AFTER_OPEN, P1, 4, SlashedHolding::CompleteTree);
     assert_eq!(
         rewind(
             vec![compact(P1, &[0], 0)],

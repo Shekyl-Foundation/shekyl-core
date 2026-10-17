@@ -145,7 +145,7 @@ impl<'id> WriteBatch<'_, 'id> {
         let bonds_apply = self.apply_policy().applies(ArchivalFamily::Bond);
         if bonds_apply {
             self.write_bond_records(delta)?;
-            self.write_release_journal(height, delta)?;
+            self.write_release_journal(BlockHeight::from_raw(height), delta)?;
         }
         if self.apply_policy().applies(ArchivalFamily::ServeCredit) {
             self.write_serve_credits(height, delta, bonds_apply)?;
@@ -200,12 +200,15 @@ impl<'id> WriteBatch<'_, 'id> {
     /// wrong height, since a persona releases once. Governed with the
     /// records it is the pre-image of, by `ArchivalFamily::Bond`; `pop`
     /// removes it through the journal.
-    fn write_release_journal(&self, height: u64, delta: &ArchivalDelta) -> Result<(), StoreError> {
+    fn write_release_journal(
+        &self,
+        height: BlockHeight,
+        delta: &ArchivalDelta,
+    ) -> Result<(), StoreError> {
         let releases = delta.releases();
         if releases.is_empty() {
             return Ok(());
         }
-        let height = BlockHeight::from_raw(height);
         let mut journal =
             self.open_insert_table(ARCHIVAL_RELEASE_JOURNAL, StoreInvariant::TipMismatch)?;
         for release in releases {
