@@ -350,7 +350,6 @@ MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = 
         frozenset({
             ("std", "shekyl-bulletproofs", "normal"),
             ("std", "shekyl-curve-generators", "normal"),
-            ("std", "shekyl-rpc-client", "normal"),
             ("std", "shekyl-scanner", "normal"),
         }),
     ),

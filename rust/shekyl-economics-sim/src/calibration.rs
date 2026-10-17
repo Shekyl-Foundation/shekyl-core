@@ -394,14 +394,17 @@ mod tests {
     /// and 34 133 atomic per byte on the shipped curve.
     fn rates() -> [PerByteRate; 3] {
         use shekyl_economics::fee::{relay_fee_floor, FeeCorrection};
-        use shekyl_economics::{base_block_reward, tail_subsidy_per_block, EconomicParams};
+        use shekyl_economics::{
+            base_block_reward, tail_subsidy_per_block, EconomicParams,
+            RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        };
 
         let params = EconomicParams::default();
         let floor_at = |reward: u64| {
             PerByteRate::from_atomic(relay_fee_floor(
                 reward,
                 params.full_reward_zone,
-                crate::fee_ladder::REF_TX_WEIGHT,
+                RELAY_FLOOR_REFERENCE_TX_WEIGHT,
                 FeeCorrection::UNITY,
                 &params,
             ))

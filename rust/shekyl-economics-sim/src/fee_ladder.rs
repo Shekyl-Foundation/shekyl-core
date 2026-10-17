@@ -6,55 +6,54 @@
 //! The fee ladder production serves, measured over the registered state grid.
 //!
 //! Production multiplies three rungs by raw `C` (`corrected_fee_ladder`,
-//! FL-R20). This instrument reports that ladder, how long a posted rung
-//! holds under Poisson traffic, and whether the fee-volume loop settles.
-//! The legacy column is the ArticMine 2021 transliteration, rounded to two
-//! significant digits: the pre-FL-R20 comparison, so the gap between that
-//! ladder and the served one is a measured output.
+//! FL-R20). This instrument reports that ladder over the correction
+//! surface and at representative states, and whether the fee-volume loop
+//! settles (FL-C7).
 //!
-//! Dwell and feedback run the served ladder. A new question is a new row
-//! in the scenario tables. The snap, the band, the dwell floor and the
-//! grid were deleted with FL-R21; they reopen when a production caller
-//! needs one.
+//! The instrument measures the design as built, on the operands production
+//! computes: every trace pushes each block's whole transaction count into
+//! the fold's [`VolumeWindow`], and `C` and the paid emission are priced at
+//! the [`TxVolume`] the validator reads (CEN-F20; FL-R24's exact window).
+//! Demand crosses from the scenario layer's float to whole transactions
+//! once, at the scenario boundary ([`whole_transactions`], DQ-2G).
+//!
+//! The feedback loop runs the served ladder. A new question is a new row
+//! in the scenario tables. How far the floor moves per block is
+//! `fee_floor.rs`'s, in basis points (FL-E2).
 //!
 //! Economics quantities come from `shekyl-economics` or from
-//! build-generated params. Two exceptions, marked where they are defined:
-//! the ArticMine transliteration, and `REF_TX_WEIGHT` (the same pinned
-//! copy `fee_policy.rs` carries).
+//! build-generated params. The reference weight is
+//! [`shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT`].
 //!
 //! This module renders. `main.rs --fee-ladder` writes.
 
 use core::fmt::Write as _;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 
 use serde::Serialize;
 use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
-    calc_release_multiplier, corrected_fee_ladder, effective_emission, emission_share_at,
-    fee_correction, paid_block_reward, projected_already_generated, relay_fee_floor,
-    round_money_up_2, tail_subsidy_per_block, EconomicParams, FeeCorrection, FeeLadder, TxVolume,
-    BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP,
+    calc_release_multiplier, corrected_fee_ladder, correction_factors_at, effective_emission,
+    paid_block_reward, projected_already_generated, relay_fee_floor, tail_subsidy_per_block,
+    CirculatingSupply, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
+    RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
+use shekyl_units::AtomicUnits;
 
-use crate::rng::PoissonTrace;
+use crate::fee_bar::CONVERGED_AMPLITUDE_BP;
+use crate::fee_floor::whole_transactions;
+use crate::fee_signal::{registered_models, AnchoredReduction};
+use crate::volume_window::VolumeWindow;
 
 /// Penalty-free zone. [`shekyl_economics::FULL_REWARD_ZONE`], generated from
 /// `config/consensus_constants.json`.
 pub(crate) const FULL_REWARD_ZONE: u64 = shekyl_economics::FULL_REWARD_ZONE;
 
-/// `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT` (`src/cryptonote_config.h`).
-/// No single Rust owner exists; `fee_policy.rs` carries the same pin.
-pub(crate) const REF_TX_WEIGHT: u64 = 3_000;
-
 /// Rolling transaction-volume window (`SHEKYL_TX_VOLUME_WINDOW`): one day
 /// at the 120 s target. Build-generated, so a window change cannot leave
 /// this instrument measuring a span the chain no longer uses.
-const VOLUME_WINDOW: usize = TX_VOLUME_WINDOW as usize;
-const _: () = assert!(
-    TX_VOLUME_WINDOW <= usize::MAX as u64,
-    "TX_VOLUME_WINDOW does not fit this target's usize"
-);
+const VOLUME_WINDOW: u64 = TX_VOLUME_WINDOW;
 
 /// [`FeeLadder::as_slots`] order: economy, standard, priority.
 const ECONOMY_RUNG: usize = 0;
@@ -87,16 +86,12 @@ const MEDIAN_ZONE_FACTORS: [u64; 4] = [1, 3, 10, 50];
 /// Demand elasticity in thousandths (`0` is inelastic, `3000` is `ε = 3`).
 const ELASTICITY_MILLI: [u64; 5] = [0, 500, 1_000, 2_000, 3_000];
 
-/// Fixed points of the demand curve, in transactions per block. These
-/// scales sit off a pow2 boundary; the boundary probe left with the snap.
+/// Fixed points of the demand curve, in transactions per block.
 const DEMAND_SCALES: [u64; 3] = [50, 100, 400];
 
 /// A displaced start is this many times the demand scale. At every
 /// registered scale the product is the start the convergence probe used.
 const DISPLACED_START_FACTOR: u64 = 8;
-
-/// Blocks in one dwell trace.
-const DWELL_TRACE_BLOCKS: u64 = 20_000;
 
 /// Blocks in one feedback trace, and the tail the settlement test reads.
 const FEEDBACK_TRACE_BLOCKS: u64 = 30_000;
@@ -128,75 +123,47 @@ pub struct CorrectionPoint {
     pub correction: Correction,
 }
 
-/// `C` at a per-block volume. Inputs come from the canonical crate.
-fn correction_factor(v: u64, circulating: u64, height: u64, params: &EconomicParams) -> Correction {
-    correction_factor_ratio(TxVolume::per_block(v), circulating, height, params)
-}
-
-/// [`correction_factor`] with the volume given as the [`TxVolume`] the
-/// owners take. `window(sum, 720)` is the 720-block mean at rational
-/// resolution; `per_block` is the integer-truncated operand.
-pub(crate) fn correction_factor_ratio(
-    volume: TxVolume,
-    circulating: u64,
+/// `C` at a per-block volume: the surface grid's whole-number points.
+fn correction_factor(
+    v: u64,
+    parent_coins: u64,
     height: u64,
     params: &EconomicParams,
 ) -> Correction {
-    let baseline = params.tx_volume_baseline;
-    let m_r = calc_release_multiplier(volume, baseline, params.release_min, params.release_max);
-    let b = calc_burn_pct(
-        volume,
-        baseline,
-        circulating,
-        params.emission_curve_asymptote,
-        params.burn_base_rate,
-        params.burn_cap,
-    );
-    let sigma = emission_share_at(height);
-    let c = fee_correction(volume, sigma, b, params);
+    correction_factor_ratio(TxVolume::per_block(v), parent_coins, height, params)
+}
+
+/// Supply a trace can name. Traces advance gross `already_generated` and
+/// keep no burn ledger, so the burned total is zero — written here, at
+/// the owner's derive, rather than by pricing `b` on the gross coins.
+fn traced_supply(parent_coins: u64) -> CirculatingSupply {
+    CirculatingSupply::derive(AtomicUnits::from_raw(parent_coins), AtomicUnits::ZERO)
+        .expect("a trace with no burn ledger burns nothing")
+}
+
+/// [`correction_factor`] with the volume given as the [`TxVolume`] the
+/// owners take — the fold's window operand on a trace.
+///
+/// `parent_coins` is the trace's gross accumulator. [`traced_supply`]
+/// turns it into the circulating supply the composition prices.
+pub(crate) fn correction_factor_ratio(
+    volume: TxVolume,
+    parent_coins: u64,
+    height: u64,
+    params: &EconomicParams,
+) -> Correction {
+    let factors = correction_factors_at(height, traced_supply(parent_coins), volume, params);
     Correction {
-        release_multiplier: m_r,
-        burn_pct: b,
-        emission_share_sigma: sigma,
-        c_scaled: c.as_scaled(),
+        release_multiplier: factors.release_multiplier,
+        burn_pct: factors.burn_pct,
+        emission_share_sigma: factors.emission_share,
+        c_scaled: factors.correction.as_scaled(),
     }
 }
 
 // ---------------------------------------------------------------------------
-// Legacy transliteration and the served ladder
+// The served ladder
 // ---------------------------------------------------------------------------
-
-/// Unrounded four-rung ladder. Exact integer transliteration of the
-/// five-argument `get_dynamic_base_fee_estimate_2021_scaling`, including
-/// its folded-division order. The comparison column reproduces that
-/// function; it does not idealize it.
-///
-/// The five-argument form does not clamp its medians. The production
-/// wrapper guarantees `Mlw ≥ zone` and `Mnw ≥ Mlw` before the call. The
-/// asserts keep a grid row below the zone from printing fees that wrapper
-/// cannot emit, and from dividing by zero in `Fh`.
-fn articmine_ladder_raw(base_reward: u64, mnw: u64, mlw: u64) -> [u64; 4] {
-    assert!(mlw >= FULL_REWARD_ZONE, "wrapper guarantees Mlw >= zone");
-    assert!(mnw >= mlw, "wrapper guarantees Mnw >= Mlw");
-    let mfw = mnw.min(mlw);
-    let fl = base_reward * REF_TX_WEIGHT / (mfw * mfw);
-    let fn_ = 4 * base_reward * REF_TX_WEIGHT / (mfw * mfw);
-    let fm = 16 * base_reward * REF_TX_WEIGHT / (FULL_REWARD_ZONE * mfw);
-    let fh = (4 * fm).max(4 * fm * mfw / (32 * REF_TX_WEIGHT * mnw / FULL_REWARD_ZONE));
-    [fl, fn_, fm, fh]
-}
-
-/// The legacy ladder on the three priced rungs.
-///
-/// `articmine_ladder_raw` returns four. Its medium slot has no served
-/// counterpart, so the comparison drops it and rounds the three that remain.
-fn rounded(raw: [u64; 4]) -> [u64; SERVED_SLOTS] {
-    [
-        round_money_up_2(raw[0]),
-        round_money_up_2(raw[1]),
-        round_money_up_2(raw[3]),
-    ]
-}
 
 /// The served ladder, from `corrected_fee_ladder`. `C` sits in the
 /// numerator and the division happens once.
@@ -209,7 +176,7 @@ fn served_ladder(
     corrected_fee_ladder(
         base_reward,
         median,
-        REF_TX_WEIGHT,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         FeeCorrection::from_scaled(c),
         params,
     )
@@ -221,17 +188,24 @@ fn relay_floor(base_reward: u64, median: u64, c: u64, params: &EconomicParams) -
     relay_fee_floor(
         base_reward,
         median,
-        REF_TX_WEIGHT,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         FeeCorrection::from_scaled(c),
         params,
     )
 }
 
-/// Standard-rung fee the feedback loop treats as the price. At least 1,
-/// so a zero rung cannot divide the demand curve.
-fn standard_fee(v_avg: u64, ag: u64, height: u64, median: u64, params: &EconomicParams) -> u64 {
+/// Standard-rung fee the feedback loop treats as the price, at the fold's
+/// window operand. At least 1, so a zero rung cannot divide the demand
+/// curve.
+fn standard_fee(
+    volume: TxVolume,
+    ag: u64,
+    height: u64,
+    median: u64,
+    params: &EconomicParams,
+) -> u64 {
     let base = base_block_reward(ag, params).expect("base along trace");
-    let c = correction_factor(v_avg, ag, height, params).c_scaled;
+    let c = correction_factor_ratio(volume, ag, height, params).c_scaled;
     served_ladder(base, median, c, params)[STANDARD_RUNG].max(1)
 }
 
@@ -318,8 +292,6 @@ pub struct RungTable {
     pub median: u64,
     pub base_reward_unmodulated: u64,
     pub c_scaled: u64,
-    /// Pre-FL-R20 ArticMine ladder on the three priced rungs.
-    pub legacy: [u64; SERVED_SLOTS],
     /// Served ladder at raw `C`.
     pub served: [u64; SERVED_SLOTS],
     /// Relay acceptance bound at this state, per byte. FL-R23 sets the
@@ -343,7 +315,6 @@ fn rung_table(
     params: &EconomicParams,
 ) -> RungTable {
     let corr = correction_factor(v, st.ag, st.height, params);
-    let legacy = rounded(articmine_ladder_raw(st.base_reward, median, median));
     let served = served_ladder(st.base_reward, median, corr.c_scaled, params);
     let floor = relay_floor(st.base_reward, median, corr.c_scaled, params);
     debug_assert_eq!(
@@ -358,7 +329,6 @@ fn rung_table(
         median,
         base_reward_unmodulated: st.base_reward,
         c_scaled: corr.c_scaled,
-        legacy,
         served,
         relay_floor_accept: floor,
         served_below_relay: served[ECONOMY_RUNG] < floor,
@@ -366,181 +336,14 @@ fn rung_table(
 }
 
 // ---------------------------------------------------------------------------
-// Dwell: how long a posted rung value persists
+// Traced chain state
 // ---------------------------------------------------------------------------
 
-/// Registered dwell scenarios: `(label, mean_start, mean_end, median)`.
-///
-/// Stationary rows cover the volume grid. The two ramps are both
-/// directions of the registered 50↔200 crossing, so a ramp is measured
-/// on the way down as well as on the way up.
-const DWELL_SCENARIOS: &[(&str, f64, f64, u64)] = &[
-    ("stationary-v0", 0.0, 0.0, FULL_REWARD_ZONE),
-    ("stationary-v5", 5.0, 5.0, FULL_REWARD_ZONE),
-    ("stationary-v50", 50.0, 50.0, FULL_REWARD_ZONE),
-    ("stationary-v100", 100.0, 100.0, FULL_REWARD_ZONE),
-    ("stationary-v200", 200.0, 200.0, FULL_REWARD_ZONE),
-    ("stationary-v500", 500.0, 500.0, FULL_REWARD_ZONE),
-    (
-        "stationary-v50-m10z",
-        50.0,
-        50.0,
-        MEDIAN_ZONE_FACTORS[2] * FULL_REWARD_ZONE,
-    ),
-    ("ramp-v50-to-v200", 50.0, 200.0, FULL_REWARD_ZONE),
-    ("ramp-v200-to-v50", 200.0, 50.0, FULL_REWARD_ZONE),
-];
-
 /// One block of traced chain state: the shipped paid emission at the
-/// windowed volume, added through the asymptote.
-pub(crate) fn advance_traced_state(ag: u64, v_avg: u64, params: &EconomicParams) -> u64 {
-    let paid = effective_emission(ag, TxVolume::per_block(v_avg), params)
-        .expect("paid emission along trace");
+/// validator's window operand, added through the asymptote.
+pub(crate) fn advance_traced_state(ag: u64, volume: TxVolume, params: &EconomicParams) -> u64 {
+    let paid = effective_emission(ag, volume, params).expect("paid emission along trace");
     advance_already_generated(ag, paid)
-}
-
-/// Per-rung run lengths over a dwell trace.
-struct RungRuns<const N: usize> {
-    runs: [Vec<(u64, u64)>; N],
-    values: [BTreeSet<u64>; N],
-    current: [u64; N],
-    run_len: [u64; N],
-    run_start: [u64; N],
-}
-
-struct RungStats<const N: usize> {
-    median_dwell: [u64; N],
-    distinct: [u64; N],
-    changes: [u64; N],
-    min_ramp: [Option<u64>; N],
-}
-
-impl<const N: usize> RungRuns<N> {
-    fn new() -> Self {
-        Self {
-            runs: std::array::from_fn(|_| Vec::new()),
-            values: std::array::from_fn(|_| BTreeSet::new()),
-            current: [0; N],
-            run_len: [0; N],
-            run_start: [0; N],
-        }
-    }
-
-    fn observe(&mut self, t: u64, fees: [u64; N]) {
-        for (i, fee) in fees.into_iter().enumerate() {
-            self.values[i].insert(fee);
-            if fee == self.current[i] {
-                self.run_len[i] += 1;
-            } else {
-                if self.run_len[i] > 0 {
-                    self.runs[i].push((self.run_start[i], self.run_len[i]));
-                }
-                self.current[i] = fee;
-                self.run_len[i] = 1;
-                self.run_start[i] = t;
-            }
-        }
-    }
-
-    fn finish(mut self, is_ramp: bool, ramp_len: u64) -> RungStats<N> {
-        for ((runs, start), len) in self.runs.iter_mut().zip(self.run_start).zip(self.run_len) {
-            runs.push((start, len));
-        }
-        let mut stats = RungStats {
-            median_dwell: [0; N],
-            distinct: [0; N],
-            changes: [0; N],
-            min_ramp: [None; N],
-        };
-        for (i, runs) in self.runs.iter().enumerate() {
-            let mut lens: Vec<u64> = runs.iter().map(|&(_, l)| l).collect();
-            lens.sort_unstable();
-            stats.median_dwell[i] = lens[lens.len() / 2];
-            stats.distinct[i] = u64::try_from(self.values[i].len()).expect("distinct count fits");
-            stats.changes[i] = u64::try_from(runs.len() - 1).expect("change count fits");
-            if is_ramp {
-                stats.min_ramp[i] = runs
-                    .iter()
-                    .filter(|&&(start, _)| start > 0 && start < ramp_len)
-                    .map(|&(_, l)| l)
-                    .min();
-            }
-        }
-        stats
-    }
-}
-
-#[derive(Serialize)]
-pub struct DwellResult {
-    pub scenario: &'static str,
-    pub is_ramp: bool,
-    pub age_years: u64,
-    pub blocks_measured: u64,
-    pub median_dwell: [u64; SERVED_SLOTS],
-    pub distinct_posted_values: [u64; SERVED_SLOTS],
-    pub value_changes: [u64; SERVED_SLOTS],
-    /// Shortest run that started inside the ramp window. `None` on a
-    /// stationary scenario, and on a rung the ramp never moved.
-    pub min_dwell_started_in_ramp: [Option<u64>; SERVED_SLOTS],
-}
-
-#[allow(clippy::cast_precision_loss)]
-fn dwell_scenario(
-    scenario: &'static str,
-    mean_start: f64,
-    mean_end: f64,
-    median: u64,
-    st: AgeState,
-    params: &EconomicParams,
-) -> DwellResult {
-    // Supply, σ and the reward move with the trace. A rung change caused
-    // by that drift is part of the measurement.
-    let blocks = DWELL_TRACE_BLOCKS;
-    let ramp_len = u64::try_from(VOLUME_WINDOW).expect("window fits u64");
-    let mut rng = PoissonTrace::trace();
-    let mut window: VecDeque<u64> = VecDeque::new();
-    let mut sum: u64 = 0;
-    for _ in 0..VOLUME_WINDOW {
-        let n = rng.poisson(mean_start);
-        sum += n;
-        window.push_back(n);
-    }
-
-    let mut ag = st.ag;
-    let mut rungs = RungRuns::<SERVED_SLOTS>::new();
-    for t in 0..blocks {
-        let frac = if (mean_end - mean_start).abs() < f64::EPSILON {
-            0.0
-        } else {
-            (t as f64 / ramp_len as f64).min(1.0)
-        };
-        let mean = mean_start + (mean_end - mean_start) * frac;
-        let n = rng.poisson(mean);
-        sum += n;
-        window.push_back(n);
-        sum -= window.pop_front().expect("window warm");
-        let v_avg = sum / ramp_len;
-
-        let height = st.height + t;
-        let base = base_block_reward(ag, params).expect("base along trace");
-        let c_raw = correction_factor(v_avg, ag, height, params).c_scaled;
-        let fees = served_ladder(base, median, c_raw, params);
-        ag = advance_traced_state(ag, v_avg, params);
-        rungs.observe(t, fees);
-    }
-
-    let is_ramp = (mean_end - mean_start).abs() >= f64::EPSILON;
-    let stats = rungs.finish(is_ramp, ramp_len);
-    DwellResult {
-        scenario,
-        is_ramp,
-        age_years: st.height / BLOCKS_PER_YEAR,
-        blocks_measured: blocks,
-        median_dwell: stats.median_dwell,
-        distinct_posted_values: stats.distinct,
-        value_changes: stats.changes,
-        min_dwell_started_in_ramp: stats.min_ramp,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -557,43 +360,97 @@ pub struct FeedbackResult {
     pub start_volume: u64,
     /// Distinct standard-rung fees over the tail. `1` has settled.
     pub distinct_fees_tail: u64,
-    /// Value changes over the tail. One change tracks emission drift.
-    /// Two or more is a cycle.
+    /// Value changes over the tail.
     pub tail_transitions: u64,
+    /// The window operand's whole-block mean over the tail: `Σ tx / W`.
     pub v_avg_tail_min: u64,
     pub v_avg_tail_max: u64,
     pub fee_tail_min: u64,
     pub fee_tail_max: u64,
+    /// `fee_tail_max / fee_tail_min − 1`, basis points: FL-C7's reading,
+    /// scored against [`CONVERGED_AMPLITUDE_BP`].
+    pub tail_amplitude_bp: u64,
+    /// The cell's reading against the bar ([`settlement`]).
+    pub settled: Settlement,
 }
 
-/// Two or more standard-rung changes in the tail.
-fn is_oscillating(fb: &FeedbackResult) -> bool {
-    fb.tail_transitions >= 2
+/// How a feedback cell's tail reads against FL-E1's pre-registered bar.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Settlement {
+    /// Tail amplitude at or under [`CONVERGED_AMPLITUDE_BP`].
+    Converged,
+    /// Above the bar, and the tail toggles between two standard-rung
+    /// values exactly one served-floor unit apart: the served rate's
+    /// whole-atomic-unit resolution acting as an output quantizer where `F`
+    /// is small, not loop instability (FL-V12,
+    /// `FEE_LADDER_DERIVATION.md` §2). The same loop converges at
+    /// `fee_floor.rs`'s finer resolution.
+    ResolutionCell,
+    /// Above the bar in any other shape: an oscillation this instrument
+    /// does not explain.
+    Oscillating,
+}
+
+/// Standard-rung atomic units one atomic unit of the served floor moves,
+/// read off the production ladder (`standard = 4F`) rather than restated.
+fn standard_units_per_floor_unit(params: &EconomicParams) -> u64 {
+    let ladder = corrected_fee_ladder(
+        10 * shekyl_units::ATOMIC_UNITS_PER_SKL,
+        FULL_REWARD_ZONE,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+        FeeCorrection::UNITY,
+        params,
+    );
+    assert_eq!(
+        ladder.standard % ladder.economy,
+        0,
+        "the standard rung is a whole multiple of the floor"
+    );
+    ladder.standard / ladder.economy
+}
+
+/// FL-C7's reading of one cell's tail against FL-E1's bar: its amplitude,
+/// how many distinct standard-rung fees it held and their range, and the
+/// rung units one served-floor unit is.
+fn settlement(
+    tail_amplitude_bp: u64,
+    distinct_fees_tail: u64,
+    fee_tail: (u64, u64),
+    floor_unit: u64,
+) -> Settlement {
+    if tail_amplitude_bp <= CONVERGED_AMPLITUDE_BP {
+        Settlement::Converged
+    } else if distinct_fees_tail == 2 && fee_tail.1 - fee_tail.0 == floor_unit {
+        Settlement::ResolutionCell
+    } else {
+        Settlement::Oscillating
+    }
 }
 
 /// One feedback cell. The reference fee is the standard rung at the
 /// demand scale, taken at the trace's start, so the demand curve stays
 /// put while the loop's fee moves.
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
+#[allow(clippy::cast_precision_loss)]
 fn feedback_scenario(
     eps_milli: u64,
     demand_scale: u64,
     start_volume: u64,
     st: AgeState,
     median: u64,
+    floor_unit: u64,
     params: &EconomicParams,
 ) -> FeedbackResult {
-    let f_ref = standard_fee(demand_scale, st.ag, st.height, median, params);
+    let f_ref = standard_fee(
+        TxVolume::per_block(demand_scale),
+        st.ag,
+        st.height,
+        median,
+        params,
+    );
     let eps = eps_milli as f64 / 1000.0;
-    let mut window: VecDeque<f64> = VecDeque::with_capacity(VOLUME_WINDOW);
-    let mut sum = 0.0f64;
+    let mut window = VolumeWindow::default();
     for _ in 0..VOLUME_WINDOW {
-        sum += start_volume as f64;
-        window.push_back(start_volume as f64);
+        window.push(start_volume);
     }
 
     let mut fee_min = u64::MAX;
@@ -606,19 +463,18 @@ fn feedback_scenario(
     let mut ag = st.ag;
     let tail_from = FEEDBACK_TRACE_BLOCKS - FEEDBACK_TAIL_BLOCKS;
     for t in 0..FEEDBACK_TRACE_BLOCKS {
-        let v_avg = (sum / VOLUME_WINDOW as f64).max(0.0) as u64;
-        let fee = standard_fee(v_avg, ag, st.height + t, median, params);
-        ag = advance_traced_state(ag, v_avg, params);
+        let volume = window.operand();
+        let fee = standard_fee(volume, ag, st.height + t, median, params);
+        ag = advance_traced_state(ag, volume, params);
         // The demand model has no saturation cap. `M_r` rails at its
-        // maximum, so the fee stays finite. The cast saturates.
+        // maximum, so the fee stays finite. The one float-to-integer
+        // boundary: the next block's whole transactions.
         let demand = (demand_scale as f64) * (fee as f64 / f_ref as f64).powf(-eps);
-        let demand = demand.max(0.0);
-        sum += demand;
-        window.push_back(demand);
-        sum -= window.pop_front().expect("window warm");
+        window.push(whole_transactions(demand));
         if t >= tail_from {
             fee_min = fee_min.min(fee);
             fee_max = fee_max.max(fee);
+            let v_avg = volume.tx_count_sum() / volume.blocks().max(1);
             v_min = v_min.min(v_avg);
             v_max = v_max.max(v_avg);
             tail_fees.insert(fee);
@@ -631,23 +487,34 @@ fn feedback_scenario(
         }
     }
 
+    let distinct_fees_tail = u64::try_from(tail_fees.len()).expect("tail cardinality fits");
+    let tail_amplitude_bp =
+        u64::try_from(u128::from(fee_max) * 10_000 / u128::from(fee_min.max(1)) - 10_000)
+            .expect("amplitude fits u64");
     FeedbackResult {
         age_years: st.height / BLOCKS_PER_YEAR,
         median,
         elasticity_milli: eps_milli,
         demand_scale,
         start_volume,
-        distinct_fees_tail: u64::try_from(tail_fees.len()).expect("tail cardinality fits"),
+        distinct_fees_tail,
         tail_transitions,
         v_avg_tail_min: v_min,
         v_avg_tail_max: v_max,
         fee_tail_min: fee_min,
         fee_tail_max: fee_max,
+        tail_amplitude_bp,
+        settled: settlement(
+            tail_amplitude_bp,
+            distinct_fees_tail,
+            (fee_min, fee_max),
+            floor_unit,
+        ),
     }
 }
 
 // ---------------------------------------------------------------------------
-// Degenerate pins (FL-C8) and the tier-share reduction (FL-C9)
+// Degenerate pins (FL-C8)
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
@@ -670,11 +537,6 @@ pub struct DegeneratePins {
     pub validation_reward_at_exhaustion: u64,
     /// Tail-emission reward at `weight = 1.5·zone`: `TAIL·(1 − x²) = TAIL·¾`.
     pub penalty_at_tail_x_half: u64,
-    /// Legacy ladder at the estimate reward and at the validation reward,
-    /// both at the zone. These are the pre-FL-R20 comparison, computed at
-    /// the two rewards FL-V1 separates.
-    pub legacy_ladder_at_estimate_reward: [u64; SERVED_SLOTS],
-    pub legacy_ladder_at_validation_reward: [u64; SERVED_SLOTS],
     /// Served relay floor at `C = 1`, on the validation reward.
     pub relay_floor_at_exhaustion: u64,
 }
@@ -726,67 +588,7 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
             params,
         )
         .expect("tail-reward penalty pin"),
-        legacy_ladder_at_estimate_reward: rounded(articmine_ladder_raw(
-            est_reward,
-            FULL_REWARD_ZONE,
-            FULL_REWARD_ZONE,
-        )),
-        legacy_ladder_at_validation_reward: rounded(articmine_ladder_raw(
-            val_reward.max(1),
-            FULL_REWARD_ZONE,
-            FULL_REWARD_ZONE,
-        )),
         relay_floor_at_exhaustion: relay_floor(val_reward, FULL_REWARD_ZONE, SCALE, params),
-    }
-}
-
-/// How far one public fee rung shrinks an anchored observer's candidate set.
-///
-/// FCMP++ puts no linkage on the wire. The attack acquires an anchor
-/// off-chain and filters the height window by every public field. The
-/// rung contributes `1/usage_share` on that one transaction, once.
-/// Surprisal is `log2` of the same factor. The single state-computed rate
-/// contributes ×1.
-#[derive(Serialize)]
-pub struct AnchoredReduction {
-    pub traffic_model: &'static str,
-    /// Tier shares ×1000, in economy / standard / priority order.
-    pub shares_milli: [u64; 3],
-    /// `1/share` ×1000, per rung.
-    pub reduction_factor_milli: [u64; 3],
-    /// `log2(reduction)` ×1000, per rung.
-    pub rung_surprisal_milli: [u64; 3],
-    /// `H(rung)` ×1000.
-    pub ladder_bits_per_tx_milli: u64,
-    /// The single rate's reduction ×1000. `1000` is ×1.
-    pub single_rate_reduction_milli: u64,
-}
-
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
-fn anchored_reduction(traffic_model: &'static str, shares_milli: [u64; 3]) -> AnchoredReduction {
-    let mut h = 0.0f64;
-    let mut surprisal = [0u64; 3];
-    let mut reduction = [0u64; 3];
-    for (i, &m) in shares_milli.iter().enumerate() {
-        let p = m as f64 / 1000.0;
-        if p > 0.0 {
-            let s_bits = -p.log2();
-            h += p * s_bits;
-            surprisal[i] = (s_bits * 1000.0).round() as u64;
-            reduction[i] = (1000.0 / p).round() as u64;
-        }
-    }
-    AnchoredReduction {
-        traffic_model,
-        shares_milli,
-        reduction_factor_milli: reduction,
-        rung_surprisal_milli: surprisal,
-        ladder_bits_per_tx_milli: (h * 1000.0).round() as u64,
-        single_rate_reduction_milli: 1000,
     }
 }
 
@@ -801,8 +603,9 @@ pub struct FeeLadderReport {
     c_reachable_max: u64,
     x_served: Vec<XServedRow>,
     rung_tables: Vec<RungTable>,
-    dwell: Vec<DwellResult>,
     feedback: Vec<FeedbackResult>,
+    converged_amplitude_bp: u64,
+    standard_units_per_floor_unit: u64,
     degenerate: DegeneratePins,
     fee_signal_bits: Vec<AnchoredReduction>,
 }
@@ -838,12 +641,12 @@ pub fn report() -> FeeLadderReport {
             let hi = (proj_ratio * u128::from(params.release_max) / u128::from(SCALE))
                 .min(u128::from(SCALE));
             let reachable = u128::from(ratio) >= lo && u128::from(ratio) <= hi;
-            let circ = u64::try_from(
+            let parent_coins = u64::try_from(
                 u128::from(params.emission_curve_asymptote) * u128::from(ratio) / u128::from(SCALE),
             )
-            .expect("circ fits");
+            .expect("parent coins fit");
             for &v in &SURFACE_VOLUMES {
-                let correction = correction_factor(v, circ, st.height, &params);
+                let correction = correction_factor(v, parent_coins, st.height, &params);
                 if reachable {
                     c_min = c_min.min(correction.c_scaled);
                     c_max = c_max.max(correction.c_scaled);
@@ -897,15 +700,7 @@ pub fn report() -> FeeLadderReport {
         ),
     ];
 
-    let mut dwell = Vec::new();
-    for &(_, st) in &states {
-        for &(label, mean_start, mean_end, median) in DWELL_SCENARIOS {
-            dwell.push(dwell_scenario(
-                label, mean_start, mean_end, median, st, &params,
-            ));
-        }
-    }
-
+    let floor_unit = standard_units_per_floor_unit(&params);
     let mut feedback = Vec::new();
     for &(_, st) in &states {
         for &factor in &MEDIAN_ZONE_FACTORS {
@@ -919,6 +714,7 @@ pub fn report() -> FeeLadderReport {
                             start,
                             st,
                             median,
+                            floor_unit,
                             &params,
                         ));
                     }
@@ -927,26 +723,17 @@ pub fn report() -> FeeLadderReport {
         }
     }
 
-    // Shares are economy / standard / priority. The defaulted model puts
-    // the 80% majority on standard. Equal thirds do not divide 1000, so
-    // 33/33/33 is 334 + 333 + 333.
-    let fee_signal = vec![
-        anchored_reduction("registered 50/40/10", [500, 400, 100]),
-        anchored_reduction("sensitivity 70/25/5", [700, 250, 50]),
-        anchored_reduction("sensitivity 33/33/33", [334, 333, 333]),
-        anchored_reduction("defaulted 15/80/5", [150, 800, 50]),
-    ];
-
     FeeLadderReport {
         c_surface,
         c_reachable_min: c_min,
         c_reachable_max: c_max,
         x_served,
         rung_tables,
-        dwell,
         feedback,
+        converged_amplitude_bp: CONVERGED_AMPLITUDE_BP,
+        standard_units_per_floor_unit: floor_unit,
         degenerate: degenerate_pins(&params),
-        fee_signal_bits: fee_signal,
+        fee_signal_bits: registered_models(),
     }
 }
 
@@ -964,47 +751,42 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
         let c = f(t.c_scaled);
         let _ = writeln!(
             out,
-            "fee-ladder: {label} C={c:.3} legacy={legacy:?} served={served:?} floor_accept={floor} served_below_relay={below}",
+            "fee-ladder: {label} C={c:.3} served={served:?} floor_accept={floor} served_below_relay={below}",
             label = t.label,
-            legacy = t.legacy,
             served = t.served,
             floor = t.relay_floor_accept,
             below = t.served_below_relay,
         );
     }
-    let _ = writeln!(out, "fee-ladder: dwell grid = {} runs", r.dwell.len());
-    for d in &r.dwell {
-        let repeats = d.value_changes[STANDARD_RUNG] >= 2;
-        let reference = d.scenario.starts_with("stationary-v50");
-        if reference || repeats {
-            let _ = writeln!(
-                out,
-                "fee-ladder: dwell {scenario} age={age} median={median:?} distinct={distinct:?} changes={changes:?} min_ramp={min_ramp:?}",
-                scenario = d.scenario,
-                age = d.age_years,
-                median = d.median_dwell,
-                distinct = d.distinct_posted_values,
-                changes = d.value_changes,
-                min_ramp = d.min_dwell_started_in_ramp,
-            );
-        }
-    }
-    let secular = r
+    let count = |want: Settlement| r.feedback.iter().filter(|fb| fb.settled == want).count();
+    let worst_amplitude = r
         .feedback
         .iter()
-        .filter(|fb| fb.distinct_fees_tail > 1 && fb.tail_transitions <= 1)
-        .count();
-    let oscillating: Vec<_> = r.feedback.iter().filter(|fb| is_oscillating(fb)).collect();
+        .map(|fb| fb.tail_amplitude_bp)
+        .max()
+        .unwrap_or(0);
     let _ = writeln!(
         out,
-        "fee-ladder: feedback grid = {} cells; {secular} secular single crossings; {} oscillating",
+        "fee-ladder: feedback grid = {} cells; converged_amplitude_bp={}; worst_tail_amplitude_bp={worst_amplitude}; {} converged; {} FL-V12 resolution cells (the tail toggles one served-floor unit, {} standard-rung units: the served rate's whole-unit resolution, not loop instability); {} oscillating",
         r.feedback.len(),
-        oscillating.len()
+        r.converged_amplitude_bp,
+        count(Settlement::Converged),
+        count(Settlement::ResolutionCell),
+        r.standard_units_per_floor_unit,
+        count(Settlement::Oscillating)
     );
-    for fb in oscillating {
+    for fb in r
+        .feedback
+        .iter()
+        .filter(|fb| fb.settled != Settlement::Converged)
+    {
+        let label = match fb.settled {
+            Settlement::ResolutionCell => "FL-V12-resolution",
+            _ => "OSCILLATING",
+        };
         let _ = writeln!(
             out,
-            "fee-ladder: feedback age={} M={} eps={} D={} start={} distinct_tail={} transitions={} v_tail=[{},{}] fee_tail=[{},{}]",
+            "fee-ladder: feedback {label} age={} M={} eps={} D={} start={} distinct_tail={} transitions={} tail_amplitude_bp={} v_tail=[{},{}] fee_tail=[{},{}]",
             fb.age_years,
             fb.median,
             fb.elasticity_milli,
@@ -1012,6 +794,7 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
             fb.start_volume,
             fb.distinct_fees_tail,
             fb.tail_transitions,
+            fb.tail_amplitude_bp,
             fb.v_avg_tail_min,
             fb.v_avg_tail_max,
             fb.fee_tail_min,
@@ -1030,11 +813,12 @@ pub fn render_summary(r: &FeeLadderReport, out: &mut String) {
     }
     let _ = writeln!(
         out,
-        "fee-ladder: degenerate tail_era_blocks={} est_reward_at_exhaustion={} val_reward_at_exhaustion={} penalty_at_tail_x_half={}",
+        "fee-ladder: degenerate tail_era_blocks={} est_reward_at_exhaustion={} val_reward_at_exhaustion={} penalty_at_tail_x_half={} relay_floor_at_exhaustion={}",
         r.degenerate.tail_era_blocks,
         r.degenerate.estimate_reward_at_exhaustion,
         r.degenerate.validation_reward_at_exhaustion,
-        r.degenerate.penalty_at_tail_x_half
+        r.degenerate.penalty_at_tail_x_half,
+        r.degenerate.relay_floor_at_exhaustion
     );
 }
 
@@ -1046,6 +830,7 @@ pub fn render_json(r: &FeeLadderReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT;
 
     /// Prints the served-ladder spacing table.
     ///
@@ -1087,63 +872,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn rung_runs_tracks_one_change_per_slot() {
-        let mut rungs = RungRuns::<SERVED_SLOTS>::new();
-        rungs.observe(0, [10, 20, 40]);
-        rungs.observe(1, [10, 20, 40]);
-        rungs.observe(2, [10, 20, 80]);
-        let stats = rungs.finish(false, 0);
-        assert_eq!(SERVED_SLOTS, 3);
-        assert_eq!(stats.distinct, [1, 1, 2]);
-        assert_eq!(stats.changes, [0, 0, 1]);
-        assert_eq!(stats.min_ramp, [None, None, None]);
-    }
-
-    /// The legacy column reproduces the pre-FL-R20 four-rung oracle in
-    /// `tests/unit_tests/scaling_2021.cpp` (`wallet_fee_estimate`, 10 SKL).
-    /// The pin covers all four rungs. [`rounded`] drops the medium one
-    /// for the comparison table; this test does not.
-    #[test]
-    fn transliteration_matches_cpp_kat() {
-        let coin: u64 = crate::burden::COIN;
-        let legacy =
-            |r: u64, mnw: u64, mlw: u64| articmine_ladder_raw(r, mnw, mlw).map(round_money_up_2);
-        assert_eq!(
-            legacy(10 * coin, 300_000, 300_000),
-            [340, 1400, 5400, 67_000]
-        );
-        assert_eq!(
-            legacy(10 * coin, 15_000_000, 300_000),
-            [340, 1400, 5400, 22_000]
-        );
-        assert_eq!(
-            legacy(10 * coin, 1_500_000, 1_500_000),
-            [13, 53, 1100, 14_000]
-        );
-    }
-
-    /// Genesis priority on the legacy column is 6_900_000: `2·R₀/Zm` at
-    /// the design's `R₀` of 1 024 SKL, rounded up to two significant digits.
-    #[test]
-    fn genesis_fh_of_the_legacy_transliteration() {
-        let params = EconomicParams::default();
-        let base = base_block_reward(0, &params).expect("genesis base");
-        let fees = rounded(articmine_ladder_raw(base, 300_000, 300_000));
-        assert_eq!(fees[PRIORITY_RUNG], 6_900_000);
-    }
-
     /// The served ladder is `corrected_fee_ladder`. At 10 SKL, a 1.5 MB
     /// median and `C = 16` the economy rung is 213.
     #[test]
     fn served_ladder_is_the_owners_arithmetic() {
         let coin: u64 = crate::burden::COIN;
         let params = EconomicParams::default();
-        // The legacy transliteration truncates the rung, then the column
-        // rounds it. That column is the pre-FL-R20 comparison.
-        let raw = articmine_ladder_raw(10 * coin, 1_500_000, 1_500_000);
-        assert_eq!(raw[ECONOMY_RUNG], 13);
-
         let served = served_ladder(10 * coin, 1_500_000, 16 * SCALE, &params);
         assert_eq!(served[ECONOMY_RUNG], 213);
         assert_eq!(
@@ -1151,11 +885,65 @@ mod tests {
             corrected_fee_ladder(
                 10 * coin,
                 1_500_000,
-                REF_TX_WEIGHT,
+                RELAY_FLOOR_REFERENCE_TX_WEIGHT,
                 FeeCorrection::from_scaled(16 * SCALE),
                 &params,
             )
             .as_slots()
+        );
+    }
+
+    /// The traced emission advances on the validator's window operand: a
+    /// window whose mean is fractional pays what `effective_emission` pays
+    /// at that exact ratio, not at its truncated whole-block mean (FL-R24).
+    #[test]
+    fn the_trace_advances_on_the_exact_window_operand() {
+        let params = EconomicParams::default();
+        let st = age_state(4, &params);
+        let exact = TxVolume::window(40 * VOLUME_WINDOW + VOLUME_WINDOW / 2, VOLUME_WINDOW);
+        let truncated = TxVolume::per_block(40);
+        let on_exact = advance_traced_state(st.ag, exact, &params);
+        let on_truncated = advance_traced_state(st.ag, truncated, &params);
+        assert!(
+            on_exact > on_truncated,
+            "a 40.5 mean must pay more than the 40 the truncated operand paid"
+        );
+        assert_eq!(
+            on_exact - st.ag,
+            effective_emission(st.ag, exact, &params).expect("priced"),
+            "one owner prices the trace's emission"
+        );
+    }
+
+    /// FL-C7's reading is the FL-E1 bar: at or under
+    /// `CONVERGED_AMPLITUDE_BP` a cell has settled; above it, a tail that
+    /// toggles one served-floor unit is an FL-V12 resolution cell, and any
+    /// other shape oscillates.
+    #[test]
+    fn settlement_is_scored_on_the_shared_bar_and_the_floor_unit() {
+        let params = EconomicParams::default();
+        let unit = standard_units_per_floor_unit(&params);
+        assert_eq!(unit, 4, "standard is 4F");
+        // At and just over the bar, on a large rung.
+        assert_eq!(
+            settlement(CONVERGED_AMPLITUDE_BP, 2, (10_000, 10_050), unit),
+            Settlement::Converged
+        );
+        // 48 ↔ 52: one floor unit on a two-digit rung, 833 bp.
+        assert_eq!(
+            settlement(833, 2, (48, 52), unit),
+            Settlement::ResolutionCell
+        );
+        // Two rung values two floor units apart, or three values: not one
+        // unit of resolution, so the instrument does not explain it.
+        assert_eq!(
+            settlement(1_666, 2, (48, 56), unit),
+            Settlement::Oscillating
+        );
+        assert_eq!(settlement(833, 3, (48, 52), unit), Settlement::Oscillating);
+        assert_eq!(
+            settlement(CONVERGED_AMPLITUDE_BP + 1, 2, (10_000, 10_051), unit),
+            Settlement::Oscillating
         );
     }
 }
