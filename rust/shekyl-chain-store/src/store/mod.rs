@@ -113,6 +113,7 @@ mod prune;
 mod read;
 mod shard_reads;
 mod shared;
+mod snapshot_view;
 mod tx_reads;
 pub(crate) mod undo;
 mod view;
@@ -138,6 +139,7 @@ pub use pop::Popped;
 pub use prune::{Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
 pub use shard_reads::{ClosedShardRows, ShardFold};
+pub use snapshot_view::SnapshotView;
 pub use tx_reads::{PqcAuths, Prunable, SegmentBytes, TxLocation, TxRecord};
 pub use undo::{RawRows, Restorable};
 pub use view::BatchView;
@@ -725,6 +727,11 @@ mod undo_tests;
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod view_tests;
+
+/// `SnapshotView` reads what `BatchView` reads (DRS-X PR 3).
+#[cfg(test)]
+#[path = "snapshot_view_tests.rs"]
+mod snapshot_view_tests;
 
 #[cfg(test)]
 #[path = "connect_fixtures.rs"]
