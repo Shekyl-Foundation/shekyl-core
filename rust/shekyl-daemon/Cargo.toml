@@ -1,0 +1,37 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-daemon"
+description = "The daemon's Rust main(): the parse, the lock and marker, logging, the announcements, the one signal owner, and the C++ remnant's run/stop pair driven through a snapshot (DAEMON_CONFIG_CUTOVER.md §2.2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shekyl-daemon-config = { path = "../shekyl-daemon-config" }
+shekyl-options = { path = "../shekyl-options" }
+shekyl-logging = { path = "../shekyl-logging" }
+# The RPC owner: its section is recorded before the remnant starts it once.
+shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+# The platform probes, the panic hook and the network id's one derivation.
+shekyl-ffi = { path = "../shekyl-ffi" }
+# The one runtime constructor (D14); the signal owner runs on it.
+shekyl-runtime = { path = "../shekyl-runtime" }
+# The managed Tor's owner (§2.2 steps 6, 8, 9) and its binary discovery.
+shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
+shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+tokio = { version = "1", default-features = false, features = ["signal", "macros", "sync", "rt"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+
+[lints]
+workspace = true

@@ -74,6 +74,9 @@ pub struct Disclosure {
     peers: bool,
     /// The caller is the host's administrator.
     host: bool,
+    /// The caller is shown the Config rows (RT-O24): everything that
+    /// describes the host or links the operator. The admin preset only.
+    config: bool,
     /// The listener's posture, reported back as `restricted`. Transitional:
     /// it leaves with that field when the channel's handshake returns the
     /// grant instead.
@@ -88,6 +91,7 @@ impl Disclosure {
         status: true,
         peers: true,
         host: true,
+        config: true,
         listener_restricted: false,
     };
 
@@ -96,8 +100,27 @@ impl Disclosure {
         status: false,
         peers: false,
         host: false,
+        config: false,
         listener_restricted: true,
     };
+
+    /// Whether the Status part is shown.
+    #[must_use]
+    pub const fn status(self) -> bool {
+        self.status
+    }
+
+    /// Whether the Peers part is shown.
+    #[must_use]
+    pub const fn peers(self) -> bool {
+        self.peers
+    }
+
+    /// Whether the Config rows are shown (RT-O24).
+    #[must_use]
+    pub const fn config(self) -> bool {
+        self.config
+    }
 
     /// The disclosure a listener's posture gives its callers.
     #[must_use]

@@ -234,7 +234,6 @@ Workspace clippy `-D warnings` cleanup.
 RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and `IMPORTED_LOCATION_<CONFIG>` for multi-config generators.
 A UDS listener for the daemon RPC (posture 1 on the daemon)
 The GUI dials its daemon with nothing said — and a dial that says nothing is constructible.
-`shekyld <command>` parses `--rpc-bind-ip` with an IPv4-only helper
 Legacy spend-graph analysis utilities (`ancestry`/`depth`/`usage`): audit against FCMP++, then delete
 `atomic_write_file` power-loss crash-injection tests.
 Wallet file metadata obfuscation (PR 6 §5.12 F5–F6).

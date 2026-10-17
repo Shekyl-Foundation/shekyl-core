@@ -36,6 +36,11 @@
 
 pub mod shard_view;
 
+/// The daemon's entry, `shekyl_daemon_main`, and the snapshot gate
+/// (`DAEMON_CONFIG_CUTOVER.md` §2.2): their `#[no_mangle]` exports survive
+/// into this archive like `shekyl-ffi`'s.
+pub use shekyl_daemon;
+
 pub use shekyl_archival_fetch_sched;
 pub use shekyl_daemon_rpc;
 pub use shekyl_ffi;

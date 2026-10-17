@@ -335,7 +335,7 @@ except that its IP and `.onion` are hardcoded so that they can always be
 found. Same mechanism, same gray to white process."
 
 - The compiled seed addresses (`get_ip_seed_nodes`,
-  `src/p2p/net_node.inl:771`, the array at `:781`; the onion seeds
+  `src/p2p/net_node.inl` line 771 (at the slice's tree), the array at `:781`; the onion seeds
   `get_seed_nodes` returns) enter gray at each start, as operator-named
   addresses do (`Source::Operator`). They reach white only through a
   drawn dial's `SessionAccepted` or `Confirmed`. **There is no harvest
@@ -441,7 +441,7 @@ C++ disclosure walks white newest-first and then shuffles
 (`get_peerlist_head` at `net_node.inl:2721` and `:2843`), so the
 sample that goes out is already a shuffle of the whole white list,
 truncated. The dial path never became a draw: it sorts candidates by
-`last_seen` (`src/p2p/net_node.inl:1935-1938`) and picks with a bias
+`last_seen` (`src/p2p/net_node.inl` lines 1935 to 1938 (at the slice's tree)) and picks with a bias
 toward the front of that order (`:1970-1974`). Rust has no time-ordered
 walk for
 either caller. The property PWD-I2 kept is the one `disclose` has to keep: two
@@ -704,12 +704,12 @@ the range table.
 | Behavior | Where | Rust |
 | --- | --- | --- |
 | Promote from a bare address and stamp now | `set_peer_just_seen`, `net_peerlist.h:334` | No such function. White is written only by `apply` under §5 |
-| Two white writes on one kept outbound dial | `set_peer_just_seen` at `src/p2p/net_node.inl:1403` and `append_with_peer_white` at `:1707` | One `apply`, and only for `SessionAccepted` or `Confirmed` of the gray draw (*records-was:* or `HarvestDone` of a Foundation host, withdrawn 2026-10-11) |
+| Two white writes on one kept outbound dial | `set_peer_just_seen` at `src/p2p/net_node.inl:801` and `append_with_peer_white` at `:1707` | One `apply`, and only for `SessionAccepted` or `Confirmed` of the gray draw (*records-was:* or `HarvestDone` of a Foundation host, withdrawn 2026-10-11) |
 | `trust_last_seen` | `append_with_peer_white`, `net_peerlist.h:347` | No flag. The clock moves only on contact this node initiated |
 | Gossiped `last_seen` stored on gray insert | `net_peerlist.h:239`, `net_peerlist.h:405` | Ignored. Gray has no clock |
-| Time order as a rank | `by_time` at `net_peerlist.h:184`; the dial sort at `src/p2p/net_node.inl:1935-1938` | Uniform draws. Load is unordered |
+| Time order as a rank | `by_time` at `net_peerlist.h:184`; the dial sort at `src/p2p/net_node.inl` lines 1935 to 1938 (at the slice's tree) | Uniform draws. Load is unordered |
 | White list never expires on age | trim is capacity only, `net_peerlist.h:215` | `EXPIRATION_PERIOD` demotes to gray |
-| Foundation seed handshake does not promote | the `just_take_peerlist` close at `src/p2p/net_node.inl:1695` | Not kept. A drawn seed the strand accepts is `Confirmed` and writes white, like any peer (§3). *Records-was, same day: `HarvestDone` wrote no white; before that, §3's fleet exception wrote white from any seat* |
+| Foundation seed handshake does not promote | the `just_take_peerlist` close at `src/p2p/net_node.inl` line 1695 (at the slice's tree) | Not kept. A drawn seed the strand accepts is `Confirmed` and writes white, like any peer (§3). *Records-was, same day: `HarvestDone` wrote no white; before that, §3's fleet exception wrote white from any seat* |
 | `--add-peer` kept off the trim front by a synthetic absence of `last_seen` | `net_peerlist.h:444` | The uniform insert rule (§2): the address just seated stays and a random other drawable seat goes, for every source. No privilege, and the draw is still uniform |
 
 `append_with_peer_white(const peerlist_entry&)` accepts any entry. Porting
@@ -722,10 +722,10 @@ that signature is the hole §5 closes.
 These C++ outcomes match the lists. The functions that produce them are not
 the API.
 
-- `--add-peer` is gray (`append_operator_candidate`, `src/p2p/net_node.inl:1098`, `net_peerlist.h:419`).
+- `--add-peer` is gray (`append_operator_candidate`, `src/p2p/net_node.inl:524`, `net_peerlist.h:419`).
 - An inbound advertisement is gray (`append_with_peer_gray`, `net_node.inl:2831`).
 - A received peerlist is merged into gray (`net_peerlist.h:239`).
-- Inbound timed sync does not write white (`src/p2p/net_node.inl:1467-1468` writes only when the session is one this node opened).
+- Inbound timed sync does not write white (`src/p2p/net_node.inl:865-866` writes only when the session is one this node opened).
 - The file cannot represent white (`net_peerlist.cpp:310`).
 
 C++ `gray_peerlist_housekeeping` writes white

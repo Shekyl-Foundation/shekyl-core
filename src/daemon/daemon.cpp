@@ -45,13 +45,11 @@
 #include "cryptonote_basic/events.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_protocol/cryptonote_protocol_handler.h"
-#include "daemon/command_line_args.h"
 #include "daemon/command_server.h"
 #include "misc_log_ex.h"
 #include "p2p/net_node.h"
 #include "rpc/core_rpc_ffi.h"
 #include "rpc/core_rpc_server.h"
-#include "rpc/rpc_args.h"
 #include "shekyl/shekyl_ffi.h"
 #include "version.h"
 
@@ -66,42 +64,6 @@ namespace {
   using t_protocol_raw = cryptonote::t_cryptonote_protocol_handler<cryptonote::core>;
   using t_node_server = nodetool::node_server<t_protocol_raw>;
 
-  // Named RPC server instance (main RPC, or the optional restricted RPC).
-  struct rpc_instance final {
-    std::unique_ptr<cryptonote::core_rpc_server> server;
-    std::string description;
-    // Configured listen host:port for this instance. Axum owns the HTTP
-    // listener; bind_host/bind_port are recorded at init from the resolved
-    // RPC config for the Axum server to bind. Empty when unset.
-    std::string bind_host;
-    std::string bind_port;
-    // Whether this instance serves the restricted command set. Passed to the
-    // Rust/Axum transport so it enforces restricted-mode filtering; a separately
-    // bound --rpc-restricted-bind-port must not expose admin-only endpoints.
-    bool restricted = false;
-    // The flags this instance's host/port/IPv6 address came from, so a
-    // diagnostic names the option the operator must change: the main
-    // listener's (even when --restricted-rpc makes it restricted) or the
-    // separate restricted listener's twins.
-    char const * flag_ip = "";
-    char const * flag_port = "";
-    char const * flag_ipv6 = "";
-
-    rpc_instance(cryptonote::core & core, t_node_server & p2p, std::string desc)
-      : server(new cryptonote::core_rpc_server{core, p2p})
-      , description(std::move(desc))
-    {}
-
-    // The flags as the operator gave them, for messages only: nothing is
-    // composed or decided from this string.
-    std::string as_given() const
-    {
-      std::string s = std::string("--") + flag_ip + "=" + bind_host + " --" + flag_port + "=" + bind_port;
-      if (server->get_rpc_use_ipv6())
-        s += std::string(" --") + flag_ipv6 + "=" + server->get_rpc_bind_ipv6();
-      return s;
-    }
-  };
 }
 
 // Lifetime order:
@@ -124,20 +86,17 @@ struct t_internals {
   // P2P server bound to protocol.
   t_node_server p2p;
 
-  // One or more RPC servers (main, optionally a separate restricted one).
-  std::vector<rpc_instance> rpcs;
+  // The core the Rust RPC serves; the listeners are Rust's.
+  std::unique_ptr<cryptonote::core_rpc_server> rpc;
 
-  // Axum RPC handles, populated by run().
-  std::vector<ShekylDaemonRpcHandle*> rust_rpc_handles;
-
-  explicit t_internals(boost::program_options::variables_map const & vm)
+  explicit t_internals(const ShekylDaemonSnapshot& snapshot)
     : core(nullptr)
-    , protocol{core, nullptr, command_line::get_arg(vm, cryptonote::arg_offline)}
+    , protocol{core, nullptr, snapshot.offline}
     , p2p{protocol}
   {
     // === core ===
     MGINFO("Initializing core...");
-    if (!core.init(vm, nullptr))
+    if (!core.init(snapshot, nullptr))
     {
       throw std::runtime_error("Failed to initialize core");
     }
@@ -145,7 +104,7 @@ struct t_internals {
 
     // === protocol ===
     MGINFO("Initializing cryptonote protocol...");
-    if (!protocol.init(vm))
+    if (!protocol.init())
     {
       throw std::runtime_error("Failed to initialize cryptonote protocol.");
     }
@@ -153,8 +112,7 @@ struct t_internals {
 
     // === p2p ===
     MGINFO("Initializing p2p server...");
-    if (!p2p.init(vm,
-        command_line::get_arg(vm, daemon_args::arg_proxy)))
+    if (!p2p.init(snapshot))
     {
       throw std::runtime_error("Failed to initialize p2p server.");
     }
@@ -164,55 +122,17 @@ struct t_internals {
     protocol.set_p2p_endpoint(&p2p);
     core.set_cryptonote_protocol(&protocol);
 
-    // === rpc(s) — Axum is the sole HTTP transport ===
-    const bool restricted = command_line::get_arg(vm, cryptonote::core_rpc_server::arg_restricted_rpc);
-    auto const main_rpc_port = command_line::get_arg(vm, cryptonote::core_rpc_server::arg_rpc_bind_port);
-    auto const & restricted_rpc_port_arg = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
-    const bool has_restricted_rpc_port_arg = !command_line::is_arg_defaulted(vm, restricted_rpc_port_arg);
-
-    const cryptonote::rpc_args::descriptors rpc_arg{};
-    {
-      rpcs.emplace_back(core, p2p, "core");
-      rpcs.back().bind_port = main_rpc_port;
-      rpcs.back().restricted = restricted;
-      rpcs.back().flag_ip = rpc_arg.rpc_bind_ip.name;
-      rpcs.back().flag_port = cryptonote::core_rpc_server::arg_rpc_bind_port.name;
-      rpcs.back().flag_ipv6 = rpc_arg.rpc_bind_ipv6_address.name;
-      MGINFO("Initializing " << rpcs.back().description << " RPC server...");
-      if (!rpcs.back().server->init(vm, restricted, main_rpc_port))
-      {
-        throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
-      }
-      rpcs.back().bind_host = rpcs.back().server->get_rpc_bind_ip();
-      MGINFO(rpcs.back().description << " RPC server initialized OK on port: " << main_rpc_port
-        << " (Axum)");
-    }
-
-    if (has_restricted_rpc_port_arg)
-    {
-      auto const restricted_rpc_port = command_line::get_arg(vm, restricted_rpc_port_arg);
-      rpcs.emplace_back(core, p2p, "restricted");
-      rpcs.back().bind_port = restricted_rpc_port;
-      rpcs.back().restricted = true;
-      rpcs.back().flag_ip = rpc_arg.rpc_restricted_bind_ip.name;
-      rpcs.back().flag_port = restricted_rpc_port_arg.name;
-      rpcs.back().flag_ipv6 = rpc_arg.rpc_restricted_bind_ipv6_address.name;
-      MGINFO("Initializing " << rpcs.back().description << " RPC server...");
-      if (!rpcs.back().server->init(vm, true, restricted_rpc_port))
-      {
-        throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
-      }
-      rpcs.back().bind_host = rpcs.back().server->get_rpc_bind_ip();
-      MGINFO(rpcs.back().description << " RPC server initialized OK on port: " << restricted_rpc_port
-        << " (Axum)");
-    }
+    // The one RPC handle. Rust binds and serves the RPC section at the
+    // remnant's one start call in run() (DAEMON_CONFIG_CUTOVER.md §2.3);
+    // this object is the core it serves and reads no option.
+    rpc.reset(new cryptonote::core_rpc_server{core, p2p});
   }
 
   ~t_internals()
   {
-    // Axum RPC servers are already stopped via shekyl_daemon_rpc_stop() in
-    // Daemon::run()/stop(); the core_rpc_server objects are torn down when
-    // `rpcs` is destroyed below. No explicit RPC deinit step remains.
+    // The Rust RPC is already stopped (shekyl_daemon_rpc_stop() in
+    // Daemon::run()); the core_rpc_server is torn down when `rpc` is
+    // destroyed below. No explicit RPC deinit step remains.
 
     MGINFO("Deinitializing p2p...");
     try { p2p.deinit(); }
@@ -235,15 +155,8 @@ struct t_internals {
   }
 };
 
-void Daemon::init_options(boost::program_options::options_description & option_spec)
-{
-  cryptonote::core::init_options(option_spec);
-  t_node_server::init_options(option_spec);
-  cryptonote::core_rpc_server::init_options(option_spec);
-}
-
-Daemon::Daemon(boost::program_options::variables_map const & vm)
-  : mp_internals(new t_internals{vm})
+Daemon::Daemon(const ShekylDaemonSnapshot& snapshot)
+  : mp_internals(new t_internals{snapshot})
 {
 }
 
@@ -258,76 +171,45 @@ bool Daemon::run(bool interactive)
     throw std::runtime_error{"Can't run stopped daemon"};
   }
 
-  std::atomic<bool> stop(false), shutdown(false);
-  boost::thread stop_thread = boost::thread([&stop, &shutdown, this] {
-    while (!stop)
+  // The stop is requested by the Rust signal owner through
+  // `daemonize::request_stop` (DAEMON_CONFIG_CUTOVER.md §2.2 step 9): one
+  // process has one signal owner, and this loop only polls the flag.
+  std::atomic<bool> stop(false);
+  boost::thread stop_thread = boost::thread([&stop, this] {
+    while (!stop && !g_stop_requested.load())
       epee::misc_utils::sleep_no_w(100);
-    if (shutdown)
+    if (g_stop_requested.load())
       this->stop_p2p();
   });
   epee::misc_utils::auto_scope_leave_caller scope_exit_handler = epee::misc_utils::create_scope_leave_handler([&](){
     stop = true;
     stop_thread.join();
   });
-  tools::signal_handler::install([&stop, &shutdown](int){ stop = shutdown = true; });
   // Every exit from run() — the normal return, a caught exception, a throw
   // that escapes — stops the Rust RPC tasks before ~t_internals destroys the
   // core they hold pointers into. The normal path stops them explicitly
   // below so "Node stopped" follows the stop; this is the backstop for
   // every other path (a later listener refusing to start, the command
   // server or p2p.run() throwing).
-  epee::misc_utils::auto_scope_leave_caller stop_rust_rpcs = epee::misc_utils::create_scope_leave_handler([this](){
-    for (auto * rust_handle : mp_internals->rust_rpc_handles)
-      shekyl_daemon_rpc_stop(rust_handle);
-    mp_internals->rust_rpc_handles.clear();
+  epee::misc_utils::auto_scope_leave_caller stop_rust_rpc = epee::misc_utils::create_scope_leave_handler([](){
+    shekyl_daemon_rpc_stop();
   });
 
   try
   {
-    for (auto & rpc : mp_internals->rpcs)
+    // The one RPC start (DAEMON_CONFIG_CUTOVER.md §2.3): Rust reads its
+    // section, binds every admin and view listener, loopback only, and
+    // serves them; the refusal is logged there. Its completion is what the
+    // Rust main() waits for before it starts what serves peers (§2.2 step
+    // 8), so it is the last act of construction here.
+    if (shekyl_daemon_rpc_start(static_cast<void*>(mp_internals->rpc.get())) != 0)
     {
-      auto * server = rpc.server.get();
-      // Hosts and port go to Rust as the operator gave them: Rust parses both
-      // families, classifies, binds, and logs each socket it bound
-      // (RPC_TRANSPORT_POSTURE.md RT-W2). Nothing is composed or decided
-      // here. The IPv6 address is passed verbatim whenever the family is
-      // enabled — an empty value included, so Rust refuses it — and NULL only
-      // when --rpc-use-ipv6 is off.
-      char const * const bind_host_v6 =
-        server->get_rpc_use_ipv6() ? server->get_rpc_bind_ipv6().c_str() : nullptr;
-      std::string const as_given = rpc.as_given();
-      // Comma-joined CORS allow-list for Axum (empty = default-deny).
-      std::string cors_origins;
-      {
-        const auto & origins = server->get_access_control_origins();
-        for (size_t i = 0; i < origins.size(); ++i)
-        {
-          if (i) cors_origins.push_back(',');
-          cors_origins += origins[i];
-        }
-      }
-      auto * rust_handle = shekyl_daemon_rpc_start(
-        static_cast<void*>(server), rpc.bind_host.c_str(), rpc.bind_port.c_str(),
-        bind_host_v6, rpc.restricted,
-        cors_origins.empty() ? nullptr : cors_origins.c_str(),
-        server->get_rpc_max_connections(),
-        server->get_rpc_max_connections_per_public_ip(),
-        server->get_rpc_max_connections_per_private_ip());
-      if (!rust_handle)
-      {
-        // A listener already started on this run is stopped by the
-        // scope-leave guard above when this throw leaves run().
-        throw std::runtime_error(
-          "Failed to start Axum RPC for " + rpc.description + " (" + as_given +
-          "); the reason is logged just above");
-      }
-      MGINFO("Axum RPC started for " << rpc.description << " (" << as_given
-        << "); each bound socket is logged by the Rust listener");
-      mp_internals->rust_rpc_handles.push_back(rust_handle);
+      throw std::runtime_error("Failed to start the RPC; the reason is logged just above");
     }
+    MGINFO("RPC started; each bound socket is logged by the Rust listener");
 
     std::unique_ptr<daemonize::t_command_server> rpc_commands;
-    if (interactive && !mp_internals->rpcs.empty())
+    if (interactive)
     {
       // The first two ctor args are unused when the third is false.
       // The interactive console renders from the live core in this process,
@@ -338,23 +220,15 @@ bool Daemon::run(bool interactive)
         0, 0,
         mp_internals->core.get_nettype(),
         false,
-        mp_internals->rpcs.front().server.get()));
-      rpc_commands->start_handling(std::bind(&Daemon::stop_p2p, this));
+        mp_internals->rpc.get()));
+      // The console's `exit` asks the one stop owner (§2.2 step 9); the
+      // remnant never stops itself.
+      rpc_commands->start_handling([](){ shekyl_daemon_request_stop(); });
     }
 
     // RPC listeners are open now, and each server has a connection budget
     // that is not yet open. Re-derive so both are inside the ceiling.
     // `init` already derived once, before these sockets existed.
-    std::uint64_t rpc_reserved = 0;
-    for (auto const & rpc : mp_internals->rpcs)
-    {
-      const std::uint64_t cap = static_cast<std::uint64_t>(rpc.server->get_rpc_max_connections());
-      if (rpc_reserved > std::numeric_limits<std::uint64_t>::max() - cap)
-        rpc_reserved = std::numeric_limits<std::uint64_t>::max();
-      else
-        rpc_reserved += cap;
-    }
-    mp_internals->p2p.apply_inbound_ceiling(rpc_reserved);
 
     // Every daemon runtime is on the ledger by here: the transport pool
     // is built at bind, Tor control at its start, and the RPC pools just
@@ -385,9 +259,7 @@ bool Daemon::run(bool interactive)
     if (rpc_commands)
       rpc_commands->stop_handling();
 
-    for (auto * rust_handle : mp_internals->rust_rpc_handles)
-      shekyl_daemon_rpc_stop(rust_handle);
-    mp_internals->rust_rpc_handles.clear();
+    shekyl_daemon_rpc_stop();
     MGINFO("Node stopped.");
     return true;
   }
@@ -403,18 +275,11 @@ bool Daemon::run(bool interactive)
   }
 }
 
-void Daemon::stop()
-{
-  if (nullptr == mp_internals)
-  {
-    throw std::runtime_error{"Can't stop stopped daemon"};
-  }
-  for (auto * rust_handle : mp_internals->rust_rpc_handles)
-    shekyl_daemon_rpc_stop(rust_handle);
-  mp_internals->rust_rpc_handles.clear();
+std::atomic<bool> g_stop_requested{false};
 
-  mp_internals->p2p.send_stop_signal();
-  mp_internals.reset(nullptr);
+void request_stop()
+{
+  g_stop_requested.store(true);
 }
 
 void Daemon::stop_p2p()

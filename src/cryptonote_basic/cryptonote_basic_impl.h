@@ -75,6 +75,18 @@ namespace cryptonote {
     , const std::string& str
     );
 
+  // Assembles an account address from keys a decode already produced.
+  // `ml_kem` is the encapsulation key, or null when `ml_kem_len` is 0.
+  // The string constructor and the miner both call this; neither is a
+  // second policy for the layout.
+  bool account_public_address_from_decoded(
+      address_parse_info& info
+    , const uint8_t spend_key[32]
+    , const uint8_t view_key[32]
+    , const uint8_t* ml_kem
+    , size_t ml_kem_len
+    );
+
   bool is_coinbase(const transaction& tx);
 
   bool operator ==(const cryptonote::transaction& a, const cryptonote::transaction& b);

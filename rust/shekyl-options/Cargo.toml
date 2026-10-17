@@ -1,0 +1,30 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-options"
+description = "The input grammar's shared crate: option tables, value kinds and their parsers, units, typed diagnostics and their renderer (INPUT_GRAMMAR.md IG-15)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# The configuration file. 0.8 with `parse` is the workspace's production
+# TOML reader (shekyl-engine-prefs, shekyl-chain-store); its `Spanned`
+# re-export gives every key a byte range, so a refusal names its line
+# (IG-11). Verified at source in DAEMON_CONFIG_CUTOVER_AUDIT.md §4.
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+# The nearest live name for an unknown one (IG-10), computed from the table.
+strsim = "0.11"
+# Secrets are zeroized when dropped (IG-6, rule 35).
+zeroize = { workspace = true }
+# A v3 onion address is checked, not pattern-matched.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+
+[lints]
+workspace = true

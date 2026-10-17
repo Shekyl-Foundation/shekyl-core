@@ -1111,7 +1111,7 @@ The finding that made R2 unrulable, per Rick's review of the fee-ladder round â€
 a canonical instance of what a site-anchored census row cannot express: **each clamp
 is individually correct; only their composition is contradictory.**
 
-- `shekyl_advance_already_generated` (called at `src/cryptonote_core/blockchain.cpp:6410`,
+- `shekyl_advance_already_generated` (called at `src/cryptonote_core/blockchain.cpp:6407`,
   also `:2362` alt-path): saturates the running total at MONEY_SUPPLY. The comment
   block above `:6410` states the inherited **tail-forever** rationale in terms:
   "MONEY_SUPPLY yields a subsidy of 0 under the base formula and therefore the
