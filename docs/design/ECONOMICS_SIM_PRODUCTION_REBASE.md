@@ -64,8 +64,9 @@ question, and nothing in this sim can respond to it.
 
 - **The two constants the condition reads.** Both are Monero's, and both
   were sized for a Monero transaction:
-  - `w_ref = 3 000` is `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT`. CEN-M3
-    finds no examination record of it as a choice.
+  - `w_ref = 3 000` is `shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT`,
+    Monero's reference weight, never derived for Shekyl. CEN-M3 finds no
+    examination record of it as a choice.
   - The 300 000-byte zone holds 100 Monero-sized transactions and about
     22 of ours. Its transaction-capacity leg was ratified on a 4–8 KB
     estimate per spend (C2-R2 Q1; CEN-G6b's provenance gap).
