@@ -295,6 +295,32 @@ fn the_two_pending_refusals_flatten_to_their_own_arms() {
     ));
 }
 
+/// A daemon's terminal verdict on the exit reaches the caller as the held
+/// disposition, never as "released, retry at will": the seam keeps that
+/// record (BD-Q3 Rule 2), so a retry would only meet the one-live-exit
+/// lane. The pre-transport pairing refusal is the one released class.
+#[test]
+fn only_the_pairing_refusal_flattens_to_released() {
+    use crate::engine::error::TerminalErrorKind;
+    use crate::engine::transaction_submitter::{BroadcastSubmitError, SubmitterError};
+
+    let terminal = BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal {
+        kind: TerminalErrorKind::DoubleSpend,
+    });
+    assert!(matches!(
+        flatten_unstake_error(ReleaseRequestError::Submit(terminal)),
+        UnstakeError::ExitFateUnknown { .. }
+    ));
+    let mismatch = BroadcastSubmitError::PersonaMismatch {
+        bytes_persona: shekyl_types::PCanonicalId::from_bytes([1; 32]),
+        submitter_persona: shekyl_types::PCanonicalId::from_bytes([2; 32]),
+    };
+    assert!(matches!(
+        flatten_unstake_error(ReleaseRequestError::Submit(mismatch)),
+        UnstakeError::ExitRefusedAndReleased { .. }
+    ));
+}
+
 /// The façade's structural pins, `drain_facade`-tripwire style (comment
 /// lines stripped; the test module excluded from the scan):
 ///

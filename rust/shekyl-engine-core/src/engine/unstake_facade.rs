@@ -72,12 +72,13 @@
 //!
 //! ## Failure disposition (the irreversible-path posture)
 //!
-//! `unstake` inherits the dispatch seam's contract: seal-before-send, a
-//! definite first-send refusal releases the seal (retry at will), a
-//! retryable/ambiguous failure HOLDS it (funds-safe; the lane stays shut
-//! until the recovery slice lands — `docs/FOLLOWUPS.md`, the dispatch-driver
-//! prune + resubmit, a registered SECURITY-coupled slice deliberately not
-//! pulled in here). The error arms below keep those dispositions distinct
+//! `unstake` inherits the dispatch seam's contract: seal-before-send; a
+//! refusal before any byte left the wallet (the persona-pairing check)
+//! releases the seal (retry at will); every failure after the bytes went out,
+//! a daemon's terminal verdict included, HOLDS it (funds-safe; BD-Q3 Rule 2:
+//! the daemon holds valid bytes, so only the chain decides). A held exit ends
+//! at its end date (WR-Q3), and `staking_info` names that height. The error
+//! arms below keep those dispositions distinct
 //! ([`UnstakeError::ExitRefusedAndReleased`] vs
 //! [`UnstakeError::ExitFateUnknown`]) because they demand opposite caller
 //! behavior.
@@ -111,7 +112,7 @@ use super::stake_engine::StakeEngineError;
 use super::stake_facade::StakeFacade;
 use super::staking_read::live_bonded_personas;
 use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
-use super::transaction_submitter::{BroadcastSubmitError, SubmitSuccess, SubmitterError};
+use super::transaction_submitter::{BroadcastSubmitError, SubmitSuccess};
 use super::{Engine, LocalLedger, StakingReadError};
 
 /// The record fetch (and only the fetch) rides the loopback exit transport;
@@ -249,19 +250,21 @@ pub enum UnstakeError {
         /// The violated bound (atomic units per weight).
         bound: u64,
     },
-    /// The network refused the exit with a **definite first-send verdict**,
-    /// and the seam has already released its seal — nothing propagated, and
-    /// retrying (after addressing the named refusal) is safe.
-    #[error("the daemon refused the exit and nothing was sent: {detail}")]
+    /// The exit was refused **before any byte left the wallet** (the
+    /// persona-pairing check), and the seam has already released its seal —
+    /// nothing propagated, and retrying (after addressing the named refusal)
+    /// is safe.
+    #[error("the exit was refused and nothing was sent: {detail}")]
     ExitRefusedAndReleased {
         /// The daemon's verdict rendering.
         detail: String,
     },
-    /// The exit's dispatch failed with **no definite verdict** (or a
-    /// retryable one): the bytes may have reached the network, so the sealed
-    /// record HOLDS — funds-safe, and the one-live-exit lane stays shut
-    /// until it settles or the recovery slice disposes of it. Do NOT retry
-    /// blindly; the stall alarm names the record in the operator log.
+    /// The exit's bytes went out and its fate is the chain's: no verdict, a
+    /// retryable one, or a daemon's terminal verdict, which never ends a
+    /// submitted record (BD-Q3 Rule 2). The sealed record HOLDS — funds-safe,
+    /// and the one-live-exit lane stays shut — until the exit lands or its
+    /// end date passes and it is withdrawn with its funds returned (WR-Q3).
+    /// `staking_info` names that height. Do NOT retry.
     #[error("the exit's network fate is unknown; its sealed record is held: {detail}")]
     ExitFateUnknown {
         /// The transport/verdict rendering.
@@ -1004,11 +1007,11 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
         }
         ReleaseRequestError::State { context, detail } => UnstakeError::Engine { context, detail },
         ReleaseRequestError::Submit(submit) => match &submit {
-            BroadcastSubmitError::PersonaMismatch { .. }
-            | BroadcastSubmitError::Submit(SubmitterError::RejectedTerminal { .. }) => {
-                // The same two classes the seam's release predicate names
+            BroadcastSubmitError::PersonaMismatch { .. } => {
+                // The one class the seam's release predicate names
                 // (`released_on_first_send_failure`): the seal is already
-                // released, nothing propagated.
+                // released, nothing propagated. A terminal verdict is not
+                // here: the seam holds that record (BD-Q3 Rule 2).
                 UnstakeError::ExitRefusedAndReleased {
                     detail: submit.to_string(),
                 }

@@ -4,8 +4,8 @@
 // BSD-3-Clause
 
 //! Archival principal staking **actions**: WI-RPC-5's `stake_in`,
-//! `get_drain_balance`, `drain`, and PR-C's exit pair `unstake` /
-//! `collect_unstaked`.
+//! `get_drain_balance`, `drain`, PR-C's exit pair `unstake` /
+//! `collect_unstaked`, and WR-Q2's `acknowledge_staking_outcome`.
 //!
 //! Its own module rather than growth on [`crate::staking`] (which stays the
 //! read-only projection surface): every method here moves money or reads the
@@ -36,8 +36,10 @@ use crate::params::{parse_optional_object, parse_required_object};
 use crate::project::pending_tx_result;
 use crate::tenant::{require_open_engine, TenantState};
 use crate::types::{
-    CollectUnstakedResult, DrainResult, DrainVerdictView, GetDrainBalanceResult, UnstakeResult,
+    AcknowledgeStakingOutcomeParams, AcknowledgeStakingOutcomeResult, CollectUnstakedResult,
+    DrainResult, DrainVerdictView, GetDrainBalanceResult, StakingRecordKind, UnstakeResult,
 };
+use shekyl_engine_state::pending_post_block::RecordKind;
 
 /// Params for `stake_in`: `{ amount }` only. The `P` receive address is
 /// engine-derived (never on the wire) and the cover is system-drawn (never a
@@ -177,6 +179,35 @@ pub(crate) async fn drain(
     let result = drain_result(&outcome);
     serde_json::to_value(result)
         .map_err(|e| WalletRpcError::InternalError(format!("serialize drain: {e}")))
+}
+
+/// `acknowledge_staking_outcome` — clear the active persona's last ending of
+/// `kind`, so `staking_info.outcomes` stops reporting it (WR-Q2). Names no
+/// slot (WR-Q5): `deny_unknown_fields` refuses `p_slot` with `-32602`.
+/// Idempotent: `acknowledged: false` when there was nothing to clear,
+/// including on a wallet with no active persona.
+pub(crate) async fn acknowledge_staking_outcome(
+    tenants: &tokio::sync::Mutex<TenantState>,
+    params: &Value,
+) -> Result<Value, WalletRpcError> {
+    let p: AcknowledgeStakingOutcomeParams =
+        parse_required_object(params, "acknowledge_staking_outcome")?;
+    let kind = match p.kind {
+        StakingRecordKind::Stake => RecordKind::Post,
+        StakingRecordKind::Claim => RecordKind::Claim,
+        StakingRecordKind::Drain => RecordKind::Drain,
+        StakingRecordKind::Exit => RecordKind::Release,
+    };
+    let shared = require_open_engine(tenants).await?;
+    let acknowledged = StakeFacade::acknowledge_staking_outcome(shared, kind)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "acknowledge_staking_outcome failed");
+            WalletRpcError::InternalError("staking state failed to load".into())
+        })?;
+    serde_json::to_value(AcknowledgeStakingOutcomeResult { acknowledged }).map_err(|e| {
+        WalletRpcError::InternalError(format!("serialize acknowledge_staking_outcome: {e}"))
+    })
 }
 
 /// Project a sealed-then-dispatched submit onto the OpenAPI `DrainResult`

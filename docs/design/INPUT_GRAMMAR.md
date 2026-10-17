@@ -581,6 +581,7 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `stake add <amount> [--yes]`, `stake return <amount> [--yes]` | same | amount | `--yes` | K |
 | `stake release [--yes]`, `stake collect [--yes]` | same | | `--yes` | K |
 | `stake join <shard-id>...` | same | integer… | | K |
+| — | `stake acknowledge <kind>` | one of `stake`, `claim`, `return`, `release` | | N, PROPOSED in #1109, not ruled: the word is the grammar round's to rule. Clears the active staking identity's last ending of that kind from `stake` (`acknowledge_staking_outcome`, `WALLET_RPC_STAKING_OUTCOMES.md` WR-Q2); the kind words are the ones `stake` prints |
 | `shard list`, `shard list all`, `shard list mine` | `shard list`, `shard list all`, `shard list held` | | | R (IG-Q22) |
 | `shard show <id>` | same | integer | | K |
 | `shard fetch <id> [--png p] [--size n]` | same | integer | `--png-file <path>`; `--png-pixels` integer | R (IG-Q22) |

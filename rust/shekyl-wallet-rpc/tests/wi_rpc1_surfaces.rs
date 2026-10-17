@@ -351,12 +351,48 @@ async fn staking_reads_on_fresh_wallet_are_zero_and_offline() {
     assert!(info.get("error").is_none(), "{info}");
     assert_eq!(info["result"]["staking_enabled"], false);
     assert_eq!(info["result"]["staked_output_count"], 0);
-    assert!(info["result"]["pscan_synced_height"].is_null(), "{info}");
+    // Every field is present, its absence-free form (rule 43): "never
+    // scanned" is a `null` member, "nothing in flight" an empty list.
+    let result = info["result"].as_object().expect("object");
+    assert!(
+        result.get("pscan_synced_height") == Some(&Value::Null),
+        "{info}"
+    );
+    assert_eq!(result.get("recovery_pending_reopen"), Some(&json!(false)));
+    assert_eq!(result.get("in_flight"), Some(&json!([])));
+    assert_eq!(result.get("outcomes"), Some(&json!([])));
+    let typed: shekyl_wallet_rpc::types::StakingInfoResult =
+        serde_json::from_value(info["result"].clone()).expect("the reply decodes as its type");
+    assert!(typed.in_flight.is_empty() && typed.outcomes.is_empty());
+
+    // The acknowledgement acts on the active persona; a fresh wallet has
+    // none, so there is nothing to clear and the answer is `false`.
+    let ack = rpc(
+        state.clone(),
+        "acknowledge_staking_outcome",
+        json!({"kind": "stake"}),
+    )
+    .await;
+    assert_eq!(ack["result"], json!({"acknowledged": false}), "{ack}");
+    // No slot, and no unknown kind (WR-Q5).
+    for params in [
+        json!({"kind": "stake", "p_slot": 0}),
+        json!({"kind": "bond"}),
+        json!({}),
+    ] {
+        let r = rpc(state.clone(), "acknowledge_staking_outcome", params.clone()).await;
+        assert_eq!(r["error"]["code"], -32602, "{params}: {r}");
+    }
 
     // All three refuse without an open wallet.
     let _ = rpc(state.clone(), "close_wallet", json!({})).await;
-    for method in ["get_staked_balance", "get_staked_outputs", "staking_info"] {
-        let r = rpc(state.clone(), method, json!({})).await;
+    for (method, params) in [
+        ("get_staked_balance", json!({})),
+        ("get_staked_outputs", json!({})),
+        ("staking_info", json!({})),
+        ("acknowledge_staking_outcome", json!({"kind": "claim"})),
+    ] {
+        let r = rpc(state.clone(), method, params).await;
         assert_eq!(r["error"]["code"], -29001, "{method}: {r}");
     }
 }

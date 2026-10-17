@@ -222,6 +222,11 @@ pub struct StakingOutcome {
     pub outcome: OutcomeKind,
     /// The tip height when the outcome was written.
     pub at_height: BlockHeight,
+    /// Whether the record's bytes were ever handed to a daemon (its state
+    /// reached `Dispatched`). Only a sent record published its inputs' key
+    /// images, so only its ending carries the linkage sentence (WR-Q5); a
+    /// post that reached its end date before it was due was never seen.
+    pub sent: bool,
 }
 
 impl std::fmt::Debug for StakingOutcome {
@@ -1323,9 +1328,14 @@ impl PendingPostBlock {
         }
 
         let mut out = EndedRelease::default();
-        let mut take = |kind: RecordKind, persona: PCanonicalId, outcome: Option<OutcomeKind>| {
+        let mut sent_flags = Vec::new();
+        let mut take = |kind: RecordKind,
+                        persona: PCanonicalId,
+                        state: PendingPostState,
+                        outcome: Option<OutcomeKind>| {
             outcome.is_some_and(|outcome| {
                 out.released.push((kind, persona, outcome));
+                sent_flags.push(matches!(state, PendingPostState::Dispatched { .. }));
                 true
             })
         };
@@ -1339,7 +1349,7 @@ impl PendingPostBlock {
                 live_funding,
                 max_age,
             );
-            !take(RecordKind::Post, r.persona, o)
+            !take(RecordKind::Post, r.persona, r.state, o)
         });
         self.claims.retain(|r| {
             let o = classify(
@@ -1351,7 +1361,7 @@ impl PendingPostBlock {
                 live_funding,
                 max_age,
             );
-            !take(RecordKind::Claim, r.persona, o)
+            !take(RecordKind::Claim, r.persona, r.state, o)
         });
         self.drains.retain(|r| {
             let o = classify(
@@ -1363,7 +1373,7 @@ impl PendingPostBlock {
                 live_funding,
                 max_age,
             );
-            !take(RecordKind::Drain, r.persona, o)
+            !take(RecordKind::Drain, r.persona, r.state, o)
         });
         self.releases.retain(|r| {
             let o = classify(
@@ -1375,17 +1385,18 @@ impl PendingPostBlock {
                 live_funding,
                 max_age,
             );
-            !take(RecordKind::Release, r.persona, o)
+            !take(RecordKind::Release, r.persona, r.state, o)
         });
         if !out.is_empty() {
             self.generation += 1;
-            for &(kind, persona, outcome) in &out.released {
+            for (&(kind, persona, outcome), sent) in out.released.iter().zip(sent_flags) {
                 self.clear_outcome(kind, &persona);
                 self.outcomes.push(StakingOutcome {
                     kind,
                     persona,
                     outcome,
                     at_height,
+                    sent,
                 });
             }
         }
@@ -2593,6 +2604,13 @@ mod tests {
             "the zero-fee claim's gate reopens"
         );
         assert_eq!(block.outcomes().len(), 6);
+        // Only the exit was sealed as dispatched (seal-before-send); the
+        // others were never handed to a daemon, so their endings say nothing
+        // about linkage (WR-Q5).
+        for o in block.outcomes() {
+            let byte = o.persona.to_bytes()[0];
+            assert_eq!(o.sent, byte == 0x14, "sent flag for {byte:#x}");
+        }
     }
 
     /// A reservation-kind record whose every input is gone landed: it is

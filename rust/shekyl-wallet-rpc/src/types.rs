@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use shekyl_engine_core::Capability;
+use shekyl_rpc_types::Nullable;
 
 use crate::error::WalletRpcError;
 
@@ -791,15 +792,18 @@ pub struct StakingInfoResult {
     pub balance: GetStakedBalanceResult,
     /// Count of unspent staking-side outputs.
     pub staked_output_count: i64,
-    /// The staking scan's sealed frontier height (`null` when the wallet has
-    /// never scanned as a staker).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pscan_synced_height: Option<i64>,
+    /// The first height the staking scan has not yet covered (its sealed
+    /// frontier, exclusive); `null` when the wallet has never scanned as a
+    /// staker. Required: "never scanned" is an answer (rule 43).
+    pub pscan_synced_height: Nullable<i64>,
     /// `true` when this session's scan recovered a staked slot that becomes
     /// operational at the next wallet open — close and reopen the wallet to
-    /// finish staking recovery. `false` in the steady state.
-    #[serde(default)]
+    /// finish staking recovery. `false` in the steady state. Required.
     pub recovery_pending_reopen: bool,
+    /// Every staking record still in flight (WR-Q1). Empty means none.
+    pub in_flight: Vec<InFlightEntry>,
+    /// The last ending per kind of staking action (WR-Q2). Empty means none.
+    pub outcomes: Vec<StakingOutcomeEntry>,
     /// What the serving host is currently obligated to serve
     /// (`"market"` / `"foundation_complete_tree"`), or absent when no host
     /// is running — see the contract's `StakingInfoResult.posture`.
@@ -824,6 +828,79 @@ pub struct StakingInfoResult {
     /// received more CPU (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.8).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serving_priority_not_lowered: Option<u32>,
+}
+
+/// One `staking_info.in_flight` entry (WR-Q1). `kind` and `state` are open
+/// strings: a reader renders an unknown value as-is (the `posture`
+/// precedent). Nothing that identifies the staking identity behind the
+/// record, its funds or its timing beyond the heights below is carried
+/// (WR-Q5).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InFlightEntry {
+    /// `stake`, `claim`, `drain` or `exit`.
+    pub kind: String,
+    /// `pending`, `dispatched`, `rejected` or `expired`.
+    pub state: String,
+    /// The tip height of the record's first send; `null` when it was never
+    /// sent.
+    pub dispatched_at_height: Nullable<i64>,
+    /// Sends so far, the first included; `0` when never sent.
+    pub attempts: u32,
+    /// For `rejected` and `expired`: the end date, after which the
+    /// transaction can never be mined. The funds return once
+    /// `pscan_synced_height` is greater than it. `null` in the other states,
+    /// where no return is expected.
+    pub funds_return_at: Nullable<i64>,
+    /// For `rejected`: what the node said, as a user sentence. `null` in the
+    /// other states.
+    pub reason: Nullable<String>,
+}
+
+/// One `staking_info.outcomes` entry (WR-Q2): how a record ended. Open
+/// strings, as [`InFlightEntry`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StakingOutcomeEntry {
+    /// `stake`, `claim`, `drain` or `exit`.
+    pub kind: String,
+    /// `rejected`, `expired`, `ended_unconfirmed` or `spent_elsewhere`.
+    pub outcome: String,
+    /// A user sentence; never an enum name.
+    pub reason: String,
+    /// The tip height when the ending was written.
+    pub at_height: i64,
+    /// `returned`, or `none_held` when the record held no funds.
+    pub funds: String,
+}
+
+/// `acknowledge_staking_outcome` params (WR-Q2). The active persona is
+/// implied (WR-Q5): a request naming a slot or anything else is refused.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AcknowledgeStakingOutcomeParams {
+    /// Which kind of ending to clear.
+    pub kind: StakingRecordKind,
+}
+
+/// A staking record kind, as a request names it. Closed: an unknown kind in
+/// a request is an error, not something to ignore.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StakingRecordKind {
+    /// A stake (bond post).
+    Stake,
+    /// An emission-reward claim.
+    Claim,
+    /// A return of staking funds to the principal balance.
+    Drain,
+    /// The exit that releases a stake.
+    Exit,
+}
+
+/// `acknowledge_staking_outcome` result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AcknowledgeStakingOutcomeResult {
+    /// Whether the active persona had an ending of that kind to clear.
+    pub acknowledged: bool,
 }
 
 /// `get_drain_balance` result (WI-RPC-5 archival staking actions).
@@ -1000,6 +1077,106 @@ mod tests {
     use super::*;
     use crate::error::WalletRpcErrorCode;
     use serde_json::json;
+
+    fn staking_info_reply() -> Value {
+        json!({
+            "staking_enabled": true,
+            "balance": {
+                "bonded_principal_confirmed": "0",
+                "bonded_principal_pending": "0",
+                "rewards_received_unspent": "0"
+            },
+            "staked_output_count": 0,
+            "pscan_synced_height": null,
+            "recovery_pending_reopen": false,
+            "in_flight": [{
+                "kind": "stake",
+                "state": "rejected",
+                "dispatched_at_height": 5_010,
+                "attempts": 1,
+                "funds_return_at": 5_100,
+                "reason": "The node refused it."
+            }],
+            "outcomes": [{
+                "kind": "drain",
+                "outcome": "expired",
+                "reason": "Withdrawn.",
+                "at_height": 5_900,
+                "funds": "returned"
+            }]
+        })
+    }
+
+    /// WR-Q1's decode falsifiers: the lists and the two tightened fields are
+    /// required; `null` is an answer only where the contract says so.
+    #[test]
+    fn staking_info_refuses_a_reply_missing_a_required_member() {
+        let ok: StakingInfoResult =
+            serde_json::from_value(staking_info_reply()).expect("the full reply decodes");
+        assert_eq!(ok.pscan_synced_height, Nullable::NULL);
+        assert_eq!(ok.in_flight[0].funds_return_at, Nullable::value(5_100));
+        // A later contract may add a state; an unknown value still decodes.
+        let mut later = staking_info_reply();
+        later["in_flight"][0]["state"] = json!("some_later_state");
+        assert!(serde_json::from_value::<StakingInfoResult>(later).is_ok());
+
+        for field in [
+            "in_flight",
+            "outcomes",
+            "pscan_synced_height",
+            "recovery_pending_reopen",
+        ] {
+            let mut missing = staking_info_reply();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<StakingInfoResult>(missing).is_err(),
+                "a reply without `{field}` must not decode"
+            );
+        }
+        for field in ["in_flight", "outcomes", "recovery_pending_reopen"] {
+            let mut null = staking_info_reply();
+            null[field] = Value::Null;
+            assert!(
+                serde_json::from_value::<StakingInfoResult>(null).is_err(),
+                "`{field}: null` must not decode"
+            );
+        }
+        for field in ["dispatched_at_height", "funds_return_at", "reason"] {
+            let mut missing = staking_info_reply();
+            missing["in_flight"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(
+                serde_json::from_value::<StakingInfoResult>(missing).is_err(),
+                "an entry without `{field}` must not decode"
+            );
+        }
+    }
+
+    /// WR-Q5's falsifiers: the request names no slot, and neither wire type
+    /// carries a persona, slot, delay or funding-output field.
+    #[test]
+    fn staking_outcome_wire_names_no_persona_slot_or_funding_output() {
+        assert!(serde_json::from_value::<AcknowledgeStakingOutcomeParams>(
+            json!({"kind": "stake", "p_slot": 0})
+        )
+        .is_err());
+        assert!(
+            serde_json::from_value::<AcknowledgeStakingOutcomeParams>(json!({"kind": "exit"}))
+                .is_ok()
+        );
+        let reply = staking_info_reply();
+        let keys: Vec<&String> = [&reply["in_flight"][0], &reply["outcomes"][0]]
+            .iter()
+            .flat_map(|e| e.as_object().unwrap().keys())
+            .collect();
+        for key in keys {
+            for banned in ["p_slot", "persona", "anchor_t0", "offset", "gindex"] {
+                assert!(!key.contains(banned), "`{key}` names {banned}");
+            }
+        }
+    }
 
     #[test]
     fn accepts_string_and_integer_ids() {
