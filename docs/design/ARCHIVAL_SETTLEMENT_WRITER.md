@@ -1675,6 +1675,15 @@ are keyed persona-first and `archival_r_market` shard-first, so their
 retirement walks the table once per epoch, a cost linear in the rows the
 family keeps.
 
+**The parity comparison now differs by horizon.** `ArchivalSnapshot`
+compares `RMarket`, `SigmaWork`, `Budget` and `SlashApplied` whole
+against the C++ capture. The C++ retires the first three at `tip − W`
+and never retires `slash_applied`; the Rust store retires `R_market` at
+`k + 1` and `slash_applied` at `k`. The captured chains are too short to
+reach the difference, and §15.9 already records that the comparison of
+these families is unexercised. The `DEL-008` re-baseline either floors
+the diff at each family's horizon or drops these families from it.
+
 ### 17.5 Tables with no derivable horizon (reported, not retired)
 
 | Table | Why no horizon is derived here | Blocker |
