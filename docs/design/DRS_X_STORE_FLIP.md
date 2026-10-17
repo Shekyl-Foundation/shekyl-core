@@ -73,9 +73,9 @@ The C++ that has no Rust owner yet — the protocol handler and `levin_notify` �
 6. **One RandomX budget.** The pipeline's `Form` workers and chain sync's header PoW draw from one bounded hasher budget, so the two never exceed the scratchpads the floor device holds (chain sync §A.3).
 7. **Deleted:** `prepare_handle_incoming_blocks` / `cleanup_handle_incoming_blocks` (Monero's batch preprocessing) and `try_add_next_blocks`' connect loop. The `Form` workers replace them.
 
-### DX-Q3 — RPC handlers that read the chain or the pool move to Rust in the flip
+### DX-Q3 — The C++ RPC server moves to Rust in the flip, whole
 
-The join rule: no FFI built for a C++ handler that dies a PR later.
+The join rule: no FFI built for a C++ handler that dies a PR later. Every method the C++ server answers is moved to Rust, deleted, or another lane's below; none stays in C++ (ruled by Rick, 2026-10-17, retiring the daemon RPC KV lane).
 
 - **Moved to Rust:**
   - **RK-6 (pool)** over the Rust pool.
@@ -87,10 +87,17 @@ The join rule: no FFI built for a C++ handler that dies a PR later.
   - **`pop_blocks`** as a connector `Rewind` message, an operator action. A live source never emits `Rewind`.
   - **`get_coinbase_tx_sum`.**
   - **RK-9:** curve-tree info and checkpoint, archival claim source, shard coverage.
+  - **Mining control:** `start_mining`, `stop_mining` and `mining_status`, over the Rust miner loop (DX-Q4). `set_log_hash_rate` deletes: the hash rate is part of mine status (`INPUT_GRAMMAR.md:632`, §13). The C++ handlers are `core_rpc_server.cpp:222`, `:273`, `:293` and `:347`.
+  - **Bans:** `set_bans`, `get_bans` and `banned` (`core_rpc_server.cpp:944`, `:881`, `:912`), over the transport layer's ban list (`rust/shekyl-transport-layer/src/ban.rs:151`, held in the socket table, `admission.rs:270`). They reach it through a handle the composition root supplies, in RT-O26's shape (`RPC_CHANNEL.md:1275`, §6.4). No FFI. The C++ forwarders through `m_p2p` delete.
+    - **How Rust reaches the list today:** only through `net_node`. The C++ handlers call `m_p2p` (`net_node.inl:213`–`:345`), which calls the `shekyl_ban_*` exports (`rust/shekyl-ffi/src/seam_ban_ffi.rs:75`–`:233`). Those act on the process's one socket table, a static inside `shekyl-ffi` (`process_sockets`, `seam_ffi.rs:200`–`:201`), or on the hub the C++ zone server binds over it (`zone_server.h:105`). Rust `main` holds no handle to either.
+    - **The seam the flip uses:** the composition root owns the process's `Sockets` value (`admission.rs:338`, an `Arc` handle) and hands the bans handle to the RPC from it. The FFI's static becomes a reader of the root's value for as long as the C++ zone server binds through it.
+  - **`stop_daemon`** (`core_rpc_server.cpp:436`) is one more trigger of the one stop path (`TOR_SUPERVISOR.md:51`, §1, ruled 2026-10-14; the stop-trigger row at `:612`). The handler asks Rust `main` to stop; it stops nothing itself.
 - **`FfiChainFacts` / `FfiInfoFacts`** are replaced by store-backed implementors (RK-D7's planned second implementation). `rpc_facts_ffi.cpp` deletes.
 - **Deleted:** `save_bc` and `flush_cache` (durability is `Immediate`; there is no cache), and `inject_archival_serve_credit` (with DEL-008).
-- **Not this lane:** log, limits and peers (#1088's `option_set`); bans (P2P); `stop_daemon` (Rust `main`).
-- **Falsifier:** no handler left in `core_rpc_server.cpp` reads the chain or the pool.
+- **Not this lane:** log, limits and peers (#1088's `option_set` / `option_show`).
+- **The C++ RPC server is gone whole:** every handler, request and response struct, dispatch table and error-code header, plus the facts and submit FFIs (`rpc_facts_ffi.cpp`, `daemon_submit_ffi.cpp`, `core_rpc_ffi.cpp`). The flip PR lists every file this empties, at its pin. At `b6bdadc3c` the falsifier's patterns match 28 files under `src/`, mixed headers such as `src/shekyl/shekyl_ffi.h` among them.
+- **The interim C++ console:** the console commands that read `COMMAND_RPC_*` structs delete with those structs. At #1088's head (`30a27570b`) they are nineteen words over eighteen executor methods (`src/daemon/rpc_command_executor.cpp:167`–`:963`; the words at `src/daemon/command_server.cpp:116`–`:257`): `bans`, `ban`, `unban`, `banned`, `flush_txpool`, `print_coinbase_tx_sum`, `print_pool`, `print_pool_sh`, `mining_status`, `pop_blocks`, `relay_tx`, `save`, `show_hr`, `hide_hr`, `start_mining`, `stop_mining`, `stop_daemon`, `exit` and `flush_cache`. `stop_daemon` and `exit` share one method. They are not ported into the Rust console. Their successors are `shekyl-cli`'s words (`INPUT_GRAMMAR.md` §13, `:609`), built by the R8 slice. Three have none: `pop_blocks` is an armed test lever (IG-Q25, `INPUT_GRAMMAR.md:683`), and `save` and `flush_cache` name LMDB and C++ cache internals.
+- **Falsifier:** after the flip, `rg -n -e 'COMMAND_RPC_' -e 'core_rpc_server' src/` returns nothing.
 
 ### DX-Q4 — The miner loop is Rust
 
@@ -124,6 +131,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 | 1 | **PR-b**: the Rust pool (`DRS_E5_POOL_ALT_PRUNE.md` §5 b1–b7, as amended in its brief) | staged |
 | 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged |
 | 3 | **The Rust RPC handlers (DX-Q3) and the miner loop (DX-Q4)**, unrouted | staged |
+| 3b | **The handlers over the pool, the router and the node**: the pool's (RK-6), `get_block_template`, `submit_block`, `generateblocks`, mining control, bans and `stop_daemon` (DX-Q3), unrouted | staged |
 | 4 | **The flip** (below) | live |
 
 **The flip PR:**
@@ -136,13 +144,14 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
   - the archival C++ path (DEL-008);
   - the reorg path (DEL-009);
   - `rpc_facts_ffi.cpp`, `daemon_submit_ffi.cpp` and `miner.cpp`;
+  - the C++ RPC server whole (DX-Q3's falsifier), with the interim console's commands that read its structs;
   - the LMDB utilities (FOLLOWUPS, IG-Q26);
   - the C++ fee floor and its FFI (DX-Q10);
   - liblmdb from `shekyld` (DEL-004);
 - deletes every LMDB-bound C++ test, each with a sentence naming the rule it tested and where Rust covers it now;
 - applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements.
 
-PRs 1–3 may run in parallel. PR 4 needs all three, plus #1088 merged.
+PRs 1, 2, 3 and 3b may run in parallel. PR 4 needs all four, plus #1088 merged.
 
 ### DX-Q9 — CEN-L14's remaining sites
 
