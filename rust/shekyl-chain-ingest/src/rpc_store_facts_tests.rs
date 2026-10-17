@@ -580,7 +580,7 @@ fn an_empty_store_is_not_ready_and_never_a_zero_tip() {
 #[derive(Debug)]
 struct Difference {
     shape: String,
-    height: u64,
+    height: BlockHeight,
     field: &'static str,
     cxx: String,
     rust: String,
@@ -647,7 +647,7 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
             ApplyPolicy::Full,
         ));
         let facts = facts_over(Arc::clone(&store), &path, rules);
-        let mut push = |height: u64, field: &'static str, cxx: String, rust: String| {
+        let mut push = |height: BlockHeight, field: &'static str, cxx: String, rust: String| {
             if cxx != rust {
                 differences.push(Difference {
                     shape: manifest.shape.clone(),
@@ -676,28 +676,33 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
                 .block
                 .expect("a connected height has a block");
             let header = &at.header;
-            push(h, "hash", format!("{hash:?}"), format!("{:?}", header.hash));
             push(
-                h,
+                *height,
+                "hash",
+                format!("{hash:?}"),
+                format!("{:?}", header.hash),
+            );
+            push(
+                *height,
                 "block_weight",
                 cxx.weight.to_raw().to_string(),
                 header.block_weight.to_string(),
             );
             push(
-                h,
+                *height,
                 "long_term_weight",
                 format!("{:?}", Some(cxx.long_term_weight.to_raw())),
                 format!("{:?}", header.long_term_weight),
             );
             let cumulative = cxx.cumulative_difficulty.to_raw();
             push(
-                h,
+                *height,
                 "cumulative_difficulty",
                 cumulative.to_string(),
                 header.cumulative_difficulty.to_string(),
             );
             push(
-                h,
+                *height,
                 "difficulty",
                 (cumulative - previous_cumulative).to_string(),
                 header.difficulty.to_string(),
@@ -705,19 +710,19 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
             previous_cumulative = cumulative;
             let served = &corpus_blocks[usize::try_from(h).expect("fits")];
             push(
-                h,
+                *height,
                 "blob",
                 hex::encode(served.serialize()),
                 hex::encode(&at.blob),
             );
             push(
-                h,
+                *height,
                 "reward",
                 template_reward(served).to_string(),
                 header.reward.to_string(),
             );
             push(
-                h,
+                *height,
                 "curve_tree_root",
                 format!("{:?}", served.header.curve_tree_root),
                 format!("{:?}", header.curve_tree_root),
@@ -731,7 +736,7 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
             )
             .expect("through the tip");
             push(
-                h,
+                *height,
                 "checkpoint_root",
                 hex::encode(cxx.root_after.to_bytes()),
                 checkpoint.root,
@@ -748,7 +753,7 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
             .expect("coinbase sum");
             let fees = corpus_fees[usize::try_from(h).expect("fits")];
             push(
-                h,
+                *height,
                 "coinbase_sum_fees",
                 fees.to_string(),
                 ((u128::from(one.fee_amount_top64) << 64) | u128::from(one.fee_amount)).to_string(),
@@ -757,7 +762,7 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
             let emission =
                 (u128::from(one.emission_amount_top64) << 64) | u128::from(one.emission_amount);
             push(
-                h,
+                *height,
                 "coinbase_sum_emission",
                 (coins - previous_coins).to_string(),
                 emission.to_string(),
@@ -780,7 +785,7 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
             let cxx = *trace.borrow(*tip).expect("covered").value();
             let info = shekyl_daemon_rpc::info_facts::InfoFacts::chain(&facts).expect("chain");
             push(
-                tip.to_raw(),
+                *tip,
                 "already_generated_coins",
                 cxx.coins_generated.to_raw().to_string(),
                 info.already_generated_coins.to_raw().to_string(),
@@ -791,13 +796,13 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
                 .map(|(h, _)| trace.borrow(*h).expect("covered").value().burned.to_raw())
                 .sum();
             push(
-                tip.to_raw(),
+                *tip,
                 "total_burned",
                 burned.to_string(),
                 info.total_burned.to_raw().to_string(),
             );
             push(
-                tip.to_raw(),
+                *tip,
                 "chain_height",
                 ChainCount::from_raw(tip.to_raw() + 1).to_raw().to_string(),
                 info.chain_height.to_raw().to_string(),
@@ -811,7 +816,11 @@ async fn the_store_facts_report_what_the_cxx_facts_were_made_of_on_every_capture
     for d in &differences {
         eprintln!(
             "difference: {} h{} {}: C++ {} / Rust {}",
-            d.shape, d.height, d.field, d.cxx, d.rust
+            d.shape,
+            d.height.to_raw(),
+            d.field,
+            d.cxx,
+            d.rust
         );
     }
     eprintln!(

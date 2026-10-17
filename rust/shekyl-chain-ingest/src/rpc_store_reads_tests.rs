@@ -115,7 +115,7 @@ async fn the_alt_reads_are_the_alt_table_walked_into_chains() {
         let chains = get_alternate_chains(&facts).expect("alt chains");
         assert!(chains.status.is_ok());
         assert_eq!(chains.chains.len(), 2, "two tips");
-        let main_at = |height: u64| match snap.block_info(h(height)).expect("info") {
+        let main_at = |height: BlockHeight| match snap.block_info(height).expect("info") {
             AtHeight::Recorded(info) => hex(info.hash),
             AtHeight::AboveTip => panic!("main block {height}"),
         };
@@ -142,10 +142,10 @@ async fn the_alt_reads_are_the_alt_table_walked_into_chains() {
             assert_eq!(chain.wide_difficulty, format!("0x{work:x}"));
             // The parent the lowest block names, which here is also the
             // main chain's block below the chain — the C++'s reading.
-            assert_eq!(chain.main_chain_parent_block, main_at(leaves_after));
+            assert_eq!(chain.main_chain_parent_block, main_at(h(leaves_after)));
             assert_eq!(
                 chain.main_chain_parent_block,
-                main_at(chain.height - chain.length)
+                main_at(h(chain.height - chain.length))
             );
         }
         // The tips are walked in the table's key order.
@@ -279,15 +279,21 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
-        let sum = |height: u64, count: u64| {
-            get_coinbase_tx_sum(&facts, &GetCoinbaseTxSumRequest { height, count })
+        let sum = |height: BlockHeight, count: u64| {
+            get_coinbase_tx_sum(
+                &facts,
+                &GetCoinbaseTxSumRequest {
+                    height: height.to_raw(),
+                    count,
+                },
+            )
                 .expect("coinbase sum")
         };
         let amount = |low: u64, top: u64| (u128::from(top) << 64) | u128::from(low);
 
         // Block by block: the verdict's paid reward, and the listed fees.
         for m in &mined {
-            let one = sum(m.height.to_raw(), 1);
+            let one = sum(m.height, 1);
             assert!(one.status.is_ok());
             let listed: u128 = if m.height == h(AT) { fees } else { 0 };
             assert_eq!(
@@ -311,7 +317,7 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
         }
 
         // The whole chain: the supply accumulator, and every fee.
-        let whole = sum(0, chain);
+        let whole = sum(BlockHeight::ZERO, chain);
         let coins = facts.chain().expect("info chain").already_generated_coins;
         assert_eq!(
             amount(whole.emission_amount, whole.emission_amount_top64),
@@ -324,15 +330,15 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
         assert_eq!(amount(whole.fee_amount, whole.fee_amount_top64), fees);
 
         // A range that starts inside and runs past the tip stops at it.
-        assert_eq!(sum(AT, chain), sum(AT, 2));
+        assert_eq!(sum(h(AT), chain), sum(h(AT), 2));
         // An empty range is zero and OK.
-        let empty = sum(0, 0);
+        let empty = sum(BlockHeight::ZERO, 0);
         assert!(empty.status.is_ok());
         assert_eq!((empty.emission_amount, empty.fee_amount), (0, 0));
         assert_eq!(empty.wide_emission_amount, "0x0");
         // The C++ bound: a start at the count, or a count past it.
         for (height, count) in [(chain, 1), (0, chain + 1)] {
-            let refused = sum(height, count);
+            let refused = sum(h(height), count);
             assert_eq!(refused.status.0, COINBASE_SUM_RANGE_REFUSAL);
             assert_eq!(
                 (refused.emission_amount, refused.wide_emission_amount.as_str()),
@@ -358,11 +364,11 @@ async fn calc_pow_hashes_the_bytes_under_the_seed_the_height_names() {
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
         let facts = facts_over(Arc::clone(&store), path, RULES);
-        let ask = |height: u64, blob: &str, seed: &str| {
+        let ask = |height: BlockHeight, blob: &str, seed: &str| {
             calc_pow(
                 &facts,
                 &CalcPowRequest {
-                    height,
+                    height: height.to_raw(),
                     block_blob: blob.to_owned(),
                     seed_hash: seed.to_owned(),
                 },
@@ -371,7 +377,7 @@ async fn calc_pow_hashes_the_bytes_under_the_seed_the_height_names() {
         for m in &mined {
             let blob = m.template.block.pow_blob();
             assert_eq!(
-                ask(m.height.to_raw(), &hex::encode(&blob), ""),
+                ask(m.height, &hex::encode(&blob), ""),
                 Ok(hex::encode(keccak_pow(&blob, &m.seed))),
                 "the recorded PoW at {}",
                 m.height.to_raw()
@@ -380,7 +386,7 @@ async fn calc_pow_hashes_the_bytes_under_the_seed_the_height_names() {
         let blob = mined[2].template.block.pow_blob();
         let named = BlockHash::from_bytes([7; 32]);
         assert_eq!(
-            ask(0, &hex::encode(&blob), &hex::encode(named.to_bytes())),
+            ask(BlockHeight::ZERO, &hex::encode(&blob), &hex::encode(named.to_bytes())),
             Ok(hex::encode(keccak_pow(&blob, &named)))
         );
         let far = 1_000_000u64;
@@ -389,13 +395,13 @@ async fn calc_pow_hashes_the_bytes_under_the_seed_the_height_names() {
             .to_raw();
         let tip = mined.last().expect("mined").height.to_raw();
         assert_eq!(
-            ask(far, &hex::encode(&blob), ""),
+            ask(h(far), &hex::encode(&blob), ""),
             Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
                 "No seed for height {far}: its seed height {seed_height} is above the chain's top block {tip}"
             ))))
         );
         assert_eq!(
-            ask(1, "zz", ""),
+            ask(h(1), "zz", ""),
             Err(RpcFault::Refused(RpcRefusal {
                 code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
                 message: "Wrong block blob".to_owned()
@@ -403,14 +409,14 @@ async fn calc_pow_hashes_the_bytes_under_the_seed_the_height_names() {
         );
         let oversize = vec![0u8; shekyl_wire::block::MAX_BLOCK_BLOB_SIZE + 1];
         assert_eq!(
-            ask(1, &hex::encode(oversize), ""),
+            ask(h(1), &hex::encode(oversize), ""),
             Err(RpcFault::Refused(RpcRefusal {
                 code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
                 message: "Block blob size is too big, rejecting block".to_owned()
             }))
         );
         assert!(matches!(
-            ask(1, &hex::encode(&blob), "abcd"),
+            ask(h(1), &hex::encode(&blob), "abcd"),
             Err(RpcFault::Refused(RpcRefusal { code: CORE_RPC_ERROR_CODE_WRONG_PARAM, .. }))
         ));
         drop(facts);
