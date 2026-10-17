@@ -179,7 +179,7 @@ pub use constants::{
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
 };
-pub use drawable_epoch::{DrawableEpoch, DrawableEpochError};
+pub use drawable_epoch::{DrawableEpoch, DrawableEpochError, DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION};
 pub use drawable_pair::DrawablePair;
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{

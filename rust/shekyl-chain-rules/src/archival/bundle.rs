@@ -682,7 +682,7 @@ pub fn verify_bundle<V: BundleView>(
             &nonce,
             record.anchor_height,
             anchor_hash.as_bytes(),
-            derived.pair.shard_id,
+            derived.pair.shard.to_raw(),
             &record.delivery_digest,
             &receipt,
         )

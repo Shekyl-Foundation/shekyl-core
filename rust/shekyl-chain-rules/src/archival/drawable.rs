@@ -100,13 +100,12 @@ fn emit_pairs<E>(
         if record.join_settlement_epoch >= epoch {
             continue;
         }
-        let p_id = persona.to_bytes();
         match &record.holdings {
             Holdings::CompleteTree => {
                 for shard in 0..final_count {
                     pairs.push(DrawablePair {
-                        p_id,
-                        shard_id: shard,
+                        persona,
+                        shard: ShardId::from_raw(shard),
                     });
                 }
             }
@@ -114,8 +113,8 @@ fn emit_pairs<E>(
                 for held in held.iter() {
                     if is_final(held.shard)? {
                         pairs.push(DrawablePair {
-                            p_id,
-                            shard_id: held.shard.to_raw(),
+                            persona,
+                            shard: held.shard,
                         });
                     }
                 }
@@ -185,8 +184,8 @@ mod tests {
 
     fn pair(p: [u8; 32], shard: u64) -> DrawablePair {
         DrawablePair {
-            p_id: p,
-            shard_id: shard,
+            persona: persona(p),
+            shard: ShardId::from_raw(shard),
         }
     }
 

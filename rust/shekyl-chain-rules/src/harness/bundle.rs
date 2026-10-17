@@ -49,7 +49,8 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{FnDsaHybridSecretKey, HybridEd25519FnDsa};
 use shekyl_crypto_pq::signature::{
     SignatureScheme as _, SCHEME_DOMAIN_RECEIPT, SCHEME_DOMAIN_WITNESS_BUNDLE,
 };
-use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
+use shekyl_types::archival::ReceiptSignPk;
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use crate::archival::BundleView;
 use crate::rule_set::RuleSet;
@@ -194,9 +195,9 @@ impl BundleView for FixtureBundleView {
 pub struct FixturePersona {
     /// The persona's canonical id. Arbitrary bytes: nothing here derives
     /// it from an identity key.
-    pub p_id: [u8; 32],
-    /// The receipt public key's canonical bytes.
-    pub receipt_public_key: Vec<u8>,
+    pub persona: PCanonicalId,
+    /// The receipt public key, as a bond record carries it.
+    pub receipt_public_key: ReceiptSignPk,
     /// The receipt secret key.
     pub receipt_secret_key: FnDsaHybridSecretKey,
     /// The shards it holds at `h_open(E)`.
@@ -261,8 +262,8 @@ impl BundleWorld {
                 HybridEd25519FnDsa::keypair_from_seeds(&[n; 32], &[n.wrapping_add(0x80); 32])
                     .expect("fixture receipt keygen");
             FixturePersona {
-                p_id: [n; 32],
-                receipt_public_key: public.to_canonical_bytes(),
+                persona: PCanonicalId::from_bytes([n; 32]),
+                receipt_public_key: public.to_receipt_sign_pk(),
                 receipt_secret_key: secret,
                 shards: shards.to_vec(),
             }
@@ -283,13 +284,11 @@ impl BundleWorld {
         let epoch = rule_set.settlement_schedule().epoch_at(h);
         let drawable = DrawableEpoch::new(
             epoch,
-            personas
-                .iter()
-                .map(|p| (p.p_id, p.receipt_public_key.clone())),
+            personas.iter().map(|p| (p.persona, &p.receipt_public_key)),
             personas.iter().flat_map(|p| {
-                p.shards.iter().map(|shard_id| DrawablePair {
-                    p_id: p.p_id,
-                    shard_id: *shard_id,
+                p.shards.iter().map(|shard| DrawablePair {
+                    persona: p.persona,
+                    shard: ShardId::from_raw(*shard),
                 })
             }),
         )
@@ -403,11 +402,11 @@ impl BundleWorld {
         let signer = self
             .personas
             .iter()
-            .find(|p| p.p_id == pair.p_id)
+            .find(|p| p.persona == pair.persona)
             .expect("the pair's persona");
         self.record_signed_by(
             &signer.receipt_secret_key,
-            pair.shard_id,
+            pair.shard.to_raw(),
             attempt,
             anchor,
             nonce,
