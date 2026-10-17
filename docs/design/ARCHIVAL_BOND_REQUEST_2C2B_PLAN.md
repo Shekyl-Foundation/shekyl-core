@@ -179,14 +179,12 @@ funding must come from **`P`-local value, never principal outputs**. That is
 whole design. A brand-new staker's **first** bond has **no `P`-earnings** to draw
 on; `bond_floor` has nowhere else to come from, so the first bond **must** be
 principal-funded. The firewall cannot forbid that — it **decorrelates** it, and
-the §7 **≥ 1 settlement-epoch spacing** (S3) is *precisely that decorrelation
-guard* (a SEB spacing is only meaningful if there is a principal→`P` funding link
-to space). The corrected disposition splits funding into two regimes, each with
+the bond-post delay measured from the funding is that decorrelation guard
+([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q2). The corrected disposition splits funding into two regimes, each with
 its own mechanism, to settle in Round 1:
 
-- **Cold-start = principal-seeded, amount-decoupled, ≥ 1-SEB-spaced +
-  standoff-decorrelated.** The SEB spacing + standoff `draw_entry_gap` decorrelate
-  **when** `P` acts — but **timing decorrelation is not enough**: spacing does
+- **Cold-start = principal-seeded, amount-decoupled, and delayed from the
+  funding (BD-Q2).** The delay decorrelates **when** `P` acts — but **timing decorrelation is not enough**: spacing does
   nothing for **amount** or **membership-set**, and a principal spend of a
   `bond_floor`-shaped amount at a distinctive moment **fingerprints the link on
   the amount** regardless of how well-spaced it is. The fix is to **amount-decouple
@@ -321,10 +319,8 @@ The regime selector is typed; neither real source is wired in 2c-2b.
 
 - **Cold-start** (principal-seeded): principal makes a generic transfer to `P`
   (amount-decoupled), `P` holds, `P` posts from its own UTXO.
-  `EconomicSpacing(SebSpan(≥ 1))` gates the principal→`P` transfer →
-  bond-post interval (the cold-start decorrelation guard).
-  `NetworkGap(BlockSpan(600))` gates the standoff draw inside the
-  bond-post event. **Real source deferred:** actual principal-output
+  The bond-post delay is drawn from the funding output's spendable
+  height (BD-Q2), and `NetworkGap` carries its width (BD-Q4). **Real source deferred:** actual principal-output
   selection is wire-later.
 - **Steady-state** (`P`-local fund-from-earnings): requires the `P`-scan
   pipeline (Bond-PR 2d-1). **Real source deferred** (SP-2.e).
@@ -391,12 +387,10 @@ this guarantee without additional machinery.
 
 **Which seam each gates (finding 6 close-out) — SETTLED.**
 
-- `NetworkGap` gates: `draw_entry_gap` standoff window (block-level timing
-  for the prep-spend / announce / bond-post sequence inside the `SignBond`
-  handler).
-- `EconomicSpacing` gates: principal→`P` seed transfer → bond-post interval
-  (cold-start decorrelation; elapse ≥ 1 SEB between events). Design-now as
-  the named constant; real elapsed check deferred to cold-start wiring.
+- `NetworkGap` gates: the `draw_entry_gap` window of the bond-post delay.
+- The funding → bond-post guard is BD-Q2's anchor, not a spacing floor;
+  `EconomicSpacing`, `SebSpan` and `MIN_COLD_START_SPACING` are deleted in
+  the implementation slice ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q5).
 
 New `shekyl-engine-core` production deps required: `shekyl-standoff`
 (for `GapRng` + `draw_entry_gap`) and `shekyl-archival-bond-builder` (for
@@ -740,15 +734,14 @@ bit-identical; `cargo test -p shekyl-engine-core` (318) + `-p shekyl-standoff`
 green; fmt + clippy clean. The Round-2 placement (the typed `NetworkGap` lives
 in `stake_timing`) is preserved — only the raw `u64` moved to the scheme's home.
 
-**`R0-D3` — B6b: cold-start SEB spacing reconciled (2026-06-19).** *Unit
-reconciliation.* `MIN_COLD_START_SPACING = EconomicSpacing(SebSpan(1))` matches
-`ARCHIVAL_TIMING_CONSTANTS.md` §7 "Min spacing join-Market ↔ principal spend:
-≥ 1 settlement epoch" (gate-6 R4). The split is now explicit in the const's doc:
-the **count** (1 SEB) is wallet policy; the SEB **length**
-(`settlement_epoch_blocks = 10000`) is consensus
-(`config/consensus_constants.json:19`). The `SebSpan → blocks` elapsed check
-(`1 × settlement_epoch_blocks`) is wire-later with the cold-start funding source
-(SP-2.d, deferred). The steady-state ramp (`≥ 2 settlement epochs`,
+**`R0-D3` — B6b: the cold-start spacing is BD-Q2's anchor (ruled 2026-10-16).**
+A floor of one settlement epoch between the funding and the post is a shift
+an observer who holds the funding anchor subtracts, so it buys no cover; the
+bond-post delay is measured from the funding instead
+([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q2, BD-Q5).
+`MIN_COLD_START_SPACING`, `EconomicSpacing` and `SebSpan` are deleted in the
+implementation slice. Amount decoupling (the generic transfer to `P`) is
+unaffected. The steady-state ramp (`≥ 2 settlement epochs`,
 `ARCHIVAL_TIMING_CONSTANTS.md` §7) is steady-state-deferred (SP-2.e) — no 2c-2b
 constant needed.
 

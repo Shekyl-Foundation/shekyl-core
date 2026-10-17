@@ -1,9 +1,10 @@
 # Bond-post delay — what it decorrelates: Round 0
 
-**Status:** OPEN — Round 0, questions **POSED 2026-10-15**; nothing is
-ruled. Each question carries a default, its reason, what the alternative
-changes, and a falsifier. **No code until the questions are ruled**
-([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
+**Status:** RULED IN PART — Round 0 posed 2026-10-15; **BD-Q1, BD-Q2, BD-Q3
+and BD-Q5 ruled 2026-10-16** (Rick). **BD-Q4, the window, is open**, with
+the inputs it needs first (§3). No code in this PR; the implementation
+slice (BD-Q2, BD-Q3, the BD-Q5 deletion) is next and does not wait for
+BD-Q4 ([`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)).
 
 **Ground:** `shekyl-core` `dev` at `0419e6780` (the #1082 merge, after
 the wallet-RPC round, #1079, merged ruled). Every `file:line` below was
@@ -17,8 +18,10 @@ read at that commit. Paths under `engine/` are in
 ([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §12). That deletion is when
 the Rust daemon starts accepting bond posts and the defect goes live.
 Until then the C++ daemon refuses every kind-5 JoinMarket post before any
-reference check, which hides it. The deadline binds BD-Q3. The window
-(BD-Q4) can be argued after BD-Q3 is ruled (§1.2). The wallet-RPC round
+reference check, which hides it. **The deadline binds BD-Q3, not BD-Q4.**
+The window is single-sourced (`shekyl-standoff/src/draw.rs:80`, typed in
+`engine/stake_timing.rs:189-190`): the implementation builds against it,
+and BD-Q4's ruling changes one constant and its golden vector. The wallet-RPC round
 ([`WALLET_RPC_STAKING_OUTCOMES.md`](WALLET_RPC_STAKING_OUTCOMES.md),
 `WR-Q1…WR-Q5`) is ruled and not yet built; §6 lists what passes between
 the two rounds.
@@ -81,128 +84,120 @@ bonded `P` service is hard to connect to its funding transaction.
 
 The defect and the cover question are separable. **Signing at the due
 time (BD-Q3) removes the dead posts and the reference leak whatever the
-window is.** BD-Q1, BD-Q2 and BD-Q4 decide how much cover the delay buys;
-BD-Q5 removes the dead constant either way.
+window is.** BD-Q4 decides how much cover the delay buys.
 
 ---
 
-## 2. What the posture says today
+## 2. What the posture says
 
 - **Method note 8** counts events on the chain, not in the pipeline. An
-  event counts only if an observer can see it as distinct; the funding
-  transfer is "not attributable, therefore not an anchor". The pipeline
-  "is invisible to every observer the posture admits"
-  (`ARCHIVAL_FIREWALL_GATE6.md:2212-2233`; pass-4 (d) closure `:1589-1617`).
+  event counts only if an observer can see it as distinct, and the funding
+  transfer is "not attributable, therefore not an anchor"
+  (`ARCHIVAL_FIREWALL_GATE6.md:2212-2220`; pass-4 (d) closure `:1589-1617`).
+  Its "invisible to every observer the posture admits" is scoped to the
+  chain observer (`:2222-2227`, BD-Q1).
 - **The WI-4 retraction** keeps the spread for one adversary only: "live
   defense-in-depth only against an off-chain-anchored adversary — someone
   who knows the principal and saw them act at time `T` — and dead against
   the chain observer". It freezes the rule for `600`: it re-derives only on
   "(a) a measurable off-chain anchor-precision model arriving, or (b) a
-  pure cost-side (latency) decision", and calls that anchor precision
-  "unquantifiable in principle" (`ARCHIVAL_BOND_WI4_MEASUREMENT.md:776-806`).
+  pure cost-side (latency) decision". The banner names the network-origin
+  observer as the measurable case, with a one-block anchor
+  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md:776-811`).
 - **The gate's threat table admits network observers**: "Local / ISP"
   (principal clearnet link timing) and "Partial passive (GPA-lite)"
   (`ARCHIVAL_FIREWALL_GATE6.md:1036-1050`).
-- **The principal side is clearnet by default.** "Until it lands, a
-  passive network observer needs *no user error* to correlate principal
-  daemon traffic with on-chain events — the vantage is granted by our
-  default" (`ARCHIVAL_BOND_WI4_MEASUREMENT.md:4072-4086`); the default flip
-  is "NOT YET BUILT" (`:1988`).
+- **A wallet without its own node reaches its daemon over clearnet by
+  default.** "Until it lands, a passive network observer needs *no user
+  error* to correlate principal daemon traffic with on-chain events — the
+  vantage is granted by our default" (`ARCHIVAL_BOND_WI4_MEASUREMENT.md:4072-4086`);
+  the principal-side default flip is "NOT YET BUILT" (`:1988`).
 - **Dandelion++ does not cover the first edge.** A wallet submission stems
   from the daemon that accepts it (`DAEMON_RELAY_PRIVACY.md:796-805`), and
   stem-and-fluff "does not hide the origin from a passive observer that
-  already sees the first stem edge" (`:1238`).
+  already sees the first stem edge" (`:1238`). What the default Tor
+  posture does about that edge is BD-Q4's first input.
 
 ---
 
-## 3. Questions
+## 3. Rulings and the open question
 
-### BD-Q1 — Which observers does the posture admit for the funding event?
+### BD-Q1 — The observers of the funding event — RULED 2026-10-16
 
-**Default: three observers, each with a named anchor and channel.** For
-two of them the funding transfer is an event, so method note 8 is scoped
-to the chain observer.
+**Ruled.** The posture admits three observers, each with a named anchor
+and channel. For the network-origin observer and the funding counterparty
+the funding transfer is an event.
 
 | Observer | What it sees (`T` and its channel) | Anchor precision |
 | --- | --- | --- |
-| **Chain-only** | The bond post, which names `P`. The funding transfer is an unattributable FCMP++ transfer. | None after BD-Q3. Today the reference age gives it the request height, and for an instant staker the funding block (§1.2). |
-| **Network origin** of the principal's transfer: the ISP or first stem edge of the principal's node, a GPA-lite relay fraction, or the remote daemon and its link when the wallet does not use its own node | The funding transaction leaving the principal. It learns the transaction's hash and so its block. | One block. |
+| **Chain-only** | The bond post, which names `P`. The funding transfer is an unattributable FCMP++ transfer. | None once BD-Q3 is built. Until then the reference age gives it the request height and, for an instant staker, the funding block (§1.2). |
+| **Network origin** of the principal's transfer: the ISP or first stem edge of the principal's node, a GPA-lite relay fraction, or the remote daemon and its link when the wallet does not use its own node | The funding transaction leaving the principal. It learns the transaction and so its block. | One block for an IP link to the transaction. What the default Tor posture leaves of this vantage is BD-Q4 input 2. |
 | **Funding counterparty**: whoever delivered the coins the principal funds `P` with (the "on-ramp witness", `ARCHIVAL_BOND_WI4_MEASUREMENT.md:4097-4099`) | Its own delivery to the principal. "The chain goes dark to the counterparty too": it does not see the principal's later transfer to `P`. | Coarse, set by the principal's own behaviour between receiving and funding. It reaches block precision only if it also holds the network-origin position. |
 
-**Reason.** The reopening uses note 8's own test. "An event counts only if
-an observer can see it as distinct", and "asking *which observer* names
-the excluded posture". The network-origin observer sees the funding
-transfer as distinct: it watched it leave the principal. The gate already
+Method note 8's "invisible to every observer the posture admits" holds for
+the chain observer; the scoping sentence is in
+`ARCHIVAL_FIREWALL_GATE6.md:2222-2227`. The WI-4 banner names the
+network-origin observer as the measurable case
+(`ARCHIVAL_BOND_WI4_MEASUREMENT.md:800-808`).
+
+**Why.** Note 8's own test decides it: "an event counts only if an
+observer can see it as distinct", and "asking *which observer* names the
+excluded posture". The network-origin observer sees the funding transfer
+as distinct, because it watched it leave the principal. The gate already
 admits that observer (§10.1's Local/ISP and GPA-lite rows), and our
-default grants it (WI-4 trace 1). Note 8's "invisible to every observer
-the posture admits" holds for the chain observer and fails for the first
-stem edge. The intent names this observer: someone who sees the funding
-appear and wants to find the bond. This is also WI-4's trigger (a). The
-off-chain anchor is not unquantifiable for this observer: its precision
-is one block, which is what BD-Q4 consumes.
+defaults grant it (WI-4 trace 1). The design intent names it: someone who
+sees the funding appear and wants to find the bond. The order coin stays
+retired: the chain still carries one attributable event, and the delay is
+a jitter against the funding anchor, not a permutation.
 
-Two things do not reopen. The order coin stays retired, because the chain
-still carries one attributable event and the delay is a jitter against
-the funding anchor, not a permutation. Note 8 keeps its force for the
-chain observer, against which the delay is still dead.
+**Reopens if** the principal's funding transfer reaches the network with
+its origin hidden from every network vantage by default. BD-Q4 input 2
+records what the default does today.
 
-**What the alternative changes.** Chain-only (note 8 as written): the
-delay protects nobody, the window should be zero, and the design intent
-is void. Adding the counterparty without the network-origin observer
-gives a coarse anchor that any window helps against, so it is not a
-sizing input. Leaving out the network-origin observer contradicts §10.1
-and the shipped default.
+### BD-Q2 — What the delay is measured from — RULED 2026-10-16
 
-**Falsifier.** The principal's funding transfer reaches the network with
-its origin hidden from the first edge by default: the principal-side Tor
-flip covers the node's own P2P broadcast, not only the wallet→daemon link.
-The network-origin row then becomes opt-out residue rather than a default
-vantage. That would not remove it: a user who opts out keeps it, and see
-BD-Q4 on why the window is not shrunk afterwards.
+**Ruled.** The delay is measured from the first height at which the
+funding can be spent into a bond. Elapsed time counts, and no fresh draw
+is added.
 
-**To rule:** if ruled, `ARCHIVAL_FIREWALL_GATE6.md` method note 8 gains a
-scoping sentence (the chain observer), and the WI-4 §13.1 banner's
-"unquantifiable" names the network-origin observer as the measurable case.
-Neither is edited before the ruling.
-
-### BD-Q2 — What is the delay measured from?
-
-**Default: the first height at which the funding can be spent into a
-bond. Elapsed time counts, and no fresh draw is added.**
-
-- The **anchor** `a = spendable_height + REF_ANCHOR_AGE` of the reserved
+- **The anchor** `a = spendable_height + REF_ANCHOR_AGE` of the reserved
   funding output with the greatest `spendable_height`. For an ordinary
   output that is `h_f + 16`, the earliest height a bond spending it can be
-  signed. The wallet knows `spendable_height` from its own record
+  signed. The wallet reads `spendable_height` from its own record
   (`pscan_state.rs:259`).
-- The **draw** `s ~ U[0, W]`, taken once at the request and persisted.
+- **The draw** `s ~ U[0, W]`, taken once at the request and persisted.
+  The wallet persists `s`, not the due. A re-draw is refused: a second
+  sample biases the post earlier.
 - **`due = max(a + s, the request's tick)`.** If `a + s` has already passed
   at the request, the post goes at the next tick.
+- **The clock.** `a` is recomputed from the live funding record at each
+  tick (count = height + 1) and compared on the daemon-claimed count clock.
+  A reorg that moves the funding output moves the anchor with it.
+  `block_source.rs:179-182` keeps the synced and ingested *tip* clocks out
+  of the due; a record's `spendable_height` is a block's height, not a tip
+  clock.
 
-**Reason.**
+**Why.**
 
 - **The anchor is the event the observer holds.** The network-origin
   observer anchors at the funding block, and the request is private (with
   BD-Q3 nothing is emitted at the request). A delay measured from the
-  request adds the principal's reaction time to the delay. The observer
-  does not know that reaction time, but it is not wallet-controlled, and
-  the common case, staking as soon as allowed, makes it a constant.
+  request adds the principal's reaction time, which is not
+  wallet-controlled; for a staker who stakes as soon as allowed it is a
+  constant.
 - **`+16` is a constant, so it buys nothing.** Every wallet shares
-  `SPENDABLE_AGE + REF_ANCHOR_AGE`, so the observer subtracts it. Measuring
-  from `a` rather than `h_f` keeps the whole window drawn. With `h_f + s`
-  instead, every draw below 16 collapses onto `h_f + 16`, a point mass at a
-  public offset from the observer's anchor.
-- **Elapsed time counts.** For a request made at elapsed age `e` past `a`,
-  the post lands at `a + max(e, s)`. What the observer sees of
-  `post − a` is uniform over `(e, W]` with a point mass at `e`. `e` is the
-  principal's private choice, so the point mass falls at a place the
-  observer cannot name. Adding a fresh draw (`due = request + s`) changes
-  nothing the observer can use and turns every late request into up to `W`
-  more blocks of latency (rule 82).
+  `SPENDABLE_AGE + REF_ANCHOR_AGE`, so the observer subtracts it.
+  Measuring from `a` rather than `h_f` keeps the whole window drawn; from
+  `h_f`, every draw below 16 would collapse onto `h_f + 16`, a point mass
+  at a public offset from the observer's anchor.
+- **Elapsed time counts.** A request at elapsed age `e` past `a` lands at
+  `a + max(e, s)`. What the observer sees of `post − a` is uniform over
+  `(e, W]` with a point mass at `e`, and `e` is the principal's private
+  choice, so the point mass falls where the observer cannot name it.
 - **The greatest `spendable_height` governs a multi-input bond** (the
-  logged exception, `engine/bond_orchestrator.rs:581-586`). The window must
-  cover the last funding transfer the observer may hold. Earlier transfers
-  are then separated by more than the window.
+  logged exception, `engine/bond_orchestrator.rs:581-586`). The window
+  covers the last funding transfer the observer may hold; earlier ones are
+  separated by more.
 
 **Wargame: a stake made the instant funding confirms.** The request comes
 at `a = h_f + 16` (`e = 0`).
@@ -211,51 +206,29 @@ at `a = h_f + 16` (`e = 0`).
   at `a + s`. Its reference age `s + 6` gives away `a`, and so `h_f`. The
   network observer's link is exact whatever `s` is, and the chain observer
   learns the funding block.
-- **Under this default:** the post lands at `a + s`, signed then, with
-  reference age 6. The observer's candidates are every bond post in
+- **Under the ruling:** the post lands at `a + s`, signed then, with
+  reference age 6. The observer's candidates are the JoinMarket posts in
   `[a, a + W]`.
-- **The request anchor with signing at due** (BD-Q3 without BD-Q2) gives
-  the same result in this case, because the request is at `a`. The two
-  anchors differ only for late requests, where the request anchor adds
-  latency and no cover. So BD-Q2's privacy weight rests on BD-Q3. Its own
-  contribution is the latency of late stakes and the precise anchor
-  definition.
+- A request anchor with signing at due would give the same result here,
+  because the request is at `a`. The two anchors differ only for late
+  requests, where the request anchor adds latency and no cover.
 
-**Two decisions inside this question:**
+**Reopens if** an observer can see the request instant: a remote daemon
+receiving the request's round trips (`get_fee_estimates`, the claimed tip;
+`bond_orchestrator.rs:555-557`, `:958-962`), or a GUI or wallet-RPC host
+across a network. That observer holds the request as an anchor, and a
+late post lands at the request instant. Under the own-node posture these
+hops are loopback and the observer does not exist.
 
-1. **The clock.** The due check runs on the daemon-claimed count clock,
-   and `block_source.rs:179-182` forbids the synced and ingested *tip*
-   clocks from feeding `anchor_t0`. A funding record's `spendable_height`
-   is a block's height, a chain fact, not a tip clock. Default: `a` is
-   computed from the record (count = height + 1) and compared on the
-   daemon-claimed clock.
-2. **Persist the draw, not the due.** `a` is read from the live funding
-   record at each tick, so a reorg that moves the funding output moves the
-   anchor with it. Re-drawing `s` after a restart is refused: a second
-   sample biases the post earlier.
+### BD-Q3 — Signing at the due time — RULED 2026-10-16
 
-**What the alternative changes.** The request anchor keeps today's
-latency for late stakes and leaves the window's meaning dependent on
-when the user clicks. The `h_f` anchor creates the point mass above. The
-least-spendable output under-delays the newest transfer in a multi-input
-bond.
+**Ruled.** The request seals an unsigned plan. At the due tick the actor
+assembles, proves and signs the post with a fresh reference at the
+canonical age, and the signed bytes are sealed before the first send. The
+schema bump is shared with, or follows, WR-Q2/WR-Q3's v13.
 
-**Falsifier.** An observer who can see the request instant. Examples: a
-remote daemon receiving the request's round trips (`get_fee_estimates`,
-the claimed tip, `bond_orchestrator.rs:555-557`, `:958-962`), or a GUI or
-wallet RPC host across a network. That observer holds the request as an
-anchor, and "no fresh draw" leaves a late post at the request instant.
-Under the own-node posture these hops are loopback and the observer does
-not exist.
-
-### BD-Q3 — Is the post signed at its due time?
-
-**Default: yes. The request seals an unsigned plan; at the due tick the
-actor assembles, proves and signs the post with a fresh reference at the
-canonical age. The plan is sealed as signed bytes before the first send.**
-
-**Reason.** Signing at the due time makes the reference age at broadcast
-the standard 6. That removes the reference leak (§1.2) and the dead posts
+Signing at the due time makes the reference age at broadcast the
+standard 6. That removes the reference leak (§1.2) and the dead posts
 together: a post signed at due is submittable for the full 94-block
 horizon from its first send.
 
@@ -290,197 +263,262 @@ whenever the wallet is open, and no secret is persisted.
 | --- | --- | --- |
 | `p_slot` | Names the persona the actor signs for. | Held. |
 | The reservation, `funding_gindexes` | Keeps the cadence driver's claims and drains off the funding until the bond spends it. `reserved_gindexes()` already unions it (`shekyl-engine-state/src/pending_post_block.rs:536-555`). | Held. |
-| The draw `s` (BD-Q2) | The due is `a + s`. A re-draw is refused. | `bond_post_offset_blocks` |
+| The draw `s` (BD-Q2) | The due is `max(a + s, request)`. A re-draw is refused. | `bond_post_offset_blocks` |
 | The holdings descriptor (the posture) | Assembly moves to the due tick, and the posture is the caller's. Today "nothing posture-shaped is persisted" (`engine/bond_orchestrator.rs:827`) because the posture is consumed at once. | Not held. New. |
 | Not the fee | Estimated at the due tick from the daemon's live estimate, as `first_stake` does now (`engine/bond_orchestrator.rs:958-962`). | — |
 | Not the tx bytes, the reference or the key image | Produced at the due tick. | `tx_bytes` |
 
 That is a persisted-schema change: a planned state (or kind) in the
 pending-post block, the posture added, `anchor_t0` replaced by the anchor
-rule. `PENDING_POST_VERSION` (12, `pending_post_block.rs:94`) bumps under
-rule 42 with its snapshot (`shekyl-engine-state/schemas/pending_post_block.snap`).
-WR-Q2 and WR-Q3 already take v13 for a durable `reference_height` (ruled,
-not built). This change takes the next version, or shares that bump if
-the two slices land together. A mismatched seal fails closed, as today
-(`:91-93`).
+rule, and each sent version's reference height durable (below).
+`PENDING_POST_VERSION` (12, `pending_post_block.rs:94`) bumps under rule
+42 with its snapshot (`shekyl-engine-state/schemas/pending_post_block.snap`).
+WR-Q2 and WR-Q3 take v13 for a durable `reference_height` (ruled, not
+built); this change shares that bump or takes the next. A mismatched seal
+fails closed, as today (`:91-93`).
 
 **The states.** W1 (preflight, nothing durable) and W2 (`bonded_slots`
-written, no record) stay. The new **planned** state (durable plan and
+written, no record) stay. The **planned** state (durable plan and
 reservation, no signature) comes before **signed** (bytes sealed,
 `Pending`), then `Dispatched`.
 
 **Surviving a restart.** The plan reloads with the pending block. The
 bonded slot is re-derived at open. At the first tick at or past due, the
 driver has the engine assemble, then seals the signed bytes, then sends.
-A wallet closed at due posts on the first tick after reopening; the post
-is signed then and valid, where today's sealed bytes would be dead.
+A wallet closed at due posts on the first tick after reopening, signed
+then.
 
-**After signing.** Retries resend the same bytes while the reference is
-young. At `REBUILD_AT` (50, `reference.rs:116`; `should_reanchor`, `:249`)
-the post is re-signed with a fresh reference. The ordinary send path
-re-anchors at the same threshold only before its first broadcast (CT-5d,
-`engine/traits/pending_tx.rs:218-232`); re-signing a post that was
-already sent is new here. The same inputs give the same key images, so
-at most one version lands. `StaleRoot` then means "re-sign", not "resend".
+**Re-signing: two states, derived from whether any byte left the wallet.**
+
+1. **Never sent.** No byte left the wallet. The post is re-anchored and
+   re-signed freely; `REBUILD_AT` and `should_reanchor`
+   (`shekyl-curve-tree/src/reference.rs:116`, `:249`) apply as on the
+   ordinary pre-broadcast path (CT-5d, `engine/traits/pending_tx.rs:218-232`).
+   This covers a post signed and sealed at due whose send did not happen
+   before the wallet closed.
+2. **Sent.** The same bytes are resent until the sent version is provably
+   dead: `proof_expired(tip, reference_height)`
+   (`shekyl-curve-tree/src/reference.rs:225-233`). That is the boundary
+   consensus enforces (`shekyl-chain-rules/src/rules/tx_against.rs:319-341`)
+   and the pool evicts at (`src/cryptonote_core/tx_pool.cpp:1082-1101`,
+   `DAEMON_SUBMIT_VERDICT.md` §6 leg 1). Only then is the post re-signed.
+   The shared predicate is used; the arithmetic is not re-derived.
+
+A sent post is not re-signed at `REBUILD_AT`. At age 50 the first version
+is still mineable (consensus accepts to `MAX_AGE`, 100) and still in the
+pool. The re-signed version spends the same key images, so the daemon
+answers it `DoubleSpendConflict`, "a *different* transaction consumed one
+of our inputs" (`shekyl-daemon-rpc/src/submit/engine.rs:505-511`). The
+dispatch driver's terminal arm then removes the record and releases the
+funding reservation (`engine/pscan/dispatch.rs:794-803`) while the first
+version can still land, and the cadence driver may claim or drain funding
+a live bond is about to spend.
+
+**After any broadcast, a key-image conflict holds the record.** Once a
+version has been broadcast, `DoubleSpendConflict` on a later version means
+one of three things: the pool has not yet evicted our own expired version
+(eviction runs on the pool's sweep, not at the exact boundary), an earlier
+version was mined, or the daemon is lying. The reservation excludes every
+other spender of `P`'s funding, so it is never a foreign spend. So after
+any broadcast a key-image conflict holds the record and the reservation.
+Release happens only on the P-scan's reorg-deep observation: the key image
+spent by one of our versions takes the confirmed path; not spent, with the
+version expired, takes the re-sign. The terminal-release arm stays only
+for a record that has never had a second version. Each sent version's
+reference height is durable; WR-Q2/WR-Q3's `reference_height` (v13) is
+that field, and the bump is shared.
 
 **What changes for WI-3.** The dispatch driver "never constructs or
-signs" (`ARCHIVAL_BOND_WI3_DISPATCH.md:34-35`). Under this default it
-triggers assembly through the engine at due. The single-writer seal
-discipline (§3.3) and seal-before-send are kept.
+signs" (`ARCHIVAL_BOND_WI3_DISPATCH.md:34-35`). Under this ruling it
+triggers assembly through the engine at due, and its conflict handling
+follows the two rules above. The single-writer seal discipline (§3.3) and
+seal-before-send are kept.
 
-**REJECTED: cap the offset at 94 and keep signing at the request.** Every
-post would land, but the reference age stays `offset + 6`. The request
-height is still public, and for an instant staker so is the funding
-block (§1.2). Reopen if the reference age stops being visible on chain:
-it is not, because the daemon checks it
-(`shekyl-chain-rules/src/rules/tx_against.rs:319-341`), and the
-transaction names its reference block (`WALLET_RPC_STAKING_OUTCOMES.md`
-WR-Q3).
+**Reopens if** signing at due needs something unavailable at the due
+tick: a secret not in the held bundle, a curve-tree path the wallet cannot
+build at that reference, or a posture the plan cannot carry. The
+precedents above say none applies; a test that assembles from a reloaded
+plan after a restart settles it.
 
-**What the alternative (sign at the request) keeps.** The defect.
+### BD-Q4 — How wide is the window? — OPEN
 
-**Falsifier.** Signing at due is unsafe if signing needs something
-unavailable at the due tick. Candidates: a secret not in the held bundle,
-a curve-tree path the wallet cannot build at that reference, or a posture
-the plan cannot carry. The precedents above say none applies. A test that
-assembles from a reloaded plan after a restart settles it.
+**Open.** The `600` sentinel holds until this is ruled. The window is
+fixed at genesis: it is wallet-side and golden-vector-pinned
+(`shekyl-standoff/src/draw.rs:59-70`, `:78`), and once wallets are live a
+change splits them into two delay distributions, which is itself a
+fingerprint. Before genesis it can be chosen with the network posture
+known, at no fingerprint cost.
 
-### BD-Q4 — How wide is the window?
+**Implementation does not wait for it.** `W` is single-sourced
+(`shekyl-standoff/src/draw.rs:80`, typed in `engine/stake_timing.rs:189-190`).
+BD-Q2, BD-Q3 and BD-Q5 build against it, and the ruling changes one
+constant and its golden vector.
 
-**Default: one settlement epoch, `W = SETTLEMENT_EPOCH_BLOCKS` (10,000
-blocks, about 13.9 days), typed from the consensus constant rather than a
-literal. The cost is stated, and the homeostasis check runs before the
-ruling.**
+**What has to be answered first.**
 
-**Reason: the targeted direction's cover is the bond-post rate.** The
-observer from BD-Q1 can work in two directions.
+1. **What the default network posture leaves of the network-origin
+   observer.** Answered at source:
+   - **Own-origin broadcast over Tor is designed and default-on.** The
+     default P2P posture runs clearnet and Tor together
+     (`INPUT_GRAMMAR.md:361`, IG-Q3). A node's own transactions ride a
+     stem slot drawn from its hidden-address (Tor) outbound sessions when
+     it has any (`TOR_COVER_POSTURE.md:53-66`; shipped in PR-1, #1018). The
+     first stem peer receives the transaction over Tor, so the
+     IP-to-transaction link at the first stem edge is gone by default.
+   - **The wire vantage stays under the default managed Tor.** That Tor is
+     a client-only second process: "Originated cells then travel that
+     client's own OR connections" (`TOR_COVER_POSTURE.md:295-296`), and "a
+     wire observer can still separate that burst from relay volume"
+     (`:29-31`). Only the operator-relay posture (§1) hides originated
+     cells, and that posture is the operator's choice, not the default. So
+     by default the ISP sees *when* the node originated something, not
+     *which* transaction. Its anchor is a timing match between that burst
+     and the transaction's appearance, and its precision is unmeasured:
+     Tor's cover class is `Volume`, "unmeasured, pending TRC-1" (`:50`).
+   - **`DAEMON_RELAY_PRIVACY.md` §42.1's carrier** (stem + own ≈ 0.5 %
+     utilisation) does not apply on the Tor zone: TRC's relay posture
+     replaced it there (the section heading, `DAEMON_RELAY_PRIVACY.md:8729`).
+   - **A wallet without its own node** still reaches its daemon over
+     clearnet by default (§2), and that daemon sees the submission.
+
+   So, under the default posture, the network-origin observer is the
+   ISP's burst-timing vantage plus the remote-daemon case, not an IP link
+   at the first stem edge; under the operator-relay posture it is
+   residue. The window's cost, every staker waiting, is weighed against
+   the burst-timing anchor's precision, which TRC-1 measures.
+2. **The cover count.** Answered at source. The targeted observer's
+   cover is **every JoinMarket post**, and only those.
+   - The `post_kind` byte is cleartext; a JoinMarket is `0x05` and nothing
+     else is (`shekyl-wire/src/transaction.rs:96`, `:664-695`).
+   - `HoldingsUpdate` (`post_kind 3`) is REJECTED; there are no holdings
+     re-posts (`ARCHIVAL_BOND_GATE4.md:828`).
+   - A Release is `Other(2)`, distinguishable by its kind. A Reinstate
+     posts for an existing record with zero credit, distinguishable by its
+     known `P` id (`ARCHIVAL_BOND_GATE4.md:356-366`).
+   - A holdings change is a rotation: a new persona's JoinMarket plus the
+     old persona's Release (`ARCHIVAL_BOND_GATE4.md:702-712`). A rotation's
+     JoinMarket names a fresh persona, as a first join does, so it is
+     cover.
+
+   FD4's churn `c` counts unbonds and holdings drops
+   (`docs/completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md:273`). Under the
+   immutable bond each drop is a rotation, which emits a JoinMarket. So
+   the join rate is FD4's box as an estimate, not a bound below it, and
+   any wallet-driven persona rotation outside `c` adds to it.
+3. **The homeostasis run.** Anything above about 1,000 blocks is on the
+   economic axis (the sim treats the standoff as free only up to 0.10
+   epoch, `STAKER_ARCHIVAL_SIM.md:3494-3501`). The staking sim runs the
+   candidate in verification mode against the production lever before the
+   ruling. Not yet run.
+4. **The join rate itself.** No bond-post rate figure exists; the box
+   below is FD4's model. A testnet read replaces it.
+
+**The candidates as they stand.** The observer from BD-Q1 can work in two
+directions.
 
 - **Untargeted (backward).** It sees a bond post and searches the
   principals it watches for a send in `[post − W, post]`. Its cover is
   every send by a watched principal, because a funding transfer looks
-  like any transfer. This is what the sim measured: "candidate-set mean
+  like any transfer. The sim measured this: "candidate-set mean
   `1 → 7 → 13 → 25` across windows `0 → 300 → 600 → 1200` blocks" at a
   background rate of 0.02 per block (`STAKER_ARCHIVAL_SIM.md:3500-3512`).
   `600` was sized here.
 - **Targeted (forward).** It knows a principal and saw it send at `T`
-  (the intent's adversary, and WI-4's). It searches the bond posts in
-  `[a, a + W]`, with `a = h_f + 16`. Its cover is other bond posts, which are far
-  scarcer.
+  (the intent's adversary, and WI-4's). It searches the JoinMarket posts
+  in `[a, a + W]`, with `a = h_f + 16`. Its cover is other JoinMarkets,
+  which are far scarcer.
 
-**The rate.** No bond-post rate figure exists. The exit round's model is
-the nearest: `ρ ≈ N_P × c / SEB`, with `N_P ∈ 79–154` bonded personas and
-per-epoch churn `c ∈ [0.02, 0.2]`
-(`docs/completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md:265-284`). In a
-stationary population, joins replace exits. FD4's `c` also counts
-`HoldingsUpdate` drops (`:273`), which no join replaces, so the join
-rate is **at most** that box. That bound is this round's reasoning, not a
-measurement. The forward candidate count is `ρ × W`, so the counts below
-are upper bounds, and the window for `N_t` candidates,
-`W ≥ (N_t − 1) / ρ` (FD4's shape), is a lower bound:
+With `ρ ≈ N_P × c / SEB`, `N_P ∈ 79–154` and `c ∈ [0.02, 0.2]`
+(`docs/completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md:265-284`), the
+forward candidate count is `ρ × W`, and the window for `N_t` candidates
+is `W ≥ (N_t − 1) / ρ` (FD4's shape):
 
-| Window | Latency (mean / max) | Other bond posts in window, at most (`79, 0.02` … `154, 0.2`) | Window for `N_t = 10` (`TARGET_ANON_SET`, WI-4 `:238`), at least |
+| Window | Latency (mean / max) | Other JoinMarkets in window (`79, 0.02` … `154, 0.2`) | Window for `N_t = 10` (`TARGET_ANON_SET`, WI-4 `:238`) |
 | --- | --- | --- | --- |
 | `600` (the sentinel) | 10 h / 20 h | 0.09 … 1.85 | — |
-| `1,000` (the sim's free ceiling, below) | 17 h / 33 h | 0.16 … 3.1 | — |
+| `1,000` (the sim's free ceiling) | 17 h / 33 h | 0.16 … 3.1 | — |
 | `10,000` (1 SEB) | 6.9 d / 13.9 d | 1.6 … 31 | — |
 | derived | — | — | 56,962 … 2,922 blocks (5.7 … 0.3 SEB) |
 
-At the `600` sentinel, a targeted observer finds fewer than two other bond
-posts at every corner of the box. Against that observer, `600` covers
-almost nothing. One SEB is the smallest candidate that leaves cover at the
-lean corner and reaches `N_t` at the thick corner. It is also the figure
-gate-6 R4 already ratified for this spacing
-(`ARCHIVAL_TIMING_CONSTANTS.md:321`), as a window this time rather than a
-floor (BD-Q5).
+- **`600`:** free on the economic axis; fewer than two forward candidates
+  at every corner, so it defends the untargeted direction only.
+- **One SEB (the round's proposal):** the smallest candidate with forward
+  cover at the lean corner and `N_t` at the thick one. Costs: a stake
+  starts earning up to 13.9 days after the request (mean 6.9), and it is
+  on the economic axis (input 3).
+- **The derived window:** reaches `N_t` everywhere, at up to 5.7 epochs
+  (about 79 days) of latency at the lean corner.
 
-**The cost, stated (rule 82).**
-
-- **Latency.** A stake starts earning up to 13.9 days after the request
-  (mean 6.9 days) instead of up to 20 hours.
-- **The economy.** The sim treats the standoff as free only up to 0.10
-  epoch (about 1,000 blocks; `STAKER_ARCHIVAL_SIM.md:3494-3501`). One SEB
-  is on the economic axis, so the staking sim's homeostasis check runs
-  before the ruling, in verification mode against the production lever,
-  not as an analytical bound.
-- **What the user sees.** Under WR-Q1 and WR-Q5 as ruled, a planned stake
-  is an `in_flight` entry in state `pending`, and "a `pending` entry
-  reveals nothing about when it will be sent". With a one-epoch window a
-  user sees `pending`, with no date, for up to 13.9 days. That is
-  acceptable at `600` (20 hours). At one epoch it reads as stuck (rule 82),
-  so the choice of window reopens part of WR-Q5. Whether the owner gets a
-  post-by bound, and in what form, is relayed to that round (§6), not
-  decided here.
-
-**Set once, not shrunk later.** The window is wallet-side and
-golden-vector-pinned (`shekyl-standoff/src/draw.rs:59-70`, `:78`). A later change
-splits the network into two delay distributions for as long as old
-wallets post, which is itself a fingerprint. The principal-side Tor flip
-covers the wallet→daemon link. It does not remove the first stem edge of
-an own node's P2P broadcast, so the network-origin observer survives it.
-The default is sized for the world with that observer, and kept.
+**What the user sees.** Under WR-Q1 and WR-Q5 as ruled, a planned stake is
+an `in_flight` entry in state `pending`, and "a `pending` entry reveals
+nothing about when it will be sent". At `600` that is up to 20 hours; at
+one epoch it is up to 13.9 days with no date, which reads as stuck
+(rule 82). The WR-Q5 relay (§6) depends on the width ruled here.
 
 **Launch.** At genesis the first bond posts have no cover at any width.
 WI-4 §16.5 proposes a launch-window rate cap on bond posts with no number
-(`ARCHIVAL_BOND_WI4_MEASUREMENT.md:2463-2464`). That is a separate
-question, recorded here and not decided.
+(`ARCHIVAL_BOND_WI4_MEASUREMENT.md:2463-2464`). It is a separate question,
+recorded here and not decided.
 
-**What the alternatives change.**
+**What decides it.** If the join rate reaches 0.015 per block (about 150
+joins per epoch), `600` reaches `N_t = 10` forward and the cost side picks
+it. If TRC-1 measures the burst-timing anchor as too coarse to name a
+block, the forward observer under the default posture loses its anchor and
+the window is weighed against the remote-daemon case alone. If the
+homeostasis run shows a one-epoch entry delay moves the equilibrium, the
+window comes down and the concession is stated.
 
-- **`600`:** free on the economic axis, and it defends only the untargeted
-  direction.
-- **The derived window:** reaches `N_t` everywhere, but at the lean corner
-  it costs 5.7 epochs (about 79 days) of latency.
-- **`1,000`:** the economic ceiling, with at most three forward candidates.
+### BD-Q5 — `MIN_COLD_START_SPACING` — RULED 2026-10-16
 
-**Falsifier.**
+**Ruled.** `MIN_COLD_START_SPACING`, `EconomicSpacing` and `SebSpan` are
+deleted (`engine/stake_timing.rs:129-135`, `:160-174`, `:192-203`; the type
+list in `engine/mod.rs:389-390`), with Rick's authorization to remove the
+landed code. The deletion lands in the implementation slice with BD-Q2 and
+BD-Q3, which touches `stake_timing.rs` anyway; the drifted SP-2.d citation
+at `engine/stake_timing.rs:160-163` goes with it. This PR carries the doc
+edits:
 
-- If the testnet join rate is at least 0.015 per block (about 150 joins
-  per epoch), `600` reaches `N_t = 10` forward, and the cost side picks
-  it.
-- If the join rate is below `9 / 10,000` per block, 1 SEB misses `N_t`.
-  The ruling then either widens the window or records the shortfall as a
-  conscious concession.
-- If the homeostasis check shows a one-epoch entry delay moves the
-  equilibrium, the window comes down and the concession is stated.
+- the §7 row (`ARCHIVAL_TIMING_CONSTANTS.md:321`) restated as the bond-post
+  delay measured from the funding, width per BD-Q4;
+- `ARCHIVAL_BOND_CONSTRUCTION.md:665-671`, the three-event model dropped;
+- `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md` SP-2.d (`:180-188`, `:320-323`,
+  `:389-393`) and R0-D3 (`:737-746`): the floor is replaced by BD-Q2's
+  anchor. Amount decoupling, the generic transfer to `P`, is unaffected.
 
-### BD-Q5 — What happens to `MIN_COLD_START_SPACING`?
-
-**Default: deleted, along with `EconomicSpacing` and `SebSpan`, whose only
-consumer it is** (`engine/stake_timing.rs:129-135`, `:160-174`,
-`:192-203`; the type list in `engine/mod.rs:389-390`). The one-epoch
-figure survives as BD-Q4's window if that is ruled.
-
-**Reason.** A floor ("at least one epoch after funding") is a different
-object from a window ("uniform over one epoch from funding").
+**Why.** A floor ("at least one epoch after funding") is a different
+object from a window ("uniform from funding").
 
 - Against an anchor the observer holds, a floor is a constant shift that
-  the observer subtracts. It costs a full epoch and buys no cover.
+  the observer subtracts. It costs latency and buys no cover.
 - It also hands the observer a structural fact, "never within an epoch of
   the funding". The gate refused that shape when it kept zero in the draw:
   excluding a value "hand[s] the observer a structural fact … that they
   did not have" (`ARCHIVAL_FIREWALL_GATE6.md:2201-2210`).
-- Under BD-Q2 the window measures from the funding, which is the job the
-  floor was named for. So the floor is subsumed, and dead code does not
-  survive the round (rule 15).
+- Under BD-Q2 the delay is measured from the funding, which is the job the
+  floor was named for. Dead code does not survive the round (rule 15).
 
-**The documents that go with it, when ruled:**
+### Rejected alternatives
 
-- the §7 row (`ARCHIVAL_TIMING_CONSTANTS.md:321`), restated as the window;
-- `ARCHIVAL_BOND_CONSTRUCTION.md:665-669`, which still describes the
-  three-event model;
-- the SP-2.d passages of `ARCHIVAL_BOND_REQUEST_2C2B_PLAN.md`
-  (`:182-187`, `:324-326`, `:397-399`);
-- the citation at `engine/stake_timing.rs:160-163`, which points at
-  CONSTRUCTION §10 for SP-2.d, a section that does not hold it.
-
-**What the alternative changes.** Wiring the floor as well
-(`due = a + SEB + s`) adds one epoch of pure latency for no cover.
-Wiring it alone (no draw) leaves a constant offset from the funding, which
-gives no cover at all.
-
-**Falsifier.** An observer model under which a floor enlarges the
-candidate set beyond what the same-width window gives. The candidates are
-the bond posts in the window wherever the window sits, so none is known.
+- **BD-Q1, chain-only posture (note 8 unscoped):** the delay would protect
+  nobody, and it contradicts GATE6 §10.1 and the shipped defaults.
+- **BD-Q2, anchor at the request:** adds the principal's reaction time,
+  costs late stakes latency, and buys no cover.
+- **BD-Q2, anchor at `h_f`:** every draw below 16 collapses onto a point
+  mass at a public offset from the observer's anchor.
+- **BD-Q2, the least-spendable output as the anchor:** under-delays the
+  newest funding transfer of a multi-input bond.
+- **BD-Q2, a fresh draw for a late request:** latency with nothing the
+  observer can use.
+- **BD-Q3, sign at the request:** the defect (§1.2).
+- **BD-Q3, cap the offset at 94 and keep signing at the request:** every
+  post lands, but the reference age stays `offset + 6`, which the daemon
+  checks and the transaction names.
+- **BD-Q3, re-sign a sent post at `REBUILD_AT`:** the first version is
+  still mineable and pool-resident, and the conflict on the second
+  releases the reservation while the first can land.
+- **BD-Q5, wire the floor with the window (`due = a + SEB + s`):** an epoch
+  of latency for no cover.
+- **BD-Q5, the floor alone:** a constant offset from the funding, no cover.
 
 ---
 
@@ -488,22 +526,30 @@ the bond posts in the window wherever the window sits, so none is known.
 
 | Objective | Route |
 | --- | --- |
-| **O1.** Link principal to `P` from the funding broadcast (network origin, forward). | BD-Q4: the window is sized against it. The residue at thin rates is stated there. |
+| **O1.** Link principal to `P` from the funding broadcast (network origin, forward). | BD-Q4: the window is sized against it, with the default posture's vantage as input 1. |
 | **O2.** Read the request height, or the funding block, off the bond's reference. | BD-Q3: absorbed. The reference age at broadcast is 6. |
-| **O3.** Have the wallet resend a dead post until the alarm, keeping the funding reserved for about 30 hours and the stake unlanded. | BD-Q3: absorbed (signed at due, re-signed at `REBUILD_AT`). WR-Q3's expiry covers any residue. |
-| **O4.** Tie the post's send to the wallet opening, when the due fell while the wallet was closed. | Discipline note. Today's sealed post sends at reopen too. Whether the post rides the serving-launch standoff (`engine/stake_timing.rs:206`, SH-2b-2) is the bond lane's forward action, posed at implementation. |
-| **O5.** Fingerprint wallets by window cohort after a window change. | BD-Q4: the window is set once. |
+| **O3.** Have the wallet resend a dead post until the alarm, keeping the funding reserved and the stake unlanded. | BD-Q3: absorbed. A post is signed at due; a sent post is re-signed once `proof_expired`. WR-Q3's release covers any residue. |
+| **O4.** Tie the post's send to the wallet opening, when the due fell while the wallet was closed. | Discipline note. Today's sealed post sends at reopen too. Whether the post rides the serving-launch standoff (`engine/stake_timing.rs:206`, SH-2b-2) is posed in the implementation slice. |
+| **O5.** Fingerprint wallets by window cohort after a window change. | BD-Q4: the window is fixed at genesis. |
 | **O6.** A remote daemon (no own node) receives both the funding transfer and the bond post from one client. | No window helps: it sees the post submitted. Conceded under the own-node posture (`engine/transaction_submitter.rs:479-483`). The routes are the principal-side Tor flip (`ARCHIVAL_BOND_WI4_MEASUREMENT.md:1988`) and the per-`P` submit posture (2d-2). Recorded, not absorbed. |
+| **O7.** A malicious daemon answers `DoubleSpendConflict` to a live post to make the wallet release its reservation and spend the funding elsewhere. | BD-Q3: after any broadcast a conflict never releases; only the P-scan's reorg-deep observation does. |
 
 ---
 
 ## 5. Proving it
 
-Tests that land with the implementation of the rulings:
+Tests that land with the implementation slice:
 
-- **Replace** the ignored test (`engine/pscan/dispatch_tests.rs:1293`). A post due at `a + s` is signed at its
-  first send and carries reference age 6. With `StaleRoot` it is re-signed
-  at `REBUILD_AT`, not resent to the alarm.
+- **Replace** the ignored test (`engine/pscan/dispatch_tests.rs:1293`). A
+  post due at `max(a + s, request)` is signed at its first send and
+  carries reference age 6.
+- **Re-signing:** a sent post is resent unchanged until `proof_expired`,
+  then re-signed. A never-sent post re-anchors at `REBUILD_AT`.
+- **Conflict after broadcast:** a `DoubleSpendConflict` after a broadcast
+  leaves the record and the reservation in place; release happens only on
+  the P-scan's observation.
+- **Re-signed while pool-resident:** a re-signed post submitted while the
+  earlier version is still in the pool does not release the reservation.
 - **Instant staker:** a request at `a` produces a post whose reference
   height is not `h_f + 10`.
 - **Restart between request and due:** the plan reloads, `s` is unchanged,
@@ -514,25 +560,27 @@ Tests that land with the implementation of the rulings:
   reserved outputs.
 - **Schema:** the version bump and snapshot, and a v12 seal failing closed.
 - **No dead code:** `rg -n 'MIN_COLD_START_SPACING|EconomicSpacing|SebSpan' rust`
-  returns nothing (BD-Q5 as defaulted).
+  returns nothing.
 
 ---
 
 ## 6. What passes to the wallet-RPC round
 
 The wallet-RPC round is ruled (`WR-Q1…WR-Q5`, merged in #1079) and not yet
-built. Each carry below is recorded in both documents (rule 26 A5).
+built. Each carry below is recorded in both documents (rule 26 A5);
 `WALLET_RPC_STAKING_OUTCOMES.md` §1.1 points here.
 
 - **The FOLLOWUPS row** "The bond-post delay does not decorrelate the
   funding transfer from the bond" is owned by this round.
 - **WR-Q1 (`in_flight`).** A planned, unsigned stake is "sealed, not yet
   sent", so it fits the ruled `pending` state. No new state is needed
-  unless BD-Q4's cost forces one.
+  unless BD-Q4's width forces one.
 - **WR-Q3 (release at the end date).** The end date is `reference_height
-  + MAX_AGE`, and the reference height is written at assembly. A planned
-  stake has no reference until it is signed at due, so it cannot expire
-  before then. Two cases need WR-Q3's rule:
+  + MAX_AGE`, written at assembly. Under BD-Q3 a stake can carry more than
+  one version, so its end date is its newest sent version's, and the
+  durable `reference_height` is per sent version (the shared v13 bump). A
+  planned stake has no reference until it is signed at due, so it cannot
+  expire before then. Two cases need WR-Q3's rule:
   - **A plan that cannot be signed at due**: funding spent elsewhere, or a
     posture refused. It needs an outcome (WR-Q2) and a release.
   - **Withdrawing a plan by dropping the record.** No byte of it was ever
@@ -542,18 +590,16 @@ built. Each carry below is recorded in both documents (rule 26 A5).
     linkage event). Whether the owner may withdraw a plan is WR-Q3's to
     rule.
 - **WR-Q5 (what the response reveals).** The wire carries no due count,
-  and a `pending` entry says nothing about when it will be sent. At a
-  one-epoch window that leaves the user up to 13.9 days with no date
-  (BD-Q4). Whether the owner sees a post-by bound is WR-Q5's to reopen.
+  and a `pending` entry says nothing about when it will be sent. If BD-Q4
+  rules a window far above `600`, the user waits up to that long with no
+  date; whether the owner then sees a post-by bound is WR-Q5's to reopen.
 
 ---
 
 ## 7. What this round does not do
 
-- No code and no test changes before the rulings.
+- No code in this PR. The implementation slice (BD-Q2, BD-Q3, the BD-Q5
+  deletion) is next and does not wait for BD-Q4.
 - It does not choose the launch-window rate cap (BD-Q4, "Launch").
 - It does not build the principal-side Tor default flip
-  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md:1988`), and its window does not
-  depend on it.
-- It does not edit method note 8, the WI-4 banner or the timing table
-  before the rulings (BD-Q1, BD-Q5).
+  (`ARCHIVAL_BOND_WI4_MEASUREMENT.md:1988`).

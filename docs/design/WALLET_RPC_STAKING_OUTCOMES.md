@@ -59,8 +59,10 @@ Recorded in `docs/FOLLOWUPS.md` as "The bond-post delay does not
 decorrelate the funding transfer from the bond", owned by the bond lane's
 Round 0, [`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md)
 (`BD-Q1…BD-Q5`: the observers, the delay's anchor, signing at the due
-time, the window, `MIN_COLD_START_SPACING`). It is blocked on that round's
-rulings. Its §6 lists what it passes back to this round.
+time, the window, `MIN_COLD_START_SPACING`). BD-Q1, BD-Q2, BD-Q3 and BD-Q5
+were ruled 2026-10-16 and the window is open; the dependency is blocked on
+that round's implementation slice. Its §6 lists what it passes back to this
+round.
 
 **What the code does.**
 
