@@ -126,6 +126,40 @@ fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
         "{context}: the executable {executable:?} is not among the pinned files"
     );
 
+    // The DLLs a Windows executable may import (TB-11). The packaging tool
+    // reads the PE import table against this list; the binary does not carry
+    // it, but a row whose list is malformed or misplaced does not compile, so
+    // the two readers of the pin file agree on what a row is.
+    match row.get("imports") {
+        Some(imports) if fold_case => {
+            let imports = imports
+                .as_array()
+                .filter(|list| !list.is_empty())
+                .unwrap_or_else(|| {
+                    panic!("{context}: \"imports\" lists the DLLs the executable imports")
+                });
+            let mut seen: Vec<String> = Vec::new();
+            for import in imports {
+                let name = import
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{context}: import {import} is not a string"));
+                let identity = checked_file_name(name, context).to_ascii_lowercase();
+                assert!(
+                    !seen.contains(&identity),
+                    "{context}: import {name:?} is listed twice"
+                );
+                seen.push(identity);
+            }
+        }
+        None if fold_case => {
+            panic!("{context}: a pinned Windows target lists the DLLs its executable imports")
+        }
+        Some(_) => {
+            panic!("{context}: \"imports\" is the PE import list; only a Windows row has one")
+        }
+        None => {}
+    }
+
     format!(
         "TorDisposition::Pinned(TorPin {{ bundle_version: {:?}, bundle_target: {:?}, \
          tor_version: {:?}, executable: {:?}, case_insensitive_names: {}, files: &[{}] }})",
