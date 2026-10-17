@@ -26,13 +26,13 @@ fee-share verdict in
 block, at the production Standard rung and under the production
 block-template fill rule:
 
-- Blocks carry **22 transactions** for the first eleven years.
+- Blocks carry **22 transactions** for the first eighteen years.
 - The median stays within one transaction of the 300 KB zone (314–322 KB).
 - About **28 a block go unserved**, roughly 7.4 M a year.
-- The median starts to climb in year 11. By year 12 blocks carry all 50, and
-  it settles at 732–764 KB.
+- Blocks grow in year 19, 42.4 a block on average that year. From year 20
+  they carry all 50, and the median settles at 732–764 KB.
 
-On the flat control fee the same thing lasts until **year 38**.
+On the flat control fee blocks carry 20 for the whole 60-year run.
 
 **The mechanism is production code.** The producer lists a transaction only
 when it does not lower the gross coinbase (`fill_block_template`, now
@@ -42,7 +42,7 @@ weight `w` therefore needs a fee that covers its penalty:
 fee grows with `w` and the penalty with `w²`. The ladder's reference weight
 `w_ref = 3 000` is a quarter to a fifth of a post-quantum ordinary
 transaction (12.6–15.3 KB), so the condition fails until `ρ` reaches about 1.2. That
-happens in year 11 on this trajectory (§5.6–§5.7).
+happens in year 19 on this trajectory (`--stage2`, the growth-gate table).
 
 **The demand assumption, named. The sim has no demand response.** Demand is
 the scenario's schedule. It is exogenous, the same whatever the fee or the
@@ -88,7 +88,8 @@ Each is an input, not a result, and none is modelled.
 - **Corpus growth.** The baseline's closed shards at year 10 are 229 864,
   against 523 841 before.
 - **The purse.** Emission is paced at the release multiplier's 0.8 floor
-  for eleven years, so the reward is 1.313× higher at every later year.
+  for eighteen years, so every later year's reward is higher than on a chain
+  that carries its demand. ESR-10's re-derived arm measures by how much.
 - **The escalation knee.** Its band's low anchor moved with the corpus
   (`docs/FOLLOWUPS.md`; GF-7's, after ESR-10).
 - **Every onset year** (§5.7).
@@ -106,17 +107,25 @@ the default fee starts growing blocks is set by the staker emission share
 their own: the staker bootstrap leg and the fee burn. Block-size growth is a
 third job carried by the same term, and nothing chose it.
 
-Measured on the ESR-6 baseline, production arm, years 1 → 10:
+Measured on the baseline, production arm, at each year's last block
+(`--stage2`, the growth-gate table):
 
-| | Year 1 | Year 10 | Factor |
-| --- | ---: | ---: | ---: |
-| `σ` | 0.143 | 0.055 | `1 − σ`: × 1.10 |
-| `b` | 0.016 | 0.203 | `1/(1 − b)`: × 1.24 |
-| `ρ` | 0.871 | 1.185 | × 1.36 |
+| | Year 1 | Year 10 | Year 18 | Factor, year 1 → 18 |
+| --- | ---: | ---: | ---: | ---: |
+| `σ` | 0.135 | 0.052 | 0.023 | `1 − σ`: × 1.13 |
+| `b` | 0.016 | 0.131 | 0.197 | `1/(1 − b)`: × 1.22 |
+| `ρ` | 0.879 | 1.090 | 1.217 | × 1.38 |
 
-`ρ` crosses the threshold `w/(4·w_ref)` = 1.22 in year 11. About
-**two-thirds of the rise is the burn fraction** climbing as the supply is
-emitted, and one-third is `σ` decaying. Any change to the decay schedule,
+The threshold `θ = w/(4·w_ref)` reads the ordinary transaction's weight,
+so it steps with the tree's depth: 1.188 in year 1, 1.220 from year 2,
+1.274 from year 23. `ρ` crosses it in year 19, and every constrained
+scenario grows in the year its `ρ` crosses (year 17 on the boom-bust
+cycle, whose booms raise `b` sooner). In the year blocks grow, `ρ` jumps
+to 1.415: the carried volume enters the burn. About **three-fifths of the
+rise to year 18 is the burn fraction** climbing as the supply is emitted,
+and two-fifths is `σ` decaying. At 22 carried a block `b ≈ 0.33·s`,
+with `s` the net supply over the asymptote (0.394 at year 10), so `b`
+rises only as fast as the curve emits. Any change to the decay schedule,
 the burn curve or the `(1 − σ)` correction therefore moves the year blocks
 can first grow, and with it the corpus, the purse and the onsets. Under
 re-derived `w_ref` and zone (finding 1) the threshold itself moves.
