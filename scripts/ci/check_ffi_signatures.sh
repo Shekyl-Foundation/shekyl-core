@@ -72,6 +72,17 @@ SURFACES=(
   "relay:rust/shekyl-ffi/src/relay_zone_ffi/mod.rs"
   "rpc_peerlist:rust/shekyl-ffi/src/rpc_peerlist_ffi.rs"
   "close_cause:rust/shekyl-ffi/src/close_cause_ffi.rs"
+  # The daemon's entry types and the snapshot field-count export
+  # (DAEMON_CONFIG_CUTOVER.md §2.9); the C++ reads the snapshot these define.
+  "daemon_entry:rust/shekyl-daemon/src/entry.rs"
+  # The one RPC start and its stop (DAEMON_CONFIG_CUTOVER.md §2.3).
+  "daemon_rpc:rust/shekyl-daemon-rpc/src/ffi_exports.rs"
+  # The notify runner's three pushes (DAEMON_CONFIG_CUTOVER.md §2.10).
+  "notify:rust/shekyl-ffi/src/notify_ffi.rs"
+  # The utilities' default data directory (DAEMON_CONFIG_CUTOVER.md §2.6).
+  "data_dir:rust/shekyl-ffi/src/data_dir_ffi.rs"
+  # The chain-sync heuristics' two verdicts (DAEMON_CONFIG_CUTOVER.md §4.2).
+  "sync:rust/shekyl-ffi/src/sync_ffi.rs"
   "tx_extra_codec:rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
 )
 

@@ -10,7 +10,6 @@
 //! admitted socket into the seam, and dials when the seam asks. A bind
 //! that fails returns an error. Nothing here starts the epee server.
 
-use std::ffi::{c_char, CStr};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -26,8 +25,8 @@ use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
 use shekyl_seam::{
-    connector_from_index, drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial,
-    Direction, DownCause, Endpoint, Hub, Route, RoutePublish, SocketId,
+    drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial, Direction, DownCause,
+    Endpoint, Hub, Route, RoutePublish, SocketId,
 };
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
 use shekyl_tor::{
@@ -39,8 +38,7 @@ use shekyl_transport_layer::spans;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::inbound_ceiling_ffi::ShekylInboundCeiling;
-use crate::seam_ffi::{ceiling_from_abi, hub, process_sockets};
+use crate::seam_ffi::{hub, process_sockets};
 
 /// Pause after a transient accept error so the loop does not spin. Not a
 /// protocol deadline.
@@ -51,7 +49,7 @@ struct Host {
     handle: tokio::runtime::Handle,
     /// The engine thread. Every handle shares its closed flag, and its
     /// `Drop` sets that flag, so the service lives here for as long as the
-    /// host does and is stopped in [`shekyl_zone_shutdown`]. Holding only
+    /// host does and is stopped in [`shutdown`]. Holding only
     /// the handle closed the engine when `ensure` returned, and every
     /// transport deadline after that was `Closed`.
     engine_service: Mutex<Option<EngineService<MonotonicClock>>>,
@@ -60,10 +58,9 @@ struct Host {
     /// The seam's hub. Accept reads its ceiling on every socket, and the
     /// gap sender lives on the connection row there.
     hub: Hub,
-    /// The incarnation the managed-Tor death watch names. `None` when no
-    /// watch is held, so a later publish of the same address can arm the
-    /// watch an earlier one missed.
-    watched_incarnation: Mutex<Option<u64>>,
+    /// The managed Tor's death watch ([`watch_managed_tor`]). The zone's
+    /// runtime runs it and ends it at shutdown.
+    tor_death: Mutex<Option<tokio::task::JoinHandle<()>>>,
     clearnet: Mutex<Option<ClearnetReady>>,
     clearnet_tx: mpsc::UnboundedSender<ClearnetAdmitted>,
     tor_tx: mpsc::UnboundedSender<TorAdmitted>,
@@ -269,20 +266,52 @@ async fn recv_admitted<T>(
     }
 }
 
-fn ensure(network_id: *const u8, ceiling: InboundCeiling) -> Result<Arc<Host>, ()> {
+/// Why a connector could not start.
+#[derive(Debug)]
+pub enum ZoneStart {
+    /// The seam is not bound: the remnant has not constructed `net_node`.
+    NoSeam,
+    /// The transport runtime could not start.
+    Runtime(String),
+    /// A listener could not bind.
+    Bind {
+        /// The endpoint.
+        addr: SocketAddr,
+        /// The operating system's error.
+        error: std::io::Error,
+    },
+    /// The clearnet channel choice was refused.
+    Channel(String),
+}
+
+impl std::fmt::Display for ZoneStart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSeam => write!(f, "the seam is not bound"),
+            Self::Runtime(e) => write!(f, "the transport runtime could not start: {e}"),
+            Self::Bind { addr, error } => write!(f, "could not bind {addr}: {error}"),
+            Self::Channel(e) => write!(f, "the clearnet channel was refused: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ZoneStart {}
+
+/// The zone host, built once over the bound seam's hub, whose inbound
+/// ceiling it reads (the seam binds with this process's, resolved in Rust).
+fn ensure(network_id: [u8; 16]) -> Result<Arc<Host>, ZoneStart> {
     let mut slot = HOST.lock().expect("zone host");
     if let Some(host) = slot.as_ref() {
         return Ok(Arc::clone(host));
     }
     let Some(hub) = hub() else {
-        return Err(());
+        return Err(ZoneStart::NoSeam);
     };
-    hub.set_ceiling(ceiling);
-    let network_id = read_id(network_id).ok_or(())?;
-    let workers = NonZeroUsize::new(spans::WORKERS).ok_or(())?;
-    let blocking = NonZeroUsize::new(spans::BLOCKING).ok_or(())?;
-    let name = ThreadName::new("p2p-transport").map_err(|_| ())?;
-    let pool = runtime(RuntimeBudget { workers, blocking }, &name).map_err(|_| ())?;
+    let runtime_err = |e: &dyn std::fmt::Debug| ZoneStart::Runtime(format!("{e:?}"));
+    let workers = NonZeroUsize::new(spans::WORKERS).ok_or_else(|| runtime_err(&"no workers"))?;
+    let blocking = NonZeroUsize::new(spans::BLOCKING).ok_or_else(|| runtime_err(&"no blocking"))?;
+    let name = ThreadName::new("p2p-transport").map_err(|e| runtime_err(&e))?;
+    let pool = runtime(RuntimeBudget { workers, blocking }, &name).map_err(|e| runtime_err(&e))?;
     let handle = pool.handle().clone();
     // One process clock (Rick, 2026-10-14). The engine (every transport
     // deadline) and the link gate read the origin the hub and every ban
@@ -318,7 +347,7 @@ fn ensure(network_id: *const u8, ceiling: InboundCeiling) -> Result<Arc<Host>, (
         engine: engine_handle,
         sockets: process_sockets(),
         hub: hub.clone(),
-        watched_incarnation: Mutex::new(None),
+        tor_death: Mutex::new(None),
         clearnet: Mutex::new(None),
         clearnet_tx,
         tor_tx,
@@ -433,25 +462,6 @@ fn spawn_lateness_report(engine: Handle<MonotonicClock>) {
     }
 }
 
-fn read_id(ptr: *const u8) -> Option<[u8; 16]> {
-    if ptr.is_null() {
-        return None;
-    }
-    let mut id = [0u8; 16];
-    unsafe {
-        std::ptr::copy_nonoverlapping(ptr, id.as_mut_ptr(), 16);
-    }
-    Some(id)
-}
-
-fn c_str(ptr: *const c_char) -> Option<String> {
-    if ptr.is_null() {
-        return None;
-    }
-    let text = unsafe { CStr::from_ptr(ptr) }.to_str().ok()?;
-    Some(text.to_owned())
-}
-
 /// Bind clearnet. `encrypt` nonzero selects [`ClearnetOption::On`]; zero
 /// is off. `0` and the ports written on success. `-1` on failure, which
 /// leaves this zone unbound.
@@ -459,97 +469,59 @@ fn c_str(ptr: *const c_char) -> Option<String> {
 /// # Safety
 /// `params` is readable. `ipv4` is a NUL-terminated address. `ipv6` may be
 /// null. `out_port` and `out_port_v6` are writable.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
-    ipv4: *const c_char,
-    port: u16,
-    ipv6: *const c_char,
-    port_v6: u16,
-    use_ipv6: i32,
-    proxy_host: *const c_char,
-    proxy_port: u16,
-    encrypt: i32,
-    network_id: *const u8,
-    ceiling: *const ShekylInboundCeiling,
-    out_port: *mut i32,
-    out_port_v6: *mut i32,
-) -> i32 {
-    if network_id.is_null() || ceiling.is_null() || out_port.is_null() || out_port_v6.is_null() {
-        return -1;
-    }
-    let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
-        Some(ceiling) => ceiling,
-        None => return -1,
-    };
-    let Ok(host) = ensure(network_id, ceiling) else {
-        return -1;
-    };
-    let Some(ipv4) = c_str(ipv4) else {
-        return -1;
-    };
-    let Ok(ip) = ipv4.parse::<IpAddr>() else {
-        return -1;
-    };
-    let proxy = match c_str(proxy_host) {
-        Some(text) => {
-            let Ok(ip) = text.parse::<IpAddr>() else {
-                return -1;
-            };
-            Some(SocketAddr::new(ip, proxy_port))
-        }
-        None => None,
-    };
-    let option = if encrypt != 0 {
+/// Starts the clearnet connector from its section: dials through `proxy`
+/// when one is given, and listens on every endpoint of `listen` (none is
+/// dial-only). Returns the bound endpoints. Fails when the seam is not
+/// bound, when a listener cannot bind, or when the channel is refused;
+/// nothing is started on failure.
+///
+/// # Errors
+/// [`ZoneStart`].
+pub fn start_clearnet(
+    listen: &[SocketAddr],
+    proxy: Option<SocketAddr>,
+    encrypt: bool,
+    network_id: [u8; 16],
+) -> Result<Vec<SocketAddr>, ZoneStart> {
+    let host = ensure(network_id)?;
+    let option = if encrypt {
         ClearnetOption::On
     } else {
         ClearnetOption::Off
     };
-    let kind = match channel_choice(ConnectorId::Clearnet.column(), option) {
-        Ok(kind) => kind,
-        Err(_) => return -1,
-    };
+    let kind = channel_choice(ConnectorId::Clearnet.column(), option)
+        .map_err(|e| ZoneStart::Channel(format!("{e:?}")))?;
     let tally = Arc::new(zero_tally());
-    let ipv6_addr = if use_ipv6 != 0 {
-        let Some(text) = c_str(ipv6) else {
-            return -1;
-        };
-        let Ok(parsed) = text.parse::<IpAddr>() else {
-            return -1;
-        };
-        Some(SocketAddr::new(parsed, port_v6))
-    } else {
-        None
-    };
-    // Bind every requested socket before accepting or publishing readiness.
-    // A later failure drops the listeners, so no port stays up.
-    let bound = host.handle.block_on(async {
-        let v4 = TcpListener::bind(SocketAddr::new(ip, port)).await?;
-        let v6 = match ipv6_addr {
-            Some(addr) => Some(TcpListener::bind(addr).await?),
-            None => None,
-        };
-        std::io::Result::Ok((v4, v6))
-    });
-    let (bound_v4, bound_v6) = match bound {
-        Ok(pair) => pair,
-        Err(_) => return -1,
-    };
-    let Ok(local) = bound_v4.local_addr() else {
-        return -1;
-    };
-    let local_v6 = match &bound_v6 {
-        Some(listener) => match listener.local_addr() {
-            Ok(addr) => Some(addr.port()),
-            Err(_) => return -1,
-        },
-        None => None,
-    };
+    let listeners = host.handle.block_on(async {
+        // No reserve: the section's listen list is a handful, and a raw
+        // `with_capacity` is a boundary reserve the SA-R-7 ratchet counts.
+        let mut bound = Vec::new();
+        for addr in listen {
+            bound.push(
+                TcpListener::bind(*addr)
+                    .await
+                    .map_err(|error| ZoneStart::Bind { addr: *addr, error })?,
+            );
+        }
+        Ok::<_, ZoneStart>(bound)
+    })?;
+    let mut locals = Vec::new();
+    for listener in &listeners {
+        locals.push(listener.local_addr().map_err(|error| {
+            ZoneStart::Bind {
+                addr: listen
+                    .first()
+                    .copied()
+                    .unwrap_or(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))),
+                error,
+            }
+        })?);
+    }
     *host.clearnet.lock().expect("clearnet") = Some(ClearnetReady {
         kind,
         tally: Arc::clone(&tally),
     });
-    spawn_clearnet(&host, bound_v4, kind, Arc::clone(&tally));
-    // The listener is up: clearnet's outbound is usable. Its route is
+    // The listeners are bound: clearnet's outbound is usable. Its route is
     // direct, or the operator's `--proxy`.
     let route = proxy.map_or(Route::Direct, Route::Socks);
     if let RoutePublish::Installed { .. } =
@@ -560,14 +532,10 @@ pub unsafe extern "C" fn shekyl_zone_listen_clearnet(
         tracing::info!("the clearnet zone dials {route:?}");
     }
     crate::dialer_ffi::start_connector(ConnectorId::Clearnet, &host.engine);
-    if let Some(listener) = bound_v6 {
-        spawn_clearnet(&host, listener, kind, tally);
+    for listener in listeners {
+        spawn_clearnet(&host, listener, kind, Arc::clone(&tally));
     }
-    unsafe {
-        *out_port = i32::from(local.port());
-        *out_port_v6 = local_v6.map(i32::from).unwrap_or(-1);
-    }
-    0
+    Ok(locals)
 }
 
 fn spawn_clearnet(
@@ -596,73 +564,60 @@ fn spawn_clearnet(
     });
 }
 
-/// Bind the Tor forward listener on `127.0.0.1:0` and, when `extra` is
-/// non-null, the operator's inbound address. `0` and the forward port on
-/// success.
+/// Starts the Tor connector over `socks`: dials through it, and listens on
+/// a loopback forward endpoint (port chosen by the operating system) for
+/// the onion this daemon publishes, plus `extra` when the operator's own
+/// Tor forwards to a named endpoint. Returns the forward endpoint.
 ///
-/// # Safety
-/// `params` and `socks_host` are readable. `extra` may be null. `out_port`
-/// is writable.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_zone_listen_tor(
-    socks_host: *const c_char,
-    socks_port: u16,
-    extra: *const c_char,
-    extra_port: u16,
-    network_id: *const u8,
-    ceiling: *const ShekylInboundCeiling,
-    out_port: *mut i32,
-) -> i32 {
-    if network_id.is_null() || ceiling.is_null() || out_port.is_null() {
-        return -1;
-    }
-    let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
-        Some(ceiling) => ceiling,
-        None => return -1,
-    };
-    let Ok(host) = ensure(network_id, ceiling) else {
-        return -1;
-    };
-    let Some(socks_host) = c_str(socks_host) else {
-        return -1;
-    };
-    let Ok(socks_ip) = socks_host.parse::<IpAddr>() else {
-        return -1;
-    };
-    install_tor_route(&host, SocketAddr::new(socks_ip, socks_port));
+/// # Errors
+/// [`ZoneStart`].
+pub fn start_tor(
+    socks: SocketAddr,
+    extra: Option<SocketAddr>,
+    network_id: [u8; 16],
+) -> Result<SocketAddr, ZoneStart> {
+    let host = ensure(network_id)?;
+    publish_tor_route(&host, socks);
     crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
-    let extra = match c_str(extra) {
-        Some(text) => {
-            let Ok(ip) = text.parse::<IpAddr>() else {
-                return -1;
-            };
-            Some(SocketAddr::new(ip, extra_port))
-        }
-        None => None,
-    };
-    let bound = host.handle.block_on(async {
-        let forward = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).await?;
+    let forward_at = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+    let (forward, extra) = host.handle.block_on(async {
+        let forward = TcpListener::bind(forward_at)
+            .await
+            .map_err(|error| ZoneStart::Bind {
+                addr: forward_at,
+                error,
+            })?;
         let extra = match extra {
-            Some(addr) => Some(TcpListener::bind(addr).await?),
+            Some(addr) => Some(
+                TcpListener::bind(addr)
+                    .await
+                    .map_err(|error| ZoneStart::Bind { addr, error })?,
+            ),
             None => None,
         };
-        std::io::Result::Ok((forward, extra))
-    });
-    let (forward, extra) = match bound {
-        Ok(pair) => pair,
-        Err(_) => return -1,
-    };
-    let Ok(local) = forward.local_addr() else {
-        return -1;
-    };
+        Ok::<_, ZoneStart>((forward, extra))
+    })?;
+    let local = forward.local_addr().map_err(|error| ZoneStart::Bind {
+        addr: forward_at,
+        error,
+    })?;
     spawn_tor(&host, forward);
     if let Some(extra) = extra {
         spawn_tor(&host, extra);
     }
-    unsafe {
-        *out_port = i32::from(local.port());
-    }
-    0
+    Ok(local)
+}
+
+/// Dials through `socks` on the Tor connector without listening: the
+/// operator's own Tor with no onion of this node's.
+///
+/// # Errors
+/// [`ZoneStart`].
+pub fn dial_through_tor(socks: SocketAddr, network_id: [u8; 16]) -> Result<(), ZoneStart> {
+    let host = ensure(network_id)?;
+    publish_tor_route(&host, socks);
+    crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
+    Ok(())
 }
 
 fn spawn_tor(host: &Host, listener: TcpListener) {
@@ -682,96 +637,16 @@ fn spawn_tor(host: &Host, listener: TcpListener) {
     });
 }
 
-/// The SOCKS proxy the Tor connector dials through, for a tor zone with no
-/// inbound listener. [`shekyl_zone_listen_tor`] installs it for zones that
-/// listen; an outbound-only `--tx-proxy tor` zone never called that, so the
-/// host had no proxy and every Tor dial was `DialFailed` before the
-/// network. Returns 0, or -1 when the host cannot be built or `socks_host`
-/// does not parse.
-///
-/// # Safety
-/// `socks_host`, `params`, and `ceiling` are readable.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_zone_set_tor_proxy(
-    socks_host: *const c_char,
-    socks_port: u16,
-    network_id: *const u8,
-    ceiling: *const ShekylInboundCeiling,
-) -> i32 {
-    if network_id.is_null() || ceiling.is_null() {
-        return -1;
-    }
-    let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
-        Some(ceiling) => ceiling,
-        None => return -1,
-    };
-    let Ok(host) = ensure(network_id, ceiling) else {
-        return -1;
-    };
-    let Some(socks_host) = c_str(socks_host) else {
-        return -1;
-    };
-    let Ok(socks_ip) = socks_host.parse::<IpAddr>() else {
-        return -1;
-    };
-    install_tor_route(&host, SocketAddr::new(socks_ip, socks_port));
-    crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
-    0
-}
-
-/// Whether the SOCKS address just published is the managed Tor's listener.
-///
-/// The slot answers this. The plan does not look at the process again.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ManagedListener {
-    /// The address is that process's SOCKS listener. Its death is this
-    /// route's death.
-    This,
-    /// An operator proxy, or no managed Tor is in the slot.
-    NotThis,
-}
-
-/// What the managed Tor's death watch should do after a route publish.
-///
-/// The watch follows the route now installed, not the fact that the route
-/// changed. A second publish of the same address still watches when the
-/// first one ran before the process existed, and a publish that is not
-/// that process's listener drops a watch the route no longer names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TorDeathWatch {
-    /// The watch already names this incarnation, or there is nothing to watch.
-    Keep,
-    /// Replace the watch so its callback names `incarnation`.
-    Arm { incarnation: u64 },
-    /// The route is no longer the managed Tor's. Drop the watch.
-    Clear,
-}
-
-/// `published` is what [`Links::publish_usable`] just returned. Both
-/// variants carry the incarnation a later down must name, so an unchanged
-/// route is planned the same way as a new one. `held` is the incarnation
-/// the current watch names.
-fn plan_tor_death_watch(
-    published: RoutePublish,
-    held: Option<u64>,
-    listener: ManagedListener,
-) -> TorDeathWatch {
-    match listener {
-        ManagedListener::This => {
-            let incarnation = published.incarnation();
-            if held == Some(incarnation) {
-                TorDeathWatch::Keep
-            } else {
-                TorDeathWatch::Arm { incarnation }
-            }
-        }
-        ManagedListener::NotThis => {
-            if held.is_some() {
-                TorDeathWatch::Clear
-            } else {
-                TorDeathWatch::Keep
-            }
-        }
+/// Publish the Tor link usable through `socks`, until the supervisor owns
+/// the route (`TOR_SUPERVISOR.md` §4.1). Both Tor entry points install it.
+/// A second publish of the same address is not a new route.
+fn publish_tor_route(host: &Host, socks: SocketAddr) {
+    if let RoutePublish::Installed { .. } =
+        host.hub
+            .links()
+            .publish_usable(ConnectorId::Tor, Route::Socks(socks), host.hub.now())
+    {
+        tracing::info!("the Tor zone dials through the SOCKS proxy at {socks}");
     }
 }
 
@@ -784,125 +659,47 @@ fn down_cause(death: TorDeath) -> DownCause {
     }
 }
 
-/// Publish the Tor link usable through `socks`, until the supervisor owns
-/// the route (`TOR_SUPERVISOR.md` §4.1). When `socks` is the managed Tor's,
-/// that Tor's death publishes the link down, so the dialer stops drawing
-/// onions it cannot reach (`TSR-F1`). The watch names the incarnation now
-/// installed, including when this call did not change the route. An
-/// operator's Tor (`--tx-proxy`) stays usable: its outbound evidence comes
-/// with the supervisor, and a watch left by an earlier managed route is
-/// dropped.
-fn install_tor_route(host: &Host, socks: SocketAddr) {
-    // `listen_tor` and the outbound-only path both install the proxy. The
-    // second call of the same address is not a new route. It can still be
-    // the call that first finds the managed Tor.
-    let published =
-        host.hub
+/// The managed Tor's death takes the Tor link down (`TSR-F1`), so the
+/// dialer draws no onion it cannot reach. `death` resolves when that Tor
+/// ends ([`DaemonTorControl::death`]). The down names the incarnation
+/// installed now: a route published later, by another Tor, is not taken
+/// down by this one's death. Only the Tor this daemon manages is watched;
+/// an operator's Tor stays usable until the supervisor brings its outbound
+/// evidence. A later call replaces the watch. Returns false, and watches
+/// nothing, when no zone host is running or no Tor route is installed.
+///
+/// [`DaemonTorControl::death`]: shekyl_tor_control_daemon::DaemonTorControl::death
+pub fn watch_managed_tor(
+    death: impl std::future::Future<Output = TorDeath> + Send + 'static,
+) -> bool {
+    let Some(host) = HOST.lock().expect("zone host").clone() else {
+        return false;
+    };
+    let link = host.hub.links().get(ConnectorId::Tor);
+    if link.route.is_none() {
+        return false;
+    }
+    let incarnation = link.incarnation;
+    let hub = host.hub.clone();
+    let watch = host.handle.spawn(async move {
+        let cause = down_cause(death.await);
+        let fell = hub
             .links()
-            .publish_usable(ConnectorId::Tor, Route::Socks(socks), host.hub.now());
-    if let RoutePublish::Installed { .. } = published {
-        tracing::info!("the Tor zone dials through the SOCKS proxy at {socks}");
-    }
-    reconcile_tor_death_watch(host, socks, published);
-}
-
-/// Make the death watch name `published`, or drop it when `socks` is not
-/// the managed Tor's listener. The route publish has already returned.
-fn reconcile_tor_death_watch(host: &Host, socks: SocketAddr, published: RoutePublish) {
-    let listener = if crate::daemon_tor_ffi::is_managed_socks(socks) {
-        ManagedListener::This
-    } else {
-        ManagedListener::NotThis
-    };
-    let mut held = host
-        .watched_incarnation
-        .lock()
-        .expect("watched incarnation");
-    match plan_tor_death_watch(published, *held, listener) {
-        TorDeathWatch::Keep => {}
-        TorDeathWatch::Arm { incarnation } => {
-            let hub = host.hub.clone();
-            // Rechecked under the slot lock. A mismatch aborts the watch
-            // the process still has; an empty slot leaves `held` clear so
-            // the next publish of this address arms.
-            let armed = crate::daemon_tor_ffi::arm_managed_death(socks, move |death| {
-                let cause = down_cause(death);
-                let fell =
-                    hub.links()
-                        .publish_down(ConnectorId::Tor, incarnation, cause, hub.now());
-                if fell && cause == DownCause::ProcessExited {
-                    tracing::warn!(
-                        "the managed Tor has exited: the Tor connector draws no dial until its link returns"
-                    );
-                }
-            });
-            *held = armed.then_some(incarnation);
-            if armed {
-                tracing::debug!("the managed Tor's death watches incarnation {incarnation}");
+            .publish_down(ConnectorId::Tor, incarnation, cause, hub.now());
+        tracing::debug!(
+            "the managed Tor ended ({cause:?}); incarnation {incarnation} {}",
+            if fell {
+                "is down"
             } else {
-                tracing::debug!(
-                    "no death watch for incarnation {incarnation}: the managed Tor's listener is no longer {socks}"
-                );
+                "was already replaced"
             }
-        }
-        TorDeathWatch::Clear => {
-            crate::daemon_tor_ffi::clear_managed_death();
-            *held = None;
-            tracing::debug!(
-                "the Tor proxy at {socks} is not the managed Tor's: the death watch is dropped"
-            );
-        }
+        );
+    });
+    let replaced = host.tor_death.lock().expect("tor death").replace(watch);
+    if let Some(replaced) = replaced {
+        replaced.abort();
     }
-}
-
-/// Replace the ceiling later accepts use.
-///
-/// Returns 0 when the seam hub holds the new ceiling. Returns -1 when
-/// `ceiling` is null or not a known decision, or when the seam is unbound:
-/// there is no hub to write, and a success would claim a ceiling that
-/// the next bind would replace with its own.
-#[no_mangle]
-pub extern "C" fn shekyl_zone_set_ceiling(ceiling: *const ShekylInboundCeiling) -> i32 {
-    if ceiling.is_null() {
-        return -1;
-    }
-    let ceiling = match ceiling_from_abi(unsafe { *ceiling }) {
-        Some(ceiling) => ceiling,
-        None => return -1,
-    };
-    let Some(hub) = hub() else {
-        return -1;
-    };
-    hub.set_ceiling(ceiling);
-    0
-}
-
-/// The operator's inbound cap for one connector. Accept enforces it for
-/// that connector and still enforces the process ceiling on the sum.
-///
-/// `connector` is the FFI connector word ([`connector_from_index`]).
-/// Returns 0, or -1 when `connector` is not one.
-#[no_mangle]
-pub extern "C" fn shekyl_zone_set_connector_cap(connector: u32, cap: u32) -> i32 {
-    let Some(connector) = connector_from_index(connector) else {
-        return -1;
-    };
-    process_sockets().set_zone_cap(connector, Some(cap));
-    0
-}
-
-/// Drop the operator inbound cap for one connector. Later accepts are
-/// bounded only by the process ceiling.
-///
-/// `connector` is the FFI connector word ([`connector_from_index`]).
-/// Returns 0, or -1 when `connector` is not one.
-#[no_mangle]
-pub extern "C" fn shekyl_zone_clear_connector_cap(connector: u32) -> i32 {
-    let Some(connector) = connector_from_index(connector) else {
-        return -1;
-    };
-    process_sockets().set_zone_cap(connector, None);
-    0
+    true
 }
 
 /// The handshake finished. The row's gap sender fires, which disarms the
@@ -918,15 +715,10 @@ pub extern "C" fn shekyl_zone_session_established(id: u64) {
     hub.session_established(id);
 }
 
-/// Stop the transport runtime. Called from outside one of its tasks.
-///
-/// D6's order: the engine takes no new deadline, the transport's tasks
-/// are cancelled, then the engine thread is joined. Each writer folds its
-/// stall when its task is dropped, including a write still in flight, so
-/// the process total is read after the pool has stopped. Nothing else in
-/// the daemon reads it.
-#[no_mangle]
-pub extern "C" fn shekyl_zone_shutdown() {
+/// Stops the dialer and the zone host: every owner loop, the engine, the
+/// transport runtime. A second call, and a call with no host, do nothing
+/// but report the write stall.
+pub fn shutdown() {
     crate::dialer_ffi::stop();
     let host = HOST.lock().expect("zone host").take();
     if let Some(host) = host {
@@ -952,8 +744,6 @@ pub extern "C" fn shekyl_zone_shutdown() {
         in_flight_max_ns = stall.in_flight_at_close_max_ns,
         "process write stall"
     );
-    // The connector caps are this zone's. The socket table outlives the
-    // pool, so they are released only after its tasks have stopped.
     process_sockets().clear_zone_caps();
 }
 

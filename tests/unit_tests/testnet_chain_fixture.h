@@ -57,7 +57,7 @@ struct TestnetChain
       BlockchainLMDB* db = owned.release();
       // TESTNET, offline, NO test_options (they would force FAKECHAIN), fixed
       // difficulty 1.
-      if (!bc.init(db, TESTNET, true, nullptr, 1))
+      if (!bc.init(db, TESTNET, nullptr, 1))
         throw std::runtime_error("Blockchain::init failed on TESTNET over LMDB");
       miner.generate(crypto::secret_key{}, false, false, TESTNET);
     }

@@ -302,10 +302,6 @@ pub const SHEKYL_RPC_FACTS_ERR_INTERNAL: i32 = -3;
 /// The store reported a height it cannot produce the block for — a
 /// data-integrity fault of this daemon, distinct from a read that threw.
 pub const SHEKYL_RPC_FACTS_ERR_INCONSISTENT: i32 = -4;
-/// The daemon was started offline (`--offline`): a state, not a fault,
-/// and nothing was written. Answered by the peer-list exports and
-/// `shekyl_rpc_p2p_state` (`shekyl-ffi`'s `FACTS_OFFLINE`; Rick, 2026-10-14).
-pub const SHEKYL_RPC_FACTS_OFFLINE: i32 = 1;
 
 /// Twin of `shekyl_rpc_identity_facts` (VC-2): what this daemon **is**, as
 /// opposed to what its chain tip looks like right now.
@@ -814,10 +810,6 @@ extern "C" {
     /// How many addresses the clearnet white and gray lists hold, from the
     /// Rust peer lists (`shekyl-ffi`). No core handle.
     pub fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray: *mut u64) -> i32;
-    /// Whether P2P runs: [`SHEKYL_RPC_FACTS_OK`], [`SHEKYL_RPC_FACTS_OFFLINE`],
-    /// or [`SHEKYL_RPC_FACTS_ERR_NOT_READY`] before the p2p layer has read
-    /// `--offline` (`shekyl-ffi`). No core handle.
-    pub fn shekyl_rpc_p2p_state() -> i32;
     pub fn shekyl_rpc_chain_tip(h: *mut CoreRpcHandle, out: *mut ChainTipFactsFfi) -> i32;
     /// `get_info`'s chain snapshot (RK-5c), read for every caller.
     pub fn shekyl_rpc_info_chain(h: *mut CoreRpcHandle, out: *mut InfoChainFactsFfi) -> i32;
@@ -989,16 +981,21 @@ extern "C" {
     /// the zone directly. Do not build on the round trip.
     pub fn core_rpc_ffi_stem_tallies(h: *mut CoreRpcHandle) -> *mut std::os::raw::c_char;
 
+    /// `restricted` is the listener's posture, carried per call: one
+    /// `core_rpc_server` answers every listener, so the C++ side reads it
+    /// off the origin the bridge hands the handler, never off itself.
     pub fn core_rpc_ffi_json_endpoint(
         h: *mut CoreRpcHandle,
         uri: *const c_char,
         body_json: *const c_char,
+        restricted: bool,
     ) -> *mut c_char;
 
     pub fn core_rpc_ffi_json_rpc(
         h: *mut CoreRpcHandle,
         method: *const c_char,
         params_json: *const c_char,
+        restricted: bool,
     ) -> *mut c_char;
 
     pub fn core_rpc_ffi_free_string(s: *mut c_char);
@@ -1082,6 +1079,7 @@ mod unit_test_link_stubs {
         _h: *mut CoreRpcHandle,
         _uri: *const std::os::raw::c_char,
         _body: *const std::os::raw::c_char,
+        _restricted: bool,
     ) -> *mut std::os::raw::c_char {
         std::ptr::null_mut()
     }
@@ -1090,6 +1088,7 @@ mod unit_test_link_stubs {
         _h: *mut CoreRpcHandle,
         _method: *const std::os::raw::c_char,
         _params: *const std::os::raw::c_char,
+        _restricted: bool,
     ) -> *mut std::os::raw::c_char {
         std::ptr::null_mut()
     }
@@ -1198,12 +1197,6 @@ mod unit_test_link_stubs {
     #[no_mangle]
     pub extern "C" fn shekyl_rpc_peerlist_sizes(_out_white: *mut u64, _out_gray: *mut u64) -> i32 {
         SHEKYL_RPC_FACTS_ERR_NULL
-    }
-    /// "Not recorded yet": the unit tests run no p2p layer, so none has
-    /// read `--offline`.
-    #[no_mangle]
-    pub extern "C" fn shekyl_rpc_p2p_state() -> i32 {
-        SHEKYL_RPC_FACTS_ERR_NOT_READY
     }
     #[no_mangle]
     pub extern "C" fn core_rpc_ffi_create(_p: *mut std::ffi::c_void) -> *mut CoreRpcHandle {

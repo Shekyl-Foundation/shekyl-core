@@ -71,7 +71,7 @@ env:
     -D CMAKE_BUILD_TYPE=Release
     && cmake --build build --target unit_tests core_tests
   APT_INSTALL_LINUX: >-
-    apt -y install build-essential cmake libboost-all-dev miniupnpc
+    apt -y install build-essential cmake libboost-all-dev
     graphviz doxygen libunwind8-dev pkg-config libssl-dev
     libsodium-dev ccache git curl ripgrep python3
   CCACHE_SETTINGS: |

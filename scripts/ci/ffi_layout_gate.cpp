@@ -23,7 +23,8 @@
 //
 // A member type is compared after mapping each generated struct to its
 // hand-written twin (norm below), so a pointer to, or an embedded, crossing
-// struct compares as the twin it is, and an enum as its underlying integer.
+// struct compares as the twin it is, an enum as its underlying integer, and
+// a callback as the function type of its twins.
 //
 // Negative-controlled at introduction (TSR-F1, PR #1092), each injected into
 // a header, a Rust source or the manifest and observed to fail the gate. In
@@ -38,7 +39,9 @@
 // renamed in C -> member-name compare; the manifest's rename naming a member
 // Rust lacks -> refused. shekyl_rpc_sync_span_facts::remote_address typed
 // uint8_t* -> type. A new struct in rpc_facts_ffi.h with no pair -> the
-// completeness scan.
+// completeness scan. ShekylDaemonEntry::run typed as the stop callback ->
+// type. And the merge of the daemon-configuration cutover (#1088) was
+// refused by the completeness scan until its five new structs had a pair.
 //
 // At introduction the gate also found divergences in the tree, fixed in the
 // same change: ShekylStemTallyRow's padding was `pad` in the C header and
@@ -54,6 +57,16 @@
 
 #include "shekyl_ffi_layout_c.h"
 
+// cbindgen writes a nullable callback as `Option<Alias>`. Rust guarantees
+// that `Option` of a function pointer has the pointer's layout, `None`
+// being null; no other `Option` has a C layout, so anything else is refused.
+template <class T> struct option_of
+{
+  static_assert(std::is_pointer<T>::value, "only an Option of a pointer has a C layout");
+  using type = T;
+};
+template <class T> using Option = typename option_of<T>::type;
+
 #include "shekyl_ffi_layout_rust.h"
 
 namespace ffi_layout_gate {
@@ -67,6 +80,7 @@ template <class T> struct norm<T*> { using type = typename norm<T>::type*; };
 template <class T> struct norm<const T> { using type = const typename norm<T>::type; };
 template <class T, std::size_t N> struct norm<T[N]> { using type = typename norm<T>::type[N]; };
 template <class T, std::size_t N> struct norm<const T[N]> { using type = const typename norm<T>::type[N]; };
+template <class R, class... A> struct norm<R(A...)> { using type = typename norm<R>::type(typename norm<A>::type...); };
 
 template <class R, class C>
 constexpr bool same = std::is_same<typename norm<R>::type, C>::value;

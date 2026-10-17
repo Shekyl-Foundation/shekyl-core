@@ -131,7 +131,7 @@ struct BlockchainAndPool
   cryptonote::Blockchain *bc = &bap.bc; \
   const cryptonote::test_options test_options = {window}; \
   TestDB *db = new TestDB(); \
-  ASSERT_TRUE(bc->init(db, cryptonote::FAKECHAIN, true, &test_options, 0))
+  ASSERT_TRUE(bc->init(db, cryptonote::FAKECHAIN, &test_options, 0))
 
 #define PREFIX() PREFIX_WINDOW(TEST_LONG_TERM_BLOCK_WEIGHT_WINDOW)
 

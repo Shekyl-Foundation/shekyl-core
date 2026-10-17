@@ -38,7 +38,6 @@ set(unit_tests_sources
   checkpoints.cpp
   command_line.cpp
   crypto.cpp
-  daemon_default_data_dir.cpp
   daemon_rpc_client.cpp
   daemon_submit_ffi_roundtrip.cpp
   daemon_submit_shims.cpp
@@ -68,13 +67,11 @@ set(unit_tests_sources
   multiexp.cpp
   net.cpp
   node_server.cpp
-  notify.cpp
   parse_amount.cpp
   peer_policy_drop_verdict.cpp
   peer_policy_block_ingest.cpp
   random.cpp
   rpc_target_wire_contract.cpp
-  rpc_args_daemon_surface.cpp
   rpc_facts_ffi_roundtrip.cpp
   rpc_facts_shims.cpp
   rpc_restricted_gate.cpp
@@ -236,6 +233,3 @@ add_test(
   NAME    unit_tests
   COMMAND unit_tests --data-dir "${TEST_DATA_DIR}")
 
-monero_add_minimal_executable(test_notifier test_notifier.cpp)
-target_link_libraries(test_notifier ${EXTRA_LIBRARIES})
-set_property(TARGET test_notifier PROPERTY FOLDER "tests")

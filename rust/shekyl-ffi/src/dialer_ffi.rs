@@ -14,28 +14,32 @@
 //! ([`shekyl_dial_take_handshake_nonce`]); the disclosure sample for the
 //! two responses the C++ still sends ([`shekyl_peerlist_disclose`]).
 //!
-//! Told: the core's tip
-//! ([`shekyl_core_publish_tip`]); `--out-peers`
-//! ([`shekyl_dialer_set_out_peers`]); an operator-named address
-//! ([`shekyl_peerlist_admit_operator`]); this node's own address on a
-//! connector ([`shekyl_peerlist_set_own_address`]); the network the
+//! Told: the core's tip ([`shekyl_core_publish_tip`]); the network the
 //! daemon chose ([`shekyl_dialer_note_network`]), which selects the
 //! compiled seeds.
+//!
+//! The configuration is not told from C++. The daemon's Rust `main()`
+//! applies the p2p section ([`apply_p2p`]) and this node's own addresses
+//! ([`set_own_addresses`]) once the dialer exists, which is from the seam's
+//! bind in the remnant's `init` (`DAEMON_CONFIG_CUTOVER.md` §2.2 step 8).
 
-use std::ffi::{c_char, CStr};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use shekyl_daemon_config::sections::P2p;
 use shekyl_dialer::{seeds, BanSnapshot, Dialer, LoadError, SeedNetwork, Shared};
 use shekyl_levin::SupportFlags;
-use shekyl_peerlist::{ConnectorId, NetworkAddress};
+use shekyl_options::PeerEndpoint;
+use std::net::SocketAddr;
+
+pub use shekyl_peerlist::{ConnectorId, NetworkAddress};
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
 use shekyl_rpc_types::DaemonNetwork;
 use shekyl_seam::{connector_from_index, CloseCause, Hub, SocketId, SyncPayload};
 use shekyl_timing_engine::{EngineError, Handle, MonotonicClock, OwnerClass};
 
 use crate::legacy_util::slice_from_typed_ptr;
-use crate::peerlist_ffi::{address_of, refused_set};
+use crate::peerlist_ffi::refused_set;
 use crate::seam_ffi::ShekylSeamAddress;
 use crate::secure_relay_rng::SecureRelayRng;
 use shekyl_seam::TOR_HOST_MAX;
@@ -50,45 +54,6 @@ static TIP: Mutex<Option<SyncPayload>> = Mutex::new(None);
 /// [`shekyl_dialer_note_network`], and `None` for stagenet and fakechain,
 /// which have no compiled seeds.
 static NETWORK: Mutex<SeedNetwork> = Mutex::new(SeedNetwork::None);
-
-/// The outbound caps the C++ set before the dialer existed: the command
-/// line is parsed before the seam binds. Applied when the dialer is built.
-static CAPS: Mutex<[Option<u32>; ConnectorId::COUNT]> = Mutex::new([None; ConnectorId::COUNT]);
-
-/// Pushes made before the dialer exists, held for its build. What that
-/// means, plainly: the daemon's `init()` parses the command line and names
-/// the address file (`shekyl_dialer_open_address_file`, `--add-peer` through
-/// `shekyl_peerlist_admit_operator`, `--add-exclusive-node` through
-/// `shekyl_dialer_set_exclusive`, `--anonymous-inbound` through
-/// `shekyl_peerlist_set_own_address`) before its first listen binds the
-/// seam, and the dialer is built at that bind (and again with every zone
-/// host, [`ensure_dialer`]). On a start where the managed Tor does not
-/// listen first, every one of those calls therefore arrives with no dialer
-/// to act on. Each such call records its argument here and answers
-/// [`SHEKYL_DIALER_DEFERRED`]; the build drains this slot into the new
-/// dialer in the order below (the file first, so an operator address
-/// already in it is not re-seated; then the operator addresses, the closed
-/// network, the own addresses), and the call has the same effect it would
-/// have had after the build. A call after the build acts at once.
-struct Deferred {
-    address_file: Option<PathBuf>,
-    operator: Vec<NetworkAddress>,
-    exclusive: Option<Vec<NetworkAddress>>,
-    own: Vec<(ConnectorId, Vec<NetworkAddress>)>,
-    disclose_early: bool,
-}
-
-static DEFERRED: Mutex<Deferred> = Mutex::new(Deferred {
-    address_file: None,
-    operator: Vec::new(),
-    exclusive: None,
-    own: Vec::new(),
-    disclose_early: false,
-});
-
-/// Recorded for the dialer's build: the entry's effect follows when the
-/// seam binds.
-pub const SHEKYL_DIALER_DEFERRED: i32 = 2;
 
 pub(crate) fn dialer() -> Option<Arc<Dialer>> {
     DIALER.lock().expect("dialer").clone()
@@ -114,42 +79,6 @@ pub(crate) fn ensure_dialer(hub: &Hub) -> Arc<Dialer> {
         SupportFlags::ADVERTISED.bits(),
         Arc::new(|| *TIP.lock().expect("tip")),
     ));
-    for (index, cap) in CAPS.lock().expect("caps").iter().enumerate() {
-        if let (Some(cap), Some(connector)) = (cap, ConnectorId::ALL.get(index)) {
-            let _closed = dialer.set_target(*connector, *cap as usize, &mut SecureRelayRng);
-        }
-    }
-    let deferred = {
-        let mut held = DEFERRED.lock().expect("deferred");
-        std::mem::replace(
-            &mut *held,
-            Deferred {
-                address_file: None,
-                operator: Vec::new(),
-                exclusive: None,
-                own: Vec::new(),
-                disclose_early: false,
-            },
-        )
-    };
-    let now = hub.now();
-    if deferred.disclose_early {
-        dialer.set_disclose_early(now);
-    }
-    if let Some(path) = deferred.address_file {
-        open_file(&dialer, &path);
-    }
-    for address in &deferred.operator {
-        if let Err(refusal) = dialer.admit_operator(address, now, &mut SecureRelayRng) {
-            tracing::warn!("operator address {address:?} was not admitted: {refusal:?}");
-        }
-    }
-    if let Some(list) = deferred.exclusive {
-        dialer.set_exclusive(list, now, &mut SecureRelayRng);
-    }
-    for (connector, own) in deferred.own {
-        dialer.set_own_addresses(connector, own);
-    }
     *slot = Some(Arc::clone(&dialer));
     dialer
 }
@@ -171,15 +100,10 @@ fn open_file(dialer: &Dialer, path: &Path) {
 
 /// This node's own addresses on `connector`, now or when the dialer is
 /// built.
-fn set_own(connector: ConnectorId, own: Vec<NetworkAddress>) {
-    match dialer() {
-        Some(dialer) => dialer.set_own_addresses(connector, own),
-        None => DEFERRED
-            .lock()
-            .expect("deferred")
-            .own
-            .push((connector, own)),
-    }
+fn set_own(connector: ConnectorId, own: Vec<NetworkAddress>) -> Result<(), NoDialer> {
+    let dialer = dialer().ok_or(NoDialer)?;
+    dialer.set_own_addresses(connector, own);
+    Ok(())
 }
 
 /// The zone host started: the dialer learns the network it dials.
@@ -281,12 +205,17 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
 
 /// The per-boot onion `shekyl-tor` published, as this node's own address
 /// on the Tor connector. `service_id` is the 56-character id, no suffix.
-pub(crate) fn note_own_onion(service_id: &str, virtual_port: u16) {
+/// The onion this daemon published is its own Tor address.
+pub fn note_own_onion(service_id: &str, virtual_port: u16) {
     let own = NetworkAddress::Tor {
         host: format!("{service_id}.onion"),
         port: virtual_port,
     };
-    set_own(ConnectorId::Tor, vec![own]);
+    if set_own(ConnectorId::Tor, vec![own]).is_err() {
+        tracing::error!(
+            "the onion was published before the dialer existed; it is not this node's own address"
+        );
+    }
 }
 
 /// Stop every owner loop. Called at zone shutdown.
@@ -329,53 +258,6 @@ pub unsafe extern "C" fn shekyl_dial_take_handshake_nonce(connector: u32, nonce:
     match dialer() {
         Some(dialer) => i32::from(dialer.take_nonce(connector, &nonce)),
         None => 0,
-    }
-}
-
-/// `--out-peers`, and the anonymity zones' cap: the connector's outbound
-/// target. A cap of 0 is legal and stops outbound entirely. A positive cap
-/// below the F-8b floor (`MIN_PROVISIONED_OUT_PEERS`) is refused with -1,
-/// because the relay embargo derivation assumes that degree. Lowering a
-/// cap at runtime closes kept sessions only. Returns 0 when set, which
-/// includes a cap set before the seam binds: it is kept and applied when
-/// the dialer is built.
-#[no_mangle]
-pub extern "C" fn shekyl_dialer_set_out_peers(connector: u32, cap: u32) -> i32 {
-    let Some(connector) = connector_from_index(connector) else {
-        return -1;
-    };
-    if cap > 0 && cap < MIN_PROVISIONED_OUT_PEERS {
-        tracing::error!(
-            "outbound cap {cap} for {connector:?} is below the floor of {MIN_PROVISIONED_OUT_PEERS} that the relay embargo derivation assumes (F-8b); refused. Omit the option for the default ({P2P_DEFAULT_OUT_PEERS}) or give a value >= {MIN_PROVISIONED_OUT_PEERS}"
-        );
-        return -1;
-    }
-    CAPS.lock().expect("caps")[connector.index()] = Some(cap);
-    if let Some(dialer) = dialer() {
-        let _closed = dialer.set_target(connector, cap as usize, &mut SecureRelayRng);
-    }
-    0
-}
-
-/// The connector's outbound target as the dialer holds it: the cap the
-/// C++ pushed, or the compiled default before any push (`--out-peers`'s
-/// default on clearnet, the hidden-cap floor on Tor). Read for the
-/// descriptor reservation and the operator's `out_peers` readback. An
-/// unknown connector is 0.
-#[no_mangle]
-pub extern "C" fn shekyl_dialer_out_target(connector: u32) -> u32 {
-    let Some(connector) = connector_from_index(connector) else {
-        return 0;
-    };
-    if let Some(dialer) = dialer() {
-        return u32::try_from(dialer.target(connector)).unwrap_or(u32::MAX);
-    }
-    match CAPS.lock().expect("caps")[connector.index()] {
-        Some(cap) => cap,
-        None => match connector {
-            ConnectorId::Clearnet => P2P_DEFAULT_OUT_PEERS,
-            ConnectorId::Tor => MIN_PROVISIONED_OUT_PEERS,
-        },
     }
 }
 
@@ -446,129 +328,88 @@ pub unsafe extern "C" fn shekyl_core_published_tip(
     1
 }
 
-/// An operator-named address (`--add-peer`): into gray,
-/// whatever its range. Returns 1 when it newly entered gray, 0 when it
-/// already sat or was refused, [`SHEKYL_DIALER_DEFERRED`] when the dialer
-/// is not built yet and the address is held for its build, -1 when the
-/// entry is not an address.
-///
-/// # Safety
-///
-/// `entry` points to one initialized [`ShekylSeamAddress`], or is null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_peerlist_admit_operator(entry: *const ShekylSeamAddress) -> i32 {
-    if entry.is_null() {
-        return -1;
-    }
-    let Some(address) = address_of(unsafe { &*entry }) else {
-        return -1;
-    };
-    let Some(dialer) = dialer() else {
-        DEFERRED.lock().expect("deferred").operator.push(address);
-        return SHEKYL_DIALER_DEFERRED;
-    };
-    let now = dialer.hub().now();
-    match dialer.admit_operator(&address, now, &mut SecureRelayRng) {
-        Ok(true) => 1,
-        Ok(false) | Err(_) => 0,
+/// The outbound target a connector is provisioned at: the protocol
+/// constants (`shekyl-relay-privacy`), one source for the dialer and for
+/// the reservation the daemon records before the seam binds.
+#[must_use]
+pub fn default_target(connector: ConnectorId) -> u32 {
+    match connector {
+        ConnectorId::Clearnet => P2P_DEFAULT_OUT_PEERS,
+        ConnectorId::Tor => MIN_PROVISIONED_OUT_PEERS,
     }
 }
 
-/// `--p2p-disclose-early` (brief revision 3 §2.6): the lists disclose below
-/// the white diversity floor, fresh per request, until the span or the
-/// floor ends it per connector. Returns 0, or [`SHEKYL_DIALER_DEFERRED`]
-/// when held for the dialer's build. The C++ option that pushes this is
-/// the one exception to "no new daemon option in C++"; the daemon-config
-/// slice deletes it and moves the option to the Rust option table.
-#[no_mangle]
-pub extern "C" fn shekyl_peerlist_disclose_early() -> i32 {
-    let Some(dialer) = dialer() else {
-        DEFERRED.lock().expect("deferred").disclose_early = true;
-        return SHEKYL_DIALER_DEFERRED;
-    };
-    let now = dialer.hub().now();
-    dialer.set_disclose_early(now);
-    0
-}
+/// The dialer does not exist: the seam is not bound, so the remnant has
+/// not constructed `net_node` yet, or the zone host was shut down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoDialer;
 
-/// A closed network (`--add-exclusive-node`): the candidate population is
-/// exactly these entries, admitted as operator-named. An entry that is
-/// not an address is left out. A count of zero declares no closed
-/// network (the C++ passes one on every boot without the option). Returns
-/// 0, [`SHEKYL_DIALER_DEFERRED`] when the list is held for the dialer's
-/// build, or -1 for a null pointer with a non-zero count.
-///
-/// # Safety
-///
-/// `entries` points to `count` initialized [`ShekylSeamAddress`] values,
-/// or `count` is zero.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_dialer_set_exclusive(
-    entries: *const ShekylSeamAddress,
-    count: usize,
-) -> i32 {
-    let Some(entries) = (unsafe { slice_from_typed_ptr(entries, count) }) else {
-        return -1;
-    };
-    let addresses: Vec<NetworkAddress> = entries.iter().filter_map(address_of).collect();
-    let Some(dialer) = dialer() else {
-        DEFERRED.lock().expect("deferred").exclusive = Some(addresses);
-        return SHEKYL_DIALER_DEFERRED;
-    };
-    let now = dialer.hub().now();
-    dialer.set_exclusive(addresses, now, &mut SecureRelayRng);
-    0
-}
-
-/// The address file (`<data dir>/p2pstate.bin`): named once, at start.
-/// Its addresses enter gray when the dialer is built, or now if it is;
-/// the dialer writes it every thirty minutes and at stop. Returns 0, or
-/// [`SHEKYL_DIALER_DEFERRED`] when held for the build, or -1 for a null
-/// or non-UTF-8 path.
-///
-/// # Safety
-///
-/// `path` points to a NUL-terminated string, or is null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_dialer_open_address_file(path: *const c_char) -> i32 {
-    if path.is_null() {
-        return -1;
+impl std::fmt::Display for NoDialer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the dialer does not exist (the seam is not bound)")
     }
-    let Ok(path) = (unsafe { CStr::from_ptr(path) }).to_str() else {
-        return -1;
-    };
-    let path = PathBuf::from(path);
-    let Some(dialer) = dialer() else {
-        DEFERRED.lock().expect("deferred").address_file = Some(path);
-        return SHEKYL_DIALER_DEFERRED;
-    };
-    open_file(&dialer, &path);
-    0
 }
 
-/// This node's own dialable address on `connector`: never a dial
-/// candidate, and one uniform member of the disclosure population. An
-/// entry that is not an address clears it. Returns 0, or -1 for an
-/// unknown connector; held for the dialer's build when it is not built.
+impl std::error::Error for NoDialer {}
+
+/// A peer endpoint as the lists address it.
+fn network_address(peer: &PeerEndpoint) -> NetworkAddress {
+    match peer {
+        PeerEndpoint::Ip(SocketAddr::V4(a)) => NetworkAddress::Ipv4 {
+            ip: *a.ip(),
+            port: a.port(),
+        },
+        PeerEndpoint::Ip(SocketAddr::V6(a)) => NetworkAddress::Ipv6 {
+            ip: *a.ip(),
+            port: a.port(),
+        },
+        PeerEndpoint::Onion { host, port } => NetworkAddress::Tor {
+            host: host.clone(),
+            port: *port,
+        },
+    }
+}
+
+/// Applies the p2p section to the dialer: the address file first, so an
+/// operator address already in it is not re-seated; then the operator's
+/// peers, which enter gray as candidates (slice 1 §3: seeds are ordinary
+/// peers); the closed-network declaration when it is non-empty (an empty
+/// one is no declaration); and early disclosure.
 ///
-/// # Safety
+/// # Errors
+/// [`NoDialer`] before the seam binds.
+pub fn apply_p2p(section: &P2p, address_file: &Path) -> Result<(), NoDialer> {
+    let dialer = dialer().ok_or(NoDialer)?;
+    open_file(&dialer, address_file);
+    let now = dialer.hub().now();
+    for peer in &section.peers {
+        let address = network_address(peer);
+        if let Err(refusal) = dialer.admit_operator(&address, now, &mut SecureRelayRng) {
+            tracing::warn!("operator address {address:?} was not admitted: {refusal:?}");
+        }
+    }
+    if !section.closed_peers.is_empty() {
+        let closed: Vec<NetworkAddress> =
+            section.closed_peers.iter().map(network_address).collect();
+        dialer.set_exclusive(closed, now, &mut SecureRelayRng);
+    }
+    if section.disclose_early {
+        dialer.set_disclose_early(now);
+    }
+    Ok(())
+}
+
+/// This node's own addresses on `connector`: never dial candidates, and
+/// the disclosure population's own member. `clearnet-advertise` for the
+/// clearnet connector (§2.8); the onion for Tor.
 ///
-/// `entry` points to one initialized [`ShekylSeamAddress`], or is null.
-#[no_mangle]
-pub unsafe extern "C" fn shekyl_peerlist_set_own_address(
-    connector: u32,
-    entry: *const ShekylSeamAddress,
-) -> i32 {
-    let Some(connector) = connector_from_index(connector) else {
-        return -1;
-    };
-    let own = if entry.is_null() {
-        Vec::new()
-    } else {
-        address_of(unsafe { &*entry }).into_iter().collect()
-    };
-    set_own(connector, own);
-    0
+/// # Errors
+/// [`NoDialer`] before the seam binds.
+pub fn set_own_addresses(
+    connector: ConnectorId,
+    addresses: Vec<NetworkAddress>,
+) -> Result<(), NoDialer> {
+    set_own(connector, addresses)
 }
 
 /// The disclosure sample for a response on `session` (the socket id):

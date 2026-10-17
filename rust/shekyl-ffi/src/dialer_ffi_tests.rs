@@ -12,7 +12,7 @@
 // `eprintln!` are test-only output and must not read as production.
 #![cfg(test)]
 
-use std::ffi::{c_void, CString};
+use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, PoisonError};
@@ -24,12 +24,14 @@ use shekyl_levin::{
     response, BasicNodeData, CoreSyncData, HandshakeResponse, PortableMap, SupportFlags,
     COMMAND_HANDSHAKE,
 };
-use shekyl_seam::{Channel, Dial, Loopback};
+use shekyl_seam::{Channel, CloseCause, Dial, Loopback};
 use shekyl_timing_engine::Tick;
 
 use super::*;
 use crate::inbound_ceiling_ffi::{ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_UNLIMITED};
-use crate::seam_ffi::{seam_bind_lock, shekyl_seam_bind, ShekylSeamObserved, ADDR_IPV4};
+use crate::seam_ffi::{
+    seam_bind_lock, shekyl_seam_bind, shekyl_seam_set_ceiling, ShekylSeamObserved,
+};
 
 /// A hub whose posts go nowhere: these tests never open a session.
 unsafe extern "C" fn no_post(
@@ -43,20 +45,6 @@ unsafe extern "C" fn no_post(
 ) {
 }
 
-fn v4(n: u8) -> ShekylSeamAddress {
-    let mut entry = ShekylSeamAddress {
-        connector: 0,
-        address_type: ADDR_IPV4,
-        zone_only: 0,
-        _pad: 0,
-        port: 18080,
-        len: 4,
-        bytes: [0; TOR_HOST_MAX],
-    };
-    entry.bytes[..4].copy_from_slice(&[11, 16, 0, n]);
-    entry
-}
-
 fn address(n: u8) -> NetworkAddress {
     NetworkAddress::Ipv4 {
         ip: Ipv4Addr::new(11, 16, 0, n),
@@ -66,7 +54,7 @@ fn address(n: u8) -> NetworkAddress {
 
 /// Unbind the seam: the dialer, if any, is stopped and dropped.
 fn unbind() {
-    unsafe { shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null()) };
+    unsafe { shekyl_seam_bind(std::ptr::null_mut(), None) };
     assert!(dialer().is_none());
 }
 
@@ -99,21 +87,53 @@ fn bind() {
         held: 0,
     };
     let mut ctx = 0u8;
-    let bound = unsafe {
-        shekyl_seam_bind(
-            (&raw mut ctx).cast::<c_void>(),
-            Some(no_post),
-            &raw const ceiling,
-        )
-    };
+    let bound = unsafe { shekyl_seam_bind((&raw mut ctx).cast::<c_void>(), Some(no_post)) };
     assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
 }
 
 /// On a clearnet-only start the command line is parsed before the
 /// seam binds, so the file, `--add-peer` and the own address arrive
 /// before the dialer exists. Each is held and applied at the build.
+fn peer(n: u8) -> PeerEndpoint {
+    PeerEndpoint::Ip(SocketAddr::from(([11, 16, 0, n], 18080)))
+}
+
+fn section(peers: &[u8], closed: &[u8], disclose_early: bool) -> P2p {
+    P2p {
+        peers: peers.iter().copied().map(peer).collect(),
+        closed_peers: closed.iter().copied().map(peer).collect(),
+        local: false,
+        disclose_early,
+        bans: Vec::new(),
+        upload_max: None,
+        download_max: None,
+    }
+}
+
+/// The section is applied once the dialer exists; before that it is a
+/// refusal the caller sees, not a push held for a build.
 #[test]
-fn pushes_before_the_dialer_exists_are_applied_when_it_is_built() {
+fn a_push_before_the_dialer_exists_is_refused_not_held() {
+    let _bind = seam_bind_lock()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    unbind();
+    let dir = tempfile::tempdir().expect("a directory");
+    assert_eq!(
+        apply_p2p(&section(&[2], &[], false), &dir.path().join("p2pstate.bin")),
+        Err(NoDialer)
+    );
+    assert_eq!(
+        set_own_addresses(ConnectorId::Clearnet, vec![address(4)]),
+        Err(NoDialer)
+    );
+}
+
+/// The address file's entries and the operator's peers enter gray, never
+/// white: a named address has not been dialled, and white is disclosed.
+#[test]
+fn the_section_enters_the_file_and_the_operators_peers_as_gray() {
     let _bind = seam_bind_lock()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
@@ -121,51 +141,28 @@ fn pushes_before_the_dialer_exists_are_applied_when_it_is_built() {
     let dir = tempfile::tempdir().expect("a directory");
     let file = dir.path().join("p2pstate.bin");
     std::fs::write(&file, shekyl_peerlist::address_file::encode(&[address(1)])).expect("written");
-    let path = CString::new(file.to_str().expect("utf-8")).expect("no NUL");
-    assert_eq!(
-        unsafe { shekyl_dialer_open_address_file(path.as_ptr()) },
-        SHEKYL_DIALER_DEFERRED
-    );
-    let named = v4(2);
-    assert_eq!(
-        unsafe { shekyl_peerlist_admit_operator(&raw const named) },
-        SHEKYL_DIALER_DEFERRED
-    );
     bind();
+    apply_p2p(&section(&[2], &[], false), &file).expect("the dialer exists");
     let dialer = dialer().expect("built at the bind");
-    {
-        let shared = dialer.shared();
-        assert!(shared.lists.is_gray(&address(1)), "from the file");
-        assert!(shared.lists.is_gray(&address(2)), "from --add-peer");
-        assert!(!shared.lists.is_white(&address(1)));
-        assert!(!shared.lists.is_white(&address(2)));
-    }
-    // The dialer exists now: a push applies at once.
-    let later = v4(3);
-    assert_eq!(
-        unsafe { shekyl_peerlist_admit_operator(&raw const later) },
-        1
-    );
-    assert!(dialer.shared().lists.is_gray(&address(3)));
+    let shared = dialer.shared();
+    assert!(shared.lists.is_gray(&address(1)), "from the file");
+    assert!(shared.lists.is_gray(&address(2)), "from p2p-peer");
+    assert!(!shared.lists.is_white(&address(1)));
+    assert!(!shared.lists.is_white(&address(2)));
+    drop(shared);
     unbind();
 }
 
 #[test]
-fn an_own_address_held_for_the_build_is_never_a_candidate() {
+fn an_own_address_is_never_a_candidate() {
     let _bind = seam_bind_lock()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     unbind();
-    let own = v4(4);
-    assert_eq!(
-        unsafe { shekyl_peerlist_set_own_address(0, &raw const own) },
-        0
-    );
-    assert_eq!(
-        unsafe { shekyl_peerlist_admit_operator(&raw const own) },
-        SHEKYL_DIALER_DEFERRED
-    );
     bind();
+    let dir = tempfile::tempdir().expect("a directory");
+    set_own_addresses(ConnectorId::Clearnet, vec![address(4)]).expect("the dialer exists");
+    apply_p2p(&section(&[4], &[], false), &dir.path().join("p2pstate.bin")).expect("applied");
     let dialer = dialer().expect("built at the bind");
     ready(&dialer);
     assert!(dialer.shared().lists.is_gray(&address(4)));
@@ -178,49 +175,35 @@ fn an_own_address_held_for_the_build_is_never_a_candidate() {
     unbind();
 }
 
-/// The C++ declares the closed network on every boot, with an empty
-/// list when no exclusive node was named. Empty is no declaration: an
-/// operator-named address is still drawn (the §4 run, 2026-10-13).
+/// An empty closed-network declaration is no declaration: the
+/// population stays open (the §4 run, 2026-10-13).
 #[test]
-fn an_empty_declaration_before_the_build_declares_no_closed_network() {
+fn an_empty_declaration_declares_no_closed_network() {
     let _bind = seam_bind_lock()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     unbind();
-    let named = v4(7);
-    assert_eq!(
-        unsafe { shekyl_peerlist_admit_operator(&raw const named) },
-        SHEKYL_DIALER_DEFERRED
-    );
-    assert_eq!(
-        unsafe { shekyl_dialer_set_exclusive(std::ptr::null(), 0) },
-        SHEKYL_DIALER_DEFERRED
-    );
     bind();
+    let dir = tempfile::tempdir().expect("a directory");
+    apply_p2p(&section(&[7], &[], false), &dir.path().join("p2pstate.bin")).expect("applied");
     let dialer = dialer().expect("built at the bind");
     ready(&dialer);
     let drawn = dialer
         .choose(ConnectorId::Clearnet, &mut SecureRelayRng)
         .map(|(address, _aim, _nonce)| address);
     assert_eq!(drawn, Some(address(7)), "nothing is held back");
-    assert_eq!(
-        unsafe { shekyl_dialer_set_exclusive(std::ptr::null(), 0) },
-        0
-    );
     unbind();
 }
 
-/// `--p2p-disclose-early` is parsed before the seam binds, like every
-/// config push: held for the build, then the flag runs on every
-/// connector from the build's clock.
 #[test]
-fn the_disclose_early_flag_held_for_the_build_runs_from_the_build() {
+fn disclose_early_runs_from_the_section() {
     let _bind = seam_bind_lock()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     unbind();
-    assert_eq!(shekyl_peerlist_disclose_early(), SHEKYL_DIALER_DEFERRED);
     bind();
+    let dir = tempfile::tempdir().expect("a directory");
+    apply_p2p(&section(&[], &[], true), &dir.path().join("p2pstate.bin")).expect("applied");
     let dialer = dialer().expect("built at the bind");
     for connector in ConnectorId::ALL {
         assert!(
@@ -228,34 +211,25 @@ fn the_disclose_early_flag_held_for_the_build_runs_from_the_build() {
                 dialer.shared().lists.disclose_early(*connector),
                 Some(shekyl_peerlist::DiscloseEarly::Running { .. })
             ),
-            "{connector:?} runs the flag from the build"
+            "{connector:?} runs the flag"
         );
     }
-    assert_eq!(
-        shekyl_peerlist_disclose_early(),
-        0,
-        "after the build the push acts at once"
-    );
     unbind();
 }
 
 #[test]
-fn a_closed_network_held_for_the_build_is_the_population() {
+fn a_closed_network_is_the_population() {
     let _bind = seam_bind_lock()
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     unbind();
-    let other = v4(5);
-    assert_eq!(
-        unsafe { shekyl_peerlist_admit_operator(&raw const other) },
-        SHEKYL_DIALER_DEFERRED
-    );
-    let declared = [v4(6)];
-    assert_eq!(
-        unsafe { shekyl_dialer_set_exclusive(declared.as_ptr(), declared.len()) },
-        SHEKYL_DIALER_DEFERRED
-    );
     bind();
+    let dir = tempfile::tempdir().expect("a directory");
+    apply_p2p(
+        &section(&[5], &[6], false),
+        &dir.path().join("p2pstate.bin"),
+    )
+    .expect("applied");
     let dialer = dialer().expect("built at the bind");
     ready(&dialer);
     let drawn = dialer
@@ -265,10 +239,6 @@ fn a_closed_network_held_for_the_build_is_the_population() {
     unbind();
 }
 
-/// `get_config` builds the mainnet, testnet, and stagenet ids, in that
-/// order, on first use. Those derivations must leave the noted seed
-/// network where the daemon put it. Fakechain shares mainnet's id and
-/// still admits no seeds. An unrecognized code does not move a record.
 #[test]
 fn a_noted_network_survives_every_id_derivation() {
     const DERIVATION_ORDER: [DaemonNetwork; 3] = [
@@ -453,10 +423,10 @@ fn a_kept_session_closed_from_cxx_returns_and_leaves_the_kept_count() {
     let dialer = dialer().expect("built at the bind");
     install_answering_loopback(dialer.hub());
     ready(&dialer);
-    let named = v4(2);
-    assert_eq!(
-        unsafe { shekyl_peerlist_admit_operator(&raw const named) },
-        1,
+    let dir = tempfile::tempdir().expect("a directory");
+    apply_p2p(&section(&[2], &[], false), &dir.path().join("p2pstate.bin")).expect("applied");
+    assert!(
+        dialer.shared().lists.is_gray(&address(2)),
         "the address entered gray"
     );
 
@@ -504,17 +474,14 @@ fn the_list_paths_and_closes_do_not_deadlock() {
     ready(&dialer);
 
     let peer = address(1);
-    let named = v4(1);
-    assert_eq!(
-        unsafe { shekyl_peerlist_admit_operator(&raw const named) },
-        1,
+    let dir = tempfile::tempdir().expect("a directory");
+    apply_p2p(&section(&[1], &[], false), &dir.path().join("p2pstate.bin")).expect("applied");
+    assert!(
+        dialer.shared().lists.is_gray(&address(1)),
         "the address entered gray"
     );
-    assert_eq!(
-        unsafe { shekyl_peerlist_set_own_address(0, &raw const named) },
-        0,
-        "the wake's filter skips the only address; a named dial does not"
-    );
+    // The wake's filter skips the only address; a named dial does not.
+    set_own_addresses(ConnectorId::Clearnet, vec![address(1)]).expect("the dialer exists");
 
     let stop = Arc::new(AtomicBool::new(false));
     let (done_tx, done_rx) = mpsc::channel();

@@ -476,6 +476,51 @@ pub fn arm_settlement_epoch_override_for_regtest() -> Result<u64, SettlementEpoc
 /// the override is being deliberately ignored. Unarmed consumers (the
 /// wallet's stake-engine spawn) surface this loudly once so the
 /// leaked-environment case is diagnosable instead of silent.
+/// Arms the schedule from typed values, the daemon's path
+/// (`DAEMON_CONFIG_CUTOVER.md` §4.2: `dev-settlement-epoch-blocks` and
+/// `dev-archival-reorg-depth`, read from the configuration's section and
+/// never from the environment). The same ranges as the string parsers,
+/// the same latch, the same refusals; `None` is the genesis pin.
+///
+/// # Errors
+/// [`SettlementEpochOverrideError`]: a value outside its range, or a
+/// schedule already latched before this ran.
+pub fn arm_settlement_epoch_override(
+    blocks: Option<u64>,
+    reorg_cap: Option<u64>,
+) -> Result<u64, SettlementEpochOverrideError> {
+    let reorg_cap = match reorg_cap {
+        Some(v) if (1..=ARCHIVAL_REORG_DEPTH_BLOCKS).contains(&v) => v,
+        Some(v) => {
+            return Err(SettlementEpochOverrideError::InvalidReorgCap { raw: v.to_string() })
+        }
+        None => ARCHIVAL_REORG_DEPTH_BLOCKS,
+    };
+    let floor = settlement_epoch_override_floor(reorg_cap);
+    let target = match blocks {
+        Some(v) if (floor..=SETTLEMENT_EPOCH_BLOCKS).contains(&v) => v,
+        Some(v) => {
+            return Err(SettlementEpochOverrideError::Invalid {
+                raw: v.to_string(),
+                floor,
+                reorg_cap,
+            })
+        }
+        None => SETTLEMENT_EPOCH_BLOCKS,
+    };
+    let latched = EFFECTIVE.get_or_init(|| EffectiveSchedule {
+        blocks: target,
+        reorg_cap,
+        ignored_override: false,
+    });
+    if latched.blocks != target || latched.reorg_cap != reorg_cap {
+        return Err(SettlementEpochOverrideError::ArmedTooLate {
+            latched: latched.blocks,
+        });
+    }
+    Ok(latched.blocks)
+}
+
 #[must_use]
 pub fn settlement_epoch_override_ignored() -> bool {
     latch_unarmed().ignored_override

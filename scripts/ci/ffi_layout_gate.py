@@ -123,6 +123,24 @@ GROUPS = [
             "ArchivalCreditPairFfi": "shekyl_archival_credit_pair",
         },
     },
+    {
+        # The daemon's Rust main() hands the C++ remnant its entry and the
+        # configuration snapshot the remnant still reads.
+        "crate": "rust/shekyl-daemon/src/lib.rs",
+        "namespace": "rust_daemon",
+        # `run` and `stop` are `Option<RunFn>` and `Option<StopFn>`.
+        "item_types": ["structs", "enums", "typedefs"],
+        "headers": ["src/shekyl/shekyl_ffi.h"],
+        "bounds": [],
+        "exclude": [],
+        "pairs": {
+            "ShekylStringList": "ShekylStringList",
+            "ShekylClientEndpoint": "ShekylClientEndpoint",
+            "ShekylMineAddress": "ShekylMineAddress",
+            "ShekylDaemonSnapshot": "ShekylDaemonSnapshot",
+            "ShekylDaemonEntry": "ShekylDaemonEntry",
+        },
+    },
 ]
 
 # Structs a header defines that no pair compares, each with its reason.
@@ -242,7 +260,9 @@ def main():
             rust.append(cbindgen(top + bounds_base, bound, workdir / "bound.h", workdir))
         include = ", ".join(f'"{r}"' for r in group["pairs"])
         exclude = ", ".join(f'"{r}"' for r in group["exclude"])
-        generated = cbindgen(top + base + f"include = [{include}]\nexclude = [{exclude}]\n",
+        items = ", ".join(f'"{i}"' for i in group.get("item_types", ["structs", "enums"]))
+        generated = cbindgen(top + base + f"item_types = [{items}]\n"
+                             f"include = [{include}]\nexclude = [{exclude}]\n",
                              group["crate"], workdir / f"{ns}.h", workdir)
         rust.append(generated)
         generated = strip_comments(generated)

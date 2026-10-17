@@ -177,7 +177,7 @@ jobs:
           # test never breaks the lane; bump only on a deliberate removal.
           grep -qE '(^|[[:space:]])ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots \.\.\. ok$' ignored-daemon.out
           grep -qE '(^|[[:space:]])blocking::tests::blocking_facade_full_lifecycle_from_plain_thread \.\.\. ok$' ignored-daemon.out
-          grep -qE '(^|[[:space:]])blocking::tests::a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop \.\.\. ok$' ignored-daemon.out
+          grep -qE '(^|[[:space:]])ephemeral::tests::a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop \.\.\. ok$' ignored-daemon.out
           passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored-daemon.out | head -1)
           echo "ran ${passed:-0} pinned-tor daemon tests"
           [ "${passed:-0}" -ge 3 ]

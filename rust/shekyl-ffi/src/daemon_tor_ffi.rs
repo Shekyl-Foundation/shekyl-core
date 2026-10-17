@@ -41,7 +41,6 @@ use std::time::Duration;
 
 use shekyl_tor_control_daemon::{
     BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError, OnionPow, TorBinaryError,
-    TorDeath,
 };
 
 /// Matches `SHEKYL_DAEMON_TOR_*` in `shekyl_ffi.h`.
@@ -100,44 +99,6 @@ unsafe fn read_optional_str<'a>(ptr: *const c_char) -> Result<Option<&'a str>, (
     // SAFETY: caller contract — non-null `ptr` is NUL-terminated.
     let s = unsafe { CStr::from_ptr(ptr) }.to_str().map_err(|_| ())?;
     Ok(if s.is_empty() { None } else { Some(s) })
-}
-
-/// Whether `socks` is the managed Tor's listener. `false` when no managed
-/// Tor is running.
-pub(crate) fn is_managed_socks(socks: std::net::SocketAddr) -> bool {
-    lock_slot()
-        .as_ref()
-        .is_some_and(|instance| instance.socks_addr() == socks)
-}
-
-/// Watch the managed Tor's death with `then` when `socks` is its listener.
-///
-/// Returns whether the watch is held. A mismatch clears any watch the
-/// process still has: the route has moved off it, and the old callback
-/// must not keep the previous incarnation. No managed Tor is `false`
-/// and nothing is cleared, because there is nothing to watch.
-pub(crate) fn arm_managed_death(
-    socks: std::net::SocketAddr,
-    then: impl FnOnce(TorDeath) + Send + 'static,
-) -> bool {
-    let slot = lock_slot();
-    let Some(instance) = slot.as_ref() else {
-        return false;
-    };
-    if instance.socks_addr() != socks {
-        instance.clear_death();
-        return false;
-    }
-    instance.on_death(then);
-    true
-}
-
-/// Drop the managed Tor's death watch without running it. No managed Tor
-/// is a no-op.
-pub(crate) fn clear_managed_death() {
-    if let Some(instance) = lock_slot().as_ref() {
-        instance.clear_death();
-    }
 }
 
 fn lock_slot() -> std::sync::MutexGuard<'static, Option<BlockingDaemonTor>> {

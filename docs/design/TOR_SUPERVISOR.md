@@ -39,12 +39,12 @@ needs, so the supervisor adds no path around it:
 
 | The supervisor needs to… | The seam that already exists (PR-3, #1056) | What changes |
 | --- | --- | --- |
-| tell dials where to go | `ZoneDial::dial_tor` reads `tor_proxy` at each dial (`rust/shekyl-ffi/src/zone_ffi.rs:172-180`) | the `Option<SocketAddr>` becomes the supervisor's published route |
+| tell dials where to go | `ZoneDial::dial_tor` reads the Tor link's route at each dial (`TSR-F1`, `rust/shekyl-ffi/src/zone_ffi.rs`) | the supervisor becomes the link's publisher |
 | stop the dialer drawing while Tor is down | `Dialer::choose` plans, then draws (`rust/shekyl-dialer/src/owner/mod.rs:574-601`, the draw at `:685-686`) | the plan reads the connector's link before it draws; the owner loop parks on the link |
 | learn whether outbound works | every dial ends in a `CloseCause` that keeps the SOCKS reply (`rust/shekyl-transport-layer/src/cause.rs:202-246`) | each outcome is also evidence to the supervisor; no separate client probe |
-| prove the onion is reachable end to end | the self-connection nonce: an inbound handshake carrying a nonce this node put in flight on this zone is recognised and dropped (`src/p2p/net_node.inl:1571-1584`) | a probe nonce kind; the probe is a dialer dial of our own onion |
+| prove the onion is reachable end to end | the self-connection nonce: an inbound handshake carrying a nonce this node put in flight on this zone is recognised and dropped (`src/p2p/net_node.inl:969-982`) | a probe nonce kind; the probe is a dialer dial of our own onion |
 | tell peers our address | `Dialer::set_own_addresses` (`rust/shekyl-dialer/src/owner/mod.rs:237`) → the partition's own member of the disclosure sample (`rust/shekyl-peerlist/src/partition.rs:521-535`) | called once per boot: the onion does not change at a respawn (`TSR-Q1`) |
-| keep inbound working across a respawn | the forward listener is bound by the zone host on loopback, not by Tor (`shekyl_zone_listen_tor`) | nothing: a republished onion targets the same port |
+| keep inbound working across a respawn | the forward listener is bound by the zone host on loopback, not by Tor (`zone_ffi::start_tor`) | nothing: a republished onion targets the same port |
 
 The relay is deliberately absent from that table; see `TSR-F9`.
 
@@ -75,8 +75,8 @@ says which and why.
 
 | Fact | Anchor |
 | --- | --- |
-| The daemon's Tor starts once, blocks init up to 300 s, and is never respawned; the crate says so and why (the static C++ proxy) | `src/p2p/net_node.inl:757`; `rust/shekyl-tor-control-daemon/src/lib.rs:40-46` |
-| Death is logged once and nothing else happens; the proxy stays installed at the dead port. The one log line is `MERROR` under `net.p2p`, which the default filter sets to `FATAL`, so at the default level it is not shown either (`TSR-F11`) | `src/p2p/net_node.inl:71`, `:1214-1232`; `contrib/epee/src/mlog.cpp:127` |
+| The daemon's Tor starts once, blocks init up to 300 s, and is never respawned; the crate says so and why (the static C++ proxy) | `src/p2p/net_node.inl` line 757 (at `d26148535e`); `rust/shekyl-tor-control-daemon/src/lib.rs:40-46` |
+| Death is logged once and nothing else happens; the proxy stays installed at the dead port. The one log line is `MERROR` under `net.p2p`, which the default filter sets to `FATAL`, so at the default level it is not shown either (`TSR-F11`) | `src/p2p/net_node.inl:68`, `:1214-1232`; `contrib/epee/src/mlog.cpp:127` |
 | Readiness is a `GETINFO status/bootstrap-phase` poll; no production code issues `SETEVENTS`. The supervisor's one `SETEVENTS`, the parsers for what it subscribes to, and the upload-round policy exist, unused (§4.2, `TSR-Q5`) | `rust/shekyl-tor-control-client/src/control/bootstrap.rs:10-11`; `rust/shekyl-tor-control-client/src/control/events.rs:42`, `:290`; `rust/shekyl-tor-control-client/src/control/upload_rounds.rs:50` |
 | The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs:273` |
 | Death has two signals: a watcher waits on the child beside the control connection's end, and either stops the actor (`TSR-F16`) | `rust/shekyl-tor-control-client/src/control/actor.rs:823`, `:1384`, `:1432`, `:1447` |
@@ -87,7 +87,7 @@ says which and why.
 | The wallet's supervisor re-verifies the pin at every spawn, never gives up, and publishes the SOCKS route as data on a watch, read at use time | `rust/shekyl-tor-control-wallet/src/service.rs:6-45`, `:289-303` |
 | The dialer draws a gray address, then checks whether it can dial at all; a `DialFailed` of any cause drops the outstanding gray draw | `rust/shekyl-dialer/src/owner/mod.rs:685-686`, then `rust/shekyl-dialer/src/owner/handshake.rs:53-71`; `rust/shekyl-peerlist/src/peerlist.rs:529-531` and `rust/shekyl-peerlist/src/partition.rs:326-331` |
 | The Tor owner loop wakes every 0.5–1.5 s | `rust/shekyl-dialer/src/pace.rs:18-23` |
-| Our onion reaches peers only as one uniform member of the disclosure sample; the sample is fixed for its window | `src/p2p/net_node.inl:1896-1904`; `rust/shekyl-peerlist/src/partition.rs:537-546` (F1, Rick 2026-10-09) |
+| Our onion reaches peers only as one uniform member of the disclosure sample; the sample is fixed for its window | `src/p2p/net_node.inl` lines 1896 to 1904 (at `d26148535e`); `rust/shekyl-peerlist/src/partition.rs:537-546` (F1, Rick 2026-10-09) |
 | `get_info` Health is told to every caller; counts belong to Status | `rust/shekyl-rpc-types/src/info.rs:117-121` |
 
 ## 3. Findings
@@ -319,7 +319,7 @@ here.
 | `HS_DESC UPLOADED` / `FAILED REASON=` for our address | `HS_DESC` | `UPLOADED`: one upload round arms the probe (§4.5); `FAILED` across a round: Service-class evidence (§4.4) |
 | `NOTICE` / `WARN` / `ERR` | log events | the `tor` log category (§4.10) |
 | every Tor dial's outcome | the connector's dial path → the supervisor | by the SOCKS reply table below |
-| a stream accepted at our forward listener | the Tor connector's inbound accept (`adopt_tor`, `rust/shekyl-ffi/src/zone_ffi.rs:362`) | display evidence only (posture line, RPC): a peer fetched the descriptor and completed introduction and rendezvous; it neither arms nor defers the probe |
+| a stream accepted at our forward listener | the Tor connector's inbound accept (`adopt_tor`, `rust/shekyl-ffi/src/zone_ffi.rs:392`) | display evidence only (posture line, RPC): a peer fetched the descriptor and completed introduction and rendezvous; it neither arms nor defers the probe |
 | a probe nonce arrived | the dialer's nonce set (§4.5) | inbound evidence |
 
 Each SOCKS reply answers two questions, not one: is it about the destination,
@@ -638,11 +638,11 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 | `DEL_ONION` on stop (the daemon's path; the wallet keeps its own) | `rust/shekyl-tor-control-client/src/control/actor.rs:1042-1052` | §4.7 |
 | `SIGTERM` in the managed shutdown | `rust/shekyl-tor-control-client/src/control/actor.rs:889-908` | §4.7 |
 | The per-publish seed, minted and dropped inside `publish` so that Tor is the key's only holder | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:328-332` | the boot's seed in secure memory, republished on each respawn (`TSR-Q1`) |
-| The synchronous wipe in teardown and on drop | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:395-415`; `data_dir.rs` `wipe`, `Drop` | the tombstone (§4.7) |
+| The synchronous wipe in teardown and on drop | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:402-422`; `data_dir.rs` `wipe`, `Drop` | the tombstone (§4.7) |
 | `EventSink::unsubscribed()` on the daemon's path | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:253` | §4.2 |
-| The FFI-installed `tor_proxy` | `rust/shekyl-ffi/src/zone_ffi.rs:63` | the link (§4.1) |
+| The zone host's Tor route and the managed Tor's death edge | `zone_ffi::start_tor`, `zone_ffi::dial_through_tor`, `zone_ffi::watch_managed_tor` (`TSR-F1`) | the supervisor publishes the link (§4.1) |
 | The control port, its port file, cookie authentication and `TAKEOWNERSHIP` on the daemon's managed launch (the wallet's attached posture keeps its authentication) | gone from the managed launch (`rust/shekyl-tor-control-client/src/control/launch.rs:203-204`); the attached handshake stays (`rust/shekyl-tor-control-client/src/control/actor.rs:1068-1076`) | the inherited owning socket (`TSR-Q7`, §4.7) |
-| The C++ start, liveness poll and teardown, and their FFI exports | `src/p2p/net_node.inl:756-810`, `:1209-1232`; `rust/shekyl-ffi/src/daemon_tor_ffi.rs:61`, `:142-341`; `blocking.rs` | the supervisor, started and stopped by the Rust `main()` (#1066); to Rick before they are cut |
+| The C++ start, liveness poll and teardown, and their FFI exports | `src/p2p/net_node.inl` lines 756 to 810 and 1209 to 1232 (at `d26148535e`; deleted by the daemon-configuration cutover's commit (c)); `rust/shekyl-ffi/src/daemon_tor_ffi.rs:61`, `:142-341`; `blocking.rs` | the supervisor, started and stopped by the Rust `main()` (#1066); to Rick before they are cut |
 
 ## 10. Bounds to measure (FOLLOWUPS rows)
 
@@ -715,9 +715,10 @@ its PR leaves draft.
 1. P2P lane: `TSR-F1`. The link replaces the zone host's `tor_proxy` slot
    here (Rick's TSR-F1 brief, 2026-10-16): the zone host publishes it, the
    managed Tor's death edge takes it down, and the connector reads its route
-   from it. The watch follows the route now installed, including a second
-   publish of the same address. An exit and a shutdown both take the link
-   down; only an exit warns.
+   from it. The daemon watches only the Tor it manages
+   (`DaemonTorControl::death`), and the down names the incarnation installed
+   when the watch began. An exit and a shutdown both take the link down;
+   only an exit is reported.
 2. Control client: the bounded sink; parsers for `STATUS_GENERAL`,
    `STATUS_CLIENT`, `NETWORK_LIVENESS`, `HS_DESC` and log events; the launch
    recipe and `AvoidDiskWrites` in the closed list; the process wait as the

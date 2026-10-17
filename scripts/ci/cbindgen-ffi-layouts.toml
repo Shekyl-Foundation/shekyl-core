@@ -13,7 +13,11 @@
 # define them (cbindgen-ffi-bounds.toml).
 #
 # The gate script adds the rest per crate: `namespace` at the top, and the
-# `include` and `exclude` lines at the end of [export]. `include` names
+# `item_types`, `include` and `exclude` lines at the end of [export].
+# `item_types` is structs and enums (an enum member compares as its
+# underlying integer), plus typedefs for a crate whose callback members are
+# aliases (`Option<RunFn>`); in the others a typedef can name a type from
+# another crate, which would not resolve. `include` names
 # the pairs' Rust structs, so a struct no function names (one crossing as
 # bytes, like the handshake result) is generated too. [export] is last for
 # that reason.
@@ -27,6 +31,3 @@ no_includes = true
 parse_deps = false
 
 [export]
-# Enums too: a member typed by a #[repr(u8)] enum is compared as its
-# underlying integer.
-item_types = ["structs", "enums"]

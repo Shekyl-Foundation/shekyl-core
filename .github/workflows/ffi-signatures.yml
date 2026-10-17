@@ -45,6 +45,10 @@ on:
       # The layout limb's completeness scan reads every header under src/.
       - "src/**/*.h"
       - "scripts/ci/check_ffi_signatures.sh"
+      # The reverse direction: C++ exports Rust imports, declared in
+      # headers under src/ and read from the gated Rust extern blocks.
+      - "src/**/*.h"
+      - "scripts/ci/check_cpp_import_signatures.py"
       - "scripts/ci/cbindgen-ffi-signatures.toml"
       - "scripts/ci/ffi_signature_gate.cpp"
       - "scripts/ci/cbindgen-ffi-layouts.toml"
@@ -81,3 +85,9 @@ jobs:
 
       - name: Run FFI signature gate
         run: scripts/ci/check_ffi_signatures.sh
+      # The other direction: every C++ function a gated Rust file imports
+      # agrees in arity and type class with its one header declaration.
+      - name: Run C++ import signature gate
+        run: |
+          python3 scripts/ci/check_cpp_import_signatures.py --selftest
+          python3 scripts/ci/check_cpp_import_signatures.py

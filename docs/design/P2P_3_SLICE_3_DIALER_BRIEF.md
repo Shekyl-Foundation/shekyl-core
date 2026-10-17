@@ -38,6 +38,12 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-14):** src/p2p/net_node.inl — the line that reads `--offline` records it through `shekyl_p2p_record_offline`, one Rust call in place of the read, so an offline daemon reports offline from its configuration and never infers it from the dialer's absence; no line is added.
 
+**UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.inl — the configuration cutover's commit (c) (`DAEMON_CONFIG_CUTOVER.md` §5.2: "a line it edits there rather than deletes carries a dated UNFREEZE line in the dialer brief"): `init` binds the seam once and builds both zones, `handle_command_line` reads the network, offline and the sync lever, `check_incoming_connections` reports without the C++-owned port; every listen, push, ceiling, UPnP and managed-Tor line is deleted, not edited.
+
+**UNFREEZE (Rick, 2026-10-13):** src/p2p/net_node.h — the cutover's commit (c): `init` loses its proxy parameter and the zone struct its listen, proxy, announce and cap fields; the rest is deletion.
+
+**UNFREEZE (Rick, 2026-10-13):** src/cryptonote_protocol/levin_notify.cpp — the cutover's commit (c): `make_relay` and the `notify` constructors take no connector mask and no carrier flag; the relay's identity and `dev-relay-cover` are the posture the Rust `main()` records (`shekyl_relay_zone_new` reads it).
+
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
 replaces "The address we announce"); `disclose_count` is the protocol
@@ -172,17 +178,18 @@ connector's loop does, and the stop writes it.
 The link is `shekyl_transport_layer::Link`: an incarnation, a route,
 and an outbound facet that is `Unknown`, `Usable` or `Down`. The zone
 host publishes clearnet's when its listener is up, with the route
-direct or the operator's `--proxy`. It publishes Tor's when it installs
-the SOCKS proxy (`shekyl_zone_listen_tor`, `shekyl_zone_set_tor_proxy`),
-and when that proxy is the managed Tor's, that Tor's death publishes
-the link down (`BlockingDaemonTor::on_death`, in Rust). The watch names
-the incarnation just published, so a second publish of the same address
-still watches when the first ran before the process existed, and a
-route that is not the managed Tor's drops the watch. An exit is
-`DownCause::ProcessExited` and is logged as a warning; a shutdown is
-`DownCause::ProcessStopped`, takes the link down, and is not. An
-operator's Tor stays usable until the supervisor brings its outbound
-evidence. Each connector reads its route from the link at every dial.
+direct or the operator's `--proxy`. It publishes Tor's when it starts
+the Tor connector (`zone_ffi::start_tor`, `zone_ffi::dial_through_tor`).
+The daemon watches only the Tor it manages: `tor::watch_death` hands
+`DaemonTorControl::death` to `zone_ffi::watch_managed_tor`, and that
+Tor's death publishes the link down for the incarnation installed when
+the watch began, so a route published later is not taken down by it.
+An exit is `DownCause::ProcessExited`, and the daemon logs it as an
+error; a stop by `DaemonTorControl::shutdown` is
+`DownCause::ProcessStopped`, and the daemon reports nothing. The daemon
+stops the zone host before the Tor, so an orderly stop withdraws the
+link first. An operator's Tor stays usable until the supervisor brings
+its outbound evidence. Each connector reads its route from the link at every dial.
 `Dialer::dial`, the named draw, reads the same gate before it draws.
 
 Two races are accepted. A link that falls between the plan and the
@@ -217,7 +224,7 @@ users on `dev`: `scripts/bench/drs_bench.py:328` and
 
 **Priority nodes — DELETED (Rick, 2026-10-11; outright, 2026-10-13).**
 `--add-priority-node` is deleted in PR-3. *Records-was:* "as a retired
-flag refused by name (`REMOVED_FLAGS`, `src/common/removed_flags.cpp:70`)";
+flag refused by name (`REMOVED_FLAGS`, line 70 of `src/common/removed_flags.cpp` at `d26148535e`)";
 Rick's ruling of 2026-10-13 removes that row too, since pre-genesis there
 is no backward compatibility and the cutover deletes the shim. The deletion takes
 `m_priority_peers` (`net_node.h:767`), its parse (`net_node.inl:558`),

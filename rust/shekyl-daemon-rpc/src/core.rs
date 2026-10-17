@@ -166,6 +166,17 @@ pub enum P2pRead<T> {
     Offline,
 }
 
+/// Offline, when configure recorded it. The peer methods return this
+/// before any dialer call. `None` when the daemon is online, so the
+/// caller asks the dialer.
+fn offline_answer<T>() -> Option<Result<P2pRead<T>, i32>> {
+    if crate::ffi_exports::offline() {
+        Some(Ok(P2pRead::Offline))
+    } else {
+        None
+    }
+}
+
 /// One peerlist entry, copied out of the Rust peer lists' export. No
 /// clock: the lists carry none (3.55). Named apart from
 /// [`crate::info_facts::PeerFacts`], `get_info`'s Peers state.
@@ -283,15 +294,25 @@ impl CoreRpc {
         }
     }
 
-    /// Dispatch a JSON REST endpoint (e.g. "/get_info").
-    pub fn json_endpoint(&self, uri: &str, body: &str) -> Option<String> {
+    /// Dispatch a JSON REST endpoint (e.g. "/get_info") as the listener
+    /// whose posture `restricted` names. The posture rides with the call:
+    /// one `core_rpc_server` answers every listener, so the C++ handlers
+    /// read it off the origin the bridge hands them (`core_rpc_ffi.cpp`,
+    /// `rpc_origin`). The in-process console passes `false`: it is the
+    /// admin arm.
+    pub fn json_endpoint(&self, uri: &str, body: &str, restricted: bool) -> Option<String> {
         if self.handle.is_null() {
             return None;
         }
         let c_uri = CString::new(uri).ok()?;
         let c_body = CString::new(body).ok()?;
         unsafe {
-            let ptr = ffi::core_rpc_ffi_json_endpoint(self.handle, c_uri.as_ptr(), c_body.as_ptr());
+            let ptr = ffi::core_rpc_ffi_json_endpoint(
+                self.handle,
+                c_uri.as_ptr(),
+                c_body.as_ptr(),
+                restricted,
+            );
             consume_c_string(ptr)
         }
     }
@@ -685,6 +706,9 @@ impl CoreRpc {
     /// the Rust peer lists), white entries then gray, copied out before the
     /// owner is released. No core handle: the lists are the dialer's.
     pub fn peer_list(&self, public_only: bool) -> Result<P2pRead<Vec<PeerEntry>>, i32> {
+        if let Some(offline) = offline_answer() {
+            return offline;
+        }
         let mut rows: *const ffi::PeerFactsFfi = std::ptr::null();
         let mut len: usize = 0;
         let mut owner: *mut std::ffi::c_void = std::ptr::null_mut();
@@ -696,10 +720,6 @@ impl CoreRpc {
                 &raw mut len,
                 &raw mut owner,
             );
-            if rc == ffi::SHEKYL_RPC_FACTS_OFFLINE {
-                // Nothing was written, the owner included.
-                return Ok(P2pRead::Offline);
-            }
             if rc != ffi::SHEKYL_RPC_FACTS_OK {
                 return Err(rc);
             }
@@ -723,28 +743,28 @@ impl CoreRpc {
     /// How many addresses the clearnet white and gray lists hold
     /// (`shekyl_rpc_peerlist_sizes`, exported by `shekyl-ffi` from the Rust
     /// peer lists), as `(white, gray)`. No core handle: the lists are the
-    /// dialer's. [`P2pRead::Offline`] for a daemon started offline.
+    /// dialer's. [`P2pRead::Offline`] when configure recorded offline,
+    /// before any dialer call.
     pub fn peerlist_sizes() -> Result<P2pRead<(u64, u64)>, i32> {
+        if let Some(offline) = offline_answer() {
+            return offline;
+        }
         let mut white: u64 = 0;
         let mut gray: u64 = 0;
         // SAFETY: two valid out pointers.
         let rc = unsafe { ffi::shekyl_rpc_peerlist_sizes(&raw mut white, &raw mut gray) };
         match rc {
             ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running((white, gray))),
-            ffi::SHEKYL_RPC_FACTS_OFFLINE => Ok(P2pRead::Offline),
             fault => Err(fault),
         }
     }
 
-    /// Whether P2P runs (`shekyl_rpc_p2p_state`, exported by `shekyl-ffi`
-    /// from what the p2p layer recorded when it read `--offline`).
+    /// Whether P2P runs. Offline is the bit configure recorded. Anything
+    /// else is running: the RPC is served only after configure, and a
+    /// process that never configured still asks the dialer rather than
+    /// inventing an offline state.
     pub fn p2p_state() -> Result<P2pRead<()>, i32> {
-        // SAFETY: no arguments; reads one atomic.
-        match unsafe { ffi::shekyl_rpc_p2p_state() } {
-            ffi::SHEKYL_RPC_FACTS_OK => Ok(P2pRead::Running(())),
-            ffi::SHEKYL_RPC_FACTS_OFFLINE => Ok(P2pRead::Offline),
-            fault => Err(fault),
-        }
+        offline_answer().unwrap_or(Ok(P2pRead::Running(())))
     }
 
     /// The dynamic base-fee estimate (`shekyl_rpc_fee_estimate`).
@@ -1103,14 +1123,19 @@ impl CoreRpc {
 
     /// Dispatch a JSON-RPC 2.0 method.
     /// Returns the raw response string from C++ (contains ok/error envelope).
-    pub fn json_rpc(&self, method: &str, params: &str) -> Option<String> {
+    pub fn json_rpc(&self, method: &str, params: &str, restricted: bool) -> Option<String> {
         if self.handle.is_null() {
             return None;
         }
         let c_method = CString::new(method).ok()?;
         let c_params = CString::new(params).ok()?;
         unsafe {
-            let ptr = ffi::core_rpc_ffi_json_rpc(self.handle, c_method.as_ptr(), c_params.as_ptr());
+            let ptr = ffi::core_rpc_ffi_json_rpc(
+                self.handle,
+                c_method.as_ptr(),
+                c_params.as_ptr(),
+                restricted,
+            );
             consume_c_string(ptr)
         }
     }
