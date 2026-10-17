@@ -28,6 +28,7 @@ use shekyl_wire::transaction::{Ct, Input};
 use shekyl_wire::Transaction;
 
 use crate::door::{self, Judged};
+use crate::evict::Limits;
 use crate::view::KeyImages;
 
 /// How a transaction reached the door.
@@ -68,8 +69,13 @@ pub enum Duplicate {
 /// What [`Pool::admit`] did with a transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Admission {
-    /// The door admitted it; the pool holds it as [`Standing::Admitted`].
-    Admitted,
+    /// The door admitted it; the pool holds it as [`Standing::Admitted`],
+    /// having evicted `evicted` in the same write to make room (CEN-M10,
+    /// kept entries first, then admitted ones paying less per weight).
+    Admitted {
+        /// What left to make room, in eviction order.
+        evicted: Vec<TxHash>,
+    },
     /// A returned transaction the chain-bound half refused and the policy
     /// did not: held as [`Standing::Kept`] — never relayed, never selected,
     /// and evicted by CEN-M10 (CEN-K10). The only way an entry becomes
@@ -79,6 +85,11 @@ pub enum Admission {
     Duplicate(Duplicate),
     /// Refused, and not held: the door's answer.
     Refused(Judged),
+    /// Refused, and not held: the pool is full and holds nothing it would
+    /// give up for this transaction (CEN-M10; `evict.rs`). Decided before
+    /// the door's crypto for a candidate that pays no more per weight than
+    /// the cheapest admitted entry.
+    PoolFull,
 }
 
 /// What the pool could not do — never a judgement about a transaction.
@@ -151,6 +162,9 @@ pub struct Pool {
     store: PoolStore,
     key_images: KeyImages,
     held: BTreeMap<TxHash, Held>,
+    /// CEN-M10's limits, read off the chain (`Limits::at`) at open and set
+    /// by the writer at each connect ([`Pool::set_limits`]).
+    limits: Limits,
     /// The next reconcile's file write is refused by the store — the tests'
     /// one way to fault a write (`reconcile_tests.rs`).
     #[cfg(test)]
@@ -168,13 +182,17 @@ impl core::fmt::Debug for Pool {
 impl Pool {
     /// The pool file at `path`, with nothing in memory yet — [`Pool::open`]'s
     /// first step, which then reads the file back and reconciles it.
-    pub(crate) fn create(path: impl AsRef<Path>) -> Result<(Self, PoolOpen), StoreError> {
+    pub(crate) fn create(
+        path: impl AsRef<Path>,
+        limits: Limits,
+    ) -> Result<(Self, PoolOpen), StoreError> {
         let (store, how) = PoolStore::create(path)?;
         Ok((
             Self {
                 store,
                 key_images: KeyImages::default(),
                 held: BTreeMap::new(),
+                limits,
                 #[cfg(test)]
                 refuse_next_write: false,
             },
@@ -225,21 +243,31 @@ impl Pool {
         {
             return Ok(Admission::Duplicate(Duplicate::OnChain));
         }
+        // CEN-M10's rising minimum, before the door's crypto: a full pool
+        // holds nothing it would give up for a candidate paying no more per
+        // weight than its cheapest admitted entry.
+        let weight = u64::try_from(tx.weight()).unwrap_or(u64::MAX);
+        let rate = (fee_of(&tx), weight);
+        if self.room_for(weight, Some(rate), false).is_none() {
+            return Ok(Admission::PoolFull);
+        }
         let judged = door::judge(&tx, chain, &self.key_images, rule_set, policy, None)
             .map_err(PoolFault::Chain)?;
-        let (standing, admission, proven) = match (judged, arrival) {
-            (Judged::Admitted { proven, .. }, _) => {
-                (Standing::Admitted, Admission::Admitted, proven)
-            }
+        let (standing, proven) = match (judged, arrival) {
+            (Judged::Admitted { proven, .. }, _) => (Standing::Admitted, proven),
             (Judged::Chain { policy: None, .. }, Arrival::Returned) => {
                 // Aged from the tip of the chain the switch left (CEN-M10).
                 let returned_at = chain
                     .tip()
                     .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
                     .map_or(BlockHeight::ZERO, |tip| tip.height);
-                (Standing::Kept { returned_at }, Admission::Kept, None)
+                (Standing::Kept { returned_at }, None)
             }
             (refused, _) => return Ok(Admission::Refused(refused)),
+        };
+        let kept = standing != Standing::Admitted;
+        let Some(evicted) = self.room_for(weight, (!kept).then_some(rate), kept) else {
+            return Ok(Admission::PoolFull);
         };
         let record = PoolRecord {
             received: ReceivedHour::of(now),
@@ -247,10 +275,19 @@ impl Pool {
             standing,
         };
         let blob = tx.serialize();
-        self.store
-            .write(|batch| batch.insert(txid, &record, &blob))?;
+        self.store.write(|batch| {
+            evicted.iter().try_for_each(|gone| batch.remove(gone))?;
+            batch.insert(txid, &record, &blob)
+        })?;
+        for gone in &evicted {
+            self.drop_held(gone);
+        }
         self.hold(txid, Held::of(tx, record, proven));
-        Ok(admission)
+        Ok(if kept {
+            Admission::Kept
+        } else {
+            Admission::Admitted { evicted }
+        })
     }
 
     /// Put `held` in the index: an admitted entry's key images enter the
@@ -335,6 +372,19 @@ impl Pool {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.held.is_empty()
+    }
+
+    /// CEN-M10's limits in force.
+    #[must_use]
+    pub const fn limits(&self) -> Limits {
+        self.limits
+    }
+
+    /// Set CEN-M10's limits: the writer's, at each connect, from
+    /// [`Limits::at`] over the chain it connected. Entries over a cap that
+    /// shrank leave at the next [`Pool::evict`].
+    pub fn set_limits(&mut self, limits: Limits) {
+        self.limits = limits;
     }
 
     /// The key images the pool's admitted entries spend (CEN-M7's map).

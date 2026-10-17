@@ -39,6 +39,7 @@ use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 
 use crate::door::{self, Judged};
+use crate::evict::Limits;
 use crate::pool::{Held, Pool, PoolFault};
 use crate::view::KeyImages;
 
@@ -95,7 +96,8 @@ impl Pool {
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<(Self, PoolOpen, Reconciled), PoolFault<V::Fault>> {
-        let (mut pool, how) = Self::create(path)?;
+        let limits = Limits::at(chain, rule_set).map_err(PoolFault::Chain)?;
+        let (mut pool, how) = Self::create(path, limits)?;
         let latest = ReceivedHour::of(now);
         let mut dropped = Vec::new();
         let snapshot = pool.store().begin_read()?;

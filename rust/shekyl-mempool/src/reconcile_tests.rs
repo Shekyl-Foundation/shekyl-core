@@ -42,7 +42,15 @@ const ADMITTED: PoolRecord = PoolRecord {
 /// refused on its bytes when judged again, so a reconcile removes both.
 fn two_planted(path: &std::path::Path) -> (Pool, [TxHash; 2]) {
     let chain = spendable_chain();
-    let (mut pool, _) = Pool::create(path).unwrap();
+    let (mut pool, _) = Pool::create(
+        path,
+        crate::Limits {
+            kept_for: shekyl_types::BlockCount::from_raw(10),
+            max_weight: u64::MAX,
+            kept_max_weight: u64::MAX,
+        },
+    )
+    .unwrap();
     let a = pool.plant(listed_on(&chain, [0x41; 32]), ADMITTED);
     let b = pool.plant(listed_on(&chain, [0x42; 32]), ADMITTED);
     (pool, [a, b])

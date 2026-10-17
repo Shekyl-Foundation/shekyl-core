@@ -41,7 +41,9 @@
 //! - refused by CEN-M3, the relay floor → [`CommitOutcome::PrunedOnInsert`],
 //!   which the engine classifies `FeeTooLow` — the engine's fee gate reads
 //!   `fee_per_byte` at the tip, the door reads the floor window's minimum
-//!   (M3), and the door is the truth;
+//!   (M3), and the door is the truth; and a full pool holding nothing it
+//!   would give up for the transaction (CEN-M10's rising minimum), the C++
+//!   insert-tail prune's answer;
 //! - anything else — a refusal on the bytes, or by M4/M5, after the engine's
 //!   own Phase A–C passed it, or a fault — is
 //!   [`CommitOutcome::InternalFault`]: two judgements of one transaction
@@ -456,7 +458,7 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                 &self.policy,
             );
             match admitted {
-                Ok(Admission::Admitted) => CommitOutcome::Committed,
+                Ok(Admission::Admitted { .. }) => CommitOutcome::Committed,
                 Ok(Admission::Duplicate(_) | Admission::Refused(Judged::Chain { .. })) => {
                     let emission_probe = parsed.emission_probe();
                     match gather(
@@ -478,6 +480,10 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                 {
                     CommitOutcome::PrunedOnInsert
                 }
+                // CEN-M10's rising minimum: the pool is full of entries
+                // paying at least as much — the C++ insert-tail prune's
+                // answer.
+                Ok(Admission::PoolFull) => CommitOutcome::PrunedOnInsert,
                 Ok(Admission::Refused(_) | Admission::Kept) | Err(_) => {
                     CommitOutcome::InternalFault
                 }

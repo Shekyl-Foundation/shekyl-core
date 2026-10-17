@@ -17,7 +17,7 @@ use shekyl_chain_rules::{
     judge_slot_stateless, probes, AdmissionPolicy, CenRow, HeaderView, PolicyRow, ReferenceClaims,
     RuleCoverage, Tip, TxSlot,
 };
-use shekyl_chain_store::pool::Standing;
+use shekyl_chain_store::pool::{PoolStore, Standing};
 use shekyl_harness_spender::Spender;
 use shekyl_mempool::{
     judge, shown, Admission, Arrival, Duplicate, Evicted, Judged, KeyImages, Limits, Pool,
@@ -88,7 +88,15 @@ async fn a_switchs_returns_run_the_door_and_the_floor_refuses_one_below_it() {
         .expect("switch");
     assert!(matches!(switched, Switched::Done(_)), "the switch landed");
     assert_eq!(admissions.len(), 2, "both listed transactions came back");
-    assert_eq!(admissions[0], (paid.txid_parts().hash, Admission::Admitted));
+    assert_eq!(
+        admissions[0],
+        (
+            paid.txid_parts().hash,
+            Admission::Admitted {
+                evicted: Vec::new()
+            }
+        )
+    );
     match &admissions[1] {
         (txid, Admission::Refused(Judged::Policy(r))) => {
             assert_eq!(*txid, cheap.txid_parts().hash);
@@ -175,15 +183,11 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
     assert!(reconciled.removed.is_empty());
     // Aged in blocks from its return: a block short of the cap it stays;
     // at the cap — no switch back reaches further — it goes.
-    let limits = Limits::GENESIS;
+    let kept_for = pool.limits().kept_for.to_raw();
     let at = |blocks: u64| shekyl_types::BlockHeight::from_raw(returned_at.to_raw() + blocks);
-    assert!(pool
-        .evict(at(limits.kept_for.to_raw() - 1), &limits, &[])
-        .expect("evict")
-        .is_empty());
+    assert!(pool.evict(at(kept_for - 1), &[]).expect("evict").is_empty());
     assert_eq!(
-        pool.evict(at(limits.kept_for.to_raw()), &limits, &[])
-            .expect("evict"),
+        pool.evict(at(kept_for), &[]).expect("evict"),
         vec![(txid, Evicted::KeptAged)]
     );
     drop(pool);
@@ -251,7 +255,12 @@ async fn an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool()
                 .expect("no fault")
         })
         .await;
-    assert_eq!(held, Admission::Admitted);
+    assert_eq!(
+        held,
+        Admission::Admitted {
+            evicted: Vec::new()
+        }
+    );
     assert!(
         !shown(&pool.record(&tid).expect("held")),
         "in its stem phase"
@@ -444,7 +453,13 @@ async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it(
                     &policy,
                 )
                 .expect("no fault");
-            assert_eq!(admitted, Admission::Admitted, "fixture");
+            assert_eq!(
+                admitted,
+                Admission::Admitted {
+                    evicted: Vec::new()
+                },
+                "fixture"
+            );
 
             // The same anchor: the reconcile verifies no proof.
             let before = probes::fcmp_verifies();
@@ -557,7 +572,9 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
                         &AdmissionPolicy::GENESIS,
                     )
                     .expect("no fault"),
-                    Admission::Admitted
+                    Admission::Admitted {
+                        evicted: Vec::new()
+                    }
                 );
                 assert!(pool.fluffed(&txid).expect("publish"));
             }
@@ -621,11 +638,143 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     );
     let refused: Vec<_> = template.refused.iter().map(|(id, _)| *id).collect();
     assert_eq!(
-        pool.evict(shekyl_types::BlockHeight::ZERO, &Limits::GENESIS, &refused)
+        pool.evict(shekyl_types::BlockHeight::ZERO, &refused)
             .expect("evict"),
         vec![(id1, Evicted::Refused)]
     );
     assert!(pool.record(&id2).is_some() && pool.record(&id3).is_some());
+    drop(pool);
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
+/// CEN-M10 at admission (the review of #1102, B3), over real spends: with
+/// room for one, a spend paying more per weight than the held one evicts it
+/// in the same write as its own insert, and a spend paying less is refused
+/// as `PoolFull` before the door runs. The pool file agrees.
+#[tokio::test]
+async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
+    let (mut scenario, mined) = matured("pool-full").await;
+    let low = paying_the_floor(&mut scenario, &mined, 0).await;
+    let fee = fee_of(&low);
+    let (high, lower) = {
+        let spender = Spender::over(&mined);
+        let wallet = scenario.wallet();
+        (
+            spender.spend_coinbase(wallet, h(1), h(AT), fee * 4),
+            spender.spend_coinbase(wallet, h(2), h(AT), fee * 2),
+        )
+    };
+    let (low_id, high_id) = (low.txid_parts().hash, high.txid_parts().hash);
+    let room = [&low, &high, &lower]
+        .iter()
+        .map(|tx| u64::try_from(tx.weight()).expect("fits"))
+        .max()
+        .expect("three");
+    let path = tmp("pool-full-pool");
+    let (first, second, third, held) = scenario
+        .read_chain(|view, rule_set| {
+            let policy = AdmissionPolicy::GENESIS;
+            let now = UnixSeconds::from_raw(1);
+            let (mut pool, _, _) = Pool::open(&path, now, view, rule_set, &policy).expect("open");
+            pool.set_limits(Limits {
+                max_weight: room,
+                ..pool.limits()
+            });
+            let mut admit = |tx: &shekyl_wire::Transaction| {
+                pool.admit(tx.clone(), Arrival::Relayed, now, view, rule_set, &policy)
+                    .expect("no fault")
+            };
+            let first = admit(&low);
+            let second = admit(&high);
+            let third = admit(&lower);
+            let held: Vec<_> = pool.listing().map(|(txid, _)| txid).collect();
+            (first, second, third, held)
+        })
+        .await;
+    assert_eq!(
+        first,
+        Admission::Admitted {
+            evicted: Vec::new()
+        }
+    );
+    assert_eq!(
+        second,
+        Admission::Admitted {
+            evicted: vec![low_id]
+        },
+        "the cheaper entry left to make room"
+    );
+    assert_eq!(third, Admission::PoolFull, "the rising minimum");
+    assert_eq!(
+        held,
+        Vec::<shekyl_types::TxHash>::new(),
+        "nothing is fluffed"
+    );
+    let (store, _) = PoolStore::create(&path).expect("the file");
+    let filed: Vec<_> = store
+        .begin_read()
+        .expect("read")
+        .txids()
+        .expect("txids")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(
+        filed,
+        vec![high_id],
+        "the eviction and the insert were one write"
+    );
+    drop(store);
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
+/// An admitted entry has no timer (B3): once the chain has moved past
+/// CEN-I11's window from its reference, the reconcile removes it on that
+/// refusal.
+#[tokio::test]
+async fn an_admitted_entry_leaves_when_its_reference_leaves_the_window() {
+    let (mut scenario, mined) = matured("pool-window").await;
+    let spend = paying_the_floor(&mut scenario, &mined, 0).await;
+    let txid = spend.txid_parts().hash;
+    let path = tmp("pool-window-pool");
+    let mut pool = open_pool(&mut scenario, &path).await;
+    let admitted = scenario
+        .read_chain(|view, rule_set| {
+            pool.admit(
+                spend,
+                Arrival::Relayed,
+                UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &AdmissionPolicy::GENESIS,
+            )
+            .expect("no fault")
+        })
+        .await;
+    assert_eq!(
+        admitted,
+        Admission::Admitted {
+            evicted: Vec::new()
+        }
+    );
+    scenario
+        .mine(shekyl_chain_rules::REFERENCE_BLOCK_MAX_AGE.to_raw())
+        .await;
+    let reconciled = scenario
+        .read_chain(|view, rule_set| {
+            pool.reconcile(view, rule_set, &AdmissionPolicy::GENESIS)
+                .expect("reconcile")
+        })
+        .await;
+    match reconciled.removed.as_slice() {
+        [(id, shekyl_mempool::Removed::Refused(Judged::Chain { refused, .. }))] => {
+            assert_eq!(*id, txid);
+            assert_eq!(refused.rule, CenRow::I11, "the reference aged out");
+        }
+        other => panic!("removed on CEN-I11: {other:?}"),
+    }
+    assert!(pool.is_empty());
     drop(pool);
     drop(std::fs::remove_file(&path));
     scenario.close().await;

@@ -51,7 +51,9 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
                         &policy
                     )
                     .expect("no fault"),
-                    Admission::Admitted
+                    Admission::Admitted {
+                        evicted: Vec::new()
+                    }
                 );
             }
             assert!(pool.fluffed(&idb).expect("publish"));
@@ -158,7 +160,12 @@ async fn the_pool_file_can_be_discarded() {
             .expect("no fault")
         })
         .await;
-    assert_eq!(readmitted, Admission::Admitted);
+    assert_eq!(
+        readmitted,
+        Admission::Admitted {
+            evicted: Vec::new()
+        }
+    );
     assert_eq!(
         scenario.digest().await.expect("digest"),
         digest_before,
@@ -221,7 +228,9 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
         .read_chain(|view, rule_set| {
             Pool::open(
                 &path,
-                shekyl_types::UnixSeconds::from_raw(1),
+                // Past both filed hours, so neither is clamped and the order held
+                // stands.
+                shekyl_types::UnixSeconds::from_raw(1_700_000_000),
                 view,
                 rule_set,
                 &AdmissionPolicy::GENESIS,

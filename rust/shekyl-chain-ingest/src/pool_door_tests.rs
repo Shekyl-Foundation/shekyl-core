@@ -310,7 +310,12 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
         })
         .await;
     let (first, again, second_spender, below_floor, held, len) = admissions;
-    assert_eq!(first, Admission::Admitted);
+    assert_eq!(
+        first,
+        Admission::Admitted {
+            evicted: Vec::new()
+        }
+    );
     assert_eq!(again, Admission::Duplicate(Duplicate::InPool), "CEN-M1");
     match second_spender {
         Admission::Refused(Judged::Chain { refused: r, .. }) => {
@@ -402,7 +407,13 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                     &policy,
                 )
                 .expect("no fault");
-            assert_eq!(admitted, Admission::Admitted, "fixture: the spend is held");
+            assert_eq!(
+                admitted,
+                Admission::Admitted {
+                    evicted: Vec::new()
+                },
+                "fixture: the spend is held"
+            );
             let seen = |pool: &Pool| {
                 let template = shekyl_mempool::select(pool, view, rule_set, u64::MAX)
                     .expect("the template reads the chain");
