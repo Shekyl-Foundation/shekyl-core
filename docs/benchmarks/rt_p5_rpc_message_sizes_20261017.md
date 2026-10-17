@@ -1,8 +1,10 @@
 # `RT-P5`, sizes: HTTP message sizes per method on a generated wallet's traffic. Registration of 2026-10-17
 
-**State of this record: registered; dry run made; registered run not
-yet made.** The dry run is recorded below the registration, and it is not
-data.
+**State of this record: measured.** Both registered runs passed every
+gate and the determinism check, on the staker VM the maintainer ruled.
+The candidate tables are below; `K` is the maintainer's choice. Results
+also carry a finding against RT-O6's premise (direction). The dry run is
+recorded below the registration, and it is not data.
 The registered run starts only after the maintainer has answered the one
 departure this registration names (the host, below). Results are added
 under "Results" and the section "Registered before the run" is not edited
@@ -256,4 +258,135 @@ them, with a test that reproduces the boundary and was seen failing first.
 
 ## Results
 
-None yet.
+**Both registered runs passed every gate, and the determinism check
+passes.** The classes below are derived from the first run, by the rule
+registered above. **`K` is the maintainer's choice and is not made here.**
+Captures, with checksums:
+[`rt_p5_rpc_message_sizes_20261017_captures/`](rt_p5_rpc_message_sizes_20261017_captures/).
+
+### Conditions, recorded as registered
+
+- **Host:** a staker VM of the testnet estate (x86-64, 8 vCPU, 15 GiB,
+  Ubuntu 24.04). It was claimed shared on the estate ledger, and its
+  standing testnet daemon was active at every check.
+- **Build:** a fresh clone of `9ead6beb6c` (this PR's head at the third
+  amendment, `dev` with #1088 merged in), with toolchain 1.94.0. The
+  daemon was built in Release, the engine's test binary in the test
+  profile.
+  - The first attempt at the test binary stopped before any run: a
+    benchmark-only dev-dependency (`valgrind-requests`, through `gungraun`)
+    runs bindgen, and the VM's libclang could not find `stdbool.h`.
+  - The build was resumed with bindgen pointed at gcc 13's header
+    directory (`BINDGEN_EXTRA_CLANG_ARGS`). No package was installed. The
+    clone, checkout and daemon build stood.
+- **Runs, 2026-10-17 (UTC):**
+  - dry run 12:48 to 12:59 (637 s), passed;
+  - first registered run to 13:12 (813 s), passed;
+  - second to 13:22 (572 s), passed.
+- **Load average:** 0.65 at the start, 1.15 before the first registered run
+  and 1.27 at the end, against 8 vCPU.
+- **Chain:** height 117, curve-tree depth 1 (the daemon's count; the size
+  predictor below counts layers, so it reads the same tree as depth 2).
+
+**Determinism:** `rt_p5_classes.py compare` on the two registered runs:
+**PASS**, 36 groups (wallet, method and direction), the same message count
+in each and every matched message within tolerance. The two
+`transactions.csv` files are byte-identical.
+
+### HTTP message sizes per method (first registered run)
+
+1,474 messages; 1,500 records after splitting at 65,533 bytes.
+
+| Method | Direction | Count | Min | Median | Max | Records |
+|---|---|---:|---:|---:|---:|---:|
+| `/get_height` | request | 35 | 84 | 84 | 84 | 35 |
+| `/get_height` | response | 35 | 287 | 288 | 288 | 35 |
+| `/get_o_indexes.bin` | request | 325 | 168 | 168 | 168 | 325 |
+| `/get_o_indexes.bin` | response | 325 | 234 | 234 | 266 | 325 |
+| `/get_transactions` | request | 18 | 230 | 230 | 431 | 18 |
+| `/get_transactions` | response | 18 | 16,684 | 63,124 | 338,644 | 34 |
+| `/submit_transaction` | request | 12 | 26,599 | 104,920 | 153,688 | 22 |
+| `/submit_transaction` | response | 12 | 207 | 207 | 207 | 12 |
+| `json_rpc:get_block` | request | 325 | 201 | 203 | 204 | 325 |
+| `json_rpc:get_block` | response | 325 | 11,038 | 11,104 | 44,912 | 325 |
+| `json_rpc:get_fee_estimate` | request | 19 | 154 | 154 | 154 | 19 |
+| `json_rpc:get_fee_estimate` | response | 19 | 263 | 263 | 263 | 19 |
+| `json_rpc:get_version` | request | 3 | 161 | 161 | 161 | 3 |
+| `json_rpc:get_version` | response | 3 | 509 | 509 | 510 | 3 |
+
+### Candidate tables, by the registered rule
+
+| K | Classes | Padding | Padding / payload |
+|---:|---|---:|---:|
+| 1 | 65,535 | 91,577,059 | 1362.3% |
+| 2 | 11,357, 65,535 | 13,452,383 | 200.1% |
+| 3 | 290, 11,357, 65,535 | 1,123,745 | 16.7% |
+| 4 | 290, 11,357, 27,534, 65,535 | 629,732 | 9.4% |
+| 5 | 290, 11,357, 27,534, 52,278, 65,535 | 444,134 | 6.6% |
+| 6 | 236, 512, 11,357, 27,534, 52,278, 65,535 | 345,485 | 5.1% |
+| 7 | 236, 512, 11,144, 11,882, 27,534, 52,278, 65,535 | 257,190 | 3.8% |
+| 8 | 236, 512, 11,144, 11,882, 27,534, 44,914, 52,278, 65,535 | 190,914 | 2.8% |
+
+The registered list of what shares a submission's classes, for every `K`,
+is in `derive_registered_1.md`. It counts records of every method in
+those classes, in both directions together.
+
+### A reading the registered output does not make: direction
+
+*This is a reading of the registered output, made after it was seen. It
+changes nothing in the derivation and is reported for the decision on
+`K`.*
+
+A path observer sees which way each record travels. A submission is a
+request, from the wallet to the daemon. Counting only requests, the
+records sharing a submission's classes are:
+
+| K | Submission request records | Other requests in the same classes |
+|---:|---:|---|
+| 1, 2 | 22 | every request in the trace (725) |
+| 3, 4, 5 | 22 | `/get_transactions` ×2 |
+| 6, 7, 8 | 22 | none |
+
+Every other request in the trace is 431 bytes or smaller, and every
+submission is 26,599 bytes or larger. So in the request direction, from
+`K` = 3 on, a record of a submission's class is a submission, whatever
+the classes are. Padding hides a submission among the records going
+the same way only at `K` ≤ 2, and those tables pad the payload by 200 % or
+more.
+
+`RPC_CHANNEL.md` §4.4 (RT-O6) states the mechanism as "a submission is
+indistinguishable from a block-fetch response of the same class". In this
+trace, block-fetch responses (`json_rpc:get_block`, `/get_transactions`)
+do share a submission's classes, but they travel in the other direction.
+**This is a finding against RT-O6's premise, for the maintainer**: on this
+traffic, size classes do not hide when a wallet submits. They do hide which
+method a response answers and how large it is within its class.
+
+### Two observations on the submission
+
+- **A submission is sent hex-encoded in JSON.** For every submission in
+  the trace, the body is `14 + 2 ×` the transaction's wire length, so the
+  upload is twice the transaction.
+- **A submission's size at greater tree depth:** from the weight crate's
+  predictor, with the body encoding above.
+  - From the depth it was built at to its largest size at any depth up to
+    8, a submission grows by 2.8 % to 15.9 % (the 1 × 2 shape grows most).
+  - For a submission larger than one record, a deeper tree changes only
+    its tail record; a smaller submission is one record, which a deeper
+    tree can move to a larger class.
+  - Proof size is not monotonic in depth: for four inputs it is smaller at
+    3 layers than at 2.
+  - The per-transaction table is in `derive_registered_1.md`.
+
+### Where RT-P5's sizes part stands
+
+- **Measured, by the registered method, on the ruled host.**
+- **What remains for its own deciders:**
+  - The choice of `K`.
+  - The direction finding above, which bears on whether size classes are
+    the mechanism RT-O6 needs at all.
+- **What remains for later steps:** the record boundaries the adapter
+  actually emits, observed in RT-W9 step 5 under the flush policy
+  registered here.
+- **Reopen:** the classes are derived again from a registered mainnet
+  trace (RT-O21).
