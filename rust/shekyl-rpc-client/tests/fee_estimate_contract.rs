@@ -28,12 +28,12 @@ use shekyl_rpc_types::{FeeTier, GetFeeEstimateResponse};
 /// The vector the daemon's own parity suite pins, parsed by the client's
 /// type. Same file, both directions — which is the only reason this is a
 /// contract rather than two crates agreeing with themselves.
-const V3: &str = include_str!("../../shekyl-rpc-types/tests/vectors/rpc/get_fee_estimate_v3.json");
+const V4: &str = include_str!("../../shekyl-rpc-types/tests/vectors/rpc/get_fee_estimate_v4.json");
 
 #[test]
 fn the_daemons_captured_reply_parses_and_carries_three_tiers() {
     let reply: GetFeeEstimateResponse =
-        serde_json::from_str(V3).expect("the 3.30 reply must parse through the shared type");
+        serde_json::from_str(V4).expect("the 3.57 reply must parse through the shared type");
     assert!(reply.status.is_ok());
     let tiers = [FeeTier::Low, FeeTier::Normal, FeeTier::High];
     // Every named tier buys a different rate. A mapping that collapsed two
@@ -54,14 +54,29 @@ fn the_daemons_captured_reply_parses_and_carries_three_tiers() {
 /// compute from a scalar the tiers were supposed to replace.
 #[test]
 fn a_reply_still_carrying_the_retired_scalar_is_refused() {
-    // Built from V3, not V2: a V2 base would be refused for its four-slot
+    // Built from V4, not V2: a V2 base would be refused for its four-slot
     // array as well as the scalar, and this test would pass while no
     // longer isolating the subject it names.
-    let mut doc: serde_json::Value = serde_json::from_str(V3).unwrap();
+    let mut doc: serde_json::Value = serde_json::from_str(V4).unwrap();
     doc.as_object_mut()
         .unwrap()
         .insert("fee".to_owned(), serde_json::json!(20));
     let err = serde_json::from_value::<GetFeeEstimateResponse>(doc)
         .expect_err("the retired scalar must not deserialize");
     assert!(err.to_string().contains("fee"), "{err}");
+}
+
+/// A reply still carrying the retired `quantization_mask` is refused
+/// (3.57). The lattice is `shekyl_economics::FEE_QUANTIZATION_MASK`, read
+/// by this client's fee arithmetic and by the daemon's admission alike; a
+/// daemon that still serves one is not read as a lattice to pay on.
+#[test]
+fn a_reply_still_carrying_the_retired_mask_is_refused() {
+    let mut doc: serde_json::Value = serde_json::from_str(V4).unwrap();
+    doc.as_object_mut()
+        .unwrap()
+        .insert("quantization_mask".to_owned(), serde_json::json!(8));
+    let err = serde_json::from_value::<GetFeeEstimateResponse>(doc)
+        .expect_err("the retired mask must not deserialize");
+    assert!(err.to_string().contains("quantization_mask"), "{err}");
 }

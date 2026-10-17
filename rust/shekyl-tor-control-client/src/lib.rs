@@ -33,6 +33,7 @@
 pub mod binary;
 pub mod control;
 pub mod onion_identity;
+pub mod spawn_lock;
 
 #[cfg(test)]
 mod test_support;

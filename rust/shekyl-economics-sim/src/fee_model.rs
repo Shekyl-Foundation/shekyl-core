@@ -29,11 +29,11 @@
 
 use shekyl_economics::{
     base_block_reward, corrected_fee_ladder, fee_correction, EconomicParams, FeeLadder, TxVolume,
+    RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
 
 use crate::burden::{ordinary_tx_fee, ordinary_tx_weight};
 use crate::calibration::PerByteRate;
-use crate::fee_ladder::REF_TX_WEIGHT;
 
 /// How a run prices an ordinary transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,7 +294,7 @@ fn ladder_at(at: &FeePoint<'_>) -> FeeLadder {
     corrected_fee_ladder(
         base_reward,
         at.long_term_median,
-        REF_TX_WEIGHT,
+        RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         correction,
         at.params,
     )
@@ -303,7 +303,9 @@ fn ladder_at(at: &FeePoint<'_>) -> FeeLadder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_economics::{emission_share_at, relay_fee_floor, FeeCorrection};
+    use shekyl_economics::{
+        emission_share_at, relay_fee_floor, FeeCorrection, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+    };
     use shekyl_tx_weight::predict_weight;
 
     use crate::burden::normal_tx_shape;
@@ -334,7 +336,7 @@ mod tests {
         let floor = relay_fee_floor(
             base,
             params.full_reward_zone,
-            REF_TX_WEIGHT,
+            RELAY_FLOOR_REFERENCE_TX_WEIGHT,
             FeeCorrection::UNITY,
             &params,
         );
@@ -357,7 +359,7 @@ mod tests {
         let floor = relay_fee_floor(
             base,
             params.full_reward_zone,
-            REF_TX_WEIGHT,
+            RELAY_FLOOR_REFERENCE_TX_WEIGHT,
             FeeCorrection::UNITY,
             &params,
         );

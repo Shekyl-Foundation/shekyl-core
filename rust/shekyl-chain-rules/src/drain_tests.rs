@@ -78,6 +78,18 @@ impl<'id, F: Fn(BlockHeight) -> AtHeight<BlockOutputs>> ChainView<'id> for Outpu
     fn total_burned(&self) -> Result<shekyl_units::AtomicUnits, Infallible> {
         Ok(shekyl_units::AtomicUnits::ZERO)
     }
+    fn long_term_effective_median_at(
+        &self,
+        _: BlockHeight,
+    ) -> Result<AtHeight<shekyl_types::LongTermWeight>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
+    fn burned_through(
+        &self,
+        _: BlockHeight,
+    ) -> Result<AtHeight<shekyl_units::AtomicUnits>, Infallible> {
+        Ok(AtHeight::AboveTip)
+    }
     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
         Ok(AtHeight::AboveTip)
     }

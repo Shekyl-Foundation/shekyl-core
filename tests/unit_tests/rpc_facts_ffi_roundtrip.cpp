@@ -297,7 +297,7 @@ TEST(rpc_facts_ffi_roundtrip, pod_sizes_are_the_documented_ones)
   static_assert(offsetof(shekyl_rpc_info_chain_facts, reserved) == 157, "reserved offset");
   static_assert(sizeof(shekyl_rpc_info_status_facts) == 24, "info-status facts POD changed size");
   static_assert(sizeof(shekyl_rpc_info_peers_facts) == 32, "info-peers facts POD changed size");
-  static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 40, "fee-estimate facts POD changed size");
+  static_assert(sizeof(shekyl_rpc_fee_estimate_facts) == 32, "fee-estimate facts POD changed size");
 
   // RK-5a's three list PODs. Same reason as `shekyl_rpc_tx_entry` above: they
   // carry pointers, so a fill/check twin has nothing to compare and the

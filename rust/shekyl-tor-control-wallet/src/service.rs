@@ -198,9 +198,10 @@ pub enum ServiceFailure {
     /// [`SupervisorPolicy::bootstrap_deadline`].
     BootstrapTimeout,
     /// The incarnation (actor/child) died. Carries the reaped [`TorExit`] when the
-    /// death was observed through teardown (`Killed` = tor wedged and was
-    /// `SIGKILL`-ed — the unclean signal an operator wants), or `None` when the
-    /// exit was not observed (e.g. the readiness channel closed first).
+    /// exit was observed: `Died` when tor died first (with the signal that saw it),
+    /// `Killed` when tor wedged and was killed in teardown (the unclean signal an
+    /// operator wants), or `None` when the exit was not observed (e.g. the readiness
+    /// channel closed first).
     Exited(Option<TorExit>),
     /// A supervisor-internal fault, not a tor failure — the gate's
     /// `spawn_blocking` task panicked or was cancelled (a `JoinError`). Carries
@@ -532,8 +533,8 @@ enum IncarnationEnd {
 /// above it. Not a `SupervisorPolicy` field on purpose: it is coupled to the
 /// actor's grace window (it must exceed it), so exposing it as a free knob would
 /// invite a `reap < grace` misconfiguration that gives up on a reap that was
-/// about to succeed. On a genuine miss the loop proceeds; `kill_on_drop` and
-/// `TAKEOWNERSHIP` remain reap backstops.
+/// about to succeed. On a genuine miss the loop proceeds; `kill_on_drop` and the
+/// owning control connection, whose close exits tor, remain reap backstops.
 const REAP_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The supervisor loop (§3c). Owns policy only; the incarnation actor owns
@@ -627,8 +628,8 @@ async fn supervise(
         match end {
             IncarnationEnd::Shutdown => return,
             IncarnationEnd::Failed(mut failure) => {
-                // Attach the reaped exit to an unqualified death (`Killed` vs
-                // `Reaped` is the operator signal); other causes keep their own.
+                // Attach the reaped exit to an unqualified death (`Died`, `Killed`
+                // or `Reaped` is the operator signal); other causes keep their own.
                 if let ServiceFailure::Exited(slot) = &mut failure {
                     *slot = exit;
                 }
@@ -648,9 +649,10 @@ async fn supervise(
 }
 
 /// Stop the incarnation and **await its child being reaped**, returning the exit
-/// telemetry. The exit channel fires from `on_stop` *after* `TorChild::shutdown`
-/// completes the SIGTERM→wait→SIGKILL→reap, so awaiting it guarantees no tor
-/// lingers to lock the reused `DataDirectory` (and yields `Killed`/`Reaped`).
+/// telemetry. The exit channel fires from the actor's child watcher *after* the
+/// child is reaped (by the SIGTERM→wait→SIGKILL→reap, or at once for a tor that
+/// already died), so awaiting it guarantees no tor lingers to lock the reused
+/// `DataDirectory` (and yields `Died`, `Killed` or `Reaped`).
 ///
 /// The **whole** sequence is bounded by [`REAP_TIMEOUT`], not just the reap wait:
 /// `stop_gracefully` sends `Signal::Stop` on the actor's bounded (cap-64) mailbox,
@@ -670,8 +672,8 @@ async fn stop_and_reap(
         Ok(exit) => exit,
         Err(_timeout) => {
             // Teardown wedged past the grace budget — force the actor down so it
-            // cannot linger; the child reap is backstopped by `kill_on_drop` /
-            // `TAKEOWNERSHIP`.
+            // cannot linger; the child reap is backstopped by `kill_on_drop` and by
+            // the owning control connection, whose close exits tor.
             actor.kill();
             None
         }
@@ -1124,11 +1126,11 @@ mod tests {
             std::fs::set_permissions(&bogus, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (events, _events) = EventSink::bounded();
         let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::At(bogus),
             data_dir: dir.path().join("data"),
-            events: EventSink::new(tx),
+            events,
             policy: tiny_policy(),
             disable_network: true,
             posture: ServingPosture::Client,
@@ -1176,11 +1178,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bogus = dir.path().join("not-tor");
         std::fs::write(&bogus, b"x").unwrap();
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (events, _events) = EventSink::bounded();
         let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::At(bogus),
             data_dir: dir.path().join("data"),
-            events: EventSink::new(tx),
+            events,
             policy: tiny_policy(),
             disable_network: true,
             posture: ServingPosture::Client,
@@ -1287,11 +1289,11 @@ mod live_tests {
     async fn crash_is_survived_respawn_reaches_ready_again() {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path().join("data");
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (events, _events) = EventSink::bounded();
         let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::UncheckedForTest(tor_binary()),
             data_dir: data_dir.clone(),
-            events: EventSink::new(tx),
+            events,
             policy: SupervisorPolicy {
                 // Fast retries for the test; production defaults elsewhere.
                 backoff_base: Duration::from_millis(100),
@@ -1330,12 +1332,13 @@ mod live_tests {
         // Murder the incarnation the way a real crash would: SIGKILL, no
         // SIGTERM, no control-connection close. The unique DataDirectory arg
         // identifies exactly our child.
-        let killed = std::process::Command::new("pkill")
-            .arg("-9")
-            .arg("-f")
-            .arg(data_dir.to_str().expect("utf8 tmpdir"))
-            .status()
-            .expect("pkill runs");
+        let killed = shekyl_tor_control_client::spawn_lock::status(
+            std::process::Command::new("pkill")
+                .arg("-9")
+                .arg("-f")
+                .arg(data_dir.to_str().expect("utf8 tmpdir")),
+        )
+        .expect("pkill runs");
         assert!(killed.success(), "pkill must find the managed tor");
 
         // The supervisor must notice and retry on its own...
@@ -1376,7 +1379,7 @@ mod live_tests {
     async fn onion_is_republished_on_every_incarnation() {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path().join("data");
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (events, _events) = EventSink::bounded();
 
         // A loopback target for the onion's virtual port — it need not be
         // listening for ADD_ONION to succeed; the publish is what we test.
@@ -1396,7 +1399,7 @@ mod live_tests {
         let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::UncheckedForTest(tor_binary()),
             data_dir: data_dir.clone(),
-            events: EventSink::new(tx),
+            events,
             policy: SupervisorPolicy {
                 backoff_base: Duration::from_millis(100),
                 backoff_cap: Duration::from_secs(2),
@@ -1415,12 +1418,13 @@ mod live_tests {
         .await;
 
         // Crash it; the republish must happen again on the fresh incarnation.
-        let killed = std::process::Command::new("pkill")
-            .arg("-9")
-            .arg("-f")
-            .arg(data_dir.to_str().expect("utf8 tmpdir"))
-            .status()
-            .expect("pkill runs");
+        let killed = shekyl_tor_control_client::spawn_lock::status(
+            std::process::Command::new("pkill")
+                .arg("-9")
+                .arg("-f")
+                .arg(data_dir.to_str().expect("utf8 tmpdir")),
+        )
+        .expect("pkill runs");
         assert!(killed.success(), "pkill must find the managed tor");
 
         await_posture(&mut posture, 30, "Restarting after SIGKILL", |p| {
@@ -1449,11 +1453,11 @@ mod live_tests {
     async fn degraded_episode_clears_only_after_sustained_ready() {
         let dir = tempfile::tempdir().expect("tempdir");
         let data_dir = dir.path().join("data");
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (events, _events) = EventSink::bounded();
         let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::UncheckedForTest(tor_binary()),
             data_dir: data_dir.clone(),
-            events: EventSink::new(tx),
+            events,
             policy: SupervisorPolicy {
                 // One failure trips the alarm; a 5s sustained Ready clears it.
                 degrade_after: 1,
@@ -1484,12 +1488,13 @@ mod live_tests {
         );
 
         // Crash it → one failure → degrade_after=1 trips the sticky alarm.
-        let killed = std::process::Command::new("pkill")
-            .arg("-9")
-            .arg("-f")
-            .arg(data_dir.to_str().expect("utf8 tmpdir"))
-            .status()
-            .expect("pkill runs");
+        let killed = shekyl_tor_control_client::spawn_lock::status(
+            std::process::Command::new("pkill")
+                .arg("-9")
+                .arg("-f")
+                .arg(data_dir.to_str().expect("utf8 tmpdir")),
+        )
+        .expect("pkill runs");
         assert!(killed.success(), "pkill must find the managed tor");
 
         // The crash must actually trip the alarm (degrade_after=1) — assert the
@@ -1541,11 +1546,11 @@ mod live_tests {
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (spawns tor repeatedly)"]
     async fn bootstrap_timeout_restart_does_not_self_lock() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (events, _events) = EventSink::bounded();
         let service = WalletTorControl::spawn(WalletTorControlConfig {
             binary: TorBinarySource::UncheckedForTest(tor_binary()),
             data_dir: dir.path().join("data"),
-            events: EventSink::new(tx),
+            events,
             policy: SupervisorPolicy {
                 // Short deadline so a network-disabled tor times out fast; short
                 // backoff so a respawn would collide with the exiting child if the

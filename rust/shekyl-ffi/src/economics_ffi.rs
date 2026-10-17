@@ -419,19 +419,18 @@ pub extern "C" fn shekyl_relay_floor_lookback() -> u64 {
     shekyl_economics::RELAY_FLOOR_LOOKBACK as u64
 }
 
-/// Admission slack in basis points. Rust is the owner; pinned at zero.
-#[no_mangle]
-pub extern "C" fn shekyl_relay_admission_slack_bp() -> u32 {
-    shekyl_economics::RELAY_ADMISSION_SLACK_BP
-}
-
 /// Three-slot ladder `[economy, standard, priority]`. Economy **is** the
-/// relay floor at the same operands. The penalty-free zone is
+/// relay floor at the same operands. `w_ref` is
+/// [`shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT`], not an argument —
+/// the same move the lattice and the slack made on
+/// [`shekyl_relay_floor_admits`]. The penalty-free zone is
 /// [`shekyl_economics::EconomicParams::full_reward_zone`], not an argument.
 /// Writes three `u64`s.
 ///
 /// Returns `0` written, `-1` null `out_fees`, `-2` scalars outside the
-/// `u128` domain (rule 40: refuse rather than abort).
+/// `u128` domain (rule 40: refuse rather than abort). A `w_ref` of `0` that
+/// still overflows priority's `2·R·C` is a scalar-domain case: this boundary
+/// does not take a weight.
 ///
 /// # Safety
 ///
@@ -440,7 +439,6 @@ pub extern "C" fn shekyl_relay_admission_slack_bp() -> u32 {
 pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     base_reward: u64,
     median: u64,
-    ref_tx_weight: u64,
     c_scaled: u64,
     out_fees: *mut u64,
 ) -> i32 {
@@ -451,7 +449,7 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
     let Some(ladder) = shekyl_economics::checked_corrected_fee_ladder(
         base_reward,
         median,
-        ref_tx_weight,
+        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         shekyl_economics::FeeCorrection::from_scaled(c_scaled),
         &params,
     ) else {
@@ -466,7 +464,9 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
 }
 
 /// Relay floor `F = R·C·w_ref/M²`, floored at 1. Same function as the
-/// ladder's economy rung. The penalty-free zone is
+/// ladder's economy rung. `w_ref` is
+/// [`shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT`], not an argument.
+/// The penalty-free zone is
 /// [`shekyl_economics::EconomicParams::full_reward_zone`], not an argument.
 /// Returns `0` written, `-1` null, `-2` out of domain.
 ///
@@ -477,7 +477,6 @@ pub unsafe extern "C" fn shekyl_corrected_fee_ladder(
 pub unsafe extern "C" fn shekyl_relay_fee_floor(
     base_reward: u64,
     median: u64,
-    ref_tx_weight: u64,
     c_scaled: u64,
     out_floor: *mut u64,
 ) -> i32 {
@@ -488,7 +487,7 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
     let Some(floor) = shekyl_economics::checked_relay_fee_floor(
         base_reward,
         median,
-        ref_tx_weight,
+        shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT,
         shekyl_economics::FeeCorrection::from_scaled(c_scaled),
         &params,
     ) else {
@@ -499,7 +498,11 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
     0
 }
 
-/// Admit iff `fee >= mask_round_up(weight · min(floors)) − slack`.
+/// Admit iff `fee ≥ quantized_fee(weight, min(floors))`
+/// ([`shekyl_economics::relay_floor_admits`]). The fee lattice
+/// (`FEE_QUANTIZATION_MASK`) and the admission slack
+/// (`RELAY_ADMISSION_SLACK_BP`) are the predicate's own constants; C++
+/// passes what only it holds.
 ///
 /// `floors` is at most [`shekyl_economics::RELAY_FLOOR_WINDOW`] values;
 /// a longer window is refused (`-1`). Empty refuses. Returns `1` / `0` /
@@ -513,10 +516,8 @@ pub unsafe extern "C" fn shekyl_relay_fee_floor(
 pub unsafe extern "C" fn shekyl_relay_floor_admits(
     fee: u64,
     weight: u64,
-    mask: u64,
     floors: *const u64,
     floors_len: usize,
-    slack_bp: u32,
 ) -> i32 {
     if floors_len > shekyl_economics::RELAY_FLOOR_WINDOW {
         return -1;
@@ -526,9 +527,7 @@ pub unsafe extern "C" fn shekyl_relay_floor_admits(
     let Some(window) = (unsafe { slice_from_typed_ptr(floors, floors_len) }) else {
         return -1;
     };
-    i32::from(shekyl_economics::relay_floor_admits(
-        fee, weight, mask, window, slack_bp,
-    ))
+    i32::from(shekyl_economics::relay_floor_admits(fee, weight, window))
 }
 
 /// Advance `already_generated_coins` by a block reward.
