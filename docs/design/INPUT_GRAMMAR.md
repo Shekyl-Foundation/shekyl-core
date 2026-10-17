@@ -231,13 +231,13 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | — | `clearnet` | one-of `on` `off` | `on` | both |  |  | N (IG-F6, IG-Q3) |
 | `no-ephemeral-tor`, `tx-proxy`, `anonymous-inbound` | `tor` | one-of `managed` `operator` `off` | `managed` | both |  |  | R |
 | (`tx-proxy` endpoint) | `tor-socks` | endpoint | unset | both |  |  | R; required with `tor = operator`, unconstructible otherwise |
-| (`tx-proxy` `user:pass@`) | `tor-socks-username`, `tor-socks-password` | secret | unset | file |  |  | N; today parsed and never handed to Rust (IG-F11) |
+| (`tx-proxy` `user:pass@`) | `tor-socks-username`, `tor-socks-password` | secret | unset | file |  |  | N; carried on the dial as an RFC 1929 pair: given together or refused (`config.value.requires`), each half 1 to 255 bytes (`config.value.range`) (IG-F11) |
 | (`anonymous-inbound` onion) | `tor-onion` | peer-endpoint, onion only | unset | both |  |  | R; `tor = operator` only; one onion: a second onion on one node is a second identity an observer can link to the first, and it offers peers nothing the first does not |
 | (`anonymous-inbound` bind) | `tor-onion-listen` | endpoint | unset | both |  |  | R; required with `tor-onion` |
 | (`SHEKYL_TOR_BINARY`, environment) | `tor-file` | path | derived: `tor/tor` beside the executable, else the version-exact bundle directory under `/opt/shekyl/` (Unix) | both |  |  | N; `tor = managed` only, unconstructible otherwise; verified against the pin as the discovered binary is, with no fall-through to discovery (IG-Q41) |
 | (`tx-proxy` / `anonymous-inbound` `,N`) | — | | | |  |  | – (R5) |
 | `proxy` | `clearnet-socks` | endpoint | unset | both |  |  | R |
-| (`proxy` `user:pass@`) | `clearnet-socks-username`, `clearnet-socks-password` | secret | unset | file |  |  | N |
+| (`proxy` `user:pass@`) | `clearnet-socks-username`, `clearnet-socks-password` | secret | unset | file |  |  | N; carried on the dial as an RFC 1929 pair: given together or refused (`config.value.requires`), each half 1 to 255 bytes (`config.value.range`) |
 | `p2p-bind-ip`, `p2p-bind-ipv6-address`, `p2p-bind-port`, `p2p-bind-port-ipv6`, `p2p-use-ipv6` | `clearnet-listen` | list of endpoint | `0.0.0.0:<row p2p port>` | both |  |  | R; `none` = dial-only on clearnet |
 | `p2p-external-port` | `clearnet-advertise` | list of endpoint (global unicast; at most one per address family) | unset | both |  |  | R (Q10a; absorbs the external port; PWD-E6's capability kept) |
 | `p2p-ignore-ipv4` | — | | | |  |  | – (the listen lists state the address families) |
@@ -339,7 +339,7 @@ The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with th
 - **IG-F8 — `address` means two things** (a Shekyl address in `--start-mining`; a network location in `--add-peer`, and a URL in `shekyl-wallet-rpc --daemon-address`). §3 gives it one.
 - **IG-F9 — the RPC fail-ban scorer has no caller.** `core_rpc_server::add_host_fail` (`core_rpc_server.cpp:173`) is defined and called by nothing; the bridge's comment records it as a no-op on that path (`core_rpc_ffi.cpp:84-89`). The six callers of `add_host_fail` elsewhere (`net_node.inl:1371,1456,2741,2749`, `cryptonote_protocol_handler.inl:2567,2612`) are `node_server::add_host_fail`, the P2P function, which `--disable-rpc-ban` never touched. The switch goes (R5). The dead scorer is C++ that goes when `core_rpc_server` is deleted; this cut deletes nothing beyond the option.
 - **IG-F10 — the shipped unit** (`contrib/packaging/linux/shekyld.service:11`) passes `--non-interactive`, `--data-dir`, `--log-file` and no network; under IG-Q8 it drops the first, and `mainnet` applies.
-- **IG-F11 — SOCKS credentials never reach Rust.** `net::socks::endpoint::get` parses `user:pass@` (`parse.cpp:267-296`), nothing in `src/p2p` or `src/shekyl` reads `userinfo`, and `shekyl_zone_listen_tor` takes a host and a port only (`shekyl_ffi.h:4484-4485`).
+- **IG-F11 — SOCKS credentials reach the dial — CLOSED 2026-10-17 (#1112).** The four secret rows are carried on the SOCKS5 dial as RFC 1929 credentials, given as a pair or refused, file only, shown as `set` and never in the snapshot.
 
 ---
 
