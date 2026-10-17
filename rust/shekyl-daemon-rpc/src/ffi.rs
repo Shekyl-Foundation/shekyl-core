@@ -575,10 +575,10 @@ pub struct NetStatsFactsFfi {
 #[derive(Clone, Copy, Debug)]
 pub struct ConnectionFactsFfi {
     /// `network_address::str()`: "host:port" for ipv4, the onion for tor.
-    pub address: *const u8,
+    pub address: *const c_char,
     pub address_len: usize,
     /// `network_address::host_str()`: the host alone.
-    pub host: *const u8,
+    pub host: *const c_char,
     pub host_len: usize,
     pub connection_id: [u8; 16],
     /// Unix seconds.
@@ -613,7 +613,7 @@ pub struct ConnectionFactsFfi {
 #[derive(Clone, Copy, Debug)]
 pub struct SyncSpanFactsFfi {
     /// `network_address::str()` of the span's origin.
-    pub remote_address: *const u8,
+    pub remote_address: *const c_char,
     pub remote_address_len: usize,
     pub start_block_height: u64,
     pub nblocks: u64,
@@ -639,7 +639,7 @@ pub struct SyncSpanFactsFfi {
 pub struct PeerFactsFfi {
     /// Already resolved per address arm by the adapter — the ip string for
     /// ipv4, the bare host for ipv6, the whole `host:port` for Tor.
-    pub host: *const u8,
+    pub host: *const c_char,
     pub host_len: usize,
     /// The ipv4 address with its four octets in **network** order, as
     /// `ipv4_network_address::ip()` returns it; 0 for every other arm.

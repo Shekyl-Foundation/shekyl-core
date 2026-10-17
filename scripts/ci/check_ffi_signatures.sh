@@ -18,9 +18,9 @@
 #
 # Struct layouts are the second limb. A struct crossing the boundary is a
 # definition, not a declaration, so the signature compile cannot compare
-# it. Every struct the header defines is compared against its #[repr(C)]
-# twin (LAYOUTS) or exempted with a reason (LAYOUT_EXEMPT); see
-# ffi_layout_gate.cpp.
+# it. Every struct a header under src/ defines with the FFI prefix is
+# compared against its #[repr(C)] twin or exempted with a reason
+# (ffi_layout_gate.py GROUPS and EXEMPT); see ffi_layout_gate.cpp.
 #
 # Signature scope: the files in SURFACES below, deliberately. Full-surface generation
 # is blocked on a named cbindgen limitation (cross-crate constant re-exports
@@ -143,99 +143,19 @@ fi
 
 g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src scripts/ci/ffi_signature_gate.cpp
 
-# Struct layouts. Rust=C, one pair per struct the header defines with a
-# #[repr(C)] twin. ffi_layout_gate.py compares their member names in order
-# and writes the size, alignment, offset and type asserts
-# ffi_layout_gate.cpp compiles; see that file for the mechanism note and the
-# negative controls.
-LAYOUTS=(
-  ShekylBuffer=ShekylBuffer
-  ShekylPqcKeypair=ShekylPqcKeypair
-  ShekylPqcSignatureResult=ShekylPqcSignatureResult
-  ShekylPqcCanonicalLens=ShekylPqcCanonicalLens
-  ShekylBurnSplit=ShekylBurnSplit
-  ShekylEmissionSplit=ShekylEmissionSplit
-  ShekylOutputData=ShekylOutputData
-  ShekylPqcAuthResult=ShekylPqcAuthResult
-  ShekylCurveTreeReplicaOutput=ShekylCurveTreeReplicaOutput
-  ShekylCurveTreeReplicaTx=ShekylCurveTreeReplicaTx
-  ShekylSignResult=ShekylSignResult
-  ShekylArchivalVerifyCtx=shekyl_archival_verify_ctx
-  ShekylArchivalPidPubkey=shekyl_archival_pid_pubkey
-  ShekylArchivalAttestationVerifyCtx=shekyl_archival_attestation_verify_ctx
-  ShekylArchivalShardCoverageIn=ShekylArchivalShardCoverageIn
-  ShekylArchivalShardCoverageOut=ShekylArchivalShardCoverageOut
-  ShekylArchivalEpochCloseBond=shekyl_archival_epoch_close_bond
-  ShekylArchivalEpochCloseShard=shekyl_archival_epoch_close_shard
-  ShekylArchivalCreditPair=shekyl_archival_credit_pair
-  ShekylArchivalEmissionEpochSnapshot=shekyl_archival_emission_epoch_snapshot
-  ShekylU128=shekyl_u128
-  ShekylRelayBlob=ShekylRelayBlob
-  ShekylInboundCeiling=shekyl_inbound_ceiling
-  ShekylStemTallyRow=ShekylStemTallyRow
-  ShekylSeamAddress=shekyl_seam_address
-  ShekylSeamObserved=shekyl_seam_observed
-  ShekylSeamOpenResult=shekyl_seam_open_result
-  ShekylSeamBoardRow=shekyl_seam_board_row
-  ShekylSeamSessionCounts=shekyl_seam_session_counts_t
-  ShekylSeamHandshakeResult=shekyl_seam_handshake_result
-  ShekylRpcPeerFacts=shekyl_rpc_peer_facts
-  ShekylBanView=shekyl_ban_view
-)
-
-# Structs the header defines that the layout limb does not compare, each
-# with its reason. ShekylOwnedBuffer is C++ only: an RAII owner of a
-# ShekylBuffer, which never crosses. ShekylAllKeysBlob's array bounds are
-# shekyl-crypto-pq constants that alias shekyl-address constants that alias
-# further ones, the cross-crate limitation the FOLLOWUPS entry names; its
-# Rust layout is pinned by the struct_layout_matches test in account_ffi.rs.
-LAYOUT_EXEMPT=(ShekylOwnedBuffer ShekylAllKeysBlob)
-
-# The files defining the constants LAYOUTS structs use as array bounds.
-BOUNDS=(
-  rust/shekyl-seam/src/endpoint.rs
-  rust/shekyl-archival-retention/src/pass_anchor.rs
-)
-
-# Completeness, by name: every struct the header defines is compared or
-# exempt. A struct added to the header without a LAYOUTS row would
-# otherwise be checked by nothing.
-defined="$(grep -oE '^\s*(typedef\s+)?struct\s+[A-Za-z0-9_]+\s*(\{.*)?$' src/shekyl/shekyl_ffi.h | grep -oE 'struct\s+[A-Za-z0-9_]+' | awk '{print $2}' | sort -u || true)"
-listed="$( (printf '%s\n' "${LAYOUTS[@]#*=}"; printf '%s\n' "${LAYOUT_EXEMPT[@]}") | sort -u)"
-if [ -z "${defined}" ]; then
-  echo "error: found no struct definitions in src/shekyl/shekyl_ffi.h — the pattern is wrong" >&2
-  exit 1
-fi
-unlisted="$(comm -23 <(echo "${defined}") <(echo "${listed}"))"
-if [ -n "${unlisted}" ]; then
-  echo "error: src/shekyl/shekyl_ffi.h defines structs the layout limb neither compares nor exempts:" >&2
-  echo "${unlisted}" | sed 's/^/  /' >&2
-  exit 1
-fi
-gone="$(comm -13 <(echo "${defined}") <(echo "${listed}"))"
-if [ -n "${gone}" ]; then
-  echo "error: the layout limb lists structs src/shekyl/shekyl_ffi.h does not define:" >&2
-  echo "${gone}" | sed 's/^/  /' >&2
+# Struct layouts: ffi_layout_gate.py generates the Rust definitions,
+# checks that every crossing struct a header defines is compared or exempt,
+# compares member names, and writes the asserts ffi_layout_gate.cpp
+# compiles. Its GROUPS list is the pairs; see ffi_layout_gate.cpp for the
+# mechanism note and the negative controls. rpc_facts_ffi.h includes
+# crypto/hash.h, so the TU takes the daemon's include paths.
+read -r layouts exempt < <(python3 scripts/ci/ffi_layout_gate.py "${workdir}")
+if [ -z "${layouts:-}" ]; then
+  echo "error: the layout limb reported nothing" >&2
   exit 1
 fi
 
-: >"${workdir}/shekyl_ffi_layout_bounds.h"
-for bound in "${BOUNDS[@]}"; do
-  cbindgen --config scripts/ci/cbindgen-ffi-bounds.toml --output "${workdir}/bound.h" \
-    "${bound}" 2>"${workdir}/cbindgen.log" \
-    || { cat "${workdir}/cbindgen.log" >&2; exit 1; }
-  cat "${workdir}/bound.h" >>"${workdir}/shekyl_ffi_layout_bounds.h"
-done
+g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src -I contrib/epee/include -I external \
+  scripts/ci/ffi_layout_gate.cpp
 
-include="$(printf '"%s", ' "${LAYOUTS[@]%%=*}")"
-{ cat scripts/ci/cbindgen-ffi-layouts.toml; echo "include = [${include%, }]"; } >"${workdir}/layouts.toml"
-cbindgen --config "${workdir}/layouts.toml" --output "${workdir}/shekyl_ffi_layout_rust.h" \
-  rust/shekyl-ffi/src/lib.rs 2>"${workdir}/cbindgen.log" \
-  || { cat "${workdir}/cbindgen.log" >&2; exit 1; }
-
-layouts="$(python3 scripts/ci/ffi_layout_gate.py src/shekyl/shekyl_ffi.h \
-  "${workdir}/shekyl_ffi_layout_rust.h" "${workdir}/shekyl_ffi_layout_asserts.h" "${LAYOUTS[@]}")"
-
-g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src scripts/ci/ffi_layout_gate.cpp
-
-echo "FFI signatures: hand-written header agrees with the Rust definitions (${total} exports over ${#SURFACES[@]} files checked; $(wc -l <<<"${declared}") declarations all exported; ${layouts} struct layouts compared, ${#LAYOUT_EXEMPT[@]} exempt)"
+echo "FFI signatures: hand-written header agrees with the Rust definitions (${total} exports over ${#SURFACES[@]} files checked; $(wc -l <<<"${declared}") declarations all exported; ${layouts} struct layouts compared, ${exempt} exempt)"

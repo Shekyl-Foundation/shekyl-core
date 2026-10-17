@@ -4,15 +4,15 @@
 # BSD-3-Clause
 #
 # cbindgen config for the array bounds the struct-layout limb of the FFI
-# signature gate needs (scripts/ci/check_ffi_signatures.sh, BOUNDS). Each
+# signature gate needs (scripts/ci/ffi_layout_gate.py, BOUNDS). Each
 # file in BOUNDS defines a constant a crossing struct uses as an array
 # length. Generating it from that file keeps the bound Rust's own value:
 # a bound typed into the gate would compare the header against the gate.
+# The gate script adds `namespace` at the top: the crate's own.
 
 language = "C++"
 cpp_compat = true
 usize_is_size_t = true
-namespace = "rust_layout"
 no_includes = true
 
 [parse]

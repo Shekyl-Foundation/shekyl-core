@@ -220,11 +220,11 @@ fn path_from_bytes(bytes: Vec<u8>) -> std::path::PathBuf {
 /// # Safety
 ///
 /// `ptr` must be null or point to `len` readable bytes that outlive the call.
-unsafe fn borrowed_string(ptr: *const u8, len: usize) -> String {
+unsafe fn borrowed_string(ptr: *const std::os::raw::c_char, len: usize) -> String {
     if ptr.is_null() || len == 0 {
         return String::new();
     }
-    String::from_utf8_lossy(std::slice::from_raw_parts(ptr, len)).into_owned()
+    String::from_utf8_lossy(std::slice::from_raw_parts(ptr.cast::<u8>(), len)).into_owned()
 }
 
 /// Project one FFI entry onto its [`TxSlot`], or `None` when `where_found`

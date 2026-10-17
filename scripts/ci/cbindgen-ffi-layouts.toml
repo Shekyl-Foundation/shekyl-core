@@ -4,31 +4,29 @@
 # BSD-3-Clause
 #
 # cbindgen config for the struct-layout limb of the FFI signature gate
-# (scripts/ci/check_ffi_signatures.sh). Generates the #[repr(C)] struct
-# DEFINITIONS of the whole shekyl-ffi crate (run on its lib.rs) into
-# namespace rust_layout, where they cannot collide with the hand-written
-# definitions in src/shekyl/shekyl_ffi.h. ffi_layout_gate.cpp compares the
-# two. Constants are left out: an array bound named from another crate
-# would render as an unresolved identifier, so the gate generates those
-# bounds from the crates that define them (cbindgen-ffi-bounds.toml).
+# (scripts/ci/ffi_layout_gate.py). Generates a crate's #[repr(C)] struct
+# and enum DEFINITIONS (run on its lib.rs) into a namespace of their own,
+# where they cannot collide with the hand-written definitions in the C
+# headers. ffi_layout_gate.cpp compares the two. Constants are left out: an
+# array bound named from another crate would render as an unresolved
+# identifier, so the gate generates those bounds from the crates that
+# define them (cbindgen-ffi-bounds.toml).
 #
-# The gate script appends the `include` line to [export]: the struct names
-# from its LAYOUTS list, so a struct no function names (one crossing as
+# The gate script adds the rest per crate: `namespace` at the top, and the
+# `include` and `exclude` lines at the end of [export]. `include` names
+# the pairs' Rust structs, so a struct no function names (one crossing as
 # bytes, like the handshake result) is generated too. [export] is last for
 # that reason.
 
 language = "C++"
 cpp_compat = true
 usize_is_size_t = true
-namespace = "rust_layout"
 no_includes = true
 
 [parse]
 parse_deps = false
 
 [export]
-item_types = ["structs"]
-# Its array bounds are aliases of constants in shekyl-crypto-pq and
-# shekyl-address, which alias further constants; see the gate script's
-# LAYOUTS note.
-exclude = ["ShekylAllKeysBlob"]
+# Enums too: a member typed by a #[repr(u8)] enum is compared as its
+# underlying integer.
+item_types = ["structs", "enums"]
