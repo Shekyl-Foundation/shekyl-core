@@ -26,7 +26,7 @@
 use shekyl_chain_rules::{
     tx_against, ChainView, Fault, FormAttempt, InvalidBlock, RuleSet, TxSlot,
 };
-use shekyl_chain_store::pool::Standing;
+use shekyl_chain_store::pool::{ProvenReference, Standing};
 use shekyl_types::TxHash;
 use shekyl_wire::Transaction;
 
@@ -87,7 +87,7 @@ pub fn select<'id, V: ChainView<'id>>(
             continue;
         }
         let anchor = match held.record.standing {
-            Standing::Admitted { proven } => proven.map(|p| p.verified()),
+            Standing::Admitted { proven } => proven.map(ProvenReference::verified),
             Standing::Kept => continue,
         };
         let view = PoolView::new(parent, &spent);
