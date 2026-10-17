@@ -101,6 +101,13 @@ pub struct SubmitFacts {
     pub reference: Option<ReferenceFacts>,
     /// Dynamic per-byte fee floor parameter (moves every block — F34).
     pub fee_per_byte: u64,
+    /// The relay floor window at the connecting height (FL-R23's lookback,
+    /// `shekyl_chain_rules::relay_floor_window`), when the shim reads it:
+    /// the engine then judges the fee by the door's own predicate,
+    /// `relay_floor_admits` (CEN-M3), and `fee_per_byte` is not read for
+    /// the gate. `None` from the C++ shim, whose tip-floor rule stands
+    /// until the flip deletes it (DX-Q10; the review of #1102, S5).
+    pub fee_floor_window: Option<Vec<u64>>,
     /// Transaction weight limit (compile-time constant on Shekyl:
     /// `min_block_weight / 2 − COINBASE_BLOB_RESERVED_SIZE` = 149 400; §3.1).
     pub weight_limit: u64,

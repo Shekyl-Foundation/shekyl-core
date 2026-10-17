@@ -17,7 +17,7 @@ use shekyl_types::{BlockHeight, ChainCount};
 use crate::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::facts::{CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta};
-use crate::submit::fee::fee_meets_floor;
+use crate::submit::fee::fee_clears;
 use crate::submit::phase_a::{parse_submission, ParsedSubmission, SubmitTxKind};
 use crate::submit::verifier::verify_debit_slot_possession;
 use crate::submit::verify::TxVerifier;
@@ -393,7 +393,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // consensus and the floor is never 0, so the non-spending arm
         // terminates here today — the SP-T4a contradiction, recorded in
         // FOLLOWUPS, reproduced for parity rather than resolved.
-        if !fee_meets_floor(parsed.weight, parsed.fee, facts.fee_per_byte) {
+        if !fee_clears(parsed.weight, parsed.fee, facts) {
             return Ok(Err(RejectCause::FeeTooLow));
         }
 
@@ -575,7 +575,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         }
         // 5. Dynamic fee floor moved (F34): re-run the same arithmetic
         //    over the fresh params.
-        if !fee_meets_floor(parsed.weight, parsed.fee, fresh.fee_per_byte) {
+        if !fee_clears(parsed.weight, parsed.fee, fresh) {
             return Ok(SubmitVerdict::Rejected {
                 cause: RejectCause::FeeTooLow,
             });

@@ -1577,12 +1577,12 @@ Not E5's; found while reading the census at the pin.
   Phase C verifies what the door verifies again at commit: the swap
   either retires Phase C's crypto for the door's verdict or keeps the
   engine as the pre-lock filter it is today, and that choice is the DX
-  round's. (b) The engine's fee gate reads `fee_per_byte` at the tip
-  (`relay_floor_at`, the pre-FL-R23 `needed/50` rule) while M3 reads the
-  floor window's minimum; the shim answers a door M3 refusal as
-  `PrunedOnInsert` (`FeeTooLow`), so the door is the truth, and the
-  engine's gate wants `relay_floor_admits` over the window
-  (`relay_floor.rs`'s note). (c) `relay()` is a no-op: the relay driver
+  round's. (b) The engine's fee gate is the door's over the Rust pool:
+  the shim hands the engine the relay floor window (`fee_floor_window`)
+  and the engine judges by `relay_floor_admits`, CEN-M3's predicate, so
+  one transaction gets one fee verdict from both (the review of #1102,
+  S5); the C++ shim gives no window, and its tip-floor `needed/50` rule
+  stands until the flip deletes it (DX-Q10). (c) `relay()` is a no-op: the relay driver
   takes the pool's unpublished entries at the flip.
 
 - **The public submit endpoint discloses nothing the stem phase holds**

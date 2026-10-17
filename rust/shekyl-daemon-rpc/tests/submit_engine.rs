@@ -679,3 +679,53 @@ fn emission_claim_slot_race_classifies_double_spend_conflict() {
     );
     assert_eq!(shim.relay_count(), 0, "raced ⇒ no relay nudge");
 }
+
+/// S5 (the review of #1102): given the relay floor window, the engine's fee
+/// gate is CEN-M3's own predicate, `relay_floor_admits` — so the engine and
+/// the pool's door give one transaction one fee verdict — at a window whose
+/// floors differ by far more than the 2 % the tip-floor rule allows. A fee
+/// of exactly the requirement at the window's minimum is accepted; one
+/// lattice step below it is `FeeTooLow`. Without the window (the C++ shim)
+/// the tip-floor rule stands and refuses the first.
+#[test]
+fn with_the_window_the_engines_fee_gate_is_the_doors() {
+    use shekyl_economics::{quantized_fee, relay_floor_admits, FEE_QUANTIZATION_MASK};
+
+    let (low, tip) = (1_000, 2_000);
+    let floors = vec![tip, low, tip];
+    let weight_of = |fee| {
+        parse_submission(&hexify(&spend_tx(fee)))
+            .expect("parses")
+            .weight
+    };
+    // A fee in the varint width the requirement will have (2^21..2^28).
+    let weight = weight_of(10_000_000);
+    let exact = quantized_fee(weight, low).expect("priced");
+    assert_eq!(
+        weight_of(exact),
+        weight,
+        "the fee's varint keeps the weight"
+    );
+    let below = exact - (FEE_QUANTIZATION_MASK + 1);
+    assert_eq!(weight_of(below), weight);
+
+    let verdict = |fee, window: Option<Vec<u64>>| {
+        let hex = hexify(&spend_tx(fee));
+        let mut facts = admitting_facts(&parse_submission(&hex).expect("parses"));
+        facts.fee_per_byte = tip;
+        facts.fee_floor_window = window;
+        let (engine, _shim, _verifier) = engine(facts, CommitOutcome::Committed);
+        engine.submit(&hex, SubmitCaller::Owner).unwrap()
+    };
+    let too_low = SubmitVerdict::Rejected {
+        cause: RejectCause::FeeTooLow,
+    };
+    assert!(relay_floor_admits(exact, weight, &floors));
+    assert_eq!(
+        verdict(exact, Some(floors.clone())),
+        SubmitVerdict::Accepted
+    );
+    assert!(!relay_floor_admits(below, weight, &floors));
+    assert_eq!(verdict(below, Some(floors)), too_low.clone());
+    assert_eq!(verdict(exact, None), too_low, "the tip rule refuses it");
+}

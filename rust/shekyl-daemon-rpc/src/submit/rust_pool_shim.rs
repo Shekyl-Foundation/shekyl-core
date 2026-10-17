@@ -40,8 +40,8 @@
 //!   for the engine to classify;
 //! - refused by CEN-M3, the relay floor → [`CommitOutcome::PrunedOnInsert`],
 //!   which the engine classifies `FeeTooLow` — the engine's fee gate reads
-//!   `fee_per_byte` at the tip, the door reads the floor window's minimum
-//!   (M3), and the door is the truth; and a full pool holding nothing it
+//!   the same window by the same predicate (`fee_floor_window`), so the two
+//!   agree; and a full pool holding nothing it
 //!   would give up for the transaction (CEN-M10's rising minimum), the C++
 //!   insert-tail prune's answer;
 //! - anything else — a refusal on the bytes, or by M4/M5, after the engine's
@@ -63,8 +63,8 @@ use shekyl_archival_retention::{
     HoldingsKindScan, ShardSet,
 };
 use shekyl_chain_rules::{
-    emission_epoch_facts, relay_floor_at, release_last_served, AdmissionPolicy, AtHeight,
-    ChainView, EmissionEpochSnapshot, HeaderView, PolicyRow, RuleSet, Tip,
+    emission_epoch_facts, relay_floor_at, relay_floor_window, release_last_served, AdmissionPolicy,
+    AtHeight, ChainView, EmissionEpochSnapshot, HeaderView, PolicyRow, RuleSet, Tip,
 };
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
 use shekyl_mempool::{stateless, Admission, Arrival, Judged, Pool};
@@ -375,6 +375,13 @@ fn gather(
     else {
         return Err(ShimFault);
     };
+    // The door's fee predicate's operand: the engine judges the fee by
+    // CEN-M3's own rule over the window (the review of #1102, S5).
+    let AtHeight::Recorded(fee_floor_window) =
+        relay_floor_window(&view, connecting).map_err(|_| ShimFault)?
+    else {
+        return Err(ShimFault);
+    };
     let identity_known = in_chain.is_some() || in_pool_broadcast;
 
     let mut facts = SubmitFacts {
@@ -384,6 +391,7 @@ fn gather(
         key_image_conflicts,
         reference,
         fee_per_byte,
+        fee_floor_window: Some(fee_floor_window),
         weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT)
             .map_err(|_| ShimFault)?,
         chain_height: ChainCount::from_raw(connecting.to_raw()),
