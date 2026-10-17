@@ -134,15 +134,14 @@ async fn the_pool_file_can_be_discarded() {
     scenario.close().await;
 }
 
-/// The reconcile keeps an entry on the chain-bound half's refusal only when
-/// the policy admits it: the policy's refusal is final. Two bodies over one
-/// coinbase's image are in the file (held before the chain moved), one
-/// paying above the floor and one paying one atomic unit; a third body over
-/// the same image is mined. At open both are refused by CEN-I7. The one
-/// above the floor is kept (CEN-K10's retention); the one below it is
-/// removed, with the door's answer naming both refusals.
+/// Kept has one entry point (the review of #1102, S4): the reconcile never
+/// makes an admitted entry kept. Two bodies over one coinbase's image are
+/// in the file as admitted (held before the chain moved), one paying above
+/// the floor and one paying one atomic unit; a third body over the same
+/// image is mined. At open both are refused by CEN-I7 — the cheap one with
+/// CEN-M3 beside it, in the door's one answer — and both leave.
 #[tokio::test]
-async fn a_reconcile_keeps_a_chain_refused_entry_only_when_the_policy_admits_it() {
+async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
     use shekyl_chain_rules::{CenRow, PolicyRow};
     use shekyl_chain_store::pool::{PoolRecord, PoolStore, Standing};
     use shekyl_harness_spender::Spender;
@@ -194,21 +193,27 @@ async fn a_reconcile_keeps_a_chain_refused_entry_only_when_the_policy_admits_it(
                 .2
         })
         .await;
-    assert_eq!(reconciled.kept, vec![idp], "above the floor: kept");
+    assert!(reconciled.kept.is_empty(), "the reconcile keeps nothing");
     assert!(reconciled.admitted.is_empty());
     match reconciled.removed.as_slice() {
         [(
-            txid,
+            first,
             Removed::Refused(Judged::Chain {
-                refused,
-                policy: Some(policy),
+                refused: a,
+                policy: None,
+            }),
+        ), (
+            second,
+            Removed::Refused(Judged::Chain {
+                refused: b,
+                policy: Some(m3),
             }),
         )] => {
-            assert_eq!(*txid, idc);
-            assert_eq!(refused.rule, CenRow::I7);
-            assert_eq!(policy.rule, PolicyRow::M3);
+            assert_eq!((*first, *second), (idp, idc), "in the order held");
+            assert_eq!((a.rule, b.rule), (CenRow::I7, CenRow::I7));
+            assert_eq!(m3.rule, PolicyRow::M3);
         }
-        other => panic!("below the floor: removed on both refusals, not kept: {other:?}"),
+        other => panic!("both leave, each on the door's answer: {other:?}"),
     }
     drop(std::fs::remove_file(&path));
     scenario.close().await;

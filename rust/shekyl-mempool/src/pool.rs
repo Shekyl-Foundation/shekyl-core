@@ -72,7 +72,8 @@ pub enum Admission {
     Admitted,
     /// A returned transaction the chain-bound half refused and the policy
     /// did not: held as [`Standing::Kept`] — never relayed, never selected,
-    /// and evicted by CEN-M10 (CEN-K10).
+    /// and evicted by CEN-M10 (CEN-K10). The only way an entry becomes
+    /// kept.
     Kept,
     /// Already accounted for (CEN-M1).
     Duplicate(Duplicate),

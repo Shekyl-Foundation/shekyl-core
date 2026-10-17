@@ -14,10 +14,17 @@
 //! [`door::judge`] again, against the chain as it now stands, in the order
 //! the pool first held them (so where two entries spend one key image, the
 //! earlier keeps it). What the door admits stays; what the chain holds
-//! leaves; what the chain-bound half refuses and the policy does not is
-//! kept, never relayed and never selected, for CEN-M10 to evict — a later
-//! reorg may make it valid again (CEN-K10's retention); what the bytes or
-//! the policy refuse leaves.
+//! leaves.
+//!
+//! **Kept has one entry point**: [`Pool::admit`], for a transaction a
+//! switch returned (CEN-K10). The reconcile never makes an entry kept. An
+//! admitted entry the door now refuses leaves, whatever refused it: a
+//! relayed transaction a connect made invalid is a double spend already
+//! mined or a reference past CEN-I11's window, and neither comes back
+//! except through a switch that returns the block's own transaction — which
+//! the switch's returns offer again. A kept entry becomes admitted when the
+//! whole door admits it, leaves on a refusal on its bytes, and otherwise
+//! stays kept until CEN-M10 ages it out.
 //!
 //! No other path decides whether a held transaction is still valid, so the
 //! pool after a restart, after a switch and after a connect is the pool the
@@ -151,9 +158,13 @@ impl Pool {
                 Judged::Admitted { proven, .. } => Standing::Admitted {
                     proven: proven.map(ProvenReference::of),
                 },
-                // Kept only on the chain-bound refusal's account: a policy
-                // refusal beside it is final (door module docs).
-                Judged::Chain { policy: None, .. } => Standing::Kept,
+                // A kept entry stays kept on any refusal but its bytes'
+                // (module docs); an admitted one is never made kept.
+                Judged::Chain { .. } | Judged::Policy(_)
+                    if held.record.standing == Standing::Kept =>
+                {
+                    Standing::Kept
+                }
                 refused => {
                     changes.insert(*txid, None);
                     reconciled.removed.push((*txid, Removed::Refused(refused)));

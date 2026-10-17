@@ -155,6 +155,16 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
             )),
         "a kept entry blocks no other spend"
     );
+    // A reconcile leaves a kept entry kept: the door still refuses it on
+    // the chain-bound half, and only its age or its bytes remove it.
+    let reconciled = x
+        .read_chain(|view, rule_set| {
+            pool.reconcile(view, rule_set, &AdmissionPolicy::GENESIS)
+                .expect("reconcile")
+        })
+        .await;
+    assert_eq!(reconciled.kept, vec![txid]);
+    assert!(reconciled.removed.is_empty());
     // Past the admitted lifetime it stays; past the kept one it goes.
     let limits = Limits::GENESIS;
     let later = UnixSeconds::from_raw(now.to_raw() + limits.admitted_lifetime + 1);
