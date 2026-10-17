@@ -818,16 +818,21 @@ impl Hub {
         }
     }
 
-    /// The executor dropped the link. The row is gone after this returns.
+    /// The executor dropped the link, or the dialer released a channel it
+    /// never adopted. The row, if there was one, is gone after this
+    /// returns, and the installed dialer has retired the id
+    /// ([`Dial::retired`]).
     pub fn reap(&self, id: SocketId) {
         let dial = self.current_dial();
         {
             let mut inner = self.lock();
+            // A channel the dialer never adopted has no row: the board did
+            // not change, and nothing waits on it.
             if let Some(conn) = inner.conns.remove(&id) {
                 Self::wake_row(&conn);
+                Self::republish(&mut inner);
+                self.wake();
             }
-            Self::republish(&mut inner);
-            self.wake();
         }
         if let Some(dial) = dial {
             dial.retired(id);

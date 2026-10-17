@@ -488,11 +488,37 @@ fn a_close_between_adopt_and_the_kept_row_is_not_kept() {
 
 /// The loopback dial with a real gap: each channel carries a gap sender, and
 /// its receiver is kept so a test can see whether the sender fired. It also
-/// records each session whose pump it was asked to run.
+/// records each session whose pump it was asked to run, and each id it was
+/// told to retire. Given answers, it hands the next one to each channel it
+/// opens, as the peer would, so no test guesses a socket id.
 struct GapDial {
     inner: Loopback,
     receivers: Mutex<Vec<(SocketId, oneshot::Receiver<()>)>>,
     driven: Mutex<Vec<SocketId>>,
+    retired: Mutex<Vec<SocketId>>,
+    answers: Mutex<VecDeque<Vec<u8>>>,
+}
+
+impl GapDial {
+    fn new() -> Self {
+        Self {
+            inner: Loopback::new(Sockets::new(), SEND_CAP),
+            receivers: Mutex::new(Vec::new()),
+            driven: Mutex::new(Vec::new()),
+            retired: Mutex::new(Vec::new()),
+            answers: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    fn answering(answers: Vec<Vec<u8>>) -> Self {
+        let dial = Self::new();
+        *dial.answers.lock().expect("answers") = answers.into();
+        dial
+    }
+
+    fn retired(&self) -> Vec<SocketId> {
+        self.retired.lock().expect("retired").clone()
+    }
 }
 
 impl Dial for GapDial {
@@ -503,6 +529,9 @@ impl Dial for GapDial {
         now: Tick,
     ) -> Result<Channel, CloseCause> {
         let mut channel = self.inner.connect(endpoint, ceiling, now)?;
+        if let Some(answer) = self.answers.lock().expect("answers").pop_front() {
+            assert!(self.inner.inject(channel.open.id(), answer));
+        }
         let (sender, receiver) = oneshot::channel();
         channel.gap = Some(sender);
         self.receivers
@@ -521,6 +550,7 @@ impl Dial for GapDial {
     }
 
     fn retired(&self, id: SocketId) {
+        self.retired.lock().expect("retired").push(id);
         self.inner.retired(id);
     }
 
@@ -540,11 +570,7 @@ impl Dial for GapDial {
 fn a_kept_dial_is_established_and_its_gap_fired_before_any_strand_turn() {
     let seen: Arc<Mutex<Option<(bool, bool)>>> = Arc::new(Mutex::new(None));
     let seen_post = Arc::clone(&seen);
-    let gaps: Arc<GapDial> = Arc::new(GapDial {
-        inner: Loopback::new(Sockets::new(), SEND_CAP),
-        receivers: Mutex::new(Vec::new()),
-        driven: Mutex::new(Vec::new()),
-    });
+    let gaps = Arc::new(GapDial::new());
     let gaps_post = Arc::clone(&gaps);
     let hubs: Arc<Mutex<Option<Hub>>> = Arc::new(Mutex::new(None));
     let hubs_post = Arc::clone(&hubs);
@@ -849,4 +875,56 @@ fn an_in_flight_dial_is_named_ahead_of_an_empty_draw() {
     assert_eq!(warn_count(&text, "no candidate"), 0, "{text}");
     inject_when_open(&rig.hub, vec![reply(NETWORK, vec![])]);
     owner.join().expect("dial").expect("kept");
+}
+
+/// **Every dial the dialer does not adopt is retired** (Copilot, #1092). A
+/// confirm and a refused handshake each release their channel and retire
+/// its id on the dialer that built it, so the loopback joins its writer
+/// thread instead of holding one per dial until it is dropped. A kept dial
+/// is not retired: its row is live.
+#[test]
+fn every_dial_the_dialer_does_not_adopt_is_retired() {
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let hub = hub_with_arming(&posts);
+    let dial = Arc::new(GapDial::answering(vec![
+        reply(NETWORK, vec![]),
+        reply([9; 16], vec![]),
+        reply(NETWORK, vec![]),
+    ]));
+    hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);
+    let dialer = dialer_for(&hub);
+    let mut rng = SplitMix64::new(3);
+    for n in 1..=3 {
+        dialer
+            .admit_operator(&peer(n), Tick::new(1), &mut rng)
+            .expect("admitted");
+    }
+    let dial_once = |n: u8, aim: DialAim| {
+        dialer.dial(
+            ConnectorId::Clearnet,
+            &peer(n),
+            aim,
+            &mut SplitMix64::new(1),
+        )
+    };
+
+    assert_eq!(
+        dial_once(1, DialAim::Confirm),
+        None,
+        "a confirm is not kept"
+    );
+    assert_eq!(dial.retired().len(), 1, "the confirm's channel is retired");
+
+    assert_eq!(
+        dial_once(2, DialAim::Keep),
+        None,
+        "another network's handshake is refused"
+    );
+    assert_eq!(dial.retired().len(), 2, "the refused channel is retired");
+
+    let kept = dial_once(3, DialAim::Keep).expect("kept");
+    assert!(
+        !dial.retired().contains(&kept),
+        "a kept dial's row is live, so it is not retired"
+    );
 }
