@@ -1314,7 +1314,7 @@ against the C++ behavior); the matrix is the gate, per round-5 minor (b).
 | --- | --- | --- | --- | --- |
 | P0 | `m_timed_out_transactions` gate | `:161-167` | flagless `Failed` (defect 0.2) | **DEL** — D3; set deleted (§9.1) |
 | P1 | `unlock_time == 0` | `:204-211` | `nonzero_unlock_time` | **A** — `Malformed` |
-| P2 | Fee floor (`get_tx_fee` + `check_fee`) | `:176-192`, `blockchain.cpp:3913-3936` | `fee_too_low` | **C + D re-gate (F34)** — Rust arithmetic over snapshot `fee_per_byte` + quantization mask + the 2% acceptance buffer at C, KAT against `check_fee`; the commit shim re-runs `check_fee` against fresh params at D because the floor is per-block dynamic (§3.1 item 6) |
+| P2 | Fee floor (`get_tx_fee` + `check_fee`) | `:176-192`, `blockchain.cpp:3913-3936` | `fee_too_low` | **C + D re-gate (F34)** — Rust arithmetic over snapshot `fee_per_byte` on the fee lattice at zero slack at C (FL-R23, FL-R27), never more permissive than the commit's window minimum, held to `relay_floor_admits` (the predicate `check_fee` calls) by `submit/fee.rs`'s `admission_at_the_tip_implies_admission_over_the_window`; the commit shim re-runs `check_fee` against fresh params at D because the floor is per-block dynamic (§3.1 item 6) |
 | P3 | `tx.extra` ≤ `MAX_TX_EXTRA_SIZE` | `:194-201` | `tx_extra_too_big` | **A** — `Malformed` |
 | P4 | Pool KI spent (relay-category-aware) | `:216-227` | `double_spend` | **B/D** — snapshot fact + Phase-D re-check; verdict decided by Rust only at D (§3.1) |
 | P5 | Insert tail (meta, KI index, transient lists, DB) | `:229-366` | — | **KEEP** behind `commit_tx` (shim 2) — mechanism, not logic |

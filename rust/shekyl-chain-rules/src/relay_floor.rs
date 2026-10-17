@@ -139,10 +139,9 @@ pub fn relay_floor_at<'id, V: ChainView<'id>>(
 /// first. Fewer than `G + 1` only while the chain is shorter than `G`.
 ///
 /// **Not wired yet.** The DRS-X store flip replaces
-/// `shekyl_daemon_rpc`'s `fee_meets_floor` (the tip floor alone, with the
-/// pre-FL-R23 `needed/50` rule) with
-/// `shekyl_economics::relay_floor_admits` over this window, and deletes
-/// the C++ ring.
+/// `shekyl_daemon_rpc`'s `fee_meets_floor` (the tip floor alone, zero
+/// slack) with `shekyl_economics::relay_floor_admits` over this window,
+/// and deletes the C++ ring.
 ///
 /// # Errors
 ///
