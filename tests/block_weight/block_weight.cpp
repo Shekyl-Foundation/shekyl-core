@@ -112,7 +112,7 @@ private:
   bc.reset(new cryptonote::Blockchain(txpool)); \
   const cryptonote::test_options test_options = {window}; \
   cryptonote::Blockchain *blockchain = bc.get(); \
-  bool r = blockchain->init(new TestDB(), cryptonote::FAKECHAIN, true, &test_options, 0); \
+  bool r = blockchain->init(new TestDB(), cryptonote::FAKECHAIN, &test_options, 0); \
   if (!r) \
   { \
     fprintf(stderr, "Failed to init blockchain\n"); \

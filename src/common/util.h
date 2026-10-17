@@ -112,29 +112,6 @@ namespace tools
 #endif
   };
 
-  /*! \brief Returns the default data directory.
-   *
-   * \details Windows < Vista: C:\\Documents and Settings\\Username\\Application Data\\CRYPTONOTE_NAME
-   *
-   * Windows >= Vista: C:\\Users\\Username\\AppData\\Roaming\\CRYPTONOTE_NAME
-   *
-   * Mac: ~/Library/Application Support/CRYPTONOTE_NAME
-   *
-   * Unix: ~/.CRYPTONOTE_NAME
-   */
-  std::string get_default_data_dir();
-
-#ifdef WIN32
-  /**
-   * @brief 
-   *
-   * @param nfolder
-   * @param iscreate
-   *
-   * @return 
-   */
-  std::string get_special_folder_path(int nfolder, bool iscreate);
-#endif
 
   /*! \brief Returns the OS version string
    *

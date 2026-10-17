@@ -236,6 +236,7 @@ pub unsafe extern "C" fn shekyl_seam_board(
 
 #[cfg(test)]
 mod tests {
+    use crate::seam_ffi::shekyl_seam_set_ceiling;
     use std::ffi::c_void;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -368,10 +369,10 @@ mod tests {
             shekyl_seam_bind(
                 Arc::as_ptr(&slot).cast_mut().cast::<c_void>(),
                 Some(note_established),
-                &raw const ceiling,
             )
         };
         assert_eq!(bound, 0);
+        assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
         assert_eq!(shekyl_seam_install_loopback(), 0);
         assert_eq!(session_counts(), Ok(counts(0, 0)), "a hub with no rows");
 
@@ -477,7 +478,7 @@ mod tests {
         shekyl_seam_handler_gone(opened.id);
         shekyl_seam_reap(opened.id);
         unsafe {
-            shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+            shekyl_seam_bind(std::ptr::null_mut(), None);
         }
         assert_eq!(
             shekyl_seam_board_count(SHEKYL_CONNECTOR_CLEARNET, SHEKYL_DIRECTION_OUTBOUND),
@@ -524,7 +525,7 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         unsafe {
-            shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+            shekyl_seam_bind(std::ptr::null_mut(), None);
         }
         assert_eq!(session_counts(), Err(SHEKYL_SEAM_COUNT_ERR_NO_HUB));
         assert_eq!(

@@ -44,7 +44,8 @@ async fn dispatch_json_raw(
     body: String,
 ) -> Option<String> {
     let core = state.core.clone();
-    tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body))
+    let restricted = state.restricted;
+    tokio::task::spawn_blocking(move || core.json_endpoint(uri, &body, restricted))
         .await
         .ok()
         .flatten()
@@ -290,7 +291,6 @@ json_handler!(get_alt_blocks_hashes, "/get_alt_blocks_hashes");
 json_handler!(get_transaction_pool, "/get_transaction_pool");
 json_handler!(get_transaction_pool_hashes, "/get_transaction_pool_hashes");
 json_handler!(get_transaction_pool_stats, "/get_transaction_pool_stats");
-json_handler!(get_limit, "/get_limit");
 
 /// `/get_info` (alias `/getinfo`) — served natively (RK-5c,
 /// `docs/design/DAEMON_RPC_KV_GET_INFO.md`). The body is ignored, as the C++
@@ -381,17 +381,109 @@ mod tests {
 }
 
 // Restricted-only endpoints (restriction enforced at route registration)
-json_handler!(start_mining, "/start_mining");
+
+/// `/start_mining`: the one request that still reaches C++ carrying values
+/// the option table built (`DAEMON_CONFIG_CUTOVER.md` §2.7, IG-12).
+/// `miner_address` goes through the `mine-address` row's constructor and
+/// `threads_count` through `mine-threads`'s, so a refusal is the grammar's
+/// (IG-11), in the REST envelope with the diagnostic's text; only a request
+/// both rows accept is dispatched. The network check on the address stays
+/// the miner's, as at startup.
+pub async fn start_mining(State(state): State<Arc<AppState>>, body: String) -> impl IntoResponse {
+    match validate_start_mining(&body) {
+        Ok(()) => dispatch_json(state, "/start_mining", body)
+            .await
+            .into_response(),
+        Err(reason) => json_refused(&reason).into_response(),
+    }
+}
+
+/// The REST error envelope for a request the table refuses: a bad request,
+/// not a dispatch failure.
+fn json_refused(reason: &str) -> (StatusCode, [(&'static str, &'static str); 1], String) {
+    let envelope = shekyl_rpc_types::RestErrorEnvelope {
+        status: shekyl_rpc_types::RpcStatus("ERROR".to_owned()),
+        error: reason.to_owned(),
+    };
+    (
+        StatusCode::BAD_REQUEST,
+        [("content-type", "application/json")],
+        serde_json::to_string(&envelope).expect("plain data serializes"),
+    )
+}
+
+/// Builds the request's two values through their rows. The C++ request
+/// struct reads `miner_address` as a string and `threads_count` as an
+/// integer, so each is checked in that form.
+fn validate_start_mining(body: &str) -> Result<(), String> {
+    use shekyl_daemon_config::TABLE;
+    use shekyl_options::Source;
+    let request: serde_json::Value = if body.trim().is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(body).map_err(|e| format!("the request is not JSON: {e}"))?
+    };
+    let address = request
+        .get("miner_address")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "`miner_address` is required, as a string".to_owned())?;
+    let row = TABLE
+        .row("mine-address")
+        .expect("the table has mine-address");
+    row.kind
+        .parse_text(address)
+        .map_err(|f| f.at("mine-address", Source::Runtime).render())?;
+    let threads = request
+        .get("threads_count")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "`threads_count` is required, as a non-negative integer".to_owned())?;
+    let row = TABLE
+        .row("mine-threads")
+        .expect("the table has mine-threads");
+    // The C++ reads 0 as "the machine's count", the grammar's `auto`.
+    let text = if threads == 0 {
+        "auto".to_owned()
+    } else {
+        threads.to_string()
+    };
+    row.kind
+        .parse_text(&text)
+        .map_err(|f| f.at("mine-threads", Source::Runtime).render())?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod start_mining_tests {
+    use super::validate_start_mining;
+
+    #[test]
+    fn the_two_values_are_built_through_their_rows() {
+        assert_eq!(
+            validate_start_mining(r#"{"miner_address":"Sabc","threads_count":2}"#),
+            Ok(())
+        );
+        assert_eq!(
+            validate_start_mining(r#"{"miner_address":"Sabc","threads_count":0}"#),
+            Ok(())
+        );
+        let e = validate_start_mining(r#"{"miner_address":"","threads_count":2}"#).unwrap_err();
+        assert!(e.contains("mine-address"), "{e}");
+        let e = validate_start_mining(r#"{"miner_address":"S a","threads_count":2}"#).unwrap_err();
+        assert!(e.contains("mine-address"), "{e}");
+        let e = validate_start_mining(r#"{"miner_address":"Sabc"}"#).unwrap_err();
+        assert!(e.contains("threads_count"), "{e}");
+        let e =
+            validate_start_mining(r#"{"miner_address":"Sabc","threads_count":-1}"#).unwrap_err();
+        assert!(e.contains("threads_count"), "{e}");
+        let e = validate_start_mining("not json").unwrap_err();
+        assert!(e.contains("not JSON"), "{e}");
+    }
+}
 json_handler!(stop_mining, "/stop_mining");
 json_handler!(mining_status, "/mining_status");
 json_handler!(save_bc, "/save_bc");
 json_handler!(set_log_hash_rate, "/set_log_hash_rate");
-json_handler!(set_log_level, "/set_log_level");
-json_handler!(set_log_categories, "/set_log_categories");
 json_handler!(stop_daemon, "/stop_daemon");
-json_handler!(set_limit, "/set_limit");
-json_handler!(out_peers, "/out_peers");
-json_handler!(in_peers, "/in_peers");
 json_handler!(pop_blocks, "/pop_blocks");
 
 /// `/get_net_stats` — process start plus the global throttle counters

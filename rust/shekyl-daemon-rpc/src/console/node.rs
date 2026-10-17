@@ -147,7 +147,7 @@ struct PoolStatsReplyProvisional {
 fn fetch_pool_stats(src: &Source) -> Result<PoolStats, String> {
     let raw = match src {
         Source::Live(core) => core
-            .json_endpoint("/get_transaction_pool_stats", "{}")
+            .json_endpoint("/get_transaction_pool_stats", "{}", false)
             .ok_or_else(|| "no reply from /get_transaction_pool_stats".to_owned())?
             .into_bytes(),
         Source::Remote { .. } => src.post_remote("/get_transaction_pool_stats", b"{}".to_vec())?,

@@ -13,14 +13,13 @@ use crate::ctl_client;
 ///
 /// **A bridged leg, on purpose** (§2.1.1): `/mining_status` is RK-7's and is
 /// still served from the C++ table (`core_rpc_ffi.cpp:180`). Required fields
-/// for the reason [`GetLimitReplyProvisional`] gives — a defaulted `active`
-/// would report a mining daemon as idle.
+/// (no `#[serde(default)]`): a renamed field is an error naming it, where a
+/// defaulted `active` would report a mining daemon as idle.
 #[derive(serde::Deserialize)]
 struct MiningStatusProvisional {
     status: shekyl_rpc_types::RpcStatus,
     active: bool,
     speed: u64,
-    is_background_mining_enabled: bool,
 }
 
 /// What `show_status` could learn about mining.
@@ -49,7 +48,7 @@ enum MiningReadout {
 fn fetch_mining_status(src: &Source) -> Result<MiningReadout, String> {
     let raw = match src {
         Source::Live(core) => core
-            .json_endpoint("/mining_status", "{}")
+            .json_endpoint("/mining_status", "{}", false)
             .ok_or_else(|| "no reply from /mining_status".to_owned())?,
         Source::Remote {
             address, timeout, ..
@@ -176,15 +175,9 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     let mining_text = match &mining {
         MiningReadout::Unavailable => "mining info unavailable".to_owned(),
         MiningReadout::Syncing => "syncing".to_owned(),
-        MiningReadout::Ready(m) if m.active => format!(
-            "{}mining at {}",
-            if m.is_background_mining_enabled {
-                "smart "
-            } else {
-                ""
-            },
-            mining_speed(u128::from(m.speed))
-        ),
+        MiningReadout::Ready(m) if m.active => {
+            format!("mining at {}", mining_speed(u128::from(m.speed)))
+        }
         MiningReadout::Ready(_) => "not mining".to_owned(),
     };
     // Network hash rate as difficulty per target second. `checked_div` for
