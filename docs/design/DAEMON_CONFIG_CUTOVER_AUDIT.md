@@ -219,7 +219,8 @@ of its own, for the same reason as the negative one.
   node's own Tor address. Step 9 calls the remnant's `stop`, which
   returns at once, tears the Tor down, then joins the run thread: the
   parallel teardown. A death between start and stop is logged once from
-  a watcher on the owner's runtime (`death_watch`).
+  a watcher on the owner's runtime (`DaemonTorControl::death`), and takes
+  the Tor link down (`TSR-F1`); the stop itself is not reported.
 - **Every network owner reads its section** (`rust/shekyl-daemon/src/network.rs`).
   Two moments: `record` before the remnant is constructed, for what the
   owners read at their build when the remnant's `init` binds the seam

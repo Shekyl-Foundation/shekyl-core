@@ -9,8 +9,6 @@
 //! dialer is the strand harness: an in-memory channel, not a socket.
 //! The hub does not dial and does not build a [`shekyl_capped_stream::StreamEnds`].
 
-use std::thread::JoinHandle;
-
 use shekyl_capped_stream::Session;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::Tick;
@@ -18,6 +16,7 @@ use shekyl_transport_layer::{CloseCause, OpenSocket, SocketId};
 use tokio::sync::oneshot;
 
 use crate::endpoint::Endpoint;
+use crate::hub::Hub;
 
 /// A channel the connector already admitted and built.
 pub struct Channel {
@@ -62,9 +61,10 @@ pub trait Dial: Send + Sync {
         let _ = id;
     }
 
-    /// The synchronous connect path started the inbound pump on a thread.
-    /// The harness joins it from [`Self::retired`].
-    fn track_pump(&self, id: SocketId, pump: JoinHandle<()>) {
-        drop((id, pump));
-    }
+    /// Run the inbound pump of `id`, a session the hub adopted: post each
+    /// frame and finish the row when the reader stops. The dialer chooses
+    /// where pumps run, in both directions. Zone bind runs each as a task
+    /// on the transport runtime; the harness runs a thread it joins from
+    /// [`Self::retired`].
+    fn drive(&self, hub: &Hub, id: SocketId, session: Session);
 }

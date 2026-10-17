@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
 use shekyl_tor_control_daemon::{
-    DaemonTorConfig, DaemonTorControl, DaemonTorStartError, OnionPow, TorBinaryError,
+    DaemonTorConfig, DaemonTorControl, DaemonTorStartError, OnionPow, TorBinaryError, TorDeath,
 };
 use tokio::task::JoinHandle;
 
@@ -144,18 +144,28 @@ pub async fn publish(
     }
 }
 
-/// Logs the managed Tor's death once, when it comes: the posture is gone
-/// for this boot (ruled: no respawn until the supervisor), originated
-/// transactions stay fail-closed on the Tor zone, and a restart mints a
-/// fresh address.
+/// Watches the managed Tor's death. The zone host takes the Tor link down
+/// at once, so the dialer draws no onion it cannot reach (`TSR-F1`). An
+/// exit is also logged, once: the posture is gone for this boot (ruled: no
+/// respawn until the supervisor), originated transactions stay fail-closed
+/// on the Tor zone, and a restart mints a fresh address. The stop
+/// [`DaemonTorControl::shutdown`] makes is not a death worth reporting.
 pub fn watch_death(
     control: &DaemonTorControl,
     published: Option<String>,
     handle: &tokio::runtime::Handle,
 ) {
-    let death = control.death_watch();
+    if !shekyl_ffi::zone_ffi::watch_managed_tor(control.death()) {
+        tracing::warn!(
+            target: "global",
+            "the managed Tor's death is not watched: the zone host has no Tor route"
+        );
+    }
+    let death = control.death();
     handle.spawn(async move {
-        death.await;
+        if death.await == TorDeath::Stopped {
+            return;
+        }
         tracing::error!(
             target: "global",
             "the managed Tor died; the overlay posture is gone for this boot. {}. Originated transactions stay \
