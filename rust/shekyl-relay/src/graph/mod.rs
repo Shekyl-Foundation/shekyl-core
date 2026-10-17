@@ -468,10 +468,9 @@ pub struct Relay {
     /// Per-successor stem outcomes — §12.11's signal, **derived here rather
     /// than imported from `tx_pool`** (§38.1). Records; never judges.
     stem_watch: StemWatch,
-    /// The address-hiding class's state as last reported to the operator
-    /// (`hidden_slot`), `None` before the first report. Only a reserved map
-    /// has one.
-    hidden_class: Option<hidden_slot::HiddenClass>,
+    /// The address-hiding class's report (`hidden_slot`). Unarmed until the
+    /// first epoch rebuild. Only a reserved map arms one.
+    hidden_class_watch: hidden_slot::HiddenClassWatch,
 }
 
 impl Relay {
@@ -571,7 +570,7 @@ impl Relay {
             params,
             stems,
             noise,
-            hidden_class: None,
+            hidden_class_watch: hidden_slot::HiddenClassWatch::BeforeRebuild,
         })
     }
 
@@ -656,6 +655,10 @@ impl Relay {
         if direction == PeerDirection::Outbound {
             self.update_stems(rng);
         }
+        // The class is the registry, not the stem merge. An inbound session
+        // is not a stem candidate; noting it changes nothing once the count
+        // is taken.
+        self.note_hidden_class();
     }
 
     /// Record that `txs` were stemmed to `successor`, keyed under `source`
@@ -802,7 +805,7 @@ impl Relay {
     /// step is not entitled to make.
     pub fn on_connection_close(&mut self, id: &ConnectionId) {
         self.contexts.remove(id);
-        self.observe_hidden_class(self.hidden_outbound_count(), false);
+        self.note_hidden_class();
         // F-8 (§39): dropping the tally is the intentional answer to §33.6's
         // persistence question under a per-connection key — "no". In-flight
         // observations go too (a disconnected peer was not given its deadline).
@@ -865,9 +868,7 @@ impl Relay {
     /// does not call this. The dead slot stays until the next merge.
     pub fn update_stems<R: RelayRng + ?Sized>(&mut self, rng: &mut R) {
         let (class, rest) = self.partitioned_outbound_ids();
-        let hidden = class.len();
         self.map.merge_outbound(class, rest, rng);
-        self.observe_hidden_class(hidden, false);
     }
 
     /// Draw a wholly new stem set over `outbound` — what an epoch rollover does.
@@ -886,12 +887,16 @@ impl Relay {
         // Every pin goes with the map, the local origin's included: the next
         // origination pins afresh (§98.3). A reserved epoch keeps slot 0 for
         // the address-hiding sessions; a uniform epoch is the paper's draw.
-        self.map = if self.map.reserves_slot() {
-            self.reserved_stem_map(rng)
+        if self.map.reserves_slot() {
+            // Arm from the registry, then draw. The map constructor does not
+            // report: a rebuild is the only arm, and the constructor stays
+            // a pure function of the census.
+            self.arm_hidden_class();
+            self.map = self.reserved_stem_map(rng);
         } else {
             let outbound = self.outbound_ids();
-            EpochMap::uniform(outbound, self.stems, rng)
-        };
+            self.map = EpochMap::uniform(outbound, self.stems, rng);
+        }
     }
 
     /// Begin a new epoch at `now`: re-draw the fluff/stem role and the end time.
@@ -1294,6 +1299,7 @@ impl Relay {
                 declaration: column,
             },
         );
+        self.note_hidden_class();
     }
 }
 

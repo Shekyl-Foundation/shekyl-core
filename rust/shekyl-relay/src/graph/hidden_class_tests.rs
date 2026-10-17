@@ -3,11 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The hidden class's operator report (`hidden_slot`): reported on a change
-//! of state between empty, one and several address-hiding sessions, never
-//! once per epoch, and first at the first epoch rebuild.
+//! The hidden class's operator report (`hidden_slot`): the watch arms at
+//! the first epoch rebuild, and after that reports a change of state
+//! between empty, one and several address-hiding sessions. The notice names
+//! the class. It does not say an exhausted origin pin has resumed.
 
-use super::hidden_slot::{hidden_class_report, HiddenClass};
+use super::hidden_slot::{
+    DegradedHiddenClass, HiddenClass, HiddenClassLevel, HiddenClassLine, HiddenClassNotice,
+    HiddenClassWatch,
+};
 use super::*;
 
 use shekyl_draw_rng::SplitMix64;
@@ -30,30 +34,131 @@ fn outbound(relay: &mut Relay, byte: u8, connector: ConnectorId, rng: &mut Split
     relay.on_session_established(id(byte), PeerDirection::Outbound, connector, rng);
 }
 
+/// The census a class stands for in the transition table. Several is more
+/// than one, and the notice carries this count rather than a fixed stand-in.
+fn sessions_for(class: HiddenClass) -> usize {
+    match class {
+        HiddenClass::Empty => 0,
+        HiddenClass::One => 1,
+        HiddenClass::Several => 4,
+    }
+}
+
+/// The report the watch owes for this transition. `arm` is the epoch rebuild.
+///
+/// Before the first rebuild nothing is recorded. The first several is quiet.
+/// Every other entrance is a warning, and a later several carries the census.
+fn expected_notice(
+    previous: Option<HiddenClass>,
+    observed: HiddenClass,
+    arm: bool,
+) -> Option<HiddenClassNotice> {
+    let entered = match previous {
+        None => arm,
+        Some(class) => class != observed,
+    };
+    if !entered {
+        return None;
+    }
+    let sessions = sessions_for(observed);
+    Some(match (previous, observed) {
+        (None, HiddenClass::Several) => HiddenClassNotice::Quiet,
+        (_, HiddenClass::Several) => HiddenClassNotice::Recovered { sessions },
+        (_, HiddenClass::Empty) => HiddenClassNotice::Warn(DegradedHiddenClass::Empty),
+        (_, HiddenClass::One) => HiddenClassNotice::Warn(DegradedHiddenClass::One),
+    })
+}
+
+fn stored_after(
+    previous: Option<HiddenClass>,
+    observed: HiddenClass,
+    arm: bool,
+) -> HiddenClassWatch {
+    if previous.is_none() && !arm {
+        HiddenClassWatch::BeforeRebuild
+    } else {
+        HiddenClassWatch::Reported(observed)
+    }
+}
+
 #[test]
-fn a_report_is_made_on_a_change_of_state_and_first_at_a_rebuild() {
+fn the_watch_arms_at_the_first_rebuild_and_then_reports_a_change() {
     for observed in CLASSES {
-        assert_eq!(
-            hidden_class_report(None, observed, false),
+        for previous in [
             None,
-            "nothing is reported before the first rebuild: {observed:?}"
-        );
-        assert_eq!(
-            hidden_class_report(None, observed, true),
-            Some(observed),
-            "the first rebuild reports the state it finds: {observed:?}"
-        );
-        for previous in CLASSES {
-            for at_rebuild in [false, true] {
-                let expected = (previous != observed).then_some(observed);
+            Some(HiddenClass::Empty),
+            Some(HiddenClass::One),
+            Some(HiddenClass::Several),
+        ] {
+            for arm in [false, true] {
+                let mut watch = match previous {
+                    None => HiddenClassWatch::BeforeRebuild,
+                    Some(class) => HiddenClassWatch::Reported(class),
+                };
+                let notice = if arm {
+                    watch.arm(sessions_for(observed))
+                } else {
+                    watch.note(sessions_for(observed))
+                };
                 assert_eq!(
-                    hidden_class_report(Some(previous), observed, at_rebuild),
-                    expected,
-                    "{previous:?} -> {observed:?} (rebuild {at_rebuild})"
+                    notice,
+                    expected_notice(previous, observed, arm),
+                    "{previous:?} -> {observed:?} (rebuild {arm})"
+                );
+                assert_eq!(
+                    watch,
+                    stored_after(previous, observed, arm),
+                    "stored class after {previous:?} -> {observed:?} (rebuild {arm})"
                 );
             }
         }
     }
+}
+
+/// `Recovered` carries the census, not the table's stand-in of four.
+#[test]
+fn a_recovery_names_the_session_count() {
+    let mut watch = HiddenClassWatch::Reported(HiddenClass::One);
+    assert_eq!(
+        watch.note(7),
+        Some(HiddenClassNotice::Recovered { sessions: 7 })
+    );
+    assert_eq!(watch, HiddenClassWatch::Reported(HiddenClass::Several));
+    assert_eq!(watch.note(2), None, "several stays several");
+    assert_eq!(
+        watch.arm(2),
+        None,
+        "a rebuild that finds several says nothing"
+    );
+}
+
+/// The lines name the class. An exhausted origin pin stays `NoOwnEdge`
+/// until the epoch ends (§98.5); these lines do not say it has resumed.
+#[test]
+fn a_notice_names_the_class_and_not_the_origin_pin() {
+    assert_eq!(HiddenClassNotice::Quiet.line(), None);
+    assert_eq!(
+        HiddenClassNotice::Warn(DegradedHiddenClass::Empty).line(),
+        Some(HiddenClassLine {
+            level: HiddenClassLevel::Warn,
+            text: "no outbound connection hides this node's address, so a transaction this node originates has no address-hiding session to leave on".to_string(),
+        })
+    );
+    assert_eq!(
+        HiddenClassNotice::Warn(DegradedHiddenClass::One).line(),
+        Some(HiddenClassLine {
+            level: HiddenClassLevel::Warn,
+            text: "hop-0 edge cannot rotate: one outbound connection hides this node's address"
+                .to_string(),
+        })
+    );
+    assert_eq!(
+        HiddenClassNotice::Recovered { sessions: 3 }.line(),
+        Some(HiddenClassLine {
+            level: HiddenClassLevel::Info,
+            text: "3 outbound connections hide this node's address".to_string(),
+        })
+    );
 }
 
 /// A node with Tor configured and only clearnet peers (the default posture
@@ -137,37 +242,4 @@ fn a_uniform_map_has_no_hidden_class() {
     z.on_connection_close(&id(10));
     z.rebuild_stems(&mut rng);
     assert_eq!(z.reported_hidden_class(), None);
-}
-
-/// The close path counts the class without building it. The count agrees
-/// with the partition at every step of a mixed session set: outbound and
-/// inbound, clearnet and Tor, opened and closed.
-#[test]
-fn the_close_count_agrees_with_the_partition() {
-    let mut rng = SplitMix64::new(3);
-    let mut z = relay(&[ConnectorId::Clearnet, ConnectorId::Tor], &mut rng);
-    let agrees = |z: &Relay| {
-        assert_eq!(
-            z.hidden_outbound_count(),
-            z.partitioned_outbound_ids().0.len()
-        );
-    };
-    agrees(&z);
-    outbound(&mut z, 1, ConnectorId::Tor, &mut rng);
-    outbound(&mut z, 2, ConnectorId::Tor, &mut rng);
-    outbound(&mut z, 10, ConnectorId::Clearnet, &mut rng);
-    z.on_session_established(id(20), PeerDirection::Inbound, ConnectorId::Tor, &mut rng);
-    z.on_session_established(
-        id(21),
-        PeerDirection::Inbound,
-        ConnectorId::Clearnet,
-        &mut rng,
-    );
-    agrees(&z);
-    assert_eq!(z.hidden_outbound_count(), 2);
-    for closed in [1, 20, 10, 2, 21] {
-        z.on_connection_close(&id(closed));
-        agrees(&z);
-    }
-    assert_eq!(z.hidden_outbound_count(), 0);
 }
