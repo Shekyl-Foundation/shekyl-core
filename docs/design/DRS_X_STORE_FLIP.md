@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`DX-Q`** (questions, ruled here) and **`DX-F`** (findings). `X-` is taken by the exit-standoff family; `DX-Q` and `DX-F` are free at `d2ac8b45d`.
 **Ground:** `dev` at `d2ac8b45d` (2026-10-16); #1088 (Rust `main()`) at its PR head. Counts re-measured at the landing pin, `d2ac8b45d`: two line spans corrected in place (DX-F1's cache block, DX-F6's `RelayState`); every other count and pin held.
-**Status:** OPEN — Round 0 RULED, Rick 2026-10-16: DX-Q1…DX-Q9 accepted as recommended, and DX-Q8 amended (§3). DX-Q5's relay seam was grounded the same day (§2, DX-F6). Implementation proceeds in the order of §4.
+**Status:** OPEN — Round 0 RULED, Rick 2026-10-16: DX-Q1…DX-Q9 accepted as recommended, and DX-Q8 amended (§3). DX-Q5's relay seam was grounded the same day (§2, DX-F6). DX-Q10, the fee floor's move at the flip, was ruled with FL PR-C (#1096, 2026-10-16) and is carried here by name. Implementation proceeds in the order of §4.
 **Parent:** `DAEMON_REDB_STORE.md`. This document replaces the plan's one-line DRS-X and DRS-B rows and amends R2 (2026-10-15) where §1 says.
 
 ---
@@ -136,6 +136,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
   - the reorg path (DEL-009);
   - `rpc_facts_ffi.cpp`, `daemon_submit_ffi.cpp` and `miner.cpp`;
   - the LMDB utilities (FOLLOWUPS, IG-Q26);
+  - the C++ fee floor and its FFI (DX-Q10);
   - liblmdb from `shekyld` (DEL-004);
 - deletes every LMDB-bound C++ test, each with a sentence naming the rule it tested and where Rust covers it now;
 - applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements.
@@ -150,6 +151,30 @@ After SO-D12's deletions remove the serve-credit pass bits and the witness rows,
 - curve-root heights.
 
 Each site's semantics are named, and L14 closes. Owner: PR 2's first commit, a census-only change.
+
+### DX-Q10 — The fee floor and the served ladder move at the flip (ruled with FL PR-C)
+
+**Ruled (Rick, 2026-10-16):** the Rust floor was built in FL PR-C (#1096, landed) and is wired at the flip. Nothing here needs a ruling; it is listed so the flip PR carries it by name.
+
+**What is built and unwired at `d2ac8b45d`:**
+- `shekyl_economics::{relay_floor_from, fee_ladder_from}`, one composition of σ, b, C, R and F from one block's `FeeOperands`;
+- `shekyl_chain_rules::{fee_operands_at, relay_floor_at, relay_floor_window}`, which read those operands off a `ChainView`;
+- `shekyl_economics::relay_floor_admits(fee, weight, floors)`, FL-R23 on the fee lattice.
+
+**What the flip wires:**
+- **Admission.** The submit engine's `fee_meets_floor` (`shekyl-daemon-rpc/src/submit/fee.rs`) is replaced by `relay_floor_admits` over `relay_floor_window` at Phase C and Phase D. It currently runs the pre-FL-R23 rule against the tip floor alone with a 2 % buffer. Pool admission (DX-Q5's door) calls the same predicate. The `fee_per_byte` submit fact goes with `daemon_submit_ffi.cpp`.
+- **The estimate.** `get_fee_estimate`'s store-backed `ChainFacts` implementor (DX-Q3) answers `fee_ladder_from` at the connecting height. The C++ `get_dynamic_base_fee_estimate_2021_scaling` and its FFI go with `rpc_facts_ffi.cpp`.
+
+**What the flip deletes:**
+- `relay_floor_ring.cpp` and `relay_floor_ring.h`, with the ring's reorg hooks;
+- `Blockchain::{check_fee, get_current_fee_per_byte, relay_floor_at, fee_correction_from, fee_correction_at}`;
+- the FFI exports only they used: `shekyl_relay_fee_floor`, `shekyl_fee_correction`, `shekyl_relay_floor_lookback`, `shekyl_corrected_fee_ladder`, `shekyl_relay_floor_admits`.
+
+This discharges FOLLOWUPS "FL-R3-STORE (consumer half)".
+
+**One divergence the flip makes on purpose.** The C++ prices the burn on gross `already_generated_coins`. The Rust owner prices it on the validator's net circulating supply (FL-R16c; `FEE_LADDER_DERIVATION.md` §11.1 item 10). Quote and admission move to the net supply together. On a chain that has burned, every floor moves at the flip: down, because b falls with supply. It is a **Design** row in DX-Q8's divergence register, citing FL-R16c — expected, not a regression.
+
+**Falsifier:** after the flip, `rg -n 'relay_floor_ring|check_fee|get_current_fee_per_byte|fee_meets_floor' src rust` returns nothing outside history.
 
 ---
 
