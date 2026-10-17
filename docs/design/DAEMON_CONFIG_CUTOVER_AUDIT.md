@@ -411,8 +411,7 @@ of its own, for the same reason as the negative one.
   environment (the daemon reads none, so there is nothing to scrub). Every
   test daemon passes `--tor off`: regtest's default is the managed Tor,
   and a test daemon launching one is a hang on a machine without a Tor
-  binary; the second measurement rig's Tor-off setting is Rick's to name
-  (§5.1), this one is recorded here. The BA-T5 sync daemons take
+  binary; the inbound-cost rig passes it too (Rick, 2026-10-17). The BA-T5 sync daemons take
   `--clearnet-listen none` for no inbound and `--p2p-closed-peer` for
   their one peer. The DRS bench cannot keep DRS-D9's `safe` durability:
   the daemon takes no sync-mode row (IG-Q4, the DRS lane's) and runs the
