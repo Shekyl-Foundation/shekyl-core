@@ -181,6 +181,12 @@ ARMED_SLOW=(
 # name-check below, so the decision cannot rot silently.
 #   generate_ct2_tier_b_fixture — fixture regenerator, not a pass/fail
 #     proposition; run manually when the CT-2 Tier-B scenarios change.
+#   rt_p5::rt_p5_dry_run, rt_p5::rt_p5_registered_run — RT-P5's sizes
+#     part, a registered measurement
+#     (docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md), not a
+#     pass/fail proposition: each writes its trace under RT_P5_OUT and is
+#     run by hand when the registration says. The parser they rely on is
+#     covered by ordinary unit tests in the same module.
 #   The five walks below each call `stake_persona_to_confirmed_bond`, which
 #     submits a `post_kind` 5 JoinMarket. The C++ daemon cannot parse that
 #     byte, and the frozen verify export refuses every JoinMarket
@@ -214,6 +220,8 @@ ARMED_SLOW=(
 #         was ARMED_SLOW.
 DECIDED_DARK=(
   engine::regtest_e2e::generate_ct2_tier_b_fixture
+  engine::regtest_e2e::rt_p5::rt_p5_dry_run
+  engine::regtest_e2e::rt_p5::rt_p5_registered_run
   engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_release_accepted_and_connected
