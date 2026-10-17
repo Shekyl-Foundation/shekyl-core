@@ -33,7 +33,9 @@ Subcommands (a target is named by its gitian host triple, `--host`):
                unless `--no-fetch` is given: then a cache miss refuses. The
                release build passes `--no-fetch`.
   verify       check that `--dir` holds exactly the pinned files, each a
-               regular file with the pinned SHA-256.
+               regular file with the pinned SHA-256. For a Windows host it also
+               reads the executable's PE import table and refuses a DLL the
+               row's `imports` does not name, and any delay-load import.
 
 An `unavailable` host is not an error: `fetch` and `stage` report it and do
 nothing, and the caller branches on `disposition`. `install-dir`,
@@ -239,6 +241,26 @@ def load_pins(path):
             or file_identity(row["os"], executable) not in names
         ):
             raise Refused(f"{where}: the executable is not among the pinned files")
+        # The DLLs a Windows executable may import (TB-11). A PE image names
+        # them; no other format's row has the list, so a row elsewhere that
+        # carries one is a mistake about which reader checks it.
+        imports = row.get("imports")
+        if row["os"] == "windows":
+            if not isinstance(imports, list) or not imports:
+                problem = "is missing" if imports is None else "is not a non-empty list"
+                raise Refused(
+                    f"{where}: \"imports\" {problem}; a pinned Windows target must list "
+                    "the DLLs its executable may import"
+                )
+            folded = []
+            for name in imports:
+                if not is_plain_name(name):
+                    raise Refused(f"{where}: import {name!r} is not a plain file name")
+                folded.append(name.lower())
+            if len(set(folded)) != len(folded):
+                raise Refused(f"{where}: an import is listed twice")
+        elif "imports" in row:
+            raise Refused(f"{where}: \"imports\" is the PE import list; only a Windows row has one")
         licenses = row.get("licenses")
         if not isinstance(licenses, list) or not licenses:
             raise Refused(f"{where}: a pinned target lists the bundle's licence texts")
@@ -368,9 +390,137 @@ def source_note(doc, row):
     )
 
 
+# PE data-directory indices (Microsoft PE format, "Optional Header Data
+# Directories"): the import table, and the delay-load import descriptors.
+_PE_IMPORT_DIRECTORY = 1
+_PE_DELAY_IMPORT_DIRECTORY = 13
+# A bound on descriptors walked, so a malformed table cannot spin the reader.
+_PE_MAX_DESCRIPTORS = 4096
+
+
+def pe_imports(data, where):
+    """The DLL names a PE image imports: `(imports, delay_imports)`, each in
+    table order.
+
+    Only the headers, the section table and the two import directories are
+    read. Anything this reader cannot follow is a refusal, not an empty list:
+    a table it could not parse is not a table that names nothing.
+    """
+
+    def u16(offset):
+        if offset < 0 or offset + 2 > len(data):
+            raise Refused(f"{where}: truncated PE image")
+        return int.from_bytes(data[offset : offset + 2], "little")
+
+    def u32(offset):
+        if offset < 0 or offset + 4 > len(data):
+            raise Refused(f"{where}: truncated PE image")
+        return int.from_bytes(data[offset : offset + 4], "little")
+
+    def u64(offset):
+        if offset < 0 or offset + 8 > len(data):
+            raise Refused(f"{where}: truncated PE image")
+        return int.from_bytes(data[offset : offset + 8], "little")
+
+    if data[:2] != b"MZ":
+        raise Refused(f"{where}: not a PE image (no MZ header)")
+    pe = u32(0x3C)
+    if data[pe : pe + 4] != b"PE\0\0":
+        raise Refused(f"{where}: not a PE image (no PE signature)")
+    coff = pe + 4
+    section_count = u16(coff + 2)
+    optional_size = u16(coff + 16)
+    optional = coff + 20
+    magic = u16(optional)
+    if magic == 0x10B:  # PE32
+        image_base = u32(optional + 28)
+        directory_count, directories = u32(optional + 92), optional + 96
+    elif magic == 0x20B:  # PE32+
+        image_base = u64(optional + 24)
+        directory_count, directories = u32(optional + 108), optional + 112
+    else:
+        raise Refused(f"{where}: unknown PE optional-header magic {magic:#x}")
+
+    sections = []
+    table = optional + optional_size
+    for i in range(section_count):
+        header = table + 40 * i
+        virtual_size, virtual_address = u32(header + 8), u32(header + 12)
+        raw_size, raw_offset = u32(header + 16), u32(header + 20)
+        sections.append((virtual_address, max(virtual_size, raw_size), raw_offset, raw_size))
+
+    def offset_of(rva):
+        for virtual_address, span, raw_offset, raw_size in sections:
+            if virtual_address <= rva < virtual_address + span:
+                delta = rva - virtual_address
+                if delta >= raw_size:
+                    break
+                return raw_offset + delta
+        raise Refused(f"{where}: RVA {rva:#x} is not backed by any section")
+
+    def name_at(rva):
+        start = offset_of(rva)
+        end = data.find(b"\0", start, start + 256)
+        if end < 0:
+            raise Refused(f"{where}: an imported DLL name at RVA {rva:#x} is unterminated")
+        return data[start:end].decode("ascii", errors="strict")
+
+    def directory(index):
+        if index >= directory_count:
+            return 0, 0
+        entry = directories + 8 * index
+        return u32(entry), u32(entry + 4)
+
+    def walk(index, descriptor_size, name_field):
+        rva, size = directory(index)
+        if rva == 0 or size == 0:
+            return []
+        names = []
+        base = offset_of(rva)
+        for i in range(_PE_MAX_DESCRIPTORS):
+            descriptor = data[base + descriptor_size * i : base + descriptor_size * (i + 1)]
+            if len(descriptor) < descriptor_size:
+                raise Refused(f"{where}: an import table runs past the end of the image")
+            if not any(descriptor):
+                return names
+            name_rva = int.from_bytes(descriptor[name_field : name_field + 4], "little")
+            # A delay-load descriptor whose attributes word is zero is the
+            # pre-VC7 form, whose name field is a virtual address.
+            if index == _PE_DELAY_IMPORT_DIRECTORY and descriptor[0:4] == b"\0\0\0\0":
+                name_rva -= image_base
+            names.append(name_at(name_rva))
+        raise Refused(f"{where}: an import table has no terminating descriptor")
+
+    try:
+        return (
+            walk(_PE_IMPORT_DIRECTORY, 20, 12),
+            walk(_PE_DELAY_IMPORT_DIRECTORY, 32, 4),
+        )
+    except UnicodeDecodeError as exc:
+        raise Refused(f"{where}: an imported DLL name is not ASCII") from exc
+
+
+def check_imports(data, where, row):
+    """Windows: the executable imports only the DLLs its row names, and
+    delay-loads nothing (TB-11). Names compare as the Windows loader does,
+    case-folded."""
+    allowed = {name.lower() for name in row["imports"]}
+    imports, delayed = pe_imports(data, where)
+    if delayed:
+        raise Refused(
+            f"{where} delay-loads {', '.join(delayed)}; the pin allows no delay-load import"
+        )
+    unlisted = [name for name in imports if name.lower() not in allowed]
+    if unlisted:
+        raise Refused(
+            f"{where} imports {', '.join(unlisted)}, which the pin's import list does not name"
+        )
+
+
 def check_directory(directory, row):
     """The daemon's rule, applied before packing: exactly the pinned files,
-    each a regular file with the pinned digest."""
+    each a regular file with the pinned digest. A Windows executable also
+    imports only what its row lists (`check_imports`)."""
     if not directory.is_dir():
         raise Refused(f"{directory} is not a directory")
     pinned = {entry["name"]: entry["sha256"] for entry in row["files"]}
@@ -395,6 +545,9 @@ def check_directory(directory, row):
     exe_mode = os.stat(directory / row["executable"]).st_mode
     if os.name == "posix" and not exe_mode & 0o111:
         raise Refused(f"{directory / row['executable']} is not executable")
+    if row["os"] == "windows":
+        executable = directory / row["executable"]
+        check_imports(executable.read_bytes(), str(executable), row)
 
 
 def stage(doc, row, sources, dest, licenses, offline=False):
@@ -429,6 +582,10 @@ def stage(doc, row, sources, dest, licenses, offline=False):
                     f"{entry['name']} in {tarball.name} does not match its pin: "
                     f"expected sha256 {entry['sha256']}, found {actual}"
                 )
+            if row["os"] == "windows" and file_identity(
+                row["os"], entry["name"]
+            ) == file_identity(row["os"], row["executable"]):
+                check_imports(data, f"{entry['name']} in {tarball.name}", row)
             staged.append((entry["name"], data))
         texts = [(Path(member).name, read_member(tar, member)) for member in row["licenses"]]
 

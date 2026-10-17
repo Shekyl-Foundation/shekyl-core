@@ -1,7 +1,7 @@
 # Bundled-Tor integration lane (2d-2 SP-T0; TOR_BUNDLE_DISTRIBUTION.md TB-6 to
-# TB-10). Manual-dispatch because it needs a real, network-reaching `tor` (the
+# TB-11). Manual-dispatch because it needs a real, network-reaching `tor` (the
 # unit lane only compile-checks the `#[ignore]`d live tests). For each pinned
-# Linux target, against ONE GPG-verified Expert Bundle, it runs:
+# target, Linux and Windows, against ONE GPG-verified Expert Bundle, it runs:
 #
 #  1. pin-match (SP-T0c) — the `bundled_tor_matches_recorded_pin` KAT is
 #     `#[ignore]`d on the unit lane, so without this a mistranscribed digest in
@@ -11,13 +11,15 @@
 #     Developers key → stage exactly the pinned files with the packaging tool
 #     → prove the staged directory passes the gate compiled into the binary.
 #     The staging step is the one the release build runs, so this lane is also
-#     where that tool meets a real bundle.
+#     where that tool meets a real bundle; on Windows that includes reading
+#     tor.exe's import table against the row's `imports` (TB-11).
 #  2. live lifecycle (SP-T0a/b + DQ-T0.6) — the `--lib` `#[ignore]`d actor +
 #     supervisor tests (managed spawn/reap, handshake, crash-respawn, reap-race
 #     self-lock, degraded-episode recovery) against that same staged bundle,
 #     launched as a user's is: cleared environment, the loader pointed at the
 #     staged directory. These are the crash/reap/hang guarantees whose whole
-#     point is that a unit test cannot reach them.
+#     point is that a unit test cannot reach them. On Windows this is TB-11's
+#     launch test: the pinned tor.exe started by Shekyl's own launcher.
 #  3. daemon ephemeral-onion lifecycle (PWD-E7) — `shekyl-tor-control-daemon`'s
 #     `#[ignore]`d boot-publish-rotate test: two boots, two different onion
 #     addresses, real reaps.
@@ -34,9 +36,17 @@
 #
 # NOT covered here (stated, not silently skipped): `tests/circuit_isolation.rs`
 # (DQ-T0.4) needs `tor-gencert` to stand up its hermetic owned-net directory
-# authority, and the Tor Expert Bundle ships only `tor` (no `tor-gencert`), so
+# authority, and the Linux Expert Bundle ships only `tor` (no `tor-gencert`), so
 # that measurement has no CI binary source yet — it runs on a dev box with a
 # full tor install until a gencert source is wired.
+#
+# Each entry carries its own floors: the number of live tests that crate runs
+# on that platform. The wallet runs fewer on Windows: three of its respawn
+# tests are `#[cfg(unix)]` (docs/FOLLOWUPS.md). The named tests each step
+# greps for must pass on every entry.
+#
+# Every step runs in bash, Git for Windows' on the Windows runner, so one
+# script serves both.
 #
 # Dispatch after every pin bump, and freely otherwise — it is read-only.
 
@@ -59,15 +69,56 @@ jobs:
           - label: linux-x86_64
             host: x86_64-linux-gnu
             runner: ubuntu-latest
+            exe: tor
+            client_floor: 8
+            wallet_floor: 4
+            daemon_floor: 2
           - label: linux-aarch64
             host: aarch64-linux-gnu
             runner: ubuntu-24.04-arm
+            exe: tor
+            client_floor: 8
+            wallet_floor: 4
+            daemon_floor: 2
+          - label: windows-x86_64
+            host: x86_64-w64-mingw32
+            runner: windows-latest
+            exe: tor.exe
+            client_floor: 8
+            wallet_floor: 1
+            daemon_floor: 2
     env:
       HOST: ${{ matrix.target.host }}
-      # The staged bundle: exactly the pinned files, in a directory of its own.
-      TOR_DIR: ${{ github.workspace }}/tor-staged/tor
+      TOR_EXE: ${{ matrix.target.exe }}
+    defaults:
+      run:
+        shell: bash
     steps:
+      # The Windows runner's git checks text out with CRLF line endings, and
+      # bash reads the `\r` of a CRLF script as part of each command. The
+      # scripts this lane runs are checked out as committed.
+      - name: check out with committed line endings (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v5
+
+      - name: paths and python3
+        run: |
+          # The staged bundle: exactly the pinned files, in a directory of its
+          # own. On Windows the path is written D:/a/..., which Git's bash,
+          # Python and the Rust tests all read as the same file.
+          ws="$GITHUB_WORKSPACE"
+          if [ "$RUNNER_OS" = Windows ]; then
+            ws="$(cygpath -m "$ws")"
+            # The runner's Python is `python`; the steps below say `python3`,
+            # as the release build does.
+            mkdir -p "$RUNNER_TEMP/python3-shim"
+            printf '#!/bin/sh\nexec python "$@"\n' > "$RUNNER_TEMP/python3-shim/python3"
+            chmod +x "$RUNNER_TEMP/python3-shim/python3"
+            echo "$RUNNER_TEMP/python3-shim" >> "$GITHUB_PATH"
+          fi
+          echo "TOR_DIR=$ws/tor-staged/tor" >> "$GITHUB_ENV"
 
       - name: fetch the pinned Expert Bundle + signature
         run: |
@@ -88,7 +139,19 @@ jobs:
           # the same value (TOR_SIGNING_KEY_FPR).
           TOR_FPR="$(python3 -c 'import json; print(json.load(open("config/tor_pins.json"))["signing_key_fingerprint"])')"
           test "${#TOR_FPR}" -eq 40
-          gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org
+          gpg --version
+          # WKD first: the key from torproject.org's own web key directory.
+          # If this gpg cannot do WKD (Git for Windows' build is the one in
+          # question), fetch the key by its full fingerprint from
+          # keys.openpgp.org instead. Either way the source only supplies the
+          # key: the verdict is the VALIDSIG check below, which accepts a
+          # signature only when its primary key is the pinned fingerprint.
+          if gpg --auto-key-locate nodefault,wkd --locate-keys torbrowser@torproject.org; then
+            echo "::notice title=Tor signing key::imported by WKD ($RUNNER_OS)"
+          else
+            gpg --keyserver hkps://keys.openpgp.org --recv-keys "$TOR_FPR"
+            echo "::notice title=Tor signing key::WKD failed; imported by fingerprint from keys.openpgp.org ($RUNNER_OS)"
+          fi
           gpg --status-fd 1 --verify "$BUNDLE.asc" "$BUNDLE" | tee verify.out
           # Require VALIDSIG terminating in the pinned primary fingerprint —
           # GOODSIG alone matches any key the keyring happens to hold.
@@ -101,7 +164,7 @@ jobs:
           # daemon applies. The raw extraction is never used: it carries
           # pluggable_transports/, which the gate refuses.
           python3 scripts/release/tor_bundle.py stage --host "$HOST" --sources tor-sources \
-            --dest "$TOR_DIR" --licenses "$GITHUB_WORKSPACE/tor-staged/tor-licenses"
+            --dest "$TOR_DIR" --licenses "${TOR_DIR%/tor}/tor-licenses"
           python3 scripts/release/tor_bundle.py verify --host "$HOST" --dir "$TOR_DIR"
 
       - uses: dtolnay/rust-toolchain@1.94.0
@@ -121,8 +184,8 @@ jobs:
         run: |
           set -o pipefail
           cd rust
-          SHEKYL_TEST_PINNED_TOR_BINARY="$TOR_DIR/tor" \
-          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/tor" \
+          SHEKYL_TEST_PINNED_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
             ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-client ignored-control.out
           # The pin-match KAT is this lane's founding guarantee (a mistranscribed
           # pin otherwise fails closed for every user at first managed
@@ -130,57 +193,52 @@ jobs:
           # count held. `--test-threads=1` prints one "test <name> ... ok" line.
           grep -qE '(^|[[:space:]])binary::tests::bundled_tor_matches_recorded_pin \.\.\. ok$' ignored-control.out
           # And guard the FULL set — not just that one — against a silent
-          # coverage drop. Floor = this crate's current linux ignored
-          # count (8: pin + 6 actor + 1 launch). `-ge` so a new live test does not
-          # fail the lane before this floor is raised with it. Lower the
-          # floor only when a test is deliberately removed.
-          passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored-control.out | head -1)
-          echo "ran ${passed:-0} pinned-tor control tests"
-          [ "${passed:-0}" -ge 8 ]
+          # coverage drop. Floor = this crate's current ignored count on the
+          # entry's platform (8 on every entry: pin + 6 actor + 1 launch).
+          # `-ge` so a new live test does not fail the lane before this floor
+          # is raised with it. Lower the floor only when a test is
+          # deliberately removed. `sed ... q`, not a pipe into `head`: the
+          # first summary line, with no pipeline to lose a status (rule 46).
+          passed=$(sed -n '/^test result: ok\. [0-9]* passed/{s/^test result: ok\. \([0-9]*\) passed.*/\1/p;q;}' ignored-control.out)
+          echo "ran ${passed:-0} pinned-tor control tests (floor ${{ matrix.target.client_floor }})"
+          [ "${passed:-0}" -ge ${{ matrix.target.client_floor }} ]
 
       - name: live supervisor lifecycle (shekyl-tor-control-wallet)
         run: |
           set -o pipefail
           cd rust
-          SHEKYL_TEST_PINNED_TOR_BINARY="$TOR_DIR/tor" \
-          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/tor" \
+          SHEKYL_TEST_PINNED_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
             ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-wallet ignored.out
-          # Floor = the supervisor's current linux ignored count (4:
-          # bootstrap-timeout, crash-respawn, degraded-episode, onion-republish).
-          # Same `-ge` discipline as above.
-          passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored.out | head -1)
-          echo "ran ${passed:-0} pinned-tor supervisor tests"
-          [ "${passed:-0}" -ge 4 ]
+          # Floor = the supervisor's current ignored count on the entry's
+          # platform (Linux 4: bootstrap-timeout, crash-respawn,
+          # degraded-episode, onion-republish; Windows 1, the other three
+          # being `#[cfg(unix)]`). Same `-ge` discipline as above.
+          passed=$(sed -n '/^test result: ok\. [0-9]* passed/{s/^test result: ok\. \([0-9]*\) passed.*/\1/p;q;}' ignored.out)
+          echo "ran ${passed:-0} pinned-tor supervisor tests (floor ${{ matrix.target.wallet_floor }})"
+          [ "${passed:-0}" -ge ${{ matrix.target.wallet_floor }} ]
           # No tor WE launched may survive the run (the reap/shutdown guarantee).
-          # Match only processes whose cmdline STARTS with this lane's tor binary
-          # (`argv[0] = <path>/tor <args…>`), so neither an unrelated `tor` on the
-          # runner nor a shell that merely references the path can trip it. The
-          # supervisor awaits the reap, but the process table can lag a beat, so
-          # give a bounded settle before asserting a real (persistent) orphan.
-          orphan="^$TOR_DIR/tor "
-          for _ in 1 2 3 4 5; do pgrep -f "$orphan" >/dev/null || break; sleep 1; done
-          ! pgrep -af "$orphan"
+          ../scripts/ci/check_no_orphan_tor.sh "$TOR_DIR/$TOR_EXE"
 
       - name: live ephemeral-onion lifecycle (shekyl-tor-control-daemon)
         run: |
           set -o pipefail
           cd rust
-          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/tor" \
+          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
             ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-daemon ignored-daemon.out
           # The PWD-E7 posture end-to-end: spawn → bootstrap → ADD_ONION with
           # DiscardPK → ServiceID verified → bounded teardown with a real reap,
           # twice, asserting the two boots publish DIFFERENT addresses (the
           # ephemeral property observed, not asserted), plus the blocking
           # facade on a plain thread (the FFI consumer's exact shape). Floor =
-          # this crate's current ignored count (2). `-ge` so adding a live
-          # test never breaks the lane; bump only on a deliberate removal.
+          # this crate's current ignored count (2, on every platform). `-ge` so
+          # adding a live test never breaks the lane; bump only on a
+          # deliberate removal.
           grep -qE '(^|[[:space:]])ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots \.\.\. ok$' ignored-daemon.out
           grep -qE '(^|[[:space:]])blocking::tests::blocking_facade_full_lifecycle_from_plain_thread \.\.\. ok$' ignored-daemon.out
-          passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored-daemon.out | head -1)
-          echo "ran ${passed:-0} pinned-tor daemon tests"
-          [ "${passed:-0}" -ge 2 ]
+          passed=$(sed -n '/^test result: ok\. [0-9]* passed/{s/^test result: ok\. \([0-9]*\) passed.*/\1/p;q;}' ignored-daemon.out)
+          echo "ran ${passed:-0} pinned-tor daemon tests (floor ${{ matrix.target.daemon_floor }})"
+          [ "${passed:-0}" -ge ${{ matrix.target.daemon_floor }} ]
           # Same no-orphan guarantee as the wallet step: a failed daemon start
           # tears its incarnation down before returning, and shutdown reaps.
-          orphan="^$TOR_DIR/tor "
-          for _ in 1 2 3 4 5; do pgrep -f "$orphan" >/dev/null || break; sleep 1; done
-          ! pgrep -af "$orphan"
+          ../scripts/ci/check_no_orphan_tor.sh "$TOR_DIR/$TOR_EXE"
