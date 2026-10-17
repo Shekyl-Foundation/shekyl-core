@@ -458,7 +458,13 @@ blocks the chain path. The runner:
   (IG-Q5), with no shell;
 - clears the environment, the rule the Tor launcher already follows
   ([`rust/shekyl-tor-control-client/src/control/actor.rs:883`](../../rust/shekyl-tor-control-client/src/control/actor.rs));
-- gives the child a null standard input and no inherited descriptors;
+- gives the child a null standard input and no inherited descriptors:
+  on Unix its `pre_exec` marks every descriptor from 3 up close-on-exec
+  (`shekyl-tor-control-client`'s `inherit`), because C++ in the same
+  process opens sockets and files without that flag; the managed Tor's
+  launch does the same and then clears its control end alone. Marking,
+  not closing, keeps the channel std uses to report a failed `exec`. The
+  gate is `scripts/ci/check_spawn_children_inherit_stdio_only.py`;
 - reaps its own children and never changes a process-wide signal
   disposition (DC-F12);
 - keeps at most one command in flight per kind; an event that arrives

@@ -129,14 +129,17 @@ jobs:
           # launch) — assert it specifically ran and PASSED, not merely that some
           # count held. `--test-threads=1` prints one "test <name> ... ok" line.
           grep -qE '(^|[[:space:]])binary::tests::bundled_tor_matches_recorded_pin \.\.\. ok$' ignored-control.out
+          # The managed tor inherits its control end and nothing else of the
+          # launching process (DAEMON_CONFIG_CUTOVER.md §2.10).
+          grep -qE '(^|[[:space:]])control::actor::tests::the_managed_tor_inherits_its_control_end_and_nothing_else \.\.\. ok$' ignored-control.out
           # And guard the FULL set — not just that one — against a silent
           # coverage drop. Floor = this crate's current linux ignored
-          # count (8: pin + 6 actor + 1 launch). `-ge` so a new live test does not
+          # count (9: pin + 7 actor + 1 launch). `-ge` so a new live test does not
           # fail the lane before this floor is raised with it. Lower the
           # floor only when a test is deliberately removed.
           passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored-control.out | head -1)
           echo "ran ${passed:-0} pinned-tor control tests"
-          [ "${passed:-0}" -ge 8 ]
+          [ "${passed:-0}" -ge 9 ]
 
       - name: live supervisor lifecycle (shekyl-tor-control-wallet)
         run: |
