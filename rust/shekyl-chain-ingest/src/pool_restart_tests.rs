@@ -1,0 +1,135 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The pool file across a restart (DRS-E5 PR-b b5; `DRS_E1_SPOOL.md` SPL-7,
+//! `SPL-Q5`, `SPL-Q8`): the reconcile at open brings what the file held up
+//! to the chain as it stands, and the file is discardable — a node that
+//! loses it loses only the transactions it held.
+
+use shekyl_chain_rules::AdmissionPolicy;
+use shekyl_chain_store::pool::PoolOpen;
+use shekyl_mempool::{Admission, Arrival, Pool, Removed};
+use shekyl_types::UnixSeconds;
+
+use crate::pool_door_tests::{matured, paying_the_floor};
+use crate::test_support::tmp;
+
+/// Two spends held; the node stops; a block mines one while the pool file
+/// is closed (the chain committed, the pool did not — SPL-7's crash
+/// between the two commits); at open the reconcile removes the mined one
+/// from memory and from the file, keeps the other admitted with its
+/// public bit, and a second open finds the file already reconciled.
+#[tokio::test]
+async fn a_restart_reconciles_the_pool_file_against_the_chain() {
+    let (mut scenario, mined) = matured("pool-restart").await;
+    let a = paying_the_floor(&mut scenario, &mined, 0).await;
+    let b = paying_the_floor(&mut scenario, &mined, 1).await;
+    let (ida, idb) = (a.txid_parts().hash, b.txid_parts().hash);
+    let path = tmp("pool-restart-pool");
+    let policy = AdmissionPolicy::GENESIS;
+    scenario
+        .read_chain(|view, rule_set| {
+            let (mut pool, how, _) = Pool::open(&path, view, rule_set, &policy).expect("open");
+            assert_eq!(how, PoolOpen::Created);
+            for tx in [a.clone(), b] {
+                assert_eq!(
+                    pool.admit(
+                        tx,
+                        Arrival::Relayed,
+                        UnixSeconds::from_raw(1),
+                        view,
+                        rule_set,
+                        &policy
+                    )
+                    .expect("no fault"),
+                    Admission::Admitted
+                );
+            }
+            assert!(pool.fluffed(&idb).expect("publish"));
+        })
+        .await;
+    // The chain moves while the pool is closed.
+    let _mined = scenario
+        .mine_listing(vec![a])
+        .await
+        .unwrap_or_else(|o| panic!("a connects: {o}"));
+    let (first, second) = scenario
+        .read_chain(|view, rule_set| {
+            let (pool, how, reconciled) = Pool::open(&path, view, rule_set, &policy).expect("open");
+            assert_eq!(how, PoolOpen::Opened);
+            let held = (
+                pool.record(&ida).is_some(),
+                pool.record(&idb).map(|r| r.public),
+            );
+            drop(pool);
+            let first = (reconciled, held);
+            let (_, _, again) = Pool::open(&path, view, rule_set, &policy).expect("reopen");
+            (first, again)
+        })
+        .await;
+    let (reconciled, held) = first;
+    assert_eq!(reconciled.removed, vec![(ida, Removed::Mined)]);
+    assert_eq!(reconciled.admitted, vec![idb]);
+    assert_eq!(held, (false, Some(true)), "a gone, b held and still public");
+    assert!(
+        second.removed.is_empty(),
+        "the file was reconciled the first time"
+    );
+    assert_eq!(second.admitted, vec![idb]);
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
+/// The file is discardable (`SPL-Q8`): removed between runs, the pool opens
+/// empty on a fresh file, the chain is untouched, and the transaction the
+/// lost file held is admitted again when it arrives again.
+#[tokio::test]
+async fn the_pool_file_can_be_discarded() {
+    let (mut scenario, mined) = matured("pool-discard").await;
+    let spend = paying_the_floor(&mut scenario, &mined, 0).await;
+    let path = tmp("pool-discard-pool");
+    let policy = AdmissionPolicy::GENESIS;
+    let digest_before = scenario.digest().await.expect("digest");
+    scenario
+        .read_chain(|view, rule_set| {
+            let (mut pool, _, _) = Pool::open(&path, view, rule_set, &policy).expect("open");
+            pool.admit(
+                spend.clone(),
+                Arrival::Relayed,
+                UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("no fault");
+        })
+        .await;
+    std::fs::remove_file(&path).expect("the operator discards the pool file");
+    let readmitted = scenario
+        .read_chain(|view, rule_set| {
+            let (mut pool, how, reconciled) =
+                Pool::open(&path, view, rule_set, &policy).expect("open");
+            assert_eq!(how, PoolOpen::Created, "a fresh file");
+            assert!(pool.is_empty() && reconciled.removed.is_empty());
+            pool.admit(
+                spend,
+                Arrival::Relayed,
+                UnixSeconds::from_raw(2),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("no fault")
+        })
+        .await;
+    assert_eq!(readmitted, Admission::Admitted);
+    assert_eq!(
+        scenario.digest().await.expect("digest"),
+        digest_before,
+        "the chain never read the pool file"
+    );
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
