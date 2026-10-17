@@ -452,6 +452,33 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// [`Corrupt::BurnExceedsEmission`]: crate::Corrupt::BurnExceedsEmission
     fn total_burned(&self) -> Result<AtomicUnits, Self::Fault>;
 
+    /// The long-term effective median in force **for** the block recorded
+    /// at `height` (`block_info.long_term_effective_median`, SCR-19): the
+    /// value it was validated and fee-floored against, written by its
+    /// connect (FL-R3-STORE). A projection of a row the store holds,
+    /// never a recomputation; [`effective_median_at`](crate::effective_median_at)
+    /// derives the same quantity for the connecting height, where no row
+    /// exists yet. Above the tip is [`AtHeight::AboveTip`].
+    ///
+    /// The relay floor's `M` at a recorded height
+    /// ([`relay_floor_window`](crate::relay_floor_window)).
+    fn long_term_effective_median_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, Self::Fault>;
+
+    /// Atomic units destroyed by blocks `0..=height`: the `total_burned`
+    /// fold as it stood once the block at `height` had connected. At the
+    /// tip it is [`total_burned`](Self::total_burned); below it, that fold
+    /// less the `block_burn` rows above `height` — a projection of rows the
+    /// store holds, bounded by how far below the tip `height` lies, never a
+    /// recomputation. Above the tip is [`AtHeight::AboveTip`].
+    ///
+    /// The relay floor's supply operand at a recorded height: the parent's
+    /// `coins_generated` less this, at the parent (FL-R16c), exactly as
+    /// CEN-F17 prices the burn at the connecting height.
+    fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, Self::Fault>;
+
     // -----------------------------------------------------------------------
     // The archival reads (DRS-E4 §2.3; DRS-E1 S-ARCH A1–A9, A11–A13;
     // `SO-D10` A14–A16, `SO-D11` A17)

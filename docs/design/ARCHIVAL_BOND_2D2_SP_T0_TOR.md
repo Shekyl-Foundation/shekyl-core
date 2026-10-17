@@ -68,7 +68,7 @@ re-decided at SP-T3. The full command surface across 2d-2:
 | SP-T0 bootstrap gate (DQ-T0.3) | `GETINFO status/bootstrap-phase` (or `SETEVENTS STATUS_CLIENT`) |
 | SP-T1 measured test (DQ-T0.4) | `SETEVENTS STREAM` + the stream→circuit attach |
 | **SP-T3 onion serving (GF-9)** | **`ADD_ONION` / `DEL_ONION`** — publish `P`'s `p_slot`-bound v3 HS, rotate it with the persona |
-| Lifecycle (DQ-T0.1) | **`TAKEOWNERSHIP`** — the child Tor dies with the controlling connection (the crash-orphan cover) |
+| Lifecycle (DQ-T0.1, as `TOR_SUPERVISOR.md` `TSR-Q7` amends it) | The managed Tor's control connection is inherited at launch (`__OwningControllerFD`) and is its owning controller from the start, so the child dies with the connection (the crash-orphan cover) with no `TAKEOWNERSHIP` sent |
 
 Each command is line-based and individually simple, so a **roll-our-own minimal client is defensible**
 (the own-the-thin-glue / minimize-deps posture) — *if* the surface stays this small. What a maintained

@@ -64,7 +64,7 @@
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc.submit"
 
 // ── §4.5 layout pins (mirrored by const asserts in shekyl-daemon-rpc) ──────
-static_assert(sizeof(shekyl_submit_facts_ffi) == 104, "SubmitFactsFfi size");
+static_assert(sizeof(shekyl_submit_facts_ffi) == 96, "SubmitFactsFfi size");
 static_assert(alignof(shekyl_submit_facts_ffi) == 8, "SubmitFactsFfi align");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_pool) == 0, "in_pool offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, in_chain) == 1, "in_chain offset");
@@ -79,11 +79,10 @@ static_assert(offsetof(shekyl_submit_facts_ffi, reserved) == 9, "reserved offset
 static_assert(offsetof(shekyl_submit_facts_ffi, ref_height) == 16, "ref_height offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, root) == 24, "root offset");
 static_assert(offsetof(shekyl_submit_facts_ffi, fee_per_byte) == 56, "fee_per_byte offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, fee_quantization_mask) == 64, "fee_quantization_mask offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, weight_limit) == 72, "weight_limit offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, chain_height) == 80, "chain_height offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, in_chain_height) == 88, "in_chain_height offset");
-static_assert(offsetof(shekyl_submit_facts_ffi, bond_record_bonded_total) == 96,
+static_assert(offsetof(shekyl_submit_facts_ffi, weight_limit) == 64, "weight_limit offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, chain_height) == 72, "chain_height offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, in_chain_height) == 80, "in_chain_height offset");
+static_assert(offsetof(shekyl_submit_facts_ffi, bond_record_bonded_total) == 88,
   "bond_record_bonded_total offset");
 
 using namespace cryptonote;
@@ -420,7 +419,6 @@ void collect_facts_locked(tx_memory_pool& pool, Blockchain& bc,
   facts.tree_depth = bc.get_db().get_curve_tree_depth();
 
   facts.fee_per_byte = bc.get_current_fee_per_byte();
-  facts.fee_quantization_mask = Blockchain::get_fee_quantization_mask();
   facts.weight_limit = get_transaction_weight_limit();
   facts.chain_height = bc.get_current_blockchain_height();
 }
@@ -1015,7 +1013,6 @@ void shekyl_submit_facts_test_fill(shekyl_submit_facts_ffi* out, uint64_t seed)
   for (size_t i = 0; i < sizeof(out->root); ++i)
     out->root[i] = static_cast<uint8_t>(submit_facts_field_value(seed, 5) >> ((i % 8) * 8));
   out->fee_per_byte = submit_facts_field_value(seed, 6);
-  out->fee_quantization_mask = submit_facts_field_value(seed, 7);
   out->weight_limit = submit_facts_field_value(seed, 8);
   out->chain_height = submit_facts_field_value(seed, 9);
   out->in_chain_height = submit_facts_field_value(seed, 11);

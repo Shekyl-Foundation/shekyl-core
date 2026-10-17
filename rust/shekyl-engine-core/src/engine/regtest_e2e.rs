@@ -441,8 +441,7 @@ impl RegtestDaemon {
                 cmd.env_remove("SHEKYL_ARCHIVAL_REORG_DEPTH_BLOCKS");
             }
         }
-        let child = cmd
-            .spawn()
+        let child = shekyl_tor_control_client::spawn_lock::spawn(&mut cmd)
             .unwrap_or_else(|e| panic!("spawn {}: {e}", bin.display()));
 
         // Base URL only — `Rpc::json_rpc_call` appends the `json_rpc` route itself.
@@ -5102,11 +5101,12 @@ async fn e2e_arm3_phantom_slot_collected_at_open() {
 /// ran.
 fn capture_build_identity(daemon_version: &str) -> String {
     let git = |args: &[&str]| -> String {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("git runs in the checkout");
+        let out = shekyl_tor_control_client::spawn_lock::output(
+            Command::new("git")
+                .args(args)
+                .current_dir(env!("CARGO_MANIFEST_DIR")),
+        )
+        .expect("git runs in the checkout");
         assert!(out.status.success(), "git {args:?} failed in the checkout");
         String::from_utf8_lossy(&out.stdout).trim().to_owned()
     };
@@ -5261,23 +5261,25 @@ async fn maybe_capture_chain_vector(
     for injection in injections {
         fetch.arg("--inject").arg(injection.to_string());
     }
-    let fetch = fetch.output().expect("spawn shekyl-chain-replay fetch");
+    let fetch = shekyl_tor_control_client::spawn_lock::output(&mut fetch)
+        .expect("spawn shekyl-chain-replay fetch");
     assert!(
         fetch.status.success(),
         "shekyl-chain-replay fetch failed: {}\n{}",
         String::from_utf8_lossy(&fetch.stdout),
         String::from_utf8_lossy(&fetch.stderr)
     );
-    let export = Command::new(&trace_bin)
-        .arg("--regtest")
-        .arg("--data-dir")
-        .arg(&daemon.data_dir)
-        .arg("--out")
-        .arg(&trace)
-        .arg("--block-stop")
-        .arg(tip.to_string())
-        .output()
-        .expect("spawn shekyl-e2-trace-export");
+    let export = shekyl_tor_control_client::spawn_lock::output(
+        Command::new(&trace_bin)
+            .arg("--regtest")
+            .arg("--data-dir")
+            .arg(&daemon.data_dir)
+            .arg("--out")
+            .arg(&trace)
+            .arg("--block-stop")
+            .arg(tip.to_string()),
+    )
+    .expect("spawn shekyl-e2-trace-export");
     assert!(
         export.status.success(),
         "shekyl-e2-trace-export failed: {}\n{}",

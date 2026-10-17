@@ -236,11 +236,11 @@ impl ServeSetPinner for IncoherentPinner {
 fn churning_tor(dir: &tempfile::TempDir) -> WalletTorControlConfig {
     let bogus = dir.path().join("not-tor");
     std::fs::write(&bogus, b"not a tor binary").expect("write bogus binary");
-    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let (events, _events) = EventSink::bounded();
     WalletTorControlConfig {
         binary: TorBinarySource::At(bogus),
         data_dir: dir.path().join("data"),
-        events: EventSink::new(tx),
+        events,
         policy: SupervisorPolicy {
             backoff_base: Duration::from_millis(5),
             backoff_cap: Duration::from_millis(20),

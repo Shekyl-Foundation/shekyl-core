@@ -851,8 +851,9 @@ Out (POD `SubmitFactsFfi`): `in_pool: u8`, `in_chain: u8`,
 height, read under the same lock scope as the membership fact so the pair
 cannot be racy), per-KI conflict descriptor (`none | own_txid | other`),
 `ref_block_found: u8`, `ref_height: u64`, `root: [u8; 32]`,
-`tree_depth: u8`, `fee_per_byte: u64`, `fee_quantization_mask: u64`,
-`weight_limit: u64`, `chain_height: u64`.
+`tree_depth: u8`, `fee_per_byte: u64`, `weight_limit: u64`,
+`chain_height: u64` (the fee lattice is `shekyl_economics::FEE_QUANTIZATION_MASK`,
+a constant, and does not cross).
 One `CRITICAL_REGION` pair, pool→blockchain, reads only.
 
 For archival-arm txs the snapshot extends with the arm's stateful facts

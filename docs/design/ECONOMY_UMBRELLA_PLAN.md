@@ -116,10 +116,10 @@ disposition verbatim**.
 | **D** | The anti-stuffing argument assumes a consensus floor; a miner's own transactions bypass it. | "Yes, this is one of the things we need from the sim, and then decide how it should be implemented holistically." | ESR-7 measured it; noted at the argument in this PR; decided at EUP-5 with the floor-basis question. | EUP-5 |
 | **E** | The yield and outcome tables were computed at a flat 0.10 SKL fee and the deleted stake-ratio concept. | "And they should be fixed, based on taking current implementation into the sim. This staking section is where we are ahead, and same problem - how is what we have implemented going to affect the system as a whole." | Marked records-was in this PR; recomputed from the sim at EUP-4. | EUP-1, EUP-4 |
 | **F** | The escalation is described as live and ships flat; the knee was derived from a trajectory the chain does not carry. | "This is a deviation that was recently coded in, and we have to re-evaluate this when we have the sim aligned - then we will probably have to make some design decisions." | Held: the knee test bounds, not pins (2026-10-03); FOLLOWUPS row owned by the GF-7 ceremony. | EUP-5 |
-| **G** | The 300 KB zone and `w_ref = 3 000` were never derived for Shekyl; FL-R13 (floor basis) is open on the same surface. | "Yes, and that punt needs to have some derivation behind it - which is why we stopped to run the sim under the new/current paradigm." | ESR-10's second arm; FOLLOWUPS rows (zone capacity leg; `w_ref`). | EUP-2, EUP-5 |
+| **G** | The 300 KB zone and `w_ref = 3 000` were never derived for Shekyl; FL-R13 (floor basis) is open on the same surface. | "Yes, and that punt needs to have some derivation behind it - which is why we stopped to run the sim under the new/current paradigm." | ESR-10's second arm; FOLLOWUPS rows (zone capacity leg; `w_ref`). **Requirement from FL-V12** (`FEE_LADDER_DERIVATION.md` §2, 2026-10-16): the served rate is whole atomic units per byte, and where `F` is small that resolution acts as an output quantizer — 18 of `--fee-ladder`'s 600 feedback cells toggle one floor unit, worst 833 bp against FL-E1's 50 bp bar. Whatever basis G derives states the served rate's resolution such that one unit of the rate stays inside that bar across the reachable state space. | EUP-2, EUP-5 |
 | **H** | The challenge doctrine's egress (~80× storage, L19i) breaches the budget in calibrated cells; the two were ruled in different rounds. | "Yes, they need to be reconciled." | Egress into the population model. | EUP-3, EUP-5 |
 | **I** | The bond's magnitude has no derivation; F-G found it the binding burden. | "Yes, which is why we need to re-sim it. Or sim it the first time, since it was not part of the original design, or at least not part of the design that was fully assessed." | First-time sim of the bond. | EUP-3, EUP-5 |
-| **J** | Design goal 5 and the release multiplier are intact. | "Yes, I think the 720-block operand has been tested in a number of ways (check this) and is actually more derived than it looks. However, I think we are still calling it provisional because it has NOT been stress tested." | Checked: FL-R24 ruled the operand's *form* (the exact SMA) from FL-E1–E3; window-length arms were run in round 2b and recorded "not selected, not read for selection". The form is derived, the length is provisional, and no stress test of the length has run. ESR-4 put the window into the fold, so step response, boom/bust and a stuffer working the window's edge are now runnable. | EUP-5 |
+| **J** | Design goal 5 and the release multiplier are intact. | "Yes, I think the 720-block operand has been tested in a number of ways (check this) and is actually more derived than it looks. However, I think we are still calling it provisional because it has NOT been stress tested." | Checked: FL-R24 ruled the operand's *form* (the exact SMA) from FL-E1–E3; window-length arms were run in round 2b and recorded "not selected, not read for selection". The form is derived, the length is provisional, and no stress test of the length has run. ESR-4 put the window into the fold, so step response, boom/bust and a stuffer working the window's edge are now runnable; they are written into EUP-5 as their own measurement (§4.2). | EUP-5 |
 
 **One conflict, resolved by the later ruling.** The relayed program lists
 "dead schedule" under ESR-8. Rick ruled on 2026-10-03 that the stake schedule
@@ -351,6 +351,48 @@ design's fill. The daemon runs the pre-v5 rule until the fill moves to Rust,
 so this reading is the design's behaviour once the fill lands.
 
 ---
+
+
+### 4.2 The 720-block window's length, measured at EUP-5 (Rick, 2026-10-16)
+
+The window's **form** is ruled: the exact SMA, FL-R24, from FL-E1–E3. Its
+**length**, 720 blocks (one day at the 120 s target), is provisional and
+has never been stress tested (§3, item J). ESR-4 put the window into the
+sim's fold, so the length can be measured on production's operand. Three
+measurements, run at EUP-5; each says what it reads and what result
+reopens 720. A threshold the text does not fix is **PROPOSED** and is
+ratified before the run, for the reason §4 gives.
+
+1. **Step response.** A sustained step in demand, up and down
+   (50 → 200 → 50 transactions a block) at each registered age, through
+   the fold's window and the production owners. **Reads:** blocks for
+   `M_r`, `b` and the relay floor to reach 95 % of their new steady
+   state, and the floor's worst one-block rise on the way. **Reopens
+   720 if:** any of the three takes longer than one window to settle
+   (something besides the window is slow), or the capacity criterion in
+   §4's table fails for the whole ramp in a registered scenario — demand
+   outrunning a floor that is still pricing yesterday.
+2. **Boom and bust.** A surge shorter than the window followed by a
+   collapse, at several surge lengths. **Reads:** `M_r`'s excursion and
+   the emission it pays against the neutral trajectory, `b`'s excursion,
+   and how long the floor stays above its post-collapse steady state.
+   **Reopens 720 if:** a surge shorter than the window moves cumulative
+   emission by more than a **PROPOSED** fraction of the neutral
+   trajectory's, or after the collapse the standard rung prices the
+   baseline's demand out (the capacity criterion fails) for longer than
+   one window.
+3. **A miner working the window's edge.** A miner stuffs its own blocks
+   with transactions timed so they enter and leave the window at chosen
+   heights, to raise `M_r` around blocks it produces. **Reads:** the
+   stuffer's net gain per stuffed block (extra reward kept, less the fees
+   it burns), against the same volume stuffed uniformly. **Reopens 720
+   if:** edge-timed stuffing is profitable where uniform stuffing at the
+   same volume is not — the window's length is then the lever — or the
+   ESR-7 envelope minimum falls below the relay floor (§4's Stuffing
+   row).
+
+Planning text only: the measurement is EUP-5's to run, and no code
+changes with this section.
 
 ## 5. What this document does not do
 

@@ -3,12 +3,13 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Raw fee-correction scalar `C`, and the wallet-cap ceiling over it.
+//! Raw fee-correction scalar `C`.
 //!
-//! [`FeeCorrection`] is the multiplier the daemon serves. [`quantize_pow2_ceil`]
-//! is `C_q ≥ C`: the wallet's absolute fee-rate cap uses it as an upper
-//! bound, and the daemon does not multiply by it (FL-R20). The §7
-//! hysteresis band was deleted with FL-R21.
+//! [`FeeCorrection`] is the multiplier the daemon serves, raw (FL-R20). No
+//! quantizer stands over it: the pow2 ceiling, the hysteresis band and the
+//! representable-`C` floor went with FL-R21, and the wallet's absolute cap
+//! is the exact structural maximum of this expression
+//! (`shekyl-engine-core` `fee_policy.rs`).
 
 use crate::params::{EconomicParams, SCALE};
 use crate::release::calc_release_multiplier;
@@ -25,8 +26,9 @@ impl FeeCorrection {
     /// `C = 1` in SCALE units.
     pub const UNITY: Self = Self(SCALE);
 
-    /// Wrap a SCALE-unit value. Tests, FFI, and the wallet-cap bound (a
-    /// number ≥ any reachable `C`) use this.
+    /// Wrap a SCALE-unit value. Tests, the FFI, and the wallet-cap bound
+    /// (the structural maximum of `C`, a number ≥ any reachable `C`) use
+    /// this.
     #[must_use]
     pub const fn from_scaled(scaled: u64) -> Self {
         Self(scaled)
@@ -66,58 +68,9 @@ pub fn fee_correction(
     )
 }
 
-/// Exact-integer `2^k ≤ c/s` (no float log2 — this feeds a
-/// wallet-must-match-daemon derivation).
-fn pow2_le(c: u128, s: u128, k: i32) -> bool {
-    if k >= 0 {
-        (s << k) <= c
-    } else {
-        s <= (c << (-k))
-    }
-}
-
-/// Ceiling pow2 snap in `SCALE` fixed point: smallest exact power of two
-/// `≥ c/SCALE`. Panics only if the snapped exponent leaves the range
-/// `SCALE` can represent exactly (`2^-6 … 2^43`).
-#[must_use]
-pub fn quantize_pow2_ceil(c_scaled: u64) -> u64 {
-    assert!(c_scaled > 0, "correction factor is structurally positive");
-    let c = u128::from(c_scaled);
-    let s = u128::from(SCALE);
-    let mut kf: i32 = -40;
-    while pow2_le(c, s, kf + 1) {
-        kf += 1;
-    }
-    let exact = if kf >= 0 {
-        (s << kf) == c
-    } else {
-        (c << (-kf)) == s
-    };
-    let k = if exact { kf } else { kf + 1 };
-    assert!(
-        (-6..=43).contains(&k),
-        "2^{k} not exactly representable in SCALE units"
-    );
-    if k >= 0 {
-        SCALE << k
-    } else {
-        SCALE >> (-k)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn quantize_snap_is_exact_integer_ceiling() {
-        for c in [500_000u64, 1_000_000, 2_000_000, 4_000_000] {
-            assert_eq!(quantize_pow2_ceil(c), c);
-        }
-        assert_eq!(quantize_pow2_ceil(680_000), 1_000_000);
-        assert_eq!(quantize_pow2_ceil(1_130_000), 2_000_000);
-        assert_eq!(quantize_pow2_ceil(12_917_390), 16_000_000);
-    }
 
     #[test]
     fn raw_correction_is_continuous_and_falls_below_one() {

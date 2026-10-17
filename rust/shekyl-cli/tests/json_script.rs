@@ -285,7 +285,8 @@ impl SpawnedDaemon {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("p2p port");
             listener.local_addr().expect("addr").port().to_string()
         };
-        let child = Command::new(bin)
+        let mut child = Command::new(bin);
+        child
             .args([
                 "--testnet",
                 "--offline",
@@ -305,8 +306,8 @@ impl SpawnedDaemon {
                 "1",
             ])
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+            .stderr(std::process::Stdio::null());
+        let child = child.spawn();
         match child {
             Ok(child) => Self { child, data_dir },
             Err(error) => {

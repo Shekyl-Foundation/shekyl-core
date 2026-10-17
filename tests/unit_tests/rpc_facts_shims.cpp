@@ -624,24 +624,7 @@ TEST(rpc_facts_shims, a_hash_whose_coinbase_claims_a_height_past_the_tip_is_refu
   EXPECT_EQ(0, f.found) << "a refusal reports nothing, not a wrapped depth";
 }
 
-// ── RK-5b: hard-fork voting info, and the fee estimate ──────────────────────
-
-// The estimator asserts on `grace_blocks` and throws. The export refuses
-// first, so an out-of-range request is a named refusal rather than an
-// exception the caller reads as an internal fault.
-TEST(rpc_facts_shims, a_fee_estimate_beyond_the_reward_window_is_refused)
-{
-  BlockchainAndPool bap;
-  ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
-
-  const uint64_t ceiling = shekyl_rpc_fee_grace_blocks_max();
-  ASSERT_GT(ceiling, 0u) << "the exported ceiling must be the real constant";
-
-  shekyl_rpc_fee_estimate_facts f{};
-  EXPECT_EQ(SHEKYL_RPC_FACTS_ERR_INCONSISTENT,
-    daemon_rpc_facts::fee_estimate(bap.bc, ceiling + 1, &f));
-  EXPECT_EQ(0u, f.fee_count) << "a refusal reports no tiers";
-}
+// ── RK-5b: the fee estimate ──────────────────────────────────────────────────
 
 // The production marshal, not the layout twin: a successful estimate must
 // fill every POD slot the array declares, and no more. The fill/check
@@ -652,13 +635,12 @@ TEST(rpc_facts_shims, a_fee_estimate_writes_three_priced_tiers)
   ASSERT_TRUE(init_blockchain(bap.bc, new FactsTestDB(CHAIN_HEIGHT)));
 
   shekyl_rpc_fee_estimate_facts f{};
-  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::fee_estimate(bap.bc, 10, &f));
+  ASSERT_EQ(SHEKYL_RPC_FACTS_OK, daemon_rpc_facts::fee_estimate(bap.bc, &f));
   constexpr size_t kSlots = sizeof(f.fees) / sizeof(f.fees[0]);
   EXPECT_EQ(kSlots, static_cast<size_t>(3));
   EXPECT_EQ(f.fee_count, static_cast<uint8_t>(kSlots));
   EXPECT_LE(f.fees[0], f.fees[1]);
   EXPECT_LE(f.fees[1], f.fees[2]);
-  EXPECT_GT(f.quantization_mask, 0u);
 }
 
 TEST(rpc_facts_shims, null_out_pointer_refuses)
