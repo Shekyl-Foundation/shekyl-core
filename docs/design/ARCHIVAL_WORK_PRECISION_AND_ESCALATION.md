@@ -1075,7 +1075,7 @@ models (each cell links its section).
 
 | Arm | Verdict | Result |
 | --- | --- | --- |
-| **A1** clearance | ~~✅ **clears**~~ → 🔴 **scenario 9 uncleared, byte-keyed (§12.13, 2026-10-01)** | *Leaf-era (J-segment) measurement, records-was:* escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. **Re-measured in the operand the validator consumes (closed byte shards): flat 0.06×, best 0.21× at 2 %, 0.04× at 10 % — no candidate in the band clears; the bond term is ~40× per unit of traffic. §12.13.** |
+| **A1** clearance | 🔴 **two scenarios uncleared** (production fee, `--stage2`) | No candidate in the band clears the late-chain tail (flat-25 **0.24×**, best **0.65×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder) or high-history / low-activity (flat-25 **0.05×**, best **0.17×**). Every other scenario clears within its own horizon, and in none does the best candidate clear where flat-25 does not. In closed byte shards the bond term is ~40× per unit of traffic. The flat-fee run is §12.13. |
 | **A2** distribution (W6) | ✅ **clears** (§12.10) | Scarce-holder share `1.0000 → 0.9998` — **0.02 %** dilution, **zero** scarce holders stranded below marginal cost. |
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
 | **A4** stuffing (W9) | ~~🔴 FAILS~~ → ✅ **CLEARS (§12.11)** | **Verdict retracted 2026-07-27**: the arm measured *profit*, not *theft*; netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales**. Figures below are historical. Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6671**, `fee×→1` **0.7** (§12.9 OQ-4). *Leaf-era figures; byte-keyed re-measurement (8-in / 1-out shape, `fee×→1` 0.8→2.0) in §12.13.* |
@@ -2153,7 +2153,7 @@ provisional-until-testnet under the §11.4 ceremony (adversary-advantage
 argument committed *before* the number; PoRep branch ⇒ A1 re-runs with sealing
 costs first). Nothing in 3a/3b weakens or advances that gate.
 
-### 12.13 Byte-keyed re-baseline of the Stage-2 sweep — MEASURED 2026-10-01
+### 12.13 Byte-keyed re-baseline of the Stage-2 sweep — MEASURED 2026-10-01 on the flat fee (`c0e5704b4`)
 
 **Why.** `SHT-Q2` ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md))
 re-keyed the D2 operand: `n` is the count of archival shards **closed** by
@@ -2308,7 +2308,7 @@ inputs). Whether an adversary with a large pre-existing output set is the right
 worst case for the ceremony is the owner's call; the one-shot (binding) figure
 does not depend on it.
 
-### 12.14 Onset of A1 failure and the lever table — MEASURED 2026-10-01
+### 12.14 Onset of A1 failure and the lever table — MEASURED 2026-10-01 on the flat fee (`235c2b841`)
 
 **Why.** A1's verdict is a **minimum** over sustained years, and a minimum
 hides *when* a failure arrives. The #929 review modelled §12.13's equations by

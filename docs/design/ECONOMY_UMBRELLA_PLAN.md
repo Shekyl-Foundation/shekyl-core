@@ -73,7 +73,7 @@ for direction, not level, until EUP-4.
 | 11 | Staker emission share | Bootstrap subsidy, 15 %, ×0.90/yr | Component 4 | ← emission; → budget (12), C (6) | — |
 | 12 | Archival budget | Emission leg + fee leg; unclaimed after 26 epochs is never created | `ARCHIVAL_BUDGET_SCHEDULE.md` §4 | ← (9), (11); → reward division (13) | — |
 | 13 | Reward division | Pay-for-service by capped serve-work | `REWARD_EMISSION_LEG.md` §4 | ← budget, work; → archiver income | — |
-| 14 | The archival good | Prunable bodies + `pqc_auths`, for rescan, audit, dispute | `V3_STAKER_ARCHIVAL.md`; PDM-Q6, PDM-Q2 | → burden | ESR-6: corpus at year 10 is 229 864 closed shards, against 523 841 before |
+| 14 | The archival good | Prunable bodies + `pqc_auths`, for rescan, audit, dispute | `V3_STAKER_ARCHIVAL.md`; PDM-Q6, PDM-Q2 | → burden | ESR-6: corpus at year 10 is 229 864 closed shards |
 | 15 | Bond | Honesty anchor, slashable; 0.75 SKL per shard | Component 3; magnitude underived (I) | → locked capital, the binding burden (F-G) | — |
 | 16 | Challenge | Exhaustive, 3 per pair per epoch, whole-shard read | `ARCHIVAL_CHALLENGE_MECHANISM.md`; SF-D1 | → archiver egress cost | Not yet in the economics sim (H) |
 | 17 | Coverage | Market-set by budget → APR → entry | L11 | ← budget; → availability | — |

@@ -85,8 +85,7 @@ Each is an input, not a result, and none is modelled.
 
 **What it feeds.**
 
-- **Corpus growth.** The baseline's closed shards at year 10 are 229 864,
-  against 523 841 before.
+- **Corpus growth.** The baseline's closed shards at year 10 are 229 864.
 - **The purse.** Emission is paced at the release multiplier's 0.8 floor
   for eighteen years, so every later year's reward is higher than on a chain
   that carries its demand. ESR-10's re-derived arm measures by how much.
@@ -404,7 +403,7 @@ defect.
 
 | Divergence | Why it exists | Reported as |
 | --- | --- | --- |
-| Control arm: flat `0.1 SKL` per transaction | Reproduces §12.14, so the old and new tables differ by the fee and nothing else | Named arm, printed beside the production arm |
+| Control arm: flat `0.1 SKL` per transaction | The fee §12.13–§12.14 were measured on. The two arms of one run differ by the fee and nothing else | Named arm, printed beside the production arm |
 | Fee multiplier on the Standard rung | What users pay above the default is not knowable before launch | `×1`, the production default, is what runs. The sweep is ESR-10 and is not printed yet |
 | Rung mix (economy / standard / priority shares) | Same. At the defaulted 15/80/5 mix ([`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §5.5) the 5 % on Priority pay roughly three quarters of all fees at the zone median | Not modelled yet: every ordinary transaction pays Standard. ESR-10 |
 | Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Nothing in the chain charges it; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table |
