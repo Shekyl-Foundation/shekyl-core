@@ -338,6 +338,28 @@ registered the prediction (`da1a6b082`) and §5.9 records it.
 §5.11 records the first run. ESR-7's falsifier holds: the report prints the
 unenforced miner's zero-fee row beside the relay stuffer's.
 
+**Landed.** ESR-9, 2026-10-17, in PR #1104.
+
+- `43a8f104f` prints the growth gate year by year in `--stage2`, on the
+  production arm: `σ`, `s`, `b` and `ρ` against `θ = w/(4·w_ref)`. On
+  the baseline `ρ` reaches `θ ≈ 1.22` in year 19, and blocks grow that
+  year. Reading-pass findings 1 and 2 quote that run.
+- The live passages that quoted a superseded figure quote the current
+  run. `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13–§12.14 are
+  dated runs on the flat fee, with their commits in the headings; neither
+  arm of today's run reproduces them, and re-deriving their readings is
+  EUP-4's.
+- `FEE_LADDER_DERIVATION.md` §11.7 is the dated run at `5574be2ea`. The
+  current `--fee-floor` runs FL-E1 on the exact window only: 600 cells,
+  4 not converged, worst 87 bp, all at age 12, `ε` = 3, `D` = 400,
+  displaced start.
+- Appendix A is deleted; Appendix A2 names each row's subject.
+
+The falsifier holds over the documents in scope: no current-tense
+sentence quotes a superseded figure, and no live section says
+records-was. Appendix C's briefs are kept as sent, and their "already
+known" lists describe the tree they were written against.
+
 **Where the fixture tests run (2026-10-10).** The two `--stage2` narration
 tests are `#[ignore]`d for cost, and until this date no CI lane ran them: on
 PR #1009 both fixtures drifted at `783053554` and were regenerated two
