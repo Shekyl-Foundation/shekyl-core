@@ -10,12 +10,14 @@
 //!
 //! # A crate, not a daemon module
 //!
-//! The loop's threads hash with RandomX for as long as mining runs, and the
-//! only other RandomX caller in the daemon is the validator's substrate.
-//! Here they share one [`CacheStore`](shekyl_pow_randomx::CacheStore) —
-//! the daemon's one RandomX budget, handed in — and nothing else: the
-//! miner has no RPC, store or p2p dependency, and the RPC crate gains no
-//! hashing threads. PR 2's composition root wires the two ends.
+//! The loop's threads hash with RandomX for as long as mining runs. The
+//! daemon's two other RandomX callers are the validator's substrate and
+//! the RPC's `calc_pow`, which hashes only under a cache already held and
+//! never derives one. All three share one
+//! [`CacheStore`](shekyl_pow_randomx::CacheStore) — the daemon's one
+//! RandomX budget, handed in. The miner shares nothing else: it has no
+//! RPC, store or p2p dependency, and the RPC crate gains no hashing
+//! threads. PR 2's composition root wires the ends.
 //!
 //! # Inputs are values
 //!

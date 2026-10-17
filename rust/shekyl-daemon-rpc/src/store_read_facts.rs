@@ -19,11 +19,13 @@
 //! - The emission of a range is the supply accumulator's growth across it
 //!   (`coins_generated`, CEN-G12's paid reward); its fees are each listed
 //!   body's `ct.fee`, read off the recorded transaction.
-//! - The longhash is the substrate's, under the seed CEN-D3 names.
+//! - The longhash is RandomX under the seed CEN-D3 names, over a cache
+//!   the daemon's cache store already holds. `calc_pow` never derives one.
 
 use shekyl_chain_rules::{seed_height, AtHeight, ChainView};
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_pow_randomx::{compute_hash, Seedhash};
+use shekyl_types::{BlockHash, BlockHeight, PowHash};
 use shekyl_wire::{Ct, Transaction};
 
 use super::{count_at, store_fault, tip_of, StoreFacts};
@@ -213,6 +215,14 @@ impl ChainReadFacts for StoreFacts {
                 }
             },
         };
-        Ok(PowAt::Hashed(self.pow.longhash(pow_blob, &seed)?))
+        // A held cache or nothing: `lookup`, never `lookup_or_derive`. The
+        // seed may be the chain's own and still not held (the store keeps
+        // two, the validator's current and spare).
+        let Some(cache) = self.caches.lookup(&Seedhash::from_bytes(*seed.as_bytes())) else {
+            return Ok(PowAt::SeedNotHeld { seed });
+        };
+        Ok(PowAt::Hashed(PowHash::from_bytes(compute_hash(
+            &cache, pow_blob,
+        ))))
     }
 }

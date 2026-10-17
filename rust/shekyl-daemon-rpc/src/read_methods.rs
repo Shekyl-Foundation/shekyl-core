@@ -142,16 +142,21 @@ pub fn get_coinbase_tx_sum(
 /// or the chain's seed for `height`. The reply is the hash as bare hex.
 ///
 /// The bytes are hashed as given — a block's hashing blob — as the C++
-/// handler hashed them. They are bounded by the largest block blob the
-/// wire parses (`MAX_BLOCK_BLOB_SIZE`): `calc_pow` admits nothing, so the
-/// bound protects the hasher, not the chain.
+/// handler hashed them. Their length is bounded by the largest block blob
+/// the wire parses (`MAX_BLOCK_BLOB_SIZE`): `calc_pow` admits nothing, so
+/// the bound protects the hasher, not the chain.
+///
+/// The hash is computed only under a cache the daemon already holds;
+/// `calc_pow` never derives one (ruled 2026-10-17). The C++ derived a cache
+/// for any seed, evicting the validator's spare, with no bound across
+/// concurrent seeds.
 ///
 /// # Errors
 ///
 /// [`RpcFault::Refused`]: the blob is not hex (`WRONG_BLOCKBLOB`), larger
 /// than the bound (`WRONG_BLOCKBLOB_SIZE`), the seed is not 32 bytes of hex,
-/// or the seed height is above the tip (both `WRONG_PARAM`). The facts'
-/// fault otherwise.
+/// the seed height is above the tip, or the seed's cache is not held (all
+/// `WRONG_PARAM`). The facts' fault otherwise.
 pub fn calc_pow(facts: &dyn ChainReadFacts, request: &CalcPowRequest) -> Result<String, RpcFault> {
     let Ok(blob) = hex::decode(&request.block_blob) else {
         return Err(RpcFault::Refused(RpcRefusal {
@@ -179,6 +184,10 @@ pub fn calc_pow(facts: &dyn ChainReadFacts, request: &CalcPowRequest) -> Result<
     };
     match facts.pow_hash(&blob, seed)? {
         PowAt::Hashed(pow) => Ok(hex::encode(pow.to_bytes())),
+        PowAt::SeedNotHeld { seed } => Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
+            "Seed {} is not held: calc_pow hashes under held seeds only",
+            hex::encode(seed.to_bytes())
+        )))),
         PowAt::SeedAboveTip { seed_height, tip } => {
             Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
                 "No seed for height {}: its seed height {} is above the chain's top block {}",

@@ -95,32 +95,15 @@ pub enum PowAt {
         /// The tip the snapshot holds.
         tip: BlockHeight,
     },
-}
-
-/// RandomX over bytes under a seed — the validator's longhash, through
-/// whatever cache the composition root holds. Every
-/// [`Substrate`](shekyl_chain_rules::Substrate) is one, so the facts hash
-/// with the substrate the connector proves blocks with.
-pub trait PowHasher: Send + Sync {
-    /// The longhash of `pow_blob` under `seed`.
-    ///
-    /// # Errors
-    ///
-    /// The substrate could not hash: an internal failure, never a hash.
-    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, FactsFault>;
-}
-
-impl<S> PowHasher for S
-where
-    S: shekyl_chain_rules::Substrate + Send + Sync,
-    S::Fault: core::fmt::Debug,
-{
-    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, FactsFault> {
-        shekyl_chain_rules::Substrate::longhash(self, pow_blob, seed).map_err(|fault| {
-            tracing::error!(?fault, "the proof-of-work substrate could not hash");
-            FactsFault::Internal
-        })
-    }
+    /// The daemon's cache store does not hold this seed's cache.
+    /// `calc_pow` hashes only under a held cache and never derives one
+    /// (ruled 2026-10-17): a derivation is a 256 MiB fill that would
+    /// evict the validator's spare cache, and an RPC caller names the
+    /// seed.
+    SeedNotHeld {
+        /// The seed asked for, given or named by the height.
+        seed: BlockHash,
+    },
 }
 
 /// The chain reads behind the store flip's eight native read methods
@@ -163,11 +146,13 @@ pub trait ChainReadFacts: Send + Sync {
     /// when a listed transaction or a block in range is missing.
     fn coinbase_sum(&self, start: BlockHeight, count: u64) -> Result<CoinbaseRange, FactsFault>;
 
-    /// RandomX over `pow_blob` under `seed`.
+    /// RandomX over `pow_blob` under `seed`, under a cache the daemon's
+    /// cache store already holds; [`PowAt::SeedNotHeld`] for any other.
+    /// Never derives a cache.
     ///
     /// # Errors
     ///
     /// As [`curve_tree`](Self::curve_tree) when the seed is read off the
-    /// chain; the hasher's fault.
+    /// chain.
     fn pow_hash(&self, pow_blob: &[u8], seed: PowSeed) -> Result<PowAt, FactsFault>;
 }

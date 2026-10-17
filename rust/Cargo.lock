@@ -4252,6 +4252,7 @@ dependencies = [
  "shekyl-economics",
  "shekyl-fcmp",
  "shekyl-peerlist",
+ "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",

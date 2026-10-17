@@ -54,7 +54,6 @@ use crate::info_facts::{
     store_file_size, InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope,
     SessionCounts,
 };
-use crate::read_facts::PowHasher;
 
 /// The node's state that the chain store does not hold, read per call.
 ///
@@ -131,20 +130,20 @@ pub struct StoreFacts {
     rules: Arc<dyn RulesAt>,
     node: Arc<dyn NodeFacts>,
     identity: NodeIdentity,
-    pow: Arc<dyn PowHasher>,
+    caches: Arc<shekyl_pow_randomx::CacheStore>,
 }
 
 impl StoreFacts {
-    /// The facts over `store`, whose data file is `store_file`, hashing
-    /// `calc_pow` with `pow` — the substrate the connector proves blocks
-    /// with.
+    /// The facts over `store`, whose data file is `store_file`. `calc_pow`
+    /// hashes under the caches `caches` already holds — the daemon's one
+    /// cache store, the validator's — and never derives one.
     pub fn new(
         store: Arc<ChainStore>,
         store_file: PathBuf,
         rules: Arc<dyn RulesAt>,
         node: Arc<dyn NodeFacts>,
         identity: NodeIdentity,
-        pow: Arc<dyn PowHasher>,
+        caches: Arc<shekyl_pow_randomx::CacheStore>,
     ) -> Self {
         Self {
             store,
@@ -152,7 +151,7 @@ impl StoreFacts {
             rules,
             node,
             identity,
-            pow,
+            caches,
         }
     }
 

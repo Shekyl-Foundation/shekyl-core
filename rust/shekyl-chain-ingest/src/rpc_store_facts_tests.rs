@@ -37,6 +37,7 @@ use shekyl_daemon_rpc::methods::{
 };
 use shekyl_daemon_rpc::read_methods::{get_coinbase_tx_sum, get_curve_tree_checkpoint};
 use shekyl_daemon_rpc::store_facts::{NodeFacts, NodeIdentity, StoreFacts, SyncFacts};
+use shekyl_pow_randomx::CacheStore;
 use shekyl_rpc_types::{
     GetBlockHeaderByHashRequest, GetBlockHeadersRangeRequest, GetBlockRequest,
     GetCoinbaseTxSumRequest, GetCurveTreeCheckpointRequest, GetFeeEstimateRequest, HashHex, Hidden,
@@ -132,13 +133,24 @@ fn identity() -> NodeIdentity {
 
 /// The store-backed facts over the store at `path`, under `rules`.
 pub(crate) fn facts_over(store: Arc<ChainStore>, path: &Path, rules: ChainRules) -> StoreFacts {
+    facts_with_caches(store, path, rules, Arc::new(CacheStore::new()))
+}
+
+/// [`facts_over`], hashing `calc_pow` under the caches `caches` holds —
+/// the store a test's production substrate derived into, or an empty one.
+pub(crate) fn facts_with_caches(
+    store: Arc<ChainStore>,
+    path: &Path,
+    rules: ChainRules,
+    caches: Arc<CacheStore>,
+) -> StoreFacts {
     StoreFacts::new(
         store,
         path.to_path_buf(),
         Arc::new(move |h| rules.in_force(h)),
         Arc::new(TestNode::synced()),
         identity(),
-        Arc::new(KeccakPow),
+        caches,
     )
 }
 

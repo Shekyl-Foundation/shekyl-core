@@ -20,6 +20,7 @@ use std::sync::Arc;
 use shekyl_chain_rules::AtHeight;
 use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_daemon_rpc::info_facts::InfoFacts;
+use shekyl_daemon_rpc::methods::get_block_header_by_height;
 use shekyl_daemon_rpc::methods::{RpcFault, RpcRefusal};
 use shekyl_daemon_rpc::read_facts::ChainReadFacts;
 use shekyl_daemon_rpc::read_methods::{
@@ -27,6 +28,7 @@ use shekyl_daemon_rpc::read_methods::{
     get_curve_tree_checkpoint, get_curve_tree_info, COINBASE_SUM_RANGE_REFUSAL,
 };
 use shekyl_harness_spender::Spender;
+use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_rpc_types::{
     CalcPowRequest, GetCoinbaseTxSumRequest, GetCurveTreeCheckpointRequest, HashHex,
     CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
@@ -36,8 +38,10 @@ use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Ct, Transaction};
 
 use crate::connector::Offered;
-use crate::rpc_store_facts_tests::{facts_over, hex, keccak_pow, KeccakPow};
+use crate::metrics::Metrics;
+use crate::rpc_store_facts_tests::{facts_over, facts_with_caches, hex, KeccakPow};
 use crate::scenario::{Mined, Scenario, RULES};
+use crate::substrate::ProductionSubstrate;
 use crate::test_support::{cleanup, h, open_store, tmp, Family, FIRST_SPEND_HEIGHT};
 
 /// The fee a listed body pays.
@@ -352,18 +356,24 @@ async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
     s.close().await;
 }
 
-/// `calc_pow` is the substrate's hash of the bytes as given, under the seed
-/// the height names — for every mined block, the hash the node recorded
-/// when it judged the block — or under a seed the caller names. A seed
-/// height above the tip, a blob that is not hex or is larger than any
-/// block, and a seed that is not 32 bytes are refused with the C++ codes.
-#[tokio::test]
-async fn calc_pow_hashes_the_bytes_under_the_seed_the_height_names() {
-    let mut s = Scenario::open_with("rpc-reads-calc-pow", KeccakPow);
-    let mined = s.mine(6).await;
+/// `calc_pow` is RandomX over the bytes as given, under a cache the
+/// daemon's cache store already holds. The store here is the one the
+/// connector's production substrate derived into while the chain was mined:
+/// where it still holds the seed a height names, the answer is the PoW the
+/// node recorded when it judged the block, and where it no longer does
+/// (genesis's, replaced by the next seed) the request is refused. A held seed the
+/// caller names is answered the same way. A seed height above the tip, a
+/// blob that is not hex or is larger than any block, and a seed that is not
+/// 32 bytes are refused with the C++ codes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
+    let caches = Arc::new(CacheStore::new());
+    let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
+    let mut s = Scenario::open_with("rpc-reads-calc-pow", pow);
+    let mined = s.mine(3).await;
     s.reopen(|path| {
         let store = Arc::new(open_store(path));
-        let facts = facts_over(Arc::clone(&store), path, RULES);
+        let facts = facts_with_caches(Arc::clone(&store), path, RULES, Arc::clone(&caches));
         let ask = |height: BlockHeight, blob: &str, seed: &str| {
             calc_pow(
                 &facts,
@@ -374,20 +384,53 @@ async fn calc_pow_hashes_the_bytes_under_the_seed_the_height_names() {
                 },
             )
         };
-        for m in &mined {
+        // Genesis was proved under the null seed, and block 0's hash seeds
+        // heights 1 and 2. A derivation lands in the store's transient slot
+        // and only a pin makes one canonical; this driver pins none, so the
+        // second derivation replaced the first. The chain's own seed for
+        // genesis is not held, and `calc_pow` refuses it rather than derive.
+        let genesis = &mined[0];
+        assert_eq!(genesis.seed, BlockHash::NULL);
+        assert_eq!(
+            ask(
+                genesis.height,
+                &hex::encode(genesis.template.block.pow_blob()),
+                ""
+            ),
+            not_held(BlockHash::NULL)
+        );
+        for m in &mined[1..] {
+            let held = caches
+                .lookup(&Seedhash::from_bytes(*m.seed.as_bytes()))
+                .expect("the validator holds the seed it proved this block under");
             let blob = m.template.block.pow_blob();
+            let recorded = get_block_header_by_height(&facts, m.height.to_raw(), true)
+                .expect("in range")
+                .block_header
+                .pow_hash
+                .expect("filled");
             assert_eq!(
                 ask(m.height, &hex::encode(&blob), ""),
-                Ok(hex::encode(keccak_pow(&blob, &m.seed))),
-                "the recorded PoW at {}",
+                Ok(hex::encode(compute_hash(&held, &blob))),
+                "RandomX under the held seed at {}",
+                m.height.to_raw()
+            );
+            assert_eq!(
+                ask(m.height, &hex::encode(&blob), ""),
+                Ok(hex::encode(recorded.to_bytes())),
+                "the PoW the node recorded at {}",
                 m.height.to_raw()
             );
         }
+        // A held seed the caller names: block 1's, under block 2's bytes.
         let blob = mined[2].template.block.pow_blob();
-        let named = BlockHash::from_bytes([7; 32]);
+        let named = mined[1].seed;
+        let held = caches
+            .lookup(&Seedhash::from_bytes(*named.as_bytes()))
+            .expect("held");
         assert_eq!(
             ask(BlockHeight::ZERO, &hex::encode(&blob), &hex::encode(named.to_bytes())),
-            Ok(hex::encode(keccak_pow(&blob, &named)))
+            Ok(hex::encode(compute_hash(&held, &blob)))
         );
         let far = 1_000_000u64;
         let seed_height = shekyl_chain_rules::seed_height(BlockHeight::from_raw(far))
@@ -426,10 +469,73 @@ async fn calc_pow_hashes_the_bytes_under_the_seed_the_height_names() {
     s.close().await;
 }
 
-/// An empty store has no tip: every chain read is not ready. A hash under a
-/// seed the caller names needs no chain, and is answered.
+/// The refusal for a seed the cache store does not hold, given or named by
+/// a height.
+fn not_held(seed: BlockHash) -> Result<String, RpcFault> {
+    Err(RpcFault::Refused(RpcRefusal::wrong_param(&format!(
+        "Seed {} is not held: calc_pow hashes under held seeds only",
+        hex::encode(seed.to_bytes())
+    ))))
+}
+
+/// `calc_pow` never derives a cache (ruled 2026-10-17). Over a chain whose
+/// facts hold an empty cache store, a seed the caller names and the seed a
+/// height names are each refused, naming the seed, and afterwards the store
+/// still holds neither: a derivation publishes the cache it made, so a seed
+/// still absent is one never derived.
+#[tokio::test]
+async fn calc_pow_never_derives_a_cache() {
+    let mut s = Scenario::open_with("rpc-reads-calc-pow-held", KeccakPow);
+    let mined = s.mine(3).await;
+    s.reopen(|path| {
+        let store = Arc::new(open_store(path));
+        let caches = Arc::new(CacheStore::new());
+        let facts = facts_with_caches(Arc::clone(&store), path, RULES, Arc::clone(&caches));
+        let blob = hex::encode(mined[2].template.block.pow_blob());
+        let fresh = BlockHash::from_bytes([7; 32]);
+        assert_eq!(
+            calc_pow(
+                &facts,
+                &CalcPowRequest {
+                    height: 2,
+                    block_blob: blob.clone(),
+                    seed_hash: hex::encode(fresh.to_bytes()),
+                }
+            ),
+            not_held(fresh)
+        );
+        let named_by_height = mined[2].seed;
+        assert_eq!(
+            calc_pow(
+                &facts,
+                &CalcPowRequest {
+                    height: 2,
+                    block_blob: blob,
+                    seed_hash: String::new(),
+                }
+            ),
+            not_held(named_by_height)
+        );
+        for seed in [fresh, named_by_height] {
+            assert!(
+                caches
+                    .lookup(&Seedhash::from_bytes(*seed.as_bytes()))
+                    .is_none(),
+                "calc_pow derived no cache for {seed:?}"
+            );
+        }
+        drop(facts);
+        drop(store);
+    })
+    .await;
+    s.close().await;
+}
+
+/// An empty store has no tip: every chain read is not ready, and with no
+/// cache held there is nothing `calc_pow` hashes under, even for a seed the
+/// caller names.
 #[test]
-fn an_empty_store_has_no_chain_reads_and_hashes_under_a_named_seed() {
+fn an_empty_store_has_no_chain_reads_and_hashes_nothing() {
     let path = tmp("rpc-reads-empty");
     let store = Arc::new(open_store(&path));
     let facts = facts_over(Arc::clone(&store), &path, RULES);
@@ -454,7 +560,7 @@ fn an_empty_store_has_no_chain_reads_and_hashes_under_a_named_seed() {
                 seed_hash: hex::encode(seed.to_bytes()),
             }
         ),
-        Ok(hex::encode(keccak_pow(&[0], &seed)))
+        not_held(seed)
     );
     drop(facts);
     drop(store);
