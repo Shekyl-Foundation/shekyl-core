@@ -147,7 +147,9 @@ F-10's verdict writes `Disarmed` and nothing re-arms it) lives in
 `shekyl-relay`'s `stem_watch.rs`, keyed by transaction hash beside the
 stem watch whose verdict disarms it. The pool record carries the one fact
 the pool reads — whether the transaction is public yet (D++ acceptance
-criterion 2) — written only by the relay's fluff event and never cleared.
+criterion 2) — written by the relay's fluff event, and by a block carrying
+the transaction (a block has published it; a pool that kept it hidden
+would be a possession oracle), and never cleared.
 The disarm *timer* is the Zone's; the pool holds no timer. The byte enum
 `RelayMethod` stays what it is — the FFI seam's word for an arrival class
 or a routing plan — and is never persisted.

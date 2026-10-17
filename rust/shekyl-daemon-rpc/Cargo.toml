@@ -63,8 +63,11 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # CEN-M9's prepared reversion (`submit/rust_pool_shim.rs`): the
 # `SubmitStateShim` over the Rust pool, reading the committed chain through
-# the store's `SnapshotView`. Not routed until the DRS-X flip; no FFI crate
-# reaches either edge (`shekyl-ffi` does not depend on this crate).
+# the store's `SnapshotView`. Not routed until the DRS-X flip, but linked:
+# `shekyl-daemon-image`, the shekyld binary's one Rust image, depends on
+# this crate, so both crates link into shekyld. No C++ reaches them — no
+# FFI export names the pool, and `shekyl-ffi` does not depend on this
+# crate.
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
