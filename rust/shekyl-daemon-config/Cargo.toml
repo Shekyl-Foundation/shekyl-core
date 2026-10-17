@@ -1,0 +1,43 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-daemon-config"
+description = "The daemon's configuration: its option table over shekyl-options, precedence, the per-network file and its checks, the lock, the marker, and the typed sections each Rust owner takes (DAEMON_CONFIG_CUTOVER.md)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+shekyl-options = { path = "../shekyl-options" }
+# The log subsystems `log-category` keys are checked against (IG-9: by
+# reference to the owner).
+shekyl-logging = { path = "../shekyl-logging" }
+# The network marker is two TOML keys; parsed with the reader the
+# workspace already pins (DAEMON_CONFIG_CUTOVER_AUDIT.md §4).
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+# A mining address is checked against the network at construction.
+shekyl-address = { path = "../shekyl-address" }
+
+[target.'cfg(unix)'.dependencies]
+# Safe wrappers for the data-directory lock (`flock`) and the account's
+# effective uid; the crate shekyl-engine-prefs already pins for `fsync`.
+rustix = { version = "1", features = ["fs", "process"] }
+
+[target.'cfg(windows)'.dependencies]
+# The Win32 security calls (the DACL allowlist, the file lock) live where
+# the workspace keeps its Windows `unsafe`.
+shekyl-win-sec = { path = "../shekyl-win-sec" }
+
+[dev-dependencies]
+tempfile = "3"
+# A valid v3 onion for the operator-Tor tests.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
+
+[lints]
+workspace = true

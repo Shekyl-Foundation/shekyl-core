@@ -103,8 +103,10 @@ pub(crate) fn open(sink: &FileSink, lines: usize) -> Result<(NonBlocking, Worker
             max_bytes,
             max_files,
         } => {
-            let writer = SizeRollingWriter::new(dir, &sink.filename_prefix, max_bytes, max_files)
-                .map_err(InitError::FileSinkCreate)?;
+            let mut writer =
+                SizeRollingWriter::new(dir, &sink.filename_prefix, max_bytes, max_files)
+                    .map_err(InitError::FileSinkCreate)?;
+            writer.retained_bytes = sink.retained_bytes;
             crate::queue::queued(writer, crate::queue::Sink::File, lines)
         }
     };
@@ -280,6 +282,17 @@ struct SizeRollingWriter {
     bytes_written: u64,
     max_bytes: u64,
     max_files: u32,
+    /// `Some` when the sink was built with `within_budget`: the live file
+    /// and its archives together stay within this many bytes. `None` leaves
+    /// the rotation a file count.
+    retained_bytes: Option<u64>,
+}
+
+/// One rotated sibling: path, mtime, and length. The live file is not one.
+struct RotatedFile {
+    path: PathBuf,
+    modified: std::time::SystemTime,
+    len: u64,
 }
 
 impl SizeRollingWriter {
@@ -294,6 +307,7 @@ impl SizeRollingWriter {
             bytes_written,
             max_bytes,
             max_files,
+            retained_bytes: None,
         })
     }
 
@@ -334,17 +348,10 @@ impl SizeRollingWriter {
         Ok(())
     }
 
-    /// Prune prefix-matching siblings so the total on-disk count
-    /// (live file + rotated files) stays at or below `self.max_files`.
-    ///
-    /// The live file is always retained. Everything else matching the
-    /// prefix and surviving the symlink filter is sorted by mtime
-    /// ascending and the oldest are deleted until the invariant holds.
-    fn prune_oldest(&self) -> io::Result<()> {
-        if self.max_files == 0 {
-            return Ok(());
-        }
-        let mut rotated: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+    /// Rotated siblings of this sink. The live file (`name == prefix`)
+    /// and a non-file planted under the prefix are left out.
+    fn rotated_files(&self) -> io::Result<Vec<RotatedFile>> {
+        let mut rotated = Vec::new();
         for entry in fs::read_dir(&self.dir)? {
             let entry = entry?;
             let name = entry.file_name();
@@ -370,9 +377,27 @@ impl SizeRollingWriter {
             if !file_type.is_file() {
                 continue;
             }
-            let mtime = entry.metadata()?.modified()?;
-            rotated.push((entry.path(), mtime));
+            let meta = entry.metadata()?;
+            rotated.push(RotatedFile {
+                path: entry.path(),
+                modified: meta.modified()?,
+                len: meta.len(),
+            });
         }
+        Ok(rotated)
+    }
+
+    /// Prune prefix-matching siblings so the total on-disk count
+    /// (live file + rotated files) stays at or below `self.max_files`.
+    ///
+    /// The live file is always retained. Everything else matching the
+    /// prefix and surviving the symlink filter is sorted by mtime
+    /// ascending and the oldest are deleted until the invariant holds.
+    fn prune_oldest(&self) -> io::Result<()> {
+        if self.max_files == 0 {
+            return Ok(());
+        }
+        let mut rotated = self.rotated_files()?;
 
         // Target: total on-disk count (live + rotated) <= max_files.
         // The live file is always retained, so the rotated slice must
@@ -383,16 +408,46 @@ impl SizeRollingWriter {
         // 1` deletes every rotated sibling.
         let cap = self.max_files.saturating_sub(1) as usize;
         if rotated.len() > cap {
-            rotated.sort_by_key(|(_, t)| *t);
+            rotated.sort_by_key(|file| file.modified);
             let to_delete = rotated.len() - cap;
-            for (path, _) in rotated.iter().take(to_delete) {
+            for file in rotated.iter().take(to_delete) {
                 // Per-file remove errors are swallowed to match
                 // `mlog.cpp`'s loop, which logs-then-continues on
                 // `boost::filesystem::remove` failure. `drop(...)`
                 // instead of `let _ = ...;` keeps the
                 // `clippy::let_underscore_must_use` lint's signal
                 // intact crate-wide.
-                drop(fs::remove_file(path));
+                drop(fs::remove_file(&file.path));
+            }
+        }
+        Ok(())
+    }
+
+    /// Drop the oldest rotated files until the live file and the
+    /// archives together fit [`Self::retained_bytes`]. The live file
+    /// is never deleted: one record larger than the budget overshoots
+    /// until the rollover in the same `write` has moved it out and this
+    /// pass deletes that archive. `None` is a count rotation and prunes
+    /// nothing here.
+    fn prune_to_budget(&self) -> io::Result<()> {
+        let Some(budget) = self.retained_bytes else {
+            return Ok(());
+        };
+        let mut rotated = self.rotated_files()?;
+        let archived = rotated
+            .iter()
+            .fold(0u64, |sum, file| sum.saturating_add(file.len));
+        let mut total = self.bytes_written.saturating_add(archived);
+        if total <= budget {
+            return Ok(());
+        }
+        rotated.sort_by_key(|file| file.modified);
+        for file in &rotated {
+            if total <= budget {
+                break;
+            }
+            if fs::remove_file(&file.path).is_ok() {
+                total = total.saturating_sub(file.len);
             }
         }
         Ok(())
@@ -414,6 +469,10 @@ impl Write for SizeRollingWriter {
             // `clippy::let_underscore_must_use` lint's signal.
             drop(self.rollover());
         }
+        // After the count prune a rollover just did, and also when this
+        // write did not roll: a byte budget drops archives until the sum
+        // fits. A count rotation leaves `retained_bytes` unset.
+        drop(self.prune_to_budget());
         Ok(n)
     }
 
@@ -745,5 +804,63 @@ mod size_rolling_tests {
             total, 3,
             "same-second rollovers must produce 2 distinct rotated siblings, got {total} total"
         );
+    }
+
+    /// Bytes in the live file and its rotated siblings.
+    fn retained_bytes(dir: &Path, prefix: &str) -> u64 {
+        fs::read_dir(dir)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    return false;
+                };
+                name == prefix || name.starts_with(&format!("{prefix}-"))
+            })
+            .map(|entry| entry.metadata().expect("metadata").len())
+            .fold(0u64, u64::saturating_add)
+    }
+
+    #[test]
+    fn a_burst_past_the_budget_drops_archives_until_the_sum_fits() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let prefix = "budget.log";
+        // The share is the roll size. The count cap is high, so only the
+        // byte budget deletes archives. Three shares fit; the burst is eight.
+        const SHARE: u64 = 8;
+        const FITS: u64 = SHARE * 3;
+        let mut writer =
+            SizeRollingWriter::new(dir.path(), prefix, SHARE, 50).expect("construct writer");
+        writer.retained_bytes = Some(FITS);
+        for _ in 0..8 {
+            writer.write_all(b"12345678").expect("write");
+        }
+        writer.flush().expect("flush");
+        let sum = retained_bytes(dir.path(), prefix);
+        assert!(
+            sum <= FITS,
+            "archives must be dropped until the sum fits the budget; got {sum}"
+        );
+        assert!(dir.path().join(prefix).exists(), "the live file stays");
+    }
+
+    #[test]
+    fn one_record_larger_than_the_budget_is_rolled_away() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let prefix = "overshoot.log";
+        const BUDGET: u64 = 16;
+        let mut writer =
+            SizeRollingWriter::new(dir.path(), prefix, 8, 50).expect("construct writer");
+        writer.retained_bytes = Some(BUDGET);
+        writer
+            .write_all(&[b'x'; 64])
+            .expect("one record past the budget");
+        writer.flush().expect("flush");
+        let sum = retained_bytes(dir.path(), prefix);
+        assert!(
+            sum <= BUDGET,
+            "the rolled record is deleted in the same write; got {sum}"
+        );
+        assert!(dir.path().join(prefix).exists(), "the live file stays");
     }
 }

@@ -115,8 +115,8 @@ t_command_server::t_command_server(
   m_command_lookup.set_handler(
       "start_mining"
     , std::bind(&t_command_parser_executor::start_mining, &m_parser, p::_1)
-    , "start_mining <addr> [<threads>|auto] [do_background_mining] [ignore_battery]"
-    , "Start mining for specified address. Defaults to 1 thread and no background mining. Use \"auto\" to autodetect optimal number of threads."
+    , "start_mining <addr> [<threads>|auto]"
+    , "Start mining for specified address. Defaults to 1 thread. Use \"auto\" to autodetect optimal number of threads."
     );
   m_command_lookup.set_handler(
       "stop_mining"
@@ -159,12 +159,6 @@ t_command_server::t_command_server(
     , "Save the blockchain."
     );
   m_command_lookup.set_handler(
-      "set_log"
-    , std::bind(&t_command_parser_executor::set_log_level, &m_parser, p::_1)
-    , "set_log <level>|<{+,-,}categories>"
-    , "Change the current log level/categories where <level> is a number 0-4."
-    );
-  m_command_lookup.set_handler(
       "diff"
     , std::bind(&t_command_parser_executor::show_difficulty, &m_parser, p::_1)
     , "Show the current difficulty."
@@ -188,36 +182,6 @@ t_command_server::t_command_server(
       "print_status"
     , std::bind(&t_command_parser_executor::print_status, &m_parser, p::_1)
     , "Print the current daemon status."
-    );
-  m_command_lookup.set_handler(
-      "limit"
-    , std::bind(&t_command_parser_executor::set_limit, &m_parser, p::_1)
-    , "limit [<kB/s>]"
-    , "Get or set the download and upload limit."
-    );
-  m_command_lookup.set_handler(
-      "limit_up"
-    , std::bind(&t_command_parser_executor::set_limit_up, &m_parser, p::_1)
-    , "limit_up [<kB/s>]"
-    , "Get or set the upload limit."
-    );
-  m_command_lookup.set_handler(
-      "limit_down"
-    , std::bind(&t_command_parser_executor::set_limit_down, &m_parser, p::_1)
-    , "limit_down [<kB/s>]"
-    , "Get or set the download limit."
-    );
-    m_command_lookup.set_handler(
-      "out_peers"
-    , std::bind(&t_command_parser_executor::out_peers, &m_parser, p::_1)
-    , "out_peers <max_number>"
-    , "Set the <max_number> of out peers."
-    );
-    m_command_lookup.set_handler(
-      "in_peers"
-    , std::bind(&t_command_parser_executor::in_peers, &m_parser, p::_1)
-    , "in_peers <max_number>"
-    , "Set the <max_number> of in peers."
     );
     m_command_lookup.set_handler(
       "bans"

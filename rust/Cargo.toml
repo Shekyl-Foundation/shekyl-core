@@ -396,6 +396,20 @@ members = [
     # Unified tracing-based logger init for all Rust binaries
     "shekyl-logging",
 
+    # The input grammar's shared crate (INPUT_GRAMMAR.md IG-15): option tables,
+    # value kinds and parsers, typed diagnostics. Every binary builds its table
+    # from it.
+    "shekyl-options",
+
+    # The daemon's configuration over shekyl-options (DAEMON_CONFIG_CUTOVER.md):
+    # the table, precedence, the file, the lock, the marker, the sections.
+    "shekyl-daemon-config",
+
+    # The daemon's Rust main() and its one signal owner (DAEMON_CONFIG_CUTOVER.md
+    # §2.2); the C++ remnant is a run/stop pair it drives. Exported through
+    # shekyl-daemon-image.
+    "shekyl-daemon",
+
     # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,
     # RANDOMX_V2_RUST.md). Consumed by shekyl-ffi (Phase 3); not the miner.
     "shekyl-pow-randomx",

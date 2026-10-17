@@ -56,8 +56,12 @@ void core_rpc_ffi_destroy(core_rpc_handle* h);
 //! Disappears with the p2p migration.
 char* core_rpc_ffi_stem_tallies(core_rpc_handle* h);
 
+// `restricted` is the calling listener's posture (admin or view). One
+// core_rpc_server answers every listener, so the posture rides with each
+// call as the origin the bridge hands the handler (core_rpc_ffi.cpp,
+// rpc_origin), never as state of the server.
 char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
-    const char* uri, const char* body_json);
+    const char* uri, const char* body_json, bool restricted);
 
 // JSON-RPC 2.0 method dispatch.
 // Returns a JSON string:
@@ -65,7 +69,7 @@ char* core_rpc_ffi_json_endpoint(core_rpc_handle* h,
 //   {"ok":false,"error_code":N,"error_message":"..."} on handler error
 // Returns NULL only if the method is completely unknown.
 char* core_rpc_ffi_json_rpc(core_rpc_handle* h,
-    const char* method, const char* params_json);
+    const char* method, const char* params_json, bool restricted);
 
 void core_rpc_ffi_free_string(char* s);
 

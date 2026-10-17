@@ -162,12 +162,14 @@ pub fn calc_pow(facts: &dyn ChainReadFacts, request: &CalcPowRequest) -> Result<
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
             message: "Wrong block blob".to_owned(),
+            data: None,
         }));
     };
     if blob.len() > shekyl_wire::block::MAX_BLOCK_BLOB_SIZE {
         return Err(RpcFault::Refused(RpcRefusal {
             code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
             message: "Block blob size is too big, rejecting block".to_owned(),
+            data: None,
         }));
     }
     let seed = if request.seed_hash.is_empty() {

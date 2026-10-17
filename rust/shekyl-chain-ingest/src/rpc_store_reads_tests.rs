@@ -447,7 +447,8 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
             ask(h(1), "zz", ""),
             Err(RpcFault::Refused(RpcRefusal {
                 code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
-                message: "Wrong block blob".to_owned()
+                message: "Wrong block blob".to_owned(),
+                data: None,
             }))
         );
         let oversize = vec![0u8; shekyl_wire::block::MAX_BLOCK_BLOB_SIZE + 1];
@@ -455,7 +456,8 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
             ask(h(1), &hex::encode(oversize), ""),
             Err(RpcFault::Refused(RpcRefusal {
                 code: CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
-                message: "Block blob size is too big, rejecting block".to_owned()
+                message: "Block blob size is too big, rejecting block".to_owned(),
+                data: None,
             }))
         );
         assert!(matches!(

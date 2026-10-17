@@ -7,12 +7,12 @@
 
 use std::ffi::c_void;
 
-use shekyl_peer_policy::UnboundedReason;
 use shekyl_timing_engine::OwnerClass;
 
 use super::*;
+use crate::inbound_ceiling_ffi::ShekylInboundCeiling;
 use crate::inbound_ceiling_ffi::SHEKYL_INBOUND_CEILING_UNLIMITED;
-use crate::seam_ffi::{shekyl_seam_bind, ShekylSeamObserved};
+use crate::seam_ffi::{shekyl_seam_bind, shekyl_seam_set_ceiling, ShekylSeamObserved};
 
 unsafe extern "C" fn discard(
     _ctx: *mut c_void,
@@ -46,16 +46,12 @@ fn the_engine_outlives_ensure() {
         shekyl_seam_bind(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
-            &raw const ceiling,
         )
     };
     assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
     let network_id = [7u8; 16];
-    let host = ensure(
-        network_id.as_ptr(),
-        InboundCeiling::Unbounded(UnboundedReason::Unlimited),
-    )
-    .expect("zone host");
+    let host = ensure(network_id).expect("zone host");
 
     let owner = host.engine.register(OwnerClass::Transport);
     assert!(
@@ -66,29 +62,24 @@ fn the_engine_outlives_ensure() {
 
     // An outbound-only tor zone installs its proxy without listening.
     assert!(host.tor_proxy.lock().expect("tor proxy").is_none());
-    let socks = std::ffi::CString::new("127.0.0.1").expect("socks host");
-    let rc = unsafe {
-        shekyl_zone_set_tor_proxy(
-            socks.as_ptr(),
-            9050,
-            network_id.as_ptr(),
-            &raw const ceiling,
-        )
-    };
-    assert_eq!(rc, 0);
+    dial_through_tor(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050),
+        network_id,
+    )
+    .expect("the proxy install");
     assert_eq!(
         *host.tor_proxy.lock().expect("tor proxy"),
         Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050)),
         "dial_tor reads this; None is DialFailed before the network"
     );
 
-    shekyl_zone_shutdown();
+    shutdown();
     assert!(
         host.engine.register(OwnerClass::Transport).is_err(),
         "shutdown closes the engine"
     );
     unsafe {
-        shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        shekyl_seam_bind(std::ptr::null_mut(), None);
     }
 }
 
@@ -114,16 +105,12 @@ fn the_engine_reads_the_process_clock() {
         shekyl_seam_bind(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
-            &raw const ceiling,
         )
     };
     assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
     let network_id = [7u8; 16];
-    let host = ensure(
-        network_id.as_ptr(),
-        InboundCeiling::Unbounded(UnboundedReason::Unlimited),
-    )
-    .expect("zone host");
+    let host = ensure(network_id).expect("zone host");
     let owner = host
         .engine
         .register(OwnerClass::Transport)
@@ -141,9 +128,9 @@ fn the_engine_reads_the_process_clock() {
         );
     }
     drop(owner);
-    shekyl_zone_shutdown();
+    shutdown();
     unsafe {
-        shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        shekyl_seam_bind(std::ptr::null_mut(), None);
     }
 }
 
@@ -169,16 +156,12 @@ fn a_second_start_of_a_connectors_loop_starts_nothing() {
         shekyl_seam_bind(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
-            &raw const ceiling,
         )
     };
     assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
     let network_id = [9u8; 16];
-    let host = ensure(
-        network_id.as_ptr(),
-        InboundCeiling::Unbounded(UnboundedReason::Unlimited),
-    )
-    .expect("zone host");
+    let host = ensure(network_id).expect("zone host");
 
     assert!(
         crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine),
@@ -188,23 +171,15 @@ fn a_second_start_of_a_connectors_loop_starts_nothing() {
         !crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine),
         "a second start finds it taken and starts nothing"
     );
-    let socks = std::ffi::CString::new("127.0.0.1").expect("socks host");
-    let rc = unsafe {
-        shekyl_zone_set_tor_proxy(
-            socks.as_ptr(),
-            9050,
-            network_id.as_ptr(),
-            &raw const ceiling,
-        )
-    };
-    assert_eq!(
-        rc, 0,
-        "the proxy install is not refused by the claimed loop"
-    );
+    dial_through_tor(
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050),
+        network_id,
+    )
+    .expect("the proxy install is not refused by the claimed loop");
 
-    shekyl_zone_shutdown();
+    shutdown();
     unsafe {
-        shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        shekyl_seam_bind(std::ptr::null_mut(), None);
     }
 }
 
@@ -225,43 +200,35 @@ fn a_zone_host_built_after_shutdown_has_a_dialer() {
         held: 0,
     };
     unsafe {
-        shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        shekyl_seam_bind(std::ptr::null_mut(), None);
     }
     let bound = unsafe {
         shekyl_seam_bind(
             std::ptr::addr_of_mut!(executor).cast::<c_void>(),
             Some(discard),
-            &raw const ceiling,
         )
     };
     assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
     assert!(crate::dialer_ffi::dialer().is_some(), "built at the bind");
     let network_id = [7u8; 16];
-    let first = ensure(
-        network_id.as_ptr(),
-        InboundCeiling::Unbounded(UnboundedReason::Unlimited),
-    )
-    .expect("zone host");
-    shekyl_zone_shutdown();
+    let first = ensure(network_id).expect("zone host");
+    shutdown();
     assert!(
         crate::dialer_ffi::dialer().is_none(),
         "shutdown drops the dialer"
     );
     assert!(crate::seam_ffi::hub().is_some(), "and the seam stays bound");
     drop(first);
-    let second = ensure(
-        network_id.as_ptr(),
-        InboundCeiling::Unbounded(UnboundedReason::Unlimited),
-    )
-    .expect("a second zone host");
+    let second = ensure(network_id).expect("a second zone host");
     assert!(
         crate::dialer_ffi::dialer().is_some(),
         "the second host builds the dialer again"
     );
-    shekyl_zone_shutdown();
+    shutdown();
     drop(second);
     unsafe {
-        shekyl_seam_bind(std::ptr::null_mut(), None, std::ptr::null());
+        shekyl_seam_bind(std::ptr::null_mut(), None);
     }
 }
 
@@ -280,4 +247,62 @@ fn a_closed_admission_keeps_the_dial_cause() {
         let err = recv_admitted(rx, fail_rx).await.expect_err("dial failed");
         assert_eq!(err.kind(), CloseKind::DialFailed);
     });
+}
+
+/// A listener that cannot bind is a refusal naming the endpoint, and
+/// nothing of that start survives: the endpoint already taken by one host's
+/// clearnet is refused to a second start (the C++ `bind_same_p2p_port`
+/// test's subject, now the zone host's).
+#[test]
+fn a_clearnet_endpoint_already_bound_is_refused_with_its_address() {
+    let _bind = crate::seam_ffi::seam_bind_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut executor = 0u8;
+    let ceiling = ShekylInboundCeiling {
+        kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+        ceiling: 0,
+        soft_limit: 0,
+        held: 0,
+    };
+    let bound = unsafe {
+        shekyl_seam_bind(
+            std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+            Some(discard),
+        )
+    };
+    assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
+    let network_id = [11u8; 16];
+    let first = start_clearnet(
+        &[SocketAddr::from((Ipv4Addr::LOCALHOST, 0))],
+        None,
+        false,
+        network_id,
+    )
+    .expect("the first start binds");
+    assert_eq!(first.len(), 1);
+    let taken = first[0];
+    assert_ne!(taken.port(), 0, "the OS chose a port");
+    // Another listener on the taken endpoint: refused, naming it. (The
+    // host is one per process, so this is a second listener set on the
+    // same host, which is what a second start would bind.)
+    let again = start_clearnet(&[taken], None, false, network_id);
+    match again {
+        Err(ZoneStart::Bind { addr, .. }) => assert_eq!(addr, taken),
+        other => panic!("a taken endpoint must be refused as a bind error: {other:?}"),
+    }
+    // A free endpoint beside the taken one still binds.
+    let another = start_clearnet(
+        &[SocketAddr::from((Ipv4Addr::LOCALHOST, 0))],
+        None,
+        false,
+        network_id,
+    )
+    .expect("a free endpoint binds");
+    assert_ne!(another[0], taken);
+    shutdown();
+    unsafe {
+        shekyl_seam_bind(std::ptr::null_mut(), None);
+    }
 }

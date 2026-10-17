@@ -23,6 +23,8 @@ crate-type = ["staticlib"]
 [dependencies]
 shekyl-ffi = { path = "../shekyl-ffi" }
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+# The daemon's entry: shekyl_daemon_main, exported from this image.
+shekyl-daemon = { path = "../shekyl-daemon" }
 shekyl-archival-fetch-sched = { path = "../shekyl-archival-fetch-sched" }
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }

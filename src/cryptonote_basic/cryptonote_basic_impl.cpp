@@ -208,59 +208,41 @@ namespace cryptonote {
     return true;
   }
   //-----------------------------------------------------------------------
-  bool get_account_address_from_str(
+  bool account_public_address_from_decoded(
       address_parse_info& info
-    , network_type nettype
-    , std::string const & str
+    , const uint8_t spend_key[32]
+    , const uint8_t view_key[32]
+    , const uint8_t* ml_kem
+    , size_t ml_kem_len
     )
   {
-    uint8_t network_out = 0;
-    uint8_t spend_key[32] = {};
-    uint8_t view_key[32] = {};
-
-    ShekylBuffer ml_kem_buf = shekyl_address_decode(
-        str.c_str(), &network_out, spend_key, view_key);
-
-    if (ml_kem_buf.ptr == nullptr)
-    {
-      LOG_PRINT_L2("Invalid Bech32m address format");
+    if (spend_key == nullptr || view_key == nullptr)
       return false;
-    }
-
-    uint8_t expected_net = nettype_to_ffi_network(nettype);
-    if (network_out != expected_net)
-    {
-      LOG_PRINT_L1("Address network mismatch: address belongs to network "
-          << (int)network_out << ", expected " << (int)expected_net);
-      if (ml_kem_buf.len > 0)
-        shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
+    if (ml_kem_len > 0 && ml_kem == nullptr)
       return false;
-    }
 
     memcpy(&info.address.m_spend_public_key, spend_key, 32);
     memcpy(&info.address.m_view_public_key, view_key, 32);
 
-    if (ml_kem_buf.len > 0)
+    if (ml_kem_len > 0)
     {
       // Derive X25519 public key from Ed25519 view key via Edwards→Montgomery map.
       // m_pqc_public_key layout: X25519_pub[32] || ML-KEM_ek[1184] = 1216 bytes.
-      // Canonical assembler: this function. See account_public_address field comment.
+      // Shared assembly: this function. See account_public_address field comment.
       uint8_t x25519_pk[32];
       if (!shekyl_view_pub_to_x25519_pub(
               reinterpret_cast<const uint8_t*>(&info.address.m_view_public_key), x25519_pk))
       {
         LOG_PRINT_L1("Failed to derive X25519 public key from view key");
-        shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
         return false;
       }
 
       info.address.m_pqc_public_key.clear();
-      info.address.m_pqc_public_key.reserve(SHEKYL_X25519_PK_BYTES + ml_kem_buf.len);
+      info.address.m_pqc_public_key.reserve(SHEKYL_X25519_PK_BYTES + ml_kem_len);
       info.address.m_pqc_public_key.insert(
           info.address.m_pqc_public_key.end(), x25519_pk, x25519_pk + SHEKYL_X25519_PK_BYTES);
       info.address.m_pqc_public_key.insert(
-          info.address.m_pqc_public_key.end(), ml_kem_buf.ptr, ml_kem_buf.ptr + ml_kem_buf.len);
-      shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
+          info.address.m_pqc_public_key.end(), ml_kem, ml_kem + ml_kem_len);
 
       CHECK_AND_ASSERT_MES(info.address.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES,
         false, "m_pqc_public_key assembly error: expected " << SHEKYL_PQC_PUBLIC_KEY_BYTES
@@ -303,6 +285,42 @@ namespace cryptonote {
     }
 
     return true;
+  }
+  //-----------------------------------------------------------------------
+  bool get_account_address_from_str(
+      address_parse_info& info
+    , network_type nettype
+    , std::string const & str
+    )
+  {
+    uint8_t network_out = 0;
+    uint8_t spend_key[32] = {};
+    uint8_t view_key[32] = {};
+
+    ShekylBuffer ml_kem_buf = shekyl_address_decode(
+        str.c_str(), &network_out, spend_key, view_key);
+
+    if (ml_kem_buf.ptr == nullptr)
+    {
+      LOG_PRINT_L2("Invalid Bech32m address format");
+      return false;
+    }
+
+    uint8_t expected_net = nettype_to_ffi_network(nettype);
+    if (network_out != expected_net)
+    {
+      LOG_PRINT_L1("Address network mismatch: address belongs to network "
+          << (int)network_out << ", expected " << (int)expected_net);
+      if (ml_kem_buf.len > 0)
+        shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
+      return false;
+    }
+
+    const bool ok = account_public_address_from_decoded(
+        info, spend_key, view_key, ml_kem_buf.ptr, ml_kem_buf.len);
+    if (ml_kem_buf.len > 0)
+      shekyl_buffer_free(ml_kem_buf.ptr, ml_kem_buf.len);
+    return ok;
   }
   //--------------------------------------------------------------------------------
   bool operator ==(const cryptonote::transaction& a, const cryptonote::transaction& b) {

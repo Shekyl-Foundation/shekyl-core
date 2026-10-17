@@ -1115,85 +1115,97 @@ fn address_type_name(address_type: u8) -> &'static str {
     }
 }
 
-/// The `/get_limit` reply, as much of it as `print_net_stats` reads.
-///
-/// **A bridged leg, on purpose** (§2.1.1): `/get_limit` is RK-8's, and until
-/// that slice lands it is still served from the C++ dispatch table. The
-/// condition that makes this safe is that the leg names a route the table
-/// really serves *and* that the console gate covers this command — so the
-/// slice that deletes the route turns this red rather than leaving it
-/// answering "no reply" forever. Both are in place; when RK-8 moves the
-/// route, this struct is replaced by the shared type.
-///
-/// **Neither field carries `#[serde(default)]`, and that is the second half
-/// of the guarantee.** Route deletion is the loud failure the `ok_or_else`
-/// above catches; a *rename or removal of a field* is the quiet one, and a
-/// default would absorb it — `print_net_stats` would report `0` up and `0`
-/// down, a real number the daemon does not hold, with no error and no red
-/// test. Required fields turn that into a deserialization error naming the
-/// field that moved. Both are `KV_SERIALIZE` (not `_OPT`) in
-/// `COMMAND_RPC_GET_LIMIT::response_t`, so the reply always carries them and
-/// absence can only mean the contract moved.
-#[derive(serde::Deserialize)]
-struct GetLimitReplyProvisional {
-    limit_up: u64,
-    limit_down: u64,
+/// The two rate rows `print_net_stats` reads, from `option_show`
+/// (`RPC_CHANNEL.md` §6.4: `/get_limit` was replaced, not ported): the
+/// download and the upload bound in bytes per second, `None` for
+/// `unlimited`. The text is the grammar's, built back through the row's own
+/// constructor, so a reply that is not a rate is named rather than read as
+/// zero.
+fn rate_limits(src: &Source) -> Result<(Option<u64>, Option<u64>), String> {
+    const DOWN: &str = "p2p-download-max";
+    const UP: &str = "p2p-upload-max";
+    let names = vec![DOWN.to_owned(), UP.to_owned()];
+    let request = crate::options::OptionShowRequest {
+        names: Some(names.clone()),
+    };
+    let reply: crate::options::OptionsResponse =
+        native_json_rpc(src, "option_show", &request, |_core| {
+            crate::options::option_show(
+                crate::ffi_exports::options().as_ref(),
+                Some(&names),
+                crate::info::Disclosure::FULL,
+            )
+        })?;
+    let bound = |name: &str| -> Result<Option<u64>, String> {
+        let row = reply
+            .options
+            .iter()
+            .find(|r| r.name() == name)
+            .ok_or_else(|| format!("option_show did not answer {name}"))?;
+        let text = row
+            .value()
+            .flatten()
+            .ok_or_else(|| format!("option_show gave {name} no value"))?;
+        let kind = &shekyl_daemon_config::TABLE
+            .row(name)
+            .ok_or_else(|| format!("{name} is not a row of the table"))?
+            .kind;
+        match kind.parse_text(text) {
+            Ok(shekyl_options::Value::Rate(bytes)) => Ok(Some(bytes)),
+            Ok(shekyl_options::Value::Word(_)) => Ok(None),
+            Ok(_) | Err(_) => Err(format!(
+                "option_show gave {name} the text {text:?}, not a rate"
+            )),
+        }
+    };
+    Ok((bound(DOWN)?, bound(UP)?))
 }
 
 /// `print_net_stats`.
 #[deny(clippy::arithmetic_side_effects)]
 fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
-    let (stats, limits) = match src {
+    let stats = match src {
         Source::Live(core) => {
             let facts = crate::chain_facts::FfiP2pFacts::new(core.clone());
-            let stats = crate::methods::get_net_stats(&facts).map_err(|e| format!("{e:?}"))?;
-            let raw = core
-                .json_endpoint("/get_limit", "{}")
-                .ok_or_else(|| "no reply from /get_limit".to_owned())?;
-            let limits: GetLimitReplyProvisional = serde_json::from_str(&raw)
-                .map_err(|e| format!("malformed get_limit reply: {e}"))?;
-            (stats, limits)
+            crate::methods::get_net_stats(&facts).map_err(|e| format!("{e:?}"))?
         }
         Source::Remote { .. } => {
             let raw = src.post_remote("/get_net_stats", b"{}".to_vec())?;
-            let stats =
-                decode_reply::<shekyl_rpc_types::GetNetStatsResponse>(&raw, "get_net_stats")?;
-            let raw = src.post_remote("/get_limit", b"{}".to_vec())?;
-            let limits: GetLimitReplyProvisional = serde_json::from_slice(&raw)
-                .map_err(|e| format!("malformed get_limit reply: {e}"))?;
-            (stats, limits)
+            decode_reply::<shekyl_rpc_types::GetNetStatsResponse>(&raw, "get_net_stats")?
         }
     };
     if !stats.status.is_ok() {
         return Err(stats.status.0);
     }
+    let (down, up) = rate_limits(src)?;
     let seconds = now.saturating_sub(stats.start_time);
-    let line = |verb: &str, bytes: u64, packets: u64, limit_kb: u64| -> String {
+    let line = |verb: &str, bytes: u64, packets: u64, limit: Option<u64>| -> String {
         // Total by construction rather than guarded; see `methods::average_kib`.
         let average = bytes.checked_div(seconds).unwrap_or(0);
-        // `/set_limit` takes an `int64_t` and passes any positive value
-        // straight to `set_rate_down_limit`, so `limit_kb` is whatever an
-        // admin typed — and `limit_kb * 1024` overflows above `u64::MAX /
-        // 1024`. Saturating, like every other peer- or admin-influenced
-        // arithmetic in this file.
-        let limit = limit_kb.saturating_mul(1024);
-        let percent = if limit == 0 {
-            0.0
-        } else {
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "a percentage for a human, from byte counts"
-            )]
-            let fraction = average as f64 / limit as f64;
-            fraction * 100.0
-        };
-        format!(
-            "{verb} {bytes} bytes ({}) in {packets} packets in {}, average {}/s = {percent:.2}% of the limit of {}/s",
+        let head = format!(
+            "{verb} {bytes} bytes ({}) in {packets} packets in {}, average {}/s",
             human_readable_bytes(bytes),
             human_readable_timespan(seconds),
             human_readable_bytes(average),
-            human_readable_bytes(limit)
-        )
+        );
+        match limit {
+            None => format!("{head}, no limit"),
+            Some(limit) => {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a percentage for a human, from byte counts"
+                )]
+                let percent = if limit == 0 {
+                    0.0
+                } else {
+                    average as f64 / limit as f64 * 100.0
+                };
+                format!(
+                    "{head} = {percent:.2}% of the limit of {}/s",
+                    human_readable_bytes(limit)
+                )
+            }
+        }
     };
     Ok(format!(
         "{}\n{}",
@@ -1201,14 +1213,9 @@ fn print_net_stats(src: &Source, now: u64) -> Result<String, String> {
             "Received",
             stats.total_bytes_in,
             stats.total_packets_in,
-            limits.limit_down
+            down
         ),
-        line(
-            "Sent",
-            stats.total_bytes_out,
-            stats.total_packets_out,
-            limits.limit_up
-        )
+        line("Sent", stats.total_bytes_out, stats.total_packets_out, up)
     ))
 }
 

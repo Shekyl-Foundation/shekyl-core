@@ -96,10 +96,6 @@ public:
 
   bool print_blockchain_info(int64_t start_block_index, uint64_t end_block_index);
 
-  bool set_log_level(int8_t level);
-
-  bool set_log_categories(const std::string &categories);
-
   bool print_height();
 
   bool print_block_by_hash(crypto::hash block_hash, bool include_hex);
@@ -119,7 +115,7 @@ public:
   // `address` is the user's original encoded string, passed through
   // verbatim (the parsed struct cannot be re-encoded since the fork-(ii)
   // address layout); the caller validates it before calling.
-  bool start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype, bool do_background_mining = false, bool ignore_battery = false);
+  bool start_mining(const std::string& address, uint64_t num_threads, cryptonote::network_type nettype);
 
   bool stop_mining();
 
@@ -129,17 +125,7 @@ public:
 
   bool print_status();
 
-  bool get_limit();
 
-  bool get_limit_up();
-
-  bool get_limit_down();
-
-  bool set_limit(int64_t limit_down, int64_t limit_up);
-
-  bool out_peers(bool set, uint32_t limit);
-
-  bool in_peers(bool set, uint32_t limit);
 
 
   bool print_bans();

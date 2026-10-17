@@ -80,6 +80,7 @@ pub mod transactions;
 pub use archival::{
     RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,
     CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
+    CORE_RPC_ERROR_CODE_CONFIG_REFUSED,
 };
 pub use bin_commands::{
     BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
