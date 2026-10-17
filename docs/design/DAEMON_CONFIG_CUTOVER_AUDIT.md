@@ -355,8 +355,8 @@ of its own, for the same reason as the negative one.
   `data-dir` in `src/blockchain_utilities/daemon_network_args.h` until
   the grammar's Part B rules each tool (§9, §10). `/start_mining` loses
   `do_background_mining` and `ignore_battery` with the background-mining
-  options (a 3.58 change, recorded in its note); the miner's own
-  background thread stays, the mining lane's (§10).
+  options (a 3.58 change, recorded in its note). The miner's background
+  half is deleted in this PR (Rick, 2026-10-17): see the note below.
 - **The regtest arms, the environment levers and the reverse pulls (commit
   (e2), §2.6, §4.2).** The `/fake` subdirectory, the wipe on start and
   `check_block_rate`'s FAKECHAIN skip are gone: the network selects the
@@ -477,8 +477,9 @@ of its own, for the same reason as the negative one.
   gates and the log budget (IG-Q19). Every §10 carry has its FOLLOWUPS
   row: the genesis-at-open check, the console's move (DC-N2), the
   utilities' option sets, the GUI sidecar (its draft PR is open on the
-  GUI repository), the background miner's thread, the two inherited
-  defaults; the `removed_flags` sunset row left with the files. The row
+  GUI repository), the two inherited defaults; the `removed_flags` sunset
+  row left with the files, and the background miner's row left with the
+  thread (deleted in this PR). The row
   on `--rpc-bind-ip`'s IPv4-only parser is closed: the client endpoint is
   a typed row (`rpc-admin-listen`'s kind, IPv4 or IPv6), and the C++
   parser is gone with (e1).
@@ -552,6 +553,25 @@ of its own, for the same reason as the negative one.
   `core::init` and by all five store-opening utilities through
   `UtilityNetwork::chain_options()`. The probe then opened the daemon's
   store with all five.
+- **The miner's background half is deleted (Rick, 2026-10-17).** This PR
+  removed its last enabler (the `bg-mining-*` rows, `start_mining`'s
+  `do_background_mining` and `ignore_battery`), so the half was
+  unreachable code the PR created: "Delete the old C++, we have addressed
+  this in Rust." Gone from `src/cryptonote_basic/miner.{h,cpp}`: the
+  controller thread and its started and enabled condition variables and
+  mutexes, the idle sampling (`get_system_times`, `get_process_time`,
+  `get_percent_of_total`), the battery probe and its platform branches
+  (and the macOS IOKit link that existed for it), `m_ignore_battery`,
+  every `BACKGROUND_MINING_*` constant, the min-idle, idle-threshold and
+  mining-target fields with their accessors, `m_miner_extra_sleep`, and
+  the worker loop's background branch; `miner.cpp` falls from 1,079 lines
+  to 469. With it `mining_status` loses `is_background_mining_enabled` and
+  the four `bg_*` members (part of 3.58), both consoles stop printing the
+  "smart mining" lines, and the wallet CLI stops sending the two retired
+  `start_mining` members. No test covered the half: the console tests'
+  mining replies all passed `false`. The Rust loop's below-daemon OS
+  priority (DRS-X PR 3) replaces it by design; the foreground loop stays,
+  the live miner until the DRS-X flip routes the Rust loop.
 - **The C++ exports Rust imports are gated.** `check_ffi_signatures.sh`
   covers Rust exports; `scripts/ci/check_cpp_import_signatures.py` covers
   the other direction (the `extern "C"` block of

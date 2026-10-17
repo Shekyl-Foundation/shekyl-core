@@ -237,7 +237,6 @@ namespace cryptonote
 
     const miner& lMiner = m_core.get_miner();
     res.active = lMiner.is_mining();
-    res.is_background_mining_enabled = lMiner.get_is_background_mining_enabled();
     store_difficulty(m_core.get_blockchain_storage().get_difficulty_for_next_block(), res.difficulty, res.wide_difficulty, res.difficulty_top64);
 
     // RPC wire contract: mining_status.block_target is part of the public
@@ -258,16 +257,9 @@ namespace cryptonote
     // The retained original string, not a struct re-encode: since the
     // fork-(ii) address layout the struct alone cannot re-encode an
     // address (no msg_sign_pk field).
-    if (lMiner.is_mining() || lMiner.get_is_background_mining_enabled())
+    if (lMiner.is_mining())
       res.address = lMiner.get_mining_address_str();
     res.pow_algorithm = "RandomX";
-    if (res.is_background_mining_enabled)
-    {
-      res.bg_idle_threshold = lMiner.get_idle_threshold();
-      res.bg_min_idle_seconds = lMiner.get_min_idle_seconds();
-      res.bg_ignore_battery = lMiner.get_ignore_battery();
-      res.bg_target = lMiner.get_mining_target();
-    }
 
     res.status = CORE_RPC_STATUS_OK;
     return true;

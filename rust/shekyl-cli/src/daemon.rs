@@ -349,8 +349,6 @@ impl DaemonClient {
             &serde_json::json!({
                 "miner_address": miner_address,
                 "threads_count": threads,
-                "do_background_mining": false,
-                "ignore_battery": false,
             }),
         )
         .map(|_| ())

@@ -1934,12 +1934,11 @@ fn an_unknown_tip_is_named() {
     );
 }
 
-fn mining_reply(active: bool, speed: u64, background: bool) -> String {
+fn mining_reply(active: bool, speed: u64) -> String {
     serde_json::json!({
         "status": "OK",
         "active": active,
         "speed": speed,
-        "is_background_mining_enabled": background,
     })
     .to_string()
 }
@@ -1992,7 +1991,7 @@ fn the_status_line_names_the_network_get_version_reported() {
     use shekyl_rpc_types::DaemonNetwork::Testnet;
     let (address, log) = route_server_recording(vec![
         ("/get_info", info_reply(100)),
-        ("/mining_status", mining_reply(false, 0, false)),
+        ("/mining_status", mining_reply(false, 0)),
         (
             "json_rpc:get_version",
             get_version_but(|r| {
@@ -2017,7 +2016,7 @@ fn the_status_line_names_the_network_get_version_reported() {
 fn the_status_line_reads_the_way_the_daemon_has_always_printed_it() {
     let address = route_server(vec![
         ("/get_info", info_reply(100)),
-        ("/mining_status", mining_reply(true, 2500, false)),
+        ("/mining_status", mining_reply(true, 2500)),
     ]);
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
@@ -2049,7 +2048,7 @@ fn a_daemon_that_withholds_status_is_not_shown_as_zero_connections() {
     }
     let address = route_server(vec![
         ("/get_info", info.to_string()),
-        ("/mining_status", mining_reply(false, 0, false)),
+        ("/mining_status", mining_reply(false, 0)),
     ]);
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
@@ -2081,7 +2080,7 @@ fn an_offline_daemon_that_withholds_status_prints_the_state() {
     }
     let address = route_server(vec![
         ("/get_info", info.to_string()),
-        ("/mining_status", mining_reply(false, 0, false)),
+        ("/mining_status", mining_reply(false, 0)),
     ]);
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
@@ -2104,7 +2103,7 @@ fn a_shown_zero_connection_count_prints_as_zero() {
     info["incoming_connections_count"] = serde_json::json!(0);
     let address = route_server(vec![
         ("/get_info", info.to_string()),
-        ("/mining_status", mining_reply(false, 0, false)),
+        ("/mining_status", mining_reply(false, 0)),
     ]);
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");
@@ -2138,7 +2137,6 @@ fn a_busy_mining_status_reads_as_syncing() {
                 "status": "BUSY",
                 "active": false,
                 "speed": 0,
-                "is_background_mining_enabled": false,
             })
             .to_string(),
         ),
@@ -2163,7 +2161,7 @@ fn a_foreign_target_does_not_warn_and_does_not_change_the_arithmetic() {
     info["target"] = serde_json::json!(60);
     let address = route_server(vec![
         ("/get_info", info.to_string()),
-        ("/mining_status", mining_reply(false, 0, false)),
+        ("/mining_status", mining_reply(false, 0)),
     ]);
     let (code, out) = run(&["status"], Some(&address));
     assert_eq!(code, SHEKYL_DAEMON_CONSOLE_OK, "{out}");

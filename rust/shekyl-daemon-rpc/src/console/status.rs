@@ -20,7 +20,6 @@ struct MiningStatusProvisional {
     status: shekyl_rpc_types::RpcStatus,
     active: bool,
     speed: u64,
-    is_background_mining_enabled: bool,
 }
 
 /// What `show_status` could learn about mining.
@@ -176,15 +175,9 @@ pub(super) fn show_status(src: &Source, now: u64) -> Result<String, String> {
     let mining_text = match &mining {
         MiningReadout::Unavailable => "mining info unavailable".to_owned(),
         MiningReadout::Syncing => "syncing".to_owned(),
-        MiningReadout::Ready(m) if m.active => format!(
-            "{}mining at {}",
-            if m.is_background_mining_enabled {
-                "smart "
-            } else {
-                ""
-            },
-            mining_speed(u128::from(m.speed))
-        ),
+        MiningReadout::Ready(m) if m.active => {
+            format!("mining at {}", mining_speed(u128::from(m.speed)))
+        }
         MiningReadout::Ready(_) => "not mining".to_owned(),
     };
     // Network hash rate as difficulty per target second. `checked_div` for

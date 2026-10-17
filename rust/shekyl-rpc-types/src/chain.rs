@@ -191,7 +191,9 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// `/set_limit`, `/get_limit`, `/set_log_level` and `/set_log_categories`
 /// are gone (`DAEMON_CONFIG_CUTOVER.md` §2.7), and `/start_mining` no longer
 /// takes `do_background_mining` or `ignore_battery` (§4.2: background
-/// mining's options and runtime arguments).
+/// mining's options and runtime arguments); `/mining_status` loses
+/// `is_background_mining_enabled` and the four `bg_*` members with the
+/// miner's background half.
 pub const CORE_RPC_VERSION_MINOR: u32 = 58;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;

@@ -340,18 +340,9 @@ bool t_rpc_command_executor::mining_status() {
   }
 
   tools::msg_writer() << "PoW algorithm: " << mres.pow_algorithm;
-  if (mres.active || mres.is_background_mining_enabled)
+  if (mres.active)
   {
     tools::msg_writer() << "Mining address: " << mres.address;
-  }
-
-  if (mres.is_background_mining_enabled)
-  {
-    tools::msg_writer() << "Smart mining enabled:";
-    tools::msg_writer() << "  Target: " << (unsigned)mres.bg_target << "% CPU";
-    tools::msg_writer() << "  Idle threshold: " << (unsigned)mres.bg_idle_threshold << "% CPU";
-    tools::msg_writer() << "  Min idle time: " << (unsigned)mres.bg_min_idle_seconds << " seconds";
-    tools::msg_writer() << "  Ignore battery: " << (mres.bg_ignore_battery ? "yes" : "no");
   }
 
   if (!mining_busy && mres.active && mres.speed > 0 && mres.block_target > 0 && mres.difficulty > 0)
