@@ -166,11 +166,13 @@ pub trait HolderSource: Send + Sync {
     /// and without replacement within one need (`SF-D10`); order here
     /// carries nothing.
     ///
-    /// The ruled producer is the epoch's drawable snapshot
-    /// (`DrawableSet::at_epoch_open`, `SO-D8` Q3), which is built. An
-    /// adapter still reads the bond records' held sets at the tip until
-    /// the journal walk recovers holdings a Release or slash has cleared
-    /// there; the scheduler's draw is the same over either.
+    /// The ruled producer is the epoch's drawable set as of its open
+    /// (`SO-D8` Q3), which `shekyl-chain-rules` builds:
+    /// `drawable_epoch_walked_back` rebuilds it at any tip from the bond
+    /// journals (`SO-D12` increment 2). An adapter still reads the bond
+    /// records' held sets at the tip, which omit a pair a Release or a
+    /// slash has cleared since the open; the scheduler's draw is the same
+    /// over either.
     ///
     /// # Errors
     ///

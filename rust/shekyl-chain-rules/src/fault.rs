@@ -373,6 +373,54 @@ pub enum Corrupt {
         /// Which check failed.
         check: SettlementCheck,
     },
+    /// The drawable set of `epoch` cannot be built from the recorded state
+    /// (`SO-D12` increment 2; SI-30). Never a refusal of the block: the
+    /// block is not invalid, this node's journals or records are.
+    DrawableEpoch {
+        /// The epoch whose drawable set was being built.
+        epoch: SettlementEpoch,
+        /// Why it could not be.
+        why: DrawableEpochFault,
+    },
+}
+
+/// Why an epoch's drawable set could not be built —
+/// [`Corrupt::DrawableEpoch`]'s discriminant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawableEpochFault {
+    /// The walk back from tip would read the bond journals below their
+    /// retirement floor, where rows have been deleted. It would undo too
+    /// few events and rebuild a set that never was, so it is refused, never
+    /// degraded (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.4 pin 4). The
+    /// walk's span is held inside the floor's window at compile time, so a
+    /// hit is a schedule the constants no longer compose.
+    BelowFloor {
+        /// `h_open(E)`: the walk reads everything strictly above it.
+        h_open: BlockHeight,
+        /// The lowest retained height.
+        floor: BlockHeight,
+    },
+    /// A journal row names a persona with no bond record. Records are
+    /// never deleted, so every persona a Release or a slash was applied to
+    /// still has one.
+    NoRecord {
+        /// The persona the row names.
+        persona: PCanonicalId,
+    },
+    /// A slash cannot be undone on the record as the walk has it: the
+    /// record already holds the shard the slash removed, or a complete-tree
+    /// demotion meets a record that is not the empty compact set it left.
+    SlashNotUndoable {
+        /// The slashed persona.
+        persona: PCanonicalId,
+        /// The shard the slash removed.
+        shard: ShardId,
+    },
+    /// A record holds a receipt key that is not a key, or the builder
+    /// refused the set it assembled. CEN-J28 judged every key before its
+    /// record was written, and the builder emits each pair once with its
+    /// persona's key, so neither is a state a conforming store holds.
+    Construction(shekyl_archival_retention::DrawableEpochError),
 }
 
 /// Which of settlement's integrity checks failed —
@@ -403,6 +451,16 @@ pub enum SettlementCheck {
     /// block at the slash height is not invalid, and this node cannot
     /// settle the epoch.
     BeaconNotRecorded,
+    /// The drawable set rebuilt from the bond journals does not digest to
+    /// the digest written when the epoch opened (§9.5 check 2; SI-30): a
+    /// Release pre-image, a slash-log row, a record or the digest changed
+    /// after `h_open(E)`, and the set a draw's index was resolved against
+    /// is not the one the journals now describe.
+    DrawableDrift,
+    /// No drawable digest is recorded for the epoch. Every block at an
+    /// `h_open(E)` writes one, an empty set included, so an epoch that
+    /// settles has one (SI-29).
+    DrawableDigestMissing,
 }
 
 /// Which of a bond record's invariants a retention fold found broken —
@@ -678,6 +736,36 @@ impl fmt::Display for Corrupt {
                     f,
                     "the settlement beacon of epoch {epoch} is not a block strictly below \
                      the connecting height (SI-25)"
+                ),
+                SettlementCheck::DrawableDrift => write!(
+                    f,
+                    "the drawable set of epoch {epoch} rebuilt from the bond journals is not \
+                     the one written when it opened (SI-30)"
+                ),
+                SettlementCheck::DrawableDigestMissing => write!(
+                    f,
+                    "no drawable digest is recorded for epoch {epoch} (SI-29)"
+                ),
+            },
+            Self::DrawableEpoch { epoch, why } => match why {
+                DrawableEpochFault::BelowFloor { h_open, floor } => write!(
+                    f,
+                    "the drawable set of epoch {epoch} would be rebuilt from above height \
+                     {h_open}, below the bond journals' floor {floor} (SI-30)"
+                ),
+                DrawableEpochFault::NoRecord { persona } => write!(
+                    f,
+                    "a bond journal row for epoch {epoch}'s drawable set names {persona}, \
+                     which has no record (SI-30)"
+                ),
+                DrawableEpochFault::SlashNotUndoable { persona, shard } => write!(
+                    f,
+                    "the slash of ({persona}, {shard}) cannot be undone while rebuilding \
+                     epoch {epoch}'s drawable set (SI-30)"
+                ),
+                DrawableEpochFault::Construction(error) => write!(
+                    f,
+                    "the drawable set of epoch {epoch} cannot be built: {error} (SI-30)"
                 ),
             },
         }
