@@ -37,7 +37,7 @@ use shekyl_chain_rules::{
     tx_against, BlockArchivalKeys, CenRow, ChainView, Fault, FormAttempt, InvalidBlock, RuleSet,
     TxSlot,
 };
-use shekyl_chain_store::pool::{ProvenReference, Standing};
+use shekyl_chain_store::pool::Standing;
 use shekyl_types::TxHash;
 use shekyl_wire::Transaction;
 
@@ -87,10 +87,10 @@ pub fn select<'id, V: ChainView<'id>>(
     // Most fee per weight first: `a.fee / a.weight > b.fee / b.weight` as
     // `a.fee · b.weight > b.fee · a.weight`, exact in u128.
     candidates.sort_by(|(ta, a), (tb, b)| {
-        let lhs = u128::from(a.record.fee.to_raw()) * u128::from(b.record.weight);
-        let rhs = u128::from(b.record.fee.to_raw()) * u128::from(a.record.weight);
+        let lhs = u128::from(a.fee.to_raw()) * u128::from(b.weight);
+        let rhs = u128::from(b.fee.to_raw()) * u128::from(a.weight);
         rhs.cmp(&lhs)
-            .then(a.record.receive_time.cmp(&b.record.receive_time))
+            .then(a.record.received.cmp(&b.record.received))
             .then(ta.cmp(tb))
     });
 
@@ -98,13 +98,13 @@ pub fn select<'id, V: ChainView<'id>>(
     let mut spent = KeyImages::default();
     let mut archival = BlockArchivalKeys::default();
     for (txid, held) in candidates {
-        let weight = held.record.weight;
+        let weight = held.weight;
         if selected.weight.saturating_add(weight) > budget {
             continue;
         }
         let anchor = match held.record.standing {
-            Standing::Admitted { proven } => proven.map(ProvenReference::verified),
-            Standing::Kept => continue,
+            Standing::Admitted => held.proven,
+            Standing::Kept { .. } => continue,
         };
         let view = PoolView::new(parent, &spent);
         match tx_against(
@@ -122,7 +122,7 @@ pub fn select<'id, V: ChainView<'id>>(
                 }
                 spent.insert(*txid, key_images_of(&held.tx));
                 selected.weight += weight;
-                selected.fees = selected.fees.saturating_add(held.record.fee.to_raw());
+                selected.fees = selected.fees.saturating_add(held.fee.to_raw());
                 selected.transactions.push((*txid, held.tx.clone()));
             }
             Ok(Err(refused)) => selected.refused.push((*txid, refused)),

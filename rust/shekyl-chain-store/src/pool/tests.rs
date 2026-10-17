@@ -10,8 +10,7 @@
 
 use redb::{Durability, TableDefinition};
 use shekyl_store_codec::{Blob, Raw};
-use shekyl_types::{TxHash, UnixSeconds};
-use shekyl_units::AtomicUnits;
+use shekyl_types::TxHash;
 
 use super::schema::{POOL_BLOB, POOL_HEADER, POOL_META};
 use super::*;
@@ -38,15 +37,18 @@ fn txid(n: u8) -> TxHash {
     TxHash::from_bytes([n; 32])
 }
 
-/// A public, admitted entry with no anchor — the shape most store tests
+/// The kept standing the store tests write.
+const KEPT: Standing = Standing::Kept {
+    returned_at: shekyl_types::BlockHeight::from_raw(9),
+};
+
+/// A public, admitted entry — the shape most store tests
 /// need; the record's own facts are the codec's tests.
 fn admitted() -> PoolRecord {
     PoolRecord {
-        weight: 1,
-        fee: AtomicUnits::from_raw(1),
-        receive_time: UnixSeconds::from_raw(1),
+        received: crate::codec::ReceivedHour::from_raw(1),
         public: true,
-        standing: Standing::Admitted { proven: None },
+        standing: Standing::Admitted,
     }
 }
 
@@ -105,7 +107,7 @@ fn insert_publish_stand_remove_and_their_refusals() {
     assert_eq!(cannot(&err), Some(PoolCannot::NotHeld));
     assert_eq!(err.class(), ErrorClass::Cannot);
     let err = store
-        .write(|b| b.stand(&h, Standing::Kept))
+        .write(|b| b.stand(&h, KEPT))
         .expect_err("stand of an unheld entry");
     assert_eq!(cannot(&err), Some(PoolCannot::NotHeld));
 
@@ -142,12 +144,12 @@ fn insert_publish_stand_remove_and_their_refusals() {
     );
 
     // P2 stand replaces the standing and leaves the bit and the blob.
-    store.write(|b| b.stand(&h, Standing::Kept)).unwrap();
+    store.write(|b| b.stand(&h, KEPT)).unwrap();
     let snap = store.begin_read().unwrap();
     assert_eq!(
         snap.record(&h).unwrap(),
         Some(PoolRecord {
-            standing: Standing::Kept,
+            standing: KEPT,
             ..published
         })
     );
@@ -287,7 +289,7 @@ fn an_undecodable_meta_row_is_si7() {
             let mut meta = txn.open_table(POOL_META).unwrap();
             // A public byte of 0xff: refused, never read as public.
             let mut bytes = admitted().encode();
-            bytes[24] = 0xff;
+            bytes[8] = 0xff;
             meta.insert(
                 txid(4).to_bytes(),
                 <shekyl_store_codec::Coded<PoolRecord> as redb::Value>::from_bytes(&bytes),
@@ -438,6 +440,25 @@ fn another_version_recreates_and_everything_else_is_refused() {
     assert_eq!(
         std::fs::read(&path).unwrap(),
         b"this is not a redb file, and it is somebody's"
+    );
+    drop(std::fs::remove_file(&path));
+}
+
+/// A layout recreate overwrites the old file before unlinking it (S7): the
+/// bytes it leaves behind are zeros, and the length is unchanged.
+#[test]
+fn the_old_file_is_overwritten_before_it_is_unlinked() {
+    let path = tmp("overwrite");
+    let bytes: Vec<u8> = (0..200_000_u32)
+        .map(|i| u8::try_from(i % 251 + 1).expect("below 252"))
+        .collect();
+    std::fs::write(&path, &bytes).unwrap();
+    super::header::overwrite(&path).unwrap();
+    let after = std::fs::read(&path).unwrap();
+    assert_eq!(after.len(), bytes.len());
+    assert!(
+        after.iter().all(|b| *b == 0),
+        "nothing of the old file remains"
     );
     drop(std::fs::remove_file(&path));
 }

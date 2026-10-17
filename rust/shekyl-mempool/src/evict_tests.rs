@@ -4,14 +4,13 @@
 // BSD-3-Clause
 
 //! CEN-M10's arithmetic over planted entries (the admission of real ones is
-//! `shekyl-chain-ingest`'s): the lifetimes by standing, the weight cap
-//! cheapest-per-weight first, the template's refusals, and the limits held
-//! to the C++ pool's while both exist.
+//! `shekyl-chain-ingest`'s): a kept entry's age in blocks, the weight cap
+//! cheapest-per-weight first, the template's refusals, and the limits.
 
 use shekyl_chain_rules::harness::fixture::{listed, paying_fee};
-use shekyl_chain_store::pool::{PoolRecord, PoolStore, Standing};
-use shekyl_types::UnixSeconds;
-use shekyl_units::AtomicUnits;
+use shekyl_chain_rules::RuleSet;
+use shekyl_chain_store::pool::{PoolRecord, PoolStore, ReceivedHour, Standing};
+use shekyl_types::{BlockCount, BlockHeight};
 
 use super::{Evicted, Limits};
 use crate::pool::Pool;
@@ -28,65 +27,80 @@ fn pool(name: &str) -> (Pool, std::path::PathBuf) {
     (pool, p)
 }
 
-fn record(weight: u64, fee: u64, at: u64, standing: Standing) -> PoolRecord {
+fn record(standing: Standing) -> PoolRecord {
     PoolRecord {
-        weight,
-        fee: AtomicUnits::from_raw(fee),
-        receive_time: UnixSeconds::from_raw(at),
+        received: ReceivedHour::from_raw(1),
         public: true,
         standing,
     }
 }
 
-const ADMITTED: Standing = Standing::Admitted { proven: None };
-
-/// A distinct transaction per `n` (its key image and fee differ).
+/// A distinct transaction per `n`, paying `n`: every one the same shape,
+/// so the same weight.
 fn tx(n: u8) -> shekyl_wire::Transaction {
     paying_fee(listed([n; 32]), u64::from(n))
 }
 
+/// The weight every [`tx`] has.
+fn weight() -> u64 {
+    u64::try_from(tx(1).weight()).expect("fits")
+}
+
+fn h(n: u64) -> BlockHeight {
+    BlockHeight::from_raw(n)
+}
+
+/// A kept entry leaves once the tip is `kept_for` blocks past its return,
+/// and not a block before.
 #[test]
-fn each_standing_ages_on_its_own_lifetime() {
+fn a_kept_entry_ages_in_blocks_from_its_return() {
     let (mut pool, path) = pool("aged");
-    let limits = Limits::GENESIS;
-    let admitted = pool.plant(tx(1), record(10, 10, 0, ADMITTED));
-    let kept = pool.plant(tx(2), record(10, 10, 0, Standing::Kept));
-    // One second past three days: the admitted entry goes, the kept stays.
-    let now = UnixSeconds::from_raw(limits.admitted_lifetime + 1);
-    assert_eq!(
-        pool.evict(now, &limits, &[]).unwrap(),
-        vec![(admitted, Evicted::Aged)]
+    let limits = Limits {
+        kept_for: BlockCount::from_raw(10),
+        ..Limits::GENESIS
+    };
+    let kept = pool.plant(
+        tx(2),
+        record(Standing::Kept {
+            returned_at: h(100),
+        }),
     );
-    assert!(pool.record(&kept).is_some());
-    // Past the week, the kept one goes too.
-    let now = UnixSeconds::from_raw(limits.kept_lifetime + 1);
+    let admitted = pool.plant(tx(1), record(Standing::Admitted));
+    assert!(pool.evict(h(109), &limits, &[]).unwrap().is_empty());
     assert_eq!(
-        pool.evict(now, &limits, &[]).unwrap(),
+        pool.evict(h(110), &limits, &[]).unwrap(),
         vec![(kept, Evicted::KeptAged)]
     );
-    assert!(pool.is_empty());
-    // The file agrees.
+    assert!(
+        pool.record(&admitted).is_some(),
+        "an admitted entry has no age"
+    );
     drop(pool);
     let (store, _) = PoolStore::create(&path).unwrap();
-    assert!(store.begin_read().unwrap().is_empty().unwrap());
+    assert_eq!(
+        store.begin_read().unwrap().len().unwrap(),
+        1,
+        "the file agrees"
+    );
     drop(store);
     drop(std::fs::remove_file(&path));
 }
 
 /// Over the cap, the least per unit of weight leaves first, and only until
-/// the pool fits: 3/10 < 5/10 < 9/10, cap 20 of 30 — one leaves.
+/// the pool fits: fees 3 < 5 < 9 over one weight, a cap of two of them —
+/// one leaves.
 #[test]
 fn over_the_cap_the_cheapest_per_weight_leaves_first() {
     let (mut pool, path) = pool("weight");
     let limits = Limits {
-        max_weight: 20,
+        max_weight: 2 * weight(),
         ..Limits::GENESIS
     };
-    let dear = pool.plant(tx(1), record(10, 9, 5, ADMITTED));
-    let cheap = pool.plant(tx(2), record(10, 3, 5, ADMITTED));
-    let middle = pool.plant(tx(3), record(10, 5, 5, ADMITTED));
+    let dear = pool.plant(tx(9), record(Standing::Admitted));
+    let cheap = pool.plant(tx(3), record(Standing::Admitted));
+    let middle = pool.plant(tx(5), record(Standing::Admitted));
     assert_eq!(
-        pool.evict(UnixSeconds::from_raw(5), &limits, &[]).unwrap(),
+        pool.evict(h(5), &limits, &[]).unwrap(),
         vec![(cheap, Evicted::OverWeight)]
     );
     assert!(pool.record(&dear).is_some() && pool.record(&middle).is_some());
@@ -100,16 +114,12 @@ fn the_templates_refusals_evict_admitted_entries_and_their_images() {
     let (mut pool, path) = pool("refused");
     let admitted_tx = tx(1);
     let image = crate::pool::key_images_of(&admitted_tx)[0];
-    let admitted = pool.plant(admitted_tx, record(10, 10, 5, ADMITTED));
-    let kept = pool.plant(tx(2), record(10, 10, 5, Standing::Kept));
+    let admitted = pool.plant(admitted_tx, record(Standing::Admitted));
+    let kept = pool.plant(tx(2), record(Standing::Kept { returned_at: h(5) }));
     assert!(pool.key_images().contains(&image));
     assert_eq!(
-        pool.evict(
-            UnixSeconds::from_raw(5),
-            &Limits::GENESIS,
-            &[admitted, kept]
-        )
-        .unwrap(),
+        pool.evict(h(5), &Limits::GENESIS, &[admitted, kept])
+            .unwrap(),
         vec![(admitted, Evicted::Refused)]
     );
     assert!(
@@ -120,10 +130,11 @@ fn the_templates_refusals_evict_admitted_entries_and_their_images() {
     drop(std::fs::remove_file(&path));
 }
 
-/// The limits are the C++ pool's (`cryptonote_config.h`) while both pools
-/// exist; the pin goes with the C++ at `DEL-010`.
+/// A kept entry is held for the genesis reorg cap: no switch back reaches
+/// further. The weight cap is the C++ pool's (`cryptonote_config.h`).
 #[test]
-fn the_limits_are_the_cxx_pools() {
+fn the_genesis_limits() {
+    assert_eq!(Limits::GENESIS.kept_for, RuleSet::GENESIS.reorg_cap());
     const HEADER: &str = include_str!("../../../src/cryptonote_config.h");
     let value = |name: &str| -> String {
         HEADER
@@ -135,13 +146,6 @@ fn the_limits_are_the_cxx_pools() {
             })
             .unwrap_or_else(|| panic!("cryptonote_config.h defines {name}"))
     };
-    assert_eq!(value("CRYPTONOTE_MEMPOOL_TX_LIVETIME"), "(86400*3)");
-    assert_eq!(Limits::GENESIS.admitted_lifetime, 86_400 * 3);
-    assert_eq!(
-        value("CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME"),
-        "604800"
-    );
-    assert_eq!(Limits::GENESIS.kept_lifetime, 604_800);
     assert_eq!(value("DEFAULT_TXPOOL_MAX_WEIGHT"), "648000000ull");
     assert_eq!(Limits::GENESIS.max_weight, 648_000_000);
 }

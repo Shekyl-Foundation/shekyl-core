@@ -633,7 +633,7 @@ census_rows! {
         // the chain-bound half alone refuses them. Witnessed by the switch
         // over the production stack.
         K9 held_by_store("shekyl-chain-ingest", "an_alternatives_bodies_are_the_stores_and_its_promotion_needs_no_pool"),
-        K10 held_by_store("shekyl-chain-ingest", "a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the_week"),
+        K10 held_by_store("shekyl-chain-ingest", "a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the_cap"),
         // 4.L Storage layer (constraints that reject chain data at write time)
         // L1 is the validator's (C2-R8 Q6): the intra-block half of key-image
         // uniqueness, run in `validate` after every slot; SI-1 is the store's
@@ -679,9 +679,10 @@ census_rows! {
         // one agree, row for row.
         M2 held_by_store("shekyl-chain-ingest", "the_door_and_a_block_of_one_agree_on_every_spend"),
         // M8: the pool's verification cache — the `(reference, height,
-        // root)` triple the proof verified against, consulted at a
-        // re-admission (b4). `form` never consults it (`E5-Q8`).
-        M8 held_by_store("shekyl-chain-ingest", "a_readmission_on_the_same_anchor_skips_the_proof_and_a_moved_anchor_verifies_it"),
+        // root)` triple the proof verified against, held in memory and
+        // consulted at a reconcile (b4); an open trusts no anchor from the
+        // file. `form` never consults it (`E5-Q8`).
+        M8 held_by_store("shekyl-chain-ingest", "a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it"),
     }
 }
 
@@ -712,6 +713,6 @@ census_rows! {
         M9 held_by_store("shekyl-chain-ingest", "the_engine_submits_through_the_rust_pool_and_its_door"),
         // M10: the pool's eviction (b4) — the lifetimes by standing, the
         // weight cap, the template's refusals.
-        M10 held_by_store("shekyl-mempool", "each_standing_ages_on_its_own_lifetime"),
+        M10 held_by_store("shekyl-mempool", "a_kept_entry_ages_in_blocks_from_its_return"),
     }
 }

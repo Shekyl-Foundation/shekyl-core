@@ -30,6 +30,7 @@
 use shekyl_chain_store::pool::{PoolRecord, Standing};
 use shekyl_chain_store::store::StoreError;
 use shekyl_types::TxHash;
+use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
 use crate::pool::Pool;
@@ -39,7 +40,17 @@ use crate::pool::Pool;
 /// template all ask it.
 #[must_use]
 pub fn shown(record: &PoolRecord) -> bool {
-    record.public && matches!(record.standing, Standing::Admitted { .. })
+    record.public && record.standing == Standing::Admitted
+}
+
+/// One entry of [`Pool::listing`]: what a pool listing says of a shown
+/// transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Listed {
+    /// Its weight.
+    pub weight: u64,
+    /// The fee it pays.
+    pub fee: AtomicUnits,
 }
 
 impl Pool {
@@ -63,12 +74,22 @@ impl Pool {
     }
 
     /// The pool listing: every entry the node shows ([`shown`]), with its
-    /// record.
-    pub fn listing(&self) -> impl Iterator<Item = (TxHash, PoolRecord)> + '_ {
+    /// weight and fee — never when this node received it (the review of
+    /// #1102, S7: a receive time across many nodes' listings points at a
+    /// transaction's origin).
+    pub fn listing(&self) -> impl Iterator<Item = (TxHash, Listed)> + '_ {
         self.held()
             .iter()
             .filter(|(_, held)| shown(&held.record))
-            .map(|(txid, held)| (*txid, held.record))
+            .map(|(txid, held)| {
+                (
+                    *txid,
+                    Listed {
+                        weight: held.weight,
+                        fee: held.fee,
+                    },
+                )
+            })
     }
 
     /// What peer pool sync may offer: the transactions the node shows.
@@ -84,9 +105,7 @@ impl Pool {
     pub fn unpublished(&self) -> impl Iterator<Item = (TxHash, &Transaction)> + '_ {
         self.held()
             .iter()
-            .filter(|(_, held)| {
-                !held.record.public && matches!(held.record.standing, Standing::Admitted { .. })
-            })
+            .filter(|(_, held)| !held.record.public && held.record.standing == Standing::Admitted)
             .map(|(txid, held)| (*txid, &held.tx))
     }
 }

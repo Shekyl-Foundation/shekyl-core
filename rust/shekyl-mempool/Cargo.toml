@@ -20,8 +20,8 @@ license.workspace = true
 # judge_slot_stateless / tx_against / policy_form — the door's three calls;
 # ChainView / HeaderView — what the decorator implements; ReferenceClaims.
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
-# PoolStore (P1–P7), PoolRecord / Standing / ProvenReference, and the
-# snapshot view the door judges against.
+# PoolStore (P1–P7), PoolRecord / Standing / ReceivedHour, the stored
+# AltBodies, and the snapshot view the door judges against.
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 # KeyImage, TxHash, BlockHeight, UnixSeconds.
 shekyl-types = { path = "../shekyl-types" }
@@ -36,6 +36,10 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # The compile_fail negative controls with stderr snapshots (the
 # `CHAIN_RULES_CRATE.md` §8.3 form: a doctest cannot say why it failed).
 trybuild = "1"
+# The open's untrusted-file test writes a row no PoolBatch would: raw bytes
+# under the pool file's own table definition.
+redb = { workspace = true }
+shekyl-store-codec = { path = "../shekyl-store-codec" }
 
 [lints]
 workspace = true

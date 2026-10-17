@@ -80,6 +80,7 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
                 Header::Other(from) => {
                     // Release the engine's file lock before removing.
                     drop(db);
+                    overwrite(path).map_err(io_open)?;
                     std::fs::remove_file(path).map_err(io_open)?;
                     let file = create_new(path).map_err(io_open)?;
                     seal_fresh(&builder, file, path).map(|db| (db, PoolOpen::Recreated { from }))
@@ -88,6 +89,26 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
         }
         Err(e) => Err(io_open(e).into()),
     }
+}
+
+/// Overwrite a pool file's bytes with zeros and flush them, before it is
+/// unlinked at a layout recreate: the file held which transactions this
+/// node had in its stem phase and when, and an unlink alone leaves those
+/// bytes on the disk for anyone who reads it later (the review of #1102,
+/// S7). Best effort below the filesystem: a copy-on-write or journaling
+/// filesystem may keep old blocks, which only full-disk encryption covers.
+pub(super) fn overwrite(path: &Path) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().write(true).open(path)?;
+    let mut left = file.metadata()?.len();
+    let zeros = [0_u8; 8 * 1024];
+    let chunk = u64::try_from(zeros.len()).expect("8 KiB");
+    while left > 0 {
+        let n = left.min(chunk);
+        file.write_all(&zeros[..usize::try_from(n).expect("at most 8 KiB")])?;
+        left -= n;
+    }
+    file.sync_all()
 }
 
 fn create_new(path: &Path) -> std::io::Result<std::fs::File> {

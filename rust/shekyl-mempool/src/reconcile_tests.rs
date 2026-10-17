@@ -12,9 +12,8 @@
 use shekyl_chain_rules::harness::fixture::{listed_on, spendable_chain};
 use shekyl_chain_rules::harness::FaultingView;
 use shekyl_chain_rules::{AdmissionPolicy, RuleSet};
-use shekyl_chain_store::pool::{PoolRecord, PoolStore, Standing};
+use shekyl_chain_store::pool::{PoolRecord, PoolStore, ReceivedHour, Standing};
 use shekyl_types::{KeyImage, TxHash, UnixSeconds};
-use shekyl_units::AtomicUnits;
 
 use super::Removed;
 use crate::pool::{Pool, PoolFault};
@@ -30,12 +29,13 @@ fn tmp(name: &str) -> std::path::PathBuf {
     path
 }
 
+/// The clock the opens in this module read.
+const NOW: UnixSeconds = UnixSeconds::from_raw(7_200);
+
 const ADMITTED: PoolRecord = PoolRecord {
-    weight: 1,
-    fee: AtomicUnits::from_raw(1),
-    receive_time: UnixSeconds::from_raw(1),
+    received: ReceivedHour::from_raw(1),
     public: true,
-    standing: Standing::Admitted { proven: None },
+    standing: Standing::Admitted,
 };
 
 /// A pool at `path` holding two fixture spends as admitted entries — each
@@ -139,21 +139,21 @@ fn an_entry_that_does_not_parse_is_dropped_at_open() {
     let txid = TxHash::from_bytes([0x51; 32]);
     {
         let (store, _) = PoolStore::create(&path).unwrap();
-        let record = PoolRecord {
-            weight: 1,
-            fee: AtomicUnits::from_raw(1),
-            receive_time: UnixSeconds::from_raw(1),
-            public: true,
-            standing: Standing::Admitted { proven: None },
-        };
+        let record = ADMITTED;
         store
             .write(|batch| batch.insert(txid, &record, b"not a transaction"))
             .unwrap();
     }
     let chain = spendable_chain();
     chain.with_view(|view| {
-        let (pool, _, reconciled) =
-            Pool::open(&path, &view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS).unwrap();
+        let (pool, _, reconciled) = Pool::open(
+            &path,
+            NOW,
+            &view,
+            &RuleSet::GENESIS,
+            &AdmissionPolicy::GENESIS,
+        )
+        .unwrap();
         assert!(pool.is_empty());
         assert_eq!(reconciled.removed, vec![(txid, Removed::Unparseable)]);
     });
@@ -188,10 +188,83 @@ fn two_filed_entries_claiming_one_image_open_and_are_judged() {
         }
     }
     let reconciled = chain.with_view(|view| {
-        Pool::open(&path, &view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS)
-            .unwrap()
-            .2
+        Pool::open(
+            &path,
+            NOW,
+            &view,
+            &RuleSet::GENESIS,
+            &AdmissionPolicy::GENESIS,
+        )
+        .unwrap()
+        .2
     });
     assert_eq!(reconciled.removed.len(), 2, "both judged");
+    drop(std::fs::remove_file(&path));
+}
+
+/// Nothing in the file is trusted (the review of #1102, S2): a row whose
+/// bytes are another transaction than its key names is dropped as
+/// misfiled, and a row whose record does not decode is dropped as
+/// unreadable — each by itself, and the pool opens.
+#[test]
+fn a_misfiled_row_and_an_unreadable_one_are_dropped_and_the_pool_opens() {
+    let path = tmp("reconcile-untrusted");
+    let chain = spendable_chain();
+    let body = listed_on(&chain, [0x44; 32]);
+    let misfiled = TxHash::from_bytes([0x61; 32]);
+    let unreadable = TxHash::from_bytes([0x62; 32]);
+    {
+        let (store, _) = PoolStore::create(&path).unwrap();
+        store
+            .write(|batch| batch.insert(misfiled, &ADMITTED, &body.serialize()))
+            .unwrap();
+        store
+            .write(|batch| batch.insert(unreadable, &ADMITTED, &body.serialize()))
+            .unwrap();
+    }
+    {
+        // A record that does not decode: a public byte of 0xff.
+        let db = redb::Database::open(&path).unwrap();
+        let txn = db.begin_write().unwrap();
+        {
+            let mut meta = txn
+                .open_table(shekyl_chain_store::pool::schema::POOL_META)
+                .unwrap();
+            let mut bytes = shekyl_store_codec::Canonical::encode(&ADMITTED);
+            bytes[8] = 0xff;
+            meta.insert(
+                unreadable.to_bytes(),
+                <shekyl_store_codec::Coded<PoolRecord> as redb::Value>::from_bytes(&bytes),
+            )
+            .unwrap();
+        }
+        txn.commit().unwrap();
+    }
+    let reconciled = chain.with_view(|view| {
+        Pool::open(
+            &path,
+            NOW,
+            &view,
+            &RuleSet::GENESIS,
+            &AdmissionPolicy::GENESIS,
+        )
+        .expect("a discardable file never stops the open")
+        .2
+    });
+    let mut removed = reconciled.removed;
+    removed.sort_by_key(|(txid, _)| *txid);
+    assert_eq!(
+        removed,
+        vec![
+            (misfiled, Removed::Misfiled),
+            (unreadable, Removed::Unreadable)
+        ]
+    );
+    let (store, _) = PoolStore::create(&path).unwrap();
+    assert!(
+        store.begin_read().unwrap().is_empty().unwrap(),
+        "the file lost both"
+    );
+    drop(store);
     drop(std::fs::remove_file(&path));
 }

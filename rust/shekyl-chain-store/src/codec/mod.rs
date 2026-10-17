@@ -95,7 +95,7 @@ pub use chain::{
 };
 pub use curve::{CurveTreeState, LayerHash, LeafCount, TreeDepth};
 pub use evidence::CoverageGaps;
-pub use pool::{PoolRecord, ProvenReference, Standing};
+pub use pool::{PoolRecord, ReceivedHour, Standing};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{

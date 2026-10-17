@@ -4,53 +4,50 @@
 // BSD-3-Clause
 
 //! CEN-M10: when a held transaction leaves the pool without a block taking
-//! it (DRS-E5 PR-b b4).
+//! it (DRS-E5 PR-b b4; the review of #1102, S4 and B3).
 //!
-//! Four reasons, in the order [`Pool::evict`] applies them:
+//! Three reasons, in the order [`Pool::evict`] applies them:
 //!
 //! 1. **Refused by the chain at template time** — an admitted entry the
 //!    template selection's `tx_against` refused against the template's
 //!    parent (b6): its reference aged out of CEN-I11's window, or the chain
 //!    spent its image. It can never be mined on this chain.
-//! 2. **Aged** — an admitted entry held longer than
-//!    [`Limits::admitted_lifetime`].
-//! 3. **Kept and aged** — a kept entry (CEN-K10) held longer than
-//!    [`Limits::kept_lifetime`], the longer window a returned transaction
-//!    gets for a reorg to make it valid again.
-//! 4. **Over the weight cap** — while the pool's total weight exceeds
+//! 2. **Kept and aged** — a kept entry (CEN-K10) once the tip is
+//!    [`Limits::kept_for`] blocks past the height it was returned at. Its
+//!    only way back is a switch back, and none reaches further than the
+//!    reorg cap.
+//! 3. **Over the weight cap** — while the pool's total weight exceeds
 //!    [`Limits::max_weight`], the entry paying the least per unit of weight
 //!    leaves first (ties: the newest first, then by hash, so the order is
 //!    total).
 //!
-//! The three limits are the C++ pool's (`cryptonote_config.h`:
-//! `CRYPTONOTE_MEMPOOL_TX_LIVETIME`, `CRYPTONOTE_MEMPOOL_TX_FROM_ALT_BLOCK_LIVETIME`,
-//! `DEFAULT_TXPOOL_MAX_WEIGHT`), carried as given: the census records that
-//! no round has ratified them as policy choices (CEN-M10, §10 R2/R7), and
-//! this crate restates no reason for them. A pin holds them to the C++
-//! values while both pools exist (`evict_tests.rs`).
+//! **An admitted entry has no lifetime of its own.** Its reference ages out
+//! of CEN-I11's window `REFERENCE_BLOCK_MAX_AGE` blocks after the block it
+//! names, and the reconcile removes it on that refusal (S4) — sooner than
+//! the C++ timer (three days).
 
-use shekyl_chain_store::pool::{PoolRecord, Standing};
+use shekyl_chain_rules::RuleSet;
+use shekyl_chain_store::pool::Standing;
 use shekyl_chain_store::store::StoreError;
-use shekyl_types::{TxHash, UnixSeconds};
+use shekyl_types::{BlockCount, BlockHeight, TxHash};
+use shekyl_units::AtomicUnits;
 
 use crate::pool::Pool;
 
-/// CEN-M10's three limits.
+/// CEN-M10's limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
-    /// How long an admitted entry is held, in seconds.
-    pub admitted_lifetime: u64,
-    /// How long a kept entry is held, in seconds.
-    pub kept_lifetime: u64,
+    /// How long a kept entry is held, in blocks past its return.
+    pub kept_for: BlockCount,
     /// The pool's total weight cap.
     pub max_weight: u64,
 }
 
 impl Limits {
-    /// The limits in force from genesis: three days, one week, 648 MB.
+    /// The limits in force from genesis: a kept entry for the genesis reorg
+    /// cap; 648 MB, the C++ pool's cap (`DEFAULT_TXPOOL_MAX_WEIGHT`).
     pub const GENESIS: Self = Self {
-        admitted_lifetime: 86_400 * 3,
-        kept_lifetime: 604_800,
+        kept_for: RuleSet::GENESIS.reorg_cap(),
         max_weight: 648_000_000,
     };
 }
@@ -60,29 +57,17 @@ impl Limits {
 pub enum Evicted {
     /// The template's `tx_against` refused it against the parent.
     Refused,
-    /// An admitted entry past its lifetime.
-    Aged,
-    /// A kept entry past its lifetime.
+    /// A kept entry past its blocks.
     KeptAged,
     /// The pool was over its weight cap and it paid the least per weight.
     OverWeight,
 }
 
-/// Whether `record` is past its lifetime at `now`.
-fn aged(record: &PoolRecord, now: UnixSeconds, limits: &Limits) -> Option<Evicted> {
-    let held_for = now.to_raw().saturating_sub(record.receive_time.to_raw());
-    match record.standing {
-        Standing::Admitted { .. } if held_for > limits.admitted_lifetime => Some(Evicted::Aged),
-        Standing::Kept if held_for > limits.kept_lifetime => Some(Evicted::KeptAged),
-        _ => None,
-    }
-}
-
 impl Pool {
-    /// Apply CEN-M10 at `now` (module docs), `refused` being the admitted
-    /// entries the last template selection refused against its parent.
-    /// Writes every removal to the file in one batch (P3), then drops the
-    /// entries and their key images from the index.
+    /// Apply CEN-M10 with the chain at `tip` (module docs), `refused` being
+    /// the admitted entries the last template selection refused against its
+    /// parent. Writes every removal to the file in one batch (P3), then
+    /// drops the entries and their key images from the index.
     ///
     /// # Errors
     ///
@@ -90,7 +75,7 @@ impl Pool {
     /// dropped it.
     pub fn evict(
         &mut self,
-        now: UnixSeconds,
+        tip: BlockHeight,
         limits: &Limits,
         refused: &[TxHash],
     ) -> Result<Vec<(TxHash, Evicted)>, StoreError> {
@@ -99,7 +84,7 @@ impl Pool {
             if self
                 .held()
                 .get(txid)
-                .is_some_and(|held| matches!(held.record.standing, Standing::Admitted { .. }))
+                .is_some_and(|held| held.record.standing == Standing::Admitted)
             {
                 evicted.push((*txid, Evicted::Refused));
             }
@@ -108,37 +93,40 @@ impl Pool {
             if evicted.iter().any(|(gone, _)| gone == txid) {
                 continue;
             }
-            if let Some(why) = aged(&held.record, now, limits) {
-                evicted.push((*txid, why));
+            if let Standing::Kept { returned_at } = held.record.standing {
+                if tip.to_raw().saturating_sub(returned_at.to_raw()) >= limits.kept_for.to_raw() {
+                    evicted.push((*txid, Evicted::KeptAged));
+                }
             }
         }
-
         // The weight cap over what survives, cheapest per weight first.
-        let mut survivors: Vec<(TxHash, PoolRecord)> = self
+        let mut survivors: Vec<(
+            TxHash,
+            u64,
+            AtomicUnits,
+            shekyl_chain_store::pool::ReceivedHour,
+        )> = self
             .held()
             .iter()
             .filter(|(txid, _)| !evicted.iter().any(|(gone, _)| gone == *txid))
-            .map(|(txid, held)| (*txid, held.record))
+            .map(|(txid, held)| (*txid, held.weight, held.fee, held.record.received))
             .collect();
-        let mut total: u128 = survivors.iter().map(|(_, r)| u128::from(r.weight)).sum();
+        let mut total: u128 = survivors.iter().map(|(_, w, _, _)| u128::from(*w)).sum();
         // Ascending fee per weight: `a.fee / a.weight < b.fee / b.weight`
         // compared as `a.fee · b.weight < b.fee · a.weight`, exact in u128;
         // then the newest first, then the hash.
-        survivors.sort_by(|(ta, a), (tb, b)| {
-            let lhs = u128::from(a.fee.to_raw()) * u128::from(b.weight);
-            let rhs = u128::from(b.fee.to_raw()) * u128::from(a.weight);
-            lhs.cmp(&rhs)
-                .then(b.receive_time.cmp(&a.receive_time))
-                .then(ta.cmp(tb))
+        survivors.sort_by(|(ta, wa, fa, ra), (tb, wb, fb, rb)| {
+            let lhs = u128::from(fa.to_raw()) * u128::from(*wb);
+            let rhs = u128::from(fb.to_raw()) * u128::from(*wa);
+            lhs.cmp(&rhs).then(rb.cmp(ra)).then(ta.cmp(tb))
         });
-        for (txid, record) in survivors {
+        for (txid, weight, _, _) in survivors {
             if total <= u128::from(limits.max_weight) {
                 break;
             }
-            total -= u128::from(record.weight);
+            total -= u128::from(weight);
             evicted.push((txid, Evicted::OverWeight));
         }
-
         if !evicted.is_empty() {
             self.store()
                 .write(|batch| evicted.iter().try_for_each(|(txid, _)| batch.remove(txid)))?;

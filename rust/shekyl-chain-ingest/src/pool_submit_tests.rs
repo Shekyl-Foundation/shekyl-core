@@ -70,6 +70,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
                 .read(|snapshot, rule_set| {
                     Pool::open(
                         &path,
+                        shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
                         &AdmissionPolicy::GENESIS,
@@ -137,6 +138,7 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
                 .read(|snapshot, rule_set| {
                     Pool::open(
                         &path,
+                        shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
                         &AdmissionPolicy::GENESIS,
@@ -280,6 +282,7 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
                 .read(|snapshot, rule_set| {
                     Pool::open(
                         &path,
+                        shekyl_types::UnixSeconds::from_raw(1),
                         &SnapshotView::new(snapshot),
                         rule_set,
                         &AdmissionPolicy::GENESIS,
@@ -347,9 +350,15 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
     let path = tmp("pool-template-g10-pool");
     let selected = scenario
         .read_chain(|view, rule_set| {
-            let mut pool = Pool::open(&path, view, rule_set, &AdmissionPolicy::GENESIS)
-                .expect("open")
-                .0;
+            let mut pool = Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &AdmissionPolicy::GENESIS,
+            )
+            .expect("open")
+            .0;
             for tx in &listed {
                 let admission = pool
                     .admit(

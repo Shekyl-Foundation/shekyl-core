@@ -4,38 +4,51 @@
 // BSD-3-Clause
 
 //! The pool record — DRS-E1 S-POOL (`DRS_E1_SPOOL.md` §3.4), reshaped by
-//! DRS-E5 PR-b under DX-F6 (2026-10-16).
+//! DRS-E5 PR-b under DX-F6 (2026-10-16) and the review of #1102 (S2, S7).
 //!
 //! **The pool knows one relay fact: whether a transaction is public yet**
 //! (`DAEMON_RELAY_PRIVACY.md` D++ acceptance criterion 2). A transaction
 //! that is not public is absent from the pool listing, from peer pool sync
 //! and from a block template. The relay's fluff event sets the bit for a
-//! relayed transaction; a transaction returned from a popped block is
-//! admitted public, because a block carried it. Nothing clears it. Stem,
-//! fluff, embargo, the arrival connector and
-//! the originator's re-broadcast responsibility (F-10's disarm) are
-//! `shekyl-relay`'s, which holds `Responsibility` keyed by transaction hash
-//! beside its stem watch. A zone is an attribute of a session, never of a
-//! pool entry (the no-zones ruling).
+//! relayed transaction; a block carrying a transaction sets it too, because
+//! the block published it. Nothing clears it. Stem, fluff, embargo, the
+//! arrival connector and the originator's re-broadcast responsibility
+//! (F-10's disarm) are `shekyl-relay`'s, which holds `Responsibility` keyed
+//! by transaction hash beside its stem watch. A zone is an attribute of a
+//! session, never of a pool entry (the no-zones ruling).
 //!
-//! Every other field is kept because admission, eviction or template
-//! selection reads it:
+//! # The file holds only what the blob cannot say
 //!
-//! - `weight` — template selection fills a block by weight and orders by
-//!   fee per weight; M10's weight cap evicts by fee per weight.
-//! - `fee` — the same two orderings.
-//! - `receive_time` — M10's age eviction.
+//! The pool file is not trusted (`shekyl_mempool`'s open re-derives
+//! everything it can and judges every entry again), so the record keeps
+//! only the facts the transaction's bytes do not carry:
+//!
+//! - `received` — when this node first held it, **to the hour**
+//!   ([`ReceivedHour`]): the reconcile's order (where two entries spend one
+//!   key image, the earlier keeps it) and template selection's tie-break,
+//!   each then broken by hash. Nothing reads it finer. A stem arrival to the
+//!   second is an origin clock: an observer comparing many nodes' records
+//!   would find the earliest, the origin or the start of its stem path.
 //! - `public` — criterion 2: listing, peer sync and template.
 //! - `standing` — template selection takes only [`Standing::Admitted`]
-//!   entries, M10 ages a [`Standing::Kept`] entry on the longer lifetime,
-//!   and the door re-admitting an entry at open reads M8's anchor from it.
+//!   entries; a [`Standing::Kept`] entry carries the height it was
+//!   returned at, which CEN-M10 ages it from, in blocks.
+//!
+//! What the record no longer carries, and why:
+//!
+//! - **Weight and fee** — functions of the transaction's bytes, derived
+//!   from the blob at open. A file that said otherwise would be believed.
+//! - **CEN-M8's anchor** — the `(reference, height, root)` the proof was
+//!   verified against. Its readers are the pool's in-memory index; its only
+//!   use in the file was to let a filed row skip the FCMP++ verify at open,
+//!   which an untrusted file must not do. The pool holds it in memory.
 //!
 //! What the C++ `txpool_tx_meta_t` carries that this record does not, and
 //! why nothing here reads it:
 //!
 //! - **The relay state** (`Origin`, the stem/fluff/block phase with its
 //!   clocks, `Responsibility`) — relay's, by DX-F6; the pool reads only
-//!   the public bit the relay's fluff event sets.
+//!   the public bit.
 //! - **`relayed`** — "this node relayed it at least once" is a relay fact.
 //!   No admission, eviction or template decision reads it.
 //! - **`double_spend_seen`** — M7's conflict map refuses the second spend
@@ -45,18 +58,9 @@
 //!   readiness cache. Template selection re-runs `tx_against` at
 //!   `TxSlot::Lone` against the template's parent for every transaction it
 //!   selects, so there is no cached readiness to consult.
-//!
-//! The FCMP++ verification cache (CEN-M8) is not the C++
-//! `H(proof ‖ referenceBlock ‖ key images)` with a null-hash sentinel: it
-//! is the `(reference hash, height, root)` triple the transaction's proof
-//! was verified against — [`ProvenReference`], the stored form of the
-//! validator's `VerifiedReference`. The entry's key is the transaction
-//! hash, which commits to the proof's bytes, so the triple is all the
-//! cache needs.
 
 use shekyl_store_codec::{Canonical, CodecError};
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, UnixSeconds};
-use shekyl_units::AtomicUnits;
+use shekyl_types::{BlockHeight, UnixSeconds};
 
 use shekyl_store_codec::reader::Reader;
 
@@ -65,76 +69,60 @@ use shekyl_store_codec::reader::Reader;
 const TAG_ADMITTED: u8 = 1;
 const TAG_KEPT: u8 = 2;
 
-/// The reference a pool entry's proof was verified against — CEN-M8's
-/// cache, the triple `form` and the pool door verify a proof under
-/// (`VerifiedReference`: the reference block's identity, its height and
-/// the curve-tree root at that height). Re-admission reads it: a claim at
-/// the pool's tip equal to this triple names the anchor the proof was
-/// already verified over.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ProvenReference {
-    /// The `reference_block` the transaction names.
-    pub reference: BlockHash,
-    /// That block's height on the chain the proof was verified against.
-    pub height: BlockHeight,
-    /// The curve-tree root at `height` — the anchor the proof verified over.
-    pub root: CurveTreeRoot,
-}
+/// Seconds in the hour [`ReceivedHour`] counts.
+const HOUR: u64 = 3_600;
 
-impl ProvenReference {
-    /// The row for what the validator verified.
+/// When this node first held a transaction, as whole hours since the Unix
+/// epoch (module docs: the coarsest clock its readers can use, and no
+/// origin clock).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReceivedHour(u64);
+
+impl ReceivedHour {
+    /// The hour `at` falls in.
     #[must_use]
-    pub const fn of(verified: shekyl_chain_rules::VerifiedReference) -> Self {
-        Self {
-            reference: verified.reference,
-            height: verified.claim.height,
-            root: verified.claim.root,
-        }
+    pub const fn of(at: UnixSeconds) -> Self {
+        Self(at.to_raw() / HOUR)
     }
 
-    /// The row read back, as the rules crate's value.
+    /// Hours since the Unix epoch.
     #[must_use]
-    pub const fn verified(self) -> shekyl_chain_rules::VerifiedReference {
-        shekyl_chain_rules::VerifiedReference {
-            reference: self.reference,
-            claim: shekyl_chain_rules::ReferenceClaim {
-                height: self.height,
-                root: self.root,
-            },
-        }
+    pub const fn to_raw(self) -> u64 {
+        self.0
+    }
+
+    /// From hours since the Unix epoch.
+    #[must_use]
+    pub const fn from_raw(hours: u64) -> Self {
+        Self(hours)
     }
 }
 
 /// Whether the entry passed the door at the tip it was last judged at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Standing {
-    /// The door admitted it. `proven` is M8's cache: the reference its
-    /// proof verified against, or `None` for a transaction whose judgement
-    /// verified no reference.
-    Admitted {
-        /// The reference the proof verified against, if any.
-        proven: Option<ProvenReference>,
+    /// The door admitted it.
+    Admitted,
+    /// Returned from a block a switch popped and refused by the door's
+    /// chain-bound half alone (CEN-K10): kept because a switch back may make
+    /// it valid again, never relayed, never selected, and evicted by M10
+    /// once the reorg cap has passed since `returned_at` — no switch back
+    /// reaches further.
+    Kept {
+        /// The tip of the chain the switch left.
+        returned_at: BlockHeight,
     },
-    /// Refused by the chain-bound half of the door when judged again — on
-    /// return from a popped block (CEN-K10) or at a reconcile: kept because
-    /// a further reorg may make it valid again, never relayed, never
-    /// selected, and evicted by M10.
-    Kept,
 }
 
 /// One pool entry's metadata. See the module docs for why each field is
-/// here and what the C++ `txpool_tx_meta_t` carried that this does not.
+/// here and what is not.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PoolRecord {
-    /// The transaction's weight.
-    pub weight: u64,
-    /// The fee it pays.
-    pub fee: AtomicUnits,
-    /// When this node first held it (wall clock).
-    pub receive_time: UnixSeconds,
+    /// When this node first held it, to the hour.
+    pub received: ReceivedHour,
     /// Whether it is public (criterion 2): set by the relay's fluff event
-    /// through [`PoolBatch::publish`](crate::pool::PoolBatch::publish), or at
-    /// insert for a transaction a block carried. Nothing clears it.
+    /// through [`PoolBatch::publish`](crate::pool::PoolBatch::publish), or by
+    /// a block carrying it. Nothing clears it.
     pub public: bool,
     /// Whether the door admitted it or K10 kept it.
     pub standing: Standing,
@@ -150,86 +138,49 @@ fn take_bool(reader: &mut Reader<'_>, what: &'static str) -> Result<bool, CodecE
     }
 }
 
-fn encode_standing(standing: Standing, out: &mut Vec<u8>) {
-    match standing {
-        Standing::Admitted { proven } => {
-            out.push(TAG_ADMITTED);
-            match proven {
-                None => out.push(0),
-                Some(proven) => {
-                    out.push(1);
-                    out.extend_from_slice(proven.reference.as_bytes());
-                    out.extend_from_slice(&proven.height.to_raw().to_le_bytes());
-                    out.extend_from_slice(proven.root.as_bytes());
-                }
-            }
-        }
-        Standing::Kept => out.push(TAG_KEPT),
-    }
-}
-
-fn decode_standing(reader: &mut Reader<'_>) -> Result<Standing, CodecError> {
-    match reader.u8()? {
-        TAG_ADMITTED => {
-            let proven = if take_bool(reader, "proven presence byte is not 0 or 1")? {
-                let reference =
-                    BlockHash::from_bytes(reader.array::<32>("buffer ends inside the reference")?);
-                let height = BlockHeight::from_raw(reader.u64()?);
-                let root =
-                    CurveTreeRoot::from_bytes(reader.array::<32>("buffer ends inside the root")?);
-                Some(ProvenReference {
-                    reference,
-                    height,
-                    root,
-                })
-            } else {
-                None
-            };
-            Ok(Standing::Admitted { proven })
-        }
-        TAG_KEPT => Ok(Standing::Kept),
-        _ => Err(reader.invalid("standing tag is not admitted or kept")),
-    }
-}
-
 /// Layout (variable width; every tag is bounded before use):
 ///
 /// ```text
-/// weight u64 ‖ fee u64 ‖ receive_time u64 ‖ public u8
+/// received u64 (hours) ‖ public u8
 /// ‖ standing:
-///     1  admitted:  presence u8 ‖ [reference hash32 ‖ height u64 ‖ root32]
-///     2  kept
+///     1  admitted
+///     2  kept: returned_at u64
 /// ```
 ///
-/// A `public` or presence byte other than `0` or `1`, or a standing tag
-/// other than `1` or `2`, is a codec error. Trailing bytes are a codec
-/// error.
+/// A `public` byte other than `0` or `1`, or a standing tag other than `1`
+/// or `2`, is a codec error. Trailing bytes are a codec error.
 impl Canonical for PoolRecord {
     const NAME: &'static str = "pool_record";
     const FIXED_WIDTH: Option<usize> = None;
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.weight.to_le_bytes());
-        self.fee.encode_into(out);
-        out.extend_from_slice(&self.receive_time.to_raw().to_le_bytes());
+        out.extend_from_slice(&self.received.to_raw().to_le_bytes());
         out.push(u8::from(self.public));
-        encode_standing(self.standing, out);
+        match self.standing {
+            Standing::Admitted => out.push(TAG_ADMITTED),
+            Standing::Kept { returned_at } => {
+                out.push(TAG_KEPT);
+                out.extend_from_slice(&returned_at.to_raw().to_le_bytes());
+            }
+        }
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut reader = Reader::new(Self::NAME, bytes);
-        let weight = reader.u64()?;
-        let fee = AtomicUnits::from_raw(reader.u64()?);
-        let receive_time = UnixSeconds::from_raw(reader.u64()?);
+        let received = ReceivedHour::from_raw(reader.u64()?);
         let public = take_bool(&mut reader, "public byte is not 0 or 1")?;
-        let standing = decode_standing(&mut reader)?;
+        let standing = match reader.u8()? {
+            TAG_ADMITTED => Standing::Admitted,
+            TAG_KEPT => Standing::Kept {
+                returned_at: BlockHeight::from_raw(reader.u64()?),
+            },
+            _ => return Err(reader.invalid("standing tag is not admitted or kept")),
+        };
         if !reader.is_empty() {
             return Err(reader.invalid("trailing bytes after the pool record"));
         }
         Ok(Self {
-            weight,
-            fee,
-            receive_time,
+            received,
             public,
             standing,
         })

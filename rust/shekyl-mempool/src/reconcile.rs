@@ -33,9 +33,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet};
-use shekyl_chain_store::pool::{PoolOpen, ProvenReference, Standing};
-use shekyl_types::TxHash;
+use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet, VerifiedReference};
+use shekyl_chain_store::pool::{PoolOpen, ReceivedHour, Standing};
+use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 
 use crate::door::{self, Judged};
@@ -53,6 +53,12 @@ pub enum Removed {
     /// is a file this binary did not write; the entry is dropped, which the
     /// discardable file allows (`SPL-Q8`).
     Unparseable,
+    /// Its stored bytes are a transaction, and not the one its key names.
+    Misfiled,
+    /// Its record or its bytes could not be read back: a row that does not
+    /// decode, or a record without its bytes. Dropped by itself — a
+    /// discardable cache never stops the daemon starting.
+    Unreadable,
 }
 
 /// What a reconcile did, entry by entry.
@@ -68,45 +74,59 @@ pub struct Reconciled {
 
 impl Pool {
     /// Open the pool file at `path` and reconcile what it holds against
-    /// `chain` ([`Pool::reconcile`]). A file this creates or recreates
-    /// (`SPL-Q8`) holds nothing, and the reconcile is empty.
+    /// `chain` ([`Pool::reconcile`]) at `now`. A file this creates or
+    /// recreates (`SPL-Q8`) holds nothing, and the reconcile is empty.
+    ///
+    /// **Nothing in the file is trusted** (the review of #1102, S2). Each
+    /// row is read on its own: one whose record or bytes cannot be read,
+    /// whose bytes do not parse, or whose bytes are not the transaction its
+    /// key names is dropped by itself. The weight and fee are read off the
+    /// bytes, a receive time later than `now` is clamped to it, and every
+    /// entry runs the whole door with no CEN-M8 anchor (the file carries
+    /// none).
     ///
     /// # Errors
     ///
     /// The store's (a foreign file, an engine fault) or the chain view's.
     pub fn open<'id, V: ChainView<'id>>(
         path: impl AsRef<Path>,
+        now: UnixSeconds,
         chain: &V,
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<(Self, PoolOpen, Reconciled), PoolFault<V::Fault>> {
         let (mut pool, how) = Self::create(path)?;
-        let mut unparseable = Vec::new();
+        let latest = ReceivedHour::of(now);
+        let mut dropped = Vec::new();
         let snapshot = pool.store().begin_read()?;
-        for entry in snapshot.entries()? {
-            let entry = entry?;
-            let blob = entry.blob(&snapshot)?;
-            match Transaction::from_bytes(&blob) {
-                Ok(tx) => pool.load(
-                    entry.txid,
-                    Held {
-                        tx,
-                        record: entry.record,
-                    },
-                ),
-                Err(_) => unparseable.push(entry.txid),
-            }
+        let txids: Vec<TxHash> = snapshot.txids()?.collect::<Result<_, _>>()?;
+        for txid in txids {
+            let (Ok(Some(mut record)), Ok(Some(blob))) =
+                (snapshot.record(&txid), snapshot.blob(&txid))
+            else {
+                dropped.push((txid, Removed::Unreadable));
+                continue;
+            };
+            let tx = match Transaction::from_bytes(&blob) {
+                Ok(tx) if tx.txid_parts().hash == txid => tx,
+                Ok(_) => {
+                    dropped.push((txid, Removed::Misfiled));
+                    continue;
+                }
+                Err(_) => {
+                    dropped.push((txid, Removed::Unparseable));
+                    continue;
+                }
+            };
+            record.received = record.received.min(latest);
+            pool.load(txid, Held::of(tx, record, None));
         }
         drop(snapshot);
         let mut reconciled = pool.reconcile(chain, rule_set, policy)?;
-        if !unparseable.is_empty() {
+        if !dropped.is_empty() {
             pool.store()
-                .write(|batch| unparseable.iter().try_for_each(|txid| batch.remove(txid)))?;
-            reconciled.removed.extend(
-                unparseable
-                    .into_iter()
-                    .map(|txid| (txid, Removed::Unparseable)),
-            );
+                .write(|batch| dropped.iter().try_for_each(|(txid, _)| batch.remove(txid)))?;
+            reconciled.removed.extend(dropped);
         }
         Ok((pool, how, reconciled))
     }
@@ -114,7 +134,8 @@ impl Pool {
     /// Offer every held transaction to the door again against `chain`, in
     /// the order the pool first held them (module docs), and write what
     /// changed: removals (P3) and standings (P2). The public bit and the
-    /// receive time are the entry's own and survive.
+    /// receive hour are the entry's own and survive; CEN-M8's anchor is
+    /// the door's latest, in memory.
     ///
     /// The judgements are made against a key-image map built beside the
     /// live one, the file is written, and only then does the index take the
@@ -131,17 +152,21 @@ impl Pool {
         policy: &AdmissionPolicy,
     ) -> Result<Reconciled, PoolFault<V::Fault>> {
         let mut order: Vec<(&TxHash, &Held)> = self.held().iter().collect();
-        order.sort_by_key(|(txid, held)| (held.record.receive_time, **txid));
+        order.sort_by_key(|(txid, held)| (held.record.received, **txid));
 
         let mut reconciled = Reconciled::default();
-        let mut changes: BTreeMap<TxHash, Option<Standing>> = BTreeMap::new();
+        // Every entry's outcome, for the index; `writes`, the file's changes.
+        let mut judged_all: BTreeMap<TxHash, Option<(Standing, Option<VerifiedReference>)>> =
+            BTreeMap::new();
+        let mut writes: BTreeMap<TxHash, Option<Standing>> = BTreeMap::new();
         let mut key_images = KeyImages::default();
         for (txid, held) in order {
             if chain
                 .has_transaction(txid)
                 .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
             {
-                changes.insert(*txid, None);
+                judged_all.insert(*txid, None);
+                writes.insert(*txid, None);
                 reconciled.removed.push((*txid, Removed::Mined));
                 continue;
             }
@@ -149,44 +174,44 @@ impl Pool {
             // last admitted the entry; the door skips the FCMP++ verify when
             // the chain still claims exactly that.
             let cached = match held.record.standing {
-                Standing::Admitted { proven } => proven.map(ProvenReference::verified),
-                Standing::Kept => None,
+                Standing::Admitted => held.proven,
+                Standing::Kept { .. } => None,
             };
             let judged = door::judge(&held.tx, chain, &key_images, rule_set, policy, cached)
                 .map_err(PoolFault::Chain)?;
-            let standing = match judged {
-                Judged::Admitted { proven, .. } => Standing::Admitted {
-                    proven: proven.map(ProvenReference::of),
-                },
+            let (standing, proven) = match judged {
+                Judged::Admitted { proven, .. } => (Standing::Admitted, proven),
                 // A kept entry stays kept on any refusal but its bytes'
                 // (module docs); an admitted one is never made kept.
                 Judged::Chain { .. } | Judged::Policy(_)
-                    if held.record.standing == Standing::Kept =>
+                    if matches!(held.record.standing, Standing::Kept { .. }) =>
                 {
-                    Standing::Kept
+                    (held.record.standing, None)
                 }
                 refused => {
-                    changes.insert(*txid, None);
+                    judged_all.insert(*txid, None);
+                    writes.insert(*txid, None);
                     reconciled.removed.push((*txid, Removed::Refused(refused)));
                     continue;
                 }
             };
+            judged_all.insert(*txid, Some((standing, proven)));
             if standing != held.record.standing {
-                changes.insert(*txid, Some(standing));
+                writes.insert(*txid, Some(standing));
             }
             match standing {
-                Standing::Admitted { .. } => {
+                Standing::Admitted => {
                     key_images.insert(*txid, held.key_images());
                     reconciled.admitted.push(*txid);
                 }
-                Standing::Kept => reconciled.kept.push(*txid),
+                Standing::Kept { .. } => reconciled.kept.push(*txid),
             }
         }
-        if !changes.is_empty() {
+        if !writes.is_empty() {
             #[cfg(test)]
             let refuse = core::mem::take(&mut self.refuse_next_write);
             self.store().write(|batch| {
-                changes.iter().try_for_each(|(txid, change)| match change {
+                writes.iter().try_for_each(|(txid, change)| match change {
                     None => batch.remove(txid),
                     Some(standing) => batch.stand(txid, *standing),
                 })?;
@@ -195,12 +220,12 @@ impl Pool {
                 // the file does not hold is the store's refusal.
                 #[cfg(test)]
                 if refuse {
-                    batch.stand(&TxHash::from_bytes([0; 32]), Standing::Kept)?;
+                    batch.stand(&TxHash::from_bytes([0; 32]), Standing::Admitted)?;
                 }
                 Ok::<(), shekyl_chain_store::store::StoreError>(())
             })?;
         }
-        self.install(&changes, key_images);
+        self.install(&judged_all, key_images);
         Ok(reconciled)
     }
 }

@@ -17,12 +17,12 @@ use shekyl_chain_rules::{
     judge_slot_stateless, probes, AdmissionPolicy, CenRow, HeaderView, PolicyRow, ReferenceClaims,
     RuleCoverage, Tip, TxSlot,
 };
-use shekyl_chain_store::pool::{PoolStore, ProvenReference, Standing};
+use shekyl_chain_store::pool::Standing;
 use shekyl_harness_spender::Spender;
 use shekyl_mempool::{
     judge, shown, Admission, Arrival, Duplicate, Evicted, Judged, KeyImages, Limits, Pool,
 };
-use shekyl_types::{CurveTreeRoot, UnixSeconds};
+use shekyl_types::UnixSeconds;
 
 use crate::connector::{Offered, Switched};
 use crate::pool_door_tests::{matured, paying_the_floor, AT};
@@ -48,9 +48,15 @@ async fn offer_branch(x: &Scenario<FreeHash>, branch: &[Mined]) -> crate::Switch
 /// An empty pool at `path`, over `x`'s chain.
 async fn open_pool(x: &mut Scenario<FreeHash>, path: &std::path::Path) -> Pool {
     x.read_chain(|view, rule_set| {
-        Pool::open(path, view, rule_set, &AdmissionPolicy::GENESIS)
-            .expect("open")
-            .0
+        Pool::open(
+            path,
+            shekyl_types::UnixSeconds::from_raw(1),
+            view,
+            rule_set,
+            &AdmissionPolicy::GENESIS,
+        )
+        .expect("open")
+        .0
     })
     .await
 }
@@ -104,7 +110,7 @@ async fn a_switchs_returns_run_the_door_and_the_floor_refuses_one_below_it() {
 /// chain-bound half, held, shown nowhere — and CEN-M10 evicts it after the
 /// kept lifetime, not the admitted one.
 #[tokio::test]
-async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the_week() {
+async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the_cap() {
     let (mut x, prefix) = matured("pool-aged-x").await;
     let mut y = Scenario::open("pool-aged-y");
     y.mine(AT).await;
@@ -131,7 +137,9 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
     let txid = spend.txid_parts().hash;
     assert_eq!(admissions, vec![(txid, Admission::Kept)]);
     let record = pool.record(&txid).expect("kept");
-    assert_eq!(record.standing, Standing::Kept);
+    let Standing::Kept { returned_at } = record.standing else {
+        panic!("kept: {record:?}");
+    };
     assert!(!shown(&record));
     assert_eq!(pool.listing().count(), 0, "kept is shown nowhere");
     assert_eq!(pool.peer_sync().count(), 0);
@@ -165,13 +173,17 @@ async fn a_returned_spend_whose_reference_aged_out_is_kept_and_evicted_after_the
         .await;
     assert_eq!(reconciled.kept, vec![txid]);
     assert!(reconciled.removed.is_empty());
-    // Past the admitted lifetime it stays; past the kept one it goes.
+    // Aged in blocks from its return: a block short of the cap it stays;
+    // at the cap — no switch back reaches further — it goes.
     let limits = Limits::GENESIS;
-    let later = UnixSeconds::from_raw(now.to_raw() + limits.admitted_lifetime + 1);
-    assert!(pool.evict(later, &limits, &[]).expect("evict").is_empty());
-    let week = UnixSeconds::from_raw(now.to_raw() + limits.kept_lifetime + 1);
+    let at = |blocks: u64| shekyl_types::BlockHeight::from_raw(returned_at.to_raw() + blocks);
+    assert!(pool
+        .evict(at(limits.kept_for.to_raw() - 1), &limits, &[])
+        .expect("evict")
+        .is_empty());
     assert_eq!(
-        pool.evict(week, &limits, &[]).expect("evict"),
+        pool.evict(at(limits.kept_for.to_raw()), &limits, &[])
+            .expect("evict"),
         vec![(txid, Evicted::KeptAged)]
     );
     drop(pool);
@@ -407,77 +419,51 @@ async fn the_connect_past_the_cap_retires_an_alt_row_and_its_bodies() {
     y.close().await;
 }
 
-/// CEN-M8: a re-admission whose anchor is the chain's claim does not verify
-/// the FCMP++ proof again; one whose stored anchor moved does, and stores
-/// the chain's. Counted by the validator's own verify probe.
+/// CEN-M8: a reconcile on the anchor the door last verified the proof
+/// against does not verify it again; the anchor is held in memory only, so
+/// an open — the file is not trusted (the review of #1102, S2) — verifies
+/// it once. Counted by the validator's own verify probe.
 #[tokio::test]
-async fn a_readmission_on_the_same_anchor_skips_the_proof_and_a_moved_anchor_verifies_it() {
+async fn a_reconcile_on_the_same_anchor_skips_the_proof_and_an_open_verifies_it() {
     let (mut scenario, mined) = matured("pool-m8").await;
     let spend = paying_the_floor(&mut scenario, &mined, 0).await;
     let txid = spend.txid_parts().hash;
     let path = tmp("pool-m8-pool");
-    let (admitted_anchor, same, moved) = scenario
+    let (same, reopened) = scenario
         .read_chain(|view, rule_set| {
             let policy = AdmissionPolicy::GENESIS;
-            let (mut pool, _, _) = Pool::open(&path, view, rule_set, &policy).expect("open");
+            let now = UnixSeconds::from_raw(1);
+            let (mut pool, _, _) = Pool::open(&path, now, view, rule_set, &policy).expect("open");
             let admitted = pool
                 .admit(
                     spend,
                     shekyl_mempool::Arrival::Relayed,
-                    UnixSeconds::from_raw(1),
+                    now,
                     view,
                     rule_set,
                     &policy,
                 )
                 .expect("no fault");
             assert_eq!(admitted, Admission::Admitted, "fixture");
-            let Standing::Admitted { proven } = pool.record(&txid).expect("held").standing else {
-                unreachable!("admitted");
-            };
-            let anchor = proven.expect("a spend's anchor");
+
+            // The same anchor: the reconcile verifies no proof.
+            let before = probes::fcmp_verifies();
+            let reconciled = pool.reconcile(view, rule_set, &policy).expect("reconcile");
+            let same = (probes::fcmp_verifies() - before, reconciled.admitted);
             drop(pool);
 
-            // The same anchor: the reconcile at open verifies no proof.
+            // Reopened: no anchor in the file, so the proof is verified.
             let before = probes::fcmp_verifies();
-            let (pool, _, reconciled) = Pool::open(&path, view, rule_set, &policy).expect("reopen");
-            let same = (
-                probes::fcmp_verifies() - before,
-                reconciled.admitted.clone(),
-            );
-            drop(pool);
-
-            // A moved anchor: the proof is verified again, and the chain's
-            // anchor replaces the stored one.
-            {
-                let (store, _) = PoolStore::create(&path).expect("the file");
-                let off = ProvenReference {
-                    root: CurveTreeRoot::from_bytes([0x77; 32]),
-                    ..anchor
-                };
-                store
-                    .write(|batch| batch.stand(&txid, Standing::Admitted { proven: Some(off) }))
-                    .expect("plant");
-            }
-            let before = probes::fcmp_verifies();
-            let (pool, _, _) = Pool::open(&path, view, rule_set, &policy).expect("reopen");
-            let moved = (
-                probes::fcmp_verifies() - before,
-                pool.record(&txid).expect("held").standing,
-            );
-            (anchor, same, moved)
+            let (_, _, reconciled) =
+                Pool::open(&path, now, view, rule_set, &policy).expect("reopen");
+            (
+                same,
+                (probes::fcmp_verifies() - before, reconciled.admitted),
+            )
         })
         .await;
     assert_eq!(same, (0, vec![txid]), "the cache spares the proof");
-    assert_eq!(
-        moved,
-        (
-            1,
-            Standing::Admitted {
-                proven: Some(admitted_anchor)
-            }
-        ),
-        "a moved anchor is verified again and replaced"
-    );
+    assert_eq!(reopened, (1, vec![txid]), "an open trusts no anchor");
     drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
@@ -576,7 +562,12 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
                 assert!(pool.fluffed(&txid).expect("publish"));
             }
             let all = shekyl_mempool::select(&pool, view, rule_set, u64::MAX).expect("template");
-            let weight = pool.record(&id3).expect("held").weight;
+            let weight = pool
+                .listing()
+                .find(|(txid, _)| *txid == id3)
+                .expect("shown")
+                .1
+                .weight;
             let one = shekyl_mempool::select(&pool, view, rule_set, weight).expect("template");
             (all, one)
         })
@@ -630,7 +621,7 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     );
     let refused: Vec<_> = template.refused.iter().map(|(id, _)| *id).collect();
     assert_eq!(
-        pool.evict(UnixSeconds::from_raw(2), &Limits::GENESIS, &refused)
+        pool.evict(shekyl_types::BlockHeight::ZERO, &Limits::GENESIS, &refused)
             .expect("evict"),
         vec![(id1, Evicted::Refused)]
     );

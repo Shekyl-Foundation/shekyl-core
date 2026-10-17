@@ -33,8 +33,14 @@ fn a_transaction_the_chain_holds_is_a_duplicate_and_is_not_judged() {
     let tx = listed_on(&base, [0x41; 32]);
     let chain = base.with_transaction(tx.txid_parts().hash);
     let admission = chain.with_view(|view| {
-        let (mut pool, _, _) =
-            Pool::open(&path, &view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS).unwrap();
+        let (mut pool, _, _) = Pool::open(
+            &path,
+            UnixSeconds::from_raw(1),
+            &view,
+            &RuleSet::GENESIS,
+            &AdmissionPolicy::GENESIS,
+        )
+        .unwrap();
         pool.admit(
             tx,
             Arrival::Relayed,
@@ -57,8 +63,14 @@ fn a_refused_transaction_leaves_no_trace() {
     let chain = spendable_chain();
     let tx = listed_on(&chain, [0x42; 32]);
     chain.with_view(|view| {
-        let (mut pool, _, _) =
-            Pool::open(&path, &view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS).unwrap();
+        let (mut pool, _, _) = Pool::open(
+            &path,
+            UnixSeconds::from_raw(1),
+            &view,
+            &RuleSet::GENESIS,
+            &AdmissionPolicy::GENESIS,
+        )
+        .unwrap();
         let admission = pool
             .admit(
                 tx,
@@ -77,8 +89,14 @@ fn a_refused_transaction_leaves_no_trace() {
         );
         assert!(pool.is_empty());
         drop(pool);
-        let (pool, _, reconciled) =
-            Pool::open(&path, &view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS).unwrap();
+        let (pool, _, reconciled) = Pool::open(
+            &path,
+            UnixSeconds::from_raw(1),
+            &view,
+            &RuleSet::GENESIS,
+            &AdmissionPolicy::GENESIS,
+        )
+        .unwrap();
         assert!(pool.is_empty());
         assert_eq!(reconciled, crate::reconcile::Reconciled::default());
     });

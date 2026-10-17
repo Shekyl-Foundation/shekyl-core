@@ -19,10 +19,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet};
-use shekyl_chain_store::pool::{PoolOpen, PoolRecord, PoolStore, ProvenReference, Standing};
+use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet, VerifiedReference};
+use shekyl_chain_store::pool::{PoolOpen, PoolRecord, PoolStore, ReceivedHour, Standing};
 use shekyl_chain_store::store::StoreError;
-use shekyl_types::{KeyImage, TxHash, UnixSeconds};
+use shekyl_types::{BlockHeight, KeyImage, TxHash, UnixSeconds};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{Ct, Input};
 use shekyl_wire::Transaction;
@@ -97,14 +97,37 @@ impl<F> From<StoreError> for PoolFault<F> {
     }
 }
 
-/// One held transaction.
+/// One held transaction: the parsed body, its record (what the file holds),
+/// and what the pool derives and keeps in memory only — the weight and fee,
+/// which the bytes say, and CEN-M8's anchor, which an untrusted file must
+/// not let a row skip the FCMP++ verify on (`codec/pool.rs`).
 #[derive(Clone, Debug)]
 pub(crate) struct Held {
     pub(crate) tx: Transaction,
     pub(crate) record: PoolRecord,
+    pub(crate) weight: u64,
+    pub(crate) fee: AtomicUnits,
+    /// What the proof verified against when the door last admitted it, or
+    /// `None`: CEN-M8's cache.
+    pub(crate) proven: Option<VerifiedReference>,
 }
 
 impl Held {
+    /// `tx` under `record`, its weight and fee read off its bytes.
+    pub(crate) fn of(
+        tx: Transaction,
+        record: PoolRecord,
+        proven: Option<VerifiedReference>,
+    ) -> Self {
+        Self {
+            weight: u64::try_from(tx.weight()).unwrap_or(u64::MAX),
+            fee: AtomicUnits::from_raw(fee_of(&tx)),
+            tx,
+            record,
+            proven,
+        }
+    }
+
     /// The key images this transaction spends, in input order.
     pub(crate) fn key_images(&self) -> Vec<KeyImage> {
         key_images_of(&self.tx)
@@ -204,29 +227,29 @@ impl Pool {
         }
         let judged = door::judge(&tx, chain, &self.key_images, rule_set, policy, None)
             .map_err(PoolFault::Chain)?;
-        let (standing, admission) = match (judged, arrival) {
-            (Judged::Admitted { proven, .. }, _) => (
-                Standing::Admitted {
-                    proven: proven.map(ProvenReference::of),
-                },
-                Admission::Admitted,
-            ),
+        let (standing, admission, proven) = match (judged, arrival) {
+            (Judged::Admitted { proven, .. }, _) => {
+                (Standing::Admitted, Admission::Admitted, proven)
+            }
             (Judged::Chain { policy: None, .. }, Arrival::Returned) => {
-                (Standing::Kept, Admission::Kept)
+                // Aged from the tip of the chain the switch left (CEN-M10).
+                let returned_at = chain
+                    .tip()
+                    .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?
+                    .map_or(BlockHeight::ZERO, |tip| tip.height);
+                (Standing::Kept { returned_at }, Admission::Kept, None)
             }
             (refused, _) => return Ok(Admission::Refused(refused)),
         };
         let record = PoolRecord {
-            weight: u64::try_from(tx.weight()).unwrap_or(u64::MAX),
-            fee: AtomicUnits::from_raw(fee_of(&tx)),
-            receive_time: now,
+            received: ReceivedHour::of(now),
             public: arrival.carried(),
             standing,
         };
         let blob = tx.serialize();
         self.store
             .write(|batch| batch.insert(txid, &record, &blob))?;
-        self.hold(txid, Held { tx, record });
+        self.hold(txid, Held::of(tx, record, proven));
         Ok(admission)
     }
 
@@ -234,7 +257,7 @@ impl Pool {
     /// map (CEN-M7); a kept one's do not — it is not a pool-valid
     /// transaction, so it blocks no other spend.
     pub(crate) fn hold(&mut self, txid: TxHash, held: Held) {
-        if matches!(held.record.standing, Standing::Admitted { .. }) {
+        if held.record.standing == Standing::Admitted {
             self.key_images.insert(txid, held.key_images());
         }
         self.held.insert(txid, held);
@@ -256,21 +279,23 @@ impl Pool {
     }
 
     /// Put a reconcile's outcome in the index once the file holds it: each
-    /// change (`None` drops the entry, `Some` is its new standing), and the
-    /// key-image map the reconcile built beside the live one.
+    /// entry's judgement (`None` drops it, `Some` is its standing and
+    /// CEN-M8's anchor), and the key-image map the reconcile built beside
+    /// the live one.
     pub(crate) fn install(
         &mut self,
-        changes: &BTreeMap<TxHash, Option<Standing>>,
+        judged: &BTreeMap<TxHash, Option<(Standing, Option<VerifiedReference>)>>,
         key_images: KeyImages,
     ) {
-        for (txid, change) in changes {
-            match change {
+        for (txid, outcome) in judged {
+            match outcome {
                 None => {
                     self.held.remove(txid);
                 }
-                Some(standing) => {
+                Some((standing, proven)) => {
                     if let Some(held) = self.held.get_mut(txid) {
                         held.record.standing = *standing;
+                        held.proven = *proven;
                     }
                 }
             }
@@ -330,7 +355,7 @@ impl Pool {
         self.store
             .write(|batch| batch.insert(txid, &record, &blob))
             .expect("plant");
-        self.hold(txid, Held { tx, record });
+        self.hold(txid, Held::of(tx, record, None));
         txid
     }
 }

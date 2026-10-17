@@ -117,9 +117,9 @@ use super::{
     post_image, AltBlock, AltBlockFacts, AltBodies, BlockDraws, BlockInfo, BondRecord, Canonical,
     Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
     IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord, ProbeCell,
-    PropertyCell, ProvenReference, RMarket, RecordedPow, RuleSetInForce, SchemaVersion,
-    SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, Standing,
-    TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    PropertyCell, RMarket, RecordedPow, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
+    SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, Standing, TreeDepth, TxIndex,
+    TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -593,41 +593,33 @@ impl Fixtures for AltBlock {
 
 impl Fixtures for PoolRecord {
     fn fixtures() -> Vec<(&'static str, Self)> {
-        use shekyl_types::{CurveTreeRoot, UnixSeconds};
+        use crate::codec::ReceivedHour;
         let stemmed = PoolRecord {
-            weight: 1_500,
-            fee: AtomicUnits::from_raw(30_000),
-            receive_time: UnixSeconds::from_raw(1_700_000_000),
+            received: ReceivedHour::from_raw(472_222),
             public: false,
-            standing: Standing::Admitted { proven: None },
+            standing: Standing::Admitted,
         };
         vec![
-            // Admitted and not yet public: the relay holds it in stem, and
-            // its judgement verified no reference.
-            ("admitted_unpublished_no_anchor", stemmed),
-            // Fluffed, with M8's anchor: the reference the proof verified
-            // against, its height and the root there.
+            // Admitted and not yet public: the relay holds it in stem.
+            ("admitted_unpublished", stemmed),
+            // Fluffed.
             (
-                "admitted_public_with_anchor",
+                "admitted_public",
                 PoolRecord {
                     public: true,
-                    standing: Standing::Admitted {
-                        proven: Some(ProvenReference {
-                            reference: BlockHash::from_bytes([0x41; 32]),
-                            height: BlockHeight::from_raw(41),
-                            root: CurveTreeRoot::from_bytes([0xc1; 32]),
-                        }),
-                    },
                     ..stemmed
                 },
             ),
             // Returned from a popped block and refused by the chain-bound
-            // half of the door: kept (CEN-K10), public because a block was.
+            // half alone: kept (CEN-K10) from the height it was returned at,
+            // public because a block carried it.
             (
                 "kept_public",
                 PoolRecord {
                     public: true,
-                    standing: Standing::Kept,
+                    standing: Standing::Kept {
+                        returned_at: BlockHeight::from_raw(41),
+                    },
                     ..stemmed
                 },
             ),

@@ -89,7 +89,7 @@ mod header;
 mod read;
 mod write;
 
-pub use crate::codec::{PoolRecord, ProvenReference, Standing};
+pub use crate::codec::{PoolRecord, ReceivedHour, Standing};
 pub use header::{PoolOpen, POOL_VERSION_KEY};
 pub use read::{PoolEntry, PoolSnapshot};
 pub use schema::PoolTxBytes;

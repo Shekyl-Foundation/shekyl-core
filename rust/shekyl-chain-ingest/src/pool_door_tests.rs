@@ -282,7 +282,14 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
     let admissions = scenario
         .read_chain(|view, rule_set| {
             let policy = AdmissionPolicy::GENESIS;
-            let (mut pool, _, _) = Pool::open(&path, view, rule_set, &policy).expect("open");
+            let (mut pool, _, _) = Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("open");
             let mut admit = |tx: &Transaction| {
                 pool.admit(
                     tx.clone(),
@@ -334,8 +341,14 @@ async fn the_pool_holds_one_spender_per_image_refuses_duplicates_and_the_floor()
     let mined_dup = scenario
         .read_chain(|view, rule_set| {
             let policy = AdmissionPolicy::GENESIS;
-            let (mut pool, _, reconciled) =
-                Pool::open(&path, view, rule_set, &policy).expect("reopen");
+            let (mut pool, _, reconciled) = Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("reopen");
             assert_eq!(
                 reconciled.removed.len(),
                 1,
@@ -371,7 +384,14 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
     let (before, after, reopened) = scenario
         .read_chain(|view, rule_set| {
             let policy = AdmissionPolicy::GENESIS;
-            let (mut pool, _, _) = Pool::open(&path, view, rule_set, &policy).expect("open");
+            let (mut pool, _, _) = Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("open");
             let admitted = pool
                 .admit(
                     good,
@@ -398,7 +418,14 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
             let after = seen(&pool);
             drop(pool);
             // The bit is the file's too: a reopen shows it.
-            let (pool, _, _) = Pool::open(&path, view, rule_set, &policy).expect("reopen");
+            let (pool, _, _) = Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("reopen");
             (before, after, seen(&pool))
         })
         .await;

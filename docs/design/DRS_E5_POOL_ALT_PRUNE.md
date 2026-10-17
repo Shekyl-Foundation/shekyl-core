@@ -833,16 +833,22 @@ for M3's job is deleted (`05-system-thinking.mdc`, one mechanism one job;
 **The pool knows one relay fact: public yet** (DX-F6, 2026-10-16;
 `DAEMON_RELAY_PRIVACY.md` D++ acceptance criterion 2). A transaction that
 is not public is absent from the pool listing, from peer pool sync and
-from a block template, and the relay's fluff event is the only writer of
-the bit. Stem, fluff, embargo, the arrival connector and the originator's
+from a block template. The relay's fluff event sets the bit, and so does a
+block carrying the transaction. Stem, fluff, embargo, the arrival connector and the originator's
 re-broadcast responsibility (F-10's disarm) are `shekyl-relay`'s:
 `Responsibility` moved there, keyed by transaction hash beside the stem
 watch, staged for the DRS-X flip's relay wiring. The pool record keeps
-what admission, eviction or template selection reads — weight, fee,
-receive time, the public bit, and a standing (admitted with M8's
-`(reference, height, root)` anchor, or kept under K10) — and nothing else
-(`codec/pool.rs`'s module docs give the reason per field; `SCHEMA_VERSION`
-27). Responsibility is in memory: after a restart the relay cannot tell
+only what the transaction's bytes cannot say and admission, eviction or
+template selection reads — the receive time to the hour, the public bit,
+and a standing (admitted, or kept under K10 with the height it was
+returned at) — and nothing else (`codec/pool.rs`'s module docs give the
+reason per field; `SCHEMA_VERSION` 27). The file is not trusted (the
+review of #1102, S2): an open re-derives the weight and fee from the
+bytes, drops each row that does not read, does not parse or is not the
+transaction its key names, clamps a receive time from the future, and
+runs every entry through the whole door; M8's anchor lives in memory
+only. The listing carries no receive time (S7), and a layout recreate
+overwrites the old file before unlinking it. Responsibility is in memory: after a restart the relay cannot tell
 this node's unpublished transactions from arrivals still in stem, and
 treats every non-public entry alike — the uniform handling is the privacy
 property. What the relay does with them at open is the relay's to decide

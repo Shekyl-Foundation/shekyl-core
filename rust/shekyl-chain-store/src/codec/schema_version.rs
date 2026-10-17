@@ -297,11 +297,12 @@ use super::{Canonical, CodecError};
 ///   `pool_record` drops the relay state (origin, phase and its clocks,
 ///   responsibility — the relay's, which keeps `Responsibility` beside its
 ///   stem watch), `relayed`, `double_spend_seen` and the readiness cache,
-///   none of which admission, eviction or template selection reads; it
-///   gains `public` and a `standing` (admitted, or kept under CEN-K10)
-///   whose admitted arm carries CEN-M8's cache as the `(reference, height,
-///   root)` triple the proof verified against, replacing the C++
-///   `H(proof ‖ referenceBlock ‖ key images)` and its null-hash sentinel.
+///   none of which admission, eviction or template selection reads, and
+///   everything the transaction's bytes say (weight, fee) or an untrusted
+///   file must not supply (CEN-M8's anchor, held in memory; the review of
+///   #1102, S2): it is `received` (whole hours, S7), `public` and a
+///   `standing` (admitted, or kept under CEN-K10 with the height it was
+///   returned at).
 ///   A `26` pool file is recreated at open (`SPL-Q8`), and a `26` chain
 ///   file is refused as at every bump — the two files share one layout
 ///   number. `pool_record.snap` re-pins. In the chain file,

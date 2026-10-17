@@ -31,7 +31,14 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
     let policy = AdmissionPolicy::GENESIS;
     scenario
         .read_chain(|view, rule_set| {
-            let (mut pool, how, _) = Pool::open(&path, view, rule_set, &policy).expect("open");
+            let (mut pool, how, _) = Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("open");
             assert_eq!(how, PoolOpen::Created);
             for tx in [a.clone(), b] {
                 assert_eq!(
@@ -57,7 +64,14 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
         .unwrap_or_else(|o| panic!("a connects: {o}"));
     let (first, second) = scenario
         .read_chain(|view, rule_set| {
-            let (pool, how, reconciled) = Pool::open(&path, view, rule_set, &policy).expect("open");
+            let (pool, how, reconciled) = Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("open");
             assert_eq!(how, PoolOpen::Opened);
             let held = (
                 pool.record(&ida).is_some(),
@@ -65,7 +79,14 @@ async fn a_restart_reconciles_the_pool_file_against_the_chain() {
             );
             drop(pool);
             let first = (reconciled, held);
-            let (_, _, again) = Pool::open(&path, view, rule_set, &policy).expect("reopen");
+            let (_, _, again) = Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("reopen");
             (first, again)
         })
         .await;
@@ -94,7 +115,14 @@ async fn the_pool_file_can_be_discarded() {
     let digest_before = scenario.digest().await.expect("digest");
     scenario
         .read_chain(|view, rule_set| {
-            let (mut pool, _, _) = Pool::open(&path, view, rule_set, &policy).expect("open");
+            let (mut pool, _, _) = Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("open");
             pool.admit(
                 spend.clone(),
                 Arrival::Relayed,
@@ -109,8 +137,14 @@ async fn the_pool_file_can_be_discarded() {
     std::fs::remove_file(&path).expect("the operator discards the pool file");
     let readmitted = scenario
         .read_chain(|view, rule_set| {
-            let (mut pool, how, reconciled) =
-                Pool::open(&path, view, rule_set, &policy).expect("open");
+            let (mut pool, how, reconciled) = Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &policy,
+            )
+            .expect("open");
             assert_eq!(how, PoolOpen::Created, "a fresh file");
             assert!(pool.is_empty() && reconciled.removed.is_empty());
             pool.admit(
@@ -146,7 +180,6 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
     use shekyl_chain_store::pool::{PoolRecord, PoolStore, Standing};
     use shekyl_harness_spender::Spender;
     use shekyl_mempool::Judged;
-    use shekyl_units::AtomicUnits;
 
     use crate::pool_door_tests::AT;
     use crate::test_support::h;
@@ -171,11 +204,9 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
         let (store, _) = PoolStore::create(&path).expect("create");
         for (at, tx) in [(1, &paid), (2, &cheap)] {
             let record = PoolRecord {
-                weight: u64::try_from(tx.weight()).expect("fits"),
-                fee: AtomicUnits::from_raw(1),
-                receive_time: UnixSeconds::from_raw(at),
+                received: shekyl_chain_store::pool::ReceivedHour::from_raw(at),
                 public: true,
-                standing: Standing::Admitted { proven: None },
+                standing: Standing::Admitted,
             };
             store
                 .write(|batch| batch.insert(tx.txid_parts().hash, &record, &tx.serialize()))
@@ -188,9 +219,15 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
         .unwrap_or_else(|o| panic!("the third body connects: {o}"));
     let reconciled = scenario
         .read_chain(|view, rule_set| {
-            Pool::open(&path, view, rule_set, &AdmissionPolicy::GENESIS)
-                .expect("open")
-                .2
+            Pool::open(
+                &path,
+                shekyl_types::UnixSeconds::from_raw(1),
+                view,
+                rule_set,
+                &AdmissionPolicy::GENESIS,
+            )
+            .expect("open")
+            .2
         })
         .await;
     assert!(reconciled.kept.is_empty(), "the reconcile keeps nothing");
@@ -215,6 +252,44 @@ async fn a_reconcile_removes_an_admitted_entry_the_chain_now_refuses() {
         }
         other => panic!("both leave, each on the door's answer: {other:?}"),
     }
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
+/// The file's receive time is not trusted (the review of #1102, S2): a
+/// filed spend claiming to have arrived years from now opens at the hour of
+/// `now`, and its weight and fee are read off its bytes.
+#[tokio::test]
+async fn an_open_clamps_a_receive_time_from_the_future() {
+    use shekyl_chain_store::pool::{PoolRecord, PoolStore, ReceivedHour, Standing};
+
+    let (mut scenario, mined) = matured("pool-clamp").await;
+    let spend = paying_the_floor(&mut scenario, &mined, 0).await;
+    let txid = spend.txid_parts().hash;
+    let path = tmp("pool-clamp-pool");
+    {
+        let (store, _) = PoolStore::create(&path).expect("create");
+        let record = PoolRecord {
+            received: ReceivedHour::from_raw(u64::MAX / 2),
+            public: true,
+            standing: Standing::Admitted,
+        };
+        store
+            .write(|batch| batch.insert(txid, &record, &spend.serialize()))
+            .expect("planted");
+    }
+    let now = UnixSeconds::from_raw(1_700_000_000);
+    let (received, listed) = scenario
+        .read_chain(|view, rule_set| {
+            let (pool, _, reconciled) =
+                Pool::open(&path, now, view, rule_set, &AdmissionPolicy::GENESIS).expect("open");
+            assert_eq!(reconciled.admitted, vec![txid]);
+            let listed = pool.listing().find(|(id, _)| *id == txid).expect("shown").1;
+            (pool.record(&txid).expect("held").received, listed)
+        })
+        .await;
+    assert_eq!(received, ReceivedHour::of(now));
+    assert_eq!(listed.weight, u64::try_from(spend.weight()).expect("fits"));
     drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
