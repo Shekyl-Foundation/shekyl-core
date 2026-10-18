@@ -91,6 +91,7 @@ fn facts_from_ffi(
         reference,
         fee_per_byte: pod.fee_per_byte,
         fee_floor_window: None,
+        pool_refuses_for_room: None,
         weight_limit: pod.weight_limit,
         chain_height: ChainCount::from_raw(pod.chain_height),
         // bond_record_exists is valid iff the BP3 probe ran (§8.7.1) —

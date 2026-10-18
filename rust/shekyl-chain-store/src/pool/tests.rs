@@ -469,3 +469,73 @@ fn the_old_file_is_overwritten_before_it_is_unlinked() {
     );
     drop(std::fs::remove_file(&path));
 }
+
+/// A recreate interrupted at any step leaves a pool that opens (Copilot,
+/// #1102): the old file is moved to the store's discard path before it is
+/// wiped, so the pool's path never holds a half-wiped file the next open
+/// would refuse as foreign, and every open finishes a discard left behind.
+#[test]
+fn an_interrupted_recreate_leaves_a_pool_that_opens() {
+    let discard = |path: &std::path::Path| super::header::discard_path(path);
+
+    // Interrupted mid-wipe: the old file sits at the discard path with its
+    // header zeroed, and the pool's path is empty. The open creates a fresh
+    // file and removes the leftover.
+    let path = tmp("interrupted-wipe");
+    std::fs::write(discard(&path), vec![0_u8; 4096]).unwrap();
+    let (store, how) = PoolStore::create(&path).unwrap();
+    assert_eq!(how, PoolOpen::Created);
+    assert!(!discard(&path).exists(), "the leftover is finished");
+    drop(store);
+
+    // Interrupted after the fresh seal: a current file at the pool's path,
+    // the discard beside it. The file opens and keeps its entries.
+    let (store, _) = PoolStore::create(&path).unwrap();
+    store
+        .write(|b| b.insert(txid(3), &admitted(), b"three"))
+        .unwrap();
+    drop(store);
+    std::fs::write(discard(&path), b"left over").unwrap();
+    let (store, how) = PoolStore::create(&path).unwrap();
+    assert_eq!(how, PoolOpen::Opened);
+    assert_eq!(store.begin_read().unwrap().len().unwrap(), 1);
+    assert!(!discard(&path).exists());
+    drop(store);
+
+    // A completed recreate leaves no discard behind.
+    {
+        let (store, _) = PoolStore::create(&path).unwrap();
+        let txn = store.db.begin_write().unwrap();
+        {
+            let mut header = txn.open_table(POOL_HEADER).unwrap();
+            let other = PoolSchemaVersion::new(POOL_SCHEMA_VERSION.get() + 1);
+            header
+                .insert(
+                    POOL_VERSION_KEY,
+                    Raw::<PropertyCellBytes>::new(&other.encode()),
+                )
+                .unwrap();
+        }
+        txn.commit().unwrap();
+        drop(store);
+    }
+    let (store, how) = PoolStore::create(&path).unwrap();
+    assert!(matches!(how, PoolOpen::Recreated { .. }));
+    assert_eq!(store.begin_read().unwrap().len().unwrap(), 0);
+    assert!(!discard(&path).exists(), "the old file is wiped and gone");
+    drop(store);
+    drop(std::fs::remove_file(&path));
+
+    // A foreign file at the pool's path is still refused and kept: nothing
+    // but a validated pool file is moved to the discard path.
+    let path = tmp("interrupted-foreign");
+    std::fs::write(&path, b"not a pool").unwrap();
+    let err = PoolStore::create(&path).expect_err("foreign");
+    assert!(matches!(
+        err,
+        StoreError::Cannot(StoreCannot::PoolFileForeign)
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), b"not a pool");
+    assert!(!discard(&path).exists());
+    drop(std::fs::remove_file(&path));
+}

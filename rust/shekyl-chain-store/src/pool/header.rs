@@ -16,6 +16,19 @@
 //! version must sit over both tables under their declared types, or the
 //! file is not one this store left behind. Everything that is not a sealed
 //! pool file is **refused and kept**.
+//!
+//! # A recreate is recoverable at every step
+//!
+//! The old file held which transactions this node had in its stem phase,
+//! so it is wiped, not only unlinked — and a wipe is not atomic. So the
+//! validated old file is first **renamed** to the store's own discard path
+//! ([`discard_path`]: the file's name with `.discard` appended), a fresh file
+//! is sealed at the pool's path, and only then is the discarded file
+//! overwritten and removed. Every open first finishes a discard an earlier
+//! run left. An interruption anywhere leaves either the old sealed file or
+//! no file at the pool's path — never a half-wiped one the next open would
+//! refuse as foreign — and the discard path is the store's alone: nothing
+//! but a validated pool file is ever moved there.
 
 use std::path::Path;
 
@@ -67,6 +80,7 @@ enum Header {
 /// file another process left, is never sealed by a creator that did not
 /// create it.
 pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreError> {
+    finish_discard(path).map_err(io_open)?;
     let mut builder = redb::Builder::new();
     builder.set_cache_size(POOL_CACHE_SIZE);
     match create_new(path) {
@@ -80,12 +94,13 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
             match read_header(&db)? {
                 Header::Current => Ok((db, PoolOpen::Opened)),
                 Header::Other(from) => {
-                    // Release the engine's file lock before removing.
+                    // Release the engine's file lock before moving it.
                     drop(db);
-                    overwrite(path).map_err(io_open)?;
-                    std::fs::remove_file(path).map_err(io_open)?;
+                    retire(path).map_err(io_open)?;
                     let file = create_new(path).map_err(io_open)?;
-                    seal_fresh(&builder, file, path).map(|db| (db, PoolOpen::Recreated { from }))
+                    let sealed = seal_fresh(&builder, file, path)?;
+                    finish_discard(path).map_err(io_open)?;
+                    Ok((sealed, PoolOpen::Recreated { from }))
                 }
             }
         }
@@ -93,12 +108,56 @@ pub(super) fn open_or_create(path: &Path) -> Result<(Database, PoolOpen), StoreE
     }
 }
 
+/// Where a recreate moves the old file before wiping it (module docs).
+pub(super) fn discard_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".discard");
+    path.with_file_name(name)
+}
+
+/// Move the validated old file at `path` to [`discard_path`], durably: the
+/// rename is one step, so the pool's path holds the old sealed file or
+/// nothing, and the directory is flushed so the move survives a crash.
+fn retire(path: &Path) -> std::io::Result<()> {
+    std::fs::rename(path, discard_path(path))?;
+    sync_parent(path)
+}
+
+/// Wipe and remove a discard an earlier step or an earlier run left. No
+/// discard is nothing to do.
+fn finish_discard(path: &Path) -> std::io::Result<()> {
+    let discard = discard_path(path);
+    match overwrite(&discard) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    }
+    std::fs::remove_file(&discard)?;
+    sync_parent(path)
+}
+
+/// Flush the directory holding `path`, so a rename or unlink in it is
+/// durable. Unix only: elsewhere a directory cannot be opened to flush.
+fn sync_parent(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let dir = match path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir,
+            _ => Path::new("."),
+        };
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 /// Overwrite a pool file's bytes with zeros and flush them, before it is
-/// unlinked at a layout recreate: the file held which transactions this
-/// node had in its stem phase and when, and an unlink alone leaves those
-/// bytes on the disk for anyone who reads it later (the review of #1102,
-/// S7). Best effort below the filesystem: a copy-on-write or journaling
-/// filesystem may keep old blocks, which only full-disk encryption covers.
+/// unlinked: the file held which transactions this node had in its stem
+/// phase and when, and an unlink alone leaves those bytes on the disk for
+/// anyone who reads it later (the review of #1102, S7). Best effort below
+/// the filesystem: a copy-on-write or journaling filesystem may keep old
+/// blocks, which only full-disk encryption covers.
 pub(super) fn overwrite(path: &Path) -> std::io::Result<()> {
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new().write(true).open(path)?;

@@ -108,6 +108,14 @@ pub struct SubmitFacts {
     /// the gate. `None` from the C++ shim, whose tip-floor rule stands
     /// until the flip deletes it (DX-Q10; the review of #1102, S5).
     pub fee_floor_window: Option<Vec<u64>>,
+    /// Whether CEN-M10's rising minimum refuses a fresh submission of this
+    /// transaction's weight and fee against the pool as it stands
+    /// (`shekyl_mempool::RelayView::refuses_for_room`), read by the Rust
+    /// shim at a raced commit. A concealed answer applies it, so a foreign
+    /// caller resubmitting a held stem transaction gets the verdict another
+    /// transaction at its rate would get (Copilot, #1102). `None` from the
+    /// C++ shim and at Phase B.
+    pub pool_refuses_for_room: Option<bool>,
     /// Transaction weight limit (compile-time constant on Shekyl:
     /// `min_block_weight / 2 − COINBASE_BLOB_RESERVED_SIZE` = 149 400; §3.1).
     pub weight_limit: u64,

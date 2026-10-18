@@ -61,10 +61,27 @@ impl RelayView<'_> {
         self.pool.record(txid)
     }
 
-    /// The key images the pool's admitted entries spend (CEN-M7's map).
+    /// The key images the pool's entries spend (CEN-M7's map).
     #[must_use]
     pub fn key_images(&self) -> &KeyImages {
         self.pool.key_images()
+    }
+
+    /// Whether CEN-M10's rising minimum refuses a transaction of `tx`'s
+    /// weight and fee against the pool as it stands — the answer
+    /// [`Pool::admit`] gives a fresh submission as `Admission::PoolFull`,
+    /// asked without admitting anything. An entry at the same rate is never
+    /// evicted for it (only strictly cheaper ones are), so for a held `tx`
+    /// this is the answer another transaction at its weight and fee would
+    /// get: what a concealed duplicate must answer, so that resubmitting a
+    /// stem transaction is no presence oracle when the pool is full (Copilot,
+    /// #1102).
+    #[must_use]
+    pub fn refuses_for_room(&self, tx: &Transaction) -> bool {
+        let weight = u64::try_from(tx.weight()).unwrap_or(u64::MAX);
+        self.pool
+            .room_for(weight, (crate::pool::fee_of(tx), weight))
+            .is_none()
     }
 
     /// How many transactions the pool holds.

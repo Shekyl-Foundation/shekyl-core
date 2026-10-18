@@ -399,6 +399,7 @@ fn gather(
         reference,
         fee_per_byte,
         fee_floor_window: Some(fee_floor_window),
+        pool_refuses_for_room: None,
         weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT)
             .map_err(|_| ShimFault)?,
         chain_height: ChainCount::from_raw(connecting.to_raw()),
@@ -509,7 +510,13 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
                         parsed.bond_probe(),
                         emission_probe.as_ref().map(|(id, epochs)| (id, *epochs)),
                     ) {
-                        Ok(fresh) => CommitOutcome::Raced(Box::new(fresh)),
+                        Ok(mut fresh) => {
+                            // The rising minimum against the pool as it
+                            // stands, for a concealed answer to apply.
+                            fresh.pool_refuses_for_room =
+                                Some(pool.relay_view().refuses_for_room(&parsed.tx));
+                            CommitOutcome::Raced(Box::new(fresh))
+                        }
                         Err(ShimFault) => CommitOutcome::InternalFault,
                     }
                 }

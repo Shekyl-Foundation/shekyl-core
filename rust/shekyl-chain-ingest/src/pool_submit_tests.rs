@@ -528,3 +528,81 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
     drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
+
+/// A full pool is no presence oracle (Copilot, #1102). The pool holds one
+/// entry's weight, and the owner's stem spend fills it. A foreign caller
+/// resubmitting those bytes gets the answer a fresh spend of the same
+/// weight and fee gets — refused for room, `FeeTooLow` — not a concealed
+/// `Accepted` that only a held transaction could earn. Over `RustPoolShim`
+/// and the production verifier.
+#[tokio::test]
+async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
+    let (mut scenario, mined) = matured("pool-submit-full").await;
+    let held = paying_the_floor(&mut scenario, &mined, 0).await;
+    let fee = match &held.ct {
+        shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,
+        shekyl_wire::transaction::Ct::Null(_) => unreachable!("a spend"),
+    };
+    let peer = shekyl_harness_spender::Spender::over(&mined).spend_coinbase(
+        scenario.wallet(),
+        h(2),
+        h(AT),
+        fee,
+    );
+    assert_eq!(held.weight(), peer.weight(), "the same shape");
+    let path = tmp("pool-submit-full-pool");
+    let (owned, duplicate, fresh, unpublished) = scenario
+        .with_store(|store, rules| {
+            let chain = Store { store, rules };
+            let mut pool = chain
+                .read(|snapshot, rule_set| {
+                    Pool::open(
+                        &path,
+                        UnixSeconds::from_raw(1),
+                        &SnapshotView::new(snapshot),
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("open")
+                    .0
+                })
+                .expect("a snapshot");
+            pool.set_limits(shekyl_mempool::Limits {
+                max_weight: u64::try_from(held.weight()).expect("fits"),
+            });
+            let shim = Arc::new(RustPoolShim::new(
+                chain,
+                pool,
+                AdmissionPolicy::GENESIS,
+                || UnixSeconds::from_raw(1),
+            ));
+            let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+            let submit = |tx: &shekyl_wire::Transaction, caller| {
+                engine.submit(&hex(tx), caller).expect("no engine fault")
+            };
+            let owned = submit(&held, SubmitCaller::Owner);
+            let duplicate = submit(&held, SubmitCaller::Foreign);
+            let fresh = submit(&peer, SubmitCaller::Foreign);
+            let unpublished = shim
+                .with_pool(|pool| pool.record(&held.txid_parts().hash).map(|r| r.public))
+                .expect("the lock");
+            (owned, duplicate, fresh, unpublished)
+        })
+        .await;
+    assert_eq!(
+        owned,
+        SubmitVerdict::Accepted,
+        "the stem spend fills the pool"
+    );
+    assert_eq!(unpublished, Some(false), "held in its stem phase");
+    assert_eq!(
+        fresh,
+        SubmitVerdict::Rejected {
+            cause: RejectCause::FeeTooLow
+        },
+        "a fresh spend at its rate finds no room"
+    );
+    assert_eq!(duplicate, fresh, "and so does the held one, concealed");
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}

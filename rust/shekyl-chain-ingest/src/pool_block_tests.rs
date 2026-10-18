@@ -716,13 +716,7 @@ async fn a_full_pool_admits_a_better_payer_by_evicting_the_cheapest() {
         "nothing is fluffed"
     );
     let (store, _) = PoolStore::create(&path).expect("the file");
-    let filed: Vec<_> = store
-        .begin_read()
-        .expect("read")
-        .txids()
-        .expect("txids")
-        .collect::<Result<_, _>>()
-        .expect("rows");
+    let filed: Vec<_> = store.begin_read().expect("read").txids().expect("txids");
     assert_eq!(
         filed,
         vec![high_id],

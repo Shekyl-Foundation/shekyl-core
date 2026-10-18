@@ -95,7 +95,7 @@ impl Pool {
         let latest = ReceivedHour::of(now);
         let mut dropped = Vec::new();
         let snapshot = pool.store().begin_read()?;
-        let txids: Vec<TxHash> = snapshot.txids()?.collect::<Result<_, _>>()?;
+        let txids: Vec<TxHash> = snapshot.txids()?;
         for txid in txids {
             let (Ok(Some(mut record)), Ok(Some(blob))) =
                 (snapshot.record(&txid), snapshot.blob(&txid))

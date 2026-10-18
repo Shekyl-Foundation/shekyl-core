@@ -434,6 +434,78 @@ fn an_embargoed_conflict_is_the_owners_alone() {
     );
 }
 
+/// A concealed answer is the fresh answer under every public change
+/// (Copilot, #1102). Under the same change to the public state — nothing,
+/// a drifted reference, a moved fee floor, a pool full at this rate — a
+/// foreign caller gets one verdict whether this node holds the hidden
+/// transaction (a stem spender of the same image, or these very bytes in
+/// their stem phase) or not. Without it, the commit itself answers: it
+/// commits, races on the moved premise, or is pruned on insert. The owner
+/// tier is still told the truth.
+#[test]
+fn a_concealed_answer_is_the_fresh_answer_under_every_public_change() {
+    type Change = fn(&mut SubmitFacts);
+    let changes: [(&str, Change); 4] = [
+        ("nothing moved", |_| {}),
+        ("the reference drifted", |f| f.reference = None),
+        ("the fee floor rose", |f| f.fee_per_byte = u64::MAX),
+        ("the pool is full at this rate", |f| {
+            f.pool_refuses_for_room = Some(true);
+        }),
+    ];
+    let submit = |phase_b: SubmitFacts, outcome: CommitOutcome, caller| {
+        let (engine, _shim, _verifier) = engine(phase_b, outcome);
+        engine.submit(&spend_hex(), caller).unwrap()
+    };
+    for (what, change) in changes {
+        // Without the hidden transaction: the commit's own answer.
+        let mut moved = base_facts();
+        change(&mut moved);
+        let fresh = if moved == base_facts() {
+            CommitOutcome::Committed
+        } else if moved.pool_refuses_for_room == Some(true) {
+            CommitOutcome::PrunedOnInsert
+        } else {
+            CommitOutcome::Raced(Box::new(moved.clone()))
+        };
+        let absent = submit(base_facts(), fresh, SubmitCaller::Foreign);
+
+        // A stem spender of the same image: the commit races on it.
+        let mut conflict = moved.clone();
+        conflict.key_image_conflicts = vec![KeyImageConflict::Embargoed, KeyImageConflict::Free];
+        let raced = || CommitOutcome::Raced(Box::new(conflict.clone()));
+        assert_eq!(
+            submit(base_facts(), raced(), SubmitCaller::Foreign),
+            absent,
+            "{what}: a stem spender is concealed as the fresh answer"
+        );
+        assert_eq!(
+            submit(base_facts(), raced(), SubmitCaller::Owner),
+            rejected(RejectCause::DoubleSpendConflict),
+            "{what}: the owner is told the conflict"
+        );
+
+        // These bytes, held in their stem phase: Phase B sees them, and the
+        // commit races on the duplicate.
+        let mut held = base_facts();
+        held.in_pool = true;
+        let mut duplicate = moved.clone();
+        duplicate.in_pool = true;
+        duplicate.key_image_conflicts = vec![KeyImageConflict::OwnTx; 2];
+        let raced = || CommitOutcome::Raced(Box::new(duplicate.clone()));
+        assert_eq!(
+            submit(held.clone(), raced(), SubmitCaller::Foreign),
+            absent,
+            "{what}: a stem duplicate is concealed as the fresh answer"
+        );
+        assert_eq!(
+            submit(held, raced(), SubmitCaller::Owner),
+            SubmitVerdict::AlreadyInPool,
+            "{what}: the owner is told the duplicate"
+        );
+    }
+}
+
 #[test]
 fn raced_key_image_conflict_beats_stale_root() {
     // Competing spend AND root drift in the same race window: the terminal

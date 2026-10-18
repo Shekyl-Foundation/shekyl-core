@@ -146,6 +146,59 @@ async fn a_stem_phase_entry_survives_a_restart_unpublished_at_its_hour() {
     scenario.close().await;
 }
 
+/// An entry with only its blob row (SI-16) is found at open and dropped,
+/// so the transaction it names can be admitted again: the open enumerates
+/// both tables' keys. Before, it enumerated the records alone, the orphan
+/// survived every open, and the resubmit's insert refused it as unpaired.
+#[tokio::test]
+async fn a_blob_without_its_record_is_dropped_at_open_and_the_spend_admitted_again() {
+    use shekyl_chain_store::codec::Raw;
+    use shekyl_chain_store::pool::schema::{PoolTxBytes, POOL_BLOB};
+
+    let (mut scenario, mined) = matured("pool-orphan-blob").await;
+    let spend = paying_the_floor(&mut scenario, &mined, 0).await;
+    let txid = spend.txid_parts().hash;
+    let path = tmp("pool-orphan-blob-pool");
+    drop(shekyl_chain_store::pool::PoolStore::create(&path).expect("create"));
+    {
+        let db = redb::Database::open(&path).expect("redb");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut blobs = txn.open_table(POOL_BLOB).expect("pool_blob");
+            blobs
+                .insert(txid.to_bytes(), Raw::<PoolTxBytes>::new(&spend.serialize()))
+                .expect("orphan");
+        }
+        txn.commit().expect("commit");
+    }
+    let policy = AdmissionPolicy::GENESIS;
+    let now = UnixSeconds::from_raw(1_700_000_000);
+    let (removed, admitted) = scenario
+        .read_chain(|view, rule_set| {
+            let (mut pool, _, reconciled) =
+                Pool::open(&path, now, view, rule_set, &policy).expect("open");
+            let admitted = pool
+                .admit(spend.clone(), now, view, rule_set, &policy)
+                .expect("no fault");
+            (reconciled.removed, admitted)
+        })
+        .await;
+    assert_eq!(
+        removed,
+        vec![(txid, Removed::Unreadable)],
+        "found and dropped"
+    );
+    assert_eq!(
+        admitted,
+        Admission::Admitted {
+            evicted: Vec::new()
+        },
+        "and the spend is admitted again"
+    );
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
 /// The file is discardable (`SPL-Q8`): removed between runs, the pool opens
 /// empty on a fresh file, the chain is untouched, and the transaction the
 /// lost file held is admitted again when it arrives again.

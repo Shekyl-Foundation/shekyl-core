@@ -850,8 +850,14 @@ review of #1102, S2): an open re-derives the weight and fee from the
 bytes, drops each row that does not read, does not parse or is not the
 transaction its key names, clamps a receive time from the future, and
 runs every entry through the whole door; M8's anchor lives in memory
-only. The listing carries no receive time (S7), and a layout recreate
-overwrites the old file before unlinking it. The API enforces criterion 2
+only. The open enumerates both tables' keys, so an entry missing either
+row (SI-16) is dropped rather than left to refuse its transaction's next
+insert. The listing carries no receive time (S7), and a layout recreate
+wipes the old file before removing it, recoverably: it moves the validated
+old file to the store's discard path, seals a fresh one, then wipes and
+removes the discard, and every open finishes a discard left behind — an
+interruption never leaves a half-wiped file the next open would refuse as
+foreign. The API enforces criterion 2
 (S6): the block arrivals are crate-private, reached only through
 `Pool::returned` and `Pool::supplement`, so no caller can admit a peer's
 transaction as public; every read that sees the stem phase — a record,
@@ -1614,13 +1620,20 @@ Not E5's; found while reading the census at the pin.
 - **The public submit endpoint discloses nothing the stem phase holds**
   (the review of #1102, B2). A conflict against a spender this node holds
   unpublished is `KeyImageConflict::Embargoed`: the owner tier is told
-  (`DoubleSpendConflict`), a foreign caller is answered as a fresh accept
-  and the transaction is not admitted; once the spender is fluffed it is
-  `Other`, disclosed to both. Every concealed answer does a fresh accept's
-  verification: the shim runs the door's step 1 before the pool's lock for
-  every submit, a duplicate it holds unpublished included (S1). The C++
-  shim never reports `Embargoed`; it has the same gap and is deleted at the
-  flip (`DEL-010`).
+  (`DoubleSpendConflict`), a foreign caller is answered as a fresh
+  submission would be and the transaction is not admitted; once the
+  spender is fluffed it is `Other`, disclosed to both. Every concealed
+  answer — that conflict, or a duplicate the pool holds unpublished — is
+  the fresh answer under the same public state (Copilot, #1102): it does a
+  fresh accept's verification (the shim runs the door's step 1 before the
+  pool's lock for every submit, S1), it passes every public re-check a
+  fresh submission meets at a raced commit (a moved claim slot, a drifted
+  reference, a moved fee floor), and it meets the pool's rising minimum
+  against the pool as it stands (`RelayView::refuses_for_room`, read into
+  `SubmitFacts::pool_refuses_for_room`), so a full pool answers a held stem
+  transaction as it answers another at its weight and fee. The C++ shim
+  never reports `Embargoed` and reads no room fact; it has the same gaps
+  and is deleted at the flip (`DEL-010`).
 
 - **For the flip (recorded here, built there):** the relay's
   `Responsibilities` is an unbounded map released only by a `release()`

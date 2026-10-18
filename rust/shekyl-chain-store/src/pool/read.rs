@@ -140,23 +140,34 @@ impl PoolSnapshot {
         self.len().map(|n| n == 0)
     }
 
-    /// Every entry's transaction hash, in key order, decoding nothing — the
-    /// pool's open reads each row on its own through P4 and P5, so a row
-    /// that does not decode is dropped by itself rather than failing the
-    /// enumeration (`shekyl_mempool`'s open; the review of #1102, S2).
+    /// Every hash either table holds a row for, in key order, decoding
+    /// nothing — the pool's open reads each on its own through P4 and P5,
+    /// so a row that does not decode is dropped by itself rather than
+    /// failing the enumeration (`shekyl_mempool`'s open; the review of
+    /// #1102, S2). Both tables' keys, so an entry missing either row
+    /// (SI-16) is found and dropped: one with only its blob would otherwise
+    /// survive every open and refuse that transaction's next insert.
     ///
     /// # Errors
     ///
-    /// Opening the table; per item, engine faults.
-    pub fn txids(
-        &self,
-    ) -> Result<impl Iterator<Item = Result<TxHash, StoreError>> + '_, StoreError> {
-        let table = self.meta()?;
-        let range = table.range::<[u8; 32]>(..).map_err(EngineError::Storage)?;
-        Ok(range.map(|item| {
-            let (k, _) = item.map_err(EngineError::Storage)?;
-            Ok(TxHash::from_bytes(k.value()))
-        }))
+    /// Opening either table, or reading a key: engine faults.
+    pub fn txids(&self) -> Result<Vec<TxHash>, StoreError> {
+        let mut keys = std::collections::BTreeSet::new();
+        for item in self
+            .meta()?
+            .range::<[u8; 32]>(..)
+            .map_err(EngineError::Storage)?
+        {
+            keys.insert(item.map_err(EngineError::Storage)?.0.value());
+        }
+        for item in self
+            .blobs()?
+            .range::<[u8; 32]>(..)
+            .map_err(EngineError::Storage)?
+        {
+            keys.insert(item.map_err(EngineError::Storage)?.0.value());
+        }
+        Ok(keys.into_iter().map(TxHash::from_bytes).collect())
     }
 
     /// **P7.** Every entry, in key order, each with its record. The class

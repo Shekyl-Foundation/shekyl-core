@@ -460,13 +460,14 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //    Cannot co-occur with a foreign key-image conflict — a
         //    pool-resident tx's own images map to its own txid. Disclosure
         //    is tier-gated exactly as at Phase B: a foreign caller who won a
-        //    race against an embargoed tx is told `Accepted` (concealed),
-        //    never `AlreadyInPool`, so the race outcome is not an oracle.
-        match disclose_pool_presence(fresh, caller) {
+        //    race against an embargoed tx is answered as a fresh submission
+        //    would be (concealed, below), never `AlreadyInPool`, so the race
+        //    outcome is not an oracle.
+        let mut concealed = match disclose_pool_presence(fresh, caller) {
             PoolDisclosure::Reveal => return Ok(SubmitVerdict::AlreadyInPool),
-            PoolDisclosure::Conceal => return Ok(SubmitVerdict::Accepted),
-            PoolDisclosure::Absent => {}
-        }
+            PoolDisclosure::Conceal => true,
+            PoolDisclosure::Absent => false,
+        };
         // 3. Terminal conflict: a *different* transaction consumed one of
         //    our inputs while we verified.
         if fresh.key_image_conflicts.contains(&KeyImageConflict::Other) {
@@ -475,20 +476,23 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
             });
         }
         // 3a. The same, against a spender this node holds in its stem phase
-        //     (the review of #1102, B2): the owner tier is told, a foreign
-        //     caller is answered as a fresh accept — the transaction is not
-        //     admitted — so the public endpoint is no map of the stem
-        //     graph. Once the spender is public it is `Other`, above.
+        //     (the review of #1102, B2): the owner tier is told; a foreign
+        //     caller is answered as a fresh submission would be (concealed,
+        //     below) — the transaction is not admitted — so the public
+        //     endpoint is no map of the stem graph. Once the spender is
+        //     public it is `Other`, above.
         if fresh
             .key_image_conflicts
             .contains(&KeyImageConflict::Embargoed)
         {
-            return Ok(match caller {
-                SubmitCaller::Owner => SubmitVerdict::Rejected {
-                    cause: RejectCause::DoubleSpendConflict,
-                },
-                SubmitCaller::Foreign => SubmitVerdict::Accepted,
-            });
+            match caller {
+                SubmitCaller::Owner => {
+                    return Ok(SubmitVerdict::Rejected {
+                        cause: RejectCause::DoubleSpendConflict,
+                    })
+                }
+                SubmitCaller::Foreign => concealed = true,
+            }
         }
         // 3b. Claim-slot conflict, the §8.7.1 BP3 re-check: a bond-post
         //     block for the same P landed while we verified (Phase C
@@ -578,6 +582,23 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         if !fee_clears(parsed.weight, parsed.fee, fresh) {
             return Ok(SubmitVerdict::Rejected {
                 cause: RejectCause::FeeTooLow,
+            });
+        }
+        // A concealed answer (a duplicate or a conflict this node holds in
+        // its stem phase, to a foreign caller) is the answer a fresh
+        // submission of these bytes would get against the same public
+        // state: it has passed every public re-check above — a moved claim
+        // slot, a drifted reference, a moved fee floor answer the same with
+        // or without the hidden transaction (Copilot, #1102) — and it meets
+        // the pool's rising minimum as a fresh one does at insert
+        // (`PrunedOnInsert`'s verdict).
+        if concealed {
+            return Ok(if fresh.pool_refuses_for_room == Some(true) {
+                SubmitVerdict::Rejected {
+                    cause: RejectCause::FeeTooLow,
+                }
+            } else {
+                SubmitVerdict::Accepted
             });
         }
         // A `Raced` with no re-classifiable premise is a shim contract
