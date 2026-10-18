@@ -243,18 +243,18 @@ data, and its sizes are not read here.
   108, and was recorded. `rt_p5_classes.py derive` ran end to end on the
   trace, including the fit of the submission encoding.
 
-**The wallet defect the dry run found.** The wallet's spend gate (`C2`)
-admits an output when its eligible height equals the reference height
-(`rust/shekyl-engine-core/src/engine/transfer/engine.rs:462`). The tree
-whose root is committed at height `H` holds only leaves matured by
-`H − 1` (`drained_through`,
-`rust/shekyl-curve-tree/src/client.rs:1551`, pinned by the CT-2 vectors),
-and the daemon agrees. So an output exactly at the boundary is selected,
-and assembly refuses it. The same comparison was in five more places on
-the wallet's paths: the drain projection and selection, the bond funding
-filter, the claim pre-filter and the backing set. The fix is in this PR:
-one predicate, `shekyl_curve_tree::in_tree_at_reference`, used at all of
-them, with a test that reproduces the boundary and was seen failing first.
+**The wallet defect the dry run found.** Before `196717b00`, the wallet's
+spend gate (C2, `rust/shekyl-engine-core/src/engine/transfer/engine.rs`)
+admitted an output whose eligible height equalled the reference height.
+The tree whose root is committed at height `H` holds only leaves matured
+through `H − 1` (`shekyl_curve_tree::drained_through`, pinned by the CT-2
+vectors in `rust/shekyl-curve-tree/tests/recon_kat.rs`). An output exactly
+at the boundary was selected, and assembly refused it. The same comparison
+was in five more places on the wallet's paths: the drain projection and
+selection, the bond funding filter, the claim pre-filter and the backing
+set. The fix defines `shekyl_curve_tree::in_tree_at_reference` from that
+cutoff and uses it at all of them, with a test that reproduces the
+boundary and was seen failing first.
 
 ## Results
 
@@ -333,34 +333,47 @@ those classes, in both directions together.
 
 ### A reading the registered output does not make: direction
 
-*This is a reading of the registered output, made after it was seen. It
-changes nothing in the derivation and is reported for the decision on
-`K`.*
+*This is a reading of the registered output, made after it was seen, and
+corrected once. The first reading treated a union of a submission's
+classes as hiding. A tail that shares a small class does not conceal the
+larger records of the same submission. The correction changes nothing in
+the derivation.*
 
-A path observer sees which way each record travels. A submission is a
-request, from the wallet to the daemon. Counting only requests, the
-records sharing a submission's classes are:
+A path observer sees which way each record travels, and sees each record
+on its own. A submission is a request, from the wallet to the daemon. What
+follows counts requests only, and it asks whether one record's class
+identifies a submission. It does not speak to record count or to timing:
+a submission may be several records in a row, and this trace does not
+measure when they are sent.
 
-| K | Submission request records | Other requests in the same classes |
-|---:|---:|---|
-| 1, 2 | 22 | every request in the trace (725) |
-| 3, 4, 5 | 22 | `/get_transactions` ×2 |
-| 6, 7, 8 | 22 | none |
+At `K` = 1 every record is one class, so a request's size does not
+identify a submission.
 
-Every other request in the trace is 431 bytes or smaller, and every
-submission is 26,599 bytes or larger. So in the request direction, from
-`K` = 3 on, a record of a submission's class is a submission, whatever
-the classes are. Padding hides a submission among the records going
-the same way only at `K` ≤ 2, and those tables pad the payload by 200 % or
-more.
+At `K` = 2 the classes are 11,357 and 65,535. Each of the 12 submission
+requests has at least one record in 65,535: 21 of the 22 submission
+records. The remaining record is one tail, 3,468 bytes, from the 68,999-byte
+submission, and it falls in 11,357. Every other request in the trace is
+431 bytes or smaller, so all 725 of them are in 11,357 and none are in
+65,535. A request record of the large class is a submission. The shared
+small class is that one tail, and sharing it does not hide the large
+records. The class-union table in `derive_registered_1.md` lists every
+other request at `K` = 2 because of that tail.
+
+From `K` = 3 the same holds for the large class, and the requests that
+share any of a submission's classes narrow further: `/get_transactions`
+×2 at `K` = 3, 4 and 5, and none at `K` = 6, 7 and 8.
 
 `RPC_CHANNEL.md` §4.4 (RT-O6) states the mechanism as "a submission is
 indistinguishable from a block-fetch response of the same class". In this
 trace, block-fetch responses (`json_rpc:get_block`, `/get_transactions`)
-do share a submission's classes, but they travel in the other direction.
+do share a submission's classes, and they travel in the other direction.
 **This is a finding against RT-O6's premise, for the maintainer**: on this
-traffic, size classes do not hide when a wallet submits. They do hide which
-method a response answers and how large it is within its class.
+traffic, at every candidate `K` from 2 upward, a request record of a
+submission's largest class is a submission. Size classes do not hide when
+a wallet submits. They do hide which method a response answers and how
+large it is within its class. Hiding a submission would also have to cover
+how many records a request is and when they are sent. This part measures
+neither.
 
 ### Two observations on the submission
 
