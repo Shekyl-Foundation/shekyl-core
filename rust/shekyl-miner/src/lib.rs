@@ -10,14 +10,17 @@
 //!
 //! # A crate, not a daemon module
 //!
-//! The loop's threads hash with RandomX for as long as mining runs. The
-//! daemon's two other RandomX callers are the validator's substrate and
-//! the RPC's `calc_pow`, which hashes only under a cache already held and
-//! never derives one. All three share one
-//! [`CacheStore`](shekyl_pow_randomx::CacheStore) — the daemon's one
-//! RandomX budget, handed in. The miner shares nothing else: it has no
-//! RPC, store or p2p dependency, and the RPC crate gains no hashing
-//! threads. PR 2's composition root wires the ends.
+//! The loop's threads hash with RandomX for as long as mining runs, and
+//! only under a cache the store already holds. The daemon's other RandomX
+//! callers are the validator's substrate, which pins the canonical cache,
+//! and the RPC's `calc_pow`, which also hashes only under a held cache.
+//! None of the three derives from a seed it did not pin: a derivation
+//! publishes into the transient slot and evicts the validator's spare
+//! (`DRS_X_STORE_FLIP.md` §3.1, ruled 2026-10-17). `pin_canonical` is the
+//! fill. They share one [`CacheStore`](shekyl_pow_randomx::CacheStore) —
+//! the daemon's one RandomX budget, handed in. The miner shares nothing
+//! else: it has no RPC, store or p2p dependency, and the RPC crate gains
+//! no hashing threads. PR 2's composition root wires the ends.
 //!
 //! # Inputs are values
 //!
@@ -37,7 +40,9 @@
 //! of `n` the `i`-th of `n` equal slices, the last taking the remainder —
 //! and writes each nonce into the job's PoW preimage at the header's
 //! [`nonce_offset`](shekyl_wire::BlockHeader::nonce_offset), so an attempt
-//! is one RandomX hash and no serialization. It checks the board's
+//! is one RandomX hash and no serialization. A job whose seed the store
+//! does not hold is left: the worker logs it and waits for a newer
+//! posting, and does not derive the cache. It checks the board's
 //! generation before every hash: a superseded job stops at once. The
 //! comparison is the validator's (`check_hash`, CEN-D1b).
 //!
@@ -66,10 +71,11 @@
 //!
 //! # The rate is the verifier's
 //!
-//! The hash is `shekyl_pow_randomx::compute_hash` over the cache — the
-//! light, cache-only mode the validator verifies with. The crate has no
-//! dataset mode (`RANDOMX_V2_RUST.md` §9, measure-first; `RD-F11`), so the
-//! rate [`MinerStatus`] reports is that mode's, over the window it states.
+//! The hash is `shekyl_pow_randomx::compute_hash` over a cache the store
+//! already holds — the light, cache-only mode the validator verifies with.
+//! The worker never derives. The crate has no dataset mode
+//! (`RANDOMX_V2_RUST.md` §9, measure-first; `RD-F11`), so the rate
+//! [`MinerStatus`] reports is that mode's, over the window it states.
 
 mod address;
 mod found;

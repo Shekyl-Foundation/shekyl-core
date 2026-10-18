@@ -136,8 +136,15 @@ impl JobBoard {
     }
 
     /// Claim `generation`'s solution. `true` for the first claimant only,
-    /// and only while the job is still posted.
+    /// and only while that generation is still the posted one.
+    ///
+    /// The check and the record share the lock [`publish`](Self::publish)
+    /// holds. A worker that has already passed [`searching`](Self::searching)
+    /// cannot record a generation a newer posting has withdrawn: `current`
+    /// moves only under this lock. `solved` stays an atomic so `searching`
+    /// does not take it.
     pub(crate) fn claim(&self, generation: Generation) -> bool {
+        let _state = self.lock();
         self.current.load(Ordering::Acquire) == generation.0
             && self
                 .solved

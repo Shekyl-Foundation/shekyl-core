@@ -111,7 +111,19 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
     while let Some(posted) = shared.board.next_after(seen, &shared.stop) {
         seen = posted.generation;
         let seed = Seedhash::from_bytes(*posted.job.seed.as_bytes());
-        let cache = shared.caches.lookup_or_derive(&seed);
+        // A derivation would publish into the transient slot and evict the
+        // validator's spare, and the seed is the job's, not one this loop
+        // pinned. `pin_canonical` is the fill. A template whose seed is not
+        // held is the composition root's bug; this worker leaves the job.
+        let Some(cache) = shared.caches.lookup(&seed) else {
+            tracing::error!(
+                seed = %posted.job.seed,
+                height = %posted.job.height,
+                generation = posted.generation.to_raw(),
+                "the miner left a job whose seed is not held; it does not derive a cache"
+            );
+            continue;
+        };
         let mut preimage = posted.preimage.clone();
         let at = posted.nonce_offset;
         for nonce in range.clone() {

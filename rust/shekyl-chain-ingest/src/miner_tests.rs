@@ -5,10 +5,11 @@
 
 //! The Rust miner loop (`shekyl-miner`; `DRS_X_STORE_FLIP.md` DX-Q4, PR 3)
 //! over a scenario chain: the production template builder makes the job,
-//! the workers hash with real RandomX, and what they find goes through the
-//! connector's own door — the production `Substrate` sharing the miner's
-//! cache store, as the daemon's one RandomX budget will. No mock stands in
-//! for any of the three.
+//! the workers hash with real RandomX under the cache the substrate
+//! pinned, and what they find goes through the connector's own door — the
+//! production `Substrate` sharing the miner's cache store, as the daemon's
+//! one RandomX budget will. The workers look that seed up; they do not
+//! derive it. No mock stands in for any of the three.
 //!
 //! The chain runs at a fixed difficulty above one, so the loop searches: at
 //! one, the first nonce wins and the search is never exercised.
