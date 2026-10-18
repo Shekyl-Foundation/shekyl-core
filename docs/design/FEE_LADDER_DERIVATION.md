@@ -23,8 +23,11 @@ Convention, because the family token is one case-flip from a rung symbol:
 rung symbols always appear backticked as `Fl` / `Fn` / `Fm` / `Fh`; family
 tokens are always `FL-` followed by a digit or section letter.
 
-Branch: `design/fee-ladder-derivation` (worktree, off `dev`). `file:line`
-anchors in §1–§9 are at `dev` = 6d2f49a5c unless stated; FL-V8…FL-V11
+This document is the round's record. The rules it ruled live in the
+census row CEN-M3 ([`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md))
+and in the code — `shekyl-economics`'s `fee` module, `shekyl-chain-rules`'s
+`relay_floor`, `shekyl-engine-core`'s `fee_policy` — and where they and
+this text disagree, they win. `file:line` anchors in §1–§9 are at `dev` = 6d2f49a5c unless stated; FL-V8…FL-V11
 (minted at review round 2) are anchored at the merge with `dev` =
 a566a466. Round-state record: [`FEE_LADDER_ROUND.md`](FEE_LADDER_ROUND.md).
 

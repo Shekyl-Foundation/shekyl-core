@@ -94,12 +94,14 @@ namespace
 #if !defined(_WIN32)
   /// RAII stderr redirector. Constructs a pipe, points
   /// `STDERR_FILENO` at its write end, and restores the original fd
-  /// on destruction. `drain()` pulls whatever the Rust subscriber
-  /// has written so far. Non-blocking with a short polling loop
-  /// because the subscriber's stderr path is synchronous but libc's
-  /// scheduling between our `MINFO(...)` call and the pipe read is
-  /// not — a tight `read` loop with a ~50 ms ceiling is empirically
-  /// enough on every CI runner that currently hosts `unit_tests`.
+  /// on destruction. `drain_through(marker)` reads until the line
+  /// holding `marker` has arrived. The Rust subscriber's stderr sink is
+  /// a queue with its own writer thread (`log-stderr`,
+  /// `rust/shekyl-logging/src/queue.rs`), so a line reaches the pipe
+  /// some time after the call that logged it returns, and lines an
+  /// earlier test logged can reach it first. The queue is FIFO: a
+  /// marker logged last arrives after every line logged before it, so
+  /// each test ends its capture with one.
   class stderr_capture
   {
   public:
@@ -111,7 +113,7 @@ namespace
         setup_error_ = std::string("pipe() failed: ") + std::strerror(errno);
         return;
       }
-      // Non-blocking read so `drain()` can poll without risk of
+      // Non-blocking read so `drain_through()` can poll without risk of
       // hanging the test process if the subscriber emitted nothing.
       const int fl = ::fcntl(pipefd[0], F_GETFL, 0);
       if (fl == -1 || ::fcntl(pipefd[0], F_SETFL, fl | O_NONBLOCK) != 0)
@@ -153,48 +155,44 @@ namespace
     /// but the Rust subscriber writes via `std::io::stderr` which is
     /// unbuffered on pipes, so the bulk of the payload is already
     /// resident after the emit returns.
-    std::string drain(std::chrono::milliseconds timeout = std::chrono::milliseconds(100))
+    /// Everything read up to the end of the first line holding
+    /// `marker`, or "" when that line has not arrived within `timeout`.
+    /// Bytes after it are kept for the next call.
+    std::string drain_through(const std::string &marker,
+                              std::chrono::milliseconds timeout = std::chrono::milliseconds(5000))
     {
-      std::fflush(stderr);
       const auto deadline = std::chrono::steady_clock::now() + timeout;
-      std::string out;
       char buf[4096];
-      int empty_reads = 0;
-      while (std::chrono::steady_clock::now() < deadline)
+      for (;;)
       {
+        const size_t at = pending_.find(marker);
+        const size_t end = at == std::string::npos ? at : pending_.find('\n', at);
+        if (end != std::string::npos)
+        {
+          std::string out = pending_.substr(0, end + 1);
+          pending_.erase(0, end + 1);
+          return out;
+        }
+        if (std::chrono::steady_clock::now() >= deadline)
+          return std::string();
         const ssize_t n = ::read(read_fd_, buf, sizeof(buf));
         if (n > 0)
         {
-          out.append(buf, buf + n);
-          empty_reads = 0;
+          pending_.append(buf, buf + n);
         }
-        else if (n == 0)
-        {
-          break; // writer-side closed (shouldn't happen here)
-        }
-        // POSIX permits `EAGAIN` and `EWOULDBLOCK` to be the same value
-        // (true on Linux / glibc / musl, both defined to `11`); on
-        // those platforms GCC's `-Wlogical-op` fires on
-        // `errno == EAGAIN || errno == EWOULDBLOCK` because it
-        // resolves to `errno == 11 || errno == 11`. A compile-time
-        // split keeps the behavior correct on platforms where POSIX
-        // permits them to differ (some BSDs) without tripping the
-        // warning on platforms where they don't.
 #if defined(EWOULDBLOCK) && (EAGAIN != EWOULDBLOCK)
-        else if (errno == EAGAIN || errno == EWOULDBLOCK)
+        else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
 #else
-        else if (errno == EAGAIN)
+        else if (n < 0 && errno == EAGAIN)
 #endif
         {
-          if (++empty_reads >= 2 && !out.empty()) break;
           std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
         else
         {
-          break;
+          return std::string();
         }
       }
-      return out;
     }
 
     void restore()
@@ -210,7 +208,7 @@ namespace
     /// assert the *absence* of output (e.g. `TEST(logging, no_logs)`)
     /// must gate on this — a `stderr_capture` whose setup failed
     /// silently would leave stderr pointing at the original fd, and
-    /// `drain()` would return an empty string regardless of whether
+    /// a drain would read nothing regardless of whether
     /// the subscriber actually emitted, producing a false negative.
     /// Hard-asserting with `ASSERT_TRUE(cap.usable())` turns that
     /// failure into a loud, debuggable test error that surfaces
@@ -224,6 +222,7 @@ namespace
     int saved_stderr_ = -1;
     bool usable_ = false;
     std::string setup_error_;
+    std::string pending_;
   };
 #endif // !_WIN32
 } // namespace
@@ -257,21 +256,38 @@ TEST(logging, skipped_on_windows)
 // even though the FATAL-vs-ERROR tier merge inside `tracing` would
 // otherwise keep MERROR / MFATAL events reaching stderr under any
 // level-based directive.
+//
+// The emits sit between two fences, each a marker logged with the filter
+// open. The open fence is read and discarded with everything queued
+// before it, lines earlier tests logged included; nothing may arrive
+// between it and the close fence. The fence spec silences `logging` at
+// INFO because `mlog_set_categories` logs the new spec there.
 TEST(logging, no_logs)
 {
-  mlog_set_categories("");
+  static const char *const fence_spec = "*:INFO,logging:FATAL";
+  mlog_set_categories(fence_spec);
   stderr_capture cap;
   ASSERT_TRUE(cap.usable())
     << "stderr_capture setup failed (" << cap.setup_error()
     << "); an empty drain below would be a false negative.";
+  MGINFO("marker-no-logs-open");
+  ASSERT_FALSE(cap.drain_through("marker-no-logs-open").empty())
+    << "the open fence never reached the pipe";
+  mlog_set_categories("");
   MFATAL("marker-no-logs-fatal");
   MERROR("marker-no-logs-error");
   MWARNING("marker-no-logs-warn");
   MINFO("marker-no-logs-info");
   MDEBUG("marker-no-logs-debug");
   MTRACE("marker-no-logs-trace");
-  const std::string out = cap.drain();
+  mlog_set_categories(fence_spec);
+  MGINFO("marker-no-logs-close");
+  const std::string fenced = cap.drain_through("marker-no-logs-close");
   cap.restore();
+  ASSERT_FALSE(fenced.empty()) << "the close fence never reached the pipe";
+  // What arrived before the close fence's own line.
+  const size_t close_line = fenced.rfind('\n', fenced.find("marker-no-logs-close"));
+  const std::string out = close_line == std::string::npos ? std::string() : fenced.substr(0, close_line + 1);
 
   // Empty-spec routes through the translator's `"off"` branch (see
   // `rust/shekyl-logging/src/legacy.rs::translate`); `"off"` disables
@@ -300,7 +316,7 @@ TEST(logging, info_reaches_stderr)
   ASSERT_TRUE(cap.usable())
     << "stderr_capture setup failed: " << cap.setup_error();
   MGINFO("marker-info-reaches-stderr");
-  const std::string out = cap.drain();
+  const std::string out = cap.drain_through("marker-info-reaches-stderr");
   cap.restore();
 
   EXPECT_NE(out.find("marker-info-reaches-stderr"), std::string::npos)
@@ -321,7 +337,7 @@ TEST(logging, level_threshold_is_respected)
     << "stderr_capture setup failed: " << cap.setup_error();
   MINFO("marker-should-not-appear");
   MWARNING("marker-should-appear");
-  const std::string out = cap.drain();
+  const std::string out = cap.drain_through("marker-should-appear");
   cap.restore();
 
   EXPECT_EQ(out.find("marker-should-not-appear"), std::string::npos)
@@ -344,7 +360,8 @@ TEST(logging, category_filter_routes_emits)
     << "stderr_capture setup failed: " << cap.setup_error();
   MCINFO("net.p2p", "marker-net-p2p-trace");
   MCINFO("wallet.scanner", "marker-wallet-scanner-info");
-  const std::string out = cap.drain();
+  MWARNING("marker-category-close");
+  const std::string out = cap.drain_through("marker-category-close");
   cap.restore();
 
   EXPECT_NE(out.find("marker-net-p2p-trace"), std::string::npos)
@@ -374,8 +391,9 @@ TEST(logging, concurrent_emits_do_not_deadlock)
   std::thread t2([] { MGINFO("marker-concurrent-thread-2"); });
   t1.join();
   t2.join();
+  MGINFO("marker-concurrent-close");
 
-  const std::string out = cap.drain();
+  const std::string out = cap.drain_through("marker-concurrent-close");
   cap.restore();
 
   EXPECT_NE(out.find("marker-concurrent-thread-1"), std::string::npos)

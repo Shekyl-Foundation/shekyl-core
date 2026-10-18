@@ -172,13 +172,15 @@ jobs:
           # twice, asserting the two boots publish DIFFERENT addresses (the
           # ephemeral property observed, not asserted), plus the blocking
           # facade on a plain thread (the FFI consumer's exact shape). Floor =
-          # this crate's current ignored count (2). `-ge` so adding a live
+          # this crate's current ignored count (3, with the death edge of
+          # TSR-F1: a killed tor is Exited, a shutdown is Stopped). `-ge` so adding a live
           # test never breaks the lane; bump only on a deliberate removal.
           grep -qE '(^|[[:space:]])ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots \.\.\. ok$' ignored-daemon.out
           grep -qE '(^|[[:space:]])blocking::tests::blocking_facade_full_lifecycle_from_plain_thread \.\.\. ok$' ignored-daemon.out
+          grep -qE '(^|[[:space:]])ephemeral::tests::a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop \.\.\. ok$' ignored-daemon.out
           passed=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' ignored-daemon.out | head -1)
           echo "ran ${passed:-0} pinned-tor daemon tests"
-          [ "${passed:-0}" -ge 2 ]
+          [ "${passed:-0}" -ge 3 ]
           # Same no-orphan guarantee as the wallet step: a failed daemon start
           # tears its incarnation down before returning, and shutdown reaps.
           orphan="^$TOR_DIR/tor "
