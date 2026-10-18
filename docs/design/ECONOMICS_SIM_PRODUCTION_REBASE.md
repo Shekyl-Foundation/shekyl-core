@@ -299,6 +299,14 @@ The arm therefore cannot be expressed through parameters alone, and either
 the floor takes its zone from the parameter set or the arm declares the
 divergence.
 
+**Amended 2026-10-18 (design owner, after ESR-9).** The prediction set's
+year-1 operands are this document's growth-gate table (finding 2), not
+§5.6's older figures: `ρ = 0.879` and `θ = 1.188`. The Standard multiplier
+that removes the constrained era is `θ(y1)/ρ(y1) ≈ 1.35`, registered as
+1.30–1.40. Those are what ESR-9 measured. They are inputs to the
+prediction. ESR-10 has not run, so the multiplier is not fitted to an
+ESR-10 outcome.
+
 **Where the items land (design owner, 2026-10-02).** ESR-1, ESR-2 and
 ESR-3 land in PR #935, which goes to review with them. ESR-4 onward
 land in a second PR stacked on #935's branch, so the remaining fold

@@ -4,7 +4,7 @@
 land in [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md)
 §5 when ESR-10 runs. Nothing here is a result.
 
-Design-owner predictions for ESR-10 (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, §3 row and the 2026-10-03 amendment), written against `dev@06690efab` before any ESR-10 code exists; corrected 2026-10-17 against `dev@d2ac8b45` (growth conditions on `ρ`, not `C`; see §1). The agent registers them in the rebase doc's §5 **before the first run**, verbatim in substance, and reports outcomes in a following "what the run said" table. Nothing here authorizes a production change; §0 names the two places where ESR-10 needs one.
+Design-owner predictions for ESR-10 (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, §3 row and the 2026-10-03 amendment), written against `dev@06690efab` before any ESR-10 code exists; corrected 2026-10-17 against `dev@d2ac8b45` (growth conditions on `ρ`, not `C`; see §1). Year-1 operands were set 2026-10-18 from that document's growth-gate table, not from §5.6's older figures: `ρ = 0.879` and `θ = 1.188`. The Standard multiplier that removes the constrained era is `θ(y1)/ρ(y1) ≈ 1.35`, registered as 1.30–1.40. Those are ESR-9 measurements used as inputs, not ESR-10 outcomes. The agent registers them in the rebase doc's §5 **before the first run**, verbatim in substance, and reports outcomes in a following "what the run said" table. Nothing here authorizes a production change; §0 names the two places where ESR-10 needs one.
 
 ## 0. What has to be built before anything can be run
 
@@ -32,7 +32,7 @@ Under the reward-aware fill on the gross coinbase, the k-th transaction past the
 
 Three consequences follow, each falsifiable:
 
-- **M1: R and `M_r` cancel for Economy and Standard.** Fee and penalty are both proportional to `R·M_r`, and both scale as `1/M²`. Whether a Standard transaction buys one more transaction's room is therefore a condition on `m·ρ` alone. The threshold `θ = w/(4·w_ref)` (1.22 on the doc's figures) is independent of year, reward and median.
+- **M1: R and `M_r` cancel for Economy and Standard.** Fee and penalty are both proportional to `R·M_r`, and both scale as `1/M²`. Whether a Standard transaction buys one more transaction's room is therefore a condition on `m·ρ` alone. The threshold is `θ = w/(4·w_ref)`. It does not depend on the reward or the median. Its year-1 value is the growth-gate table's 1.188, not §5.6's older figure of about 1.22, and it steps with tree depth, as the operands below state.
 - **M2: the ratchet.** Because the condition is scale-invariant in `M`, once `m·ρ ≥ θ` every block takes one transaction past its median. The long-term median follows, and growth continues until demand is carried. Growth is a **switch at a ρ threshold**, not a slope.
 - **M3: Priority buys to `M·(1 + ρ)`.** Priority's per-byte fee scales as `1/M` against a marginal penalty of `≈ 2R·x·w/M`, so a Priority transaction is admitted while `x ≤ ρ`, capped at `2M − reserve`. Priority can grow a block only when Priority demand exceeds the penalty-free room.
 
@@ -77,7 +77,7 @@ Inherited `θ = w/(4·w_ref)`: 1.188 in year 1, 1.220 from year 2, 1.274 from ye
 ## 3. Predictions — re-derived arm (`w_ref′`, `zone′ = 100·w_ref′`)
 
 - **R1. Baseline carries 50 of 50 from genesis, with zero expired.** The median stays on the zone′ floor for the whole run (50 transactions are about half of zone′). The same holds for every scenario until its demand exceeds 100 a block.
-- **R2. Where demand exceeds the room, blocks track demand immediately.** `θ′ = 0.25 < ρ₀ ≈ 0.87`, so the Standard ratchet runs from the first block that has a queue. There is no constrained era in any scenario, at any `m ≥ 1`. The multiplier sweep is flat in blocks carried and moves only fees.
+- **R2. Where demand exceeds the room, blocks track demand immediately.** `θ′ = 0.25 < ρ₀ = 0.879` (the growth-gate table's year-1 `ρ`), so the Standard ratchet runs from the first block that has a queue. There is no constrained era in any scenario, at any `m ≥ 1`. The multiplier sweep is flat in blocks carried and moves only fees.
 - **R3. Year-1 Standard fee per transaction ≈ 0.25–0.30× the inherited arm's.** That is `1/k` with `k = w/3000 ≈ 4.5–4.8`, times `M_r` 1.0/0.8 = 1.25 (fee level reads `C`, so `M_r` counts here).
   - Fee revenue a block: about 0.6× the inherited arm's in its constrained years (50/22 transactions × 0.27).
   - **It crosses over once the inherited arm ratchets.** The inherited median then sits at about 730–765 KB, while the re-derived arm sits at zone′, so the re-derived per-transaction fee becomes **1.2–1.45×** the inherited one.
