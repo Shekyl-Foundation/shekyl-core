@@ -611,51 +611,6 @@ where
             .map(|(switched, _)| switched)
     }
 
-    /// The switch, then the pool (DRS-E5 PR-b b4): the demoted blocks'
-    /// listed transactions go to `pool` after the switch lands
-    /// (`SwitchDone::returned`'s caller), through the door against the chain
-    /// the switch left, at `now`. The pool's answer decides their relay and
-    /// templates only: the switch read every body it connected from the
-    /// store.
-    pub async fn reorganize_with_pool(
-        &mut self,
-        plan: &SwitchPlan,
-        pool: &mut shekyl_mempool::Pool,
-        now: shekyl_types::UnixSeconds,
-    ) -> Result<
-        (
-            Switched,
-            Vec<(shekyl_types::TxHash, shekyl_mempool::Admission)>,
-        ),
-        RunFault,
-    > {
-        let switched = self.reorganize(plan).await?;
-        let admissions = match &switched {
-            Switched::Done(done) => {
-                let returned = done.returned.clone();
-                let offers = self
-                    .read_chain(|view, rule_set| {
-                        pool.returned(
-                            returned,
-                            now,
-                            view,
-                            rule_set,
-                            &shekyl_chain_rules::AdmissionPolicy::GENESIS,
-                        )
-                    })
-                    .await;
-                assert!(
-                    offers.faults.is_empty(),
-                    "the pool faulted on the returns: {:?}",
-                    offers.faults
-                );
-                offers.admissions
-            }
-            _ => Vec::new(),
-        };
-        Ok((switched, admissions))
-    }
-
     /// [`Self::reorganize`], reporting how long the forming (step 1, the
     /// RandomX) and the [`Reorganize`] message (the judging, the closure)
     /// each took — the switch PR's cap-depth measurement. A switch that
@@ -882,12 +837,28 @@ where
             .map_err(handler_error)
     }
 
-    /// Stop the connector, release the store, remove the file.
-    pub async fn close(self) {
+    /// Stop the connector and join its task, so the store it owns is dropped
+    /// before the file is opened again ([`Self::reopen`], [`Self::with_store`]).
+    async fn stop_connector(&mut self) {
         let _already_stopped = self.connector.stop_gracefully().await.is_err();
-        if let Some(task) = self.task {
+        if let Some(task) = self.task.take() {
             drop(task.await.expect("the connector task joins"));
         }
+    }
+
+    /// A fresh connector over the store at [`Self`]'s path, under the same rules.
+    fn start_connector(&mut self) {
+        let (connector, task) = spawn_connector(ConnectorArgs {
+            store: (self.opener)(&self.path),
+            rules: self.rules,
+        });
+        self.task = Some(task);
+        self.connector = connector;
+    }
+
+    /// Stop the connector, release the store, remove the file.
+    pub async fn close(mut self) {
+        self.stop_connector().await;
         cleanup(&self.path);
     }
 
@@ -896,68 +867,9 @@ where
     /// start a fresh connector over the reopened store. The clock, the
     /// wallet and the template counter carry over.
     pub async fn reopen(&mut self, edit: impl FnOnce(&std::path::Path)) {
-        let _already_stopped = self.connector.stop_gracefully().await.is_err();
-        if let Some(task) = self.task.take() {
-            drop(task.await.expect("the connector task joins"));
-        }
+        self.stop_connector().await;
         edit(&self.path);
-        let (connector, task) = spawn_connector(ConnectorArgs {
-            store: (self.opener)(&self.path),
-            rules: self.rules,
-        });
-        self.task = Some(task);
-        self.connector = connector;
-    }
-
-    /// Run `f` over the chain the store holds now, through the committed
-    /// snapshot's view (`SnapshotView`, what the pool door judges against),
-    /// with the rule set in force at the height the next block connects at
-    /// ([`Self::with_store`]).
-    ///
-    /// # Panics
-    ///
-    /// If the snapshot cannot be begun or its tip read: the store this
-    /// driver just held is unreadable, which is not a scenario outcome.
-    pub async fn read_chain<R>(
-        &mut self,
-        f: impl FnOnce(&shekyl_chain_store::store::SnapshotView<'_>, &RuleSet) -> R,
-    ) -> R {
-        self.with_store(|store, rules| {
-            let snapshot = store
-                .begin_read()
-                .expect("a snapshot of the scenario's store");
-            let view = shekyl_chain_store::store::SnapshotView::new(&snapshot);
-            let connecting = shekyl_chain_rules::Tip::connecting_height(
-                shekyl_chain_rules::HeaderView::tip(&view)
-                    .expect("the tip of the scenario's store")
-                    .as_ref(),
-            );
-            f(&view, &rules.in_force(connecting))
-        })
-        .await
-    }
-
-    /// Lend `f` the store itself and the rules it runs under — for a reader
-    /// that begins its own snapshots (the submit engine's shim over the
-    /// pool). The connector is stopped so the store can be opened here, and
-    /// a fresh one is started over the same file after, as
-    /// [`reopen`](Self::reopen) does.
-    pub async fn with_store<R>(&mut self, f: impl FnOnce(&ChainStore, ChainRules) -> R) -> R {
-        let _already_stopped = self.connector.stop_gracefully().await.is_err();
-        if let Some(task) = self.task.take() {
-            drop(task.await.expect("the connector task joins"));
-        }
-        let out = {
-            let store = (self.opener)(&self.path);
-            f(&store, self.rules)
-        };
-        let (connector, task) = spawn_connector(ConnectorArgs {
-            store: (self.opener)(&self.path),
-            rules: self.rules,
-        });
-        self.task = Some(task);
-        self.connector = connector;
-        out
+        self.start_connector();
     }
 
     /// Every table of the store as stored bytes (`TableRows`), for a
@@ -1076,6 +988,9 @@ fn handler_error<M>(e: kameo::error::SendError<M, RunFault>) -> RunFault {
         other => panic!("connector mailbox: {other}"),
     }
 }
+
+#[path = "scenario_pool.rs"]
+mod pool;
 
 #[cfg(test)]
 #[path = "scenario_tests.rs"]
