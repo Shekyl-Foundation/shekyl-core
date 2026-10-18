@@ -128,7 +128,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 
 | # | PR | Live? |
 | --- | --- | --- |
-| 1 | **PR-b**: the Rust pool (`DRS_E5_POOL_ALT_PRUNE.md` §5 b1–b7, as amended in its brief) | staged |
+| 1 | **PR-b**: the Rust pool (`DRS_E5_POOL_ALT_PRUNE.md` §5 b1–b7, as amended in its brief) | staged; merged 2026-10-18 (#1102) |
 | 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged |
 | 3 | **Briefed: the read-only RPC handlers and the store-backed facts (DX-Q3), and the miner loop (DX-Q4)**, unrouted | staged |
 | 3b | **The pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` / `stop_mining` (with `mining_status`), the bans and `stop_daemon`** (DX-Q3), unrouted. Briefed after PR-b and PR 2 merge | staged |
@@ -282,7 +282,7 @@ Each observed difference becomes one row.
 
 ## 4. Order of work
 
-1. **PR-b**, brief issued 2026-10-16. Starts now.
+1. **PR-b**, brief issued 2026-10-16; merged 2026-10-18 (#1102).
 2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Briefed after PR-b's door lands, because the entry's pool calls are its shape.
 3. **PR 3** — briefed: the read-only RPC handlers, the store-backed facts and the miner loop. Runs beside PR-b.
 4. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge.
