@@ -437,7 +437,8 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     let issued_digest = schema::ordinal_of("archival_issued_digest").expect("catalogued");
     let block_draws = schema::ordinal_of("archival_block_draws").expect("catalogued");
     let drawable_digest = schema::ordinal_of("archival_drawable_digest").expect("catalogued");
-    let last = schema::ordinal_of("block_pow").expect("catalogued");
+    let block_pow = schema::ordinal_of("block_pow").expect("catalogued");
+    let last = schema::ordinal_of("alt_block_bodies").expect("catalogued");
     // The journal stores ordinals as `u32`. A catalogue that does not fit
     // that width cannot be journaled, so the length check fails here
     // rather than at the first pop.
@@ -452,17 +453,19 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     assert_eq!(issued_draw.index() + 1, issued_digest.index());
     assert_eq!(issued_digest.index() + 1, block_draws.index());
     assert_eq!(block_draws.index() + 1, drawable_digest.index());
-    assert_eq!(drawable_digest.index() + 1, last.index());
+    assert_eq!(drawable_digest.index() + 1, block_pow.index());
+    assert_eq!(block_pow.index() + 1, last.index());
     assert_eq!(
         last.index() + 1,
         catalogue_len,
-        "block_pow is the final catalogue slot"
+        "alt_block_bodies is the final catalogue slot"
     );
-    // 33 LMDB mirrors plus the ten Rust-only tables
+    // 33 LMDB mirrors plus the eleven Rust-only tables
     // (`archival_budget_accruing`, `curve_tree_leaf_counts`, `undo_log`,
     // `txs_pqc_auth_hash`, `txs_archival_len`, `archival_issued_draw`,
     // `archival_issued_digest`, `archival_block_draws`,
-    // `archival_drawable_digest`, `block_pow`) at SCHEMA_VERSION 26 — 47
+    // `archival_drawable_digest`, `block_pow`, `alt_block_bodies`) at
+    // SCHEMA_VERSION 27 — 47
     // mirrors until S-POOL moved `txpool_meta` / `txpool_blob` to the pool
     // file (layout 12, `schema::MIRRORED_ELSEWHERE`), 45 until S-ALT folded
     // `archival_alt_attestation_witness` into `alt_blocks` (layout 13,
@@ -474,8 +477,10 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     // the issued-draw index and its digest (layout 22); 42 since `SO-D12`
     // added the per-block draw state and the drawable set's digest
     // (layout 23); 43 since the switch PR recorded the proof-of-work beside
-    // each block (`block_pow`, layout 26).
-    assert_eq!(catalogue_len, 43);
+    // each block (`block_pow`, layout 26); 44 since DRS-E5 PR-b moved an
+    // alternative block's bodies into the store (`alt_block_bodies`,
+    // layout 27).
+    assert_eq!(catalogue_len, 44);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
@@ -489,7 +494,8 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
             "archival_issued_digest",
             "archival_block_draws",
             "archival_drawable_digest",
-            "block_pow"
+            "block_pow",
+            "alt_block_bodies"
         ]
     );
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.

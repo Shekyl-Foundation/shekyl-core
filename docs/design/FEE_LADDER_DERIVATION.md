@@ -724,8 +724,8 @@ the miner-effective reward `(1−σ)·M_r·R` and divided by `(1−b)`.
 ### §3.2 What each inherited rung turns out to *be* (derived, not asserted)
 
 Running the algebra through the folded integer expressions at
-`blockchain.cpp:4488-4501` (instrument-verified against the C++ KATs,
-`fee_ladder.rs` tests):
+`blockchain.cpp:4488-4501` (verified against the C++ KATs by the
+`fee_ladder.rs` tests at review round 3, `7c668a460`):
 
 - **`Fl` = `R·w_ref/M²`** is the fee at which a single reference-weight
   transaction added to an exactly-median block pays its own penalty
@@ -758,11 +758,14 @@ and zero client changes.** Only rung *count* touches the wire (§7).
 
 Instrument: `shekyl-economics-sim --fee-ladder` (`src/fee_ladder.rs`),
 calling only canonical `shekyl-economics` functions for economics
-quantities; its "current-ladder" comparison column is pinned against the
-C++ oracle by four KATs (the three `scaling_2021.cpp` `wallet_fee_estimate`
-triples, the `relay_fee` set, and the genesis-condition legacy `Fh`, now
-6,900,000 at the design's 1,024-SKL genesis). Full JSON is reproducible
-from the module; headline numbers. The run these were measured on applied
+quantities. The tables below are the round's runs at review round 3
+(`7c668a460`), whose JSON reproduces from the module at that commit. Their
+"current-ladder" column is the inherited ladder, pinned in that run
+against the C++ oracle by four KATs (the three `scaling_2021.cpp`
+`wallet_fee_estimate` triples, the `relay_fee` set, and the
+genesis-condition legacy `Fh`, 6,900,000 at the design's 1,024-SKL
+genesis). Today's `--fee-ladder` prints the served ladder only; headline
+numbers. The run these were measured on applied
 the emission speed factor per minute, a 2,048-SKL genesis; §4.3 is
 re-measured at 1,024 SKL (2026-10-04), and the other subsections keep their
 measured values:
@@ -802,9 +805,8 @@ top rung rounds to 14,000,000. The design genesis is 1,024 SKL. Its legacy
 
 (These tables measure the *mispricing* and therefore apply raw `C`; the
 values a §5.2 daemon would actually serve apply the quantized `C_q` and
-differ by up to one pow2 step. The instrument's `served_ceil_cq` column
-carried them until the column was deleted with the snap (2026-10-15); the
-figures stay as that round's record. Measured highlights, review round 3: in every quiet state
+differ by up to one pow2 step. Measured highlights, review round 3, of
+the pow2 ceiling snap FL-R21 deleted: in every quiet state
 with `C ∈ (0.5, 1]` the ceiling rule gives `C_q = 1`, so the **served
 ladder equals today's ladder exactly** — genesis-quiet, genesis-baseline
 and mature-quiet all serve `[69 000/16 000, …]` unchanged, meaning launch
@@ -3263,17 +3265,6 @@ not contradict. *Integer arm:* 108/600 outside the bar at 30 000 blocks,
 **312 bp** — persistent limit cycles of ≤ ~1.5 ticks at the cell's `V`,
 every one of them the truncation, none of them the map. The tick is not a
 transient; it is a quantizer doing what quantizers do in a loop.
-
-> **2026-10-13 (ESR-14).** The feedback instrument now reads the window
-> as production reads it: whole transactions per block into the fold's
-> `VolumeWindow`, in place of a float running sum of fractional demand
-> (`ECONOMICS_SIM_PRODUCTION_REBASE.md` §5.20, item 1). On that reading the
-> exact arm keeps every verdict above (4/600 outside the bar at 30 000
-> blocks, worst 87 bp). The integer arm, the truncating reading FL-R24
-> retired from consensus, reads 116/600 outside the bar with a worst
-> amplitude of 281 bp: whole-transaction demand feeds its one-tick
-> toggles more coarsely. The figures in this paragraph are the 2026-09-10
-> run's, on the instrument's own float window.
 
 **FL-R24 — the pre-registered rule fires; RULED 2026-09-10: exact SMA, reward and floor together ("accepted/agree").** Integer stationary
 `grace_bp_max` = 307 > 300 at age 30 (`grace_bp_mean` = 4, inside its

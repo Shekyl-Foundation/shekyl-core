@@ -15,6 +15,7 @@ mod fee_horizon;
 mod fee_ladder;
 mod fee_model;
 mod fee_signal;
+mod growth_gate;
 mod median_window;
 mod miner_stuffer;
 mod mn_feasibility;
