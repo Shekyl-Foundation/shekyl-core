@@ -266,7 +266,8 @@ left out. ESR-1 runs the Standard rung at `×1` only. The multiplier is in
 the type and nothing sweeps it, and the rung mix is not modelled at all.
 ESR-10 prints A1-T at a swept multiplier and at the defaulted 15/80/5
 mix, including a zero-Priority arm. Its falsifier: the `×1` column equals
-the default report's.
+the default report's. The predictions, written before any ESR-10 code, are
+[`ESR10_PREDICTIONS.md`](ESR10_PREDICTIONS.md).
 
 **Amended 2026-10-03 (design owner, after ESR-6).** ESR-10 runs every rung
 mix twice:
