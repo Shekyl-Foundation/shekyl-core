@@ -108,8 +108,8 @@ pub enum FeePriority {
     ///
     /// Snapshot well-formedness (monotonicity, absolute cap on
     /// *named* tiers) is already decided before this variant is
-    /// interpreted — an honest 2021-scaling Priority tier does not
-    /// lock Custom.
+    /// interpreted — an honest served Priority tier does not lock
+    /// Custom.
     Custom(NonZeroU64),
 }
 

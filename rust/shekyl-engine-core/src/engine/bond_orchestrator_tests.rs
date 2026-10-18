@@ -792,7 +792,7 @@ fn bond_fee_refuses_what_the_send_path_refuses() {
         priority: FeeRate::new(p).expect("priority"),
     };
 
-    // Honest 2021-scaling KAT row: accepted, and the fee is the shared
+    // Honest served-ladder KAT row: accepted, and the fee is the shared
     // formula over the bond ceiling — not a number this path invents.
     let honest = snapshot(333, 1_332, 66_666);
     let fee = bond_fee_from_estimates(honest).expect("an honest snapshot funds a bond");

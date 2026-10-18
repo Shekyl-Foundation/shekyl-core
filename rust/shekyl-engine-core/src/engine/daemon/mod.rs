@@ -78,8 +78,7 @@ use crate::engine::transaction_submitter::submit_outcome_from_verdict;
 /// / [`FeeTier::High`] — one slot each, `[economy, standard, priority]`.
 ///
 /// A missing `fees` array is malformed, not a legacy scalar to synthesize
-/// from: Shekyl genesis is already 2021-scaling, and the invented
-/// `×1 / ×5 / ×1000` band is gone.
+/// tiers from: the daemon serves the three-rung ladder from genesis.
 fn fee_estimates_from_reply(reply: &GetFeeEstimateResponse) -> Result<FeeEstimates, RpcError> {
     if !reply.status.is_ok() {
         return Err(RpcError::InvalidFee);
