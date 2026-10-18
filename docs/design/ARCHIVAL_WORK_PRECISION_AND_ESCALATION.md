@@ -1075,12 +1075,12 @@ models (each cell links its section).
 
 | Arm | Verdict | Result |
 | --- | --- | --- |
-| **A1** clearance | ~~✅ **clears**~~ → 🔴 **scenario 9 uncleared, byte-keyed (§12.13, 2026-10-01)** | *Leaf-era (J-segment) measurement, records-was:* escalation earns its keep in the far tail: scenario 9 flat-25 **0.66×** (fails) vs best candidate **2.36×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder. **Re-measured in the operand the validator consumes (closed byte shards): flat 0.06×, best 0.21× at 2 %, 0.04× at 10 % — no candidate in the band clears; the bond term is ~40× per unit of traffic. §12.13.** |
+| **A1** clearance | 🔴 **two scenarios uncleared** (production fee, `--stage2`) | No candidate in the band clears the late-chain tail (flat-25 **0.24×**, best **0.65×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder) or high-history / low-activity (flat-25 **0.05×**, best **0.17×**). Every other scenario clears within its own horizon, and in none does the best candidate clear where flat-25 does not. In closed byte shards the bond term is ~40× per unit of traffic. The flat-fee run is §12.13. |
 | **A2** distribution (W6) | ✅ **clears** (§12.10) | Scarce-holder share `1.0000 → 0.9998` — **0.02 %** dilution, **zero** scarce holders stranded below marginal cost. |
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
-| **A4** stuffing (W9) | ~~🔴 FAILS~~ → ✅ **CLEARS (§12.11)** | **Verdict retracted 2026-07-27**: the arm measured *profit*, not *theft*; netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales**. Figures below are historical. Served-work ROI **2.8×–17.8×** at the rational equilibrium. Pure fee-flow-volume leverage (premium ≈ 1.0), cost ~99 % fees, `fee×→1` spread 2.8→17.8. Under R2, ROI **0.6671**, `fee×→1` **0.7** (§12.9 OQ-4). *Leaf-era figures; byte-keyed re-measurement (8-in / 1-out shape, `fee×→1` 0.8→2.0) in §12.13.* |
-| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching a ~3 KB opening beats holding 13.6 GB (12.3 GB byte-keyed, §12.13) by **4–40×**; crossover `q* ≈ 0.098–0.278`. |
-| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity, down-swing ≤ **0.1014** pts (leaf-era; byte-keyed **0.0036** / slew **0.05–0.10 pts/epoch**, §12.13). Adversarial slew ceiling **1.41 pts/epoch penalty-free** (~~closed **economically** by reopen (c)~~ — **(c) closed with no mechanism (§12.11); this tier CLOSED structurally at §12.11.1**) or **2.82 pts/epoch at the legal 2× limit** (~~already priced out by the block-reward penalty, ~10.24 M SKL/epoch, **114×** the fees~~ — **that is also a price argument and blind to a griefer; this tier closes on the same structural grounds, §12.11.1**). **Both tiers are now descriptive bounds on how fast the chain can be pushed toward a sanctioned state, not residual risk.** See the §6.0 amendment. |
+| **A4** stuffing (W9) | ✅ **CLEARS (§12.11)** | The arm measures the stuffer's *profit*, not theft: netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales** (§12.11). On the production fee (`--stage2`, the 8-in / 1-out shape searched as the stuffer's best) served-work ROI at the rational equilibrium is **0.05×** on the baseline and at most **3.07×** (sustained growth), with premium ≈ 1.0: pure fee-flow-volume leverage. `fee×→1` spans **0.0→7.7** across scenarios. Under R2 (plateau deletion) the baseline's ROI is **0.0008** (OQ-4). |
+| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching the ~6.9 KB opening costs **$0.00083** an epoch at 0.01 $/GB against **$0.00468** to hold 12.3 GB, so at the cheap end of the fetch band the proxy free-rides by **5.6×**; crossover `q* ≈ 0.105–0.271` (`--stage2`). |
+| **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity; the only down-swing is a reorg's, ≤ **0.0036** pts. A flood at the surge ceiling moves the share at most **0.0504** pts/epoch penalty-free and **0.1008** pts/epoch at the legal 2× limit (`--stage2`, steepest candidate). Both tiers close structurally (§12.11.1): they are descriptive bounds on how fast the chain can be pushed toward a sanctioned state, not residual risk. See the §6.0 amendment. |
 
 **The through-line: one theorem, three independent confirmations.** A4's
 `prem ≈ 1.0`, OQ-1's `|Δ| = 0` at the partition optimum, and A2's `0.02 %`
@@ -2153,7 +2153,7 @@ provisional-until-testnet under the §11.4 ceremony (adversary-advantage
 argument committed *before* the number; PoRep branch ⇒ A1 re-runs with sealing
 costs first). Nothing in 3a/3b weakens or advances that gate.
 
-### 12.13 Byte-keyed re-baseline of the Stage-2 sweep — MEASURED 2026-10-01
+### 12.13 Byte-keyed re-baseline of the Stage-2 sweep — MEASURED 2026-10-01 on the flat fee (`c0e5704b4`)
 
 **Why.** `SHT-Q2` ([`ARCHIVAL_SHARD_T_DERIVATION.md`](../completed/ARCHIVAL_SHARD_T_DERIVATION.md))
 re-keyed the D2 operand: `n` is the count of archival shards **closed** by
@@ -2308,7 +2308,7 @@ inputs). Whether an adversary with a large pre-existing output set is the right
 worst case for the ceremony is the owner's call; the one-shot (binding) figure
 does not depend on it.
 
-### 12.14 Onset of A1 failure and the lever table — MEASURED 2026-10-01
+### 12.14 Onset of A1 failure and the lever table — MEASURED 2026-10-01 on the flat fee (`235c2b841`)
 
 **Why.** A1's verdict is a **minimum** over sustained years, and a minimum
 hides *when* a failure arrives. The #929 review modelled §12.13's equations by

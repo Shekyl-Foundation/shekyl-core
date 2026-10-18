@@ -8,8 +8,8 @@
 //!
 //! ```text
 //! F(h)      = max(1, R · C(h) · w_ref / M²)   // economy == relay floor
-//! standard  = 4F
-//! priority  = max(2 · R · C / M, 4F)
+//! standard  = STANDARD_RUNG_OVER_ECONOMY · F
+//! priority  = max(2 · R · C / M, standard)
 //! C(h)      = (1−σ) · M_r / (1−b)             // raw, SCALE units
 //! M         = max(long-term median, Zm)
 //! paid      = quantized_fee(weight, rung)      // the lattice, once
@@ -36,6 +36,7 @@ pub use floor::{
 };
 pub use ladder::{
     checked_corrected_fee_ladder, corrected_fee_ladder, FeeLadder, EMISSION_CLAIM_FEE_FLOOR,
+    STANDARD_RUNG_OVER_ECONOMY,
 };
 pub use quantization::{quantized_fee, FEE_DECIMAL_PLACES, FEE_QUANTIZATION_MASK};
 pub use relay::{
