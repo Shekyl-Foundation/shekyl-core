@@ -1,6 +1,6 @@
 # Daemon configuration cutover — pre-flight record
 
-**Status: OPEN — the pre-flight of the cutover's implementation (2026-10-15), recorded before the first production commit as [`DAEMON_CONFIG_CUTOVER.md`](DAEMON_CONFIG_CUTOVER.md) §9 requires.** Sibling record of that brief, which owns the design; this file records what was observed at the implementation pin and the decisions the implementation takes inside the brief. It mints no identifier family.
+**Status: OPEN — the pre-flight and implementation record of the cutover (2026-10-15 to 2026-10-17; merged #1088); open while the brief's residue is, recorded before the first production commit as [`DAEMON_CONFIG_CUTOVER.md`](DAEMON_CONFIG_CUTOVER.md) §9 requires.** Sibling record of that brief, which owns the design; this file records what was observed at the implementation pin and the decisions the implementation takes inside the brief. It mints no identifier family.
 
 Implementation pin: `dev` `d26148535e` (2026-10-15). Branch
 `feat/daemon-config-cutover`.
@@ -125,8 +125,13 @@ The answer can only be read off a hosted run. The Windows smoke script now
 prints, on every run, how many processes share its console and whether a
 console window exists
 ([`scripts/ci/daemon_boot_stop_smoke.ps1`](../../scripts/ci/daemon_boot_stop_smoke.ps1)).
-The cutover's first Windows job reports it, and this section records the
-answer before commit (f) writes the Ctrl-Break case.
+The answer, from the cutover's Windows jobs on the hosted runner
+(2026-10-16): `runner console: 3 process(es) attached, window none`. The
+runner's process has a console and no console window, so
+`GenerateConsoleCtrlEvent` can reach a child started in its own process
+group there, and the Ctrl-Break case can run in CI. Commit (f) did not
+write it (a `CreateProcess` launch with `CREATE_NEW_PROCESS_GROUP`, which
+.NET's `Process.Start` cannot do); FOLLOWUPS carries it.
 
 ## 6. DC-F12 demonstrated (§9 item 6)
 
@@ -407,8 +412,7 @@ of its own, for the same reason as the negative one.
   environment (the daemon reads none, so there is nothing to scrub). Every
   test daemon passes `--tor off`: regtest's default is the managed Tor,
   and a test daemon launching one is a hang on a machine without a Tor
-  binary; the second measurement rig's Tor-off setting is Rick's to name
-  (§5.1), this one is recorded here. The BA-T5 sync daemons take
+  binary; the inbound-cost rig passes it too (Rick, 2026-10-17). The BA-T5 sync daemons take
   `--clearnet-listen none` for no inbound and `--p2p-closed-peer` for
   their one peer. The DRS bench cannot keep DRS-D9's `safe` durability:
   the daemon takes no sync-mode row (IG-Q4, the DRS lane's) and runs the

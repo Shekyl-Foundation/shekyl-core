@@ -172,7 +172,7 @@ Each site's semantics are named, and L14 closes. Owner: PR 2's first commit, a c
 - `shekyl_economics::relay_floor_admits(fee, weight, floors)`, FL-R23 on the fee lattice.
 
 **What the flip wires:**
-- **Admission.** The submit engine's `fee_meets_floor` (`shekyl-daemon-rpc/src/submit/fee.rs`) is replaced by `relay_floor_admits` over `relay_floor_window` at Phase C and Phase D. It currently runs the pre-FL-R23 rule against the tip floor alone with a 2 % buffer. Pool admission (DX-Q5's door) calls the same predicate. The `fee_per_byte` submit fact goes with `daemon_submit_ffi.cpp`.
+- **Admission.** The submit engine's `fee_meets_floor` (`shekyl-daemon-rpc/src/submit/fee.rs`) is replaced by `relay_floor_admits` over `relay_floor_window` at Phase C and Phase D. It currently runs `relay_floor_admits` over the snapshot tip floor alone, a one-element window, at zero slack. Pool admission (DX-Q5's door) calls the same predicate. The `fee_per_byte` submit fact goes with `daemon_submit_ffi.cpp`.
 - **The estimate.** `get_fee_estimate`'s store-backed `ChainFacts` implementor (DX-Q3) answers `fee_ladder_from` at the connecting height. The C++ `get_dynamic_base_fee_estimate_2021_scaling` and its FFI go with `rpc_facts_ffi.cpp`.
 
 **What the flip deletes:**
