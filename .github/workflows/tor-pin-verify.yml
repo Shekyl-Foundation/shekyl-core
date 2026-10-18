@@ -40,10 +40,13 @@
 # that measurement has no CI binary source yet — it runs on a dev box with a
 # full tor install until a gencert source is wired.
 #
-# Each entry carries its own floors: the number of live tests that crate runs
-# on that platform. The wallet runs fewer on Windows: three of its respawn
-# tests are `#[cfg(unix)]` (docs/FOLLOWUPS.md). The named tests each step
-# greps for must pass on every entry.
+# Each entry carries its own floors, the number of live tests each crate runs
+# on that platform, and its required tests, which must each have run and
+# passed there (scripts/ci/require_live_tests.sh). Windows runs fewer: three
+# of the wallet's respawn tests are `#[cfg(unix)]` (docs/FOLLOWUPS.md), and the
+# daemon's death-watcher test kills tor with `kill -9` and is Linux-only. A
+# test that one platform cannot run is left off that entry's list, never
+# skipped by a condition inside a step.
 #
 # Every step runs in bash, Git for Windows' on the Windows runner, so one
 # script serves both.
@@ -72,14 +75,26 @@ jobs:
             exe: tor
             client_floor: 8
             wallet_floor: 4
-            daemon_floor: 2
+            daemon_floor: 3
+            client_tests: >-
+              binary::tests::bundled_tor_matches_recorded_pin
+            daemon_tests: >-
+              ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
+              blocking::tests::blocking_facade_full_lifecycle_from_plain_thread
+              ephemeral::tests::a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop
           - label: linux-aarch64
             host: aarch64-linux-gnu
             runner: ubuntu-24.04-arm
             exe: tor
             client_floor: 8
             wallet_floor: 4
-            daemon_floor: 2
+            daemon_floor: 3
+            client_tests: >-
+              binary::tests::bundled_tor_matches_recorded_pin
+            daemon_tests: >-
+              ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
+              blocking::tests::blocking_facade_full_lifecycle_from_plain_thread
+              ephemeral::tests::a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop
           - label: windows-x86_64
             host: x86_64-w64-mingw32
             runner: windows-latest
@@ -87,6 +102,11 @@ jobs:
             client_floor: 8
             wallet_floor: 1
             daemon_floor: 2
+            client_tests: >-
+              binary::tests::bundled_tor_matches_recorded_pin
+            daemon_tests: >-
+              ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
+              blocking::tests::blocking_facade_full_lifecycle_from_plain_thread
     env:
       HOST: ${{ matrix.target.host }}
       TOR_EXE: ${{ matrix.target.exe }}
@@ -191,7 +211,7 @@ jobs:
           # pin otherwise fails closed for every user at first managed
           # launch) — assert it specifically ran and PASSED, not merely that some
           # count held. `--test-threads=1` prints one "test <name> ... ok" line.
-          grep -qE '(^|[[:space:]])binary::tests::bundled_tor_matches_recorded_pin \.\.\. ok$' ignored-control.out
+          ../scripts/ci/require_live_tests.sh ignored-control.out ${{ matrix.target.client_tests }}
           # And guard the FULL set — not just that one — against a silent
           # coverage drop. Floor = this crate's current ignored count on the
           # entry's platform (8 on every entry: pin + 6 actor + 1 launch).
@@ -231,11 +251,12 @@ jobs:
           # twice, asserting the two boots publish DIFFERENT addresses (the
           # ephemeral property observed, not asserted), plus the blocking
           # facade on a plain thread (the FFI consumer's exact shape). Floor =
-          # this crate's current ignored count (2, on every platform). `-ge` so
+          # this crate's current ignored count on the entry's platform (Linux 3,
+          # with TSR-F1's death edge: a killed tor is Exited, a shutdown is
+          # Stopped; Windows 2, that test killing tor with `kill -9`). `-ge` so
           # adding a live test never breaks the lane; bump only on a
           # deliberate removal.
-          grep -qE '(^|[[:space:]])ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots \.\.\. ok$' ignored-daemon.out
-          grep -qE '(^|[[:space:]])blocking::tests::blocking_facade_full_lifecycle_from_plain_thread \.\.\. ok$' ignored-daemon.out
+          ../scripts/ci/require_live_tests.sh ignored-daemon.out ${{ matrix.target.daemon_tests }}
           passed=$(sed -n '/^test result: ok\. [0-9]* passed/{s/^test result: ok\. \([0-9]*\) passed.*/\1/p;q;}' ignored-daemon.out)
           echo "ran ${passed:-0} pinned-tor daemon tests (floor ${{ matrix.target.daemon_floor }})"
           [ "${passed:-0}" -ge ${{ matrix.target.daemon_floor }} ]

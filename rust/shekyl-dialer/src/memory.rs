@@ -44,7 +44,8 @@ const CONSECUTIVE_CAP: u32 = 32;
 
 /// How long an address is suppressed after `consecutive` failures in a
 /// row: [`FIRST_WINDOW_NANOS`], doubled for each failure after the first,
-/// capped at [`WINDOW_CAP_NANOS`].
+/// capped at [`WINDOW_CAP_NANOS`]. The same schedule on every operating
+/// system.
 #[must_use]
 pub fn window_nanos(consecutive: u32) -> u64 {
     let mut window = FIRST_WINDOW_NANOS;
