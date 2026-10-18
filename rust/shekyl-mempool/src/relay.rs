@@ -32,6 +32,7 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
 use crate::pool::Pool;
+use crate::rate::FeeRate;
 use crate::view::KeyImages;
 
 /// Whether the node may show `record`'s transaction to anyone: public.
@@ -80,7 +81,7 @@ impl RelayView<'_> {
     pub fn refuses_for_room(&self, tx: &Transaction) -> bool {
         let weight = u64::try_from(tx.weight()).unwrap_or(u64::MAX);
         self.pool
-            .room_for(weight, (crate::pool::fee_of(tx), weight))
+            .room_for(weight, FeeRate::new(crate::pool::fee_of(tx), weight))
             .is_none()
     }
 

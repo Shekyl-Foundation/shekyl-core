@@ -33,6 +33,10 @@ shekyl-wire = { path = "../shekyl-wire" }
 [dev-dependencies]
 # The harness views and fixtures the door == validator tests run over.
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# The reconcile test refuses the pool file's next commit after the closure
+# has written (`pool-commit-fault`). Dev edge only: the normal dependency
+# above leaves the feature off, and check_test_only_features.py holds that.
+shekyl-chain-store = { path = "../shekyl-chain-store", features = ["pool-commit-fault"] }
 # The compile_fail negative controls with stderr snapshots (the
 # `CHAIN_RULES_CRATE.md` §8.3 form: a doctest cannot say why it failed).
 trybuild = "1"

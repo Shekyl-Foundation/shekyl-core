@@ -100,7 +100,7 @@ fn a_refused_write_leaves_the_index_and_the_file_as_they_were_and_the_retry_writ
     let path = tmp("reconcile-write-fault");
     let (mut pool, held) = two_planted(&path);
     let chain = spendable_chain();
-    pool.refuse_next_write = true;
+    pool.store().refuse_next_commit();
     let fault =
         chain.with_view(|view| pool.reconcile(&view, &RuleSet::GENESIS, &AdmissionPolicy::GENESIS));
     assert!(matches!(fault, Err(PoolFault::Store(_))), "{fault:?}");

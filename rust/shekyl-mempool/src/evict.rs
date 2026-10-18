@@ -51,6 +51,7 @@ use shekyl_chain_store::store::StoreError;
 use shekyl_types::TxHash;
 
 use crate::pool::{Held, Pool};
+use crate::rate::FeeRate;
 
 /// CEN-M10's limit (module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,17 +85,12 @@ pub enum Evicted {
     OverWeight,
 }
 
-/// `a` pays less per unit of weight than `b`, exactly: `a.fee / a.weight <
-/// b.fee / b.weight` as `a.fee · b.weight < b.fee · a.weight` in u128.
-fn cheaper(a: (u64, u64), b: (u64, u64)) -> bool {
-    u128::from(a.0) * u128::from(b.1) < u128::from(b.0) * u128::from(a.1)
-}
-
 impl Pool {
     /// The entries to evict, in order, for `weight` more to fit: entries
-    /// paying less per weight than `rate` (`(fee, weight)`), the cheapest
-    /// first. `None` when no such set frees enough.
-    pub(crate) fn room_for(&self, weight: u64, rate: (u64, u64)) -> Option<Vec<TxHash>> {
+    /// paying strictly less per weight than `candidate`, the cheapest
+    /// first ([`FeeRate`], [`crate::rate::AdmissionRank::eviction`]).
+    /// `None` when no such set frees enough. An equal rate does not leave.
+    pub(crate) fn room_for(&self, weight: u64, candidate: FeeRate) -> Option<Vec<TxHash>> {
         let total: u128 = self
             .held()
             .values()
@@ -107,7 +103,7 @@ impl Pool {
             if over == 0 {
                 break;
             }
-            if !cheaper((held.fee.to_raw(), held.weight), rate) {
+            if held.rate().cmp_rate(candidate) != core::cmp::Ordering::Less {
                 return None;
             }
             victims.push(txid);
@@ -124,13 +120,7 @@ impl Pool {
             .iter()
             .map(|(txid, held)| (*txid, held))
             .collect();
-        held.sort_by(|(ta, a), (tb, b)| {
-            let lhs = u128::from(a.fee.to_raw()) * u128::from(b.weight);
-            let rhs = u128::from(b.fee.to_raw()) * u128::from(a.weight);
-            lhs.cmp(&rhs)
-                .then(b.record.received.cmp(&a.record.received))
-                .then(ta.cmp(tb))
-        });
+        held.sort_by(|(ta, a), (tb, b)| a.rank(*ta).eviction(b.rank(*tb)));
         held
     }
 

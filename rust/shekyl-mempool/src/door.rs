@@ -33,16 +33,19 @@
 //! The submit engine reads the step to classify its reply (a chain-bound
 //! refusal may be a race with a block or a held spend, `rust_pool_shim`).
 //!
-//! Steps 2 and 3 read the view step 1's claim was read off, so the claim
-//! and the chain it is compared with cannot disagree: a
-//! [`Stale`](shekyl_chain_rules::Stale) here is a view that moved under its
-//! reader, and comes back as the fault.
+//! Steps 2 and 3 read the view step 1's claim was read off. A
+//! [`Stale`](shekyl_chain_rules::Stale) from that comparison is the
+//! validator's, and comes back inside [`DoorFault::Chain`]. A relay-floor
+//! window the tip has dropped under is [`DoorFault::TipMoved`]: the
+//! transaction is unjudged. The floors the policy sees are floors the
+//! chain recorded.
 
 use shekyl_chain_rules::{
     judge_lone_stateless, policy_form, relay_floor_window, tx_against, AdmissionPolicy, AtHeight,
     ChainView, Fault, FormAttempt, InvalidBlock, PolicyCoverage, PolicyRefused, ReferenceClaims,
-    RuleCoverage, RuleSet, StatelessPass, Tip, TxSlot,
+    RuleCoverage, RuleSet, StatelessPass, Tip, TxSlot, ViewRead,
 };
+use shekyl_types::BlockHeight;
 use shekyl_wire::Transaction;
 
 use crate::view::{KeyImages, PoolView};
@@ -68,6 +71,51 @@ pub enum Judged {
     /// Admitted by the consensus rows and refused by the admission policy
     /// (step 3).
     Policy(PolicyRefused),
+}
+
+/// Why the door could not judge. Never a judgement about the transaction.
+///
+/// A [`Fault`] is the validator's: the view failed, a store invariant
+/// broke, or a premise of block admission went stale. A tip that dropped
+/// under the relay-floor window is this door's own fact. [`Stale`](shekyl_chain_rules::Stale)
+/// tells a driver to redo `form`, and the pool door is not `form`.
+/// [`Fault::Corrupt`] is data no conforming store holds; a moved tip is a
+/// chain that moved, and a corrupt arm reaching a connect would halt the
+/// writer. The policy's empty window is CEN-M3, a fee refusal, so the
+/// floors handed to it are floors the chain recorded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DoorFault<F> {
+    /// The validator could not judge against this view.
+    Chain(Fault<F>),
+    /// The window was read at `asked`, and that height was above the tip.
+    /// `now` is the connecting height read again afterwards. The
+    /// transaction is unjudged; the caller reads the chain again and judges
+    /// once more. Equal heights stay this fault: the window was not priced,
+    /// and nothing fills it in afterwards.
+    TipMoved {
+        /// The connecting height the window was read at.
+        asked: BlockHeight,
+        /// The connecting height read again after the window answered
+        /// [`AtHeight::AboveTip`].
+        now: BlockHeight,
+    },
+}
+
+/// The floors `window` recorded at `asked`, or why it priced none.
+///
+/// `now` is the connecting height a caller re-read after [`AtHeight::AboveTip`].
+/// A recorded window passes through. An absent one is [`DoorFault::TipMoved`]
+/// at `(asked, now)`. A view fault stays the validator's [`DoorFault::Chain`].
+fn priced_floors<F>(
+    window: Result<AtHeight<Vec<u64>>, ViewRead<F>>,
+    asked: BlockHeight,
+    now: BlockHeight,
+) -> Result<Vec<u64>, DoorFault<F>> {
+    match window {
+        Ok(AtHeight::Recorded(floors)) => Ok(floors),
+        Ok(AtHeight::AboveTip) => Err(DoorFault::TipMoved { asked, now }),
+        Err(read) => Err(DoorFault::Chain(read.into())),
+    }
 }
 
 /// Step 1 for `tx` against `chain` under `rule_set`, at the height a block
@@ -96,10 +144,11 @@ pub fn stateless<'id, V: ChainView<'id>>(
 ///
 /// # Errors
 ///
-/// The view's fault, a store invariant observed broken
-/// ([`Fault::Corrupt`]), or a [`Fault::Stale`] — a view that answered the
-/// claim's read and the comparison's read from different chains. None is a
-/// judgement about the transaction.
+/// [`DoorFault::Chain`] for the view's fault, a store invariant observed
+/// broken ([`Fault::Corrupt`]), or a [`Fault::Stale`] — the claim's read
+/// and the comparison's read answered from different chains.
+/// [`DoorFault::TipMoved`] when the relay-floor window's height is above
+/// the tip. None of these is a judgement about the transaction.
 pub fn judge<'id, V: ChainView<'id>>(
     tx: &Transaction,
     chain: &V,
@@ -107,12 +156,17 @@ pub fn judge<'id, V: ChainView<'id>>(
     rule_set: &RuleSet,
     policy: &AdmissionPolicy,
     prior: Option<&StatelessPass>,
-) -> Result<Judged, Fault<V::Fault>> {
-    let pass = match stateless(tx, chain, rule_set, prior)? {
+) -> Result<Judged, DoorFault<V::Fault>> {
+    let pass = match stateless(tx, chain, rule_set, prior).map_err(DoorFault::Chain)? {
         Ok(pass) => pass,
         Err(refused) => return Ok(Judged::Stateless(refused)),
     };
-    let connecting = Tip::connecting_height(chain.tip().map_err(Fault::View)?.as_ref());
+    let connecting = Tip::connecting_height(
+        chain
+            .tip()
+            .map_err(|fault| DoorFault::Chain(Fault::View(fault)))?
+            .as_ref(),
+    );
     let view = PoolView::new(chain, pool);
     let against = match tx_against(
         tx,
@@ -121,19 +175,29 @@ pub fn judge<'id, V: ChainView<'id>>(
         rule_set,
         pass.proven(),
         FormAttempt::FIRST,
-    )? {
+    )
+    .map_err(DoorFault::Chain)?
+    {
         Ok(against) => against,
         Err(refused) => return Ok(Judged::Chain(refused)),
     };
 
-    let floors = match relay_floor_window(chain, connecting)? {
-        AtHeight::Recorded(floors) => floors,
-        // The window ends at the connecting height read off this same view,
-        // so a view that holds still never answers this. One that moved
-        // below it prices nothing, and CEN-M3 refuses an empty window: the
-        // transaction is refused, never admitted unpriced.
-        AtHeight::AboveTip => Vec::new(),
+    // The window ends at `connecting`. A view that holds still records it.
+    // One whose tip dropped answers [`AtHeight::AboveTip`]; the height read
+    // again is what the caller retries against. The policy never sees an
+    // empty window manufactured for that answer.
+    let window = relay_floor_window(chain, connecting);
+    let now = if matches!(window, Ok(AtHeight::AboveTip)) {
+        Tip::connecting_height(
+            chain
+                .tip()
+                .map_err(|fault| DoorFault::Chain(Fault::View(fault)))?
+                .as_ref(),
+        )
+    } else {
+        connecting
     };
+    let floors = priced_floors(window, connecting, now)?;
     Ok(match policy_form(tx, policy, &floors) {
         Err(refused) => Judged::Policy(refused),
         Ok(policy) => Judged::Admitted {

@@ -37,13 +37,14 @@ mod block;
 mod door;
 mod evict;
 mod pool;
+mod rate;
 mod reconcile;
 mod relay;
 mod template;
 mod view;
 
 pub use block::Offers;
-pub use door::{judge, stateless, Judged};
+pub use door::{judge, stateless, DoorFault, Judged};
 pub use evict::{Evicted, Limits};
 pub use pool::{Admission, Duplicate, Pool, PoolFault};
 pub use reconcile::{Reconciled, Removed};

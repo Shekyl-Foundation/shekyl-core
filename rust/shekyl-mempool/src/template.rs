@@ -83,15 +83,9 @@ pub fn select<'id, V: ChainView<'id>>(
         .iter()
         .filter(|(_, held)| shown(&held.record))
         .collect();
-    // Most fee per weight first: `a.fee / a.weight > b.fee / b.weight` as
-    // `a.fee · b.weight > b.fee · a.weight`, exact in u128.
-    candidates.sort_by(|(ta, a), (tb, b)| {
-        let lhs = u128::from(a.fee.to_raw()) * u128::from(b.weight);
-        let rhs = u128::from(b.fee.to_raw()) * u128::from(a.weight);
-        rhs.cmp(&lhs)
-            .then(a.record.received.cmp(&b.record.received))
-            .then(ta.cmp(tb))
-    });
+    // Richest per weight first, then the earliest held, then the lesser
+    // hash — the template half of the order eviction shares (`AdmissionRank`).
+    candidates.sort_by(|(ta, a), (tb, b)| a.rank(**ta).template(b.rank(**tb)));
 
     let mut selected = Selected::default();
     let mut spent = KeyImages::default();

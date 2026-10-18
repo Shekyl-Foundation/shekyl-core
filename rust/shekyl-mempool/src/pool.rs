@@ -22,13 +22,14 @@ use std::path::Path;
 use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet, StatelessPass};
 use shekyl_chain_store::pool::{PoolOpen, PoolRecord, PoolStore, ReceivedHour};
 use shekyl_chain_store::store::StoreError;
-use shekyl_types::{KeyImage, TxHash, UnixSeconds};
+use shekyl_types::{BlockHeight, KeyImage, TxHash, UnixSeconds};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{Ct, Input};
 use shekyl_wire::Transaction;
 
-use crate::door::{self, Judged};
+use crate::door::{self, DoorFault, Judged};
 use crate::evict::Limits;
+use crate::rate::{AdmissionRank, FeeRate};
 use crate::view::KeyImages;
 
 /// How a transaction reached the door — which decides only whether it is
@@ -87,8 +88,29 @@ pub enum PoolFault<F> {
     /// The chain view faulted, or a judgement against it could not be made
     /// ([`Fault`]).
     Chain(Fault<F>),
+    /// The connecting height the door priced against is no longer the tip.
+    /// Nothing was written. The caller reads the chain again and judges
+    /// once more.
+    TipMoved {
+        /// The connecting height the window was read at.
+        asked: BlockHeight,
+        /// The connecting height read again after the window answered above
+        /// the tip.
+        now: BlockHeight,
+    },
     /// The pool file faulted.
     Store(StoreError),
+}
+
+impl<F> PoolFault<F> {
+    /// The door's fault as the pool's. A chain fault stays one. A tip that
+    /// moved is named, and the transaction stays unjudged.
+    pub(crate) fn door(fault: DoorFault<F>) -> Self {
+        match fault {
+            DoorFault::Chain(fault) => Self::Chain(fault),
+            DoorFault::TipMoved { asked, now } => Self::TipMoved { asked, now },
+        }
+    }
 }
 
 impl<F> From<StoreError> for PoolFault<F> {
@@ -130,6 +152,16 @@ impl Held {
     pub(crate) fn key_images(&self) -> Vec<KeyImage> {
         key_images_of(&self.tx)
     }
+
+    /// This entry's fee per weight.
+    pub(crate) fn rate(&self) -> FeeRate {
+        FeeRate::new(self.fee.to_raw(), self.weight)
+    }
+
+    /// This entry in the order eviction and template selection share.
+    pub(crate) fn rank(&self, txid: TxHash) -> AdmissionRank {
+        AdmissionRank::new(self.rate(), self.record.received, txid)
+    }
 }
 
 /// The key images `tx` spends: one per `ToKey` input.
@@ -152,10 +184,6 @@ pub struct Pool {
     /// CEN-M10's limits, read off the chain (`Limits::at`) at open and set
     /// by the writer at each connect ([`Pool::set_limits`]).
     limits: Limits,
-    /// The next reconcile's file write is refused by the store — the tests'
-    /// one way to fault a write (`reconcile_tests.rs`).
-    #[cfg(test)]
-    pub(crate) refuse_next_write: bool,
 }
 
 impl core::fmt::Debug for Pool {
@@ -180,8 +208,6 @@ impl Pool {
                 key_images: KeyImages::default(),
                 held: BTreeMap::new(),
                 limits,
-                #[cfg(test)]
-                refuse_next_write: false,
             },
             how,
         ))
@@ -200,8 +226,9 @@ impl Pool {
     ///
     /// # Errors
     ///
-    /// [`PoolFault::Chain`] if the view faulted; [`PoolFault::Store`] if the
-    /// file did. Either way nothing was admitted.
+    /// [`PoolFault::Chain`] if the view faulted; [`PoolFault::TipMoved`] if
+    /// the tip dropped under the relay-floor window; [`PoolFault::Store`]
+    /// if the file did. Nothing was admitted.
     pub fn admit<'id, V: ChainView<'id>>(
         &mut self,
         tx: Transaction,
@@ -272,7 +299,7 @@ impl Pool {
         // holds nothing it would give up for a candidate paying no more per
         // weight than its cheapest admitted entry.
         let weight = u64::try_from(tx.weight()).unwrap_or(u64::MAX);
-        let rate = (fee_of(&tx), weight);
+        let rate = FeeRate::new(fee_of(&tx), weight);
         if self.room_for(weight, rate).is_none() {
             return Ok(Admission::PoolFull);
         }
@@ -284,7 +311,7 @@ impl Pool {
             policy,
             prior.as_ref(),
         )
-        .map_err(PoolFault::Chain)?;
+        .map_err(PoolFault::door)?;
         let Judged::Admitted { pass, .. } = judged else {
             return Ok(Admission::Refused(judged));
         };

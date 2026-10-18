@@ -138,8 +138,9 @@ impl Pool {
     ///
     /// # Errors
     ///
-    /// The chain view's or the store's. Either way neither the index nor
-    /// the file changed, and the next reconcile makes the same judgements.
+    /// The chain view's, a tip that moved under the relay-floor window, or
+    /// the store's. Either way neither the index nor the file changed, and
+    /// the next reconcile makes the same judgements.
     pub fn reconcile<'id, V: ChainView<'id>>(
         &mut self,
         chain: &V,
@@ -175,7 +176,7 @@ impl Pool {
                 policy,
                 held.pass.as_ref(),
             )
-            .map_err(PoolFault::Chain)?;
+            .map_err(PoolFault::door)?;
             let Judged::Admitted { pass, .. } = judged else {
                 judged_all.insert(*txid, None);
                 removals.push(*txid);
@@ -187,19 +188,8 @@ impl Pool {
             reconciled.admitted.push(*txid);
         }
         if !removals.is_empty() {
-            #[cfg(test)]
-            let refuse = core::mem::take(&mut self.refuse_next_write);
-            self.store().write(|batch| {
-                removals.iter().try_for_each(|txid| batch.remove(txid))?;
-                // The tests' write fault, after every real change so the
-                // abort is seen to take them back: publishing an entry the
-                // file does not hold is the store's refusal.
-                #[cfg(test)]
-                if refuse {
-                    batch.publish(&TxHash::from_bytes([0; 32]))?;
-                }
-                Ok::<(), shekyl_chain_store::store::StoreError>(())
-            })?;
+            self.store()
+                .write(|batch| removals.iter().try_for_each(|txid| batch.remove(txid)))?;
         }
         self.install(&judged_all, key_images);
         Ok(reconciled)
