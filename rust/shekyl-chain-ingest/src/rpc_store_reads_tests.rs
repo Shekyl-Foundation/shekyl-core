@@ -44,7 +44,9 @@ use crate::metrics::Metrics;
 use crate::rpc_store_facts_tests::{facts_over, facts_with_caches, hex, KeccakPow};
 use crate::scenario::{Mined, Scenario, RULES};
 use crate::substrate::ProductionSubstrate;
-use crate::test_support::{cleanup, h, open_store, tmp, Family, FIRST_SPEND_HEIGHT};
+use crate::test_support::{
+    cleanup, h, open_store, open_store_under, tmp, Family, FIRST_SPEND_HEIGHT,
+};
 
 /// The fee a listed body pays.
 fn fee_of(tx: &Transaction) -> u64 {
@@ -162,6 +164,80 @@ async fn the_alt_reads_are_the_alt_table_walked_into_chains() {
             .collect();
         by_table.dedup();
         assert_eq!(tip_order, by_table);
+        drop(snap);
+        drop(facts);
+        drop(store);
+    })
+    .await;
+    x.close().await;
+    y.close().await;
+    z.close().await;
+}
+
+/// After a connect retires a branch, every alternative chain the handler
+/// lists names a main-chain block as its parent: the death rule takes a
+/// branch whole (`store/alt.rs`), so no chain is left hanging from a
+/// removed row. Under the levered cap of 10: a 5-block branch from main
+/// block 1 is crossed when the tip reaches its lowest row (2) plus the
+/// cap; a one-row branch at 3 on main block 2 outlives it.
+#[tokio::test]
+async fn after_a_retirement_every_listed_chain_hangs_from_the_main_chain() {
+    use crate::scenario::FreeHash;
+    use crate::scenario_shard::{levered_rules, REORG_CAP_BLOCKS};
+    let rules = levered_rules();
+    let mut x = Scenario::open_under("rpc-reads-retire-x", FreeHash, rules);
+    let mut y = Scenario::open_under("rpc-reads-retire-y", FreeHash, rules);
+    let mut z = Scenario::open_under("rpc-reads-retire-z", FreeHash, rules);
+    x.mine(2).await;
+    y.mine(2).await;
+    z.mine(3).await;
+    y.idle();
+    for _ in 0..5 {
+        x.mine(1).await;
+        for mined in y.mine(1).await {
+            assert!(matches!(
+                x.offer(&mined).await.expect("offer"),
+                Offered::Held { .. }
+            ));
+        }
+    }
+    z.idle();
+    let beside = z.mine(1).await;
+    assert!(matches!(
+        x.offer(&beside[0]).await.expect("offer"),
+        Offered::Held { .. }
+    ));
+    // Mine to the crossing connect: the tip is the branch's lowest row (2)
+    // plus the cap.
+    let mut tip = 6;
+    while tip < 2 + REORG_CAP_BLOCKS {
+        x.mine(1).await;
+        tip += 1;
+    }
+    x.reopen(|path| {
+        let store = Arc::new(open_store_under(
+            path,
+            &rules.in_force(BlockHeight::ZERO),
+            shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+        ));
+        let facts = facts_over(Arc::clone(&store), path, rules);
+        let snap = store.begin_read().expect("read");
+        let chains = get_alternate_chains(&facts).expect("alt chains").chains;
+        assert_eq!(
+            chains.len(),
+            1,
+            "the crossed branch left whole; the one beside it stays"
+        );
+        assert_eq!(chains[0].block_hash, hex(beside[0].hash));
+        for chain in &chains {
+            let parent = BlockHash::from_bytes(chain.main_chain_parent_block.to_bytes());
+            assert_eq!(
+                snap.height_of(&parent).expect("read"),
+                Some(h(chain.height - chain.length)),
+                "the parent of the chain tipped at {} is the main block below it",
+                chain.block_hash
+            );
+        }
         drop(snap);
         drop(facts);
         drop(store);

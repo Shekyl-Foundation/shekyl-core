@@ -35,7 +35,9 @@ pub struct AltChainFacts {
     /// The tip's cumulative difficulty along its chain.
     pub cumulative_difficulty: u128,
     /// The parent the lowest block names — where the chain leaves the
-    /// blocks this node holds as alternatives.
+    /// blocks this node holds as alternatives. A main-chain block: every
+    /// stored alternative chain reaches the main chain (the store's
+    /// invariant, `shekyl-chain-store`'s `store/alt.rs`).
     pub parent: BlockHash,
 }
 
