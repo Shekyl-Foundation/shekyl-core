@@ -535,6 +535,10 @@ stale_through = [
   { through = "189f8104a", note = "The gap ends at the peer's first complete handshake frame, where it ended at any first complete frame: a frame of another command no longer disarms it. The dial, the handshake and their I/O are unchanged; in the clearnet legs the peer's first frame was its handshake. Not re-measured." },
   { through = "cf144a645", note = "The gap and dial timeout arms stop logging the wake's identity fields at debug; the timeout and its close kind are unchanged. Logging only. Not re-measured." },
   { through = "db6e11e07", note = "Tests, the seam post and the ban view move into files of their own; no code path changes. Not re-measured." },
+  { through = "cb507edf7", note = "A link per connector (TSR-F1): a route and an outbound facet on the seam hub, read by the connector at each dial in place of its proxy slot. No deadline and no dial I/O changes. Not re-measured." },
+  { through = "f60ab687f", note = "Republishing the usable route keeps its incarnation and tells no watcher; a return from down is a new incarnation. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
+  { through = "21524f1a8", note = "A link subscription unsubscribes when dropped. Watcher bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
+  { through = "7e9ea0f61", note = "The managed-Tor death watch follows the route now installed, and a shutdown publishes ProcessStopped. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
 ]
 
 [[constant]]
@@ -615,6 +619,10 @@ cleared = [
   { through = "189f8104a", reason = "The gap ends at the peer's first complete handshake frame instead of its first complete frame (Copilot on #1056). In the capture the two are the same frame: the dialer sends its handshake request first and accepts only the response as its first message, so every counted session's first frame was its handshake (the record says so). The capture still prices this tree; the dial and the I/O are unchanged." },
   { through = "cf144a645", reason = "The Tor dial and gap timeout arms drop their debug lines naming the wake; the deadlines, the timeout and its close kind are unchanged, so the capture still prices this tree." },
   { through = "db6e11e07", reason = "The Tor listener tests and the seam's post and ban types move into files of their own; no code path changes." },
+  { through = "cb507edf7", reason = "The Tor link (TSR-F1) holds the route the Tor dial used to read from the zone host's proxy slot; the dial, the gap and their I/O are unchanged, so the capture still prices this tree." },
+  { through = "f60ab687f", reason = "The Tor link keeps one incarnation across a repeated publish of the same route, so the managed-Tor death watcher is armed once. The dial, the gap and their I/O are unchanged." },
+  { through = "21524f1a8", reason = "Link subscriptions are removed when dropped. The dial, the gap and their I/O are unchanged." },
+  { through = "7e9ea0f61", reason = "The Tor link's death watch is re-planned on each publish and a stop has its own cause; the dial, the gap and their I/O are unchanged, so the capture still prices this tree." },
 ]
 
 [[constant]]

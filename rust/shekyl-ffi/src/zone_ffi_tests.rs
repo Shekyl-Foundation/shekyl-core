@@ -9,6 +9,8 @@ use std::ffi::c_void;
 
 use shekyl_timing_engine::OwnerClass;
 
+use shekyl_seam::Outbound;
+
 use super::*;
 use crate::inbound_ceiling_ffi::ShekylInboundCeiling;
 use crate::inbound_ceiling_ffi::SHEKYL_INBOUND_CEILING_UNLIMITED;
@@ -60,20 +62,34 @@ fn the_engine_outlives_ensure() {
     );
     drop(owner);
 
-    // An outbound-only tor zone installs its proxy without listening.
-    assert!(host.tor_proxy.lock().expect("tor proxy").is_none());
+    // An outbound-only tor zone installs its proxy without listening: the
+    // Tor link (TSR-F1) is usable through it, and dial_tor reads its route.
+    assert_eq!(host.hub.links().get(ConnectorId::Tor).route, None);
     dial_through_tor(
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050),
         network_id,
     )
     .expect("the proxy install");
+    let link = host.hub.links().get(ConnectorId::Tor);
     assert_eq!(
-        *host.tor_proxy.lock().expect("tor proxy"),
-        Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050)),
-        "dial_tor reads this; None is DialFailed before the network"
+        link.route,
+        Some(Route::Socks(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9050
+        ))),
+        "dial_tor reads this route; none is DialFailed before the network"
+    );
+    assert!(
+        link.is_usable(),
+        "nothing watches an operator's Tor, so its link stays usable"
     );
 
     shutdown();
+    assert_eq!(
+        host.hub.links().get(ConnectorId::Tor).route,
+        None,
+        "the zone's routes leave with it"
+    );
     assert!(
         host.engine.register(OwnerClass::Transport).is_err(),
         "shutdown closes the engine"
@@ -249,6 +265,14 @@ fn a_closed_admission_keeps_the_dial_cause() {
     });
 }
 
+/// An exit and a stop both take the link down, and they are not the same
+/// cause. Swapping the arms fails this.
+#[test]
+fn an_exit_and_a_stop_record_different_causes() {
+    assert_eq!(down_cause(TorDeath::Exited), DownCause::ProcessExited);
+    assert_eq!(down_cause(TorDeath::Stopped), DownCause::ProcessStopped);
+}
+
 /// A listener that cannot bind is a refusal naming the endpoint, and
 /// nothing of that start survives: the endpoint already taken by one host's
 /// clearnet is refused to a second start (the C++ `bind_same_p2p_port`
@@ -301,6 +325,80 @@ fn a_clearnet_endpoint_already_bound_is_refused_with_its_address() {
     )
     .expect("a free endpoint binds");
     assert_ne!(another[0], taken);
+    shutdown();
+    unsafe {
+        shekyl_seam_bind(std::ptr::null_mut(), None);
+    }
+}
+
+/// The managed Tor's death takes the Tor link down, naming the incarnation
+/// installed when the watch began (`TSR-F1`). A death that arrives after
+/// another route was installed leaves that route usable. Publishing the
+/// down without the incarnation check fails the second half.
+#[test]
+fn a_managed_tor_death_takes_its_own_incarnation_down_and_no_later_one() {
+    let _bind = crate::seam_ffi::seam_bind_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut executor = 0u8;
+    let ceiling = ShekylInboundCeiling {
+        kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+        ceiling: 0,
+        soft_limit: 0,
+        held: 0,
+    };
+    let bound = unsafe {
+        shekyl_seam_bind(
+            std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+            Some(discard),
+        )
+    };
+    assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
+    let network_id = [12u8; 16];
+    let socks = |port| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let fell_within = |host: &Host, wanted: bool| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if host.hub.links().get(ConnectorId::Tor).is_usable() != wanted {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        false
+    };
+    assert!(
+        !watch_managed_tor(std::future::pending()),
+        "no zone host, no watch"
+    );
+
+    dial_through_tor(socks(9050), network_id).expect("the proxy install");
+    let host = ensure(network_id).expect("zone host");
+    let (died, death) = tokio::sync::oneshot::channel();
+    assert!(watch_managed_tor(async move {
+        death.await.unwrap_or(TorDeath::Stopped)
+    }));
+    died.send(TorDeath::Exited).expect("the watch waits");
+    assert!(fell_within(&host, true), "the death took the link down");
+    assert!(matches!(
+        host.hub.links().get(ConnectorId::Tor).outbound,
+        Outbound::Down {
+            cause: DownCause::ProcessExited,
+            ..
+        }
+    ));
+
+    let (died, death) = tokio::sync::oneshot::channel();
+    assert!(watch_managed_tor(async move {
+        death.await.unwrap_or(TorDeath::Stopped)
+    }));
+    dial_through_tor(socks(9051), network_id).expect("a later route");
+    died.send(TorDeath::Exited).expect("the watch waits");
+    assert!(
+        !fell_within(&host, true),
+        "the later route is not the dead Tor's"
+    );
+
     shutdown();
     unsafe {
         shekyl_seam_bind(std::ptr::null_mut(), None);

@@ -87,10 +87,9 @@ use shekyl_archival_retention::{
     emission_vin_verify_claims, p_canonical_id_from_hybrid_pubkey, release_pre_cooldown_guards,
     release_vin_statics, settlement_epoch_at_height, verify_bond_post_ct_balance,
     verify_join_market_bond_post, verify_release_bond_post, whole_record_last_served,
-    ArchivalBondPostVin, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
-    BondTermError, ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
-    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor,
-    HoldingsKind, RewardCommit, ShardSet,
+    BondPostError, BondPostKind as RetentionBondPostKind, BondTerm, BondTermError,
+    ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
+    EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, RewardCommit,
 };
 use shekyl_bulletproofs::{verify_batch, BatchEntry};
 use shekyl_crypto_pq::error::PqcVerifyError;
@@ -104,8 +103,8 @@ use shekyl_types::archival::ReceiptSignPk;
 use shekyl_types::SigningPayloadHash;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 use shekyl_wire::transaction::{
-    BondPost as WireBondPost, BondPostKind as WireBondPostKind, Ct, CtBase, Holdings, Input,
-    PqcAuth, Prunable, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
+    BondPost as WireBondPost, BondPostKind as WireBondPostKind, Ct, CtBase, Input, PqcAuth,
+    Prunable, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
 };
 
 use crate::submit::facts::SubmitFacts;
@@ -262,13 +261,8 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // (HoldingsUpdate) is REJECTED at the wire.
     let arm = match &bond.kind {
         WireBondPostKind::JoinMarket {
-            bond_spend_pk,
-            receipt_sign_pk,
-            ..
-        } => BondArm::Credit {
-            bond_spend_pk,
-            receipt_sign_pk,
-        },
+            receipt_sign_pk, ..
+        } => BondArm::Credit { receipt_sign_pk },
         WireBondPostKind::Other(tag) if *tag == RetentionBondPostKind::Release as u8 => {
             BondArm::Debit
         }
@@ -345,11 +339,8 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
         ));
     };
     match arm {
-        BondArm::Credit {
-            bond_spend_pk,
-            receipt_sign_pk,
-        } => {
-            verify_credit_arm(bond, bond_spend_pk, receipt_sign_pk, bond_auth, facts)?;
+        BondArm::Credit { receipt_sign_pk } => {
+            verify_credit_arm(bond, receipt_sign_pk, bond_auth, facts)?;
         }
         BondArm::Debit => verify_debit_arm(bond, bond_auth, facts)?,
     }
@@ -666,14 +657,12 @@ fn emission_reject(e: &EmissionVerifyError) -> VerifyReject {
 /// collateral out, and the identity key is exactly the key a compromised
 /// serving host holds. See `verify_debit_arm`.
 enum BondArm<'a> {
-    /// JoinMarket (§8.7.1). `bond_spend_pk` is what the record will commit,
-    /// authorized by the identity key (BP5). `receipt_sign_pk` is BP6's
-    /// operand: the arm judges it before it reads the record, so a credit
-    /// arm without a key cannot be built.
-    Credit {
-        bond_spend_pk: &'a [u8],
-        receipt_sign_pk: &'a ReceiptSignPk,
-    },
+    /// JoinMarket (§8.7.1), authorized by the identity key (BP5). The
+    /// `bond_spend_pk` the record will commit rides the wire kind and reaches
+    /// the battery through the validator's marshal (`bond_post_vin`).
+    /// `receipt_sign_pk` is BP6's operand: the arm judges it before it reads
+    /// the record, so a credit arm without a key cannot be built.
+    Credit { receipt_sign_pk: &'a ReceiptSignPk },
     /// Release (§8.7.1.1) — carries no `bond_spend_pk` on the wire;
     /// authorized by the record's committed key (row UB3).
     Debit,
@@ -691,7 +680,6 @@ enum BondArm<'a> {
 /// claim slot. It does not read the key.
 fn verify_credit_arm(
     bond: &WireBondPost,
-    bond_spend_pk: &[u8],
     receipt_sign_pk: &ReceiptSignPk,
     bond_auth: &PqcAuth,
     facts: &SubmitFacts,
@@ -728,7 +716,7 @@ fn verify_credit_arm(
             "bond-post: snapshot carries no BP3 record fact",
         ));
     };
-    let Some(vin) = retention_vin(bond, RetentionBondPostKind::JoinMarket, bond_spend_pk) else {
+    let Some(vin) = shekyl_chain_rules::bond_post_vin(bond) else {
         return Err(VerifyReject::malformed(
             "JoinMarket: wire vin could not be marshaled into the retention view",
         ));
@@ -806,7 +794,7 @@ fn verify_debit_arm(
     //
     // The shared consensus function, never a restatement: `verify_release_bond_post`
     // runs the identical guards, so the block path and this arm cannot drift.
-    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Release, &[]) else {
+    let Some(vin) = shekyl_chain_rules::bond_post_vin(bond) else {
         return Err(VerifyReject::malformed(
             "Release: wire vin could not be marshaled into the retention view",
         ));
@@ -875,53 +863,6 @@ fn verify_debit_arm(
         Err(e @ BondPostError::RecordMissing) => Err(VerifyReject::double_spend(e)),
         Err(e) => Err(VerifyReject::malformed(e)),
     }
-}
-
-/// Marshal the wire bond-post vin into the retention crate's verify view.
-///
-/// Total for a `validate()`d JoinMarket vin (the wire read already enforced
-/// the shard-set bound + duplicate-freeness this re-checks); `None` only
-/// for a hand-built inconsistent value — the seam's non-panicking refusal.
-fn retention_vin(
-    bond: &WireBondPost,
-    post_kind: RetentionBondPostKind,
-    bond_spend_pk: &[u8],
-) -> Option<ArchivalBondPostVin> {
-    let (holdings_kind, shard_ids) = match &bond.holdings {
-        Holdings::ShardSetCompact(ids) => (
-            HoldingsKind::ShardSetCompact,
-            ShardSet::new(ids.clone()).ok()?,
-        ),
-        Holdings::CompleteTree => (HoldingsKind::CompleteTree, ShardSet::empty()),
-    };
-    let kind = match &bond.kind {
-        WireBondPostKind::JoinMarket {
-            receipt_sign_pk,
-            endpoint,
-            ..
-        } => shekyl_archival_retention::BondKind::JoinMarket {
-            bond_spend_pk: bond_spend_pk.to_vec(),
-            // The one JoinMarket form. The receipt key the post committed
-            // rides through, so the retention view is the post that was sent.
-            receipt_sign_pk: receipt_sign_pk.clone(),
-            endpoint: *endpoint,
-        },
-        WireBondPostKind::Other(_) => post_kind.unit_kind()?,
-    };
-    Some(ArchivalBondPostVin {
-        hybrid_public_key: bond.hybrid_public_key.clone(),
-        // The retention descriptor still carries the id as bytes; typing it
-        // is that crate's (RTN-7 §3.2 addressee), not this boundary's.
-        p_canonical_id: bond.p_canonical_id.to_bytes(),
-        kind,
-        holdings: HoldingsDescriptor {
-            kind: holdings_kind,
-            shard_ids,
-        },
-        bonded_total_atomic: bond.bonded_total_atomic,
-        bond_credit: bond.bond_credit,
-        bond_debit: bond.bond_debit,
-    })
 }
 
 /// Resolve the FCMP++ reference root + library layer count for a K12 leg,
@@ -1296,7 +1237,7 @@ pub(crate) fn verify_debit_slot_possession(parsed: &ParsedSubmission) -> Result<
     // fires for it. The shared consensus function, never a local restatement:
     // the block path runs the identical checks inside
     // `verify_release_bond_post`, in the same order.
-    let Some(vin) = retention_vin(bond, RetentionBondPostKind::Release, &[]) else {
+    let Some(vin) = shekyl_chain_rules::bond_post_vin(bond) else {
         return Err(VerifyReject::malformed(
             "debit pre-gate: wire vin could not be marshaled into the retention view",
         ));

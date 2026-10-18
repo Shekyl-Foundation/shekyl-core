@@ -12,14 +12,12 @@
 
 #![cfg(test)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 use shekyl_harness_spender::Spender;
 use shekyl_pow_randomx::CacheStore;
-use shekyl_types::{BlockHash, BlockHeight};
-use shekyl_wire::Transaction;
+use shekyl_types::BlockHeight;
 
 use crate::connector::{Offered, Switched};
 use crate::metrics::Metrics;
@@ -94,11 +92,7 @@ where
     };
     let offered = started.elapsed();
     assert_eq!(plan.demoted.len(), usize::try_from(depth).expect("fits"));
-    let bodies: HashMap<BlockHash, Vec<Transaction>> = b
-        .iter()
-        .map(|m| (m.hash, m.template.transactions.clone()))
-        .collect();
-    let (switched, timing) = x.reorganize_timed(&plan, &bodies).await.expect("switch");
+    let (switched, timing) = x.reorganize_timed(&plan).await.expect("switch");
     assert!(matches!(switched, Switched::Done(_)), "{switched:?}");
 
     let (rows_x, rows_y) = (

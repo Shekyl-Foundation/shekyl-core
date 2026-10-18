@@ -598,20 +598,15 @@ where
 
     /// Carry out `plan` (DRS-E5 §2.3 step 1, then [`Reorganize`]): form the
     /// demoted blocks unless the verdict is the checkpoint's, and the alt
-    /// entries from their rows' blocks and witnesses with the listed bodies
-    /// `bodies` holds by block hash — the pool's role from PR-b on. A
-    /// promoted block `form` refuses under the plan's claims is
+    /// entries from their rows' blocks, witnesses and listed bodies (the
+    /// store's, AL8). A promoted block `form` refuses under the plan's claims is
     /// [`RefusePromotion`]: the failing suffix is removed and nothing is
     /// popped. A demoted block this node connected forms without claims; a
     /// refusal there is an invariant, not a verdict. After
     /// [`Switched::Done`], the header ledger drops every height above the
     /// fork, so the next claim reloads the chain this switch connected.
-    pub async fn reorganize(
-        &mut self,
-        plan: &SwitchPlan,
-        bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
-    ) -> Result<Switched, RunFault> {
-        self.reorganize_timed(plan, bodies)
+    pub async fn reorganize(&mut self, plan: &SwitchPlan) -> Result<Switched, RunFault> {
+        self.reorganize_timed(plan)
             .await
             .map(|(switched, _)| switched)
     }
@@ -624,7 +619,6 @@ where
     pub async fn reorganize_timed(
         &mut self,
         plan: &SwitchPlan,
-        bodies: &std::collections::HashMap<BlockHash, Vec<Transaction>>,
     ) -> Result<(Switched, ReorgTiming), RunFault> {
         let started = std::time::Instant::now();
         // Demoted blocks carry no reference claims: the cheap tier never
@@ -642,9 +636,8 @@ where
         }
         let demoted_len = work.len();
         work.extend(plan.promoted.iter().map(|p| {
-            let listed = bodies.get(&p.at.hash).cloned().unwrap_or_default();
-            let candidate =
-                Candidate::new(p.block.clone(), listed).with_attestation_witness(p.witness.clone());
+            let candidate = Candidate::new(p.block.clone(), p.transactions.clone())
+                .with_attestation_witness(p.witness.clone());
             let references = plan.references_for(&p.at, &candidate);
             (candidate, p.at.clone(), references)
         }));
@@ -844,12 +837,28 @@ where
             .map_err(handler_error)
     }
 
-    /// Stop the connector, release the store, remove the file.
-    pub async fn close(self) {
+    /// Stop the connector and join its task, so the store it owns is dropped
+    /// before the file is opened again ([`Self::reopen`], [`Self::with_store`]).
+    async fn stop_connector(&mut self) {
         let _already_stopped = self.connector.stop_gracefully().await.is_err();
-        if let Some(task) = self.task {
+        if let Some(task) = self.task.take() {
             drop(task.await.expect("the connector task joins"));
         }
+    }
+
+    /// A fresh connector over the store at [`Self`]'s path, under the same rules.
+    fn start_connector(&mut self) {
+        let (connector, task) = spawn_connector(ConnectorArgs {
+            store: (self.opener)(&self.path),
+            rules: self.rules,
+        });
+        self.task = Some(task);
+        self.connector = connector;
+    }
+
+    /// Stop the connector, release the store, remove the file.
+    pub async fn close(mut self) {
+        self.stop_connector().await;
         cleanup(&self.path);
     }
 
@@ -858,17 +867,9 @@ where
     /// start a fresh connector over the reopened store. The clock, the
     /// wallet and the template counter carry over.
     pub async fn reopen(&mut self, edit: impl FnOnce(&std::path::Path)) {
-        let _already_stopped = self.connector.stop_gracefully().await.is_err();
-        if let Some(task) = self.task.take() {
-            drop(task.await.expect("the connector task joins"));
-        }
+        self.stop_connector().await;
         edit(&self.path);
-        let (connector, task) = spawn_connector(ConnectorArgs {
-            store: (self.opener)(&self.path),
-            rules: self.rules,
-        });
-        self.task = Some(task);
-        self.connector = connector;
+        self.start_connector();
     }
 
     /// Every table of the store as stored bytes (`TableRows`), for a
@@ -987,6 +988,9 @@ fn handler_error<M>(e: kameo::error::SendError<M, RunFault>) -> RunFault {
         other => panic!("connector mailbox: {other}"),
     }
 }
+
+#[path = "scenario_pool.rs"]
+mod pool;
 
 #[cfg(test)]
 #[path = "scenario_tests.rs"]

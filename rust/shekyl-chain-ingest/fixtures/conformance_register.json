@@ -473,10 +473,6 @@
       "state": "CHECKED-CONFORMANT"
     },
     {
-      "id": "CEN-K10",
-      "state": "CHECKED-CONFORMANT"
-    },
-    {
       "id": "CEN-K1a",
       "state": "CHECKED-CONFORMANT"
     },
@@ -558,7 +554,7 @@
     },
     {
       "id": "CEN-M3",
-      "state": "CHECKED-CONFORMANT"
+      "state": "DIVERGENT"
     },
     {
       "id": "CEN-M4",

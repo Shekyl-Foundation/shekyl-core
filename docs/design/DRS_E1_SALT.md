@@ -21,6 +21,15 @@ has two arms; `coins_generated` is gone from the row and `block_weight` is
 `BlockWeight` (no presence byte; zero is a codec refusal) at
 `SCHEMA_VERSION` 24. The §3 and §11 rows below record the increment **as
 it landed**; `DRS_E5_POOL_ALT_PRUNE.md` §1.1 is the shape of record.
+**Moved by DRS-E5 PR-b (2026-10-17; the review of #1102, B1):** an alt
+row's listed bodies are consensus data in `alt_block_bodies`
+(Rust-only, ordinal 43, layout 27) — written by AL1 from the verdict,
+removed by AL2 and AL3 with the row, read by **AL8** `alt_block_bodies`
+held to the row's listed hashes (SI-7 otherwise) — and a row leaves the
+table by promotion, a reset, or the death rule: the connect that
+advances the tip removes every row at or below `tip − cap`, and the
+writer every row at or below CEN-E2's anchor floor
+(`DRS_E5_POOL_ALT_PRUNE.md` §2.3).
 This file stays in `design/` as the E1/E5 boundary statement (§0, §2.2,
 §2.3, SAL-13, SAL-14) until E5's plan owns it.
 **Round 0 executed 2026-09-24** at `dev` @ `9532b58f5`

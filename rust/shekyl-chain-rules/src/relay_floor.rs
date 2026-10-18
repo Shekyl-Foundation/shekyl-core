@@ -138,11 +138,10 @@ pub fn relay_floor_at<'id, V: ChainView<'id>>(
 /// `F(h)` for `h` in `max(0, connecting − G) ..= connecting`, oldest
 /// first. Fewer than `G + 1` only while the chain is shorter than `G`.
 ///
-/// **Not wired yet.** The DRS-X store flip replaces
-/// `shekyl_daemon_rpc`'s `fee_meets_floor` (the tip floor alone, with the
-/// pre-FL-R23 `needed/50` rule) with
-/// `shekyl_economics::relay_floor_admits` over this window, and deletes
-/// the C++ ring.
+/// The live C++ submit path still admits on one floor: `fee_meets_floor` is
+/// `relay_floor_admits` over the tip floor alone. The Rust pool's door, and
+/// `fee_clears` when the shim supplies this window, already admit on it.
+/// The DRS-X store flip deletes the one-floor arm with the C++ ring.
 ///
 /// # Errors
 ///

@@ -16,6 +16,12 @@
 # every function the header declares anywhere must be a Rust export, so a
 # declaration cannot outlive the function it names.
 #
+# Struct layouts are the second limb. A struct crossing the boundary is a
+# definition, not a declaration, so the signature compile cannot compare
+# it. Every struct a header under src/ defines with the FFI prefix is
+# compared against its #[repr(C)] twin or exempted with a reason
+# (ffi_layout_gate.py GROUPS and EXEMPT); see ffi_layout_gate.cpp.
+#
 # Signature scope: the files in SURFACES below, deliberately. Full-surface generation
 # is blocked on a named cbindgen limitation (cross-crate constant re-exports
 # render as unresolved identifiers — the account/PQ surface). A file is
@@ -148,4 +154,19 @@ fi
 
 g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src scripts/ci/ffi_signature_gate.cpp
 
-echo "FFI signatures: hand-written header agrees with the Rust definitions (${total} exports over ${#SURFACES[@]} files checked; $(wc -l <<<"${declared}") declarations all exported)"
+# Struct layouts: ffi_layout_gate.py generates the Rust definitions,
+# checks that every crossing struct a header defines is compared or exempt,
+# compares member names, and writes the asserts ffi_layout_gate.cpp
+# compiles. Its GROUPS list is the pairs; see ffi_layout_gate.cpp for the
+# mechanism note and the negative controls. rpc_facts_ffi.h includes
+# crypto/hash.h, so the TU takes the daemon's include paths.
+read -r layouts exempt < <(python3 scripts/ci/ffi_layout_gate.py "${workdir}")
+if [ -z "${layouts:-}" ]; then
+  echo "error: the layout limb reported nothing" >&2
+  exit 1
+fi
+
+g++ -fsyntax-only -std=c++17 -I "${workdir}" -I src -I contrib/epee/include -I external \
+  scripts/ci/ffi_layout_gate.cpp
+
+echo "FFI signatures: hand-written header agrees with the Rust definitions (${total} exports over ${#SURFACES[@]} files checked; $(wc -l <<<"${declared}") declarations all exported; ${layouts} struct layouts compared, ${exempt} exempt)"

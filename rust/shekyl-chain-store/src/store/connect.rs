@@ -134,6 +134,10 @@ pub struct Connected {
     /// `Some` only at a boundary `E·SEB`, `E ≥ 2` (DRS-E1 S-PRUNE,
     /// `store/prune.rs`).
     pub pruned: Option<Pruned>,
+    /// How many alt blocks the death rule removed in this connect's
+    /// transaction: those at or below the new tip less the reorg cap in
+    /// force, which no switch can reach (`store/alt.rs`).
+    pub retired_alts: u64,
 }
 
 impl<'id> WriteBatch<'_, 'id> {
@@ -379,10 +383,19 @@ impl<'id> WriteBatch<'_, 'id> {
         // slash log's floor is `in_force`'s expression (`SLK-2`).
         let height = BlockHeight::from_raw(height);
         let pruned = self.prune_at_boundary(height, &in_force)?;
+        // ---- 12. the death rule (`store/alt.rs`) -------------------------
+        // After the seal for the prune's reason: alt rows are not chain
+        // state and are never journaled. A row at or below `height − cap`
+        // needs a switch deeper than the cap, which none can be.
+        let retired_alts = match height.to_raw().checked_sub(in_force.reorg_cap().to_raw()) {
+            Some(through) => self.retire_alt_blocks(BlockHeight::from_raw(through))?,
+            None => 0,
+        };
         Ok(Connected {
             height,
             journaled,
             pruned,
+            retired_alts,
         })
     }
 

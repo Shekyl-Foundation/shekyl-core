@@ -20,7 +20,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 
-use shekyl_dialer::HubBans;
+use shekyl_dialer::BanSnapshot;
 use shekyl_peerlist::{
     BanQuery, ConnectionId, ConnectorId, NetworkAddress, Peerlist, RefusedSet, SessionRow, Tick,
 };
@@ -194,6 +194,7 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_received(
     };
     let row = hub.board().get(id).map(|row| row.connector());
     let now = hub.now();
+    let mut bans = BanSnapshot::take(&hub);
     let Some(dialer) = crate::dialer_ffi::shared() else {
         return SHEKYL_PEERLIST_NO_HUB;
     };
@@ -204,7 +205,7 @@ pub unsafe extern "C" fn shekyl_peerlist_admit_received(
         session_of(id),
         entries,
         now,
-        &mut HubBans(&hub),
+        &mut bans,
     )
 }
 

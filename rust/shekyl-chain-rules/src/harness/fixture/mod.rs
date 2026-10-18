@@ -458,6 +458,31 @@ pub fn paying_fee(mut tx: Transaction, fee: u64) -> Transaction {
     tx
 }
 
+/// `tx` — a [`spend`] — paying exactly the relay requirement at `floor`:
+/// `quantized_fee(weight, floor)` (CEN-M3's predicate), priced at the
+/// weight the fee itself leaves. The fee is a varint, so paying it can move
+/// the weight; the price is re-derived until it holds still (at most a few
+/// rounds: the requirement sits on a lattice far coarser than a varint
+/// byte).
+///
+/// # Panics
+///
+/// As [`paying_fee`]; or if the price does not settle in eight rounds.
+#[must_use]
+pub fn paying_its_floor(tx: &Transaction, floor: u64) -> Transaction {
+    let mut paid = tx.clone();
+    for _ in 0..8 {
+        let weight = u64::try_from(paid.weight()).expect("a weight fits in u64");
+        let fee = shekyl_economics::quantized_fee(weight, floor).expect("a priceable weight");
+        let next = paying_fee(tx.clone(), fee);
+        if next == paid {
+            return paid;
+        }
+        paid = next;
+    }
+    panic!("paying_its_floor: the price did not settle");
+}
+
 /// The reference block no chain holds — what [`spend`] carries until a
 /// chain anchors it ([`referencing`]): CEN-I10's own negative fixture.
 pub const UNRECORDED_REFERENCE: BlockHash = BlockHash::from_bytes([0x99; 32]);

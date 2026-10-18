@@ -479,6 +479,116 @@ fn cen_g10_two_bond_posts_for_one_p_are_refused_whatever_their_kinds() {
     check_alone_on::<G10>(&chain, &block).expect("one bond post per P passes G10");
 }
 
+/// The first body [`BlockArchivalKeys`] refuses when `bodies` are added in
+/// order, with its row.
+fn first_refused_added(bodies: &[Transaction]) -> Option<(usize, CenRow)> {
+    let mut keys = BlockArchivalKeys::default();
+    bodies
+        .iter()
+        .enumerate()
+        .find_map(|(n, tx)| keys.add(tx).err().map(|row| (n, row)))
+}
+
+/// The accumulator a block filler asks is the three rows asked one body at
+/// a time: on the G7, G9 and G10 blocks above it refuses the body the row
+/// refuses, on the row's name, and admits each control block whole. A
+/// refused body adds nothing, so a body after it that collides only with
+/// the refused one is admitted.
+#[test]
+fn the_block_archival_keys_refuse_the_body_the_block_rows_refuse() {
+    let join = || BondPostKind::JoinMarket {
+        bond_spend_pk: vec![0xb3; SINGLE_KEY_CANONICAL_LEN],
+        receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
+            [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
+        ),
+        endpoint: [0xe0; shekyl_wire::transaction::BOND_POST_ENDPOINT_LEN],
+    };
+    let refused = [
+        (
+            vec![
+                body_with(vec![serve_credit_vin(P1, 7, 11)]),
+                body_with(vec![
+                    serve_credit_vin(P1, 8, 11),
+                    serve_credit_vin(P1, 7, 11),
+                ]),
+            ],
+            CenRow::G7,
+        ),
+        (
+            vec![
+                body_with(vec![emission_vin(0xa1, &[11, 12])]),
+                body_with(vec![emission_vin(0xa1, &[12])]),
+            ],
+            CenRow::G9,
+        ),
+        (
+            vec![
+                body_with(vec![bond_post_vin(P1, join())]),
+                body_with(vec![
+                    bond_post_vin(P2, join()),
+                    bond_post_vin(P1, BondPostKind::Other(2)),
+                ]),
+            ],
+            CenRow::G10,
+        ),
+    ];
+    let chain = spendable_chain();
+    for (bodies, row) in refused {
+        let block = candidate_on(&chain, bodies.clone());
+        let by_row = match row {
+            CenRow::G7 => check_alone_on::<G7>(&chain, &block),
+            CenRow::G9 => check_alone_on::<G9>(&chain, &block),
+            _ => check_alone_on::<G10>(&chain, &block),
+        };
+        let refusal = by_row.expect_err("the block row refuses the block");
+        assert_eq!(refusal.rule, row);
+        assert!(matches!(
+            refusal.locus,
+            Locus::Input {
+                slot: TxSlot::Listed(1),
+                ..
+            }
+        ));
+        assert_eq!(first_refused_added(&bodies), Some((1, row)), "{row:?}");
+    }
+    let admitted = [
+        vec![
+            body_with(vec![serve_credit_vin(P1, 7, 11)]),
+            body_with(vec![
+                serve_credit_vin(P1, 8, 11),
+                serve_credit_vin(P1, 7, 12),
+                serve_credit_vin(P2, 7, 11),
+            ]),
+        ],
+        vec![
+            body_with(vec![emission_vin(0xa1, &[11])]),
+            body_with(vec![emission_vin(0xa1, &[12])]),
+            body_with(vec![emission_vin(0xa2, &[11])]),
+        ],
+        vec![
+            body_with(vec![bond_post_vin(P1, join())]),
+            body_with(vec![bond_post_vin(P2, BondPostKind::Other(2))]),
+        ],
+        vec![listed_on(&chain, point_at(60))],
+    ];
+    for bodies in admitted {
+        assert_eq!(first_refused_added(&bodies), None);
+    }
+    // The refused body's P2 post was not added: P2's own post is admitted.
+    let mut keys = BlockArchivalKeys::default();
+    keys.add(&body_with(vec![bond_post_vin(P1, join())]))
+        .expect("the first post");
+    assert_eq!(
+        keys.add(&body_with(vec![
+            bond_post_vin(P2, join()),
+            bond_post_vin(P1, BondPostKind::Other(2)),
+        ])),
+        Err(CenRow::G10)
+    );
+    keys.add(&body_with(vec![bond_post_vin(P2, join())]))
+        .expect("a refused body adds nothing");
+}
+
 #[test]
 fn the_archival_rows_are_vacuous_on_a_block_of_spends() {
     // The corpus's common case: no archival vin, three rows record and pass.

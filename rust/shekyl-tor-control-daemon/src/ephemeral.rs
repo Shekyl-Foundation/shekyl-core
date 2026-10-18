@@ -41,6 +41,8 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use kameo::actor::Spawn;
@@ -207,6 +209,16 @@ fn pow_refusal(pow: OnionPow, status: u16, lines: &[String]) -> Option<DaemonTor
     Some(DaemonTorPublishError::PowRefused { status })
 }
 
+/// How the managed Tor's incarnation ended, as [`DaemonTorControl::death`]
+/// reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TorDeath {
+    /// [`DaemonTorControl::shutdown`] stopped it.
+    Stopped,
+    /// It exited, or was killed, while it was meant to be running.
+    Exited,
+}
+
 /// A live managed-tor incarnation: bootstrapped, SOCKS address known, and —
 /// after a successful [`Self::publish`] — an onion service published. Dropping
 /// the handle without [`DaemonTorControl::shutdown`] still reaps the child
@@ -218,6 +230,9 @@ pub struct DaemonTorControl {
     exit_rx: Option<oneshot::Receiver<TorExit>>,
     socks_addr: SocketAddr,
     reply_deadline: Duration,
+    /// Set when [`Self::shutdown`] begins, so [`Self::death`] can tell that
+    /// stop from Tor exiting on its own.
+    stopping: Arc<AtomicBool>,
     /// Declared last so a plain drop wipes the directory after the actor
     /// (and therefore the child) has been dropped.
     data_dir: Option<EphemeralDataDir>,
@@ -259,6 +274,7 @@ impl DaemonTorControl {
             exit_rx: Some(exit_rx),
             socks_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             reply_deadline,
+            stopping: Arc::new(AtomicBool::new(false)),
             data_dir: Some(data_dir),
         };
 
@@ -384,11 +400,23 @@ impl DaemonTorControl {
         self.actor.wait_for_shutdown().await;
     }
 
-    /// A future that resolves when the control actor has stopped, owning
-    /// its handle, so a watcher can run on a runtime beside this control.
-    pub fn death_watch(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+    /// [`Self::wait_death`] without borrowing `self`, and saying how the
+    /// incarnation ended. The future owns a clone of the control actor,
+    /// so a watcher spawned beside this control outlives the call that
+    /// started it. It resolves when the actor stops: [`TorDeath::Stopped`]
+    /// when [`Self::shutdown`] (or a failed start) stopped it, and
+    /// [`TorDeath::Exited`] when Tor ended while it was meant to run.
+    pub fn death(&self) -> impl std::future::Future<Output = TorDeath> + Send + 'static {
         let actor = self.actor.clone();
-        async move { actor.wait_for_shutdown().await }
+        let stopping = Arc::clone(&self.stopping);
+        async move {
+            actor.wait_for_shutdown().await;
+            if stopping.load(Ordering::Acquire) {
+                TorDeath::Stopped
+            } else {
+                TorDeath::Exited
+            }
+        }
     }
 
     /// Bounded teardown: graceful actor stop (which `DEL_ONION`s the published
@@ -401,6 +429,8 @@ impl DaemonTorControl {
     }
 
     async fn teardown(&mut self) -> Option<TorExit> {
+        // Before the actor stops, so a death watcher hears a stop.
+        self.stopping.store(true, Ordering::Release);
         let exit_rx = self.exit_rx.take();
         let teardown = async {
             self.actor.stop_gracefully().await.ok();
@@ -577,5 +607,65 @@ mod tests {
             "a new boot mints a new key and therefore a new address"
         );
         boot2.shutdown().await;
+    }
+
+    /// The tor process launched with `dir` as its DataDirectory parent.
+    #[cfg(target_os = "linux")]
+    fn tor_under(dir: &std::path::Path) -> Option<u32> {
+        let needle = dir.to_string_lossy().into_owned();
+        std::fs::read_dir("/proc").ok()?.find_map(|entry| {
+            let entry = entry.ok()?;
+            let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+            let cmdline = std::fs::read(entry.path().join("cmdline")).ok()?;
+            String::from_utf8_lossy(&cmdline)
+                .contains(&needle)
+                .then_some(pid)
+        })
+    }
+
+    /// The death edge (`TOR_SUPERVISOR.md` `TSR-F1`): a watcher hears the
+    /// incarnation end. A tor killed from outside is `Exited`. A shutdown is
+    /// `Stopped`.
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
+    async fn a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop() {
+        let binary = VerifiedTorBinary::unchecked_for_test(tor_binary());
+        let heard = |death| tokio::time::timeout(Duration::from_secs(30), death);
+
+        let dir = tempfile::tempdir().unwrap();
+        let killed = DaemonTorControl::start(config_with(binary.clone(), dir.path().to_path_buf()))
+            .await
+            .expect("start");
+        let death = tokio::spawn(killed.death());
+        let pid = tor_under(dir.path()).expect("the tor under this directory");
+        // Under the spawn lock, as every spawn in a crate that launches tor
+        // is (TOR_SUPERVISOR.md 4.7): a child started in the launch window
+        // would inherit tor's end.
+        let status = shekyl_tor_control_client::spawn_lock::status(
+            std::process::Command::new("kill").args(["-9", &pid.to_string()]),
+        )
+        .expect("kill");
+        assert!(status.success());
+        assert_eq!(
+            heard(death).await.expect("heard").expect("watcher"),
+            TorDeath::Exited
+        );
+        assert!(!killed.is_alive());
+        let _exit_after_kill = killed.shutdown().await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let stopped = DaemonTorControl::start(config_with(binary, dir.path().to_path_buf()))
+            .await
+            .expect("start");
+        let death = tokio::spawn(stopped.death());
+        assert!(
+            stopped.shutdown().await.is_some(),
+            "the stop observes a real reap"
+        );
+        assert_eq!(
+            heard(death).await.expect("heard").expect("watcher"),
+            TorDeath::Stopped
+        );
     }
 }
