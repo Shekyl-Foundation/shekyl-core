@@ -263,8 +263,10 @@ impl Drop for Daemon {
 
 /// A directory whose every ancestor only root or this account can write:
 /// the daemon refuses a configuration file anywhere else (`file.rs`; a
-/// sticky world-writable `/tmp` included). The runtime directory, then the
-/// home directory.
+/// sticky world-writable `/tmp` included). The runtime directory, then
+/// `$HOME`, then the account's passwd home, which is where the daemon itself
+/// takes its home from; in a CI container running as root, `$HOME` is a
+/// directory another account owns and the passwd home is `/root`.
 fn owner_only_base() -> PathBuf {
     use std::os::unix::fs::MetadataExt;
     let probe = std::env::temp_dir().join(format!("shekyl-uid-probe-{}", std::process::id()));
@@ -282,8 +284,22 @@ fn owner_only_base() -> PathBuf {
         .iter()
         .filter_map(std::env::var_os)
         .map(PathBuf::from)
+        .chain(passwd_home(me))
         .find(|dir| dir.is_absolute() && safe(dir))
-        .expect("neither $XDG_RUNTIME_DIR nor $HOME is writable by root and this account alone")
+        .expect(
+            "none of $XDG_RUNTIME_DIR, $HOME and the passwd home is writable by root and \
+             this account alone",
+        )
+}
+
+/// The home directory `/etc/passwd` names for `uid`.
+fn passwd_home(uid: u32) -> Option<PathBuf> {
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd.lines().find_map(|line| {
+        let fields: Vec<&str> = line.split(':').collect();
+        (fields.len() >= 6 && fields[2].parse::<u32>().ok() == Some(uid))
+            .then(|| PathBuf::from(fields[5]))
+    })
 }
 
 fn pair_toml(option: &str) -> String {
