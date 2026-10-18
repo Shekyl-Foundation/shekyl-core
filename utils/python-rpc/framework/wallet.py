@@ -1061,16 +1061,6 @@ class Wallet(object):
         }
         return self.rpc.send_json_rpc_request(delete_address_book)
 
-    def stop_mining(self):
-        stop_mining = {
-            'method': 'stop_mining',
-            'jsonrpc': '2.0',
-            'params': {
-            },
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(stop_mining)
-
     def estimate_tx_size_and_weight(self, n_inputs, n_outputs, ring_size = 0, ct = True):
         estimate_tx_size_and_weight = {
             'method': 'estimate_tx_size_and_weight',
