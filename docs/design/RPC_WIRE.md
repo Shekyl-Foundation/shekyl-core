@@ -10,6 +10,17 @@
 
 **Ground:** `dev` `0be5ead54`; #1088 `daf109d23`; #1101 `b9be94775`; #1106 `5b1c97b2b`.
 
+**Revision 2 (2026-10-18, the grammar lane's folds; each is a proposal, none
+a ruling).** Against the text as posed: (a) findings RW-F1…RW-F3, from the
+tree at `0be5ead54`; (b) RW-Q5 names the second consumer of
+`get_blocks_by_height.bin` and its REST alias; (c) RW-Q4 separates the wire
+amount from IG-6's typed amount, and gives byte bodies one kind on both
+surfaces; (d) RW-Q7's CLI-word column becomes the row's grammar path, so
+`INPUT_GRAMMAR.md` §13 has one home; (e) RW-Q8 places the name census in
+the input grammar as Part C; (f) RW-Q9, the wire rendering of a path;
+(g) RW-Q10, parameter and reply-field names; (h) one citation corrected
+(`native_method_for` is at `json_rpc.rs:207`).
+
 ## RW-Q1 — What a method name is
 
 - **Problem.** Today's names are Monero's:
@@ -70,7 +81,7 @@
   - 56 `skip_serializing_if` sites inherit epee's omissions, including an empty list dropped from the document (RK-3b).
   - `#[serde(default)]` lets an omitted field read as zero (FOLLOWUPS row).
   - Whether a field is a count or a height still differs by field (`HEIGHT_SEMANTICS.md`).
-- **Question.** Does every wire value take exactly one encoding per kind, matching IG-6?
+- **Question.** Does every wire value take exactly one encoding per kind? Where a wire kind is also a grammar kind (`hash`), the syntax is IG-6's. The wire amount is its own kind: atomic units, where IG-6's `amount` is the decimal SKL an operator types.
   - amount → decimal atomic units (`AtomicUnitsString`);
   - 128-bit quantity → `HexU128`;
   - hash → `HashHex`;
@@ -82,6 +93,7 @@
   - Recommend base64 (RFC 4648 §4, padded) for bodies, and hex for the hash kind only.
   - Bodies are what a wallet scanning a remote daemon over Tor pulls in bulk. Hex doubles them; base64 costs 4/3.
   - That is two encodings for two kinds, each with its own job.
+  - **One body kind on both surfaces.** `INPUT_GRAMMAR.md` §12.3 rules `tx decode <hex>`; a base64 body copied from a reply would not paste into it. Proposal: IG-6 gains a `bytes` kind (base64, RFC 4648 §4, padded), and `tx decode` takes it, an amendment to §12.3 in this round's ruling commit.
 - **Recommendation: yes to all.**
 
 ## RW-Q5 — The two `.bin` methods
@@ -91,10 +103,10 @@
     - Its one consumer asks once per block, for the coinbase, to learn the block's first global output index (`block_fetch.rs:28–34`, `:494–519`).
     - The wallet avoids per-output asks because they leak which outputs it owns.
     - So a by-txid output-index method leaks by construction, and is kept alive to answer a fact every block carries.
-  - **`get_blocks_by_height.bin`.** Its consumer is the engine's timing rig (`daemon_observability.rs:21`, `:80`). The FOLLOWUPS attestation-witness sidecar row concerns this method.
+  - **`get_blocks_by_height.bin`.** It has two consumers: the engine's timing rig (`daemon_observability.rs:21`, `:80`), and `shekyl-chain-ingest`'s fetch (`fetch.rs:45`), the corpus builder behind `shekyl-chain-replay` and the chain-ingest file source that `INPUT_GRAMMAR.md` IG-Q26 names as offline bootstrap's successor (RW-F1). It also answers a second REST spelling, `/getblocks_by_height.bin` (`server.rs:273`, RW-F2). The FOLLOWUPS attestation-witness sidecar row concerns this method.
 - **Question.**
   - Does the first output index become a field of the block reply, and the by-txid method delete? The field is the same for every caller, so it says nothing about who is asking.
-  - Does the block view take a bounded list of heights (resource policy §6.3), replacing `get_blocks_by_height.bin`, with the sidecar row re-homed to the block reply's shape?
+  - Does the block view take a bounded list of heights (resource policy §6.3), replacing `get_blocks_by_height.bin`, with the sidecar row re-homed to the block reply's shape, and both consumers moved to it in the same PR?
 - **Recommendation: yes to both.** The safest query is the one that does not exist.
 
 ## RW-Q6 — The version read
@@ -109,7 +121,7 @@
 ## RW-Q7 — One method table
 
 - **Problem.** A method's facts live in several places:
-  - the dispatch match (`native_method_for`, `json_rpc.rs:206`);
+  - the dispatch match (`native_method_for`, `json_rpc.rs:207`);
   - `RESTRICTED_METHODS` (`:49`) and its spec test;
   - `RPC_CHANNEL.md` §6.1's grant table, as prose;
   - the route list in `server.rs`;
@@ -117,7 +129,8 @@
 
   RK-D6 asked for one list, and the FOLLOWUPS dual-list row is still open.
 - **Question.** Is there one method table in `shekyl-rpc-types`?
-  - Each row: name, request type, reply type, grant (or host-only, or armed lever), resource bound, and CLI word if any.
+  - Each row: the grammar path (the method name is the path joined with `_`, RW-Q9; the console word, if the method has one, is the same path), request type, reply type, grant (or host-only, or armed lever), resource bound.
+  - `INPUT_GRAMMAR.md` §13, the console catalog, is generated from the table rather than kept beside it, so each name has one home (IG-15). The IG-3 walk covers method names; a new term (`header`, `range`, the selector's) is a glossary row ruled like any other.
   - Dispatch, the grant check, the generated docs and every client's call are built from it.
   - A gate checks that every served method is a row and every row is served (the IG-9 pattern).
 - **Recommendation: yes.**
@@ -133,11 +146,29 @@
   - RT-W10's grant table is keyed by method name.
 - **Question.** Does the round land in two halves?
   - **Conventions** (Q2–Q5, Q7) are ruled now, and PR 3b is built to them.
-  - **The name table** (Q1, Q6) is drafted with a census of every served method. It lands in one rename PR after the flip, at `CORE_RPC_VERSION` 4.0, with every in-tree client changed in the same PR and the GUI repository's change paired with it.
+  - **The name table** (Q1, Q6, Q10) is drafted with a census of every served method, its parameters and its reply fields, as `INPUT_GRAMMAR.md` Part C: the glossary rows and the walk are the grammar's, and it is ruled before the rename. It lands in one rename PR after the flip, at `CORE_RPC_VERSION` 4.0, with every in-tree client changed in the same PR and the GUI repository's change paired with it.
   - RT-P5 measures after the rename, and its registration names the wire it measured.
 - **Recommendation: yes.**
   - Renaming after the flip keeps DX-Q8's two-binary comparison free of a name map.
   - Ruling conventions before PR 3b means no type is written twice.
+
+## RW-Q9 — The wire rendering of a path
+
+- **Problem.** `INPUT_GRAMMAR.md` IG-1 joins a name's segments with hyphens. RT-O23 joined `option set`'s terms with `_` on the wire (`option_set`), and RW-Q1 proposes the same for every method, but the grammar never states it, so no gate can check a method name.
+- **Question.** Does IG-1 state the three renderings of one path, and no other: words at the prompt (`chain height`), `-`-joined as an option name, `_`-joined as an RPC method name?
+- **Recommendation: yes.** One path, one spelling per surface, each surface's spelling fixed by rule.
+
+## RW-Q10 — Parameter and reply-field names
+
+- **Problem.** The grammar's scope is every identifier a person types or a script depends on (`INPUT_GRAMMAR.md` §1). A script depends on a method's parameter names and its reply's field names as much as on the method name, and RW is silent on them. RW-Q1's typed selector already needs parameter names.
+- **Question.** Do parameter and reply-field names draw their terms from the glossary, rendered with `_` (RW-Q9), and join the name census (RW-Q8)?
+- **Recommendation: yes.** The rename at 4.0 is already a wire break for every client; naming the fields in the same PR avoids a second one. The alternative is to rule them out of the grammar explicitly, with the reason stated.
+
+## Findings at the ground
+
+- **RW-F1 — a second consumer of `get_blocks_by_height.bin`.** `shekyl-chain-ingest`'s fetch (`fetch.rs:45`, `ROUTE`) builds corpora from it for `shekyl-chain-replay`; it is the chain-ingest file source IG-Q26 names as offline bootstrap's successor. RW-Q5's replacement serves it.
+- **RW-F2 — a REST alias the alias count leaves out.** `/getblocks_by_height.bin` (`server.rs:273`) answers beside `/get_blocks_by_height.bin`; RW-Q1's fourteen are JSON-RPC spellings.
+- **RW-F3 — the counts, measured.** At `0be5ead54`, `git grep -n 'pub status:' rust/shekyl-rpc-types rust/shekyl-daemon-rpc` finds 20 fields and `git grep -c skip_serializing_if` over the same two crates finds 61 sites. RW-Q3 and RW-Q4 cite 25 and 56; the census states the grep it counts with.
 
 ## Correction to ruling 5 (R8's timing) — Claude's premise was wrong
 
