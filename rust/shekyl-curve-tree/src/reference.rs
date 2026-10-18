@@ -124,50 +124,51 @@ const _: () = assert!(REBUILD_AT.to_raw() == 50);
 
 /// The last maturity height the tree committed at `reference_height` holds.
 ///
-/// A leaf maturing at `m` enters the tree when block `m + 1` connects, so the
-/// root committed in the header at `reference_height` reflects every leaf
-/// matured through `reference_height − 1` (pinned by the CT-2 vectors,
-/// `tests/recon_kat.rs`). The daemon agrees: connecting block `H` drains
-/// leaves maturing by `H`, and the header's root is the tree before that
-/// connection. Height 0 has no predecessor; its saturation to 0 is harmless,
-/// since no leaf matures at height 0, and [`in_tree_at_reference`] does not
-/// read it.
+/// A leaf maturing at `m` enters the tree when block `m + 1` connects, so
+/// connecting block `H` drains leaves matured through `H − 1`, and the root
+/// committed in the header at `H` is that tree (pinned by the CT-2 vectors,
+/// `tests/recon_kat.rs`). Height 0 has no predecessor. Saturation to 0 is
+/// the maturity index's bucket key for that height; [`in_tree_at_reference`]
+/// does not treat the key as a cutoff.
 #[must_use]
 pub fn drained_through(reference_height: shekyl_types::BlockHeight) -> shekyl_types::BlockHeight {
     reference_height.saturating_sub_count(shekyl_types::BlockCount::ONE)
 }
 
-/// Whether a leaf maturing at `maturity_height` is in the tree whose root is
-/// committed at `reference_height`: `maturity_height <
-/// reference_height`, which is `maturity_height <=
-/// drained_through(reference_height)` for every reference past genesis.
+/// Whether a leaf maturing at `maturity_height` is in the tree whose root
+/// the header at `reference_height` commits.
 ///
-/// The one rule every wallet path that selects inputs against a reference
-/// block applies. An output whose maturity *equals* the reference height is
-/// not in that tree yet. Admitting it (`maturity <= reference`) selects an
-/// input the membership proof cannot cover, and assembly refuses it with
-/// [`ClientError::OutputNotDrained`](crate::ClientError::OutputNotDrained);
-/// the RT-P5 dry run met exactly that
-/// (`docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md`).
+/// That root holds every leaf matured through [`drained_through`]. Height 0
+/// commits an empty root, so the saturated cutoff there is not membership.
+/// A leaf whose maturity equals the reference height is not in that root; it
+/// enters when the next block connects. Every wallet path that selects
+/// inputs against a reference block uses this predicate.
 #[must_use]
 pub fn in_tree_at_reference(
     maturity_height: shekyl_types::BlockHeight,
     reference_height: shekyl_types::BlockHeight,
 ) -> bool {
-    maturity_height < reference_height
+    !reference_height.is_zero() && maturity_height <= drained_through(reference_height)
 }
 
-/// Blocks until a leaf maturing at `maturity_height` is in the tree at the
-/// reference: zero when [`in_tree_at_reference`] already holds, else the
-/// distance to the first reference height past `maturity_height`.
+/// Blocks from `reference_height` until a leaf maturing at `maturity_height`
+/// is in the committed tree.
+///
+/// Zero when [`in_tree_at_reference`] already holds. Otherwise the distance
+/// to the first reference height past `maturity_height`, the first root that
+/// holds the leaf.
 #[must_use]
 pub fn blocks_until_in_tree(
     maturity_height: shekyl_types::BlockHeight,
     reference_height: shekyl_types::BlockHeight,
 ) -> shekyl_types::BlockCount {
-    maturity_height
-        .saturating_add(shekyl_types::BlockCount::ONE)
-        .saturating_sub(reference_height)
+    if in_tree_at_reference(maturity_height, reference_height) {
+        shekyl_types::BlockCount::ZERO
+    } else {
+        maturity_height
+            .saturating_add(shekyl_types::BlockCount::ONE)
+            .saturating_sub(reference_height)
+    }
 }
 
 /// The canonical reference height for a proof built at `tip`:
@@ -307,10 +308,10 @@ pub fn should_reanchor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_types::{BlockCount, BlockHeight};
 
     #[test]
     fn drained_through_is_reference_minus_one() {
-        use shekyl_types::BlockHeight;
         assert_eq!(
             drained_through(BlockHeight::from_raw(0)),
             BlockHeight::from_raw(0)
@@ -325,29 +326,34 @@ mod tests {
         );
     }
 
-    /// The spendability rule is the drain rule: past genesis, a leaf is in
-    /// the tree at `r` exactly when it matured by `drained_through(r)`, and
-    /// an output whose maturity equals the reference is not in it. Waiting
-    /// [`blocks_until_in_tree`] blocks is enough, and one block fewer is not.
+    /// Membership is the drain cutoff, including genesis. Past height 0 a
+    /// leaf is in the tree at `r` exactly when it matured by
+    /// [`drained_through`]`(r)`. Height 0 commits an empty root, so a
+    /// maturity of 0 is not a member there even though the cutoff saturates
+    /// to 0. A leaf maturing at the reference is not in it. Waiting
+    /// [`blocks_until_in_tree`] blocks reaches the first root that holds it,
+    /// and one block fewer does not.
     #[test]
     fn in_tree_at_reference_is_the_drain_rule() {
-        use shekyl_types::{BlockCount, BlockHeight};
-        for r in 1..=80u64 {
+        for r in 0..=80u64 {
             let reference = BlockHeight::from_raw(r);
             for m in 0..=90u64 {
                 let maturity = BlockHeight::from_raw(m);
+                let member = !reference.is_zero() && maturity <= drained_through(reference);
                 assert_eq!(
                     in_tree_at_reference(maturity, reference),
-                    maturity <= drained_through(reference),
+                    member,
                     "maturity {m}, reference {r}"
                 );
                 let wait = blocks_until_in_tree(maturity, reference);
-                let later = reference.saturating_add(wait);
-                assert!(
-                    in_tree_at_reference(maturity, later),
-                    "maturity {m}, reference {r}"
-                );
-                if wait > BlockCount::ZERO {
+                if member {
+                    assert_eq!(wait, BlockCount::ZERO, "maturity {m}, reference {r}");
+                } else {
+                    let later = reference.saturating_add(wait);
+                    assert!(
+                        in_tree_at_reference(maturity, later),
+                        "maturity {m}, reference {r}"
+                    );
                     let sooner = later.saturating_sub_count(BlockCount::ONE);
                     assert!(
                         !in_tree_at_reference(maturity, sooner),
@@ -359,7 +365,6 @@ mod tests {
             assert_eq!(blocks_until_in_tree(reference, reference), BlockCount::ONE);
         }
     }
-    use shekyl_types::{BlockCount, BlockHeight};
 
     fn h(n: u64) -> BlockHeight {
         BlockHeight::from_raw(n)

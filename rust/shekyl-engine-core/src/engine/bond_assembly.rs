@@ -960,23 +960,32 @@ mod tests {
     }
 
     /// GF-4b §3.1 structural emptiness at the sweep boundary: the swept set
-    /// **is** the spendable eligible set — filtering the input by the sweep's
-    /// own eligibility predicate and subtracting the selection leaves
-    /// nothing. (The state-level zero-pre-bond-output test extends this to
-    /// the post-sweep record set; this KAT pins the function's totality.)
+    /// **is** the spendable eligible set. Filtering the input by
+    /// [`in_tree_at_reference`](shekyl_curve_tree::in_tree_at_reference) and
+    /// subtracting the selection leaves nothing. A record maturing at the
+    /// reference is not eligible — `spendable_height <= reference_height`
+    /// would have swept it. (The state-level zero-pre-bond-output test
+    /// extends this to the post-sweep record set; this KAT pins the
+    /// function's totality.)
     #[test]
     fn sweep_leaves_no_spendable_eligible_remainder() {
+        let reference_height = BlockHeight::from_raw(100);
         let reserved: std::collections::BTreeSet<u64> = [4u64].into_iter().collect();
         let mut immature = record(5, 90, 250);
         immature.spendable_height = BlockHeight::from_raw(150);
+        let mut at_reference = record(6, 90, 250);
+        at_reference.spendable_height = reference_height;
+        let at_reference_gindex = at_reference.gindex.to_raw();
         let records = vec![
             record(1, 10, 300),
             record(2, 20, 400),
             record_for_slot(7, 3, 15, 999), // other persona
             record(4, 25, 500),             // reserved
             immature,                       // survives by design (GF4b-6)
+            at_reference,                   // matures at the reference: not in its tree
         ];
-        let selection = sweep(&records, 0, &reserved, 100, 100).expect("sweeps");
+        let selection =
+            sweep(&records, 0, &reserved, 100, reference_height.to_raw()).expect("sweeps");
         let swept: std::collections::BTreeSet<u64> = selection
             .records
             .iter()
@@ -987,7 +996,7 @@ mod tests {
             .filter(|r| {
                 r.p_slot == shekyl_types::PSlot::from_raw(0)
                     && !reserved.contains(&r.gindex.to_raw())
-                    && r.spendable_height <= BlockHeight::from_raw(100)
+                    && shekyl_curve_tree::in_tree_at_reference(r.spendable_height, reference_height)
             })
             .map(|r| r.gindex.to_raw())
             .filter(|g| !swept.contains(g))
@@ -995,6 +1004,10 @@ mod tests {
         assert!(
             remainder.is_empty(),
             "a spendable eligible record survived the sweep: {remainder:?}"
+        );
+        assert!(
+            !swept.contains(&at_reference_gindex),
+            "a record maturing at the reference is not in that tree"
         );
         assert_eq!(
             swept.len(),

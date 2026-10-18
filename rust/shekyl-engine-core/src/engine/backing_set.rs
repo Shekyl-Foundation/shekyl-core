@@ -38,7 +38,7 @@
 
 use std::collections::BTreeSet;
 
-use shekyl_curve_tree::in_tree_at_reference as in_tree;
+use shekyl_curve_tree::in_tree_at_reference;
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_tx_builder::LeafEntry;
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PSlot};
@@ -144,15 +144,15 @@ impl BackingSet {
     where
         I: IntoIterator<Item = &'a PFundingOutputRecord>,
     {
-        // Enforce the slot + spendability preconditions here rather than trust
-        // the caller (type docs; GF4b-6): the claimant slot's records that are
-        // in the tree at the reference, exactly as the sweep applies both.
-        // Filtering before the survivor tripwire drops the immature and
-        // foreign-slot subsets of its false positives by construction, and
-        // makes the type's guarantees hold for every member.
+        // Slot and tree membership are enforced here (GF4b-6), the same
+        // predicate the sweep applies. Filtering before the survivor tripwire
+        // drops immature and foreign-slot false positives, so every member
+        // meets the type's guarantee.
         let spendable: Vec<&PFundingOutputRecord> = records
             .into_iter()
-            .filter(|r| r.p_slot == p_slot && in_tree(r.spendable_height, reference_height))
+            .filter(|r| {
+                r.p_slot == p_slot && in_tree_at_reference(r.spendable_height, reference_height)
+            })
             .collect();
 
         debug_assert!(
@@ -736,7 +736,8 @@ mod tests {
         let remainder: Vec<&PFundingOutputRecord> = pre_sweep
             .iter()
             .filter(|r| {
-                !swept.contains(&r.gindex.to_raw()) && in_tree(r.spendable_height, reference_height)
+                !swept.contains(&r.gindex.to_raw())
+                    && in_tree_at_reference(r.spendable_height, reference_height)
             })
             .collect();
         assert!(
