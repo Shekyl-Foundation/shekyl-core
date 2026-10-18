@@ -147,41 +147,46 @@ impl<C: ChainSource> RustPoolShim<C> {
     }
 }
 
-/// The C++ `classify_key_image` over the pool and the chain: spent on the
-/// chain is another's; spent in the pool by another transaction is
-/// another's (own when the submission itself is pooled, as the C++
-/// answers) — embargoed while that transaction is unpublished, which the
-/// engine discloses to the owner tier alone; spent in the pool only by the
-/// submission itself counts once it is public — before that the image reads
-/// free, so the snapshot discloses no embargoed spend.
+/// The class of `key_image` for the submission `txid`.
+///
+/// Spent on the chain, the image is another's. Otherwise the class is the
+/// spender the pool names and whether that entry is public
+/// ([`class_of_pool_spend`]). The C++ classifier approximated the same
+/// split with an `in_pool` flag, because its spent-image query does not
+/// return the spender; a foreign spender of an image this submission also
+/// holds would then read as this transaction's own.
 fn classify(
     view: &SnapshotView<'_>,
     pool: &Pool,
     txid: &TxHash,
-    in_pool: bool,
     key_image: &[u8; 32],
 ) -> Result<KeyImageConflict, ShimFault> {
     let image = shekyl_types::KeyImage::from_bytes(*key_image);
     if view.has_key_image(&image).map_err(|_| ShimFault)? {
         return Ok(KeyImageConflict::Other);
     }
-    let (spent, public) = match pool.relay_view().key_images().spender(&image) {
-        None => (false, true),
-        Some(spender) if spender != *txid => (
-            true,
-            pool.relay_view().record(&spender).is_some_and(|r| r.public),
-        ),
-        Some(_) => (
-            pool.relay_view().record(txid).is_some_and(|r| r.public),
-            true,
-        ),
+    let relay = pool.relay_view();
+    let Some(spender) = relay.key_images().spender(&image) else {
+        return Ok(KeyImageConflict::Free);
     };
-    Ok(match (spent, in_pool, public) {
-        (false, _, _) => KeyImageConflict::Free,
-        (true, true, _) => KeyImageConflict::OwnTx,
-        (true, false, true) => KeyImageConflict::Other,
-        (true, false, false) => KeyImageConflict::Embargoed,
-    })
+    let public = relay.record(&spender).is_some_and(|record| shown(&record));
+    Ok(class_of_pool_spend(spender == *txid, public))
+}
+
+/// The class of a pool spend the chain has not taken.
+///
+/// `own` is whether the pool's spender is this submission. `public` is
+/// [`shown`] on that entry. The submission's own image reads free while
+/// the entry is still in stem, so a snapshot discloses no embargoed
+/// self-spend. A foreign spender in stem is embargoed, and one that is
+/// public is another's — including when this submission is itself pooled.
+fn class_of_pool_spend(own: bool, public: bool) -> KeyImageConflict {
+    match (own, public) {
+        (true, true) => KeyImageConflict::OwnTx,
+        (true, false) => KeyImageConflict::Free,
+        (false, true) => KeyImageConflict::Other,
+        (false, false) => KeyImageConflict::Embargoed,
+    }
 }
 
 /// The §8.7.1.1 Release bundle (`fill_release_facts_locked`): the record,
@@ -360,7 +365,7 @@ fn gather(
         .map(|location| location.height);
     let key_image_conflicts = key_images
         .iter()
-        .map(|key_image| classify(&view, pool, txid, in_pool, key_image))
+        .map(|key_image| classify(&view, pool, txid, key_image))
         .collect::<Result<Vec<_>, _>>()?;
     let connecting = Tip::connecting_height(view.tip().map_err(fault)?.as_ref());
     let reference = match view.height_of(reference_block).map_err(fault)? {
@@ -536,4 +541,23 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
     }
 
     fn relay(&self, _txid: &TxHash) {}
+}
+
+#[cfg(test)]
+mod class_tests {
+    use super::{class_of_pool_spend, KeyImageConflict};
+
+    /// The four pool classes. A foreign spender is another's, public or
+    /// embargoed. That this submission is itself pooled is not an input:
+    /// `own` is the spender's identity.
+    #[test]
+    fn the_class_follows_the_spender_and_the_public_bit() {
+        assert_eq!(class_of_pool_spend(true, true), KeyImageConflict::OwnTx);
+        assert_eq!(class_of_pool_spend(true, false), KeyImageConflict::Free);
+        assert_eq!(class_of_pool_spend(false, true), KeyImageConflict::Other);
+        assert_eq!(
+            class_of_pool_spend(false, false),
+            KeyImageConflict::Embargoed
+        );
+    }
 }
