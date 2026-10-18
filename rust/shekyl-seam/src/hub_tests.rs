@@ -274,6 +274,21 @@ fn a_message_that_does_not_fit_is_send_queue_full() {
     );
 }
 
+/// With no dialer installed the hub is shutting down, so a session handed to
+/// [`Hub::drive`] closes as a local close and no pump runs.
+#[test]
+fn a_session_driven_with_no_dialer_closes_locally() {
+    let rig = rig();
+    let mut opened = adopt(&rig, Direction::Outbound, 32);
+    service(&rig, true);
+    let session = opened.session.take().expect("session");
+    rig.hub.drive(opened.id, session);
+    assert_eq!(
+        rig.hub.cause(opened.id).map(CloseCause::kind),
+        Some(CloseKind::LocalClose)
+    );
+}
+
 #[test]
 fn a_refused_delivery_is_session_refused() {
     let rig = rig();
@@ -355,9 +370,7 @@ fn replacing_the_dialer_joins_the_pump_and_the_next_hub_keeps_the_id() {
     let endpoint = endpoint(doc_ip(), Direction::Outbound);
     let attached = first.connect(&endpoint).expect("open");
     let id = attached.id;
-    let hub = first.clone();
-    let pump = thread::spawn(move || drive_inbound(&hub, id, attached.session));
-    first.track_pump(id, pump);
+    first.drive(id, attached.session);
     first.install_loopback(32);
     first.shutdown();
     assert!(first.cause(id).is_none());

@@ -28,7 +28,7 @@ pub struct ShekylBanView {
     pub permanent: u8,
     pub _pad: [u8; 6],
     /// NUL-terminated. Unused bytes are zero.
-    pub text: [u8; 80],
+    pub text: [c_char; 80],
     /// Nanoseconds until the deadline. Zero when `permanent` is 1.
     pub remaining_ns: u64,
 }
@@ -53,13 +53,15 @@ fn parse_subnet(text: &str) -> Option<Ipv4Subnet> {
     Ipv4Subnet::new(addr, prefix)
 }
 
-fn fill_text(text: &str) -> Option<[u8; 80]> {
+fn fill_text(text: &str) -> Option<[c_char; 80]> {
     let bytes = text.as_bytes();
     if bytes.len() >= 80 {
         return None;
     }
-    let mut out = [0u8; 80];
-    out[..bytes.len()].copy_from_slice(bytes);
+    let mut out: [c_char; 80] = [0; 80];
+    for (slot, &byte) in out.iter_mut().zip(bytes) {
+        *slot = c_char::from_ne_bytes([byte]);
+    }
     Some(out)
 }
 

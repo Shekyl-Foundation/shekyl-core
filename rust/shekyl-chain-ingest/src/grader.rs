@@ -18,7 +18,7 @@
 //! carries only the live root, and no archival state at all — the archival
 //! rows travel beside it as the checkpoint's other encoding
 //! (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1) and are diffed, not hashed, so a
-//! disagreement names its row (`shekyl_e2_grade_v3`).
+//! disagreement names its row (`shekyl_e2_grade_v4`).
 //!
 //! # The two clauses (RD-Q9, RULED)
 //!
@@ -39,9 +39,12 @@
 //!   `ConnectFacts::DELETED_BY` named, read from the store's own
 //!   declaration so a slice deriving a fact flipped its rows to real
 //!   evidence with no harness change (RD-Q6). The last fact derived on
-//!   2026-09-29 and the arm went with the declaration: every row's
-//!   component is real replay output now (`shekyl_e2_grade_v2`; `v3` added
-//!   the archival oracle beside the root oracle, 2026-10-01).
+//!   2026-09-29 and the arm went with the declaration: a consensus row's
+//!   component is real replay output (`shekyl_e2_grade_v2`; `v3` added the
+//!   archival oracle beside the root oracle, 2026-10-01). A `PolicyRow`
+//!   feeds no chain digest — relay admission never enters the blocks a
+//!   replay connects — so its component is [`ComponentEvidence::NotFed`]
+//!   (`shekyl_e2_grade_v4`).
 //!
 //! # The grader's law and the adjudication sentence (§1.3)
 //!
@@ -79,7 +82,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use shekyl_chain_rules::CenRow;
+use shekyl_chain_rules::{CenRow, PolicyRow};
 use shekyl_chain_store::archival_snapshot::{hex, SnapshotDiff};
 use shekyl_chain_store::conformance::{grade, Acceptance, ConformanceState, FailureReason};
 use shekyl_types::BlockHeight;
@@ -87,7 +90,7 @@ use shekyl_types::BlockHeight;
 /// The JSON the extractor emits.
 pub const REGISTER_SCHEMA: &str = "shekyl_e2_register_v1";
 /// The JSON this module emits.
-pub const GRADE_SCHEMA: &str = "shekyl_e2_grade_v3";
+pub const GRADE_SCHEMA: &str = "shekyl_e2_grade_v4";
 
 /// One register row as extracted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -348,6 +351,9 @@ pub enum ComponentEvidence {
     },
     /// No checkpoint was compared in this run.
     NotCompared,
+    /// The row feeds no chain digest. A checkpoint match is not evidence
+    /// about it. Relay policy ([`PolicyRow`]) is this case.
+    NotFed,
 }
 
 /// One graded row: both clauses, each with its acceptance where evidence
@@ -495,6 +501,15 @@ impl GradedRun {
     }
 }
 
+/// Whether `id` can feed the chain digest.
+///
+/// A [`PolicyRow`] cannot: relay and pool admission never enter the blocks
+/// a replay connects, so a checkpoint match says nothing about the row.
+/// Every other id keeps the digest clause.
+fn feeds_the_digest(id: &str) -> bool {
+    !PolicyRow::ALL.iter().any(|row| row.as_str() == id)
+}
+
 /// Grade a run against the register (module docs).
 #[must_use]
 pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
@@ -547,15 +562,18 @@ pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
             VerdictEvidence::NotExercised => None,
         };
         // ---- clause (2): the component --------------------------------
-        let component = match obs.digest_identical {
-            Some(identical) => ComponentEvidence::Real { identical },
-            None => ComponentEvidence::NotCompared,
-        };
-        let component_acceptance = match component {
-            ComponentEvidence::Real { identical } => {
-                Some(GradedAcceptance::from(grade(state, identical)))
+        // A policy row has no digest component. Grading the checkpoint
+        // against it would call a match a reproduced defect.
+        let (component, component_acceptance) = if feeds_the_digest(&id) {
+            match obs.digest_identical {
+                Some(identical) => (
+                    ComponentEvidence::Real { identical },
+                    Some(GradedAcceptance::from(grade(state, identical))),
+                ),
+                None => (ComponentEvidence::NotCompared, None),
             }
-            ComponentEvidence::NotCompared => None,
+        } else {
+            (ComponentEvidence::NotFed, None)
         };
         // ---- tallies ---------------------------------------------------
         if verdict_acceptance == Some(GradedAcceptance::AcceptedAsCorrect) {
@@ -896,6 +914,31 @@ mod tests {
         // Not compared is the default: `compared == false`, and it does not
         // fail the run.
         assert!(!ArchivalOracle::default().compared);
+    }
+
+    #[test]
+    fn a_policy_row_feeds_no_digest_component() {
+        let reg = Register::from_json(
+            r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-M3","state":"DIVERGENT"},{"id":"CEN-A1","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
+        )
+        .expect("register");
+        for identical in [true, false] {
+            let mut obs = Observations::default();
+            obs.checkpoint(identical);
+            let g = grade_run(&reg, &obs);
+            let policy = row(&g, "CEN-M3");
+            assert_eq!(policy.component, ComponentEvidence::NotFed);
+            assert_eq!(policy.component_acceptance, None);
+            assert!(g.unadjudicated.iter().all(|u| u.id != "CEN-M3"));
+        }
+        let mut obs = Observations::default();
+        obs.checkpoint(true);
+        let g = grade_run(&reg, &obs);
+        assert_eq!(
+            row(&g, "CEN-A1").component,
+            ComponentEvidence::Real { identical: true }
+        );
+        assert!(g.passes());
     }
 
     #[test]

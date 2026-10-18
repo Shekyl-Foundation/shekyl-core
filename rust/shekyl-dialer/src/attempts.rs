@@ -11,9 +11,9 @@
 //! so the board cannot see it. The dialer keeps a pending attempt from
 //! the moment the dial starts until its [`DialOutcome`], on every path.
 //!
-//! The `Keep` count is adopted `Keep` rows plus pending `Keep` attempts.
-//! It is not the board's outbound count, which includes a `Confirm` row
-//! and knows nothing of a pending attempt.
+//! The `Keep` count is kept sessions plus pending `Keep` attempts.
+//! A confirm dial is not a row and does not count. The board's outbound
+//! count knows nothing of a pending attempt.
 
 use std::collections::{BTreeMap, BTreeSet};
 
