@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use curve25519_dalek::{EdwardsPoint, Scalar};
 use shekyl_address::{Network, ShekylAddress, MSG_SIGN_PK_LEN};
 use shekyl_block_template::MinerKeys;
-use shekyl_chain_rules::{CenRow, FakechainSchedule};
+use shekyl_chain_rules::{CenRow, FakechainSchedule, Substrate};
 use shekyl_difficulty::{check_hash, Difficulty};
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_miner::{found_blocks, Job, JobBoard, Miner, MinerConfig, MiningAddress, RATE_WINDOW};
@@ -66,6 +66,16 @@ fn harness_address() -> String {
     )
     .encode()
     .expect("the harness keys encode")
+}
+
+/// Pin `next`'s seed into the cache the workers share, then require the
+/// lookup they will make to hit. A post of an unpinned seed is left, and
+/// the same generation is not searched again.
+fn pin_job_seed(substrate: &ProductionSubstrate, caches: &CacheStore, next: &NextBlock) {
+    substrate.pin_seed(&next.seed);
+    caches
+        .lookup(&Seedhash::from_bytes(*next.seed.as_bytes()))
+        .expect("the substrate holds the seed the miner will look up");
 }
 
 /// The job a miner is handed for `next`.
@@ -116,12 +126,14 @@ fn miner_rows() -> usize {
         .count()
 }
 
-/// The loop end to end, one sequence over one cache derivation: the
-/// address decodes to the template's keys; two workers find a block at the
-/// chain's target, one of them delivers it, and the connector admits it
-/// under the real longhash; no second solution follows for the same job; a
-/// job superseded while it is being searched is left for the newer one,
-/// whose block connects too; every worker is a ledger row, lowered below
+/// The loop end to end, over one cache derivation. The substrate pins each
+/// job's seed before the post: the workers look that seed up and leave a
+/// job whose seed is not held. The address decodes to the template's keys;
+/// two workers find a block at the chain's target, one of them delivers it,
+/// and the connector admits it under the real longhash; no second solution
+/// follows for the same job; a job superseded while it is being searched is
+/// left for the newer one, whose block connects too; every worker is a
+/// ledger row, lowered below
 /// the daemon (read back as nice 19 on Linux; on every platform the
 /// status's not-lowered count is zero); the status reports both workers'
 /// hashes over its window; and stopping joins every worker and removes its
@@ -131,6 +143,7 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
     let _lane = MINER_LANE.lock().await;
     let caches = Arc::new(CacheStore::new());
     let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
+    let substrate = pow.clone();
     let mut s = Scenario::open_under("miner-loop", pow, RULES);
 
     let address =
@@ -166,11 +179,14 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
     // A block at the chain's target, through the connector.
     let mut next = s.next_template(Vec::new()).await.expect("a template");
     assert_eq!(next.target.difficulty(), Difficulty::from_raw(8));
+    pin_job_seed(&substrate, &caches, &next);
     let first = board.publish(job_for(&next));
     let block = found.recv_timeout(FIND_WITHIN).expect("a block is found");
     assert_eq!(block.generation, first);
     assert_eq!(block.height, next.height);
-    let cache = caches.lookup_or_derive(&Seedhash::from_bytes(*next.seed.as_bytes()));
+    let cache = caches
+        .lookup(&Seedhash::from_bytes(*next.seed.as_bytes()))
+        .expect("the reported block was hashed under the pinned seed");
     assert_eq!(
         compute_hash(&cache, &block.block.pow_blob()),
         block.pow.to_bytes(),
@@ -203,6 +219,7 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
         difficulty: Difficulty::from_raw(u128::MAX),
         ..job_for(&next)
     };
+    pin_job_seed(&substrate, &caches, &next);
     let hopeless = board.publish(unreachable);
     std::thread::sleep(Duration::from_secs(2));
     let searching = miner.status();
