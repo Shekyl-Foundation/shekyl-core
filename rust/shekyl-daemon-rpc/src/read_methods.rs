@@ -25,22 +25,13 @@ use shekyl_rpc_types::{
 };
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
 
-use crate::methods::{RpcFault, RpcRefusal};
+use crate::methods::{split_128, RpcFault, RpcRefusal};
 use crate::read_facts::{ChainReadFacts, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed};
 use shekyl_chain_rules::EmissionEpochFacts;
 
 /// The status `get_coinbase_tx_sum` answers a range outside the chain with
 /// — the C++ handler's string, which clients match on.
 pub const COINBASE_SUM_RANGE_REFUSAL: &str = "height or count is too large";
-
-/// The wire's three-field rendering of a 128-bit value — `store_128`'s
-/// split: the low word, the whole value as `0x` minimal lowercase hex
-/// (`cryptonote::hex`), the high word.
-fn split_128(value: u128) -> (u64, String, u64) {
-    let low = u64::try_from(value & u128::from(u64::MAX)).expect("masked to 64 bits");
-    let top = u64::try_from(value >> 64).expect("a u128 shifted right 64 fits in u64");
-    (low, format!("0x{value:x}"), top)
-}
 
 fn hash_hex(hash: BlockHash) -> HashHex {
     HashHex::from_bytes(hash.to_bytes())

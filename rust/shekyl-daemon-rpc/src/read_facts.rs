@@ -41,10 +41,10 @@ pub struct AltChainFacts {
     pub tip_height: BlockHeight,
     /// The tip's cumulative difficulty along its chain.
     pub cumulative_difficulty: u128,
-    /// The parent the lowest block names — where the chain leaves the
-    /// blocks this node holds as alternatives. A main-chain block: every
-    /// stored alternative chain reaches the main chain (the store's
-    /// invariant, `shekyl-chain-store`'s `store/alt.rs`).
+    /// The recorded root the store's walk reached — where the chain leaves
+    /// the blocks this node holds as alternatives. A stored chain that does
+    /// not reach one is not represented here; the read faults
+    /// ([`FactsFault::Inconsistent`]).
     pub parent: BlockHash,
 }
 

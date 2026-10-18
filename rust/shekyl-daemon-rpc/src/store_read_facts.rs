@@ -8,8 +8,10 @@
 //! and holds to the same two rules — one snapshot per call, one source per
 //! value.
 //!
-//! - The alt reads walk the alt table as the store keeps it, in LMDB's
-//!   key order (the key-types gate holds the order).
+//! - The alt reads are the store's. Hashes come off the table in its key
+//!   order. Chains are [`ReadSnapshot::alternate_chains`]: the same walk
+//!   admission uses, so a stored chain that does not reach the main chain,
+//!   or that links to itself, is this node's inconsistency.
 //! - The tree after block `h` is the tree a block at `h + 1` is checked
 //!   against: the store's `root_at(h + 1)` and `leaf_count_at(h + 1)`, the
 //!   depth derived from the count (`ChainView::depth_at`, `CTW-Q4`). The
@@ -37,7 +39,9 @@ use shekyl_chain_rules::{
     emission_epoch_facts, release_last_served, seed_height, shard_close, AtHeight, ChainView,
     ClosedUniverse,
 };
-use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
+use shekyl_chain_store::store::{
+    AltCannot, AltChain, ReadSnapshot, SnapshotView, StoreCannot, StoreError,
+};
 use shekyl_pow_randomx::{compute_hash, Seedhash};
 use shekyl_types::archival::Holdings;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, PowHash, SettlementEpoch, ShardId};
@@ -110,11 +114,38 @@ fn fees_at(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<u128, FactsFa
             tracing::error!(%error, ?hash, "a recorded transaction's base does not parse");
             FactsFault::Inconsistent
         })?;
-        if let Ct::Fcmp { fee, .. } = tx.ct {
-            fees += u128::from(fee);
-        }
+        // A listed body is an FCMP++ spend. The coinbase is the miner
+        // transaction, not a hash in `transaction_hashes`, so a `Null`
+        // base here is the block disagreeing with its own list.
+        let fee = match tx.ct {
+            Ct::Fcmp { fee, .. } => fee,
+            Ct::Null(_) => {
+                tracing::error!(?hash, "a listed transaction is not an FCMP++ spend");
+                return Err(FactsFault::Inconsistent);
+            }
+        };
+        fees += u128::from(fee);
     }
     Ok(fees)
+}
+
+/// One stored chain as the facts layer reports it. Entries come back
+/// ascending, just above the recorded root; the reply is tip-first, and
+/// the parent is that root. A chain built from an alt tip with no entries
+/// named a recorded block as the tip, which a listing of alt tips does
+/// not.
+fn alt_chain_facts(chain: &AltChain) -> Result<AltChainFacts, FactsFault> {
+    let entries = chain.entries();
+    let Some(tip) = entries.last() else {
+        tracing::error!("an alternative chain built from a stored tip has no alt block");
+        return Err(FactsFault::Inconsistent);
+    };
+    Ok(AltChainFacts {
+        blocks: entries.iter().rev().map(|entry| entry.id).collect(),
+        tip_height: tip.block.height(),
+        cumulative_difficulty: tip.block.cumulative_difficulty().to_raw(),
+        parent: chain.root().hash,
+    })
 }
 
 impl ChainReadFacts for StoreFacts {
@@ -132,40 +163,22 @@ impl ChainReadFacts for StoreFacts {
     fn alternate_chains(&self) -> Result<Vec<AltChainFacts>, FactsFault> {
         let snap = self.snapshot()?;
         tip_of(&snap)?;
-        let entries = snap.alt_blocks().map_err(store_fault)?;
-        let by_id: std::collections::HashMap<BlockHash, &shekyl_chain_store::codec::AltBlock> =
-            entries
-                .iter()
-                .map(|entry| (entry.id, &entry.block))
-                .collect();
-        let parents: std::collections::HashSet<BlockHash> = entries
-            .iter()
-            .map(|entry| entry.block.block().header.previous)
-            .collect();
-        let mut chains = Vec::new();
-        // A tip is an alt block no alt block names as its parent. Each is
-        // walked down while its parent is an alt block; the first parent
-        // that is not is where the chain leaves the alternatives.
-        for tip in entries.iter().filter(|entry| !parents.contains(&entry.id)) {
-            let mut blocks = vec![tip.id];
-            let mut parent = tip.block.block().header.previous;
-            while let Some(below) = by_id.get(&parent) {
-                if blocks.len() > entries.len() {
-                    // Longer than the table: the parent links loop, which
-                    // no chain of hashes does.
-                    return Err(FactsFault::Inconsistent);
-                }
-                blocks.push(parent);
-                parent = below.block().header.previous;
+        // The store walks. `Unlinked` on a chain the table already holds is
+        // the invariant breaking: admission refuses that orphan, so a stored
+        // one was written around it. It stays a cannot for an offer. Here,
+        // where the rows are the store's own, it is this node's inconsistency.
+        let chains = match snap.alternate_chains() {
+            Ok(chains) => chains,
+            Err(StoreError::Cannot(StoreCannot::Alt(AltCannot::Unlinked { at }))) => {
+                tracing::error!(
+                    hash = %at,
+                    "a stored alternative chain does not reach the main chain"
+                );
+                return Err(FactsFault::Inconsistent);
             }
-            chains.push(AltChainFacts {
-                blocks,
-                tip_height: tip.block.height(),
-                cumulative_difficulty: tip.block.cumulative_difficulty().to_raw(),
-                parent,
-            });
-        }
-        Ok(chains)
+            Err(other) => return Err(store_fault(other)),
+        };
+        chains.iter().map(alt_chain_facts).collect()
     }
 
     fn curve_tree(&self) -> Result<CurveTreeFacts, FactsFault> {

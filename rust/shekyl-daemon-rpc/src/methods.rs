@@ -517,7 +517,7 @@ pub fn get_block_header_by_height(
 /// the low word as a number, the whole value as `0x`-prefixed minimal
 /// lowercase hex (`cryptonote::hex`), and the high word. The masking is the
 /// point, not an accident of casting.
-fn split_128(value: u128) -> (u64, String, u64) {
+pub(crate) fn split_128(value: u128) -> (u64, String, u64) {
     let low = u64::try_from(value & u128::from(u64::MAX)).expect("masked to 64 bits");
     let top = u64::try_from(value >> 64).expect("a u128 shifted right 64 fits in u64");
     (low, format!("0x{value:x}"), top)

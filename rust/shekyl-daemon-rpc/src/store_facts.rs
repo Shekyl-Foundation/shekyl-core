@@ -297,29 +297,21 @@ fn main_header(
     } else {
         None
     };
-    let cumulative = info.cumulative_difficulty.to_raw();
     let block = body.block;
-    let header = BlockHeaderFacts {
-        hash: body.hash,
-        prev_hash: block.header.previous,
-        miner_tx_hash: block.miner_transaction.hash(),
-        curve_tree_root: block.header.curve_tree_root,
-        attestation_root: block.header.attestation_root,
-        pow_hash,
-        height,
-        depth: BlockCount::from_raw(tip.to_raw() - height.to_raw()),
-        timestamp: block.header.timestamp,
-        difficulty: difficulty_of(snap, &block, height, cumulative)?,
-        cumulative_difficulty: cumulative,
-        reward: reward_of(&block)?,
-        block_weight: info.weight.to_raw(),
-        long_term_weight: Some(info.long_term_weight.to_raw()),
-        num_txes: u64::try_from(block.transaction_hashes.len()).unwrap_or(u64::MAX),
-        nonce: block.header.nonce,
-        major_version: block.header.major_version,
-        minor_version: block.header.minor_version,
-        orphan_status: false,
-    };
+    let header = header_facts(
+        snap,
+        &block,
+        HeaderPlace {
+            hash: body.hash,
+            height,
+            depth: BlockCount::from_raw(tip.to_raw() - height.to_raw()),
+            pow_hash,
+            cumulative_difficulty: info.cumulative_difficulty.to_raw(),
+            block_weight: info.weight.to_raw(),
+            long_term_weight: Some(info.long_term_weight.to_raw()),
+            orphan_status: false,
+        },
+    )?;
     Ok(Some((header, block)))
 }
 
@@ -336,30 +328,71 @@ fn alt_header(
         return Ok(None);
     };
     let block = alt.block().clone();
-    let height = alt.height();
-    let cumulative = alt.cumulative_difficulty().to_raw();
-    let header = BlockHeaderFacts {
-        hash: id,
+    let header = header_facts(
+        snap,
+        &block,
+        HeaderPlace {
+            hash: id,
+            height: alt.height(),
+            depth: BlockCount::from_raw(0),
+            pow_hash: fill_pow_hash.then(|| alt.pow().pow.to_bytes()),
+            cumulative_difficulty: alt.cumulative_difficulty().to_raw(),
+            block_weight: alt.block_weight().to_raw(),
+            long_term_weight: None,
+            orphan_status: true,
+        },
+    )?;
+    Ok(Some((header, block)))
+}
+
+/// Where a block sits for the header reply. The block supplies its own
+/// bytes; these are the values the main chain and an alt row do not share.
+/// A value, copied into the facts: every field already is.
+#[derive(Clone, Copy)]
+struct HeaderPlace {
+    hash: BlockHash,
+    height: BlockHeight,
+    /// Confirmations behind the main-chain tip. Zero for an alt block:
+    /// nothing on the main chain confirms it.
+    depth: BlockCount,
+    pow_hash: Option<[u8; 32]>,
+    cumulative_difficulty: u128,
+    block_weight: u64,
+    /// `None` for an alt block. A long-term weight is a function of the
+    /// chain the block sits on, and an alt row's chain has no recorded
+    /// medians. The wire omits a zero, and `None` is that omission.
+    long_term_weight: Option<u64>,
+    orphan_status: bool,
+}
+
+/// The header facts of `block` at `place`. The difficulty and the reward
+/// are read here, so the two callers cannot each grow a copy.
+fn header_facts(
+    snap: &ReadSnapshot<'_>,
+    block: &Block,
+    place: HeaderPlace,
+) -> Result<BlockHeaderFacts, FactsFault> {
+    Ok(BlockHeaderFacts {
+        hash: place.hash,
         prev_hash: block.header.previous,
         miner_tx_hash: block.miner_transaction.hash(),
         curve_tree_root: block.header.curve_tree_root,
         attestation_root: block.header.attestation_root,
-        pow_hash: fill_pow_hash.then(|| alt.pow().pow.to_bytes()),
-        height,
-        depth: BlockCount::from_raw(0),
+        pow_hash: place.pow_hash,
+        height: place.height,
+        depth: place.depth,
         timestamp: block.header.timestamp,
-        difficulty: difficulty_of(snap, &block, height, cumulative)?,
-        cumulative_difficulty: cumulative,
-        reward: reward_of(&block)?,
-        block_weight: alt.block_weight().to_raw(),
-        long_term_weight: None,
+        difficulty: difficulty_of(snap, block, place.height, place.cumulative_difficulty)?,
+        cumulative_difficulty: place.cumulative_difficulty,
+        reward: reward_of(block)?,
+        block_weight: place.block_weight,
+        long_term_weight: place.long_term_weight,
         num_txes: u64::try_from(block.transaction_hashes.len()).unwrap_or(u64::MAX),
         nonce: block.header.nonce,
         major_version: block.header.major_version,
         minor_version: block.header.minor_version,
-        orphan_status: true,
-    };
-    Ok(Some((header, block)))
+        orphan_status: place.orphan_status,
+    })
 }
 
 /// The header facts `at` names, main chain first; by hash, an alt block
