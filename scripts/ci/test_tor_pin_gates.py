@@ -12,7 +12,9 @@
 # with the binaries and a `pluggable_transports/` directory Shekyl does not
 # ship, `docs/` with the licence texts), pinned by a pin file written to match.
 # No real tor is needed and nothing is fetched: `stage` finds the tarball in
-# `--sources`.
+# `--sources`. The Windows cases build a minimal PE32+ image whose import
+# tables say what each case needs, so the PE reader is bitten by a file whose
+# every byte this test chose.
 
 import hashlib
 import io
@@ -48,9 +50,9 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def make_tarball(path):
+def make_tarball(path, members=MEMBERS):
     with tarfile.open(path, "w:gz") as tar:
-        for name, data in MEMBERS.items():
+        for name, data in members.items():
             info = tarfile.TarInfo(name)
             info.size = len(data)
             info.mode = 0o700
@@ -91,11 +93,78 @@ def base_pins(tarball_digest):
     }
 
 
+WIN_HOST = "x86_64-w64-mingw32"
+WIN_IMPORTS = ["KERNEL32.dll", "WS2_32.dll", "api-ms-win-crt-runtime-l1-1-0.dll"]
+
+
+def make_pe(imports, delayed=(), import_rva=None, import_size=None, delay_size=None):
+    """A PE32+ image: the DOS and PE headers, one section, and in it an import
+    table naming `imports` and, when `delayed` is given, a delay-load table
+    naming those. `import_rva` overrides where the import directory points;
+    `import_size` and `delay_size` override the sizes the directories record
+    (the tables themselves are laid out as usual)."""
+    section_rva, section_raw = 0x1000, 0x200
+    import_table_size = 20 * (len(imports) + 1)
+    delay_table_size = 32 * (len(delayed) + 1) if delayed else 0
+    names = bytearray()
+
+    def name_rva(name):
+        rva = section_rva + import_table_size + delay_table_size + len(names)
+        names.extend(name.encode("ascii") + b"\0")
+        return rva
+
+    body = bytearray()
+    for name in imports:
+        descriptor = bytearray(20)
+        descriptor[12:16] = name_rva(name).to_bytes(4, "little")
+        body += descriptor
+    body += bytes(20)
+    for name in delayed:
+        descriptor = bytearray(32)
+        descriptor[0:4] = (1).to_bytes(4, "little")  # attributes: RVA form
+        descriptor[4:8] = name_rva(name).to_bytes(4, "little")
+        body += descriptor
+    if delayed:
+        body += bytes(32)
+    body += names
+
+    image = bytearray(section_raw)
+    image[0:2] = b"MZ"
+    image[0x3C:0x40] = (0x40).to_bytes(4, "little")
+    image[0x40:0x44] = b"PE\0\0"
+    coff = 0x44
+    image[coff : coff + 2] = (0x8664).to_bytes(2, "little")
+    image[coff + 2 : coff + 4] = (1).to_bytes(2, "little")
+    image[coff + 16 : coff + 18] = (240).to_bytes(2, "little")
+    optional = coff + 20
+    image[optional : optional + 2] = (0x20B).to_bytes(2, "little")
+    image[optional + 24 : optional + 32] = (0x140000000).to_bytes(8, "little")
+    image[optional + 108 : optional + 112] = (16).to_bytes(4, "little")
+    directories = optional + 112
+    rva = section_rva if import_rva is None else import_rva
+    image[directories + 8 : directories + 12] = rva.to_bytes(4, "little")
+    recorded = import_table_size if import_size is None else import_size
+    image[directories + 12 : directories + 16] = recorded.to_bytes(4, "little")
+    if delayed:
+        delay = directories + 8 * 13
+        recorded = delay_table_size if delay_size is None else delay_size
+        image[delay : delay + 4] = (section_rva + import_table_size).to_bytes(4, "little")
+        image[delay + 4 : delay + 8] = recorded.to_bytes(4, "little")
+    section = optional + 240
+    image[section : section + 8] = b".idata\0\0"
+    image[section + 8 : section + 12] = len(body).to_bytes(4, "little")
+    image[section + 12 : section + 16] = section_rva.to_bytes(4, "little")
+    image[section + 16 : section + 20] = len(body).to_bytes(4, "little")
+    image[section + 20 : section + 24] = section_raw.to_bytes(4, "little")
+    return bytes(image + body)
+
+
 class Bench:
     """A scratch directory holding a tarball, its pin file, and room to stage."""
 
     def __init__(self, tmp):
         self.root = Path(tmp)
+        self.host = HOST
         self.sources = self.root / "sources"
         self.sources.mkdir()
         self.tarball = self.sources / "tor-expert-bundle-linux-x86_64-9.9.9.tar.gz"
@@ -115,14 +184,39 @@ class Bench:
             text=True,
         )
 
-    def stage(self, host=HOST):
+    def stage(self, host=None):
         return self.run(
-            "stage", "--host", host, "--sources", str(self.sources),
+            "stage", "--host", host or self.host, "--sources", str(self.sources),
             "--dest", str(self.dest), "--licenses", str(self.licenses),
         )
 
     def verify(self):
-        return self.run("verify", "--host", HOST, "--dir", str(self.dest))
+        return self.run("verify", "--host", self.host, "--dir", str(self.dest))
+
+    def windows(self, pe, imports=WIN_IMPORTS):
+        """Make the pinned row a Windows bundle whose tor.exe is `pe`, with
+        the bundle's other executable beside it (not shipped), and an import
+        list of `imports`."""
+        members = {
+            "tor/tor.exe": pe,
+            "tor/tor-gencert.exe": b"a tool Shekyl does not ship",
+            "docs/tor.txt": b"tor licence",
+            "docs/zlib.txt": b"zlib licence",
+        }
+        self.tarball = self.sources / "tor-expert-bundle-windows-x86_64-9.9.9.tar.gz"
+        row = self.pins["targets"][0]
+        row.update(
+            os="windows",
+            gitian_host=WIN_HOST,
+            bundle_target="windows-x86_64",
+            tarball_sha256=make_tarball(self.tarball, members),
+            executable="tor.exe",
+            files=[{"name": "tor.exe", "sha256": sha(pe)}],
+            imports=list(imports),
+            licenses=["docs/tor.txt", "docs/zlib.txt"],
+        )
+        self.host = WIN_HOST
+        self.write()
 
 
 CASES = []
@@ -353,11 +447,94 @@ def _(b):
     row["os"] = "windows"
     row["gitian_host"] = "x86_64-w64-mingw32"
     row["executable"] = "TOR"
+    row["imports"] = list(WIN_IMPORTS)
     b.write()
     expect(b.run("disposition", "--host", "x86_64-w64-mingw32"), 0, "pinned")
     row["files"].append({"name": "TOR", "sha256": row["files"][0]["sha256"]})
     b.write()
     expect(b.run("disposition", "--host", "x86_64-w64-mingw32"), 1, "a file is listed twice")
+
+
+@case("windows: a tor.exe importing only listed DLLs stages and verifies")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS), imports=[name.lower() for name in WIN_IMPORTS])
+    expect(b.stage(), 0, "staged tor 0.0.0.1")
+    assert os.listdir(b.dest) == ["tor.exe"], os.listdir(b.dest)
+    expect(b.verify(), 0, "holds exactly the pinned bundle")
+
+
+@case("windows: a planted import the list does not name is refused")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS + ["version.dll"]))
+    expect(b.stage(), 1, "imports version.dll, which the pin's import list does not name")
+    assert not b.dest.exists(), "a tor.exe that fails its import list leaves nothing staged"
+
+
+@case("windows: verify reads the import table of a staged tor.exe")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS))
+    expect(b.stage(), 0)
+    b.pins["targets"][0]["imports"].remove("WS2_32.dll")
+    b.write()
+    expect(b.verify(), 1, "imports WS2_32.dll, which the pin's import list does not name")
+
+
+@case("windows: a delay-load import is refused even when the DLL is listed")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS, delayed=["WS2_32.dll"]))
+    expect(b.stage(), 1, "delay-loads WS2_32.dll; the pin allows no delay-load import")
+    assert not b.dest.exists()
+
+
+@case("windows: a directory with only one of RVA and size set is refused, either table")
+def _(b):
+    # The loader reads an import table from its RVA whatever the size says:
+    # a zero size must not hide the planted import.
+    b.windows(make_pe(WIN_IMPORTS + ["version.dll"], import_size=0))
+    expect(b.stage(), 1, "data directory 1 has RVA 0x1000 and size 0")
+    # Nor hide a delay-load.
+    b.windows(make_pe(WIN_IMPORTS, delayed=["WS2_32.dll"], delay_size=0))
+    expect(b.stage(), 1, "data directory 13 has RVA")
+    # A size with no table behind it is as inconsistent.
+    b.windows(make_pe(WIN_IMPORTS, import_rva=0))
+    expect(b.stage(), 1, "data directory 1 has RVA 0x0 and size")
+    assert not b.dest.exists()
+
+
+@case("windows: an import table the reader cannot follow is refused, not read as empty")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS, import_rva=0x9000))
+    expect(b.stage(), 1, "RVA 0x9000 is not backed by any section")
+    b.windows(b"MZ" + bytes(62))
+    expect(b.stage(), 1, "not a PE image")
+    # Cut inside the PE32+ optional header's ImageBase (offset 0x58 + 24).
+    b.windows(make_pe(WIN_IMPORTS)[: 0x58 + 28])
+    expect(b.stage(), 1, "truncated PE image")
+
+
+@case("pin file: the import list is a Windows row's, and well formed")
+def _(b):
+    b.windows(make_pe(WIN_IMPORTS))
+    row = b.pins["targets"][0]
+    del row["imports"]
+    b.write()
+    expect(b.stage(), 1, '"imports" is missing; a pinned Windows target must list')
+    row["imports"] = []
+    b.write()
+    expect(b.stage(), 1, '"imports" is not a non-empty list')
+    row["imports"] = ["KERNEL32.dll", "kernel32.DLL"]
+    b.write()
+    expect(b.stage(), 1, "an import is listed twice")
+    row["imports"] = ["..\\KERNEL32.dll"]
+    b.write()
+    expect(b.stage(), 1, "is not a plain file name")
+
+
+@case("pin file: a non-Windows row carrying an import list is refused")
+def _(b):
+    b.pins["targets"][0]["imports"] = list(WIN_IMPORTS)
+    b.write()
+    expect(b.stage(), 1, "only a Windows row has one")
 
 
 # --- check_tor_pin_targets.py ---------------------------------------------

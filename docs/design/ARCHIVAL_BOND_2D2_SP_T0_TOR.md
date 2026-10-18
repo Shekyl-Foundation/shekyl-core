@@ -193,13 +193,11 @@ gate. Closes the keystone the SP-T1 crate doc points forward to.
 
 ### DQ-T0.5 — packaging (reuse-not-own, §15)
 
-> **Amended 2026-10-06 (ruled by Rick, not yet implemented):**
-> [`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md) `TB-4` and
+> **Amended 2026-10-06 (ruled by Rick; implemented for Linux and Windows,
+> [`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md) §5):** `TB-4` and
 > `TB-6`…`TB-13` rule that the bundle ships in every artifact, that the pin
 > covers every file in tor's directory and the directory holds nothing else,
-> that the launcher clears its environment, and a re-pin to tor `0.4.9.13`.
-> The pins and the resolver are as this section describes until those changes
-> land.
+> that the launcher clears its environment, and the re-pin `TB-10` names.
 
 Do **not** own a Tor build. Inherit reproducible packaging where it exists (Guix `tor`); **hash-pin**
 the Tor Project's official released binary — the **Tor Expert Bundle**
@@ -217,19 +215,25 @@ evaporates), so SP-T0c's definition of done — "the bundle **and** the checklis
 (Per-target Guix coverage for macOS/Windows is a packaging detail to work; reuse-don't-own
 bounds the cost regardless.)
 
-**Current pin (recorded 2026-10-07, `TOR_BUNDLE_DISTRIBUTION.md` TB-10):** verified
-`tor-expert-bundle-linux-x86_64-15.0.24.tar.gz` (Tor `0.4.9.13`) — tarball SHA256
-`8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2`, GPG-signed by the **Tor Browser
+**Current pin (recorded 2026-10-17, `TOR_BUNDLE_DISTRIBUTION.md` TB-10):** verified
+`tor-expert-bundle-linux-x86_64-15.0.25.tar.gz` (Tor `0.4.9.14`) — tarball SHA256
+`19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a`, GPG-signed by the **Tor Browser
 Developers** key `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290` (signing subkey
 `022DA248432D2A0E0F54E65E316C1FACD62D07D9`). The durable pin is *that signing key*, not just this one
 hash — a version bump re-verifies the new bundle's signature against the same fingerprint, then records
 the new digests. **The pin of record is `config/tor_pins.json`**, which `build.rs` compiles into the
 binary and the packaging tool reads; this paragraph is a pointer to it. Since TB-7 the runtime gate is
 no longer one digest: it is the SHA256 of **each of the four files** tor's directory holds (`tor`
-`74f5a47bfe0fc7f7c3ec2fe6c772ec6e52d4a9e9e9c95c7f274f5330e02a8813`, and `libevent-2.1.so.7`,
+`39c9db0654d2ec218892bd00f75eccb5b641a7222754436c2e4a8d2f764a57d3`, and `libevent-2.1.so.7`,
 `libssl.so.3`, `libcrypto.so.3` as the file records them), together with the rule that the directory
-holds nothing else. (Superseded pins, kept so the earlier verification claims stay independently
-checkable, each a pin over the `tor` file alone: **15.0.19** recorded 2026-08-06 / Tor `0.4.9.11`,
+holds nothing else. The same bundle version is the `windows-x86_64` pin (TB-11), over `tor.exe`
+alone, with the DLLs it may import. (Superseded pins, kept so the earlier verification claims stay
+independently checkable: **15.0.24** recorded 2026-10-07 / Tor `0.4.9.13`, tarball SHA256
+`8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2`, `tor` SHA256
+`74f5a47bfe0fc7f7c3ec2fe6c772ec6e52d4a9e9e9c95c7f274f5330e02a8813`, `libssl.so.3`
+`e95f55c73b63a4e25db7b9c74abdd35c42829ca1dc68f2fb17ae71c4d841381c`, `libcrypto.so.3`
+`6ed9fc77689324da28567478e0ed226f4f450f71b47852088e9b0b9220eb0404`, `libevent-2.1.so.7` unchanged in
+15.0.25; and, each a pin over the `tor` file alone, **15.0.19** recorded 2026-08-06 / Tor `0.4.9.11`,
 tarball SHA256 `5a8f19f5f119b5fa2a8fd799a3a532e3236ad36164241800d6302e32f0e1c2a9`, signing subkey
 `CAAE408AEBE2288E96FC5D5E157432CF78A65729`, extracted-binary SHA256
 `660a8c54d0c9341f85f0a7f827b6bde640e7db14dfde44d3856979d4ee6d16fb`; **15.0.17** recorded 2026-07-01,
@@ -238,16 +242,18 @@ extracted-binary digest as 15.0.19 — two bundle releases that moved the label 
 **15.0.16** recorded 2026-06-29 / Tor `0.4.9.9`, tarball SHA256
 `71c838387ec0019a7c7f9f60a5538f7fcae0521a29924c992b84189c9ec4d7f1`.)
 
-**`linux-aarch64` pin (RULED 2026-09-29; re-pinned 2026-10-07): Expert Bundle 16.0a13, tor
-`0.4.9.13`, an alpha.** Verified `tor-expert-bundle-linux-aarch64-16.0a13.tar.gz` — tarball SHA256
-`e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517`, Good signature under
+**`linux-aarch64` pin (RULED 2026-09-29; re-pinned 2026-10-17): Expert Bundle 16.0a14, tor
+`0.4.9.14`, an alpha.** Verified `tor-expert-bundle-linux-aarch64-16.0a14.tar.gz` — tarball SHA256
+`6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2`, `VALIDSIG` under
 `EF6E286DDA85EA2A4BA7DE684E2C6E8793298290`; the runtime gate is the four per-file digests in the
 `linux`/`aarch64` row of `config/tor_pins.json` (`tor`
-`5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477`). (Superseded: **16.0a12** recorded
+`0acff9cc36f225adf6f068187ec620712ca838ad12c19d69259623effc0ea17b`; the three libraries are byte-identical to 16.0a13's). (Superseded: **16.0a13** recorded
+2026-10-07 / tor `0.4.9.13`, tarball SHA256 `e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517`, `tor` SHA256
+`5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477`; **16.0a12** recorded
 2026-09-29 / tor `0.4.9.12`, tarball SHA256
 `e84426c96aca0934d2c8d92980f850e508e367aea431a1f9367312cbb2655a26`, extracted-binary SHA256
 `e703a978324938d62ed0b39bae299a6aa285dde4f08d5b3ebbd127311ac54a56`.) The Tor Project does **not** publish a `linux-aarch64` Expert Bundle on the stable line:
-at 15.0.17, 15.0.19 and 15.0.24 the Linux targets are `linux-i686` and `linux-x86_64` only, and the
+at 15.0.17, 15.0.19, 15.0.24 and 15.0.25 the Linux targets are `linux-i686` and `linux-x86_64` only, and the
 aarch64 builds are `android-aarch64` (Bionic) and `macos-aarch64` (Mach-O). `linux-aarch64` exists only
 in the alpha line, from 16.0a1 (2025-12-15) on.
 

@@ -35,7 +35,7 @@ const COUNTER_CEILING: u32 = u32::MAX;
 ///
 /// **A round whose ends do not all arrive still ends.** Tor starts every upload of a
 /// round in one pass of its main loop, before any HSDir can have answered (tor
-/// 0.4.9.13, `run_upload_descriptor_event` → `upload_descriptor_to_all`), so an
+/// 0.4.9.13 and 0.4.9.14, `run_upload_descriptor_event` → `upload_descriptor_to_all`), so an
 /// `UPLOAD` that arrives once the open round's uploads have begun to end belongs to the
 /// next round: the open one ends there, counting the uploads that never reported in
 /// `unfinished`, and the next one starts and can trigger again. An end that is lost
