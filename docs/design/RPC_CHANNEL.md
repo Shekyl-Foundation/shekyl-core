@@ -450,7 +450,13 @@ The prologue (§4.4) is unchanged.
   the opener succeeded *and* the receiving direction itself opened at
   least one. An opener that reports success having opened nothing is
   refused like any other failure, and there is a test with exactly that
-  opener.
+  opener. **The direction must also be the session's own.** The opener
+  holds it by `&mut` and could put another session's direction in its
+  place, one that has already opened. `into_directions` stamps both
+  directions with the session's handshake hash, and the pending session
+  is released only if the receiving direction it gets back carries its
+  own (ruled in the #1039 review; landed 2026-10-18). A test swaps in a
+  second session's direction, and failed against the count-only gate.
   On success that yields `AuthenticatedSession`: the transport directions,
   the authenticated client and message 3's payload. On failure the session
   is gone. `PendingSession` does not expose the request, the directions or

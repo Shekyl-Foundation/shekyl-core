@@ -838,20 +838,29 @@ impl PendingSession {
     /// [`TRANSPORT_AD`].
     ///
     /// **The opener's word is not what releases the session.** After it
-    /// returns, the receiving direction must itself have opened at least one
-    /// ciphertext ([`Direction::opened`]): a tag verified under a key only
-    /// the client's ML-KEM key could have produced. An opener that returns
-    /// `Ok` without opening anything, or after only failed attempts, has
-    /// authenticated nobody, and the session is refused exactly as if it
-    /// had returned an error. So is one that opens a ciphertext and then
-    /// returns `Err`.
+    /// returns, two things about the direction it hands back are checked,
+    /// and both must hold:
+    ///
+    /// - it is **this session's** direction: it carries this session's
+    ///   handshake hash ([`Direction::handshake_hash`], stamped by
+    ///   `into_directions`). The opener holds the direction by `&mut`, so it
+    ///   could put another session's direction in its place, one that has
+    ///   already opened; that is refused;
+    /// - it has itself opened at least one ciphertext
+    ///   ([`Direction::opened`]): a tag verified under a key only the
+    ///   client's ML-KEM key could have produced.
+    ///
+    /// An opener that returns `Ok` without opening anything, or after only
+    /// failed attempts, has authenticated nobody, and the session is refused
+    /// exactly as if it had returned an error. So is one that opens a
+    /// ciphertext and then returns `Err`.
     ///
     /// On success, returns the session and whatever the opener returned.
     ///
     /// # Errors
     ///
-    /// [`FirstMessageRefused`] when the opener fails or the direction opened
-    /// nothing. The session is consumed and cannot be tried again: its
+    /// [`FirstMessageRefused`] when the opener fails, the direction it hands
+    /// back is not this session's, or that direction opened nothing. The session is consumed and cannot be tried again: its
     /// sending direction, the client and the request are dropped unseen.
     pub fn open_first_message<T, E>(
         self,
@@ -860,7 +869,7 @@ impl PendingSession {
         let handshake_hash = self.sym.handshake_hash();
         let (send, mut recv) = self.sym.into_directions(SplitRole::Responder);
         let opened = opener(&mut recv).map_err(|_| FirstMessageRefused)?;
-        if recv.opened() == 0 {
+        if recv.handshake_hash() != handshake_hash || recv.opened() == 0 {
             return Err(FirstMessageRefused);
         }
         Ok((
