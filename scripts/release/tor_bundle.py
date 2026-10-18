@@ -35,7 +35,9 @@ Subcommands (a target is named by its gitian host triple, `--host`):
   verify       check that `--dir` holds exactly the pinned files, each a
                regular file with the pinned SHA-256. For a Windows host it also
                reads the executable's PE import table and refuses a DLL the
-               row's `imports` does not name, and any delay-load import.
+               row's `imports` does not name, and any import its delay-load
+               table records (`check_imports` says what that can and cannot
+               see).
 
 An `unavailable` host is not an error: `fetch` and `stage` report it and do
 nothing, and the caller branches on `disposition`. `install-dir`,
@@ -473,8 +475,17 @@ def pe_imports(data, where):
 
     def walk(index, descriptor_size, name_field):
         rva, size = directory(index)
-        if rva == 0 or size == 0:
+        # Absent means both fields zero. The loader walks import descriptors
+        # from the RVA to the null terminator and does not read the size, so
+        # an RVA with a zero size is still a table; a pair with one field set
+        # is refused rather than guessed at either way.
+        if rva == 0 and size == 0:
             return []
+        if rva == 0 or size == 0:
+            raise Refused(
+                f"{where}: data directory {index} has RVA {rva:#x} and size {size}; "
+                "a table is both or neither"
+            )
         names = []
         base = offset_of(rva)
         for i in range(_PE_MAX_DESCRIPTORS):
@@ -503,7 +514,14 @@ def pe_imports(data, where):
 def check_imports(data, where, row):
     """Windows: the executable imports only the DLLs its row names, and
     delay-loads nothing (TB-11). Names compare as the Windows loader does,
-    case-folded."""
+    case-folded.
+
+    The delay-load half reads the table the linker records. The delay-load
+    helper finds its descriptors through the binary's own code, not through
+    that directory, so a binary built to hide one would not be seen here.
+    This is a tripwire on the Tor Project's signed builds, which are digest-
+    pinned already: it notices a new bundle that starts loading a DLL of its
+    own. It is not a proof about an arbitrary binary."""
     allowed = {name.lower() for name in row["imports"]}
     imports, delayed = pe_imports(data, where)
     if delayed:

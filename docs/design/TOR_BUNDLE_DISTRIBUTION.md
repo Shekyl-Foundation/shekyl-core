@@ -298,9 +298,13 @@ with that as the stated reason.
      `tor_bundle.py`'s `load_pins` both refuse a Windows row without the list
      and any other row with one.
    - The import check: `tor_bundle.py` reads `tor.exe`'s PE import table when
-     it stages and when it verifies, and refuses a DLL the list does not name
-     and any delay-load import. A future bundle that starts shipping or
+     it stages and when it verifies, and refuses a DLL the list does not name,
+     any import its delay-load table records, and a data directory that sets
+     only one of its address and size. A future bundle that starts shipping or
      loading its own DLL is refused at packaging, not noticed in the field.
+     It is a tripwire on the Tor Project's digest-pinned builds, not a proof
+     about any binary: a delay-load helper finds its descriptors through the
+     binary's own code, so a binary built to hide one would not show it.
    - The package: the Windows gitian descriptor stages the bundle into `tor/`
      beside the binaries, with `tor-licenses/`, and verifies it, as the Linux
      one does.

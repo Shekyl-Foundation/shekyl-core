@@ -97,17 +97,19 @@ WIN_HOST = "x86_64-w64-mingw32"
 WIN_IMPORTS = ["KERNEL32.dll", "WS2_32.dll", "api-ms-win-crt-runtime-l1-1-0.dll"]
 
 
-def make_pe(imports, delayed=(), import_rva=None):
+def make_pe(imports, delayed=(), import_rva=None, import_size=None, delay_size=None):
     """A PE32+ image: the DOS and PE headers, one section, and in it an import
     table naming `imports` and, when `delayed` is given, a delay-load table
-    naming those. `import_rva` overrides where the import directory points."""
+    naming those. `import_rva` overrides where the import directory points;
+    `import_size` and `delay_size` override the sizes the directories record
+    (the tables themselves are laid out as usual)."""
     section_rva, section_raw = 0x1000, 0x200
-    import_size = 20 * (len(imports) + 1)
-    delay_size = 32 * (len(delayed) + 1) if delayed else 0
+    import_table_size = 20 * (len(imports) + 1)
+    delay_table_size = 32 * (len(delayed) + 1) if delayed else 0
     names = bytearray()
 
     def name_rva(name):
-        rva = section_rva + import_size + delay_size + len(names)
+        rva = section_rva + import_table_size + delay_table_size + len(names)
         names.extend(name.encode("ascii") + b"\0")
         return rva
 
@@ -141,11 +143,13 @@ def make_pe(imports, delayed=(), import_rva=None):
     directories = optional + 112
     rva = section_rva if import_rva is None else import_rva
     image[directories + 8 : directories + 12] = rva.to_bytes(4, "little")
-    image[directories + 12 : directories + 16] = import_size.to_bytes(4, "little")
+    recorded = import_table_size if import_size is None else import_size
+    image[directories + 12 : directories + 16] = recorded.to_bytes(4, "little")
     if delayed:
         delay = directories + 8 * 13
-        image[delay : delay + 4] = (section_rva + import_size).to_bytes(4, "little")
-        image[delay + 4 : delay + 8] = delay_size.to_bytes(4, "little")
+        recorded = delay_table_size if delay_size is None else delay_size
+        image[delay : delay + 4] = (section_rva + import_table_size).to_bytes(4, "little")
+        image[delay + 4 : delay + 8] = recorded.to_bytes(4, "little")
     section = optional + 240
     image[section : section + 8] = b".idata\0\0"
     image[section + 8 : section + 12] = len(body).to_bytes(4, "little")
@@ -479,6 +483,21 @@ def _(b):
 def _(b):
     b.windows(make_pe(WIN_IMPORTS, delayed=["WS2_32.dll"]))
     expect(b.stage(), 1, "delay-loads WS2_32.dll; the pin allows no delay-load import")
+    assert not b.dest.exists()
+
+
+@case("windows: a directory with only one of RVA and size set is refused, either table")
+def _(b):
+    # The loader reads an import table from its RVA whatever the size says:
+    # a zero size must not hide the planted import.
+    b.windows(make_pe(WIN_IMPORTS + ["version.dll"], import_size=0))
+    expect(b.stage(), 1, "data directory 1 has RVA 0x1000 and size 0")
+    # Nor hide a delay-load.
+    b.windows(make_pe(WIN_IMPORTS, delayed=["WS2_32.dll"], delay_size=0))
+    expect(b.stage(), 1, "data directory 13 has RVA")
+    # A size with no table behind it is as inconsistent.
+    b.windows(make_pe(WIN_IMPORTS, import_rva=0))
+    expect(b.stage(), 1, "data directory 1 has RVA 0x0 and size")
     assert not b.dest.exists()
 
 
