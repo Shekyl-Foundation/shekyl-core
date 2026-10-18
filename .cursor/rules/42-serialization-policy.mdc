@@ -18,7 +18,8 @@ different mechanisms shaped to what each persists:
 | Tree | What is snapshotted | Snapshot dir | Version constant | Regenerate |
 |---|---|---|---|---|
 | `rust/shekyl-engine-state/**` | the `postcard_schema::Schema` of each persisted block | `rust/shekyl-engine-state/schemas/*.snap` | one per block (table below) | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state schema_snapshot` |
-| `rust/shekyl-chain-store/**` | the fixture **encodings** of each `codec::Canonical` impl, the **table catalogue** (name, shape, key/value type per `schema.rs` definition), and the **property-cell catalogue** (key, scope, value-codec name per `property_cells!` row) | `rust/shekyl-chain-store/schemas/*.snap` | `SCHEMA_VERSION` in `src/codec/schema_version.rs`, for the whole store | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests` |
+| `rust/shekyl-chain-store/**` | the fixture **encodings** of each `codec::Canonical` impl, the **table catalogue** (name, shape, key/value type per `schema.rs` definition), and the **property-cell catalogue** (key, scope, value-codec name per `property_cells!` row) | `rust/shekyl-chain-store/schemas/*.snap` | `SCHEMA_VERSION` in `src/codec/schema_version.rs`, for the whole consensus store file | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests` |
+| the pool file (`rust/shekyl-chain-store/src/pool/`) | the pool record's fixture encoding, the pool version cell's, and the pool file's **table catalogue** | `rust/shekyl-chain-store/pool_schemas/*.snap` | `POOL_SCHEMA_VERSION` in `src/pool/schema_version.rs`, for the pool file alone | the same command |
 
 The chain store snapshots bytes rather than a type schema because its codecs
 are hand-written fixed-width encodings, not serde derives, and because the
@@ -221,6 +222,15 @@ The same workflow, the same shape, one tree over:
    PR head must be greater than the value parsed at the PR base (or
    the file must be born in the PR). A rewrite of the declaration line
    that leaves the number alone does not pass.
+
+The pool file is the crate's second file and has its own number
+(`DRS_E1_SPOOL.md` `SPL-Q8`): its snapshots live in the sibling
+`pool_schemas/`, and a change there requires `POOL_SCHEMA_VERSION`
+(`src/pool/schema_version.rs`) to increase, by the same rule. The pool
+file is discardable, so a mismatch recreates it rather than refusing: a
+pool-only change never forces a chain rebuild. Each `snapshotted_codecs!`
+row names its file, and the meta-tests hold each directory to exactly its
+own codecs and catalogues.
 
 ### Zeroizing-field grep (commit 5 — §3.5)
 

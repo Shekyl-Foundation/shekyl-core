@@ -22,16 +22,16 @@
       "arch": "x86_64",
       "gitian_host": "x86_64-linux-gnu",
       "disposition": "pinned",
-      "bundle_version": "15.0.24",
+      "bundle_version": "15.0.25",
       "bundle_target": "linux-x86_64",
-      "tor_version": "0.4.9.13",
-      "tarball_sha256": "8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a",
       "executable": "tor",
       "files": [
-        { "name": "tor", "sha256": "74f5a47bfe0fc7f7c3ec2fe6c772ec6e52d4a9e9e9c95c7f274f5330e02a8813" },
+        { "name": "tor", "sha256": "39c9db0654d2ec218892bd00f75eccb5b641a7222754436c2e4a8d2f764a57d3" },
         { "name": "libevent-2.1.so.7", "sha256": "b51ca562ec232785856c454ce4f3621d957f39d0db87919e237590b0331544ff" },
-        { "name": "libssl.so.3", "sha256": "e95f55c73b63a4e25db7b9c74abdd35c42829ca1dc68f2fb17ae71c4d841381c" },
-        { "name": "libcrypto.so.3", "sha256": "6ed9fc77689324da28567478e0ed226f4f450f71b47852088e9b0b9220eb0404" }
+        { "name": "libssl.so.3", "sha256": "9c2438d086d6c299db04b0bc337bbc8c0acd26c19c71eada2173a5b2ef7cecac" },
+        { "name": "libcrypto.so.3", "sha256": "418208c5c738864cb5653f3eeab650debcc71afbe50d08b0bd5a04b20f1d3c05" }
       ],
       "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt"]
     },
@@ -40,13 +40,13 @@
       "arch": "aarch64",
       "gitian_host": "aarch64-linux-gnu",
       "disposition": "pinned",
-      "bundle_version": "16.0a13",
+      "bundle_version": "16.0a14",
       "bundle_target": "linux-aarch64",
-      "tor_version": "0.4.9.13",
-      "tarball_sha256": "e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2",
       "executable": "tor",
       "files": [
-        { "name": "tor", "sha256": "5ad180229237d10e670ae0475b21d788272da0c13bb89c2617223afcfe3ff477" },
+        { "name": "tor", "sha256": "0acff9cc36f225adf6f068187ec620712ca838ad12c19d69259623effc0ea17b" },
         { "name": "libevent-2.1.so.7", "sha256": "097958f586ffce01273a57557e17062357d92343724e1f112ea61ad8261ce577" },
         { "name": "libssl.so.3", "sha256": "080e70629ffe87e3c5bbbb59bc231da4c5d68100dd6b43b522bcaf8447d85eaf" },
         { "name": "libcrypto.so.3", "sha256": "f50977cdfd82a28ab7ac327daa11841486193888365a149f1409ce5a3b1e61b3" }
@@ -78,9 +78,24 @@
       "os": "windows",
       "arch": "x86_64",
       "gitian_host": "x86_64-w64-mingw32",
-      "disposition": "unavailable",
-      "reason": "the Windows pin is not adopted until its launch test has run (TB-11)",
-      "pending": "TB-11"
+      "disposition": "pinned",
+      "bundle_version": "15.0.25",
+      "bundle_target": "windows-x86_64",
+      "tor_version": "0.4.9.14",
+      "tarball_sha256": "c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252",
+      "executable": "tor.exe",
+      "files": [
+        { "name": "tor.exe", "sha256": "8c38513b3c4584154158e7c584f4144849dc679a64cd679553d72dad28230c54" }
+      ],
+      "imports": [
+        "ADVAPI32.dll", "CRYPT32.dll", "IPHLPAPI.DLL", "KERNEL32.dll", "SHELL32.dll", "SHLWAPI.dll", "USER32.dll", "WS2_32.dll",
+        "api-ms-win-crt-conio-l1-1-0.dll", "api-ms-win-crt-convert-l1-1-0.dll", "api-ms-win-crt-environment-l1-1-0.dll",
+        "api-ms-win-crt-filesystem-l1-1-0.dll", "api-ms-win-crt-heap-l1-1-0.dll", "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll", "api-ms-win-crt-private-l1-1-0.dll", "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll", "api-ms-win-crt-string-l1-1-0.dll", "api-ms-win-crt-time-l1-1-0.dll",
+        "api-ms-win-crt-utility-l1-1-0.dll"
+      ],
+      "licenses": ["docs/tor.txt", "docs/libevent.txt", "docs/openssl.txt", "docs/zlib.txt"]
     },
     {
       "os": "macos",

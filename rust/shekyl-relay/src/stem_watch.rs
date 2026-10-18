@@ -430,6 +430,92 @@ impl StemWatch {
     }
 }
 
+/// Whether this node still owes the network a broadcast of a transaction it
+/// originated — the C++ `observed_circulating` bit, on the only class it is
+/// defined for. [`StemWatch::seen`]'s `true` is F-10's verdict that ends it.
+///
+/// **The relay's, not the pool's** (DX-F6, 2026-10-16). The pool knows one
+/// relay fact — whether a transaction is public yet
+/// (`DAEMON_RELAY_PRIVACY.md` D++ acceptance criterion 2) — and
+/// re-broadcast responsibility is a relay decision's input, so it lives
+/// beside the stem watch whose verdict disarms it, keyed by the same
+/// [`TxId`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Responsibility {
+    /// The origin still re-broadcasts on its private path.
+    Armed,
+    /// The transaction was seen arriving from somewhere other than where it
+    /// was stemmed. Never re-armed.
+    Disarmed,
+}
+
+/// Re-broadcast responsibility per originated transaction, keyed by its
+/// hash.
+///
+/// **STAGED** (rule 23) for the DRS-X flip, whose relay wiring is the
+/// consumer: it calls [`Self::originated`] when this node submits a
+/// transaction, hands [`crate::Relay::record_arrival`]'s propagated set to
+/// [`Self::propagated`], and calls [`Self::release`] when the pool drops
+/// the transaction (mined, evicted). Until the flip the C++ pool's
+/// `observed_circulating` bit is the live holder, and nothing here runs.
+///
+/// **In memory, by decision.** A restart forgets every entry. The pool
+/// does not record which of its entries this node originated (DX-F6), so
+/// after a restart the relay cannot tell its own unpublished transactions
+/// from arrivals still in stem, and treats every non-public pool entry
+/// alike: the uniform handling is the privacy property. What the relay
+/// does with those entries at open is the relay's to decide at the flip
+/// (`DRS_E5_POOL_ALT_PRUNE.md` §2.2).
+#[derive(Debug, Default)]
+pub struct Responsibilities {
+    owed: HashMap<TxId, Responsibility>,
+}
+
+impl Responsibilities {
+    /// This node originated `tx` and owes the network a broadcast of it. A
+    /// transaction already known keeps what it has: a disarmed
+    /// responsibility is never armed again.
+    pub fn originated(&mut self, tx: TxId) {
+        self.owed.entry(tx).or_insert(Responsibility::Armed);
+    }
+
+    /// Disarm every transaction in `txs` — the set
+    /// [`crate::Relay::record_arrival`] returns, each of which came back
+    /// from somewhere other than where it was stemmed (F-10). A transaction
+    /// this node did not originate has nothing to disarm and is ignored.
+    pub fn propagated(&mut self, txs: &[TxId]) {
+        for tx in txs {
+            if let Some(owed) = self.owed.get_mut(tx) {
+                *owed = Responsibility::Disarmed;
+            }
+        }
+    }
+
+    /// What this node owes for `tx`, or `None` when it did not originate it
+    /// (or has released it).
+    #[must_use]
+    pub fn of(&self, tx: &TxId) -> Option<Responsibility> {
+        self.owed.get(tx).copied()
+    }
+
+    /// The pool no longer holds `tx`: nothing is owed for it.
+    pub fn release(&mut self, tx: &TxId) {
+        self.owed.remove(tx);
+    }
+
+    /// How many originated transactions are tracked.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.owed.len()
+    }
+
+    /// Whether none is.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.owed.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,5 +722,48 @@ mod tests {
             Some(5_000),
             "resolving the earliest moves the wake to the next"
         );
+    }
+
+    /// The responsibility walk: armed on origination, disarmed by the stem
+    /// watch's propagation verdict, never re-armed, gone on release. An
+    /// arrival this node did not originate owes nothing.
+    #[test]
+    fn responsibility_arms_on_origination_and_disarms_on_propagation_only() {
+        let mut w = StemWatch::default();
+        let mut owed = Responsibilities::default();
+        owed.originated(tx(1));
+        assert_eq!(owed.of(&tx(1)), Some(Responsibility::Armed));
+
+        // F-10: the charged successor's echo resolves nothing, so nothing
+        // disarms.
+        w.stemmed(tx(1), peer(9), None, crate::ConnectorId::Clearnet, 1_000);
+        let echoed: Vec<TxId> = [tx(1)]
+            .into_iter()
+            .filter(|t| w.seen(t, Some(peer(9))))
+            .collect();
+        owed.propagated(&echoed);
+        assert_eq!(owed.of(&tx(1)), Some(Responsibility::Armed));
+
+        // Another peer has it: the verdict fires and disarms.
+        let back: Vec<TxId> = [tx(1)]
+            .into_iter()
+            .filter(|t| w.seen(t, Some(peer(3))))
+            .collect();
+        assert_eq!(back, vec![tx(1)], "fixture: the verdict fired");
+        owed.propagated(&back);
+        assert_eq!(owed.of(&tx(1)), Some(Responsibility::Disarmed));
+
+        // Originating it again does not re-arm.
+        owed.originated(tx(1));
+        assert_eq!(owed.of(&tx(1)), Some(Responsibility::Disarmed));
+
+        // An arrival's propagation is not this node's to disarm.
+        owed.propagated(&[tx(2)]);
+        assert_eq!(owed.of(&tx(2)), None);
+        assert_eq!(owed.len(), 1);
+
+        owed.release(&tx(1));
+        assert_eq!(owed.of(&tx(1)), None);
+        assert!(owed.is_empty());
     }
 }

@@ -1264,3 +1264,96 @@ fn i2_the_wire_admits_two_ct_types_and_h15_refuses_null_off_the_coinbase() {
     // third member for either slot to reach.
     let _ = coinbase(1);
 }
+
+/// The pool door's four no-anchor exits each end in a refusal, never in
+/// `Fault::Stale` (the review of #1102, S8). The door claims every
+/// reference the chain records in CEN-I11's window
+/// (`ReferenceClaims::for_transaction`), so `judge_proofs` yields `None`
+/// only when a reference row refuses before the comparison: a reference the
+/// chain does not record (I10), a body with no prunable region, a declared
+/// depth of zero, and one a `u8` does not hold (I13). Each case is the
+/// door's path less the signatures: the claims read as the door reads
+/// them, `judge_proofs` over them, `tx_against` with what it yields. A
+/// `Stale` here would be a crafted transaction misreported as a node fault.
+#[test]
+fn the_doors_no_anchor_exits_each_end_in_a_refusal() {
+    let chain = spendable_chain();
+    let anchored = anchored_on(&chain, listed(KI));
+    let with_prunable = |edit: fn(&mut Option<shekyl_wire::transaction::Prunable>)| {
+        let mut tx = anchored.clone();
+        match &mut tx.ct {
+            Ct::Fcmp { prunable, .. } => edit(prunable),
+            Ct::Null(_) => unreachable!("a spend is an Fcmp ct"),
+        }
+        tx
+    };
+    let exits: [(&str, Transaction, CenRow); 4] = [
+        ("no claim", listed(KI), CenRow::I10),
+        (
+            "no prunable region",
+            with_prunable(|p| *p = None),
+            CenRow::I13,
+        ),
+        (
+            "depth zero",
+            with_prunable(|p| p.as_mut().expect("a prunable region").tree_depth = 0),
+            CenRow::I13,
+        ),
+        (
+            "depth past a u8",
+            with_prunable(|p| {
+                p.as_mut().expect("a prunable region").tree_depth = u64::from(u8::MAX) + 1;
+            }),
+            CenRow::I13,
+        ),
+    ];
+    chain.with_view(|view| {
+        use crate::view::{HeaderView, Tip};
+        let connecting = Tip::connecting_height(view.tip().expect("tip").as_ref());
+        for (name, tx, row) in exits {
+            let claims = ReferenceClaims::for_transaction(&view, connecting, &tx).expect("claims");
+            let mut coverage = RuleCoverage::EMPTY;
+            let cx = TxContext::derive(&tx, TxSlot::Lone, &mut coverage).expect("a spend");
+            let proven = judge_proofs(&cx, &claims, &mut coverage)
+                .unwrap_or_else(|r| panic!("{name}: the proof exit, not a refusal: {r:?}"));
+            assert_eq!(proven, None, "{name}: no anchor");
+            match tx_against(
+                &tx,
+                TxSlot::Lone,
+                &view,
+                &RuleSet::GENESIS,
+                proven,
+                FormAttempt::FIRST,
+            ) {
+                Ok(Err(refused)) => assert_eq!(refused.rule, row, "{name}"),
+                other => panic!("{name}: a refusal, never a fault: {other:?}"),
+            }
+        }
+    });
+    // The control: a spend anchored inside the window, at a depth the tree
+    // holds, is claimed and reaches the verify — this fixture's proof is
+    // refused there — and never exits with `None`, which over a recorded,
+    // in-window reference would end in the `Stale`.
+    let planted = planted_chain();
+    let mut in_window = listed(KI);
+    if let Ct::Fcmp {
+        prunable: Some(p), ..
+    } = &mut in_window.ct
+    {
+        p.tree_depth = 1;
+    }
+    let in_window = anchored_on(&planted, in_window);
+    planted.with_view(|view| {
+        use crate::view::{HeaderView, Tip};
+        let connecting = Tip::connecting_height(view.tip().expect("tip").as_ref());
+        let claims =
+            ReferenceClaims::for_transaction(&view, connecting, &in_window).expect("claims");
+        assert_eq!(claims.len(), 1, "the window claims it");
+        let mut coverage = RuleCoverage::EMPTY;
+        let cx = TxContext::derive(&in_window, TxSlot::Lone, &mut coverage).expect("a spend");
+        assert!(
+            !matches!(judge_proofs(&cx, &claims, &mut coverage), Ok(None)),
+            "a claimed reference is verified, not skipped"
+        );
+    });
+}

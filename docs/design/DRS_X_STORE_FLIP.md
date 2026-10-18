@@ -128,7 +128,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 
 | # | PR | Live? |
 | --- | --- | --- |
-| 1 | **PR-b**: the Rust pool (`DRS_E5_POOL_ALT_PRUNE.md` §5 b1–b7, as amended in its brief) | staged |
+| 1 | **PR-b**: the Rust pool (`DRS_E5_POOL_ALT_PRUNE.md` §5 b1–b7, as amended in its brief) | staged; merged 2026-10-18 (#1102) |
 | 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged |
 | 3 | **Briefed: the read-only RPC handlers and the store-backed facts (DX-Q3), and the miner loop (DX-Q4)**, unrouted | staged |
 | 3b | **The pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` / `stop_mining` (with `mining_status`), the bans and `stop_daemon`** (DX-Q3), unrouted. Briefed after PR-b and PR 2 merge | staged |
@@ -172,7 +172,7 @@ Each site's semantics are named, and L14 closes. Owner: PR 2's first commit, a c
 - `shekyl_economics::relay_floor_admits(fee, weight, floors)`, FL-R23 on the fee lattice.
 
 **What the flip wires:**
-- **Admission.** The submit engine's `fee_meets_floor` (`shekyl-daemon-rpc/src/submit/fee.rs`) is replaced by `relay_floor_admits` over `relay_floor_window` at Phase C and Phase D. It currently runs `relay_floor_admits` over the snapshot tip floor alone, a one-element window, at zero slack. Pool admission (DX-Q5's door) calls the same predicate. The `fee_per_byte` submit fact goes with `daemon_submit_ffi.cpp`.
+- **Admission.** `fee_clears` (`shekyl-daemon-rpc/src/submit/fee.rs`) is `relay_floor_admits` over the relay-floor window when the shim supplies one (the Rust pool), and `fee_meets_floor` — the same predicate over the snapshot tip floor alone — when it does not (the C++ shim). The flip deletes the C++ shim, so Phase C and Phase D see only the window. Pool admission (DX-Q5's door) calls the same predicate. The `fee_per_byte` submit fact goes with `daemon_submit_ffi.cpp`.
 - **The estimate.** `get_fee_estimate`'s store-backed `ChainFacts` implementor (DX-Q3) answers `fee_ladder_from` at the connecting height. The C++ `get_dynamic_base_fee_estimate_2021_scaling` and its FFI go with `rpc_facts_ffi.cpp`.
 
 **What the flip deletes:**
@@ -218,7 +218,7 @@ The C++ hits are all in files the flip deletes (`blockchain.{h,cpp}`, `tx_pool.c
 - One Rust → C++ call hands `levin_notify` what the pool's readiness says is due. That is the only new C++ entry, and RD deletes it with `levin_notify`.
 
 **DX-F6 — the landed pool record holds the relay state machine, against D++ acceptance criterion 2.**
-- `RelayState` (`shekyl-chain-store/src/codec/pool.rs:155–171`) stores:
+- `RelayState` (`shekyl-chain-store/src/codec/pool.rs` at the ground, `d2ac8b45d`, lines 155–171; PR-b replaced it with the public bit) stores:
   - a stem/fluff phase;
   - an arrival `zone: NetZone`.
 - Criterion 2 (`DAEMON_RELAY_PRIVACY.md:113–125`) rules: "**The pool knows one bit: public yet** … owned by the relay and read by the pool", and that `NetZone` is "not a pool field". There are no zones in Shekyl (2026-09-30).
@@ -251,7 +251,7 @@ Each observed difference becomes one row.
 | --- | --- | --- |
 | **Design** | Rust implements a Shekyl ruling the C++ never had or had differently | Cite the ruling (date, document). No action |
 | **C++ defect** | Rust implements the specification; the C++ is wrong | Cite the specification clause. No C++ change (the C++ is deleted in this PR) |
-| **Removed** | A C++ mechanism Shekyl rejected or deleted (hard-fork table, zones, orphan store, scoring, pruning seeds, `kept_by_block` floor bypass) | Cite the ruling |
+| **Removed** | A C++ mechanism Shekyl rejected or deleted (hard-fork table, zones, orphan store, scoring, pruning seeds, `kept_by_block` — its floor bypass and the whole reorg retention it served, CEN-K10, deleted 2026-10-17 on #1102) | Cite the ruling |
 | **Unbuilt by design** | A staged mechanism with a named owner and PR (chain sync's headers-first) | Owner and PR named, and the C++ behaviour is not needed meanwhile |
 | **Rust defect** | Rust is wrong against the design | **Blocks the merge.** Fixed in the flip PR |
 
@@ -282,7 +282,7 @@ Each observed difference becomes one row.
 
 ## 4. Order of work
 
-1. **PR-b**, brief issued 2026-10-16. Starts now.
+1. **PR-b**, brief issued 2026-10-16; merged 2026-10-18 (#1102).
 2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Briefed after PR-b's door lands, because the entry's pool calls are its shape.
 3. **PR 3** — briefed: the read-only RPC handlers, the store-backed facts and the miner loop. Runs beside PR-b.
 4. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge.

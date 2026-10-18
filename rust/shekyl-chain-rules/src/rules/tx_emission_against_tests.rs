@@ -17,7 +17,7 @@ use crate::harness::fixture::{
 use crate::harness::{assert_refused, defined, MockChain};
 use crate::rule_set::{FakechainSchedule, RuleSet, SettlementEpochBlocks};
 use crate::rules::tx_against::{ReferenceContext, I15};
-use crate::rules::tx_emission_against::judge_emission_claim;
+use crate::rules::tx_emission_against::{emission_epoch_facts, judge_emission_claim};
 use crate::rules::TxContext;
 use crate::verdict::{Locus, TxSlot};
 use shekyl_types::archival::SigmaWorkMilli;
@@ -232,4 +232,37 @@ fn j25_refuses_a_claim_the_verify_rejects_and_one_with_no_reference() {
             assert!(!coverage.contains(CenRow::J25));
         }
     });
+}
+
+/// `emission_epoch_facts` gathers only what CEN-J23's citing gate admits.
+/// A claimed epoch far past the tip has no budget and no `Σwork`, and its
+/// slash pass's universe lies above the tip: it answers with the absent
+/// rows and no snapshot — the facts the engine refuses a premature claim
+/// on — never a fault. The settled epoch beside it is gathered.
+#[test]
+fn the_epoch_facts_of_an_unsettled_epoch_are_absent_rows_and_no_snapshot() {
+    let rules = short_epochs();
+    let epoch = SettlementEpoch::from_raw(CLAIMED);
+    let settled_at = rules.settlement_schedule().slash_deadline_height(CLAIMED);
+    let chain = chain_of(settled_at + 6)
+        .with_close(epoch, AtomicUnits::from_raw(1_000_000))
+        .with_gather(epoch, SigmaWorkMilli::from_raw(1_000));
+    let premature = 50;
+    assert!(
+        rules.settlement_schedule().slash_deadline_height(premature) > settled_at + 6,
+        "the premature epoch settles above the tip"
+    );
+    let persona = shekyl_types::PCanonicalId::from_bytes([0x23; 32]);
+    let facts = chain.with_view(|view| {
+        emission_epoch_facts(&view, &rules, &persona, &[CLAIMED, premature])
+            .expect("a premature claim is a fact, not a fault")
+    });
+    assert_eq!(facts.len(), 2);
+    assert_eq!(facts[0].budget, Some(1_000_000));
+    assert_eq!(facts[0].sigma_work_milli, Some(1_000));
+    assert!(facts[0].snapshot.is_some(), "the settled epoch is gathered");
+    assert_eq!(facts[1].settlement_epoch, premature);
+    assert_eq!(facts[1].budget, None);
+    assert_eq!(facts[1].sigma_work_milli, None);
+    assert_eq!(facts[1].snapshot, None, "nothing is gathered for it");
 }

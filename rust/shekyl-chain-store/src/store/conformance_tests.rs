@@ -208,7 +208,7 @@ where
 /// the cumulative work the validator derived for each block (read back off
 /// the verdict the store connected and the store it connected into — the
 /// record both views must then agree on).
-fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Candidate>) {
+pub(super) fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Candidate>) {
     let path = tmp(&format!("conformance-{len}"));
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let mut mock = MockChain::default();

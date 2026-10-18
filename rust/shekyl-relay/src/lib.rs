@@ -82,4 +82,6 @@ pub use graph::{
 };
 pub use noise_queue::{CarrierOutcome, CarrierToken, NoiseQueues, NoiseSend};
 pub use shekyl_relay_privacy::SlotIndex;
-pub use stem_watch::{StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId};
+pub use stem_watch::{
+    Responsibilities, Responsibility, StemOutcome, StemTally, StemTallySnapshot, StemWatch, TxId,
+};

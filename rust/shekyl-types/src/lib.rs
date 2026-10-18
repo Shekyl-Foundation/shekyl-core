@@ -930,7 +930,7 @@ pub use archival::{
 };
 
 pub mod relay;
-pub use relay::{NetZone, RelayCategory, RelayMethod};
+pub use relay::{NetZone, RelayMethod};
 
 scalar_u64! {
     /// **Wall-clock** seconds since the Unix epoch — a pool entry's
@@ -942,14 +942,6 @@ scalar_u64! {
     /// subtractable from each other. The store's other time words are
     /// block time; this one is the pool's, and it never enters a rule.
     UnixSeconds
-}
-
-hash32! {
-    /// The pool's FCMP++ verification-cache key — `H(proof ‖ referenceBlock
-    /// ‖ key images)` (CEN-M8; `tx_pool.cpp:495`). A cached verdict is
-    /// `Some(hash)`; "no cache" is `None`, never a zero hash with a bit
-    /// beside it (DRS-E1 S-POOL, SPL-10).
-    FcmpVerificationHash
 }
 
 mod block_axis;

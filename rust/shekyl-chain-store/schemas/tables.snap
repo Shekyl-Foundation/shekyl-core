@@ -1,8 +1,9 @@
 # shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
 #   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
 # and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
-tables = 43
+tables = 44
 [tables]
+alt_block_bodies = #43 map<shekyl::LmdbHashKey, shekyl::Coded<alt_bodies>>
 alt_blocks = #13 map<shekyl::LmdbHashKey, shekyl::Coded<alt_block>>
 archival_attestation_witness = #20 map<u64, shekyl::Blob<attestation_witness>>
 archival_block_draws = #40 map<u64, shekyl::Coded<block_draws>>
