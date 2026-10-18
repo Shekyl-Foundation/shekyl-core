@@ -31,8 +31,9 @@
 //! `windows_process_extensions_raw_attribute` (rust-lang/rust#114854). Stabilising it
 //! does not retire this lock.
 //!
-//! **Residual.** The C++ `tools::spawn` (DC-F12's subject) does not take this lock.
-//! It stays outside until that lane is gone.
+//! **No residual.** The C++ `tools::spawn` (DC-F12's subject) is deleted; the
+//! daemon's notify commands are spawned by the Rust runner, under this lock
+//! (`shekyl-ffi` `notify_ffi.rs`).
 
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{Mutex, PoisonError};

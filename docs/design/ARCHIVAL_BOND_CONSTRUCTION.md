@@ -662,12 +662,12 @@ conventional).
   *not* a variant on the shared `TxRequest`, which would route bond construction
   through the `LedgerEngine` transfer pipeline and violate §9.6/§10.1. A
   typed-separate request to a separate actor makes cross-assignment
-  unrepresentable. Funding decorrelation defaults from
-  [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7 (>= 1
-  settlement-epoch spacing; fund-from-earnings ramp).
+  unrepresentable. Funding decorrelation: the bond-post delay is measured
+  from the funding ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q2), and the
+  fund-from-earnings ramp is [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §7's.
 - **Runs the standoff self-cert, not just `draw_entry_gap`.** PR 2 wires
-  `draw_entry_gap` for prep-spend / announce / bond-post separation (600-block
-  window, inversion on) **and** runs `shekyl-standoff`'s `certify_draw` against
+  `draw_entry_gap` for the bond-post delay (one draw on the one chain event;
+  the window is [`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q4's) **and** runs `shekyl-standoff`'s `certify_draw` against
   the wallet's actual CSPRNG. The self-cert is the actionable half of the
   conformance work -- it proves the *shipping wallet's RNG* produces conformant
   draws, not merely that the reference does.

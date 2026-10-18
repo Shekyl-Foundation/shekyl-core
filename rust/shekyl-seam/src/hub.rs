@@ -22,8 +22,8 @@ use shekyl_capped_stream::{SendHalf, Session};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
 use shekyl_transport_layer::{
-    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet, OpenSocket, SocketId,
-    Sockets,
+    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Ipv4Subnet, Links, ListedBan,
+    OpenSocket, SocketId, Sockets,
 };
 
 use crate::connection::{
@@ -116,6 +116,10 @@ pub struct Hub {
     post: Arc<dyn Fn(Post) + Send + Sync>,
     clock: Arc<dyn Clock + Send + Sync>,
     dial: Arc<RwLock<Option<Arc<dyn Dial>>>>,
+    /// Each connector's link: published by whoever owns its route, read by
+    /// the connector at each dial and by the dialer before it draws
+    /// (`TOR_SUPERVISOR.md` §4.1).
+    links: Arc<Links>,
 }
 
 /// What one `send` did. `found` is whether the registry held the id.
@@ -151,7 +155,14 @@ impl Hub {
             post,
             clock,
             dial: Arc::new(RwLock::new(None)),
+            links: Arc::new(Links::new()),
         }
+    }
+
+    /// Every connector's link. Clones of this hub share it.
+    #[must_use]
+    pub fn links(&self) -> &Links {
+        &self.links
     }
 
     /// Wake every thread waiter.
@@ -232,9 +243,9 @@ impl Hub {
     /// The channel is admitted and built, and its gap deadline, when it
     /// has one, is already armed by the connector. Nothing here writes
     /// the board or tells the adapter: the outbound dialer holds the
-    /// channel through the handshake and calls [`Self::adopt`] only on a
-    /// well-formed response. A channel that is never adopted leaves no
-    /// trace in the registry.
+    /// channel through the handshake and calls [`Self::adopt`] only for a
+    /// kept response. A confirm closes the channel unadopted. A channel
+    /// that is never adopted leaves no trace in the registry.
     ///
     /// No dialer is [`CloseKind::LocalClose`].
     pub fn dial_channel(&self, endpoint: &Endpoint) -> Result<Channel, CloseCause> {
@@ -250,28 +261,29 @@ impl Hub {
     /// `established` post in one call.
     ///
     /// The seam tests and the harness use this. The outbound dialer does
-    /// not: it runs the handshake between the two. The caller drives
-    /// [`crate::drive_inbound`] on the returned session.
+    /// not: it runs the handshake between the two. The caller starts the
+    /// returned session's pump with [`Self::drive`].
     pub fn connect(&self, endpoint: &Endpoint) -> Result<Attached, CloseCause> {
         let channel = self.dial_channel(endpoint)?;
         self.adopt(channel.open, channel.session, channel.endpoint, channel.gap)
     }
 
     /// Post the outbound handshake's result for `id`. The caller has
-    /// adopted the channel; this is the first post after its
-    /// `established`, ahead of any frame the pump will deliver.
+    /// adopted the channel, recorded the kept session and marked it
+    /// established. This notifies the strand. Nothing waits on it. Only a
+    /// kept dial is posted: a confirm dial finishes in the dialer.
+    /// It is the first post after `established`, ahead of any frame the
+    /// pump will deliver.
     pub fn post_handshake_result(
         &self,
         id: SocketId,
         connector: ConnectorId,
-        keep: bool,
         support_flags: u32,
         sync: SyncPayload,
     ) {
         (self.post)(Post::HandshakeResult {
             id,
             connector,
-            keep,
             support_flags,
             sync,
         });
@@ -565,10 +577,16 @@ impl Hub {
             .is_some_and(|dial| dial.inject(id, frame))
     }
 
-    /// Remember the harness pump so [`Self::reap`] can join it.
-    pub fn track_pump(&self, id: SocketId, pump: std::thread::JoinHandle<()>) {
-        if let Some(dial) = self.current_dial() {
-            dial.track_pump(id, pump);
+    /// Start the inbound pump of `id`, an adopted session, where the
+    /// installed dialer runs pumps ([`Dial::drive`]). With no dialer the
+    /// hub is shutting down, and the row closes as [`CloseKind::LocalClose`].
+    pub fn drive(&self, id: SocketId, session: Session) {
+        match self.current_dial() {
+            Some(dial) => dial.drive(self, id, session),
+            None => {
+                drop(session);
+                let _ = self.finish(id, CloseCause::new(CloseKind::LocalClose));
+            }
         }
     }
 
@@ -758,7 +776,7 @@ impl Hub {
     /// The Levin handshake finished. Fires this row's gap sender, if it
     /// still has one.
     ///
-    /// A missing row, and a row already in [`Phase::Closed`], are left
+    /// A missing row, and a row already closed, are left
     /// alone. A close is not a handshake, and the closed row stays until
     /// [`Self::reap`].
     pub fn session_established(&self, id: SocketId) {
@@ -800,16 +818,21 @@ impl Hub {
         }
     }
 
-    /// The executor dropped the link. The row is gone after this returns.
+    /// The executor dropped the link, or the dialer released a channel it
+    /// never adopted. The row, if there was one, is gone after this
+    /// returns, and the installed dialer has retired the id
+    /// ([`Dial::retired`]).
     pub fn reap(&self, id: SocketId) {
         let dial = self.current_dial();
         {
             let mut inner = self.lock();
+            // A channel the dialer never adopted has no row: the board did
+            // not change, and nothing waits on it.
             if let Some(conn) = inner.conns.remove(&id) {
                 Self::wake_row(&conn);
+                Self::republish(&mut inner);
+                self.wake();
             }
-            Self::republish(&mut inner);
-            self.wake();
         }
         if let Some(dial) = dial {
             dial.retired(id);
@@ -882,10 +905,21 @@ impl Hub {
         self.lock().sockets.is_banned(host, now)
     }
 
+    /// Bans still in force, copied out of the table.
+    ///
+    /// One wake's view: expiry is applied at this read, and the copy does
+    /// not expire again. Callers that also hold another lock take this
+    /// before that lock.
+    #[must_use]
+    pub fn listed_bans(&self) -> Vec<ListedBan> {
+        let now = self.now();
+        self.lock().sockets.listed(now)
+    }
+
     fn record(&self, id: SocketId, cause: CloseCause) -> CloseResult {
         let poster = Arc::clone(&self.post);
         let dial = self.current_dial();
-        let (open, send, gap) = {
+        let (open, send, gap, connector) = {
             let mut inner = self.lock();
             let Some(conn) = inner.conns.get_mut(&id) else {
                 return CloseResult::AlreadyClosed;
@@ -899,18 +933,15 @@ impl Hub {
             let send = conn.send.take();
             let gap = conn.gap.take();
             let connector = conn.connection.endpoint().connector();
-            poster(Post::Closed {
-                id,
-                connector,
-                cause,
-            });
             Self::wake_row(conn);
             self.wake();
             Self::republish(&mut inner);
-            (open, send, gap)
+            (open, send, gap, connector)
         };
         // The sender is dropped off the table lock: the connector task it
-        // wakes may call back into the hub.
+        // wakes may call back into the hub. The poster is after that
+        // release. It calls the dialer and the strand, and both may take
+        // this lock; a poster under the lock deadlocks on that re-entry.
         drop(gap);
         if let Some(open) = open {
             let _ = open.close(cause);
@@ -932,6 +963,11 @@ impl Hub {
         if let Some(dial) = dial {
             dial.reader_stopped(id);
         }
+        poster(Post::Closed {
+            id,
+            connector,
+            cause,
+        });
         CloseResult::Recorded(cause)
     }
 

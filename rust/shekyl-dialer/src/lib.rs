@@ -13,6 +13,12 @@
 //! and [`shekyl_peerlist::Peerlist::apply`] stays the only writer of gray
 //! and white. The seam drives the channel once the handshake has adopted it.
 //!
+//! Lock order: this crate never calls into the hub while it holds its own
+//! lock. A ban snapshot and a board read are taken first, and the lists
+//! lock is taken after they return. The hub's close poster runs the other
+//! way — it takes this lock — so the two are never held in the opposite
+//! order.
+//!
 //! Placement (Rick, 2026-10-13): a crate of its own over `shekyl-seam` and
 //! `shekyl-peerlist`, which do not depend on each other. The C++ reaches
 //! it only through `shekyl-ffi`.
@@ -31,12 +37,12 @@ pub mod seeds;
 pub mod store;
 
 pub use attempts::Attempts;
-pub use bans::HubBans;
+pub use bans::BanSnapshot;
 pub use candidate::{CandidateFilter, Skip};
 pub use fill::{plan, Census, DialAim, DrawList, FillRule, Plan, IN_FLIGHT_BOUND};
 pub use memory::FailedAddresses;
 pub use nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
-pub use owner::{session_of, Dialer, Shared, SnapshotSource};
+pub use owner::{session_of, Dialer, NotReady, Shared, SnapshotSource};
 pub use pace::{next_wake_nanos, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
 pub use seeds::{seeds, SeedNetwork};
 pub use store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};
