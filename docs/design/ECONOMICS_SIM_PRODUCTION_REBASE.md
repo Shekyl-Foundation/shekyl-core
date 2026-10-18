@@ -18,7 +18,7 @@ fee-share verdict in
 
 ---
 
-## Reading-pass finding 1: the production default carries 22 of 50 (2026-10-03, ESR-6)
+## Reading-pass finding 1: the production default carries 22 of 50 (re-measured 2026-10-17; the 2026-10-03 run is §5.7)
 
 *Relabelled 2026-10-05 (Rick's ruling, [`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2).* "The production block-template fill rule" below is the reward-aware fill, which is the design's. The daemon runs Monero's pre-v5 rule until the fill moves to Rust, so this finding is the design's behaviour once the fill lands, not what the daemon does today. The sim's fill also weighs the bodies without the coinbase (1,331 B a block); the figures are re-run when the owner prices the block's weight ([`FOLLOWUPS.md`](../FOLLOWUPS.md)).
 
@@ -26,13 +26,13 @@ fee-share verdict in
 block, at the production Standard rung and under the production
 block-template fill rule:
 
-- Blocks carry **22 transactions** for the first eleven years.
+- Blocks carry **22 transactions** for the first eighteen years.
 - The median stays within one transaction of the 300 KB zone (314–322 KB).
 - About **28 a block go unserved**, roughly 7.4 M a year.
-- The median starts to climb in year 11. By year 12 blocks carry all 50, and
-  it settles at 732–764 KB.
+- Blocks grow in year 19, 42.4 a block on average that year. From year 20
+  they carry all 50, and the median settles at 732–764 KB.
 
-On the flat control fee the same thing lasts until **year 38**.
+On the flat control fee blocks carry 20 for the whole 60-year run.
 
 **The mechanism is production code.** The producer lists a transaction only
 when it does not lower the gross coinbase (`fill_block_template`, now
@@ -42,7 +42,10 @@ weight `w` therefore needs a fee that covers its penalty:
 fee grows with `w` and the penalty with `w²`. The ladder's reference weight
 `w_ref = 3 000` is a quarter to a fifth of a post-quantum ordinary
 transaction (12.6–15.3 KB), so the condition fails until `ρ` reaches about 1.2. That
-happens in year 11 on this trajectory (§5.6–§5.7).
+happens in year 19 on this trajectory (`--stage2`, the growth-gate table).
+The table evaluates `w·M² ≤ 4·ρ·w_ref·m²` in integers: `ρ` is
+`fee_correction / M_r` and `4` is `STANDARD_RUNG_OVER_ECONOMY`. It prints
+`θ = w/(4·w_ref)` as that test at equal medians, beside `m/M` and the verdict.
 
 **The demand assumption, named. The sim has no demand response.** Demand is
 the scenario's schedule. It is exogenous, the same whatever the fee or the
@@ -64,8 +67,9 @@ question, and nothing in this sim can respond to it.
 
 - **The two constants the condition reads.** Both are Monero's, and both
   were sized for a Monero transaction:
-  - `w_ref = 3 000` is `DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT`. CEN-M3
-    finds no examination record of it as a choice.
+  - `w_ref = 3 000` is `shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT`,
+    Monero's reference weight, never derived for Shekyl. CEN-M3 finds no
+    examination record of it as a choice.
   - The 300 000-byte zone holds 100 Monero-sized transactions and about
     22 of ours. Its transaction-capacity leg was ratified on a 4–8 KB
     estimate per spend (C2-R2 Q1; CEN-G6b's provenance gap).
@@ -85,17 +89,17 @@ Each is an input, not a result, and none is modelled.
 
 **What it feeds.**
 
-- **Corpus growth.** The baseline's closed shards at year 10 are 229 864,
-  against 523 841 before.
+- **Corpus growth.** The baseline's closed shards at year 10 are 229 864.
 - **The purse.** Emission is paced at the release multiplier's 0.8 floor
-  for eleven years, so the reward is 1.313× higher at every later year.
+  for eighteen years, so every later year's reward is higher than on a chain
+  that carries its demand. ESR-10's re-derived arm measures by how much.
 - **The escalation knee.** Its band's low anchor moved with the corpus
   (`docs/FOLLOWUPS.md`; GF-7's, after ESR-10).
 - **Every onset year** (§5.7).
 
 None of these should be quoted without the assumption above beside it.
 
-## Reading-pass finding 2: block growth is gated by the fee correction (2026-10-03, ESR-6)
+## Reading-pass finding 2: block growth is gated by the fee correction (re-measured 2026-10-17; the 2026-10-03 run is §5.7)
 
 A Standard-rung transaction buys one more transaction's room past the
 median when `w ≤ 4ρ·w_ref·(m/M)²`, with `ρ = (1 − σ)/(1 − b)`. That is the
@@ -106,17 +110,30 @@ the default fee starts growing blocks is set by the staker emission share
 their own: the staker bootstrap leg and the fee burn. Block-size growth is a
 third job carried by the same term, and nothing chose it.
 
-Measured on the ESR-6 baseline, production arm, years 1 → 10:
+Measured on the baseline, production arm, at each year's last block
+(`--stage2`, the growth-gate table):
 
-| | Year 1 | Year 10 | Factor |
-| --- | ---: | ---: | ---: |
-| `σ` | 0.143 | 0.055 | `1 − σ`: × 1.10 |
-| `b` | 0.016 | 0.203 | `1/(1 − b)`: × 1.24 |
-| `ρ` | 0.871 | 1.185 | × 1.36 |
+| | Year 1 | Year 10 | Year 18 | Factor, year 1 → 18 |
+| --- | ---: | ---: | ---: | ---: |
+| `σ` | 0.135 | 0.052 | 0.023 | `1 − σ`: × 1.13 |
+| `b` | 0.016 | 0.131 | 0.197 | `1/(1 − b)`: × 1.22 |
+| `ρ` | 0.879 | 1.090 | 1.217 | × 1.38 |
 
-`ρ` crosses the threshold `w/(4·w_ref)` = 1.22 in year 11. About
-**two-thirds of the rise is the burn fraction** climbing as the supply is
-emitted, and one-third is `σ` decaying. Any change to the decay schedule,
+The threshold `θ = w/(4·w_ref)` reads the ordinary transaction's weight,
+so it steps with the tree's depth: 1.188 in year 1, 1.220 from year 2,
+1.274 from year 23. `θ` is that threshold when the medians are equal.
+`ρ` crosses it in year 19, and every constrained scenario grows in the
+year its `ρ` crosses (year 17 on the boom-bust cycle, whose booms raise
+`b` sooner). The report prints `m/M` and the full inequality's verdict
+beside `θ`. On this baseline `m/M` stays 1.000 through year 25, so the
+verdict, the zone crossing and block growth are all year 19. A trajectory
+where the effective median pulls ahead of the long-term one admits earlier
+than `θ`. In the year blocks grow, `ρ` jumps
+to 1.415: the carried volume enters the burn. About **three-fifths of the
+rise to year 18 is the burn fraction** climbing as the supply is emitted,
+and two-fifths is `σ` decaying. At 22 carried a block `b ≈ 0.33·s`,
+with `s` the net supply over the asymptote (0.394 at year 10), so `b`
+rises only as fast as the curve emits. Any change to the decay schedule,
 the burn curve or the `(1 − σ)` correction therefore moves the year blocks
 can first grow, and with it the corpus, the purse and the onsets. Under
 re-derived `w_ref` and zone (finding 1) the threshold itself moves.
@@ -162,8 +179,9 @@ Two rulings govern the repair.
 ## 1. What the census found
 
 Two read-only passes read every file of both sim crates against the
-production owners (§8 gives the method and its limits; Appendices A and B
-are the reports). The rows that move a published number, or that block the
+production owners (§8 gives the method and its limits; Appendix A2 is
+the economics sim's rows and where each stands, Appendix B the staking
+sim's report). The rows that move a published number, or that block the
 baseline the second ruling asks for:
 
 | Finding | Where | Effect | Checked by the lane |
@@ -204,8 +222,9 @@ tables has one cause. Each item names what would show it wrong.
 | **ESR-5** | Net circulating supply (`CirculatingSupply::derive`) in the gate-7 path and the recorder; the fixture is regenerated. | Each regenerated column is justified from the production formula, not from the run that produced it. |
 | **ESR-6** | The weight penalty (`paid_block_reward`) and a block-weight median enter the fold. The pure median fold is **exposed from `shekyl-chain-rules`**, not restated — see §3. What a block carries is the producer's fill rule, lifted from `fill_block_template` to `shekyl_block_template::Fill` and called. | With traffic above the penalty-free zone the median rises and the floor falls as `1/M²` — **amended by §5.6 before the run**: on an all-Standard chain, only once one more transaction's fee covers its penalty. |
 | **ESR-7** | A miner stuffer: transactions the miner includes in its own blocks. Two arms: the fee floor **unenforced** (the current system — zero fee, bounded only by the penalty) and **enforced** (a declared divergence, §4). | `--stage2` prints a stuffer row at zero fee beside the fee-path one. |
-| **ESR-8** | Restated constants become imports, or are declared in §4. ~~The dead stake schedule is deleted in its own commit (rule 15).~~ **Withdrawn 2026-10-03 (Rick):** staking is being built now, and the sim is the instrument for designing it. A staking surface the daemon does not read yet is not dead. The stake schedule, the stake ratio and `ActivityMetric.total_staked` stay. | Appendix A's restated-constant rows are each closed by an import, a deletion, or a §4 entry. Staking surfaces are excepted from deletion. **Re-censused 2026-10-11 (Appendix A2):** 26 rows closed, 11 restated and 10 dead-referent rows open. |
+| **ESR-8** | Restated constants become imports, or are declared in §4. The stake schedule, the stake ratio and `ActivityMetric.total_staked` stay (Rick, 2026-10-03): staking is being built now, and the sim is the instrument for designing it. A staking surface the daemon does not read yet is not dead. Rejected: deleting the stake schedule as dead. | The census's restated-constant rows are each closed by an import, a deletion, or a §4 entry; staking surfaces are excepted from deletion. Appendix A2 holds none open. |
 | **ESR-9** | Every live passage that quotes a superseded figure or reads as history is replaced by the current one, with the history in git (ruled 2026-10-15). In scope: the documents that quote the old tables (§12.13–§12.14 rows); the FL-E1 note in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §11.7, re-measured before it is replaced; the staking-sim plan's clause that L11–L19 figures become records-was rows (§6, EUP-3's to restate before it runs); and Appendix A, which Appendix A2's re-census supersedes; and the thin-margin counts that `FEE_LADDER_DERIVATION.md` (the arm table of §10.10) and `FEE_LADDER_ROUND.md` (round 16b) quote from a column the sim no longer prints. Also in scope: the deleted fee-ladder arms (`served_ceil_cq`, and the quantized, hysteresis, rate-limited and grid columns), the FL-R3 and FL-R18 sweep lines `--fee-ladder` no longer prints, and the §4 nearest-pow2 row. | No current-tense sentence quotes a superseded figure, and no live section says records-was. |
+| **ESR-15** | The ordinary fee is rounded up to the fee lattice by `shekyl_economics::quantized_fee`, as the wallet pays it, and §4's unrounded-fee row is deleted. Its own step, after ESR-9 and before ESR-10 registers its predictions (ruled 2026-10-17): ESR-10's fixture changes then come from ESR-10 alone, and it starts from a fee path with no declared departures. Predictions are written before it runs. | A fee `--stage2` charges on the production arm that is not a multiple of `FEE_QUANTIZATION_MASK`. |
 
 The constant-fee closed form for the fee horizon (`onset.rs`, and the two
 tests that pin it) describes a fee the chain does not charge. It is
@@ -256,7 +275,8 @@ left out. ESR-1 runs the Standard rung at `×1` only. The multiplier is in
 the type and nothing sweeps it, and the rung mix is not modelled at all.
 ESR-10 prints A1-T at a swept multiplier and at the defaulted 15/80/5
 mix, including a zero-Priority arm. Its falsifier: the `×1` column equals
-the default report's.
+the default report's. The predictions, written before any ESR-10 code, are
+[`ESR10_PREDICTIONS.md`](ESR10_PREDICTIONS.md).
 
 **Amended 2026-10-03 (design owner, after ESR-6).** ESR-10 runs every rung
 mix twice:
@@ -278,6 +298,14 @@ One implementation fact for the re-derived arm:
 The arm therefore cannot be expressed through parameters alone, and either
 the floor takes its zone from the parameter set or the arm declares the
 divergence.
+
+**Amended 2026-10-18 (design owner, after ESR-9).** The prediction set's
+year-1 operands are this document's growth-gate table (finding 2), not
+§5.6's older figures: `ρ = 0.879` and `θ = 1.188`. The Standard multiplier
+that removes the constrained era is `θ(y1)/ρ(y1) ≈ 1.35`, registered as
+1.30–1.40. Those are what ESR-9 measured. They are inputs to the
+prediction. ESR-10 has not run, so the multiplier is not fitted to an
+ESR-10 outcome.
 
 **Where the items land (design owner, 2026-10-02).** ESR-1, ESR-2 and
 ESR-3 land in PR #935, which goes to review with them. ESR-4 onward
@@ -328,6 +356,34 @@ registered the prediction (`da1a6b082`) and §5.9 records it.
 
 §5.11 records the first run. ESR-7's falsifier holds: the report prints the
 unenforced miner's zero-fee row beside the relay stuffer's.
+
+**Landed.** ESR-9, 2026-10-17, in PR #1104.
+
+- `43a8f104f` prints the growth gate year by year in `--stage2`. On the
+  baseline `ρ` reaches `θ ≈ 1.22` in year 19, and blocks grow that
+  year. Reading-pass findings 1 and 2 quote that run.
+- `1f1c4972d` makes that gate read production. The inequality is
+  `w·M² ≤ 4·ρ·w_ref·m²`, with `ρ` from `fee_correction / M_r` and the
+  `4` from `STANDARD_RUNG_OVER_ECONOMY`. It prints `θ` as that test at
+  equal medians, with `m/M` and the verdict. On this baseline `m/M`
+  stays 1.000 through year 25, so the verdict and the crossing are the
+  same year. The flat control arm does not print the section.
+- The live passages that quoted a superseded figure quote the current
+  run. `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13–§12.14 are
+  dated runs on the flat fee, with their commits in the headings; neither
+  arm of today's run reproduces them, and re-deriving their readings is
+  EUP-4's (`FOLLOWUPS.md`). §12.4.1's A1, A4, A5 and A6 rows give the
+  current run.
+- `FEE_LADDER_DERIVATION.md` §11.7 is the dated run at `5574be2ea`. The
+  current `--fee-floor` runs FL-E1 on the exact window only: 600 cells,
+  4 not converged, worst 87 bp, all at age 12, `ε` = 3, `D` = 400,
+  displaced start.
+- Appendix A is deleted; Appendix A2 names each row's subject.
+
+The falsifier holds over the documents in scope: no current-tense
+sentence quotes a superseded figure, and no live section says
+records-was. Appendix C's briefs are kept as sent, and their "already
+known" lists describe the tree they were written against.
 
 **Where the fixture tests run (2026-10-10).** The two `--stage2` narration
 tests are `#[ignore]`d for cost, and until this date no CI lane ran them: on
@@ -394,7 +450,7 @@ defect.
 
 | Divergence | Why it exists | Reported as |
 | --- | --- | --- |
-| Control arm: flat `0.1 SKL` per transaction | Reproduces §12.14, so the old and new tables differ by the fee and nothing else | Named arm, printed beside the production arm |
+| Control arm: flat `0.1 SKL` per transaction | The fee §12.13–§12.14 were measured on. The two arms of one run differ by the fee and nothing else | Named arm, printed beside the production arm |
 | Fee multiplier on the Standard rung | What users pay above the default is not knowable before launch | `×1`, the production default, is what runs. The sweep is ESR-10 and is not printed yet |
 | Rung mix (economy / standard / priority shares) | Same. At the defaulted 15/80/5 mix ([`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §5.5) the 5 % on Priority pay roughly three quarters of all fees at the zone median | Not modelled yet: every ordinary transaction pays Standard. ESR-10 |
 | Control arm: admission at a flat 300 atomic/byte | The rate §12.13's stuffer and claim were priced at. Nothing in the chain charges it; the chain's admission rate is the relay floor | Part of the control arm; printed in its stuffer table |
@@ -406,17 +462,14 @@ defect.
 | The pool's livetime is a restated C++ define | `CRYPTONOTE_MEMPOOL_TX_LIVETIME` has no Rust owner until the pool moves (`DRS_E1_SPOOL.md`); the sim's copy is pinned to the header by a test | Stated at its definition |
 | Budget disposition (b) is unpenalised | (b) is the unmodulated subsidy, a counterfactual of the release multiplier. The penalty in (a) is bounded by the fees of the transactions that crossed the median, since the fill rule admits no other | Stated in `budget.rs` |
 | Every ordinary transaction pays Standard | No wallet escalates its rung under congestion; the user chooses. Blocks past the median are what Priority pays for | ESR-10's rung mix |
-| A claim is one ordinary transaction at the admission rate | The claim's own envelope and the wallet's claim hold floor (`EMISSION_CLAIM_FEE_FLOOR`) are not modelled. Carried from the pre-ESR report unchanged | Appendix A, class A, row A9 |
-| Fee paid unrounded | The product is the fixed point of `shekyl_tx_weight::converge_weight_fee` — the wallet's iteration without the mask. The wallet then rounds each fee up to the daemon's quantization mask (1 000 atomic). The mask has no Rust owner — it is a C++ static — and the fee-floor instrument in this crate already pays unrounded (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here; closes when the mask gains a Rust owner |
-| `REF_TX_WEIGHT = 3_000` | The ladder's reference weight is a C++ macro with no single Rust owner. The crate's one existing declared copy (`fee_ladder.rs`) is reused, not duplicated | Declared at its definition |
+| A claim is one ordinary transaction at the admission rate | The claim's own envelope and the wallet's claim hold floor (`EMISSION_CLAIM_FEE_FLOOR`) are not modelled | Stated here |
+| Fee paid unrounded | The product is the fixed point of `shekyl_tx_weight::converge_weight_fee` — the wallet's iteration without the lattice. The wallet rounds each fee up to the lattice, `shekyl_economics::FEE_QUANTIZATION_MASK` (1 000 atomic), through `quantized_fee`, the function relay admission runs. The fee-floor instrument in this crate pays unrounded too (FL-R22). At most 1 000 atomic per transaction, below print precision | Stated here. The lattice has its owner, so calling `quantized_fee` closes the row. That changes both narration fixtures in their last printed digits, so it is its own step: ESR-15 |
 | Fee floor enforced in consensus | Not the current system: the floor is relay policy (C2-R2 Q9, reopened 2026-10-02) | Second arm of ESR-7 |
-| Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each already declared at its definition (Appendix A, class A) |
-| The fee-floor instrument's floor at `SCALE` resolution (Appendix A R29) | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` |
-| The ArticMine transliteration's KAT inputs (R30) | The 300 000 in the inherited-ladder tests is an input of the C++ `scaling_2021` vectors, fixed with them; importing the zone would move a KAT with the config | `fee_ladder.rs` tests |
+| Traffic schedules, opportunity-cost band, SKL price band, storage and Kryder terms, replica target `R = 6` | No production owner exists | Exogenous; each declared at its definition |
+| The fee-floor instrument's floor at `SCALE` resolution | FL-E1–E3 measure the floor's per-block slew, which is finer than one atomic unit per byte; the owner rounds to whole units | `fee_floor.rs`; pinned to `relay_fee_floor` and the ladder's `4F` by `the_floor_is_the_owners_at_scale_resolution` |
 | The secret draw's reveal lag and dropout (ESR-11) | Who reveals a block's seed, and when, is behaviour production cannot know. ESR-13 runs ESR-11's epoch at `Timing::esr11()` on production's `draw_count`, `draw_horizon` and `select_draw`; ESR-11's own loop was deleted at `f58531716` (§5.22). ESR-11's analytic functions are called: the `(m, n)` re-check, the retry mixture and the clearing figures, the evidence set's shape, and the count rule's callers `count_at` / `capped_at` | `secret_draw.rs`, `secret_draw_production.rs`; `--secret-draw` |
 | The secret draw on production's count and selection: producer dropout, filing lag, inclusion latency, loss to a reorg, and each block's seed and hash (ESR-13) | The count, the horizon and the selection are production's and are called. What decides whether a block's bundle is admitted is the behaviour of producers and of the chain, which has no owner to call; the seed and the block hash are the generator's bytes because no block is built. `M` is challenger policy, not consensus | `secret_draw_production.rs`; §5.17 fixes the model before the run |
 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs`, R22) | Production's rule is a predicate over one window, not a probability. The closed forms are the analysis of that predicate and are cross-checked against the predicate-backed kernel by test | Stated at each form |
-| The ArticMine transliteration (`fee_ladder.rs`, D7) | The inherited ladder is reproduced as the thing the Shekyl ladder is measured against. It has no production owner because production does not run it | `fee_ladder.rs`; its KAT inputs are the row above |
 | Maturity operands (`MATURITY_D = 324_000`, 40 000 projected pairs; D13) | Assumptions about a network that does not exist yet, not values of the chain | Named as assumptions where they are defined |
 | Gate-7's locked supply counts one shard per `blocks_per_shard` blocks (`engine.rs`, D1) | The partition is by archival bytes (`shard_of`), and the engine fold carries no byte fold to read it from. The default cadence is one shard per `SETTLEMENT_EPOCH_BLOCKS`; the sim's own stage-2 baseline closes 229,864 shards in ten years, one per eleven blocks, so the default understates the locked supply by a factor near 900. **Not a neutral choice:** a gate-7 figure is a floor on the lock, not an estimate of it | Stated at `ArchivalLockModel::blocks_per_shard`. Moving gate-7 onto the byte fold moves its committed figures and is its own step, with its predictions written first |
 | The A3 and A4 base paths score through the plateau curve (`population.rs`, `stranding.rs`, D3) | Credited work is linear in production; the curve is kept there for counterfactuals only. The two base paths predate that and still read `curve_milli` | `distribution.rs` and OQ-4 name themselves counterfactual; `redistribution.rs` is linear. Re-basing A3 and A4 moves both narration fixtures and is its own step, with its predictions written first |
@@ -687,6 +740,9 @@ about the default, not about a chain under congestion with a rung mix;
 that is ESR-10's.
 
 ### 5.7 ESR-6 — what the run said (2026-10-03, at `49b313eeb`)
+
+This section is the 2026-10-03 run at `49b313eeb`. The head readings were
+re-measured 2026-10-17; growth there is year 19 (findings 1 and 2).
 
 | Prediction (§5.6) | Outcome |
 | --- | --- |
@@ -1847,8 +1903,8 @@ subjects ESR-13 did not test, are added to ESR-13 at ESR-11's timing.
 
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
-**Reworded 2026-10-04, under the cycle ruling (§0).** Staking is being
-designed now, and the staking sim is where it is designed. It is not a
+Under the cycle ruling (§0), staking is being designed now, and the
+staking sim is where it is designed. It is not a
 re-base onto a finished system. Its next PR is the *check* half of the cycle,
 for the pieces that have been implemented and settled:
 
@@ -1880,8 +1936,9 @@ abstract-purse control arm reproduces the existing L11 and L13 pins in
 
 Two consequences are recorded here so they are not discovered later.
 
-- Every L11–L19 figure becomes a records-was row when that PR lands. No
-  test pins a population result today; they are pinned in documents only.
+- When that PR lands, each L11–L19 section that reports a run reports
+  the new one, and cites the run it replaces by its commit. No test pins
+  a population result today; they are pinned in documents only.
 - The consensus constants calibrated from those runs — the bond floor, the
   age weight, the bond duration, the failure window, the release cooldown
   — keep their values and lose their derivation until the runs are
@@ -1920,239 +1977,37 @@ found. It built nothing and ran nothing.
 - **Row labels inside the appendices are local to their tables** (`R9`,
   `D2`, `A1`, …). They are not identifiers and collide by spelling with
   registered families and with the sim's arm names. Cite a row as
-  "Appendix A row R9"; the identifiers of this round are `ESR-`.
-- **Line numbers are at the pin** (`bb021f254`) and will move.
-- **The appendices are the reports as returned**, less two lines about
-  the reporting environment and one local path; report headings are
-  demoted one level to sit under the appendix headings. Nothing else is
-  edited, so a claim in an appendix is the pass's, not this document's.
+  "Appendix A2 row R9"; the identifiers of this round are `ESR-`.
+- **Line numbers are at each appendix's pin** and will move.
+- **Appendix B is the report as returned**, less two lines about the
+  reporting environment and one local path, its headings demoted one
+  level to sit under the appendix heading. Nothing else is edited, so a
+  claim in it is the pass's, not this document's. The economics sim's
+  first report as returned is in this document at `486c754e6`;
+  Appendix A2 carries each of its rows forward.
 - The census did not sweep the design documents that quote sim output;
-  ESR-9 owes that sweep.
+  ESR-9 did.
 
 ---
 
-## Appendix A — census of `shekyl-economics-sim` (as reported, at `bb021f254`)
+## Appendix A2 — census of `shekyl-economics-sim`, and where each row stands (re-census at `258b4d851`)
 
-Read-only pass, 2026-10-02. Row labels are local to these tables (§8).
-Sim paths are relative to `rust/shekyl-economics-sim/src/`; production
-paths to `rust/`. Status column: **V** = definition and use both read;
-**I** = inferred.
-
-Scope: `dev` @ `bb021f254`, 23 files under `rust/shekyl-economics-sim/src/`, **15,255 lines** (not ~20k), every file read in full. Nothing was edited, built or run. Sim paths below are relative to that `src/`; production paths are relative to `rust/`.
-
-Status column: **V** = definition and use both read; **I** = inferred.
-
-
-### Known items (confirmed)
-
-1. `calibration.rs:53` `FEE_PER_BYTE_ATOMIC = 300`, consumed at `:126`, `:135`. The macro is at `src/cryptonote_config.h:78` (the sim comment cites `:66`). A word-match grep over `src/` and `tests/` finds only the `#define`, so it has no caller. V.
-2. `fee_per_tx: 100_000_000` appears at `scenarios.rs:31,55,76,102,121,154,193,220,268,342,389`, `budget_scenarios.rs:23,40,69,92,116,143`, and the test config at `engine.rs:386`. Consumers: `engine.rs:235`, `stage2.rs:306`, `budget.rs:245`, `record.rs:229`, `onset.rs:581` (closed form), `onset.rs:881,917` (tests). V.
-3. `fee_ladder.rs:62` `REF_TX_WEIGHT = 3_000` is still a valid exception. The macro is at `cryptonote_config.h:81` (comment cites `:70`); C++ callers are `relay_floor_ring.cpp:151` and `blockchain.cpp:4303`. Rust has only a private copy at `shekyl-engine-core/src/engine/fee_policy.rs:62`. V.
-4. No block-weight median state in `stage2.rs:251-343`, `engine.rs:155-338`, `budget.rs:139-326` (declared at `budget.rs:44-48`) or `onset.rs`. A6 assumes the saturated ceiling (`swing.rs:117,150-152`). The FL instruments take the median as a swept constant (`fee_ladder.rs:2292`, `fee_floor.rs:289,473`). Owners: `shekyl-chain-rules/src/rules/block_weight.rs:237`, `shekyl-economics/src/block_weight.rs:41,52`. V.
-5. `fee_ladder.rs` and `fee_floor.rs` import heavily, but still carry three undeclared local copies (R24–R26) and one retired rule (D6).
-
-### (R) Restated
-
-| # | Site | What | Production owner | St. |
-|---|---|---|---|---|
-| R1 | `engine.rs:134-148` | 11 `SimParams::default` literals: asymptote, speed factor 22, final subsidy 300_000_000, `blocks_per_year` 262_800, baseline 50, release 800_000/1_300_000, burn 500_000/900_000, staker emission share 150_000, decay 900_000. Only `staker_pool_share` (`:146`) is imported. Guarded by a JSON-parity test (`engine.rs:423`). | `EconomicParams::default()` `shekyl-economics/src/params.rs:245-271`; `STAKER_EMISSION_SHARE` `:108`, `STAKER_EMISSION_DECAY` `:113`, `BLOCKS_PER_YEAR` `:118` | V |
-| R2 | `engine.rs:156-170`, `stage2.rs:252-266`, `stage2.rs:1598-1612`, `budget.rs:140-154`, `record.rs:150-164` | Five copies of the `SimParams` → `EconomicParams` struct literal | `EconomicParams::default()` | V |
-| R3 | `burden.rs:38` (u64); `engine.rs:153`, `stage2.rs:52`, `onset.rs:87`, `budget.rs:62` (f64); `swing.rs:101,217` (`/ 1.0e9`); `fee_ladder.rs:3031,3123` (tests) | `COIN = 1_000_000_000` | `shekyl_units::ATOMIC_UNITS_PER_SKL` (`shekyl-units/build.rs:70`, from JSON `coin`). The sim has no `shekyl-units` dep. | V |
-| R4 | `proxy.rs:48` | `BLOCKS_PER_YEAR = 262_800`, feeding `epochs_per_year()` (`:52`) used at `stage2.rs:1311,1459,1586`, `redistribution.rs:100`, `cartel.rs:449,654`. Bypasses `SimParams.blocks_per_year`. | `params.rs:118` | V |
-| R5 | `swing.rs:50` | `EPOCH_BLOCKS = 10_000` | `SETTLEMENT_EPOCH_BLOCKS` `shekyl-archival-retention/src/constants.rs:245` (imported by five other sim files) | V |
-| R6 | `swing.rs:54` | `REORG_DEPTH_BLOCKS = 720` | `ARCHIVAL_REORG_DEPTH_BLOCKS` (`shekyl-archival-retention/build.rs:210`, re-exported `lib.rs:102`); `D_MAX` `shekyl-chain-rules/src/reorg.rs:70` | V |
-| R7 | `swing.rs:41,47` | Penalty-free ceiling = zone × S; max = × 2 | `effective_median` `block_weight.rs:41`; `block_weight_limit` `emission.rs:265` | V |
-| R8 | `swing.rs:86-102` | Penalty compensation hard-codes "reward at B = 2M is zero" while the doc says "measured from the production penalty formula". Nothing is called. | `block_reward_with_penalty` `emission.rs:243`, `paid_block_reward` `:175` | V (no call) |
-| R9 | `engine.rs:226`, `stage2.rs:290`, `budget.rs:223,355`, `onset.rs:219`, `record.rs:204` | Literal epoch `0` passed to `calc_effective_emission_share`. `fee_ladder.rs:76-86` documents this exact defect and uses 1. | `compute_emission_split` `emission_share.rs:33`; `EMISSION_SPLIT_EPOCH = 1` `shekyl-chain-rules/src/rules/miner.rs:128` | V |
-| R10 | `engine.rs:214-269`, `stage2.rs:279-323`, `budget.rs:204-262`, `record.rs:176-256` | Per-block reward chain assembled from primitives. Differences from production: no height-0 whole-to-miner arm; no weight penalty; circulating via `saturating_sub` on u64-truncated casts (`engine.rs:196`, `stage2.rs:297`, `budget.rs:235`). | `price_emission` `reward.rs:163`; `compute_fee_burn` `burn.rs:170`; `CirculatingSupply::derive` `supply.rs:81` | V |
-| R11 | `engine.rs:215,221,242,249`; `stage2.rs:286,299`; `budget.rs:211,218,237`; `onset.rs:447`; `record.rs:192,199,224` | `TxVolume::per_block(instantaneous)`; step schedules respond in one block. Undeclared. | `TxVolume::window(sum, 720)` `volume.rs:58`, `TX_VOLUME_WINDOW` `params.rs:65` | V |
-| R12 | `onset.rs:754-757` | Tail per year uses `final_subsidy_per_minute * 2` (literal 2 minutes) | `tail_subsidy_per_block` `emission.rs:49` | V |
-| R13 | `onset.rs:620`; tests `:886,919` | Literal `0.25` staker share | `staker_pool_share` (sim already has `escalation.rs:50 floor_share()`) | V |
-| R14 | `stage2.rs:476,669,1069`; `swing.rs:136` | `/ 10_000.0` for SCALE → percent (`onset.rs:137` derives it) | `SCALE` | V |
-| R15 | `stage2.rs:499,1095`, `onset.rs:744`, `scenarios.rs:436,443,450`; `stage2.rs:1276`; `stage2.rs:1360` | Report strings hard-code "0.75", "MAX_CLAIM_AGE_W=26", "4096 shards" | `ARCHIVAL_BOND_FLOOR_ATOMIC`, `MAX_CLAIM_AGE_W`, `MAX_HOLDINGS_SHARDS` | V |
-| R16 | `admission.rs:155,170` | Literal `4_096` | `MAX_HOLDINGS_SHARDS` `shekyl-types/src/archival/mod.rs:78` (already imported at `admission.rs:34`) | V |
-| R17 | `population.rs:42-44` | `BandedCurveParams::from_plateau_value(8_000)` | `ARCHIVAL_PROVISIONAL_CURVE` `reward_arithmetic.rs:120` | V |
-| R18 | `population.rs:56` | `AGE_WEIGHT_MILLI = 1_000`; production is 2000. Declared inert at `AGE_MILLI = 0` (`:53-55`). | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI` (`shekyl-archival-retention/build.rs:207`) | V |
-| R19 | `mn_feasibility.rs:53` | `N_HARD_BOUND = 25` | Derived privately as `MAX_CLAIM_AGE_W − LAG + 1` (`failure_window.rs:176-183`); no pub owner | V |
-| R20 | `mn_feasibility.rs:370`; `challenge_coverage.rs:227-230,290,302` | λ = 3 as literal | `CHALLENGES_PER_PAIR_PER_EPOCH` `constants.rs:30` (`proxy.rs:41` imports it) | V |
-| R21 | `challenge_coverage.rs:72-124,147-204` | Exact-min urn and the even-spread schedule (`:163`) re-implemented with a local SplitMix64 | `ChallengeUrn::new` `challenge_assignment.rs:172`, `assign_epoch` `:303`. The band variant has no owner. | V (equivalence I) |
-| R22 | `mn_feasibility.rs:204-267`; `cartel.rs:135-137` | f64 closed forms of the m-of-n rule: naive binomial P(≥ m of n) used as a union bound, `(m−1)/n`, `(n−m+1)/n`. Cross-checked against the predicate-backed kernel by test `mn_feasibility.rs:978`. | `failure_window_slashable` `failure_window.rs:362` | V |
-| R23 | `cartel.rs:249` | `1.0 + SLASH_GRACE_EPOCHS` | `SLASH_SETTLEMENT_TIP_LAG_EPOCHS` `failure_window.rs:176` (private) | V |
-| R24 | `fee_ladder.rs:163-193` | `C = (1−σ)·M_r/(1−b)` composed locally (`:186`). Not among the file's declared exceptions (`:29-35`). | `fee_correction` `fee/correction.rs:49` (also clamps σ and b) | V |
-| R25 | `fee_ladder.rs:230-243` (used `:257-263,1912,1923`) | Local `round_money_up_2`. The owner's doc (`ladder.rs:14-18`) says the FL instrument imports it; the import list (`:45-52`) does not. | `round_money_up_2` `fee/ladder.rs:20` | V |
-| R26 | `fee_ladder.rs:349-355,396-450` | `quantize_c_pow2` Ceiling arm and `pow2_le`. No cross-pin against the owner. | `quantize_pow2_ceil` `fee/correction.rs:83` | V |
-| R27 | `fee_ladder.rs:2155-2156` | Reachability `×8/10`, `×13/10` restates the release rails | `params.release_min/max` | V |
-| R28 | `fee_ladder.rs:1996`; `:110` | `per_block(100)` for "double baseline"; `RACE_LAGS` 100 equals `fcmp_reference_block_max_age` | `tx_volume_baseline`; `consensus_constants.json` | V |
-| R29 | `fee_floor.rs:380` | Standard rung `4 * f` | `corrected_fee_ladder` `fee/ladder.rs:72` | V |
-| R30 | `fee_ladder.rs:3035,3039,3068`; `engine.rs:349-371,410`; `cartel.rs:974` | Test literals: zone 300_000; bond 750_000_000 / 0.75 / 445.5 | `FULL_REWARD_ZONE`, `ARCHIVAL_BOND_FLOOR_ATOMIC` | V |
-| R31 | `onset.rs:216` | Mid-year height omits `genesis_height_offset` (`stage2.rs:280` includes it). Harmless today: only offset-0 scenarios reach it (`onset.rs:669-672`). | — | V |
-
-### (A) Assumed exogenous
-
-| # | Site | What | Declared? | St. |
-|---|---|---|---|---|
-| A1 | `burden.rs:125` `REPLICAS_PER_SHARD = 6` (used `burden.rs:142`, `stage2.rs:411,470,918`, `onset.rs:439,477,708`); `scenarios.rs:311-312` `R_FULL = 6`, `R_THIN = 4`; `population.rs:65`, `redistribution.rs:45`, `distribution.rs:189,279` | Replica target R. No production owner found by grep of `rust/` outside the sim crates. Two separate consts hold the same 6. | Declared (`burden.rs:121-124`; `stage2.rs:441-443` calls it "a leaf-era replication constant carried as an input") | V; absence I |
-| A2 | `scenarios.rs:299,304-306` | Gate-7 horizon 30 y; N_P 79 / 154 / 40 | Declared (staking-sim L11/L13) | V |
-| A3 | `burden.rs:132`; binding member at `stage2.rs:532`, `onset.rs:99`. Duplicates: `stage2.rs:790` `A4_OPP_RATE`, `stage2.rs:1793-1795`, `onset.rs:886` | Opportunity-cost band 2 / 5 / 10 % | Declared, including in report text (`stage2.rs:573-575`) | V |
-| A4 | `burden.rs:119`; mid pick at `stage2.rs:463,1625-1626`, `onset.rs:315,344,512`; duplicate literal `redistribution.rs:178` | SKL/fiat band 0.01 / 0.10 / 1.00 | Declared | V |
-| A5 | `burden.rs:111,177-183`; `proxy.rs:96` (duplicate of `burden.rs:111`), `:102`, `:110` | Storage 1e-11 $/B/yr, Kryder 0 / 10 / 25 %, fetch and cloud bands | Declared | V |
-| A6 | `scenarios.rs:27-29,44-52,68-73,89-97,115-117,134-136,169-179,205-215,233,252-263,322-332,373-381`; `budget_scenarios.rs:22,39,59-68,84-91,108-115,132-142` | All traffic schedules: multipliers on the production baseline, or absolute counts (scenario 8, `fee_era`, scenario 9). `scenarios.rs:91` uses 21_600 blocks for 30 days. | Declared as scenarios | V |
-| A7 | `scenarios.rs:221-225`; `budget_scenarios.rs:144-150` | "95 % emitted at ~year 30" asserted as a start state. `projected_already_generated` (`emission.rs:193`) could derive it. | Comment only | V |
-| A8 | `burden.rs:67,72-74` | Honest tx shape 1-in/2-out | Declared | V |
-| A9 | `stage2.rs:1269-1272`; `stranding.rs:162-171,215` | Claim cost is one normal tx at 300 atomic/byte. The wallet's claim hold floor is not modelled. | Silent. Owner candidate: `EMISSION_CLAIM_FEE_FLOOR` = 3.6 SKL, `fee/ladder.rs:38` | I |
-| A10 | `stranding.rs:48-52`; `population.rs:51,63-68`; `redistribution.rs:43-48`; `stage2.rs:784,1256,1590`; `distribution.rs:51` | Archiver population classes, replica tail, scarcity bands, holdings sizes, age 0 | Declared, except the bare `20_000` at `stage2.rs:1590` | V |
-| A11 | `proxy.rs:474`; `mn_feasibility.rs:57`; literal 131 in tests `proxy.rs:825-1018`, `mn_feasibility.rs:1065-1067` | 131-epoch reward horizon, reused as "bond life". Production `bond_duration` (`bond_duration.rs:142`) is not consulted. | Silently pinned | I (owner mapping) |
-| A12 | `mn_feasibility.rs:370-375,386-388`; `challenge_coverage.rs:223-225` | False-slash target 1e-3, free-ride 0.80, 40,000 pairs, `p_attempt` 0.30, pair counts 4,096 / 324,000. `k_cap` is 6 in one arm and 30 in the other. | Declared provisional; the `k_cap` disagreement is silent | V |
-| A13 | `calibration.rs:57-61` | Rucknium March-2024 anchors | Declared | V |
-| A14 | `stage2.rs:57,817,1613`; `record.rs:137,280`; `admission.rs:46`; `fee_ladder.rs:123` | Ramp years 2, response lag 2, reward at asymptote/2, half-emission height from `neutral_height_reaching` (2_907_270 at ESF 22; the removed ESF-23 literal was 5_788_000), safety multiple 2, gap placeholder 5 | Mostly declared | V |
-| A15 | `fee_ladder.rs:1708,2574-2581`; `fee_floor.rs:408` | Demand elasticity model, tier-usage shares | Declared (registered grid) | V |
-
-### (D) Dead or stale referent
-
-| # | Site | What | Production today | St. |
-|---|---|---|---|---|
-| D1 | `engine.rs:93-99`; `scenarios.rs:397,406-468` (`seb`; `seb/10` at `:429`) | Gate-7 locked supply counts one shard per 10,000-block epoch. Acknowledged as a "model parameter" at `engine.rs:69-77`. Using the sim's own figure (`escalation.rs:69`: n = 523,841 at 10 y), that is about one shard per 5 blocks, roughly 2000× denser. | `shard_of` `shekyl-types/src/archival/mod.rs:134`, wrapped by the sim's `burden.rs:203` | V; magnitude I |
-| D2 | `engine.rs:197-206,241-246`; `record.rs:140-144,182-188` | Gross circulating (`already_generated` alone), commented "matching `validate_miner_transaction`". The recorder tracks no burn at all. | Net: `CirculatingSupply::derive` `supply.rs:81`; callers `shekyl-block-template/src/lib.rs:510`, `shekyl-ffi/src/economics_ffi.rs:233` | V |
-| D3 | `population.rs:42-44,97-125,166-178` (A4, via `stage2.rs:875,1020`); `stranding.rs:173,185-189` (A3, via `stage2.rs:1318-1333`) | A3 and A4 base paths score through the plateau `curve_milli`. `distribution.rs` and OQ-4 (`stage2.rs:1376`) are explicit counterfactuals; `redistribution.rs:21-26` is already linear. | Credited work is linear: `consensus_state.rs:204`; the curve is "sim/counterfactual only" (`reward_arithmetic.rs:108-120`) | V |
-| D4 | `engine.rs:43-45,201-212,278-291`; `scenarios.rs:4-19` and per-scenario stake closures; `record.rs:189,212-216,238-249` | Stake schedule and stake ratio. They now feed only reported yield and ratio, plus fixture columns nobody reads. | Burn no longer consumes stake ratio (`params.rs:313-318`); `economics_differential.rs:73-80` marks the weighted-stake columns unconsumed | V. **Not a deletion (Rick, 2026-10-03).** Staking is under construction and the sim leads it. "Nothing in the daemon reads it" describes the daemon's progress; it is not a disposition. |
-| D5 | `proxy.rs:91`; A5 table `proxy.rs:480-561` | Leaf-plus-segment opening payload with widths 4·38, 18, 38 as literals. Called "the retained pre-pruning artifact" at `proxy.rs:132`. | Width owners: `shekyl-fcmp/src/tree.rs:46,50,53,650` | V |
-| D6 | `fee_ladder.rs:1514,1738-1748`; `:2356,2532` | Rejection race applies the 2 % buffer (`×100 < ×98`) and a 1020 thin-margin threshold. The same file removed the cushion at `:592-600`. | `RELAY_ADMISSION_SLACK_BP = 0` `fee/relay.rs:25`; lookback-min `relay_floor_admits` `:79` is not called | V |
-| D7 | `fee_ladder.rs:211-223`; mode `:749,1454`; pin `:3030` | Pre-FL-R20 four-rung ladder; declared a historical baseline (`:281-285`). | The C++ function is now at `blockchain.cpp:4297` with a different signature | V |
-| D8 | `fee_ladder.rs:76-86` | "No Rust owner exists" for the genesis-epoch height | `EMISSION_SPLIT_EPOCH` `miner.rs:128` (pub) | V |
-| D9 | `calibration.rs:50`; `fee_ladder.rs:58,201,206,572`; `fee_floor.rs:29` | Stale line cites into `cryptonote_config.h` (`:66`→`:78`, `:70`→`:81`) and `blockchain.cpp` | — | V for the header; I for `blockchain.cpp` |
-| D10 | `main.rs:147`; `Cargo.toml` description; `engine.rs:36,335` | "All 8 scenarios" (there are 9, `scenarios.rs:275-287`); `stuffing_profitable` is always `None` | — | V |
-| D11 | `scenarios.rs:132,143-144` | "One epoch (~35 days)" = 25,000 blocks | Settlement epoch is 10,000 blocks | V; provenance I |
-| D12 | `cartel.rs:830,881-890` | Test literals 2.4 and 2.4156 SKL/shard/epoch from a "representative run (2026-07-30)", before the byte-keyed re-derivation | — | I |
-| D13 | `challenge_coverage.rs:26-27,224`; `mn_feasibility.rs:64,375` | Pair-count projections (324,000; 40,000). The design doc (`docs/design/ARCHIVAL_CHALLENGE_MECHANISM.md:1738`) calls 324k "a snapshot, not a ceiling"; the sim's own n × R at 10 y is about 3.1 M. | — | I |
-
-### (X) Declared exceptions
-
-| # | Site | What | Marking and standing | St. |
-|---|---|---|---|---|
-| X1 | `fee_ladder.rs:62` | `REF_TX_WEIGHT = 3_000` | Declared; still no Rust owner | V |
-| X2 | `fee_ladder.rs:86` | `GENESIS_NG_HEIGHT = 1` | Declared; its premise is now false (D8) | V |
-| X3 | `fee_ladder.rs:211` | ArticMine transliteration | Declared as the round's subject | V |
-| X4 | `fee_ladder.rs:383` | `D8_MARGIN_MILLI = 30` | Declared; the owner's margin is private (`correction.rs:123`); behaviour-pinned by test `:2978` | V |
-| X5 | `fee_ladder.rs:116` | `BLOCKS_PER_DAY = 720` | Rationale at `:112-115`; numerically equal to `TX_VOLUME_WINDOW` | V |
-| X6 | `fee_floor.rs:154-157` | `floor_rate`, a SCALE-unit copy of the relay floor | Declared (`:45-59`). The cross-check against `relay_fee_floor` it says it owes is absent: the file has no tests. | V |
-| X7 | `stage2.rs:244-246` | `year_share_atomic`, a u128 widening of `mul_scale` | Declared; pinned by test `stage2.rs:1757` | V |
-| X8 | `stranding.rs:71-77` | Pre-D1 scoring, re-expressing a deleted production function | Declared (`:24-29`) | V |
-| X9 | `escalation.rs:86` | Knee as archival length, 6.75 TB | Pinned against a W re-pin by test `:231` | V |
-
-### (S) Sweep and grid bands
-
-- **Escalation:** `escalation.rs:57` asymptote band; `:80` `KNEE_BAND = [500_000, 2_250_000, 10_000_000]`. The band exists under that name and matches the JSON comment. Test `escalation.rs:253` pins `shekyl_escalation_knee_n` to `KNEE_BAND[1]`, so production config is pinned to a sim constant, not the reverse.
-- **Stage 2:** `stage2.rs:61,768,772,780,1256,1387`.
-- **Onset:** `onset.rs:93,96,106,112`.
-- **Archival arms:** `distribution.rs:189`; `cartel.rs:98,101,107-116,478,670`; `mn_feasibility.rs:60-64`; `challenge_coverage.rs:41`; `proxy.rs:102,696`.
-- **Fee instruments:** `fee_floor.rs:87,91,96,122,203-214,459,473-476`; `fee_ladder.rs:95,110,1242-1255,2134-2136,2245-2281,2292-2299,2333,2399-2431`.
-
-### (P) Correct production imports, per file
-
-- **`admission.rs:33-35`** — `scarcity_micro`, `work_milli_from_micro`, `MAX_HOLDINGS_SHARDS`, `WORK_MICRO_PER_MILLI`.
-- **`budget.rs:51-58`** — `SETTLEMENT_EPOCH_BLOCKS`; `base_block_reward`, `effective_emission`, `calc_release_multiplier`, `calc_burn_pct`, `compute_burn_split_at`, `calc_effective_emission_share`, `split_block_emission`.
-- **`budget_scenarios.rs`** — none directly; uses `SimParams.tx_volume_baseline`.
-- **`burden.rs:31-33`** — `ARCHIVAL_BOND_FLOOR_ATOMIC`, `predict_archival_len`, `shard_of`, `SHARD_LENGTH`.
-- **`calibration.rs:42-46`** — `outputs_per_node`, `predict_weight`, `predict_archival_len`, `MAX_OUTPUTS`, `MAX_TREE_DEPTH`, `SHARD_LENGTH`; test `:513` uses `FULL_REWARD_ZONE` and `BLOCK_WEIGHT_SURGE_FACTOR`.
-- **`cartel.rs:81-85`** — `bond_floor_of`, `reinstate_connect`, `BadInterval`, `FAILURE_WINDOW_M/N`, `MAX_HOLDINGS_SHARDS`, `SLASH_GRACE_EPOCHS`.
-- **`challenge_coverage.rs:36`** — `SETTLEMENT_EPOCH_BLOCKS`.
-- **`distribution.rs:43`** — `curve_milli`, `scarcity_micro`, `work_milli_from_micro`.
-- **`engine.rs:2-7,148,178`** — the burn, emission and release functions, `calc_stake_ratio`. `SimParams::default` incorporates the shipped curve, release, burn, `staker_pool_share`, and `BLOCKS_PER_YEAR`, `STAKER_EMISSION_SHARE`, `STAKER_EMISSION_DECAY`. A run replaces fields to price an alternative; `economic()` writes those knobs onto `EconomicParams::default()` and leaves the DAA target and the escalation fields shipped. An escalation alternative is an `EscalationCurve`.
-- **`escalation.rs:35-38,237`** — `staker_pool_share_at`, `EscalationParams`, `SCALE`, floor from the shipped config, `SHARD_LENGTH`. Nothing computes a ramp locally.
-- **`fee_floor.rs:65-69`** — `TX_VOLUME_WINDOW`, `base_block_reward`, `BLOCKS_PER_YEAR`, `RELAY_ADMISSION_SLACK_BP`, `RELAY_FLOOR_LOOKBACK`.
-- **`fee_ladder.rs:44-56`** — `corrected_fee_ladder`, `relay_fee_floor`, `hysteresis_step/fold/settled`, `paid_block_reward`, `effective_emission`, `projected_already_generated`, `tail_subsidy_per_block`, `EconomicParams::emission_speed_factor_per_block`, `STAKER_EMISSION_SHARE/DECAY`, `BLOCKS_PER_YEAR`, `FULL_REWARD_ZONE`.
-- **`main.rs`** — none.
-- **`mn_feasibility.rs:46-48`** — `FAILURE_WINDOW_M/N`, `MAX_HOLDINGS_SHARDS`, `SETTLEMENT_EPOCH_BLOCKS`.
-- **`onset.rs:69-72,584,746`** — `ARCHIVAL_BOND_FLOOR_ATOMIC`, `calc_burn_pct`, `calc_effective_emission_share`, `SHARD_LENGTH`.
-- **`population.rs:34-36`** — `curve_milli`, `scarcity_micro`, `work_milli_from_micro`.
-- **`proxy.rs:39-43`** — `failure_window_slashable`, `BaselineObservation`, `CHALLENGES_PER_PAIR_PER_EPOCH`, `FAILURE_WINDOW_M/N`, `MAX_HOLDINGS_SHARDS`, `SETTLEMENT_EPOCH_BLOCKS`, bond floor.
-- **`record.rs:40-45,281`** — `base_block_reward`, `base_emission_at`, `calc_burn_pct_from_activity`, `compute_burn_split_at`, `params_digest`, `CALIBRATION_GENERATION`.
-- **`redistribution.rs:33`** — `reward_share_floor`, bond floor.
-- **`scenarios.rs:2`** — bond floor (`:356,398`), `SETTLEMENT_EPOCH_BLOCKS` (`:397`).
-- **`stage2.rs:23-29,47-49,507`** — emission and burn functions, `reward_share_floor`, bond floor, `MAX_HOLDINGS_SHARDS`, `SHARD_LENGTH`.
-- **`stranding.rs:37-40`** — `g_age_milli`, `scarcity_micro`, `work_milli_from_micro`, `reward_share_floor`, `MAX_CLAIM_AGE_W`, `MAX_HOLDINGS_SHARDS`.
-- **`swing.rs:29,36,38`** — `SHARD_LENGTH`, `FULL_REWARD_ZONE`, `blocks_to_surge_saturation`, `BLOCK_WEIGHT_SURGE_FACTOR`.
-
-### Answers to the specific checks
-
-| Item | Finding |
-|---|---|
-| Replica target R | A1: exogenous, declared, held in two consts. |
-| Bond floor 0.75 | Imported from `ARCHIVAL_BOND_FLOOR_ATOMIC` wherever it is computed: `burden.rs:142`, `scenarios.rs:356,398`, `stage2.rs:904`, `onset.rs:437,476`, `proxy.rs:468`, `redistribution.rs:102`, `cartel.rs:234`. Literals survive only in report strings (R15) and tests (R30). |
-| `SHARD_BYTES` | `burden.rs:60` is `SHARD_LENGTH.to_raw() as f64`: imported, pinned at `burden.rs:253`. Integer paths use `SHARD_LENGTH` directly. |
-| Blocks per year | Restated at R1 and R4. `fee_ladder.rs` and `fee_floor.rs` import it. |
-| Epoch length | Imported in five files; restated at `swing.rs:50` (R5) and in `mn_feasibility.rs` test literals `:1052,1081,1098`. |
-| COIN | R3. |
-| Emission, tail, decay | Values restated (R1); functions called. Tail restated at `onset.rs:755` (R12). Split epoch wrong (R9). |
-| Burn | Values restated (R1); `calc_burn_pct` called. The supply operand is gross in two places (D2). |
-| Staker share | Pool share imported; emission share and decay restated (R1); literal 0.25 (R13). |
-| Archival bytes per tx | No `12,627` literal anywhere in the crate. `burden.rs:82-85` calls `predict_archival_len` at the modelled tree depth. |
-| Tx weights | `predict_weight` at `calibration.rs:125`, shapes searched (`:162-201`). No local byte model. |
-| Storage / Kryder, opportunity cost, traffic | A5, A3, A6. |
-
-### Tests and outputs that pin results depending on items 1 and 2
-
-**Item 1 (`FEE_PER_BYTE_ATOMIC`)**
-- `calibration.rs:556` `a_shard_costs_about_one_skl_and_depth_barely_moves_it` pins an absolute band of 0.5–2 SKL per shard and ≤ 5 % depth drift. It will move.
-- `calibration.rs:385` `stuffer_shape_is_max_inputs_min_outputs`, `calibration.rs:508` `max_archival_per_block_is_a_search_not_the_cost_shape` and `swing.rs:229` `flood_ceiling_is_finite_and_nearly_depth_flat` depend on the fee only through the fee varint in the weight. Weak.
-- `calibration.rs:435`, `:469`, `:534` are identities over `tx_fee_atomic`. They survive a value change but need rework if the fee becomes state-dependent.
-- `stranding.rs:279,309,325` use hand-typed claim costs (0.01 and 0.005 SKL). They will not move, but lose their anchor.
-- Report outputs: stuffer table `stage2.rs:702-761`; A4 cost, ROI and verdict `stage2.rs:901,1079,1157-1249`; A3 claim cost `stage2.rs:1269-1286,1316`; OQ-4 `stage2.rs:1417`; A6 fee term `swing.rs:215`.
-
-**Item 2 (`fee_per_tx`)**
-- `onset.rs:827` `growth_schedule_year_fees_exceed_u64_so_the_aggregate_is_u128` asserts a magnitude and is the most likely to go red. The production floor scales with the base reward (333 atomic/byte at 10 SKL, about 20 at the 0.6 SKL tail), so a late-era fee per tx is orders of magnitude below 0.1 SKL. This is arithmetic from constants, not a run.
-- `onset.rs:872` `fee_horizon_closed_form_matches_the_fold_on_the_baseline` and `onset.rs:903` `burn_horizon_rises_with_sqrt_traffic_until_the_cap` rest on the constant-fee closed form (`onset.rs:428-440`) and literals 0.25 / 0.10.
-- `record.rs:330` `committed_fixture_matches_recorder` pins `staker_fee_pool` and `actually_destroyed` in `docs/test_vectors/economics/baseline_steady_state.json` (11 rows). Regenerate via `record.rs:318`.
-  - This is the only pin on those columns. The engine-core differential (`shekyl-engine-core/src/engine/economics_differential.rs:46-90`) drops them, and `staker_emission`, through serde.
-  - That differential takes `circulating_supply` as an input (`:149-162`), so it cannot see D2 or R9 either.
-  - `CALIBRATION_GENERATION` is written into the fixture (`record.rs:281`) and asserted engine-side, so a generation bump moves both.
-- `stage2.rs:1743` `a1_aggs_positive_and_emission_decays` needs fee > 0.
-- `stage2.rs:1785`, `:1818`, `onset.rs:772`, `:809` are ordinal or equalities between sim paths. They survive.
-- `cartel.rs:880` `reinstate_breakeven_pins_at_representative_reward` hard-codes its reward input. It will not move; its "representative" label goes stale (D12).
-- `engine.rs:394` carries the literal (`:386`), but its asserted values are fee-independent.
-- Not fee-dependent: `stage2.rs:1703`, `escalation.rs:253`, `onset.rs:793`.
-- Report outputs:
-  - Default and `--gate7` JSON: burned, yield, circulating, inflation.
-  - `--fb1c-c2`: fee leg, budgets, uplift.
-  - `--stage2`: A1 `stage2.rs:493-633`; onset and levers `onset.rs:481-750`, including the closed-form horizon `:581-637`; A3 budget; A2 pool `stage2.rs:1585-1592`; A4 Δpool `:869-873`; A5/TJ operands `:1458-1480`; the JSON payload `:1642-1648`.
-  - `--fee-ladder`, `--fee-floor` and `--challenge-coverage` read neither item.
-- `docs/economics_sim_results.json` holds fee-dependent totals, but it is a stale stderr capture (cargo lines, "Running scenario"). No test or workflow reference was found.
-
-### Not checked / uncertain
-
-- `tests/unit_tests/scaling_2021.cpp` contents against the pins at `fee_ladder.rs:3034-3046` (file exists; cases not compared).
-- Whether the Rust weight penalty returns exactly zero at B = 2M (the value R8 asserts).
-- Equivalence of the sim urn (R21) and production `ChallengeUrn`: both read, neither run.
-- Whether `bond_duration` is the right owner for "bond life" (A11), and whether the wallet claim floor is the right owner for A9.
-- R-target absence is grep-based over `rust/`; design docs were not searched for a ratified value.
-- Design-doc figures quoted from sim runs (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13–§12.14) were not swept.
-- `shekyl-staking-sim` was not censused.
-- Owners for R3, R9 and D5 live in `shekyl-units`, `shekyl-chain-rules` and `shekyl-fcmp`, none of which the sim depends on today.
-- Grid literals in `fee_ladder.rs` and `fee_floor.rs` are summarised under (S), not itemised line by line.
-
----
-
-## Appendix A2 — re-census of Appendix A for ESR-8 (at `258b4d851`)
-
-Read-only pass, 2026-10-11, over items 1–5, R1–R31 and D1–D13 of
-Appendix A. Appendix A stays as the record of what was found at
-`bb021f254`; its line numbers are that tree's. This table says what each
-row is now. Sim paths are relative to `rust/shekyl-economics-sim/src/`.
-The X, A, S and P sections were not re-censused.
-
-ESR-1 to ESR-7 closed most of the list as they re-based the folds, and
-PR #1009 closed the epoch rows (R9, D8) when the split epoch became one
-constant that no caller passes.
+The first census was a read-only pass of 2026-10-02 over `bb021f254`
+(§8); its row labels are used here. This re-census, 2026-10-11, read its
+items 1–5, R1–R31 and D1–D13 again. Sim paths are relative to
+`rust/shekyl-economics-sim/src/`. The first census's other classes —
+inputs assumed exogenous, exceptions declared in the code, sweep bands
+and correct imports — were not re-read; the first two are declared where
+they are defined (§4).
 
 | Status | Rows |
 | --- | --- |
-| Closed by import or call | 4, R1, R4, R5, R6, R7, R8, R9, R12, R14, R20, R24, R25, R27, R28, D2; **in ESR-8:** R3, R10, R11, R13, R15, R16, R17, R18, R19, R23, D5, N1, N2, N3; text: D9, D10, D11, D12, N4 |
-| Closed by deletion | R2, R31, D8; R21 and D6 (2026-10-15, the instruments of superseded designs); R26 (2026-10-15, the nearest-pow2 arm) |
-| Closed by a §4 declaration | 1, 2, 3, R29; **in ESR-8:** R22, D1, D3, D7, D13; R30 (the KAT zone; the bond imports) |
-| Staking-excepted (ruled 2026-10-03) | D4 |
+| Closed by import or call | The block-weight median every fold lacked (item 4); `SimParams::default`'s eleven literals (R1); `COIN` (R3); `BLOCKS_PER_YEAR` (R4); the swing model's epoch length, reorg depth and penalty-free ceiling (R5–R7); its penalty compensation (R8); the literal split epoch `0` (R9); the per-block reward chain assembled from primitives, now `price_emission` (R10); the instantaneous transaction volume, now the 720-block window (R11); the tail per year (R12); the flat `0.25` staker share (R13); `/ 10_000.0` for `SCALE` (R14); report strings that spelled a constant (R15, R16); the plateau curve value (R17); the age weight (R18); the gather's `n` bound (R19); `λ = 3` (R20); the slash settlement lag (R23); the fee instrument's local `C` and `round_money_up_2` (R24, R25); the release rails (R27); the baseline volume and reference-block age (R28); the reference weight `w_ref` (item 3, `629c49b4a`); the bond-floor test literals (R30's bond half); gross circulating supply into the burn (D2); proof-response widths (D5); the secret draw's count rule (N1); the recorder's block (N2); the stage-2 burn split (N3). Text fixed: stale line citations, the scenario count, the epoch length and a dated test input (D9–D12); a stale dependency comment (N4) |
+| Closed by deletion | Five copies of the `SimParams` → `EconomicParams` literal (R2); a mid-year height without the genesis offset (R31); "no Rust owner" for the genesis-epoch height (D8); the public urn's reproduction (R21) and the FL-R18 race with its retired 2 % buffer (D6), instruments of superseded designs; the nearest-pow2 arm (R26); the ArticMine transliteration and its KAT inputs (D7, R30's zone half, `7bcea06e9`) |
+| Closed by a §4 row | The stuffer's flat 300 atomic per byte (item 1) and the flat `0.1 SKL` fee (item 2), both the control arm; the fee-floor instrument's floor at `SCALE` resolution (R29); the f64 closed forms of the m-of-n rule (R22); gate-7's one shard per `blocks_per_shard` (D1); the A3 and A4 base paths' plateau curve (D3); the maturity operands (D13) |
+| Staking-excepted (ruled 2026-10-03) | The stake schedule and stake ratio (D4) |
 | **Open** | none |
 
-Item 5 was a roll-up of R24–R26 and D6. R24 and R25 closed by import; R26 and D6 closed by deletion.
 
 ### The eleven restated rows open at the re-census
 
@@ -2162,7 +2017,7 @@ ESR-8 did.
 | # | What remained | Closes by | In ESR-8 |
 | --- | --- | --- | --- |
 | R3 | Two test literals, `let coin: u64 = 1_000_000_000` (`fee_ladder.rs:3004`, `:3098`). Every non-test `COIN` derives from `shekyl_units::ATOMIC_UNITS_PER_SKL` | `crate::burden::COIN` | Closed: both tests read `crate::burden::COIN` |
-| R10 | No fold restated the three differences Appendix A listed: the penalty, the net supply and the height-0 share are production's. What remains is that each fold composes the reward chain from production's parts (`split_block_emission`, `compute_burn_split_at`) and none calls `price_emission`, which owns the order they run in | A decision (below) | Closed: the cursor calls `price_emission` and the folds read its `PaidEmission`; the stuffer's payout calls it too. See the note under the direction |
+| R10 | No fold restated the three differences the first census listed: the penalty, the net supply and the height-0 share are production's. What remains is that each fold composes the reward chain from production's parts (`split_block_emission`, `compute_burn_split_at`) and none calls `price_emission`, which owns the order they run in | A decision (below) | Closed: the cursor calls `price_emission` and the folds read its `PaidEmission`; the stuffer's payout calls it too. See the note under the direction |
 | R13 | `0.25` as the flat staker share in the fee-horizon report (`fee_horizon.rs:151`) and its test (`:203`). The literal moved here from `onset.rs` with the closed form | `escalation::floor_share()` | Closed: the share and its label come from `floor_share()` |
 | R15 | Report strings that spell a constant: "0.75" (`stage2.rs:622`, `:1241`; `scenarios.rs:430`, with "75 coins" and "7_500 coins" at `:437`, `:444`), "4096 shards" (`stage2.rs:1508`) | Interpolate `ARCHIVAL_BOND_FLOOR_ATOMIC` and `MAX_HOLDINGS_SHARDS` | Closed: every string interpolates the constant. Both narration fixtures match byte for byte |
 | R16 | One table header, "split-loss@4096" (`admission.rs:155`); the value beside it already reads the constant | Interpolate `MAX_HOLDINGS_SHARDS` | Closed |
@@ -2181,11 +2036,11 @@ ESR-8 did.
 | D3 | The A3 and A4 base paths still score through the plateau curve; credited work is linear in production | A §4 row, or the linear owner | §4 row. Re-basing A3 and A4 on linear work is a separate step (`FOLLOWUPS.md`) |
 | D5 | Proof-response widths as literals (`proxy.rs:92`) | `shekyl_fcmp::tree` constants, which needs a new dependency | Closed by import: `RESPONSE_BYTES` is built from `shekyl_fcmp::tree`'s widths and `CHALLENGED_LEAF_LEN`, and a const-assert holds it at 6 784 |
 | D6 | The retired 2 % relay buffer, as `* 98` and `< 1020` (`fee_ladder.rs:1717`, `:2329`, `:2505`), in a file that also asserts the slack is 0 | `relay_floor_admits` | Deleted 2026-10-15: the race measured admission under FL-R19, which FL-R23 superseded and production runs. The race code was last at `4de99d1e1b` |
-| D7 | The ArticMine transliteration (`fee_ladder.rs:198-210`). §4 declares its KAT inputs, not the transliteration | A §4 row | §4 row |
+| D7 | The ArticMine transliteration (`fee_ladder.rs:198-210`). §4 declares its KAT inputs, not the transliteration | A §4 row | §4 row. The transliteration and its KATs are deleted (`7bcea06e9`) |
 | D9–D12 | Stale citations, "8 scenarios" where there are nine, "~35 days" for an epoch, a dated representative run | Text | Text fixed: line numbers into C++ replaced by the function named; the scenario count is read from the run; the always-empty `stuffing_profitable` field is deleted; "one epoch" is "25,000 blocks"; the 2026-07-30 figure is labelled a test input |
 | D13 | Maturity operands as literals (`MATURITY_D = 324_000`, 40 000 projected pairs) | A §4 row naming them as assumptions | §4 row |
 
-### Found by this pass, in neither Appendix A nor §4
+### Found by this pass, in neither the first census nor §4
 
 | # | What was found | Closes by |
 | --- | --- | --- |

@@ -4,9 +4,9 @@
 // BSD-3-Clause
 
 //! The dialer's owner: one loop per connector that wakes, plans and draws.
-//! The handshake module opens the channel, reads the response, adopts the
-//! session and posts the result (dialer brief, "The fill", "The dial",
-//! "`DialOutcome`").
+//! The handshake module opens the channel, reads the response, and either
+//! adopts a kept session or closes a confirm dial in Rust (dialer brief,
+//! "The fill", "The dial", "`DialOutcome`").
 //!
 //! The loop runs on a thread of its own. Its wake is a timing-engine owner
 //! (Rick, 2026-10-13): each gap is armed on the engine and the thread
@@ -14,9 +14,15 @@
 //! no second one. `Hub::dial_channel` blocks that thread while the
 //! connector opens the channel, and the handshake reads the channel's
 //! frames on it. No p2p io worker is held.
+//!
+//! A wake draws only when the connector can dial: its link is usable and the
+//! tip and the network id are known (`TSR-F1`; the `ready` module). While one
+//! is missing the loop does not arm its timer. It waits on the change that
+//! could supply it, and the wake spacing resumes when the connector is ready.
 
 mod address;
 mod handshake;
+mod ready;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -26,19 +32,21 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_peerlist::{
-    white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome, Host,
+    white_diversity_floor, CloseCause, CloseKind, ConnectionId, ConnectorId, DialOutcome,
     NetworkAddress, Peerlist, Refusal, RefusedSet, Source, Tick, WHITE_REFILL_LINE,
 };
 use shekyl_relay_privacy::params::{MIN_PROVISIONED_OUT_PEERS, P2P_DEFAULT_OUT_PEERS};
-use shekyl_seam::{Hub, SocketId, SyncPayload};
+use shekyl_seam::{Hub, SocketId, Subscription, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle};
 
-use self::address::live_sessions;
-use self::handshake::Attempt;
+use self::address::{live_sessions, LiveSessions};
+use self::handshake::{Attempt, KeptDial};
+pub use self::ready::NotReady;
+use self::ready::{park, Bell};
 use crate::attempts::Attempts;
-use crate::bans::HubBans;
+use crate::bans::BanSnapshot;
 use crate::candidate::CandidateFilter;
-use crate::fill::{plan, Census, DialAim, DrawList};
+use crate::fill::{plan, Census, DialAim, DrawList, IN_FLIGHT_BOUND};
 use crate::memory::FailedAddresses;
 use crate::nonce::{HandshakeNonce, HandshakeNonceSet, InFlightNonce};
 use crate::pace::next_wake_nanos;
@@ -49,13 +57,39 @@ use crate::store::{AddressStore, LoadError, STORE_INTERVAL_NANOS};
 /// handshake without the chain's height is not one.
 pub type SnapshotSource = Arc<dyn Fn() -> Option<SyncPayload> + Send + Sync>;
 
-/// A dial the strand has not yet answered.
-#[derive(Debug, Clone)]
-struct Pending {
-    connector: ConnectorId,
-    address: NetworkAddress,
-    keep: bool,
+/// Why a connector under its target dialed nothing on one wake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IdleWhy {
+    /// A dial is already in flight, so the fill draws nothing.
+    InFlight,
+    /// The lists have nothing the fill can draw.
+    NoCandidate,
+    /// Gray or white holds addresses, and every one is filtered out.
+    Filtered,
 }
+
+impl IdleWhy {
+    fn reason(self) -> &'static str {
+        match self {
+            Self::InFlight => "a dial is in flight",
+            Self::NoCandidate => "no candidate",
+            Self::Filtered => "a filter holds every address",
+        }
+    }
+}
+
+/// Consecutive wakes of one [`IdleWhy`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IdleWatch {
+    why: IdleWhy,
+    wakes: u32,
+    warned: bool,
+}
+
+/// How many wakes a connector may sit under its target with nothing dialed
+/// before the owner says so. One warning, then silence until the reason
+/// changes, the connector draws, or it is no longer under its target.
+const IDLE_WARN_WAKES: u32 = 60;
 
 /// The state the owner loops and the FFI calls share.
 pub struct Shared {
@@ -67,10 +101,14 @@ pub struct Shared {
     attempts: Vec<Attempts>,
     targets: Vec<usize>,
     own: Vec<Vec<NetworkAddress>>,
-    /// Dials adopted and posted, awaiting the strand's verdict.
-    pending: BTreeMap<u64, Pending>,
     /// Kept sessions by id, so a close can name the address.
     kept: BTreeMap<u64, NetworkAddress>,
+    /// Kept dials from just before `adopt` until their kept row is written,
+    /// by socket id. A close in that window finds no kept row; it records
+    /// its cause here instead, and the kept row is never written for it.
+    adopting: BTreeMap<u64, Option<CloseCause>>,
+    /// Under-target wakes that dialed nothing, one slot per connector.
+    idle: [Option<IdleWatch>; ConnectorId::COUNT],
     /// A closed network (`--add-exclusive-node`): the candidate
     /// population, when set. Not a dialer arm.
     exclusive: Option<BTreeSet<NetworkAddress>>,
@@ -90,6 +128,10 @@ impl Shared {
     fn attempts(&mut self, connector: ConnectorId) -> &mut Attempts {
         &mut self.attempts[connector.index()]
     }
+
+    fn view(&self, connector: ConnectorId) -> &Attempts {
+        &self.attempts[connector.index()]
+    }
 }
 
 /// The outbound dialer for every connector of one process.
@@ -108,6 +150,12 @@ pub struct Dialer {
     /// start is refused, not stacked (the ephemeral-tor path and the
     /// proxy-only zone branch both asked for Tor's, 2026-10-13).
     owners: Mutex<[bool; ConnectorId::COUNT]>,
+    /// What a parked owner loop waits on. The hub's links ring it on every
+    /// change; so do the tip, the network id and the stop.
+    bell: Arc<Bell>,
+    /// The hub's links ring [`Self::bell`] while this is held. Dropped with
+    /// the dialer, so a dialer rebuilt on the same hub leaves no watcher.
+    _links_watch: Subscription,
 }
 
 /// The peerlist's name for a seam session: the socket id, little-endian,
@@ -124,8 +172,9 @@ impl Dialer {
     ///
     /// `support_flags` is what every handshake request carries, with the
     /// network id given later by [`Self::set_network_id`]. `snapshot` is
-    /// the core's latest published tip. Until both are known the owner
-    /// loops dial nothing.
+    /// the core's latest published tip, and [`Self::tip_published`] says
+    /// when it changes. Until both are known, and the connector's link on
+    /// `hub` is usable, the owner loops draw nothing.
     #[must_use]
     pub fn new(
         hub: Hub,
@@ -136,6 +185,9 @@ impl Dialer {
         let mut targets = vec![0usize; ConnectorId::COUNT];
         targets[ConnectorId::Clearnet.index()] = P2P_DEFAULT_OUT_PEERS as usize;
         targets[ConnectorId::Tor.index()] = MIN_PROVISIONED_OUT_PEERS as usize;
+        let bell = Arc::new(Bell::new());
+        let ringing = Arc::clone(&bell);
+        let links_watch = hub.links().subscribe(Arc::new(move |_| ringing.ring()));
         Self {
             hub,
             shared: Arc::new(Mutex::new(Shared {
@@ -144,8 +196,9 @@ impl Dialer {
                 attempts: (0..ConnectorId::COUNT).map(|_| Attempts::new()).collect(),
                 targets,
                 own: vec![Vec::new(); ConnectorId::COUNT],
-                pending: BTreeMap::new(),
                 kept: BTreeMap::new(),
+                adopting: BTreeMap::new(),
+                idle: [None; ConnectorId::COUNT],
                 exclusive: None,
                 configured: Vec::new(),
                 stranded: [false; ConnectorId::COUNT],
@@ -158,6 +211,8 @@ impl Dialer {
             snapshot,
             store: Mutex::new(None),
             owners: Mutex::new([false; ConnectorId::COUNT]),
+            bell,
+            _links_watch: links_watch,
         }
     }
 
@@ -183,6 +238,27 @@ impl Dialer {
     /// starts.
     pub fn set_network_id(&self, network_id: [u8; 16]) {
         *self.network_id.lock().expect("network id") = Some(network_id);
+        self.bell.ring();
+    }
+
+    /// The core published a tip: a loop parked for want of one looks again.
+    pub fn tip_published(&self) {
+        self.bell.ring();
+    }
+
+    /// Whether `connector` can dial now, or the first thing it lacks. The
+    /// plan reads this before it draws, and the owner loop parks on it.
+    pub fn readiness(&self, connector: ConnectorId) -> Result<(), NotReady> {
+        if let Some(missing) = NotReady::from_outbound(self.hub.links().get(connector).outbound) {
+            return Err(missing);
+        }
+        if (self.snapshot)().is_none() {
+            return Err(NotReady::NoTip);
+        }
+        if self.network_id().is_none() {
+            return Err(NotReady::NoNetworkId);
+        }
+        Ok(())
     }
 
     fn network_id(&self) -> Option<[u8; 16]> {
@@ -204,6 +280,18 @@ impl Dialer {
     #[must_use]
     pub fn target(&self, connector: ConnectorId) -> usize {
         self.shared().targets[connector.index()]
+    }
+
+    /// Dials in flight on `connector`, of either aim.
+    #[must_use]
+    pub fn in_flight(&self, connector: ConnectorId) -> usize {
+        self.shared().view(connector).in_flight()
+    }
+
+    /// Kept sessions on `connector`, pending `Keep` attempts included.
+    #[must_use]
+    pub fn kept_sessions(&self, connector: ConnectorId) -> usize {
+        self.shared().view(connector).kept_count()
     }
 
     /// The connector's outbound target. A cap of 0 is legal and dials
@@ -262,17 +350,16 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) {
+        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
         for address in &addresses {
             // Already seated: the population is the declaration either way.
             // A refusal is not "already seated" and is said.
-            if let Err(refusal) = shared.lists.admit_gray(
-                address,
-                Source::Operator,
-                now,
-                &mut HubBans(&self.hub),
-                rng,
-            ) {
+            if let Err(refusal) =
+                shared
+                    .lists
+                    .admit_gray(address, Source::Operator, now, &mut bans, rng)
+            {
                 tracing::warn!("closed-network address {address:?} was not admitted: {refusal:?}");
             }
         }
@@ -303,13 +390,14 @@ impl Dialer {
         now: Tick,
         rng: &mut R,
     ) -> Result<bool, Refusal> {
+        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
         if !shared.configured.contains(address) {
             shared.configured.push(address.clone());
         }
         shared
             .lists
-            .admit_gray(address, Source::Operator, now, &mut HubBans(&self.hub), rng)
+            .admit_gray(address, Source::Operator, now, &mut bans, rng)
     }
 
     /// The inbound handshake's question: is `nonce` one of ours in flight
@@ -319,67 +407,37 @@ impl Dialer {
         self.nonces.take(connector, nonce)
     }
 
-    /// The strand accepted or refused the sync payload of the handshake
-    /// posted for `id`. A kept dial that was accepted stays; a confirm
-    /// dial that was accepted is closed here; a refused dial of either
-    /// aim is closed here. The outcome reaches the lists and the memory.
-    pub fn verdict<R: RelayRng + ?Sized>(&self, id: SocketId, accepted: bool, rng: &mut R) {
-        let pending = self.shared().pending.remove(&id.get());
-        let Some(pending) = pending else {
-            return;
-        };
-        let outcome = match (accepted, pending.keep) {
-            (true, true) => DialOutcome::SessionAccepted(pending.address.clone()),
-            (true, false) => DialOutcome::Confirmed(pending.address.clone()),
-            (false, _) => DialOutcome::PayloadRefused(pending.address.clone()),
-        };
-        tracing::info!(
-            "{:?} dial {:?}: {outcome:?}",
-            pending.connector,
-            pending.address
-        );
-        if !matches!(outcome, DialOutcome::SessionAccepted(_)) {
-            self.hub.close(id);
-        }
+    /// The session `id` closed, with the cause that won.
+    ///
+    /// A kept session leaves the kept count. `CloseKind::SessionRefused`
+    /// is the lists' `PayloadRefused`: the payload owner declined a
+    /// delivery. The address stays as `SessionAccepted` left it, which is
+    /// white. Any other cause only drops the kept row. An id this dialer
+    /// is not keeping is a no-op: a dial still in the handshake has no row
+    /// here yet, and a confirm dial never has one.
+    pub fn session_closed<R: RelayRng + ?Sized>(
+        &self,
+        id: SocketId,
+        cause: CloseCause,
+        rng: &mut R,
+    ) {
+        let now = self.hub.now();
         let mut shared = self.shared();
-        if matches!(outcome, DialOutcome::SessionAccepted(_)) {
-            shared.kept.insert(id.get(), pending.address.clone());
-        }
-        Self::record(
-            &mut shared,
-            pending.connector,
-            &outcome,
-            self.hub.now(),
-            rng,
-        );
-    }
-
-    /// The session `id` closed. A kept session leaves the kept count; a
-    /// dial still awaiting its verdict is a failure with the cause the
-    /// connector stored.
-    pub fn session_closed<R: RelayRng + ?Sized>(&self, id: SocketId, rng: &mut R) {
-        let mut shared = self.shared();
-        if let Some(address) = shared.kept.remove(&id.get()) {
-            let connector = Peerlist::connector_of(&address);
-            if let Some(connector) = connector {
-                shared.attempts(connector).session_closed(&address);
-            }
+        if let Some(adopting) = shared.adopting.get_mut(&id.get()) {
+            *adopting = Some(cause);
             return;
         }
-        if let Some(pending) = shared.pending.remove(&id.get()) {
-            let cause = self
-                .hub
-                .cause(id)
-                .unwrap_or_else(|| CloseCause::new(CloseKind::LocalClose));
-            let outcome = DialOutcome::DialFailed(pending.address, cause);
-            Self::record(
-                &mut shared,
-                pending.connector,
-                &outcome,
-                self.hub.now(),
-                rng,
-            );
+        let Some(address) = shared.kept.remove(&id.get()) else {
+            return;
+        };
+        let Some(connector) = Peerlist::connector_of(&address) else {
+            return;
+        };
+        if cause.kind() == CloseKind::SessionRefused {
+            let outcome = DialOutcome::PayloadRefused(address.clone());
+            Self::record(&mut shared, connector, &outcome, now, rng);
         }
+        shared.attempts(connector).session_closed(&address);
     }
 
     /// Stop every owner loop at its next wake, and write the address file
@@ -388,6 +446,7 @@ impl Dialer {
     /// does.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Release);
+        self.bell.ring();
         if let Err(err) = self.store_addresses() {
             tracing::warn!("the address file was not written at stop: {err}");
         }
@@ -407,8 +466,9 @@ impl Dialer {
         let loaded = store.load();
         *self.store.lock().expect("address store") = Some(store);
         let addresses = loaded?;
+        let now = self.hub.now();
         let mut shared = self.shared();
-        shared.last_store = Some(self.hub.now());
+        shared.last_store = Some(now);
         Ok(shared.lists.restore(addresses, rng))
     }
 
@@ -421,7 +481,8 @@ impl Dialer {
         };
         let addresses = self.shared().lists.persistable();
         store.write(&addresses)?;
-        self.shared().last_store = Some(self.hub.now());
+        let now = self.hub.now();
+        self.shared().last_store = Some(now);
         Ok(true)
     }
 
@@ -451,6 +512,66 @@ impl Dialer {
         shared.memory.observe(outcome, now);
     }
 
+    /// Record `outcome` after the hub's clock has been read.
+    fn settle<R: RelayRng + ?Sized>(
+        &self,
+        connector: ConnectorId,
+        outcome: &DialOutcome,
+        rng: &mut R,
+    ) {
+        let now = self.hub.now();
+        let mut shared = self.shared();
+        Self::record(&mut shared, connector, outcome, now, rng);
+    }
+
+    /// Record `SessionAccepted` and the kept row in one lock section, mark
+    /// the session established on the hub, then notify the strand and start
+    /// the pump. The poster of that notification already sees the kept
+    /// session, an empty in-flight count, and an established row whose gap
+    /// sender has fired. `Post::Established` was posted by `adopt`, before
+    /// this runs.
+    ///
+    /// A close that reached the dialer after `adopt` and before this lock
+    /// section left its cause in `adopting`. The dial is then
+    /// `DialFailed` with that cause, no kept row is written, nothing is
+    /// posted, and this returns `false`: the hub posts a close once, so a
+    /// kept row written after it would never leave.
+    fn accept_and_notify<R: RelayRng + ?Sized>(
+        &self,
+        connector: ConnectorId,
+        address: &NetworkAddress,
+        kept: KeptDial,
+        rng: &mut R,
+    ) -> bool {
+        let now = self.hub.now();
+        let closed = {
+            let mut shared = self.shared();
+            let closed = shared.adopting.remove(&kept.id.get()).flatten();
+            let outcome = match closed {
+                Some(cause) => DialOutcome::DialFailed(address.clone(), cause),
+                None => DialOutcome::SessionAccepted(address.clone()),
+            };
+            Self::record(&mut shared, connector, &outcome, now, rng);
+            if closed.is_none() {
+                shared.kept.insert(kept.id.get(), address.clone());
+            }
+            closed
+        };
+        if let Some(cause) = closed {
+            tracing::debug!(
+                "{connector:?} dial {address:?} closed before it was kept ({:?})",
+                cause.kind()
+            );
+            return false;
+        }
+        tracing::debug!("{connector:?} dial {address:?} kept as {:?}", kept.id);
+        self.hub.session_established(kept.id);
+        self.hub
+            .post_handshake_result(kept.id, connector, kept.support_flags, kept.sync);
+        self.hub.drive(kept.id, kept.session);
+        true
+    }
+
     /// Run the owner loop for `connector` on the calling thread, until
     /// [`Self::stop`], the owner's deregistration, or the engine's close.
     ///
@@ -463,7 +584,32 @@ impl Dialer {
         owner: &OwnerHandle<C>,
         rng: &mut R,
     ) {
-        while !self.stop.load(Ordering::Acquire) {
+        let mut parked: Option<NotReady> = None;
+        loop {
+            // The bell first, then the stop, then readiness. `stop` sets its
+            // flag before it rings, so a ring already counted in `seen` is a
+            // stop this check sees; and a ring after the read ends the wait.
+            let seen = self.bell.rung();
+            if self.stop.load(Ordering::Acquire) {
+                break;
+            }
+            match self.readiness(connector) {
+                Err(missing) => {
+                    if parked != Some(missing) {
+                        tracing::info!("{connector:?}: the dialer waits: {}", missing.describe());
+                        parked = Some(missing);
+                    }
+                    if !park(&self.bell, owner, seen) {
+                        break;
+                    }
+                    continue;
+                }
+                Ok(()) => {
+                    if parked.take().is_some() {
+                        tracing::info!("{connector:?}: the dialer resumes");
+                    }
+                }
+            }
             let deadline = Tick::new(
                 owner
                     .clock()
@@ -483,38 +629,43 @@ impl Dialer {
             if let Err(err) = self.store_if_due(self.hub.now()) {
                 tracing::warn!("the address file was not written: {err}");
             }
-            let Some((address, aim, nonce)) = self.choose(connector, rng) else {
-                continue;
-            };
-            tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
-            match self.exchange(connector, &address, aim, &nonce, rng) {
-                Attempt::Done(outcome) => {
-                    tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
-                    let mut shared = self.shared();
-                    Self::record(&mut shared, connector, &outcome, self.hub.now(), rng);
-                }
-                Attempt::Posted(id) => {
-                    tracing::debug!("{connector:?} dial {address:?} handshake posted as {id:?}");
-                    self.shared().pending.insert(
-                        id.get(),
-                        Pending {
-                            connector,
-                            address,
-                            keep: aim == DialAim::Keep,
-                        },
-                    );
-                }
-            }
-            // The nonce leaves the set here: the attempt ended, by any path.
-            drop(nonce);
+            self.wake(connector, rng);
         }
     }
 
+    /// One wake's work: the plan, and the dial it chose. Returns whether a
+    /// dial was made. The owner loop calls this when its timer fires; a test
+    /// calls it directly to run wakes without the clock.
+    pub fn wake<R: RelayRng + ?Sized>(&self, connector: ConnectorId, rng: &mut R) -> bool {
+        let Some((address, aim, nonce)) = self.choose(connector, rng) else {
+            return false;
+        };
+        tracing::debug!("{connector:?} dial {address:?} aim {aim:?}");
+        match self.exchange(connector, &address, aim, &nonce, rng) {
+            Attempt::Done(outcome) => {
+                tracing::debug!("{connector:?} dial {address:?} ended: {outcome:?}");
+                self.settle(connector, &outcome, rng);
+            }
+            Attempt::Kept(kept) => {
+                self.accept_and_notify(connector, &address, kept, rng);
+            }
+        }
+        // The nonce leaves the set here: the attempt ended, by any path.
+        drop(nonce);
+        true
+    }
+
     /// One dial of `address` with `aim`, outside the wake loop: the draw
-    /// of that address, the pending entry, the nonce, the handshake, the
-    /// adopt and the post, or the total outcome. Returns the adopted id
-    /// when the strand's verdict is still owed. The owner loop does this
-    /// after its own draw; a test does it directly.
+    /// of that address, the pending attempt, the nonce and the handshake.
+    /// Returns the kept session's id. A confirm dial, a refusal and a
+    /// failure return [`None`]: each is recorded before this returns, and
+    /// a confirm dial posts nothing. The owner loop draws through
+    /// [`Self::choose`]; a test dials one named address here.
+    ///
+    /// Readiness comes first, as in [`Self::choose`]. A connector that
+    /// cannot dial returns [`None`] before any draw: a draw it cannot dial
+    /// ends as `DialFailed(LocalClose)`, and the list rule drops a drawn
+    /// gray address.
     ///
     /// A gray address is drawn here, so the outcome resolves an
     /// outstanding draw as the lists require. A white address is a
@@ -527,6 +678,13 @@ impl Dialer {
         aim: DialAim,
         rng: &mut R,
     ) -> Option<SocketId> {
+        if let Err(missing) = self.readiness(connector) {
+            tracing::debug!(
+                "{connector:?} dial {address:?} not made: {}",
+                missing.describe()
+            );
+            return None;
+        }
         {
             let mut shared = self.shared();
             if shared.lists.is_gray(address) {
@@ -544,53 +702,47 @@ impl Dialer {
         let nonce = self.nonces.mint(connector, rng);
         match self.exchange(connector, address, aim, &nonce, rng) {
             Attempt::Done(outcome) => {
-                let mut shared = self.shared();
-                Self::record(&mut shared, connector, &outcome, self.hub.now(), rng);
+                self.settle(connector, &outcome, rng);
                 None
             }
-            Attempt::Posted(id) => {
-                self.shared().pending.insert(
-                    id.get(),
-                    Pending {
-                        connector,
-                        address: address.clone(),
-                        keep: aim == DialAim::Keep,
-                    },
-                );
-                Some(id)
+            Attempt::Kept(kept) => {
+                let id = kept.id;
+                self.accept_and_notify(connector, address, kept, rng)
+                    .then_some(id)
             }
         }
     }
 
     /// One wake's plan and draw. `None` when this wake dials nothing.
     ///
-    /// The lists are demoted and expired once ([`Peerlist::settle`]), then
-    /// counted and drawn from that view. A stranded connector re-admits its
-    /// configured addresses and dials nothing this wake; the next wake draws
-    /// from what was admitted. The nonce is minted after the lists lock
-    /// drops: it does not depend on the lists, and the nonce set is its own
-    /// lock. It stays in flight until it is dropped. Public so a test can
-    /// read the draw without running the loop.
+    /// Readiness comes first (`TSR-F1`). A connector that cannot dial returns
+    /// here, before the lists are settled or a stranded connector is
+    /// re-admitted: a draw it cannot dial ends as `DialFailed(LocalClose)`,
+    /// and the list rule drops a drawn gray address. The lists are then
+    /// demoted and expired once ([`Peerlist::settle`]), counted and drawn
+    /// from that view. A stranded connector re-admits its configured
+    /// addresses and dials nothing this wake; the next wake draws from what
+    /// was admitted. The nonce is minted after the lists lock drops: it does
+    /// not depend on the lists, and the nonce set is its own lock. It stays
+    /// in flight until it is dropped. Public so a test can read the draw
+    /// without running the loop.
     pub fn choose<R: RelayRng + ?Sized>(
         &self,
         connector: ConnectorId,
         rng: &mut R,
     ) -> Option<(NetworkAddress, DialAim, InFlightNonce)> {
         let now = self.hub.now();
-        let (sessions, outbound_hosts) = live_sessions(&self.hub, connector);
+        if let Err(missing) = self.readiness(connector) {
+            tracing::debug!("{connector:?} wake: nothing drawn: {}", missing.describe());
+            return None;
+        }
+        let live = live_sessions(&self.hub, connector);
+        let mut bans = BanSnapshot::take(&self.hub);
         let mut shared = self.shared();
-        let wake = plan_wake(
-            &mut shared,
-            &self.hub,
-            connector,
-            &sessions,
-            &outbound_hosts,
-            now,
-            rng,
-        );
+        let wake = plan_wake(&mut shared, &mut bans, connector, &live, now, rng);
         let (address, aim) = match wake {
             Wake::Recover => {
-                re_admit(&mut shared, &self.hub, connector, now, rng);
+                re_admit(&mut shared, &mut bans, connector, now, rng);
                 return None;
             }
             Wake::Idle => return None,
@@ -615,13 +767,37 @@ enum Wake {
     },
 }
 
+/// What the census says about an under-target wake that does not draw.
+/// `None` when the connector is not under its target: the watch clears.
+fn idle_if_undrawn(census: &Census) -> Option<IdleWhy> {
+    if census.target == 0 || census.kept >= census.target {
+        return None;
+    }
+    if census.in_flight >= IN_FLIGHT_BOUND {
+        return Some(IdleWhy::InFlight);
+    }
+    if census
+        .white_candidates
+        .saturating_add(census.gray_candidates)
+        > 0
+    {
+        // The lists hold a drawable address and no rule took it.
+        return Some(IdleWhy::NoCandidate);
+    }
+    if census.white.saturating_add(census.gray) > 0 {
+        return Some(IdleWhy::Filtered);
+    }
+    Some(IdleWhy::NoCandidate)
+}
+
 /// Settle once, count once, and either recover, idle, or begin one attempt.
+/// [`Dialer::choose`] has already returned when the connector cannot dial.
+/// `bans` was copied out of the hub before the lists lock was taken.
 fn plan_wake<R: RelayRng + ?Sized>(
     shared: &mut Shared,
-    hub: &Hub,
+    bans: &mut BanSnapshot,
     connector: ConnectorId,
-    sessions: &BTreeSet<NetworkAddress>,
-    outbound_hosts: &BTreeSet<Host>,
+    live: &LiveSessions,
     now: Tick,
     rng: &mut R,
 ) -> Wake {
@@ -629,7 +805,7 @@ fn plan_wake<R: RelayRng + ?Sized>(
     let target = shared.targets[index];
     let own = shared.own[index].clone();
     let exclusive = shared.exclusive.clone();
-    let wake = {
+    let (wake, undrawn) = {
         let Shared {
             lists,
             attempts,
@@ -638,15 +814,14 @@ fn plan_wake<R: RelayRng + ?Sized>(
         } = &mut *shared;
         let kept = attempts[index].kept_count();
         let in_flight = attempts[index].in_flight();
-        let mut bans = HubBans(hub);
-        let mut settled = lists.settle(connector, now, &mut bans, rng);
+        let mut settled = lists.settle(connector, now, bans, rng);
         let mut filter = CandidateFilter {
             own: &own,
-            sessions,
-            outbound_hosts,
+            sessions: &live.addresses,
+            outbound_hosts: &live.outbound_hosts,
             attempts: &attempts[index],
             failed: memory,
-            bans: &mut bans,
+            bans: &mut *bans,
             now,
         };
         let mut eligible = |address: &NetworkAddress| {
@@ -665,6 +840,7 @@ fn plan_wake<R: RelayRng + ?Sized>(
             gray: seats.gray,
             gray_candidates: seats.gray_candidates,
         };
+        let undrawn = idle_if_undrawn(&census);
         // A connector with a target, no kept session, nothing in flight and
         // no drawable candidate cannot get itself a peer. Recovery re-admits
         // after this borrow ends; this wake dials nothing.
@@ -673,7 +849,7 @@ fn plan_wake<R: RelayRng + ?Sized>(
             && in_flight == 0
             && census.white_candidates == 0
             && census.gray_candidates == 0;
-        if stranded {
+        let wake = if stranded {
             Wake::Recover
         } else {
             match plan(&census, white_diversity_floor(), WHITE_REFILL_LINE) {
@@ -702,9 +878,10 @@ fn plan_wake<R: RelayRng + ?Sized>(
                     }
                 }
             }
-        }
+        };
+        (wake, undrawn)
     };
-    match wake {
+    let wake = match wake {
         Wake::Recover => Wake::Recover,
         Wake::Idle => {
             note_recovered(shared, connector);
@@ -719,14 +896,20 @@ fn plan_wake<R: RelayRng + ?Sized>(
                 Wake::Idle
             }
         }
-    }
+    };
+    let idle = match wake {
+        Wake::Drawn { .. } => None,
+        Wake::Recover | Wake::Idle => undrawn,
+    };
+    note_idle(shared, connector, idle);
+    wake
 }
 
 /// Re-admit the closed network, or the configured seeds and `--add-peer`,
 /// as operator-named gray. Already seated is quiet. A refusal is said.
 fn re_admit<R: RelayRng + ?Sized>(
     shared: &mut Shared,
-    hub: &Hub,
+    bans: &mut BanSnapshot,
     connector: ConnectorId,
     now: Tick,
     rng: &mut R,
@@ -742,7 +925,7 @@ fn re_admit<R: RelayRng + ?Sized>(
     {
         match shared
             .lists
-            .admit_gray(address, Source::Operator, now, &mut HubBans(hub), rng)
+            .admit_gray(address, Source::Operator, now, bans, rng)
         {
             Ok(true) => admitted += 1,
             Ok(false) => {}
@@ -757,6 +940,36 @@ fn re_admit<R: RelayRng + ?Sized>(
         tracing::info!(
             "{connector:?}: no kept session, nothing in flight and no drawable candidate; re-admitted {admitted} configured address(es) to gray"
         );
+    }
+}
+
+/// Count an under-target wake that dialed nothing. The first time the
+/// same reason reaches [`IDLE_WARN_WAKES`], say so once. A draw, a change
+/// of reason, or leaving the under-target state clears the count.
+fn note_idle(shared: &mut Shared, connector: ConnectorId, why: Option<IdleWhy>) {
+    let slot = &mut shared.idle[connector.index()];
+    let Some(why) = why else {
+        *slot = None;
+        return;
+    };
+    match slot {
+        Some(watch) if watch.why == why => {
+            watch.wakes = watch.wakes.saturating_add(1);
+            if watch.wakes == IDLE_WARN_WAKES && !watch.warned {
+                watch.warned = true;
+                let reason = why.reason();
+                tracing::warn!(
+                    "{connector:?}: under its target for {IDLE_WARN_WAKES} wakes with nothing dialed: {reason}"
+                );
+            }
+        }
+        _ => {
+            *slot = Some(IdleWatch {
+                why,
+                wakes: 1,
+                warned: false,
+            })
+        }
     }
 }
 

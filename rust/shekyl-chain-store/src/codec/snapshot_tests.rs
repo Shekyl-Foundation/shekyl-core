@@ -41,15 +41,19 @@
 //! A layout change of either kind moves that text and enters the same
 //! paired-bump gate as the codec bytes.
 //!
-//! # One version, so the pairing is a glob
+//! # One version per file, so each pairing is a glob
 //!
-//! Every codec in this crate pairs with the same constant —
-//! [`SCHEMA_VERSION`] — because the store has one layout version
-//! (§11.1(a)). `.github/workflows/schema-snapshot.yml` therefore enforces
-//! *any change under `schemas/` ⟹ `SCHEMA_VERSION` has a greater value
-//! in the same PR*, with no per-codec registry to keep in sync. What this
-//! module still has to guard is that the snapshot **set** is exactly the
-//! registered codecs' names plus the catalogues, and that no codec
+//! The crate lays out two files ([`Layout`]), and each has one layout
+//! version: the chain file's [`SCHEMA_VERSION`] (§11.1(a)), and the pool
+//! file's own `POOL_SCHEMA_VERSION` (`DRS_E1_SPOOL.md` `SPL-Q8`: the pool
+//! file is recreated at a mismatch, the chain file refused, so a pool-only
+//! change must not cost a chain rebuild). `.github/workflows/schema-snapshot.yml`
+//! therefore enforces *any change under `schemas/` ⟹ `SCHEMA_VERSION` has a
+//! greater value in the same PR*, and the same of `pool_schemas/` and
+//! `POOL_SCHEMA_VERSION`, with no per-codec registry to keep in sync. Each
+//! row of [`snapshotted_codecs!`] names its layout. What this
+//! module still has to guard is that each directory's snapshot **set** is
+//! exactly its layout's registered codecs' names plus its catalogues, and that no codec
 //! implemented here escapes registration
 //! ([`every_canonical_impl_has_a_snapshot`] — read its *Why containment
 //! here and equality there* for what the move did and did not cost), and
@@ -114,15 +118,15 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, AltBlock, AltBlockFacts, ArrivedPhase, BlockDraws, BlockInfo, BlockRef, BondRecord,
-    Canonical, Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard,
-    Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OriginatedPhase, OutKey, OutTx,
-    PoolRecord, ProbeCell, PropertyCell, RMarket, Readiness, RecordedPow, RelayState,
-    Responsibility, RuleSetInForce, SchemaVersion, SettlementEpochBlocks, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth, TxIndex, TxOutputIndices, UndoEntry,
-    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, AltBlock, AltBlockFacts, AltBodies, BlockDraws, BlockInfo, BondRecord, Canonical,
+    Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
+    IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord, ProbeCell,
+    PropertyCell, RMarket, RecordedPow, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
+    SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth, TxIndex,
+    TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
+use crate::pool::PoolSchemaVersion;
 use crate::schema::TableOrdinal;
 use shekyl_chain_rules::{CenRow, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
@@ -133,29 +137,117 @@ use shekyl_types::{
 };
 use shekyl_units::AtomicUnits;
 
-/// Catalogue snapshot stems under `schemas/`. Not codec names;
+/// Catalogue snapshot stems. Not codec names;
 /// [`every_canonical_impl_has_a_snapshot`] holds the two namespaces apart.
 const TABLE_CATALOGUE_SNAP: &str = "tables";
 const PROPERTY_CATALOGUE_SNAP: &str = "properties";
-/// The pool file's table catalogue (`crate::pool::schema::catalogue`) — a
-/// second file, pinned under the same `SCHEMA_VERSION` (DRS-E1 S-POOL,
-/// `SPL-Q8` as built: one layout number for the crate's two files).
+/// The pool file's table catalogue (`crate::pool::schema::catalogue`).
 const POOL_CATALOGUE_SNAP: &str = "pool_tables";
-const CATALOGUE_SNAPS: &[&str] = &[
-    TABLE_CATALOGUE_SNAP,
-    PROPERTY_CATALOGUE_SNAP,
-    POOL_CATALOGUE_SNAP,
-];
+
+/// The two files this crate lays out. Each has its own snapshot directory
+/// and its own version constant, because they answer a layout mismatch
+/// differently — the chain file refuses and is rebuilt from the block
+/// corpus, the pool file is recreated (`DRS_E1_SPOOL.md` `SPL-Q8`) — so a
+/// pool-only change must not demand a chain rebuild.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Layout {
+    /// The consensus store file: `schemas/`, [`SCHEMA_VERSION`].
+    Chain,
+    /// The pool file: `pool_schemas/`,
+    /// [`POOL_SCHEMA_VERSION`](crate::pool::POOL_SCHEMA_VERSION).
+    Pool,
+}
+
+impl Layout {
+    const ALL: [Self; 2] = [Self::Chain, Self::Pool];
+
+    /// The snapshot directory, relative to the crate.
+    const fn dir_name(self) -> &'static str {
+        match self {
+            Self::Chain => "schemas",
+            Self::Pool => "pool_schemas",
+        }
+    }
+
+    fn dir(self) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(self.dir_name())
+    }
+
+    /// The version constant the directory pairs with.
+    const fn constant(self) -> &'static str {
+        match self {
+            Self::Chain => "SCHEMA_VERSION",
+            Self::Pool => "POOL_SCHEMA_VERSION",
+        }
+    }
+
+    /// The file that declares [`Self::constant`], relative to the crate.
+    const fn source(self) -> &'static str {
+        match self {
+            Self::Chain => "src/codec/schema_version.rs",
+            Self::Pool => "src/pool/schema_version.rs",
+        }
+    }
+
+    /// The constant's value as compiled.
+    fn version(self) -> u64 {
+        match self {
+            Self::Chain => SCHEMA_VERSION.get(),
+            Self::Pool => crate::pool::POOL_SCHEMA_VERSION.get(),
+        }
+    }
+
+    /// The declaration the workflow parses the value out of: at column 0,
+    /// the value a decimal literal inside `<Type>::new(…)`.
+    const fn decl_prefix(self) -> &'static str {
+        match self {
+            Self::Chain => "pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(",
+            Self::Pool => {
+                "pub const POOL_SCHEMA_VERSION: PoolSchemaVersion = PoolSchemaVersion::new("
+            }
+        }
+    }
+
+    /// The regex the workflow's `sed` carries for [`Self::decl_prefix`].
+    const fn workflow_regex(self) -> &'static str {
+        match self {
+            Self::Chain => r"SchemaVersion = SchemaVersion::new\(([0-9_]+)\)",
+            Self::Pool => r"PoolSchemaVersion = PoolSchemaVersion::new\(([0-9_]+)\)",
+        }
+    }
+
+    /// The catalogue stems in this directory.
+    const fn catalogues(self) -> &'static [&'static str] {
+        match self {
+            Self::Chain => &[TABLE_CATALOGUE_SNAP, PROPERTY_CATALOGUE_SNAP],
+            Self::Pool => &[POOL_CATALOGUE_SNAP],
+        }
+    }
+
+    /// What a mismatch costs an existing file.
+    const fn consequence(self) -> &'static str {
+        match self {
+            Self::Chain => "a rebuild for every existing store",
+            Self::Pool => "a recreate of every existing pool file",
+        }
+    }
+
+    /// The header every snapshot in the directory starts with.
+    fn header(self) -> String {
+        format!(
+            "# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:\n\
+             #   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store {TEST_FILTER}\n\
+             # and bump {} in {} in the same PR.\n",
+            self.constant(),
+            self.source()
+        )
+    }
+}
 
 /// The `cargo test` filter that selects exactly this module — what the
 /// workflow's assert job runs. Pinned here so [`workflow_gates_this_crate`]
 /// can hold the workflow to it and hold it to `module_path!()`.
 const TEST_FILTER: &str = "codec::snapshot_tests";
-
-const SNAPSHOT_HEADER: &str =
-    "# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:\n\
-     #   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests\n\
-     # and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.\n";
 
 /// A codec's representative values.
 trait Fixtures: Canonical + PartialEq + core::fmt::Debug {
@@ -544,6 +636,23 @@ impl Fixtures for BondRecord {
         ]
     }
 }
+impl Fixtures for AltBodies {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // The alt block fixture's own coinbase, as a listed body: the codec
+        // carries transactions as bytes it parses, and these are this
+        // snapshot's literals (`test_block_bytes`).
+        let block = crate::codec::BlockBody::parse(&super::alt::test_block_bytes(41))
+            .expect("the fixture block parses");
+        vec![
+            ("none_listed", AltBodies::of(Vec::new())),
+            (
+                "one_listed",
+                AltBodies::of(vec![block.miner_transaction.clone()]),
+            ),
+        ]
+    }
+}
+
 impl Fixtures for AltBlock {
     fn fixtures() -> Vec<(&'static str, Self)> {
         use shekyl_types::BlockWeight;
@@ -577,81 +686,34 @@ impl Fixtures for AltBlock {
 
 impl Fixtures for PoolRecord {
     fn fixtures() -> Vec<(&'static str, Self)> {
-        use shekyl_types::{FcmpVerificationHash, NetZone, UnixSeconds};
-        let arrived = PoolRecord {
-            weight: 1_500,
-            fee: AtomicUnits::from_raw(30_000),
-            receive_time: UnixSeconds::from_raw(1_700_000_000),
-            relay_state: RelayState::Arrived {
-                zone: NetZone::Public,
-                phase: ArrivedPhase::Stem {
-                    next_attempt: UnixSeconds::from_raw(1_700_000_190),
-                },
-            },
-            relayed: false,
-            double_spend_seen: false,
-            readiness: Readiness::default(),
-            fcmp_cache: None,
+        use crate::codec::ReceivedHour;
+        let stemmed = PoolRecord {
+            received: ReceivedHour::from_raw(472_222),
+            public: false,
         };
         vec![
-            // An arrival in stem: the embargo deadline is the phase's clock,
-            // no responsibility, no cache, no readiness.
-            ("arrived_stem_at_admission", arrived),
-            // The same entry fluffed and relayed once, with every optional
-            // part present: a Tor arrival, a last relay, a readiness cache
-            // on both legs, a verified FCMP++ proof, a double-spend seen.
+            // Not yet public: the relay holds it in stem.
+            ("unpublished", stemmed),
+            // Fluffed, or carried by a block.
             (
-                "arrived_fluff_fully_populated",
+                "public",
                 PoolRecord {
-                    relay_state: RelayState::Arrived {
-                        zone: NetZone::Tor,
-                        phase: ArrivedPhase::Fluff {
-                            last_relayed: Some(UnixSeconds::from_raw(1_700_000_300)),
-                        },
-                    },
-                    relayed: true,
-                    double_spend_seen: true,
-                    readiness: Readiness {
-                        max_used: Some(BlockRef {
-                            height: BlockHeight::from_raw(41),
-                            hash: BlockHash::from_bytes([0x41; 32]),
-                        }),
-                        last_failed: Some(BlockRef {
-                            height: BlockHeight::from_raw(40),
-                            hash: BlockHash::from_bytes([0x40; 32]),
-                        }),
-                    },
-                    fcmp_cache: Some(FcmpVerificationHash::from_bytes([0xfc; 32])),
-                    ..arrived
+                    public: true,
+                    ..stemmed
                 },
             ),
-            // Originated and held, admitted through the engine's attested
-            // path (the fallback clock starts at receive_time), responsibility
-            // armed.
-            (
-                "originated_held_armed",
-                PoolRecord {
-                    relay_state: RelayState::Originated {
-                        phase: OriginatedPhase::Held {
-                            last_attempt: Some(UnixSeconds::from_raw(1_700_000_000)),
-                        },
-                        responsibility: Responsibility::Armed,
-                    },
-                    ..arrived
-                },
-            ),
-            // Originated, yielded to proof of work (a Block arrival), the
-            // responsibility disarmed by observation; never relayed since.
-            (
-                "originated_block_disarmed",
-                PoolRecord {
-                    relay_state: RelayState::Originated {
-                        phase: OriginatedPhase::Block { last_relayed: None },
-                        responsibility: Responsibility::Disarmed,
-                    },
-                    ..arrived
-                },
-            ),
+        ]
+    }
+}
+
+impl Fixtures for PoolSchemaVersion {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // Literals, not `POOL_SCHEMA_VERSION`, for the reason
+        // `SchemaVersion`'s fixtures give.
+        vec![
+            ("zero", PoolSchemaVersion::new(0)),
+            ("one", PoolSchemaVersion::new(1)),
+            ("byte_order", PoolSchemaVersion::new(0x0102_0304_0506_0708)),
         ]
     }
 }
@@ -985,7 +1047,7 @@ fn hex(bytes: &[u8]) -> String {
 /// still break the fixed-width storage contract (`DAEMON_REDB_STORE.md`
 /// §11.1(b)). Checked in regeneration runs too — it is a property of the
 /// codec, not of the committed text.
-fn render<T: Fixtures>() -> String {
+fn render<T: Fixtures>(layout: Layout) -> String {
     let fixtures = T::fixtures();
     let mut labels = BTreeSet::new();
     for (label, value) in &fixtures {
@@ -1007,7 +1069,7 @@ fn render<T: Fixtures>() -> String {
         }
     }
 
-    let mut out = String::from(SNAPSHOT_HEADER);
+    let mut out = layout.header();
     out.push_str(&format!("codec = {}\n", T::NAME));
     match T::FIXED_WIDTH {
         Some(n) => out.push_str(&format!("fixed_width = {n}\n")),
@@ -1040,7 +1102,7 @@ fn render_table_catalogue() -> String {
             spec.name
         );
     }
-    let mut out = String::from(SNAPSHOT_HEADER);
+    let mut out = Layout::Chain.header();
     out.push_str(&format!("tables = {}\n[tables]\n", rows.len()));
     for (name, row) in rows {
         out.push_str(&format!("{name} = {row}\n"));
@@ -1064,20 +1126,12 @@ fn render_property_catalogue() -> String {
             spec.key
         );
     }
-    let mut out = String::from(SNAPSHOT_HEADER);
+    let mut out = Layout::Chain.header();
     out.push_str(&format!("cells = {}\n[cells]\n", rows.len()));
     for (key, row) in rows {
         out.push_str(&format!("{key} = {row}\n"));
     }
     out
-}
-
-fn schemas_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas")
-}
-
-fn snapshot_path(stem: &str) -> PathBuf {
-    schemas_dir().join(format!("{stem}.snap"))
 }
 
 /// What the driver did with a rendered snapshot.
@@ -1091,11 +1145,17 @@ enum Snapshot {
 /// Assert-or-update driver, the same shape as the wallet's. `what` names
 /// the subject in the failure text; `consequence` says what a mismatch
 /// means for the store.
-fn check_or_update(stem: &str, rendered: &str, what: &str, consequence: &str) -> Snapshot {
-    let path = snapshot_path(stem);
+fn check_or_update(
+    layout: Layout,
+    stem: &str,
+    rendered: &str,
+    what: &str,
+    consequence: &str,
+) -> Snapshot {
+    let path = layout.dir().join(format!("{stem}.snap"));
 
     if env::var_os("UPDATE_SNAPSHOTS").is_some() {
-        fs::create_dir_all(schemas_dir()).expect("create schemas dir");
+        fs::create_dir_all(layout.dir()).expect("create the snapshot dir");
         fs::write(&path, rendered)
             .unwrap_or_else(|e| panic!("cannot write snapshot {}: {e}", path.display()));
         eprintln!("UPDATE_SNAPSHOTS=1: wrote {}", path.display());
@@ -1105,9 +1165,10 @@ fn check_or_update(stem: &str, rendered: &str, what: &str, consequence: &str) ->
     let committed = fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
             "missing snapshot {}: {e}\n\
-             hint: `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests` \
-             to bootstrap, then bump SCHEMA_VERSION.",
-            path.display()
+             hint: `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store {TEST_FILTER}` \
+             to bootstrap, then bump {}.",
+            path.display(),
+            layout.constant()
         )
     });
     assert!(
@@ -1115,24 +1176,32 @@ fn check_or_update(stem: &str, rendered: &str, what: &str, consequence: &str) ->
         "snapshot mismatch for {what}\n\
          --- committed ({}) vs. +++ current ---\n{}\n\
          {consequence} That is a layout change (DAEMON_REDB_STORE.md §11.1(b)) and\n\
-         a rebuild for every existing store. If intentional:\n\
+         {}. If intentional:\n\
          \n\
-           1. bump SCHEMA_VERSION in src/codec/schema_version.rs in the same commit;\n\
-           2. regenerate: UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests\n\
+           1. bump {} in {} in the same commit;\n\
+           2. regenerate: UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store {TEST_FILTER}\n\
            3. review the diff above.\n",
         path.display(),
         unified_diff(&committed, rendered),
+        layout.consequence(),
+        layout.constant(),
+        layout.source(),
     );
     Snapshot::Matched
 }
 
-fn check_or_update_snapshot<T: Fixtures>() {
-    let rendered = render::<T>();
+fn check_or_update_snapshot<T: Fixtures>(layout: Layout) {
+    let rendered = render::<T>(layout);
+    let consequence = match layout {
+        Layout::Chain => "The canonical encoding of a stored value has changed — digest-visible.",
+        Layout::Pool => "The canonical encoding of a pool file value has changed.",
+    };
     if let Snapshot::Written = check_or_update(
+        layout,
         T::NAME,
         &rendered,
         &format!("codec `{}`", T::NAME),
-        "The canonical encoding of a stored value has changed — digest-visible.",
+        consequence,
     ) {
         return;
     }
@@ -1150,6 +1219,7 @@ fn check_or_update_snapshot<T: Fixtures>() {
 fn table_catalogue_snapshot() {
     let rendered = render_table_catalogue();
     let _ = check_or_update(
+        Layout::Chain,
         TABLE_CATALOGUE_SNAP,
         &rendered,
         "the table catalogue (schema.rs)",
@@ -1157,7 +1227,7 @@ fn table_catalogue_snapshot() {
     );
 }
 
-/// The pool file's table catalogue snapshot (`schemas/pool_tables.snap`).
+/// The pool file's table catalogue snapshot (`pool_schemas/pool_tables.snap`).
 /// The pool has no journal, so no ordinal is part of its layout; rows are
 /// name-sorted with no `#n`.
 #[test]
@@ -1173,12 +1243,13 @@ fn pool_catalogue_snapshot() {
             spec.name
         );
     }
-    let mut out = String::from(SNAPSHOT_HEADER);
+    let mut out = Layout::Pool.header();
     out.push_str(&format!("tables = {}\n[tables]\n", rows.len()));
     for (name, row) in rows {
         out.push_str(&format!("{name} = {row}\n"));
     }
     let _ = check_or_update(
+        Layout::Pool,
         POOL_CATALOGUE_SNAP,
         &out,
         "the pool file's table catalogue (pool/schema.rs)",
@@ -1191,6 +1262,7 @@ fn pool_catalogue_snapshot() {
 fn property_catalogue_snapshot() {
     let rendered = render_property_catalogue();
     let _ = check_or_update(
+        Layout::Chain,
         PROPERTY_CATALOGUE_SNAP,
         &rendered,
         "the property-cell catalogue (codec::property)",
@@ -1339,62 +1411,65 @@ fn unified_diff(a: &str, b: &str) -> String {
 
 /// Every codec with a snapshot, in one place. [`every_canonical_impl_has_a_snapshot`]
 /// holds this list equal to the `impl Canonical for` set in the source tree.
+/// Each row names the [`Layout`] whose directory and version pin it.
 macro_rules! snapshotted_codecs {
-    ($($ty:ty => $test:ident),* $(,)?) => {
+    ($($ty:ty => $test:ident in $layout:ident),* $(,)?) => {
         $(
             #[test]
             fn $test() {
-                check_or_update_snapshot::<$ty>();
+                check_or_update_snapshot::<$ty>(Layout::$layout);
             }
         )*
 
-        fn snapshotted() -> Vec<(&'static str, &'static str)> {
-            vec![$((type_name::<$ty>(), <$ty as Canonical>::NAME)),*]
+        fn snapshotted() -> Vec<(&'static str, &'static str, Layout)> {
+            vec![$((type_name::<$ty>(), <$ty as Canonical>::NAME, Layout::$layout)),*]
         }
     };
 }
 
 snapshotted_codecs! {
-    u8 => codec_snapshot_u8,
-    u64 => codec_snapshot_u64,
-    Hash32 => codec_snapshot_hash32,
-    SchemaVersion => codec_snapshot_schema_version,
-    FamilySet => codec_snapshot_family_set,
-    UndoLog => codec_snapshot_undo_log,
-    SettlementEpochBlocks => codec_snapshot_settlement_epoch_blocks,
-    CoverageGaps => codec_snapshot_rule_coverage_gaps,
-    CurveTreeRoot => codec_snapshot_curve_root,
-    BlockHeight => codec_snapshot_block_height,
-    RuleSetInForce => codec_snapshot_rule_set_id,
-    PrunableHash => codec_snapshot_prunable_hash,
-    AtomicUnits => codec_snapshot_atomic_units,
-    PqcAuthHash => codec_snapshot_pqc_auth_hash,
-    BlockInfo => codec_snapshot_block_info,
-    TxIndex => codec_snapshot_tx_index,
-    OutTx => codec_snapshot_out_tx,
-    OutKey => codec_snapshot_out_key,
-    TxOutputIndices => codec_snapshot_tx_output_indices,
-    TreePosition => codec_snapshot_tree_position,
-    GlobalOutputIndex => codec_snapshot_global_output_index,
-    LeafCount => codec_snapshot_leaf_count,
-    TreeLeaf => codec_snapshot_tree_leaf,
-    CurveTreeState => codec_snapshot_curve_tree_state,
-    LayerHash => codec_snapshot_layer_hash,
-    BondRecord => codec_snapshot_bond_record,
-    RMarket => codec_snapshot_r_market,
-    SigmaWorkMilli => codec_snapshot_sigma_work_milli,
-    SlashLogEntry => codec_snapshot_slash_log_entry,
-    SettlementRow => codec_snapshot_settlement_row,
-    IssuedDraw => codec_snapshot_issued_draw,
-    IssuedDigest => codec_snapshot_issued_digest,
-    BlockDraws => codec_snapshot_block_draws,
-    DrawableDigest => codec_snapshot_drawable_digest,
-    SettlementEpoch => codec_snapshot_settlement_epoch,
-    ShardId => codec_snapshot_shard_id,
-    ArchivalLength => codec_snapshot_archival_length,
-    PoolRecord => codec_snapshot_pool_record,
-    AltBlock => codec_snapshot_alt_block,
-    RecordedPow => codec_snapshot_recorded_pow,
+    u8 => codec_snapshot_u8 in Chain,
+    u64 => codec_snapshot_u64 in Chain,
+    Hash32 => codec_snapshot_hash32 in Chain,
+    SchemaVersion => codec_snapshot_schema_version in Chain,
+    FamilySet => codec_snapshot_family_set in Chain,
+    UndoLog => codec_snapshot_undo_log in Chain,
+    SettlementEpochBlocks => codec_snapshot_settlement_epoch_blocks in Chain,
+    CoverageGaps => codec_snapshot_rule_coverage_gaps in Chain,
+    CurveTreeRoot => codec_snapshot_curve_root in Chain,
+    BlockHeight => codec_snapshot_block_height in Chain,
+    RuleSetInForce => codec_snapshot_rule_set_id in Chain,
+    PrunableHash => codec_snapshot_prunable_hash in Chain,
+    AtomicUnits => codec_snapshot_atomic_units in Chain,
+    PqcAuthHash => codec_snapshot_pqc_auth_hash in Chain,
+    BlockInfo => codec_snapshot_block_info in Chain,
+    TxIndex => codec_snapshot_tx_index in Chain,
+    OutTx => codec_snapshot_out_tx in Chain,
+    OutKey => codec_snapshot_out_key in Chain,
+    TxOutputIndices => codec_snapshot_tx_output_indices in Chain,
+    TreePosition => codec_snapshot_tree_position in Chain,
+    GlobalOutputIndex => codec_snapshot_global_output_index in Chain,
+    LeafCount => codec_snapshot_leaf_count in Chain,
+    TreeLeaf => codec_snapshot_tree_leaf in Chain,
+    CurveTreeState => codec_snapshot_curve_tree_state in Chain,
+    LayerHash => codec_snapshot_layer_hash in Chain,
+    BondRecord => codec_snapshot_bond_record in Chain,
+    RMarket => codec_snapshot_r_market in Chain,
+    SigmaWorkMilli => codec_snapshot_sigma_work_milli in Chain,
+    SlashLogEntry => codec_snapshot_slash_log_entry in Chain,
+    SettlementRow => codec_snapshot_settlement_row in Chain,
+    IssuedDraw => codec_snapshot_issued_draw in Chain,
+    IssuedDigest => codec_snapshot_issued_digest in Chain,
+    BlockDraws => codec_snapshot_block_draws in Chain,
+    DrawableDigest => codec_snapshot_drawable_digest in Chain,
+    SettlementEpoch => codec_snapshot_settlement_epoch in Chain,
+    ShardId => codec_snapshot_shard_id in Chain,
+    ArchivalLength => codec_snapshot_archival_length in Chain,
+    AltBlock => codec_snapshot_alt_block in Chain,
+    AltBodies => codec_snapshot_alt_bodies in Chain,
+    RecordedPow => codec_snapshot_recorded_pow in Chain,
+    PoolRecord => codec_snapshot_pool_record in Pool,
+    PoolSchemaVersion => codec_snapshot_pool_schema_version in Pool,
 }
 
 /// The gate asserts its own arming state (rule 47). `UPDATE_SNAPSHOTS`
@@ -1451,7 +1526,7 @@ fn every_canonical_impl_has_a_snapshot() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut impls = BTreeSet::new();
     scan_impls(&src, &mut impls);
-    let registered: BTreeSet<&str> = snapshotted().into_iter().map(|(ty, _)| ty).collect();
+    let registered: BTreeSet<&str> = snapshotted().into_iter().map(|(ty, ..)| ty).collect();
     let local: BTreeSet<&str> = impls.iter().map(String::as_str).collect();
     // The scan's subject: a scan that found nothing would pass the
     // containment below for the wrong reason (rule 47).
@@ -1467,72 +1542,99 @@ fn every_canonical_impl_has_a_snapshot() {
         "every `impl Canonical for T` under src/ must appear in `snapshotted_codecs!` \
          so it has a committed fixture snapshot; these do not: {unregistered:?}"
     );
-
-    let mut names: BTreeSet<&str> = snapshotted().into_iter().map(|(_, name)| name).collect();
+    let all_names: BTreeSet<&str> = snapshotted().into_iter().map(|(_, name, _)| name).collect();
     assert_eq!(
-        names.len(),
+        all_names.len(),
         registered.len(),
         "Canonical::NAME must be unique per codec"
     );
-    for stem in CATALOGUE_SNAPS {
-        assert!(
-            names.insert(*stem),
-            "a codec is NAMEd `{stem}`, which is a catalogue snapshot stem"
+
+    // Each directory holds exactly its layout's codecs and catalogues: a
+    // snapshot filed under the other file's number would be versioned by
+    // the wrong constant.
+    for layout in Layout::ALL {
+        let mut names: BTreeSet<&str> = snapshotted()
+            .into_iter()
+            .filter(|(.., l)| *l == layout)
+            .map(|(_, name, _)| name)
+            .collect();
+        for stem in layout.catalogues() {
+            assert!(
+                names.insert(*stem),
+                "a codec is NAMEd `{stem}`, which is a catalogue snapshot stem"
+            );
+        }
+        let snaps: BTreeSet<String> = fs::read_dir(layout.dir())
+            .unwrap_or_else(|e| panic!("read {}: {e}", layout.dir().display()))
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                (path.extension()? == "snap")
+                    .then(|| path.file_stem()?.to_str().map(String::from))?
+            })
+            .collect();
+        assert_eq!(
+            snaps.iter().map(String::as_str).collect::<BTreeSet<_>>(),
+            names,
+            "rust/shekyl-chain-store/{}/*.snap must be exactly the {layout:?} layout's \
+             registered codecs' NAMEs plus its catalogue stems {:?}",
+            layout.dir_name(),
+            layout.catalogues()
         );
     }
-    let snaps: BTreeSet<String> = fs::read_dir(schemas_dir())
-        .expect("read schemas dir")
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            (path.extension()? == "snap").then(|| path.file_stem()?.to_str().map(String::from))?
-        })
-        .collect();
-    assert_eq!(
-        snaps.iter().map(String::as_str).collect::<BTreeSet<_>>(),
-        names,
-        "rust/shekyl-chain-store/schemas/*.snap must be exactly the registered codecs' NAMEs \
-         plus the catalogue stems {CATALOGUE_SNAPS:?}"
-    );
 
-    // Need against supply (doc comment above). The `Coded<V>` TypeName's
-    // prefix is derived from a real one rather than spelled here, so this
-    // reads the same string `shape` writes.
-    let codec_names: BTreeSet<&str> = snapshotted().into_iter().map(|(_, name)| name).collect();
+    // Need against supply (doc comment above), per file: every codec a
+    // file's layout uses is registered under that file's layout. The
+    // `Coded<V>` TypeName's prefix is derived from a real one rather than
+    // spelled here, so this reads the same string `shape` writes.
     let probe = <Coded<BlockHeight> as redb::Value>::type_name();
     let coded_prefix = probe
         .name()
         .strip_suffix(&format!("{}>", BlockHeight::NAME))
         .expect("a Coded<V> TypeName ends in `{V::NAME}>`")
         .to_owned();
-    let mut used: BTreeSet<String> = BTreeSet::new();
-    for spec in schema::catalogue() {
-        let value = spec.value.name();
-        if let Some(rest) = value.strip_prefix(coded_prefix.as_str()) {
-            let name = rest.strip_suffix('>').unwrap_or_else(|| {
-                panic!(
-                    "table `{}`: value TypeName {value:?} is not `{coded_prefix}{{NAME}}>`",
-                    spec.name
-                )
-            });
-            used.insert(name.to_owned());
+    let coded = |specs: Vec<schema::TableSpec>| -> BTreeSet<String> {
+        let mut used = BTreeSet::new();
+        for spec in specs {
+            let value = spec.value.name();
+            if let Some(rest) = value.strip_prefix(coded_prefix.as_str()) {
+                let name = rest.strip_suffix('>').unwrap_or_else(|| {
+                    panic!(
+                        "table `{}`: value TypeName {value:?} is not `{coded_prefix}{{NAME}}>`",
+                        spec.name
+                    )
+                });
+                used.insert(name.to_owned());
+            }
         }
-    }
+        used
+    };
+    let mut chain_used = coded(schema::catalogue());
     for cell in PROPERTY_CELLS {
-        used.insert(cell.value.to_owned());
+        chain_used.insert(cell.value.to_owned());
     }
-    assert!(
-        !used.is_empty(),
-        "no table or property cell names a codec; the demand side read nothing"
-    );
-    let unpinned: Vec<&String> = used
-        .iter()
-        .filter(|n| !codec_names.contains(n.as_str()))
-        .collect();
-    assert!(
-        unpinned.is_empty(),
-        "this store's layout uses codecs that have no registered fixture: {unpinned:?} — \
-         register each in `snapshotted_codecs!` so its bytes are pinned under SCHEMA_VERSION"
-    );
+    let pool_used = coded(crate::pool::schema::catalogue());
+    for (layout, used) in [(Layout::Chain, chain_used), (Layout::Pool, pool_used)] {
+        assert!(
+            !used.is_empty(),
+            "no {layout:?} table or property cell names a codec; the demand side read nothing"
+        );
+        let supply: BTreeSet<&str> = snapshotted()
+            .into_iter()
+            .filter(|(.., l)| *l == layout)
+            .map(|(_, name, _)| name)
+            .collect();
+        let unpinned: Vec<&String> = used
+            .iter()
+            .filter(|n| !supply.contains(n.as_str()))
+            .collect();
+        assert!(
+            unpinned.is_empty(),
+            "the {layout:?} layout uses codecs with no fixture registered under it: \
+             {unpinned:?} — register each in `snapshotted_codecs!` with `in {layout:?}` so \
+             its bytes are pinned under {}",
+            layout.constant()
+        );
+    }
 }
 
 fn scan_impls(dir: &Path, out: &mut BTreeSet<String>) {
@@ -1745,12 +1847,6 @@ fn trigger_covers(pattern: &str, dir: &str) -> bool {
     }
 }
 
-/// The grammar the workflow parses `SCHEMA_VERSION` out of: the declaration
-/// at column 0, the value a decimal literal inside `SchemaVersion::new(…)`.
-/// The workflow's `sed` carries the same regex; both are pinned below.
-const DECL_PREFIX: &str = "pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(";
-const WORKFLOW_VERSION_REGEX: &str = r"SchemaVersion::new\(([0-9_]+)\)";
-
 /// The workflow's job names, as `.github/workflows/schema-snapshot.yml`
 /// spells them.
 const ASSERT_JOB: &str = "assert-snapshots";
@@ -1811,16 +1907,26 @@ fn workflow_gates_this_crate() {
     let yaml = fs::read_to_string(&workflow)
         .unwrap_or_else(|e| panic!("read {}: {e}", workflow.display()));
     let run_line = format!("cargo test -p shekyl-chain-store {TEST_FILTER}");
-    let needles = [
-        (ASSERT_JOB, run_line.as_str()),
-        (BUMP_JOB, "rust/shekyl-chain-store/schemas/"),
-        (
-            BUMP_JOB,
-            "rust/shekyl-chain-store/src/codec/schema_version.rs",
-        ),
-        (BUMP_JOB, "SCHEMA_VERSION"),
-        (BUMP_JOB, WORKFLOW_VERSION_REGEX),
-    ];
+    // Each file's directory, declaring source, constant and the grammar the
+    // workflow parses it in (the grammar this test holds the declaration
+    // to, below).
+    let paired: Vec<(Layout, String, String)> = Layout::ALL
+        .into_iter()
+        .map(|layout| {
+            (
+                layout,
+                format!("rust/shekyl-chain-store/{}/", layout.dir_name()),
+                format!("rust/shekyl-chain-store/{}", layout.source()),
+            )
+        })
+        .collect();
+    let mut needles: Vec<(&str, &str)> = vec![(ASSERT_JOB, run_line.as_str())];
+    for (layout, dir, src) in &paired {
+        needles.push((BUMP_JOB, dir.as_str()));
+        needles.push((BUMP_JOB, src.as_str()));
+        needles.push((BUMP_JOB, layout.constant()));
+        needles.push((BUMP_JOB, layout.workflow_regex()));
+    }
     let regions = active_yaml_by_job(&yaml);
     // The trigger must cover every crate whose code can change a byte a
     // fixture pins — derived from the manifests, not listed here
@@ -1875,40 +1981,48 @@ fn workflow_gates_this_crate() {
         module_path!()
     );
 
-    // The constant the workflow parses is declared in the grammar it parses:
-    // the same extraction here yields the compiled value.
-    let decl = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/codec/schema_version.rs"),
-    )
-    .expect("read schema_version.rs");
-    let declared: Vec<u64> = decl
-        .lines()
-        .filter_map(|l| l.strip_prefix(DECL_PREFIX))
-        .map(|rest| {
-            let digits: String = rest
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '_')
-                .filter(|c| *c != '_')
-                .collect();
-            digits.parse().unwrap_or_else(|e| {
-                panic!("SCHEMA_VERSION literal {digits:?} is not a decimal u64: {e}")
+    // Each constant the workflow parses is declared in the grammar it
+    // parses: the same extraction here yields the compiled value.
+    for layout in Layout::ALL {
+        let decl = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(layout.source()))
+            .unwrap_or_else(|e| panic!("read {}: {e}", layout.source()));
+        let declared: Vec<u64> = decl
+            .lines()
+            .filter_map(|l| l.strip_prefix(layout.decl_prefix()))
+            .map(|rest| {
+                let digits: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '_')
+                    .filter(|c| *c != '_')
+                    .collect();
+                digits.parse().unwrap_or_else(|e| {
+                    panic!(
+                        "{} literal {digits:?} is not a decimal u64: {e}",
+                        layout.constant()
+                    )
+                })
             })
-        })
-        .collect();
-    assert_eq!(
-        declared,
-        vec![SCHEMA_VERSION.get()],
-        "src/codec/schema_version.rs must declare SCHEMA_VERSION exactly once, at column 0, \
-         as `{DECL_PREFIX}<decimal>);` — the workflow's paired-bump job parses the value \
-         from that line at the PR's base and head and requires it to increase"
-    );
+            .collect();
+        assert_eq!(
+            declared,
+            vec![layout.version()],
+            "{} must declare {} exactly once, at column 0, as `{}<decimal>);` — the \
+             workflow's paired-bump job parses the value from that line at the PR's base and \
+             head and requires it to increase",
+            layout.source(),
+            layout.constant(),
+            layout.decl_prefix()
+        );
 
-    // A constant's doc is part of the edit (rule 91): the History list on
-    // the declaration must name the current version.
-    let entry = format!("/// - `{}` —", SCHEMA_VERSION.get());
-    assert!(
-        decl.contains(&entry),
-        "src/codec/schema_version.rs: the History list has no entry {entry:?} for the \
-         current SCHEMA_VERSION; record what changed when you bump"
-    );
+        // A constant's doc is part of the edit (rule 91): the History list
+        // on the declaration must name the current version.
+        let entry = format!("/// - `{}` —", layout.version());
+        assert!(
+            decl.contains(&entry),
+            "{}: the History list has no entry {entry:?} for the current {}; record what \
+             changed when you bump",
+            layout.source(),
+            layout.constant()
+        );
+    }
 }

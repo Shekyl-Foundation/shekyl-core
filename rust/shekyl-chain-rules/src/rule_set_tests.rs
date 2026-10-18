@@ -146,14 +146,14 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
     assert_eq!(enforced, expected);
     assert_eq!(
         enforced.len(),
-        CenRow::ALL.len() - 38,
-        "A1 and A4 are held; E5 is enforced at open and K1b, K4, D5, E2 at the alt tier; A3, A6, A7, F2, F8, F19, F21, G3, G4, G5, H2, H8, H12, H13, H23, I2, I3, L8, L9, L11, L12, L16 hold by construction; B3, K1a, K2, K3, K8 are held by the store and K5, K5b, K6, K7 by its writer's switch"
+        CenRow::ALL.len() - 41,
+        "A1 and A4 are held; E5 is enforced at open and K1b, K4, D5, E2 at the alt tier; A3, A6, A7, F2, F8, F19, F21, G3, G4, G5, H2, H8, H12, H13, H23, I2, I3, L8, L9, L11, L12, L16 hold by construction; B3, K1a, K2, K3, K8 are held by the store, K5, K5b, K6, K7 by its writer's switch and M2, M8, K9 by the pool"
     );
     assert_eq!(
         format!("{genesis:?}"),
         format!(
             "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held, at-open, by-construction and store-held rows excluded), header_major_version: 1, difficulty: Lwma1, mined_money_unlock_window: BlockCount(60), reorg_cap: BlockCount(720), tx_spendable_age: BlockCount(10), settlement_schedule: SettlementSchedule(10000) }}",
-            v = CenRow::ALL.len() - 38,
+            v = CenRow::ALL.len() - 41,
             n = CenRow::ALL.len()
         )
     );

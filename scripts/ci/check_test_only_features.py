@@ -177,6 +177,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     ): "forges VerifiedTorBinary, the SP-T0c hash-pin witness, for lifecycle "
     "tests that inject an arbitrary unpinned tor",
     (
+        "shekyl-chain-store",
+        "pool-commit-fault",
+    ): "PoolStore::write aborts its next successful closure as a commit "
+    "failure, after that closure has run, so shekyl-mempool's reconcile "
+    "test can show the closure's removals roll back with the transaction. "
+    "Enabled from shekyl-mempool's dev-dependency edge only. The pool's "
+    "reconcile does not know the test exists, and a shipped write commits "
+    "exactly what its closure returned",
+    (
         "shekyl-chain-rules",
         "harness",
     ): "exposes the negative-fixture harness (MockChain, MockSubstrate) as a "

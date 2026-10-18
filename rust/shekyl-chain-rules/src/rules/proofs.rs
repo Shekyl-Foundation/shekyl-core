@@ -36,6 +36,19 @@ pub mod probes {
     thread_local! {
         static FCMP: Cell<u64> = const { Cell::new(0) };
         static SIGNATURES: Cell<u64> = const { Cell::new(0) };
+        static RANGE_PROOFS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// How many range proofs CEN-H19 verified as a batch of one, at
+    /// `TxSlot::Lone`, on this thread.
+    #[must_use]
+    pub fn range_proof_verifies() -> u64 {
+        RANGE_PROOFS.with(Cell::get)
+    }
+
+    /// One range proof verified alone, on this thread.
+    pub(in crate::rules) fn count_range_proof() {
+        RANGE_PROOFS.with(|c| c.set(c.get() + 1));
     }
 
     /// How many times [`shekyl_fcmp::proof::verify`] was called through
@@ -87,6 +100,10 @@ const PROOF_ROWS: [CenRow; 3] = [I15::ROW, J26::ROW, J27::ROW];
 ///
 /// Yields what the proof was verified against, for `validate` to compare
 /// with the chain's context.
+///
+/// CEN-M8's cache is not this function's: a pool re-judging a transaction
+/// whose claim has not moved does not call it
+/// ([`crate::judge_lone_stateless`]).
 pub(crate) fn judge_proofs(
     cx: &TxContext<'_>,
     claims: &ReferenceClaims,
@@ -127,6 +144,7 @@ pub(crate) fn judge_proofs(
     if tree_depth == 0 {
         return Ok(None);
     }
+    let verified = VerifiedReference { reference, claim };
     let context = ReferenceContext {
         ref_height: claim.height,
         anchor: claim.root,
@@ -136,7 +154,7 @@ pub(crate) fn judge_proofs(
         return Err(InvalidBlock::new(row, cx.locus()));
     }
     coverage.insert(row);
-    Ok(Some(VerifiedReference { reference, claim }))
+    Ok(Some(verified))
 }
 
 /// CEN-I17, a **definition**: what each input's hybrid signature is over —

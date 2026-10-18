@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `shekyl_mempool::Arrival`
+ --> tests/trybuild/a_block_arrival_is_not_reachable.rs:9:5
+  |
+9 | use shekyl_mempool::Arrival;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^ no `Arrival` in the root

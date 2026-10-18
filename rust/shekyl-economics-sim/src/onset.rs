@@ -565,6 +565,9 @@ pub fn onset_report(
     for (name, series) in &space_rows {
         writeln!(out, "       {:<20} {series}", trunc(name, 20))?;
     }
+    if params.fee == crate::fee_model::FeeModel::PRODUCTION_DEFAULT {
+        crate::growth_gate::write_report(out, params, folded)?;
+    }
     crate::fee_horizon::write_report(out, params)?;
     Ok(results)
 }

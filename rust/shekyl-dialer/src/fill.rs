@@ -24,10 +24,12 @@ pub const IN_FLIGHT_BOUND: usize = 1;
 /// became. The handshake owner does not infer one from the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialAim {
-    /// Keep the session if the strand accepts the payload.
+    /// Keep the session. The handshake checks have already passed; the
+    /// strand is notified afterwards and does not answer.
     Keep,
-    /// Confirm the address and close in that turn. The row does not count
-    /// toward the outbound target and the relay is not flipped.
+    /// Confirm the address and close in Rust. No adopt, no post, no row.
+    /// The dial does not count toward the outbound target and the relay
+    /// is not flipped.
     Confirm,
 }
 

@@ -292,7 +292,18 @@ use super::{Canonical, CodecError};
 ///   mis-framed, so the bump refuses it at open; `alt_block.snap` re-pins
 ///   and `recorded_pow.snap` is new. Rebuild from the block corpus, as at
 ///   every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(26);
+/// - `27` — `alt_block_bodies` (`LmdbHashKey → alt_bodies`, Rust-only,
+///   ordinal 43) is born: an alternative block's listed bodies are
+///   consensus data the switch connects, so the store holds them beside the
+///   alt row instead of the pool (DRS-E5 PR-b; the review of #1102, B1).
+///   `alt_bodies.snap` is new and `tables.snap` re-pins; no existing table,
+///   ordinal or property cell moves. The pool file leaves this number
+///   (`SPL-Q8` as ruled, 2026-10-17): `pool_record.snap` and
+///   `pool_tables.snap` move to `pool_schemas/` under the pool file's own
+///   `POOL_SCHEMA_VERSION` (`crate::pool`), whose history records the
+///   record's reshaping in the same PR. A `26` chain file is refused, as
+///   at every bump.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(27);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -349,10 +360,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(26));
-        assert_eq!(SCHEMA_VERSION.encode(), [26, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(27));
+        assert_eq!(SCHEMA_VERSION.encode(), [27, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[26, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[27, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

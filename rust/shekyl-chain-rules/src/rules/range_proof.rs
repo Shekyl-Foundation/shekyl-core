@@ -53,10 +53,21 @@
 //! [`ListedProofs`] is that assembly. The fold and any measurement of the
 //! fold call it; a second walk over `bulletproofs` would disagree with the
 //! fold the moment a transaction carried more than one proof.
+//!
+//! # A lone transaction is a batch of one
+//!
+//! The pool judges one transaction at `TxSlot::Lone` with no block around
+//! it, through the same per-slot function `form` runs
+//! (`judge_slot_stateless`, DRS-E5 PR-b). There the batch *is* that
+//! transaction's proof: [`H19::verify_lone`] assembles it the way the fold
+//! assembles each listed one ([`ListedProof::of`]) and verifies it alone —
+//! the walk's own step, so a proof the block fold would refuse at its slot
+//! is refused at `Lone`, and one it would pass passes. `form` never passes
+//! `Lone`, so a block's proofs are still verified once, in its batch.
 
 use shekyl_bulletproofs::{verify_batch, BatchEntry, Bulletproof};
 use shekyl_curve_io::CompressedPoint;
-use shekyl_wire::Ct;
+use shekyl_wire::{Ct, Transaction};
 
 use crate::block::Candidate;
 use crate::rules::tx::H19;
@@ -98,6 +109,38 @@ struct ListedProof {
 }
 
 impl ListedProof {
+    /// One transaction's proof at `slot`, with its output commitments as
+    /// carried: `None` when it carries none (a coinbase, a serve credit, a
+    /// storage-pruned body).
+    ///
+    /// # Errors
+    ///
+    /// More than one proof — the layout refusal, at `slot`.
+    fn of(slot: TxSlot, tx: &Transaction) -> Verdict<Option<Self>> {
+        let Ct::Fcmp {
+            base,
+            prunable: Some(prunable),
+            ..
+        } = &tx.ct
+        else {
+            return Ok(None);
+        };
+        let bp = match prunable.bulletproofs.as_slice() {
+            [] => return Ok(None),
+            [bp] => bp,
+            _ => return Err(InvalidBlock::new(H19::ROW, Locus::Tx { slot })),
+        };
+        Ok(Some(Self {
+            slot,
+            proof: bp.to_bulletproof(),
+            commitments: base
+                .commitments
+                .iter()
+                .map(|c| CompressedPoint::from(*c))
+                .collect(),
+        }))
+    }
+
     fn entry(&self) -> Option<BatchEntry<'_>> {
         self.proof.as_ref().map(|proof| BatchEntry {
             proof,
@@ -107,6 +150,8 @@ impl ListedProof {
 
     /// The proof verified as a batch of one, under its own derived seed.
     fn verifies_alone(&self) -> bool {
+        #[cfg(any(test, feature = "harness"))]
+        crate::rules::proofs::probes::count_range_proof();
         self.entry()
             .is_some_and(|entry| verify_batch(core::slice::from_ref(&entry)))
     }
@@ -124,29 +169,9 @@ impl ListedProofs {
     pub fn assemble(candidate: &Candidate) -> Verdict<Self> {
         let mut proofs = Vec::new();
         for (n, tx) in candidate.transactions.iter().enumerate() {
-            let slot = TxSlot::Listed(n);
-            let Ct::Fcmp {
-                base,
-                prunable: Some(prunable),
-                ..
-            } = &tx.ct
-            else {
-                continue;
-            };
-            let bp = match prunable.bulletproofs.as_slice() {
-                [] => continue,
-                [bp] => bp,
-                _ => return Err(InvalidBlock::new(H19::ROW, Locus::Tx { slot })),
-            };
-            proofs.push(ListedProof {
-                slot,
-                proof: bp.to_bulletproof(),
-                commitments: base
-                    .commitments
-                    .iter()
-                    .map(|c| CompressedPoint::from(*c))
-                    .collect(),
-            });
+            if let Some(proof) = ListedProof::of(TxSlot::Listed(n), tx)? {
+                proofs.push(proof);
+            }
         }
         Ok(Self { proofs })
     }
@@ -216,6 +241,22 @@ impl H19 {
         // one fails unless its derived weight is zero, probability `1/ℓ`.
         // Refused at the block, never admitted and never a panic.
         Err(InvalidBlock::new(Self::ROW, Locus::Block))
+    }
+}
+
+impl H19 {
+    /// The verification half for one transaction at [`TxSlot::Lone`]: its
+    /// proof verified as a batch of one (module docs, *A lone transaction
+    /// is a batch of one*). A transaction with no proof passes vacuously,
+    /// as an empty block batch does. Pure in the transaction.
+    pub(crate) fn verify_lone(tx: &Transaction) -> Verdict<()> {
+        match ListedProof::of(TxSlot::Lone, tx)? {
+            Some(proof) if !proof.verifies_alone() => Err(InvalidBlock::new(
+                Self::ROW,
+                Locus::Tx { slot: TxSlot::Lone },
+            )),
+            _ => Ok(()),
+        }
     }
 }
 

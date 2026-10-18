@@ -52,7 +52,7 @@ pub mod ephemeral;
 
 pub use blocking::{BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError};
 pub use ephemeral::{
-    DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError,
+    DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError, TorDeath,
 };
 pub use shekyl_tor_control_client::control::OnionPow;
 // Re-exported so the FFI crate's probe/start seam names one crate (this one)

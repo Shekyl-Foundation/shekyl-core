@@ -3,8 +3,9 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Three-tier ladder. Economy is the relay floor; standard is `4F`;
-//! priority is `max(2RC/M, 4F)` so the slots are monotone by construction.
+//! Three-tier ladder. Economy is the relay floor; standard is
+//! [`STANDARD_RUNG_OVER_ECONOMY`] times that floor; priority is
+//! `max(2RC/M, standard)` so the slots are monotone by construction.
 
 use super::correction::FeeCorrection;
 use super::relay::{checked_relay_fee_floor, clamped_median};
@@ -16,6 +17,9 @@ use crate::params::{EconomicParams, SCALE};
 /// so the floor errs toward holding one more epoch. Uniform across
 /// wallets (anti-fingerprint). Not consensus.
 pub const EMISSION_CLAIM_FEE_FLOOR: u64 = 3_600_000_000;
+
+/// Standard rung over the economy rung. The served ladder is `standard = 4F`.
+pub const STANDARD_RUNG_OVER_ECONOMY: u64 = 4;
 
 /// The three priced rungs. [`Self::as_slots`] is the wire projection:
 /// `[economy, standard, priority]`.
@@ -42,8 +46,9 @@ impl FeeLadder {
     }
 }
 
-/// Three-tier ladder: economy = [`super::relay_fee_floor`], standard = `4F`,
-/// priority = `max(2RC/M, 4F)`.
+/// Three-tier ladder: economy = [`super::relay_fee_floor`], standard =
+/// [`STANDARD_RUNG_OVER_ECONOMY`] times that floor, priority =
+/// `max(2RC/M, standard)`.
 ///
 /// `base_reward` is the M_r-neutral total (`max(curve(remaining), TAIL)`);
 /// `median` is the long-term fee median; `c` is raw [`FeeCorrection`].
@@ -78,13 +83,16 @@ pub fn checked_corrected_fee_ladder(
     let ms = mfw.checked_mul(u128::from(SCALE))?;
 
     let economy = checked_relay_fee_floor(base_reward, median, ref_tx_weight, c, params)?;
-    // `4F` in u128, saturating at the u64 rail. Not `economy.checked_mul(4)`:
-    // that multiplies in u64 and would refuse a ladder the pre-FL-R20 shape
-    // still priced (BLOCK_REWARD_OVERESTIMATE fallback).
-    let standard = u64::try_from(u128::from(economy) * 4).unwrap_or(u64::MAX);
+    // The Standard multiple in u128, saturating at the u64 rail. Not
+    // `economy.checked_mul(STANDARD_RUNG_OVER_ECONOMY)`: that multiplies in
+    // u64 and would refuse a ladder the pre-FL-R20 shape still priced
+    // (BLOCK_REWARD_OVERESTIMATE fallback).
+    let standard = u64::try_from(u128::from(economy) * u128::from(STANDARD_RUNG_OVER_ECONOMY))
+        .unwrap_or(u64::MAX);
     // Raised to `standard` so the ladder is monotone by construction. At a
     // reward small enough to truncate every quotient to zero, economy is
-    // `max(1)` = 1, standard is 4, and an unfloored priority is 0.
+    // `max(1)` = 1, standard is that times [`STANDARD_RUNG_OVER_ECONOMY`],
+    // and an unfloored priority is 0.
     let priority = u64::try_from(base.checked_mul(cq)?.checked_mul(2)? / ms)
         .unwrap_or(u64::MAX)
         .max(standard);
@@ -226,6 +234,14 @@ mod tests {
                 .priority,
             13_653_333
         );
+    }
+
+    #[test]
+    fn standard_rung_over_economy_is_four() {
+        // The ratio the ladder multiplies by. `economy_rung_is_the_relay_floor`
+        // keeps `floor * 4` as an independent check that the product is that
+        // multiple, so this pin and that assertion are not the same line.
+        assert_eq!(STANDARD_RUNG_OVER_ECONOMY, 4);
     }
 
     #[test]
