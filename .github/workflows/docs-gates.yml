@@ -369,6 +369,14 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_compare.py
 
+      - name: Run RT-P6 summary tests
+        # `scripts/bench/rt_p6_summary.py` turns RT-P6's raw samples into the
+        # statistics its registration names
+        # (`docs/benchmarks/rt_p6_handshake_cost_20261018.md`): nearest-rank
+        # percentiles, and a refusal when a registered step is missing.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_rt_p6_summary.py
+
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.

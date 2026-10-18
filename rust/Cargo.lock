@@ -5004,6 +5004,7 @@ version = "3.1.0"
 dependencies = [
  "fips203",
  "hex",
+ "libc",
  "rand_core 0.6.4",
  "serde_json",
  "sha3",

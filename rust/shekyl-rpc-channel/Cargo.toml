@@ -36,6 +36,9 @@ sha3 = { version = "0.10", default-features = false }
 # (`shekyl-crypto-pq`). Neither is a production edge.
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+# RT-P6's harness reads this thread's CPU clock (`CLOCK_THREAD_CPUTIME_ID`);
+# the standard library has no thread CPU clock. Already in the lock.
+libc = "0.2"
 
 [lints]
 workspace = true
