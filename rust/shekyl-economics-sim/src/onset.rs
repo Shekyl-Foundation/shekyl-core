@@ -565,96 +565,11 @@ pub fn onset_report(
     for (name, series) in &space_rows {
         writeln!(out, "       {:<20} {series}", trunc(name, 20))?;
     }
-    if params.fee.flat_per_tx_atomic().is_none() {
-        write_growth_gate(out, params, folded)?;
+    if params.fee == crate::fee_model::FeeModel::PRODUCTION_DEFAULT {
+        crate::growth_gate::write_report(out, params, folded)?;
     }
     crate::fee_horizon::write_report(out, params)?;
     Ok(results)
-}
-
-/// Years of the baseline the growth-gate table prints, one row each.
-const GROWTH_GATE_YEARS: u64 = 25;
-
-/// The growth gate (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, reading-pass
-/// finding 2), on the production arm: a Standard-rung transaction buys one
-/// more transaction's room past the median when `ρ ≥ θ`, with
-/// `ρ = (1 − σ)/(1 − b)` and `θ = w/(4·w_ref)`. Every operand is the year's
-/// last block as the fold priced it: `σ` the emission share, `b` the burn
-/// fraction, `s` the net supply over the curve's asymptote (what `b` reads),
-/// `w` the ordinary transaction's weight. The ratios are report-layer
-/// quantities.
-///
-/// One row a year for the baseline, then one line per scenario: the first
-/// year `ρ ≥ θ`, and the first year its blocks grow: the first year that
-/// carries more than one transaction a block above every earlier year that
-/// left demand unserved. A scenario never constrained prints `-` there.
-fn write_growth_gate(
-    out: &mut impl fmt::Write,
-    params: &SimParams,
-    folded: &[FoldedScenario],
-) -> fmt::Result {
-    let w_ref = shekyl_economics::RELAY_FLOOR_REFERENCE_TX_WEIGHT as f64;
-    let per_block = |txs: u128| txs as f64 / params.blocks_per_year as f64;
-    let gate = |a: &A1YearAgg| {
-        let sigma = a.last_block.sigma_scaled as f64 / SCALE as f64;
-        let b = a.last_block.burn_pct_scaled as f64 / SCALE as f64;
-        let s = a.last_block.supply.to_raw() as f64 / params.emission_curve_asymptote as f64;
-        let rho = (1.0 - sigma) / (1.0 - b);
-        let theta = a.last_block.honest_tx.weight as f64 / (4.0 * w_ref);
-        (sigma, s, b, rho, theta)
-    };
-    writeln!(
-        out,
-        "  -> GROWTH GATE (reading-pass finding 2), production arm: a Standard transaction buys room\n\
-         past the median when rho = (1 - sigma)/(1 - b) >= theta = w/(4 w_ref), w_ref = {w_ref:.0} B.\n\
-         Operands at each year's last block; s = net supply / asymptote, the burn's operand.\n\
-         \x20      {:>6} {:>8} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
-        "year", "carried", "LTM KB", "sigma", "s", "b", "rho", "theta",
-    )?;
-    if let Some(baseline) = folded.first() {
-        for a in baseline.aggs.iter().take(GROWTH_GATE_YEARS as usize) {
-            let (sigma, s, b, rho, theta) = gate(a);
-            writeln!(
-                out,
-                "       {:>6} {:>8.1} {:>7.0} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>7.3}",
-                a.year,
-                per_block(a.carried_txs),
-                a.long_term_median as f64 / 1_000.0,
-                sigma,
-                s,
-                b,
-                rho,
-                theta,
-            )?;
-        }
-    }
-    for scenario in folded {
-        let aggs = &scenario.aggs;
-        let crossing = aggs.iter().find(|a| {
-            let (_, _, _, rho, theta) = gate(a);
-            rho >= theta
-        });
-        let mut room: Option<f64> = None;
-        let mut growth = None;
-        for a in aggs {
-            let carried = per_block(a.carried_txs);
-            if room.is_some_and(|r| carried > r + 1.0) {
-                growth = Some(a);
-                break;
-            }
-            if per_block(a.expired_txs) > 1.0 {
-                room = Some(room.map_or(carried, |r| r.max(carried)));
-            }
-        }
-        writeln!(
-            out,
-            "       {:<20} rho >= theta from {}, blocks grow from {}",
-            trunc(&scenario.name, 20),
-            crossing.map_or("-".to_owned(), |a| format!("y{}", a.year)),
-            growth.map_or("-".to_owned(), |a| format!("y{}", a.year)),
-        )?;
-    }
-    Ok(())
 }
 
 /// A1-L — the lever table on the two bracketing scenarios. Prints to `out`,

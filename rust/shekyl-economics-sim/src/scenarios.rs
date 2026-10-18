@@ -18,10 +18,14 @@ fn default_stake_schedule() -> StakeSchedule {
     }
 }
 
+/// Name of the steady baseline. The growth gate selects its year table by
+/// this, and [`all_scenarios`] lists that scenario first.
+pub const BASELINE_STEADY_STATE: &str = "baseline_steady_state";
+
 pub fn scenario_1_baseline(params: &SimParams) -> ScenarioConfig {
     let baseline = params.tx_volume_baseline;
     ScenarioConfig {
-        name: "baseline_steady_state".into(),
+        name: BASELINE_STEADY_STATE.into(),
         description: "Constant moderate transaction volume (1x baseline) over 10 years".into(),
         sim_years: 10,
         volume: VolumeSchedule {
