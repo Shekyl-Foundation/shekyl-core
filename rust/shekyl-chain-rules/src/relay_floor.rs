@@ -167,9 +167,10 @@ pub fn fee_ladder_at<'id, V: ChainView<'id>>(
 /// `F(h)` for `h` in `max(0, connecting − G) ..= connecting`, oldest
 /// first. Fewer than `G + 1` only while the chain is shorter than `G`.
 ///
-/// **Not wired yet.** `fee_meets_floor` is `relay_floor_admits` over the
-/// tip floor alone. The DRS-X store flip passes this window there instead,
-/// and deletes the C++ ring.
+/// The live C++ submit path still admits on one floor: `fee_meets_floor` is
+/// `relay_floor_admits` over the tip floor alone. The Rust pool's door, and
+/// `fee_clears` when the shim supplies this window, already admit on it.
+/// The DRS-X store flip deletes the one-floor arm with the C++ ring.
 ///
 /// # Errors
 ///

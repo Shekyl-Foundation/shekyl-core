@@ -67,6 +67,7 @@ use shekyl_pow_randomx::CacheStore;
 /// Which mutations a captured chain can carry (`CHAIN_RULES_SLICE_7.md` §3.7).
 mod corpus_census;
 mod h19_cost;
+mod pool_door;
 mod relay_floor;
 mod replay;
 mod retired_keyless_join;

@@ -240,8 +240,8 @@ impl<'id, V> AltValid<'id, V> {
         &self.candidate
     }
 
-    /// The candidate, consumed — the bodies are the pool's to hold until
-    /// promotion; the block is the alt row's.
+    /// The candidate, consumed — AL1 stores the block in the alt row and
+    /// the listed bodies beside it.
     #[must_use]
     pub fn into_candidate(self) -> Candidate {
         self.candidate

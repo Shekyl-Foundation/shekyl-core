@@ -11,11 +11,11 @@
 use shekyl_types::{BlockHash, BlockHeight};
 
 use crate::connector::{Offered, Switched};
-use crate::scenario::{FreeHash, Scenario};
+use crate::scenario::{FreeHash, Mined, Scenario};
 
 use super::{
-    assert_same_chain, bodies, differing_tables, levered, offer_branch, with_prefix, AT,
-    LEVERED_CAP, PREFIX,
+    assert_same_chain, differing_tables, levered, offer_branch, with_prefix, AT, LEVERED_CAP,
+    PREFIX,
 };
 
 /// The self-differential: `x` connects a prefix and branch A (`depth`
@@ -51,18 +51,39 @@ async fn spend_differential(name: &str, rules: crate::schedule::ChainRules, dept
 
     let plan = offer_branch(&x, &b).await;
     assert_eq!(plan.demoted.len(), usize::try_from(depth).expect("small"));
-    let Switched::Done(done) = x.reorganize(&plan, &bodies(&b)).await.expect("switch") else {
+    let Switched::Done(done) = x.reorganize(&plan).await.expect("switch") else {
         panic!("the switch did not land");
     };
     assert!(
         done.returned.iter().any(|tx| tx.hash() == spend.hash()),
         "the demoted spend comes back for the pool"
     );
-    assert_same_chain(&x, &y, &a.iter().collect::<Vec<_>>(), "A → B equals B").await;
+    // The death rule: the switch's last connect takes the tip to
+    // `AT + depth`, so a demoted row at or below `AT + depth − cap` left
+    // with its bodies — at the cap, A's first block, which no switch back
+    // could reach (it would pop `depth + 1`).
+    let cap = x_cap(rules);
+    let kept: Vec<&Mined> = a
+        .iter()
+        .filter(|m| m.height.to_raw() + cap > AT + depth)
+        .collect();
+    assert_eq!(kept.len(), a.len() - usize::from(depth == cap));
+    assert_same_chain(&x, &y, &kept, "A → B equals B").await;
 
     // Back to A: B is one block longer than A was, so the way back pops
     // `depth + 1`. Inside the cap it lands and equals the chain that never
-    // switched; at the cap it is one past it and refused locally.
+    // switched. At the cap it is one past it: A's first block is gone, so
+    // A's extension does not link (it would have been refused on the cap).
+    if depth == cap {
+        match x.offer(&a_ext[0]).await.expect("offer") {
+            Offered::Unlinked { at } => assert_eq!(at, a[0].hash),
+            other => panic!("A's first block was retired: {other:?}"),
+        }
+        for s in [x, y, z] {
+            s.close().await;
+        }
+        return;
+    }
     let (last, held) = a_ext.split_last().expect("two blocks");
     for mined in held {
         assert!(matches!(
@@ -72,14 +93,8 @@ async fn spend_differential(name: &str, rules: crate::schedule::ChainRules, dept
     }
     match x.offer(last).await.expect("offer") {
         Offered::SwitchDue(plan) => {
-            assert!(
-                depth < x_cap(rules),
-                "a switch back past the cap was planned"
-            );
             assert!(matches!(
-                x.reorganize(&plan, &bodies(a.iter().chain(&a_ext)))
-                    .await
-                    .expect("switch back"),
+                x.reorganize(&plan).await.expect("switch back"),
                 Switched::Done(_)
             ));
             assert_same_chain(
@@ -89,10 +104,6 @@ async fn spend_differential(name: &str, rules: crate::schedule::ChainRules, dept
                 "A → B → A equals the chain that never switched",
             )
             .await;
-        }
-        Offered::BeyondCap(beyond) => {
-            assert_eq!(depth, x_cap(rules), "only the cap-depth run is refused");
-            assert_eq!(beyond.depth.to_raw(), depth + 1);
         }
         other => panic!("A's heavier extension: {other:?}"),
     }
@@ -183,7 +194,7 @@ async fn a_corrupted_undo_row_makes_the_differential_fail() {
         .await;
     let plan = offer_branch(&x, &b).await;
     assert!(matches!(
-        x.reorganize(&plan, &bodies(&b)).await.expect("switch"),
+        x.reorganize(&plan).await.expect("switch"),
         Switched::Done(_)
     ));
     let differ = differing_tables(&x, &y).await;
@@ -255,7 +266,7 @@ async fn a_tampered_witness_on_an_alt_row_fails_promotion_k5b() {
         plan.promoted[1].witness.is_some(),
         "the plan carries the row's witness"
     );
-    match x.reorganize(&plan, &bodies(&b)).await.expect("switch") {
+    match x.reorganize(&plan).await.expect("switch") {
         Switched::Refused {
             hash,
             refused,

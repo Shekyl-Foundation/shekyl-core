@@ -126,6 +126,16 @@ mod mutation_tests;
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
+/// DRS-E5 PR-b (`DRS_E5_POOL_ALT_PRUNE.md` §2.2): the pool door held to
+/// the validator over real spends, and the pool's own rows over them.
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_block_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_door_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_restart_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod pool_submit_tests;
 #[cfg(all(test, feature = "pipeline"))]
 mod rpc_store_facts_tests;
 /// The store flip's native read handlers over scenario chains (DRS-X

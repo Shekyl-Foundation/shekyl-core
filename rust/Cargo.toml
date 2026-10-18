@@ -228,6 +228,12 @@ members = [
     # where the validator, the store and RandomX meet.
     "shekyl-chain-ingest",
 
+    # The daemon's transaction pool (DRS-E5 PR-b, DRS_E5_POOL_ALT_PRUNE.md
+    # §2.2): admission through the validator's own door, the key-image map,
+    # the public bit, eviction, template selection, the reconcile at open.
+    # Holds no rule (E5-Q2). Staged for the DRS-X store flip.
+    "shekyl-mempool",
+
     # Foundational monetary-amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md)
     "shekyl-units",
 

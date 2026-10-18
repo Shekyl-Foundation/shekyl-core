@@ -603,22 +603,7 @@ fn release_terms_hold<'id, V: ChainView<'id>>(
     let (bonded_total, bad_interval_count, last_served) = match record {
         None => (None, 0, None),
         Some(record) => {
-            let maxima: Vec<u64> = match &record.holdings {
-                Holdings::ShardSet(held) => {
-                    let mut maxima = Vec::with_capacity(held.len());
-                    for h in held.iter() {
-                        if let Some(epoch) = view.last_served_epoch(&persona, h.shard)? {
-                            maxima.push(epoch.to_raw());
-                        }
-                    }
-                    maxima
-                }
-                Holdings::CompleteTree => view
-                    .served_shards(&persona)?
-                    .into_iter()
-                    .map(|s| s.last_served.to_raw())
-                    .collect(),
-            };
+            let maxima = release_last_served(view, &persona, record)?;
             (
                 Some(record.bonded_total.to_raw()),
                 record.bad_intervals.len(),
@@ -665,6 +650,42 @@ fn reinstate_terms_hold(vin: &ArchivalBondPostVin, record: Option<&BondRecord>) 
     .is_ok()
 }
 
+/// The last-served epoch of every shard `persona`'s record holds and has
+/// served — a release's cooldown operand, before
+/// `whole_record_last_served` folds it: for a shard set, each held shard's
+/// latest pass in held order, a never-served shard omitted (the C++'s
+/// `archival_bond_last_served_epochs` over `held_shard_ids`); for a complete
+/// tree, every served shard's latest pass in shard order (its
+/// `archival_bond_all_last_served_epochs`). Public for the submit engine's
+/// Release facts over the Rust pool (DRS-E5 PR-b M9), so the block path and
+/// the engine read one gather.
+///
+/// # Errors
+///
+/// The view's fault.
+pub fn release_last_served<'id, V: ChainView<'id>>(
+    view: &V,
+    persona: &PCanonicalId,
+    record: &BondRecord,
+) -> Result<Vec<u64>, V::Fault> {
+    Ok(match &record.holdings {
+        Holdings::ShardSet(held) => {
+            let mut maxima = Vec::with_capacity(held.len());
+            for h in held.iter() {
+                if let Some(epoch) = view.last_served_epoch(persona, h.shard)? {
+                    maxima.push(epoch.to_raw());
+                }
+            }
+            maxima
+        }
+        Holdings::CompleteTree => view
+            .served_shards(persona)?
+            .into_iter()
+            .map(|s| s.last_served.to_raw())
+            .collect(),
+    })
+}
+
 /// The classified arm as the retention crate's vin — the marshal the three
 /// `verify_*` functions read. The kind is the arm's, so a kind no arm names
 /// never reaches here ([`L7`] refused it). The holdings and the amounts are
@@ -672,13 +693,9 @@ fn reinstate_terms_hold(vin: &ArchivalBondPostVin, record: Option<&BondRecord>) 
 /// (duplicate, over cap) — the wire parse refuses those before any rule
 /// runs, so the arm is unreachable from bytes and fails closed.
 ///
-/// The submit pool's `retention_vin` (`shekyl-daemon-rpc`,
-/// `submit/verifier.rs`) is a different function. It takes a caller-supplied
-/// retention kind and a separate `bond_spend_pk`, and it does not classify
-/// the post. The two are not interchangeable, and neither is a copy of the
-/// other. The pool's deletes when pool admission calls [`crate::tx_against`]
-/// (DRS-E5); until that caller lands, the pool's stays. The follow-up names
-/// both shapes (`docs/FOLLOWUPS.md`).
+/// The one marshal: the submit engine's battery reads the same vin through
+/// [`bond_post_vin`] (DRS-E5 PR-b), so the block path and the engine cannot
+/// disagree about what a post says.
 pub(crate) fn retention_vin(arm: &BondArm<'_>) -> Option<ArchivalBondPostVin> {
     let post = arm.post();
     let (holdings_kind, shard_ids) = match &post.holdings {
@@ -714,6 +731,17 @@ pub(crate) fn retention_vin(arm: &BondArm<'_>) -> Option<ArchivalBondPostVin> {
         bond_credit: post.bond_credit,
         bond_debit: post.bond_debit,
     })
+}
+
+/// A wire bond post as the retention crate's verify view: the post
+/// classified into its arm ([`BondArm::of`]) and marshalled by
+/// [`retention_vin`] — the validator's own marshal, public for the submit
+/// engine's battery (`shekyl-daemon-rpc`, `submit/verifier.rs`), which
+/// reads the vin the block path reads. `None` for a post no arm names
+/// (CEN-L7's refusal) or a compact set that is not a [`ShardSet`].
+#[must_use]
+pub fn bond_post_vin(post: &BondPost) -> Option<ArchivalBondPostVin> {
+    BondArm::of(post).as_ref().and_then(retention_vin)
 }
 
 #[cfg(test)]

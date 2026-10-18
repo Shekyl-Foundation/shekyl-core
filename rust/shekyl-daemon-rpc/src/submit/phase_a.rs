@@ -32,6 +32,8 @@ use shekyl_archival_retention::{
 use shekyl_types::{BlockHash, TxHash};
 use shekyl_wire::transaction::{BondPost, BondPostKind, Ct, Input, Transaction, MAX_TX_SIZE};
 
+use crate::submit::facts::BondProbe;
+
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 
 /// Shape class of an admissible submission, decided by the input-arm mix
@@ -107,6 +109,39 @@ impl ParsedSubmission {
                 *p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey).as_bytes(),
                 vin.settlement_epochs.as_slice(),
             )
+        })
+    }
+
+    /// The archival-bond question a bond-post submission asks at the fact
+    /// snapshot, keyed on the vin's claimed `p_canonical_id` (BP2 pins the
+    /// claim to the pubkey in Phase C) — `None` off a bond post. Which
+    /// question depends on the post kind, and the two are opposites:
+    /// JoinMarket wants the record ABSENT (§8.7.1 BP3), Release wants it
+    /// PRESENT with its contents as verify operands (§8.7.1.1), and carries
+    /// the bond slot's auth key so the gather can run the cheap pin before
+    /// its expensive scan (Phase C still runs UB3 itself). The other
+    /// non-JoinMarket kinds have no producer and are refused in Phase C, so
+    /// they ask JoinMarket's question and never reach a verdict that
+    /// consumes the answer. One derivation for the engine's snapshot and a
+    /// shim's commit-time re-check.
+    pub fn bond_probe(&self) -> Option<BondProbe<'_>> {
+        let (index, bond) = self.bond_post()?;
+        let bond_auth = match &self.tx.ct {
+            Ct::Fcmp { pqc_auths, .. } => {
+                pqc_auths.get(index).map(|a| a.hybrid_public_key.as_slice())
+            }
+            Ct::Null(_) => None,
+        };
+        Some(match (self.bond_post_is_release(), bond_auth) {
+            (true, Some(auth_pubkey)) => BondProbe::Release {
+                p_canonical_id: &bond.p_canonical_id,
+                auth_pubkey,
+                bond_debit: bond.bond_debit,
+            },
+            // No auth slot for the bond vin is a malformed submission the
+            // battery refuses anyway; ask the cheap question rather than
+            // inventing a key, and let Phase C issue the verdict.
+            _ => BondProbe::Join(&bond.p_canonical_id),
         })
     }
 
