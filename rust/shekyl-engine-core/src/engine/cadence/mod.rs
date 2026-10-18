@@ -389,6 +389,7 @@ where
         Box::new(outcomes::PendingOutcomeLeg {
             engine: Weak::clone(&engine),
             alarms: Arc::clone(alarms),
+            logged: Arc::default(),
         }),
         Box::new(EpochClaimLeg {
             engine,

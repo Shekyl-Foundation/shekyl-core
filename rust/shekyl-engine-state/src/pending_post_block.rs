@@ -198,8 +198,10 @@ pub enum OutcomeKind {
     Expired,
     /// The end date passed for a record that reserves no inputs (the Q11
     /// zero-fee emission claim), whose landing the scan cannot see. Nothing
-    /// was held.
-    EndedUnconfirmed,
+    /// was held. A terminal verdict does not make it `Rejected`, because a
+    /// daemon can relay what it refused and the scan could not tell; the
+    /// cause, if one was recorded, is kept so its sentence can be shown.
+    EndedUnconfirmed(Option<TerminalCause>),
     /// The end date passed with the record's reserved inputs partly spent
     /// by another transaction. Nothing outside the wallet can spend `P`'s
     /// outputs, so this is a wallet bug or a compromised key. The unspent
@@ -1311,8 +1313,8 @@ impl PendingPostBlock {
     /// | --- | --- |
     /// | a post with every reserved input gone | held: no outcome, not released |
     /// | some reserved input gone, not all | [`OutcomeKind::SpentElsewhere`] |
+    /// | the record reserves no inputs (the Q11 zero-fee claim) | [`OutcomeKind::EndedUnconfirmed`], with the cause if one was recorded |
     /// | a terminal verdict was recorded | [`OutcomeKind::Rejected`] |
-    /// | the record reserves no inputs (the Q11 zero-fee claim) | [`OutcomeKind::EndedUnconfirmed`] |
     /// | every reserved input still live | [`OutcomeKind::Expired`] |
     ///
     /// Releasing is safe at the end date because no block above it can
@@ -1346,10 +1348,10 @@ impl PendingPostBlock {
             let gone = reserved.iter().filter(|g| !live.contains(g)).count();
             Some(if gone > 0 {
                 OutcomeKind::SpentElsewhere
+            } else if reserved.is_empty() {
+                OutcomeKind::EndedUnconfirmed(terminal)
             } else if let Some(cause) = terminal {
                 OutcomeKind::Rejected(cause)
-            } else if reserved.is_empty() {
-                OutcomeKind::EndedUnconfirmed
             } else {
                 OutcomeKind::Expired
             })
@@ -2619,7 +2621,8 @@ mod tests {
                 b.seal_release(release(0x14, &[5, 6]), ChainCount::from_raw(1), g),
                 SealAdmission::Admit
             );
-            // claim, nothing reserved, a verdict seen -> rejected
+            // claim, nothing reserved, a verdict seen -> ended unconfirmed,
+            // the cause kept: the scan cannot see whether it landed
             assert!(b.push_claim(claim(0x15, &[])));
             // stake, every input gone, no match -> held, not released
             assert!(b.push_post(post(0x16, &[7, 8])));
@@ -2638,7 +2641,7 @@ mod tests {
         assert_eq!(got[&(RecordKind::Post, 0x11)], OutcomeKind::SpentElsewhere);
         assert_eq!(
             got[&(RecordKind::Claim, 0x12)],
-            OutcomeKind::EndedUnconfirmed
+            OutcomeKind::EndedUnconfirmed(None)
         );
         assert_eq!(
             got[&(RecordKind::Drain, 0x13)],
@@ -2650,7 +2653,7 @@ mod tests {
         );
         assert_eq!(
             got[&(RecordKind::Claim, 0x15)],
-            OutcomeKind::Rejected(TerminalCause::Malformed)
+            OutcomeKind::EndedUnconfirmed(Some(TerminalCause::Malformed))
         );
         assert!(
             !got.contains_key(&(RecordKind::Post, 0x16)),

@@ -34,7 +34,6 @@ use std::time::Duration;
 use shekyl_archival_retention::ARCHIVAL_REORG_DEPTH_BLOCKS;
 use shekyl_engine_state::pending_post_block::{end_date, EndedRelease, RecordKind, TerminalCause};
 
-use super::end_date::log_ended;
 pub(crate) use super::end_date::{terminal_cause, REFERENCE_MAX_AGE};
 use shekyl_engine_state::{PendingBondPost, PendingPostBlock, PendingPostState};
 use shekyl_standoff::draw::bounded_uniform;
@@ -753,7 +752,6 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                 }
             }
         }
-        log_ended(&plan.ended);
 
         // -- Phase 3: the single dispatch (dispersal → emit → send) ---------
         let Some((post, attempts)) = plan.dispatched else {

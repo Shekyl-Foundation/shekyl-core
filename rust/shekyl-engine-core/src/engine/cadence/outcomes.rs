@@ -61,6 +61,40 @@ where
 {
     pub(super) engine: WeakEngine<S, D, L, E, R, P, WalletFile>,
     pub(super) alarms: Arc<OperatorAlarms>,
+    /// The counts last logged this start, so the error is written once per
+    /// start and again only when they change (WR-Q3, WR-Q5).
+    pub(super) logged: Arc<std::sync::Mutex<IntegrityCounts>>,
+}
+
+/// One reading of the durable integrity faults: `spent_elsewhere` outcomes
+/// and held stakes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct IntegrityCounts {
+    pub(super) spent_elsewhere: u64,
+    pub(super) held_stakes: u64,
+}
+
+/// Whether this reading should be logged: it differs from the last logged
+/// one and shows a fault. Records the reading either way, so a fault that
+/// clears and returns is logged again.
+pub(super) fn should_log(last: &mut IntegrityCounts, now: IntegrityCounts) -> bool {
+    let changed = *last != now;
+    *last = now;
+    changed && now != IntegrityCounts::default()
+}
+
+/// The error a person reads in the wallet log (WR-Q3). It names no persona,
+/// slot or record (WR-Q5): the counts and the remedy only.
+fn log_integrity(now: IntegrityCounts) {
+    tracing::error!(
+        spent_elsewhere = now.spent_elsewhere,
+        held_stakes = now.held_stakes,
+        "staking funds this wallet set aside were spent by another transaction. \
+         Nothing outside this wallet can spend them, so this is a wallet defect or a \
+         compromised key. staking_info shows each case: a spent_elsewhere outcome, \
+         or a stake held because every input it set aside is spent. Operator \
+         action: check this wallet's logs and keys"
+    );
 }
 
 impl<S, D, L, E, R, P> CadenceLeg for PendingOutcomeLeg<S, D, L, E, R, P>
@@ -84,6 +118,7 @@ where
     fn fire(&mut self, _tip: u64) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let weak = Weak::clone(&self.engine);
         let alarms = Arc::clone(&self.alarms);
+        let logged = Arc::clone(&self.logged);
         Box::pin(async move {
             let Some(engine) = weak.upgrade() else {
                 return;
@@ -91,12 +126,25 @@ where
             let read = engine.read().await.sealed_staking_records();
             match read {
                 Ok((pscan, Some(block))) => {
-                    let held = held_spent_stakes(&block, pscan.as_ref());
+                    let now = IntegrityCounts {
+                        spent_elsewhere: spent_elsewhere_count(&block),
+                        held_stakes: u64::try_from(held_spent_stakes(&block, pscan.as_ref()).len())
+                            .unwrap_or(u64::MAX),
+                    };
                     shekyl_operator_alarm::cadence::apply_pending_outcomes(
                         &alarms,
-                        spent_elsewhere_count(&block),
-                        u64::try_from(held.len()).unwrap_or(u64::MAX),
+                        now.spent_elsewhere,
+                        now.held_stakes,
                     );
+                    let log = should_log(
+                        &mut logged
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
+                        now,
+                    );
+                    if log {
+                        log_integrity(now);
+                    }
                 }
                 Ok((_, None)) => {}
                 Err(e) => {

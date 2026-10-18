@@ -2965,12 +2965,15 @@ components:
           type: string
           description: >
             Values at this contract version. `pending`: saved, not yet
-            sent. `dispatched`: sent and still able to land. `rejected`: a
-            node refused it; nothing more is sent, and its funds stay set
-            aside until funds_return_at because only the chain can say
-            whether it landed. `expired`: the end date has passed, so the
-            transaction can never be mined; its funds return at
-            funds_return_at. `held`: a stake past its end date whose every
+            sent. `dispatched`: sent and still able to land. `refused`: a
+            node refused it and its end date has not passed. Not final:
+            nothing more is sent, its funds stay set aside until
+            funds_return_at, and a stake that lands before then takes the
+            confirmed path, because only the chain can say whether it
+            landed; the refusal becomes an outcome only at the end date.
+            `expired`: the end date has passed, so the transaction can
+            never be mined; its funds return at funds_return_at, and a
+            record a node refused keeps its reason. `held`: a stake past its end date whose every
             reserved input has been spent with no confirmation seen; it is
             kept rather than withdrawn, so a stake that did land keeps its
             place, nothing is returned because nothing reserved is left,
@@ -2993,7 +2996,7 @@ components:
           format: int64
           nullable: true
           description: >
-            For `rejected` and `expired`: the end date, the last height at
+            For `refused` and `expired`: the end date, the last height at
             which the transaction could be mined. Its funds return once
             pscan_synced_height is greater than it. `null` in the other
             states, where no return is expected.
@@ -3001,9 +3004,9 @@ components:
           type: string
           nullable: true
           description: >
-            For `rejected`, what the node said, and for `held`, why the
-            stake is kept, as a sentence for the user. `null` in the other
-            states.
+            What a node said, whenever one refused the record (`refused`,
+            and `expired` after a refusal), and for `held` why the stake is
+            kept, as a sentence for the user. `null` otherwise.
 
     StakingOutcomeEntry:
       type: object
@@ -3022,7 +3025,8 @@ components:
             and it did not land by its end date. `expired`: it did not land
             by its end date. `ended_unconfirmed`: a reward claim that held
             no funds reached its end date, and the wallet cannot see
-            whether it landed. `spent_elsewhere`: some of its funds were
+            whether it landed; a node's refusal does not make it
+            `rejected`, and its sentence is kept in `reason`. `spent_elsewhere`: some of its funds were
             spent by another transaction, which should not happen.
         reason:
           type: string

@@ -233,10 +233,12 @@ fn in_flight_entry(r: &InFlightRecord) -> InFlightEntry {
     let (state, funds_return_at) = match r.state {
         InFlightState::Pending => ("pending", None),
         InFlightState::Dispatched => ("dispatched", None),
-        InFlightState::Rejected {
+        InFlightState::Refused {
             funds_return_at, ..
-        } => ("rejected", Some(funds_return_at)),
-        InFlightState::Expired { funds_return_at } => ("expired", Some(funds_return_at)),
+        } => ("refused", Some(funds_return_at)),
+        InFlightState::Expired {
+            funds_return_at, ..
+        } => ("expired", Some(funds_return_at)),
         InFlightState::Held => ("held", None),
     };
     InFlightEntry {
@@ -253,7 +255,7 @@ fn outcome_entry(o: &ReportedOutcome) -> StakingOutcomeEntry {
     let outcome = match o.outcome {
         OutcomeKind::Rejected(_) => "rejected",
         OutcomeKind::Expired => "expired",
-        OutcomeKind::EndedUnconfirmed => "ended_unconfirmed",
+        OutcomeKind::EndedUnconfirmed(_) => "ended_unconfirmed",
         OutcomeKind::SpentElsewhere => "spent_elsewhere",
     };
     StakingOutcomeEntry {

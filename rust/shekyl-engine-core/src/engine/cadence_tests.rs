@@ -800,6 +800,37 @@ async fn claim_leg_evaluates_once_per_settled_epoch() {
     );
 }
 
+/// The leg's error is written once per start and again only when the
+/// counts change, and a fault that clears and returns is written again; a
+/// quiet reading writes nothing.
+#[test]
+fn the_integrity_error_is_written_once_per_start_and_on_change() {
+    use outcomes::{should_log, IntegrityCounts};
+    let fault = |spent_elsewhere, held_stakes| IntegrityCounts {
+        spent_elsewhere,
+        held_stakes,
+    };
+    let mut last = IntegrityCounts::default();
+    assert!(!should_log(&mut last, fault(0, 0)), "quiet writes nothing");
+    assert!(
+        should_log(&mut last, fault(1, 0)),
+        "the first reading of a fault"
+    );
+    assert!(
+        !should_log(&mut last, fault(1, 0)),
+        "not again on the next tick"
+    );
+    assert!(should_log(&mut last, fault(1, 1)), "a change is written");
+    assert!(
+        !should_log(&mut last, fault(0, 0)),
+        "clearing writes nothing"
+    );
+    assert!(
+        should_log(&mut last, fault(1, 1)),
+        "a returning fault is written"
+    );
+}
+
 /// The pending-outcomes leg (WR-Q3): a sealed `spent_elsewhere` outcome
 /// raises the pending-funds integrity alarm, a fresh board after a restart
 /// re-derives it from the same seal, and once the outcome is acknowledged a
@@ -824,6 +855,7 @@ async fn the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal()
     let leg_on = |alarms: &Arc<OperatorAlarms>| outcomes::PendingOutcomeLeg {
         engine: Arc::downgrade(&arc),
         alarms: Arc::clone(alarms),
+        logged: Arc::default(),
     };
 
     let before = Arc::new(OperatorAlarms::new());

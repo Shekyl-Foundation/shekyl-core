@@ -827,9 +827,17 @@ and the review rulings of 2026-10-17 (§7.3).
   `attempts` are facts about the record's sends, so a `rejected` or
   `expired` record that was sent still reports them. `attempts` is `0`
   for a record never sent.
-- **`rejected` is an `in_flight` state** (Rule 2): the record is held to
-  its end date, so the reason shows at once and the outcome is written at
-  the end date.
+- **`refused` and `expired` follow WR-Q1 as amended** (Rule 2): a record a
+  daemon refused reads `refused` until its end date and `expired` after
+  it, carrying the reason on both sides; the outcome `rejected` is written
+  at the release. A zero-fee claim with a recorded verdict ends
+  `ended_unconfirmed`, keeping the daemon's sentence, and reports
+  `funds: none_held`.
+- **One error line per start, and nothing else logged** (WR-Q3, WR-Q5).
+  The cadence driver's outcome leg writes it when it first reads a
+  `spent_elsewhere` outcome or a held stake, and again only when the
+  counts change. It names no persona, slot or record. The release itself
+  logs nothing.
 - **`held` is an `in_flight` state** (ruled 2026-10-17, §7.3): a stake past
   its end date with every reserved input spent and no confirmation seen.
   `funds_return_at` is `null`, because nothing reserved is left to return.
@@ -859,7 +867,10 @@ and the review rulings of 2026-10-17 (§7.3).
 | WR-Q1: no `in_flight`, or `null`, fails to decode; the tightened fields (`pscan_synced_height`, `recovery_pending_reopen`, `posture`, `serving_priority_not_lowered`) are required | `types::tests::staking_info_refuses_a_reply_missing_a_required_member` (wallet RPC) |
 | WR-Q1: expired after a reload, `funds_return_at == r + 100` | `staking_outcomes::tests::an_expired_record_reads_the_same_after_a_reload`; the boundary at `tip == end date` in `a_record_reads_expired_from_a_tip_at_its_end_date` |
 | WR-Q1: no `stalled` | `rg -nw stalled` over the three paths returns only two comments about RPC concurrency in `send.rs`; without `-w` it also matches `installed` |
-| WR-Q2, amended by Rule 2 | `e2e_the_cxx_daemon_answers_join_market_unsupported` against the C++ daemon: one stake in flight, `rejected`, the refusal sentence, `funds_return_at` the end date, no outcome yet; the same after a restart. The WR-Q2 falsifier text in §3 predates Rule 2 |
+| WR-Q1, amended: `refused` below the end date, `expired` with the same reason after it | `a_recorded_verdict_reads_refused_then_expired_with_its_reason` |
+| WR-Q2, amended: the full arc against a real daemon | `e2e_the_cxx_daemon_answers_join_market_unsupported` against the C++ daemon: the stake reads `refused` with the refusal sentence and `funds_return_at` the end date, before and after a restart; `expired` with the reason once the ledger passes the end date; then the production P-scan's dispatch tick releases it and `outcomes` holds one `rejected` stake with the reason and its funds returned, before and after another restart |
+| WR-Q3: a refused zero-fee claim ends `ended_unconfirmed` | `the_release_outcome_follows_the_precedence_table`; its sentence and `none_held` in `reasons_are_user_sentences_and_linkage_follows_the_send` |
+| WR-Q3 / WR-Q5: the error line once per start | `the_integrity_error_is_written_once_per_start_and_on_change` |
 | WR-Q2: the acknowledgement by kind and height | `pending_post_block` `an_acknowledgement_clears_every_persona_through_the_height_shown`; through the facade and the seal, `an_acknowledgement_clears_every_personas_outcome_through_the_height_shown`; the CLI default, `acknowledge_defaults_to_the_newest_ending_shown` |
 | WR-Q3 / WR-Q4: the release table, every kind | `pending_post_block` tests and `the_release_moves_each_kind_from_in_flight_to_outcomes` |
 | §7.3: a stake with every input spent holds; a partly spent one releases | `the_release_outcome_follows_the_precedence_table`; `a_stake_with_every_input_spent_reads_held`; the alarm from the two seals, `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |

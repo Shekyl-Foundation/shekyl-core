@@ -3553,23 +3553,30 @@ async fn e2e_the_cxx_daemon_answers_join_market_unsupported() {
     the_real_rejection_reads_as_a_held_rejected_stake(&daemon, submitted).await;
 }
 
-/// WR-Q2's falsifier as BD-Q3 Rule 2 amends it, on the real daemon's
-/// verdict: the cause is recorded on the held post through `terminal_cause`,
-/// the one mapping the dispatch driver's terminal arm uses (this harness
-/// submits directly, so it records as that arm does; the arm itself is
-/// pinned in `dispatch_tests.rs`). The staking read then reports one stake
-/// in flight, `rejected`, with the refusal sentence and the end date as
-/// `funds_return_at`, and no outcome yet: the outcome is written at the end
-/// date. After a restart it reads the same, and the held record keeps the
-/// open-time phantom sweep from collecting the slot.
+/// WR-Q2's falsifier as amended 2026-10-16 (`WALLET_RPC_STAKING_OUTCOMES.md`
+/// WR-Q2), on the real daemon's verdict. The cause is recorded on the held
+/// post through `terminal_cause`, the one mapping the dispatch driver's
+/// terminal arm uses (this harness submits directly, so it records as that
+/// arm does; the arm itself is pinned in `dispatch_tests.rs`). Then:
+///
+/// - the stake reads `refused`, with the refusal sentence and the end date as
+///   `funds_return_at`, and no outcome; the same after a restart, and the
+///   held record keeps the open-time phantom sweep from collecting the slot;
+/// - once the ledger reaches the end date it reads `expired`, keeping the
+///   reason;
+/// - once the production P-scan covers the end date, its dispatch tick
+///   releases the record: `in_flight` is empty and `outcomes` holds one
+///   `rejected` stake with the reason, its funds returned; the same after
+///   another restart.
 async fn the_real_rejection_reads_as_a_held_rejected_stake(
     daemon: &RegtestDaemon,
     submitted: SubmittedBondPost,
 ) {
     use super::pscan::start::pending_post_store_for_engine;
     use super::staking_outcomes::InFlightState;
-    use shekyl_engine_state::pending_post_block::{RecordKind, TerminalCause};
+    use shekyl_engine_state::pending_post_block::{OutcomeKind, RecordKind, TerminalCause};
 
+    const REASON: &str = "Staking is not available on this node";
     let verdict = submitted
         .verdict
         .as_ref()
@@ -3593,68 +3600,125 @@ async fn the_real_rejection_reads_as_a_held_rejected_stake(
             })
             .expect("pending seal")
     };
-    let expected_end = shekyl_types::BlockHeight::from_raw(
+    let end = shekyl_types::BlockHeight::from_raw(
         reference_height.to_raw() + crate::consensus_constants::FCMP_REFERENCE_BLOCK_MAX_AGE,
     );
-    let check = |view: super::StakingReadView, when: &str| {
-        assert!(view.staking_enabled, "{when}: still a staker");
+    let in_flight_state = |view: &super::StakingReadView, when: &str| {
         assert_eq!(view.in_flight.len(), 1, "{when}: one stake in flight");
         let entry = view.in_flight[0];
         assert_eq!(entry.kind, RecordKind::Post, "{when}");
-        assert_eq!(
-            entry.state,
-            InFlightState::Rejected {
-                cause: TerminalCause::JoinMarketUnsupported,
-                funds_return_at: expected_end,
-            },
-            "{when}"
-        );
-        let reason = entry.state.reason().expect("a rejected stake has a reason");
-        assert!(
-            reason.starts_with("Staking is not available on this node"),
-            "{when}: {reason}"
-        );
         assert!(
             entry.sends.is_none(),
             "{when}: the harness sent around the driver"
         );
+        let reason = entry.state.reason().expect("a refused stake has a reason");
+        assert!(reason.starts_with(REASON), "{when}: {reason}");
         assert!(
             view.outcomes.is_empty(),
-            "{when}: the outcome waits for the end date"
+            "{when}: the outcome waits for the release"
         );
+        entry.state
     };
-    check(
-        submitted
-            .arc
-            .read()
-            .await
-            .staking_read_view()
-            .expect("staking read"),
-        "before the restart",
-    );
+    let refused = InFlightState::Refused {
+        cause,
+        funds_return_at: end,
+    };
+    let view = submitted
+        .arc
+        .read()
+        .await
+        .staking_read_view()
+        .expect("staking read");
+    assert_eq!(in_flight_state(&view, "refused"), refused);
 
     let creds = super::lifecycle::Credentials::password_only(b"pr4-staker");
-    let lock = Arc::try_unwrap(submitted.arc).unwrap_or_else(|_| {
-        panic!("engine arc still has co-owners at close: a scan or refresh task is still live")
-    });
-    lock.into_inner().close(&creds).expect("close staker");
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc (reopen)");
-    let reopened = super::Engine::<super::SoloSigner>::open_full(
-        &submitted._tmp.path().join("wallet"),
-        &creds,
-        shekyl_address::Network::Mainnet,
-        super::DaemonClient::verifying(rpc, regtest_expectation()),
-        shekyl_engine_file::SafetyOverrides::none(),
-    )
-    .expect("reopen the staker")
-    .into_wallet();
-    check(
-        reopened.staking_read_view().expect("staking read"),
-        "after the restart",
-    );
-    reopened.close(&creds).expect("close");
+    let wallet = submitted._tmp.path().join("wallet");
+    let reopen = |engine: Arc<RwLock<super::Engine<super::SoloSigner>>>| {
+        let (creds, wallet) = (&creds, &wallet);
+        async move {
+            let lock = Arc::try_unwrap(engine).unwrap_or_else(|_| {
+                panic!(
+                    "engine arc still has co-owners at close: a scan or refresh task is still live"
+                )
+            });
+            lock.into_inner().close(creds).expect("close staker");
+            let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
+                .await
+                .expect("wallet rpc (reopen)");
+            let engine = super::Engine::<super::SoloSigner>::open_full(
+                wallet,
+                creds,
+                shekyl_address::Network::Mainnet,
+                super::DaemonClient::verifying(rpc, regtest_expectation()),
+                shekyl_engine_file::SafetyOverrides::none(),
+            )
+            .expect("reopen the staker")
+            .into_wallet();
+            Arc::new(RwLock::new(engine))
+        }
+    };
+
+    let arc = reopen(submitted.arc).await;
+    let view = arc.read().await.staking_read_view().expect("staking read");
+    assert!(view.staking_enabled, "the held record keeps the slot");
+    assert_eq!(in_flight_state(&view, "refused, restarted"), refused);
+
+    // The ledger reaches the end date: the stake can no longer be mined.
+    let mut expired = false;
+    for _ in 0..8 {
+        let tip = daemon.height().await;
+        let short = end.to_raw().saturating_sub(tip) + 2;
+        daemon.generate_blocks(short, &submitted.principal).await;
+        refresh(&arc).await;
+        let view = arc.read().await.staking_read_view().expect("staking read");
+        if in_flight_state(&view, "expiring") != refused {
+            assert_eq!(
+                view.in_flight[0].state,
+                InFlightState::Expired {
+                    funds_return_at: end,
+                    cause: Some(cause),
+                },
+                "past the end date it reads expired, the reason kept"
+            );
+            expired = true;
+            break;
+        }
+    }
+    assert!(expired, "the ledger never reached the end date");
+
+    // The scan covers the end date, and its dispatch tick releases the stake.
+    let mut released = None;
+    for _ in 0..6 {
+        daemon
+            .generate_blocks(PSCAN_TEST_REORG_DEPTH + 2, &submitted.principal)
+            .await;
+        refresh(&arc).await;
+        pscan_until(&arc, &submitted.pscan_seal, "the end date covered", |s| {
+            s.synced_height() > end
+        })
+        .await;
+        let view = arc.read().await.staking_read_view().expect("staking read");
+        if view.in_flight.is_empty() {
+            released = Some(view);
+            break;
+        }
+    }
+    let view = released.expect("the dispatch tick released the stake at its end date");
+    let check_outcome = |view: &super::StakingReadView, when: &str| {
+        assert!(view.in_flight.is_empty(), "{when}");
+        assert_eq!(view.outcomes.len(), 1, "{when}: one outcome");
+        let outcome = view.outcomes[0];
+        assert_eq!(outcome.kind, RecordKind::Post, "{when}");
+        assert_eq!(outcome.outcome, OutcomeKind::Rejected(cause), "{when}");
+        assert!(outcome.returned_funds(), "{when}: its funds are returned");
+        assert!(outcome.reason().starts_with(REASON), "{when}");
+    };
+    check_outcome(&view, "released");
+    let arc = reopen(arc).await;
+    let view = arc.read().await.staking_read_view().expect("staking read");
+    check_outcome(&view, "released, restarted");
+    let lock = Arc::try_unwrap(arc).unwrap_or_else(|_| panic!("engine arc still shared"));
+    lock.into_inner().close(&creds).expect("close");
 }
 
 /// PR-4c emission-claim harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4c): the

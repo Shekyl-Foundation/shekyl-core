@@ -839,20 +839,21 @@ pub struct StakingInfoResult {
 pub struct InFlightEntry {
     /// `stake`, `claim`, `drain` or `exit`.
     pub kind: String,
-    /// `pending`, `dispatched`, `rejected`, `expired` or `held`.
+    /// `pending`, `dispatched`, `refused`, `expired` or `held`.
     pub state: String,
     /// The tip height of the record's first send; `null` when it was never
     /// sent.
     pub dispatched_at_height: Nullable<i64>,
     /// Sends so far, the first included; `0` when never sent.
     pub attempts: u32,
-    /// For `rejected` and `expired`: the end date, after which the
+    /// For `refused` and `expired`: the end date, after which the
     /// transaction can never be mined. The funds return once
     /// `pscan_synced_height` is greater than it. `null` in the other states,
     /// where no return is expected.
     pub funds_return_at: Nullable<i64>,
-    /// For `rejected`, what the node said, and for `held`, why the stake is
-    /// kept, as a user sentence. `null` in the other states.
+    /// What a node said, whenever one refused the record (`refused`, and
+    /// `expired` after a refusal), and for `held` why the stake is kept, as a
+    /// user sentence. `null` otherwise.
     pub reason: Nullable<String>,
 }
 
@@ -1099,7 +1100,7 @@ mod tests {
             "serving_priority_not_lowered": null,
             "in_flight": [{
                 "kind": "stake",
-                "state": "rejected",
+                "state": "refused",
                 "dispatched_at_height": 5_010,
                 "attempts": 1,
                 "funds_return_at": 5_100,

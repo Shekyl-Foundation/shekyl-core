@@ -429,15 +429,23 @@ fn in_flight_line(entry: &InFlightEntry) -> String {
             entry.attempts,
             if entry.attempts == 1 { "" } else { "s" }
         ),
-        ("rejected", _) => format!(
+        ("refused", _) => format!(
             "{kind}: refused. {} {}",
             entry.reason.0.as_deref().unwrap_or(""),
             returns.unwrap_or_default()
         ),
-        ("expired", _) => format!(
-            "{kind}: can no longer be mined. {}",
-            returns.unwrap_or_default()
-        ),
+        ("expired", _) => {
+            let refused = entry
+                .reason
+                .0
+                .as_deref()
+                .map(|reason| format!(" {reason}"))
+                .unwrap_or_default();
+            format!(
+                "{kind}: can no longer be mined.{refused} {}",
+                returns.unwrap_or_default()
+            )
+        }
         ("held", _) => format!("{kind}: kept. {}", entry.reason.0.as_deref().unwrap_or("")),
         (other, _) => format!("{kind}: {other}"),
     }
@@ -735,7 +743,7 @@ mod tests {
             dispatched_at_height: sent.into(),
             attempts: u32::from(sent.is_some()),
             funds_return_at: returns.into(),
-            reason: (state == "rejected")
+            reason: (state == "refused")
                 .then(|| "The node refused its fee as too low.".to_owned())
                 .into(),
         }
@@ -783,7 +791,7 @@ mod tests {
             in_flight_line(&entry("dispatched", Some(5_010), None)),
             "return: sent at height 5010, 1 attempt"
         );
-        let refused = in_flight_line(&entry("rejected", Some(5_010), Some(5_100)));
+        let refused = in_flight_line(&entry("refused", Some(5_010), Some(5_100)));
         assert!(refused.contains("fee as too low"), "{refused}");
         assert!(refused.contains("passes height 5100"), "{refused}");
         assert!(in_flight_line(&entry("expired", None, Some(5_100))).contains("5100"));

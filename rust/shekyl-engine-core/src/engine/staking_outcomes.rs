@@ -56,18 +56,23 @@ pub struct Sends {
     pub attempts: u32,
 }
 
-/// Where a live pending record stands (WR-Q1, with BD-Q3 Rule 2's
-/// `Rejected`).
+/// Where a live pending record stands (WR-Q1 as amended 2026-10-16, with
+/// the `held` stake of 2026-10-17).
+///
+/// Precedence follows whether the transaction can still land: a record that
+/// saw a terminal verdict is `Refused` until its end date and `Expired`
+/// after it, still carrying the cause.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InFlightState {
     /// Sealed, not yet sent.
     Pending,
     /// Sent at least once and still able to land.
     Dispatched,
-    /// A daemon refused it outright. Nothing more is sent; the record and its
-    /// funds are held until the end date, because only the chain can say
-    /// whether the bytes landed (BD-Q3 Rule 2).
-    Rejected {
+    /// A daemon refused it outright and its end date has not passed. Not
+    /// final: nothing more is sent, but the record and its funds are held
+    /// until the end date, because only the chain can say whether the bytes
+    /// land (BD-Q3 Rule 2).
+    Refused {
         /// What the daemon said.
         cause: TerminalCause,
         /// The end date; the funds return once the staking scan is past it.
@@ -78,6 +83,8 @@ pub enum InFlightState {
     Expired {
         /// The end date.
         funds_return_at: BlockHeight,
+        /// What a daemon said, if it refused the record before the end date.
+        cause: Option<TerminalCause>,
     },
     /// A stake past its end date whose every reserved input is spent, with
     /// no confirmation seen. It is either the stake itself, landed and not
@@ -88,23 +95,27 @@ pub enum InFlightState {
 }
 
 impl InFlightState {
-    /// The user sentence for a rejected or held record (rule 81); `None` for
-    /// every other state, which needs none.
+    /// The user sentence for a refused or held record, and for an expired
+    /// one a daemon refused (rule 81); `None` for every other state, which
+    /// needs none.
     #[must_use]
     pub fn reason(&self) -> Option<String> {
         match self {
-            Self::Rejected { cause, .. } => Some(format!(
+            Self::Refused { cause, .. } => Some(format!(
                 "{} Nothing more will be sent. Its funds stay set aside until \
                  its transaction can no longer be mined.",
                 refusal(*cause)
             )),
+            Self::Expired {
+                cause: Some(cause), ..
+            } => Some(refusal(*cause).to_owned()),
             Self::Held => Some(
                 "Every input this stake set aside has been spent, but the wallet has not \
                  seen the stake confirm. It is kept rather than withdrawn, so a stake that \
                  did land is not lost. This should not happen; check the wallet's logs."
                     .to_owned(),
             ),
-            Self::Pending | Self::Dispatched | Self::Expired { .. } => None,
+            Self::Pending | Self::Dispatched | Self::Expired { cause: None, .. } => None,
         }
     }
 }
@@ -158,12 +169,17 @@ impl ReportedOutcome {
                 ),
                 true,
             ),
-            OutcomeKind::EndedUnconfirmed => (
-                "This reward claim could not be confirmed. If it was accepted, \
-                 the reward it earned will appear in your balance."
-                    .to_owned(),
-                false,
-            ),
+            OutcomeKind::EndedUnconfirmed(cause) => {
+                let unconfirmed = "This reward claim could not be confirmed. If it was \
+                                   accepted, the reward it earned will appear in your balance.";
+                (
+                    match cause {
+                        Some(cause) => format!("{} {unconfirmed}", refusal(cause)),
+                        None => unconfirmed.to_owned(),
+                    },
+                    false,
+                )
+            }
             OutcomeKind::SpentElsewhere => (
                 "Some of the funds set aside for this were spent by another \
                  transaction. The rest are spendable again. This should not \
@@ -183,7 +199,7 @@ impl ReportedOutcome {
     /// claim's, which held none.
     #[must_use]
     pub fn returned_funds(&self) -> bool {
-        !matches!(self.outcome, OutcomeKind::EndedUnconfirmed)
+        !matches!(self.outcome, OutcomeKind::EndedUnconfirmed(_))
     }
 }
 
@@ -221,11 +237,11 @@ fn refusal(cause: TerminalCause) -> &'static str {
 /// The state of one record against the ledger clock.
 ///
 /// Precedence: a held stake reads `Held` (its inputs are spent, so neither a
-/// verdict nor the clock describes it); a recorded verdict reads `Rejected`
-/// whatever the clock says, so its reason shows at once; otherwise a tip at or
-/// past the end date reads `Expired`, because the next block cannot include
-/// the transaction (the driver's no-send rule on the same clock); otherwise
-/// the sealed state.
+/// verdict nor the clock describes it); otherwise a tip at or past the end
+/// date reads `Expired`, because the next block cannot include the
+/// transaction (the driver's no-send rule on the same clock), carrying any
+/// recorded cause; otherwise a recorded verdict reads `Refused`, so its
+/// reason shows at once; otherwise the sealed state.
 fn record(
     kind: RecordKind,
     state: PendingPostState,
@@ -244,13 +260,16 @@ fn record(
     let funds_return_at = end_date(reference_height, REFERENCE_MAX_AGE);
     let state = if held {
         InFlightState::Held
+    } else if ledger_tip >= funds_return_at {
+        InFlightState::Expired {
+            funds_return_at,
+            cause: terminal,
+        }
     } else if let Some(cause) = terminal {
-        InFlightState::Rejected {
+        InFlightState::Refused {
             cause,
             funds_return_at,
         }
-    } else if ledger_tip >= funds_return_at {
-        InFlightState::Expired { funds_return_at }
     } else if sends.is_some() {
         InFlightState::Dispatched
     } else {
@@ -353,8 +372,8 @@ pub(crate) fn outcomes(block: &PendingPostBlock) -> Vec<ReportedOutcome> {
 }
 
 /// Why an acknowledgement could not be read or written. An outcome that is
-/// not there is not an error: [`StakeStakeFacade::acknowledge_staking_outcome`]
-/// answers `false`.
+/// not there is not an error: [`StakeFacade::acknowledge_staking_outcome`]
+/// answers `0`.
 #[derive(Debug, thiserror::Error)]
 pub enum AcknowledgeOutcomeError {
     /// The pending seal could not be read or written. The detail is for the
@@ -545,6 +564,7 @@ mod tests {
                 expired.state,
                 InFlightState::Expired {
                     funds_return_at: END,
+                    cause: None,
                 },
                 "tip {tip:?}"
             );
@@ -556,10 +576,12 @@ mod tests {
         }
     }
 
-    /// A recorded verdict shows its reason at once and keeps reading
-    /// `Rejected` past the end date, until the release writes the outcome.
+    /// WR-Q1's falsifier as amended 2026-10-16: a record with a recorded
+    /// verdict reads `Refused` with its reason and `funds_return_at` below
+    /// the end date, and `Expired` with the same reason from the end date
+    /// until the release writes the outcome.
     #[test]
-    fn a_recorded_verdict_reads_rejected_before_and_after_the_end_date() {
+    fn a_recorded_verdict_reads_refused_then_expired_with_its_reason() {
         let mut block = PendingPostBlock::empty();
         seal(&mut block, Record::Post(post(3, &[3])));
         assert!(block.record_terminal(
@@ -567,15 +589,31 @@ mod tests {
             &persona(3),
             TerminalCause::JoinMarketUnsupported
         ));
-        let rejected = InFlightState::Rejected {
-            cause: TerminalCause::JoinMarketUnsupported,
-            funds_return_at: END,
-        };
+        let cause = TerminalCause::JoinMarketUnsupported;
+        let before = in_flight(&block, at(END.to_raw() - 1), &BTreeSet::new())[0].state;
         assert_eq!(
-            in_flight(&block, at(5_010), &BTreeSet::new())[0].state,
-            rejected
+            before,
+            InFlightState::Refused {
+                cause,
+                funds_return_at: END,
+            }
         );
-        assert_eq!(in_flight(&block, END, &BTreeSet::new())[0].state, rejected);
+        let after = in_flight(&block, END, &BTreeSet::new())[0].state;
+        assert_eq!(
+            after,
+            InFlightState::Expired {
+                funds_return_at: END,
+                cause: Some(cause),
+            }
+        );
+        let (before, after) = (
+            before.reason().expect("refused"),
+            after.reason().expect("expired"),
+        );
+        assert!(
+            before.starts_with(refusal(cause)) && after.starts_with(refusal(cause)),
+            "the same reason on both sides: {before} / {after}"
+        );
     }
 
     /// Every kind is reported, and the release moves a record from
@@ -643,7 +681,7 @@ mod tests {
                 },
                 ReportedOutcome {
                     kind: RecordKind::Claim,
-                    outcome: OutcomeKind::EndedUnconfirmed,
+                    outcome: OutcomeKind::EndedUnconfirmed(None),
                     at_height: at(5_900),
                     sent: true,
                 },
@@ -826,15 +864,15 @@ mod tests {
     fn reasons_are_user_sentences_and_linkage_follows_the_send() {
         let mut seen = BTreeSet::new();
         for cause in CAUSES {
-            let held = InFlightState::Rejected {
+            let held = InFlightState::Refused {
                 cause,
                 funds_return_at: END,
             }
             .reason()
-            .expect("a rejected record has a reason");
+            .expect("a refused record has a reason");
             assert!(seen.insert(refusal(cause)), "{cause:?} shares a sentence");
             assert!(held.contains("Nothing more will be sent"), "{held}");
-            for name in ["Rejected", "TerminalCause", &format!("{cause:?}")] {
+            for name in ["Refused", "TerminalCause", &format!("{cause:?}")] {
                 assert!(!held.contains(name), "{name} leaked into: {held}");
             }
         }
@@ -843,6 +881,7 @@ mod tests {
             InFlightState::Dispatched,
             InFlightState::Expired {
                 funds_return_at: END,
+                cause: None,
             },
         ] {
             assert_eq!(state.reason(), None);
@@ -862,7 +901,16 @@ mod tests {
                     true,
                 ),
                 (RecordKind::Post, OutcomeKind::Expired, true),
-                (RecordKind::Claim, OutcomeKind::EndedUnconfirmed, false),
+                (
+                    RecordKind::Claim,
+                    OutcomeKind::EndedUnconfirmed(None),
+                    false,
+                ),
+                (
+                    RecordKind::Claim,
+                    OutcomeKind::EndedUnconfirmed(Some(TerminalCause::FeeTooLow)),
+                    false,
+                ),
                 (RecordKind::Release, OutcomeKind::SpentElsewhere, true),
             ] {
                 let o = ended(kind, outcome, sent);
@@ -874,13 +922,28 @@ mod tests {
                 );
                 assert_eq!(
                     o.returned_funds(),
-                    !matches!(outcome, OutcomeKind::EndedUnconfirmed)
+                    !matches!(outcome, OutcomeKind::EndedUnconfirmed(_))
                 );
             }
         }
         assert!(ended(RecordKind::Post, OutcomeKind::Expired, false)
             .reason()
             .starts_with("The stake was not accepted in time"));
+        // A refused zero-fee claim held no funds: it keeps the node's
+        // sentence, never says its funds came back, and carries no linkage.
+        let refused_claim = ended(
+            RecordKind::Claim,
+            OutcomeKind::EndedUnconfirmed(Some(TerminalCause::FeeTooLow)),
+            true,
+        );
+        let reason = refused_claim.reason();
+        assert!(
+            reason.starts_with(refusal(TerminalCause::FeeTooLow)),
+            "{reason}"
+        );
+        assert!(reason.contains("could not be confirmed"), "{reason}");
+        assert!(!reason.contains("spendable again"), "{reason}");
+        assert!(!refused_claim.returned_funds());
     }
 
     /// The falsifier WR-Q1 names: a dispatched record with reference height
@@ -900,6 +963,7 @@ mod tests {
             in_flight(&reloaded, at(5_101), &BTreeSet::new())[0].state,
             InFlightState::Expired {
                 funds_return_at: BlockHeight::from_raw(REFERENCE.to_raw() + 100),
+                cause: None,
             }
         );
     }

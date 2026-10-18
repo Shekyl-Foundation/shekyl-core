@@ -15,7 +15,7 @@
 //! pinned age limit, the mapping from a submit failure to the cause a record
 //! keeps, and the log lines a release writes.
 
-use shekyl_engine_state::pending_post_block::{EndedRelease, OutcomeKind, TerminalCause};
+use shekyl_engine_state::pending_post_block::TerminalCause;
 use shekyl_types::BlockCount;
 
 use crate::engine::transaction_submitter::{BroadcastSubmitError, SubmitterError};
@@ -55,35 +55,6 @@ pub(crate) fn terminal_cause(e: &BroadcastSubmitError) -> Option<TerminalCause> 
             Some(TerminalCause::from(*kind))
         }
         _ => None,
-    }
-}
-
-/// The log lines for one tick's end-date releases. A `SpentElsewhere`
-/// release is an error: nothing outside the wallet can spend `P`'s outputs,
-/// so it is a wallet defect or a compromised key. The durable outcome is the
-/// system of record; the cadence driver re-raises the operator alarm from it
-/// on every start.
-pub(crate) fn log_ended(ended: &EndedRelease) {
-    for &(kind, persona, outcome) in &ended.released {
-        if outcome == OutcomeKind::SpentElsewhere {
-            tracing::error!(
-                kind = ?kind,
-                persona = ?persona,
-                "pending record released at its end date with part of its reserved \
-                 funds spent by ANOTHER transaction — nothing outside this wallet can \
-                 spend them, so this is a wallet defect or a compromised key; the \
-                 unspent rest is spendable again. Operator action: check this \
-                 wallet's logs and keys"
-            );
-        } else {
-            tracing::info!(
-                kind = ?kind,
-                outcome = ?outcome,
-                "pending record released at its end date: its transaction can no \
-                 longer be mined and did not land; record and reservation released in \
-                 one seal, outcome recorded"
-            );
-        }
     }
 }
 
