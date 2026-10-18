@@ -380,7 +380,7 @@ pub enum StoreInvariant {
     /// at `h_open(E)` and by nothing else ([`DigestFault::Rewritten`]), so
     /// an epoch that settles has one ([`DigestFault::Missing`], observed by
     /// the settlement pass and arriving through `refuse_corrupt`). A
-    /// `26`-layout file is refused at open, so a store this crate opens
+    /// `27`-layout file is refused at open, so a store this crate opens
     /// wrote every open it holds.
     DrawableDigestNotSingular {
         /// The epoch.
