@@ -17,6 +17,14 @@
 #                               submission, as Markdown on stdout
 #   compare  RUN_DIR RUN_DIR    the determinism check between two runs;
 #                               exit 1 when it fails
+#   report   RUN_DIR RUN_DIR    for each K of the first run's tables:
+#                               padding per method and overall, which
+#                               methods share each class, where a
+#                               submission stands, and whether the second
+#                               run falls into the first run's classes.
+#                               A reading for the choice of K, added after
+#                               the registered output was seen; it does
+#                               not change `derive`.
 #
 # RUN_DIR is a directory the instrument wrote (messages.csv,
 # transactions.csv, run.json): engine::regtest_e2e::rt_p5 in
@@ -255,6 +263,157 @@ def derive(run_dir):
             cells.append(f"{base_head + len(str(body)) + body:,}")
         print(f"| {tx} | {wallet} | {n_in} × {n_out} | {depth} | " + " | ".join(cells) + " |")
 
+# What each message is, for the question "does a submission share a class
+# with block batches or with wallet sync". A block batch is a
+# `/get_transactions` response: up to 100 transaction bodies of the blocks
+# being synced (`TXS_PER_REQUEST`), the only response here larger than one
+# record. Wallet sync is every other message a refresh makes. Building a
+# spend is `get_fee_estimate`; submitting it is `/submit_transaction`.
+def category(label, direction):
+    if label == SUBMIT:
+        return "submission" if direction == "request" else "submission reply"
+    if label == "/get_transactions" and direction == "response":
+        return "block batch"
+    if label == "json_rpc:get_fee_estimate":
+        return "spend building"
+    return "wallet sync"
+
+
+def records_with_owner(messages):
+    out = []
+    for m in messages:
+        for r in records_of(m["total"]):
+            out.append((r, m["label"], m["direction"]))
+    return out
+
+
+def class_usage(records, classes):
+    """{(label, direction): {class: record count}} under `classes`."""
+    usage = defaultdict(Counter)
+    for r, label, direction in records:
+        usage[(label, direction)][class_of(r, classes)] += 1
+    return usage
+
+
+def counterparts(messages_a, messages_b):
+    """Pair each run-b message with its run-a counterpart: within one
+    (wallet, method, direction), in size order, as `compare` matches them.
+    Returns (pairs, unmatched count)."""
+    group = lambda ms: {k: sorted(m["total"] for m in ms if (m["wallet"], m["label"], m["direction"]) == k)
+                        for k in {(m["wallet"], m["label"], m["direction"]) for m in ms}}
+    ga, gb = group(messages_a), group(messages_b)
+    pairs, unmatched = [], 0
+    for key in set(ga) | set(gb):
+        xa, xb = ga.get(key, []), gb.get(key, [])
+        unmatched += abs(len(xa) - len(xb))
+        pairs += [(key, a, b) for a, b in zip(xa, xb)]
+    return pairs, unmatched
+
+
+def falls_into(pairs, classes):
+    """Records of run b whose class differs from their run-a counterpart's,
+    by (method, direction); a message whose record count differs counts
+    every record of its run-b side."""
+    moved, total = Counter(), 0
+    for (wallet, label, direction), a, b in pairs:
+        ca = [class_of(r, classes) for r in records_of(a)]
+        cb = [class_of(r, classes) for r in records_of(b)]
+        total += len(cb)
+        if len(ca) != len(cb):
+            moved[(label, direction)] += len(cb)
+        else:
+            moved[(label, direction)] += sum(1 for x, y in zip(ca, cb) if x != y)
+    return {k: v for k, v in moved.items() if v}, total
+
+
+def submission_standing(records, classes):
+    """Per class a submission's request records fall in: how many of them,
+    and the categories of the other records in that class, in the same
+    direction and in either direction."""
+    out = {}
+    for r, l, d in records:
+        if l == SUBMIT and d == "request":
+            out.setdefault(class_of(r, classes), [0, Counter(), Counter()])[0] += 1
+    for r, l, d in records:
+        c = class_of(r, classes)
+        if c not in out or (l == SUBMIT and d == "request"):
+            continue
+        out[c][2][category(l, d)] += 1
+        if d == "request":
+            out[c][1][category(l, d)] += 1
+    return out
+
+
+def verdict(counter):
+    parts = [k for k in ("block batch", "wallet sync", "spend building", "submission reply") if counter.get(k)]
+    if not parts:
+        return "stands alone"
+    return "shares with " + " and ".join(f"{k} ({counter[k]} records)" for k in parts)
+
+
+def report(run_a, run_b):
+    ma, _, _ = load(run_a)
+    mb, _, _ = load(run_b)
+    ra, rb = records_with_owner(ma), records_with_owner(mb)
+    tables = optimal_tables([r for r, _, _ in ra])
+    pairs, unmatched = counterparts(ma, mb)
+    own_b = optimal_tables([r for r, _, _ in rb])
+    payload = lambda recs: sum(r - OCCUPANCY_LEN for r, _, _ in recs)
+    print("# RT-P5: the candidate tables, per method\n")
+    print("Tables are the first registered run's, by the registered rule. Records: "
+          f"{len(ra)} in the first run, {len(rb)} in the second. Padding is the bytes added to "
+          "bring each record to its class; the percentage is of that method's payload "
+          "(the record bytes less the two-byte occupancy).\n")
+    print("Categories: a **block batch** is a `/get_transactions` response (up to 100 "
+          "transaction bodies of the blocks being synced); **wallet sync** is every other "
+          "message of a refresh (`get_block`, `get_o_indexes.bin`, `get_height`, "
+          "`get_version`, and the `/get_transactions` request); **spend building** is "
+          "`get_fee_estimate`; a **submission** is a `/submit_transaction` request. A path "
+          "observer sees each record's direction, so where a submission stands is given in "
+          "its own direction first.\n")
+    keys = sorted({(l, d) for _, l, d in ra})
+    for K in range(1, K_MAX + 1):
+        classes, total_pad = tables[K]
+        print(f"## K = {K}: {', '.join(f'{c:,}' for c in classes)}\n")
+        print(f"Overall padding: {total_pad:,} bytes, {total_pad / payload(ra):.1%} of the payload.\n")
+        print("| Method | Direction | Records | Payload | Padding | Padding % |")
+        print("|---|---|---:|---:|---:|---:|")
+        for key in keys:
+            recs = [x for x in ra if (x[1], x[2]) == key]
+            pay = payload(recs)
+            pad = sum(class_of(r, classes) - r for r, _, _ in recs)
+            print(f"| `{key[0]}` | {key[1]} | {len(recs)} | {pay:,} | {pad:,} | {pad / pay:.1%} |")
+        print("\n| Class | Requests in it | Responses in it |")
+        print("|---:|---|---|")
+        usage = class_usage(ra, classes)
+        for c in classes:
+            req = sorted((k[0], usage[k][c]) for k in usage if k[1] == "request" and usage[k].get(c))
+            resp = sorted((k[0], usage[k][c]) for k in usage if k[1] == "response" and usage[k].get(c))
+            fmt = lambda xs: ", ".join(f"`{l}` ×{n}" for l, n in xs) or "—"
+            print(f"| {c:,} | {fmt(req)} | {fmt(resp)} |")
+        standing = submission_standing(ra, classes)
+        print("\n**Where a submission stands**, per class its records fall in:\n")
+        for c in sorted(standing):
+            n, same, either = standing[c]
+            print(f"- {c:,}: {n} of its {sum(v[0] for v in standing.values())} records. In its own "
+                  f"direction it {verdict(same)}; counting both directions it {verdict(either)}.")
+        print()
+        moved, total = falls_into(pairs, classes)
+        pad_b = sum(class_of(r, classes) - r for r, _, _ in rb)
+        same_table = own_b[K][0] == classes
+        if moved or unmatched:
+            where = ", ".join(f"`{k[0]}` {k[1]} {n}" for k, n in sorted(moved.items()))
+            fall = (f"**no**: {sum(moved.values())} of the second run's {total} records land in a "
+                    f"different class from their first-run counterpart ({where})"
+                    + (f"; {unmatched} messages have no counterpart" if unmatched else ""))
+        else:
+            fall = (f"**yes**: every one of the second run's {total} records lands in the same class "
+                    "as its first-run counterpart")
+        print(f"**Second run in the first run's classes:** {fall}. Its padding under this table: "
+              f"{pad_b:,} bytes, {pad_b / payload(rb):.1%}. The second run's own optimal table at this K "
+              f"{'is the same' if same_table else 'differs: ' + ', '.join(f'{c:,}' for c in own_b[K][0])}.\n")
+
+
 def compare(run_a, run_b):
     a, _, _ = load(run_a)
     b, _, _ = load(run_b)
@@ -283,6 +442,9 @@ def main(argv):
         return 0
     if len(argv) == 4 and argv[1] == "compare":
         return compare(argv[2], argv[3])
+    if len(argv) == 4 and argv[1] == "report":
+        report(argv[2], argv[3])
+        return 0
     print(__doc__ or "usage: rt_p5_classes.py derive RUN_DIR | compare RUN_DIR RUN_DIR", file=sys.stderr)
     return 2
 

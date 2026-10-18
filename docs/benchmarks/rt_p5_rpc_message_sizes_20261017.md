@@ -375,6 +375,68 @@ large it is within its class. Hiding a submission would also have to cover
 how many records a request is and when they are sent. This part measures
 neither.
 
+### Per candidate class count: padding, sharing, and the second run
+
+*Asked for by the maintainer on 2026-10-18 for the choice of `K`, and
+added after the registered output was seen; it changes nothing in the
+derivation.*
+
+The full report, for every `K`, is
+[`report_registered_1_vs_2.md`](rt_p5_rpc_message_sizes_20261017_captures/report_registered_1_vs_2.md)
+(`rt_p5_classes.py report`). It gives:
+- the padding per method and direction, in bytes and as a share of that
+  method's payload;
+- every class's members in each direction;
+- where a submission's records stand, class by class.
+
+The categories it uses:
+- a **block batch** is a `/get_transactions` response: up to 100
+  transaction bodies of the blocks being synced, the only response
+  larger than one record;
+- **wallet sync** is every other message of a refresh;
+- a **submission** is a `/submit_transaction` request, 22 records in
+  this run.
+
+The second run is compared record by record with its counterpart in the
+first, matched in size order within each wallet, method and direction.
+
+| K | Padding, run 1 | Run 2 under run 1's table | Submission records alone in their direction | Submission records with other requests in their class | Submission records sharing a class with block batches (either direction) | Submission records sharing a class with wallet sync (either direction) | Run-2 records in a different class from their counterpart |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1362.3% | 1362.1% | 0 of 22 | 22 of 22 | 22 of 22 | 22 of 22 | 0 |
+| 2 | 200.1% | 201.7% | 21 of 22 | 1 of 22 | 22 of 22 | 22 of 22 | 2 |
+| 3 | 16.7% | 18.3% | 21 of 22 | 1 of 22 | 22 of 22 | 22 of 22 | 2 |
+| 4 | 9.4% | 9.8% | 21 of 22 | 1 of 22 | 22 of 22 | 22 of 22 | 2 |
+| 5 | 6.6% | 7.1% | 21 of 22 | 1 of 22 | 22 of 22 | 11 of 22 | 2 |
+| 6 | 5.1% | 5.6% | 22 of 22 | 0 of 22 | 22 of 22 | 11 of 22 | 2 |
+| 7 | 3.8% | 4.4% | 22 of 22 | 0 of 22 | 22 of 22 | 8 of 22 | 10 |
+| 8 | 2.8% | 3.4% | 22 of 22 | 0 of 22 | 16 of 22 | 7 of 22 | 10 |
+
+**Reading it.**
+
+- **A submission in its own direction.** From `K` = 2 on, at least 21 of
+  a submission's 22 records are the only requests in their class. The one
+  exception is a tail record that shares 11,357 with small requests up to
+  `K` = 5. So "does a submission share a class with block batches or wallet
+  sync" has two answers:
+  - **in its own direction**, the one a path observer separates, it stands
+    alone from `K` = 2 on, except that one tail record;
+  - **in either direction**, all 22 of its records share a class with
+    block batches up to `K` = 7 (16 at `K` = 8). Between 7 and 22 of them
+    share a class with wallet sync (the larger `get_block` responses),
+    depending on `K`.
+- **Run 2 lands in run 1's classes only at `K` = 1.** From `K` = 2 on, 2
+  records (10 at `K` ≥ 7) change class, every one a `json_rpc:get_block`
+  response. The cause is a property of the derivation: an optimal class
+  sits exactly at the largest size of the cluster it covers. Run 1's main
+  cluster of `get_block` responses tops out at 11,357 bytes and run 2's at
+  11,379, because JSON numbers (heights, timestamps) vary in length. So a few run-2 responses
+  step over the boundary into the next class. At `K` = 3 the next class
+  is 65,535, which is why two records raise run 2's padding from 16.7 %
+  to 18.3 %.
+- **Shipping consequence:** a table taken straight from one trace has no
+  margin above its clusters, and traffic a few bytes larger pays the next
+  class's padding.
+
 ### Two observations on the submission
 
 - **A submission is sent hex-encoded in JSON.** For every submission in

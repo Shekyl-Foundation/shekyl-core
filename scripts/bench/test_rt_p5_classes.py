@@ -72,6 +72,42 @@ class OptimalTables(unittest.TestCase):
         self.assertEqual(pads, sorted(pads, reverse=True))
 
 
+class Report(unittest.TestCase):
+    def msg(self, label, direction, total, wallet="w"):
+        return {"wallet": wallet, "label": label, "direction": direction, "total": total}
+
+    def test_a_record_that_crosses_a_boundary_is_counted_as_moved(self):
+        classes = [300, 65_535]
+        a = [self.msg("/a", "response", 290), self.msg("/a", "response", 100)]
+        b = [self.msg("/a", "response", 297), self.msg("/a", "response", 101)]
+        pairs, unmatched = rc.counterparts(a, b)
+        moved, total = rc.falls_into(pairs, classes)
+        self.assertEqual((unmatched, total), (0, 2))
+        # 290 + 2 = 292 fits 300; 297 + 2 = 299 still fits: nothing moves.
+        self.assertEqual(moved, {})
+        b[0]["total"] = 299  # 301 bytes with its occupancy: the next class
+        moved, _ = rc.falls_into(rc.counterparts(a, b)[0], classes)
+        self.assertEqual(moved, {("/a", "response"): 1})
+
+    def test_a_message_that_splits_differently_moves_all_its_records(self):
+        pairs, _ = rc.counterparts(
+            [self.msg("/a", "request", rc.RECORD_PAYLOAD_MAX)],
+            [self.msg("/a", "request", rc.RECORD_PAYLOAD_MAX + 1)],
+        )
+        moved, total = rc.falls_into(pairs, [rc.MAX_RECORD_PLAINTEXT])
+        self.assertEqual((moved, total), ({("/a", "request"): 2}, 2))
+
+    def test_a_submission_alone_in_its_direction_is_reported_alone(self):
+        classes = [500, 65_535]
+        recs = [(30_000, rc.SUBMIT, "request"), (200, "/get_height", "request"),
+                (40_000, "json_rpc:get_block", "response")]
+        standing = rc.submission_standing(recs, classes)
+        n, same, either = standing[65_535]
+        self.assertEqual(n, 1)
+        self.assertEqual(rc.verdict(same), "stands alone")
+        self.assertEqual(rc.verdict(either), "shares with wallet sync (1 records)")
+
+
 class Compare(unittest.TestCase):
     def write_run(self, root, name, totals):
         d = os.path.join(root, name)
