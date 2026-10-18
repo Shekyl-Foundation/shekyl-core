@@ -127,12 +127,22 @@ pub struct InfoPeersFacts {
 }
 
 /// Which of the pool's two counts a caller is owed.
+///
+/// **How each maps onto the Rust pool, for the store flip's implementor**
+/// (`shekyl-mempool`, DRS-E5 PR-b). The two counts come from two different
+/// readers of the pool, and the scope picks the reader: a foreign caller's
+/// count is never the relay view's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolScope {
     /// The entries this node has broadcast: what every caller may be told.
+    /// In the Rust pool, `Pool::listing().count()`: the entries
+    /// `shekyl_mempool::shown` admits. Shown is the record's public bit
+    /// alone, so this is the count of public entries.
     Broadcast,
     /// That, and the entries it holds and has not yet broadcast. The second
-    /// is host-only data (`RPC_CHANNEL.md` §6.1, RT-O9.3).
+    /// is host-only data (`RPC_CHANNEL.md` §6.1, RT-O9.3). In the Rust pool,
+    /// `Pool::relay_view().len()`: every entry, those in their stem phase
+    /// included. Only a host caller is answered from it.
     WithUnbroadcast,
 }
 
