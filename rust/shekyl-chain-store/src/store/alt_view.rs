@@ -249,7 +249,9 @@ impl ReadSnapshot<'_> {
     /// root up to the tip. The root's hash is the main-chain parent the
     /// lowest block names.
     ///
-    /// An empty table is no chains. A tip whose chain reaches no recorded
+    /// An empty table is no chains. A tip the main chain also holds — a
+    /// replay left the row — builds no alternative entries, and is not a
+    /// chain this listing returns. A tip whose chain reaches no recorded
     /// block is [`AltCannot::Unlinked`]: the invariant that every stored
     /// chain reaches the main chain is broken, and the caller decides what
     /// that means. A cycle, or a height that disagrees with the links, is
@@ -263,7 +265,13 @@ impl ReadSnapshot<'_> {
         let links = AltLinks::of(&entries);
         let mut chains = Vec::new();
         for tip in links.tips(&entries) {
-            chains.push(AltChain::build(self, &tip.id)?);
+            let chain = AltChain::build(self, &tip.id)?;
+            // The tip is a recorded block. The row is a duplicate, not an
+            // alternative chain, and the facts layer does not report one.
+            if chain.entries().is_empty() {
+                continue;
+            }
+            chains.push(chain);
         }
         Ok(chains)
     }

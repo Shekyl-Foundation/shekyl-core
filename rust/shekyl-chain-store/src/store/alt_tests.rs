@@ -78,6 +78,23 @@ pub(super) fn plant_bytes(store: &ChainStore, key: BlockHash, cell: Encoded<'_, 
     out.expect("plant");
 }
 
+/// Plant the recorded block at `height` into the alt table under its own
+/// hash. A replay `Apply` can leave that duplicate (`switch.rs`): AL1
+/// refuses only an alt-table collision, so the row is planted here the
+/// way a file can already hold it.
+fn plant_recorded(store: &ChainStore, height: BlockHeight) -> BlockHash {
+    let snap = store.begin_read().expect("read");
+    let body = match snap.block(height).expect("block") {
+        shekyl_chain_rules::AtHeight::Recorded(body) => body,
+        shekyl_chain_rules::AtHeight::AboveTip => panic!("the height is recorded"),
+    };
+    let hash = body.hash;
+    let bytes = body.block.serialize();
+    drop(snap);
+    plant(store, hash, &alt(height, &bytes, None));
+    hash
+}
+
 /// A block off the main chain at `height` on `previous`, distinguished by
 /// its listed transaction. The cheap tier judges the header and the body's
 /// pairing, never a listed transaction (that is promotion's — CEN-K4), so
@@ -420,14 +437,20 @@ fn a_removed_row_takes_every_row_built_on_it() {
     assert_eq!(out, Ok(4));
     assert_eq!(held(&store), 1);
 
-    // A refusal names `a`; its branch leaves with it, `e` stays.
+    // A refusal names `a`; its branch leaves with it, `e` stays. The
+    // reply is the rows removed, lowest height first.
     let a_again = branch(&store);
     assert_eq!(a_again, a);
-    let out: Result<u64, TestErr> = store.write(|batch| Ok(batch.remove_alt_branches(&[a])?));
-    assert_eq!(out, Ok(4));
+    let out: Result<Vec<BlockHash>, TestErr> =
+        store.write(|batch| Ok(batch.remove_alt_branches(&[a])?));
+    let removed = out.expect("the branch");
+    assert_eq!(removed.len(), 4);
+    assert_eq!(removed[0], a, "the selected row is the lowest");
+    assert!(!removed.contains(&e_id));
     assert_eq!(held(&store), 1);
     // A root the store does not hold is the caller's bookkeeping gone wrong.
-    let out: Result<u64, TestErr> = store.write(|batch| Ok(batch.remove_alt_branches(&[a])?));
+    let out: Result<Vec<BlockHash>, TestErr> =
+        store.write(|batch| Ok(batch.remove_alt_branches(&[a])?));
     assert_eq!(
         out,
         Err(TestErr::Store(
@@ -446,6 +469,91 @@ fn a_removed_row_takes_every_row_built_on_it() {
         .alt_block(&e_id)
         .expect("read")
         .is_none());
+    cleanup(&path);
+}
+
+/// A main-chain block can also sit in the alt table. The recorded chain
+/// wins where a hash is both: removing that row does not take the branch
+/// built on the recorded block, and a listing does not report a chain
+/// that has no alternative entry.
+#[test]
+fn a_recorded_duplicate_stops_the_closure_and_is_not_listed() {
+    let path = tmp("alt-duplicate");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
+    let listed = |store: &ChainStore| {
+        store
+            .begin_read()
+            .expect("read")
+            .alternate_chains()
+            .expect("chains")
+    };
+
+    // The tip, planted before it has a child, is a tip whose chain is empty.
+    let tip = plant_recorded(&store, h(2));
+    assert_eq!(tip, main[2]);
+    assert!(
+        listed(&store).is_empty(),
+        "a recorded tip is not an alternative chain"
+    );
+
+    // A real alternative block on that recorded hash. The duplicate is no
+    // longer a tip; the branch is the one chain, and it stops at the record.
+    let side = side_candidate(h(3), main[2], 9);
+    let side_id = side.block.hash();
+    insert_admitted(&store, side).expect("side");
+    let chains = listed(&store);
+    assert_eq!(chains.len(), 1);
+    assert_eq!(chains[0].root().hash, main[2]);
+    assert_eq!(
+        chains[0]
+            .entries()
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        vec![side_id]
+    );
+
+    // The death rule at height 1 selects the duplicate of main block 1
+    // and stops. The branch above the tip stays.
+    let lower = plant_recorded(&store, h(1));
+    assert_eq!(lower, main[1]);
+    let out: Result<u64, TestErr> = store.write(|batch| Ok(batch.retire_alt_blocks(h(1))?));
+    assert_eq!(out, Ok(1));
+    assert!(store
+        .begin_read()
+        .expect("read")
+        .alt_block(&main[1])
+        .expect("read")
+        .is_none());
+    assert!(store
+        .begin_read()
+        .expect("read")
+        .has_alt_block(&main[2])
+        .expect("has"));
+    let chains = listed(&store);
+    assert_eq!(chains.len(), 1);
+    assert_eq!(chains[0].entries()[0].id, side_id);
+
+    // Removing the recorded tip removes that row and not the branch on it.
+    let out: Result<Vec<BlockHash>, TestErr> =
+        store.write(|batch| Ok(batch.remove_alt_branches(&[main[2]])?));
+    assert_eq!(out, Ok(vec![main[2]]));
+    assert!(store
+        .begin_read()
+        .expect("read")
+        .alt_block(&main[2])
+        .expect("read")
+        .is_none());
+    assert!(store
+        .begin_read()
+        .expect("read")
+        .has_alt_block(&side_id)
+        .expect("has"));
+    let chains = listed(&store);
+    assert_eq!(chains.len(), 1);
+    assert_eq!(chains[0].root().hash, main[2]);
+    assert_eq!(chains[0].entries().len(), 1);
     cleanup(&path);
 }
 

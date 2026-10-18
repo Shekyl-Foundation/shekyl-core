@@ -31,7 +31,8 @@
 //!    full `validate` and `connect` (K5; K5b's witness travels in the alt
 //!    row), and the alt rows removed. A promotion verdict aborts the
 //!    transaction — the store is the pre-switch chain — and the failing alt
-//!    suffix is removed in a write of its own.
+//!    suffix, with every other branch built on it, is removed in a write
+//!    of its own. The reply names the rows that write removed.
 //!
 //!    Proofs run in `form`, off the actor, under the plan's claims. A
 //!    promoted block that fails there never becomes a [`Reorganize`]:
@@ -250,13 +251,14 @@ enum Planned {
     BeyondCap(PopBeyondReorgCap),
     /// CEN-D6 refused an alt entry's target on its own headers: that
     /// block's verdict (`target` module docs), so there is no claim to
-    /// make and nothing is formed. As a promotion verdict does (K5), the
-    /// refused entry and every entry above it leave the alt table —
-    /// `remove`, ascending — in a write of their own.
+    /// make and nothing is formed. The refused entry and every entry
+    /// above it are the roots. The write removes those and every other
+    /// branch built on them.
     Refused {
         /// The verdict.
         refused: InvalidBlock,
-        /// The refused entry and its successors, ascending.
+        /// The refused entry and its successors, ascending: the roots
+        /// the closure is taken from.
         remove: Vec<BlockHash>,
     },
 }
@@ -320,8 +322,8 @@ pub enum Switched {
     Done(SwitchDone),
     /// A promoted block failed `validate` (K5): the transaction rolled
     /// back, the main chain is the pre-switch chain, and the failing alt
-    /// suffix — the refused block and every alt entry above it — was
-    /// removed.
+    /// suffix — the refused block, every alt entry above it, and every
+    /// other branch built on them — was removed.
     Refused {
         /// Where the refused block sits on the alternative chain.
         at: BlockHeight,
@@ -329,7 +331,7 @@ pub enum Switched {
         hash: BlockHash,
         /// The verdict.
         refused: InvalidBlock,
-        /// The alt rows removed with it, ascending.
+        /// The alt rows the refusal removed, ascending by height.
         removed: Vec<BlockHash>,
     },
     /// The fork is deeper than the cap (`E5-Q6`): local, nothing popped.
@@ -686,9 +688,9 @@ fn refuse_promotion(store: &ChainStore, msg: RefusePromotion) -> Result<Switched
         });
     };
     let at = entries[index].block.height();
-    let removed: Vec<BlockHash> = entries[index..].iter().map(|entry| entry.id).collect();
+    let roots: Vec<BlockHash> = entries[index..].iter().map(|entry| entry.id).collect();
     drop(snap);
-    remove_alt_suffix(store, &removed)?;
+    let removed = remove_alt_suffix(store, &roots)?;
     Ok(Switched::Refused {
         at,
         hash: msg.hash,
@@ -868,8 +870,9 @@ fn switch(
         }) => {
             // K5: the failing alt suffix leaves the store, in its own write
             // — the switch's transaction rolled back with everything in it.
-            let removed: Vec<BlockHash> = entries[index..].iter().map(|e| e.id).collect();
-            remove_alt_suffix(store, &removed)?;
+            // The reply is the rows that write removed, siblings included.
+            let roots: Vec<BlockHash> = entries[index..].iter().map(|e| e.id).collect();
+            let removed = remove_alt_suffix(store, &roots)?;
             Ok(Switched::Refused {
                 at,
                 hash,
@@ -924,10 +927,10 @@ fn halt_writer(
 /// judging write aborted — with every branch built on it, since a chain
 /// through a refused block can never be valid (`store/alt.rs`, the
 /// invariant that every stored chain reaches the main chain).
-fn remove_alt_suffix(store: &ChainStore, ids: &[BlockHash]) -> Result<(), RunFault> {
-    let cleared: Result<u64, StoreError> = store.write(|batch| batch.remove_alt_branches(ids));
-    cleared?;
-    Ok(())
+fn remove_alt_suffix(store: &ChainStore, ids: &[BlockHash]) -> Result<Vec<BlockHash>, RunFault> {
+    let removed: Result<Vec<BlockHash>, StoreError> =
+        store.write(|batch| batch.remove_alt_branches(ids));
+    Ok(removed?)
 }
 
 /// The seed claim for the block at `height` on `view`. The seed height is
