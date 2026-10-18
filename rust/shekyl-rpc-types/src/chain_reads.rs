@@ -28,7 +28,9 @@ use crate::{HashHex, RpcStatus};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetAltBlocksHashesResponse {
     pub status: RpcStatus,
-    /// The alt blocks' identities.
+    /// The alt blocks' identities. Absent on the wire when empty: epee
+    /// omits an empty container, so a reply with no alt blocks has no field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blks_hashes: Vec<HashHex>,
 }
 
@@ -48,7 +50,8 @@ pub struct AltChainInfo {
     pub wide_difficulty: String,
     /// The tip's cumulative difficulty, high 64 bits.
     pub difficulty_top64: u64,
-    /// The chain's blocks, tip first.
+    /// The chain's blocks, tip first. Required: a chain holds at least its
+    /// tip, so epee never omits it, and a reply without it is malformed.
     pub block_hashes: Vec<HashHex>,
     /// The block the chain's lowest block names as its parent.
     pub main_chain_parent_block: HashHex,
@@ -58,6 +61,8 @@ pub struct AltChainInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GetAlternateChainsResponse {
     pub status: RpcStatus,
+    /// Absent on the wire when empty, as epee omits an empty container.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chains: Vec<AltChainInfo>,
 }
 
@@ -138,3 +143,41 @@ pub const CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB: i64 = -6;
 /// `CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE` (-10): the request's blob is
 /// larger than any block.
 pub const CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE: i64 = -10;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A node with no alternative blocks answers without the list (epee
+    /// omits an empty container); the reply decodes as empty, and an empty
+    /// Rust reply is written the same way.
+    #[test]
+    fn an_empty_alt_block_list_is_omitted_and_reads_back_empty() {
+        let cxx = r#"{"status":"OK","untrusted":false}"#;
+        let decoded: GetAltBlocksHashesResponse = serde_json::from_str(cxx).expect("decodes");
+        assert!(decoded.blks_hashes.is_empty());
+        let written = serde_json::to_value(&decoded).expect("encodes");
+        assert_eq!(written, serde_json::json!({"status": "OK"}));
+        let back: GetAltBlocksHashesResponse = serde_json::from_value(written).expect("round trip");
+        assert_eq!(back, decoded);
+    }
+
+    /// The same for the alternative chains.
+    #[test]
+    fn an_empty_alt_chain_list_is_omitted_and_reads_back_empty() {
+        let cxx = r#"{"status":"OK","untrusted":false}"#;
+        let decoded: GetAlternateChainsResponse = serde_json::from_str(cxx).expect("decodes");
+        assert!(decoded.chains.is_empty());
+        let written = serde_json::to_value(&decoded).expect("encodes");
+        assert_eq!(written, serde_json::json!({"status": "OK"}));
+        let back: GetAlternateChainsResponse = serde_json::from_value(written).expect("round trip");
+        assert_eq!(back, decoded);
+    }
+
+    /// A chain without its block list is malformed, not empty.
+    #[test]
+    fn a_chain_without_its_blocks_is_refused() {
+        let chain = r#"{"status":"OK","chains":[{"block_hash":"0000000000000000000000000000000000000000000000000000000000000000","height":5,"length":1,"difficulty":1,"wide_difficulty":"0x1","difficulty_top64":0,"main_chain_parent_block":"0000000000000000000000000000000000000000000000000000000000000000"}]}"#;
+        assert!(serde_json::from_str::<GetAlternateChainsResponse>(chain).is_err());
+    }
+}

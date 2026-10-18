@@ -16,6 +16,8 @@
 //! Every test that starts workers holds [`MINER_LANE`]: the thread ledger
 //! is the process's, and two miners at once would count each other's rows.
 
+#![cfg(test)]
+
 use std::num::{NonZeroU128, NonZeroUsize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -75,7 +77,11 @@ fn job_for(next: &NextBlock) -> Job {
     }
 }
 
-/// The OS nice value of every live thread named `sk-miner` in this process.
+/// The OS nice value of every live thread named `sk-miner` in this process,
+/// read back from `/proc` — Linux's readback, as `shekyl-thread-priority`'s
+/// own tests read it. Elsewhere the status's not-lowered count is the
+/// signal.
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn miner_thread_nices() -> Vec<i32> {
     let mut nices = Vec::new();
     for task in std::fs::read_dir("/proc/self/task").expect("list threads") {
@@ -114,9 +120,11 @@ fn miner_rows() -> usize {
 /// chain's target, one of them delivers it, and the connector admits it
 /// under the real longhash; no second solution follows for the same job; a
 /// job superseded while it is being searched is left for the newer one,
-/// whose block connects too; every worker is a ledger row at nice 19; the
-/// status reports both workers' hashes over its window; and stopping joins
-/// every worker and removes its row.
+/// whose block connects too; every worker is a ledger row, lowered below
+/// the daemon (read back as nice 19 on Linux; on every platform the
+/// status's not-lowered count is zero); the status reports both workers'
+/// hashes over its window; and stopping joins every worker and removes its
+/// row.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
     let _lane = MINER_LANE.lock().await;
@@ -212,7 +220,9 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
         .await
         .unwrap_or_else(|outcome| panic!("the second found block connects: {outcome}"));
 
-    // Below the daemon, and reported.
+    // Below the daemon, and reported: on Linux read back from the kernel;
+    // on every platform the status counts the workers the OS refused.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     assert_eq!(
         miner_thread_nices(),
         vec![shekyl_thread_priority::SERVING_NICE; 2],

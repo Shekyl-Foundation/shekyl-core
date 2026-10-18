@@ -19,6 +19,8 @@
 //! facts under test: the mined template, the producer's claims, a hash
 //! recomputed through the substrate, the corpus bytes, the trace.
 
+#![cfg(test)]
+
 use std::path::Path;
 use std::sync::Arc;
 

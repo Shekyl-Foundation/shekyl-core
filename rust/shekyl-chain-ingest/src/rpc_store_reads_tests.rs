@@ -14,6 +14,8 @@
 //! test: the mined template and its verdict, the producer's seed, a hash
 //! recomputed through the substrate, the next block's header.
 
+#![cfg(test)]
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
