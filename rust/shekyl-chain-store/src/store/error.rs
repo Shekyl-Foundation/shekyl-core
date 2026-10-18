@@ -497,19 +497,10 @@ pub enum PoolCannot {
     /// `insert` of a transaction the pool already holds. The pool decides
     /// whether to upsert by removing first, as the C++ `add_tx` does.
     AlreadyHeld,
-    /// `update` of a transaction the pool does not hold.
+    /// `publish` or `stand` of a transaction the pool does not hold.
     NotHeld,
     /// `insert` with no transaction bytes: a pool entry is a transaction.
     EmptyBlob,
-    /// `update` whose relay state does not
-    /// [`follow`](crate::codec::RelayState::follows) the stored one — the
-    /// ratchet's verdict, carried as the type gave it: a changed provenance
-    /// (§92.4, `SPL-Q9`), a phase that is not the stored one or a forward
-    /// step, a responsibility re-armed after observation disarmed it.
-    Relay(crate::codec::RelayRefusal),
-    /// `fcmp_cache` is the all-zero null hash. Absence is `None`; the null
-    /// hash is not a verification (SPL-10).
-    NullFcmpCache,
 }
 
 impl core::fmt::Display for StoreCannot {
@@ -664,14 +655,10 @@ impl core::fmt::Display for PoolCannot {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::AlreadyHeld => f.write_str("insert of a transaction the pool already holds"),
-            Self::NotHeld => f.write_str("update of a transaction the pool does not hold"),
+            Self::NotHeld => {
+                f.write_str("publish or stand of a transaction the pool does not hold")
+            }
             Self::EmptyBlob => f.write_str("insert with no transaction bytes"),
-            Self::Relay(refusal) => {
-                write!(f, "update whose relay state does not follow: {refusal}")
-            }
-            Self::NullFcmpCache => {
-                f.write_str("fcmp verification cache is the null hash; absence is None")
-            }
         }
     }
 }

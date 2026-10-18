@@ -64,8 +64,8 @@ pub struct Coverage<R: Row> {
 /// Consensus coverage: the [`CenRow`]s a `ChainValid` was judged under.
 pub type RuleCoverage = Coverage<CenRow>;
 
-/// Policy coverage: the [`PolicyRow`]s an admission decision applied.
-/// DRS-E5's; staged with `AdmissionPolicy`.
+/// Policy coverage: the [`PolicyRow`]s an admission decision applied —
+/// what [`policy_form`](crate::policy_form) returns on a pass.
 pub type PolicyCoverage = Coverage<PolicyRow>;
 
 impl<R: Row> Coverage<R> {
@@ -110,16 +110,15 @@ impl<R: Row> Coverage<R> {
             .filter(move |row| self.contains(*row))
     }
 
-    /// Record that `row` was evaluated. Crate-private, with exactly two
-    /// writers, one per row kind: [`crate::rules::run`] for a **predicate**
-    /// row, after the rule bound to it passed; and a **definition** row's
+    /// Record that `row` was evaluated. Crate-private, with one writer per
+    /// row kind: [`crate::rules::run`] for a consensus **predicate** row,
+    /// after the rule bound to it passed; a consensus **definition** row's
     /// derivation function, at the site that derived — today
-    /// [`crate::rules::header::B6::identity`], the only definition row
+    /// [`crate::rules::header::B6::identity`], the first definition row
     /// landed (slice 1 Q5: B6 is registered as the derivation, not as a
-    /// check that always passes). A third writer is a new row kind and a
-    /// registry decision, not a convenience. (Slice 1 un-staged this; the
-    /// scaffold's `expect(dead_code)` marker went with the first rule, as it
-    /// was written to.)
+    /// check that always passes); and, for a **policy** row, `policy_form`'s
+    /// one judge (`policy.rs`, DRS-E5 PR-b), after the row passed. Another
+    /// writer is a new row kind and a registry decision, not a convenience.
     pub(crate) fn insert(&mut self, row: R) {
         let (word, bit) = Self::slot(row);
         self.words[word] |= bit;

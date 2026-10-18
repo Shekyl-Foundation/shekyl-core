@@ -5,7 +5,8 @@
 
 //! Alt-chain reads (DRS-E1 S-ALT, `DRS_E1_SALT.md` §3.2): **AL4**
 //! `alt_block`, **AL5** `has_alt_block`, **AL6** `alt_block_count`, **AL7**
-//! `alt_blocks`. One body each. [`ReadSnapshot`]'s methods are here, with
+//! `alt_blocks`, and **AL8** `alt_block_bodies` (DRS-E5 PR-b). One body
+//! each. [`ReadSnapshot`]'s methods are here, with
 //! those bodies, so `read.rs` does not grow a façade for a surface that is
 //! not the recorded chain. The batch methods live on
 //! [`super::write::WriteBatch`] (`store/alt.rs`): the same bodies, and an
@@ -29,16 +30,22 @@ use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_store_codec::{Canonical, CodecError};
 use shekyl_types::BlockHash;
 
-use crate::codec::AltBlock;
+use crate::codec::{AltBlock, AltBodies};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::ALT_BLOCKS;
+use crate::schema::{ALT_BLOCKS, ALT_BLOCK_BODIES};
 
-use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
+use super::chain_reads::{self, absent, undecodable, ReadFault, ReadTables};
 use super::error::StoreError;
 use super::read::ReadSnapshot;
 
 /// The `alt_blocks` cell as faults name it.
 pub(super) const ALT_BLOCKS_CELL: &str = "alt_blocks";
+
+/// The `alt_block_bodies` cell as faults name it.
+pub(super) const ALT_BODIES_CELL: &str = "alt_block_bodies";
+
+/// SI-7 reason when an alt block's bodies are not the ones its header lists.
+pub(super) const ALT_BODIES_MISMATCH: &str = "alt block bodies are not the ones its header lists";
 
 /// One enumerated alt block (AL7): the hash and the whole record. Both
 /// C++ enumerators want the block, so there is no block-less shape to
@@ -132,6 +139,42 @@ pub(super) fn alt_blocks<T: ReadTables>(txn: &T) -> Result<Vec<AltEntry>, ReadFa
     Ok(out)
 }
 
+/// **AL8.** The listed bodies of the alt block `id`, held to its row: the
+/// two rows are written and removed together (AL1–AL3), so a row without
+/// its bodies, bodies without a row, or bodies that are not the header's
+/// listed transactions in order is SI-7. `None` is "not an alt block".
+pub(super) fn alt_block_bodies<T: ReadTables>(
+    txn: &T,
+    id: &BlockHash,
+) -> Result<Option<AltBodies>, ReadFault> {
+    let row = alt_block(txn, id)?;
+    let bodies = chain_reads::cell(txn, ALT_BLOCK_BODIES, key(id), ALT_BODIES_CELL)?;
+    match (row, bodies) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(absent(ALT_BLOCKS_CELL)),
+        (Some(_), None) => Err(absent(ALT_BODIES_CELL)),
+        (Some(row), Some(bodies)) => {
+            let listed = &row.block().transaction_hashes;
+            let paired = listed.len() == bodies.transactions().len()
+                && listed
+                    .iter()
+                    .zip(bodies.transactions())
+                    .all(|(hash, tx)| tx.txid_parts().hash == *hash);
+            if paired {
+                Ok(Some(bodies))
+            } else {
+                Err(undecodable(
+                    ALT_BODIES_CELL,
+                    CodecError::Invalid {
+                        codec: AltBodies::NAME,
+                        reason: ALT_BODIES_MISMATCH,
+                    },
+                ))
+            }
+        }
+    }
+}
+
 /// Alt-chain reads on a committed snapshot. The bodies above are the ones
 /// the batch calls too (`store/alt.rs`).
 impl ReadSnapshot<'_> {
@@ -178,5 +221,17 @@ impl ReadSnapshot<'_> {
     /// [`super::StoreInvariant::CellCorrupt`]; engine faults.
     pub fn alt_blocks(&self) -> Result<Vec<AltEntry>, StoreError> {
         alt_blocks(self.txn()).map_err(ReadFault::into_plain)
+    }
+
+    /// **AL8.** The listed bodies of the alt block `id`, in listed order,
+    /// held to its row. `None` is "not an alt block".
+    ///
+    /// # Errors
+    ///
+    /// [`super::StoreInvariant::CellCorrupt`] for a row without its bodies
+    /// or the converse, a row that does not decode, or bodies that are not
+    /// the header's listed transactions; engine faults.
+    pub fn alt_block_bodies(&self, id: &BlockHash) -> Result<Option<AltBodies>, StoreError> {
+        alt_block_bodies(self.txn(), id).map_err(ReadFault::into_plain)
     }
 }

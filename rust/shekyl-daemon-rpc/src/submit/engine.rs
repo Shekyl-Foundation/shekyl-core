@@ -13,14 +13,11 @@
 
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
 use shekyl_types::{BlockHeight, ChainCount};
-use shekyl_wire::transaction::Ct;
 
 use crate::consensus::{FCMP_REFERENCE_BLOCK_MAX_AGE, FCMP_REFERENCE_BLOCK_MIN_AGE};
 use crate::submit::certificate::VerificationCertificate;
-use crate::submit::facts::{
-    BondProbe, CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta,
-};
-use crate::submit::fee::fee_meets_floor;
+use crate::submit::facts::{CommitOutcome, KeyImageConflict, SubmitFacts, SubmitStateShim, TxMeta};
+use crate::submit::fee::fee_clears;
 use crate::submit::phase_a::{parse_submission, ParsedSubmission, SubmitTxKind};
 use crate::submit::verifier::verify_debit_slot_possession;
 use crate::submit::verify::TxVerifier;
@@ -210,34 +207,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // (§8.7.1.1). The other non-JoinMarket kinds have no producer and
         // are refused in Phase C, so they ask JoinMarket's question and
         // never reach a verdict that consumes the answer.
-        let bond_probe_id = parsed.bond_post().map(|(_, bond)| bond.p_canonical_id);
-        // The debit arm's probe carries the bond slot's auth key so the
-        // gather can run the cheap pin before its expensive scan (§8.7.1.1);
-        // Phase C still runs UB3 itself.
-        let bond_auth = parsed
-            .bond_post()
-            .and_then(|(index, _)| match &parsed.tx.ct {
-                Ct::Fcmp { pqc_auths, .. } => {
-                    pqc_auths.get(index).map(|a| a.hybrid_public_key.as_slice())
-                }
-                _ => None,
-            });
-        let bond_probe = bond_probe_id.as_ref().map(|id| {
-            match (parsed.bond_post_is_release(), bond_auth) {
-                (true, Some(auth_pubkey)) => BondProbe::Release {
-                    p_canonical_id: id,
-                    auth_pubkey,
-                    bond_debit: parsed
-                        .bond_post()
-                        .map(|(_, bond)| bond.bond_debit)
-                        .unwrap_or(0),
-                },
-                // No auth slot for the bond vin is a malformed submission the
-                // battery refuses anyway; ask the cheap question rather than
-                // inventing a key, and let Phase C issue the verdict.
-                _ => BondProbe::Join(id),
-            }
-        });
+        let bond_probe = parsed.bond_probe();
         // An emission claim asks for the §8.7.2 E6/E7 facts, keyed on the
         // vin-derived claimant id + claimed epochs (E2 pins the derivation
         // to the auth key in Phase C).
@@ -423,7 +393,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         // consensus and the floor is never 0, so the non-spending arm
         // terminates here today — the SP-T4a contradiction, recorded in
         // FOLLOWUPS, reproduced for parity rather than resolved.
-        if !fee_meets_floor(parsed.weight, parsed.fee, facts.fee_per_byte) {
+        if !fee_clears(parsed.weight, parsed.fee, facts) {
             return Ok(Err(RejectCause::FeeTooLow));
         }
 
@@ -490,19 +460,39 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //    Cannot co-occur with a foreign key-image conflict — a
         //    pool-resident tx's own images map to its own txid. Disclosure
         //    is tier-gated exactly as at Phase B: a foreign caller who won a
-        //    race against an embargoed tx is told `Accepted` (concealed),
-        //    never `AlreadyInPool`, so the race outcome is not an oracle.
-        match disclose_pool_presence(fresh, caller) {
+        //    race against an embargoed tx is answered as a fresh submission
+        //    would be (concealed, below), never `AlreadyInPool`, so the race
+        //    outcome is not an oracle.
+        let mut concealed = match disclose_pool_presence(fresh, caller) {
             PoolDisclosure::Reveal => return Ok(SubmitVerdict::AlreadyInPool),
-            PoolDisclosure::Conceal => return Ok(SubmitVerdict::Accepted),
-            PoolDisclosure::Absent => {}
-        }
+            PoolDisclosure::Conceal => true,
+            PoolDisclosure::Absent => false,
+        };
         // 3. Terminal conflict: a *different* transaction consumed one of
         //    our inputs while we verified.
         if fresh.key_image_conflicts.contains(&KeyImageConflict::Other) {
             return Ok(SubmitVerdict::Rejected {
                 cause: RejectCause::DoubleSpendConflict,
             });
+        }
+        // 3a. The same, against a spender this node holds in its stem phase
+        //     (the review of #1102, B2): the owner tier is told; a foreign
+        //     caller is answered as a fresh submission would be (concealed,
+        //     below) — the transaction is not admitted — so the public
+        //     endpoint is no map of the stem graph. Once the spender is
+        //     public it is `Other`, above.
+        if fresh
+            .key_image_conflicts
+            .contains(&KeyImageConflict::Embargoed)
+        {
+            match caller {
+                SubmitCaller::Owner => {
+                    return Ok(SubmitVerdict::Rejected {
+                        cause: RejectCause::DoubleSpendConflict,
+                    })
+                }
+                SubmitCaller::Foreign => concealed = true,
+            }
         }
         // 3b. Claim-slot conflict, the §8.7.1 BP3 re-check: a bond-post
         //     block for the same P landed while we verified (Phase C
@@ -589,9 +579,26 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         }
         // 5. Dynamic fee floor moved (F34): re-run the same arithmetic
         //    over the fresh params.
-        if !fee_meets_floor(parsed.weight, parsed.fee, fresh.fee_per_byte) {
+        if !fee_clears(parsed.weight, parsed.fee, fresh) {
             return Ok(SubmitVerdict::Rejected {
                 cause: RejectCause::FeeTooLow,
+            });
+        }
+        // A concealed answer (a duplicate or a conflict this node holds in
+        // its stem phase, to a foreign caller) is the answer a fresh
+        // submission of these bytes would get against the same public
+        // state: it has passed every public re-check above — a moved claim
+        // slot, a drifted reference, a moved fee floor answer the same with
+        // or without the hidden transaction (Copilot, #1102) — and it meets
+        // the pool's rising minimum as a fresh one does at insert
+        // (`PrunedOnInsert`'s verdict).
+        if concealed {
+            return Ok(if fresh.pool_refuses_for_room == Some(true) {
+                SubmitVerdict::Rejected {
+                    cause: RejectCause::FeeTooLow,
+                }
+            } else {
+                SubmitVerdict::Accepted
             });
         }
         // A `Raced` with no re-classifiable premise is a shim contract

@@ -345,13 +345,25 @@ impl I11 {
 /// CEN-I12, a **definition**: the membership anchor a regular spend's
 /// proof is verified against is the curve-tree state **at** `ref_height`
 /// — the root after the reference block's parent connected and before the
-/// reference block drained its own leaves — read from the chain's own
-/// per-height record ([`ChainView::root_at`]), never from a header
-/// (`blockchain.cpp:4152` `get_curve_tree_root_at_height(ref_height)`; the
-/// comment above it is the census's wording). Recorded as coverage where
-/// it is derived, the D4 arrangement: nothing about a candidate can fail
-/// a definition, and `implemented(rules::tx_against::I12)` names this
-/// derivation.
+/// reference block drained its own leaves. The state has two witnesses
+/// that CEN-B5 holds equal for every connected block: the reference
+/// header's `curve_tree_root` and the chain's per-height record
+/// ([`ChainView::root_at`]). Recorded as coverage where it is derived, the
+/// D4 arrangement: nothing about a candidate can fail a definition, and
+/// `implemented(rules::tx_against::I12)` names this derivation.
+///
+/// **The anchor is the third claim** (`CHAIN_RULES_CRATE.md` §4.6). The
+/// caller reads the header witness off whatever header chain it holds
+/// ahead of connect ([`ReferenceClaims::from_headers`](crate::ReferenceClaims::from_headers)),
+/// `form` verifies the proof against that claim (CEN-I15 in `judge_proofs`,
+/// on the parallel stage), and this step reads the record — the chain's
+/// own — for [`judge_reference`] to compare with the claim `form` verified
+/// ([`VerifiedReference`]). A disagreement is
+/// [`Stale::Reference`](crate::Stale::Reference), a fault the driver
+/// answers by forming again, never a verdict; the comparison is the only
+/// place the two witnesses meet, and nothing in `validate` verifies a
+/// proof. The C++ reads only the record (`blockchain.cpp:4152`
+/// `get_curve_tree_root_at_height(ref_height)`), and verifies there.
 ///
 /// Derived after I10 and I11 have passed, so `ref_height` is recorded and
 /// at least `MIN_AGE` below the connecting height. A view that then
@@ -360,18 +372,10 @@ impl I11 {
 /// never a verdict. This is the read that widens `tx_against`'s fault to
 /// [`ViewRead`]: the first view-bound row to read a per-height record.
 ///
-/// The anchor's consumer on a **spend** is CEN-I15's proof verification,
-/// run by [`judge_reference`]'s spend arm over the [`ReferenceContext`]
-/// this step and I13's yield. *Records-was:* until 2026-10-08 that
-/// consumer was staged off — turning it on refused every filler-proof
-/// spend fixture the store's and ingest's tests ran `validate` over — and
-/// [`SPEND_REFERENCE`] staged the depth step off with it, the anchor
-/// derived, recorded and dropped beside this definition (RULED
-/// 2026-10-07: the fixtures became scenarios, the flip landed with the
-/// last conversion; `CHAIN_RULES_SLICE_6.md` §5 row 6). On an **emission**
-/// the same read is CEN-J21's step, and its anchor is consumed the same
-/// way: the emission's proof rows (CEN-J25, CEN-J26) verify against the
-/// yielded context.
+/// On an **emission** the same read is CEN-J21's step, and on a bond
+/// post's funding spends CEN-J27's; their anchors are compared with the
+/// claim the same way, and the proof rows that consumed them (CEN-J26,
+/// J27's verify half) ran in `form`.
 pub(crate) struct I12;
 
 impl Rule for I12 {
