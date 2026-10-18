@@ -64,13 +64,17 @@ pub(super) fn address_of(endpoint: &Endpoint) -> Option<NetworkAddress> {
     }
 }
 
-/// Live sessions on `connector`: every address, and the host of every
-/// outbound session. One outbound session per host is read from the
-/// second set.
-pub(super) fn live_sessions(
-    hub: &Hub,
-    connector: ConnectorId,
-) -> (BTreeSet<NetworkAddress>, BTreeSet<Host>) {
+/// Live sessions on one connector, read from the hub's board once per wake.
+pub(super) struct LiveSessions {
+    /// Every session's list address.
+    pub(super) addresses: BTreeSet<NetworkAddress>,
+    /// The host of every outbound session: one outbound session per host is
+    /// read from this set.
+    pub(super) outbound_hosts: BTreeSet<Host>,
+}
+
+/// Live sessions on `connector`.
+pub(super) fn live_sessions(hub: &Hub, connector: ConnectorId) -> LiveSessions {
     let mut sessions = BTreeSet::new();
     let mut outbound_hosts = BTreeSet::new();
     for row in hub.board().rows() {
@@ -85,5 +89,8 @@ pub(super) fn live_sessions(
         }
         sessions.insert(address);
     }
-    (sessions, outbound_hosts)
+    LiveSessions {
+        addresses: sessions,
+        outbound_hosts,
+    }
 }

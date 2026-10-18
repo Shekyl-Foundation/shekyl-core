@@ -196,6 +196,15 @@ daemon bugs that need fixing first.
 
 ## 2. `get_fee_estimate(s)` daemon RPC (Phase 2a prerequisite)
 
+*This section records the Phase 0 audit at its date (2026-04-25), against
+the C++ handler and epee structs it quotes. The method is served by Rust
+now, and its current shape is `shekyl-rpc-types`'s `GetFeeEstimateRequest`
+(no parameters) and `GetFeeEstimateResponse` (`status` and a three-slot
+`fees`), at `CORE_RPC_VERSION` 3.57. Of what the audit describes below,
+the scalar `fee` is gone, and so are the fourth slot, `grace_blocks` and
+`quantization_mask` ([`FEE_LADDER_DERIVATION.md`](design/FEE_LADDER_DERIVATION.md)
+FL-R25, FL-R26 and FL-R27).*
+
 ### Verdict: PRESENT — singular `get_fee_estimate`, positional 4-slot fee vector, no name-keyed buckets
 
 `shekyld` exposes a JSON-RPC method named `get_fee_estimate`
