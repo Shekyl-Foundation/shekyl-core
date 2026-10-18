@@ -921,14 +921,11 @@ fn halt_writer(
 }
 
 /// The alt suffix a refusal names, removed in its own write after the
-/// judging write aborted.
+/// judging write aborted — with every branch built on it, since a chain
+/// through a refused block can never be valid (`store/alt.rs`, the
+/// invariant that every stored chain reaches the main chain).
 fn remove_alt_suffix(store: &ChainStore, ids: &[BlockHash]) -> Result<(), RunFault> {
-    let cleared: Result<(), StoreError> = store.write(|batch| {
-        for id in ids {
-            batch.remove_alt_block(id)?;
-        }
-        Ok(())
-    });
+    let cleared: Result<u64, StoreError> = store.write(|batch| batch.remove_alt_branches(ids));
     cleared?;
     Ok(())
 }

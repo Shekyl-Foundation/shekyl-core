@@ -166,7 +166,7 @@ fn hash_at(store: &ChainStore, height: u64) -> Option<BlockHash> {
 fn insert_read_enumerate_remove_and_drop() {
     let path = tmp("alt-ops");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let main = connect_chain(&store, &[vec![], vec![]]).hashes;
+    let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
     let a_cand = side_candidate(h(1), main[0], 3);
     let (a, a_bytes) = (a_cand.block.hash(), a_cand.block.serialize());
     let witness = vec![0xA5; 40];
@@ -291,7 +291,9 @@ fn the_bodies_are_written_read_and_removed_with_the_row() {
     let (a, a_listed) = (a_cand.block.hash(), a_cand.transactions.clone());
     assert!(!a_listed.is_empty(), "the fixture lists a body");
     insert_admitted(&store, a_cand).expect("insert a");
-    let b_cand = side_candidate(h(2), a, 4);
+    // `b` hangs from the main chain, not from `a`, so it outlives the sweep
+    // that takes `a`: a row built on `a` would leave with it.
+    let b_cand = side_candidate(h(2), main[1], 4);
     let (b, b_listed) = (b_cand.block.hash(), b_cand.transactions.clone());
     insert_admitted(&store, b_cand).expect("insert b");
     {
@@ -376,6 +378,74 @@ fn the_bodies_are_written_read_and_removed_with_the_row() {
         snap.alt_block_bodies(&stray).expect_err("no row"),
         "alt_blocks"
     ));
+    cleanup(&path);
+}
+
+/// A removal takes the closure — the rows it selects and every row built
+/// on one of them — so every stored chain still reaches the main chain
+/// (`store/alt.rs`). Over main blocks 0..=2: `a` at 1 on block 0, `b` and
+/// `c` at 2 on `a`, `d` at 3 on `b`, and `e` at 2 on main block 1.
+#[test]
+fn a_removed_row_takes_every_row_built_on_it() {
+    let path = tmp("alt-closure");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let main = connect_chain(&store, &[vec![], vec![], vec![]]).hashes;
+    let branch = |store: &ChainStore| {
+        let a = side_candidate(h(1), main[0], 3);
+        let a_id = a.block.hash();
+        insert_admitted(store, a).expect("a");
+        let b = side_candidate(h(2), a_id, 4);
+        let b_id = b.block.hash();
+        insert_admitted(store, b).expect("b");
+        insert_admitted(store, side_candidate(h(2), a_id, 5)).expect("c");
+        insert_admitted(store, side_candidate(h(3), b_id, 6)).expect("d");
+        a_id
+    };
+    let held = |store: &ChainStore| {
+        store
+            .begin_read()
+            .expect("read")
+            .alt_block_count()
+            .expect("count")
+    };
+    let a = branch(&store);
+    let e = side_candidate(h(2), main[1], 7);
+    let e_id = e.block.hash();
+    insert_admitted(&store, e).expect("e");
+    assert_eq!(held(&store), 5);
+
+    // The death rule at 1 selects `a` alone by height and takes the three
+    // rows above it; `e`, at 2 on the main chain, stays.
+    let out: Result<u64, TestErr> = store.write(|batch| Ok(batch.retire_alt_blocks(h(1))?));
+    assert_eq!(out, Ok(4));
+    assert_eq!(held(&store), 1);
+
+    // A refusal names `a`; its branch leaves with it, `e` stays.
+    let a_again = branch(&store);
+    assert_eq!(a_again, a);
+    let out: Result<u64, TestErr> = store.write(|batch| Ok(batch.remove_alt_branches(&[a])?));
+    assert_eq!(out, Ok(4));
+    assert_eq!(held(&store), 1);
+    // A root the store does not hold is the caller's bookkeeping gone wrong.
+    let out: Result<u64, TestErr> = store.write(|batch| Ok(batch.remove_alt_branches(&[a])?));
+    assert_eq!(
+        out,
+        Err(TestErr::Store(
+            StoreError::from(AltCannot::NotHeld).to_string()
+        ))
+    );
+
+    // A rewind names the blocks it popped; `e` hangs from main block 1.
+    let out: Result<u64, TestErr> =
+        store.write(|batch| Ok(batch.retire_alt_blocks_on(&[main[1]])?));
+    assert_eq!(out, Ok(1));
+    assert_eq!(held(&store), 0);
+    assert!(store
+        .begin_read()
+        .expect("read")
+        .alt_block(&e_id)
+        .expect("read")
+        .is_none());
     cleanup(&path);
 }
 
