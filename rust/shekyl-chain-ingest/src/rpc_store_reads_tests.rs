@@ -26,15 +26,16 @@ use shekyl_daemon_rpc::methods::get_block_header_by_height;
 use shekyl_daemon_rpc::methods::{RpcFault, RpcRefusal};
 use shekyl_daemon_rpc::read_facts::ChainReadFacts;
 use shekyl_daemon_rpc::read_methods::{
-    calc_pow, get_alt_blocks_hashes, get_alternate_chains, get_coinbase_tx_sum,
-    get_curve_tree_checkpoint, get_curve_tree_info, COINBASE_SUM_RANGE_REFUSAL,
+    calc_pow, get_alt_blocks_hashes, get_alternate_chains, get_archival_emission_claim_source,
+    get_archival_shard_coverage, get_coinbase_tx_sum, get_curve_tree_checkpoint,
+    get_curve_tree_info, COINBASE_SUM_RANGE_REFUSAL, P_ID_REFUSAL,
 };
 use shekyl_harness_spender::Spender;
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_rpc_types::{
-    CalcPowRequest, GetCoinbaseTxSumRequest, GetCurveTreeCheckpointRequest, HashHex,
-    CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
-    CORE_RPC_ERROR_CODE_WRONG_PARAM,
+    CalcPowRequest, GetArchivalEmissionClaimSourceRequest, GetCoinbaseTxSumRequest,
+    GetCurveTreeCheckpointRequest, HashHex, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB,
+    CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE, CORE_RPC_ERROR_CODE_WRONG_PARAM,
 };
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Ct, Transaction};
@@ -172,6 +173,150 @@ async fn the_alt_reads_are_the_alt_table_walked_into_chains() {
     x.close().await;
     y.close().await;
     z.close().await;
+}
+
+/// The claim source over a levered chain mined through several settled
+/// epochs, for a persona with no bond. Every epoch of the claim window is
+/// listed, ascending; its budget and `Σwork` are the store's rows; it
+/// carries a gather (`has_budget_row`) exactly when both rows exist, with
+/// no bonds or credits on a chain that has none; the chain count and the
+/// settled epoch are the tip's. A `p_id` that is not 32 bytes of hex is
+/// refused with the C++ wording.
+#[tokio::test]
+async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
+    use crate::scenario::FreeHash;
+    use crate::scenario_shard::{levered_rules, levered_schedule};
+    let rules = levered_rules();
+    let mut s = Scenario::open_under("rpc-reads-claim-source", FreeHash, rules);
+    let mined = s.mine(100).await;
+    let tip = mined.last().expect("mined").height;
+    s.reopen(|path| {
+        let store = Arc::new(open_store_under(
+            path,
+            &rules.in_force(BlockHeight::ZERO),
+            shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+        ));
+        let facts = facts_over(Arc::clone(&store), path, rules);
+        let snap = store.begin_read().expect("read");
+        let ask = |p_id: &str| {
+            get_archival_emission_claim_source(
+                &facts,
+                &GetArchivalEmissionClaimSourceRequest {
+                    p_id: p_id.to_owned(),
+                },
+            )
+        };
+        let source = ask(&"11".repeat(32)).expect("a claim source");
+        assert!(source.status.is_ok());
+        let connecting = tip.to_raw() + 1;
+        assert_eq!(source.chain_height, connecting);
+        let settled = levered_schedule().epoch_at(h(connecting)).to_raw();
+        assert_eq!(source.current_settled_epoch, settled);
+        assert!(!source.has_bond_record);
+        let window: Vec<u64> =
+            (shekyl_archival_retention::claim_window_floor(settled)..settled).collect();
+        assert_eq!(
+            source
+                .epochs
+                .iter()
+                .map(|e| e.settlement_epoch)
+                .collect::<Vec<_>>(),
+            window
+        );
+        let mut admitted = 0;
+        for epoch in &source.epochs {
+            let e = shekyl_types::SettlementEpoch::from_raw(epoch.settlement_epoch);
+            let budget = snap
+                .budget(e)
+                .expect("read")
+                .map(shekyl_units::AtomicUnits::to_raw);
+            let sigma = snap
+                .sigma_work(e)
+                .expect("read")
+                .map(shekyl_types::archival::SigmaWorkMilli::to_raw);
+            assert_eq!(epoch.budget_atomic, budget.unwrap_or(0));
+            assert_eq!(epoch.sigma_work_milli, sigma.unwrap_or(0));
+            assert_eq!(
+                epoch.has_budget_row,
+                budget.is_some() && sigma.is_some(),
+                "epoch {} is gathered exactly when both rows exist",
+                epoch.settlement_epoch
+            );
+            assert_eq!(
+                epoch.close_block_height,
+                levered_schedule()
+                    .close_height(epoch.settlement_epoch)
+                    .expect("a window epoch closes")
+            );
+            assert!(epoch.bonds.is_empty() && epoch.credit_pairs.is_empty());
+            assert_eq!(epoch.claimant_bond_idx, u64::MAX);
+            admitted += u64::from(epoch.has_budget_row);
+        }
+        assert!(
+            admitted > 0 && admitted < u64::try_from(window.len()).expect("fits"),
+            "the window holds both an admitted epoch and one awaiting its pass"
+        );
+        assert_eq!(
+            ask("zz"),
+            Err(RpcFault::Refused(RpcRefusal::wrong_param(P_ID_REFUSAL)))
+        );
+        drop(snap);
+        drop(facts);
+        drop(store);
+    })
+    .await;
+    s.close().await;
+}
+
+/// The coverage list over a chain that has closed no shard: nothing a join
+/// can hold, as of the tip, with the last settled epoch's rows behind the
+/// profit hint.
+#[tokio::test]
+async fn the_coverage_list_of_a_chain_with_no_closed_shard_is_empty() {
+    use crate::scenario::FreeHash;
+    use crate::scenario_shard::{levered_rules, levered_schedule};
+    let rules = levered_rules();
+    let mut s = Scenario::open_under("rpc-reads-coverage", FreeHash, rules);
+    let mined = s.mine(60).await;
+    let tip = mined.last().expect("mined").height;
+    s.reopen(|path| {
+        let store = Arc::new(open_store_under(
+            path,
+            &rules.in_force(BlockHeight::ZERO),
+            shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+        ));
+        let facts = facts_over(Arc::clone(&store), path, rules);
+        let snap = store.begin_read().expect("read");
+        let coverage = get_archival_shard_coverage(&facts).expect("coverage");
+        assert!(coverage.status.is_ok());
+        assert_eq!(coverage.as_of_height, tip.to_raw());
+        assert_eq!(coverage.frozen_count, 0);
+        assert!(coverage.shards.is_empty());
+        let settled = levered_schedule().last_settled_epoch_as_of_parent(tip.to_raw());
+        assert_eq!(coverage.settled_epoch, settled);
+        let e = shekyl_types::SettlementEpoch::from_raw(settled);
+        let sigma = snap
+            .sigma_work(e)
+            .expect("read")
+            .map_or(0, shekyl_types::archival::SigmaWorkMilli::to_raw);
+        assert_eq!(coverage.sigma_work_milli, sigma);
+        assert_eq!(
+            coverage.budget_atomic,
+            snap.budget(e)
+                .expect("read")
+                .map_or(0, shekyl_units::AtomicUnits::to_raw)
+        );
+        assert_eq!(coverage.profit_estimate_available, sigma != 0);
+        assert_eq!(
+            coverage.leaf_count,
+            snap.curve_tree().expect("summary").leaf_count.to_raw()
+        );
+        drop(snap);
+        drop(facts);
+        drop(store);
+    })
+    .await;
+    s.close().await;
 }
 
 /// After a connect retires a branch, every alternative chain the handler

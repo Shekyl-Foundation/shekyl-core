@@ -19,7 +19,14 @@
 //! The values are typed chain facts. The handlers own the wire: hex, the
 //! 128-bit triples, the status strings and the refusals.
 
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash};
+use shekyl_archival_retention::ShardCoverageIn;
+use shekyl_chain_rules::EmissionEpochFacts;
+use shekyl_types::archival::HoldingsKind;
+use shekyl_types::{
+    BlockHash, BlockHeight, ChainCount, CurveTreeRoot, PCanonicalId, PowHash, SettlementEpoch,
+    ShardId,
+};
+use shekyl_units::AtomicUnits;
 
 use crate::chain_facts::FactsFault;
 
@@ -108,6 +115,56 @@ pub enum PowAt {
     },
 }
 
+/// A claimant's bond record, as the claim source reports it: what the
+/// wallet's exit and claim checks read of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimantBond {
+    pub join_settlement_epoch: SettlementEpoch,
+    pub holdings_kind: HoldingsKind,
+    /// The held shards, in the record's order; empty for a complete tree.
+    pub held_shards: Vec<ShardId>,
+    pub claimed_settlement_epochs: Vec<SettlementEpoch>,
+    pub bonded_total: AtomicUnits,
+    pub bad_interval_count: usize,
+    /// The record's last-served epoch, folded over its shards by the
+    /// release verify's own fold (`whole_record_last_served`); `None` for
+    /// a record that never served.
+    pub last_served: Option<u64>,
+    /// The slash scheduler's watermark; `None` before any slash epoch
+    /// settled.
+    pub last_settled_slash: Option<SettlementEpoch>,
+}
+
+/// What a persona's claim is built from: the chain count, the settled
+/// epoch, its record, and every epoch of the claim window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimSource {
+    pub chain_height: ChainCount,
+    pub current_settled_epoch: SettlementEpoch,
+    pub bond: Option<ClaimantBond>,
+    /// Every epoch of the claim window, ascending, as the claim verify's
+    /// own gather reads it (`emission_epoch_facts`, CEN-J23): an epoch its
+    /// citing gate admits — budget, `Σwork` and close height all present —
+    /// carries the snapshot; any other carries none and is unclaimable
+    /// (`SO-D11d`, `SO-D11g`).
+    pub epochs: Vec<EmissionEpochFacts>,
+}
+
+/// The coverage list's operands: the shards a join can hold, unranked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShardCoverage {
+    /// The tip the list is as of.
+    pub as_of: BlockHeight,
+    /// Leaves in the curve tree after the tip.
+    pub leaf_count: u64,
+    /// The last settled epoch as of the tip.
+    pub settled_epoch: SettlementEpoch,
+    pub budget: Option<u64>,
+    pub sigma_work_milli: Option<u64>,
+    /// One row per closed and final shard, in shard order.
+    pub shards: Vec<ShardCoverageIn>,
+}
+
 /// The chain reads behind the store flip's eight native read methods
 /// (module docs). Every method reads one committed snapshot.
 pub trait ChainReadFacts: Send + Sync {
@@ -157,4 +214,19 @@ pub trait ChainReadFacts: Send + Sync {
     /// As [`curve_tree`](Self::curve_tree) when the seed is read off the
     /// chain.
     fn pow_hash(&self, pow_blob: &[u8], seed: PowSeed) -> Result<PowAt, FactsFault>;
+
+    /// What `persona`'s emission claim is built from (`ClaimSource`).
+    ///
+    /// # Errors
+    ///
+    /// As [`curve_tree`](Self::curve_tree); [`FactsFault::Inconsistent`]
+    /// when a derivation finds the store contradicting itself.
+    fn emission_claim_source(&self, persona: &PCanonicalId) -> Result<ClaimSource, FactsFault>;
+
+    /// The shard coverage list's operands (`ShardCoverage`).
+    ///
+    /// # Errors
+    ///
+    /// As [`emission_claim_source`](Self::emission_claim_source).
+    fn shard_coverage(&self) -> Result<ShardCoverage, FactsFault>;
 }

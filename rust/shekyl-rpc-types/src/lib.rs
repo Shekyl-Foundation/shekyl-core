@@ -65,6 +65,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod archival;
+pub mod archival_reads;
 pub mod bin_commands;
 pub mod chain;
 pub mod chain_reads;
@@ -81,6 +82,11 @@ pub use archival::{
     RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,
     CORE_RPC_ERROR_CODE_ARCHIVAL_SHARD_OPEN, CORE_RPC_ERROR_CODE_ARCHIVAL_SKELETON_ABSENT,
     CORE_RPC_ERROR_CODE_CONFIG_REFUSED,
+};
+pub use archival_reads::{
+    ClaimBondRow, ClaimCreditPair, ClaimEpochSnapshot, ClaimShardRow,
+    GetArchivalEmissionClaimSourceRequest, GetArchivalEmissionClaimSourceResponse,
+    GetArchivalShardCoverageResponse, ShardCoverageRow,
 };
 pub use bin_commands::{
     BinError, BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,

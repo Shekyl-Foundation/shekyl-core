@@ -19,19 +19,35 @@
 //! - The emission of a range is the supply accumulator's growth across it
 //!   (`coins_generated`, CEN-G12's paid reward); its fees are each listed
 //!   body's `ct.fee`, read off the recorded transaction.
+//! - The claim source is the claim verify's own citing gate and gather
+//!   (`emission_epoch_facts`, CEN-J23) over every window epoch, and the
+//!   record read the release verify reads (`release_last_served`, folded
+//!   by `whole_record_last_served`). An epoch the gate does not admit is
+//!   listed without a snapshot (`SO-D11g`).
+//! - The coverage list is the shards a join can hold — closed and final,
+//!   the byte-cut universe CEN-J15 judges (`ClosedUniverse::final_before`)
+//!   — with the market's counts for the last settled epoch.
 //! - The longhash is RandomX under the seed CEN-D3 names, over a cache
 //!   the daemon's cache store already holds. `calc_pow` never derives one.
 
-use shekyl_chain_rules::{seed_height, AtHeight, ChainView};
+use shekyl_archival_retention::{
+    claim_window_floor, whole_record_last_served, ShardClose, ShardCoverageIn,
+};
+use shekyl_chain_rules::{
+    emission_epoch_facts, release_last_served, seed_height, shard_close, AtHeight, ChainView,
+    ClosedUniverse,
+};
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
 use shekyl_pow_randomx::{compute_hash, Seedhash};
-use shekyl_types::{BlockHash, BlockHeight, PowHash};
+use shekyl_types::archival::Holdings;
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, PowHash, SettlementEpoch, ShardId};
 use shekyl_wire::{Ct, Transaction};
 
-use super::{count_at, store_fault, tip_of, StoreFacts};
+use super::{connecting, count_at, derivation_fault, store_fault, tip_of, StoreFacts};
 use crate::chain_facts::FactsFault;
 use crate::read_facts::{
-    AltChainFacts, ChainReadFacts, CoinbaseRange, CoinbaseSum, CurveTreeFacts, PowAt, PowSeed,
+    AltChainFacts, ChainReadFacts, ClaimSource, ClaimantBond, CoinbaseRange, CoinbaseSum,
+    CurveTreeFacts, PowAt, PowSeed, ShardCoverage,
 };
 
 /// The tree after the block at `after`: the store's state at `after + 1`.
@@ -224,5 +240,112 @@ impl ChainReadFacts for StoreFacts {
         Ok(PowAt::Hashed(PowHash::from_bytes(compute_hash(
             &cache, pow_blob,
         ))))
+    }
+
+    fn emission_claim_source(&self, persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {
+        let snap = self.snapshot()?;
+        let (tip, _) = tip_of(&snap)?;
+        let view = SnapshotView::new(&snap);
+        let at = connecting(tip);
+        let rule_set = self.rules.in_force(at);
+        let schedule = rule_set.settlement_schedule();
+        let settled = schedule.epoch_at(at);
+        let bond = match view.bond_record(persona).map_err(store_fault)? {
+            None => None,
+            Some(record) => {
+                let maxima = release_last_served(&view, persona, &record).map_err(store_fault)?;
+                Some(ClaimantBond {
+                    join_settlement_epoch: record.join_settlement_epoch,
+                    holdings_kind: record.holdings.kind(),
+                    held_shards: match &record.holdings {
+                        Holdings::ShardSet(held) => {
+                            held.as_slice().iter().map(|h| h.shard).collect()
+                        }
+                        Holdings::CompleteTree => Vec::new(),
+                    },
+                    claimed_settlement_epochs: record.claimed_settlement_epochs.clone(),
+                    bonded_total: record.bonded_total,
+                    bad_interval_count: record.bad_intervals.len(),
+                    last_served: whole_record_last_served(&maxima),
+                    last_settled_slash: view.last_settled_slash_epoch().map_err(store_fault)?,
+                })
+            }
+        };
+        let window: Vec<u64> = (claim_window_floor(settled.to_raw())..settled.to_raw()).collect();
+        let epochs =
+            emission_epoch_facts(&view, &rule_set, persona, &window).map_err(derivation_fault)?;
+        Ok(ClaimSource {
+            chain_height: count_at(tip),
+            current_settled_epoch: settled,
+            bond,
+            epochs,
+        })
+    }
+
+    fn shard_coverage(&self) -> Result<ShardCoverage, FactsFault> {
+        let snap = self.snapshot()?;
+        let (tip, _) = tip_of(&snap)?;
+        let view = SnapshotView::new(&snap);
+        let at = connecting(tip);
+        let rule_set = self.rules.in_force(at);
+        let universe = ClosedUniverse::final_before(&view, at, rule_set.reorg_cap())
+            .map_err(derivation_fault)?;
+        let count = universe.count().get();
+        let settled = SettlementEpoch::from_raw(
+            rule_set
+                .settlement_schedule()
+                .last_settled_epoch_as_of_parent(tip.to_raw()),
+        );
+        let mut bonded = vec![0u64; usize::try_from(count).map_err(|_| FactsFault::Internal)?];
+        for (_, record) in view.bond_records().map_err(store_fault)? {
+            if let Holdings::ShardSet(held) = &record.holdings {
+                for h in held.as_slice() {
+                    if let Some(slot) = usize::try_from(h.shard.to_raw())
+                        .ok()
+                        .and_then(|i| bonded.get_mut(i))
+                    {
+                        *slot += 1;
+                    }
+                }
+            }
+        }
+        let mut shards = Vec::with_capacity(bonded.len());
+        for (k, bonded_count) in (0..count).zip(bonded) {
+            let shard = ShardId::from_raw(k);
+            let ShardClose::ClosedAt(closed) =
+                shard_close(&view, shard, &universe).map_err(derivation_fault)?
+            else {
+                tracing::error!(shard = k, "a shard below the closed count reads open");
+                return Err(FactsFault::Inconsistent);
+            };
+            let served = view
+                .r_market(shard, settled)
+                .map_err(store_fault)?
+                .map_or(0, shekyl_types::archival::RMarket::to_raw);
+            shards.push(ShardCoverageIn {
+                shard_id: k,
+                bonded_count,
+                served_count: served,
+                freeze_height: closed.to_raw(),
+            });
+        }
+        let leaf_count = match view.leaf_count_at(at).map_err(store_fault)? {
+            AtHeight::Recorded(n) => n,
+            AtHeight::AboveTip => return Err(FactsFault::Inconsistent),
+        };
+        Ok(ShardCoverage {
+            as_of: tip,
+            leaf_count,
+            settled_epoch: settled,
+            budget: view
+                .budget(settled)
+                .map_err(store_fault)?
+                .map(shekyl_units::AtomicUnits::to_raw),
+            sigma_work_milli: view
+                .sigma_work(settled)
+                .map_err(store_fault)?
+                .map(shekyl_types::archival::SigmaWorkMilli::to_raw),
+            shards,
+        })
     }
 }

@@ -18,10 +18,16 @@ use shekyl_rpc_types::{
     GetCurveTreeCheckpointResponse, GetCurveTreeInfoResponse, HashHex, RpcStatus,
     CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB, CORE_RPC_ERROR_CODE_WRONG_BLOCKBLOB_SIZE,
 };
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_rpc_types::{
+    ClaimBondRow, ClaimCreditPair, ClaimEpochSnapshot, ClaimShardRow,
+    GetArchivalEmissionClaimSourceRequest, GetArchivalEmissionClaimSourceResponse,
+    GetArchivalShardCoverageResponse, ShardCoverageRow,
+};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
 
 use crate::methods::{RpcFault, RpcRefusal};
 use crate::read_facts::{ChainReadFacts, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed};
+use shekyl_chain_rules::EmissionEpochFacts;
 
 /// The status `get_coinbase_tx_sum` answers a range outside the chain with
 /// — the C++ handler's string, which clients match on.
@@ -249,5 +255,168 @@ pub fn get_curve_tree_checkpoint(
         depth: tree.depth,
         leaf_count: tree.leaf_count,
         block_height: tree.after.to_raw(),
+    })
+}
+
+/// The refusal for a `p_id` that is not 32 bytes of hex — the C++ wording.
+pub const P_ID_REFUSAL: &str = "p_id must be 64 hex characters (32-byte P_canonical_id)";
+
+fn usize_wire(n: usize) -> u64 {
+    u64::try_from(n).expect("a count fits u64")
+}
+
+/// One window epoch on the wire: its snapshot where the citing gate
+/// admitted it, an empty gather with `has_budget_row = false` where it did
+/// not. `close_block_height` is `0` only for an epoch whose close is past a
+/// `u64`, which no window epoch is.
+fn claim_epoch_row(epoch: EmissionEpochFacts) -> ClaimEpochSnapshot {
+    let mut row = ClaimEpochSnapshot {
+        settlement_epoch: epoch.settlement_epoch,
+        close_block_height: epoch.close_height.map_or(0, BlockHeight::to_raw),
+        sigma_work_milli: epoch.sigma_work_milli.unwrap_or(0),
+        budget_atomic: epoch.budget.unwrap_or(0),
+        has_budget_row: epoch.snapshot.is_some(),
+        bonds: Vec::new(),
+        shards: Vec::new(),
+        credit_pairs: Vec::new(),
+        claimant_bond_idx: u64::MAX,
+    };
+    if let Some(snapshot) = epoch.snapshot {
+        row.bonds = snapshot
+            .bonds
+            .into_iter()
+            .map(|bond| ClaimBondRow {
+                join_settlement_epoch: bond.join_settlement_epoch,
+                is_foundation_complete_tree: bond.is_foundation_complete_tree,
+                bad_intervals_flat: bond
+                    .bad_intervals
+                    .iter()
+                    .flat_map(|i| [i.start_epoch, i.end_exclusive])
+                    .collect(),
+            })
+            .collect();
+        row.shards = snapshot
+            .shards
+            .into_iter()
+            .map(|shard| {
+                let wire = shard.close.to_wire();
+                ClaimShardRow {
+                    shard_id: shard.shard_id,
+                    freeze_height: wire.freeze_height,
+                    has_segment: wire.has_segment,
+                }
+            })
+            .collect();
+        row.credit_pairs = snapshot
+            .pairs
+            .into_iter()
+            .map(|pair| ClaimCreditPair {
+                bond_idx: usize_wire(pair.bond_idx),
+                shard_idx: usize_wire(pair.shard_idx),
+            })
+            .collect();
+        row.claimant_bond_idx = snapshot.claimant_bond_idx.map_or(u64::MAX, usize_wire);
+    }
+    row
+}
+
+/// `get_archival_emission_claim_source`: what `p_id`'s emission claim is
+/// built from — the chain count and settled epoch, the record's claim
+/// context, and every epoch of the claim window
+/// (`EMISSION_CLAIM_BUILDER.md` §7). The request names the persona and
+/// nothing else, and the handler branches on nothing claimable-set-derived:
+/// every window epoch is listed, and only the epochs the claim verify's
+/// citing gate admits carry its gather (`SO-D11g`).
+///
+/// # Errors
+///
+/// [`RpcFault::Refused`] (`WRONG_PARAM`, the C++ wording) for a `p_id`
+/// that is not 32 bytes of hex; the facts' fault otherwise.
+pub fn get_archival_emission_claim_source(
+    facts: &dyn ChainReadFacts,
+    request: &GetArchivalEmissionClaimSourceRequest,
+) -> Result<GetArchivalEmissionClaimSourceResponse, RpcFault> {
+    let Ok(p_id) = HashHex::from_hex(&request.p_id) else {
+        return Err(RpcFault::Refused(RpcRefusal::wrong_param(P_ID_REFUSAL)));
+    };
+    let source = facts.emission_claim_source(&PCanonicalId::from_bytes(p_id.to_bytes()))?;
+    let mut response = GetArchivalEmissionClaimSourceResponse {
+        status: RpcStatus::ok(),
+        chain_height: source.chain_height.to_raw(),
+        current_settled_epoch: source.current_settled_epoch.to_raw(),
+        has_bond_record: source.bond.is_some(),
+        join_settlement_epoch: 0,
+        holdings_kind: 0,
+        held_shard_ids: Vec::new(),
+        claimed_settlement_epochs: Vec::new(),
+        bonded_total_atomic: 0,
+        bad_interval_count: 0,
+        has_last_served_epoch: false,
+        last_served_epoch: 0,
+        has_last_settled_slash_epoch: false,
+        last_settled_slash_epoch: 0,
+        epochs: source.epochs.into_iter().map(claim_epoch_row).collect(),
+    };
+    if let Some(bond) = source.bond {
+        response.join_settlement_epoch = bond.join_settlement_epoch.to_raw();
+        response.holdings_kind = bond.holdings_kind.to_u8();
+        response.held_shard_ids = bond.held_shards.iter().map(|s| s.to_raw()).collect();
+        response.claimed_settlement_epochs = bond
+            .claimed_settlement_epochs
+            .iter()
+            .map(|e| e.to_raw())
+            .collect();
+        response.bonded_total_atomic = bond.bonded_total.to_raw();
+        response.bad_interval_count = usize_wire(bond.bad_interval_count);
+        response.has_last_served_epoch = bond.last_served.is_some();
+        response.last_served_epoch = bond.last_served.unwrap_or(0);
+        response.has_last_settled_slash_epoch = bond.last_settled_slash.is_some();
+        response.last_settled_slash_epoch = bond
+            .last_settled_slash
+            .map_or(0, shekyl_types::SettlementEpoch::to_raw);
+    }
+    Ok(response)
+}
+
+/// `get_archival_shard_coverage`: the shards a join can hold — closed and
+/// final, the byte-cut universe CEN-J15 judges — ranked by join scarcity by
+/// the retention crate's ordering (`order_shard_coverage`, SL-D4), with the
+/// last settled epoch's budget and `Σwork` behind the expected-profit hint.
+///
+/// # Errors
+///
+/// The facts' fault.
+pub fn get_archival_shard_coverage(
+    facts: &dyn ChainReadFacts,
+) -> Result<GetArchivalShardCoverageResponse, RpcFault> {
+    let coverage = facts.shard_coverage()?;
+    let budget = coverage.budget.unwrap_or(0);
+    let sigma = coverage.sigma_work_milli.unwrap_or(0);
+    let ranked = shekyl_archival_retention::order_shard_coverage(
+        coverage.as_of.to_raw(),
+        budget,
+        sigma,
+        &coverage.shards,
+    );
+    Ok(GetArchivalShardCoverageResponse {
+        status: RpcStatus::ok(),
+        as_of_height: coverage.as_of.to_raw(),
+        leaf_count: coverage.leaf_count,
+        frozen_count: usize_wire(coverage.shards.len()),
+        settled_epoch: coverage.settled_epoch.to_raw(),
+        budget_atomic: budget,
+        sigma_work_milli: sigma,
+        profit_estimate_available: sigma != 0,
+        shards: ranked
+            .into_iter()
+            .map(|row| ShardCoverageRow {
+                shard_id: row.shard_id,
+                bonded_count: row.bonded_count,
+                served_count: row.served_count,
+                freeze_height: row.freeze_height,
+                join_scarcity_micro: row.join_scarcity_micro,
+                expected_profit_atomic: row.expected_profit_atomic,
+            })
+            .collect(),
     })
 }
