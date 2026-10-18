@@ -18,7 +18,7 @@ fee-share verdict in
 
 ---
 
-## Reading-pass finding 1: the production default carries 22 of 50 (2026-10-03, ESR-6)
+## Reading-pass finding 1: the production default carries 22 of 50 (re-measured 2026-10-17; the 2026-10-03 run is §5.7)
 
 *Relabelled 2026-10-05 (Rick's ruling, [`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2).* "The production block-template fill rule" below is the reward-aware fill, which is the design's. The daemon runs Monero's pre-v5 rule until the fill moves to Rust, so this finding is the design's behaviour once the fill lands, not what the daemon does today. The sim's fill also weighs the bodies without the coinbase (1,331 B a block); the figures are re-run when the owner prices the block's weight ([`FOLLOWUPS.md`](../FOLLOWUPS.md)).
 
@@ -43,6 +43,9 @@ fee grows with `w` and the penalty with `w²`. The ladder's reference weight
 `w_ref = 3 000` is a quarter to a fifth of a post-quantum ordinary
 transaction (12.6–15.3 KB), so the condition fails until `ρ` reaches about 1.2. That
 happens in year 19 on this trajectory (`--stage2`, the growth-gate table).
+The table evaluates `w·M² ≤ 4·ρ·w_ref·m²` in integers: `ρ` is
+`fee_correction / M_r` and `4` is `STANDARD_RUNG_OVER_ECONOMY`. It prints
+`θ = w/(4·w_ref)` as that test at equal medians, beside `m/M` and the verdict.
 
 **The demand assumption, named. The sim has no demand response.** Demand is
 the scenario's schedule. It is exogenous, the same whatever the fee or the
@@ -95,7 +98,7 @@ Each is an input, not a result, and none is modelled.
 
 None of these should be quoted without the assumption above beside it.
 
-## Reading-pass finding 2: block growth is gated by the fee correction (2026-10-03, ESR-6)
+## Reading-pass finding 2: block growth is gated by the fee correction (re-measured 2026-10-17; the 2026-10-03 run is §5.7)
 
 A Standard-rung transaction buys one more transaction's room past the
 median when `w ≤ 4ρ·w_ref·(m/M)²`, with `ρ = (1 − σ)/(1 − b)`. That is the
@@ -117,9 +120,14 @@ Measured on the baseline, production arm, at each year's last block
 
 The threshold `θ = w/(4·w_ref)` reads the ordinary transaction's weight,
 so it steps with the tree's depth: 1.188 in year 1, 1.220 from year 2,
-1.274 from year 23. `ρ` crosses it in year 19, and every constrained
-scenario grows in the year its `ρ` crosses (year 17 on the boom-bust
-cycle, whose booms raise `b` sooner). In the year blocks grow, `ρ` jumps
+1.274 from year 23. `θ` is that threshold when the medians are equal.
+`ρ` crosses it in year 19, and every constrained scenario grows in the
+year its `ρ` crosses (year 17 on the boom-bust cycle, whose booms raise
+`b` sooner). The report prints `m/M` and the full inequality's verdict
+beside `θ`. On this baseline `m/M` stays 1.000 through year 25, so the
+verdict, the zone crossing and block growth are all year 19. A trajectory
+where the effective median pulls ahead of the long-term one admits earlier
+than `θ`. In the year blocks grow, `ρ` jumps
 to 1.415: the carried volume enters the burn. About **three-fifths of the
 rise to year 18 is the burn fraction** climbing as the supply is emitted,
 and two-fifths is `σ` decaying. At 22 carried a block `b ≈ 0.33·s`,
@@ -342,10 +350,15 @@ unenforced miner's zero-fee row beside the relay stuffer's.
 
 **Landed.** ESR-9, 2026-10-17, in PR #1104.
 
-- `43a8f104f` prints the growth gate year by year in `--stage2`, on the
-  production arm: `σ`, `s`, `b` and `ρ` against `θ = w/(4·w_ref)`. On
-  the baseline `ρ` reaches `θ ≈ 1.22` in year 19, and blocks grow that
+- `43a8f104f` prints the growth gate year by year in `--stage2`. On the
+  baseline `ρ` reaches `θ ≈ 1.22` in year 19, and blocks grow that
   year. Reading-pass findings 1 and 2 quote that run.
+- `1f1c4972d` makes that gate read production. The inequality is
+  `w·M² ≤ 4·ρ·w_ref·m²`, with `ρ` from `fee_correction / M_r` and the
+  `4` from `STANDARD_RUNG_OVER_ECONOMY`. It prints `θ` as that test at
+  equal medians, with `m/M` and the verdict. On this baseline `m/M`
+  stays 1.000 through year 25, so the verdict and the crossing are the
+  same year. The flat control arm does not print the section.
 - The live passages that quoted a superseded figure quote the current
   run. `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.13–§12.14 are
   dated runs on the flat fee, with their commits in the headings; neither
@@ -718,6 +731,9 @@ about the default, not about a chain under congestion with a rung mix;
 that is ESR-10's.
 
 ### 5.7 ESR-6 — what the run said (2026-10-03, at `49b313eeb`)
+
+This section is the 2026-10-03 run at `49b313eeb`. The head readings were
+re-measured 2026-10-17; growth there is year 19 (findings 1 and 2).
 
 | Prediction (§5.6) | Outcome |
 | --- | --- |

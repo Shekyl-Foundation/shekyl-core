@@ -63,7 +63,7 @@ for direction, not level, until EUP-4.
 | 1 | Emission curve | PoW security budget; predictable, no governance. ESF 22 per block | `DESIGN_CONCEPTS.md` §3, §13; FL-R12′ | → miner pay, staker share (11), fee floor (5), every onset | Code ran 21 per block (A) |
 | 2 | Perpetual tail | Avoid the fee-only end state; 0.3 SKL/min | FL-R12′ | → security budget | — |
 | 3 | Release multiplier | Demand-paced emission, 0.8–1.3× over a 720-block window | Component 1; FL-R24 (operand) | ← volume; → emission (1), correction C (6) | ESR-4 (`896d95c33`): step response over 720 blocks; ESR-6 (`49b313eeb`): pinned at 0.8 while blocks carry 22 of 50 |
-| 4 | Block-weight governance | Penalty past the median; 300 KB zone; 2× limit; penalty applied last | FL-R12′ (order); zone value punted (G) | ← weights; → floor (5), fill rule, paid reward | ESR-6: blocks carry 22 of 50 for eleven years (finding 1) |
+| 4 | Block-weight governance | Penalty past the median; 300 KB zone; 2× limit; penalty applied last | FL-R12′ (order); zone value punted (G) | ← weights; → floor (5), fill rule, paid reward | ESR-6 on #936: eleven years, growth in year 11. Re-measured 2026-10-17 (finding 1): eighteen years, growth in year 19 |
 | 5 | Fee ladder | Price block space: Economy `F = R·C·w_ref/M²`, Standard 4F, Priority `max(2RC/M, 4F)` | `FEE_LADDER_DERIVATION.md` §5, §8; FL-R13 open | ← reward, C, median, `w_ref` | ESR-1 (`9d8a52985`): Standard ≈ 3.3 SKL/tx in year 1; ESR-6: year 1 2.36, falls 4.9× once the median grows |
 | 6 | Fee correction C | Keep the miner's margin whole: `(1 − σ)·M_r/(1 − b)` | FL-R20/21 | ← σ (11), burn (8), M_r (3); → floor (5), **block growth** | ESR-6 finding 2: the year blocks first grow is set by `(1 − σ)/(1 − b)` — two-thirds burn, one-third σ |
 | 7 | Floor enforcement | Relay policy; block-carried transactions bypass it | FL-V2; **Q9 reopened as a bug, 2026-10-02** | → stuffing cost | ESR-7 (`28b0006f4`): cheapest archival byte is a miner's in every era |
@@ -84,7 +84,7 @@ for direction, not level, until EUP-4.
 breaks:
 
 - **Everything rides the curve.** `F ∝ R`, so every fee, every stuffing
-  cost, every onset year and the year-11 capacity unlock move with the emission
+  cost, every onset year and the capacity unlock (year 19 on the 2026-10-17 run; year 11 on #936) move with the emission
   speed factor (A).
 - **Block growth rides the staker share and the burn** (ESR-6 finding 2). A
   change to the decay schedule, the burn curve or C moves the year the default
