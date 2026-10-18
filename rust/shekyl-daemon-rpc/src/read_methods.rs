@@ -371,8 +371,11 @@ pub fn get_archival_emission_claim_source(
 
 /// `get_archival_shard_coverage`: the shards a join can hold — closed and
 /// final, the byte-cut universe CEN-J15 judges — ranked by join scarcity by
-/// the retention crate's ordering (`order_shard_coverage`, SL-D4), with the
-/// last settled epoch's budget and `Σwork` behind the expected-profit hint.
+/// the retention crate's ordering (`order_shard_coverage`, SL-D4). The
+/// expected-profit hint reads the slash pass's watermark, the epoch whose
+/// gather wrote `r_market`, the budget and `Σwork`. Before any pass the
+/// hint is absent. The wire epoch is 0 then, and also when epoch 0 settled
+/// with a zero `Σwork`; the hint is available when `Σwork` is not zero.
 ///
 /// # Errors
 ///

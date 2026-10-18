@@ -28,7 +28,7 @@
 //!   listed without a snapshot (`SO-D11g`).
 //! - The coverage list is the shards a join can hold — closed and final,
 //!   the byte-cut universe CEN-J15 judges (`ClosedUniverse::final_before`)
-//!   — with the market's counts for the last settled epoch.
+//!   — with the market's counts at the slash pass's watermark.
 //! - The longhash is RandomX under the seed CEN-D3 names, over a cache
 //!   the daemon's cache store already holds. `calc_pow` never derives one.
 
@@ -146,6 +146,59 @@ fn alt_chain_facts(chain: &AltChain) -> Result<AltChainFacts, FactsFault> {
         cumulative_difficulty: tip.block.cumulative_difficulty().to_raw(),
         parent: chain.root().hash,
     })
+}
+
+/// The slash pass's gather at the watermark.
+///
+/// The pass writes `r_market`, `Σwork` and the watermark one grace epoch
+/// after the epoch closes (`scan_slashes`, `SO-D11`). The coverage list's
+/// profit hint is that gather. Before any pass the watermark cell is
+/// absent: the wire epoch is [`SettlementEpoch::ZERO`] and no row is read.
+#[derive(Clone, Copy)]
+struct SlashGather {
+    /// The epoch the pass wrote. `None` before any pass.
+    written: Option<SettlementEpoch>,
+    budget: Option<u64>,
+    sigma_work_milli: Option<u64>,
+}
+
+impl SlashGather {
+    fn read(view: &SnapshotView<'_>) -> Result<Self, FactsFault> {
+        let Some(epoch) = view.last_settled_slash_epoch().map_err(store_fault)? else {
+            return Ok(Self {
+                written: None,
+                budget: None,
+                sigma_work_milli: None,
+            });
+        };
+        Ok(Self {
+            written: Some(epoch),
+            budget: view
+                .budget(epoch)
+                .map_err(store_fault)?
+                .map(shekyl_units::AtomicUnits::to_raw),
+            sigma_work_milli: view
+                .sigma_work(epoch)
+                .map_err(store_fault)?
+                .map(shekyl_types::archival::SigmaWorkMilli::to_raw),
+        })
+    }
+
+    /// `r_market` for `shard` at the written epoch. Before any pass there
+    /// is no epoch to read, and the served count is zero.
+    fn served(&self, view: &SnapshotView<'_>, shard: ShardId) -> Result<u64, FactsFault> {
+        let Some(epoch) = self.written else {
+            return Ok(0);
+        };
+        Ok(view
+            .r_market(shard, epoch)
+            .map_err(store_fault)?
+            .map_or(0, shekyl_types::archival::RMarket::to_raw))
+    }
+
+    fn epoch(&self) -> SettlementEpoch {
+        self.written.unwrap_or(SettlementEpoch::ZERO)
+    }
 }
 
 impl ChainReadFacts for StoreFacts {
@@ -304,11 +357,7 @@ impl ChainReadFacts for StoreFacts {
         let universe = ClosedUniverse::final_before(&view, at, rule_set.reorg_cap())
             .map_err(derivation_fault)?;
         let count = universe.count().get();
-        let settled = SettlementEpoch::from_raw(
-            rule_set
-                .settlement_schedule()
-                .last_settled_epoch_as_of_parent(tip.to_raw()),
-        );
+        let gather = SlashGather::read(&view)?;
         let mut bonded = vec![0u64; usize::try_from(count).map_err(|_| FactsFault::Internal)?];
         for (_, record) in view.bond_records().map_err(store_fault)? {
             if let Holdings::ShardSet(held) = &record.holdings {
@@ -331,10 +380,7 @@ impl ChainReadFacts for StoreFacts {
                 tracing::error!(shard = k, "a shard below the closed count reads open");
                 return Err(FactsFault::Inconsistent);
             };
-            let served = view
-                .r_market(shard, settled)
-                .map_err(store_fault)?
-                .map_or(0, shekyl_types::archival::RMarket::to_raw);
+            let served = gather.served(&view, shard)?;
             shards.push(ShardCoverageIn {
                 shard_id: k,
                 bonded_count,
@@ -349,15 +395,9 @@ impl ChainReadFacts for StoreFacts {
         Ok(ShardCoverage {
             as_of: tip,
             leaf_count,
-            settled_epoch: settled,
-            budget: view
-                .budget(settled)
-                .map_err(store_fault)?
-                .map(shekyl_units::AtomicUnits::to_raw),
-            sigma_work_milli: view
-                .sigma_work(settled)
-                .map_err(store_fault)?
-                .map(shekyl_types::archival::SigmaWorkMilli::to_raw),
+            settled_epoch: gather.epoch(),
+            budget: gather.budget,
+            sigma_work_milli: gather.sigma_work_milli,
             shards,
         })
     }

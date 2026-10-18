@@ -157,7 +157,10 @@ pub struct ShardCoverage {
     pub as_of: BlockHeight,
     /// Leaves in the curve tree after the tip.
     pub leaf_count: u64,
-    /// The last settled epoch as of the tip.
+    /// The slash pass's watermark: the epoch whose gather wrote the
+    /// rows behind the profit hint. [`SettlementEpoch::ZERO`] before any
+    /// pass, which is also epoch 0 after its pass; `budget` and
+    /// `sigma_work_milli` are absent only before a pass.
     pub settled_epoch: SettlementEpoch,
     pub budget: Option<u64>,
     pub sigma_work_milli: Option<u64>,

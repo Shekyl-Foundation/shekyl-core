@@ -268,17 +268,23 @@ async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
     s.close().await;
 }
 
-/// The coverage list over a chain that has closed no shard: nothing a join
-/// can hold, as of the tip, with the last settled epoch's rows behind the
-/// profit hint.
+/// The coverage list over a chain that has closed no shard, on the block
+/// after the first slash pass. Nothing a join can hold. The profit hint
+/// reads the watermark the pass wrote, which the schedule's arithmetic
+/// has already stepped past.
 #[tokio::test]
 async fn the_coverage_list_of_a_chain_with_no_closed_shard_is_empty() {
     use crate::scenario::FreeHash;
     use crate::scenario_shard::{levered_rules, levered_schedule};
     let rules = levered_rules();
+    let schedule = levered_schedule();
+    // The pass for epoch 0 runs on its deadline. The next block's
+    // schedule epoch is the one that pass has not gathered.
+    let after_pass = schedule.slash_deadline_height(0) + 1;
     let mut s = Scenario::open_under("rpc-reads-coverage", FreeHash, rules);
-    let mined = s.mine(60).await;
+    let mined = s.mine(after_pass + 1).await;
     let tip = mined.last().expect("mined").height;
+    assert_eq!(tip.to_raw(), after_pass);
     s.reopen(|path| {
         let store = Arc::new(open_store_under(
             path,
@@ -292,21 +298,31 @@ async fn the_coverage_list_of_a_chain_with_no_closed_shard_is_empty() {
         assert_eq!(coverage.as_of_height, tip.to_raw());
         assert_eq!(coverage.frozen_count, 0);
         assert!(coverage.shards.is_empty());
-        let settled = levered_schedule().last_settled_epoch_as_of_parent(tip.to_raw());
-        assert_eq!(coverage.settled_epoch, settled);
-        let e = shekyl_types::SettlementEpoch::from_raw(settled);
-        let sigma = snap
-            .sigma_work(e)
+        let watermark = snap
+            .last_settled_slash_epoch()
             .expect("read")
-            .map_or(0, shekyl_types::archival::SigmaWorkMilli::to_raw);
-        assert_eq!(coverage.sigma_work_milli, sigma);
+            .expect("the first pass has written the watermark");
+        let arithmetic = schedule.last_settled_epoch_as_of_parent(tip.to_raw());
+        assert_ne!(watermark.to_raw(), arithmetic);
+        assert_eq!(coverage.settled_epoch, watermark.to_raw());
+        let ahead = shekyl_types::SettlementEpoch::from_raw(arithmetic);
+        assert_eq!(
+            snap.sigma_work(ahead).expect("read"),
+            None,
+            "the schedule's epoch has no gather yet"
+        );
+        let sigma = snap
+            .sigma_work(watermark)
+            .expect("read")
+            .expect("the watermark's gather is a row");
+        assert_eq!(coverage.sigma_work_milli, sigma.to_raw());
         assert_eq!(
             coverage.budget_atomic,
-            snap.budget(e)
+            snap.budget(watermark)
                 .expect("read")
                 .map_or(0, shekyl_units::AtomicUnits::to_raw)
         );
-        assert_eq!(coverage.profit_estimate_available, sigma != 0);
+        assert_eq!(coverage.profit_estimate_available, sigma.to_raw() != 0);
         assert_eq!(
             coverage.leaf_count,
             snap.curve_tree().expect("summary").leaf_count.to_raw()
