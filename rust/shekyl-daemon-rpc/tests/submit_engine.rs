@@ -227,6 +227,41 @@ fn fee_below_floor_rejects_fee_too_low() {
 }
 
 #[test]
+fn a_fee_short_of_the_tip_floor_is_refused_before_the_commit() {
+    // The band FL-R23 deleted: a fee within 2 % below the tip floor's
+    // requirement. Phase C admitted it, the commit's zero-slack window
+    // refused it, and the `Raced` came back with no premise to classify,
+    // answered HTTP 500. The commit is scripted to do exactly that again;
+    // the fee must stop at Phase C, so the commit is never reached.
+    let parsed = parse_submission(&spend_hex()).expect("fixture spend parses");
+    let fee_per_byte = parsed.fee / parsed.weight + 1;
+    let needed = shekyl_economics::quantized_fee(parsed.weight, fee_per_byte).expect("in range");
+    assert!(
+        parsed.fee < needed && (needed - parsed.fee) * 50 <= needed,
+        "fixture fee {} must sit within 2 % below {needed}",
+        parsed.fee
+    );
+    let mut facts = admitting_facts(&parsed);
+    facts.fee_per_byte = fee_per_byte;
+    let raced_unchanged = CommitOutcome::Raced(Box::new(facts.clone()));
+    let (engine, shim, verifier) = engine(facts, raced_unchanged);
+    assert_eq!(
+        engine.submit(&spend_hex(), SubmitCaller::Owner).unwrap(),
+        rejected(RejectCause::FeeTooLow)
+    );
+    assert_eq!(
+        verifier.call_count(),
+        0,
+        "fee gate precedes the crypto battery"
+    );
+    assert_eq!(
+        shim.commit_count(),
+        0,
+        "a short fee never reaches the commit"
+    );
+}
+
+#[test]
 fn serve_credit_terminates_at_the_fee_floor() {
     // SP-T4a parity: consensus pins serve-credit fee to 0; the pool floor
     // is never 0; the non-spending arm therefore terminates FeeTooLow —
@@ -754,11 +789,10 @@ fn emission_claim_slot_race_classifies_double_spend_conflict() {
 
 /// S5 (the review of #1102): given the relay floor window, the engine's fee
 /// gate is CEN-M3's own predicate, `relay_floor_admits` — so the engine and
-/// the pool's door give one transaction one fee verdict — at a window whose
-/// floors differ by far more than the 2 % the tip-floor rule allows. A fee
-/// of exactly the requirement at the window's minimum is accepted; one
-/// lattice step below it is `FeeTooLow`. Without the window (the C++ shim)
-/// the tip-floor rule stands and refuses the first.
+/// the pool's door give one transaction one fee verdict. A fee of exactly
+/// the requirement at the window's minimum is accepted; one lattice step
+/// below it is `FeeTooLow`. Without the window (the C++ shim) the gate
+/// admits on the tip floor alone, and that tip refuses the same fee.
 #[test]
 fn with_the_window_the_engines_fee_gate_is_the_doors() {
     use shekyl_economics::{quantized_fee, relay_floor_admits, FEE_QUANTIZATION_MASK};

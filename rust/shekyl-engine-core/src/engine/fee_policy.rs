@@ -5,13 +5,13 @@
 
 //! Snapshot well-formedness for daemon fee estimates.
 //!
-//! The 2021-scaling daemon (`shekyld`, `HF_VERSION_2021_SCALING = 1` from
-//! genesis) returns `Fl / Fn / Fm / Fh` with `Fh / Fl` routinely 65×–1000×
-//! (`tests/unit_tests/scaling_2021.cpp`). An intra-snapshot "priority ≤ 10×
-//! economy" lock is not a sanity ceiling against that daemon — it is a ban
-//! on the honest Priority tier. That check is **withdrawn**. The historical
-//! median-multiple ceiling remains the V3.x `WalletSideEstimator`'s job
-//! (`FOLLOWUPS.md` §"wallet-side fee estimation").
+//! The daemon serves three rungs, economy / standard / priority, in the
+//! multiples `1 : 4 : 2M/w_ref` (FL-C5): priority is 200× economy at the
+//! penalty-free zone and grows with the long-term median `M`. So no fixed
+//! "priority ≤ k× economy" bound is a sanity ceiling — at a wide enough
+//! median it bans the honest Priority tier — and none is enforced. A
+//! historical median-multiple ceiling is the V3.x `WalletSideEstimator`'s
+//! job (`FOLLOWUPS.md` §"wallet-side fee estimation").
 //!
 //! What *is* snapshot-shaped, and is enforced here once:
 //!
@@ -219,12 +219,11 @@ impl CeilingViolation {
 /// Why a caller-pinned `Custom` rate was refused.
 ///
 /// The band is exactly the policy every *named* tier obeys — no more,
-/// no less. There is no `Custom`-only relative ceiling: an
-/// economy-anchored multiple is the same category error the withdrawn
-/// 10× lock was (economy is the market *floor*, and honest
-/// 2021-scaling `Fh / Fl` reaches 1077×), so a "100× economy" ceiling
-/// refused `Custom` at the snapshot's own Priority rate while
-/// `FeePriority::Priority` succeeded at that identical rate. The
+/// no less. There is no `Custom`-only relative ceiling: economy is the
+/// market *floor*, and the honest priority / economy ratio is `2M/w_ref`
+/// — 200× at the zone, growing with the median — so any economy multiple
+/// would refuse `Custom` at the snapshot's own Priority rate while
+/// `FeePriority::Priority` succeeds at that identical rate. The
 /// 2026-08-16 ruling names one bound for `Custom` — the absolute cap —
 /// and that is what is enforced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -316,7 +315,7 @@ mod tests {
     }
 
     /// This bites against a fixture that inverts the band; it does NOT
-    /// cover the withdrawn 10×-economy lock (that lock is gone).
+    /// cover an economy-multiple ceiling (none is enforced).
     #[test]
     fn monotonicity_carries_all_three_tiers() {
         match ValidatedFeeEstimates::try_new(snapshot(20, 10, 50)) {
@@ -344,10 +343,10 @@ mod tests {
         }
     }
 
-    /// This bites against a 2021-scaling-shaped snapshot being refused;
+    /// This bites against an honest served-ladder snapshot being refused;
     /// it does NOT cover a historical median-multiple ceiling.
     #[test]
-    fn twenty_twenty_one_scaling_kat_rows_are_well_formed() {
+    fn served_ladder_kat_rows_are_well_formed() {
         // tests/unit_tests/scaling_2021.cpp `wallet_fee_estimate`,
         // mapped economy=fees[0], standard=fees[1], priority=fees[2].
         //
@@ -356,11 +355,11 @@ mod tests {
         // moves — which is the only thing that makes a mirrored constant a
         // cross-check rather than a second copy free to drift.
         ValidatedFeeEstimates::try_new(snapshot(333, 1332, 66_666))
-            .expect("10 SKL / 300k-zone Fh=66666 is 200× economy and must pass");
+            .expect("10 SKL / 300k-zone priority 66666 is 200× economy and must pass");
         ValidatedFeeEstimates::try_new(snapshot(13, 52, 13_333))
-            .expect("10 SKL / 1.5M-zone Fh=13333 is 1025× economy and must pass");
+            .expect("10 SKL / 1.5M-median priority 13333 is 1025× economy and must pass");
         ValidatedFeeEstimates::try_new(snapshot(10, 20, 101))
-            .expect("the withdrawn 10× lock must not refuse 10.1×");
+            .expect("no economy-multiple bound refuses a 10.1× priority");
     }
 
     /// A saturated rate is an over-cap refusal, not a malformed response:
