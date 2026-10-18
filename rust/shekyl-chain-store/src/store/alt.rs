@@ -45,8 +45,13 @@
 //! ([`WriteBatch::retire_alt_blocks_on`]), each of which removes the
 //! descendants with the row; or by a reset (AL3), which removes them all. A
 //! switch's pops demote what they pop into rows, so a branch that hung from
-//! a popped block hangs from a row. Readers rely on it: the lowest block of
-//! every alternative chain names a main-chain block as its parent.
+//! a popped block hangs from a row. The reader is
+//! [`ReadSnapshot::alternate_chains`](super::ReadSnapshot::alternate_chains):
+//! each tip is [`AltChain::build`](super::AltChain::build), and a stored
+//! chain that does not reach a recorded block comes back
+//! [`AltCannot::Unlinked`](super::AltCannot::Unlinked) rather than a parent
+//! the main chain does not hold. The lowest block of every chain that
+//! listing returns names a main-chain block as its parent.
 //!
 //! # One transaction, or it is not a switch
 //!
@@ -93,8 +98,6 @@
 //! build: the same class of crate bug [`WriteBatch::replay_undo`] refuses
 //! with `assert!`.
 
-use std::collections::{HashMap, HashSet};
-
 use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_chain_rules::AltValid;
 use shekyl_store_codec::{Canonical, Coded};
@@ -104,7 +107,7 @@ use crate::codec::{AltBlock, AltBodies};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{ALT_BLOCKS, ALT_BLOCK_BODIES};
 
-use super::alt_reads::{self, key, AltEntry, ALT_BLOCKS_CELL, ALT_BODIES_CELL};
+use super::alt_reads::{self, key, AltEntry, AltLinks, ALT_BLOCKS_CELL, ALT_BODIES_CELL};
 use super::error::{AltCannot, EngineError, StoreError, StoreInvariant};
 use super::keyed::check_row;
 use super::write::WriteBatch;
@@ -266,26 +269,13 @@ impl WriteBatch<'_, '_> {
     /// them (the closure under "names as its parent"), with their bodies.
     fn remove_alt_closure(&self, root: impl Fn(&AltEntry) -> bool) -> Result<u64, StoreError> {
         let entries = self.alt_blocks()?;
-        let mut children: HashMap<BlockHash, Vec<BlockHash>> = HashMap::new();
-        for entry in &entries {
-            children
-                .entry(entry.block.block().header.previous)
-                .or_default()
-                .push(entry.id);
-        }
-        let mut dead: HashSet<BlockHash> = HashSet::new();
-        let mut frontier: Vec<BlockHash> = entries
-            .iter()
-            .filter(|entry| root(entry))
-            .map(|entry| entry.id)
-            .collect();
-        while let Some(id) = frontier.pop() {
-            if dead.insert(id) {
-                if let Some(below) = children.get(&id) {
-                    frontier.extend(below.iter().copied());
-                }
-            }
-        }
+        let links = AltLinks::of(&entries);
+        let dead = links.closure(
+            entries
+                .iter()
+                .filter(|entry| root(entry))
+                .map(|entry| entry.id),
+        );
         for id in &dead {
             self.remove_alt_block(id)?;
         }
