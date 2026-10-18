@@ -27,9 +27,9 @@ use super::connect_fixtures::{
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
-use crate::codec::{forged, AltBlock, AltBlockFacts, Canonical, CodecError, Encoded};
+use crate::codec::{forged, AltBlock, AltBlockFacts, AltBodies, Canonical, CodecError, Encoded};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::ALT_BLOCKS;
+use crate::schema::{ALT_BLOCKS, ALT_BLOCK_BODIES};
 
 /// `BlockHeight::from_raw`, short enough for a fixture call.
 pub(super) const fn h(n: u64) -> BlockHeight {
@@ -257,6 +257,125 @@ fn insert_read_enumerate_remove_and_drop() {
         store.connect_state().is_live(),
         "alt writes are not chain work; nothing halts"
     );
+    cleanup(&path);
+}
+
+/// Plant `bodies` under `key` in `alt_block_bodies` alone, around AL1.
+fn plant_bodies(store: &ChainStore, key: BlockHash, bodies: &AltBodies) {
+    let out: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .txn()
+            .open_table(ALT_BLOCK_BODIES)
+            .map_err(|e| StoreError::from(EngineError::Table(e)))?
+            .insert(
+                LmdbHashKey::from_bytes(*key.as_bytes()),
+                bodies.encoded().as_encoded(),
+            )
+            .map_err(|e| StoreError::from(EngineError::Storage(e)))?;
+        Ok(())
+    });
+    out.expect("plant bodies");
+}
+
+/// The bodies are consensus data held with the row (the review of #1102,
+/// B1): AL1 writes the verdict's listed bodies, AL8 reads them back in
+/// listed order and holds them to the row, and AL2, AL3 and the death rule
+/// remove them with it. A row without its bodies, bodies without a row,
+/// and bodies that are not the header's listed transactions are SI-7.
+#[test]
+fn the_bodies_are_written_read_and_removed_with_the_row() {
+    let path = tmp("alt-bodies");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let main = connect_chain(&store, &[vec![], vec![]]).hashes;
+    let a_cand = side_candidate(h(1), main[0], 3);
+    let (a, a_listed) = (a_cand.block.hash(), a_cand.transactions.clone());
+    assert!(!a_listed.is_empty(), "the fixture lists a body");
+    insert_admitted(&store, a_cand).expect("insert a");
+    let b_cand = side_candidate(h(2), a, 4);
+    let (b, b_listed) = (b_cand.block.hash(), b_cand.transactions.clone());
+    insert_admitted(&store, b_cand).expect("insert b");
+    {
+        let snap = store.begin_read().expect("read");
+        let got = snap.alt_block_bodies(&a).expect("read").expect("held");
+        assert_eq!(got.transactions(), a_listed.as_slice());
+        assert_eq!(snap.alt_block_bodies(&main[1]).expect("read"), None);
+    }
+
+    // The death rule's sweep: at or below height 1, `a` and its bodies.
+    let out: Result<u64, TestErr> = store.write(|batch| Ok(batch.retire_alt_blocks(h(1))?));
+    assert_eq!(out, Ok(1));
+    {
+        let snap = store.begin_read().expect("read");
+        assert_eq!(snap.alt_block_bodies(&a).expect("both gone"), None);
+        let got = snap.alt_block_bodies(&b).expect("read").expect("held");
+        assert_eq!(got.transactions(), b_listed.as_slice());
+    }
+
+    // AL2 takes the bodies with the row.
+    let out: Result<(), TestErr> = store.write(|batch| Ok(batch.remove_alt_block(&b)?));
+    out.expect("remove");
+    assert_eq!(
+        store
+            .begin_read()
+            .expect("read")
+            .alt_block_bodies(&b)
+            .expect("both gone"),
+        None
+    );
+
+    // AL3 too.
+    let judged = store.begin_read().expect("read");
+    let again = admitted(&judged, side_candidate(h(1), main[0], 3));
+    let out: Result<u64, TestErr> = store.write(|batch| {
+        batch.insert_alt_block(again)?;
+        Ok(batch.drop_alt_blocks()?)
+    });
+    assert_eq!(out, Ok(1));
+    assert_eq!(
+        store
+            .begin_read()
+            .expect("read")
+            .alt_block_bodies(&a)
+            .expect("both gone"),
+        None
+    );
+
+    // The belts. A row without its bodies:
+    let row_only = side_candidate(h(1), main[0], 5);
+    let row_id = row_only.block.hash();
+    plant(
+        &store,
+        row_id,
+        &alt(h(1), &row_only.block.serialize(), None),
+    );
+    let is_si7 = |e: StoreError, cell: &str| {
+        matches!(
+            e,
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt { key, .. }) if key == cell
+        )
+    };
+    let snap = store.begin_read().expect("read");
+    assert!(is_si7(
+        snap.alt_block_bodies(&row_id).expect_err("no bodies"),
+        "alt_block_bodies"
+    ));
+    drop(snap);
+    // Bodies that are not the header's:
+    plant_bodies(&store, row_id, &AltBodies::of(b_listed));
+    let snap = store.begin_read().expect("read");
+    assert!(is_si7(
+        snap.alt_block_bodies(&row_id).expect_err("not its bodies"),
+        "alt_block_bodies"
+    ));
+    drop(snap);
+    // Bodies without a row:
+    let stray = BlockHash::from_bytes([0x5B; 32]);
+    plant_bodies(&store, stray, &AltBodies::of(Vec::new()));
+    let snap = store.begin_read().expect("read");
+    assert!(is_si7(
+        snap.alt_block_bodies(&stray).expect_err("no row"),
+        "alt_blocks"
+    ));
     cleanup(&path);
 }
 

@@ -74,11 +74,12 @@ use crate::block::Candidate;
 use crate::census::{CenRow, PolicyRow, RowStatus};
 use crate::fault::FormAttempt;
 use crate::harness::expected_references;
-use crate::harness::fixture::{candidate_on, recorded, repriced, root};
+use crate::harness::fixture::{candidate_on, paying_its_floor, recorded, repriced, root};
 use crate::harness::{
     assert_refused, expected_seed, expected_target, judged, Faulted, MockChain, MockSubstrate,
 };
-use crate::rule_set::RuleSet;
+use crate::policy::policy_form;
+use crate::rule_set::{AdmissionPolicy, RuleSet};
 use crate::trust::Trust;
 use crate::validate::{form, tx_form, validate};
 use crate::verdict::{ChainValid, Locus, TxSlot, Verdict};
@@ -780,12 +781,31 @@ fn hold_to_registry(row: CenRow, verdict: Verdict<()>, tx: &Transaction, locus: 
     }
 }
 
+/// A policy arm's trip is refused by `policy_form` on the arm's own row —
+/// the pool's side of the twin's divergence (DRS-E5 PR-b b1). The trip pays
+/// its own requirement at a floor of one ([`paying_its_floor`]), so CEN-M3
+/// does not answer for a later row in census order.
+fn hold_to_policy(row: PolicyRow, tx: &Transaction) {
+    const FLOORS: [u64; 1] = [1];
+    let paid = paying_its_floor(tx, FLOORS[0]);
+    assert_eq!(
+        policy_form(&paid, &AdmissionPolicy::GENESIS, &FLOORS)
+            .err()
+            .map(|refused| refused.rule),
+        Some(row),
+        "a policy arm's trip is refused by policy_form on its row"
+    );
+}
+
 fn run(site: &Site) {
     match site.trip {
         Trip::None => {}
         Trip::Lone(build, expect) => {
             let tx = build();
             twin_refuses_on(site, &tx);
+            if let Arm::Policy(row) = site.arm {
+                hold_to_policy(row, &tx);
+            }
             let verdict = tx_form(&tx, TxSlot::Lone, &RuleSet::GENESIS).map(|_| ());
             match (site.arm, expect) {
                 (Arm::Rule(row), Expect::FromRegistry) => {

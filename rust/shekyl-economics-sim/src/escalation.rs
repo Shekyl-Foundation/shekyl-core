@@ -69,7 +69,7 @@ pub const ASYMPTOTE_BAND: [u64; 3] = [500_000, 750_000, 900_000];
 /// `n` = 10,279,293; geometric mean ≈ 2.32 M — rounded to one significant
 /// figure and a half. The fold has moved since: under the production fill
 /// rule (ESR-6) the baseline carries 22 of its 50 transactions a block for
-/// eleven years, and its `n` at 10 y is 229,864. On the design's emission
+/// eighteen years, and its `n` at 10 y is 229,864. On the design's emission
 /// curve the largest final `n` is 2,079,614, below the shipped knee.
 /// `stage2::an_out_of_band_knee_is_held_only_while_the_escalation_is_flat`
 /// evaluates the definitions on the current fold, prints the band and

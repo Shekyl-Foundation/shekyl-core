@@ -1589,9 +1589,9 @@ journals are retired at the slash log's floor, `(k + n)` epochs and a cap
 below the pruning tip, so the relation is `1 + k ≤ k + n`, asserted at
 compile time. A walk asked to start below the floor anyway is refused.
 
-**The store** (`shekyl-chain-store`, layout 27):
+**The store** (`shekyl-chain-store`, layout 28):
 
-- `archival_release_journal`, Rust-only, ordinal 43: `(height, persona)`
+- `archival_release_journal`, Rust-only, ordinal 44: `(height, persona)`
   → the record a Release replaced, written insert-once beside the
   post-image under the Bond family, popped through the journal, retired
   at the slash log's floor.

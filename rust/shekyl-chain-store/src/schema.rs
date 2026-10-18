@@ -166,11 +166,11 @@ use shekyl_types::{
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    AltBlock, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo, BondRecord, Coded,
-    CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx,
-    Present, PropertyCellBytes, RMarket, RecordedPow, RuleSetInForce, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
-    TxPrunedSegment, UndoLog, Unshaped,
+    AltBlock, AltBodies, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo,
+    BondRecord, Coded, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash,
+    LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RecordedPow, RuleSetInForce,
+    SettlementRow, SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
+    TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple};
 use crate::lmdb_order::LmdbHashKey;
@@ -456,6 +456,14 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          already hashed without RandomX. The C++ kept a transient precompute table and no \
          per-block record, so LMDB never holds it. Out of the digest domain: a function of the \
          block the digest's hashes already fold",
+    ),
+    (
+        "alt_block_bodies",
+        "an alternative block's listed bodies, keyed as its alt_blocks row is (DRS-E5 PR-b, the \
+         review of #1102's B1): consensus data a switch connects at promotion, written by AL1 \
+         from the cheap tier's verdict and removed with the row. The C++ held them in the \
+         transaction pool under kept_by_block, a store this node prunes by local policy, so \
+         LMDB never holds them. Not chain state: Excluded from every digest, as alt_blocks is",
     ),
     (
         "archival_release_journal",
@@ -814,6 +822,15 @@ tables! {
     pub const BLOCK_POW: TableDefinition<u64, Coded<RecordedPow>> =
         TableDefinition::new("block_pow");
 
+    /// `alt_block_bodies` — **Rust-only** ([`RUST_ONLY_TABLES`]); key order
+    /// `compare_hash32`, as `alt_blocks`; block hash → the alternative
+    /// block's listed bodies ([`AltBodies`]). Written by AL1 beside the
+    /// `alt_blocks` row, removed by AL2 and AL3 with it, read by AL8 when a
+    /// switch promotes the block. Not chain state (§11.2), written outside
+    /// any pop recording. Ordinal 43.
+    pub const ALT_BLOCK_BODIES: TableDefinition<LmdbHashKey, Coded<AltBodies>> =
+        TableDefinition::new("alt_block_bodies");
+
     /// `archival_release_journal` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// `(height, persona)` → the [`BondRecord`] a Release at that height
     /// replaced, exactly as it stood before the Release arm changed it.
@@ -821,7 +838,7 @@ tables! {
     /// reversed by `pop` through the journal; retired at the slash log's
     /// floor in the same boundary batch, so the walk that rebuilds an
     /// epoch's drawable set reads both journals over one span (A20,
-    /// `SO-D12` increment 2). Appended last (ordinal 43).
+    /// `SO-D12` increment 2). Appended last (ordinal 44).
     pub const ARCHIVAL_RELEASE_JOURNAL: TableDefinition<ReleaseJournalTuple, Coded<BondRecord>> =
         TableDefinition::new("archival_release_journal");
 }
@@ -902,8 +919,10 @@ mod tests {
             ("archival_drawable_digest", 41),
             // Layout 26 (DRS-E5 switch PR): the recorded proof-of-work.
             ("block_pow", 42),
-            // Layout 27 (`SO-D12` increment 2): the Release journal.
-            ("archival_release_journal", 43),
+            // Layout 27 (DRS-E5 PR-b): an alternative block's bodies.
+            ("alt_block_bodies", 43),
+            // Layout 28 (`SO-D12` increment 2): the Release journal.
+            ("archival_release_journal", 44),
         ];
         for &(name, index) in pinned {
             assert_eq!(

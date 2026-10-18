@@ -543,7 +543,37 @@ impl ReferenceClaims {
         connecting: BlockHeight,
         candidate: &Candidate,
     ) -> Result<Self, V::Fault> {
-        let named = candidate.proof_references();
+        Self::named_in_window(view, connecting, &candidate.proof_references())
+    }
+
+    /// The claim for one transaction at `connecting` — the pool door's
+    /// (DRS-E5 PR-b, `DRS_E5_POOL_ALT_PRUNE.md` §2.2): the reference it
+    /// names, read off `view`'s headers across CEN-I11's window exactly as
+    /// [`Self::from_headers`] reads a block's, so a transaction is judged
+    /// against the claim a block carrying it would be. A transaction naming
+    /// no reference reads nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::from_headers`].
+    pub fn for_transaction<'id, V: HeaderView<'id>>(
+        view: &V,
+        connecting: BlockHeight,
+        tx: &Transaction,
+    ) -> Result<Self, V::Fault> {
+        let named: BTreeSet<BlockHash> = crate::rules::tx_against::proof_reference(tx)
+            .into_iter()
+            .collect();
+        Self::named_in_window(view, connecting, &named)
+    }
+
+    /// Claim every header in CEN-I11's window at `connecting` whose identity
+    /// is in `named`, at its height with its `curve_tree_root`.
+    fn named_in_window<'id, V: HeaderView<'id>>(
+        view: &V,
+        connecting: BlockHeight,
+        named: &BTreeSet<BlockHash>,
+    ) -> Result<Self, V::Fault> {
         if named.is_empty() {
             return Ok(Self::EMPTY);
         }

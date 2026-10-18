@@ -131,6 +131,7 @@ mod coverage;
 mod drain;
 mod fault;
 mod header_ladder;
+mod policy;
 mod reorg;
 mod rule_set;
 mod rules;
@@ -183,6 +184,7 @@ pub use fault::{
     Corrupt, DrawableEpochFault, Fault, FormAttempt, PerHeightRecord, RecordInvariant,
     ReferenceMismatch, Retry, SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,
 };
+pub use policy::{policy_form, PolicyRefused};
 pub use relay_floor::{fee_operands_at, relay_floor_at, relay_floor_window};
 pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
@@ -195,7 +197,7 @@ pub use rules::block_weight::{
     effective_median_at, even_pair_median, median, medians_from, medians_over, EffectiveMedian,
     Weights,
 };
-pub use rules::body::ArchivalKey;
+pub use rules::body::{ArchivalKey, BlockArchivalKeys};
 pub use rules::difficulty::{cumulative_difficulty_after, target_claim, Target};
 pub use rules::miner::{
     closed_shards_before, closed_shards_through, tx_volume_span, tx_volume_window, TxVolumeSpan,
@@ -210,6 +212,10 @@ pub use rules::tx_against::{
     admissible_references, newest_admissible_reference, REFERENCE_BLOCK_MAX_AGE,
     REFERENCE_BLOCK_MIN_AGE,
 };
+pub use rules::tx_bond::{bond_post_vin, release_last_served};
+pub use rules::tx_emission_against::{
+    emission_epoch_facts, EmissionEpochFacts, EmissionEpochSnapshot, EpochCloseBondFacts,
+};
 pub use rules::{recorded, recorded_header};
 pub use shekyl_archival_retention::{DrawableEpoch, DrawableEpochError};
 pub use shekyl_fcmp::LeafInput;
@@ -219,7 +225,9 @@ pub use tree_growth::{
     TreeFrontier, TreeGrowth,
 };
 pub use trust::Trust;
-pub use validate::{form, tx_against, tx_form, validate};
+pub use validate::{
+    form, judge_lone_stateless, judge_slot_stateless, tx_against, tx_form, validate, StatelessPass,
+};
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 pub use view::{
     AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, LeafSource, RecordedBlock,

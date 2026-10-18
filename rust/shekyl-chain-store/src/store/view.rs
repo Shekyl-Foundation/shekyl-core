@@ -16,10 +16,10 @@
 //! write transaction observe that transaction's own writes, so projecting
 //! the view from the batch gives block *h+1* the chain block *h* left.
 //!
-//! A `ReadSnapshot`-backed view (RPC-side re-validation, DRS-E5's pool
-//! decorator) is a later, separate implementor. It carries no batch brand,
-//! and so cannot mint a `ChainValid` that `connect` accepts — which is the
-//! point of the brand (C2-R8 Q3).
+//! The `ReadSnapshot`-backed view is a separate implementor,
+//! [`SnapshotView`](super::SnapshotView) — what the pool door judges
+//! against. It carries no batch brand, and so cannot mint a `ChainValid`
+//! that `connect` accepts — which is the point of the brand (C2-R8 Q3).
 //!
 //! # The root at `h` is key `h`
 //!
