@@ -539,6 +539,7 @@ stale_through = [
   { through = "f60ab687f", note = "Republishing the usable route keeps its incarnation and tells no watcher; a return from down is a new incarnation. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
   { through = "21524f1a8", note = "A link subscription unsubscribes when dropped. Watcher bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
   { through = "7e9ea0f61", note = "The managed-Tor death watch follows the route now installed, and a shutdown publishes ProcessStopped. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
+  { through = "0d882303c3", note = "Direction carries a 32-byte handshake-hash stamp set once by into_directions, so the P2P handshake's split copies 32 bytes per direction once per session. No record seal, open or rekey reads it; the per-record path is unchanged. Not re-measured." }
 ]
 
 [[constant]]
