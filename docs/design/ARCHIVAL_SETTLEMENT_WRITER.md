@@ -1621,7 +1621,9 @@ faults, the Reinstate. Store (on the slash-scan harness, `SEB 100 / cap
 pass settling epoch 3, across a Release above an open and one in an open
 block; five tampers — a pre-image's holdings, one byte of its key, a
 planted slash, the digest, the digest removed — each halt through the
-fault path; popping an open removes its digest and its Release row and
+fault path; on a compact bond, a slash above the open rebuilds the same
+set, and the same slash with its row naming another shard, which the walk
+can restore, halts as `DrawableDrift`; popping an open removes its digest and its Release row and
 reconnecting writes the same; a walk and both reads below the floor are
 refused; the boundary retires journal rows and settled digests (`SEB 10 /
 cap 5`). A slash above an open is undone on the existing chain that runs

@@ -24,6 +24,10 @@
 //! served and CEN-J16's cooldown is vacuous for them. No draw is issued:
 //! the check runs at every settlement whether anything was drawn or not.
 //!
+//! One test adds a compact bond, planted before epoch 2 opens
+//! ([`compact_bond_chain`]), for the one tamper only a compact holding can
+//! show: a slash row whose shard is altered to one the walk can restore.
+//!
 //! The rules-side arms — the undo of each event kind, the order, the
 //! filters, a Reinstate — are `shekyl-chain-rules`' `drawable_tests.rs`, on
 //! plain data. A slash inside an epoch is witnessed on this harness by
@@ -514,5 +518,153 @@ fn a_walk_below_the_floor_is_refused_and_so_is_the_read() {
         "{log:?}"
     );
     drop(snap);
+    chain.finish();
+}
+
+/// The persona of the compact bond [`compact_bond_chain`] plants: a slot
+/// none of the harness's joins uses.
+const COMPACT: u32 = 9;
+
+/// The harness chain through `h_open(2) − 1`, with one compact bond
+/// holding shard 0 planted under [`COMPACT`] before epoch 2 opens, then
+/// connected to `through`. The harness's own joins are complete trees, and
+/// a compact join needs a priced, closed and final shard at its parent
+/// (CEN-J15), which this chain has only from height 131; a planted record
+/// is the compact bond the open block then digests like any other.
+fn compact_bond_chain(label: &str, through: u64) -> SlashedChain {
+    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, h_open(2) - 1, no_draws);
+    let persona = Persona::at(COMPACT);
+    let record = BondRecord {
+        hybrid_pubkey: persona.identity(),
+        bond_spend_pk: persona.bond_spend(),
+        receipt_sign_pk: persona.receipt_key(),
+        endpoint: [0xEE; 32],
+        join_settlement_epoch: SettlementEpoch::from_raw(0),
+        bonded_total: AtomicUnits::from_raw(BONDED),
+        holdings: compact_holdings(&[0]),
+        bad_intervals: Vec::new(),
+        claimed_settlement_epochs: Vec::new(),
+        first_paying_emission_height: None,
+    };
+    let planted: Result<(), TestErr> = chain.store.write(|batch| {
+        batch
+            .open_insert_table(
+                crate::schema::ARCHIVAL_BOND,
+                StoreInvariant::BondRecordNotFresh,
+            )?
+            .insert(*persona.id().as_bytes(), record.encoded().as_encoded())?;
+        Ok(())
+    });
+    planted.expect("planted");
+    for _ in h_open(2)..=through {
+        connect(&mut chain, &[]);
+    }
+    chain
+}
+
+fn compact_holdings(shards: &[u64]) -> shekyl_types::archival::Holdings {
+    shekyl_types::archival::Holdings::shard_set(
+        shards
+            .iter()
+            .map(|&shard| shekyl_types::archival::HeldShard {
+                shard: ShardId::from_raw(shard),
+                add_epoch: SettlementEpoch::from_raw(0),
+            })
+            .collect(),
+    )
+    .expect("distinct shards under the cap")
+}
+
+/// A slash of the compact bond's shard 0 at a height above `h_open(2)`, as
+/// the store holds one: the record without the shard and a log row naming
+/// the shard the slash took. `shard` is what the row names.
+fn slash_compact_bond(batch: &WriteBatch<'_, '_>, shard: u64) -> Result<(), StoreError> {
+    let persona = Persona::at(COMPACT).id();
+    let mut record = batch
+        .chain_view()
+        .bond_record(&persona)?
+        .expect("the compact bond");
+    record.holdings = compact_holdings(&[]);
+    batch
+        .open_upsert_table(crate::schema::ARCHIVAL_BOND)?
+        .upsert(*persona.as_bytes(), record.encoded().as_encoded())?;
+    let entry = SlashLogEntry {
+        persona,
+        shard: ShardId::from_raw(shard),
+        epoch: SettlementEpoch::from_raw(1),
+        holding: SlashedHolding::Shard {
+            add_epoch: SettlementEpoch::from_raw(0),
+        },
+    };
+    batch
+        .open_upsert_table(crate::schema::ARCHIVAL_SLASH_LOG)?
+        .upsert(
+            crate::ids::SlashLogKey::new(BlockHeight::from_raw(FIRST_RELEASE), 0).key(),
+            entry.encoded().as_encoded(),
+        )?;
+    Ok(())
+}
+
+/// **A slash-log row that names another shard, which the walk can still
+/// restore, halts the settlement as drift.** Epoch 2 holds the compact
+/// bond's `(P, 0)`. A slash of shard 0 above the open — the record emptied,
+/// the row naming shard 0 — rebuilds the same set, and the settling block
+/// judges clean. The same slash with its row altered to name shard 5
+/// restores shard 5 instead: the record holds a shard it can take back,
+/// so the walk completes, but shard 5 is not closed and final at the open
+/// and `(P, 0)` is not restored, so the rebuilt set lacks the pair the
+/// open digested. That is `SettlementCheck::DrawableDrift`, SI-30, and
+/// never a verdict on the block.
+///
+/// Red edit: restore the row's shard without the digest comparison
+/// (report `Ok` when the walk completes), or compare only the set's length
+/// — both sets hold `D`'s other four pairs and no fifth.
+#[test]
+fn a_slash_row_naming_another_shard_halts_the_settlement_as_drift() {
+    let epoch = SettlementEpoch::from_raw(2);
+    let settles = RULES.settlement_schedule().slash_deadline_height(2);
+    let chain = compact_bond_chain("drawable-compact", settles - 1);
+    let compact = Persona::at(COMPACT).id();
+    let held = walked(&chain.store, 2).expect("opened");
+    assert!(
+        personas_of(&held).contains(&compact),
+        "epoch 2 holds the compact bond's pair"
+    );
+
+    // The slash as the store would hold it: the settling block judges.
+    let control: Result<(), TestErr> = chain.store.write(|batch| {
+        slash_compact_bond(batch, 0)?;
+        let view = batch.chain_view();
+        assert!(
+            chain.grown.judge_empty_or_corrupt(&view, &RULES)?.is_ok(),
+            "an honest slash above the open rebuilds the same set"
+        );
+        Err(TestErr::Abort)
+    });
+    assert!(matches!(control, Err(TestErr::Abort)));
+
+    // The same slash with the row's shard altered.
+    let out: Result<(), TestErr> = chain.store.write(|batch| {
+        slash_compact_bond(batch, 5)?;
+        let view = batch.chain_view();
+        let Err(corrupt) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
+            panic!("the pass settled over a slash row naming another shard");
+        };
+        assert_eq!(
+            corrupt,
+            Corrupt::SettlementIntegrity {
+                epoch,
+                check: SettlementCheck::DrawableDrift,
+            }
+        );
+        Err(batch.refuse_corrupt(corrupt).into())
+    });
+    let TestErr::Store(refused) = out.expect_err("the batch is refused") else {
+        panic!("aborted, not refused");
+    };
+    assert!(
+        refused.contains("does not digest to archival_drawable_digest"),
+        "{refused}"
+    );
     chain.finish();
 }
