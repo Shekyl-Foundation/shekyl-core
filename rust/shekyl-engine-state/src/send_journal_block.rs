@@ -58,9 +58,8 @@ use shekyl_types::BlockHeight;
 /// strict-equality gating, pre-genesis, no migration.
 /// Version `5` (2026-10-18): [`SendRecipient::destination`] replaces the
 /// address string with [`SendDestination`], so a `stake_in` row records
-/// that it funded this wallet's own persona instead of a persona address
-/// (persona addresses no longer exist). Strict-equality gating,
-/// pre-genesis, no migration.
+/// that it funded this wallet's own persona; a persona has no address.
+/// Strict-equality gating, pre-genesis, no migration.
 pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 5;
 
 /// The wallet's own outputs that must not be spent again yet, keyed by
