@@ -728,7 +728,11 @@ its PR leaves draft.
    recipe and `AvoidDiskWrites` in the closed list; the process wait as the
    second death signal. **Implemented** (#1091).
 3. The supervisor core (sans-IO) and its timing-engine driver; the pin gate per
-   spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings.
+   spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings. It removes the
+   daemon's step-8 Tor wait (`rust/shekyl-daemon/src/run.rs`) and its 300 s
+   bootstrap deadline (`rust/shekyl-daemon/src/tor.rs`): step 8 does not wait
+   for Tor, and no bootstrap is given up (Rick, 2026-10-19; one cold bootstrap
+   in a hundred on the floor device took longer than 300 s, §10).
 4. The probe nonce and the probe.
 5. The supervisor becomes the Tor link's publisher, in place of the zone host.
 6. Acceptance; then the C++ deletions, to Rick before they are cut.
