@@ -298,14 +298,21 @@ fn clear_cloexec(fd: TorEndNumber) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Unix: clear close-on-exec on tor's end in the child, after `fork`. The parent's
-/// copy keeps it, so no other spawn can inherit tor's end, concurrent or not.
+/// Unix: in the child, after `fork`, mark every descriptor from 3 up close-on-exec
+/// ([`crate::inherit`]: a descriptor C++ opened without the flag must not reach
+/// tor), then clear the flag on tor's end alone. The parent's copy keeps it, so no
+/// other spawn can inherit tor's end, concurrent or not.
 #[cfg(unix)]
 fn inherit_in_the_child_only(cmd: &mut Command, tor_end: TorEndNumber) {
+    let stdio_only = crate::inherit::StdioOnly::prepare();
     // SAFETY: the closure runs in the child between `fork` and `exec`, and
-    // [`clear_cloexec`] is async-signal-safe.
+    // [`crate::inherit::StdioOnly::apply`] and [`clear_cloexec`] are
+    // async-signal-safe.
     unsafe {
-        cmd.pre_exec(move || clear_cloexec(tor_end));
+        cmd.pre_exec(move || {
+            stdio_only.apply()?;
+            clear_cloexec(tor_end)
+        });
     }
 }
 
@@ -1276,6 +1283,35 @@ mod tests {
         assert!(
             child.wait().await.expect("exits").success(),
             "the child handed tor's end holds it"
+        );
+    }
+
+    /// A descriptor opened without close-on-exec, as C++ in the daemon's process
+    /// opens one, does not reach the child handed tor's end, and that end still
+    /// does (`DAEMON_CONFIG_CUTOVER.md` §2.10). Fails when
+    /// [`inherit_in_the_child_only`] stops calling
+    /// [`crate::inherit::StdioOnly::apply`].
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_child_handed_tors_end_holds_nothing_else_of_ours() {
+        // SAFETY: `open` on a NUL-terminated path, without `O_CLOEXEC`.
+        let planted = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+        assert!(planted >= 3, "a descriptor above stdio");
+        let pair = ControlPair::new().expect("control pair");
+        let number = pair.tor_end();
+        let mut handed = Command::new("/bin/sh");
+        handed.args([
+            "-c",
+            &format!("test -e /dev/fd/{number} && ! test -e /dev/fd/{planted}"),
+        ]);
+        inherit_in_the_child_only(&mut handed, number);
+        let (mut child, _read, _write) = pair.spawn(&mut handed, None).expect("spawn");
+        let status = child.wait().await.expect("exits");
+        // SAFETY: closes the descriptor this test opened.
+        unsafe { libc::close(planted) };
+        assert!(
+            status.success(),
+            "the child holds tor's end and not the planted descriptor"
         );
     }
 

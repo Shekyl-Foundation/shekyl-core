@@ -55,13 +55,19 @@ of its configuration (`shekyld --help`; `docs/EXECUTABLES.md`):
 - **Tor** (`tor`): `managed` runs the bundled Tor (the default; `tor-file`
   names the binary); `operator` uses a Tor you run, named by `tor-socks`,
   with `tor-onion` and `tor-onion-listen` for the onion service that makes
-  the node reachable; `off` is clearnet only. Transactions this node
+  the node reachable, and `tor-socks-username` and `tor-socks-password`
+  when that Tor's SOCKS port asks for them; `off` is clearnet only. Transactions this node
   originates leave over Tor when the connector is on.
 - **Clearnet** (`clearnet`): `on` (the default) or `off`. `clearnet-socks`
   names a SOCKS proxy for clearnet dials, with `clearnet-socks-username`
   and `clearnet-socks-password` in the configuration file only; a proxy
   cannot forward inbound connections, so `clearnet-listen none` is the
   matching posture when every dial leaves through one.
+- **SOCKS username and password.** A pair is given whole, in the
+  configuration file only (readable by the daemon's account and root
+  alone), and is sent to that proxy and no other. A proxy that refuses it
+  fails each dial through it, and the log names the two options to fix
+  once a minute; the daemon keeps running.
 
 ```bash
 # The operator's own Tor, reachable as an onion service

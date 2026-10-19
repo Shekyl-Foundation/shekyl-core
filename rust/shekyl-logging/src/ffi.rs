@@ -144,6 +144,10 @@ pub const SHEKYL_LOG_ERR_INVALID_UTF8: i32 = -10;
 pub const SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL: i32 = -11;
 /// The tracing forwarder was already installed in this process.
 pub const SHEKYL_LOG_ERR_ALREADY_INSTALLED: i32 = -12;
+/// A sink's writer thread could not be started.
+pub const SHEKYL_LOG_ERR_WRITER_THREAD: i32 = -13;
+/// [`shekyl_log_flush`]'s deadline passed with lines still queued.
+pub const SHEKYL_LOG_ERR_FLUSH_DEADLINE: i32 = -14;
 
 // -----------------------------------------------------------------
 // Global state
@@ -366,6 +370,23 @@ pub unsafe extern "C" fn shekyl_log_shutdown() {
         if let Ok(mut state) = cell.lock() {
             let _ = state.guard.take();
         }
+    }
+}
+
+/// Wait until every line logged before this call has reached its sink, or
+/// `within_ms` milliseconds pass ([`crate::flush`]). Returns
+/// [`SHEKYL_LOG_OK`] or [`SHEKYL_LOG_ERR_FLUSH_DEADLINE`]; never waits
+/// longer than `within_ms`. With no logger initialized there is nothing
+/// queued, and it returns [`SHEKYL_LOG_OK`].
+///
+/// # Safety
+///
+/// No pointer parameters.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_log_flush(within_ms: u32) -> i32 {
+    match crate::flush(std::time::Duration::from_millis(u64::from(within_ms))) {
+        crate::Flushed::Done => SHEKYL_LOG_OK,
+        crate::Flushed::DeadlinePassed => SHEKYL_LOG_ERR_FLUSH_DEADLINE,
     }
 }
 
@@ -901,6 +922,7 @@ fn init_error_to_code(e: &InitError) -> i32 {
         InitError::FilterParse(_) => SHEKYL_LOG_ERR_FILTER_PARSE,
         InitError::SubscriberInstall(_) => SHEKYL_LOG_ERR_SUBSCRIBER_INSTALL,
         InitError::InvalidDirectory(_) => SHEKYL_LOG_ERR_INVALID_DIRECTORY,
+        InitError::WriterThread(_) => SHEKYL_LOG_ERR_WRITER_THREAD,
     }
 }
 
