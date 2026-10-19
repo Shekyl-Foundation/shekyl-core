@@ -531,15 +531,25 @@ impl super::Transition {
                 .iter()
                 .map(|(persona, post)| (persona, &post.record))
         };
-        let complete_trees =
-            freeze_complete_trees(records(), |persona| !served(persona).is_empty());
+        // One extraction of each persona's Served shards. The frozen set
+        // asks only whether that list is empty; the snapshot takes the
+        // list. Both used to call `served`, so the epoch's settled rows
+        // were walked twice.
+        let mut credits: BTreeMap<PCanonicalId, Vec<u64>> = records()
+            .map(|(persona, _)| (*persona, served(persona)))
+            .collect();
+        let complete_trees = freeze_complete_trees(records(), |persona| {
+            credits
+                .get(persona)
+                .is_some_and(|shards| !shards.is_empty())
+        });
         let snapshot = gather_epoch_snapshot(
             view,
             &universe,
             records(),
             None,
             &complete_trees,
-            |persona| Ok(served(persona)),
+            |persona| Ok(credits.remove(persona).unwrap_or_default()),
         )?;
         let gathered = fold_epoch(self.schedule, epoch, &snapshot, complete_trees);
         self.gathers.push(gathered);
@@ -555,7 +565,7 @@ impl super::Transition {
 /// also a complete tree.
 ///
 /// The one read of the record's complete-tree flag on the gather's path,
-/// and it is the pass's: the claim reads this set back (A20).
+/// and it is the pass's: the claim reads this set back (A22).
 pub(crate) fn freeze_complete_trees<'r>(
     records: impl IntoIterator<Item = (&'r PCanonicalId, &'r BondRecord)>,
     mut credited: impl FnMut(&PCanonicalId) -> bool,
