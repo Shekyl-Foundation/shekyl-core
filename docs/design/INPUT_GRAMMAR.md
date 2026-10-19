@@ -735,7 +735,7 @@ The rules Part C applies are ruled. It adds no rule; each question in §20 is a 
 - A parameter or reply-field name is a glossary path rendered with `_`, and never encodes its kind or unit (RW-Q10). Height and count are named in the field (RW-Q4).
 - `status` leaves every reply, and a failure is only the JSON-RPC error object (RW-Q3). Each value takes its kind's one encoding (RW-Q4): an amount is decimal atomic units, a 128-bit quantity is one `HexU128` field, a hash is `HashHex`, a body is `bytes`. RK-D23's three states replace every presence flag (`has_*`), every `""` sentinel and every `u64::MAX` sentinel: absent means withheld by grant, `null` means no answer.
 
-**The version read.** `version` is callable at every grant, on every listener, before any grant is checked. In its reply only the `version` field is frozen: the key, a JSON integer, `(major << 16) | minor` (RK-D25, RW-Q6). The method's name and its empty params are frozen from the RW-Q6 ruling on. Every other field of the reply follows this Part like any other.
+**The version read.** `version` is in every grant set. Every authenticated connection may call it, as may the same-user socket and the plaintext view listener. It is never served before authentication (`RPC_CHANNEL.md` §4.3). In its reply only the `version` field is frozen: the key, a JSON integer, `(major << 16) | minor` (RK-D25, RW-Q6). The method's name and its empty params are frozen from the RW-Q6 ruling on. Every other field of the reply follows this Part like any other.
 
 ## 17. The method census
 
