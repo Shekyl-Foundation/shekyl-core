@@ -106,30 +106,6 @@ pub struct MiningStatus {
     pub difficulty: u64,
 }
 
-/// `get_archival_shard_coverage` result. Field names match the daemon wire.
-#[derive(Debug, Deserialize)]
-pub struct ArchivalShardCoverage {
-    pub as_of_height: u64,
-    pub leaf_count: u64,
-    pub frozen_count: u64,
-    pub settled_epoch: u64,
-    pub budget_atomic: u64,
-    pub sigma_work_milli: u64,
-    pub profit_estimate_available: bool,
-    pub shards: Vec<ShardCoverageRow>,
-}
-
-/// One frozen shard on the coverage list.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ShardCoverageRow {
-    pub shard_id: u64,
-    pub bonded_count: u64,
-    pub served_count: u64,
-    pub freeze_height: u64,
-    pub join_scarcity_micro: u64,
-    pub expected_profit_atomic: u64,
-}
-
 /// Lightweight daemon RPC client. Uses ureq (rustls TLS backend) with an
 /// independent connection from the wallet-RPC session's daemon path.
 pub struct DaemonClient {
@@ -292,7 +268,12 @@ impl DaemonClient {
     }
 
     /// Operator coverage list. Empty params; the daemon orders the rows.
-    pub fn archival_shard_coverage(&self) -> Result<ArchivalShardCoverage, DaemonError> {
+    /// Decoded as `shekyl-rpc-types`' wire type, the one the daemon answers
+    /// with: an empty list is an omitted field (epee's), so a node with no
+    /// closed shard still decodes.
+    pub fn archival_shard_coverage(
+        &self,
+    ) -> Result<shekyl_rpc_types::GetArchivalShardCoverageResponse, DaemonError> {
         let value = self.json_rpc("get_archival_shard_coverage", &serde_json::json!({}))?;
         serde_json::from_value(value).map_err(|e| {
             DaemonError::MalformedResponse(format!("get_archival_shard_coverage: {e}"))

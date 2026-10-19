@@ -11,34 +11,22 @@ use super::{
     trimmed, wide_difficulty_decimal, Source,
 };
 use crate::chain_facts::FfiChainFacts;
+use shekyl_rpc_types::{AltChainInfo, GetAlternateChainsResponse};
 
-/// One entry of the `get_alternate_chains` reply.
+/// The `get_alternate_chains` reply is the wire type `shekyl-rpc-types`
+/// owns ([`GetAlternateChainsResponse`]): one definition for every reader
+/// and for the native handler that will answer it at the flip.
 ///
 /// **A bridged leg, on purpose** (§2.1.1): `get_alternate_chains` is RK-8's
-/// and is still served from the C++ table (`core_rpc_ffi.cpp:284`). Required
-/// fields (no `#[serde(default)]`): a renamed field is an error naming it,
-/// where a defaulted `length` would make every alt chain read as zero blocks
-/// long, which is a sentence about the chain rather than about the reply.
-#[derive(serde::Deserialize)]
-struct AltChainProvisional {
-    block_hash: shekyl_rpc_types::HashHex,
-    height: u64,
-    length: u64,
-    wide_difficulty: String,
-    block_hashes: Vec<shekyl_rpc_types::HashHex>,
-    main_chain_parent_block: shekyl_rpc_types::HashHex,
-}
-
-/// The `get_alternate_chains` reply. See [`AltChainProvisional`].
-#[derive(serde::Deserialize)]
-struct AltChainsReplyProvisional {
-    status: shekyl_rpc_types::RpcStatus,
-    chains: Vec<AltChainProvisional>,
-}
-
+/// and is still served from the C++ table (`core_rpc_ffi.cpp:284`). Each
+/// chain's fields are required: a renamed field is an error naming it,
+/// where a defaulted `length` would make every alt chain read as zero
+/// blocks long. The `chains` list itself defaults to empty, because epee
+/// omits an empty container: a node with no alternative chains answers
+/// without the field.
 /// Fetch `get_alternate_chains` — bridged on both arms.
-fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainProvisional>, String> {
-    let reply: AltChainsReplyProvisional = match src {
+fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainInfo>, String> {
+    let reply: GetAlternateChainsResponse = match src {
         Source::Live(core) => {
             let raw = core
                 .json_rpc("get_alternate_chains", "{}", false)
@@ -53,7 +41,7 @@ fn fetch_alt_chains(src: &Source) -> Result<Vec<AltChainProvisional>, String> {
             }))
             .map_err(|e| format!("cannot encode the request: {e}"))?;
             let raw = src.post_remote("/json_rpc", body)?;
-            json_rpc_result::<AltChainsReplyProvisional>(&raw, "get_alternate_chains")?
+            json_rpc_result::<GetAlternateChainsResponse>(&raw, "get_alternate_chains")?
         }
     };
     if reply.status.is_ok() {
@@ -155,13 +143,13 @@ pub(super) fn alt_chain_info(
     let mut chains = fetch_alt_chains(src)?;
     // The alt chain's first block. Saturating: an alt chain longer than our
     // own height is not something this console gets to be surprised by.
-    let start_of = |c: &AltChainProvisional| c.height.saturating_sub(c.length).saturating_add(1);
+    let start_of = |c: &AltChainInfo| c.height.saturating_sub(c.length).saturating_add(1);
     // "deep" as the C++ computed it: how far below our tip the fork point is.
-    let depth_of = |c: &AltChainProvisional| height.saturating_sub(start_of(c)).saturating_sub(1);
+    let depth_of = |c: &AltChainInfo| height.saturating_sub(start_of(c)).saturating_sub(1);
 
     if tip.is_empty() {
         chains.sort_by_key(|c| c.height);
-        let shown: Vec<&AltChainProvisional> = chains
+        let shown: Vec<&AltChainInfo> = chains
             .iter()
             .filter(|c| c.length > above)
             .filter(|c| last_blocks == 0 || depth_of(c) < last_blocks)

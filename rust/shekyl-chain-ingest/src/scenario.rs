@@ -45,15 +45,14 @@
 //! to `connect` through `Composed`) went with the last of them.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use kameo::actor::ActorRef;
 use shekyl_block_template::{
     build, EmissionOperands, MinerKeys, Template, TemplateContext, TemplateError,
 };
 use shekyl_chain_rules::{
-    form, seed_height, ArchivalDelta, Candidate, CenRow, FormAttempt, InvalidBlock, PaidEmission,
-    ReferenceClaims, RuleSet, StructurallyValid, Substrate, Target, Weights,
+    form, seed_height, Candidate, CenRow, FormAttempt, InvalidBlock, ReferenceClaims, RuleSet,
+    StructurallyValid, Substrate, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -61,7 +60,7 @@ use shekyl_economics::EconomicParams;
 use shekyl_harness_wallet::MinerWallet;
 use shekyl_types::archival::BondRecord;
 use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, PowHash, SettlementEpoch,
+    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PCanonicalId, SettlementEpoch,
     Timestamp,
 };
 use shekyl_units::AtomicUnits;
@@ -77,72 +76,12 @@ use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
 use crate::test_support::{cleanup, open_store, open_store_under, tmp};
 
-/// The seconds between the driver's blocks — the DAA target, so a
-/// scripted chain's timestamps look like a chain's.
-pub const BLOCK_INTERVAL: u64 = 120;
+#[path = "scenario_types.rs"]
+mod types;
 
-/// Where the driver's clock starts: after the harness fixtures' epoch so a
-/// scenario and a fixture never share a timestamp by accident.
-pub const CLOCK_START: Timestamp = Timestamp::from_raw(1_800_000_000);
-
-/// A substrate whose clock the driver owns and advances, over a longhash
-/// the caller chooses. Production PoW is `Clocked<ProductionSubstrate>`;
-/// the default is the harness's always-satisfying longhash.
-pub struct Clocked<P> {
-    clock: AtomicU64,
-    pow: P,
-}
-
-impl<P> Clocked<P> {
-    /// A clock at [`CLOCK_START`] over `pow`'s longhash.
-    pub const fn new(pow: P) -> Self {
-        Self {
-            clock: AtomicU64::new(CLOCK_START.to_raw()),
-            pow,
-        }
-    }
-
-    /// The clock now.
-    pub fn now(&self) -> Timestamp {
-        Timestamp::from_raw(self.clock.load(Ordering::Relaxed))
-    }
-
-    /// Advance the clock by one block interval and return the new reading.
-    pub fn tick(&self) -> Timestamp {
-        let next = self
-            .clock
-            .fetch_add(BLOCK_INTERVAL, Ordering::Relaxed)
-            .saturating_add(BLOCK_INTERVAL);
-        Timestamp::from_raw(next)
-    }
-}
-
-impl<P: Substrate> Substrate for Clocked<P> {
-    type Fault = P::Fault;
-
-    fn local_clock(&self) -> Result<Timestamp, P::Fault> {
-        Ok(self.now())
-    }
-
-    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, P::Fault> {
-        self.pow.longhash(pow_blob, seed)
-    }
-}
-
-/// The harness longhash as a substrate: every target satisfied, no cache.
-pub struct FreeHash;
-
-impl Substrate for FreeHash {
-    type Fault = std::convert::Infallible;
-
-    fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
-        Ok(CLOCK_START)
-    }
-
-    fn longhash(&self, _: &[u8], _: &BlockHash) -> Result<PowHash, Self::Fault> {
-        Ok(PowHash::from_bytes([0; 32]))
-    }
-}
+pub use types::{
+    Clocked, FreeHash, Mined, NextBlock, ReorgTiming, StepOutcome, Unconnected, CLOCK_START,
+};
 
 /// One block `form` refused while a switch was forming, in the
 /// demoted-then-promoted order the plan named.
@@ -154,117 +93,6 @@ struct FormRefusal {
     hash: BlockHash,
     /// The verdict.
     refused: InvalidBlock,
-}
-
-/// Where a timed switch spent its time ([`Scenario::reorganize_timed`]).
-#[derive(Clone, Copy, Debug)]
-pub struct ReorgTiming {
-    /// Forming the demoted and promoted blocks — the RandomX, off the actor,
-    /// across every core the host offers.
-    pub form: std::time::Duration,
-    /// The [`Reorganize`] message: the plan held to the store, the demoted
-    /// blocks through the cheap tier, the write closure.
-    pub switch: std::time::Duration,
-}
-
-/// One mined block: what the template priced and what the validator
-/// judged it under.
-#[derive(Clone, Debug)]
-pub struct Mined {
-    /// The connecting height.
-    pub height: BlockHeight,
-    /// The block's identity.
-    pub hash: BlockHash,
-    /// The template as built.
-    pub template: Template,
-    /// The census rows the validator recorded for this block.
-    pub judged_by: Vec<CenRow>,
-    /// The emission the verdict priced the block at (`Applied::emission`).
-    pub emission: PaidEmission,
-    /// The weight, long-term weight and medians the verdict derived for the
-    /// block (`Applied::weights`; CEN-G6/G6b). The witness that a listed
-    /// body's weight is the block's addend, which a `MockChain` block
-    /// cannot carry once the body has to be a real spend (slice 6 row 6).
-    pub weights: Weights,
-    /// What the verdict derived the block does to the archival state
-    /// (`Applied::archival`). The witness the archival scenarios read,
-    /// because the store does not write it until the E4 writer lands.
-    pub archival: ArchivalDelta,
-    /// The seed the producer claimed (CEN-D3) — what a second driver needs
-    /// to `form` this block when it arrives there as an alternative.
-    pub seed: BlockHash,
-    /// The target the producer claimed (CEN-D4), likewise.
-    pub target: Target,
-}
-
-impl Mined {
-    /// The block as a candidate: the template's block and listed bodies,
-    /// no witness (the driver mints no attestation records).
-    #[must_use]
-    pub fn candidate(&self) -> Candidate {
-        Candidate::new(
-            self.template.block.clone(),
-            self.template.transactions.clone(),
-        )
-    }
-}
-
-/// A block this driver formed and did not connect ([`Scenario::assemble_unconnected`]).
-/// Its header is in the driver's target ledger; the store has never held it.
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub struct Unconnected {
-    /// The connecting height the facts named.
-    pub height: BlockHeight,
-    /// The block's identity.
-    pub hash: BlockHash,
-    /// The block and its listed bodies.
-    pub candidate: Candidate,
-    /// The seed the producer claimed (CEN-D3).
-    pub seed: BlockHash,
-    /// The target the producer claimed (CEN-D4).
-    pub target: Target,
-}
-
-impl shekyl_harness_spender::MinedBlock for Mined {
-    fn height(&self) -> BlockHeight {
-        self.height
-    }
-
-    fn hash(&self) -> BlockHash {
-        self.hash
-    }
-
-    fn miner_transaction(&self) -> &Transaction {
-        &self.template.block.miner_transaction
-    }
-
-    fn listed(&self) -> &[Transaction] {
-        &self.template.transactions
-    }
-}
-
-/// Why a scripted step did not land. Refusals are data (the scenario asked
-/// for a block the chain refuses, which some scenarios do on purpose);
-/// faults are the stack's.
-#[derive(Debug)]
-pub enum StepOutcome {
-    /// The validator refused the candidate.
-    Refused(InvalidBlock),
-    /// The template could not be built for the chain's facts.
-    Template(TemplateError),
-    /// The connector faulted.
-    Connector(RunFault),
-}
-
-impl std::fmt::Display for StepOutcome {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Refused(refused) => write!(f, "refused: {refused}"),
-            Self::Template(e) => write!(f, "template: {e}"),
-            Self::Connector(e) => write!(f, "connector: {e}"),
-        }
-    }
 }
 
 /// The connector actor's task handle.
@@ -415,19 +243,48 @@ where
     /// Build the next block listing `listed`, form it, and apply it.
     /// A refusal is returned, not panicked: some scenarios ask for one.
     pub async fn mine_listing(&mut self, listed: Vec<Transaction>) -> Result<Mined, StepOutcome> {
+        let next = self.next_template(listed).await?;
+        self.connect_template(next).await
+    }
+
+    /// The next block's template listing `listed`, with the seed and the
+    /// target the producer claims for it — what a miner is handed. Its
+    /// nonce is the template's; [`connect_template`](Self::connect_template)
+    /// connects whatever block the caller puts back in it.
+    pub async fn next_template(
+        &mut self,
+        listed: Vec<Transaction>,
+    ) -> Result<NextBlock, StepOutcome> {
         let facts = self.facts().await.map_err(StepOutcome::Connector)?;
         let now = self.substrate.tick();
         let template = self
             .template(&facts, now, &listed)
             .map_err(StepOutcome::Template)?;
         let height = facts.connecting;
+        let (seed, target) = self.claimed_seed_and_target(height).await?;
+        Ok(NextBlock {
+            height,
+            template,
+            seed,
+            target,
+        })
+    }
+
+    /// Form `next`'s block and apply it: the connector's own door, the way
+    /// [`mine_listing`](Self::mine_listing) applies what it built.
+    pub async fn connect_template(&mut self, next: NextBlock) -> Result<Mined, StepOutcome> {
+        let NextBlock {
+            height,
+            template,
+            seed,
+            target,
+        } = next;
         // Nothing the producer priced is handed to `connect`: the reward it
         // priced is judged by F14b/F18, the burn by F17, and both are
         // recorded from the verdict (the ledger that carried the burn left
         // with wave B).
         let rule_set = self.rules.in_force(height);
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
-        let (seed, target) = self.claimed_seed_and_target(height).await?;
         // The third claim, off the same ledger (its window covers CEN-I11's).
         let references = match ReferenceClaims::from_headers(&self.targets, height, &candidate) {
             Ok(references) => references,

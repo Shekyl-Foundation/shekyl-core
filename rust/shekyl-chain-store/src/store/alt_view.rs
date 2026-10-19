@@ -52,12 +52,22 @@
 //! constructor through which an alternative genesis can be asked for
 //! (CEN-K1a). A candidate whose parent is unknown is not a K1a case; it is
 //! K2's orphan, and `build` refuses it before any height exists.
+//!
+//! # The chains the store holds
+//!
+//! [`ReadSnapshot::alternate_chains`] lists every stored chain: the tips of
+//! [`AltLinks`](super::alt_reads::AltLinks), each walked by
+//! [`AltChain::build`]. The listing and admission are one walk, so a cycle,
+//! a height that disagrees with the links, and a chain that reaches no
+//! recorded block are the same answers a candidate gets.
+
+use std::collections::HashSet;
 
 use shekyl_chain_rules::{AltChainView, AtHeight, Fork, HeaderRecord, HeaderView, Tip};
 use shekyl_store_codec::{Canonical, CodecError};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
-use super::alt_reads::{AltEntry, ALT_BLOCKS_CELL};
+use super::alt_reads::{AltEntry, AltLinks, ALT_BLOCKS_CELL};
 use super::chain_reads::{self, undecodable};
 use super::error::{AltCannot, StoreError};
 use super::read::ReadSnapshot;
@@ -66,6 +76,11 @@ use crate::codec::AltBlock;
 /// SI-7 reason when an alt row's recorded height is not the height its
 /// `previous` chain derives: the row claims one place and links to another.
 pub(super) const ALT_HEIGHT_MISMATCH: &str = "alt block's recorded height disagrees with its chain";
+
+/// SI-7 reason when an alt chain's `previous` links return to a block the
+/// walk already passed. A chain of hashes does not. A file written around
+/// AL1 can: AL1 will not insert the cycle, and the row is already there.
+pub(super) const ALT_LINKS_TO_ITSELF: &str = "alt block chain links to itself";
 
 /// SI-7 reason when `block_heights` names a root above the recorded tip
 /// read on the same snapshot. The height came from `height_of`, so the
@@ -98,8 +113,10 @@ impl AltChain {
     /// (the recorded chain wins where a hash is both, as a promoted block's
     /// is until its alt row is removed); an alt row is an entry; neither is
     /// the orphan. Each `previous` is committed by its child's hash, and
-    /// every alt row was held to hash to its key when read (AL4), so the
-    /// walk cannot cycle without a hash collision and needs no bound.
+    /// every alt row was held to hash to its key when read (AL4). A file
+    /// written around that boundary can still link a chain to itself, so
+    /// the walk records the hashes it has passed and a revisit is SI-7
+    /// ([`ALT_LINKS_TO_ITSELF`]).
     ///
     /// Each entry's recorded height is then held to the height its position
     /// derives (`root + 1 + i`, the assertion the C++ rebuild made): a row
@@ -115,15 +132,20 @@ impl AltChain {
     /// # Errors
     ///
     /// [`AltCannot::Unlinked`] for the orphan; SI-7 for an alt row that
-    /// does not decode, does not hash to its key, or sits at the wrong
-    /// height; engine errors pass through.
+    /// does not decode, does not hash to its key, sits at the wrong
+    /// height, or links back to a block the walk already passed; engine
+    /// errors pass through.
     pub fn build(snapshot: &ReadSnapshot<'_>, prev_id: &BlockHash) -> Result<Self, StoreError> {
         let Some(recorded_tip) = snapshot.tip()?.recorded else {
             return Err(AltCannot::Unlinked { at: *prev_id }.into());
         };
         let mut parent_first = Vec::new();
+        let mut seen = HashSet::new();
         let mut cursor = *prev_id;
         let root = loop {
+            if !seen.insert(cursor) {
+                return Err(links_to_itself());
+            }
             if let Some(height) = snapshot.height_of(&cursor)? {
                 break Tip {
                     height,
@@ -217,15 +239,61 @@ impl AltChain {
     }
 }
 
-fn height_mismatch() -> StoreError {
+impl ReadSnapshot<'_> {
+    /// Every alternative chain, one per tip, in the alt table's key order.
+    ///
+    /// A tip is an alt block no stored alt block names as its parent
+    /// ([`AltLinks::tips`]). Each chain is [`AltChain::build`] from that
+    /// tip, so the listing, admission, the height check and the cycle belt
+    /// are one walk. Entries run from the block just above the recorded
+    /// root up to the tip. The root's hash is the main-chain parent the
+    /// lowest block names.
+    ///
+    /// An empty table is no chains. A tip the main chain also holds — a
+    /// replay left the row — builds no alternative entries, and is not a
+    /// chain this listing returns. A tip whose chain reaches no recorded
+    /// block is [`AltCannot::Unlinked`]: the invariant that every stored
+    /// chain reaches the main chain is broken, and the caller decides what
+    /// that means. A cycle, or a height that disagrees with the links, is
+    /// SI-7.
+    ///
+    /// # Errors
+    ///
+    /// [`AltCannot::Unlinked`]; SI-7; engine faults.
+    pub fn alternate_chains(&self) -> Result<Vec<AltChain>, StoreError> {
+        let entries = self.alt_blocks()?;
+        let links = AltLinks::of(&entries);
+        let mut chains = Vec::new();
+        for tip in links.tips(&entries) {
+            let chain = AltChain::build(self, &tip.id)?;
+            // The tip is a recorded block. The row is a duplicate, not an
+            // alternative chain, and the facts layer does not report one.
+            if chain.entries().is_empty() {
+                continue;
+            }
+            chains.push(chain);
+        }
+        Ok(chains)
+    }
+}
+
+fn alt_blocks_invalid(reason: &'static str) -> StoreError {
     undecodable(
         ALT_BLOCKS_CELL,
         CodecError::Invalid {
             codec: AltBlock::NAME,
-            reason: ALT_HEIGHT_MISMATCH,
+            reason,
         },
     )
     .into_plain()
+}
+
+fn height_mismatch() -> StoreError {
+    alt_blocks_invalid(ALT_HEIGHT_MISMATCH)
+}
+
+fn links_to_itself() -> StoreError {
+    alt_blocks_invalid(ALT_LINKS_TO_ITSELF)
 }
 
 /// The alt tier's [`HeaderView`]: a committed snapshot stitched with an

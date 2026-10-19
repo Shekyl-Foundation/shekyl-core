@@ -343,6 +343,87 @@ fn fixture_omits_empty_containers() {
     }
 }
 
+/// The daemon's wire type — `shekyl-rpc-types`'
+/// `GetArchivalEmissionClaimSourceResponse`, what the store-backed handler
+/// answers with — writes, for the bonded fixture, exactly the document
+/// [`source_json`] writes: every decode test in this file is a test of the
+/// daemon's reply. A reply for a persona with no record, whose record
+/// fields the daemon zeroes rather than omits, decodes to no bond.
+#[test]
+fn the_daemon_wire_type_writes_the_document_the_wallet_decodes() {
+    use shekyl_rpc_types::{
+        ClaimBondRow, ClaimCreditPair, ClaimEpochSnapshot, ClaimShardRow,
+        GetArchivalEmissionClaimSourceResponse, RpcStatus,
+    };
+    let bonded = GetArchivalEmissionClaimSourceResponse {
+        status: RpcStatus::ok(),
+        chain_height: 30001,
+        current_settled_epoch: 3,
+        has_bond_record: true,
+        join_settlement_epoch: 1,
+        holdings_kind: 0,
+        held_shard_ids: vec![4, 9],
+        claimed_settlement_epochs: vec![1],
+        bonded_total_atomic: 0,
+        bad_interval_count: 2,
+        has_last_served_epoch: false,
+        last_served_epoch: 0,
+        has_last_settled_slash_epoch: false,
+        last_settled_slash_epoch: 0,
+        epochs: vec![
+            ClaimEpochSnapshot {
+                settlement_epoch: 1,
+                close_block_height: 20000,
+                sigma_work_milli: 5000,
+                budget_atomic: 777,
+                has_budget_row: true,
+                bonds: vec![ClaimBondRow {
+                    join_settlement_epoch: 0,
+                    is_foundation_complete_tree: false,
+                    bad_intervals_flat: vec![2, 3],
+                }],
+                shards: vec![ClaimShardRow {
+                    shard_id: 4,
+                    freeze_height: 15,
+                    has_segment: true,
+                }],
+                credit_pairs: vec![ClaimCreditPair {
+                    bond_idx: 0,
+                    shard_idx: 0,
+                }],
+                claimant_bond_idx: 0,
+            },
+            ClaimEpochSnapshot {
+                settlement_epoch: 2,
+                close_block_height: 30000,
+                sigma_work_milli: 0,
+                budget_atomic: 0,
+                has_budget_row: false,
+                bonds: vec![],
+                shards: vec![],
+                credit_pairs: vec![],
+                claimant_bond_idx: u64::MAX,
+            },
+        ],
+    };
+    let written = serde_json::to_value(&bonded).unwrap();
+    assert_eq!(written, fixture());
+    assert!(EmissionClaimSource::from_json(&written).is_ok());
+
+    let unbonded = GetArchivalEmissionClaimSourceResponse {
+        has_bond_record: false,
+        join_settlement_epoch: 0,
+        held_shard_ids: vec![],
+        claimed_settlement_epochs: vec![],
+        bad_interval_count: 0,
+        ..bonded
+    };
+    let decoded = EmissionClaimSource::from_json(&serde_json::to_value(&unbonded).unwrap())
+        .expect("a zeroed record decodes");
+    assert!(decoded.bond.is_none());
+    assert_eq!(decoded.epochs.len(), 2);
+}
+
 #[test]
 fn decodes_fixture_field_for_field() {
     let src = EmissionClaimSource::from_json(&fixture()).unwrap();

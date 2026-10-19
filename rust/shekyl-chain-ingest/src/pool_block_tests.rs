@@ -389,59 +389,124 @@ async fn a_switch_back_promotes_a_demoted_body_the_door_refused() {
     z.close().await;
 }
 
-/// The death rule (B1): the connect that advances the tip to `t` removes
-/// every alt row at or below `t − cap`, with its bodies — no switch reaches
-/// it — and keeps the one at `t − cap + 1`. Under the genesis cap of 720 a
-/// test would mine hundreds of blocks; the levered rules' cap is the same
-/// rule at a small number.
-#[tokio::test]
-async fn the_connect_past_the_cap_retires_an_alt_row_and_its_bodies() {
-    use crate::scenario_shard::{levered_rules, REORG_CAP_BLOCKS};
-    let mut x = Scenario::open_under("pool-death-x", FreeHash, levered_rules());
-    let mut y = Scenario::open_under("pool-death-y", FreeHash, levered_rules());
-    x.mine(30).await;
-    y.mine(30).await;
-    // x's two new blocks and the alternative's two sit at the same heights,
-    // so the alternative is no heavier: both are held and nothing switches.
-    x.mine(2).await;
-    y.idle();
-    let b = y.mine(2).await;
-    for mined in &b {
-        assert!(matches!(
-            x.offer(mined).await.expect("offer"),
-            Offered::Held { .. }
-        ));
+/// Regtest at fixed difficulty one under a reorg cap of `cap` blocks: a
+/// cap wide enough for a long branch to sit inside it, and small enough to
+/// cross in a test.
+fn rules_with_cap(cap: u64) -> crate::schedule::ChainRules {
+    crate::schedule::ChainRules::Regtest {
+        fixed_difficulty: Some(std::num::NonZeroU128::MIN),
+        schedule: shekyl_chain_rules::FakechainSchedule::new(
+            shekyl_chain_rules::SettlementEpochBlocks::new(100).expect("non-zero"),
+            shekyl_types::BlockCount::from_raw(cap),
+        )
+        .expect("the cap sits inside the epoch"),
     }
-    // One block at a time, so each connect's sweep is the one under test:
-    // until the tip reaches `b[0] + cap` both rows are reachable. x's tip is
-    // the alternative's second height.
-    let mut tip = b[1].height.to_raw();
-    while tip + 1 < b[0].height.to_raw() + REORG_CAP_BLOCKS {
+}
+
+/// Offer every block of `branch` to `x` and require each to be held.
+async fn hold_all(x: &Scenario<FreeHash>, branch: &[Mined]) {
+    for mined in branch {
+        assert!(
+            matches!(x.offer(mined).await.expect("offer"), Offered::Held { .. }),
+            "block {:?} not held",
+            mined.height
+        );
+    }
+}
+
+/// The death rule (B1) takes a branch whole: the connect that advances the
+/// tip to `t` removes every alt row at or below `t − cap` and every row
+/// built on one of them (`store/alt.rs`). Under a cap of 40 a 30-block
+/// branch, mined beside the main chain from its block 1, is all reachable
+/// until the tip is its lowest row (2) plus the cap. The connect that
+/// crosses that row leaves the other 29 above the line, every one built on
+/// it, and takes them too. A one-row branch at 3 hanging from main block 2
+/// stays until its own row is crossed.
+#[tokio::test]
+async fn the_connect_that_crosses_a_branch_retires_it_whole() {
+    const CAP: u64 = 40;
+    const LENGTH: u64 = 30;
+    let rules = rules_with_cap(CAP);
+    let mut x = Scenario::open_under("pool-death-x", FreeHash, rules);
+    let mut y = Scenario::open_under("pool-death-y", FreeHash, rules);
+    let mut z = Scenario::open_under("pool-death-z", FreeHash, rules);
+    x.mine(2).await;
+    y.mine(2).await;
+    z.mine(3).await;
+    y.idle();
+    let mut branch = Vec::new();
+    for _ in 0..LENGTH {
+        x.mine(1).await;
+        // The same height as x's new tip, so no heavier: held, not switched.
+        let mined = y.mine(1).await;
+        hold_all(&x, &mined).await;
+        branch.extend(mined);
+    }
+    let lowest = branch[0].height.to_raw();
+    assert_eq!(lowest, 2);
+    z.idle();
+    let beside = z.mine(1).await;
+    hold_all(&x, &beside).await;
+    assert_eq!(beside[0].height, h(3));
+    let held = LENGTH + 1;
+    // One block at a time, so each connect's sweep is the one under test.
+    let mut tip = branch.last().expect("branch").height.to_raw();
+    while tip + 1 < lowest + CAP {
         x.mine(1).await;
         tip += 1;
-        let first = stored_bodies(&mut x, b[0].hash).await;
-        let second = stored_bodies(&mut x, b[1].hash).await;
-        assert!(
-            first.is_some() && second.is_some(),
-            "both reachable at tip {tip}"
+        assert_eq!(
+            x.alt_blocks_held().await.expect("count"),
+            held,
+            "every row reachable at tip {tip}"
         );
     }
     x.mine(1).await;
-    // The tip is `b[0] + cap`: that row is at `tip − cap` and leaves with
-    // its bodies; `b[1]`'s, at `tip − cap + 1`, stays.
-    let first = stored_bodies(&mut x, b[0].hash).await;
-    let second = stored_bodies(&mut x, b[1].hash).await;
-    assert!(
-        first.is_none(),
-        "the row at tip − cap and its bodies are gone"
-    );
-    assert!(second.is_some(), "the row at tip − cap + 1 stays");
+    // The tip is `lowest + cap`: the branch's lowest row is at `tip − cap`,
+    // the other 29 above it and every one built on it.
+    for mined in &branch {
+        assert!(
+            stored_bodies(&mut x, mined.hash).await.is_none(),
+            "the branch's row at {} left with its lowest",
+            mined.height.to_raw()
+        );
+    }
+    assert!(stored_bodies(&mut x, beside[0].hash).await.is_some());
     assert_eq!(x.alt_blocks_held().await.expect("count"), 1);
     x.mine(1).await;
-    assert!(stored_bodies(&mut x, b[1].hash).await.is_none());
     assert_eq!(x.alt_blocks_held().await.expect("count"), 0);
     x.close().await;
     y.close().await;
+    z.close().await;
+}
+
+/// A rewind takes the branches built on the blocks it pops: they no longer
+/// reach the main chain (`store/alt.rs`). Main blocks 0..=6; `y`'s two rows
+/// at 5 and 6 hang from main block 4, `z`'s row at 3 from main block 2.
+/// Rewinding to 3 pops 4, 5 and 6: `y`'s branch leaves, `z`'s stays.
+#[tokio::test]
+async fn a_rewind_takes_the_branches_on_what_it_pops() {
+    let mut x = Scenario::open("pool-rewind-x");
+    let mut y = Scenario::open("pool-rewind-y");
+    let mut z = Scenario::open("pool-rewind-z");
+    x.mine(7).await;
+    y.mine(5).await;
+    y.idle();
+    let on_popped = y.mine(2).await;
+    z.mine(3).await;
+    z.idle();
+    let on_kept = z.mine(1).await;
+    hold_all(&x, &on_popped).await;
+    hold_all(&x, &on_kept).await;
+    assert_eq!(x.alt_blocks_held().await.expect("count"), 3);
+    x.rewind_to(h(3)).await.expect("rewind");
+    assert_eq!(x.alt_blocks_held().await.expect("count"), 1);
+    assert!(stored_bodies(&mut x, on_kept[0].hash).await.is_some());
+    for mined in &on_popped {
+        assert!(stored_bodies(&mut x, mined.hash).await.is_none());
+    }
+    x.close().await;
+    y.close().await;
+    z.close().await;
 }
 
 /// CEN-M8: a reconcile on the anchor the door last verified the proof
