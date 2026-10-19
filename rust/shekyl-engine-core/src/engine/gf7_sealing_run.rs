@@ -295,6 +295,8 @@ fn synthetic_post(persona: PCanonicalId, slot: usize, round: usize) -> PendingBo
         anchor_t0: ChainCount::from_raw(0),
         funding_gindexes: Vec::new(),
         state: PendingPostState::Pending,
+        reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+        terminal: None,
     }
 }
 

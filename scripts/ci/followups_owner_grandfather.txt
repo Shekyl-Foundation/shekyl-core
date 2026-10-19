@@ -43,7 +43,6 @@ DRS-D3c — root-and-frontier parity, daemon vs wallet.
 Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with reopen (d)
 `sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide whether a sweep primitive returns.
 Forfeited-claim record does not survive a wallet restart.
-Drain/claim/release dispatch driver — terminal-reject prune + byte-identical resubmit remain (confirmation-observe landed 2026-08-27, #572; the release lane joined the residue with #601, which landed the SEAM-side release for a definite first-send refusal — `RejectedTerminal` on the one send the seam itself makes — leaving exactly the driver legs the other two lanes carry: crash-window/ambiguous resubmit, and the driver-side prune for records a future resubmit path re-sends).
 Q11 zero-fee-input emission claim has no settlement evidence
 Enumerate the greenfield pending set: items whose only callers are tests
 GF-7 `stake_in` change-co-presence residual — shipped with a warning, not closed.
