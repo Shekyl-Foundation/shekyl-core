@@ -160,20 +160,25 @@ mod tests {
     use shekyl_chain_rules::Tip;
     use shekyl_types::BlockCount;
 
-    fn tip(height: u64, fill: u8) -> Tip {
+    fn tip(height: BlockHeight, fill: u8) -> Tip {
         Tip {
-            height: BlockHeight::from_raw(height),
+            height,
             hash: BlockHash::from_bytes([fill; 32]),
         }
     }
 
-    fn popping(blocks: u64) -> Fork {
-        Fork::new(tip(0, 1), tip(blocks, 2)).expect("the root is not above the tip")
+    /// A fork that pops `pops` recorded blocks.
+    fn popping(pops: BlockCount) -> Fork {
+        Fork::new(
+            tip(BlockHeight::ZERO, 1),
+            tip(BlockHeight::ZERO.saturating_add(pops), 2),
+        )
+        .expect("the root is not above the tip")
     }
 
     #[test]
     fn an_unanchored_fork_past_the_cap_is_not_hashed_and_not_an_invalid_block() {
-        let fork = popping(D_MAX.to_raw() + 1);
+        let fork = popping(BlockCount::from_raw(D_MAX.to_raw() + 1));
         let window = SeedPair {
             canonical: BlockHash::NULL,
             transient: None,
@@ -194,7 +199,7 @@ mod tests {
 
     #[test]
     fn a_seed_outside_the_held_pair_is_not_hashed() {
-        let fork = popping(1);
+        let fork = popping(BlockCount::from_raw(1));
         let window = SeedPair {
             canonical: BlockHash::NULL,
             transient: None,
@@ -216,7 +221,7 @@ mod tests {
 
     #[test]
     fn a_seed_the_pair_holds_is_hashed() {
-        let fork = popping(1);
+        let fork = popping(BlockCount::from_raw(1));
         let seed = BlockHash::from_bytes([4; 32]);
         let window = SeedPair {
             canonical: seed,
@@ -232,7 +237,7 @@ mod tests {
         );
         assert!(matches!(gated, AltSpend::Hash), "{gated:?}");
         // At the cap, still hashed: the cap binds only when anchored.
-        let at_cap = popping(D_MAX.to_raw());
+        let at_cap = popping(D_MAX);
         assert!(matches!(
             spend(
                 &at_cap,
