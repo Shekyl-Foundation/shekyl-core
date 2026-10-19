@@ -84,11 +84,11 @@ use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
 
 use shekyl_archival_retention::{
     cold_authority_pin, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims, p_canonical_id_from_hybrid_pubkey, release_pre_cooldown_guards,
-    release_vin_statics, settlement_epoch_at_height, verify_bond_post_ct_balance,
-    verify_join_market_bond_post, verify_release_bond_post, whole_record_last_served,
-    BondPostError, BondPostKind as RetentionBondPostKind, BondTerm, BondTermError,
-    ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
+    emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey,
+    release_pre_cooldown_guards, release_vin_statics, settlement_epoch_at_height,
+    verify_bond_post_ct_balance, verify_join_market_bond_post, verify_release_bond_post,
+    whole_record_last_served, BondPostError, BondPostKind as RetentionBondPostKind, BondTerm,
+    BondTermError, ClaimantBondRecord, CreditPair, EmissionEpochSource, EmissionVerifyContext,
     EmissionVerifyError, EpochCloseBond, EpochCloseInputs, EpochCloseShard, RewardCommit,
 };
 use shekyl_bulletproofs::{verify_batch, BatchEntry};
@@ -107,7 +107,7 @@ use shekyl_wire::transaction::{
     Prunable, PQC_HYBRID_SINGLE_KEY_LEN, PQC_MAX_PUBLIC_KEY_BLOB,
 };
 
-use crate::submit::facts::SubmitFacts;
+use crate::submit::facts::{EpochClaimStanding, SubmitFacts};
 use crate::submit::phase_a::{ParsedSubmission, SubmitTxKind};
 use crate::submit::verify::{TxVerifier, VerifyReject};
 
@@ -490,8 +490,23 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
             "emission: snapshot carries no E6/E7 fact bundle",
         ));
     };
+    // An expired epoch is refused as expired, before E7 asks for a row the
+    // shim did not read (its rows may be retired; `ARCHIVAL_SETTLEMENT_WRITER.md`
+    // §17). The reason is the claims battery's own `EpochClaimExpired`.
+    for snapshot in &emission_facts.snapshots {
+        if let EpochClaimStanding::Expired { window_floor } = snapshot.standing {
+            return Err(emission_reject(&EmissionVerifyError::EpochClaimExpired {
+                epoch: snapshot.settlement_epoch,
+                floor: window_floor,
+            }));
+        }
+    }
     // E7: every claimed epoch must carry a frozen budget row.
-    if emission_facts.snapshots.iter().any(|s| !s.has_budget_row) {
+    if emission_facts
+        .snapshots
+        .iter()
+        .any(|s| s.standing == EpochClaimStanding::NoBudgetRow)
+    {
         return Err(VerifyReject::malformed(
             "emission E7: a claimed epoch has no frozen budget row",
         ));
@@ -506,9 +521,10 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         vout_reward_sum,
     };
     // Borrow-anchored view construction, the archival_ffi shape: owned
-    // rows first, then the borrowing `verify_view` sources (the single
-    // constructor the C++ oracle's shim also uses, so the two paths build
-    // byte-identical views).
+    // rows first, then the borrowing sources, each under the facts'
+    // schedule (`EpochCloseInputs::under_schedule`). Under the process
+    // schedule, which the C++ marshal names, that is the `verify_view` the
+    // C++ oracle's shim builds, byte for byte.
     let bonds_per: Vec<Vec<EpochCloseBond<'_>>> = emission_facts
         .snapshots
         .iter()
@@ -556,7 +572,8 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         .zip(&shards_per)
         .zip(&pairs_per)
         .map(|(((snap, bonds), shards), pairs)| EmissionEpochSource {
-            inputs: EpochCloseInputs::verify_view(
+            inputs: EpochCloseInputs::under_schedule(
+                emission_facts.schedule,
                 snap.settlement_epoch,
                 snap.close_block_height,
                 bonds,
@@ -570,8 +587,8 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         .collect();
 
     // ── E8: claims battery (§7.1 steps 1–5) ─────────────────────────────
-    let claims =
-        emission_vin_verify_claims(vin, &ctx, &sources).map_err(|e| emission_reject(&e))?;
+    let claims = emission_vin_verify_claims_under(emission_facts.schedule, vin, &ctx, &sources)
+        .map_err(|e| emission_reject(&e))?;
 
     // ── E9 + E10: backing membership proof + the dual hybrid auths ──────
     let reference = facts

@@ -373,6 +373,16 @@ pub enum Corrupt {
         /// Which check failed.
         check: SettlementCheck,
     },
+    /// `epoch` has a frozen `Σwork(E)` and no frozen complete-tree set
+    /// (A22; SI-31). The slash pass writes the two in one write set, so a
+    /// settled epoch without the set is a file that lost a row, never an
+    /// epoch a claim may be judged on without it: the re-gather would have
+    /// to read the record's flag, which is the defect the set closes
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`).
+    CompleteTreesAbsent {
+        /// The settled epoch whose set is missing.
+        epoch: SettlementEpoch,
+    },
     /// The drawable set of `epoch` cannot be built from the recorded state
     /// (`SO-D12` increment 2; SI-30). Never a refusal of the block: the
     /// block is not invalid, this node's journals or records are.
@@ -783,6 +793,11 @@ impl fmt::Display for Corrupt {
             Self::DrawableEpoch { epoch, why } => {
                 write!(f, "the drawable set of epoch {epoch} cannot be built: {why} (SI-30)")
             }
+            Self::CompleteTreesAbsent { epoch } => write!(
+                f,
+                "settled epoch {epoch} has a frozen Σwork and no frozen complete-tree set \
+                 (SI-31)"
+            ),
         }
     }
 }

@@ -30,11 +30,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
-    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
-    SlashLogFloor, Tip, TreeFrontier,
+    AtHeight, BlockOutputs, ChainView, Claimable, EpochFloor, HeaderRecord, HeaderView, Pricing,
+    RecordedBlock, RecordedWeights, ReleaseJournalFloor, Settling, SlashLogFloor, Tip,
+    TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
+    SettlementRow,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -242,16 +244,26 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
         &self,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Pricing>,
     ) -> Result<Option<RMarket>, StoreError> {
-        archival_reads::r_market(self.snapshot.txn(), shard, epoch).map_err(ReadFault::into_plain)
+        archival_reads::r_market(self.snapshot.txn(), shard, epoch, floor)
+            .map_err(ReadFault::into_plain)
     }
 
-    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError> {
-        archival_reads::sigma_work(self.snapshot.txn(), epoch).map_err(ReadFault::into_plain)
+    fn sigma_work(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SigmaWorkMilli>, StoreError> {
+        archival_reads::sigma_work(self.snapshot.txn(), epoch, floor).map_err(ReadFault::into_plain)
     }
 
-    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
-        archival_reads::budget(self.snapshot.txn(), epoch).map_err(ReadFault::into_plain)
+    fn budget(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget(self.snapshot.txn(), epoch, floor).map_err(ReadFault::into_plain)
     }
 
     fn last_settled_slash_epoch(&self) -> Result<Option<SettlementEpoch>, StoreError> {
@@ -267,8 +279,9 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<bool, StoreError> {
-        archival_reads::slash_applied(self.snapshot.txn(), persona, shard, epoch)
+        archival_reads::slash_applied(self.snapshot.txn(), persona, shard, epoch, floor)
             .map_err(ReadFault::into_plain)
     }
 
@@ -281,25 +294,37 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
     ) -> Result<Option<SettlementRow>, StoreError> {
-        archival_reads::settlement_row(self.snapshot.txn(), persona, shard, epoch)
+        archival_reads::settlement_row(self.snapshot.txn(), persona, shard, epoch, floor)
             .map_err(ReadFault::into_plain)
     }
 
-    fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, StoreError> {
-        archival_reads::issued_draws(self.snapshot.txn(), epoch).map_err(ReadFault::into_plain)
+    fn issued_draws(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::issued_draws(self.snapshot.txn(), epoch, floor)
+            .map_err(ReadFault::into_plain)
     }
 
-    fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
-        archival_reads::issued_digest(self.snapshot.txn(), epoch).map_err(ReadFault::into_plain)
+    fn issued_digest(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<IssuedDigest, StoreError> {
+        archival_reads::issued_digest(self.snapshot.txn(), epoch, floor)
+            .map_err(ReadFault::into_plain)
     }
 
     fn served_at(
         &self,
         persona: &PCanonicalId,
         epochs: &BTreeSet<SettlementEpoch>,
+        floor: EpochFloor<Claimable>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
-        archival_reads::served_at(self.snapshot.txn(), persona, epochs)
+        archival_reads::served_at(self.snapshot.txn(), persona, epochs, floor)
             .map_err(ReadFault::into_plain)
     }
 
@@ -310,14 +335,25 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
     fn drawable_digest(
         &self,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, StoreError> {
-        archival_reads::drawable_digest(self.snapshot.txn(), epoch).map_err(ReadFault::into_plain)
+        archival_reads::drawable_digest(self.snapshot.txn(), epoch, floor)
+            .map_err(ReadFault::into_plain)
+    }
+
+    fn complete_trees(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<CompleteTreeSet>, StoreError> {
+        archival_reads::complete_trees(self.snapshot.txn(), epoch, floor)
+            .map_err(ReadFault::into_plain)
     }
 
     fn release_journal_after(
         &self,
         height: BlockHeight,
-        floor: SlashLogFloor,
+        floor: ReleaseJournalFloor,
     ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
         archival_reads::release_journal_after(self.snapshot.txn(), height, floor)
             .map_err(ReadFault::into_plain)

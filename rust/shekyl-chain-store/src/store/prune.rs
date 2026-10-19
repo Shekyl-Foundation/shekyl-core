@@ -14,9 +14,16 @@
 //! | Bodies (`txs_prunable`, `txs_pqc_auths`) | shard `k`, whole | the epoch boundary after `k`'s freeze epoch: `close_epoch(k) + 2 ≤ E` |
 //! | Pop-undo journal (`undo_log`) | rows below `tip − retention` | every boundary; `retention` is `D_max` in production |
 //! | Slash log (`archival_slash_log`) | rows below `tip − ((k + n)·SEB + reorg_cap)` | every boundary whose session applies `SlashLog`; the cap is the in-force rule set's (`SLK-Q1`, `ARW-9`) |
+//! | Release journal (`archival_release_journal`) | rows at or below `h_open` of the settling family's oldest kept epoch | every boundary whose session applies `Bond` ([`ReleaseJournalFloor`], SI-28) |
+//! | Per-epoch tables (`archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement`; `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied`; `archival_r_market`) | rows of epochs below their family's floor, `(B − 1) − LAG` at the boundary of `B` | every boundary; a table whose family the session stubs is not opened (`ARW-9`) (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`) |
 //!
 //! The body horizon is a rule of the epoch calendar — there is no constant
-//! to name and no watermark to store. The slash log's horizon is a
+//! to name and no watermark to store. So are the per-epoch horizons
+//! (`epoch_retire`, `shekyl_chain_rules::EpochFloor`): each table is retired below the
+//! epoch its last reader stops asking for, computed from the rule set's
+//! schedule and consensus constants, and each read of it is refused below
+//! the same floor (SI-32). They keep no cell either, and a re-run at the
+//! same boundary deletes the same empty ranges. The slash log's horizon is a
 //! consensus expression ([`SlashLogFloor`], `DRS_E4_SLASH_LOG_ROUND.md`):
 //! the batch computes it from the rule set `connect` holds — its epoch and
 //! its **reorg cap**, never the store's `undo_retention`, which an operator
@@ -130,7 +137,7 @@
 use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
-use shekyl_chain_rules::{RuleSet, SettlementSchedule, SlashLogFloor};
+use shekyl_chain_rules::{ReleaseJournalFloor, RuleSet, SlashLogFloor};
 use shekyl_types::{
     shard_floor, shard_of, storage_ids_through, ArchivalLength, BlockCount, BlockHeight,
 };
@@ -139,9 +146,11 @@ use crate::apply_policy::ArchivalFamily;
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
 use crate::ids::{ReleaseJournalKey, ReleaseJournalTuple, SlashLogKey, SlashLogTuple};
 use crate::schema::{
-    ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES,
-    TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
+    ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN,
+    TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
 };
+
+pub use super::epoch_retire::EpochFloors;
 
 use super::chain_reads::{self, ReadFault, ReadTables};
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant, UndoFault};
@@ -348,6 +357,8 @@ pub struct Pruned {
     /// deleted nothing: the chain is under the window, or the session
     /// does not apply `SlashLog`.
     pub slash_floor: SlashLogFloor,
+    /// The per-epoch floors this boundary retired below, one per family.
+    pub epochs: EpochFloors,
 }
 
 impl Pruned {
@@ -389,27 +400,31 @@ impl WriteBatch<'_, '_> {
         let schedule = in_force.settlement_schedule();
         let floor = SlashLogFloor::under(height, schedule.blocks(), in_force.reorg_cap());
         let slash_floor = self.retire_slash_rows(floor)?;
-        // The Release journal and the drawable digests are retired at the
-        // same floor, so the walk that reads them with the slash log has
-        // one horizon (`SO-D12` increment 2).
-        self.retire_release_rows(floor)?;
-        self.retire_drawable_digests(floor, schedule)?;
+        // The Release journal retires at the settling family's horizon
+        // (SI-28): one above `h_open` of the oldest epoch that family
+        // keeps. That height is inside the slash log's floor, so the
+        // journal does not share it. Drawable digests retire with the
+        // same family, by epoch, inside `retire_epoch_rows`.
+        let floors = EpochFloors::at_boundary(height, schedule);
+        self.retire_release_rows(ReleaseJournalFloor::of(floors.settling, schedule))?;
+        let epochs = self.retire_epoch_rows(floors)?;
         Ok(Some(Pruned {
             shard_start: discard.shards.start,
             shard_end: discard.shards.end,
             undo_floor,
             slash_floor,
+            epochs,
         }))
     }
 
-    /// Delete `archival_release_journal` rows below `floor`, the slash
-    /// log's: the two journals the drawable set's rebuild reads keep one
-    /// span. Nothing while the chain is under the window, and nothing when
-    /// this session does not apply [`ArchivalFamily::Bond`], the family the
-    /// rows are written under. The read asserts the floor where it reads
-    /// (SI-28, `archival_reads::release_journal_after`); not pop-reversible,
-    /// for [`Self::retire_slash_rows`]'s reason.
-    fn retire_release_rows(&self, floor: SlashLogFloor) -> Result<(), StoreError> {
+    /// Delete `archival_release_journal` rows below `floor`. `floor` is
+    /// one above `h_open` of the settling family's oldest kept epoch
+    /// ([`ReleaseJournalFloor`]), the same height A20 refuses below
+    /// (SI-28). Nothing while that family retains every epoch, and nothing
+    /// when this session does not apply [`ArchivalFamily::Bond`], the
+    /// family the rows are written under. Not pop-reversible, for
+    /// [`Self::retire_slash_rows`]'s reason.
+    fn retire_release_rows(&self, floor: ReleaseJournalFloor) -> Result<(), StoreError> {
         let Some(kept_from) = floor.height() else {
             return Ok(());
         };
@@ -422,37 +437,6 @@ impl WriteBatch<'_, '_> {
             .map_err(EngineError::Table)?;
         journal
             .retain_in::<ReleaseJournalTuple, _>(ReleaseJournalKey::below(kept_from), |_, _| false)
-            .map_err(EngineError::Storage)?;
-        Ok(())
-    }
-
-    /// Delete the `archival_drawable_digest` rows of every epoch whose
-    /// settlement is below `floor`: the digest's one reader is the
-    /// settlement pass of its epoch, so it has none left. `E` settles in
-    /// the block at its slash deadline, `last_block(E) + grace`, and that
-    /// is below the floor exactly when `(E + 1)·SEB + grace ≤ floor`, so the
-    /// rows retired are the epochs below `⌊(floor − grace) / SEB⌋`.
-    fn retire_drawable_digests(
-        &self,
-        floor: SlashLogFloor,
-        schedule: SettlementSchedule,
-    ) -> Result<(), StoreError> {
-        let Some(kept_from) = floor.height() else {
-            return Ok(());
-        };
-        let Some(above_grace) = kept_from
-            .to_raw()
-            .checked_sub(schedule.slash_grace_blocks())
-        else {
-            return Ok(());
-        };
-        let first_kept = schedule.epoch_at_height(above_grace);
-        let mut digests = self
-            .txn()
-            .open_table(ARCHIVAL_DRAWABLE_DIGEST)
-            .map_err(EngineError::Table)?;
-        digests
-            .retain_in::<u64, _>(..first_kept, |_, _| false)
             .map_err(EngineError::Storage)?;
         Ok(())
     }
