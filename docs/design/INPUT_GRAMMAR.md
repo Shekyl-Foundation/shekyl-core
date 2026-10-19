@@ -818,7 +818,7 @@ Each shape's fields today, and their names under this Part. A reply of `show` is
 
 **Chain height** (`chain_height`): `height` (`/get_height`'s and `get_block_count`'s count) → `height`, the tip's ordinal (IG-Q45); `hash` → `hash`, the tip's.
 
-**Transaction** (`tx_show`, `tx_list`): `tx_hash` → `id`; `as_hex`, `pruned_as_hex` → `body` (bytes; the pruned form when `prune` is set, IG-Q55); `prunable_as_hex` and `as_json` go; `prunable_hash` → `prunable_hash`; `archival_len` → `archival_size` (bytes); `pruned` goes (the request says); `in_pool` → `txpool` (switch); `double_spend_seen` → `conflict` (switch); `block_height` → `block_height`; `confirmations` → `confirmations`; `block_timestamp` → `block_time`; `output_indices` → `output_index` (a list); `relayed` → `relayed`; `received_timestamp` goes with the pool's receive time (IG-Q57). `txs_hashes` → `id`; `missed_tx` goes (`null` in the slot).
+**Transaction** (`tx_show`, `tx_list`): `tx_hash` → `id`; `as_hex`, `pruned_as_hex` → `body` (bytes; the pruned form when `prune` is set, IG-Q55); `prunable_as_hex` and `as_json` go; `prunable_hash` → `prunable_hash`; `archival_len` → `archival_size` (bytes); `pruned` goes (the request says); `in_pool` → `txpool` (switch); `double_spend_seen` goes (IG-Q57); `block_height` → `block_height`; `confirmations` → `confirmations`; `block_timestamp` → `block_time`; `output_indices` → `output_index` (a list); `relayed` → `public` (switch: the pool's one bit, IG-Q57; `true` for every caller below host-only, since an entry not yet public is host-only, RT-O9.3); `received_timestamp` goes with the pool's receive time (IG-Q57). `txs_hashes` → `id`; `missed_tx` goes (`null` in the slot).
 
 **Spent** (`chain_spent`): `key_images` → `key_image`; `spent_status` (0, 1, 2) → a list of one-of `unspent`, `chain`, `txpool`, in request order.
 
@@ -861,7 +861,7 @@ Each shape's fields today, and their names under this Part. A reply of `show` is
 | `public_incoming_socket_count` | `clearnet_inbound_count` | `public_outgoing_socket_count` | `clearnet_outbound_count` |
 | `tor_incoming_socket_count` | `tor_inbound_count` | `tor_outgoing_socket_count` | `tor_outbound_count` |
 | `p2p` (`running`, `offline`) | goes: it repeats `offline` | `white_peerlist_size` | `peer_white_count` |
-| `grey_peerlist_size` | `peer_gray_count` | `tx_pool_unbroadcast_count` | `txpool_stem_count` |
+| `grey_peerlist_size` | `peer_gray_count` | `tx_pool_unbroadcast_count` (host-only, RT-O9.3) | `txpool_private_count` (host-only) |
 | `restricted` | `grant` (the grants the caller holds, `RPC_CHANNEL.md` §6.2) | | |
 
 **Version** (`version`): `version` (frozen); `release` → `tagged`; `current_height` (a count) → `height` (ordinal, IG-Q45); `target_height` (a count) → `target_height` (ordinal, IG-Q45); `consensus_constants_digest` → `consensus_digest`; `nettype` → `network` (its value `fakechain` is `regtest`, §3's name); `genesis_hash` → `genesis`.
@@ -878,7 +878,7 @@ Each shape's fields today, and their names under this Part. A reply of `show` is
 
 **Pool entry** (`txpool_list`): `id`, `weight`, `fee`, the Rust pool's listing (`rust/shekyl-mempool/src/relay.rs`, `Listed`; IG-Q57). Today's `tx_info` fields `id_hash` → `id`, `weight` → `weight`, `fee` → `fee`; `tx_json`, `tx_blob`, `blob_size`, `max_used_block_id_hash`, `max_used_block_height`, `kept_by_block`, `last_failed_height`, `last_failed_id_hash`, `receive_time`, `relayed`, `last_relayed_time`, `do_not_relay` and `double_spend_seen` go; the body is `tx_show`'s. `spent_key_images` goes with them. `/get_transaction_pool_hashes`' `tx_hashes` and `get_txpool_backlog`'s packed `backlog` fold into the list (IG-Q46).
 
-**Pool statistics** (`txpool_stats`): `pool_stats` unwraps. `txs_total` → `count`; `bytes_total`, `bytes_min`, `bytes_max`, `bytes_med` → `weight_total`, `weight_min`, `weight_max`, `weight_median`; `fee_total` → `fee_total`; `num_double_spends` → `conflict_count`; `num_not_relayed` → `stem_count`; `num_failing`, `oldest`, `num_10m`, `histo_98pc` and `histo` go (IG-Q57).
+**Pool statistics** (`txpool_stats`): `pool_stats` unwraps. `txs_total` → `count`; `bytes_total`, `bytes_min`, `bytes_max`, `bytes_med` → `weight_total`, `weight_min`, `weight_max`, `weight_median`; `fee_total` → `fee_total`; `num_double_spends` goes (IG-Q57); `num_not_relayed` (host-only, RT-O9.3) → `private_count` (host-only); `num_failing`, `oldest`, `num_10m`, `histo_98pc` and `histo` go (IG-Q57).
 
 **Template** (`block_template`): parameters `wallet_address` → `address`, `reserve_size` → `extra_size` (bytes, at most 8), `extra_nonce` → `extra` (bytes); `prev_block`, refused when set, goes. Reply: the difficulty triple → `difficulty`; `height` → `height` (the next block's ordinal, `HEIGHT_SEMANTICS.md` §3.1 C6); `reserved_offset` → `extra_offset`; `expected_reward` → `reward`; `prev_hash` → `parent`; `seed_height` → `seed_height`; `blocktemplate_blob` → `body`; `blockhashing_blob` → `hashing` (bytes); `seed_hash` → `seed`; `next_seed_hash` (`""` when unchanged) → `seed_next` (`null` when unchanged). `get_miner_data` folds in (IG-Q46): its `major_version` → `version_major`, `median_weight` → `weight_median`, `already_generated_coins` (a number there) → `emission` (amount); its `height`, `prev_id`, `seed_hash` and `difficulty` (a `0x` string there) are the template's; its `tx_backlog` is `txpool_list`'s.
 
@@ -921,8 +921,8 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | image | key | a key image (a hash) |
 | prune | tx | a switch: carry the pruned body |
 | prunable | tx | the prunable part of a transaction |
-| conflict | tx, txpool | a double spend seen |
-| relayed | tx | already relayed |
+| public | tx | the pool's one bit: the relay has made the transaction public (`DAEMON_RELAY_PRIVACY.md` acceptance criterion 2) |
+| private | txpool | entries whose `public` bit is unset; with `count`, host-only (RT-O9.3) |
 | confirmations | tx | blocks since the transaction's |
 | parent | block | the block this one extends (a hash) |
 | nonce | block | the header's nonce; under `dev block generate`, the first nonce |
@@ -960,7 +960,6 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | connection | span | the P2P connection downloading the span |
 | host | ban | an IP address or subnet |
 | banned | peer | include banned peers |
-| stem | txpool | not yet broadcast (Dandelion++'s stem phase) |
 | parameter | — | a diagnostic's named parameters (IG-11) |
 | offline | daemon | P2P is off (IG-Q3's offline state) |
 | economy | fee | the `economy` tier's fee per unit of weight |
@@ -1082,4 +1081,7 @@ Each is posed for ruling. A question that amends a ruled row names it.
 
 **IG-Q56 — the proof-of-work hash in a header — POSED 2026-10-18.** `fill_pow_hash` has two restricted-listener policies: `get_block` and `get_block_header_by_height` blank the field silently, and the other three header methods refuse with `-19`. *Recommended:* one input, `pow` (a switch, off by default); a caller whose grant or resource bound does not cover it is refused with the RW-Q3 class that applies, never answered with a blank; the field is absent when not asked for.
 
-**IG-Q57 — the pool's listing — POSED 2026-10-18.** The Rust pool's listing is id, weight and fee, never the receive time, because receive times across many nodes' listings point at a transaction's origin (the review of #1102; `rust/shekyl-mempool/src/relay.rs`, `Pool::listing`). *Recommended:* `txpool_list`'s element is exactly that listing, the body comes from `tx_show`, and the C++ pool's other fields go; `txpool_stats` keeps the counts and weights, and its fields derived from receive times (`oldest`, `num_10m`, `histo`, `histo_98pc`) and the C++ pool's `num_failing` go.
+**IG-Q57 — the pool's listing — POSED 2026-10-18.** The Rust pool's listing is id, weight and fee, never the receive time, because receive times across many nodes' listings point at a transaction's origin (the review of #1102; `rust/shekyl-mempool/src/relay.rs`, `Pool::listing`). *Recommended:* `txpool_list`'s element is exactly that listing, the body comes from `tx_show`, and the C++ pool's other fields go; `txpool_stats` keeps the counts and weights, and its fields derived from receive times (`oldest`, `num_10m`, `histo`, `histo_98pc`) and the C++ pool's `num_failing` go. The same grounding reaches the transaction entry and the statistics:
+- `double_spend_seen` and `num_double_spends` go. `shekyl-mempool` holds no per-entry conflict flag: its door admits one spender per key image (`view.rs`, CEN-M7's conflict map), and the `conflicted` list in `template.rs` is the template builder's, not an entry's.
+- `relayed` becomes the pool's one bit, `public` (`DAEMON_RELAY_PRIVACY.md` acceptance criterion 2; `DRS_X_STORE_FLIP.md` DX-F6). For any caller below host-only it is constant, `true`, because an entry not yet public is host-only (RT-O9.3).
+- The counts of entries not yet public, `num_not_relayed` on the statistics and `tx_pool_unbroadcast_count` on `daemon_status`, are host-only, and are named after the pool's bit: `private_count` and `txpool_private_count`.
