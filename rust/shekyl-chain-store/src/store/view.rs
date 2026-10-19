@@ -454,4 +454,22 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     ) -> Result<Option<DrawableDigest>, StoreError> {
         archival_reads::drawable_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
     }
+
+    fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
+        archival_reads::release_journal_after(self.batch.txn(), height, floor)
+            .map_err(|f| self.arm(f))
+    }
+
+    fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::LoggedSlash>, StoreError> {
+        archival_reads::slash_log_rows_after(self.batch.txn(), height, floor)
+            .map_err(|f| self.arm(f))
+    }
 }

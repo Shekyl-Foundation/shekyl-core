@@ -124,10 +124,10 @@ pub use bundle::{
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
 pub use delta::{
-    Accrual, ArchivalDelta, EpochClose, EpochGather, RecordWrite, RecordWriteKind, ServeCreditKey,
-    Settlement, Slash,
+    Accrual, ArchivalDelta, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
+    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
 };
-pub use drawable::DrawableSet;
+pub use drawable::{drawable_epoch_walked_back, WALK_BACK_EPOCHS};
 pub(crate) use slash::apply_slash;
 
 use std::collections::btree_map::Entry;
@@ -205,8 +205,9 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     let accrued = transition.accrue(view, accrual)?;
     transition.scan_slashes(view)?;
     let close = transition.close(accrued);
+    let drawable_digest = transition.drawable_digest_at_open(view)?;
     coverage.insert(L7::ROW);
-    Ok(Ok(transition.into_delta(accrued, close)))
+    Ok(Ok(transition.into_delta(accrued, close, drawable_digest)))
 }
 
 /// A compact holding with no shards — the Release's and the complete-tree
@@ -248,6 +249,9 @@ struct Transition {
     /// join epoch and add epoch; the claim's `current_settled`.
     epoch: SettlementEpoch,
     posts: BTreeMap<PCanonicalId, Post>,
+    /// Each Release's pre-image, in block order: what the Release journal
+    /// keeps of it.
+    releases: Vec<ReleasePreImage>,
     serve_credits: Vec<ServeCreditKey>,
     /// The rows this block's slash pass has settled, keyed in the order
     /// the delta carries them: epoch, then persona, then shard.
@@ -270,6 +274,7 @@ impl Transition {
             slash_floor: SlashLogFloor::under(connecting, schedule.blocks(), reorg_cap),
             epoch: SettlementEpoch::from_raw(schedule.epoch_at_height(connecting.to_raw())),
             posts: BTreeMap::new(),
+            releases: Vec::new(),
             serve_credits: Vec::new(),
             settled: BTreeMap::new(),
             gathers: Vec::new(),
@@ -340,7 +345,43 @@ impl Transition {
             .collect())
     }
 
-    fn into_delta(self, accrual: Accrual, close: Option<EpochClose>) -> ArchivalDelta {
+    /// Derivation 1 of the drawable set (`drawable.rs`): at the first
+    /// block of an epoch, the digest of `D(E)` over the state this block
+    /// leaves, its slash pass included — every record as merged with this
+    /// block's post-images. `None` at every other height.
+    ///
+    /// Runs after the close, as the last read of the transition, so every
+    /// arm that changes a record has run. Genesis opens epoch 0 and writes
+    /// the empty set's digest: no bond joins before epoch 0.
+    fn drawable_digest_at_open<'id, V: ChainView<'id>>(
+        &mut self,
+        view: &V,
+    ) -> Result<Option<DrawableDigestWrite>, ViewRead<V::Fault>> {
+        let h_open = self.schedule.open_height(self.epoch.to_raw());
+        if self.connecting.to_raw() != h_open {
+            return Ok(None);
+        }
+        let epoch = self.epoch;
+        let final_count = drawable::final_count_at_open(view, self.connecting, self.reorg_cap)?;
+        let records = self.merged(view)?;
+        let drawable = drawable::drawable_epoch_at_open(
+            epoch,
+            records.iter().map(|(persona, record)| (persona, record)),
+            final_count,
+        )
+        .map_err(|why| ViewRead::Corrupt(Corrupt::DrawableEpoch { epoch, why }))?;
+        Ok(Some(DrawableDigestWrite {
+            epoch,
+            digest: drawable.digest(),
+        }))
+    }
+
+    fn into_delta(
+        self,
+        accrual: Accrual,
+        close: Option<EpochClose>,
+        drawable_digest: Option<DrawableDigestWrite>,
+    ) -> ArchivalDelta {
         let records = self
             .posts
             .into_iter()
@@ -364,6 +405,7 @@ impl Transition {
             .collect();
         ArchivalDelta {
             records,
+            releases: self.releases,
             serve_credits: self.serve_credits,
             settlements,
             gathers: self.gathers,
@@ -371,6 +413,7 @@ impl Transition {
             slash_watermark: self.slash_watermark,
             accrual,
             close,
+            drawable_digest,
         }
     }
 }

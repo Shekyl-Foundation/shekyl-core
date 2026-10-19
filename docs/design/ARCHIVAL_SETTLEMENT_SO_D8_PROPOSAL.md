@@ -96,7 +96,7 @@ privacy gain does not enter the arithmetic.
 > | SO-D9 `epoch(h) == E` | **surface-free** | E6 increment |
 > | `0x0C` content (Q13 RULED) | coinbase `tx_extra` predicate, no store handle; **surface-free** | E6 increment |
 > | witness verification | `h`'s coinbase commitment from `tx_extra`; **surface-bound to the block/tx surface**, which ports well ahead of S-ARCH | E6-or-tx, not E4 |
-> | membership (the pair is draw `j` of `h`'s revealed seed) | drawable set produced by `DrawableSet::at_epoch_open` (Q3 RULED, chain-rules over `ChainView`; no snapshot table). Gate still **surface-bound to S-ARCH** with the writer — Q3 names the producer, it does not re-home the gate | E4 |
+> | membership (the pair is draw `j` of `h`'s revealed seed) | drawable set produced by the chain-rules builder (`drawable_epoch_walked_back`; Q3 RULED, over `ChainView`; no snapshot table). Gate still **surface-bound to S-ARCH** with the writer — Q3 names the producer, it does not re-home the gate | E4 |
 > | dedup per draw, `(h, j)` exact-get | **surface-bound to S-ARCH** | E4 |
 >
 > Waiting is **stronger than the shim prohibition.** Landing R-B
@@ -1101,12 +1101,13 @@ Home: `shekyl-chain-rules`. No store handle (DRS-D12). Reads arrive as a
 `ChainView` projection. Output is a value type.
 
 ```text
-DrawableSet::at_epoch_open(view, E) -> Vec<DrawablePair>
+drawable_epoch_walked_back(view, E, schedule, reorg_cap, floor) -> Option<DrawableEpoch>
 ```
 
-No snapshot table. Runs once per epoch. The named type is STAGED in this plan; the
-body lands with Slice C (authorized 2026-10-04, §8.0; *was* "not
-authorized").
+No snapshot table; one 32-byte digest per epoch, written at `h_open(E)`.
+Built in `ARCHIVAL_SETTLEMENT_WRITER.md` §16.10 (`SO-D12` increment 2),
+beside the derivation from the open block's post-state that writes the
+digest.
 
 **(3.3) The drop filter lives at settlement, not at draw.**
 
@@ -1858,7 +1859,7 @@ about it.
 | `SO-D8c` | Emission gather **moves to the slash pass** — `SO-D7` applied to its second consumer; invariant-2 joint pin moves with it. Presence-vs-absolute-2 recorded, not opened. | **RULED 2026-09-16** |
 | `SO-D8d` | §6: three local integrity layers, none on chain — the stored issued-draw index against the running digest folded at admission, the persisted digest of `D` against a re-walk, `passes ≤ issued`. A desync is a store-invariant Fault, never a verdict. | **RULED 2026-09-16; amended 2026-09-16 vs `dev@5fde3b1ce`**; form **RULED 2026-10-07** |
 | `SO-D8e` | The urn, its replay and its `W₂` assignment ring. Replaced by the secret per-block draw and a stored issued-draw index ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) §4, §10). Owed items that are not the urn's stay in §7.2. | **SUPERSEDED 2026-10-07** |
-| Drawable set (Q3) | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` over `ChainView`; no snapshot table. A dropped pair stays in `D`; filter at settlement and witness. Construction §7.4. | **RULED 2026-09-16** |
+| Drawable set (Q3) | A pure function in `shekyl-chain-rules` over `ChainView` (`drawable_epoch_walked_back`, `ARCHIVAL_SETTLEMENT_WRITER.md` §16.10); no snapshot table. A dropped pair stays in `D`; filter at settlement and witness. Construction §7.4. | **RULED 2026-09-16** |
 | `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row **discharged 2026-09-16** by `SO-D8a` RULED (first admission-path reader). | **RESOLVED by R-B**; referent **RULED 2026-09-16 (`SO-D8a`)** |
 | Witness key (Q8) | **Dedicated non-output key**, committed under **`0x0C`**, **mandatory-present** (commitment 2, not byte count). The coinbase output's own per-output key is **ruled out by `PL-D3`'s premise**; extending `0x0B` is refused. Key and seed are fresh randomness per block, one 32-byte commitment over both (specification §4.2). Construction §7.5. | **RULED 2026-09-16**; derivation **SUPERSEDED 2026-10-07** (`SCS-P1`, `SCS-P3`) |
 | Batching (Q9) | **SUPERSEDED 2026-10-11 as mechanism** ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](ARCHIVAL_SERVE_CREDIT_SPEC.md) `SCS-P14`–`P16`, `SCS-P21`): there is no carrier transaction; one bundle per block carries the reveal and every record, admitted whole, outside the fee median. Fail-whole with resubmission, and the rejection of per-record admission, stand as the bundle's. *As ruled:* One witness key reveal and one signature per carrier over a set commitment; **no inclusion paths**. **Carrier fail-whole + resubmission within `W₂`** (§7.6.2 (B) RULED; (A) per-vin admission REJECTED — free-weight channel). Serve-credit is fee-less by construction. 300,000 is `get_min_block_weight` (a floor). Prunable bytes count toward weight. Each carrier obeys `TX_WEIGHT_LIMIT`. Unpaid inclusion and a prunable-weight discount → fee-and-weight round (FOLLOWUPS row). Merkle-root batching with per-record inclusion paths REJECTED. Construction §7.6; bytes, reveal and sizes: specification §7. | **RULED 2026-09-16 (amended same day)**; commitment bytes **RULED 2026-10-07** (`SCS-P6`) |
@@ -1907,7 +1908,7 @@ so where it applies.
 1. **RATIFIED — R-B.** The herd is R-A's, not R-B's (F4). Recorded §2.
 2. **RESOLVED by 1.** `CHALLENGE_RESPONSE_BLOCKS` becomes the per-challenge
    deadline; the const-assert becomes load-bearing.
-3. **RULED 2026-09-16 — `DrawableSet::at_epoch_open(view, E)`.**
+3. **RULED 2026-09-16 — `D(E)` is a pure function over the chain** (built as `drawable_epoch_walked_back`, `SO-D12` increment 2).
    Pure function in `shekyl-chain-rules` over a `ChainView` projection of
    the append-only bond journals (holdings-update, unbond, reinstate, slash).
    Evaluated at `h_open(E)`. No snapshot table. A drawn pair whose shard has

@@ -650,24 +650,31 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 ## 10. Bounds to measure (FOLLOWUPS rows)
 
 Each on the Pi 4, which sets the value (rule 76), and on one x86 host as a
-diagnostic. No figure is set before its row lands.
+diagnostic. No figure is set before its row lands. The pre-flight rows were
+measured on 2026-10-19 on the floor device (Pi 4, Ubuntu 26.04.1 aarch64) with
+tor 0.4.9.14 (16.0a14), launched as `TSR-Q7` rules (an inherited owning control
+socket, the torrc and GeoIP defaults foreclosed, a cleared environment,
+`AvoidDiskWrites 1`), and beside it on an x86 dev box with tor 0.4.9.14
+(15.0.25) as the diagnostic. The raw rows, the harness revision and each
+run's conditions are in `shekyl-dev`, `data/tsr-preflight/2026-10-19*/`.
 
 | Row | Measures | Sets |
 | --- | --- | --- |
-| `TSR-M1` | bootstrap time, cold directory and kept directory | the stall bound |
+| `TSR-M1` | bootstrap time, cold directory and kept directory. **Measured 2026-10-19.** Cold, n=100: p50 11.3 s, p90 17.0 s, p99 127.1 s, max 380.8 s; 1 run over 300 s. Kept, n=30: p50 3.54 s, max 3.81 s (a respawn into its kept directory, `TSR-Q1`). x86: cold max 42.7 s, kept max 2.36 s. **Where the cold tail comes from** (300 more cold runs with each phase's time, 03:38Z to 06:45Z): of the 31 over 60 s, 26 spent their time loading relay descriptors and 5 loading the consensus; circuits took a median 0.86 s, as in fast runs. A slow run sits at one directory percentage, often for about five minutes, and then completes. Tor raised a `BOOTSTRAP` problem event in 1 of the 31. The tail's size moves with the night: 3 % over 60 s in the record (01:23Z to 03:13Z), 9 % in this run outside its overlap with the load test | the stall bound. No bootstrap is given up (`TSR-F7`, §4.4), and a slow one is not a process fault (`TSR-Q3`). A stalled directory fetch usually raises no problem event, so problem events alone cannot carry §5's operator message for it |
 | `TSR-M2` | respawn to outbound usable, and to inbound reachable | the backoff base and cap |
-| `TSR-M3` | self-probe latency, and that it works at all | the probe's delay range and timeout |
-| `TSR-M4` | Tor's resident memory at 12 outbound plus inbound load, default and set `MaxMemInQueues` | `MaxMemInQueues` |
-| `TSR-M5` | Tor's file descriptors at load; the limit the child inherits | the descriptor budget |
-| `TSR-M6` | when Tor first writes `state` after bootstrap under `AvoidDiskWrites 1`, and whether a kill loses guard changes made since. A Tor killed before its first write leaves a respawn to sample new guards: that window is the re-roll still open to an attacker who can crash Tor early | whether the kept directory needs more than `TSR-Q1` gives it |
-| `TSR-M7` | descriptor upload time after `ADD_ONION` and after a republish | the upload bound |
+| `TSR-M3` | self-probe latency, and that it works at all. **Measured 2026-10-19**: 40 of 40 succeeded, the probe nonce arriving each time; p50 2.35 s, p90 7.39 s, max 12.29 s. x86: 40 of 40, max 46.15 s, with five probes in one cluster at 42.9 to 46.1 s | the probe's delay range and timeout. A timeout below about 46 s would have failed the x86 cluster's probes, each of which succeeded |
+| `TSR-M4` | Tor's resident memory at 12 outbound plus inbound load, default and set `MaxMemInQueues`. **Measured 2026-10-19 at Tor's default**, under a synthetic load (no fleet daemon could supply one; Rick, 2026-10-19): 12 outbound and 12 inbound rendezvous streams, each carrying 512 bytes every 10 s, for an hour. Resident memory **91.0 MiB**, flat once the streams were up; idle baselines 85.7 and 92.3 MiB. x86: 82.5 MiB. A set `MaxMemInQueues` was not measured | `MaxMemInQueues` |
+| `TSR-M5` | Tor's file descriptors at load; the limit the child inherits. **Measured 2026-10-19** under `TSR-M4`'s load: **36 to 38** open; soft limit 524288 as launched; idle 13 to 15 | the descriptor budget |
+| `TSR-M6` | when Tor first writes `state` after bootstrap under `AvoidDiskWrites 1`, and whether a kill loses guard changes made since. **Measured 2026-10-19**: the first write came 603.8 s and 601.9 s after bootstrap, then about every 610 s. A clean exit saved all 20 guards; a kill wrote nothing at exit, leaving the last periodic write's 20. x86: 602.1 and 603.7 s. A Tor killed before its first write leaves a respawn to sample new guards: that window is the re-roll still open to an attacker who can crash Tor early | whether the kept directory needs more than `TSR-Q1` gives it |
+| `TSR-M7` | descriptor upload time after `ADD_ONION` and after a republish. **Measured 2026-10-19**: the first `UPLOADED` 4.43 s after `ADD_ONION`, 3.53 s after a respawn into the kept directory republished the held key; 1 of 13 uploads in the republish round failed, the case `TSR-Q5`'s rounds absorb. x86: 3.11 and 4.58 s | the upload bound |
 | `TSR-M8` | the monotonic clock across suspend on Windows and macOS | suspend handling |
-| `TSR-M9` | no onion address in the daemon Tor's log events at `notice` | the log category |
-| `TSR-M10` | the delete time of a used `DataDirectory` on the floor device's storage | the tombstone delete bound |
+| `TSR-M9` | no onion address in the daemon Tor's log events at `notice`. **Measured 2026-10-19**: 0 of 36 `NOTICE`/`WARN`/`ERR` events carried one, across a publish, 40 probes and a republish. x86: 0 of 33 | the log category |
+| `TSR-M10` | the delete time of a used `DataDirectory` on the floor device's storage. **Measured 2026-10-19**: 100 used cold directories, p50 11 ms, max 13 ms each. x86: max 7 ms | the tombstone delete bound |
 | `TSR-M11` | on Windows, whether a killed and reaped `tor.exe` has released its `DataDirectory` files (`lock`, `state`, `tor.log`) when the reap returns. **Measured 2026-10-16** (Windows 11 23H2, Defender real-time protection on; the pinned 15.0.24 `tor.exe`, launched as #1083 does): 0 failures in 400, by kill and by owner-close, each followed at once by the tombstone rename and by a recursive delete. Every file is released by the time `WaitForSingleObject` returns | a respawn into the kept directory (`TSR-Q1`) and the tombstone rename (§4.7) do not wait for the directory's files once the reap has returned |
 
 **`TSR-M6`, what is established (2026-10-16; mechanisms from an x86 diagnostic
-and the floor device's dry run, timings to come from the floor run).** Under
+and the floor device's dry run; the floor's timings, 2026-10-19, are in the
+table).** Under
 `AvoidDiskWrites 1` Tor defers its periodic `state` write: none within 240 s of
 bootstrap while it reported 20 entry guards; with `AvoidDiskWrites 0` it wrote
 them within 34 s. Every clean exit saves `state` with every guard, under either
@@ -690,8 +697,9 @@ stop path, not a bound.
 **Pre-flight (rule 26).** `TSR-M1`, `TSR-M3` to `TSR-M7`, `TSR-M9` and
 `TSR-M10` need only today's managed Tor and a SOCKS self-dial, and are measured
 before increment 3 (§12), the first increment whose code uses a bound they set;
-increment 2 uses none. They are taken after the re-pin, on the Tor that ships
-(0.4.9.14), the Pi 4 setting each value; `TSR-M11` is measured (above). `TSR-M2` and `TSR-M8` need the supervisor
+increment 2 uses none. They were taken on 2026-10-19, after the re-pin, on the Tor that ships
+(0.4.9.14), the Pi 4 setting each value (the table above); `TSR-M11` is measured
+(above). `TSR-M2` and `TSR-M8` need the supervisor
 or the suspend apparatus, and are measured on the implementation branch before
 its PR leaves draft.
 
@@ -728,7 +736,11 @@ its PR leaves draft.
    recipe and `AvoidDiskWrites` in the closed list; the process wait as the
    second death signal. **Implemented** (#1091).
 3. The supervisor core (sans-IO) and its timing-engine driver; the pin gate per
-   spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings.
+   spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings. It removes the
+   daemon's step-8 Tor wait (`rust/shekyl-daemon/src/run.rs`) and its 300 s
+   bootstrap deadline (`rust/shekyl-daemon/src/tor.rs`): step 8 does not wait
+   for Tor, and no bootstrap is given up (Rick, 2026-10-19; one cold bootstrap
+   in a hundred on the floor device took longer than 300 s, §10).
 4. The probe nonce and the probe.
 5. The supervisor becomes the Tor link's publisher, in place of the zone host.
 6. Acceptance; then the C++ deletions, to Rick before they are cut.

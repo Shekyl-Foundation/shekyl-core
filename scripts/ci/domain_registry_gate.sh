@@ -348,7 +348,12 @@ count_pattern() {
 # shekyl/fcmp-membership-only-batch-weights-v1) and one #[cfg(test)] site.
 # Both live in rust/shekyl-fcmp/src/batch_weights.rs (moved out of proof.rs
 # with the statement; the count is unchanged).
-MECH1_EXPECTED=78
+# SO-D12 increment 2 (2026-10-17, ruling B): 78 -> 79. One production site
+# in rust/shekyl-archival-retention/src/drawable_epoch.rs
+# (`DrawableEpoch::digest`), the new domain
+# shekyl/archival-drawable-epoch-v1. Its vectors were computed outside the
+# tree and are pinned as hex, so the tests add no site.
+MECH1_EXPECTED=79
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

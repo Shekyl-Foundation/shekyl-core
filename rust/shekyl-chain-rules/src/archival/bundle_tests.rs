@@ -30,7 +30,8 @@ use shekyl_archival_retention::{
     BUNDLE_WITNESS_LEN, CHALLENGE_READS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
-use shekyl_types::{BlockCount, BlockHash, BlockHeight};
+use shekyl_types::archival::ReceiptSignPk;
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, PCanonicalId};
 
 use super::bundle_section_tests::{rules_of, view_holding};
 use super::*;
@@ -1025,7 +1026,7 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
         .expect("sixteen draws over eight pairs reach the first persona");
     let index = world.selected(draw);
     let pair = world.drawable_epoch().pair(index).expect("in D");
-    assert_eq!(pair.p_id, world.personas[0].p_id);
+    assert_eq!(pair.persona, world.personas[0].persona);
 
     let (key_b_public, key_b_secret) =
         HybridEd25519FnDsa::keypair_from_seeds(&[0xB0; 32], &[0xB1; 32]).expect("keygen");
@@ -1036,7 +1037,7 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
         draw,
         0,
     );
-    let signed_by_b = world.record_signed_by(&key_b_secret, pair.shard_id, 0, anchor, &nonce);
+    let signed_by_b = world.record_signed_by(&key_b_secret, pair.shard.to_raw(), 0, anchor, &nonce);
     let passes = PassBitmap::from_passes(16, [draw]).expect("in range");
     let (reference, body) = world.assemble(passes, &[signed_by_b]);
 
@@ -1051,17 +1052,17 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
     let pairs: Vec<DrawablePair> = (0..world.drawable_epoch().len())
         .map(|i| world.drawable_epoch().pair(i).expect("in D"))
         .collect();
-    let keys: Vec<([u8; 32], Vec<u8>)> = world
+    let keys: Vec<(PCanonicalId, ReceiptSignPk)> = world
         .personas
         .iter()
         .enumerate()
         .map(|(n, p)| {
             let key = if n == 0 {
-                key_b_public.to_canonical_bytes()
+                key_b_public.to_receipt_sign_pk()
             } else {
                 p.receipt_public_key.clone()
             };
-            (p.p_id, key)
+            (p.persona, key)
         })
         .collect();
     world.view.drawable_epochs.insert(
@@ -1307,10 +1308,10 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let pairs: Vec<DrawablePair> = (0..8)
         .map(|i| world.drawable_epoch().pair(i).expect("in D"))
         .collect();
-    let keys: Vec<([u8; 32], Vec<u8>)> = world
+    let keys: Vec<(PCanonicalId, &ReceiptSignPk)> = world
         .personas
         .iter()
-        .map(|p| (p.p_id, p.receipt_public_key.clone()))
+        .map(|p| (p.persona, &p.receipt_public_key))
         .collect();
     let other_epoch = shekyl_types::SettlementEpoch::from_raw(epoch.to_raw() + 1);
     world.view.drawable_epochs.insert(
@@ -1332,7 +1333,7 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
     let (mut world, bundle) = fresh();
     world.view.drawable_epochs.insert(
         epoch,
-        DrawableEpoch::new(epoch, Vec::<([u8; 32], Vec<u8>)>::new(), []).expect("empty"),
+        DrawableEpoch::new(epoch, Vec::<(PCanonicalId, ReceiptSignPk)>::new(), []).expect("empty"),
     );
     assert_eq!(
         unanswered(&world, &bundle),

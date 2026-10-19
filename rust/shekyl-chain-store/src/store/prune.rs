@@ -130,17 +130,17 @@
 use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
-use shekyl_chain_rules::{RuleSet, SlashLogFloor};
+use shekyl_chain_rules::{RuleSet, SettlementSchedule, SlashLogFloor};
 use shekyl_types::{
     shard_floor, shard_of, storage_ids_through, ArchivalLength, BlockCount, BlockHeight,
 };
 
 use crate::apply_policy::ArchivalFamily;
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
-use crate::ids::{SlashLogKey, SlashLogTuple};
+use crate::ids::{ReleaseJournalKey, ReleaseJournalTuple, SlashLogKey, SlashLogTuple};
 use crate::schema::{
-    ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE,
-    UNDO_LOG,
+    ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES,
+    TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
 };
 
 use super::chain_reads::{self, ReadFault, ReadTables};
@@ -386,17 +386,75 @@ impl WriteBatch<'_, '_> {
         let undo_floor = self.retire_undo_rows(height.to_raw())?;
         // Both operands are the rule set's (SLK-2); `check_against` has
         // already held its epoch equal to the pinned one at this height.
-        let slash_floor = self.retire_slash_rows(SlashLogFloor::under(
-            height,
-            in_force.settlement_schedule().blocks(),
-            in_force.reorg_cap(),
-        ))?;
+        let schedule = in_force.settlement_schedule();
+        let floor = SlashLogFloor::under(height, schedule.blocks(), in_force.reorg_cap());
+        let slash_floor = self.retire_slash_rows(floor)?;
+        // The Release journal and the drawable digests are retired at the
+        // same floor, so the walk that reads them with the slash log has
+        // one horizon (`SO-D12` increment 2).
+        self.retire_release_rows(floor)?;
+        self.retire_drawable_digests(floor, schedule)?;
         Ok(Some(Pruned {
             shard_start: discard.shards.start,
             shard_end: discard.shards.end,
             undo_floor,
             slash_floor,
         }))
+    }
+
+    /// Delete `archival_release_journal` rows below `floor`, the slash
+    /// log's: the two journals the drawable set's rebuild reads keep one
+    /// span. Nothing while the chain is under the window, and nothing when
+    /// this session does not apply [`ArchivalFamily::Bond`], the family the
+    /// rows are written under. The read asserts the floor where it reads
+    /// (SI-28, `archival_reads::release_journal_after`); not pop-reversible,
+    /// for [`Self::retire_slash_rows`]'s reason.
+    fn retire_release_rows(&self, floor: SlashLogFloor) -> Result<(), StoreError> {
+        let Some(kept_from) = floor.height() else {
+            return Ok(());
+        };
+        if !self.apply_policy().applies(ArchivalFamily::Bond) {
+            return Ok(());
+        }
+        let mut journal = self
+            .txn()
+            .open_table(ARCHIVAL_RELEASE_JOURNAL)
+            .map_err(EngineError::Table)?;
+        journal
+            .retain_in::<ReleaseJournalTuple, _>(ReleaseJournalKey::below(kept_from), |_, _| false)
+            .map_err(EngineError::Storage)?;
+        Ok(())
+    }
+
+    /// Delete the `archival_drawable_digest` rows of every epoch whose
+    /// settlement is below `floor`: the digest's one reader is the
+    /// settlement pass of its epoch, so it has none left. `E` settles in
+    /// the block at its slash deadline, `last_block(E) + grace`, and that
+    /// is below the floor exactly when `(E + 1)·SEB + grace ≤ floor`, so the
+    /// rows retired are the epochs below `⌊(floor − grace) / SEB⌋`.
+    fn retire_drawable_digests(
+        &self,
+        floor: SlashLogFloor,
+        schedule: SettlementSchedule,
+    ) -> Result<(), StoreError> {
+        let Some(kept_from) = floor.height() else {
+            return Ok(());
+        };
+        let Some(above_grace) = kept_from
+            .to_raw()
+            .checked_sub(schedule.slash_grace_blocks())
+        else {
+            return Ok(());
+        };
+        let first_kept = schedule.epoch_at_height(above_grace);
+        let mut digests = self
+            .txn()
+            .open_table(ARCHIVAL_DRAWABLE_DIGEST)
+            .map_err(EngineError::Table)?;
+        digests
+            .retain_in::<u64, _>(..first_kept, |_, _| false)
+            .map_err(EngineError::Storage)?;
+        Ok(())
     }
 
     /// Delete `archival_slash_log` rows below `floor` — the slash log's
@@ -414,14 +472,18 @@ impl WriteBatch<'_, '_> {
     /// No floor is persisted and none is checked here (`SLK-3`): the
     /// expression is the floor, a re-run at the same height deletes the
     /// same empty range, and the one reader of the log asserts the floor
-    /// where it reads (SI-26, `archival_reads::slash_log_after`) — a
-    /// derived floor and an asserting read, rather than a watermark the
-    /// read would trust. Not pop-reversible, like the body discards: the
-    /// row for the boundary block was sealed before this ran, and `pop`
-    /// cannot reach a height this retires — the undo floor is `retention`
-    /// below the tip with `retention < SEB` ([`Horizons::new`]), the slash
-    /// floor at least `SEB + reorg_cap` below it, and a pop below the undo
-    /// floor is `PopBelowFloor`.
+    /// where it reads (SI-26,
+    /// [`scan_slash_log_after`](super::archival_reads::scan_slash_log_after),
+    /// the walk behind
+    /// [`slash_log_rows_after`](super::archival_reads::slash_log_rows_after)
+    /// and [`slash_log_after`](super::archival_reads::slash_log_after)) — a
+    /// derived floor and an asserting read, rather than a
+    /// watermark the read would trust. Not pop-reversible, like the body
+    /// discards: the row for the boundary block was sealed before this ran,
+    /// and `pop` cannot reach a height this retires — the undo floor is
+    /// `retention` below the tip with `retention < SEB` ([`Horizons::new`]),
+    /// the slash floor at least `SEB + reorg_cap` below it, and a pop below
+    /// the undo floor is `PopBelowFloor`.
     fn retire_slash_rows(&self, floor: SlashLogFloor) -> Result<SlashLogFloor, StoreError> {
         let Some(kept_from) = floor.height() else {
             return Ok(SlashLogFloor::NONE);

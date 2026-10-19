@@ -19,7 +19,8 @@ use shekyl_archival_retention::{
     BUNDLE_SECTION_BUDGET_MULTIPLE,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
-use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_types::archival::ReceiptSignPk;
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::*;
 use crate::harness::bundle::{with_hash, BundleRead, BundleReadFaulted, FixtureBundleView};
@@ -473,29 +474,29 @@ fn of_two_section_defects_the_earlier_check_refuses() {
     assert_eq!(reads, [BundleRead::DrawableEpoch]);
 }
 
-const PERSONA: [u8; 32] = [0x41; 32];
+const PERSONA: PCanonicalId = PCanonicalId::from_bytes([0x41; 32]);
 
 /// One receipt key, generated once. A drawable epoch parses it.
-fn receipt_key() -> &'static Vec<u8> {
-    static KEY: OnceLock<Vec<u8>> = OnceLock::new();
+fn receipt_key() -> &'static ReceiptSignPk {
+    static KEY: OnceLock<ReceiptSignPk> = OnceLock::new();
     KEY.get_or_init(|| {
         HybridEd25519FnDsa::keypair_from_seeds(&[0x41; 32], &[0x42; 32])
             .expect("fixture receipt key")
             .0
-            .to_canonical_bytes()
+            .to_receipt_sign_pk()
     })
 }
 
 /// Epoch `epoch` with `pairs` shards of one persona. `pairs` is `D`.
 fn drawable(epoch: u64, pairs: u64) -> DrawableEpoch {
     let epoch = SettlementEpoch::from_raw(epoch);
-    let keys = (pairs > 0).then(|| (PERSONA, receipt_key().clone()));
+    let keys = (pairs > 0).then(|| (PERSONA, receipt_key()));
     DrawableEpoch::new(
         epoch,
         keys,
-        (0..pairs).map(|shard_id| DrawablePair {
-            p_id: PERSONA,
-            shard_id,
+        (0..pairs).map(|shard| DrawablePair {
+            persona: PERSONA,
+            shard: ShardId::from_raw(shard),
         }),
     )
     .expect("one persona, distinct shards")
