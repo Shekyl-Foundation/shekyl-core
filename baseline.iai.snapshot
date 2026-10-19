@@ -43,7 +43,7 @@ ledger_iai::ledger::hot_path_bench_ledger_postcard_deserialize with_setup_2:(bui
   Total read+write:               603838166|N/A                  (*********)
   Estimated Cycles:               610575742|N/A                  (*********)
 
-Gungraun result: Ok. 6 without regressions; 0 regressed; 0 filtered; 6 benchmarks finished in 17.7471s
+Gungraun result: Ok. 6 without regressions; 0 regressed; 0 filtered; 6 benchmarks finished in 17.9601s
 
 ==== shekyl-engine-state::balance_iai ====
 balance_iai::balance::hot_path_bench_balance_compute with_setup_0:(build_transfers(100))
@@ -68,18 +68,18 @@ balance_iai::balance::hot_path_bench_balance_compute with_setup_2:(build_transfe
   Total read+write:                  226599|N/A                  (*********)
   Estimated Cycles:                  302443|N/A                  (*********)
 
-Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 23.9440s
+Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 22.3079s
 
 ==== shekyl-engine-file::open_iai ====
 open_iai::open_cold::crypto_bench_wallet_open_cold kat_kdf:(prepared_wallet())
   Instructions:                     1990401|N/A                  (*********)
-  L1 Hits:                          2494608|N/A                  (*********)
-  LL Hits:                            23856|N/A                  (*********)
+  L1 Hits:                          2494626|N/A                  (*********)
+  LL Hits:                            23838|N/A                  (*********)
   RAM Hits:                             421|N/A                  (*********)
   Total read+write:                 2518885|N/A                  (*********)
-  Estimated Cycles:                 2628623|N/A                  (*********)
+  Estimated Cycles:                 2628551|N/A                  (*********)
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 0.50327s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 0.50374s
 
 ==== shekyl-scanner::scan_block_iai ====
 scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup_0:(build_state_and_outputs(0))
@@ -90,21 +90,21 @@ scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup
   Total read+write:                     819|N/A                  (*********)
   Estimated Cycles:                    1929|N/A                  (*********)
 scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup_1:(build_state_and_outputs(5))
-  Instructions:                      231182|N/A                  (*********)
-  L1 Hits:                           266139|N/A                  (*********)
+  Instructions:                      231177|N/A                  (*********)
+  L1 Hits:                           266132|N/A                  (*********)
   LL Hits:                              142|N/A                  (*********)
   RAM Hits:                             300|N/A                  (*********)
-  Total read+write:                  266581|N/A                  (*********)
-  Estimated Cycles:                  277349|N/A                  (*********)
+  Total read+write:                  266574|N/A                  (*********)
+  Estimated Cycles:                  277342|N/A                  (*********)
 scan_block_iai::scan_block::hot_path_bench_scan_block_process_outputs with_setup_2:(build_state_and_outputs(50))
-  Instructions:                     2312147|N/A                  (*********)
-  L1 Hits:                          2690686|N/A                  (*********)
-  LL Hits:                             1855|N/A                  (*********)
+  Instructions:                     2311992|N/A                  (*********)
+  L1 Hits:                          2690519|N/A                  (*********)
+  LL Hits:                             1849|N/A                  (*********)
   RAM Hits:                            1118|N/A                  (*********)
-  Total read+write:                 2693659|N/A                  (*********)
-  Estimated Cycles:                 2739091|N/A                  (*********)
+  Total read+write:                 2693486|N/A                  (*********)
+  Estimated Cycles:                 2738894|N/A                  (*********)
 
-Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 1.01487s
+Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 0.95493s
 
 ==== shekyl-tx-builder::transfer_e2e_iai ====
 transfer_e2e_iai::transfer_e2e::crypto_bench_bulletproofs_plus_2_outputs bp_plus_2_outputs:(fresh_2out_commitments())
@@ -122,7 +122,7 @@ transfer_e2e_iai::transfer_e2e::crypto_bench_hybrid_sign_1_input hybrid_sign_1_i
   Total read+write:                 9079751|N/A                  (*********)
   Estimated Cycles:                 9209287|N/A                  (*********)
 
-Gungraun result: Ok. 2 without regressions; 0 regressed; 0 filtered; 2 benchmarks finished in 4.81349s
+Gungraun result: Ok. 2 without regressions; 0 regressed; 0 filtered; 2 benchmarks finished in 4.56468s
 
 ==== shekyl-engine-core::engine_trait_bench_ledger_synced_height_iai ====
 engine_trait_bench_ledger_synced_height_iai::engine_trait_bench_ledger_synced_height_group::engine_trait_bench_ledger_synced_height fresh_engine:(build_engine_fixture())
@@ -133,7 +133,7 @@ engine_trait_bench_ledger_synced_height_iai::engine_trait_bench_ledger_synced_he
   Total read+write:                      79|N/A                  (*********)
   Estimated Cycles:                     219|N/A                  (*********)
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 31.6199s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 21.4542s
 
 ==== shekyl-engine-core::engine_trait_bench_ledger_balance_iai ====
 engine_trait_bench_ledger_balance_iai::engine_trait_bench_ledger_balance_group::engine_trait_bench_ledger_balance balance:(build_engine_fixture_with_default_balance())
@@ -144,40 +144,40 @@ engine_trait_bench_ledger_balance_iai::engine_trait_bench_ledger_balance_group::
   Total read+write:                   25936|N/A                  (*********)
   Estimated Cycles:                   34968|N/A                  (*********)
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 31.8666s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 21.7485s
 
 ==== shekyl-engine-core::engine_trait_bench_key_dispatch_baseline_iai ====
 engine_trait_bench_key_dispatch_baseline_iai::engine_trait_bench_key_dispatch_baseline_group::engine_trait_bench_key_dispatch_baseline_claim_mine claim_mine:(build_key_baseline_fixture())
   Instructions:                    11458786|N/A                  (*********)
-  L1 Hits:                         14844714|N/A                  (*********)
-  LL Hits:                            17524|N/A                  (*********)
-  RAM Hits:                            9195|N/A                  (*********)
+  L1 Hits:                         14844722|N/A                  (*********)
+  LL Hits:                            17507|N/A                  (*********)
+  RAM Hits:                            9204|N/A                  (*********)
   Total read+write:                14871433|N/A                  (*********)
-  Estimated Cycles:                15254159|N/A                  (*********)
+  Estimated Cycles:                15254397|N/A                  (*********)
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 1.90752s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 2.10857s
 
 ==== shekyl-engine-core::engine_trait_bench_key_merge_projection_iai ====
 engine_trait_bench_key_merge_projection_iai::engine_trait_bench_key_merge_projection_group::engine_trait_bench_key_merge_projection projection:(build_merge_projection_fixture())
-  Instructions:                     5163651|N/A                  (*********)
-  L1 Hits:                          6990608|N/A                  (*********)
-  LL Hits:                              490|N/A                  (*********)
-  RAM Hits:                           10550|N/A                  (*********)
-  Total read+write:                 7001648|N/A                  (*********)
-  Estimated Cycles:                 7362308|N/A                  (*********)
+  Instructions:                     5163615|N/A                  (*********)
+  L1 Hits:                          6990546|N/A                  (*********)
+  LL Hits:                              509|N/A                  (*********)
+  RAM Hits:                           10547|N/A                  (*********)
+  Total read+write:                 7001602|N/A                  (*********)
+  Estimated Cycles:                 7362236|N/A                  (*********)
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 0.30278s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 0.30319s
 
 ==== shekyl-ffi::relay_admission_verify_iai ====
 relay_admission_verify_iai::relay_admission_verify_group::crypto_bench_relay_admission_verify modal:(modal_shape())
-  Instructions:                   358775697|N/A                  (*********)
-  L1 Hits:                        466914143|N/A                  (*********)
-  LL Hits:                           304213|N/A                  (*********)
-  RAM Hits:                              10|N/A                  (*********)
-  Total read+write:               467218366|N/A                  (*********)
-  Estimated Cycles:               468435558|N/A                  (*********)
+  Instructions:                   358810601|N/A                  (*********)
+  L1 Hits:                        466963509|N/A                  (*********)
+  LL Hits:                           303023|N/A                  (*********)
+  RAM Hits:                              21|N/A                  (*********)
+  Total read+write:               467266553|N/A                  (*********)
+  Estimated Cycles:               468479359|N/A                  (*********)
 
-Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 268.554s
+Gungraun result: Ok. 1 without regressions; 0 regressed; 0 filtered; 1 benchmarks finished in 240.699s
 
 ==== shekyl-p-serve::serve_response_iai ====
 serve_response_iai::serve_response_group::crypto_bench_serve_response one_leaf:(one_leaf())
@@ -265,7 +265,7 @@ serve_response_iai::serve_response_group::crypto_bench_serve_digest_alone full_s
   Total read+write:               204561680|N/A                  (*********)
   Estimated Cycles:               204770922|N/A                  (*********)
 
-Gungraun result: Ok. 12 without regressions; 0 regressed; 0 filtered; 12 benchmarks finished in 34.1788s
+Gungraun result: Ok. 12 without regressions; 0 regressed; 0 filtered; 12 benchmarks finished in 31.2244s
 
 ==== shekyl-crypto-pq::fn_dsa_hybrid_iai ====
 fn_dsa_hybrid_iai::fn_dsa_hybrid::crypto_bench_fn_dsa_hybrid_sign receipt:(keypair())
@@ -290,4 +290,4 @@ fn_dsa_hybrid_iai::fn_dsa_hybrid::crypto_bench_fn_dsa_hybrid_verify receipt:(sig
   Total read+write:                 1142861|N/A                  (*********)
   Estimated Cycles:                 1160347|N/A                  (*********)
 
-Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 3.81285s
+Gungraun result: Ok. 3 without regressions; 0 regressed; 0 filtered; 3 benchmarks finished in 3.61013s
