@@ -22,10 +22,9 @@ PR-SM-2's verify un-gate). **Update 2026-08-15 — LANDED, round fully
 discharged:** the layout went in as an in-place correction (version
 byte stays `0x01`; the 65-byte draft never reaches the frozen record —
 ruled at landing, multisig never-deployed precedent), the
-`ADDRESS_DERIVATION_V2` successor corpus is pinned, persona receive
-addresses carry a per-slot `msg_sign_pk` under the seventh archival-P
-label (a landing-time ruling the round had not priced — uniformity, not
-a persona signing capability), and the R6-a type gate lifted by
+`ADDRESS_DERIVATION_V2` successor corpus is pinned (a persona has no
+address and no `msg_sign_pk`: decision log 2026-10-18), and the R6-a
+type gate lifted by
 `verify_message` taking `&BoundClassicalSegment` — keys and bound
 bytes are the same object; `SignerIdentity` is deleted (the two-
 parameter API would have left the unbound provenance the type was

@@ -6706,3 +6706,30 @@ JoinMarket's receipt key) and `RejectCause::JoinMarketUnsupported` are
 accepted.
 
 ---
+
+## 2026-10-18 — A persona has no address: `stake_in` pays its keys, and the bundle derives no SLH-DSA key
+
+**Decision (maintainer, 2026-10-18; built on PR #1122).** A persona's payment
+destination is its spend, view and ML-KEM-768 encapsulation keys, handed by
+the stake engine to the transfer path as a wallet-internal destination
+(`TxDestination::OwnPersona`). Nothing encodes a persona address and nothing
+parses one. `ArchivalPKeys` no longer derives the SLH-DSA-192s message-signing
+key, whose only reader was that address, and its label
+`shekyl-archival-p-msg-sign-slh-dsa-192s-v1` is gone with it.
+
+**Why.** No persona address leaves the wallet: `stake_in` encoded the address
+only for the sign pass to parse it again, and a persona has no signing surface
+for the key. The key was most of a staker's wallet-open derivation cost
+(`FN_DSA_HYBRID.md` `FND-25`). The send journal and the reservation summary
+record a persona funding as `OwnPersonaFunding`, never as a fabricated address
+or a zero-filled key.
+
+**Rejected alternatives.**
+
+- Persona addresses carrying an SLH-DSA key for uniformity were rejected on
+  2026-10-18 because no persona address leaves the wallet.
+
+**Out of scope.** The principal's SLH-DSA key at wallet open, and deriving
+persona slots in parallel.
+
+---

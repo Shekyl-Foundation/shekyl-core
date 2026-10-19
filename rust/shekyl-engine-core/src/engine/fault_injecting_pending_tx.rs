@@ -253,7 +253,7 @@ mod tests {
     fn standard_request() -> TxRequest {
         TxRequest {
             recipients: vec![super::super::pending::TxRecipient {
-                address: "addr".into(),
+                destination: super::super::pending::TxDestination::Address("addr".into()),
                 amount_atomic_units: shekyl_units::AtomicUnits::from_raw(1),
                 rid: None,
             }],

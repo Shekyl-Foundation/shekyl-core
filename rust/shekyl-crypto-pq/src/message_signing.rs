@@ -271,11 +271,9 @@ pub fn derive_message_signing_identity(
 /// Split a 72-byte identity-seed expansion into the R4-a layout and run
 /// the deterministic keygen: `SK.seed ‖ SK.prf ‖ PK.seed` at `n = 24`
 /// each. The **one** place the slice order exists (SM-R-4 R4-a — a wrong
-/// split silently produces a valid-but-different keypair): the principal
-/// identity above and the per-slot archival-P identity
-/// (`archival_p::derive_p_msg_sign_pk`) both feed it, under their own
-/// HKDF labels.
-pub(crate) fn slh_identity_from_okm(
+/// split silently produces a valid-but-different keypair). Only the
+/// principal identity above has an SLH-DSA key: a persona has none.
+fn slh_identity_from_okm(
     okm: &Zeroizing<[u8; MSG_SIGN_IDENTITY_SEED_LEN]>,
 ) -> (slh_dsa_sha2_192s::PublicKey, slh_dsa_sha2_192s::PrivateKey) {
     let mut sk_seed = Zeroizing::new([0u8; SLH_192S_N]);

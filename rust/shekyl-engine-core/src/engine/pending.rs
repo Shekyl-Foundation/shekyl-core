@@ -102,9 +102,10 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use shekyl_address::Network;
-use shekyl_engine_state::PaymentRequestId;
+use shekyl_crypto_pq::archival_p::PersonaDestination;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SendJournalBlock};
+use shekyl_engine_state::{PaymentRequestId, SendDestination};
 use shekyl_units::AtomicUnits;
 
 use crate::engine::{
@@ -285,13 +286,42 @@ impl SubmitOutcome {
     }
 }
 
+/// Where one payment of a [`TxRequest`] goes.
+///
+/// Ordered so the consent fingerprint can sort destinations canonically
+/// (CT-5d F-G′). `Debug` prints an address and names the persona arm
+/// without its keys ([`PersonaDestination`]'s own `Debug`).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TxDestination {
+    /// An address in canonical Shekyl encoding — the user-send case. The
+    /// only arm ever parsed: the sign pass decodes and network-checks it
+    /// before building the output, and refuses one that does not decode
+    /// for the wallet's network.
+    Address(String),
+    /// This wallet's own active staking persona (`stake_in`): the payment
+    /// keys the stake engine hands over. A persona has no address, so
+    /// nothing here is encoded or parsed.
+    OwnPersona(PersonaDestination),
+}
+
+impl TxDestination {
+    /// What the reservation summary and the send journal record for this
+    /// destination: the address, or for a persona only the kind.
+    #[must_use]
+    pub fn recorded(&self) -> SendDestination {
+        match self {
+            Self::Address(address) => SendDestination::Address(address.clone()),
+            Self::OwnPersona(_) => SendDestination::OwnPersonaFunding,
+        }
+    }
+}
+
 /// One transfer destination for [`TxRequest`].
 #[derive(Clone, Debug)]
 pub struct TxRecipient {
-    /// Destination address in canonical Shekyl encoding (parsed and
-    /// network-checked by [`build_pending_tx_in_state`]).
-    pub address: String,
-    /// Amount to send to this address in atomic units (no fee).
+    /// Where this payment goes.
+    pub destination: TxDestination,
+    /// Amount to send to this destination in atomic units (no fee).
     pub amount_atomic_units: AtomicUnits,
     /// The payment request this send answers, when it was composed from a
     /// `shekyl:` link that carried a `rid`: echoed in the output's
@@ -338,14 +368,27 @@ impl TxRequest {
     }
 }
 
+impl TxRecipient {
+    /// The display summary of this recipient: what the reservation and the
+    /// handle carry ([`TxRecipientSummary`]).
+    #[must_use]
+    pub fn summary(&self) -> TxRecipientSummary {
+        TxRecipientSummary {
+            destination: self.destination.recorded(),
+            amount_atomic_units: self.amount_atomic_units,
+        }
+    }
+}
+
 /// Display-friendly recipient summary stored alongside the
 /// reservation so the caller can render "what is in flight" without
 /// parsing transaction bytes.
 #[derive(Clone, Debug)]
 pub struct TxRecipientSummary {
-    /// Destination address, verbatim from the [`TxRecipient`] that
-    /// produced the reservation.
-    pub address: String,
+    /// Destination, as [`TxDestination::recorded`] gives it: the address
+    /// verbatim, or for a `stake_in` only that it funds this wallet's own
+    /// persona.
+    pub destination: SendDestination,
     /// Amount the caller asked to send to this destination, in atomic
     /// units, before fee.
     pub amount_atomic_units: AtomicUnits,
@@ -747,10 +790,7 @@ pub(crate) fn build_pending_tx_in_state(
     let summary: Vec<TxRecipientSummary> = request
         .recipients
         .iter()
-        .map(|r| TxRecipientSummary {
-            address: r.address.clone(),
-            amount_atomic_units: r.amount_atomic_units,
-        })
+        .map(TxRecipient::summary)
         .collect();
 
     // Derive the SnapshotId from a freshly-read LedgerSnapshot view
