@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** OPEN — Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to the ruled CS-Q2 and CS-Q3, made in review on 2026-10-19 and awaiting Rick's confirmation: a body is bound to its header before the offer, so a substituted body never invalidates an honest header (CEN-G2); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction, with only an omitted first block attributable. Nothing here is implemented; the pure-Rust work of CS-Q10 starts first.
+**Status:** OPEN — Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to the ruled CS-Q2 and CS-Q3, made in review on 2026-10-19 and awaiting Rick's confirmation: a body is bound to its header before the offer, so a substituted body never invalidates an honest header (CEN-G2); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction, with only an omitted first block attributable. From DRS-X PR 2's design review (2026-10-19): `following_degraded` is set by ingest's three refusals in the connector and held in the chain store (§A, coupling 4), and header PoW follows the earned-seed rule (CS-Q2 step 3), with one choice open for past-cap evidence, (i) or (ii). Nothing here is implemented; the pure-Rust work of CS-Q10 starts first.
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 **Subject.** Moving chain sync (`cryptonote_protocol_handler`, `block_queue`) from C++ to Rust.
@@ -259,10 +259,55 @@ ingest deciding forks.**
          once its work is proven. It needs less memory, but it is a
          second protocol pass. *Reopen if* the Pi 4 figures (CS-Q11)
          show `2 × |T|` does not fit.
-   - **PoW, last.** RandomX (with the seed from the header chain
-     itself) on each header of the run, in order.
+   - **PoW, last.** RandomX on each header of the run, in order.
      - The first failure closes the session.
      - Headers that pass join `T`, and the run is cleared.
+   - **Which seed, and when a cache may be derived.** A header at height
+     `h` hashes under the seed named by the header at `seedheight(h)` on
+     its own branch (`SEEDHASH_EPOCH_BLOCKS` 2048, `SEEDHASH_EPOCH_LAG`
+     64; `shekyl-difficulty/src/seed_epoch.rs:37-40`). This is DRS-X's
+     earned-seed rule, applied to headers (B2, DRS-X PR 2 review): a
+     cache is derived only for a seed the chain has earned.
+     - **A seed one of the two cache slots holds** (the window the
+       ingest door uses) is used as is.
+     - **A seed on the run's own branch** is earned when the seed header
+       and every header after it, up to the one being hashed, are
+       PoW-verified on that branch. In-order verification gives this
+       whenever a header names such a seed: the lag puts the seed header
+       at least 65 headers earlier, each paid for at its claimed
+       difficulty. This is the header form of B2's "65 or more stored
+       blocks". Initial sync is this case: each seed on `H*` past `L` is
+       earned by the headers `T` already verified.
+     - Such a cache is **transient**. It never takes the canonical slot
+       or the pinned pair, and it is never pinned. It is built under
+       `Class::HeaderPow` (`shekyl-hash-budget`, DRS-X PR 2), one build
+       at a time, and dropped when that seed epoch's headers are done.
+     - **Any other seed is not derived.** That is an old main-chain seed
+       below the window, named by the first headers of a branch that
+       forks deeper than the window reaches. Those headers are not
+       hashed, so a header that names an unearned seed costs zero cache
+       builds. That keeps B1, the old-cache derivation attack (one cache
+       build bought with one block nobody worked for), closed.
+     - **What this costs `Diverged` (CS-Q4, the `D_max` trap).** A fork
+       deeper than `D_max` names, in its first headers, a seed the window
+       guarantees to hold only up to `D_max` deep. So under this rule,
+       sync verifies a past-cap branch only while its fork point's seed
+       is still in the window, and a deeper fork stays silent. **Rick's
+       call:**
+       - **(i) Keep B2 strict:** `Diverged` covers forks whose first seed
+         is in the window, and the deeper case is a recorded gap. *Reopen
+         if* an eclipse run (CS-Q11) shows the honest chain arriving only
+         after the window has moved past the fork.
+       - **(ii) One bounded old-seed path for evidence:** a past-cap
+         branch whose computed work exceeds `work(L)` may have its fork
+         seed derived, transiently, in a hasher class below `Miner`. One
+         build runs at a time, at most one per session, and it uses only
+         idle permits, so it can never delay `Chain`, `HeaderPow`,
+         `Unsolicited`, `CalcPow` or the miner. The attacker cost per
+         build is a session and no work, because computed work can be
+         raised by timestamps alone. What B1 bought, starving the chain's
+         hashing, stays closed; idle CPU is what it costs. This needs a
+         new class in `shekyl-hash-budget`, which is DRS-X's crate.
 4. **Select.** `H*` = the most work among the reachable chains in `T`.
    - A liar who claimed more work than its headers deliver is caught at
      the end of its run (step 3) and its session is closed.
@@ -298,12 +343,16 @@ ingest deciding forks.**
      between asking for room and offering.
    - `Held`, `SwitchDue` and the switch outcomes: ingest's. Sync only
      reads the new `L`.
-   - `BeyondCap`: arises only on the **announce path**, because bodies
-     are requested only along reachable `H*`. The entry may answer it at
-     the door, before proof of work (DRS-X PR 2, #1123), so the reply is
-     unverified and **never raises the alarm**. Sync treats it as a hint:
-     it requests headers, and a verified run can raise the alarm through
-     `T` (step 8).
+   - `BeyondCap`: the door's hint (DRS-X PR 2, #1123). Nothing was
+     stored or hashed, so it **never raises the alarm**. Sync treats it
+     as a hint: it requests headers, and a verified run can raise the
+     alarm through `T` (step 8).
+   - `CannotFollow { BeyondCap | BelowFloor }`: ingest stored the block,
+     its proof of work passed, and the fork choice said heavier, but the
+     node cannot follow. The connector has already set
+     `following_degraded` (step 8). Sync only reads the latch. These
+     arise only on the announce path, because bodies are requested only
+     along reachable `H*`.
 8. **State, published as one source.** **A claim's value never changes
    the sync state; only verified headers do.** A higher claim only starts
    a header request (step 1).
@@ -330,11 +379,13 @@ ingest deciding forks.**
        than `L` and forks deeper than `D_max`. Those headers pass the
        same step-3 run, so raising the alarm costs no more than any
        other header chain. A claim alone never raises it.
-     - **Secondary source:** ingest's switch results,
-       `Switched::BelowFloor` and `Switched::BeyondCap`, which come after
-       proof of work and storage (§A, coupling 4). A `BeyondCap` reply
-       from the door never sets it: one free block would otherwise turn
-       off a staker's serving until a resync.
+     - **Secondary source:** ingest's three refusals of a heavier chain:
+       the store's `Offered::BeyondCap` and the switch's
+       `Switched::BeyondCap` and `Switched::BelowFloor`. Each comes after
+       the block is stored and its proof of work has passed. They are set
+       in the connector, where they are produced, never from a reply
+       (§A, coupling 4). The door's `BeyondCap` never sets it: one free
+       block would otherwise turn off a staker's serving until a resync.
      - It never withholds `Synced`, and it never stops the miner or the
        relay gate (CS-Q4).
      - **Its wire is the existing `following_degraded`** (C2-R1b F-1(a);
@@ -352,7 +403,8 @@ ingest deciding forks.**
        - (a) **The field's meaning widens,** from "a switch refused at
          the prune watermark" to "a heavier chain refused at either cap:
          the undo floor (`Switched::BelowFloor`) or `D_max`
-         (`Switched::BeyondCap`, or a verified run in `T`)". Both mean the node knows it is not on
+         (`Offered::BeyondCap`, `Switched::BeyondCap`, or a verified run
+         in `T`)". Both mean the node knows it is not on
          the heaviest chain it has seen, which is what the wallet
          consumer acts on.
        - (b) **The latch stays.** The alarm latches until a resync, as
@@ -361,9 +413,9 @@ ingest deciding forks.**
          - A derived alarm would also clear on restart, because `T` is
            held in memory, until the heavier chain is seen again. That
            is the wrong direction for a fault that needs an operator.
-         - If the latch must survive a restart, it is a persisted flag:
-           one bit in the store, the store lane's to place.
-           C2-R1b's latch is process-lifetime today.
+         - The latch lives in the chain store and survives a restart;
+           only a resync clears it (`DRS_X_STORE_FLIP.md` DX-Q2 item 8,
+           #1123). C2-R1b's C++ latch was process-lifetime.
      - **Its producer is Rust:** a latch that ingest sets from the flip
        and the sync owner also sets from the CS cutover (§A, coupling 4).
 
@@ -1071,6 +1123,8 @@ half-cut, and one cutover PR avoids it.
     `C`;
   - a claim's value never changes the sync state;
   - the long-run slot goes to the most verified work at equal height;
+  - header PoW never derives a cache for a seed its branch has not earned
+    (CS-Q2 step 3); a branch-earned cache is transient and never pinned;
   - the `Diverged` alarm latches until a resync and sets
     `following_degraded`;
   - `Diverged` never withholds `Synced`;
@@ -1160,7 +1214,8 @@ document says it carries.
 
 1. **One reply per arrival, tagged with the arrival.** The variants:
    `Connected`, `Refused(verdict)`, `Unlinked{at}`, `AlreadyHeld`,
-   `Held`, `BeyondCap`, `NoRoom`, and the switch outcomes.
+   `Held`, `BeyondCap` (the door's hint), `CannotFollow { BeyondCap |
+   BelowFloor }`, `NoRoom`, and the switch outcomes.
    - `Source` is a pull trait with no path back, so it cannot carry
      this.
 2. **Capacity.** The entry reports room before sync requests bodies. An
@@ -1204,19 +1259,25 @@ relayed to the DRS-X lane.
    - `DRS_X_STORE_FLIP.md` has no mention of `following_degraded`. Yet
      the field is landed RPC (3.26), and the wallet engine reads it
      (CS-Q2 step 8).
-   - **Ruled: a Rust-held latch, not shell state.** After the flip the
-     switch is Rust ingest's, and its results already carry the two
-     refusals: `Switched::BelowFloor` (the undo floor) and
-     `Switched::BeyondCap` (`D_max`) (`switch.rs:338-342`). Ingest sets
-     the latch from those switch results only.
+   - **Ruled: a Rust-held latch in the chain store, not shell state.**
+     After the flip the switch is Rust ingest's. Three outcomes prove a
+     heavier chain the node refused:
+     - the store's `Offered::BeyondCap` (`switch.rs:502`), reached only
+       after the fork choice says heavier, with the block stored and its
+       proof of work passed;
+     - the switch's `Switched::BeyondCap` (`D_max`) and
+       `Switched::BelowFloor` (the undo floor) (`switch.rs:338-342`).
+
+     The connector sets the latch where these are produced, never from a
+     reply. They reach sync as one reply, `CannotFollow`. #1123 carries
+     this as DX-Q2 item 8, from Rick's design review of 2026-10-19.
    - **Not from the door.** DRS-X PR 2 (#1123) refuses a past-cap
      alternative at the door, before its proof of work is checked or it
-     is stored, and answers `BeyondCap`. That reply never sets the
-     latch. Since the door and `within_cap` (`switch.rs:640`) use the
-     same depth, `Switched::BeyondCap` is reached only when the tip
-     moves between the claim and the connector. In practice the `D_max`
-     alarm comes from the sync owner's verified headers (CS-Q2 step 8),
-     from the CS cutover.
+     is stored, and answers `BeyondCap`. That reply never sets the latch.
+     A chain that becomes heavier only after its fork has passed the cap
+     never reaches ingest at all. So from the CS cutover, the sync
+     owner's verified headers are the source for that case (CS-Q2 step 8),
+     within the seed rule of CS-Q2 step 3.
    - The RPC reads it in Rust (`info_facts.rs:88`, DX-Q3, #1106). The
      latch semantics are C2-R1b's: one-way until a resync.
    - Without this, the flip silently retires a field the wallet acts
