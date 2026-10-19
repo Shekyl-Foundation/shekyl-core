@@ -190,12 +190,6 @@ pub enum Reply {
     /// chain: one block nobody worked for earns it. Local: the session
     /// stays open, and it never sets `following_degraded` (DX-Q2 item 8).
     BeyondCap(PopBeyondReorgCap),
-    /// The block's seed is not one of the two caches this node holds.
-    /// Local: nothing was stored and nothing was hashed.
-    OutsideWindow {
-        /// Its height on its chain.
-        height: BlockHeight,
-    },
     /// Stored, and the chain switched onto its branch.
     Switched {
         /// The blocks popped, ascending.
@@ -369,6 +363,21 @@ pub enum ServiceFault<F> {
     /// panicked. The miner must not keep hashing a job nothing will refresh.
     #[error("the tip follower ended")]
     FollowerEnded,
+    /// An in-cap alternative named a seed below its fork that the window
+    /// does not hold. The window's arithmetic says it cannot: a defect in
+    /// this node, never a peer's doing (`cache_window` module docs).
+    #[error("an in-cap alternative at height {height} named a below-fork seed outside the window")]
+    SeedNotInWindow {
+        /// The alternative's height on its chain.
+        height: BlockHeight,
+    },
+    /// A form hashed under a seed this node had just prepared, and the
+    /// substrate still had no cache for it.
+    #[error("a prepared seed's cache was absent at height {height}")]
+    PreparedSeedAbsent {
+        /// The block's height on its chain.
+        height: BlockHeight,
+    },
     /// A block this node connected failed its own stateless rules when a
     /// switch formed it to demote it.
     #[error("the recorded block {hash:?} refused when formed for demotion: {refused}")]
@@ -396,6 +405,12 @@ pub(crate) struct Shared<S: Substrate> {
     fault: Mutex<Option<ServiceFault<S::Fault>>>,
     /// Serializes cache pins. Taken after a hasher permit, never before.
     pin_lock: Arc<Mutex<()>>,
+    /// Serialises every form under a branch's own seed (B2): an alternative
+    /// arrival's, and a switch that promotes past its branch's seed point.
+    /// Taken before any permit, so the order is gate, permit, `pin_lock`.
+    /// With one such form at a time, the live caches are the canonical, the
+    /// transient, and at most one evicted cache a form still holds.
+    branch_gate: tokio::sync::Mutex<()>,
     /// The seeds the two slots hold. `None` until the first install.
     seeds: tokio::sync::watch::Sender<Option<crate::cache_window::SeedPair>>,
     /// The last `TipChanged` publication the tip attendant acted on.
@@ -474,6 +489,24 @@ where
     /// Record the seeds a pin just installed.
     pub(crate) fn note_pins(&self, pinned: &[BlockHash]) {
         window::note_pins(self, pinned);
+    }
+
+    /// A branch seed was prepared into the transient slot: the published
+    /// pair says so, so the next window install sees the slot it lost.
+    pub(crate) fn note_prepared(&self, seed: BlockHash) {
+        if let Some(pair) = self.published_seeds() {
+            if pair.canonical != seed {
+                self.seeds.send_replace(Some(crate::cache_window::SeedPair {
+                    canonical: pair.canonical,
+                    transient: Some(seed),
+                }));
+            }
+        }
+    }
+
+    /// The gate every form under a branch's own seed takes first.
+    pub(crate) async fn branch_form(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.branch_gate.lock().await
     }
 
     pub(crate) const fn connector(&self) -> &ActorRef<Connector> {
@@ -820,6 +853,7 @@ where
             stop: tokio::sync::watch::Sender::new(false),
             fault: Mutex::new(None),
             pin_lock: Arc::new(Mutex::new(())),
+            branch_gate: tokio::sync::Mutex::new(()),
             seeds: tokio::sync::watch::Sender::new(None),
             followed: tokio::sync::watch::Sender::new(0),
             pool: follow.pool,
@@ -1002,3 +1036,7 @@ mod service_tests;
 #[cfg(test)]
 #[path = "service_pool_tests.rs"]
 mod service_pool_tests;
+
+#[cfg(test)]
+#[path = "service_seed_tests.rs"]
+mod service_seed_tests;

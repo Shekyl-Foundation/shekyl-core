@@ -36,6 +36,14 @@ pub(crate) struct Gated {
     waited: AtomicUsize,
     /// Seeds pinned: every cache this substrate was asked to build.
     pins: AtomicUsize,
+    /// The two cache slots, as the cache store keeps them: canonical, then
+    /// transient.
+    slots: Mutex<(Option<BlockHash>, Option<BlockHash>)>,
+    /// Caches a preparation built: a branch seed no slot held.
+    prepared: AtomicUsize,
+    /// Forms hashing under a held branch cache now, and the most at once.
+    branch_forms: AtomicUsize,
+    branch_forms_max: AtomicUsize,
 }
 
 impl Gated {
@@ -46,6 +54,10 @@ impl Gated {
             hashes: AtomicUsize::new(0),
             waited: AtomicUsize::new(0),
             pins: AtomicUsize::new(0),
+            slots: Mutex::new((None, None)),
+            prepared: AtomicUsize::new(0),
+            branch_forms: AtomicUsize::new(0),
+            branch_forms_max: AtomicUsize::new(0),
         }
     }
 
@@ -68,6 +80,21 @@ impl Gated {
     /// Seeds pinned so far.
     pub(crate) fn pins(&self) -> usize {
         self.pins.load(Ordering::Acquire)
+    }
+
+    /// Caches preparations built so far.
+    pub(crate) fn prepared(&self) -> usize {
+        self.prepared.load(Ordering::Acquire)
+    }
+
+    /// The seed in the canonical slot.
+    pub(crate) fn canonical(&self) -> Option<BlockHash> {
+        self.slots.lock().expect("slots").0
+    }
+
+    /// The most forms that hashed under a held branch cache at once.
+    pub(crate) fn branch_forms_max(&self) -> usize {
+        self.branch_forms_max.load(Ordering::Acquire)
     }
 
     /// Wait until a longhash has met a closed gate: the held block is in
@@ -101,8 +128,40 @@ impl Substrate for Gated {
         Ok(PowHash::from_bytes([0; 32]))
     }
 
-    fn pin_seed(&self, _seed: &BlockHash) {
+    /// The cache store's `pin_canonical`: the previous canonical seed is
+    /// demoted to the transient slot.
+    fn pin_seed(&self, seed: &BlockHash) {
         self.pins.fetch_add(1, Ordering::AcqRel);
+        let mut slots = self.slots.lock().expect("slots");
+        if slots.0 != Some(*seed) {
+            *slots = (Some(*seed), slots.0);
+        }
+    }
+
+    /// The cache store's derive: a seed no slot holds is built into the
+    /// transient slot; the canonical slot does not move.
+    fn prepare_seed(&self, seed: &BlockHash) {
+        let mut slots = self.slots.lock().expect("slots");
+        if slots.0 != Some(*seed) && slots.1 != Some(*seed) {
+            self.prepared.fetch_add(1, Ordering::AcqRel);
+            slots.1 = Some(*seed);
+        }
+    }
+
+    /// A form under a held branch cache, held open briefly so two at once
+    /// would overlap.
+    fn longhash_held(
+        &self,
+        pow_blob: &[u8],
+        seed: &BlockHash,
+        _held: &(),
+    ) -> Result<PowHash, Self::Fault> {
+        let now = self.branch_forms.fetch_add(1, Ordering::AcqRel) + 1;
+        self.branch_forms_max.fetch_max(now, Ordering::AcqRel);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let hashed = self.longhash(pow_blob, seed);
+        self.branch_forms.fetch_sub(1, Ordering::AcqRel);
+        hashed
     }
 }
 

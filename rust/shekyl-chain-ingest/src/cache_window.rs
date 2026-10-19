@@ -5,14 +5,25 @@
 
 //! The two RandomX caches an arrival may hash under.
 //!
-//! The cache store holds two slots. A block this node will hash — one
-//! inside the reorg cap, and not below a reached checkpoint — names at
-//! most those two seeds, because two caps fit inside one seed epoch. The
-//! service pins that pair, older endpoint first and the connecting height's
-//! seed as the canonical slot. An alternative whose seed is not one of
-//! them is refused before any cache is built. Only the main chain and the
-//! miner's next block move the canonical slot, and every build takes a
-//! hasher permit.
+//! The cache store holds two slots. A cache is derived only for a seed the
+//! chain has earned (B2, design review 2026-10-19):
+//!
+//! - **a main-chain seed in the window.** A block inside the reorg cap, and
+//!   not below a reached checkpoint, whose seed lies below its fork names
+//!   one of at most two seeds, because the window fits inside one seed
+//!   epoch. The service pins that pair, older endpoint first and the
+//!   connecting height's seed as the canonical slot. A below-fork seed
+//!   outside the pair is a defect in this arithmetic, a fault.
+//! - **the seed block of the arrival's own in-cap branch.** A branch that
+//!   forked below a seed block and grew past it names its own block there.
+//!   That block is a stored alt row whose proof of work passed, and no
+//!   block names it until the branch holds 65 or more stored blocks from it
+//!   up. It is prepared into the transient slot under the arrival's permit
+//!   and never pinned; the form hashes with the cache the preparation
+//!   returned.
+//!
+//! Only the main chain and the miner's next block move the canonical
+//! slot, and every build takes a hasher permit.
 
 use shekyl_chain_rules::{
     anchor_band, seed_height, AnchorBand, AtHeight, CenRow, Corrupt, Fork, InvalidBlock, Locus,
@@ -20,17 +31,32 @@ use shekyl_chain_rules::{
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError};
 use shekyl_difficulty::SEEDHASH_EPOCH_BLOCKS;
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
 use crate::connector::PopBeyondReorgCap;
 use crate::schedule::ChainRules;
 
 /// Two reorg caps fit inside one seed epoch, so the two slots hold every
-/// seed an in-cap alternative can name. A wider cap must not assume that.
+/// below-fork seed an in-cap alternative can name. A wider cap must not
+/// assume that.
 const _: () = assert!(
     2 * D_MAX.to_raw() < SEEDHASH_EPOCH_BLOCKS,
     "two reorg caps no longer fit in one seed epoch; the two cache slots cannot cover an in-cap alternative"
 );
+
+/// How far above the connecting height the window reaches: the cap, and
+/// never less than the seed lag plus one. A seed block mined below the
+/// tip is named only from 65 blocks above it, so a lever cap under 65
+/// would otherwise leave a mined below-fork seed out of the pair. The
+/// window stays `cap + max(cap, 65) < SEEDHASH_EPOCH_BLOCKS` wide.
+fn reach_above(cap: BlockCount) -> BlockCount {
+    let lag_reach = BlockCount::from_raw(shekyl_difficulty::SEEDHASH_EPOCH_LAG + 1);
+    if cap.to_raw() < lag_reach.to_raw() {
+        lag_reach
+    } else {
+        cap
+    }
+}
 
 /// The seeds the two slots hold: the connecting height's, and the other
 /// endpoint of the serviceable window when it differs.
@@ -55,18 +81,24 @@ impl SeedPair {
 /// work is checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AltSpend {
-    /// The fork is inside the band and the seed is held. Hash it. Do not
-    /// pin: the slots already hold the seed.
+    /// The fork is inside the band and the seed lies below it, in the
+    /// pair. Hash it. Do not pin: the slots already hold the seed.
     Hash,
+    /// The fork is inside the band and the seed is the branch's own block,
+    /// above the fork. Prepare it into the transient slot under the
+    /// arrival's permit, never pinned, and hash with the cache that
+    /// returns.
+    Prepare,
     /// Below a reached checkpoint, or past the cap on an anchored chain.
     /// CEN-E2. Nothing is stored.
     Refused(InvalidBlock),
     /// Past the cap on a chain where the cap does not bind as consensus.
     /// Local. Nothing is stored and nothing is hashed.
     BeyondCap(PopBeyondReorgCap),
-    /// The seed is not one of the two slots. Local. Nothing is stored and
-    /// nothing is hashed.
-    OutsideWindow {
+    /// A seed below the fork that the pair does not hold. The window's
+    /// arithmetic says it cannot happen inside the cap: a driver defect,
+    /// which the caller faults on. Never a reply.
+    SeedNotInWindow {
         /// The block's height on its chain.
         height: BlockHeight,
     },
@@ -82,18 +114,30 @@ pub(crate) fn seeds_for(
     store: &ChainStore,
     rules: ChainRules,
 ) -> Result<SeedPair, ViewRead<StoreError>> {
-    let snap = store.begin_read()?;
+    seeds_on(&store.begin_read()?, rules)
+}
+
+/// [`seeds_for`] on `snap`: the window an alternative claimed on the same
+/// snapshot is judged against.
+///
+/// # Errors
+///
+/// As [`seeds_for`].
+pub(crate) fn seeds_on(
+    snap: &ReadSnapshot<'_>,
+    rules: ChainRules,
+) -> Result<SeedPair, ViewRead<StoreError>> {
     let tip = snap.tip()?.recorded;
     let connecting = shekyl_chain_rules::Tip::connecting_height(tip.as_ref());
     let cap = rules.in_force(connecting).reorg_cap();
     let low = connecting.saturating_sub_count(cap);
-    let high = connecting.saturating_add(cap);
+    let high = connecting.saturating_add(reach_above(cap));
     // The connecting height's seed lags the tip, or is the null hash
     // before any block exists. The window's far end can name the next
     // epoch before that block is mined; that seed is not a slot.
-    let canonical = required_seed(seed_hash(&snap, connecting)?, connecting)?;
-    let older = seed_hash(&snap, low)?;
-    let newer = seed_hash(&snap, high)?;
+    let canonical = required_seed(seed_hash(snap, connecting)?, connecting)?;
+    let older = seed_hash(snap, low)?;
+    let newer = seed_hash(snap, high)?;
     Ok(pair_of(canonical, older, newer))
 }
 
@@ -148,12 +192,23 @@ fn seed_hash(
     }
 }
 
-/// Whether `fork`'s block, hashing under `seed` at `height`, may be hashed
-/// against `window`. Records nothing. Builds nothing.
+/// Where an alternative's seed block lies against its fork.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SeedSide {
+    /// At or below the fork point: a main-chain block, or the null seed.
+    BelowFork,
+    /// Above the fork point: the branch's own block.
+    OnBranch,
+}
+
+/// Whether `fork`'s block, hashing under `seed` (which lies on `side`) at
+/// `height`, may be hashed against `window`, and how. Records nothing.
+/// Builds nothing.
 #[must_use]
 pub(crate) fn spend(
     fork: &Fork,
     seed: &BlockHash,
+    side: SeedSide,
     height: BlockHeight,
     rule_set: &RuleSet,
     trust: &Trust,
@@ -167,8 +222,11 @@ pub(crate) fn spend(
             depth: fork.pops(),
             cap: rule_set.reorg_cap(),
         }),
-        None if !window.holds(seed) => AltSpend::OutsideWindow { height },
-        None => AltSpend::Hash,
+        None => match side {
+            SeedSide::OnBranch => AltSpend::Prepare,
+            SeedSide::BelowFork if window.holds(seed) => AltSpend::Hash,
+            SeedSide::BelowFork => AltSpend::SeedNotInWindow { height },
+        },
     }
 }
 
@@ -204,6 +262,7 @@ mod tests {
         let spend = spend(
             &fork,
             &BlockHash::NULL,
+            SeedSide::BelowFork,
             BlockHeight::from_raw(1),
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,
@@ -215,26 +274,42 @@ mod tests {
         );
     }
 
+    /// B2: a seed below the fork must be one of the pair, and a miss is a
+    /// defect, never a reply. The branch's own seed block is prepared,
+    /// whatever the pair holds.
     #[test]
-    fn a_seed_outside_the_held_pair_is_not_hashed() {
+    fn a_below_fork_miss_is_a_defect_and_a_branch_seed_is_prepared() {
         let fork = popping(BlockCount::from_raw(1));
         let window = SeedPair {
             canonical: BlockHash::NULL,
             transient: None,
         };
         let other = BlockHash::from_bytes([9; 32]);
-        let spend = spend(
+        let at = BlockHeight::from_raw(2);
+        let rules = (&RuleSet::GENESIS, &Trust::UNANCHORED);
+        let below = spend(
             &fork,
             &other,
-            BlockHeight::from_raw(2),
-            &RuleSet::GENESIS,
-            &Trust::UNANCHORED,
+            SeedSide::BelowFork,
+            at,
+            rules.0,
+            rules.1,
             &window,
         );
         assert!(
-            matches!(spend, AltSpend::OutsideWindow { height } if height == BlockHeight::from_raw(2)),
-            "{spend:?}"
+            matches!(below, AltSpend::SeedNotInWindow { height } if height == at),
+            "{below:?}"
         );
+        let branch = spend(
+            &fork,
+            &other,
+            SeedSide::OnBranch,
+            at,
+            rules.0,
+            rules.1,
+            &window,
+        );
+        assert!(matches!(branch, AltSpend::Prepare), "{branch:?}");
     }
 
     #[test]
@@ -248,6 +323,7 @@ mod tests {
         let gated = spend(
             &fork,
             &seed,
+            SeedSide::BelowFork,
             BlockHeight::from_raw(2),
             &RuleSet::GENESIS,
             &Trust::UNANCHORED,
@@ -260,6 +336,7 @@ mod tests {
             spend(
                 &at_cap,
                 &seed,
+                SeedSide::BelowFork,
                 BlockHeight::from_raw(2),
                 &RuleSet::GENESIS,
                 &Trust::UNANCHORED,
@@ -306,12 +383,20 @@ mod tests {
     #[test]
     fn two_caps_name_at_most_two_seeds() {
         // The const assert is the compile-time pin. This names the
-        // distance the window walks: `low` to `high` is `2 * cap`.
-        let cap = BlockCount::from_raw(D_MAX.to_raw());
-        let connecting = BlockHeight::from_raw(SEEDHASH_EPOCH_BLOCKS);
-        let low = connecting.saturating_sub_count(cap);
-        let high = connecting.saturating_add(cap);
-        assert!(high.to_raw() - low.to_raw() == 2 * cap.to_raw());
-        assert!(2 * cap.to_raw() < SEEDHASH_EPOCH_BLOCKS);
+        // distance the window walks: `low` to `high` is the cap below and
+        // `reach_above` above, under one seed epoch for every cap a
+        // schedule can name (`ReorgCapOutrunsSeedEpoch`).
+        let largest = shekyl_chain_rules::ReorgCapOutrunsSeedEpoch::LARGEST_CAP_BLOCKS;
+        for cap in [1, 10, 64, 65, D_MAX.to_raw(), largest] {
+            let cap = BlockCount::from_raw(cap);
+            let connecting = BlockHeight::from_raw(SEEDHASH_EPOCH_BLOCKS);
+            let low = connecting.saturating_sub_count(cap);
+            let high = connecting.saturating_add(reach_above(cap));
+            assert!(
+                high.to_raw() - low.to_raw() < SEEDHASH_EPOCH_BLOCKS,
+                "cap {cap:?}"
+            );
+            assert!(reach_above(cap).to_raw() > shekyl_difficulty::SEEDHASH_EPOCH_LAG);
+        }
     }
 }

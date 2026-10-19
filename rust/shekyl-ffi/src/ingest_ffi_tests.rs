@@ -285,10 +285,6 @@ fn reply_codes_are_the_headers() {
         ),
         ("SHEKYL_INGEST_STOPPED", i64::from(SHEKYL_INGEST_STOPPED)),
         (
-            "SHEKYL_INGEST_OUTSIDE_WINDOW",
-            i64::from(SHEKYL_INGEST_OUTSIDE_WINDOW),
-        ),
-        (
             "SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP",
             i64::from(SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP),
         ),
@@ -328,14 +324,13 @@ fn shape(reply: &Reply) -> usize {
         Reply::AlreadyHeld => 3,
         Reply::Held { .. } => 4,
         Reply::BeyondCap(_) => 5,
-        Reply::OutsideWindow { .. } => 6,
-        Reply::Switched { .. } => 7,
-        Reply::PromotionRefused { .. } => 8,
-        Reply::CannotFollow(CannotFollow::BeyondCap(_)) => 9,
-        Reply::CannotFollow(CannotFollow::BelowFloor { .. }) => 10,
-        Reply::MissingBodies { .. } => 11,
-        Reply::Cancelled { .. } => 12,
-        Reply::Stopped => 13,
+        Reply::Switched { .. } => 6,
+        Reply::PromotionRefused { .. } => 7,
+        Reply::CannotFollow(CannotFollow::BeyondCap(_)) => 8,
+        Reply::CannotFollow(CannotFollow::BelowFloor { .. }) => 9,
+        Reply::MissingBodies { .. } => 10,
+        Reply::Cancelled { .. } => 11,
+        Reply::Stopped => 12,
     }
 }
 
@@ -358,7 +353,6 @@ fn one_of_each() -> Vec<Reply> {
         Reply::AlreadyHeld,
         Reply::Held { height },
         Reply::BeyondCap(beyond),
-        Reply::OutsideWindow { height },
         Reply::Switched {
             demoted: vec![(height, hash)],
             promoted: vec![(height, hash)],

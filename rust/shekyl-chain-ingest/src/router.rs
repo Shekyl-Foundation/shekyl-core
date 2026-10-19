@@ -35,7 +35,7 @@
 
 use shekyl_chain_rules::{
     seed_height, target_claim, AtHeight, Candidate, Corrupt, Fault, HeaderRecord, HeaderView,
-    InvalidBlock, ReferenceClaims, RuleSet, Target, Trust,
+    InvalidBlock, PerHeightRecord, ReferenceClaims, RuleSet, Target, Trust, ViewRead,
 };
 use shekyl_chain_store::store::{
     AltCannot, AltChain, AltView, ChainStore, ReadSnapshot, StoreCannot, StoreError,
@@ -43,7 +43,7 @@ use shekyl_chain_store::store::{
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
-use crate::cache_window::{self, AltSpend, SeedPair};
+use crate::cache_window::{self, AltSpend, SeedSide};
 use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
 
@@ -252,9 +252,15 @@ fn claim_one(
 /// and before any cache is built.
 #[derive(Clone, Debug)]
 pub(crate) enum ClaimedAlt {
-    /// Inside the band and the window. The target was read.
-    Ready(Claims),
-    /// The early gate's refusal. The target was not read.
+    /// Inside the band. The target was read. `prepare` is the branch's own
+    /// seed block: prepare it into the transient slot before the hash (B2).
+    Ready {
+        /// The claims.
+        claims: Claims,
+        /// The seed is the branch's own block, above the fork.
+        prepare: bool,
+    },
+    /// The early gate's answer. The target was not read.
     Spend(AltSpend),
 }
 
@@ -263,42 +269,63 @@ pub(crate) enum ClaimedAlt {
 /// cheap tier judges headers (CEN-K4), and promotion verifies the proofs
 /// under the plan's claims (`SwitchPlan::references_for`).
 ///
-/// The fork and the seed are known before the target window is read. A
-/// fork outside the band, or a seed the two cache slots do not hold, comes
-/// back as [`ClaimedAlt::Spend`] and the target is not derived.
+/// The fork and the seed are known before the target window is read, and
+/// the window is read on the same snapshot. A fork outside the band, or a
+/// below-fork seed the pair does not hold, comes back as
+/// [`ClaimedAlt::Spend`] and the target is not derived. A seed on the
+/// branch itself is [`ClaimedAlt::Ready`] with `prepare` (B2).
 ///
 /// # Errors
 ///
 /// [`ClaimStop`]; `Unlinked` comes back as the store's `AltCannot`, which
-/// the caller places again.
+/// the caller places again. A seed height the stitched view has no block
+/// at is a hole below its tip: the seed lags the candidate by 65 blocks.
 pub(crate) fn claim_alt(
     store: &ChainStore,
     rules: ChainRules,
     candidate: &Candidate,
-    window: &SeedPair,
     trust: &Trust,
 ) -> Result<ClaimedAlt, ClaimStop> {
     let snap = store.begin_read()?;
+    let window = match cache_window::seeds_on(&snap, rules) {
+        Ok(window) => window,
+        Err(ViewRead::View(e)) => return Err(ClaimStop::Store(e)),
+        Err(ViewRead::Corrupt(corrupt)) => {
+            return Err(ClaimStop::Corrupt {
+                height: BlockHeight::ZERO,
+                corrupt,
+            })
+        }
+    };
     let chain = AltChain::build(&snap, &candidate.block.header.previous)?;
     let height = chain.candidate_height();
     let fork = chain.fork();
     let rule_set = rules.in_force(height);
     let view = AltView::new(&snap, chain);
-    let seed = match seed_height(height) {
-        None => BlockHash::NULL,
+    let (seed, side) = match seed_height(height) {
+        None => (BlockHash::NULL, SeedSide::BelowFork),
         Some(at) => match view.header_at(at)? {
-            AtHeight::Recorded(record) => record.hash,
-            // The seed block is not on the chain this alternative can see.
-            // It is not one of the two slots. Nothing is stored or hashed.
+            AtHeight::Recorded(record) if at > fork.root().height => {
+                (record.hash, SeedSide::OnBranch)
+            }
+            AtHeight::Recorded(record) => (record.hash, SeedSide::BelowFork),
             AtHeight::AboveTip => {
-                return Ok(ClaimedAlt::Spend(AltSpend::OutsideWindow { height }));
+                return Err(ClaimStop::Corrupt {
+                    height,
+                    corrupt: Corrupt::HoleBelowTip {
+                        at,
+                        record: PerHeightRecord::Header,
+                    },
+                });
             }
         },
     };
-    let outcome = cache_window::spend(&fork, &seed, height, &rule_set, trust, window);
-    if !matches!(outcome, AltSpend::Hash) {
-        return Ok(ClaimedAlt::Spend(outcome));
-    }
+    let outcome = cache_window::spend(&fork, &seed, side, height, &rule_set, trust, &window);
+    let prepare = match outcome {
+        AltSpend::Hash => false,
+        AltSpend::Prepare => true,
+        refused => return Ok(ClaimedAlt::Spend(refused)),
+    };
     let target = match target_claim(&view, height, &rule_set) {
         Ok(Ok(target)) => target,
         Ok(Err(refused)) => return Err(ClaimStop::Refused { index: 0, refused }),
@@ -306,13 +333,16 @@ pub(crate) fn claim_alt(
         Err(Fault::View(e)) => return Err(ClaimStop::Store(e)),
         Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
     };
-    Ok(ClaimedAlt::Ready(Claims {
-        height,
-        rule_set,
-        seed,
-        target,
-        references: ReferenceClaims::EMPTY,
-    }))
+    Ok(ClaimedAlt::Ready {
+        claims: Claims {
+            height,
+            rule_set,
+            seed,
+            target,
+            references: ReferenceClaims::EMPTY,
+        },
+        prepare,
+    })
 }
 
 /// The claims a producer makes for the block after the recorded tip, on

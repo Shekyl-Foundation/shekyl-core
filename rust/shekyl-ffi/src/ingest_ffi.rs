@@ -68,9 +68,9 @@ pub struct ShekylIngestArrival {
 /// `height` and `hash` for `CONNECTED`, `HELD`, `PROMOTION_REFUSED`;
 /// `hash` for `UNLINKED`; `rule` (the census row's index) for `REFUSED` and
 /// `PROMOTION_REFUSED`; `by` for `CANCELLED`; `height` (the depth) and `by`
-/// (the cap) for `BEYOND_CAP`; `height` (the tip) and `by` (the floor) for
-/// `BELOW_FLOOR`; `height` (the promoted tip's height) for `SWITCHED`;
-/// `height` (the block's height) for `OUTSIDE_WINDOW`. The rest are zero.
+/// (the cap) for `BEYOND_CAP` and `CANNOT_FOLLOW_BEYOND_CAP`; `height` (the
+/// tip) and `by` (the floor) for `CANNOT_FOLLOW_BELOW_FLOOR`; `height` (the
+/// promoted tip's height) for `SWITCHED`. The rest are zero.
 /// `MISSING_BODIES` carries its indices beside the struct.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -119,12 +119,9 @@ pub const SHEKYL_INGEST_MISSING_BODIES: u32 = 10;
 pub const SHEKYL_INGEST_CANCELLED: u32 = 11;
 /// The service stopped first.
 pub const SHEKYL_INGEST_STOPPED: u32 = 12;
-/// The block's seed is not one of the two caches this node holds. Local:
-/// nothing was stored, nothing was hashed, and the session stays open.
-pub const SHEKYL_INGEST_OUTSIDE_WINDOW: u32 = 13;
 /// A stored heavier chain this node cannot follow: its fork is deeper than
 /// the cap. `height` is the depth, `by` the cap.
-pub const SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP: u32 = 14;
+pub const SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP: u32 = 13;
 
 /// The span was accepted: one reply per arrival follows.
 pub const SHEKYL_INGEST_ACCEPTED: i32 = 0;
@@ -686,10 +683,6 @@ fn encode(connection: u64, tagged: Tagged) -> (ShekylIngestReply, Vec<u64>) {
             out.by = by.0;
         }
         Reply::Stopped => out.kind = SHEKYL_INGEST_STOPPED,
-        Reply::OutsideWindow { height } => {
-            out.kind = SHEKYL_INGEST_OUTSIDE_WINDOW;
-            out.height = height.to_raw();
-        }
     }
     (out, indices)
 }

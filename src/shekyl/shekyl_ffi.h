@@ -4405,13 +4405,9 @@ constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BELOW_FLOOR = 9;
 constexpr std::uint32_t SHEKYL_INGEST_MISSING_BODIES = 10;
 constexpr std::uint32_t SHEKYL_INGEST_CANCELLED = 11;
 constexpr std::uint32_t SHEKYL_INGEST_STOPPED = 12;
-/// The block's seed is not one of the two caches this node holds. Local:
-/// nothing was stored, nothing was hashed, and the session stays open.
-/// `height` is the block's height.
-constexpr std::uint32_t SHEKYL_INGEST_OUTSIDE_WINDOW = 13;
 /// A stored heavier chain this node cannot follow: its fork is deeper than
 /// the cap. `height` is the depth, `by` the cap.
-constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP = 14;
+constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP = 13;
 /// `shekyl_ingest_offer_span`'s results. Every refusal is before
 /// acceptance and never a peer fault; THROTTLED lets the handler close the
 /// session, never score it.

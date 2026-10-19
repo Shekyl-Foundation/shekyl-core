@@ -273,6 +273,60 @@ impl<P: Substrate> Substrate for Recalled<'_, P> {
     }
 }
 
+/// `inner`, hashing each prepared seed under the cache its preparation
+/// returned (B2): no second lookup, so an eviction since the preparation
+/// does not fail the form. Every other seed is `inner`'s plain longhash.
+/// One seed for an alternative arrival; a switch's promoted run names one
+/// branch seed per seed point it crosses.
+pub(crate) struct Branch<'a, P: Substrate> {
+    inner: &'a P,
+    held: &'a [(BlockHash, P::Held)],
+}
+
+impl<'a, P: Substrate> Branch<'a, P> {
+    /// `inner` with `held`: each prepared seed and its cache.
+    pub(crate) const fn new(inner: &'a P, held: &'a [(BlockHash, P::Held)]) -> Self {
+        Self { inner, held }
+    }
+}
+
+impl<P: Substrate> Substrate for Branch<'_, P> {
+    type Fault = P::Fault;
+    type Held = P::Held;
+
+    fn local_clock(&self) -> Result<Timestamp, P::Fault> {
+        self.inner.local_clock()
+    }
+
+    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, P::Fault> {
+        match self.held.iter().find(|(prepared, _)| prepared == seed) {
+            Some((_, held)) => self.inner.longhash_held(pow_blob, seed, held),
+            None => self.inner.longhash(pow_blob, seed),
+        }
+    }
+
+    fn pin_seed(&self, seed: &BlockHash) {
+        self.inner.pin_seed(seed);
+    }
+
+    fn cache_absent(&self, fault: &P::Fault) -> bool {
+        self.inner.cache_absent(fault)
+    }
+
+    fn prepare_seed(&self, seed: &BlockHash) -> P::Held {
+        self.inner.prepare_seed(seed)
+    }
+
+    fn longhash_held(
+        &self,
+        pow_blob: &[u8],
+        seed: &BlockHash,
+        held: &P::Held,
+    ) -> Result<PowHash, P::Fault> {
+        self.inner.longhash_held(pow_blob, seed, held)
+    }
+}
+
 #[cfg(test)]
 #[path = "substrate_tests.rs"]
 mod substrate_tests;
