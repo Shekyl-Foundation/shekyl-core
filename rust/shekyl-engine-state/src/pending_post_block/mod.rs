@@ -33,11 +33,28 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::{BlockCount, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId, PSlot};
 
 use crate::error::WalletLedgerError;
 
-/// Schema version of the durable pending-post block. **v12** retypes
+mod outcomes;
+pub use outcomes::{
+    end_date, end_date_disposition, every_reserved_spent, record_was_sent, EndDateDisposition,
+    EndedRecord, EndedRelease, OutcomeKind, RecordKind, SealedRecord, StakingOutcome,
+};
+
+/// Schema version of the durable pending-post block. **v13** gives every
+/// record its end date and every ending a durable outcome
+/// (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q2, WR-Q3, WR-Q4; the amendment of
+/// `ARCHIVAL_BOND_POST_DELAY.md` BD-Q3 Rule 2): each of the four record kinds
+/// gains `reference_height` (the FCMP++ reference its proof was built at, so
+/// its end date is `reference_height + FCMP_REFERENCE_BLOCK_MAX_AGE`) and
+/// `terminal` (the cause of a terminal daemon verdict, once one is seen; the
+/// record is held, not removed), and the block gains `outcomes`. A
+/// `(kind, persona)` has one ending, except `spent_elsewhere`, which stays
+/// beside a later ending of the same pair until it is acknowledged.
+/// Pre-genesis: refuse, don't
+/// migrate. **v12** retypes
 /// [`PendingBondPost::bond_post_offset_blocks`] from bare `u64` to
 /// [`BlockCount`] (height-semantics Phase 2e, C4; postcard bytes of the
 /// transparent `u64` are identical; the schema type-name change still
@@ -91,7 +108,7 @@ use crate::error::WalletLedgerError;
 /// a different version **refuse rather than migrate** — pre-genesis, a v4
 /// seal under a v5 binary fails closed and the operator re-assembles
 /// (rule 15).
-pub const PENDING_POST_VERSION: u32 = 12;
+pub const PENDING_POST_VERSION: u32 = 13;
 
 /// Dispatch state of a pending bond post. The WI-2 assemble path writes only
 /// [`Self::Pending`]; WI-3's block-timed dispatch driver owns the
@@ -124,6 +141,31 @@ pub enum PendingPostState {
         /// byte-identical resubmit, bounded by the driver's attempt budget.
         attempts: u32,
     },
+}
+
+/// The cause of a terminal daemon verdict, as the pending record keeps it.
+///
+/// The persisted twin of engine-core's `TerminalErrorKind`, which this crate
+/// cannot name (rule 18: the state-shaped copy lives with the record that
+/// persists it). Engine-core converts into it; a cause that conversion does
+/// not know becomes [`Self::Unrecognized`], so a future engine-side variant
+/// can never fail to persist.
+///
+/// A recorded cause never ends a record (BD-Q3 Rule 2): the chain decides at
+/// the end date. It decides only what the outcome says if the record did not
+/// land, and it stops further sends.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+pub enum TerminalCause {
+    /// An input was already spent on the chain the daemon saw.
+    DoubleSpend,
+    /// The fee was below the daemon's relay floor.
+    FeeTooLow,
+    /// The daemon found the transaction structurally invalid.
+    Malformed,
+    /// The daemon gave a cause this wallet build does not know.
+    Unrecognized,
+    /// The daemon cannot admit a JoinMarket bond post (until `DEL-008`).
+    JoinMarketUnsupported,
 }
 
 /// One durable pending bond post: the assembled, signed, wire-encoded
@@ -174,6 +216,13 @@ pub struct PendingBondPost {
     pub funding_gindexes: Vec<GlobalOutputIndex>,
     /// Dispatch state (WI-2: always [`PendingPostState::Pending`]).
     pub state: PendingPostState,
+    /// The height of the FCMP++ reference the bytes were proved against. The
+    /// record's end date is [`end_date`] of it (WR-Q3).
+    pub reference_height: BlockHeight,
+    /// The cause of a terminal daemon verdict, once one is seen. The record
+    /// is held to its end date regardless (BD-Q3 Rule 2); this only stops
+    /// further sends and names the outcome.
+    pub terminal: Option<TerminalCause>,
 }
 
 impl std::fmt::Debug for PendingBondPost {
@@ -221,6 +270,12 @@ pub struct PendingEmissionClaim {
     pub fee_gindexes: Vec<GlobalOutputIndex>,
     /// Dispatch state — same lifecycle as the bond post's.
     pub state: PendingPostState,
+    /// The height of the FCMP++ reference the bytes were proved against: the
+    /// backing's membership path is assembled against it even when the claim
+    /// sweeps no fee inputs (see [`PendingBondPost::reference_height`]).
+    pub reference_height: BlockHeight,
+    /// A terminal verdict's cause, once seen (see [`PendingBondPost::terminal`]).
+    pub terminal: Option<TerminalCause>,
 }
 
 impl std::fmt::Debug for PendingEmissionClaim {
@@ -263,6 +318,11 @@ pub struct PendingDrain {
     pub funding_gindexes: Vec<GlobalOutputIndex>,
     /// Dispatch state — same lifecycle as the bond post's / claim's.
     pub state: PendingPostState,
+    /// The height of the FCMP++ reference the bytes were proved against
+    /// (see [`PendingBondPost::reference_height`]).
+    pub reference_height: BlockHeight,
+    /// A terminal verdict's cause, once seen (see [`PendingBondPost::terminal`]).
+    pub terminal: Option<TerminalCause>,
 }
 
 impl std::fmt::Debug for PendingDrain {
@@ -306,6 +366,11 @@ pub struct PendingRelease {
     pub funding_gindexes: Vec<GlobalOutputIndex>,
     /// Dispatch state — same lifecycle as the drain's.
     pub state: PendingPostState,
+    /// The height of the FCMP++ reference the bytes were proved against
+    /// (see [`PendingBondPost::reference_height`]).
+    pub reference_height: BlockHeight,
+    /// A terminal verdict's cause, once seen (see [`PendingBondPost::terminal`]).
+    pub terminal: Option<TerminalCause>,
 }
 
 impl std::fmt::Debug for PendingRelease {
@@ -434,6 +499,11 @@ pub struct PendingPostBlock {
     /// (the exit seam refuses a second — the exit debits the record's whole
     /// bonded total, so a second is doomed by construction).
     releases: Vec<PendingRelease>,
+    /// Durable endings. A `(kind, persona)` has one entry, except
+    /// `spent_elsewhere`: that integrity signal stays when a later seal or
+    /// a later ending of the same pair is written, and only an
+    /// acknowledgement removes it. The two can therefore sit side by side.
+    outcomes: Vec<StakingOutcome>,
 }
 
 impl std::fmt::Debug for PendingPostBlock {
@@ -450,6 +520,7 @@ impl std::fmt::Debug for PendingPostBlock {
             .field("claims", &"<redacted pending-claims>")
             .field("drains", &"<redacted pending-drains>")
             .field("releases", &"<redacted pending-releases>")
+            .field("outcomes", &"<redacted outcomes>")
             .finish()
     }
 }
@@ -470,6 +541,7 @@ impl PendingPostBlock {
             claims: Vec::new(),
             drains: Vec::new(),
             releases: Vec::new(),
+            outcomes: Vec::new(),
         }
     }
 
@@ -858,6 +930,7 @@ impl PendingPostBlock {
             SealAdmission::Admit => {}
             refused => return refused,
         }
+        self.replace_outcome(RecordKind::Post, &post.persona);
         self.posts.push(post);
         SealAdmission::Admit
     }
@@ -887,6 +960,7 @@ impl PendingPostBlock {
             refused => return refused,
         }
         claim.state = PendingPostState::Dispatched { at, attempts: 1 };
+        self.replace_outcome(RecordKind::Claim, &claim.persona);
         self.claims.push(claim);
         SealAdmission::Admit
     }
@@ -909,6 +983,7 @@ impl PendingPostBlock {
             refused => return refused,
         }
         drain.state = PendingPostState::Dispatched { at, attempts: 1 };
+        self.replace_outcome(RecordKind::Drain, &drain.persona);
         self.drains.push(drain);
         SealAdmission::Admit
     }
@@ -935,6 +1010,7 @@ impl PendingPostBlock {
             refused => return refused,
         }
         release.state = PendingPostState::Dispatched { at, attempts: 1 };
+        self.replace_outcome(RecordKind::Release, &release.persona);
         self.releases.push(release);
         SealAdmission::Admit
     }
@@ -1004,16 +1080,9 @@ impl PendingPostBlock {
         &mut self,
         live_funding: &std::collections::BTreeSet<GlobalOutputIndex>,
     ) -> SettledRetirement {
-        fn settled(
-            reserved: &[GlobalOutputIndex],
-            live: &std::collections::BTreeSet<GlobalOutputIndex>,
-        ) -> bool {
-            !reserved.is_empty() && reserved.iter().all(|g| !live.contains(g))
-        }
-
         let mut out = SettledRetirement::default();
         self.claims.retain(|claim| {
-            if settled(&claim.fee_gindexes, live_funding) {
+            if every_reserved_spent(&claim.fee_gindexes, live_funding) {
                 out.claims.push(claim.persona);
                 false
             } else {
@@ -1021,7 +1090,7 @@ impl PendingPostBlock {
             }
         });
         self.drains.retain(|drain| {
-            if settled(&drain.funding_gindexes, live_funding) {
+            if every_reserved_spent(&drain.funding_gindexes, live_funding) {
                 out.drains.push(drain.persona);
                 false
             } else {
@@ -1029,7 +1098,7 @@ impl PendingPostBlock {
             }
         });
         self.releases.retain(|release| {
-            if settled(&release.funding_gindexes, live_funding) {
+            if every_reserved_spent(&release.funding_gindexes, live_funding) {
                 out.releases.push(release.persona);
                 false
             } else {
@@ -1069,6 +1138,9 @@ impl PendingPostBlock {
 mod tests {
     use super::*;
 
+    /// The reference every test record is built at.
+    const TEST_REFERENCE: BlockHeight = BlockHeight::from_raw(5_000);
+
     fn post(persona_byte: u8, gindexes: &[u64]) -> PendingBondPost {
         PendingBondPost {
             p_slot: PSlot::from_raw(0),
@@ -1082,6 +1154,8 @@ mod tests {
                 .map(GlobalOutputIndex::from_raw)
                 .collect(),
             state: PendingPostState::Pending,
+            reference_height: TEST_REFERENCE,
+            terminal: None,
         }
     }
 
@@ -1532,6 +1606,7 @@ mod tests {
             claims: Vec::new(),
             drains: Vec::new(),
             releases: Vec::new(),
+            outcomes: Vec::new(),
         };
         let bytes = postcard::to_allocvec(&wrong).expect("encode");
         let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("must refuse");
@@ -1540,6 +1615,29 @@ mod tests {
             WalletLedgerError::UnsupportedBlockVersion {
                 block: "pending_post_block",
                 ..
+            }
+        ));
+    }
+
+    /// A **v12** seal under this v13 binary fails closed on the version gate:
+    /// v12 records have no `reference_height`, so they have no end date and
+    /// could never be released (WR-Q3). Refuse-not-migrate; re-assemble.
+    #[test]
+    fn v12_seal_fails_closed_under_v13_binary() {
+        assert_eq!(PENDING_POST_VERSION, 13);
+        let mut bytes = PendingPostBlock::empty()
+            .to_postcard_bytes()
+            .expect("encode");
+        // The leading varint is the version; 12 and 13 both fit one byte.
+        assert_eq!(bytes[0], 13);
+        bytes[0] = 12;
+        let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("v12 must refuse");
+        assert!(matches!(
+            err,
+            WalletLedgerError::UnsupportedBlockVersion {
+                block: "pending_post_block",
+                file: 12,
+                binary: 13,
             }
         ));
     }
@@ -1556,6 +1654,7 @@ mod tests {
             claims: Vec::new(),
             drains: Vec::new(),
             releases: Vec::new(),
+            outcomes: Vec::new(),
         };
         let bytes = postcard::to_allocvec(&v1).expect("encode");
         let err = PendingPostBlock::from_postcard_bytes(&bytes).expect_err("v1 must refuse");
@@ -1709,6 +1808,8 @@ mod tests {
                 .map(GlobalOutputIndex::from_raw)
                 .collect(),
             state: PendingPostState::Pending,
+            reference_height: TEST_REFERENCE,
+            terminal: None,
         }
     }
 
@@ -1779,6 +1880,8 @@ mod tests {
                 .map(GlobalOutputIndex::from_raw)
                 .collect(),
             state: PendingPostState::Pending,
+            reference_height: TEST_REFERENCE,
+            terminal: None,
         }
     }
 
@@ -1850,6 +1953,8 @@ mod tests {
                 .map(GlobalOutputIndex::from_raw)
                 .collect(),
             state: PendingPostState::Pending,
+            reference_height: TEST_REFERENCE,
+            terminal: None,
         }
     }
 

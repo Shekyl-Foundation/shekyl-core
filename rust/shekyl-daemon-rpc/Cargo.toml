@@ -60,6 +60,8 @@ shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 # The validator's bond-post marshal (`bond_post_vin`): the battery reads the
 # vin the block path reads, through the validator's one function, never a
 # second spelling (DRS-E5 PR-b; the FOLLOWUPS `retention_vin` row closed).
+# Also the store-backed facts' derivations (DRS-X PR 3): the next target,
+# the medians, the volume window and the fee ladder.
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # CEN-M9's prepared reversion (`submit/rust_pool_shim.rs`): the
 # `SubmitStateShim` over the Rust pool, reading the committed chain through
@@ -67,7 +69,7 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # `shekyl-daemon-image`, the shekyld binary's one Rust image, depends on
 # this crate, so both crates link into shekyld. No C++ reaches them — no
 # FFI export names the pool, and `shekyl-ffi` does not depend on this
-# crate.
+# crate. Also the store-backed facts' one snapshot per call (DRS-X PR 3).
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-mempool = { path = "../shekyl-mempool" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
@@ -88,6 +90,15 @@ shekyl-rpc-client = { path = "../shekyl-rpc-client", default-features = false, f
 # caller's structural floor (the transport's 2 and 1), not Tokio's unset
 # defaults. The D5 pin replaces them.
 shekyl-runtime = { path = "../shekyl-runtime" }
+# DRS-X PR 3 (DRS_X_STORE_FLIP.md DX-Q3): the store-backed facts read the
+# chain store and derive through the rules crate (both above), staged until
+# the flip; the adjusted time is projected over the difficulty crate's MTP
+# window and target.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+# calc_pow's hash, under a cache the daemon's one CacheStore already holds:
+# the RPC calls `lookup` and `compute_hash`, never a derivation (ruled
+# 2026-10-17). In the graph already through shekyl-ffi and the ingest.
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 
 [dev-dependencies]
 # Real consensus-valid spend fixture for the production-verifier oracle test

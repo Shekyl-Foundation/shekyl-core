@@ -262,6 +262,44 @@ Each observed difference becomes one row.
 - The register lives in the flip's design record; the E2 grader's output is its input, not its verdict.
 - After the flip the corpus re-baselines from Rust (`DAEMON_REDB_STORE.md` §12.1). The register is the last record that compares the two, kept as records-was at its sha.
 
+**Rows found by PR 3** (#1106; the store-backed facts and read handlers, staged). The flip replays the corpus and walks the suites; these are the rows it starts from, each with its evidence.
+
+*The header and info facts:*
+
+| Subject | C++ | Rust | Category |
+| --- | --- | --- | --- |
+| `get_block.json` | epee's rendering of the block | omitted | **Removed** (RK-D11; RK-W retires it): no Rust producer, and the field repeats `blob` |
+| an alt block's header by hash: difficulty, cumulative difficulty, weights, depth | the main chain's values at the alt block's height (`rpc_facts_ffi.cpp:302`–`:325`) | the alt row's own work and weight; no long-term weight (no chain records its medians); depth 0 | **C++ defect**: an alt block described by another block |
+| an empty store | unreachable (LMDB always holds genesis) | `NotReady`, never a zero tip | **Design**; unreachable after the flip, which connects genesis before the RPC serves (DX-Q6) |
+| `get_info`'s sync, pool, peers and free-space parts | read from the C++ core | inputs through `NodeFacts`: PR 2's sync owner, PR-b's pool (`PoolScope`'s docs map each count), the p2p board | **Unbuilt by design** until the flip wires them |
+
+*The read handlers:*
+
+| Subject | C++ | Rust | Category |
+| --- | --- | --- | --- |
+| `get_coinbase_tx_sum` emission | each coinbase's outputs less the block's fees (`cryptonote_core.cpp:634`) | the coins the range minted: the supply accumulator's growth, each block's paid reward | **C++ defect**: the coinbase pays the miner's emission plus only the miner's fee share, so the figure leaves out the staker emission and the burned and staker fee shares, and wraps below zero in a block whose fees exceed its coinbase. It differs at 1,463 of the 1,469 captured heights |
+| `get_alternate_chains` order | an unordered map's | the alt table's key order of the tips | **Design** |
+| `get_alternate_chains.main_chain_parent_block` | the main chain's block at `height − length` | the parent the chain's lowest block names; the read fails closed when that parent is not a recorded block | **Design**, the same value while the invariant holds. An alternative row leaves by promotion, refusal, the death rule, a rewind or a reset, and every stored chain reaches a main-chain block (`store/alt.rs`). The listing is that walk (`AltChain::build`): a chain that does not reach a recorded block, or that links to itself, is an inconsistent store, not a parent the reply names |
+| `get_curve_tree_checkpoint` heights | one every 10,000 blocks | every height through the tip | **Design**: the store records the tree at every height |
+| the curve tree's depth | stored | derived from the leaf count (`CTW-Q4`) | **Design** |
+| `get_curve_tree_info` on an empty chain | `height` underflows | `NotReady` | **C++ defect**, unreachable after DX-Q6 |
+| `calc_pow` with a seed height above the tip | hashes under the null seed and returns it | refused, `WRONG_PARAM` | **C++ defect** |
+| `calc_pow` under a seed the cache store does not hold | derives a new cache, evicting the validator's spare, with no limit across concurrent seeds (`core_rpc_server.cpp:578`–`:596`; `pow_randomx_ffi.rs:227`) | refused, `WRONG_PARAM`; the handler calls `CacheStore::lookup` and never derives | **Design** (ruled 2026-10-17) |
+| `calc_pow`'s size bound | the cumulative weight limit plus leeway | the largest blob the wire parses (`MAX_BLOCK_BLOB_SIZE`) | **Design**: `calc_pow` admits nothing |
+| the claim source's shard rows | leaf segments, `has_segment` / `freeze_height` from the segment registry (`ARCHIVAL_SHARD_COUNT_CUTOVER.md:246`) | the byte-cut shards the Rust validator judges, folded onto the same pair by `ShardClose::to_wire` | **Design** (`SHT-Q2`; CEN-L10, ruled intended) |
+| the claim source's `has_budget_row` | the budget row alone; `Σwork` is written with it at the close | the claim verify's citing gate: budget, `Σwork` and close height all rows (`emission_epoch_facts`, CEN-J23); `Σwork` is the slash pass's, an epoch after the budget | **Design** (`SO-D11d`, `SO-D11g`) |
+| the coverage list's shards | the frozen leaf segments (`frozen_segment_count` over the leaf count) | the byte-cut shards closed and final, the set CEN-J15 lets a join hold (`ClosedUniverse::final_before`) | **Design** (`SHT-Q2`, `SO-D11f`) |
+
+**The flip's `CORE_RPC_VERSION` bump.** One minor bump covers every row above that changes what a client reads:
+- `get_block.json` disappears;
+- an alt block's header carries its own values;
+- the coinbase sum's emission changes meaning;
+- `calc_pow` gains two refusals: a seed height above the tip, and a seed whose cache is not held;
+- a checkpoint answers at every height;
+- the claim source's shard rows and `has_budget_row`, and the coverage list's shards, follow the Rust validator.
+
+Its number is read from the tree at the flip's pin, never carried from a plan (`shekyl-rpc-types`' `chain.rs`).
+
 ### 3.2 Function
 
 - **Every regtest e2e walk** passes on the flip binary.
