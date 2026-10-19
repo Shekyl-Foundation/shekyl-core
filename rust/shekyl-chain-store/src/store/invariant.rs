@@ -396,9 +396,9 @@ pub enum StoreInvariant {
     /// inside the journals' floor, and every journal row is one the records
     /// can have been left by. Observed by the validator, which derives the
     /// set (`ARW-Q1`), and arriving through `refuse_corrupt`. A mismatch is
-    /// [`DrawableFault::Drift`]. A set that cannot be rebuilt is
-    /// [`DrawableFault::Rebuild`] of the validator's
-    /// [`DrawableEpochFault`](shekyl_chain_rules::DrawableEpochFault),
+    /// [`DrawableFault::Drift`]. A set that cannot be built, at the open or
+    /// by the settlement's walk back, is [`DrawableFault::NotBuilt`] of the
+    /// validator's [`DrawableEpochFault`](shekyl_chain_rules::DrawableEpochFault),
     /// including a digest recorded for an epoch the view has not opened.
     /// Never a verdict on the block: the block is not invalid, this node
     /// cannot settle the epoch.
@@ -464,7 +464,7 @@ pub enum DigestFault {
 ///
 /// Drift is the digest comparison. Every other observation is the
 /// validator's [`DrawableEpochFault`](shekyl_chain_rules::DrawableEpochFault),
-/// carried rather than copied: a new reason the set cannot be rebuilt is
+/// carried rather than copied: a new reason the set cannot be built is
 /// one arm there, and this payload gains none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawableFault {
@@ -472,8 +472,10 @@ pub enum DrawableFault {
     /// pre-image, a slash-log row, a record or the digest changed after
     /// the epoch opened.
     Drift,
-    /// The set could not be rebuilt. The reason is the validator's.
-    Rebuild(shekyl_chain_rules::DrawableEpochFault),
+    /// The set could not be built: at the open, from the block's
+    /// post-state, or at settlement, by the walk back. The reason is the
+    /// validator's.
+    NotBuilt(shekyl_chain_rules::DrawableEpochFault),
 }
 
 /// What SI-31 observed (payload of [`StoreInvariant::CompleteTreesNotFrozen`]).
@@ -860,9 +862,9 @@ impl core::fmt::Display for StoreInvariant {
                      digest to archival_drawable_digest; the set its draws were resolved against \
                      is not the one the journals describe, rebuild from the block corpus"
                 ),
-                DrawableFault::Rebuild(why) => write!(
+                DrawableFault::NotBuilt(why) => write!(
                     f,
-                    "the drawable set of epoch {epoch} cannot be rebuilt ({why}); rebuild from \
+                    "the drawable set of epoch {epoch} cannot be built ({why}); rebuild from \
                      the block corpus"
                 ),
             },

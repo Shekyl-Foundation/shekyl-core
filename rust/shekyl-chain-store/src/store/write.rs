@@ -265,7 +265,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25), except the drawable set's two checks below |
     /// | `SettlementIntegrity { epoch, check: DrawableDigestMissing }` | `DrawableDigestNotSingular { epoch, observed: Missing }` (SI-29) |
     /// | `SettlementIntegrity { epoch, check: DrawableDrift }` | `DrawableSetNotSound { epoch, observed: Drift }` (SI-30) |
-    /// | `DrawableEpoch { epoch, why }` | `DrawableSetNotSound { epoch, observed: Rebuild(why) }` (SI-30) |
+    /// | `DrawableEpoch { epoch, why }` | `DrawableSetNotSound { epoch, observed: NotBuilt(why) }` (SI-30) |
     /// | `RelayFloorUnpriceable { at }` | `CellCorrupt { key: "block_info", fault: OutsideDomain { at } }` (SI-7) |
     ///
     /// (The arms between are documented inline on the match.)
@@ -508,7 +508,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             // the halt.
             Corrupt::DrawableEpoch { epoch, why } => StoreInvariant::DrawableSetNotSound {
                 epoch,
-                observed: DrawableFault::Rebuild(why),
+                observed: DrawableFault::NotBuilt(why),
             },
             // A claim's re-gather found `Σwork(E)` and no frozen
             // complete-tree set: the slash pass's write set is not whole

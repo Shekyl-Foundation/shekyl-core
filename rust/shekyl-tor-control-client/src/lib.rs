@@ -32,6 +32,7 @@
 
 pub mod binary;
 pub mod control;
+pub mod inherit;
 pub mod onion_identity;
 pub mod spawn_lock;
 

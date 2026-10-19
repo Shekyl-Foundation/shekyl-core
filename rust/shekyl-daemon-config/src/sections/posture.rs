@@ -11,8 +11,8 @@
 
 use shekyl_options::{Code, Diagnostic, PeerEndpoint};
 
-use super::read::Reader;
-use super::{Clearnet, Onion, Socks, Tor};
+use super::read::{Read, Reader};
+use super::{Clearnet, Onion, Socks, SocksCredential, Tor};
 
 /// A parent posture under which a child row is a conflict.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -254,26 +254,42 @@ fn onion(r: &mut Reader<'_>) -> Option<Onion> {
     }
 }
 
-/// A SOCKS proxy. The dial sends no credentials, so a username or a
-/// password is refused until a dial carries them: with the endpoint, the
-/// refusal names that fact; without it, the refusal names the missing
-/// endpoint. The secret's text is never copied onto the success type.
+/// A SOCKS proxy and its RFC 1929 pair (DC-Q7). The pair is given whole
+/// or refused: a half names the other half; either without the endpoint
+/// names the endpoint. The secret's text is never copied into a refusal.
 fn socks(r: &mut Reader<'_>, prefix: &str) -> Option<Socks> {
     let endpoint = r.optional_endpoint(prefix).present();
-    let missing = format!("`{prefix}` is not set");
-    let because = match endpoint {
-        Some(_) => {
-            "the SOCKS dial sends no credentials; the proxy must accept an unauthenticated connection"
+    let username_key = format!("{prefix}-username");
+    let password_key = format!("{prefix}-password");
+    let username = r.socks_secret(&username_key, SocksCredential::MAX_BYTES);
+    let password = r.socks_secret(&password_key, SocksCredential::MAX_BYTES);
+    let Some(endpoint) = endpoint else {
+        for key in [&username_key, &password_key] {
+            if r.given(key) {
+                r.requires(key, &format!("`{prefix}`"));
+            }
         }
-        None => missing.as_str(),
+        return None;
     };
-    for suffix in ["username", "password"] {
-        let key = format!("{prefix}-{suffix}");
-        if r.given(&key) {
-            r.conflict(&key, because);
+    let credential = match (username, password) {
+        (Read::Present(username), Read::Present(password)) => {
+            Some(SocksCredential { username, password })
         }
-    }
-    endpoint.map(|endpoint| Socks { endpoint })
+        (Read::Present(_), Read::Absent) => {
+            r.requires(&username_key, &format!("`{password_key}`"));
+            None
+        }
+        (Read::Absent, Read::Present(_)) => {
+            r.requires(&password_key, &format!("`{username_key}`"));
+            None
+        }
+        // Neither given, or a half already refused.
+        _ => None,
+    };
+    Some(Socks {
+        endpoint,
+        credential,
+    })
 }
 
 /// An IP peer needs clearnet; an onion peer needs Tor. The refusal names

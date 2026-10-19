@@ -791,7 +791,7 @@ impl fmt::Display for Corrupt {
                 ),
             },
             Self::DrawableEpoch { epoch, why } => {
-                write!(f, "the drawable set of epoch {epoch} cannot be rebuilt: {why} (SI-30)")
+                write!(f, "the drawable set of epoch {epoch} cannot be built: {why} (SI-30)")
             }
             Self::CompleteTreesAbsent { epoch } => write!(
                 f,

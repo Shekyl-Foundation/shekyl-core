@@ -217,37 +217,53 @@ pub(super) fn bond_record<T: ReadTables>(
 /// the record to answer whether a shard was held *as of* `height`
 /// (`db_lmdb.cpp:4804`'s `archival_slash_removed_holding_after`, minus the
 /// fold, which is the retention crate's; CEN-L16). The log holds every
-/// persona's slashes, so this is [`slash_log_rows_after`] filtered to
-/// `persona`, with the height dropped: the holdings fold needs the entry,
-/// and any one qualifying row answers it. Empty when nothing above
-/// `height` names `persona`. The floor check and the decode live on A21,
-/// once.
+/// persona's slashes. This keeps one persona's entry, dropping the height
+/// the holdings fold does not read, and drops every other persona before
+/// the row is stored. Empty when nothing above `height` names `persona`.
+/// The floor check and the decode are [`scan_slash_log_after`], shared
+/// with A21.
 pub(super) fn slash_log_after<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
     height: BlockHeight,
     floor: SlashLogFloor,
 ) -> Result<Vec<SlashLogEntry>, ReadFault> {
-    Ok(slash_log_rows_after(txn, height, floor)?
-        .into_iter()
-        .filter(|row| row.entry.persona == *persona)
-        .map(|row| row.entry)
-        .collect())
+    let mut out = Vec::new();
+    scan_slash_log_after(txn, height, floor, |row| {
+        if row.entry.persona == *persona {
+            out.push(row.entry);
+        }
+    })?;
+    Ok(out)
 }
 
 /// **A21.** Every slash logged at a height **strictly above** `height`,
 /// every persona's, in log order, each with the height its key carries.
-/// The range is [`SlashLogKey::above`]; a start that lies in
-/// [`SlashLogKey::below`] is SI-26, refused before the table is opened.
-/// The last height has no range, so it needs no check. A row that does
-/// not decode is SI-7. A2 is this scan filtered to one persona.
+/// The floor check and the decode are [`scan_slash_log_after`]. A row that
+/// does not decode is SI-7. A2 is the same walk, keeping one persona.
 pub(super) fn slash_log_rows_after<T: ReadTables>(
     txn: &T,
     height: BlockHeight,
     floor: SlashLogFloor,
 ) -> Result<Vec<LoggedSlash>, ReadFault> {
+    let mut out = Vec::new();
+    scan_slash_log_after(txn, height, floor, |row| out.push(row))?;
+    Ok(out)
+}
+
+/// The slash-log range strictly above `height`. SI-26 refuses a start in
+/// [`SlashLogKey::below`] before the table is opened. The last height has
+/// no range, so it needs no check. Each decoded row is handed to `keep`
+/// and not retained here, so a reader that wants one persona does not
+/// fill a buffer with the rest.
+pub(super) fn scan_slash_log_after<T: ReadTables>(
+    txn: &T,
+    height: BlockHeight,
+    floor: SlashLogFloor,
+    mut keep: impl FnMut(LoggedSlash),
+) -> Result<(), ReadFault> {
     let Some(above) = SlashLogKey::above(height) else {
-        return Ok(Vec::new());
+        return Ok(());
     };
     if let Some(kept_from) = floor.height() {
         if SlashLogKey::below(kept_from).contains(&above.start) {
@@ -260,19 +276,18 @@ pub(super) fn slash_log_rows_after<T: ReadTables>(
         }
     }
     let table = txn.table(ARCHIVAL_SLASH_LOG)?;
-    let mut out = Vec::new();
     for row in table.range(above)? {
         let (key, value) = row?;
         let entry = value
             .value()
             .decode()
             .map_err(|cause| undecodable(SLASH_LOG, cause))?;
-        out.push(LoggedSlash {
+        keep(LoggedSlash {
             height: SlashLogKey::from_key(key.value()).height(),
             entry,
         });
     }
-    Ok(out)
+    Ok(())
 }
 
 /// **A20.** Every Release journaled at a height **strictly above**

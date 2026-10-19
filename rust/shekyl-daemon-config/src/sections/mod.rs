@@ -22,7 +22,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
-use shekyl_options::{Code, Diagnostic, PeerEndpoint, Source};
+use shekyl_options::{Code, Diagnostic, PeerEndpoint, Secret, Source};
 
 use crate::network::Network;
 use crate::platform::{Platform, RunMode};
@@ -41,13 +41,43 @@ mod tests;
 
 use read::{RateBound, Read, Reader, ThreadCount};
 
-/// A SOCKS5 proxy. Credentials are refused until a dial sends them
-/// (FOLLOWUPS, the SOCKS credentials row): the success type holds the
-/// endpoint alone, so a secret cannot be stored and then never sent.
+/// A SOCKS5 proxy the operator runs, and the RFC 1929 pair it asks for
+/// when the operator gave one (DC-Q7). The pair authenticates this node to
+/// that proxy and nothing else: the daemon sets no isolation key and dials
+/// onions only, and personas live in the wallet's own Tor (PWD-E9).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Socks {
     /// The proxy.
     pub endpoint: SocketAddr,
+    /// The username and password, given together or not at all.
+    pub credential: Option<SocksCredential>,
+}
+
+/// An RFC 1929 username and password, each 1 to 255 bytes, as RFC 1929's
+/// message carries them. Built only by the sections, which refuse anything
+/// else at parse, so a dial never meets a pair it cannot send. Both halves
+/// are secrets: wiped on drop, and `Debug` shows neither.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SocksCredential {
+    username: Secret,
+    password: Secret,
+}
+
+impl SocksCredential {
+    /// The longest field RFC 1929 carries: its length is one byte.
+    pub const MAX_BYTES: usize = 255;
+
+    /// The username's bytes, for the one dial that sends them.
+    #[must_use]
+    pub fn username(&self) -> &[u8] {
+        self.username.expose().as_bytes()
+    }
+
+    /// The password's bytes, for the one dial that sends them.
+    #[must_use]
+    pub fn password(&self) -> &[u8] {
+        self.password.expose().as_bytes()
+    }
 }
 
 /// The clearnet connector's posture.
