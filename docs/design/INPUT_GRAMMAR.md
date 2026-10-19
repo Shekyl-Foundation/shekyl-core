@@ -55,7 +55,7 @@ Out of scope: RPC method names (a wire contract owned by the RPC lane) and log c
 
 ## 2. The rules
 
-**IG-1 Lexical.** An identifier is lowercase ASCII, `[a-z][a-z0-9]*` segments joined by single hyphens. Identifiers, keywords and units are never translated.
+**IG-1 Lexical.** An identifier is lowercase ASCII `[a-z][a-z0-9]*` segments. One path has three renderings and no other: words at the prompt (`chain height`); `-`-joined in option names and TOML keys (`log-level`); `_`-joined on the RPC wire for method, parameter and reply-field names (`chain_height`; [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q9). Identifiers, keywords and units are never translated.
 
 **IG-2 One vocabulary, as a tree.** The glossary is a tree of terms. Each term is defined once, project-wide, and lists its parents; a term with no parent is a *subject*. A term reused under several parents keeps its one meaning (`listen` under `clearnet`, `onion`, `rpc` and `view`). Every segment of every name is a term in the tree, including plain words (`file`, `dir`, `max`, `help`): the gate has no exemption list.
 
@@ -79,6 +79,7 @@ The gate walks every live and reserved name and every command in every binary's 
 | peer-endpoint | an endpoint, or `<v3>.onion:port` | string | |
 | address | `--x shekyl1…` | string | a Shekyl address, checked against the network |
 | hash | `--x 6f1c…` | string | 64 hexadecimal characters, a 32-byte value: a transaction id, a block hash or a key image |
+| bytes | `--x AAEC…` | string | base64 (RFC 4648 §4, padded): a block's or a transaction's serialized bytes; hex is the `hash` kind only ([`RPC_WIRE.md`](RPC_WIRE.md) RW-Q4) |
 | amount | `--x 1.5` | string | a decimal SKL amount with at most `DISPLAY_DECIMAL_POINT` fractional digits (`shekyl-units`, the one source), parsed exactly to atomic units; never a float |
 | name | `--x miner` | string | a wallet's name: one path component, no separators |
 | text | the rest of the line | string | free text, verbatim |
@@ -476,7 +477,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | from | show, sum | the first height |
 | to | show | the last height |
 | last | stats, sum | the most recent N blocks |
-| hex | show | print the raw bytes as hex |
+| body | show | a block's or transaction's serialized bytes, kind `bytes` |
 | hard | rescan | rebuild from the chain |
 | seconds | add | a duration, in seconds |
 | alt | chain | *view* — the alternative chains |
@@ -573,10 +574,10 @@ A command's last term is a verb or a view, and a command that changes state ends
 | `version`, `help [command]` | same | | | K |
 | `exit` (synonym `quit`) | `exit` | | | R (IG-Q30): `quit` goes |
 | `tx list [--in \| --out] [--unmatched]` | `tx list` | | `--direction in\|out`; `--unmatched` | R (IG-Q22) |
-| `tx show <id>` | same | hash | `--hex` | K |
+| `tx show <id>` | same | hash | `--body` | K; `--body` prints the transaction's serialized bytes, kind `bytes` (RW-Q4) |
 | `tx note <txid> [<text...>]` | `tx note <id>`, `tx note set <id> <text>` | hash; hash, text | | R (IG-Q34): `tx note` is a view; `tx note set` with empty text clears the note |
 | `tx abandon <txid>` | same | hash | | K |
-| — | `tx decode <hex>` | a transaction blob, hex | | N (IG-Q26): decodes with the Rust codecs; `shekyl-utils-deserialize` then goes |
+| — | `tx decode <body>` | bytes (a transaction's serialized bytes) | | N (IG-Q26, RW-Q4): decodes with the Rust codecs; `shekyl-utils-deserialize` then goes |
 | `request new <amount> <label> [--expiry e]` | `request create <amount> <label>` | amount, text | `--expiry` quantity (duration) | R (IG-Q34) |
 | `request list [--matched \| --all]` | same | | `--matched`; `--all` | K |
 | `uri make [--amount X] [--label L] [--address A]` | same | | `--amount` amount; `--label` text; `--address` address | K |
@@ -627,7 +628,7 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 | `is_key_image_spent <ki>` | `chain spent <key-image>` | hash | |
 | `pop_blocks <n>` | — | | –: no grammar successor; it is an armed test lever (RPC_CHANNEL RT-O9.2, §6.4) |
 | `print_block <hash\|height>` | `block show <hash\|height>` | hash or integer | |
-| `print_tx <hash> [+hex] [+json]` | `tx show <id>` | hash; `--hex`; `--json` is the session's | shares the wallet's word |
+| `print_tx <hash> [+hex] [+json]` | `tx show <id>` | hash; `--body`; `--json` is the session's | shares the wallet's word |
 | `relay_tx <txid>` | `tx relay <id>` | hash | |
 | `print_pool`, `print_pool_sh`, `print_pool_stats`, `flush_txpool [txid]` | `txpool list [--short]`, `txpool stats`, `txpool flush [id]` | | |
 | `print_pl [white] [gray] [limit]`, `print_pl_stats`, `print_cn`, `print_net_stats` | `peer list [--white] [--gray] [--max N]`, `peer stats`, `peer connections`, `p2p stats` | | |
@@ -687,7 +688,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 **IG-Q25 — the console — RULED 2026-10-14.** The C++ console is not renamed and dies with R8. §13 is the catalog the Rust console and `shekyl-cli` serve: runtime settings are `option set` and `option show` (IG-12); `is_key_image_spent` is the view `chain spent <key-image>`; `pop_blocks` has no grammar successor: it is an armed test lever (RT-O9.2, RPC_CHANNEL §6.4); the daemon's words are `daemon status` and `daemon stop`.
 
-**IG-Q26 — the utilities — RULED 2026-10-14.** As §14.1. The deletions are separate implementation PRs, each fixing its consumers. `tx decode <hex>` (§12.3) replaces `shekyl-utils-deserialize`.
+**IG-Q26 — the utilities — RULED 2026-10-14.** As §14.1. The deletions are separate implementation PRs, each fixing its consumers. `tx decode <body>` (§12.3) replaces `shekyl-utils-deserialize`.
 
 **IG-Q27 — the gate's scope — RULED 2026-10-14.** The gate's subject is every binary target we author, enumerated mechanically from the Cargo workspace and CMake, never from a hand-kept list; the gate asserts the set is non-empty (rule 47). Development tools are in it. The exceptions are the tools bound to LMDB or the C++ while they last, and `shekyl-mdb-copy`, which is LMDB's upstream tool.
 
