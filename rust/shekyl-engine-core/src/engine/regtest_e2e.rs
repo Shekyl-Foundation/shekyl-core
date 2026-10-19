@@ -5916,3 +5916,6 @@ async fn ported_p2p_console_commands_answer_on_the_in_process_arm() {
 
 #[path = "regtest_e2e_origin.rs"]
 mod origin;
+
+#[path = "regtest_e2e_rt_p5.rs"]
+mod rt_p5;

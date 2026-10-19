@@ -104,7 +104,7 @@ pub enum BuildErrorKind {
 
     /// The wallet has the balance and the curve tree covers it, but one or more
     /// outputs needed for the spend are **too fresh for the reference block** —
-    /// `eligible_height > tip − REF_ANCHOR_AGE`, so they are not in the tree as
+    /// `eligible_height >= tip − REF_ANCHOR_AGE`, so they are not in the tree as
     /// of the reference block the proof anchors to (C2; 2A §3.7.5, CT-5 §3.2).
     /// Mirrors
     /// [`SendError::OutputNotYetSpendable`](crate::engine::error::SendError::OutputNotYetSpendable);

@@ -452,8 +452,8 @@ async fn tree_handle_ingested_through(cap: u64) -> (TempDir, CurveTreeHandle) {
 /// `0x07` blob carries each output's real leaf entry (`CM ‖ record`), so the
 /// tree leaf's identity (`O`, `C`, `CM.x`) equals the ledger output's. Empty
 /// blocks advance the cursor to `synced`. Pick `owned_block` so the leaves
-/// are drained at the reference height: `owned_block + SPENDABLE_AGE <=
-/// synced - REF_ANCHOR_AGE`.
+/// are drained at the reference height: `owned_block + SPENDABLE_AGE <
+/// synced - REF_ANCHOR_AGE` (`in_tree_at_reference`).
 async fn funded_ledger_and_tree(
     specs: &[(u8, u64)],
     owned_block: u64,
@@ -807,7 +807,7 @@ async fn tree_behind_reference_blocks_individually_covered_output() {
 /// 15 − REF_ANCHOR_AGE(6) = 9`. An output at block 1 matures at
 /// `eligible = 1 + SPENDABLE_AGE(10) = 11`: matured at the tip (11 ≤ 15)
 /// **and** in the tree (cursor 15 ≥ 11), but too fresh for the reference
-/// block (11 > 9). The C2 gate must surface a clean
+/// block, whose tree holds leaves matured by 8. The C2 gate must surface a clean
 /// [`SendError::OutputNotYetSpendable`] with a wait-N-blocks signal — not a
 /// spendable candidate, a `SpendUnavailableRebuilding`, or an
 /// `InsufficientFunds`.
@@ -847,12 +847,72 @@ async fn output_not_yet_spendable_at_reference_block() {
             );
             assert_eq!(
                 wait_blocks,
-                shekyl_types::BlockCount::from_raw(2),
-                "spendable once the reference reaches 11 (tip 17)"
+                shekyl_types::BlockCount::from_raw(3),
+                "in the tree committed at reference 12 (tip 18), which holds leaves matured by 11"
             );
         }
         other => panic!("expected OutputNotYetSpendable, got {other:?}"),
     }
+}
+
+/// C2 at its boundary, over a tree that holds the wallet's leaf. The tree
+/// committed at the reference height `r` holds leaves matured by `r − 1`
+/// (`drained_through`, pinned by the CT-2 vectors), so an output whose
+/// eligible height **equals** the reference is not in it yet. The gate must
+/// say so — `OutputNotYetSpendable`, one block to wait — rather than select
+/// the output and leave assembly to refuse it (`CurveTreeUnavailable` with
+/// `OutputNotDrained`), which is what it did when it admitted
+/// `eligible_height <= reference_height`. Found by the RT-P5 dry run
+/// (`docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md`). One block later
+/// the same spend builds.
+#[tokio::test]
+async fn an_output_eligible_at_the_reference_height_waits_one_block() {
+    use shekyl_engine_state::transfer::SPENDABLE_AGE;
+
+    let owned_block: u64 = 1;
+    let eligible = owned_block + SPENDABLE_AGE.to_raw();
+    // The tip at which the reference height is exactly the output's
+    // eligible height.
+    let boundary_tip = eligible + REF_ANCHOR_AGE.to_raw();
+
+    let (ledger, _dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000)], owned_block, boundary_tip).await;
+    let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+    let err = pending
+        .build(standard_request(7_000))
+        .await
+        .expect_err("the only output is not in the tree at the reference block");
+    match err {
+        SendError::OutputNotYetSpendable {
+            eligible_height,
+            reference_block_height,
+            wait_blocks,
+        } => {
+            assert_eq!(
+                eligible_height,
+                shekyl_types::BlockHeight::from_raw(eligible)
+            );
+            assert_eq!(
+                reference_block_height,
+                shekyl_types::BlockHeight::from_raw(eligible),
+                "the reference sits exactly at the output's eligible height"
+            );
+            assert_eq!(
+                wait_blocks,
+                shekyl_types::BlockCount::ONE,
+                "the tree at the next reference holds it"
+            );
+        }
+        other => panic!("expected OutputNotYetSpendable, got {other:?}"),
+    }
+
+    let (ledger, _dir, tree) =
+        funded_ledger_and_tree(&[(1, 50_000)], owned_block, boundary_tip + 1).await;
+    let pending = test_pending_tx_with_tree(Arc::clone(&ledger), tree);
+    pending
+        .build(standard_request(7_000))
+        .await
+        .expect("one block later the output is in the tree and the spend builds");
 }
 
 /// C2 wait-blocks KAT: when *multiple* too-fresh outputs are needed to cover
@@ -860,8 +920,8 @@ async fn output_not_yet_spendable_at_reference_block() {
 /// them mature — not the soonest single output (which alone is insufficient
 /// and would underestimate the wait). synced 15 → reference 9; output A
 /// (eligible 11, 10_000) is too small alone for the 30_000 spend (+fee), so
-/// B (eligible 13, 50_000) is also required → the wait is `13 − 9 = 4`, not
-/// `11 − 9 = 2`.
+/// B (eligible 13, 50_000) is also required → B is in the tree committed at
+/// reference 14, so the wait is 5 blocks, not A's 3.
 #[tokio::test]
 async fn output_not_yet_spendable_wait_covers_required_subset() {
     let ledger = Arc::new(test_ledger());
@@ -903,8 +963,8 @@ async fn output_not_yet_spendable_wait_covers_required_subset() {
             );
             assert_eq!(
                 wait_blocks,
-                shekyl_types::BlockCount::from_raw(4),
-                "wait until enough matures, not the soonest"
+                shekyl_types::BlockCount::from_raw(5),
+                "wait until enough is in the tree, not the soonest"
             );
         }
         other => panic!("expected OutputNotYetSpendable, got {other:?}"),

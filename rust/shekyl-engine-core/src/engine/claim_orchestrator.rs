@@ -52,8 +52,9 @@
 //! `chain_height − 1`), but a membership proof exists only for outputs
 //! already **drained into the tree at the reference height** — which sits
 //! [`REF_ANCHOR_AGE`](shekyl_curve_tree::REF_ANCHOR_AGE) blocks behind that
-//! tip ([`select_reference_height`]). Records with
-//! `spendable_height > reference_height` are spendable
+//! tip ([`select_reference_height`]). Records not yet in the tree at the
+//! reference ([`in_tree_at_reference`](shekyl_curve_tree::in_tree_at_reference)
+//! is false: `spendable_height >= reference_height`) are spendable
 //! but not yet provable — selecting one would assemble a claim the daemon
 //! rejects. The pipeline therefore pre-filters the record set to the provable
 //! subset before designation and sweep, the same drained-at-reference rule
@@ -223,8 +224,9 @@ fn claim_reference_height(
 }
 
 /// The provability pre-filter (module docs): the subset of `records` already
-/// drained into the curve tree at `reference_height` — inclusive at the
-/// boundary, matching the tree's drain rule (`eligible_height <= reference`).
+/// drained into the curve tree at `reference_height`, by the tree's drain
+/// rule ([`in_tree_at_reference`](shekyl_curve_tree::in_tree_at_reference):
+/// a record maturing at the reference height itself is not in it yet).
 /// Borrows: the designation and the sweep clone only what they select.
 fn provable_records(
     records: &[PFundingOutputRecord],
@@ -232,7 +234,7 @@ fn provable_records(
 ) -> Vec<&PFundingOutputRecord> {
     records
         .iter()
-        .filter(|r| r.spendable_height <= reference_height)
+        .filter(|r| shekyl_curve_tree::in_tree_at_reference(r.spendable_height, reference_height))
         .collect()
 }
 
@@ -476,35 +478,39 @@ mod tests {
         ));
     }
 
-    /// The provability pre-filter's inclusive boundary: an output drained AT
-    /// the reference height proves; one drained a block later is spendable
-    /// at the gather tip but not yet provable, and must not enter
-    /// designation or the sweep.
+    /// The provability pre-filter at its boundary. The tree committed at the
+    /// reference height holds leaves matured by the block before it
+    /// (`in_tree_at_reference`), so a record maturing one block before the
+    /// reference proves, and one maturing AT the reference is spendable at
+    /// the gather tip but not yet provable and must not enter designation or
+    /// the sweep. This test pinned the boundary as inclusive until the RT-P5
+    /// dry run met the refusal that rule produces at assembly
+    /// (`OutputNotDrained`); the tree's drain rule was always `r − 1`.
     #[test]
-    fn provability_boundary_is_inclusive_at_the_reference_height() {
-        let at = crate::engine::test_support::funding_record(
+    fn provability_boundary_excludes_a_record_maturing_at_the_reference_height() {
+        let earlier = crate::engine::test_support::funding_record(
             0,
             7,
             100,
             1_000,
             MintLineageOutput::ExternalTransfer,
         );
-        let mut later = crate::engine::test_support::funding_record(
+        let mut at = crate::engine::test_support::funding_record(
             0,
             8,
             101,
             1_000,
             MintLineageOutput::ExternalTransfer,
         );
-        later.spendable_height = BlockHeight::from_raw(at.spendable_height.to_raw() + 1);
+        at.spendable_height = BlockHeight::from_raw(earlier.spendable_height.to_raw() + 1);
 
         let reference_height = at.spendable_height;
-        let records = [at, later];
+        let records = [earlier, at];
         let kept = provable_records(&records, reference_height);
         assert_eq!(
             kept.iter().map(|r| r.gindex.to_raw()).collect::<Vec<_>>(),
             vec![7],
-            "inclusive at the boundary; the one-block-later record is filtered"
+            "the record maturing a block before the reference proves; the one maturing at it does not"
         );
     }
 

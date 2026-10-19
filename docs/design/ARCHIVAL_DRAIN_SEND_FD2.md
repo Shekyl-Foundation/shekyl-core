@@ -107,7 +107,8 @@ seal input (seat removed 2026-07-19; see the charter note above).
   set — the plan can neither be sized against nor select an in-flight-held
   output); `DrainPlan { amount, inputs:
   Vec<GlobalOutputIndex>, input_total, change }` (`:90`, Debug redacts
-  `inputs`). Maturity = `spendable_height <= reference_height` (`:186`).
+  `inputs`). Maturity = in the tree at the reference
+  (`in_tree_at_reference`: `spendable_height < reference_height`).
 - **The planner is fee-agnostic** — no fee operand anywhere in the three
   stages; `change = input_total − amount` exactly. Sweep, as built, is
   the `target == spendable` boundary (largest-first takes every mature
