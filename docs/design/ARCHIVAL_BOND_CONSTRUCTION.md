@@ -889,10 +889,8 @@ and sequentially** inside the sync `create` / `open_full` call (staker-only).
 That whole call is the blocking unit async callers already wrap in
 `spawn_blocking` (see the lifecycle module docs), so the keygens are off the
 *async* hot path at that granularity without `assemble()` itself spawning
-anything. Intra-call parallelism across the (small, `k`-bounded) `union` is a
-documented perf follow-up (`docs/FOLLOWUPS.md`), not a correctness concern. This
-is the perf side of the zero-root-exposure trade (privacy/security over
-performance, the correct priority direction).
+anything. This is the perf side of the zero-root-exposure trade
+(privacy/security over performance, the correct priority direction).
 
 **Robustness -- isolate the transport, not just the request (§11.1 Q3).** The
 parallel request type isolates *construction*; the residual gap is the network
