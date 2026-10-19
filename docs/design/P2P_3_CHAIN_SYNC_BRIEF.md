@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** OPEN — Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to the ruled CS-Q2 and CS-Q3, made in review on 2026-10-19 and awaiting Rick's confirmation: a body is bound to its header before the offer, so a substituted body never invalidates an honest header (CEN-G2); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction, with only an omitted first block attributable. From DRS-X PR 2's design review (2026-10-19): `following_degraded` is set by ingest's three refusals in the connector and held in the chain store (§A, coupling 4), and header PoW follows the earned-seed rule (CS-Q2 step 3), with one choice open for past-cap evidence, (i) or (ii). Nothing here is implemented; the pure-Rust work of CS-Q10 starts first.
+**Status:** OPEN — Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction, with only an omitted first block attributable. Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). Nothing here is implemented; the pure-Rust work of CS-Q10 starts first.
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 **Subject.** Moving chain sync (`cryptonote_protocol_handler`, `block_queue`) from C++ to Rust.
@@ -288,26 +288,67 @@ ingest deciding forks.**
        hashed, so a header that names an unearned seed costs zero cache
        builds. That keeps B1, the old-cache derivation attack (one cache
        build bought with one block nobody worked for), closed.
-     - **What this costs `Diverged` (CS-Q4, the `D_max` trap).** A fork
-       deeper than `D_max` names, in its first headers, a seed the window
-       guarantees to hold only up to `D_max` deep. So under this rule,
-       sync verifies a past-cap branch only while its fork point's seed
-       is still in the window, and a deeper fork stays silent. **Rick's
-       call:**
-       - **(i) Keep B2 strict:** `Diverged` covers forks whose first seed
-         is in the window, and the deeper case is a recorded gap. *Reopen
-         if* an eclipse run (CS-Q11) shows the honest chain arriving only
-         after the window has moved past the fork.
-       - **(ii) One bounded old-seed path for evidence:** a past-cap
-         branch whose computed work exceeds `work(L)` may have its fork
-         seed derived, transiently, in a hasher class below `Miner`. One
-         build runs at a time, at most one per session, and it uses only
-         idle permits, so it can never delay `Chain`, `HeaderPow`,
-         `Unsolicited`, `CalcPow` or the miner. The attacker cost per
-         build is a session and no work, because computed work can be
-         raised by timestamps alone. What B1 bought, starving the chain's
-         hashing, stays closed; idle CPU is what it costs. This needs a
-         new class in `shekyl-hash-budget`, which is DRS-X's crate.
+     - **The past-cap evidence check (Rick, 2026-10-19).** A branch that
+       forks deeper than `D_max` is checked as evidence for the alarm
+       (CS-Q4, the `D_max` trap). Only the first seed it names is built
+       without being earned. That seed is a block on our own chain, below
+       the fork.
+       1. **Its own hasher class, `Class::Evidence`, between `CalcPow`
+          and `Miner`.**
+          - A class is granted only while no higher class waits
+            (`shekyl-hash-budget`, `grantable`), and miner workers wait
+            whenever fewer than two permits are free (`free_needed`).
+            So a class below `Miner` would never run on a mining node,
+            which is the node most likely to be mining on an attacker's
+            chain.
+          - Above `Miner`, the miner yields at most one permit while a
+            check runs.
+          - **When it lands:** with chain sync's first caller, not
+            before (rule 21). `shekyl-hash-budget` is DRS-X's crate.
+       2. **Its own cache, outside `CacheStore`'s two slots.**
+          - Held only while that check runs; never canonical, never
+            pinned.
+          - It never evicts the ingest window's seed pair or an in-cap
+            branch's seed, so B2's thrash bound stands as ruled.
+          - Live memory rises by one cache, only while a check is in
+            flight.
+       3. **One check at a time, drawn uniformly.**
+          - **Candidates:** sessions offering a past-cap run whose cheap
+            checks pass and whose computed work exceeds `work(L)`.
+          - **The draw:** one candidate, uniformly at random. Never by
+            computed work, which timestamps raise for free. This is the
+            dialer's rule: an honest chain served by many honest sessions
+            is reached in proportion to their share.
+          - **At most one check per session.**
+       4. **In order from the fork, and stop at proof.**
+          - Every later seed on the run is earned under B2's 65-block
+            rule (above).
+          - All the run's hashes take `Evidence`.
+          - The first proof-of-work failure closes the session.
+          - When the fork point's work plus the run's verified work
+            exceeds `work(L)`, the sync owner sets the latch through the
+            connector (§A item 7).
+          - While the latch is set, no evidence check runs until a
+            resync.
+       - **Wargame.**
+         - **A false alarm needs real work:** more than the network's own
+           since the fork, over more than `D_max` blocks.
+         - **What a free session buys:** one cache build at `Evidence`
+           priority, one at a time. The floor device has one incidental
+           reading of 2.19 s per derivation
+           (`docs/benchmarks/measurement_ledger.toml:859`), not a
+           protocol run; the figure is an `Assumption` until CS-Q11
+           measures it.
+         - **B1's harms do not arise:** the canonical cache is not
+           evicted, the miner does not abandon its job, and there are no
+           parallel builds.
+       - **Not taken: checking only forks whose first seed is in the
+         window**, because the eclipse attacker chooses the duration. A
+         fork older than the window's older seed point (roughly 784 to
+         2,800 blocks: `D_max` and the 64-block lag, plus up to one
+         2048-block seed epoch; 1 to 4 days) would stay silent until a
+         release anchor contradicted it, and anchors ship about every 195
+         days (`ARCHIVAL_PRUNED_DAEMON_MODE.md:371`).
 4. **Select.** `H*` = the most work among the reachable chains in `T`.
    - A liar who claimed more work than its headers deliver is caught at
      the end of its run (step 3) and its session is closed.
@@ -324,11 +365,20 @@ ingest deciding forks.**
      transaction hashes;
    - every carried transaction hashes to its declared hash (CEN-G2's
      check, `rules/body.rs:132-160`, run by sync first; a skeleton's
-     txid is computed from its supplied components).
+     txid is computed from its supplied components);
+   - the attestation witness, with the coinbase's kept headers (the
+     first `0x0B` field of its extra), rebuilds to the header's
+     `attestation_root`. The witness travels beside the block and is not
+     covered by its identity. This is CEN-B4's parse-and-root half
+     (`AttestationSet::parse` and `verify_root`,
+     `rules/attestation.rs:110-118`), which is stateless and reads no
+     view. The countersignatures stay `validate`'s. The same rule covers
+     the bundle section once SO-D12's merged increment puts it on the
+     block wire.
    - A mismatch is the supplier's form failure: its session is closed and
      the span is requested elsewhere. **The header is not touched:** a
      peer cannot invalidate an honest header by substituting or
-     reordering its bodies.
+     reordering its bodies, or by swapping its witness.
 7. **Verdicts** from the entry's reply (§A):
    - `Connected`: advance.
    - `Refused`: the body matched its header (step 6), so the refusal is
@@ -416,8 +466,10 @@ ingest deciding forks.**
          - The latch lives in the chain store and survives a restart;
            only a resync clears it (`DRS_X_STORE_FLIP.md` DX-Q2 item 8,
            #1123). C2-R1b's C++ latch was process-lifetime.
-     - **Its producer is Rust:** a latch that ingest sets from the flip
-       and the sync owner also sets from the CS cutover (§A, coupling 4).
+     - **Its producer is Rust:** a latch in the chain store, written only
+       by the connector. Ingest sets it from the flip, and the sync owner
+       sets it from the CS cutover by sending the connector its evidence
+       (§A item 7, coupling 4).
 
    **The consumers:**
    - the RPC (`synchronized`, plus `target` as `null` when unknown, per
@@ -690,6 +742,19 @@ the existing types are extended, not replaced.
 - **Ruled (Rick, 2026-10-18): (a), with (c) as the normal behaviour.** Headers-first
   makes the trap need a total eclipse, then a heavier chain appearing
   after more than `D_max` blocks.
+- **Why the alarm exists, and what it is not.** The cap trades a
+  network-wide attack for a per-node one. Without it, a majority attacker
+  on rented RandomX hashpower rewrites history on every node. With it,
+  the attacker cannot rewrite more than `D_max` blocks on any node that
+  saw the honest chain, and a node eclipsed for longer is stranded
+  instead of healing. The store strands a node anyway at its undo floor
+  (`BelowFloor`); the cap makes that depth one consensus number instead
+  of a per-node storage accident. The alarm adds no security. It turns
+  "stranded and silent" into "stranded and told", which ends an
+  exploitation window the cap would otherwise leave open. It never heals
+  the node automatically: that would be the deep reorg the cap refuses,
+  and an honest node cannot tell an eclipse from a majority attack. A
+  person decides.
 - **Tiny network.** Two halves of a testnet that mine apart for more than
   24 h never rejoin. That is `D_max`'s design. (a) makes it visible
   instead of silent, and both halves keep mining.
@@ -978,7 +1043,13 @@ does it meet ingest's backpressure?
 - **Header PoW** runs on the same bounded hasher budget as ingest's
   `form` workers (DX-Q2 item 6, landed in #1101). So headers and bodies never
   together exceed the RandomX scratchpads a Pi 4 can hold. Solicited
-  work comes before unsolicited work within that budget (CS-Q5).
+  work comes before unsolicited work within that budget (CS-Q5). Sync's
+  classes:
+  - `HeaderPow`: header proof of work on runs sync requested;
+  - `Unsolicited`: blocks a peer announced unasked;
+  - `Evidence`: the past-cap evidence check, between `CalcPow` and
+    `Miner`, so the miner yields one permit to it and it never starves on
+    a mining node (CS-Q2 step 3).
 - **Backpressure.** Sync requests bodies only when the entry reports
   room. A requested body is never dropped for lack of room.
 
@@ -1125,6 +1196,11 @@ half-cut, and one cutover PR avoids it.
   - the long-run slot goes to the most verified work at equal height;
   - header PoW never derives a cache for a seed its branch has not earned
     (CS-Q2 step 3); a branch-earned cache is transient and never pinned;
+  - a substituted witness never marks its header invalid;
+  - on a mining node an evidence check runs, and the miner yields;
+  - a free fake run costs at most one cache build and closes its session;
+  - after the latch is set, no evidence build runs;
+  - an evidence check never evicts either ingest slot;
   - the `Diverged` alarm latches until a resync and sets
     `following_degraded`;
   - `Diverged` never withholds `Synced`;
@@ -1231,18 +1307,25 @@ document says it carries.
    (CS-Q2 steps 7 and 8).
 6. **A doc fix:** `source.rs:28` and `:43` (CS-F5). DRS-X assigned it to
    its PR 2.
+7. **One latch, one writer.** `following_degraded` lives in the chain
+   store, and the connector is the store's only writer. The sync owner
+   sets it by sending the connector one message carrying its evidence:
+   the fork point, and the verified run's tip and work. The connector
+   writes the latch in its own transaction. The sync owner never holds a
+   second flag.
 
-**Each coupling below is a docs PR against `DRS_X_STORE_FLIP.md`,**
-relayed to the DRS-X lane.
+**Couplings 1, 2, 4 and 5 are carried** in DRS-X PR 2 (#1123): the
+record in `99542387b`, and the latch's reply split, `CannotFollow`, in
+`b6b3a5d95`. DX-Q2 item 8 there is the latch's spec.
 
-1. **§4 item 6, the order of work (`:328`),** has chain sync delete the
+1. **Carried.** **§4 item 6, the order of work (`:328`),** has chain sync delete the
    whole protocol-handler half of the shell. Under CS-Q1, the
    transaction routes in that handler are RD's.
    - Wording: "Chain sync's cutover deletes the protocol handler's sync
      half, the complement request included. RD deletes its transaction
      routes, complement serving, `levin_notify` and the relay entry.
      Whichever lands second deletes the handler file."
-2. **DX-Q2 item 4 (`:64`)** says "Only `Refused(InvalidBlock)` is about
+2. **Carried.** **DX-Q2 item 4 (`:64`)** says "Only `Refused(InvalidBlock)` is about
    the peer… never punish". Under CS-Q5 (c) the wording becomes: "`Refused(InvalidBlock)` is the only outcome that closes the
    serving session (PWD-B7); nothing scores".
 3. **The carried requirement.** DRS-X says "chain sync's Round 0
@@ -1253,11 +1336,10 @@ relayed to the DRS-X lane.
    - The carried text can name this document now: chain sync is row
      **CS** of the §4.2 register, beside **TE** and **RD**, not a
      numbered slice.
-4. **`following_degraded` loses its producer at the flip.**
+4. **Carried (DX-Q2 item 8).** **`following_degraded` loses its producer at the flip.**
    - The flip deletes `Blockchain` (DEL-010, `:143`), which holds
      `m_following_degraded` and sets it (`blockchain.cpp:2288`).
-   - `DRS_X_STORE_FLIP.md` has no mention of `following_degraded`. Yet
-     the field is landed RPC (3.26), and the wallet engine reads it
+   - The field is landed RPC (3.26), and the wallet engine reads it
      (CS-Q2 step 8).
    - **Ruled: a Rust-held latch in the chain store, not shell state.**
      After the flip the switch is Rust ingest's. Three outcomes prove a
@@ -1282,7 +1364,7 @@ relayed to the DRS-X lane.
      latch semantics are C2-R1b's: one-way until a resync.
    - Without this, the flip silently retires a field the wallet acts
      on. Rule 82 puts that in scope.
-5. **The flip's `UNFREEZE`.** The flip PR edits `try_add_next_blocks`
+5. **Carried.** **The flip's `UNFREEZE`.** The flip PR edits `try_add_next_blocks`
    and carries its own `UNFREEZE` line under CS-Q9's rows (§4 item 5).
 6. **`NoRoom`** is in CS-Q2's verdicts and in §A.1. #1101 names it
    (DX-Q2 item 3, `:62`), so this coupling only needs the two to stay in
@@ -1299,8 +1381,10 @@ relayed to the DRS-X lane.
 - the index rows read ruled.
 
 **Relayed:**
-- §A couplings 1, 2, 4 and 5 go to the DRS-X lane, as a docs PR against
-  `DRS_X_STORE_FLIP.md`;
+- to the DRS-X lane, by Rick: for `DRS_X_STORE_FLIP.md` DX-Q2 items 6 and
+  8, the sync owner sets `following_degraded` through the connector (§A
+  item 7), and the evidence check's `Class::Evidence` with its own cache
+  lands with chain sync's first caller, not in PR 2;
 - the `INPUT_GRAMMAR.md:270` row moves from **L** to **X** with CS-Q12's
   reason. That is the grammar lane's table.
 
