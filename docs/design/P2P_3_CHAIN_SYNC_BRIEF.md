@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** OPEN — Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 7); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Nothing here is implemented; the pure-Rust work of CS-Q10 starts first.
+**Status:** OPEN — Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to the ruled CS-Q2 and CS-Q3, made in review on 2026-10-19 and awaiting Rick's confirmation: a body is bound to its header before the offer, so a substituted body never invalidates an honest header (CEN-G2); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction, with only an omitted first block attributable. Nothing here is implemented; the pure-Rust work of CS-Q10 starts first.
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 **Subject.** Moving chain sync (`cryptonote_protocol_handler`, `block_queue`) from C++ to Rust.
@@ -112,7 +112,7 @@ owner of block propagation.
 | C++ function | Owner | Fate |
 | --- | --- | --- |
 | `handle_request_chain`, `handle_response_chain_entry` | CS | Redesign (headers, CS-Q3) |
-| `handle_request_get_objects`, `handle_response_get_objects` | CS | Redesign (byte budget, body form by height, CS-Q3) |
+| `handle_request_get_objects`, `handle_response_get_objects` | CS | Redesign (byte budget, per-transaction body form, CS-Q3) |
 | `request_missing_objects`, `should_download_next_span`, `skip_unneeded_hashes`, `request_chain_history`, `calculate_dynamic_span`, `block_queue` | CS | Redesign as the sync owner's scheduler (CS-Q2, Q8) |
 | `try_add_next_blocks` (the add loop), `make_*_connect_supplement` | DRS-X | Deleted here. Arrivals go to the DRS-X entry; formation is `form`'s |
 | `process_payload_sync_data` | CS | Redesign as hint intake. Callers: the dialer's result (landed) and slice 4's inbound handshake and timed sync |
@@ -272,10 +272,24 @@ ingest deciding forks.**
    - A span goes to any session whose verified frontier covers it.
    - One request is outstanding per session, under a global byte budget.
    - Arrivals go to the DRS-X entry in chain order.
-6. **Verdicts** from the entry's reply (§A):
+6. **Before the offer, sync binds each body to its header.** A delivered
+   block must match the header in `T` it was requested for:
+   - its identity (`identity_of_pow_blob`) equals that header's hash,
+     which binds the header, the miner transaction and the declared
+     transaction hashes;
+   - every carried transaction hashes to its declared hash (CEN-G2's
+     check, `rules/body.rs:132-160`, run by sync first; a skeleton's
+     txid is computed from its supplied components).
+   - A mismatch is the supplier's form failure: its session is closed and
+     the span is requested elsewhere. **The header is not touched:** a
+     peer cannot invalidate an honest header by substituting or
+     reordering its bodies.
+7. **Verdicts** from the entry's reply (§A):
    - `Connected`: advance.
-   - `Refused`: mark that header and its subtree in `T` invalid and
-     close the session that served the body. A new `H*` follows.
+   - `Refused`: the body matched its header (step 6), so the refusal is
+     about the block the header commits to. Mark that header and its
+     subtree in `T` invalid and close the session that served the body.
+     A new `H*` follows.
    - `Unlinked{at}`: re-locate from `at` (a tip announce whose parent we
      lack).
    - `NoRoom`: the entry refused before acceptance. Sync keeps the span
@@ -289,15 +303,23 @@ ingest deciding forks.**
      the door, before proof of work (DRS-X PR 2, #1123), so the reply is
      unverified and **never raises the alarm**. Sync treats it as a hint:
      it requests headers, and a verified run can raise the alarm through
-     `T` (step 7).
-7. **State, published as one source.** **A claim's value never changes
+     `T` (step 8).
+8. **State, published as one source.** **A claim's value never changes
    the sync state; only verified headers do.** A higher claim only starts
    a header request (step 1).
    - **`NoView`**: no session has completed a handshake.
    - **`Behind { have, best }`**: `work(L) < work(H*)`, over verified
      headers.
-   - **`Synced`**: not `NoView`, and `work(L) ≥ work(H*)` over verified
-     headers.
+   - **`Following { verified_to }`**: `work(L) ≥ work(H*)` over verified
+     headers, while PDM-Q5's backward fill has not yet reached the
+     checkpoint `C` (genesis under `assumevalid = 0`). The node follows
+     the chain, but the proofs in `(C, verified_to]` are unchecked, so it
+     does not report synced and does not act as a validator for anyone
+     else (`ARCHIVAL_PRUNED_DAEMON_MODE.md:549-576`). `verified_to` is the
+     fill's descending frontier, which the RPC shows as progress (rule
+     80). The fill is local work, so no claim affects this state.
+   - **`Synced`**: not `NoView`, `work(L) ≥ work(H*)` over verified
+     headers, and the backward fill has reached `C`.
    - **Why no "a peer agrees" condition.** Reading it as "peers name our
      tip" would stop mining during an ordinary equal-work tip race.
      Reading it as "a higher claim means we are behind" would let anyone
@@ -427,24 +449,45 @@ the wire can still change?
      `total_height`. A height is the index along the chain.
 2. **Objects request and response.**
    - The request names hashes, as now.
-   - The responder stops at a byte budget and says which hashes it did
-     not send. A partial answer is legal **only when the response stopped
-     at its byte budget**. A response under the budget must carry every
-     requested body inside the responder's advertised verified frontier
-     (CS-Q4, the withholding rule).
-   - `missed_ids` becomes that explicit not-sent list, which is how
-     withholding becomes visible.
-   - `prune` is deleted.
-3. **The body's form is a function of height, not a request flag.**
-   - Discard is uniform across all daemons (PDM).
-   - So a block below the discard frontier is served as a skeleton:
+   - **The response carries the requested blocks in request order.** The
+     first is always sent, whatever its size. Its size is bounded by
+     consensus (the block weight limit) and by the packet cap. After it,
+     the responder adds the next block while it fits the remaining byte
+     budget, and stops at the first that does not.
+   - The response names the tail it did not send. `missed_ids` becomes
+     that not-sent list, and `prune` is deleted.
+   - **What the receiver can attribute.** It cannot see an omitted
+     block's size, so an omission after the first block is never a
+     fault: the tail is re-requested, from that session or another. A
+     response that omits the **first** requested block, when that block
+     lies inside the responder's advertised verified frontier, is
+     withholding (CS-Q4). Every node can serve every block in at least
+     skeleton form (item 3), so the first block is always servable.
+3. **The form is per transaction, not per block or per request flag.**
+   - Each transaction is served either **full** or as a **skeleton**:
      - the unprunable part;
      - `prunable_hash`;
      - `pqc_auth_hash`;
      - the archival length.
-   - Above the frontier it is served full.
-   - The receiver checks the form against the same rule, so a full body
-     below the frontier, or a skeleton above it, is a violation.
+   - Every node holds every skeleton (PDM-Q5: headers, every tx prefix,
+     `CtSigBase` and both hash rows), so a skeleton is always servable.
+     The responder serves full where it still holds the prunable bytes.
+   - **Peers differ, honestly.** A boundary block is mixed: the shard
+     boundary falls mid-block (`DRS_E1_SPRUNE.md:274-278`). Peers at
+     different tips have different discard frontiers. And discard is
+     irreversible, so after a reorg across an epoch boundary a node may
+     hold only skeletons where the rule would now retain bytes
+     (`ARCHIVAL_PRUNED_DAEMON_MODE.md:233-238`).
+   - **So the form is never a session-closing fault.** The receiver
+     binds every transaction to its declared txid, whatever its form
+     (CS-Q2 step 6); a binding mismatch is the only fault.
+     - A skeleton where the receiver's own discard rule keeps the bytes
+       is not a fault: that transaction's full form is requested from
+       another session.
+     - A full transaction where a skeleton would do is accepted, and the
+       receiver's own rule discards it.
+     - No shared reference context is needed: each side applies its own
+       discard state.
    - This takes **F28 into this slice**: the `PDM-Q-F28` row
      (FOLLOWUPS:1413) is owned by CS.
 4. **Encoding.** Keep Levin portable storage for these messages. A move
@@ -456,7 +499,8 @@ all at once, so there is no mixed-version arm.
 **Allocation bound.** What a malicious peer can make us hold:
 - `T`: headers PoW-verified one at a time;
 - one run budget per session, plus at most one long run up to the size of `T` (CS-Q2 step 3);
-- one byte budget per outstanding objects request;
+- one byte budget, plus one block at the consensus limit, per
+  outstanding objects request;
 - the ingest window.
 
 All four are fixed by our own constants, not by what peers claim. The
@@ -467,8 +511,10 @@ All four are fixed by our own constants, not by what peers claim. The
 - **Junk hashes.** Gone: there are no unproven ids on the wire.
 - **Inflated tip claim.** It costs the liar its session at the end of
   its own run, with zero hashes.
-- **Partial or withheld bodies.** Explicit and attributable to that
-  session.
+- **Partial bodies.** Explicit, and re-requested. **Withheld bodies:**
+  only an omitted first block is attributable, and it closes the session.
+- **Substituted bodies.** Bound to the header before the offer (CS-Q2
+  step 6); the supplier is closed and the header stays valid.
 - **Tiny network.** No change.
 - **Budget values.** `Assumption`s until measured on the Rust path
   (Ruling B, CS-Q11).
@@ -512,14 +558,16 @@ tested against PWD-B7:
   wire). This arm is consistent with PWD-B7, and it is the droppable
   class PWD-B7 names.
 - **Withholding** is attributable only if the wire makes it a universal
-  rule. CS-Q3.2 does, under one condition stated here:
-  - an objects response that stops **under** its byte budget must carry
-    every requested body inside the peer's advertised verified frontier,
-    in the form its height dictates (CS-Q3.3);
-  - a hash left out of an under-budget response is a form failure, and
-    the session is closed;
-  - a response that stops at the budget is legal, and the not-sent tail
-    is re-requested.
+  rule. CS-Q3.2 does, for one case:
+  - a response that omits the **first** requested block, when that block
+    lies inside the peer's advertised verified frontier, is a form
+    failure, and the session is closed (every node can serve a block in
+    skeleton form, CS-Q3.3);
+  - an omission after the first block is never a fault, because the
+    receiver cannot see whether it would have fit; the tail is
+    re-requested;
+  - a transaction served as a skeleton where the receiver needs it full
+    is not withholding either (CS-Q3.3).
 - **A missed deadline** fails PWD-B7's second conjunct. The deadline is
   derived from our **local** rate floor, an `Assumption`, so it is local
   policy, not a universal rule. A slow honest peer on a thin link, or a
@@ -537,7 +585,7 @@ tested against PWD-B7:
     been a named exception to PWD-B7.
 
 **Where the verdicts live.** The mapping from the entry's reply (CS-Q2
-step 6) to a session action is built in `shekyl-peer-policy`, beside
+step 7) to a session action is built in `shekyl-peer-policy`, beside
 `BlockAnnounceAction` and `BlockSyncAction`. It uses PWD-B7's tri-state
 `DropVerdict`, whose unset arm does not sever (CS-Q1). It is additive:
 the existing types are extended, not replaced.
@@ -546,7 +594,8 @@ the existing types are extended, not replaced.
 | --- | --- | --- |
 | Eclipse during initial sync | Sync cannot detect a total eclipse; defence is the dialer's uniform draw and `ReleaseAnchors`. Headers-first means that when one honest session appears, its heavier headers win before bodies are connected deep (CS-F3) | — |
 | Long low-work fork | Its claim is below `work(H*)`, so it is never asked. A liar claiming more is caught at the end of its run: the run's computed work falls short of the claim | Zero hashes if the work falls short; at most one run budget held. If the headers carry inflated work, the first PoW check fails: at most one hash per session |
-| Withholding | A body inside the advertised frontier, left out of a response under its byte budget, is a form failure, and the session is closed. A response stopped at the budget is legal; the tail goes to another session that holds it | Bounded by the sessions holding the span |
+| Withholding | An omitted first block inside the advertised frontier is a form failure, and the session is closed. Omissions after the first block are re-requested, from that session or another | Bounded by the sessions holding the span |
+| Substituted or reordered bodies under an honest header | Caught before the offer by the header binding (CS-Q2 step 6): the supplier is closed, the span is requested elsewhere, and the header is not invalidated | One session per attempt; no header is ever lost |
 | Slow drip | Each request's deadline = the connector's transit (from its declaration, `transit_ms`) plus bytes asked over a rate floor. Late means the span is reassigned and the session stops being a body source for that run. It is **not** closed, under option (i) above (PWD-B7) | The rate floor is an `Assumption` until measured. The slot it keeps is bounded by the dialer and PWD-B1, not sync |
 | Body passes framing, fails `validate` | The header's PoW is on the selected chain, so the attacker mined it at honest difficulty; subtree invalidated, session closed | Attacker: one real block's mining. Us: one block's validation |
 | Invalid-PoW announce | The cheap checks run first (parent known, timestamps, difficulty); then PoW; a failure closes the session | One RandomX hash per announce that passes the cheap checks, and one session spent by the attacker. Unsolicited work is capped (CS-Q5) |
@@ -557,7 +606,7 @@ the existing types are extended, not replaced.
 - Options:
   - (a) Accept it, surfaced: raise the `Diverged { fork_at }` alarm, a
     rule-82 failure that is loud and persistent. RPC shows it, and the
-    wallet's sync view carries it (CS-Q2 step 7). The remedy is the
+    wallet's sync view carries it (CS-Q2 step 8). The remedy is the
     operator's (a resync).
     - It is an **alarm only**. It does not withhold `Synced`, and the
       miner and the relay gate keep running on our chain.
@@ -722,9 +771,20 @@ nothing:
   - This arm exists only to pick a score weight.
   - The rest of the crate stays and is extended (CS-Q1, CS-Q4).
 
-Slice 4's two inbound calls go with slice 4's port. The test overrides
-go too: `tests/unit_tests/node_server.cpp:591` and
-`sync_orphan_arm.cpp:145`.
+**Every caller goes at the CS cutover, whenever slice 4 lands.** CS
+deletes the method, so it deletes all five calls with it:
+- the handler's two (`.inl:2570`, `:2615`);
+- the inbound handshake's two (`net_node.inl:941`, `:949`);
+- the timed-sync peerlist refusal (`net_node.inl:582`).
+
+Each of the three `net_node.inl` sites already closes or drops the
+connection before the call, so the deletion removes only the score. With
+them go:
+- the interface's declarations (`net_node_common.h:76`, `:133`);
+- `node_server`'s (`net_node.h:244`, `net_node.inl:349`);
+- `m_host_fails_score` and its lock (`net_node.h:300-301`);
+- the test overrides (`tests/unit_tests/node_server.cpp:591`,
+  `sync_orphan_arm.cpp:145`).
 
 **What stays:** operator bans and their expiry, and the registered
 reconnect throttle, which is not a ban.
@@ -1002,21 +1062,26 @@ half-cut, and one cutover PR avoids it.
   - no body is requested off `H*`;
   - every request ends;
   - no RandomX hash is spent on a run whose computed work does not
-    exceed `work(H*)`;
+    exceed `work(H*)`, except by a run taking or holding the long-run
+    slot (CS-Q2 step 3), which pays PoW on its deferred prefix and on
+    every later response;
   - an honest chain longer than one response is never refused;
-  - a refusal invalidates exactly its subtree;
+  - a refusal invalidates exactly its subtree, and only for a body that
+    matched its header; a body that fails the header binding closes its
+    supplier and never changes `T`;
   - `PayloadRefused` fires only on structurally impossible claims;
-  - `NoView`, `Behind` and `Synced` are derived, never latched;
+  - `NoView`, `Behind`, `Following` and `Synced` are derived, never
+    latched; `Synced` never holds while the backward fill is short of
+    `C`;
   - a claim's value never changes the sync state;
-  - only a run in the long slot, or one taking it, pays PoW before it
-    exceeds `work(H*)`; the slot goes to the most verified work at equal
-    height;
+  - the long-run slot goes to the most verified work at equal height;
   - the `Diverged` alarm latches until a resync and sets
     `following_degraded`;
   - `Diverged` never withholds `Synced`;
   - a missed deadline reassigns the span and never closes the session;
-  - a body left out of an under-budget objects response closes the
-    session.
+  - an objects response closes the session only when it omits the first
+    requested block inside the advertised frontier; a later omission or a
+    skeleton where full was needed never does.
 - **Adversarial harness.** Scripted peers over real Levin framing on
   loopback (`shekyl-p2p-harness`): honest, liar, withholder, slow-drip,
   low-work fork, invalid body, and an unsolicited-announce flood during
@@ -1025,8 +1090,13 @@ half-cut, and one cutover PR avoids it.
     using `chain-ingest`'s captured chains.
   - That is a production pathway with adversarial peers, not mocks.
 - **Regtest.** Multi-node, including a partition held for more than
-  `D_max` blocks. It must end with the `Diverged` alarm raised on both
-  halves, and both halves still mining.
+  `D_max` blocks with unequal work on the two halves. On rejoining:
+  - the **lighter** half raises the `Diverged` alarm (it sees a verified
+    heavier chain past `D_max`), and the heavier half does not;
+  - with equal work, neither raises it;
+  - both halves keep mining.
+  - A second scripted overtake, where the other half becomes heavier,
+    exercises the latch on the other side.
 - **Pi 4, after the cutover, each figure labelled `RustPath`:**
   - headers per second and bodies per second, over clearnet and over
     Tor;
@@ -1107,7 +1177,7 @@ document says it carries.
    switch, as one source. The dialer and sync both read it.
 5. **`BeyondCap` reaches sync** as a reply. A door refusal, before proof
    of work, is a hint to request headers and never raises the alarm
-   (CS-Q2 steps 6 and 7).
+   (CS-Q2 steps 7 and 8).
 6. **A doc fix:** `source.rs:28` and `:43` (CS-F5). DRS-X assigned it to
    its PR 2.
 
@@ -1137,7 +1207,7 @@ relayed to the DRS-X lane.
      `m_following_degraded` and sets it (`blockchain.cpp:2288`).
    - `DRS_X_STORE_FLIP.md` has no mention of `following_degraded`. Yet
      the field is landed RPC (3.26), and the wallet engine reads it
-     (CS-Q2 step 7).
+     (CS-Q2 step 8).
    - **Ruled: a Rust-held latch, not shell state.** After the flip the
      switch is Rust ingest's, and its results already carry the two
      refusals: `Switched::BelowFloor` (the undo floor) and
@@ -1149,7 +1219,7 @@ relayed to the DRS-X lane.
      latch. Since the door and `within_cap` (`switch.rs:640`) use the
      same depth, `Switched::BeyondCap` is reached only when the tip
      moves between the claim and the connector. In practice the `D_max`
-     alarm comes from the sync owner's verified headers (CS-Q2 step 7),
+     alarm comes from the sync owner's verified headers (CS-Q2 step 8),
      from the CS cutover.
    - The RPC reads it in Rust (`info_facts.rs:88`, DX-Q3, #1106). The
      latch semantics are C2-R1b's: one-way until a resync.
