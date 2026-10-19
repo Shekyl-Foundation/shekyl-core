@@ -58,7 +58,7 @@ Out of scope: log category names (owned by `shekyl-logging`); they can be brough
 
 **IG-1 Lexical.** An identifier is lowercase ASCII `[a-z][a-z0-9]*` segments. One path has three renderings and no other: words at the prompt (`chain height`); `-`-joined in option names and TOML keys (`log-level`); `_`-joined on the RPC wire for method, parameter and reply-field names (`chain_height`; [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q9). Identifiers, keywords and units are never translated.
 
-**IG-2 One vocabulary, as a tree.** The glossary is a tree of terms. Each term is defined once, project-wide, and lists its parents; a term with no parent is a *subject*. A term reused under several parents keeps its one meaning (`listen` under `clearnet`, `onion`, `rpc` and `view`). Every segment of every name is a term in the tree, including plain words (`file`, `dir`, `max`, `help`): the gate has no exemption list.
+**IG-2 One vocabulary, as a tree.** The glossary is a tree of terms. Each term is defined once, project-wide, and lists its parents; a term with no parent is a *subject*. A term reused under several parents keeps its one meaning (`listen` under `clearnet`, `onion`, `rpc` and `view`). Every segment of every name is a term in the tree, including plain words (`file`, `dir`, `max`, `help`): the gate has no exemption list. The glossary is acyclic: no term is its own ancestor through its parents, and the gate refuses a cycle. An edge expresses refinement only; a name that points at another subject does so by reference (IG-Q42).
 
 **IG-3 Structure.** A name is a path through the tree: it starts at a subject and each segment is a child of the one before (`tor-socks-password` is `tor` → `socks` → `password`). A subject alone is a name (`network`). The qualifiers `max` and `min` may end any path. A path-valued option ends in `file` or `dir`. A term may both carry a value and have children (`tor`, `tor-socks`). `dev` is a subject like any other (IG-8); its children may be other subjects (`dev-clearnet-encrypt`). The gate checks that a name is well formed; whether it is an option is the table's. A command is a path whose last term is a *verb* (the command acts) or a *view* (a noun whose command prints it); verbs and views are terms of that kind under their parent, a subject that is itself a verb or a view is a command alone (`send`, `balance`), and each command has exactly one spelling. A view changes no state; a command that changes state ends in a verb.
 
@@ -1009,7 +1009,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | sender | tally | a distinct peer that sent the transaction; with `count` |
 | holding | claim | one-of `shards`, `complete-tree` |
 | settled | claim, coverage | the last settled epoch |
-| bond | claim, credit, epoch | an archival bond |
+| bond | — | an archival bond: a subject, which the claim source, an epoch and a credit name by reference (IG-Q42) |
 | served | claim, coverage, shard | served |
 | slash | claim | slashed |
 | work | epoch, coverage | the summed work (milli, IG-Q54) |

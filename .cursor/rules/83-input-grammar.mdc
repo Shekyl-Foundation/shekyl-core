@@ -38,7 +38,10 @@ term is defined once, project-wide, and lists its parents; a term with no
 parent is a *subject*. A term reused under several parents keeps its one
 meaning. Every segment of every name is a term in the tree, including
 plain words (`file`, `dir`, `max`, `help`): the gate has no exemption
-list.
+list. The glossary is acyclic: no term is its own ancestor through its
+parents, and the gate refuses a cycle. An edge expresses refinement only;
+a name that points at another subject does so by reference (IG-Q42 in
+`docs/design/INPUT_GRAMMAR.md`).
 
 **IG-3 Structure.** A name is a path through the tree: it starts at a
 subject and each segment is a child of the one before. A subject alone is
