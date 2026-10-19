@@ -199,6 +199,13 @@
 #                                                   and not-offered are
 #                                                   -29534..-29536, never an
 #                                                   empty result)
+#   SPECIFIED (WR-Q2 — staking outcomes a user can see):
+#     acknowledge_staking_outcome                  (clear the staking
+#                                                   endings of one kind,
+#                                                   every identity, through
+#                                                   the height shown. Names
+#                                                   no identity or slot;
+#                                                   idempotent)
 #
 #   RESERVED: none at present. (sign_message / verify_message shipped with
 #     PR-SM-2; match_transfer_to_request was re-ruled REJECTED 2026-09-07 —
@@ -437,7 +444,22 @@ info:
   # The cause-unknown form is unchanged and carries no `data`: its cause is
   # withheld to the server log (rule 43's "not disclosed to this caller"
   # reading, not an absent answer). api_version stays 1.
-  version: 0.13.0
+  # 0.14.0: staking work a user can see (WALLET_RPC_STAKING_OUTCOMES.md,
+  # WR-Q1..WR-Q5). staking_info gains two required lists: in_flight, one
+  # entry per staking record still in flight (kind, state, the first send's
+  # height, attempts, funds_return_at, reason), and outcomes, the last
+  # ending per kind (kind, outcome, reason, at_height, funds). kind, state
+  # and outcome are open strings. pscan_synced_height becomes required and
+  # null when the wallet never scanned as a staker; recovery_pending_reopen
+  # is listed and required; posture and serving_priority_not_lowered are
+  # required and null when no host or serving process is running. in_flight
+  # has a held state: a stake whose every reserved input is spent with no
+  # confirmation seen is kept, not withdrawn. New method
+  # acknowledge_staking_outcome { kind, through_height } clears every
+  # ending of that kind at or below the height shown. -29521 now means only
+  # a refusal before any byte was sent; a daemon's terminal verdict on a
+  # sent exit is -29522, held until its end date. api_version stays 1.
+  version: 0.14.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -504,6 +526,7 @@ x-shekyl-method-registry:
   drain: { status: SPECIFIED }
   unstake: { status: SPECIFIED }
   collect_unstaked: { status: SPECIFIED }
+  acknowledge_staking_outcome: { status: SPECIFIED }
   get_tx_proof: { status: SPECIFIED }
   check_tx_proof: { status: SPECIFIED }
   get_reserve_proof: { status: SPECIFIED }
@@ -626,6 +649,7 @@ components:
             - drain
             - unstake
             - collect_unstaked
+            - acknowledge_staking_outcome
             - get_tx_proof
             - check_tx_proof
             - get_reserve_proof
@@ -1333,26 +1357,29 @@ components:
                                           operation took an input; plain
                                           retry). Automation MUST branch on
                                           data.cause, never message prose
-          -29521 UNSTAKE_REFUSED_RELEASED unstake: the daemon refused the
-                                          exit with a DEFINITE first-send
-                                          verdict and the sealed record was
+          -29521 UNSTAKE_REFUSED_RELEASED unstake: the exit was refused
+                                          BEFORE any byte left the wallet
+                                          and the sealed record was
                                           RELEASED — nothing propagated;
                                           address data.detail's refusal and
                                           retry at will. Distinct from
                                           -29522 because the two demand
                                           OPPOSITE client behavior
-          -29522 UNSTAKE_FATE_UNKNOWN     unstake: the dispatch failed with
-                                          no definite verdict (or a
-                                          retryable one) — the bytes may
-                                          have reached the network, so the
+          -29522 UNSTAKE_FATE_UNKNOWN     unstake: the exit was sent and
+                                          the chain decides its fate — no
+                                          verdict, a retryable one, or a
+                                          daemon's terminal verdict, which
+                                          never ends a sent record. The
                                           sealed record is HELD funds-safe
                                           and the one-live-exit lane stays
-                                          shut until it settles or the
-                                          recovery slice (FOLLOWUPS
-                                          dispatch-driver prune+resubmit)
-                                          disposes of it. Do NOT re-fire
-                                          blindly; a stall alarm names the
-                                          record in the operator log
+                                          shut. Do NOT re-fire. Check
+                                          staking_info: by the height its
+                                          in_flight entry names
+                                          (funds_return_at), this exit
+                                          will either have completed or
+                                          been withdrawn with its funds
+                                          returned, and outcomes says
+                                          which
           -29523 COLLECT_NO_EXIT          collect_unstaked: no confirmed
                                           exit awaits collection — unstake
                                           first, or wait for the exit to
@@ -2797,7 +2824,16 @@ components:
 
     StakingInfoResult:
       type: object
-      required: [staking_enabled, balance, staked_output_count]
+      required:
+        - staking_enabled
+        - balance
+        - staked_output_count
+        - pscan_synced_height
+        - recovery_pending_reopen
+        - in_flight
+        - outcomes
+        - posture
+        - serving_priority_not_lowered
       properties:
         staking_enabled:
           type: boolean
@@ -2812,17 +2848,50 @@ components:
         pscan_synced_height:
           type: integer
           format: int64
+          nullable: true
           description: >
-            The staking scan's sealed frontier height. Absent when the
-            wallet has never scanned as a staker.
+            The first height the staking scan has not yet covered (its
+            sealed frontier, exclusive): every block below it is scanned.
+            `null` when the wallet has never scanned as a staker, which is
+            an answer, not something withheld. Compare with an in_flight
+            entry's funds_return_at: those funds return once this is
+            greater than it.
+        recovery_pending_reopen:
+          type: boolean
+          description: >
+            `true` when this session's scan recovered a staked slot that
+            becomes operational only at the next wallet open: close and
+            reopen the wallet to finish staking recovery. `false` in the
+            steady state.
+        in_flight:
+          type: array
+          description: >
+            Every staking record still in flight, in no meaningful order
+            (WR-Q1). Empty means nothing is in flight; the list is never
+            absent or null for that. Every state comes from the wallet's
+            saved records, so it reads the same after a restart.
+          items:
+            $ref: "#/components/schemas/StakingInFlightEntry"
+        outcomes:
+          type: array
+          description: >
+            The last ending for each kind of staking action, per staking
+            identity the wallet holds (WR-Q2). An entry stays until the
+            same kind is started again for that identity or the owner
+            acknowledges it (acknowledge_staking_outcome). A
+            `spent_elsewhere` entry stays until it is acknowledged. Empty
+            means there is nothing to report.
+          items:
+            $ref: "#/components/schemas/StakingOutcomeEntry"
         posture:
           type: string
+          nullable: true
           description: >
             What this wallet's serving host is currently obligated to
-            serve. **Absent means no host is running** — a non-staker, a
+            serve. **`null` means no host is running** — a non-staker, a
             staker still inside its launch standoff, or a wallet whose
             serving path failed — and renders as "not serving" rather than
-            as either posture.
+            as either posture. Required: "no host" is an answer (rule 43).
 
             Values defined at this contract version: `market`,
             `foundation_complete_tree`.
@@ -2843,16 +2912,17 @@ components:
             from a stored setting: no posture is durable wallet-side, and
             the connected bond record lives daemon-side, so this answers
             "what is being served now" rather than "what was intended".
-            Consequently it can be absent for a wallet that is bonded —
+            Consequently it can be `null` for a wallet that is bonded —
             which is the honest reading, not a gap.
         serving_priority_not_lowered:
           type: integer
           minimum: 0
+          nullable: true
           description: >
             How many threads of this wallet's serving host are still at
             normal CPU priority because the operating system refused to
-            lower them. **Absent means no serving lifecycle is parked** —
-            the same reading as an absent `posture`. **Zero is the steady
+            lower them. **`null` means no serving process is running**;
+            the field is required (rule 43). **Zero is the steady
             reading**: every serving thread that is running was lowered.
             Blocking threads start only when a connection needs one, so
             zero does not claim that every thread which will ever exist
@@ -2868,6 +2938,146 @@ components:
             threads that are still running. It does not say whether the
             daemon received more CPU: that depends on how the two
             processes are scheduled against each other.
+
+    StakingInFlightEntry:
+      type: object
+      required:
+        - kind
+        - state
+        - dispatched_at_height
+        - attempts
+        - funds_return_at
+        - reason
+      description: >
+        One staking record in flight. `kind` and `state` are open strings
+        for the reason `posture` is: a client renders an unknown value
+        as-is rather than reject the reply. The entry carries no handle;
+        actions act on the active persona (WR-Q5).
+      properties:
+        kind:
+          type: string
+          description: >
+            Values at this contract version: `stake`, `claim` (an
+            emission-reward claim the wallet makes on its own), `drain`
+            (a return of staking funds to the principal balance), `exit`
+            (the release of a stake).
+        state:
+          type: string
+          description: >
+            Values at this contract version. `pending`: saved, not yet
+            sent. `dispatched`: sent and still able to land. `refused`: a
+            node refused it and its end date has not passed. Not final:
+            nothing more is sent, its funds stay set aside until
+            funds_return_at, and a stake that lands before then takes the
+            confirmed path, because only the chain can say whether it
+            landed; the refusal becomes an outcome only at the end date.
+            `expired`: the end date has passed, so the transaction can
+            never be mined; its funds return at funds_return_at, and a
+            record a node refused keeps its reason. `held`: a stake past its end date whose every
+            reserved input has been spent with no confirmation seen; it is
+            kept rather than withdrawn, so a stake that did land keeps its
+            place, nothing is returned because nothing reserved is left,
+            and the wallet raises an integrity alarm. A record that lands
+            leaves the list without an outcome; its effect shows in the
+            balance.
+        dispatched_at_height:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            The tip height the record's first send was judged against.
+            `null` when it was never sent.
+        attempts:
+          type: integer
+          minimum: 0
+          description: Sends so far, the first included; `0` when never sent.
+        funds_return_at:
+          type: integer
+          format: int64
+          nullable: true
+          description: >
+            For `refused` and `expired`: the end date, the last height at
+            which the transaction could be mined. Its funds return once
+            pscan_synced_height is greater than it. `null` in the other
+            states, where no return is expected.
+        reason:
+          type: string
+          nullable: true
+          description: >
+            What a node said, whenever one refused the record (`refused`,
+            and `expired` after a refusal), and for `held` why the stake is
+            kept, as a sentence for the user. `null` otherwise.
+
+    StakingOutcomeEntry:
+      type: object
+      required: [kind, outcome, reason, at_height, funds]
+      description: >
+        How a staking record ended without landing. Open strings, as
+        StakingInFlightEntry.
+      properties:
+        kind:
+          type: string
+          description: As StakingInFlightEntry.kind.
+        outcome:
+          type: string
+          description: >
+            Values at this contract version. `rejected`: a node refused it
+            and it did not land by its end date. `expired`: it did not land
+            by its end date. `ended_unconfirmed`: a reward claim that held
+            no funds reached its end date, and the wallet cannot see
+            whether it landed; a node's refusal does not make it
+            `rejected`, and its sentence is kept in `reason`. `spent_elsewhere`: some of its funds were
+            spent by another transaction, which should not happen.
+        reason:
+          type: string
+          description: >
+            A sentence for the user, never a code. The ending of a record
+            that was sent and whose funds came back adds that anyone who
+            saw the attempt can link a later spend of those funds to it.
+        at_height:
+          type: integer
+          format: int64
+          description: The tip height when the ending was written.
+        funds:
+          type: string
+          description: >
+            `returned`: the funds it held are spendable again (for
+            `spent_elsewhere`, the unspent rest). `none_held`: it held
+            none (`ended_unconfirmed`).
+
+    AcknowledgeStakingOutcomeParams:
+      type: object
+      required: [kind, through_height]
+      additionalProperties: false
+      description: >
+        Clear every ending of `kind` in staking_info.outcomes, for every
+        staking identity the wallet holds, whose at_height is at or below
+        `through_height` (WR-Q2, ruled 2026-10-17). No identity, slot or
+        record is named (WR-Q5); a request carrying anything else is
+        -32602.
+      properties:
+        kind:
+          type: string
+          enum: [stake, claim, drain, exit]
+        through_height:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            The newest at_height the owner was shown, so an ending written
+            after it is never cleared unseen. The CLI sends the newest
+            height its last `stake` showed for the kind.
+
+    AcknowledgeStakingOutcomeResult:
+      type: object
+      required: [cleared]
+      properties:
+        cleared:
+          type: integer
+          minimum: 0
+          description: >
+            How many endings were cleared. `0` when there were none, so a
+            repeated acknowledgement is harmless.
 
     # ── Archival principal staking actions — WI-RPC-5 ────────────────
     # The principal↔P money legs that already exist in Engine: stake_in
@@ -3047,7 +3257,8 @@ components:
         the network confirms it, collect_unstaked completes the arc.
         Failure dispositions are first-class here because the path is
         irreversible: -29521 means the seal was RELEASED (retry at will);
-        -29522 means it is HELD funds-safe (do not re-fire) — see the
+        -29522 means it is HELD funds-safe until it lands or its end date
+        passes (do not re-fire; staking_info names the height) — see the
         code table.
       properties:
         tx_hash:

@@ -73,20 +73,22 @@ rust/shekyl-engine-state/src/payment_id.rs|pub struct PaymentId(pub [u8; 8]);
 # audit"* (2026-04-25) for the runtime-only invariant rationale.
 rust/shekyl-engine-state/src/ledger_indexes.rs|pub(crate) pub_keys: HashMap<[u8; 32], usize>
 
-# ── pending_post_block.rs ─────────────────────────────────────────────
+# ── pending_post_block/mod.rs ─────────────────────────────────────────
 #
-# `PendingBondPost.tx_bytes` (WI-2 D-A4) is the fully-assembled, signed,
-# wire-encoded transaction — the value a submitter broadcasts verbatim
-# (SP-T4 pin P-2: retries re-send the stored bytes, never a re-encode). A
-# signed tx is a public network artifact by construction: it carries key
-# images, output keys, commitments, the FCMP++ membership proof, and the
-# on-chain KEM ciphertexts, but no private scalar / spend-key material —
-# signing already consumed the secrets (the same class as transfer.rs's
+# `tx_bytes` on each sealed record (the bond post, the claim, the drain,
+# and the exit) is the fully-assembled, signed, wire-encoded transaction
+# — the value a submitter broadcasts verbatim (WI-2 D-A4; SP-T4 pin P-2:
+# retries re-send the stored bytes, never a re-encode). The four
+# declarations share this spelling, so one line covers them. A signed tx
+# is a public network artifact by construction: it carries key images,
+# output keys, commitments, the FCMP++ membership proof, and the on-chain
+# KEM ciphertexts, but no private scalar / spend-key material — signing
+# already consumed the secrets (the same class as transfer.rs's
 # `path_blob`). Its sensitivity is *correlation* (which persona posts
 # what, when), not confidentiality; that is handled by the type's redacted
 # `Debug` and the engine-layer AEAD-at-rest seal on the `.wallet.pending`
 # sibling file, not by wipe-on-drop.
-rust/shekyl-engine-state/src/pending_post_block.rs|pub tx_bytes: Vec<u8>
+rust/shekyl-engine-state/src/pending_post_block/mod.rs|pub tx_bytes: Vec<u8>
 
 # ── pscan_cursor.rs ───────────────────────────────────────────────────
 #
