@@ -45,33 +45,45 @@ The C++ that has no Rust owner yet — the protocol handler and `levin_notify` �
 
 ### DX-Q2 — The arrival contract
 
-1. **The router (Rust)** places every arrival by its parent:
-   - the recorded tip → the pipeline (`Extend`);
+*Amended by PR 2's rulings (PR2-Q1…PR2-Q6, design review 2026-10-18) and CS-Q5 (c) (Rick, 2026-10-18). Built in PR 2 (#1123): `shekyl-chain-ingest`'s `service.rs`, `router.rs`, `admission.rs`, `follower.rs`, and `shekyl-ffi`'s `ingest_ffi.rs`.*
+
+1. **The router (Rust)** places every arrival by its parent, on a `ReadSnapshot` at acceptance:
+   - the recorded tip → the pipeline (`Extend`), also for a block the alt table holds: its connect takes it out of the alt table;
    - a recorded or alt block → `OfferAlt` and the switch (#1082);
    - unknown → `Unlinked { at }`, with nothing stored;
    - already held → `AlreadyHeld`.
 
    **There is no orphan store.** A peer cannot make the node hold a block it cannot place.
-   - CEN-A1 and CEN-A4 become `enforced_at` the router. Their `held_by_cxx` entries and the `block_validation.cpp` citations go.
-   - **CEN-A5** moves to bucket 3 with its reason recorded: it was the parse-cost bound, not validity, which G6b judges. Its bound is re-homed as the router's admission, size before parse, under "each layer owns its admission".
-2. **One FFI entry, used by the protocol handler only.** `submit_block` and the miner enter the router natively (DX-Q3, DX-Q4).
-   - The entry takes a span and returns at once. Every arrival gets one reply, tagged with the arrival, posted to the connection's strand.
-   - The reply variants: `Connected`, `Refused(InvalidBlock)`, `Unlinked { at }`, `AlreadyHeld`, `Held`, `BeyondCap`, and the switch outcomes.
-3. **Capacity (chain sync's Round 0 requirement, ruled 2026-10, carried here).**
+   - **The router is not the writer.** The tip can move between a placement and its connect. The seed (CEN-D3), target (CEN-D4) and reference claims are compared by equality in `validate`, so a stale placement comes back as `Stale` or as the connector's `HeightClaim` and is placed again against a new snapshot, never a verdict. An `Extend` whose parent stopped being the tip is placed again as `OfferAlt`.
+   - **A block id is in at most one of the main chain and the alt table**, and the store holds it: every connect removes a same-id alt row in its own write, and AL1 refuses a recorded hash (`store/alt.rs`).
+   - CEN-A1 and CEN-A4 are held by the router: `held_by_store("shekyl-chain-ingest", …)`, since the router is a crate the validator does not import. The registry cites no C++ test for either.
+   - **CEN-A5** is bucket 3: it was the parse-cost bound, not validity, which G6b judges. Its bound is the router's admission, size before parse (PR2-Q2).
+2. **One FFI entry, used by the protocol handler only** (`shekyl_ingest_offer_span`). `submit_block` and the miner's found-block sink enter the service's door natively (DX-Q3, DX-Q4).
+   - The entry takes a span and returns at once. Every accepted arrival gets exactly one reply, tagged with the arrival, posted to the connection's strand.
+   - **Refused before acceptance:** `NoRoom`, `Throttled`, `Oversize`. Never a peer fault; nothing is kept.
+   - **Replies after acceptance:** `Connected`, `Refused(InvalidBlock)`, `Unlinked { at }`, `AlreadyHeld`, `Held`, `BeyondCap`, the switch outcomes (`Switched`, `PromotionRefused`, `BelowFloor`), `MissingBodies { indices }`, `Cancelled { by }`, `Stopped`.
+   - Built and tested in PR 2; the flip routes the handler's arrivals to it. Chain sync and RD delete it with the handler.
+3. **Capacity (chain sync's Round 0 requirement, ruled 2026-10, carried here; PR2-Q5).**
    - The entry reports room. A caller asks before sending.
-   - An arrival the entry accepted is **never dropped**. A span offered without room is `NoRoom`, before acceptance, and is never a peer fault.
+   - **While the service runs, an accepted arrival is never dropped.** A span offered without room is `NoRoom`, before acceptance, and is never a peer fault.
+   - **At a stop** (`TOR_SUPERVISOR.md` §1; DX-Q6), the connector finishes its current message and the store closes; every accepted arrival not yet connected replies `Stopped`. Never a peer fault: sync asks again after the restart.
    - Until the chain-sync cutover the C++ handler's span scheduler asks once per span.
-4. **Peer scoring.** Only `Refused(InvalidBlock)` is about the peer. `Unlinked`, `NoRoom`, `BeyondCap`, the floor and stale outcomes never punish (C2-R1 Q1c F-1(a)).
+4. **Session close.** `Refused(InvalidBlock)` is the only outcome that closes the serving session. Nothing scores: automated per-host scoring and bans are deleted (CS-Q5 (c), Rick 2026-10-18), and bans are operator configuration only (`set_bans` over the transport `BanList`). `Throttled` lets the handler close a session that keeps announcing past its bucket: a close, never a score.
 5. **`TipChanged`, one source.**
-   - The connector publishes the tip after every committed connect, pop and switch. `shekyl_core_publish_tip`'s producer moves from `Blockchain` to that commit.
+   - The connector publishes the tip on a `watch` after every committed connect, pop and switch, and once at start; never before the commit. It carries the dialer's `SyncPayload` fields (the block count, the cumulative difficulty, the top id) and a sequence number. `shekyl_core_publish_tip`'s producer (`blockchain.cpp:5895`) moves to that publication at the flip.
    - **Consumers:**
      - the handshake (the dialer and slice 4);
      - new-block relay;
-     - the miner's template refresh;
      - the sync owner;
-     - the RPC.
-6. **One RandomX budget.** The pipeline's `Form` workers and chain sync's header PoW draw from one bounded hasher budget, so the two never exceed the scratchpads the floor device holds (chain sync's Round 0 requirement, carried here).
-7. **Deleted:** `prepare_handle_incoming_blocks` / `cleanup_handle_incoming_blocks` (Monero's batch preprocessing) and `try_add_next_blocks`' connect loop. The `Form` workers replace them.
+     - the RPC;
+     - **the pool**, reconciled per publication (the service's tip follower);
+     - **the miner's template producer**, in the same follower, after the pool: it pins `seed(tip + 1)` through the substrate's `pin_seed` before `JobBoard::publish`, and withdraws the board while the node is behind. The miner hashes only under a held cache, and nothing else pins the seed a new epoch's first block is hashed under, so this is the one derivation the hasher budget allows. Its template source is a seam: PR 3b's `get_block_template` assembler at the flip.
+6. **One RandomX budget** (PR2-Q3; `shekyl-hash-budget`). `available_parallelism` permits, read at run time (rule 76), granted by class, highest first: forming on the chain or a solicited span; chain sync's header PoW; unsolicited arrivals; `calc_pow`; the miner. **The miner never holds a permit a higher class waits for:** it takes one per hash. Nice 19 stays, but priority is by permit. Only the pipeline's seed claim and pin derive a cache; `calc_pow` and the miner look up only.
+7. **Deleted at the flip:** `prepare_handle_incoming_blocks` / `cleanup_handle_incoming_blocks` (Monero's batch preprocessing) and `try_add_next_blocks`' connect loop. The `Form` workers replace them.
+
+**PR 2's admission and pool rulings** (design review, 2026-10-18):
+- **PR2-Q2 — what an arrival costs, and who pays.** A light-mode hash costs about 1.25 s per core on the floor device, and a junk block costs its sender nothing. So: size before parse (the header bound plus twice the ceiling limit `2·S·LTEM`, which no valid block's arrival exceeds at any height a span reaches); unsolicited announcements take a token from a per-session bucket (two per target interval, at most two); solicited spans take none; the first `Refused(InvalidBlock)` in a span cancels its siblings, and no hash starts after it; there is no memory of invalid block ids.
+- **PR2-Q4 — compact blocks do not reveal stem possession.** A compact block's bodies are resolved from the entries the pool shows, and only those. A stem entry counts as missing and is asked for (`MissingBodies`).
 
 ### DX-Q3 — The C++ RPC server moves to Rust in the flip, whole
 
@@ -129,8 +141,8 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 | # | PR | Live? |
 | --- | --- | --- |
 | 1 | **PR-b**: the Rust pool (`DRS_E5_POOL_ALT_PRUNE.md` §5 b1–b7, as amended in its brief) | staged; merged 2026-10-18 (#1102) |
-| 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged |
-| 3 | **Briefed: the read-only RPC handlers and the store-backed facts (DX-Q3), and the miner loop (DX-Q4)**, unrouted | staged |
+| 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged; under way (#1123) |
+| 3 | **The read-only RPC handlers and the store-backed facts (DX-Q3), and the miner loop (DX-Q4)**, unrouted | staged; merged 2026-10-19 (#1106) |
 | 3b | **The pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` / `stop_mining` (with `mining_status`), the bans and `stop_daemon`** (DX-Q3), unrouted. Briefed after PR-b and PR 2 merge | staged |
 | 4 | **The flip** (below) | live |
 
@@ -141,7 +153,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 - deletes:
   - LMDB and `BlockchainDB`;
   - `Blockchain` and `tx_memory_pool` (DEL-010);
-  - the archival C++ path (DEL-008), only once DEL-008's gate holds: Slice C's admission rows `implemented`, CEN-J8–J10 retired, the draw live;
+  - the archival C++ path (DEL-008). Its gate holds at genesis, not at the flip (Rick, 2026-10-18): until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code;
   - the reorg path (DEL-009);
   - `rpc_facts_ffi.cpp`, `daemon_submit_ffi.cpp` and `miner.cpp`;
   - the C++ RPC server whole (DX-Q3's falsifier), with the interim console's commands that read its structs;
@@ -217,6 +229,10 @@ The C++ hits are all in files the flip deletes (`blockchain.{h,cpp}`, `tx_pool.c
 - The shell implements the five `i_core_events` methods by forwarding: height and sync to `TipChanged` and the sync state; the other three to the Rust pool.
 - One Rust → C++ call hands `levin_notify` what the pool's readiness says is due. That is the only new C++ entry, and RD deletes it with `levin_notify`.
 
+**The flip's relay obligations** (carried from the review of #1102):
+- The flip drives `Responsibilities::release` from every way an entry leaves the pool — eviction, the reconcile's removals and mining — and asserts `len() ≤ pool.len()`, so the relay never holds a responsibility for a transaction the pool no longer has.
+- The relay nudge fires only on `Committed`, never on a concealed `Accepted`.
+
 **DX-F6 — the landed pool record holds the relay state machine, against D++ acceptance criterion 2.**
 - `RelayState` (`shekyl-chain-store/src/codec/pool.rs` at the ground, `d2ac8b45d`, lines 155–171; PR-b replaced it with the public bit) stores:
   - a stem/fluff phase;
@@ -257,7 +273,7 @@ Each observed difference becomes one row.
 
 **Rules for the register.**
 - There is **no "unexplained" category.** A difference that cannot be placed blocks the merge until it is.
-- **Serve-credit acceptance is a prerequisite, never a row.** DEL-008 gates the flip (`DAEMON_REDB_STORE.md:2697`): no cutover until SO-D8 Slice C's admission rows are `implemented` in `census.rs` and CEN-J8–J10 are retired, and no Rust consensus before the secret draw is live (`SO-D11b`). Deleting `check_archival_serve_credit_input` removes the only serve-credit acceptance that runs, so its successor (SO-D12's bundle admission) cannot be staged at the flip, and a difference it leaves cannot be placed as **Unbuilt by design**.
+- **Serve-credit acceptance is a prerequisite, never a row.** DEL-008 gates genesis (`DAEMON_REDB_STORE.md:2697`; moved from the flip, Rick 2026-10-18): no genesis until SO-D8 Slice C's admission rows are `implemented` in `census.rs`, CEN-J8–J10 are retired, and the secret draw is live (`SO-D11b`). Until then testnet archival runs on the Rust path as it stands, carriers included. Deleting `check_archival_serve_credit_input` removes the only serve-credit acceptance that runs, so its successor (SO-D12's bundle admission) cannot be staged at the flip, and a difference it leaves cannot be placed as **Unbuilt by design**.
 - A difference the C++ cannot exhibit (Rust-only state) is not a row.
 - The register lives in the flip's design record; the E2 grader's output is its input, not its verdict.
 - After the flip the corpus re-baselines from Rust (`DAEMON_REDB_STORE.md` §12.1). The register is the last record that compares the two, kept as records-was at its sha.
@@ -329,12 +345,10 @@ Its number is read from the tree at the flip's pin, never carried from a plan (`
 ## 4. Order of work
 
 1. **PR-b**, brief issued 2026-10-16; merged 2026-10-18 (#1102).
-2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Briefed after PR-b's door lands, because the entry's pool calls are its shape.
-3. **PR 3** — briefed: the read-only RPC handlers, the store-backed facts and the miner loop. Runs beside PR-b.
-4. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge.
-5. **The flip** needs PR-b, PR 2, PR 3, PR 3b and #1088, and DEL-008's gate: SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`).
+2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Under way (#1123), staged: built and tested, nothing routed.
+3. **PR 3** — the read-only RPC handlers, the store-backed facts and the miner loop. Merged (#1106).
+4. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge. Its `get_block_template` assembler is also the tip follower's template source (DX-Q2 item 5): one producer for the RPC and the miner.
+5. **The flip** needs PR-b, PR 2, PR 3, PR 3b and #1088. DEL-008's gate moves from the flip to genesis (Rick, 2026-10-18): at genesis the requirements stay — SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`). Until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code.
 6. **Chain sync's cutover** follows the flip and deletes the shell's protocol-handler half. **RD** deletes `levin_notify` and the relay entry.
 
-**Docs to fix in PR 2** (chain sync CS-F5):
-- `shekyl-chain-ingest/src/source.rs:28` and `:43` still say the p2p source computes the switch and emits `Rewind`.
-- The landed switch puts the fork choice in ingest. A live source never emits `Rewind`.
+**Chain sync CS-F5** (fixed in PR 2): `shekyl-chain-ingest/src/source.rs` states the landed switch — the fork choice is ingest's, and a live source never emits `Rewind`.
