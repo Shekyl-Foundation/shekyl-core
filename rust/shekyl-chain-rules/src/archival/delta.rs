@@ -39,7 +39,6 @@ use shekyl_units::AtomicUnits;
 ///     accrual: todo!(),
 ///     close: None,
 ///     drawable_digest: None,
-///     complete_trees: shekyl_types::archival::CompleteTreeSet::default(),
 /// };
 /// ```
 ///
