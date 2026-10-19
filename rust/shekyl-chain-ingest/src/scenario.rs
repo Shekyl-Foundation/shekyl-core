@@ -51,8 +51,7 @@ use shekyl_block_template::{
     build, EmissionOperands, MinerKeys, Template, TemplateContext, TemplateError,
 };
 use shekyl_chain_rules::{
-    form, seed_height, Candidate, CenRow, FormAttempt, InvalidBlock, ReferenceClaims, RuleSet,
-    StructurallyValid, Substrate, Target,
+    form, seed_height, Candidate, CenRow, FormAttempt, ReferenceClaims, RuleSet, Substrate, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -69,8 +68,8 @@ use zeroize::Zeroizing;
 
 use crate::connector::{
     AltBlocksHeld, Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector, ConnectorArgs,
-    Digest, HashAt, HeaderAt, OfferAlt, Offered, PlannedBlock, RefusePromotion, Reorganize, Rewind,
-    Rewound, RootAt, RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
+    Digest, HashAt, HeaderAt, OfferAlt, Offered, RefusePromotion, Reorganize, Rewind, Rewound,
+    RootAt, RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
 };
 use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
@@ -82,18 +81,6 @@ mod types;
 pub use types::{
     Clocked, FreeHash, Mined, NextBlock, ReorgTiming, StepOutcome, Unconnected, CLOCK_START,
 };
-
-/// One block `form` refused while a switch was forming, in the
-/// demoted-then-promoted order the plan named.
-struct FormRefusal {
-    /// Its place in that order. Below the demoted length, the block is one
-    /// this node connected; at or above it, the block is a promotion.
-    index: usize,
-    /// The block's identity.
-    hash: BlockHash,
-    /// The verdict.
-    refused: InvalidBlock,
-}
 
 /// The connector actor's task handle.
 type ConnectorTask = tokio::task::JoinHandle<
@@ -153,7 +140,7 @@ impl Scenario<FreeHash> {
 
 impl<P: Substrate + Send + Sync + 'static> Scenario<P>
 where
-    P::Fault: std::fmt::Debug,
+    P::Fault: std::fmt::Debug + Send,
 {
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
     pub fn open_with(name: &str, pow: P) -> Self {
@@ -184,7 +171,7 @@ where
     ) -> Self {
         let path = tmp(name);
         let (connector, task) = spawn_connector(ConnectorArgs {
-            store: store(&path),
+            store: store(&path).into(),
             rules,
         });
         Self {
@@ -478,31 +465,21 @@ where
         plan: &SwitchPlan,
     ) -> Result<(Switched, ReorgTiming), RunFault> {
         let started = std::time::Instant::now();
-        // Demoted blocks carry no reference claims: the cheap tier never
-        // compares one (it judges headers), so a claim would buy no
-        // verdict and cost N blocks' proofs verified again — proofs the
-        // chain verified when it connected them. Promoted blocks claim off
-        // the plan's header chain (`SwitchPlan::references_for`).
-        let mut work: Vec<(Candidate, PlannedBlock, ReferenceClaims)> = Vec::new();
-        if plan.verdict != shekyl_difficulty::ForkChoiceVerdict::ForcedSwitch {
-            work.extend(
-                plan.demoted
-                    .iter()
-                    .map(|d| (d.candidate.clone(), d.at.clone(), ReferenceClaims::EMPTY)),
-            );
-        }
-        let demoted_len = work.len();
-        work.extend(plan.promoted.iter().map(|p| {
-            let candidate = Candidate::new(p.block.clone(), p.transactions.clone())
-                .with_attestation_witness(p.witness.clone());
-            let references = plan.references_for(&p.at, &candidate);
-            (candidate, p.at.clone(), references)
-        }));
-        let mut formed_all = match self.form_parallel(work) {
+        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let formed_plan = match crate::plan_form::form_plan(
+            plan,
+            self.rules,
+            &self.substrate,
+            threads,
+            &|| Box::new(()),
+        ) {
             Ok(formed) => formed,
-            Err(refusal) => {
+            Err(crate::plan_form::PlanStop::Substrate(fault)) => {
+                panic!("the driver's substrate does not fault: {fault:?}")
+            }
+            Err(crate::plan_form::PlanStop::Refused(refusal)) => {
                 let formed = started.elapsed();
-                if refusal.index < demoted_len {
+                if refusal.demoted {
                     let (hash, refused) = (refusal.hash, refusal.refused);
                     panic!(
                         "a demoted block this node connected forms without reference claims: {refused} ({hash:?})"
@@ -528,8 +505,7 @@ where
                 ));
             }
         };
-        let promoted = formed_all.split_off(demoted_len);
-        let demoted = formed_all;
+        let crate::plan_form::FormedPlan { demoted, promoted } = formed_plan;
         let formed = started.elapsed();
         let started = std::time::Instant::now();
         let switched = self
@@ -558,96 +534,6 @@ where
                 switch: started.elapsed(),
             },
         ))
-    }
-
-    /// `form` every `(candidate, plan)` pair, in order, across the cores
-    /// this host offers — step 1 of the switch, which production runs on
-    /// its RandomX workers off the actor (`DRS_E5_POOL_ALT_PRUNE.md` §2.3).
-    ///
-    /// Through [`Recalled`](crate::substrate::Recalled): every block a plan
-    /// names was hashed when this node first judged it, and the plan
-    /// carries that record, so a switch calls RandomX only where a seed
-    /// claim differs from the recorded one (ruling 3, 2026-10-15). The
-    /// first refusal, in plan order, is the result; every thread is joined.
-    fn form_parallel(
-        &self,
-        work: Vec<(Candidate, PlannedBlock, ReferenceClaims)>,
-    ) -> Result<Vec<StructurallyValid>, FormRefusal> {
-        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-        let chunk = work.len().div_ceil(threads).max(1);
-        let recalled = crate::substrate::Recalled::new(
-            &self.substrate,
-            work.iter()
-                .map(|(_, at, _)| (at.hash, at.recorded.seed(), at.recorded.pow())),
-        );
-        let substrate = &recalled;
-        let rules = self.rules;
-        let mut chunks = Vec::new();
-        let mut rest = work;
-        let mut start = 0;
-        while !rest.is_empty() {
-            let n = chunk.min(rest.len());
-            let tail = rest.split_off(n);
-            chunks.push((start, rest));
-            start += n;
-            rest = tail;
-        }
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = chunks
-                .into_iter()
-                .map(|(start, chunk)| {
-                    scope.spawn(move || {
-                        let mut formed = Vec::with_capacity(chunk.len());
-                        for (local, (candidate, at, references)) in chunk.into_iter().enumerate() {
-                            let hash = at.hash;
-                            match form(
-                                candidate,
-                                &rules.in_force(at.height),
-                                substrate,
-                                at.seed,
-                                at.target,
-                                &references,
-                                FormAttempt::FIRST,
-                            ) {
-                                Ok(Ok(valid)) => formed.push(valid),
-                                Ok(Err(refused)) => {
-                                    return Err(FormRefusal {
-                                        index: start + local,
-                                        hash,
-                                        refused,
-                                    });
-                                }
-                                Err(fault) => {
-                                    panic!("the driver's substrate does not fault: {fault:?}")
-                                }
-                            }
-                        }
-                        Ok(formed)
-                    })
-                })
-                .collect();
-            let mut formed = Vec::new();
-            let mut refusal: Option<FormRefusal> = None;
-            for handle in handles {
-                match handle.join().expect("a forming thread") {
-                    Ok(blocks) => {
-                        if refusal.is_none() {
-                            formed.extend(blocks);
-                        }
-                    }
-                    Err(found) => {
-                        refusal = Some(match refusal {
-                            Some(kept) if kept.index <= found.index => kept,
-                            _ => found,
-                        });
-                    }
-                }
-            }
-            match refusal {
-                Some(refusal) => Err(refusal),
-                None => Ok(formed),
-            }
-        })
     }
 
     /// Pop the chain back to `to`.
@@ -706,7 +592,7 @@ where
     /// A fresh connector over the store at [`Self`]'s path, under the same rules.
     fn start_connector(&mut self) {
         let (connector, task) = spawn_connector(ConnectorArgs {
-            store: (self.opener)(&self.path),
+            store: (self.opener)(&self.path).into(),
             rules: self.rules,
         });
         self.task = Some(task);

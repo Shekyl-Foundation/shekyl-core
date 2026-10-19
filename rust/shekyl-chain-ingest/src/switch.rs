@@ -29,7 +29,8 @@
 //!    pops and SI-5 (`pop_many`), the demoted rows from their verdicts
 //!    (K7; the checkpoint arm discards them), every alt entry through the
 //!    full `validate` and `connect` (K5; K5b's witness travels in the alt
-//!    row), and the alt rows removed. A promotion verdict aborts the
+//!    row), each connect removing its block's alt row (a block id has one
+//!    home, `store/alt.rs`). A promotion verdict aborts the
 //!    transaction — the store is the pre-switch chain — and the failing alt
 //!    suffix, with every other branch built on it, is removed in a write
 //!    of its own. The reply names the rows that write removed.
@@ -811,14 +812,10 @@ fn switch(
     // The closure: pops and SI-5, the demoted rows, promotion, removes.
     let outcome: Result<SwitchDone, Stop> = store.write(|batch| {
         batch.pop_many(depth)?;
+        // A demoted block was recorded, so the alt table does not hold it
+        // (a block id has one home, `store/alt.rs`); the pop above took it
+        // off the main chain, so AL1 admits its row.
         for admitted in demoted_rows {
-            // A recorded block can already sit in the alt table (a replay
-            // `Apply` connects without consulting it); the row written now
-            // is the tier's verdict over the recorded block, so it replaces
-            // the older one.
-            if batch.has_alt_block(&admitted.hash())? {
-                batch.remove_alt_block(&admitted.hash())?;
-            }
             batch.insert_alt_block(admitted)?;
         }
         let view = batch.chain_view();
@@ -835,12 +832,11 @@ fn switch(
                     let hash = valid.block().hash();
                     done.exercised
                         .extend(valid.coverage().iter().map(CenRow::as_str));
-                    batch.connect(valid, in_force)?;
-                    // Its alt row leaves with its connect, before the next
-                    // connect's death rule could reach it: a promoted chain
-                    // longer than the cap would otherwise lose a row it is
-                    // about to remove (`store/alt.rs`).
-                    batch.remove_alt_block(&entry.id)?;
+                    // Its alt row leaves in the connect, before the same
+                    // connect's death rule could reach it: a block id has
+                    // one home (`store/alt.rs`).
+                    let connected = batch.connect(valid, in_force)?;
+                    debug_assert!(connected.left_alt, "a promoted block was its own alt row");
                     super::retire_below_the_anchor(batch, &trust, height)?;
                     done.promoted.push((height, hash));
                 }

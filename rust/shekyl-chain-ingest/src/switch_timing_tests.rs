@@ -45,7 +45,7 @@ fn randomx() -> ProductionSubstrate {
 async fn timed<P>(label: &str, pow: impl Fn() -> P, spends: bool)
 where
     P: Substrate + Send + Sync + 'static,
-    P::Fault: std::fmt::Debug,
+    P::Fault: std::fmt::Debug + Send,
 {
     let depth = cap();
     let prefix_len = FIRST_SPEND_HEIGHT + 2;

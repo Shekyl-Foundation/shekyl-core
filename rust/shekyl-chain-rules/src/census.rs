@@ -69,9 +69,7 @@ pub enum RowStatus {
     /// enforces it at a site other than the per-block stages, so no
     /// per-block coverage could ever contain it (`CHAIN_RULES_SLICE_3.md`
     /// Q4). The first is CEN-E5, run once by the writer at open
-    /// (`ReleaseAnchors::conflict_with`); CEN-A1 and CEN-A4 take this
-    /// status at cutover, when their C++ holder leaves and the Rust ingest
-    /// driver decides acceptance topology.
+    /// (`ReleaseAnchors::conflict_with`).
     ///
     /// The registry entry carries the citation — `enforced_at(path, "test")`
     /// — and that is the only copy. The path is compile-pinned; the gate
@@ -126,8 +124,9 @@ pub enum RowStatus {
     /// status holds the rows the **switch** enforces — CEN-K5, K5b, K6 and
     /// K7, held by `shekyl-chain-ingest`, the store's single writer, whose
     /// switch sequences promotion, the fork choice's match and the demoted
-    /// rows (DRS-E5 a5): like the store, a crate the validator does not
-    /// import, which is what the status names.
+    /// rows (DRS-E5 a5) — and the two acceptance-topology rows its
+    /// **router** holds, CEN-A1 and CEN-A4 (DRS-X PR 2): like the store, a
+    /// crate the validator does not import, which is what the status names.
     ///
     /// The registry entry cites the crate and the test that proves the
     /// holder refuses — `held_by_store("<crate>", "<test>")` — and the gate
@@ -351,10 +350,13 @@ census_rows! {
     /// the gate holds the bijection.
     pub enum CenRow: Consensus {
         // 4.A Acceptance topology (`CHAIN_RULES_SLICE_1.md` §3–§4)
-        // A1/A4: where a block goes, not whether it is valid. The C++ ingest
-        // driver holds these rows until cutover; each entry cites the core
-        // test that observes the outcome byte.
-        A1 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known_is_already_exists"),
+        // A1/A4: where a block goes, not whether it is valid. The ingest
+        // service's router holds them (DRS-X PR 2, `router.rs`): a held
+        // block is `AlreadyHeld`, and a block whose parent neither table
+        // holds is `Unlinked` and not stored. The router is in
+        // `shekyl-chain-ingest`, a crate this one does not import, which is
+        // what `held_by_store` names; `enforced_at` would be a site here.
+        A1 held_by_store("shekyl-chain-ingest", "an_arrival_this_node_holds_is_already_held"),
         A2 implemented(crate::rules::topology::A2),
         // A3: subsumed by B4's empty-witness arm — never its own rule
         // (slice 1 Q3). The validator has no witness-less entry to guard:
@@ -363,7 +365,7 @@ census_rows! {
         // non-empty root with nothing supplied refuses as B4 (slice 8
         // row 10). The second guard the C++ needed is unrepresentable.
         A3 by_construction(crate::block::Candidate, "cen_b4_non_empty_root_with_nothing_supplied_is_refused"),
-        A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_invalid_prev_id"),
+        A4 held_by_store("shekyl-chain-ingest", "an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored"),
         // A5: subsumed by the 4.G weight rule (slice 7); the pre-parse fast
         // path is the driver's DoS choice, not a row.
         A5 pending,

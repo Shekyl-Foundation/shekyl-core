@@ -742,7 +742,10 @@ where
     // engine's lock).
     let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
     let connector = prepared.actor_ref().clone();
-    let actor_task = prepared.spawn(ConnectorArgs { store, rules });
+    let actor_task = prepared.spawn(ConnectorArgs {
+        store: Arc::new(store),
+        rules,
+    });
 
     let mut drive = Drive {
         source,

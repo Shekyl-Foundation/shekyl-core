@@ -31,10 +31,21 @@
 //! connect: an offer on top of it is `Unlinked`, and no switch can promote
 //! it. So the death rule removes the closure — every row at or below the
 //! line and every row descending from one of them — and a branch that
-//! straddles the line leaves whole. A row the main chain also holds is a
-//! duplicate a replay left. The walk stops at it: its children reach that
-//! recorded block, so removing the duplicate does not take them. The
-//! duplicate itself leaves when the rule selects it.
+//! straddles the line leaves whole.
+//!
+//! # A block id has one home
+//!
+//! **Invariant:** a block id is in at most one of the main chain and the
+//! alt table. Every connect — an `Apply` and a switch's promotion alike —
+//! removes a same-id alt row, with its bodies, in its own write
+//! ([`WriteBatch::connect`](super::WriteBatch::connect), after the seal);
+//! AL1 refuses a hash the main chain records as [`AltCannot::AlreadyHeld`].
+//! A switch's pops take a block off the main chain before its demoted row
+//! goes in, so a demotion never meets its own row. The live router places
+//! two copies of one block from two sessions against snapshots the other
+//! copy's write can move, and the store holds the invariant for both orders
+//! of arrival. So the closure below never reaches a recorded block, and the
+//! listing never meets a tip the main chain holds.
 //!
 //! # Every stored chain reaches the main chain
 //!
@@ -71,8 +82,8 @@
 //! store.write(|batch| {
 //!     batch.pop()?;                                           // ×N to the split
 //!     batch.insert_alt_block(demoted)?;                       // ×N (CEN-K7)
-//!     batch.connect(valid, facts, in_force)?;                 // ×M from the alt chain
-//!     batch.remove_alt_block(&promoted)?;                     // ×M
+//!     batch.connect(valid, in_force)?;  // ×M from the alt chain; each
+//!                                       // takes its block's own alt row
 //!     Ok(())
 //! })
 //! ```
@@ -100,8 +111,6 @@
 //! [`WriteBatch::alt_table`] asserts the recording is not live, in every
 //! build: the same class of crate bug [`WriteBatch::replay_undo`] refuses
 //! with `assert!`.
-
-use std::collections::HashSet;
 
 use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_chain_rules::AltValid;
@@ -165,11 +174,20 @@ impl WriteBatch<'_, '_> {
     ///
     /// # Errors
     ///
-    /// [`AltCannot::AlreadyHeld`] if the store already holds the hash —
-    /// CEN-K3's belt, typed; the caller need not (and inside a batch, cannot
-    /// usefully) pre-read (SAL-4). Engine faults otherwise.
+    /// [`AltCannot::AlreadyHeld`] if the store already holds the hash, as
+    /// an alt row (CEN-K3's belt, typed) or on the main chain (a block id
+    /// has one home, module docs). Read in this batch, so a connect that
+    /// committed after the caller's snapshot is seen; the caller need not
+    /// (and inside a batch, cannot usefully) pre-read (SAL-4). Engine
+    /// faults otherwise.
     pub fn insert_alt_block(&self, admitted: AltValid<'_, AltView<'_>>) -> Result<(), StoreError> {
         let id = admitted.hash();
+        if super::chain_reads::height_of(self.txn(), &id)
+            .map_err(|fault| self.arm_read_fault(fault))?
+            .is_some()
+        {
+            return Err(AltCannot::AlreadyHeld.into());
+        }
         let (row, bodies) = AltBlock::admitted(admitted);
         let encoded = row.encoded();
         let bodies = bodies.encoded();
@@ -211,17 +229,29 @@ impl WriteBatch<'_, '_> {
     /// bookkeeping gone wrong, surfaced so the batch aborts (`SAL-Q3`).
     /// Engine faults otherwise.
     pub fn remove_alt_block(&self, id: &BlockHash) -> Result<(), StoreError> {
+        if self.take_alt_block(id)? {
+            Ok(())
+        } else {
+            Err(AltCannot::NotHeld.into())
+        }
+    }
+
+    /// Remove the alt block under `id`, with its bodies, if the table holds
+    /// it; whether it did. The connect's half of "a block id has one home"
+    /// (module docs): the block it records leaves the alt table in the same
+    /// write. Its children stay: their parent is now a main-chain block.
+    pub(super) fn take_alt_block(&self, id: &BlockHash) -> Result<bool, StoreError> {
         let mut table = self.alt_table()?;
         let removed = table.remove(key(id)).map_err(EngineError::Storage)?;
-        if removed.is_none() {
-            return Err(AltCannot::NotHeld.into());
-        }
+        let held = removed.is_some();
         drop(removed);
         drop(table);
-        self.alt_bodies_table()?
-            .remove(key(id))
-            .map_err(EngineError::Storage)?;
-        Ok(())
+        if held {
+            self.alt_bodies_table()?
+                .remove(key(id))
+                .map_err(EngineError::Storage)?;
+        }
+        Ok(held)
     }
 
     /// **The death rule** (module docs): remove every alt block at or below
@@ -243,8 +273,7 @@ impl WriteBatch<'_, '_> {
     /// height, and in the alt table's key order within one height. A
     /// refused block's suffix is its descendants, and so is any other
     /// branch built on it: a chain through a refused block can never be
-    /// valid. The walk stops at a hash the main chain holds
-    /// ([`Self::remove_alt_closure`]).
+    /// valid.
     ///
     /// # Errors
     ///
@@ -278,33 +307,18 @@ impl WriteBatch<'_, '_> {
 
     /// Remove the rows `root` selects and every row descending from one of
     /// them (the closure under "names as its parent"), with their bodies.
-    ///
-    /// A selected row the main chain also holds is removed, and the walk
-    /// stops there: [`AltChain::build`](super::AltChain::build) reaches
-    /// that recorded block and does not continue through the alt row, so
-    /// the rows above it still have their path. Returns the removed hashes
-    /// ascending by height, the alt table's key order breaking a tie.
+    /// Returns the removed hashes ascending by height, the alt table's key
+    /// order breaking a tie.
     fn remove_alt_closure(
         &self,
         root: impl Fn(&AltEntry) -> bool,
     ) -> Result<Vec<BlockHash>, StoreError> {
         let entries = self.alt_blocks()?;
-        let links = AltLinks::of(&entries);
-        let mut recorded = HashSet::new();
-        for entry in &entries {
-            if super::chain_reads::height_of(self.txn(), &entry.id)
-                .map_err(|fault| self.arm_read_fault(fault))?
-                .is_some()
-            {
-                recorded.insert(entry.id);
-            }
-        }
-        let dead = links.closure(
+        let dead = AltLinks::of(&entries).closure(
             entries
                 .iter()
                 .filter(|entry| root(entry))
                 .map(|entry| entry.id),
-            |id| recorded.contains(id),
         );
         let mut removed: Vec<&AltEntry> = entries
             .iter()

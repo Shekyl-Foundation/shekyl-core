@@ -55,6 +55,7 @@
 
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
@@ -333,8 +334,10 @@ pub struct ChainFacts {
 
 /// What the actor is built from.
 pub struct ConnectorArgs {
-    /// The store this actor alone writes.
-    pub store: ChainStore,
+    /// The store this actor alone writes. Shared, so the readers that place
+    /// arrivals and answer the RPC take their snapshots off the same file
+    /// (the ingest service's router, `StoreFacts`); none of them writes.
+    pub store: Arc<ChainStore>,
     /// Which rules are in force at each height (RD-Q10's driver half).
     pub rules: ChainRules,
 }
@@ -343,12 +346,12 @@ pub struct ConnectorArgs {
 /// every write after the first store-terminal fault (module docs). Reads
 /// stay open.
 struct Writer {
-    store: ChainStore,
+    store: Arc<ChainStore>,
     over: Option<RunEnd>,
 }
 
 impl Writer {
-    const fn live(store: ChainStore) -> Self {
+    const fn live(store: Arc<ChainStore>) -> Self {
         Self { store, over: None }
     }
 

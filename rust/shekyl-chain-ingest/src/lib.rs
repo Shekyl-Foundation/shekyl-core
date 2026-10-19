@@ -124,6 +124,9 @@ mod mutation_tests;
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
+/// Step 1 of a switch: the blocks a plan names, formed off the actor.
+#[cfg(feature = "pipeline")]
+pub mod plan_form;
 /// DRS-E5 PR-b (`DRS_E5_POOL_ALT_PRUNE.md` §2.2): the pool door held to
 /// the validator over real spends, and the pool's own rows over them.
 #[cfg(all(test, feature = "pipeline"))]
@@ -134,6 +137,9 @@ mod pool_door_tests;
 mod pool_restart_tests;
 #[cfg(all(test, feature = "pipeline"))]
 mod pool_submit_tests;
+/// Where an arrival goes, and the claims it is formed under.
+#[cfg(feature = "pipeline")]
+pub mod router;
 /// The RPC's store-backed facts over the scenario chain and the captured
 /// chains (DRS-X PR 3, `DRS_X_STORE_FLIP.md` DX-Q3).
 #[cfg(all(test, feature = "pipeline"))]
@@ -173,6 +179,9 @@ pub mod schedule;
 pub mod seed;
 #[cfg(feature = "pipeline")]
 pub mod sequencer;
+/// The live arrival path: one door, the router, the connector.
+#[cfg(feature = "pipeline")]
+pub mod service;
 pub mod snapshot_json;
 pub mod source;
 pub mod substrate;
