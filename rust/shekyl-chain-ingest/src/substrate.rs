@@ -278,11 +278,13 @@ impl<P: Substrate> Substrate for Recalled<'_, P> {
 /// does not fail the form. Every other seed is `inner`'s plain longhash.
 /// One seed for an alternative arrival; a switch's promoted run names one
 /// branch seed per seed point it crosses.
+#[cfg(feature = "pipeline")]
 pub(crate) struct Branch<'a, P: Substrate> {
     inner: &'a P,
     held: &'a [(BlockHash, P::Held)],
 }
 
+#[cfg(feature = "pipeline")]
 impl<'a, P: Substrate> Branch<'a, P> {
     /// `inner` with `held`: each prepared seed and its cache.
     pub(crate) const fn new(inner: &'a P, held: &'a [(BlockHash, P::Held)]) -> Self {
@@ -290,6 +292,7 @@ impl<'a, P: Substrate> Branch<'a, P> {
     }
 }
 
+#[cfg(feature = "pipeline")]
 impl<P: Substrate> Substrate for Branch<'_, P> {
     type Fault = P::Fault;
     type Held = P::Held;
