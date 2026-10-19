@@ -983,6 +983,47 @@ pub(super) async fn try_generate_blocks(
     .await
 }
 
+/// A stop's last lines reach the log file: the daemon flushes its queued
+/// sinks last, after the lock's release, before it exits (`shekyl-logging`'s
+/// `flush`; Rick's ruling of 2026-10-17, item 7). `Deinitializing core...` is
+/// the last line the stop logs; SIGTERM is the operator's stop.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn a_stops_last_line_reaches_the_log_file() {
+    const LAST_LINE: &str = "Deinitializing core...";
+    const STOP_WITHIN: Duration = Duration::from_secs(60);
+    let mut daemon = RegtestDaemon::start().await;
+    let pid = daemon.child.id().to_string();
+    let sent = shekyl_tor_control_client::spawn_lock::status(
+        std::process::Command::new("kill").args(["-TERM", &pid]),
+    )
+    .expect("run kill");
+    assert!(sent.success(), "SIGTERM delivered");
+    let deadline = std::time::Instant::now() + STOP_WITHIN;
+    let status = loop {
+        if let Some(status) = daemon.child.try_wait().expect("wait for the daemon") {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the daemon did not stop within {STOP_WITHIN:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(status.success(), "a requested stop exits 0: {status}");
+    let log = std::fs::read_to_string(daemon.data_dir.join("shekyld.log")).expect("the log file");
+    assert!(
+        log.contains("stop requested by"),
+        "the stop's first line is in the log file"
+    );
+    assert!(
+        log.contains(LAST_LINE),
+        "the stop's last line is in the log file; its tail:\n{}",
+        log.lines().rev().take(10).collect::<Vec<_>>().join("\n")
+    );
+}
+
 /// Smoke test: the harness spawns a daemon, a fresh wallet's address is mineable,
 /// and `generateblocks` advances the chain. De-risks the Phase-0 foundation
 /// (spawn, RPC, wallet creation, address-format match) before layering the spend
