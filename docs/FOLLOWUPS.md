@@ -11,6 +11,10 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **`stake_in` must refuse an already-bonded active persona (requirement, ruled 2026-10-18).** A persona's funding is a single event under the immutable-bond ruling (decision log 2026-09-20), so `stake_in` refuses an active persona that is bonded instead of building a second funding. Nothing activates a persona in production yet (`StakeEngineHandle::activate_persona` has test callers only), so the refusal lands with the production persona-activation path; reopen when that path gains its first production caller.
+  - Owner: [`ARCHIVAL_BOND_CONSTRUCTION.md`](design/ARCHIVAL_BOND_CONSTRUCTION.md) §10.2 (persona activation, typed contract #2)
+  - Target: pre-genesis
+
 - **The block template draws a fresh witness key for every template; the producer keeps one witness pair per parent block (`SO-D12` increment 1).** Rust's `shekyl_coinbase_extra` generates a hybrid scheme-3 witness key and a seed per call and keeps neither, so every block commits to a seed nobody reveals and a miner pays the key generation 2 to 11 times per template (`BA-T35`). The producer holds one pair per parent block in its Rust store and reuses it for every template on that parent, so the bundle it later files opens the `0x0C` the mined block committed to.
   - Owner: the producer lane — [`ARCHIVAL_SETTLEMENT_WRITER.md`](design/ARCHIVAL_SETTLEMENT_WRITER.md) §16.3 (the producer side)
   - Target: pre-genesis

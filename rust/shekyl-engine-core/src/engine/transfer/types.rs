@@ -16,7 +16,7 @@ use shekyl_units::AtomicUnits;
 use super::super::error::{SendError, TerminalErrorKind};
 use super::super::local_ledger::LocalLedger;
 use super::super::pending::{
-    InFlightSubmit, ReservationId, SnapshotId, TxHash, TxRecipientSummary, TxRequest,
+    InFlightSubmit, ReservationId, SnapshotId, TxDestination, TxHash, TxRecipient, TxRequest,
 };
 use super::super::traits::LedgerEngine;
 
@@ -55,9 +55,11 @@ pub(crate) type OutputId = usize;
 pub(crate) struct ContentFingerprint {
     /// Fee in atomic units.
     fee: u64,
-    /// Authorized destinations as `(address, amount)`, sorted canonically so an
-    /// output reshuffle does not change the fingerprint (F-G′).
-    dests: Vec<(String, u64)>,
+    /// Authorized destinations as `(destination, amount)`, sorted canonically
+    /// so an output reshuffle does not change the fingerprint (F-G′). A
+    /// persona destination compares by its payment keys; the fingerprint
+    /// lives only in memory with the reservation.
+    dests: Vec<(TxDestination, u64)>,
     /// Change amount (atomic units). The change *address* is deliberately
     /// excluded — it re-randomizes on every reprove (F-G).
     change: u64,
@@ -68,12 +70,12 @@ impl ContentFingerprint {
     /// change)`. Sorts the destinations so the result is permutation-invariant.
     pub(super) fn from_parts(
         fee: AtomicUnits,
-        recipients: &[TxRecipientSummary],
+        recipients: &[TxRecipient],
         change: AtomicUnits,
     ) -> Self {
-        let mut dests: Vec<(String, u64)> = recipients
+        let mut dests: Vec<(TxDestination, u64)> = recipients
             .iter()
-            .map(|r| (r.address.clone(), r.amount_atomic_units.to_raw()))
+            .map(|r| (r.destination.clone(), r.amount_atomic_units.to_raw()))
             .collect();
         dests.sort();
         Self {
@@ -94,7 +96,7 @@ impl ContentFingerprint {
     /// so the two derive the fingerprint identically.
     pub(super) fn from_build(
         fee: AtomicUnits,
-        recipients: &[TxRecipientSummary],
+        recipients: &[TxRecipient],
         total_covered: AtomicUnits,
     ) -> Result<Self, SendError> {
         let paid = AtomicUnits::checked_sum(recipients.iter().map(|r| r.amount_atomic_units))

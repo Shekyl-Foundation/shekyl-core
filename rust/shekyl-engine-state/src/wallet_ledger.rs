@@ -139,7 +139,10 @@ use crate::{
 ///
 /// `21` (2026-09-28): `SendRecipient::rid` — the nested send-journal block
 /// went to version 4.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 21;
+///
+/// `22` (2026-10-18): `SendRecipient::destination` — the nested send-journal
+/// block went to version 5.
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 22;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
@@ -1451,7 +1454,9 @@ mod tests {
             txid,
             5,
             vec![SendRecipient {
-                address: "shekyl1example".to_owned(),
+                destination: crate::send_journal_block::SendDestination::Address(
+                    "shekyl1example".to_owned(),
+                ),
                 amount: 1,
                 rid: None,
             }],

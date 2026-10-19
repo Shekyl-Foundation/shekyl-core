@@ -5,6 +5,7 @@
 
 //! `KeyEngine::sign_transaction` bridge (Phase 2a §3.7–3.9).
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
@@ -31,6 +32,7 @@ use zeroize::Zeroizing;
 
 use super::error::KeyEngineError;
 use super::local_keys::LocalKeys;
+use super::pending::TxDestination;
 use super::traits::key::{
     TxInputSignature, TxInputSigningContext, TxOutputContext, TxSignatures, TxToSign,
 };
@@ -214,6 +216,39 @@ fn decode_recipient(address: &str, network: Network) -> Result<ShekylAddress, Ke
     })
 }
 
+/// The keys a payment output is built to.
+struct RecipientKeys<'a> {
+    spend_key: [u8; 32],
+    /// Edwards; the sign pass maps it to X25519 for the KEM.
+    view_key: [u8; 32],
+    ml_kem_encap_key: Cow<'a, [u8]>,
+}
+
+/// Resolve a payment's destination to the keys its output is built to. An
+/// address is decoded and network-checked here, the one parse on the send
+/// path; a persona's keys are used exactly as the stake engine handed them
+/// over, with nothing encoded or decoded.
+fn recipient_keys(
+    destination: &TxDestination,
+    network: Network,
+) -> Result<RecipientKeys<'_>, KeyEngineError> {
+    match destination {
+        TxDestination::Address(address) => {
+            let decoded = decode_recipient(address, network)?;
+            Ok(RecipientKeys {
+                spend_key: decoded.spend_key,
+                view_key: decoded.view_key,
+                ml_kem_encap_key: Cow::Owned(decoded.ml_kem_encap_key),
+            })
+        }
+        TxDestination::OwnPersona(persona) => Ok(RecipientKeys {
+            spend_key: *persona.spend_pk().as_canonical_bytes(),
+            view_key: *persona.view_pk().as_canonical_bytes(),
+            ml_kem_encap_key: Cow::Borrowed(persona.ml_kem_ek()),
+        }),
+    }
+}
+
 fn spend_input_from_context(
     ctx: &TxInputSigningContext,
     bundle: &super::traits::key::SourceSecretsBundle,
@@ -240,7 +275,7 @@ fn spend_input_from_context(
 /// One payment output the sign pass will construct, its label plaintext
 /// already chosen so the construction loop only encrypts.
 struct PaymentOutput {
-    address: String,
+    destination: TxDestination,
     amount: u64,
     label_plaintext: [u8; 8],
 }
@@ -260,7 +295,7 @@ fn payment_outputs_of(
                 .checked_add(*amount)
                 .ok_or(KeyEngineError::InsufficientFunds { shortfall: 0 })?;
             payments.push(PaymentOutput {
-                address: dest.address.clone(),
+                destination: dest.destination.clone(),
                 amount: *amount,
                 label_plaintext: label_plaintext_for_recipient(dest.rid)?,
             });
@@ -323,13 +358,13 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
     let mut output_index: u64 = 0;
 
     for PaymentOutput {
-        address,
+        destination,
         amount,
         label_plaintext,
     } in payment_outputs
     {
-        let recipient = decode_recipient(&address, network)?;
-        // The address carries the recipient's **Edwards** view key; the KEM's
+        let recipient = recipient_keys(&destination, network)?;
+        // The destination carries the recipient's **Edwards** view key; the KEM's
         // X25519 half encapsulates to `montgomery(view_pk)` (the parameter-free
         // birational map — the same one the recipient's scanner inverts by using
         // its view scalar as the Montgomery secret). Passing the Edwards bytes
@@ -571,7 +606,7 @@ mod tests {
         let outputs = vec![
             TxOutputContext::Payment {
                 dest: OutputDestination {
-                    address: "shekyl1payee".into(),
+                    destination: TxDestination::Address("shekyl1payee".into()),
                     rid: Some(PaymentRequestId(42)),
                 },
                 amount: 5,
@@ -581,7 +616,7 @@ mod tests {
             },
             TxOutputContext::Payment {
                 dest: OutputDestination {
-                    address: "shekyl1other".into(),
+                    destination: TxDestination::Address("shekyl1other".into()),
                     rid: None,
                 },
                 amount: 7,
@@ -601,7 +636,7 @@ mod tests {
         );
         let unechoable = vec![TxOutputContext::Payment {
             dest: OutputDestination {
-                address: "shekyl1payee".into(),
+                destination: TxDestination::Address("shekyl1payee".into()),
                 rid: Some(PaymentRequestId(0)),
             },
             amount: 1,
@@ -684,6 +719,69 @@ mod tests {
                 "rid {rid:?}"
             );
         }
+    }
+
+    /// `stake_in`'s destination through the sign pass: a persona destination
+    /// resolves to that persona's own keys with nothing encoded or decoded,
+    /// and the output `build_output` makes from them is one the persona's
+    /// scan recovers, owned by its spend key. A persona destination built
+    /// from the wrong keys would leave an output nobody opens.
+    #[test]
+    fn a_persona_destination_builds_an_output_the_persona_recovers() {
+        use crate::engine::stake_engine::test_fixtures::derive_bundle;
+        const TX_KEY: [u8; 32] = [29u8; 32];
+        const OUT_IDX: u64 = 0;
+        const AMOUNT: u64 = 9_000_000;
+
+        let persona = derive_bundle(2);
+        let destination = TxDestination::OwnPersona(persona.payment_destination());
+        // The network is the wallet's; a persona arm reads none of it.
+        let resolved = recipient_keys(&destination, Network::Testnet).expect("resolve");
+        assert_eq!(&resolved.spend_key, persona.spend_pk.as_canonical_bytes());
+        assert_eq!(&resolved.view_key, persona.view_pk.as_canonical_bytes());
+        assert_eq!(&*resolved.ml_kem_encap_key, &persona.ml_kem_ek[..]);
+
+        let recipient_x25519 =
+            ed25519_pk_to_x25519_pk(&resolved.view_key).expect("map view key to X25519");
+        let built = build_output(
+            &TX_KEY,
+            &resolved.spend_key,
+            &recipient_x25519,
+            &resolved.ml_kem_encap_key,
+            AMOUNT,
+            OUT_IDX,
+            &sentinel_plaintext(),
+        )
+        .expect("construct the persona's output");
+        let (ct_x25519, ct_ml_kem) = built.kem_blob.split_at(32);
+        let mask = Scalar::from_bytes_mod_order(built.info.commitment_mask);
+        let commitment = ((&mask * ED25519_BASEPOINT_TABLE)
+            + (*shekyl_curve_generators::H * Scalar::from(AMOUNT)))
+        .compress()
+        .to_bytes();
+        let recovered = scan_output_recover(
+            persona.view_sk.as_canonical_bytes(),
+            persona.ml_kem_dk.as_canonical_bytes(),
+            ct_x25519
+                .try_into()
+                .expect("the X25519 ciphertext is 32 bytes"),
+            ct_ml_kem,
+            &built.output_key,
+            &commitment,
+            built.info.enc_amount.ciphertext(),
+            built.info.enc_amount.tag(),
+            built.info.enc_label.ciphertext(),
+            built.info.enc_label.tag(),
+            built.view_tag.expect("payment outputs carry a view tag"),
+            OUT_IDX,
+        )
+        .expect("the persona recovers the output");
+        assert_eq!(recovered.amount, AMOUNT);
+        assert_eq!(
+            &recovered.recovered_spend_key,
+            persona.spend_pk.as_canonical_bytes(),
+            "the output is owned by the persona's spend key"
+        );
     }
 
     /// A self-paid **change** output must return to the wallet's base spend key
