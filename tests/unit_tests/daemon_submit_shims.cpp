@@ -394,8 +394,8 @@ struct ShimFixture
     cert_root = db->root_at(ref_height);
   }
 
-  // fee_scale ≥ 1 clears the floor (with check_fee's 2% buffer); the F34
-  // test passes an absolute fee instead.
+  // fee_scale ≥ 1 clears the floor at zero slack (`needed` is the smallest
+  // fee the predicate admits); the F34 test passes an absolute fee instead.
   // Put the fee **in** the transaction, then re-derive everything from it.
   //
   // There are two ways the fee is read here and they must not disagree.
