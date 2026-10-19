@@ -304,13 +304,13 @@ struct DrainOperands {
 
 /// The maturity predicate the projection and the balance surface share: a
 /// record is provable (spendable) once its leaf is in the curve tree at the
-/// reference height — the `spendable_height <= reference_height` rule the
-/// backing/claim paths apply (a record whose leaf is not yet in the tree has no
+/// reference height — [`in_tree_at_reference`](shekyl_curve_tree::in_tree_at_reference),
+/// the rule the backing/claim paths apply (a record whose leaf is not yet in the tree has no
 /// membership path and cannot be spent). Reads only `spendable_height`, a
 /// maturity axis and never a reward-sequence coordinate, so applying it outside
 /// the projection discloses nothing the aggregate scalar doesn't already.
 fn is_mature(record: &PFundingOutputRecord, reference_height: BlockHeight) -> bool {
-    record.spendable_height <= reference_height
+    shekyl_curve_tree::in_tree_at_reference(record.spendable_height, reference_height)
 }
 
 /// Project `P`'s persisted funding records into the drain operands: drop

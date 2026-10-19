@@ -57,17 +57,38 @@ pub struct Direction {
     epoch: KeyEpoch,
     /// Ciphertexts this direction has opened, over its whole life.
     opened: u64,
+    /// The handshake hash of the session this direction was split from.
+    /// Not a secret, and not changed by a rekey.
+    handshake_hash: [u8; HASH_LEN],
 }
 
 impl Direction {
-    pub(crate) fn new(ck: Zeroizing<[u8; HASH_LEN]>, k: Zeroizing<[u8; HASH_LEN]>) -> Self {
+    pub(crate) fn new(
+        ck: Zeroizing<[u8; HASH_LEN]>,
+        k: Zeroizing<[u8; HASH_LEN]>,
+        handshake_hash: [u8; HASH_LEN],
+    ) -> Self {
         Self {
             ck,
             k,
             n: 0,
             epoch: KeyEpoch::INITIAL,
             opened: 0,
+            handshake_hash,
         }
+    }
+
+    /// The handshake hash of the session this direction belongs to, stamped
+    /// by [`SymmetricState::into_directions`](crate::SymmetricState::into_directions).
+    ///
+    /// A caller that lends a direction out and takes it back reads this to
+    /// know it got its own session's direction back, and not another's: two
+    /// sessions' directions are otherwise interchangeable values, and
+    /// [`Self::opened`] counts only what a direction has opened, not for
+    /// which session.
+    #[must_use]
+    pub fn handshake_hash(&self) -> [u8; HASH_LEN] {
+        self.handshake_hash
     }
 
     /// How many ciphertexts this direction has opened. A failed tag is not
@@ -148,6 +169,7 @@ mod tests {
         Direction::new(
             Zeroizing::new([0x11; HASH_LEN]),
             Zeroizing::new([0x22; HASH_LEN]),
+            [0x33; HASH_LEN],
         )
     }
 
