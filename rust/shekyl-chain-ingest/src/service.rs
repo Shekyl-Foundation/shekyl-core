@@ -234,7 +234,9 @@ impl Ticket {
 }
 
 /// Where an accepted arrival's one reply goes. Dropped without a reply, it
-/// sends [`Reply::Stopped`]; either way the arrival's room is given back.
+/// sends [`Reply::Stopped`]. Either way the arrival's room is given back
+/// once, with the sender, and **before** the reply goes out: a caller the
+/// reply wakes reads the room it freed.
 struct ReplySlot {
     sender: Option<oneshot::Sender<Reply>>,
     room: Arc<AtomicUsize>,
@@ -242,7 +244,13 @@ struct ReplySlot {
 
 impl ReplySlot {
     fn send(mut self, reply: Reply) {
+        self.answer(reply);
+    }
+
+    /// Give the room back and send `reply`, if this slot has not answered.
+    fn answer(&mut self, reply: Reply) {
         if let Some(sender) = self.sender.take() {
+            self.room.fetch_add(1, Ordering::AcqRel);
             // The caller dropped its ticket: the reply has no reader, and
             // the arrival is answered all the same.
             let _unread = sender.send(reply);
@@ -252,10 +260,7 @@ impl ReplySlot {
 
 impl Drop for ReplySlot {
     fn drop(&mut self) {
-        if let Some(sender) = self.sender.take() {
-            let _unread = sender.send(Reply::Stopped);
-        }
-        self.room.fetch_add(1, Ordering::AcqRel);
+        self.answer(Reply::Stopped);
     }
 }
 
