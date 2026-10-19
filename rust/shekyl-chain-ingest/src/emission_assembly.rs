@@ -124,7 +124,6 @@ pub struct AssembledClaim {
 /// 14 the full prefix hash; 15 the fee-side proving with the reward as the
 /// input-side cleartext term; 16–17 the PQC auth slots, fee keys then the
 /// identity key; 19 the production encoder.
-#[allow(clippy::too_many_lines)]
 pub fn assemble_emission_claim(
     keys: &ArchivalPKeys,
     tx_key_secret: &Zeroizing<[u8; 32]>,
@@ -133,6 +132,67 @@ pub fn assemble_emission_claim(
     terms: ClaimTerms,
     fee: u64,
     tree: &TreeContext,
+) -> AssembledClaim {
+    assemble(
+        keys,
+        tx_key_secret,
+        fee_inputs,
+        backing,
+        terms,
+        fee,
+        tree,
+        FeeProof::AsProved,
+    )
+}
+
+/// [`assemble_emission_claim`] with its fee-input FCMP++ proof one bit off
+/// what the prover made, signed **after** the flip: the claim a producer
+/// lists with a bad fee proof under valid signatures. Every other row
+/// passes it — the vin's backing proof and its auths are over the signable
+/// prefix, and the signatures cover the flipped prunable region — so
+/// CEN-J26 is the only row that can refuse it. A proof flipped after
+/// signing is CEN-I18's refusal instead, and I18 runs first. The same
+/// shape as the spender's `spend_coinbase_breaking_range_proof`.
+pub fn assemble_emission_claim_breaking_fee_proof(
+    keys: &ArchivalPKeys,
+    tx_key_secret: &Zeroizing<[u8; 32]>,
+    fee_inputs: Vec<SpendInput>,
+    backing: SpendInput,
+    terms: ClaimTerms,
+    fee: u64,
+    tree: &TreeContext,
+) -> AssembledClaim {
+    assemble(
+        keys,
+        tx_key_secret,
+        fee_inputs,
+        backing,
+        terms,
+        fee,
+        tree,
+        FeeProof::FlippedBeforeSigning,
+    )
+}
+
+/// The fee-input proof an assembly signs over.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FeeProof {
+    /// The prover's.
+    AsProved,
+    /// The prover's with its first byte flipped, then signed.
+    FlippedBeforeSigning,
+}
+
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn assemble(
+    keys: &ArchivalPKeys,
+    tx_key_secret: &Zeroizing<[u8; 32]>,
+    fee_inputs: Vec<SpendInput>,
+    backing: SpendInput,
+    terms: ClaimTerms,
+    fee: u64,
+    tree: &TreeContext,
+    fee_proof: FeeProof,
 ) -> AssembledClaim {
     // Step 5: the mint is the sum of the per-epoch plain rewards; the fee
     // spends fund the fee and return the rest as two confidential vouts.
@@ -317,7 +377,7 @@ pub fn assemble_emission_claim(
 
     // Step 15: the fee-side proving, the mint as the input-side cleartext
     // term — `Σ pseudoOuts + total_reward·H = Σ masks + fee·H` (CEN-H22).
-    let signed = sign_transaction_with_terms(
+    let mut signed = sign_transaction_with_terms(
         prefix_hash,
         &spend_inputs,
         &output_infos,
@@ -332,6 +392,9 @@ pub fn assemble_emission_claim(
         Some(&reward_commits[0].commitment),
         "the signer's reward commitment is the auth-bound commit"
     );
+    if fee_proof == FeeProof::FlippedBeforeSigning {
+        signed.fcmp_proof[0] ^= 0x01;
+    }
 
     // Steps 16–17: fee slots sign inside `open_spend`; the emission slot
     // signs with the persona's identity key over its own payload.

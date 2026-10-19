@@ -26,6 +26,36 @@
 //! which the store does not know. The lifetime of an alt row is the cap —
 //! no constant of its own.
 //!
+//! **A dead row takes its descendants.** A row above the line whose chain
+//! runs down through a removed row has lost the only path by which it could
+//! connect: an offer on top of it is `Unlinked`, and no switch can promote
+//! it. So the death rule removes the closure — every row at or below the
+//! line and every row descending from one of them — and a branch that
+//! straddles the line leaves whole. A row the main chain also holds is a
+//! duplicate a replay left. The walk stops at it: its children reach that
+//! recorded block, so removing the duplicate does not take them. The
+//! duplicate itself leaves when the rule selects it.
+//!
+//! # Every stored chain reaches the main chain
+//!
+//! **Invariant:** every stored alternative row's chain — the row, its
+//! parent if that is a stored row, and so on down — ends at a block the
+//! main chain holds. A row enters only on a held parent (AL1 takes an
+//! admitted verdict, and admission refuses an `Unlinked` block). It leaves
+//! by promotion, which makes its descendants' parent a main-chain block; by
+//! refusal ([`WriteBatch::remove_alt_branches`]), the death rule
+//! ([`WriteBatch::retire_alt_blocks`]) or a rewind
+//! ([`WriteBatch::retire_alt_blocks_on`]), each of which removes the
+//! descendants with the row; or by a reset (AL3), which removes them all. A
+//! switch's pops demote what they pop into rows, so a branch that hung from
+//! a popped block hangs from a row. The reader is
+//! [`ReadSnapshot::alternate_chains`](super::ReadSnapshot::alternate_chains):
+//! each tip is [`AltChain::build`](super::AltChain::build), and a stored
+//! chain that does not reach a recorded block comes back
+//! [`AltCannot::Unlinked`](super::AltCannot::Unlinked) rather than a parent
+//! the main chain does not hold. The lowest block of every chain that
+//! listing returns names a main-chain block as its parent.
+//!
 //! # One transaction, or it is not a switch
 //!
 //! The C++ commits a chain switch as separately committed writes and
@@ -71,6 +101,8 @@
 //! build: the same class of crate bug [`WriteBatch::replay_undo`] refuses
 //! with `assert!`.
 
+use std::collections::HashSet;
+
 use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_chain_rules::AltValid;
 use shekyl_store_codec::{Canonical, Coded};
@@ -80,7 +112,7 @@ use crate::codec::{AltBlock, AltBodies};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{ALT_BLOCKS, ALT_BLOCK_BODIES};
 
-use super::alt_reads::{self, key, AltEntry, ALT_BLOCKS_CELL, ALT_BODIES_CELL};
+use super::alt_reads::{self, key, AltEntry, AltLinks, ALT_BLOCKS_CELL, ALT_BODIES_CELL};
 use super::error::{AltCannot, EngineError, StoreError, StoreInvariant};
 use super::keyed::check_row;
 use super::write::WriteBatch;
@@ -193,25 +225,97 @@ impl WriteBatch<'_, '_> {
     }
 
     /// **The death rule** (module docs): remove every alt block at or below
-    /// `through`, with its bodies; returns how many. `connect` calls it with
-    /// the tip less the cap in force; the writer calls it with the anchor
-    /// floor.
+    /// `through`, and every alt block descending from one of them, with
+    /// their bodies; returns how many. `connect` calls it with the tip less
+    /// the cap in force; the writer calls it with the anchor floor.
     ///
     /// # Errors
     ///
     /// [`super::StoreInvariant::CellCorrupt`] for a row that does not
     /// decode; engine faults.
     pub fn retire_alt_blocks(&self, through: BlockHeight) -> Result<u64, StoreError> {
-        let dead: Vec<BlockHash> = self
-            .alt_blocks()?
-            .into_iter()
-            .filter(|entry| entry.block.height() <= through)
-            .map(|entry| entry.id)
+        let removed = self.remove_alt_closure(|entry| entry.block.height() <= through)?;
+        Ok(u64::try_from(removed.len()).expect("fewer than 2^64 alt rows"))
+    }
+
+    /// Remove the rows `roots` names and every row descending from one of
+    /// them, with their bodies. Returns the removed hashes, ascending by
+    /// height, and in the alt table's key order within one height. A
+    /// refused block's suffix is its descendants, and so is any other
+    /// branch built on it: a chain through a refused block can never be
+    /// valid. The walk stops at a hash the main chain holds
+    /// ([`Self::remove_alt_closure`]).
+    ///
+    /// # Errors
+    ///
+    /// [`AltCannot::NotHeld`] if a root is not held — the caller names the
+    /// rows it enumerated, so an absent one is its bookkeeping gone wrong;
+    /// [`super::StoreInvariant::CellCorrupt`] for a row that does not
+    /// decode; engine faults.
+    pub fn remove_alt_branches(&self, roots: &[BlockHash]) -> Result<Vec<BlockHash>, StoreError> {
+        for root in roots {
+            if !self.has_alt_block(root)? {
+                return Err(AltCannot::NotHeld.into());
+            }
+        }
+        self.remove_alt_closure(|entry| roots.contains(&entry.id))
+    }
+
+    /// Remove every row whose parent is one of `parents` and every row
+    /// descending from one of them, with their bodies; returns how many. A
+    /// rewind calls it with the blocks it popped, which no longer stand on
+    /// the main chain, so the branches built on them no longer reach it.
+    ///
+    /// # Errors
+    ///
+    /// [`super::StoreInvariant::CellCorrupt`] for a row that does not
+    /// decode; engine faults.
+    pub fn retire_alt_blocks_on(&self, parents: &[BlockHash]) -> Result<u64, StoreError> {
+        let removed = self
+            .remove_alt_closure(|entry| parents.contains(&entry.block.block().header.previous))?;
+        Ok(u64::try_from(removed.len()).expect("fewer than 2^64 alt rows"))
+    }
+
+    /// Remove the rows `root` selects and every row descending from one of
+    /// them (the closure under "names as its parent"), with their bodies.
+    ///
+    /// A selected row the main chain also holds is removed, and the walk
+    /// stops there: [`AltChain::build`](super::AltChain::build) reaches
+    /// that recorded block and does not continue through the alt row, so
+    /// the rows above it still have their path. Returns the removed hashes
+    /// ascending by height, the alt table's key order breaking a tie.
+    fn remove_alt_closure(
+        &self,
+        root: impl Fn(&AltEntry) -> bool,
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        let entries = self.alt_blocks()?;
+        let links = AltLinks::of(&entries);
+        let mut recorded = HashSet::new();
+        for entry in &entries {
+            if super::chain_reads::height_of(self.txn(), &entry.id)
+                .map_err(|fault| self.arm_read_fault(fault))?
+                .is_some()
+            {
+                recorded.insert(entry.id);
+            }
+        }
+        let dead = links.closure(
+            entries
+                .iter()
+                .filter(|entry| root(entry))
+                .map(|entry| entry.id),
+            |id| recorded.contains(id),
+        );
+        let mut removed: Vec<&AltEntry> = entries
+            .iter()
+            .filter(|entry| dead.contains(&entry.id))
             .collect();
-        for id in &dead {
+        removed.sort_by_key(|entry| entry.block.height());
+        let removed: Vec<BlockHash> = removed.iter().map(|entry| entry.id).collect();
+        for id in &removed {
             self.remove_alt_block(id)?;
         }
-        Ok(u64::try_from(dead.len()).expect("fewer than 2^64 alt rows"))
+        Ok(removed)
     }
 
     /// **AL3.** Remove every alt block; returns how many there were. The
