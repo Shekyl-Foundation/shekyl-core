@@ -598,6 +598,8 @@ where
             .map(crate::engine::ownership::p_assemble_input)
             .collect();
 
+        // The height the post is proved against: its end date (WR-Q3).
+        let reference_height = reference.height;
         let paths = curve_tree
             .assemble_tx(reference, assemble_inputs)
             .await
@@ -668,6 +670,8 @@ where
             anchor_t0,
             funding_gindexes: assembled.funding_gindexes.clone(),
             state: PendingPostState::Pending,
+            reference_height,
+            terminal: None,
         };
         let admission = store
             .mutate(|block| {

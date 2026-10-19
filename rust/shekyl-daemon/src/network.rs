@@ -19,9 +19,10 @@
 use std::net::SocketAddr;
 use std::path::Path;
 
-use shekyl_daemon_config::sections::{Ban, Clearnet, DaemonConfig, Tor};
+use shekyl_daemon_config::sections::{Ban, Clearnet, DaemonConfig, Socks, Tor};
 use shekyl_ffi::dialer_ffi::{ConnectorId, NetworkAddress};
 use shekyl_ffi::zone_ffi::ZoneStart;
+use shekyl_socks::{Proxy, SocksUsername};
 
 /// The address file the peer lists persist under the data directory.
 pub const ADDRESS_FILE: &str = "p2pstate.bin";
@@ -118,17 +119,32 @@ pub fn own_onion(config: &DaemonConfig) -> Option<NetworkAddress> {
     }
 }
 
-/// The Tor SOCKS endpoint the zone host dials through at step 8: the
-/// operator's, or the managed Tor's once it bootstrapped.
-#[derive(Clone, Copy, Debug)]
+/// The proxy a section names, with its RFC 1929 pair when the operator gave
+/// one (DC-Q7). The pair is bound to that proxy's address.
+#[must_use]
+pub fn proxy_of(socks: &Socks) -> Proxy {
+    match &socks.credential {
+        None => Proxy::unauthenticated(socks.endpoint),
+        Some(pair) => Proxy::authenticated(
+            socks.endpoint,
+            SocksUsername::new(pair.username(), pair.password())
+                .expect("the sections admit 1 to 255 bytes for each half, as RFC 1929 does"),
+        ),
+    }
+}
+
+/// The Tor SOCKS proxy the zone host dials through at step 8: the
+/// operator's, with its pair, or the managed Tor's once it bootstrapped,
+/// which takes none.
+#[derive(Clone, Debug)]
 pub enum TorSocks {
     /// No Tor this boot.
     None,
-    /// The endpoint, and whether the zone host also listens for an onion
+    /// The proxy, and whether the zone host also listens for an onion
     /// (the managed one, or the operator's named onion).
     At {
-        /// The SOCKS endpoint.
-        socks: SocketAddr,
+        /// The SOCKS proxy.
+        socks: Proxy,
         /// The operator's onion listen endpoint, when the operator's Tor
         /// forwards an onion to this node.
         onion_listen: Option<SocketAddr>,
@@ -198,7 +214,7 @@ pub fn start(
     if let Clearnet::On { listen, socks, .. } = &config.clearnet {
         started.clearnet = shekyl_ffi::zone_ffi::start_clearnet(
             listen,
-            socks.as_ref().map(|s| s.endpoint),
+            socks.as_ref().map(proxy_of),
             config.dev.clearnet_encrypt,
             network_id,
         )?;

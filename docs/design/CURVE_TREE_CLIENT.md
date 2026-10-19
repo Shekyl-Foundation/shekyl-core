@@ -632,9 +632,12 @@ ages (§2):
   block_height + 10`).
 - `REF_ANCHOR_AGE = MIN_AGE + 1 = 6` governs **reference-block depth**.
 
-The correct C2 bound is `eligible_height ≤ reference_height` where
+The correct C2 bound is `eligible_height < reference_height` where
 `reference_height = tip − REF_ANCHOR_AGE` (§5.1), **not** `tip − SPENDABLE_AGE`.
-Numerically `tip − 6`, not `tip − 10`.
+Numerically `tip − 6`, not `tip − 10`. It is strict because the root committed at
+`reference_height` holds leaves matured through `reference_height − 1`
+(`drained_through`); `shekyl_curve_tree::in_tree_at_reference` is the one
+predicate the wallet's paths share.
 
 **Landed (Round-1 cross-edit).** 2A now references `reference_height` /
 `REF_ANCHOR_AGE` at all four C2-gate sites — the §3.7.1 snapshot-locality note,

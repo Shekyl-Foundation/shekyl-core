@@ -3949,6 +3949,7 @@ version = "3.1.0"
 dependencies = [
  "clap",
  "curve25519-dalek",
+ "hex",
  "kameo",
  "redb",
  "serde",
@@ -3968,10 +3969,13 @@ dependencies = [
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
  "shekyl-mempool",
+ "shekyl-miner",
  "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
+ "shekyl-thread-ledger",
+ "shekyl-thread-priority",
  "shekyl-tx-builder",
  "shekyl-types",
  "shekyl-units",
@@ -4218,6 +4222,7 @@ dependencies = [
  "shekyl-onion-v3",
  "shekyl-options",
  "shekyl-runtime",
+ "shekyl-socks",
  "shekyl-tor-control-client",
  "shekyl-tor-control-daemon",
  "tempfile",
@@ -4279,11 +4284,13 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-tree",
  "shekyl-daemon-config",
+ "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-fcmp",
  "shekyl-mempool",
  "shekyl-options",
  "shekyl-peerlist",
+ "shekyl-pow-randomx",
  "shekyl-rpc-client",
  "shekyl-rpc-transport",
  "shekyl-rpc-types",
@@ -4616,6 +4623,7 @@ dependencies = [
  "shekyl-rpc-types",
  "shekyl-runtime",
  "shekyl-seam",
+ "shekyl-socks",
  "shekyl-thread-ledger",
  "shekyl-timing-engine",
  "shekyl-tor",
@@ -4726,6 +4734,22 @@ dependencies = [
  "shekyl-units",
  "shekyl-wire",
  "trybuild",
+]
+
+[[package]]
+name = "shekyl-miner"
+version = "3.1.0"
+dependencies = [
+ "shekyl-address",
+ "shekyl-block-template",
+ "shekyl-crypto-pq",
+ "shekyl-difficulty",
+ "shekyl-pow-randomx",
+ "shekyl-thread-ledger",
+ "shekyl-thread-priority",
+ "shekyl-types",
+ "shekyl-wire",
+ "tracing",
 ]
 
 [[package]]

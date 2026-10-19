@@ -401,7 +401,8 @@ where
 
         // C2 (2A §3.7.5): when a curve tree is enforced, the reference block
         // anchors `REF_ANCHOR_AGE` behind the tip; an output is in the tree as
-        // of that reference block only if `eligible_height <= reference_height`.
+        // of that reference block only if it matured by the block before it
+        // (`in_tree_at_reference`: `eligible_height < reference_height`).
         // Without a tree there is no FCMP reference, so C2 does not apply.
         let c2_active = matches!(tree_gate, TreeSpendGate::Enforced { .. });
         let (
@@ -459,7 +460,7 @@ where
                     // C2 active: spendability is decided against the *reference*
                     // height, not the per-output eligible height.
                     Some(rh) => {
-                        if td.eligible_height > rh {
+                        if !shekyl_curve_tree::in_tree_at_reference(td.eligible_height, rh) {
                             // Too fresh for the reference block — not in the tree
                             // there even if its leaf is already ingested.
                             let raw = amount.to_raw();
@@ -467,8 +468,8 @@ where
                             not_yet_spendable.push((td.eligible_height, raw));
                         } else if tree_gate.covers(rh) {
                             // The tree has reached the reference height, so its
-                            // root is reconstructable and every `eligible <= rh`
-                            // leaf is present at the reference block — spendable.
+                            // root is reconstructable and every leaf matured before
+                            // `rh` is present at the reference block — spendable.
                             spendable_now_total =
                                 spendable_now_total.saturating_add(amount.to_raw());
                             candidates.push(OutputCandidate { index: idx, amount });
@@ -591,7 +592,10 @@ where
                 SendError::OutputNotYetSpendable {
                     eligible_height,
                     reference_block_height,
-                    wait_blocks: eligible_height.saturating_sub(reference_block_height),
+                    wait_blocks: shekyl_curve_tree::blocks_until_in_tree(
+                        eligible_height,
+                        reference_block_height,
+                    ),
                 }
             } else {
                 SendError::InsufficientFunds {

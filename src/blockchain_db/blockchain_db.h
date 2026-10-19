@@ -2005,11 +2005,12 @@ public:
   ///
   /// Admission stays pair-epoch-wide (`pass_count > 0`) while the live issuer
   /// is the one-challenge-per-pair-epoch beacon (`challenge_fire_height` /
-  /// `challenge_leaf_index`). The assignment cutover (`assign_epoch` — Rust
-  /// only, no FFI; ARCHIVAL_CHALLENGE_MECHANISM.md §9.5.1) makes this the
-  /// uniqueness question. Named blocker, named caller: do not delete under
-  /// rule 15. Tests that pass their own height are not coverage of a
-  /// production caller that does not exist yet.
+  /// `challenge_leaf_index`). The public urn that was to make this a per-draw
+  /// question is deleted (2026-10-10); the secret draw that replaces it is
+  /// judged in Rust (ARCHIVAL_SERVE_CREDIT_SPEC.md), and this path stays until
+  /// the C++ daemon is retired (DEL-008): do not delete under rule 15 before
+  /// then. Tests that pass their own height are not coverage of a production
+  /// caller that does not exist yet.
   virtual bool has_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch, uint64_t block_height) const = 0;
   virtual void set_archival_serve_credit_bit(const crypto::hash& p_id, uint64_t shard_id,

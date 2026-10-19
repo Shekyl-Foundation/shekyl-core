@@ -987,27 +987,6 @@ std::string get_nix_version_display_string()
   }
 #endif
 
-  void closefrom(int fd)
-  {
-#if defined(_WIN32)
-    (void)fd;
-#elif defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__ || defined __DragonFly__
-    ::closefrom(fd);
-#else
-#if defined __GLIBC__
-    const int sc_open_max =  sysconf(_SC_OPEN_MAX);
-    const int MAX_FDS = std::min(65536, sc_open_max);
-#else
-    const int MAX_FDS = 65536;
-#endif
-    while (fd < MAX_FDS)
-    {
-      close(fd);
-      ++fd;
-    }
-#endif
-  }
-
   std::string get_human_readable_timestamp(uint64_t ts)
   {
     char buffer[64];

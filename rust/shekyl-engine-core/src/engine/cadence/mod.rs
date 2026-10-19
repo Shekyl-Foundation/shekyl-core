@@ -42,6 +42,7 @@
 //! [`AlarmCondition::ChainProgress`]: shekyl_operator_alarm::AlarmCondition::ChainProgress
 
 mod claim;
+mod outcomes;
 mod serving;
 mod submit;
 
@@ -170,10 +171,11 @@ pub(crate) type ServingSlot = Arc<std::sync::Mutex<Option<ServingHandle>>>;
 pub(crate) type WeakEngine<S, D, L, E, R, P, F> = Weak<RwLock<Engine<S, D, L, E, R, P, F>>>;
 
 /// Leg 4's registered slot (`ENGINE_CADENCE_DRIVER.md` §3 leg 4): the
-/// terminal-reject prune / byte-identical resubmit body is unbuilt —
-/// `docs/FOLLOWUPS.md` "Drain/claim/release dispatch driver —
-/// terminal-reject prune + byte-identical resubmit" (pre-genesis; the
-/// prune half is a security item). The slot is registered **now** so the
+/// byte-identical resubmit body is unbuilt — `docs/FOLLOWUPS.md`
+/// "Drain/claim/release dispatch driver — byte-identical resubmit
+/// remains" (pre-genesis). Its prune half landed as the dispatch tick's
+/// end-date release (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3). The slot is
+/// registered **now** so the
 /// body lands into proven wiring (tick, ordering, isolation) and must not
 /// grow its own timer; it is a STAGED surface with a named consumer
 /// (rule 23), not dead code. Its registration-and-invocation is asserted
@@ -351,7 +353,9 @@ where
 /// Complete as of commit 6: leg 1 (submit lifecycle), leg 2 (serving
 /// liveness), the leg-4 slot (terminal-reject, body staged), leg 3
 /// (per-epoch claim) — registered last so every retire-class leg has
-/// already run when it snapshots the funding set.
+/// already run when it snapshots the funding set. The pending-outcomes leg
+/// (WR-Q3) only reads, so its place is free; it sits before leg 3 with the
+/// other non-assembling legs.
 ///
 /// `WalletFile`-specialized because legs 2 and 3's construction sites
 /// (`start_serving_if_staker`, `submit_emission_claim`) are;
@@ -382,6 +386,11 @@ where
             slot: Arc::clone(serving),
         }),
         Box::new(TerminalRejectSlot),
+        Box::new(outcomes::PendingOutcomeLeg {
+            engine: Weak::clone(&engine),
+            alarms: Arc::clone(alarms),
+            logged: Arc::default(),
+        }),
         Box::new(EpochClaimLeg {
             engine,
             daemon_address: daemon_address.to_owned(),

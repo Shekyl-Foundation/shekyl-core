@@ -160,9 +160,9 @@ pub mod relay_floor;
 pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
-    closed_and_final, shard_close, shard_close_height, Accrual, ArchivalDelta, ClosedUniverse,
-    DrawableSet, EpochClose, EpochGather, RecordWrite, RecordWriteKind, ServeCreditKey, Settlement,
-    Slash,
+    closed_and_final, drawable_epoch_walked_back, shard_close, shard_close_height, Accrual,
+    ArchivalDelta, ClosedUniverse, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
+    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash, WALK_BACK_EPOCHS,
 };
 // The serve-credit bundle rule (`archival/bundle.rs`): STAGED. The
 // verifier and its view trait are exported for the lanes that wire them
@@ -181,11 +181,11 @@ pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use drain::{tree_after, Drain, DrainedOutput};
 pub use fault::{
-    Corrupt, Fault, FormAttempt, PerHeightRecord, RecordInvariant, ReferenceMismatch, Retry,
-    SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,
+    Corrupt, DrawableEpochFault, Fault, FormAttempt, PerHeightRecord, RecordInvariant,
+    ReferenceMismatch, Retry, SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,
 };
 pub use policy::{policy_form, PolicyRefused};
-pub use relay_floor::{fee_operands_at, relay_floor_at, relay_floor_window};
+pub use relay_floor::{fee_ladder_at, fee_operands_at, relay_floor_at, relay_floor_window};
 pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
     AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule,
@@ -217,6 +217,7 @@ pub use rules::tx_emission_against::{
     emission_epoch_facts, EmissionEpochFacts, EmissionEpochSnapshot, EpochCloseBondFacts,
 };
 pub use rules::{recorded, recorded_header};
+pub use shekyl_archival_retention::{DrawableEpoch, DrawableEpochError};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;
 pub use tree_growth::{

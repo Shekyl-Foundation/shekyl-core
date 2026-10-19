@@ -43,8 +43,9 @@ pub use drive::{accept_inbound, accept_one, dial_one, Accept, Admitted, Dial, In
 /// Caller inputs. The dial span, the gap span, and the send-queue byte
 /// cap are unmeasured until a measurement names them.
 pub struct Config {
-    /// The operator's SOCKS5 proxy. Outbound dials go here.
-    pub proxy: SocketAddr,
+    /// The SOCKS5 proxy outbound dials go through, with the pair it asks
+    /// for, if any.
+    pub proxy: shekyl_socks::Proxy,
     /// Binds from `--anonymous-inbound`. These are the operator's onions.
     /// They are not a [`ForwardAddr`], so [`publish_forward`] cannot name them.
     pub anonymous_inbound: Vec<OperatorInbound>,
@@ -172,7 +173,7 @@ pub struct Listener<C: Clock + Clone> {
     pub sessions: mpsc::UnboundedReceiver<Session>,
     engine: Handle<C>,
     sockets: Sockets,
-    proxy: SocketAddr,
+    proxy: shekyl_socks::Proxy,
     dial_within: Tick,
     gap_within: Tick,
     send_queue_bytes: usize,
@@ -214,7 +215,7 @@ where
     pub fn dial(&self, address: NetworkAddress) {
         let dial = Dial {
             address,
-            proxy: self.proxy,
+            proxy: self.proxy.clone(),
             sockets: self.sockets.clone(),
             dial_within: self.dial_within,
             gap_within: self.gap_within,
@@ -268,7 +269,7 @@ where
     let admitted_keep = admitted_tx.clone();
     let on_cause_keep = Arc::clone(&config.on_cause);
     let shutdown_timeout = config.shutdown_timeout;
-    let proxy = config.proxy;
+    let proxy = config.proxy.clone();
     let dial_within = config.dial_within;
     let gap_within = config.gap_within;
     let send_queue_bytes = config.send_queue_bytes;

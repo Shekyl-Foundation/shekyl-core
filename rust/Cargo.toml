@@ -117,6 +117,12 @@ members = [
     # do it. See docs/design/P2P_TRANSPORT_LAYER.md.
     "shekyl-thread-ledger",
 
+    # The daemon's built-in miner loop (DRS-X DX-Q4): workers over the
+    # RandomX verifier, one ledger row each, below the daemon's priority
+    # (SH-3). Staged; the store flip connects it.
+    # See docs/design/DRS_X_STORE_FLIP.md.
+    "shekyl-miner",
+
     # D5's one runtime constructor. The worker count and the blocking
     # cap are inputs. The pool is a row on shekyl-thread-ledger.
     # Daemon-RPC, Tor-control, and the transport all call it. The D5
@@ -692,6 +698,18 @@ shekyl-economics-sim = { opt-level = 3 }
 shekyl-economics = { opt-level = 3 }
 shekyl-block-template = { opt-level = 3 }
 shekyl-tx-weight = { opt-level = 3 }
+# RandomX is hash-bound the same way: every real-RandomX test (the scenario
+# chains under the production substrate, the miner loop) derives a 256 MiB
+# cache and hashes in light mode, and an unoptimised verifier made the
+# miner's one default-lane test take 158 s of every debug `cargo test` run.
+# Optimisation does not change the hash: the crate is spec-vector tested
+# and release builds are what the daemon ships.
+shekyl-pow-randomx = { opt-level = 3 }
+# Its three hashing dependencies: the cache's Argon2d fill and its BLAKE2b
+# compression, and the AES rounds of every program.
+argon2 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
+aes = { opt-level = 3 }
 
 [profile.dev]
 panic = "abort"

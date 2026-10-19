@@ -127,11 +127,19 @@ file) is counted the same way and reported as `N lines failed to write
 since <time>` once the sink takes writes again. A flush is counted only
 when that `flush` returns an error, as `N flushes failed since <time>`.
 A summary the sink refuses stays pending; it is not itself a failed
-flush. `tracing_appender`'s worker discards a writer's error, so without
-the count those lines were lost with nothing said.
-`tests/write_errors.rs` refuses a fixed run of writes, then accepts.
-What the queues leave (shutdown, the pre-init passthrough, a bound in
-lines, the thread ledger) is recorded in the crate doc.
+flush. `tests/write_errors.rs` refuses a fixed run of writes, then
+accepts.
+
+A line reaches its sink some time after the call that logged it
+returns. `flush(within)` is the bounded wait: it returns `Flushed::Done`
+once every line logged before the call is written and flushed, or
+`Flushed::DeadlinePassed` when `within` passes first, and it never
+waits on a full queue. A process about to exit calls it last (the
+daemon does, after its lock's release, with `FLUSH_WITHIN`), and so
+does a test that reads what a sink wrote. `tests/flush.rs` checks both
+outcomes through the installed subscriber. What the queues leave
+(shutdown, the pre-init passthrough, a bound in lines, the thread
+ledger) is recorded in the crate doc.
 
 ### `LoggerGuard`
 
@@ -209,8 +217,13 @@ Summary of the C surface:
   helpers. All return the total number of bytes that would have
   been written, so callers can detect truncation and re-invoke
   with a larger buffer. Bytes are never NUL-terminated.
-- `shekyl_log_shutdown()` — drop the stashed `LoggerGuard` so the
-  non-blocking writer flushes. Safe to call multiple times.
+- `shekyl_log_flush(within_ms)` — `flush` for C: `SHEKYL_LOG_OK`, or
+  `SHEKYL_LOG_ERR_FLUSH_DEADLINE` when lines were still queued at the
+  deadline. The unit tests' stderr capture calls it before it opens
+  and before it reads.
+- `shekyl_log_shutdown()` — drop the stashed `LoggerGuard`: each sink
+  flushes within `FLUSH_WITHIN` and its writer stops. Safe to call
+  multiple times.
 
 Thread-safety: the global state is an `OnceLock<Mutex<_>>` and the
 last-error text is per-thread, so concurrent C calls across threads

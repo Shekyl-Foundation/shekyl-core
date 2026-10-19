@@ -58,7 +58,8 @@ use crate::consensus_constants::ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 use super::local_ledger::LocalLedger;
 use super::signer::EngineSignerKind;
-use super::traits::{DaemonEngine, EconomicsEngine, PendingTxEngine, RefreshEngine};
+use super::staking_outcomes::{self, InFlightRecord, ReportedOutcome};
+use super::traits::{DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 use super::Engine;
 
 /// Staked-balance breakdown (WI-RPC-1 DECISION default). See the module docs
@@ -145,11 +146,17 @@ pub struct StakingReadView {
     /// the surface that tells the embedder to say so (rule 82) instead of
     /// leaving a wallet that claims staker-hood but cannot stake.
     pub recovery_pending_reopen: bool,
+    /// Every live pending record and where it stands, judged at the wallet
+    /// ledger's synced tip (WR-Q1).
+    pub in_flight: Vec<InFlightRecord>,
+    /// The last ending per record kind and persona (WR-Q2).
+    pub outcomes: Vec<ReportedOutcome>,
 }
 
 impl std::fmt::Debug for StakingReadView {
-    /// Redacts the output rows (contents *and* count — the count alone is
-    /// `P`-activity volume); the balance totals render like any balance.
+    /// Redacts the output rows, the in-flight records and the outcomes
+    /// (contents *and* counts — a count alone is `P`-activity volume); the
+    /// balance totals render like any balance.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StakingReadView")
             .field("staking_enabled", &self.staking_enabled)
@@ -157,8 +164,25 @@ impl std::fmt::Debug for StakingReadView {
             .field("outputs", &"<redacted funding-history>")
             .field("pscan_synced_height", &self.pscan_synced_height)
             .field("recovery_pending_reopen", &self.recovery_pending_reopen)
+            .field("in_flight", &"<redacted pending-posts>")
+            .field("outcomes", &"<redacted outcomes>")
             .finish()
     }
+}
+
+/// The ledger facts a staking read takes under the ledger guard, so a caller
+/// that already holds the guard can snapshot them, drop it, and read the
+/// seals without nesting a second `ledger.read()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StakingLedgerSnapshot {
+    /// `StakingBlock::staking_enabled`.
+    pub staking_enabled: bool,
+    /// Whether bond watch adopted a slot this session
+    /// ([`StakingReadView::recovery_pending_reopen`]).
+    pub recovery_pending_reopen: bool,
+    /// The wallet ledger's synced tip, inclusive: the clock `in_flight`'s
+    /// `Expired` is judged by (WR-Q1).
+    pub ledger_tip: BlockHeight,
 }
 
 /// Why the staking read view could not be produced. Fail-closed by design:
@@ -299,6 +323,44 @@ fn staked_outputs_from_state(state: &PScanState) -> Vec<StakedOutput> {
         .collect()
 }
 
+// `F = WalletFile`, any ledger: the two sealed sibling files raw, for the
+// cadence driver's outcome leg (its legs are generic over the ledger) and the
+// exit resolutions.
+#[allow(private_bounds)]
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        E: EconomicsEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, L, E, R, P, shekyl_engine_file::WalletFile>
+{
+    /// Open the two sealed sibling files raw — the decoded [`PScanState`] and
+    /// [`PendingPostBlock`] — for consumers that need the **sets** rather
+    /// than the aggregated view (the `unstake_facade` resolutions and the
+    /// cadence driver's outcome leg, whose legs are generic over the ledger).
+    /// Same fail-closed posture as the staking read view: an absent seal is
+    /// the ordinary empty case; a corrupt or version-mismatched one errors.
+    /// A plain read, not the dispatch seams' generation-coherent basis —
+    /// callers that only *propose* on it must leave every race to the seam's
+    /// seal admission.
+    pub(crate) fn sealed_staking_records(
+        &self,
+    ) -> Result<(Option<PScanState>, Option<PendingPostBlock>), StakingReadError> {
+        let wrap_key = self.state_wrap_key().as_bytes();
+        let pscan = match self.persistence.open_pscan_state(wrap_key)? {
+            Some(body) => Some(PScanState::from_postcard_bytes(&body)?),
+            None => None,
+        };
+        let pending = match self.persistence.open_pending_posts(wrap_key)? {
+            Some(body) => Some(PendingPostBlock::from_postcard_bytes(&body)?),
+            None => None,
+        };
+        Ok((pscan, pending))
+    }
+}
+
 // `F = WalletFile` specialization: the sealed `.wallet.pscan` /
 // `.wallet.pending` files are a concrete `WalletFile` concern (the same seam-b
 // rationale as `start_pscan`, `pscan/start.rs`); `L = LocalLedger` for the
@@ -321,29 +383,6 @@ impl<
         self.ledger.read().recovery_pending_reopen()
     }
 
-    /// Open the two sealed sibling files raw — the decoded [`PScanState`] and
-    /// [`PendingPostBlock`] — for consumers that need the **sets** rather
-    /// than the aggregated view (the `unstake_facade` resolutions). Same
-    /// fail-closed posture as [`Self::staking_read_view`]: an absent seal is
-    /// the ordinary empty case; a corrupt or version-mismatched one errors.
-    /// A plain read, not the dispatch seams' generation-coherent basis —
-    /// callers that only *propose* on it must leave every race to the seam's
-    /// seal admission.
-    pub(crate) fn exit_seal_snapshot(
-        &self,
-    ) -> Result<(Option<PScanState>, Option<PendingPostBlock>), StakingReadError> {
-        let wrap_key = self.state_wrap_key().as_bytes();
-        let pscan = match self.persistence.open_pscan_state(wrap_key)? {
-            Some(body) => Some(PScanState::from_postcard_bytes(&body)?),
-            None => None,
-        };
-        let pending = match self.persistence.open_pending_posts(wrap_key)? {
-            Some(body) => Some(PendingPostBlock::from_postcard_bytes(&body)?),
-            None => None,
-        };
-        Ok((pscan, pending))
-    }
-
     /// Ledger facts under one read guard, then the sealed staking read.
     ///
     /// `under_guard` runs while the guard is held, so its result is coherent
@@ -358,15 +397,18 @@ impl<
         &self,
         under_guard: impl FnOnce(&WalletLedger) -> T,
     ) -> (T, Result<StakingReadView, StakingReadError>) {
-        let (staking_enabled, recovery_pending_reopen, extra) = {
+        let (snapshot, extra) = {
             let guard = self.ledger.read();
             (
-                guard.ledger.staking.staking_enabled,
-                guard.recovery_pending_reopen(),
+                StakingLedgerSnapshot {
+                    staking_enabled: guard.ledger.staking.staking_enabled,
+                    recovery_pending_reopen: guard.recovery_pending_reopen(),
+                    ledger_tip: guard.ledger.ledger.height(),
+                },
                 under_guard(&guard.ledger),
             )
         };
-        let view = self.staking_read_view_with_snapshot(staking_enabled, recovery_pending_reopen);
+        let view = self.staking_read_view_with_snapshot(snapshot);
         (extra, view)
     }
 
@@ -416,9 +458,13 @@ impl<
     /// money-sum overflow.
     pub fn staking_read_view_with_snapshot(
         &self,
-        staking_enabled: bool,
-        recovery_pending_reopen: bool,
+        snapshot: StakingLedgerSnapshot,
     ) -> Result<StakingReadView, StakingReadError> {
+        let StakingLedgerSnapshot {
+            staking_enabled,
+            recovery_pending_reopen,
+            ledger_tip,
+        } = snapshot;
         // No key copy: the region-2 wrap key is borrowed straight from its
         // owner for the two seal opens (same shape as `pscan/start.rs`'s
         // `with_persistence_read`).
@@ -438,6 +484,16 @@ impl<
             .map(staked_outputs_from_state)
             .unwrap_or_default();
         let pscan_synced_height = pscan.as_ref().map(PScanState::synced_height);
+        let (in_flight, outcomes) = pending.as_ref().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |block| {
+                let scan = staking_outcomes::FundingScan::from_seal(pscan.as_ref());
+                (
+                    staking_outcomes::in_flight(block, ledger_tip, scan.evidence()),
+                    staking_outcomes::outcomes(block),
+                )
+            },
+        );
 
         Ok(StakingReadView {
             staking_enabled,
@@ -445,6 +501,8 @@ impl<
             outputs,
             pscan_synced_height,
             recovery_pending_reopen,
+            in_flight,
+            outcomes,
         })
     }
 }
@@ -526,6 +584,8 @@ mod tests {
             anchor_t0: ChainCount::from_raw(1),
             funding_gindexes: Vec::new(),
             state: PendingPostState::Pending,
+            reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+            terminal: None,
         }
     }
 
@@ -794,11 +854,28 @@ mod tests {
             outputs: outs,
             pscan_synced_height: Some(BlockHeight::from_raw(5_000)),
             recovery_pending_reopen: false,
+            in_flight: vec![InFlightRecord {
+                kind: shekyl_engine_state::pending_post_block::RecordKind::Post,
+                state: super::super::staking_outcomes::InFlightState::Pending,
+                sends: None,
+            }],
+            outcomes: vec![ReportedOutcome {
+                kind: shekyl_engine_state::pending_post_block::RecordKind::Drain,
+                outcome: shekyl_engine_state::pending_post_block::OutcomeKind::Expired,
+                at_height: BlockHeight::from_raw(5_001),
+                sent: true,
+            }],
         };
         let rendered = format!("{view:?}");
         assert!(
             rendered.contains("<redacted funding-history>") && !rendered.contains("StakedOutput"),
             "the view must redact output contents and count: {rendered}"
+        );
+        assert!(
+            !rendered.contains("InFlightRecord")
+                && !rendered.contains("ReportedOutcome")
+                && !rendered.contains("5001"),
+            "the view must redact in-flight records and outcomes, counts included: {rendered}"
         );
     }
 }

@@ -21,18 +21,24 @@
 //! after that line is written. A refused summary leaves the counts where
 //! they are. It is not itself a failed flush.
 //!
-//! `tracing_appender`'s worker keeps running when a write returns an error,
-//! and it discards the error. Returning `Err` from this writer still ends
-//! the current batch before `flush`, so a drained queue would not publish.
-//! [`DropNotice`] therefore returns `Ok` and keeps the counts itself.
+//! **Flushing.** A line reaches the sink some time after the call that
+//! logged it returns. [`flush`] is the bounded wait for that: it puts a
+//! marker behind every line already queued and returns when the writer has
+//! written and flushed up to the marker, or when the deadline passes,
+//! whichever is first. It never blocks on a full queue; it retries until the
+//! deadline. A process that is about to exit, and a test that reads what a
+//! sink wrote, call it. [`SinkGuard`]'s drop flushes the same way and then
+//! stops the writer.
 
 use std::io::{self, Write};
-use std::sync::{Arc, OnceLock};
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuilder, WorkerGuard};
+use tracing_subscriber::fmt::MakeWriter;
 
 /// Lines one sink's queue holds before a log call drops instead of waiting.
 ///
@@ -43,6 +49,22 @@ use tracing_appender::non_blocking::{ErrorCounter, NonBlocking, NonBlockingBuild
 /// (rule 76). *Records-was:* `tracing_appender`'s default, 128 000 lines and
 /// lossy with no report, on the file sink only.
 pub const SINK_QUEUE_LINES: usize = 8_192;
+
+/// How long a flush waits for the writers before it gives up.
+///
+/// Provisioned at the floor device (rule 76): a full queue is
+/// [`SINK_QUEUE_LINES`] lines of a few hundred bytes, about 3 MB per sink,
+/// and the writer appends them through the page cache in one write per line.
+/// On a Pi 4 that is about 8 000 `write` calls of a few microseconds each:
+/// tens of milliseconds. Two seconds is a wide margin over that. A sink that
+/// has not drained by then is stalled (a blocked terminal, a hung journald,
+/// a disk that stopped answering), and waiting longer would hold the
+/// daemon's exit on it.
+pub const FLUSH_WITHIN: Duration = Duration::from_secs(2);
+
+/// How often a flush retries a queue that was full when it tried to put its
+/// marker in.
+const FULL_RETRY: Duration = Duration::from_millis(1);
 
 /// Which sink a queue writes to. The thread name and the summary label
 /// both come from here, so a new sink is one variant.
@@ -70,34 +92,197 @@ impl Sink {
     }
 }
 
+/// What a queue carries to its writer.
+enum Msg {
+    /// One formatted line.
+    Line(Vec<u8>),
+    /// Every line before this one has been written: flush, then answer.
+    Marker(SyncSender<()>),
+    /// Flush, answer, and end the writer.
+    Stop(SyncSender<()>),
+}
+
+/// Whether a flush reached its marker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "a flush that passed its deadline left lines queued"]
+pub enum Flushed {
+    /// Every line queued before the call is written and flushed. A sink
+    /// whose writer has already stopped counts here: it holds nothing.
+    Done,
+    /// The deadline passed first.
+    DeadlinePassed,
+}
+
+/// The log-call side of one sink's queue: what the subscriber's layer
+/// writes to. Cloned per event.
+#[derive(Clone)]
+pub(crate) struct Producer {
+    tx: SyncSender<Msg>,
+    dropped: Arc<AtomicUsize>,
+}
+
+impl Producer {
+    /// Put a marker behind every queued line and wait for the writer to
+    /// reach it, until `deadline`.
+    fn flush_until(&self, deadline: Instant) -> Flushed {
+        let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+        if !self.send_until(Msg::Marker(ack_tx), deadline) {
+            return Flushed::DeadlinePassed;
+        }
+        wait_until(&ack_rx, deadline)
+    }
+
+    /// Queue `msg`, retrying a full queue until `deadline`. `true` when it
+    /// was queued or the writer has stopped (there is nothing to wait for).
+    fn send_until(&self, mut msg: Msg, deadline: Instant) -> bool {
+        loop {
+            match self.tx.try_send(msg) {
+                Ok(()) | Err(TrySendError::Disconnected(_)) => return true,
+                Err(TrySendError::Full(back)) => {
+                    if Instant::now() >= deadline {
+                        return false;
+                    }
+                    msg = back;
+                    std::thread::sleep(FULL_RETRY);
+                }
+            }
+        }
+    }
+}
+
+/// The answer to a marker or a stop, until `deadline`. A writer that ended
+/// without answering has nothing left to write.
+fn wait_until(ack: &Receiver<()>, deadline: Instant) -> Flushed {
+    let left = deadline.saturating_duration_since(Instant::now());
+    match ack.recv_timeout(left) {
+        Ok(()) | Err(RecvTimeoutError::Disconnected) => Flushed::Done,
+        Err(RecvTimeoutError::Timeout) => Flushed::DeadlinePassed,
+    }
+}
+
+impl Write for Producer {
+    /// Queue `buf` as one line, or drop and count it when the queue is
+    /// full or the writer has stopped. Never waits.
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.tx.try_send(Msg::Line(buf.to_vec())).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(buf.len())
+    }
+
+    /// Nothing to do on the log call's side: [`flush`] is the wait.
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for Producer {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// One sink's writer thread. Dropping it flushes within [`FLUSH_WITHIN`] and
+/// stops the writer; it never waits longer.
+pub(crate) struct SinkGuard {
+    producer: Producer,
+}
+
+impl Drop for SinkGuard {
+    fn drop(&mut self) {
+        let deadline = Instant::now() + FLUSH_WITHIN;
+        let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+        if self.producer.send_until(Msg::Stop(ack_tx), deadline) {
+            let _flushed = wait_until(&ack_rx, deadline);
+        }
+    }
+}
+
+/// The sinks the installed subscriber writes to, for [`flush`].
+static INSTALLED: Mutex<Vec<Producer>> = Mutex::new(Vec::new());
+
+/// Record the installed subscriber's sinks.
+pub(crate) fn install(producers: Vec<Producer>) {
+    *INSTALLED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = producers;
+}
+
+/// Wait until every line logged before this call has reached its sink, or
+/// `within` passes. One deadline covers every sink. With no subscriber
+/// installed there is nothing queued: [`Flushed::Done`].
+pub fn flush(within: Duration) -> Flushed {
+    let deadline = Instant::now() + within;
+    let producers = INSTALLED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let mut flushed = Flushed::Done;
+    for producer in &producers {
+        if producer.flush_until(deadline) == Flushed::DeadlinePassed {
+            flushed = Flushed::DeadlinePassed;
+        }
+    }
+    flushed
+}
+
 /// `writer` behind a bounded lossy queue of `lines` with its own thread.
 ///
 /// `lines` is at least one. A full queue drops and counts. The thread
 /// publishes the count.
+///
+/// # Errors
+///
+/// The writer thread could not be started.
 pub(crate) fn queued<W: Write + Send + 'static>(
     writer: W,
     sink: Sink,
     lines: usize,
-) -> (NonBlocking, WorkerGuard) {
+) -> io::Result<(Producer, SinkGuard)> {
     assert!(lines > 0, "a sink queue holds at least one line");
-    let counter = Arc::new(OnceLock::new());
-    let (non_blocking, guard) = NonBlockingBuilder::default()
-        .lossy(true)
-        .buffered_lines_limit(lines)
-        .thread_name(sink.thread_name())
-        .finish(DropNotice {
-            inner: writer,
-            loss: LossWindow::new(sink),
-            counter: Arc::clone(&counter),
-        });
-    // The worker blocks in `recv` until a line exists, and the subscriber
-    // that produces lines is installed after this returns. The counter has
-    // to be published before either. A missed publish would report every
-    // drop as zero, which is the failure this queue exists to close.
-    counter
-        .set(non_blocking.error_counter())
-        .expect("the drop counter is published once");
-    (non_blocking, guard)
+    let (tx, rx) = mpsc::sync_channel(lines);
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let notice = DropNotice {
+        inner: writer,
+        loss: LossWindow::new(sink),
+        dropped: Arc::clone(&dropped),
+    };
+    std::thread::Builder::new()
+        .name(sink.thread_name().to_owned())
+        .spawn(move || write_queue(&rx, notice))?;
+    let producer = Producer { tx, dropped };
+    Ok((producer.clone(), SinkGuard { producer }))
+}
+
+/// The writer thread: each line in order, a flush whenever the queue runs
+/// empty, and an answer to each marker after the lines before it.
+fn write_queue<W: Write>(rx: &Receiver<Msg>, mut notice: DropNotice<W>) {
+    while let Ok(mut msg) = rx.recv() {
+        loop {
+            match msg {
+                Msg::Line(line) => notice.write_line_queued(&line),
+                Msg::Marker(ack) => {
+                    notice.flush();
+                    // A flush that gave up at its deadline dropped the
+                    // receiver; nobody is left to answer.
+                    ack.send(()).ok();
+                }
+                Msg::Stop(ack) => {
+                    notice.flush();
+                    ack.send(()).ok();
+                    return;
+                }
+            }
+            match rx.try_recv() {
+                Ok(next) => msg = next,
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+            }
+        }
+        notice.flush();
+    }
+    notice.flush();
 }
 
 /// What one sink has lost since the last summary that reached it.
@@ -209,15 +394,21 @@ enum Notice {
 struct DropNotice<W> {
     inner: W,
     loss: LossWindow,
-    counter: Arc<OnceLock<ErrorCounter>>,
+    /// Lines the log call's side dropped: a full queue, or a stopped writer.
+    dropped: Arc<AtomicUsize>,
 }
 
 impl<W: Write> DropNotice<W> {
     fn dropped_total(&self) -> usize {
-        self.counter
-            .get()
-            .expect("the drop counter is published before any line")
-            .dropped_lines()
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// One queued line: the summary first when there is one to give.
+    fn write_line_queued(&mut self, buf: &[u8]) {
+        match self.publish() {
+            Notice::Delivered => self.write_line(buf),
+            Notice::Held => self.loss.note_failed_line(),
+        }
     }
 
     /// Write the summary when there is something to say.
@@ -243,32 +434,18 @@ impl<W: Write> DropNotice<W> {
             Err(_) => self.loss.note_failed_line(),
         }
     }
-}
 
-impl<W: Write> Write for DropNotice<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self.publish() {
-            Notice::Delivered => self.write_line(buf),
-            Notice::Held => self.loss.note_failed_line(),
-        }
-        // `Ok` so the worker finishes this batch and reaches `flush`.
-        // That flush is what publishes a queue that just drained.
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        // A refused summary is not a flush, and it stays pending.
+    /// Flush the sink. A refused summary is not a flush, and it stays
+    /// pending; a refused flush is counted and published in this call,
+    /// because a marker or a stop may be the last chance before exit.
+    fn flush(&mut self) {
         if self.publish() == Notice::Held {
-            return Ok(());
+            return;
         }
         if self.inner.flush().is_err() {
             self.loss.note_failed_flush();
-            // Publish in this call. The worker's batch flush is the last
-            // chance before shutdown releases the guard; a later line
-            // would be too late.
             let _notice = self.publish();
         }
-        Ok(())
     }
 }
 
@@ -320,7 +497,8 @@ mod tests {
             },
             Sink::Stderr,
             lines + 1,
-        );
+        )
+        .expect("the writer thread");
         for _ in 0..lines {
             non_blocking.write_all(b"line\n").expect("enqueue");
         }
@@ -375,5 +553,197 @@ mod tests {
             !text.contains("lines failed to write"),
             "the lines were written:\n{text}"
         );
+    }
+
+    /// A sink that takes `pause` per write, or blocks until opened.
+    struct Slow {
+        pause: Duration,
+        gate: Gate,
+        buf: Arc<Mutex<Vec<u8>>>,
+        /// Writes begun: a test waits on it to know the writer holds a line.
+        entered: Arc<AtomicUsize>,
+    }
+
+    impl Write for Slow {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.entered.fetch_add(1, Ordering::SeqCst);
+            let (open, opened) = &*self.gate;
+            let mut is_open = open.lock().expect("gate");
+            while !*is_open {
+                is_open = opened.wait(is_open).expect("gate");
+            }
+            drop(is_open);
+            std::thread::sleep(self.pause);
+            self.buf.lock().expect("slow").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A gate the slow sink's writes wait on.
+    type Gate = Arc<(Mutex<bool>, std::sync::Condvar)>;
+
+    /// A slow sink behind a queue of `lines`: its producer, guard, gate,
+    /// what it wrote, and how many writes it has begun.
+    struct SlowQueue {
+        producer: Producer,
+        guard: SinkGuard,
+        gate: Gate,
+        buf: Arc<Mutex<Vec<u8>>>,
+        entered: Arc<AtomicUsize>,
+    }
+
+    fn slow(pause: Duration, open: bool, lines: usize) -> SlowQueue {
+        let gate = Arc::new((Mutex::new(open), std::sync::Condvar::new()));
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let entered = Arc::new(AtomicUsize::new(0));
+        let (producer, guard) = queued(
+            Slow {
+                pause,
+                gate: Arc::clone(&gate),
+                buf: Arc::clone(&buf),
+                entered: Arc::clone(&entered),
+            },
+            Sink::Stderr,
+            lines,
+        )
+        .expect("the writer thread");
+        SlowQueue {
+            producer,
+            guard,
+            gate,
+            buf,
+            entered,
+        }
+    }
+
+    /// Wait until the writer has begun `writes` writes.
+    fn wait_entered(entered: &AtomicUsize, writes: usize) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while entered.load(Ordering::SeqCst) < writes {
+            assert!(Instant::now() < deadline, "the writer never took a line");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn open_gate(gate: &(Mutex<bool>, std::sync::Condvar)) {
+        *gate.0.lock().expect("gate") = true;
+        gate.1.notify_all();
+    }
+
+    /// A flush returns only once every line queued before it is on the sink.
+    #[test]
+    fn a_flush_returns_after_every_line_before_it_is_written() {
+        const LINES: usize = 50;
+        let SlowQueue {
+            mut producer,
+            buf,
+            guard: _guard,
+            ..
+        } = slow(Duration::from_millis(2), true, LINES + 1);
+        for _ in 0..LINES {
+            producer.write_all(b"line\n").expect("enqueue");
+        }
+        assert_eq!(
+            producer.flush_until(Instant::now() + Duration::from_secs(30)),
+            Flushed::Done
+        );
+        let written = buf.lock().expect("slow").len();
+        assert_eq!(
+            written,
+            LINES * b"line\n".len(),
+            "every line before the marker"
+        );
+    }
+
+    /// A stalled sink holds a flush to its deadline, not past it and not short
+    /// of it.
+    #[test]
+    fn a_flush_on_a_stalled_sink_returns_at_its_deadline() {
+        const WITHIN: Duration = Duration::from_millis(200);
+        let SlowQueue {
+            mut producer,
+            guard,
+            gate,
+            ..
+        } = slow(Duration::ZERO, false, 4);
+        producer.write_all(b"held\n").expect("enqueue");
+        let started = Instant::now();
+        assert_eq!(
+            producer.flush_until(started + WITHIN),
+            Flushed::DeadlinePassed
+        );
+        let waited = started.elapsed();
+        assert!(waited >= WITHIN, "returned before the deadline: {waited:?}");
+        assert!(waited < WITHIN * 10, "held past the deadline: {waited:?}");
+        open_gate(&gate);
+        drop(guard);
+    }
+
+    /// A queue too full to take the marker is retried until the deadline,
+    /// never waited on.
+    #[test]
+    fn a_flush_on_a_full_queue_returns_at_its_deadline() {
+        const WITHIN: Duration = Duration::from_millis(100);
+        let SlowQueue {
+            mut producer,
+            guard,
+            gate,
+            entered,
+            ..
+        } = slow(Duration::ZERO, false, 1);
+        // One line in the writer's hands, one in the queue: full.
+        producer.write_all(b"a\n").expect("enqueue");
+        wait_entered(&entered, 1);
+        producer.write_all(b"b\n").expect("enqueue");
+        let started = Instant::now();
+        assert_eq!(
+            producer.flush_until(started + WITHIN),
+            Flushed::DeadlinePassed
+        );
+        assert!(
+            started.elapsed() < WITHIN * 10,
+            "the full queue was waited on"
+        );
+        open_gate(&gate);
+        drop(guard);
+    }
+
+    /// Dropping the guard of a stalled sink returns within [`FLUSH_WITHIN`].
+    #[test]
+    fn the_guard_of_a_stalled_sink_returns_within_the_drain_bound() {
+        let SlowQueue {
+            mut producer,
+            guard,
+            gate,
+            ..
+        } = slow(Duration::ZERO, false, 4);
+        producer.write_all(b"held\n").expect("enqueue");
+        let started = Instant::now();
+        drop(guard);
+        let waited = started.elapsed();
+        assert!(
+            waited < FLUSH_WITHIN * 2,
+            "the stop waited past its bound: {waited:?}"
+        );
+        open_gate(&gate);
+    }
+
+    /// After the writer stopped, a flush has nothing to wait for.
+    #[test]
+    fn a_flush_after_the_stop_is_done_at_once() {
+        let SlowQueue {
+            producer, guard, ..
+        } = slow(Duration::ZERO, true, 4);
+        drop(guard);
+        let started = Instant::now();
+        assert_eq!(
+            producer.flush_until(started + Duration::from_secs(30)),
+            Flushed::Done
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
