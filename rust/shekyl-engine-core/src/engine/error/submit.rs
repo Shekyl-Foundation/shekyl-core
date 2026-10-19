@@ -76,6 +76,22 @@ pub enum TerminalErrorKind {
     JoinMarketUnsupported,
 }
 
+impl From<TerminalErrorKind> for shekyl_engine_state::pending_post_block::TerminalCause {
+    /// The persisted cause a pending record keeps (BD-Q3 Rule 2). Exhaustive
+    /// on purpose: a new terminal kind fails this match in review, where the
+    /// persisted twin gains its variant (or the kind maps to `Unrecognized`).
+    fn from(kind: TerminalErrorKind) -> Self {
+        use shekyl_engine_state::pending_post_block::TerminalCause as C;
+        match kind {
+            TerminalErrorKind::DoubleSpend => C::DoubleSpend,
+            TerminalErrorKind::FeeTooLow => C::FeeTooLow,
+            TerminalErrorKind::Malformed => C::Malformed,
+            TerminalErrorKind::Unrecognized => C::Unrecognized,
+            TerminalErrorKind::JoinMarketUnsupported => C::JoinMarketUnsupported,
+        }
+    }
+}
+
 /// Retryable daemon-rejection sub-discriminant
 /// (`docs/design/DAEMON_SUBMIT_VERDICT.md` §2.5).
 ///

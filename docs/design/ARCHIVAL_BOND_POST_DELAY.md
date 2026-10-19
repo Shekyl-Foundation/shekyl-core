@@ -271,7 +271,7 @@ whenever the wallet is open, and no secret is persisted.
 | Held | Why | Today |
 | --- | --- | --- |
 | `p_slot` | Names the persona the actor signs for. | Held. |
-| The reservation, `funding_gindexes` | Keeps the cadence driver's claims and drains off the funding until the bond spends it. `reserved_gindexes()` already unions it (`shekyl-engine-state/src/pending_post_block.rs:536-555`). | Held. |
+| The reservation, `funding_gindexes` | Keeps the cadence driver's claims and drains off the funding until the bond spends it. `reserved_gindexes()` already unions it (`shekyl-engine-state/src/pending_post_block/mod.rs:602-628`). | Held. |
 | The draw `s` (BD-Q2) | The due is `max(a + 1 + s, request)` on the count clock. A re-draw is refused. | `bond_post_offset_blocks` |
 | The holdings descriptor (the posture) | Assembly moves to the due tick, and the posture is the caller's. Today "nothing posture-shaped is persisted" (`engine/bond_orchestrator.rs:827`) because the posture is consumed at once. | Not held. New. |
 | Not the fee | Estimated at the due tick from the daemon's live estimate, as `first_stake` does now (`engine/bond_orchestrator.rs:958-962`). | — |

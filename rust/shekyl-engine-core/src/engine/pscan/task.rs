@@ -437,6 +437,9 @@ where
             TickEvidence {
                 confirmed_posts: &accrual.confirmed_join_market_personas(),
                 live_funding: &live_funding,
+                // `next_height` is the first unscanned height (half-open
+                // ranges), so the last covered block is one below it.
+                scanned_through: accrual.next_height().checked_sub_count(BlockCount::ONE),
             },
             cancel,
         )

@@ -80,6 +80,10 @@ pub async fn dispatch(
         "drain" => staking_actions::drain(tenants, params).await,
         "unstake" => staking_actions::unstake(tenants, params).await,
         "collect_unstaked" => staking_actions::collect_unstaked(tenants, params).await,
+        // WR-Q2: clear the active persona's last staking ending of a kind.
+        "acknowledge_staking_outcome" => {
+            staking_actions::acknowledge_staking_outcome(tenants, params).await
+        }
         // WI-RPC-3 proofs. The `get_*` pair requires an open wallet; the
         // `check_*` pair is WALLET-LESS by contract (a verifier checks
         // someone else's proof against the chain).
