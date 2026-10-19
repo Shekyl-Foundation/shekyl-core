@@ -394,9 +394,13 @@ pub enum StoreInvariant {
     /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 check 2), the rebuild reads
     /// inside the journals' floor, and every journal row is one the records
     /// can have been left by. Observed by the validator, which derives the
-    /// set (`ARW-Q1`), and arriving through `refuse_corrupt`. Never a
-    /// verdict on the block: the block is not invalid, this node cannot
-    /// settle the epoch.
+    /// set (`ARW-Q1`), and arriving through `refuse_corrupt`. A mismatch is
+    /// [`DrawableFault::Drift`]. A set that cannot be rebuilt is
+    /// [`DrawableFault::Rebuild`] of the validator's
+    /// [`DrawableEpochFault`](shekyl_chain_rules::DrawableEpochFault),
+    /// including a digest recorded for an epoch the view has not opened.
+    /// Never a verdict on the block: the block is not invalid, this node
+    /// cannot settle the epoch.
     DrawableSetNotSound {
         /// The epoch whose drawable set was being built or checked.
         epoch: shekyl_types::SettlementEpoch,
@@ -418,33 +422,19 @@ pub enum DigestFault {
 
 /// What an SI-30 check observed (payload of
 /// [`StoreInvariant::DrawableSetNotSound`]).
+///
+/// Drift is the digest comparison. Every other observation is the
+/// validator's [`DrawableEpochFault`](shekyl_chain_rules::DrawableEpochFault),
+/// carried rather than copied: a new reason the set cannot be rebuilt is
+/// one arm there, and this payload gains none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawableFault {
     /// The rebuilt set's digest is not the recorded one: a Release
     /// pre-image, a slash-log row, a record or the digest changed after
     /// the epoch opened.
     Drift,
-    /// The rebuild would start below the journals' floor.
-    BelowFloor {
-        /// `h_open(E)`.
-        h_open: shekyl_types::BlockHeight,
-        /// The lowest retained height.
-        floor: shekyl_types::BlockHeight,
-    },
-    /// A journal row names a persona with no bond record.
-    NoRecord {
-        /// The persona the row names.
-        persona: shekyl_types::PCanonicalId,
-    },
-    /// A slash cannot be undone on the record the rebuild holds.
-    SlashNotUndoable {
-        /// The slashed persona.
-        persona: shekyl_types::PCanonicalId,
-        /// The shard the slash removed.
-        shard: shekyl_types::ShardId,
-    },
-    /// The set could not be built: a record's receipt key is not a key.
-    Construction(shekyl_chain_rules::DrawableEpochError),
+    /// The set could not be rebuilt. The reason is the validator's.
+    Rebuild(shekyl_chain_rules::DrawableEpochFault),
 }
 
 /// What an SI-25 check observed (payload of
@@ -820,24 +810,9 @@ impl core::fmt::Display for StoreInvariant {
                      digest to archival_drawable_digest; the set its draws were resolved against \
                      is not the one the journals describe, rebuild from the block corpus"
                 ),
-                DrawableFault::BelowFloor { h_open, floor } => write!(
+                DrawableFault::Rebuild(why) => write!(
                     f,
-                    "the drawable set of epoch {epoch} would be rebuilt from above {h_open}, below \
-                     the bond journals' floor {floor}; the schedule is mis-composed, not the data"
-                ),
-                DrawableFault::NoRecord { persona } => write!(
-                    f,
-                    "a bond journal row names {persona}, which has no archival_bond record; \
-                     rebuild from the block corpus"
-                ),
-                DrawableFault::SlashNotUndoable { persona, shard } => write!(
-                    f,
-                    "the slash of ({persona}, {shard}) cannot have left the record archival_bond \
-                     holds; rebuild from the block corpus"
-                ),
-                DrawableFault::Construction(error) => write!(
-                    f,
-                    "the drawable set of epoch {epoch} cannot be built ({error}); rebuild from \
+                    "the drawable set of epoch {epoch} cannot be rebuilt ({why}); rebuild from \
                      the block corpus"
                 ),
             },

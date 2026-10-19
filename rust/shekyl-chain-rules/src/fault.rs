@@ -421,6 +421,39 @@ pub enum DrawableEpochFault {
     /// record was written, and the builder emits each pair once with its
     /// persona's key, so neither is a state a conforming store holds.
     Construction(shekyl_archival_retention::DrawableEpochError),
+    /// A digest is recorded for an epoch this view has not opened: the walk
+    /// has no post-state to rebuild, and that absence is not a drift. The
+    /// open of a settled epoch sits below the tip on every view whose tip
+    /// is the chain, so this is a view whose tip and digest disagree.
+    Unopened {
+        /// `h_open(E)`.
+        h_open: BlockHeight,
+    },
+}
+
+impl fmt::Display for DrawableEpochFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BelowFloor { h_open, floor } => write!(
+                f,
+                "the walk would start above {h_open}, below the bond journals' floor {floor}; \
+                 the schedule is mis-composed, not the data"
+            ),
+            Self::NoRecord { persona } => {
+                write!(f, "a bond journal row names {persona}, which has no record")
+            }
+            Self::SlashNotUndoable { persona, shard } => write!(
+                f,
+                "the slash of ({persona}, {shard}) cannot have left the record"
+            ),
+            Self::Construction(error) => write!(f, "{error}"),
+            Self::Unopened { h_open } => write!(
+                f,
+                "the epoch has not opened: h_open {h_open} is above this view's tip, so there \
+                 is no post-state to rebuild"
+            ),
+        }
+    }
 }
 
 /// Which of settlement's integrity checks failed —
@@ -747,27 +780,9 @@ impl fmt::Display for Corrupt {
                     "no drawable digest is recorded for epoch {epoch} (SI-29)"
                 ),
             },
-            Self::DrawableEpoch { epoch, why } => match why {
-                DrawableEpochFault::BelowFloor { h_open, floor } => write!(
-                    f,
-                    "the drawable set of epoch {epoch} would be rebuilt from above height \
-                     {h_open}, below the bond journals' floor {floor} (SI-30)"
-                ),
-                DrawableEpochFault::NoRecord { persona } => write!(
-                    f,
-                    "a bond journal row for epoch {epoch}'s drawable set names {persona}, \
-                     which has no record (SI-30)"
-                ),
-                DrawableEpochFault::SlashNotUndoable { persona, shard } => write!(
-                    f,
-                    "the slash of ({persona}, {shard}) cannot be undone while rebuilding \
-                     epoch {epoch}'s drawable set (SI-30)"
-                ),
-                DrawableEpochFault::Construction(error) => write!(
-                    f,
-                    "the drawable set of epoch {epoch} cannot be built: {error} (SI-30)"
-                ),
-            },
+            Self::DrawableEpoch { epoch, why } => {
+                write!(f, "the drawable set of epoch {epoch} cannot be rebuilt: {why} (SI-30)")
+            }
         }
     }
 }

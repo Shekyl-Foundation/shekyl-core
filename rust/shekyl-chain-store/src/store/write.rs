@@ -81,8 +81,7 @@ use super::chain_reads::ReadFault;
 use super::prune::Horizons;
 
 use shekyl_chain_rules::{
-    Corrupt, DrawableEpochFault, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant,
-    SettlementCheck,
+    Corrupt, FrontierFault, LeafInput, PerHeightRecord, RecordInvariant, SettlementCheck,
 };
 use shekyl_units::AtomicUnits;
 
@@ -266,7 +265,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25), except the drawable set's two checks below |
     /// | `SettlementIntegrity { epoch, check: DrawableDigestMissing }` | `DrawableDigestNotSingular { epoch, observed: Missing }` (SI-29) |
     /// | `SettlementIntegrity { epoch, check: DrawableDrift }` | `DrawableSetNotSound { epoch, observed: Drift }` (SI-30) |
-    /// | `DrawableEpoch { epoch, why }` | `DrawableSetNotSound { epoch, .. }` with `why` as the fault (SI-30) |
+    /// | `DrawableEpoch { epoch, why }` | `DrawableSetNotSound { epoch, observed: Rebuild(why) }` (SI-30) |
     /// | `RelayFloorUnpriceable { at }` | `CellCorrupt { key: "block_info", fault: OutsideDomain { at } }` (SI-7) |
     ///
     /// (The arms between are documented inline on the match.)
@@ -505,19 +504,11 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             }
             // The drawable set could not be built from the records and the
             // journals, at an open or at the settlement's rebuild. The
-            // validator derives the set; the store supplies the halt.
+            // validator names why; the store carries that fault and supplies
+            // the halt.
             Corrupt::DrawableEpoch { epoch, why } => StoreInvariant::DrawableSetNotSound {
                 epoch,
-                observed: match why {
-                    DrawableEpochFault::BelowFloor { h_open, floor } => {
-                        DrawableFault::BelowFloor { h_open, floor }
-                    }
-                    DrawableEpochFault::NoRecord { persona } => DrawableFault::NoRecord { persona },
-                    DrawableEpochFault::SlashNotUndoable { persona, shard } => {
-                        DrawableFault::SlashNotUndoable { persona, shard }
-                    }
-                    DrawableEpochFault::Construction(error) => DrawableFault::Construction(error),
-                },
+                observed: DrawableFault::Rebuild(why),
             },
         };
         self.poison.arm(row)

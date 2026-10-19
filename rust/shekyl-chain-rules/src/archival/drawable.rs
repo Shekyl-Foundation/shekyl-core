@@ -81,12 +81,12 @@ use shekyl_archival_retention::{
     DrawableEpoch, DrawablePair, SettlementSchedule, FAILURE_WINDOW_N, SLASH_GRACE_EPOCHS,
 };
 use shekyl_types::archival::{
-    BondRecord, HeldShard, Holdings, LoggedSlash, ReleasedRecord, SlashedHolding,
+    BondRecord, DrawableDigest, HeldShard, Holdings, LoggedSlash, ReleasedRecord, SlashedHolding,
 };
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use crate::archival::ClosedUniverse;
-use crate::fault::{Corrupt, DrawableEpochFault, ViewRead};
+use crate::fault::{Corrupt, DrawableEpochFault, SettlementCheck, ViewRead};
 use crate::reorg::SlashLogFloor;
 use crate::view::ChainView;
 
@@ -187,6 +187,40 @@ pub fn drawable_epoch_walked_back<'id, V: ChainView<'id>>(
     emit(epoch, at_open.iter(), final_count)
         .map(Some)
         .map_err(corrupt)
+}
+
+/// §9.5 check 2, on the two values and nothing else.
+///
+/// `written` is the digest the open recorded. `rebuilt` is the walk's set,
+/// `None` when `epoch` has not opened on the view. A missing digest, a
+/// digest for an epoch with no post-state, and a digest that differs are
+/// three faults. Only the last is drift: comparing the walk's `Option`
+/// with the recorded digest would report an unopened epoch as one.
+pub(super) fn compare_recorded_digest(
+    epoch: SettlementEpoch,
+    h_open: BlockHeight,
+    written: Option<DrawableDigest>,
+    rebuilt: Option<&DrawableEpoch>,
+) -> Result<(), Corrupt> {
+    let Some(written) = written else {
+        return Err(Corrupt::SettlementIntegrity {
+            epoch,
+            check: SettlementCheck::DrawableDigestMissing,
+        });
+    };
+    let Some(rebuilt) = rebuilt else {
+        return Err(Corrupt::DrawableEpoch {
+            epoch,
+            why: DrawableEpochFault::Unopened { h_open },
+        });
+    };
+    if rebuilt.digest() != written {
+        return Err(Corrupt::SettlementIntegrity {
+            epoch,
+            check: SettlementCheck::DrawableDrift,
+        });
+    }
+    Ok(())
 }
 
 /// One event the walk undoes. Within a block a Release (an input) connects

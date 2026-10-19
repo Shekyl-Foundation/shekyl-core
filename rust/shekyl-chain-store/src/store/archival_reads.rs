@@ -176,59 +176,31 @@ pub(super) fn bond_record<T: ReadTables>(
 /// above** `height`, in log order — the rows `holds_shard_at` folds over
 /// the record to answer whether a shard was held *as of* `height`
 /// (`db_lmdb.cpp:4804`'s `archival_slash_removed_holding_after`, minus the
-/// fold, which is the retention crate's; CEN-L16). The log is keyed by
-/// height then sequence and holds every persona's slashes, so the walk is
-/// one range from `(height + 1, 0)` filtered to `persona`; the C++ walked
-/// the same range and skipped its epoch-marker rows, which the log no
-/// longer has (`ARW-Q2`). Empty when nothing above `height` names
-/// `persona` — including when `height` is the last height, where
-/// [`SlashLogKey::above`] has no range to give (no height lies above it),
-/// so the C++'s `u64::MAX` early-return is the key type's `None` and not a
-/// case here. A row that does not decode is SI-7.
-///
-/// `floor` is the log's retirement floor under the caller's rule set.
-/// The scan is [`SlashLogKey::above`]; a start that lies in
-/// [`SlashLogKey::below`] is SI-26, refused before the table is opened.
-/// The last height has no range, so it needs no check.
+/// fold, which is the retention crate's; CEN-L16). The log holds every
+/// persona's slashes, so this is [`slash_log_rows_after`] filtered to
+/// `persona`, with the height dropped: the holdings fold needs the entry,
+/// and any one qualifying row answers it. Empty when nothing above
+/// `height` names `persona`. The floor check and the decode live on A21,
+/// once.
 pub(super) fn slash_log_after<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
     height: BlockHeight,
     floor: SlashLogFloor,
 ) -> Result<Vec<SlashLogEntry>, ReadFault> {
-    let Some(above) = SlashLogKey::above(height) else {
-        return Ok(Vec::new());
-    };
-    if let Some(kept_from) = floor.height() {
-        if SlashLogKey::below(kept_from).contains(&above.start) {
-            return Err(ReadFault::Invariant(
-                StoreInvariant::SlashLogReadBelowFloor {
-                    asked: height,
-                    floor: kept_from,
-                },
-            ));
-        }
-    }
-    let table = txn.table(ARCHIVAL_SLASH_LOG)?;
-    let mut out = Vec::new();
-    for row in table.range(above)? {
-        let (_key, value) = row?;
-        let entry = value
-            .value()
-            .decode()
-            .map_err(|cause| undecodable(SLASH_LOG, cause))?;
-        if entry.persona == *persona {
-            out.push(entry);
-        }
-    }
-    Ok(out)
+    Ok(slash_log_rows_after(txn, height, floor)?
+        .into_iter()
+        .filter(|row| row.entry.persona == *persona)
+        .map(|row| row.entry)
+        .collect())
 }
 
 /// **A21.** Every slash logged at a height **strictly above** `height`,
 /// every persona's, in log order, each with the height its key carries.
-/// The range is A2's ([`SlashLogKey::above`]) without A2's persona filter,
-/// and SI-26 refuses a start below `floor` as it does for A2. A row that
-/// does not decode is SI-7.
+/// The range is [`SlashLogKey::above`]; a start that lies in
+/// [`SlashLogKey::below`] is SI-26, refused before the table is opened.
+/// The last height has no range, so it needs no check. A row that does
+/// not decode is SI-7. A2 is this scan filtered to one persona.
 pub(super) fn slash_log_rows_after<T: ReadTables>(
     txn: &T,
     height: BlockHeight,

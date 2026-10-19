@@ -579,3 +579,58 @@ fn a_reinstate_leaves_the_drawable_set_unchanged() {
         "a Reinstate that would restore a shard is refused"
     );
 }
+
+/// The settlement check's three readings of one digest. A missing digest,
+/// a digest for an epoch the view has not opened, and a digest that
+/// differs are different faults. Red edit: compare the walk's `Option`
+/// with the recorded digest, and the unopened epoch reports drift.
+#[test]
+fn the_recorded_digest_is_missing_unopened_or_drift() {
+    let epoch = SettlementEpoch::from_raw(2);
+    // The height is the fault's payload. The comparison does not consult
+    // the schedule, so any open names the same arm.
+    let h_open = BlockHeight::from_raw(200);
+    let empty = DrawableEpoch::new(
+        epoch,
+        Vec::<(PCanonicalId, ReceiptSignPk)>::new(),
+        Vec::<DrawablePair>::new(),
+    )
+    .expect("the empty set builds");
+    let recorded = empty.digest();
+    let other = DrawableDigest::from_bytes([0x5a; 32]);
+    assert_ne!(other, recorded, "the planted digest is not the empty set's");
+
+    assert_eq!(
+        compare_recorded_digest(epoch, h_open, Some(recorded), Some(&empty)),
+        Ok(())
+    );
+    assert_eq!(
+        compare_recorded_digest(epoch, h_open, None, Some(&empty)),
+        Err(Corrupt::SettlementIntegrity {
+            epoch,
+            check: SettlementCheck::DrawableDigestMissing,
+        })
+    );
+    let unopened = compare_recorded_digest(epoch, h_open, Some(recorded), None)
+        .expect_err("a digest beside no post-state");
+    assert_eq!(
+        unopened,
+        Corrupt::DrawableEpoch {
+            epoch,
+            why: DrawableEpochFault::Unopened { h_open },
+        }
+    );
+    // The store halt interpolates this Display. A rewrite that drops the
+    // phrase would report the unopened epoch as a generic rebuild.
+    assert!(
+        unopened.to_string().contains("has not opened"),
+        "{unopened}"
+    );
+    assert_eq!(
+        compare_recorded_digest(epoch, h_open, Some(other), Some(&empty)),
+        Err(Corrupt::SettlementIntegrity {
+            epoch,
+            check: SettlementCheck::DrawableDrift,
+        })
+    );
+}
