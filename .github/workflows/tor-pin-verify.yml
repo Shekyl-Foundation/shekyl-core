@@ -248,9 +248,10 @@ jobs:
           # DiscardPK → ServiceID verified → bounded teardown with a real reap,
           # twice, asserting the two boots publish DIFFERENT addresses (the
           # ephemeral property observed, not asserted). Floor = this crate's
-          # current ignored count on the entry's platform (Linux 2, with
-          # TSR-F1's death edge: a killed tor is Exited, a shutdown is Stopped;
-          # Windows 1, that test killing tor with `kill -9`). `-ge` so
+          # current ignored count on the entry's platform: Linux 2, the
+          # rotation test and TSR-F1's death watcher (a killed tor is Exited,
+          # a shutdown is Stopped); Windows 1, the rotation test alone, since
+          # the death watcher kills tor with `kill -9` and is Linux-only. `-ge` so
           # adding a live test never breaks the lane; bump only on a
           # deliberate removal.
           ../scripts/ci/require_live_tests.sh ignored-daemon.out ${{ matrix.target.daemon_tests }}
