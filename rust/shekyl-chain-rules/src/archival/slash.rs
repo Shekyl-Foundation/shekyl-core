@@ -209,15 +209,17 @@ impl super::Transition {
         self.gather(view, epoch)
     }
 
-    /// Settle `epoch`: check its issued-draw index against its digest and
-    /// fold each pair's counted draws into a row (module docs, *Order
-    /// inside one epoch*, step 1).
+    /// Settle `epoch`: check its drawable set against the digest written at
+    /// its open, check its issued-draw index against its digest, and fold
+    /// each pair's counted draws into a row (module docs, *Order inside one
+    /// epoch*, step 1).
     fn settle<'id, V: ChainView<'id>>(
         &mut self,
         view: &V,
         epoch: SettlementEpoch,
         snapshot: &[(PCanonicalId, BondRecord)],
     ) -> Result<(), ViewRead<V::Fault>> {
+        self.check_drawable(view, epoch)?;
         let draws = view.issued_draws(epoch).map_err(ViewRead::View)?;
         // Every stored draw, before any is dropped: the digest was folded
         // over issuance, and a pair that later stopped holding its shard
@@ -281,6 +283,47 @@ impl super::Transition {
             }
         }
         Ok(())
+    }
+
+    /// §9.5 check 2: the drawable set rebuilt from the bond journals is the
+    /// one whose digest was written when `epoch` opened. Every epoch that
+    /// settles is checked, whether or not anything was drawn from it: the
+    /// set is the operand every index of the epoch was resolved against.
+    ///
+    /// The rebuild is the walk back ([`super::drawable_epoch_walked_back`])
+    /// over this view, under this pass's floor. It reads no value the open
+    /// produced but the digest it is compared with, so a Release pre-image,
+    /// a slash-log row, a record or the digest that changed after the open
+    /// is a mismatch here. The comparison itself is
+    /// [`super::drawable::compare_recorded_digest`]: a missing digest, a
+    /// digest for an epoch this view has not opened, and a digest that
+    /// differs are three faults.
+    ///
+    /// # Errors
+    ///
+    /// [`ViewRead::Corrupt`]. [`SettlementCheck::DrawableDigestMissing`]
+    /// when the open wrote no digest. [`SettlementCheck::DrawableDrift`]
+    /// when the rebuilt set's digest is not the recorded one.
+    /// [`Corrupt::DrawableEpoch`] when the set cannot be rebuilt, including
+    /// [`crate::DrawableEpochFault::Unopened`] when the view's tip is below
+    /// `h_open` while a digest is recorded. Each halts the writer. None is
+    /// a verdict on the block.
+    fn check_drawable<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        epoch: SettlementEpoch,
+    ) -> Result<(), ViewRead<V::Fault>> {
+        let h_open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
+        let written = view.drawable_digest(epoch).map_err(ViewRead::View)?;
+        let rebuilt = super::drawable_epoch_walked_back(
+            view,
+            epoch,
+            self.schedule,
+            self.reorg_cap,
+            self.slash_floor,
+        )?;
+        super::drawable::compare_recorded_digest(epoch, h_open, written, rebuilt.as_ref())
+            .map_err(ViewRead::Corrupt)
     }
 
     /// The settlement beacon of `epoch`: the hash of the block `W₂` after

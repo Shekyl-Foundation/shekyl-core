@@ -54,7 +54,7 @@ use shekyl_chain_rules::{Candidate, FakechainSchedule, RuleSet, SlashLogFloor};
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, ShardId, SHARD_LENGTH};
 use shekyl_wire::{Ct, Transaction};
 
-use super::archival_read_tests::{persona, plant, plant_slash, slash_entry};
+use super::archival_read_tests::{persona, plant, plant_slash, record, slash_entry};
 use super::connect_fixtures::{
     at, candidate, candidate_over, judge_under, root_going_into, serve_credit, spends, Grown,
     Listed, FIRST_SPEND_HEIGHT,
@@ -2436,6 +2436,111 @@ fn the_boundary_retires_slash_rows_below_the_floor_and_the_read_asserts_it() {
         "the same expression at the same height"
     );
     assert_eq!(slash_rows(&store), kept, "the same, already empty, range");
+    cleanup(&path);
+}
+
+/// The second boundary with a floor: the first whose floor is above the
+/// slash grace and an epoch, so the first at which an epoch's settlement
+/// sits below the floor and its drawable digest is retired.
+const DIGEST_RETIRING_BOUNDARY: u64 = FIRST_FLOORED_BOUNDARY + 2 * WINDOW_SEB;
+
+/// **The Release journal and the settled digests are retired with the
+/// slash log** (`SO-D12` increment 2): at a floored boundary, journal rows
+/// below the floor are gone and rows at and above it stay; the digest of
+/// every epoch whose settlement is below the floor is gone and every later
+/// one stays; and the journal's reader asserts the floor (SI-28) — a read
+/// starting at the floor returns the kept rows, a read starting below it is
+/// the fault.
+///
+/// Here the floor is `25` and the grace one epoch of ten blocks, so epoch
+/// 0, which settles at its deadline `19`, is the one digest retired.
+///
+/// **Falsifiers:** delete `retire_release_rows` and the journal assertion
+/// fails with the planted rows intact; delete `retire_drawable_digests` and
+/// the digest assertion fails with epoch 0's row; delete the SI-28 arm in
+/// `archival_reads::release_journal_after` and the `unwrap_err` panics on an
+/// `Ok`.
+#[test]
+fn the_boundary_retires_release_rows_and_settled_digests_below_the_floor() {
+    let path = tmp("release-retire");
+    let boundary = DIGEST_RETIRING_BOUNDARY;
+    let floor = floor_at(boundary)
+        .height()
+        .expect("a floored boundary")
+        .to_raw();
+    let schedule = WINDOW_RULES.settlement_schedule();
+    assert_eq!(floor, 25);
+    assert!(schedule.slash_deadline_height(0) < floor);
+    assert!(schedule.slash_deadline_height(1) >= floor);
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+
+    // A pre-image one below, at, and one above the floor.
+    let p = persona(0x61);
+    plant(&path, |txn| {
+        let mut journal = txn
+            .open_table(crate::schema::ARCHIVAL_RELEASE_JOURNAL)
+            .expect("t");
+        for h in [floor - 1, floor, floor + 1] {
+            journal
+                .insert(
+                    crate::ids::ReleaseJournalKey::new(BlockHeight::from_raw(h), p).key(),
+                    record().encoded().as_encoded(),
+                )
+                .expect("insert");
+        }
+    });
+    let digests = |store: &ChainStore| -> Vec<u64> {
+        let snap = store.begin_read().expect("read");
+        let table = snap
+            .open_table(crate::schema::ARCHIVAL_DRAWABLE_DIGEST)
+            .expect("table");
+        table
+            .range::<u64>(..)
+            .expect("range")
+            .map(|item| item.expect("row").0.value())
+            .collect()
+    };
+    let store = window_store(&path, WINDOW_CAP);
+    let opened = schedule.epoch_at_height(boundary - 1);
+    assert_eq!(
+        digests(&store),
+        (0..=opened).collect::<Vec<_>>(),
+        "every open below the boundary wrote its epoch's digest"
+    );
+
+    let pruned = b
+        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+        .remove(0)
+        .pruned
+        .expect("a floored boundary");
+    let snap = store.begin_read().expect("read");
+    let kept = snap
+        .release_journal_after(BlockHeight::from_raw(floor - 1), pruned.slash_floor)
+        .expect("a read starting at the floor is sound");
+    assert_eq!(
+        kept.iter().map(|r| r.height.to_raw()).collect::<Vec<_>>(),
+        [floor, floor + 1],
+        "below the floor gone, at and above it kept"
+    );
+    let err = snap
+        .release_journal_after(BlockHeight::from_raw(floor - 2), pruned.slash_floor)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::ReleaseJournalReadBelowFloor {
+                asked,
+                floor: at
+            }) if asked == BlockHeight::from_raw(floor - 2) && at == BlockHeight::from_raw(floor)
+        ),
+        "a read starting below the floor is SI-28: {err}"
+    );
+    drop(snap);
+    assert_eq!(
+        digests(&store),
+        (1..=schedule.epoch_at_height(boundary)).collect::<Vec<_>>(),
+        "epoch 0 settled below the floor; every later epoch's digest stays"
+    );
     cleanup(&path);
 }
 

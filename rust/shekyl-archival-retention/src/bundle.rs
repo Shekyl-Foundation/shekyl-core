@@ -67,6 +67,7 @@ use shekyl_types::archival::SettlementEpochBlocks;
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
 use crate::hash::cshake256_32;
+use crate::secret_draw::COUNT_CAP_BASE_MULTIPLE;
 use crate::SettlementSchedule;
 
 /// cSHAKE256 customization for [`bundle_commitment`] (rule 30: one label,
@@ -777,14 +778,15 @@ pub const fn bundle_charge(count: u32) -> u64 {
 /// `d_max` is the largest `D` among the epochs of the bundles in the
 /// section, and `c` is [`BUNDLE_SECTION_BUDGET_MULTIPLE`] in production.
 /// `⌊9·D / SEB⌋ + 1` is the count cap: the per-block target is at most
-/// `9·D / SEB` and the carry adds less than one. The `+ 1` is what lets a
+/// `9·D / SEB` and the carry adds less than one. The `9` is
+/// [`COUNT_CAP_BASE_MULTIPLE`], the one the count rule caps at. The `+ 1` is what lets a
 /// network below `SEB / 9` pairs admit a bundle at all.
 ///
 /// Computed in 128 bits and saturated: a budget above `u64::MAX` binds
 /// nothing a `u64` sum can reach.
 #[must_use]
 pub fn section_budget(c: u64, d_max: u64, seb: SettlementEpochBlocks) -> u64 {
-    let cap = u128::from(d_max) * 9 / u128::from(seb.get()) + 1;
+    let cap = u128::from(d_max) * u128::from(COUNT_CAP_BASE_MULTIPLE) / u128::from(seb.get()) + 1;
     u64::try_from(u128::from(c).saturating_mul(cap)).unwrap_or(u64::MAX)
 }
 

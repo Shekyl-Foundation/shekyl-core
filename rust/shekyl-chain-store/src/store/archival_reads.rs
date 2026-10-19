@@ -113,19 +113,22 @@ use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::{BlobKind, CodecError};
 use shekyl_types::archival::SettlementOutcome;
 pub use shekyl_types::archival::{
-    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, LoggedSlash, PassCount, ReleasedRecord,
+    ServedShard, SettlementRow,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::archival_snapshot::{ArchivalSnapshot, SnapshotFamily, SnapshotFault};
 use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
-use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{
+    IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
+};
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
     ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
-    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
-    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
+    ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -156,6 +159,8 @@ const BLOCK_DRAWS: &str = "archival_block_draws";
 const DRAWABLE_DIGEST: &str = "archival_drawable_digest";
 /// The `archival_attestation_witness` cell as faults name it.
 const WITNESS: &str = "archival_attestation_witness";
+/// The `archival_release_journal` cell as faults name it.
+const RELEASE_JOURNAL: &str = "archival_release_journal";
 
 /// **A1.** `archival_bond[p]`, decoded. `None` is "no bond record for `p`";
 /// a row that does not decode is SI-7 (which is also SI-14's arm: a record
@@ -171,28 +176,54 @@ pub(super) fn bond_record<T: ReadTables>(
 /// above** `height`, in log order — the rows `holds_shard_at` folds over
 /// the record to answer whether a shard was held *as of* `height`
 /// (`db_lmdb.cpp:4804`'s `archival_slash_removed_holding_after`, minus the
-/// fold, which is the retention crate's; CEN-L16). The log is keyed by
-/// height then sequence and holds every persona's slashes, so the walk is
-/// one range from `(height + 1, 0)` filtered to `persona`; the C++ walked
-/// the same range and skipped its epoch-marker rows, which the log no
-/// longer has (`ARW-Q2`). Empty when nothing above `height` names
-/// `persona` — including when `height` is the last height, where
-/// [`SlashLogKey::above`] has no range to give (no height lies above it),
-/// so the C++'s `u64::MAX` early-return is the key type's `None` and not a
-/// case here. A row that does not decode is SI-7.
-///
-/// `floor` is the log's retirement floor under the caller's rule set.
-/// The scan is [`SlashLogKey::above`]; a start that lies in
-/// [`SlashLogKey::below`] is SI-26, refused before the table is opened.
-/// The last height has no range, so it needs no check.
+/// fold, which is the retention crate's; CEN-L16). The log holds every
+/// persona's slashes. This keeps one persona's entry, dropping the height
+/// the holdings fold does not read, and drops every other persona before
+/// the row is stored. Empty when nothing above `height` names `persona`.
+/// The floor check and the decode are [`scan_slash_log_after`], shared
+/// with A21.
 pub(super) fn slash_log_after<T: ReadTables>(
     txn: &T,
     persona: &PCanonicalId,
     height: BlockHeight,
     floor: SlashLogFloor,
 ) -> Result<Vec<SlashLogEntry>, ReadFault> {
+    let mut out = Vec::new();
+    scan_slash_log_after(txn, height, floor, |row| {
+        if row.entry.persona == *persona {
+            out.push(row.entry);
+        }
+    })?;
+    Ok(out)
+}
+
+/// **A21.** Every slash logged at a height **strictly above** `height`,
+/// every persona's, in log order, each with the height its key carries.
+/// The floor check and the decode are [`scan_slash_log_after`]. A row that
+/// does not decode is SI-7. A2 is the same walk, keeping one persona.
+pub(super) fn slash_log_rows_after<T: ReadTables>(
+    txn: &T,
+    height: BlockHeight,
+    floor: SlashLogFloor,
+) -> Result<Vec<LoggedSlash>, ReadFault> {
+    let mut out = Vec::new();
+    scan_slash_log_after(txn, height, floor, |row| out.push(row))?;
+    Ok(out)
+}
+
+/// The slash-log range strictly above `height`. SI-26 refuses a start in
+/// [`SlashLogKey::below`] before the table is opened. The last height has
+/// no range, so it needs no check. Each decoded row is handed to `keep`
+/// and not retained here, so a reader that wants one persona does not
+/// fill a buffer with the rest.
+pub(super) fn scan_slash_log_after<T: ReadTables>(
+    txn: &T,
+    height: BlockHeight,
+    floor: SlashLogFloor,
+    mut keep: impl FnMut(LoggedSlash),
+) -> Result<(), ReadFault> {
     let Some(above) = SlashLogKey::above(height) else {
-        return Ok(Vec::new());
+        return Ok(());
     };
     if let Some(kept_from) = floor.height() {
         if SlashLogKey::below(kept_from).contains(&above.start) {
@@ -205,16 +236,58 @@ pub(super) fn slash_log_after<T: ReadTables>(
         }
     }
     let table = txn.table(ARCHIVAL_SLASH_LOG)?;
-    let mut out = Vec::new();
     for row in table.range(above)? {
-        let (_key, value) = row?;
+        let (key, value) = row?;
         let entry = value
             .value()
             .decode()
             .map_err(|cause| undecodable(SLASH_LOG, cause))?;
-        if entry.persona == *persona {
-            out.push(entry);
+        keep(LoggedSlash {
+            height: SlashLogKey::from_key(key.value()).height(),
+            entry,
+        });
+    }
+    Ok(())
+}
+
+/// **A20.** Every Release journaled at a height **strictly above**
+/// `height`, ascending by height and then persona, each with the record it
+/// replaced. `floor` is the slash log's, which the journal is retired at: a
+/// start that lies in [`ReleaseJournalKey::below`] is SI-28, refused before
+/// the table is opened. The last height has no range, so it needs no check.
+/// A row that does not decode is SI-7.
+pub(super) fn release_journal_after<T: ReadTables>(
+    txn: &T,
+    height: BlockHeight,
+    floor: SlashLogFloor,
+) -> Result<Vec<ReleasedRecord>, ReadFault> {
+    let Some(above) = ReleaseJournalKey::above(height) else {
+        return Ok(Vec::new());
+    };
+    if let Some(kept_from) = floor.height() {
+        if ReleaseJournalKey::below(kept_from).contains(&above.start) {
+            return Err(ReadFault::Invariant(
+                StoreInvariant::ReleaseJournalReadBelowFloor {
+                    asked: height,
+                    floor: kept_from,
+                },
+            ));
         }
+    }
+    let table = txn.table(ARCHIVAL_RELEASE_JOURNAL)?;
+    let mut out = Vec::new();
+    for row in table.range(above)? {
+        let (key, value) = row?;
+        let key = ReleaseJournalKey::from_key(key.value());
+        let pre_image: BondRecord = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(RELEASE_JOURNAL, cause))?;
+        out.push(ReleasedRecord {
+            height: key.height(),
+            persona: key.persona(),
+            pre_image,
+        });
     }
     Ok(out)
 }

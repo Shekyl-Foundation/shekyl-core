@@ -1111,8 +1111,9 @@ the watermark and the closed-not-settled cases.
 ## 16. `SO-D12` — admission and the draw — RULED 2026-10-10
 
 **Status:** RULED 2026-10-10 (§16.6). Ten questions (§16.4), posed with
-recommendations and ruled the same day. Increment 1 is in progress
-(§16.8). Grounded at `dev@e28979ff2`.
+recommendations and ruled the same day; the later rulings are in the
+same table. Increment 1 landed (PR #1032, §16.8). Increment 2 is §16.10.
+Grounded at `dev@e28979ff2`; increment 2 at `dev@09402ea19`.
 
 **Carriers were replaced on 2026-10-11** by one bundle per block (the
 Slice C round; §16.9). §16.1 to §16.5 are the pre-flight as posed and
@@ -1233,8 +1234,8 @@ The work is split by what is checked, not by who owns the tables
 - **This lane** owns the state and the wiring.
 - **The E5 lane** owns the bundle queue and the body store. The view
   trait has one implementation, on the store's `BatchView` — the switch's
-  batch view is that view — built once, with this lane's merged increment
-  (item 3; `DRS_E5_POOL_ALT_PRUNE.md` §2.3).
+  batch view is that view — built once, with this lane's cutover
+  (item 4; `DRS_E5_POOL_ALT_PRUNE.md` §2.3).
 
 This lane's increments, each its own change:
 
@@ -1242,17 +1243,22 @@ This lane's increments, each its own change:
    table and the drawable set's digest cell with their view reads,
    layout 23; `0x0C` required in every coinbase and drawn inside Rust's
    writer, with the genesis regenerated.
-2. **The Release journal, and the snapshot.**
+2. **The Release journal, and `D`** (§16.10).
    - The journal stores the **full bond record** as a Release's
-     pre-image, not the holdings alone, so a pair released after
-     `h_open(E)` keeps its receipt key. Built now.
-   - The `h_open(E)` snapshot is built to the type the Slice C round
-     defines: one type, two methods, the drawable pairs and each pair's
-     receipt key. Built once that type is delivered. The `D` digest is
-     written at `h_open(E)` and checked by the settlement pass
-     (`SO-D10g`).
-3. **The merged increment** (the pre-flight's 3 and 4), after the Slice C
-   verifier lands:
+     pre-image. What a Release loses at tip is the holdings and whether
+     the bond was a complete tree; the record itself survives and its
+     receipt key never changes. The whole record is the ruled value: it
+     reuses the record's type and codec, at about 2 KB a Release.
+   - `D(E)` is built as the Slice C round's `DrawableEpoch`, the drawable
+     pairs and each pair's receipt key, twice: from the post-state at
+     `h_open(E)`, and by the walk back from a later tip. The first is
+     digested into the store at every open (`SO-D12m`); the settlement
+     pass rebuilds the second and compares (`SO-D10g`'s check, which
+     lands here).
+3. **The count writer** (`SO-D12k`), its own change: the per-block count
+   and carry, `issued_short` (`SO-D12l`), and the in-memory `D` cache,
+   whose first reader it is.
+4. **The cutover**, after the Slice C verifier lands:
    - implement the view trait on this lane's store;
    - call the verifier at block admission and write its kept projection
      into this lane's tables;
@@ -1263,8 +1269,11 @@ This lane's increments, each its own change:
      census status for a row retired by ruling; and the serve-credit
      table with the two reads that stand on it (`SO-D10c`, `SO-D12j`).
 
-No tree before the merged increment admits a bundle. The verifier that
-checks receipts and the wiring that calls it arrive together.
+No tree before the cutover admits a bundle. The verifier that checks
+receipts and the wiring that calls it arrive together.
+
+`SO-D12h`'s fix, the complete-tree membership fact frozen at the slash
+pass, is its own change in this lane (§16.6).
 
 The producer side is not in this list: keeping the seed and the witness
 key, scheduling the reads and filing the bundle. It needs only increment
@@ -1296,15 +1305,19 @@ The settlement-timing question `ESR-12`.
 | # | Ruling |
 | --- | --- |
 | `SO-D12a` | **Agreed.** Four increments; the producer side is a separate lane. *(Restated 2026-10-11 as three increments for this lane under the split by what is checked, §16.3)* |
-| `SO-D12b` | **Agreed: journal the Release pre-image.** It is not new design: Q3 (2026-09-16) already defines `D` as a pure function over the append-only bond journals, and the Rust store never got the unbond journal that function assumes. Building it completes Q3 and does not reopen the snapshot refusal. Two conditions. **Reinstate is a third event:** if a Reinstate connected after `h_open(E)` restores holdings the pair did not have at `h_open(E)`, the walk-back reverses it too (checked, §16.7). **Compute once per epoch, not per admission:** `D` is built at `h_open(E)` into an in-memory cache that is never persisted as consensus state, rebuilt deterministically from tip and journals on restart and after a reorg across `h_open(E)`, and guarded by the digest check |
-| `SO-D12c` | **Agreed.** Increment 3 is staged. No network-type branch. *(Superseded 2026-10-11: there is no staged increment. The verifier is the Slice C round's and lands whole; this lane's merged increment wires it, §16.3)* |
+| `SO-D12b` | **Agreed: journal the Release pre-image.** It is not new design: Q3 (2026-09-16) already defines `D` as a pure function over the append-only bond journals, and the Rust store never got the unbond journal that function assumes. Building it completes Q3 and does not reopen the snapshot refusal. Two conditions. **Reinstate is a third event:** if a Reinstate connected after `h_open(E)` restores holdings the pair did not have at `h_open(E)`, the walk-back reverses it too (checked, §16.7). **Compute once per epoch, not per admission:** `D` is held in an in-memory cache that is never persisted as consensus state, rebuilt deterministically from tip and journals on restart and after a reorg across `h_open(E)`, and guarded by the digest check. The cache lands with its first reader, the count writer (increment 3, 2026-10-17); increment 2's two readers use none — the digest at `h_open` comes from the block's post-state, and the settlement re-walk exists to check the journals |
+| `SO-D12c` | **No network-type branch, and nothing staged on the connect path.** The verifier is the Slice C round's and lands whole; this lane's cutover (increment 4) wires it, receipts included (2026-10-11) |
 | `SO-D12d` | **The FN-DSA lane closed at increment 2** (maintainer, 2026-10-11): the scheme and the receipt key's derivation. **Increments 3 and 4, the receipt key in the bond record and receipts signed under it, belong to the Slice C round, and the receipt check moves with them.** The settlement lane builds none of the three and does not own the receipt check. This replaces the ruling of 2026-10-10, which gave increments 2 to 4 to the settlement lane |
 | `SO-D12e` | **Agreed.** Rust deletions in the increment that replaces each piece; C++ deletions at `DEL-008` |
 | `SO-D12f` | **Agreed.** The shortfall is stored, with undo |
 | `SO-D12g` | **Agreed** |
-| `SO-D12h` | **Agreed.** The same journal fixes the complete-tree flag |
+| `SO-D12h` | **Fixed by freezing the membership fact at the slash pass** (2026-10-17), its own change in this lane, with the retirement of the frozen rows. A claim reaches back `MAX_CLAIM_AGE_W_EPOCHS` (26) epochs and the bond journals are retired after 14 epochs and the reorg cap (`SlashLogFloor`), so the Release journal cannot reach the readers of that flag |
 | `SO-D12i` | **Required from increment 1, with no height gate.** The testnet runs tagged releases and the next tag is a regenesis, so nothing on `dev` reaches a running chain and there is no compatibility window. One condition, on correctness: the grammar that requires `0x0C` lands for the validator that judges blocks in that release. The C++ daemon is that validator until `DEL-008` and must accept the tag in increment 1 itself. What the change touches is in §16.7 |
-| `SO-D12j` | **Deferred** to the design text of the increment that deletes the table (the merged increment, §16.3) |
+| `SO-D12j` | **Deferred** to the design text of the increment that deletes the table (the cutover, §16.3 item 4) |
+| `SO-D12k` | **The count writer is increment 3** (2026-10-16), its own change after increment 2. The cutover is increment 4. *(Relayed as CW-1; `CW-` is the credit-wire family, `IMPLEMENTATION_INDEX.md`.)* |
+| `SO-D12l` | **`BlockDraws` gains `issued_short: u32`** (2026-10-16), the shortfall reduction a block's admissions cause. Lands with increment 3. *(Relayed as CW-2.)* |
+| `SO-D12m` | **The `D` digest covers the pairs and each persona's receipt key** (2026-10-17): `cSHAKE256_32("shekyl/archival-drawable-epoch-v1", E_le8 ‖ n_pairs_le8 ‖ (p_canonical_id ‖ shard_le8)* ‖ n_personas_le8 ‖ (p_canonical_id ‖ receipt_sign_pk)*)`, pairs in canonical order, personas ascending (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 check 2) |
+| `SO-D12n` | **`DrawableSet`'s tip read is replaced** by the builder of increment 2 (2026-10-17): no second drawable-set type remains, and the pair emitter stays inside the builder |
 
 What `SO-D12i` touches on the live chain, checked before it was ruled, is §16.7.
 
@@ -1461,7 +1474,7 @@ was going to be, landed as one rule-07 change.
    rules and the tests that use it are landed code and stay. The C++
    that serves the Rust wallet stays until the Rust daemon serves the
    same method. Bundle admission is built beside the input, in the
-   merged increment, and the input's fate is decided there.
+   cutover, and the input's fate is decided there.
 
 **Commit order, as landed.** Design text and census; store tables,
 schema and view reads; the `0x0C` field, grammar and writer; genesis
@@ -1528,17 +1541,110 @@ type**, after that type is delivered.
 The `0x0C` field, the genesis and the six recaptured chains stand.
 
 **Added to the increment: a gate on the hand-maintained C header**
-(rule 40). The coinbase writer's C ABI gains a parameter on a header no
-check reads, with five C++ call sites changed by hand. The increment
-either generates the declaration or asserts the signature from both
-sides.
+(rule 40). `scripts/ci/check_ffi_signatures.sh` asserts the coinbase
+writers' and the relay surface's signatures from both sides: each
+declared `shekyl_*` is a Rust export with the signature the header
+states. The coinbase writer's C ABI is unchanged, since Rust's writer
+draws the commitment itself.
 
 **Order confirmed:** store tables, schema 23 and view reads first; then
 the grammar change and the genesis regeneration, with the six chains
 recaptured from a C++ daemon built with the new grammar.
 
-On the set commitment: the specification's §7.3 already leads the
-commitment with `seed[32] ‖ h_le[8]`, and every vector there carries
-both. The condition is met by construction; increment 1 adds the test
-that the bytes fed to the commitment are the `0x0D` field's own seed and
-`h`, so the field and the commitment cannot name different values.
+On the set commitment: the bundle commitment of the specification's §7.3
+leads with the kept part's `seed[32] ‖ h_le[8]`, and every vector there
+carries both. The seed and `h` are the bundle's kept bytes, so there is
+no second field for the commitment to disagree with.
+
+### 16.10 Increment 2 as built — the Release journal and `D`
+
+The claim this increment proves: **`D(E)` is the set of pairs held after
+`h_open(E)` connects, its slash pass included, with each pair's receipt
+key, and it can be rebuilt identically at any later height inside the
+retention window.** Nothing in it reads an index into `D`; that is the
+count writer's (increment 3) and admission's (increment 4).
+
+**The builder** (`shekyl-chain-rules`, `archival/drawable.rs`; `SO-D12n`).
+One emitter for the three pins of the proposal's §7.4 (join filter,
+complete tree over the closed-and-final prefix at `h_open`, canonical
+order) and two derivations, both returning a `DrawableEpoch`:
+
+| Derivation | Where | Reads | What it is for |
+| --- | --- | --- | --- |
+| 1, at the open | the transition, at every `h_open(E)`, after the slash pass and the close | the records merged with the block's post-images; no journal | the digest the block writes |
+| 2, the walk back | `drawable_epoch_walked_back`, at any tip | the records at tip, the Release journal (A20) and the slash log (A21) above `h_open(E)`, undone newest first | the settlement check; increment 3's cache |
+
+The two read nothing from each other. An event in the open block itself
+is applied: derivation 1 runs over that block's post-state, and the walk
+undoes only events strictly above `h_open`. Closed and final at `h_open`
+is one count for both arms, the `final_before` prefix, which reads blocks
+at or below `h_open − reorg_cap`. A Reinstate changes no holdings
+(§16.7), so the walk has two events to undo; a test drives the
+transition's own Reinstate arm and fails if one ever writes holdings.
+
+**The span.** The pass that settles `E` runs in the last block of
+`E + k`; the walk's span is under `WALK_BACK_EPOCHS = 1 + k` epochs, and a
+reorg re-runs it at most a reorg cap below the last pruning tip. Both
+journals are retired at the slash log's floor, `(k + n)` epochs and a cap
+below the pruning tip, so the relation is `1 + k ≤ k + n`, asserted at
+compile time. A walk asked to start below the floor anyway is refused.
+
+**The store** (`shekyl-chain-store`, layout 28):
+
+- `archival_release_journal`, Rust-only, ordinal 44: `(height, persona)`
+  → the record a Release replaced, written insert-once beside the
+  post-image under the Bond family, popped through the journal, retired
+  at the slash log's floor.
+- `archival_drawable_digest` gets its writer: insert-once at every open,
+  genesis's the empty set's; popped through the journal; retired once
+  its epoch's settlement is below the floor.
+- Reads A20 `release_journal_after` and A21 `slash_log_rows_after`, both
+  floored.
+- `SI-28` (the journal read below its floor), `SI-29` (one digest per
+  epoch: rewritten or missing), `SI-30` (the set did not drift, and the
+  walk can be built). The rules' `SettlementCheck::{DrawableDrift,
+  DrawableDigestMissing}` and `Corrupt::DrawableEpoch` map onto them.
+
+**The digest** is `DrawableEpoch::digest` (`SO-D12m`;
+`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 check 2), with four vectors computed
+outside the tree and pinned, and its label registered.
+
+**The check.** At the slash pass that settles `E`, before any row for `E`
+is written and whether or not anything was drawn: the digest is read,
+the walk is run under the pass's floor, and the two are compared. A
+missing digest, a rebuilt digest that differs, and a digest recorded for
+an epoch the view has not opened are three halts; only the second is
+drift. A walk that cannot be built is the same class of halt. None is a
+verdict on the block.
+
+**Tests.** Rules (18, plain data): each undo, the order, the filters, the
+faults, the Reinstate. Store (on the slash-scan harness, `SEB 100 / cap
+50`): the two derivations agree at every height from `h_open(2)` to the
+pass settling epoch 3, across a Release above an open and one in an open
+block; five tampers — a pre-image's holdings, one byte of its key, a
+planted slash, the digest, the digest removed — each halt through the
+fault path; on a compact bond, a slash above the open rebuilds the same
+set, and the same slash with its row naming another shard, which the walk
+can restore, halts as `DrawableDrift`; popping an open removes its digest and its Release row and
+reconnecting writes the same; a walk and both reads below the floor are
+refused; the boundary retires journal rows and settled digests (`SEB 10 /
+cap 5`). A slash above an open is undone on the existing chain that runs
+one epoch past the epoch-`M` slash
+(`the_window_passes_over_an_unobserved_epoch_and_counts_a_served_one`):
+its settlement of `M + 1` checks the walk that undoes those demotions.
+
+**From the review of 2026-10-15, in this increment:** the count cap is
+one derived constant (`COUNT_CAP_BASE_MULTIPLE`, read by the count rule,
+its cap predicate and the section budget), and `DrawableEpoch::new` takes
+`PCanonicalId` and `ReceiptSignPk`, with `DrawablePair` typed as `persona`
+and `shard`. The other two findings — the verifier's `0x0C` read as
+`DrawCommitment`, read from the coinbase, and a typed section budget —
+land with the view's implementation, in increment 4.
+
+**`SO-D12e`'s increment-2 deletion**, the public urn, was already done
+(2026-10-10); this increment corrects the C++ header comment that still
+named `assign_epoch`.
+
+**Not in this increment:** the `D` cache and the count writer (increment
+3); the `0x0C` read and admission (increment 4); `SO-D12h` (its own
+change); the producer; any C++ beyond the comment.

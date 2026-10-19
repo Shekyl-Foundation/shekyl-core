@@ -17,31 +17,42 @@ use super::*;
 
 const EPOCH: SettlementEpoch = SettlementEpoch::from_raw(7);
 
-/// Three personas' receipt keys, generated once: canonical bytes, ordered
-/// as the personas `[0x10; 32]`, `[0x20; 32]`, `[0x30; 32]`.
-fn keys() -> &'static [Vec<u8>; 3] {
-    static KEYS: OnceLock<[Vec<u8>; 3]> = OnceLock::new();
+/// Three personas' receipt keys, generated once, ordered as the personas
+/// [`P1`], [`P2`], [`P3`].
+fn keys() -> &'static [ReceiptSignPk; 3] {
+    static KEYS: OnceLock<[ReceiptSignPk; 3]> = OnceLock::new();
     KEYS.get_or_init(|| {
         [1u8, 2, 3].map(|n| {
             HybridEd25519FnDsa::keypair_from_seeds(&[n; 32], &[n + 100; 32])
                 .expect("keygen")
                 .0
-                .to_canonical_bytes()
+                .to_receipt_sign_pk()
         })
     })
 }
 
-const P1: [u8; 32] = [0x10; 32];
-const P2: [u8; 32] = [0x20; 32];
-const P3: [u8; 32] = [0x30; 32];
+const P1: PCanonicalId = PCanonicalId::from_bytes([0x10; 32]);
+const P2: PCanonicalId = PCanonicalId::from_bytes([0x20; 32]);
+const P3: PCanonicalId = PCanonicalId::from_bytes([0x30; 32]);
 
-fn pair(p_id: [u8; 32], shard_id: u64) -> DrawablePair {
-    DrawablePair { p_id, shard_id }
+fn pair(persona: PCanonicalId, shard: u64) -> DrawablePair {
+    DrawablePair {
+        persona,
+        shard: ShardId::from_raw(shard),
+    }
 }
 
-fn all_keys() -> Vec<([u8; 32], Vec<u8>)> {
+fn all_keys() -> Vec<(PCanonicalId, &'static ReceiptSignPk)> {
     let k = keys();
-    vec![(P1, k[0].clone()), (P2, k[1].clone()), (P3, k[2].clone())]
+    vec![(P1, &k[0]), (P2, &k[1]), (P3, &k[2])]
+}
+
+/// `key` with the byte at `at` replaced by `byte`: a string one edit away
+/// from a key, as `ReceiptSignPk::as_bytes` says a fixture makes one.
+fn edited(key: &ReceiptSignPk, at: usize, byte: u8) -> ReceiptSignPk {
+    let mut bytes = *key.as_bytes();
+    bytes[at] = byte;
+    ReceiptSignPk::from_bytes(bytes)
 }
 
 /// Canonical order is persona id bytes, then shard id numerically — not
@@ -89,7 +100,7 @@ fn pairs_are_held_in_canonical_order() {
 fn a_pairs_receipt_key_is_its_personas() {
     let k = keys();
     // Keys supplied in an order that is not the personas' order.
-    let supplied_keys = vec![(P3, k[2].clone()), (P1, k[0].clone()), (P2, k[1].clone())];
+    let supplied_keys = vec![(P3, &k[2]), (P1, &k[0]), (P2, &k[1])];
     let drawable = DrawableEpoch::new(
         EPOCH,
         supplied_keys,
@@ -107,7 +118,7 @@ fn a_pairs_receipt_key_is_its_personas() {
         let key = drawable
             .receipt_key(index as u64)
             .expect("a pair in D has a key");
-        assert_eq!(&key.to_canonical_bytes(), *expected, "index {index}");
+        assert_eq!(&key.to_receipt_sign_pk(), *expected, "index {index}");
     }
 }
 
@@ -118,51 +129,50 @@ fn a_pairs_receipt_key_is_its_personas() {
 #[test]
 fn a_pair_without_a_receipt_key_fails_construction() {
     let k = keys();
-    let two_keys = vec![(P1, k[0].clone()), (P3, k[2].clone())];
+    let two_keys = vec![(P1, &k[0]), (P3, &k[2])];
     assert_eq!(
         DrawableEpoch::new(EPOCH, two_keys, [pair(P1, 2), pair(P2, 9), pair(P3, 1)]),
         Err(DrawableEpochError::MissingReceiptKey {
-            persona: PCanonicalId::from_bytes(P2),
-            shard_id: 9,
+            persona: P2,
+            shard: ShardId::from_raw(9),
         })
     );
     // No keys at all.
     assert_eq!(
-        DrawableEpoch::new(EPOCH, Vec::<([u8; 32], Vec<u8>)>::new(), [pair(P1, 2)]),
+        DrawableEpoch::new(
+            EPOCH,
+            Vec::<(PCanonicalId, &ReceiptSignPk)>::new(),
+            [pair(P1, 2)]
+        ),
         Err(DrawableEpochError::MissingReceiptKey {
-            persona: PCanonicalId::from_bytes(P1),
-            shard_id: 2,
+            persona: P1,
+            shard: ShardId::from_raw(2),
         })
     );
 }
 
-/// A key that does not parse fails construction: empty, truncated, the
-/// identity scheme's header, and a key with one coefficient out of range.
+/// A key that does not parse fails construction: the identity scheme's
+/// header, and a key with one coefficient out of range. A key of the wrong
+/// length is not among them: [`ReceiptSignPk`] is exactly 1,837 bytes, so
+/// an empty or truncated key is not a value the constructor can be given.
 /// Red edit: store the bytes and parse at use.
 #[test]
 fn a_receipt_key_that_does_not_parse_fails_construction() {
     let k = keys();
-    let malformed = DrawableEpochError::ReceiptKeyMalformed {
-        persona: PCanonicalId::from_bytes(P2),
-    };
-    let build = |bad: Vec<u8>| {
+    let malformed = DrawableEpochError::ReceiptKeyMalformed { persona: P2 };
+    let build = |bad: ReceiptSignPk| {
         DrawableEpoch::new(
             EPOCH,
             vec![(P1, k[0].clone()), (P2, bad)],
             [pair(P1, 2), pair(P2, 9)],
         )
     };
-    assert_eq!(build(Vec::new()), Err(malformed));
-    assert_eq!(build(k[1][..k[1].len() - 1].to_vec()), Err(malformed));
-    let mut wrong_scheme = k[1].clone();
-    wrong_scheme[1] = 1;
-    assert_eq!(build(wrong_scheme), Err(malformed));
+    assert_eq!(build(edited(&k[1], 1, 1)), Err(malformed));
     // The FN-DSA half starts after the 4-byte header, a 4-byte length, the
     // 32-byte Ed25519 key and a second 4-byte length. Sixteen one-bits
     // after its header byte set the first coefficient above q.
-    let mut out_of_range = k[1].clone();
-    out_of_range[8 + 32 + 4 + 1] = 0xFF;
-    out_of_range[8 + 32 + 4 + 2] = 0xFF;
+    let fn_dsa = 8 + 32 + 4;
+    let out_of_range = edited(&edited(&k[1], fn_dsa + 1, 0xFF), fn_dsa + 2, 0xFF);
     assert_eq!(build(out_of_range), Err(malformed));
     // The control: the same call with the key intact builds.
     assert!(build(k[1].clone()).is_ok());
@@ -178,19 +188,17 @@ fn duplicates_are_refused() {
     assert_eq!(
         DrawableEpoch::new(EPOCH, all_keys(), [pair(P1, 2), pair(P2, 9), pair(P1, 2)]),
         Err(DrawableEpochError::DuplicatePair {
-            persona: PCanonicalId::from_bytes(P1),
-            shard_id: 2,
+            persona: P1,
+            shard: ShardId::from_raw(2),
         })
     );
     assert_eq!(
         DrawableEpoch::new(
             EPOCH,
-            vec![(P1, k[0].clone()), (P2, k[1].clone()), (P1, k[2].clone())],
+            vec![(P1, &k[0]), (P2, &k[1]), (P1, &k[2])],
             [pair(P1, 2)],
         ),
-        Err(DrawableEpochError::DuplicateReceiptKey {
-            persona: PCanonicalId::from_bytes(P1),
-        })
+        Err(DrawableEpochError::DuplicateReceiptKey { persona: P1 })
     );
 }
 
@@ -198,9 +206,89 @@ fn duplicates_are_refused() {
 /// for a persona that holds no pair is not kept and is not parsed.
 #[test]
 fn an_epoch_with_no_pairs_is_an_empty_drawable_epoch() {
-    let empty = DrawableEpoch::new(EPOCH, vec![(P1, vec![0u8; 3])], []).expect("no pair to key");
+    let unparsable = ReceiptSignPk::from_bytes([0; shekyl_types::archival::RECEIPT_SIGN_PK_LEN]);
+    let empty = DrawableEpoch::new(EPOCH, vec![(P1, unparsable)], []).expect("no pair to key");
     assert_eq!(empty.len(), 0);
     assert!(empty.is_empty());
     assert_eq!(empty.pair(0), None);
     assert!(empty.receipt_key(0).is_none());
+}
+
+/// The digest vectors (`SO-D12` ruling B), computed independently of this
+/// crate from the specification's encoding (§9.5 check 2) with a
+/// standalone cSHAKE256, then pinned.
+mod digest_vectors {
+    use super::*;
+
+    const E0: SettlementEpoch = SettlementEpoch::from_raw(0);
+    const E5: SettlementEpoch = SettlementEpoch::from_raw(5);
+
+    fn hex(digest: DrawableDigest) -> String {
+        hex::encode(digest.as_bytes())
+    }
+
+    /// Vector 3's value: a complete tree over three shards, expanded to
+    /// its pairs ([`P2`]), and one compact persona ([`P1`]). `p2_key` is
+    /// [`P2`]'s receipt key.
+    fn tree_and_compact(p2_key: &ReceiptSignPk) -> DrawableEpoch {
+        DrawableEpoch::new(
+            E5,
+            vec![(P1, &keys()[0]), (P2, p2_key)],
+            [pair(P2, 0), pair(P2, 1), pair(P2, 2), pair(P1, 5)],
+        )
+        .expect("every pair has a key")
+    }
+
+    /// Vector 1: the empty set at epoch 0, what genesis writes. Red edit:
+    /// any change to the label, the epoch word or the empty lists' counts.
+    #[test]
+    fn the_empty_set_at_epoch_zero() {
+        let empty = DrawableEpoch::new(E0, Vec::<(PCanonicalId, &ReceiptSignPk)>::new(), [])
+            .expect("no pair to key");
+        assert_eq!(
+            hex(empty.digest()),
+            "33aeb943e48f57989ecf85df23e4c2c7fae2aa5fa4ab69ad681e351fcc0bb465"
+        );
+    }
+
+    /// Vector 2: one compact pair. Red edit: the shard's width or byte
+    /// order, or the persona and key hashed in another order.
+    #[test]
+    fn one_compact_pair() {
+        let one = DrawableEpoch::new(E5, vec![(P1, &keys()[0])], [pair(P1, 7)])
+            .expect("the pair has a key");
+        assert_eq!(
+            hex(one.digest()),
+            "cab2fbe4394e517964a13f245b5d333fa18b40d54142a9cc0bd34bfd07cf0383"
+        );
+    }
+
+    /// Vector 3: three pairs of one persona and one of another, supplied
+    /// out of canonical order. Red edit: hash the pairs as supplied, hash a
+    /// key once per pair instead of once per persona, or drop a count.
+    #[test]
+    fn a_complete_tree_over_three_shards_and_one_compact_persona() {
+        assert_eq!(
+            hex(tree_and_compact(&keys()[1]).digest()),
+            "6d7018a6abbf5b8c62c665b3748a3f57dc17e4e799dcf76753f202f5f431bf55"
+        );
+    }
+
+    /// Vector 4: vector 3 with the last byte of one receipt key changed —
+    /// an edit that still parses, so the value is built and only the key
+    /// differs. The pairs are the same, so a digest over the pairs alone
+    /// would give vector 3's. Red edit: leave the persona list out of the
+    /// digest.
+    #[test]
+    fn one_byte_of_one_receipt_key_changes_the_digest() {
+        let key = &keys()[1];
+        let last = shekyl_types::archival::RECEIPT_SIGN_PK_LEN - 1;
+        let changed = edited(key, last, key.as_bytes()[last] ^ 0x01);
+        let digest = hex(tree_and_compact(&changed).digest());
+        assert_eq!(
+            digest,
+            "2691af460e3726d70cfb52c0e1e7783add3ff29b434fe87eb1389f5814f4a56a"
+        );
+        assert_ne!(digest, hex(tree_and_compact(key).digest()));
+    }
 }

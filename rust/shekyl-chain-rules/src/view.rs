@@ -64,8 +64,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, RMarket,
-    ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, LoggedSlash, PassCount,
+    RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -685,9 +685,37 @@ pub trait ChainView<'id>: HeaderView<'id> {
         &self,
         epoch: SettlementEpoch,
     ) -> Result<Option<DrawableDigest>, Self::Fault>;
+
+    /// **A20.** Every Release journaled at a height **strictly above**
+    /// `height`, ascending by height and then persona: each releasing
+    /// persona's record as it stood before its Release. Empty when none.
+    /// The walk that rebuilds an epoch's drawable set from a later tip reads
+    /// it from `h_open(E)` (`SO-D12` increment 2), as it reads A21.
+    ///
+    /// `floor` is the slash log's retirement floor, which the Release
+    /// journal shares: both are retired in the same boundary batch. A read
+    /// whose range starts below it would undo too few Releases and rebuild
+    /// a set that never was, so the store refuses it (SI-28), as A2's
+    /// refusal is SI-26.
+    fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: crate::SlashLogFloor,
+    ) -> Result<Vec<ReleasedRecord>, Self::Fault>;
+
+    /// **A21.** Every slash logged at a height **strictly above** `height`,
+    /// every persona's, in log order, each with the height it was applied
+    /// at. Empty when none. The walk that rebuilds a drawable set undoes
+    /// slashes and Releases newest first, so it needs the heights A2 does
+    /// not give. Refused below `floor` (SI-26), as A2 is.
+    fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: crate::SlashLogFloor,
+    ) -> Result<Vec<LoggedSlash>, Self::Fault>;
 }
 
-/// Implement every archival [`ChainView`] read (A1–A9, A11–A19) as one policy.
+/// Implement every archival [`ChainView`] read (A1–A9, A11–A21) as one policy.
 ///
 /// Three policies, one method list. A new archival read is added here, once;
 /// every view that expands the macro then implements it. A view that answers
@@ -858,6 +886,16 @@ macro_rules! archival_reads {
             (::core::option::Option<shekyl_types::archival::DrawableDigest>);
             (epoch);
             (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; release_journal_after;
+            (height: shekyl_types::BlockHeight, floor: $crate::SlashLogFloor);
+            (::std::vec::Vec<shekyl_types::archival::ReleasedRecord>);
+            (height, floor);
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; slash_log_rows_after;
+            (height: shekyl_types::BlockHeight, floor: $crate::SlashLogFloor);
+            (::std::vec::Vec<shekyl_types::archival::LoggedSlash>);
+            (height, floor);
+            (::std::vec::Vec::new()));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
