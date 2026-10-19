@@ -95,6 +95,19 @@ use crate::scenario_shard::{
     mine_to, EPOCH_BLOCKS,
 };
 use shekyl_harness_spender::{Owner, Recipient, Spender};
+use std::sync::Arc;
+
+use shekyl_chain_rules::AdmissionPolicy;
+use shekyl_chain_store::store::SnapshotView;
+use shekyl_daemon_rpc::submit::{
+    parse_submission, ChainSource, DaemonTxVerifier, EpochClaimStanding, RustPoolShim,
+    SubmitCaller, SubmitEngine, SubmitStateShim, TxVerifier,
+};
+use shekyl_mempool::Pool;
+use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_types::UnixSeconds;
+
+use crate::pool_submit_tests::hex;
 
 /// The fill spends coinbases from here up; the funding spend rides
 /// coinbase 0, below it.
@@ -108,6 +121,10 @@ const CLAIM_TX_KEY: [u8; 32] = [0x5c; 32];
 /// The twin claim's transaction key — a second claim for the same terms,
 /// so G9 has a pair to refuse.
 const TWIN_TX_KEY: [u8; 32] = [0x5d; 32];
+
+/// A third claim's transaction key: the `SO-D12h` chain's claim two epochs
+/// below the window.
+const OLDER_TX_KEY: [u8; 32] = [0x5e; 32];
 
 /// `FAILURE_WINDOW_M`: the misses after which the pass slashes a pair.
 const FAILURE_WINDOW: u64 = 11;
@@ -899,6 +916,24 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
     mine_to(&mut scenario, &mut mined, connecting).await;
     catch_up(&mut spender, &mined, &mut seen);
     let owner = Owner::persona(persona.keys());
+    // The relay floor at the claim's height: the submit engine's fee gate
+    // runs ahead of its verifier, so a claim must pay it to be judged on
+    // its epochs at all.
+    let relay_floor = scenario
+        .read_chain(|view, _| {
+            let next = shekyl_chain_rules::Tip::connecting_height(
+                shekyl_chain_rules::HeaderView::tip(view)
+                    .expect("tip")
+                    .as_ref(),
+            );
+            match shekyl_chain_rules::relay_floor_window(view, next).expect("floors") {
+                shekyl_chain_rules::AtHeight::Recorded(floors) => {
+                    floors.into_iter().min().expect("a window")
+                }
+                shekyl_chain_rules::AtHeight::AboveTip => unreachable!("the connecting height"),
+            }
+        })
+        .await;
     let claim_for = |epoch: SettlementEpoch, tx_key: [u8; 32]| {
         let terms = ClaimTerms {
             holdings: shard_set(vec![0]),
@@ -913,18 +948,30 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
             }],
             reward_amount_plain: vec![share.reward],
         };
-        let backing = spender.owned_input(&owner, backing_key, connecting);
-        let fee_input = spender.owned_input(&owner, fee_key, connecting);
-        let claim = assemble_emission_claim(
-            persona.keys(),
-            &Zeroizing::new(tx_key),
-            vec![fee_input.input],
-            backing.input,
-            terms,
-            FEE,
-            &backing.tree,
-        );
-        Transaction::from_bytes(&claim.bytes).expect("the encoder's bytes parse as a transaction")
+        // Re-priced until the fee covers the floor at the claim's weight.
+        let mut fee = FEE;
+        for _ in 0..8 {
+            let backing = spender.owned_input(&owner, backing_key, connecting);
+            let fee_input = spender.owned_input(&owner, fee_key, connecting);
+            let claim = assemble_emission_claim(
+                persona.keys(),
+                &Zeroizing::new(tx_key),
+                vec![fee_input.input],
+                backing.input,
+                terms.clone(),
+                fee,
+                &backing.tree,
+            );
+            let tx = Transaction::from_bytes(&claim.bytes)
+                .expect("the encoder's bytes parse as a transaction");
+            let weight = u64::try_from(tx.weight()).expect("a weight fits");
+            let needed = shekyl_economics::quantized_fee(weight, relay_floor).expect("priceable");
+            if needed <= fee {
+                return tx;
+            }
+            fee = needed;
+        }
+        panic!("the claim's floor price did not settle")
     };
 
     // One epoch older is expired: refused at CEN-J25's window, before any
@@ -940,6 +987,100 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
         Locus::Tx {
             slot: TxSlot::Listed(0),
         },
+    );
+
+    // The submit path over the Rust pool (CEN-M9's shim) at the same
+    // height. An expired epoch's facts are their own state and are never
+    // read (`EmissionEpochStanding::Expired`), and the verifier refuses the
+    // submission as expired: never E7's missing budget row, and never a
+    // `ShimFault` from a read below the claimable floor. Two epochs below
+    // the oldest claimable one, the rows are already retired. The claim on
+    // the oldest claimable epoch is admitted.
+    let two_below = SettlementEpoch::from_raw(served.to_raw() - 2);
+    let submitted = [
+        claim_for(expired, TWIN_TX_KEY),
+        claim_for(two_below, OLDER_TX_KEY),
+        claim_for(served, CLAIM_TX_KEY),
+    ];
+    let path = crate::test_support::tmp("scenario-emission-frozen-submit-pool");
+    let (reasons, verdicts) = scenario
+        .with_store(|store, rules| {
+            let chain = crate::pool_submit_tests::Store { store, rules };
+            let pool = chain
+                .read(|snapshot, rule_set| {
+                    Pool::open(
+                        &path,
+                        UnixSeconds::from_raw(1),
+                        &SnapshotView::new(snapshot),
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("open")
+                    .0
+                })
+                .expect("a snapshot");
+            let shim = Arc::new(RustPoolShim::new(
+                chain,
+                pool,
+                AdmissionPolicy::GENESIS,
+                || UnixSeconds::from_raw(1),
+            ));
+            let reasons: Vec<String> = submitted[..2]
+                .iter()
+                .map(|tx| {
+                    let parsed = parse_submission(&hex(tx)).expect("the claim parses");
+                    let facts = shim
+                        .snapshot_facts(
+                            &parsed.txid,
+                            &parsed.key_images,
+                            &parsed.reference_block,
+                            parsed.bond_probe(),
+                            parsed.emission_probe().as_ref().map(|(id, e)| (id, *e)),
+                        )
+                        .expect("an expired claim's facts are no shim fault");
+                    let snapshots = &facts.emission.as_ref().expect("the E6/E7 bundle").snapshots;
+                    assert!(
+                        snapshots.iter().all(|s| matches!(
+                            s.standing,
+                            EpochClaimStanding::Expired { window_floor } if window_floor == served.to_raw()
+                        )),
+                        "the expired epoch is its own state, and unread"
+                    );
+                    DaemonTxVerifier
+                        .verify(&parsed, &facts)
+                        .expect_err("an expired claim is refused")
+                        .reason()
+                        .to_owned()
+                })
+                .collect();
+            let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+            let verdicts: Vec<_> = submitted
+                .iter()
+                .map(|tx| engine.submit(&hex(tx), SubmitCaller::Owner))
+                .collect();
+            (reasons, verdicts)
+        })
+        .await;
+    drop(std::fs::remove_file(&path));
+    for reason in &reasons {
+        assert!(
+            reason.contains("below claim window floor"),
+            "refused as expired, not as a missing row: {reason}"
+        );
+    }
+    let mut verdicts = verdicts.into_iter().map(|v| v.expect("no engine fault"));
+    for _ in 0..2 {
+        assert_eq!(
+            verdicts.next(),
+            Some(SubmitVerdict::Rejected {
+                cause: RejectCause::Malformed
+            })
+        );
+    }
+    assert_eq!(
+        verdicts.next(),
+        Some(SubmitVerdict::Accepted),
+        "the oldest claimable epoch is admitted"
     );
 
     let claim_tx = claim_for(served, CLAIM_TX_KEY);

@@ -723,8 +723,8 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// recorded. Every 32-byte value is a digest: an all-zero one is not
     /// an absent one.
     ///
-    /// `floor`: the settling family's ([`EpochFloor`]; SI-32), the floor
-    /// of its ruled reader, the pass's re-walk compare (`SO-D10g`).
+    /// `floor`: the settling family's ([`EpochFloor`]; SI-32), the reach
+    /// of its last reader, the pass's re-walk compare (`SO-D10g`).
     fn drawable_digest(
         &self,
         epoch: SettlementEpoch,

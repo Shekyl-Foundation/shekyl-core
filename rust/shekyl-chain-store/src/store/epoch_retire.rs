@@ -12,7 +12,7 @@
 //! because a generic walker would hide which shape a table has.
 
 use redb::WriteTransaction;
-use shekyl_chain_rules::{Claimable, EpochFloor, Pricing, RuleSet, Settling};
+use shekyl_chain_rules::{Claimable, EpochFloor, Pricing, SettlementSchedule, Settling};
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
 use crate::apply_policy::ArchivalFamily;
@@ -42,6 +42,21 @@ pub struct EpochFloors {
     pub pricing: EpochFloor<Pricing>,
 }
 
+impl EpochFloors {
+    /// Every family's floor for the boundary batch at `boundary` under
+    /// `schedule` ([`EpochFloor::at_boundary`]), computed once per batch:
+    /// the per-epoch retirement and the Release journal's floor
+    /// (`ReleaseJournalFloor::of(settling)`) read the same values.
+    #[must_use]
+    pub fn at_boundary(boundary: BlockHeight, schedule: SettlementSchedule) -> Self {
+        Self {
+            claimable: EpochFloor::at_boundary(boundary, schedule),
+            settling: EpochFloor::at_boundary(boundary, schedule),
+            pricing: EpochFloor::at_boundary(boundary, schedule),
+        }
+    }
+}
+
 impl WriteBatch<'_, '_> {
     /// Delete each per-epoch table's rows below its family's floor at this
     /// boundary (`shekyl_chain_rules::EpochFloor::at_boundary`;
@@ -57,17 +72,7 @@ impl WriteBatch<'_, '_> {
     /// keyed persona-first and `archival_r_market` shard-first, so their
     /// retirement walks the table: a cost linear in the rows each family
     /// keeps (its window of epochs), once an epoch.
-    pub(super) fn retire_epoch_rows(
-        &self,
-        boundary: BlockHeight,
-        in_force: &RuleSet,
-    ) -> Result<EpochFloors, StoreError> {
-        let schedule = in_force.settlement_schedule();
-        let floors = EpochFloors {
-            claimable: EpochFloor::at_boundary(boundary, schedule),
-            settling: EpochFloor::at_boundary(boundary, schedule),
-            pricing: EpochFloor::at_boundary(boundary, schedule),
-        };
+    pub(super) fn retire_epoch_rows(&self, floors: EpochFloors) -> Result<EpochFloors, StoreError> {
         let policy = self.apply_policy();
         let txn = self.txn();
         if let Some(kept) = floors.claimable.kept_from().map(SettlementEpoch::to_raw) {

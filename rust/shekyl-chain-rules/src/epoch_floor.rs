@@ -80,16 +80,25 @@
 
 use core::marker::PhantomData;
 
-use shekyl_archival_retention::{SettlementSchedule, MAX_CLAIM_AGE_W, SLASH_GRACE_EPOCHS};
+use shekyl_archival_retention::{
+    claim_window_floor, SettlementSchedule, MAX_CLAIM_AGE_W, SLASH_GRACE_EPOCHS,
+};
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
 /// A family of per-epoch tables that share a last reader (module docs).
 pub trait EpochFamily: Copy + core::fmt::Debug + Eq {
-    /// Epochs below `B − 1` that the family's rows stay at the boundary of
-    /// `B`.
+    /// How many epochs back from the connecting block's epoch the family's
+    /// last reader reaches.
     const LAG: u64;
-    /// The family as a fault names it.
-    const NAME: &'static str;
+
+    /// The oldest epoch a block in epoch `current` can ask the family for:
+    /// `current − LAG`, zero while the chain is younger. A family whose
+    /// reader states its own window answers with that window's expression,
+    /// so the floor and the reader cannot be two derivations of one fact.
+    #[must_use]
+    fn oldest_read(current: u64) -> u64 {
+        current.saturating_sub(Self::LAG)
+    }
 }
 
 /// The tables a claim reads (module docs): retained for the claim window.
@@ -106,17 +115,21 @@ pub enum Pricing {}
 
 impl EpochFamily for Claimable {
     const LAG: u64 = MAX_CLAIM_AGE_W;
-    const NAME: &'static str = "claimable";
+
+    /// The claim window's own floor ([`claim_window_floor`]): the epoch
+    /// CEN-J25's window, the verify's `EpochClaimExpired` and the failure
+    /// window's walk (which takes this floor) all stop at.
+    fn oldest_read(current: u64) -> u64 {
+        claim_window_floor(current)
+    }
 }
 
 impl EpochFamily for Settling {
     const LAG: u64 = SLASH_GRACE_EPOCHS;
-    const NAME: &'static str = "settling";
 }
 
 impl EpochFamily for Pricing {
     const LAG: u64 = SLASH_GRACE_EPOCHS + 1;
-    const NAME: &'static str = "pricing";
 }
 
 // The compile-time half of "a reorg never needs a retired row": every
@@ -149,43 +162,49 @@ pub struct EpochFloor<F: EpochFamily> {
 }
 
 impl<F: EpochFamily> EpochFloor<F> {
-    /// Nothing retired: the floor of a chain younger than the family's
-    /// horizon, and of a read no retirement has touched.
-    pub const NONE: Self = Self {
+    /// Nothing retired. Private: a production read always carries the
+    /// floor its connecting height names, so no caller can switch SI-32
+    /// off by passing this.
+    const NOTHING: Self = Self {
         kept_from: None,
         _family: PhantomData,
     };
 
+    /// Nothing retired, for a test whose chain is younger than every
+    /// family's horizon. Not built into production code.
+    #[cfg(any(test, feature = "harness"))]
+    pub const NONE: Self = Self::NOTHING;
+
     /// The family's floor for a block connecting at `connecting` under
-    /// `schedule`: `epoch(connecting) − LAG`, the oldest epoch that block
-    /// can ask the family for. A read passes this; the store refuses a
-    /// read below it (SI-32).
+    /// `schedule`: [`EpochFamily::oldest_read`] of its epoch, the oldest
+    /// epoch that block can ask the family for. A read passes this; the
+    /// store refuses a read below it (SI-32).
     #[must_use]
-    pub const fn under(connecting: BlockHeight, schedule: SettlementSchedule) -> Self {
-        Self::below_epoch(schedule.epoch_at_height(connecting.to_raw()))
+    pub fn under(connecting: BlockHeight, schedule: SettlementSchedule) -> Self {
+        Self::reading_from(schedule.epoch_at_height(connecting.to_raw()))
     }
 
     /// The floor the boundary batch at `boundary` retires below: the
     /// floor of the lowest height that can connect after the batch,
-    /// `(B − 1)·SEB + 1`, which is `(B − 1) − LAG` (module docs). `None`
-    /// at a height that is not past the first epoch.
+    /// `(B − 1)·SEB + 1`, in epoch `B − 1` (module docs). Nothing at a
+    /// height that is not past the first epoch.
     #[must_use]
-    pub const fn at_boundary(boundary: BlockHeight, schedule: SettlementSchedule) -> Self {
+    pub fn at_boundary(boundary: BlockHeight, schedule: SettlementSchedule) -> Self {
         match schedule.epoch_at_height(boundary.to_raw()).checked_sub(1) {
-            Some(previous) => Self::below_epoch(previous),
-            None => Self::NONE,
+            Some(previous) => Self::reading_from(previous),
+            None => Self::NOTHING,
         }
     }
 
-    /// `epoch − LAG`, or [`Self::NONE`] while that is not above zero.
-    const fn below_epoch(epoch: u64) -> Self {
-        let kept_from = match epoch.checked_sub(F::LAG) {
-            Some(0) | None => None,
-            Some(e) => Some(SettlementEpoch::from_raw(e)),
-        };
-        Self {
-            kept_from,
-            _family: PhantomData,
+    /// The floor of a block in epoch `current`: nothing retired while the
+    /// oldest epoch it reads is zero.
+    fn reading_from(current: u64) -> Self {
+        match F::oldest_read(current) {
+            0 => Self::NOTHING,
+            e => Self {
+                kept_from: Some(SettlementEpoch::from_raw(e)),
+                _family: PhantomData,
+            },
         }
     }
 
@@ -195,10 +214,17 @@ impl<F: EpochFamily> EpochFloor<F> {
         self.kept_from
     }
 
+    /// The floor `epoch` lies below, if it does: the comparison SI-32
+    /// refuses on, stated once.
+    #[must_use]
+    pub fn below(self, epoch: SettlementEpoch) -> Option<SettlementEpoch> {
+        self.kept_from.filter(|&floor| epoch < floor)
+    }
+
     /// Whether `epoch` is retained under this floor.
     #[must_use]
     pub fn retains(self, epoch: SettlementEpoch) -> bool {
-        self.kept_from.is_none_or(|floor| epoch >= floor)
+        self.below(epoch).is_none()
     }
 }
 
@@ -213,23 +239,30 @@ impl<F: EpochFamily> EpochFloor<F> {
 pub struct ReleaseJournalFloor(Option<BlockHeight>);
 
 impl ReleaseJournalFloor {
-    /// Nothing retired: the settling family still keeps every epoch.
+    /// Nothing retired: the settling family still keeps every epoch. For a
+    /// test whose chain is younger than the horizon; not built into
+    /// production code.
+    #[cfg(any(test, feature = "harness"))]
     pub const NONE: Self = Self(None);
 
     /// The journal floor the settling family's `floor` names under
     /// `schedule`. The walk of the oldest kept epoch reads strictly above
     /// its open, so the first retained height is one above that open. The
     /// row at the open itself is never read.
+    ///
+    /// # Panics
+    ///
+    /// If a kept epoch opens at `u64::MAX`. A kept epoch is below the
+    /// boundary's epoch, so its open is below a recorded height.
     #[must_use]
     pub const fn of(floor: EpochFloor<Settling>, schedule: SettlementSchedule) -> Self {
         let Some(epoch) = floor.kept_from() else {
-            return Self::NONE;
+            return Self(None);
         };
         let open = schedule.open_height(epoch.to_raw());
         match open.checked_add(1) {
             Some(height) => Self(Some(BlockHeight::from_raw(height))),
-            // An open at the last height has no row strictly above it.
-            None => Self(Some(BlockHeight::from_raw(open))),
+            None => panic!("a kept epoch opens below a recorded height"),
         }
     }
 

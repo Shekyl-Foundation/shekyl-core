@@ -27,7 +27,7 @@ use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
 
 use crate::methods::{split_128, RpcFault, RpcRefusal};
 use crate::read_facts::{ChainReadFacts, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed};
-use shekyl_chain_rules::EmissionEpochFacts;
+use shekyl_chain_rules::{EmissionEpochFacts, EmissionEpochStanding};
 
 /// The status `get_coinbase_tx_sum` answers a range outside the chain with
 /// — the C++ handler's string, which clients match on.
@@ -258,55 +258,74 @@ fn usize_wire(n: usize) -> u64 {
 
 /// One window epoch on the wire: its snapshot where the citing gate
 /// admitted it, an empty gather with `has_budget_row = false` where it did
-/// not. `close_block_height` is `0` only for an epoch whose close is past a
+/// not, or where the epoch is already below the claim window (nothing is
+/// read for it; the wire's `false` is "not claimable", which it is not).
+/// `close_block_height` is `0` only for an epoch whose close is past a
 /// `u64`, which no window epoch is.
 fn claim_epoch_row(epoch: EmissionEpochFacts) -> ClaimEpochSnapshot {
     let mut row = ClaimEpochSnapshot {
         settlement_epoch: epoch.settlement_epoch,
         close_block_height: epoch.close_height.map_or(0, BlockHeight::to_raw),
-        sigma_work_milli: epoch.sigma_work_milli.unwrap_or(0),
-        budget_atomic: epoch.budget.unwrap_or(0),
-        has_budget_row: epoch.snapshot.is_some(),
+        sigma_work_milli: 0,
+        budget_atomic: 0,
+        has_budget_row: false,
         bonds: Vec::new(),
         shards: Vec::new(),
         credit_pairs: Vec::new(),
         claimant_bond_idx: u64::MAX,
     };
-    if let Some(snapshot) = epoch.snapshot {
-        row.bonds = snapshot
-            .bonds
-            .into_iter()
-            .map(|bond| ClaimBondRow {
-                join_settlement_epoch: bond.join_settlement_epoch,
-                is_foundation_complete_tree: bond.is_foundation_complete_tree,
-                bad_intervals_flat: bond
-                    .bad_intervals
-                    .iter()
-                    .flat_map(|i| [i.start_epoch, i.end_exclusive])
-                    .collect(),
-            })
-            .collect();
-        row.shards = snapshot
-            .shards
-            .into_iter()
-            .map(|shard| {
-                let wire = shard.close.to_wire();
-                ClaimShardRow {
-                    shard_id: shard.shard_id,
-                    freeze_height: wire.freeze_height,
-                    has_segment: wire.has_segment,
-                }
-            })
-            .collect();
-        row.credit_pairs = snapshot
-            .pairs
-            .into_iter()
-            .map(|pair| ClaimCreditPair {
-                bond_idx: usize_wire(pair.bond_idx),
-                shard_idx: usize_wire(pair.shard_idx),
-            })
-            .collect();
-        row.claimant_bond_idx = snapshot.claimant_bond_idx.map_or(u64::MAX, usize_wire);
+    match epoch.standing {
+        EmissionEpochStanding::Expired { .. } => {}
+        EmissionEpochStanding::Unsettled {
+            sigma_work_milli,
+            budget,
+        } => {
+            row.sigma_work_milli = sigma_work_milli.unwrap_or(0);
+            row.budget_atomic = budget.unwrap_or(0);
+        }
+        EmissionEpochStanding::Settled {
+            sigma_work_milli,
+            budget,
+            snapshot,
+        } => {
+            row.sigma_work_milli = sigma_work_milli;
+            row.budget_atomic = budget;
+            row.has_budget_row = true;
+            row.bonds = snapshot
+                .bonds
+                .into_iter()
+                .map(|bond| ClaimBondRow {
+                    join_settlement_epoch: bond.join_settlement_epoch,
+                    is_foundation_complete_tree: bond.is_foundation_complete_tree,
+                    bad_intervals_flat: bond
+                        .bad_intervals
+                        .iter()
+                        .flat_map(|i| [i.start_epoch, i.end_exclusive])
+                        .collect(),
+                })
+                .collect();
+            row.shards = snapshot
+                .shards
+                .into_iter()
+                .map(|shard| {
+                    let wire = shard.close.to_wire();
+                    ClaimShardRow {
+                        shard_id: shard.shard_id,
+                        freeze_height: wire.freeze_height,
+                        has_segment: wire.has_segment,
+                    }
+                })
+                .collect();
+            row.credit_pairs = snapshot
+                .pairs
+                .into_iter()
+                .map(|pair| ClaimCreditPair {
+                    bond_idx: usize_wire(pair.bond_idx),
+                    shard_idx: usize_wire(pair.shard_idx),
+                })
+                .collect();
+            row.claimant_bond_idx = snapshot.claimant_bond_idx.map_or(u64::MAX, usize_wire);
+        }
     }
     row
 }

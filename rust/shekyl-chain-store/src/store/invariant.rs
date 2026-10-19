@@ -435,8 +435,8 @@ pub enum StoreInvariant {
     /// epoch below it rather than answer "absent": absent is *never
     /// written*, and a row below the floor may have been written and
     /// retired. Every reader asks inside its family by construction — a
-    /// claim's epochs are checked against the claim window before any read
-    /// (CEN-J23) — so a hit is a mis-composed schedule, never data. Fatal,
+    /// claim's epochs are checked against the claim window (CEN-J25's,
+    /// ahead of CEN-J23) before any read — so a hit is a mis-composed schedule, never data. Fatal,
     /// never a verdict on the block.
     EpochReadBelowFloor {
         /// The table the read was of.

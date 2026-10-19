@@ -23,9 +23,9 @@ use crate::ffi;
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::facts::{
     BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
-    EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, KeyImageConflict,
-    ReferenceFacts, ReleaseFacts, ReleaseRecordFacts, ShimFault, SubmitFacts, SubmitStateShim,
-    TxMeta,
+    EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, EpochClaimStanding,
+    KeyImageConflict, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts, ShimFault, SubmitFacts,
+    SubmitStateShim, TxMeta,
 };
 use shekyl_archival_retention::{
     BadInterval, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardClose, ShardCloseWire,
@@ -307,7 +307,11 @@ unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<
             })
             .collect();
         snapshots.push(EmissionEpochSnapshotFacts {
-            has_budget_row: snap.has_budget_row != 0,
+            standing: if snap.has_budget_row != 0 {
+                EpochClaimStanding::BudgetFrozen
+            } else {
+                EpochClaimStanding::NoBudgetRow
+            },
             settlement_epoch: snap.settlement_epoch,
             close_block_height: snap.close_block_height,
             sigma_work_milli: snap.sigma_work_milli,
@@ -319,7 +323,13 @@ unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<
             credit_pairs,
         });
     }
-    Ok(EmissionFacts { bond, snapshots })
+    // The C++ marshal holds no rule set; the process schedule is the one
+    // its store and its claims battery have always run under.
+    Ok(EmissionFacts {
+        bond,
+        snapshots,
+        schedule: shekyl_archival_retention::SettlementSchedule::effective(),
+    })
 }
 
 /// A slice's data pointer, or NULL when the slice is empty. The C++ submit

@@ -74,9 +74,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::{
     emission_vin_verify, emission_vin_verify_auth, emission_vin_verify_backing,
-    emission_vin_verify_claims_under, epoch_is_claim_expired, p_canonical_id_from_hybrid_pubkey,
-    ArchivalRewardEmissionVin, ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext,
-    EpochCloseInputs,
+    emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
+    ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EpochCloseInputs,
 };
 use shekyl_types::archival::CompleteTreeSet;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -293,16 +292,45 @@ pub struct EmissionEpochFacts {
     pub settlement_epoch: u64,
     /// Its close height under the rule set, `None` past a `u64`.
     pub close_height: Option<BlockHeight>,
-    /// The frozen `Σwork(E)` (A7), `None` before the slash pass writes it.
-    pub sigma_work_milli: Option<u64>,
-    /// The frozen budget (A8), `None` before the close freezes it.
-    pub budget: Option<u64>,
-    /// The close snapshot, gathered only for an epoch CEN-J23's citing gate
-    /// admits — its budget, its `Σwork` and its close height all present.
-    /// `None` for an epoch that has not settled: J23 refuses a claim on it
-    /// without a gather, and its slash pass's universe may lie above the
-    /// tip.
-    pub snapshot: Option<EmissionEpochSnapshot>,
+    /// Where the epoch stands for a claim at the connecting height.
+    pub standing: EmissionEpochStanding,
+}
+
+/// Where one claimed epoch stands for a claim connecting at the view's
+/// next height: three states, so "expired" and "not settled" are never
+/// told apart by which fields happen to be absent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EmissionEpochStanding {
+    /// Below the claim window at the connecting height: under the
+    /// claimable [`EpochFloor`], which is the window's own floor
+    /// (`claim_window_floor`, the one CEN-J25's window and the verify's
+    /// `EpochClaimExpired` use). **Nothing was read for it**: its rows may
+    /// be retired, and a read below the floor is SI-32. A claim on it is
+    /// refused as expired.
+    Expired {
+        /// The oldest claimable epoch at the connecting height.
+        window_floor: SettlementEpoch,
+    },
+    /// Inside the window and not settled: CEN-J23's citing gate refuses
+    /// it. Each frozen row it already has — the budget once the close
+    /// froze it, `Σwork` once the slash pass wrote it — and no gather: its
+    /// slash pass may not have run, and its universe may lie above the tip.
+    Unsettled {
+        /// The frozen `Σwork(E)` (A7), if the slash pass wrote it.
+        sigma_work_milli: Option<u64>,
+        /// The frozen budget (A8), if the close froze it.
+        budget: Option<u64>,
+    },
+    /// Settled: CEN-J23's citing gate admits it, with the rows it read and
+    /// the snapshot its gather builds.
+    Settled {
+        /// The frozen `Σwork(E)` (A7).
+        sigma_work_milli: u64,
+        /// The frozen budget (A8).
+        budget: u64,
+        /// What the epoch's slash pass read, with the claimant named.
+        snapshot: EmissionEpochSnapshot,
+    },
 }
 
 /// The snapshot of a settled epoch in an [`EmissionEpochFacts`]: what its
@@ -334,14 +362,15 @@ pub struct EpochCloseBondFacts {
 /// The close facts of every epoch in `epochs` for `persona`'s emission
 /// claim, read off `view` under `rule_set` — CEN-J23's citing gate and
 /// gather ([`CitedEpoch::cite`], [`gather_claimed_epoch`]) for every epoch
-/// the claim window still holds, without J23's refusal: an epoch the gate
-/// does not admit answers with what it has and no snapshot
-/// ([`EmissionEpochFacts::snapshot`]), because the caller presents facts
-/// and the validator judges.
+/// the claim window still holds, without J23's refusal: each epoch
+/// answers with its [`EmissionEpochStanding`], because the caller presents
+/// facts and the validator judges.
 ///
-/// An epoch [`epoch_is_claim_expired`] would refuse is not read. Its rows
-/// may already be retired, and a read below the claimable floor is SI-32.
-/// It answers with the schedule's close height and no frozen facts.
+/// The claim window is checked first, against the claimable [`EpochFloor`]
+/// of the height the view's next block connects at (the window's own
+/// floor, as [`J25`]'s window check). An epoch below it is
+/// [`EmissionEpochStanding::Expired`] and is not read: its rows may already
+/// be retired, and a read below the floor is SI-32.
 ///
 /// # Errors
 ///
@@ -358,10 +387,9 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
     let schedule = rule_set.settlement_schedule();
     let connecting = Tip::connecting_height(view.tip().map_err(ViewRead::View)?.as_ref());
     let floor = EpochFloor::<Claimable>::under(connecting, schedule);
-    let current = schedule.epoch_at_height(connecting.to_raw());
     let mut cited = BTreeMap::new();
     for &raw in epochs {
-        if epoch_is_claim_expired(raw, current) {
+        if floor.below(SettlementEpoch::from_raw(raw)).is_some() {
             continue;
         }
         if let Some(epoch) = CitedEpoch::cite(view, rule_set, floor, raw)? {
@@ -377,31 +405,22 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
     )?;
     let mut out = Vec::with_capacity(epochs.len());
     for &raw in epochs {
-        let close_height = schedule.close_height(raw).map(BlockHeight::from_raw);
-        if epoch_is_claim_expired(raw, current) {
-            out.push(EmissionEpochFacts {
-                settlement_epoch: raw,
-                close_height,
-                sigma_work_milli: None,
-                budget: None,
-                snapshot: None,
-            });
-            continue;
-        }
-        let epoch = SettlementEpoch::from_raw(raw);
-        let snapshot = match cited.get(&raw) {
-            None => None,
-            Some(cited) => {
-                let snapshot = gather_claimed_epoch(
-                    view,
-                    rule_set,
-                    &records,
-                    persona,
-                    &credits,
-                    cited.epoch,
-                    &cited.complete_trees,
-                )?;
-                Some(EmissionEpochSnapshot {
+        let standing = if let Some(window_floor) = floor.below(SettlementEpoch::from_raw(raw)) {
+            EmissionEpochStanding::Expired { window_floor }
+        } else if let Some(cited) = cited.get(&raw) {
+            let snapshot = gather_claimed_epoch(
+                view,
+                rule_set,
+                &records,
+                persona,
+                &credits,
+                cited.epoch,
+                &cited.complete_trees,
+            )?;
+            EmissionEpochStanding::Settled {
+                sigma_work_milli: cited.sigma_work_milli,
+                budget: cited.budget,
+                snapshot: EmissionEpochSnapshot {
                     bonds: snapshot
                         .bonds
                         .iter()
@@ -414,21 +433,25 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
                     shards: snapshot.shards,
                     pairs: snapshot.pairs,
                     claimant_bond_idx: snapshot.claimant_bond_idx,
-                })
+                },
+            }
+        } else {
+            let epoch = SettlementEpoch::from_raw(raw);
+            EmissionEpochStanding::Unsettled {
+                sigma_work_milli: view
+                    .sigma_work(epoch, floor)
+                    .map_err(ViewRead::View)?
+                    .map(shekyl_types::archival::SigmaWorkMilli::to_raw),
+                budget: view
+                    .budget(epoch, floor)
+                    .map_err(ViewRead::View)?
+                    .map(shekyl_units::AtomicUnits::to_raw),
             }
         };
         out.push(EmissionEpochFacts {
             settlement_epoch: raw,
-            close_height,
-            sigma_work_milli: view
-                .sigma_work(epoch, floor)
-                .map_err(ViewRead::View)?
-                .map(shekyl_types::archival::SigmaWorkMilli::to_raw),
-            budget: view
-                .budget(epoch, floor)
-                .map_err(ViewRead::View)?
-                .map(shekyl_units::AtomicUnits::to_raw),
-            snapshot,
+            close_height: schedule.close_height(raw).map(BlockHeight::from_raw),
+            standing,
         });
     }
     Ok(out)
@@ -462,9 +485,10 @@ impl Rule for J25 {
 
 impl J25 {
     /// The claim window, before anything is read: every cited epoch is at
-    /// or above `claim_window_floor` of the connecting height's epoch, by
-    /// the retention crate's own predicate ([`epoch_is_claim_expired`], the
-    /// one the verify's step 1 refuses `EpochClaimExpired` with). Run ahead
+    /// or above the claimable [`EpochFloor`] of the connecting height,
+    /// which is `claim_window_floor` of its epoch — the floor the verify's
+    /// step 1 refuses `EpochClaimExpired` below, and the floor J23's reads
+    /// then carry, one value for both. Run ahead
     /// of CEN-J23 because J23 reads the cited epochs' rows, and the rows of
     /// an expired epoch may be retired (`ARCHIVAL_SETTLEMENT_WRITER.md`
     /// §17): the store refuses a read below the claimable floor as a fault
@@ -477,13 +501,11 @@ impl J25 {
         vin: &ArchivalRewardEmissionVin,
         connecting: BlockHeight,
     ) -> Verdict<()> {
-        let current = rule_set
-            .settlement_schedule()
-            .epoch_at_height(connecting.to_raw());
+        let floor = EpochFloor::<Claimable>::under(connecting, rule_set.settlement_schedule());
         if vin
             .settlement_epochs
             .iter()
-            .any(|&epoch| epoch_is_claim_expired(epoch, current))
+            .any(|&epoch| floor.below(SettlementEpoch::from_raw(epoch)).is_some())
         {
             return Err(InvalidBlock::new(Self::ROW, cx.locus()));
         }
@@ -493,6 +515,10 @@ impl J25 {
     /// The verify over the gathered epochs. `Ok(Err)` is this row's
     /// refusal, or J24's where the commit set is not well-defined; `Err`
     /// is the view's fault from the record read.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the claim, its context, and the connecting height the window was checked at"
+    )]
     fn verify<'id, V: ChainView<'id>>(
         cx: &TxContext<'_>,
         view: &V,
@@ -501,6 +527,7 @@ impl J25 {
         persona: &PCanonicalId,
         reference: &ReferenceContext,
         gathered: &[GatheredEpoch<'_>],
+        connecting: BlockHeight,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
         let schedule = rule_set.settlement_schedule();
@@ -554,9 +581,9 @@ impl J25 {
             return Ok(refuse());
         };
 
-        // The connecting height, as the C++ passes `chain_height`: one
-        // above the tip the block is judged against.
-        let connecting = Tip::connecting_height(view.tip().map_err(ViewRead::View)?.as_ref());
+        // `connecting` is the height the C++ passes as `chain_height`: one
+        // above the tip the block is judged against, the same height the
+        // window was checked at.
         let ctx = EmissionVerifyContext {
             current_block_height: connecting.to_raw(),
             bond,
@@ -650,7 +677,9 @@ pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
         let Some(reference) = reference else {
             return Ok(Err(InvalidBlock::new(J25::ROW, cx.locus())));
         };
-        match J25::verify(cx, view, rule_set, &vin, &persona, reference, &gathered)? {
+        match J25::verify(
+            cx, view, rule_set, &vin, &persona, reference, &gathered, connecting,
+        )? {
             Ok(()) => {}
             Err(refused) => return Ok(Err(refused)),
         }

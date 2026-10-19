@@ -33,7 +33,9 @@
 //! stops, and the retention horizon ruled 2026-10-09 live with the
 //! arithmetic in `shekyl-archival-retention::failure_window`. This pass
 //! supplies the standing predicate ([`good_through`]) and the settlement-row
-//! read, and the floor ([`settlement_retention_floor`]) the gather stops at.
+//! read, and the floor the gather stops at: the claimable family's
+//! [`EpochFloor`](crate::EpochFloor), equal to the retention crate's
+//! `settlement_retention_floor`.
 //!
 //! # The stale snapshot
 //!
@@ -48,8 +50,8 @@ use shekyl_archival_retention::settlement_select::{
     issued_draw_term, settle_pair, SETTLEMENT_BEACON_LEN,
 };
 use shekyl_archival_retention::{
-    good_through, holds_shard_at, settlement_retention_floor, settlement_window_slashable,
-    slash_open_interval_to_append, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_BOND_BAD_INTERVALS,
+    good_through, holds_shard_at, settlement_window_slashable, slash_open_interval_to_append,
+    ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_BOND_BAD_INTERVALS,
 };
 use shekyl_types::archival::{
     BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
@@ -61,6 +63,7 @@ use shekyl_units::AtomicUnits;
 use crate::fault::{Corrupt, RecordInvariant, SettlementCheck, ViewRead};
 use crate::rules::recorded;
 use crate::view::ChainView;
+use crate::Claimable;
 
 use super::close::settled_for;
 use super::{emptied, Slash};
@@ -503,7 +506,14 @@ impl super::Transition {
         shard: ShardId,
         epoch: SettlementEpoch,
     ) -> Result<bool, ViewRead<V::Fault>> {
-        let floor = settlement_retention_floor(self.schedule, self.connecting);
+        // The walk stops at the claimable floor its own row reads take
+        // (`EpochFloor`), one value for both. It equals the retention
+        // crate's `settlement_retention_floor`, the ruled bound, which
+        // `epoch_floor_tests` holds to it at every height.
+        let floor = self
+            .floor::<Claimable>()
+            .kept_from()
+            .unwrap_or(SettlementEpoch::from_raw(0));
         settlement_window_slashable(
             epoch,
             floor,

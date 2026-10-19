@@ -137,7 +137,7 @@
 use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
-use shekyl_chain_rules::{EpochFloor, ReleaseJournalFloor, RuleSet, Settling, SlashLogFloor};
+use shekyl_chain_rules::{ReleaseJournalFloor, RuleSet, SlashLogFloor};
 use shekyl_types::{
     shard_floor, shard_of, storage_ids_through, ArchivalLength, BlockCount, BlockHeight,
 };
@@ -405,9 +405,9 @@ impl WriteBatch<'_, '_> {
         // keeps. That height is inside the slash log's floor, so the
         // journal does not share it. Drawable digests retire with the
         // same family, by epoch, inside `retire_epoch_rows`.
-        let settling = EpochFloor::<Settling>::at_boundary(height, schedule);
-        self.retire_release_rows(ReleaseJournalFloor::of(settling, schedule))?;
-        let epochs = self.retire_epoch_rows(height, in_force)?;
+        let floors = EpochFloors::at_boundary(height, schedule);
+        self.retire_release_rows(ReleaseJournalFloor::of(floors.settling, schedule))?;
+        let epochs = self.retire_epoch_rows(floors)?;
         Ok(Some(Pruned {
             shard_start: discard.shards.start,
             shard_end: discard.shards.end,

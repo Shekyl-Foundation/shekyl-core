@@ -105,13 +105,13 @@ fn every_height_that_can_follow_a_batch_reads_at_or_above_what_it_retired() {
                 EpochFloor::<F>::under(lowest, schedule),
                 retired,
                 "{}: the lowest re-connectable height of {b}",
-                F::NAME
+                core::any::type_name::<F>()
             );
             for h in (lowest.to_raw()..EPOCHS * SEB).map(BlockHeight::from_raw) {
                 assert!(
                     kept(EpochFloor::<F>::under(h, schedule)) >= kept(retired),
                     "{}: {h:?} after the batch of {b}",
-                    F::NAME
+                    core::any::type_name::<F>()
                 );
             }
         }

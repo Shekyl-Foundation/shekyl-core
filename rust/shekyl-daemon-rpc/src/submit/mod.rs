@@ -50,9 +50,9 @@ pub use certificate::VerificationCertificate;
 pub use engine::{EngineFault, SubmitCaller, SubmitEngine};
 pub use facts::{
     BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
-    EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, KeyImageConflict,
-    LastServedScanMismatch, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts, ShimFault,
-    SubmitFacts, SubmitStateShim, TxMeta,
+    EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, EpochClaimStanding,
+    KeyImageConflict, LastServedScanMismatch, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts,
+    ShimFault, SubmitFacts, SubmitStateShim, TxMeta,
 };
 pub use ffi_shim::FfiSubmitShim;
 pub use gate::phase_c_semaphore;

@@ -186,15 +186,13 @@ fn kept<F: EpochFamily>(
     epoch: SettlementEpoch,
     floor: EpochFloor<F>,
 ) -> Result<(), ReadFault> {
-    match floor.kept_from() {
-        Some(kept_from) if epoch < kept_from => {
-            Err(ReadFault::Invariant(StoreInvariant::EpochReadBelowFloor {
-                table,
-                asked: epoch,
-                floor: kept_from,
-            }))
-        }
-        _ => Ok(()),
+    match floor.below(epoch) {
+        Some(kept_from) => Err(ReadFault::Invariant(StoreInvariant::EpochReadBelowFloor {
+            table,
+            asked: epoch,
+            floor: kept_from,
+        })),
+        None => Ok(()),
     }
 }
 /// The `archival_attestation_witness` cell as faults name it.
