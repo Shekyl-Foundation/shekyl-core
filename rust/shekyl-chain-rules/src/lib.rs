@@ -125,6 +125,7 @@
 mod alt;
 mod anchors;
 mod archival;
+mod archival_reads;
 mod block;
 mod census;
 mod coverage;
