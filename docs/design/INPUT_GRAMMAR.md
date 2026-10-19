@@ -944,7 +944,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | syncing | daemon | the node is syncing |
 | degraded | daemon | following, degraded |
 | peered | daemon | at least one handshaken session (`has_peers`) |
-| protocol | daemon | the P2P protocol's version |
+| protocol | daemon | the P2P protocol; with `version`, its version |
 | emission | coinbase, daemon, sum, template | coins emitted |
 | burn | daemon | the share the next coinbase burns (micro) and, with `total`, what has burned |
 | tagged | version, daemon | a tagged release build |
@@ -1033,7 +1033,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | alt | daemon | §11's `alt` gains `daemon`: the alternative blocks |
 | relay | — | §3's `relay` is also a subject: transaction relay, whose statistics `relay stats` reads |
 | endpoint | connection, peer, span | §11's `endpoint`: the peer's |
-| version | header, daemon, protocol, template | the block format's version (bare, §3's `version` is the binary's) |
+| version | header, daemon, protocol, template | the version of what its parent names: under `header` and `template`, the block format's; under `protocol`, the P2P protocol's; under `daemon`, the RPC contract's, the field RW-Q6 freezes. Bare, §3's `version` is the binary's, so none of these is a reference to it |
 | blocks | span | a length in blocks |
 | body | block, template, tx | a block's or transaction's serialized bytes, kind `bytes` |
 | complete | bond | the whole corpus |
