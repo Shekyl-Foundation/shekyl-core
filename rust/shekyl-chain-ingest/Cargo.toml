@@ -18,10 +18,12 @@ license.workspace = true
 # validator never names the store (G1); the pipeline names all three and
 # wires them.
 #
-# Features keep the harvest FFI lean: `shekyl-ffi` depends with
-# `default-features = false` and compiles the trace writer only. The
-# pipeline (kameo/tokio), the corpus fetcher (RPC), and the replay CLI
-# (clap / HTTP / settlement epoch) are optional. Default enables all three
+# Features keep the FFI lean: `shekyl-ffi` depends with
+# `default-features = false, features = ["pipeline"]` — the trace writer
+# and the ingest service its one arrival entry offers into, not the corpus
+# fetcher (RPC) or the replay CLI (clap / HTTP / settlement epoch). The
+# pipeline (kameo/tokio and the service's pool, miner and hasher-budget
+# edges), the fetcher and the CLI are optional. Default enables all three
 # so `cargo test -p shekyl-chain-ingest` is the full crate.
 [features]
 default = ["pipeline", "fetch", "replay-cli"]
