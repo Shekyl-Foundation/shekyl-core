@@ -6,16 +6,18 @@
 //! The principal → active-`P` funding leg (`stake_in`), `PRINCIPAL_STAKE_LIFECYCLE.md`
 //! §2 / PR-P2 — the first unblocked cut of the principal orchestrator surface.
 //!
-//! `stake_in` is an **ordinary FCMP++ transfer** principal → `P`'s public
-//! receive address, byte-indistinguishable from any other transfer (DQ1, the
-//! frozen Q11 genesis wire: no `C_stake`, band, range proof, or minimum). It
+//! `stake_in` is an **ordinary FCMP++ transfer** principal → `P`'s payment
+//! keys, byte-indistinguishable from any other transfer (DQ1, the frozen Q11
+//! genesis wire: no `C_stake`, band, range proof, or minimum). It
 //! **composes** the built [`build_pending_tx_async`](super::Engine::build_pending_tx_async)
 //! path and touches **no `P` secret** — `P` is only a public recipient, its
-//! receive address projected public-only out of `StakeEngine` (rule 36).
+//! spend, view and ML-KEM keys handed public-only out of `StakeEngine`
+//! (rule 36). A persona has no address: the keys go to the transfer path as
+//! a [`TxDestination::OwnPersona`] and are never encoded or parsed.
 //!
-//! The leg's worth is the **GF-2 boundary** it proves: an output addressed the
-//! way `stake_in` addresses `P` is recovered by `P`'s own dual-scan (the
-//! `#[cfg(test)]` end-test below).
+//! The leg's worth is the **GF-2 boundary** it proves: an output paid the
+//! way `stake_in` pays `P` is recovered by `P`'s own dual-scan (the actor's
+//! payment-destination test and the regtest end-to-end funding).
 //!
 //! **Amount-axis cover is applied here** (`ARCHIVAL_COVER_DRAW.md`): the
 //! transfer carries `stake + cover` with `cover ~ U(0, bond_floor)`, so the
@@ -27,7 +29,6 @@
 //! because this is the transaction whose amount is observed.
 
 use rand_core::RngCore as _;
-use shekyl_address::AddressError;
 use shekyl_standoff::{draw_cover_amount, COVER_RUNG_ATOMIC};
 use shekyl_units::AtomicUnits;
 
@@ -67,13 +68,11 @@ pub enum StakeInError {
     /// No persona is currently active — mint + activate one before funding it.
     #[error("no active persona to fund")]
     NoActivePersona,
-    /// The stake engine could not project the active persona's receive address
-    /// (the crate-private actor error's own user-facing rendering).
+    /// The stake engine could not hand over the active persona's payment
+    /// destination (the crate-private actor error's own user-facing
+    /// rendering).
     #[error("stake engine: {0}")]
     StakeEngine(String),
-    /// Encoding `P`'s receive address failed.
-    #[error("encoding P's receive address: {0}")]
-    Address(#[source] AddressError),
     /// The underlying transfer build failed (funding, fee, reservation, …).
     #[error(transparent)]
     Send(#[from] SendError),
@@ -109,12 +108,12 @@ where
 {
     /// Fund the wallet's currently-active archival persona `P` (PR-P2).
     ///
-    /// An **ordinary FCMP++ transfer** principal → `P`'s public receive address
-    /// (DQ1). Exactly one recipient, so the transfer yields **one** `P`-output
-    /// (plus the principal's own change) — the later bond-post sweep then
-    /// consumes a single input, keeping the P-public bond post's input-count
-    /// from signalling funding-tranche count (GF-4b). `P` is a public recipient;
-    /// no `P` secret is touched (rule 36 — the address is projected public-only
+    /// An **ordinary FCMP++ transfer** principal → `P`'s payment keys (DQ1).
+    /// Exactly one recipient, so the transfer yields **one** `P`-output (plus
+    /// the principal's own change) — the later bond-post sweep then consumes a
+    /// single input, keeping the P-public bond post's input-count from
+    /// signalling funding-tranche count (GF-4b). `P` is a public recipient; no
+    /// `P` secret is touched (rule 36 — the keys are handed over public-only
     /// from `StakeEngine`).
     ///
     /// The transfer carries **`amount + cover`**, never `amount` verbatim: the
@@ -137,12 +136,13 @@ where
     ///
     /// # Errors
     ///
-    /// [`StakeInError`]: not staking, no active persona, address encode, or the
-    /// underlying transfer build ([`SendError`] — insufficient funds, etc.).
+    /// [`StakeInError`]: not staking, no active persona, the actor's handover,
+    /// or the underlying transfer build ([`SendError`] — insufficient funds,
+    /// etc.).
     ///
     /// `&self` (W-B step 1 parity with
     /// [`build_pending_tx_async`](super::Engine::build_pending_tx_async), which
-    /// is the entire body after the address resolution): the slow FCMP++
+    /// is the entire body after the destination resolution): the slow FCMP++
     /// assembly is serialized by the pending-tx implementor's own permit, so an
     /// embedder holds a shared borrow across the build and concurrent read RPCs
     /// proceed. The PR-P2 frozen contract is the `stake_in(amount) ->
@@ -159,8 +159,8 @@ where
 
     /// Resolve the active persona into the single-recipient [`TxRequest`]
     /// [`stake_in`](Self::stake_in) builds — the leg's **novel** logic (the
-    /// recipient is `P`'s address; everything downstream is the shared transfer
-    /// path). Split out so the GF-2 boundary test can exercise the address
+    /// recipient is `P`'s payment destination; everything downstream is the
+    /// shared transfer path). Split out so a test can exercise the destination
     /// resolution without an on-chain build (which is daemon-gated).
     async fn stake_in_request(&self, amount: AtomicUnits) -> Result<TxRequest, StakeInError> {
         let stake = self.stake_handle().ok_or(StakeInError::NotStaking)?;
@@ -215,19 +215,18 @@ where
                 stake: amount.to_raw(),
                 cover: cover.to_raw(),
             })?;
-        // The actor projects P's address (public-only `ShekylAddress`, built
-        // in-actor from the live bundle — never re-derived, no P secret crosses;
-        // rule 36). The principal's own network is the address's network.
-        let address = stake
-            .active_persona_receive_address(self.network)
+        // The actor hands over P's payment keys (public only, taken in-actor
+        // from the live bundle — never re-derived, no P secret crosses; rule
+        // 36). A persona has no address: the keys go to the transfer path as
+        // they are, and nothing encodes or parses them.
+        let destination = stake
+            .active_persona_payment_destination()
             .await
             .map_err(|e| StakeInError::StakeEngine(e.to_string()))?
-            .ok_or(StakeInError::NoActivePersona)?
-            .encode()
-            .map_err(StakeInError::Address)?;
+            .ok_or(StakeInError::NoActivePersona)?;
         Ok(TxRequest {
             recipients: vec![TxRecipient {
-                destination: TxDestination::Address(address),
+                destination: TxDestination::OwnPersona(destination),
                 amount_atomic_units: funded,
                 rid: None,
             }],
@@ -272,8 +271,9 @@ mod tests {
     }
 
     /// Happy path: with a persona active, `stake_in` builds a **single-recipient**
-    /// request (GF-4b single-output funding) to exactly the address the actor
-    /// projects for that persona — the recipient side of the leg, funding aside.
+    /// request (GF-4b single-output funding) to exactly the payment destination
+    /// the actor hands over for that persona — the recipient side of the leg,
+    /// funding aside.
     #[tokio::test(flavor = "multi_thread")]
     async fn stake_in_request_is_a_single_output_to_the_active_persona() {
         let (_tmp, engine) = staker_engine(3, SEED_MULT);
@@ -300,19 +300,17 @@ mod tests {
             "funded {funded:?} reached stake + a full rung — cover must be sub-rung"
         );
 
-        let projected = engine
+        let handed_over = engine
             .stake_handle()
             .expect("staker")
-            .active_persona_receive_address(engine.network())
+            .active_persona_payment_destination()
             .await
             .expect("accessor")
-            .expect("active persona")
-            .encode()
-            .expect("encode");
+            .expect("active persona");
         assert_eq!(
             request.recipients[0].destination,
-            TxDestination::Address(projected),
-            "the recipient is the active persona's projected address"
+            TxDestination::OwnPersona(handed_over),
+            "the recipient is the active persona's payment destination, not an address"
         );
     }
 }

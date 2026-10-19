@@ -2002,7 +2002,6 @@ impl From<StakeInError> for WalletRpcError {
             // is engine-derived), funds, fee, and their internal residue.
             StakeInError::Send(e) => e.into(),
             StakeInError::StakeEngine(detail) => internal_detail("stake engine", detail),
-            StakeInError::Address(e) => internal_detail("staking address encoding", e),
             StakeInError::RngSourceFailed(e) => {
                 internal_detail("entropy source unavailable for the cover draw", e)
             }
