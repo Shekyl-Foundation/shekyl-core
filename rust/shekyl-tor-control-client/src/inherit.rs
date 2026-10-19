@@ -192,12 +192,14 @@ mod tests {
         }
     }
 
-    /// Whether a child spawned with `install` still holds `fd`. The shell's
-    /// `true <&N` fails, without ending the shell, when `N` is not open.
+    /// Whether a child spawned with `install` still holds `fd`. `/dev/fd/N`
+    /// is the child's own table; a redirection (`<&N`) would not do, because
+    /// dash takes only one-digit descriptor numbers there, and a test
+    /// process can hold ten.
     fn child_holds(fd: libc::c_int, install: impl FnOnce(&mut std::process::Command)) -> bool {
         let mut cmd = std::process::Command::new("/bin/sh");
         cmd.arg("-c")
-            .arg(format!("true <&{fd}"))
+            .arg(format!("test -e /dev/fd/{fd}"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());

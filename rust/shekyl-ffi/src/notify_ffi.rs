@@ -472,7 +472,9 @@ mod tests {
     #[test]
     fn the_command_does_not_inherit_a_descriptor_c_plus_plus_left_open() {
         let planted = Planted::open();
-        let status = run_now(&["/bin/sh", "-c", &format!("true <&{}", planted.0)]);
+        // `/dev/fd/N`, not `<&N`: dash takes only one-digit descriptor
+        // numbers in a redirection, and a test process can hold ten.
+        let status = run_now(&["/bin/sh", "-c", &format!("test -e /dev/fd/{}", planted.0)]);
         assert!(
             !status.success(),
             "the planted descriptor reached the command"
