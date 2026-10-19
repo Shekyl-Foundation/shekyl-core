@@ -337,9 +337,9 @@ pub struct ChainFacts {
 /// identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainTip {
-    /// Blocks recorded: the tip's height plus one, as the handshake's
-    /// `current_height` reports it.
-    pub height: u64,
+    /// Blocks recorded: the tip's height plus one, the count the
+    /// handshake's `current_height` reports.
+    pub count: shekyl_types::ChainCount,
     /// The tip's cumulative difficulty.
     pub cumulative_difficulty: shekyl_difficulty::CumulativeDifficulty,
     /// The tip's identity.
@@ -376,7 +376,8 @@ fn chain_tip(store: &ChainStore) -> Result<Option<ChainTip>, StoreError> {
         unreachable!("the recorded tip has its row");
     };
     Ok(Some(ChainTip {
-        height: tip.height.to_raw() + 1,
+        count: shekyl_types::ChainCount::with_tip(tip.height)
+            .expect("a recorded tip has a successor count"),
         cumulative_difficulty: info.cumulative_difficulty,
         top_id: tip.hash,
     }))

@@ -567,7 +567,10 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
     let started = Instant::now();
     loop {
         let tip = *tips.borrow_and_update();
-        if tip.tip.is_some_and(|t| t.height >= 2) {
+        if tip
+            .tip
+            .is_some_and(|t| t.count.tip() >= Some(shekyl_types::BlockHeight::from_raw(1)))
+        {
             break;
         }
         assert!(

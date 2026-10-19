@@ -743,7 +743,7 @@ async fn tip_changed_is_published_once_per_commit_and_never_before_it() {
             let snap = store.begin_read().expect("read");
             assert_eq!(
                 snap.height_of(&tip.top_id).expect("height"),
-                Some(BlockHeight::from_raw(tip.height - 1)),
+                tip.count.tip(),
                 "publication {} is ahead of the store",
                 published.seq
             );
