@@ -2611,7 +2611,16 @@ async fn submit_tier_b_spend(
 ) {
     use shekyl_units::AtomicUnits;
     let amount = AtomicUnits::from_raw(unlocked_balance(arc).await.to_raw() / 4);
-    transfer_to(daemon, arc, address, recipient, amount, batch, max_batches).await;
+    transfer_to(
+        daemon,
+        arc,
+        address,
+        super::pending::TxDestination::Address(recipient.to_string()),
+        amount,
+        batch,
+        max_batches,
+    )
+    .await;
 }
 
 /// Build (retrying past the C2 reference-spendability gate) + submit a transfer
@@ -2620,7 +2629,7 @@ async fn transfer_to(
     daemon: &RegtestDaemon,
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     address: &str,
-    recipient: &str,
+    recipient: super::pending::TxDestination,
     amount: shekyl_units::AtomicUnits,
     batch: u64,
     max_batches: usize,
@@ -2636,15 +2645,15 @@ async fn submit_transfer(
     daemon: &RegtestDaemon,
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     address: &str,
-    recipient: &str,
+    recipient: super::pending::TxDestination,
     amount: shekyl_units::AtomicUnits,
     batch: u64,
     max_batches: usize,
 ) -> TxHash {
-    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxRecipient, TxRequest};
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            destination: TxDestination::Address(recipient.to_string()),
+            destination: recipient,
             amount_atomic_units: amount,
             rid: None,
         }],
@@ -2669,14 +2678,61 @@ async fn submit_transfer(
         }
     }
     let pending = pending.expect("transfer must build once reference-spendable");
+    submit_built(arc, &pending, "the transfer").await
+}
+
+/// Fund the active persona with `amount` through the production
+/// `stake_in` (the wallet-RPC and GUI entry: `Engine::stake`), retrying
+/// past the C2 reference-spendability gate, then submit it and mine one
+/// confirming block. The transfer carries `amount` plus the system cover
+/// draw, so callers size by `amount` and never assert the exact funded
+/// figure.
+async fn stake_in_and_confirm(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+    amount: shekyl_units::AtomicUnits,
+    batch: u64,
+    max_batches: usize,
+) {
+    use super::principal_stake::StakeInError;
+    let mut pending = None;
+    for _ in 0..max_batches {
+        let attempt = {
+            let g = arc.read().await;
+            g.stake().stake_in(amount).await
+        };
+        match attempt {
+            Ok(p) => {
+                pending = Some(p);
+                break;
+            }
+            Err(StakeInError::Send(super::error::SendError::OutputNotYetSpendable { .. })) => {
+                daemon.generate_blocks(batch, address).await;
+                refresh(arc).await;
+            }
+            Err(e) => panic!("stake_in: {e:?}"),
+        }
+    }
+    let pending = pending.expect("stake_in must build once reference-spendable");
+    submit_built(arc, &pending, "the stake_in funding").await;
+    daemon.generate_blocks(1, address).await;
+}
+
+/// Submit a built pending transaction and require the daemon's fresh accept.
+async fn submit_built(
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    pending: &super::pending::PendingTx,
+    what: &str,
+) -> TxHash {
     let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
-            .expect("daemon must accept the transfer (consensus verify)")
+            .unwrap_or_else(|e| panic!("daemon must accept {what} (consensus verify): {e:?}"))
     };
-    let tx_hash = require_fresh_accept(outcome, "the transfer");
-    eprintln!("daemon accepted transfer: {tx_hash}");
+    let tx_hash = require_fresh_accept(outcome, what);
+    eprintln!("daemon accepted {what}: {tx_hash}");
     tx_hash
 }
 
@@ -2754,22 +2810,20 @@ pub(super) async fn staker_wallet(
     (Arc::new(RwLock::new(engine)), tmp, address)
 }
 
-/// The persona's on-chain receive address, derived in-test from the same
-/// master seed the wallet holds. The production wallet derives the identical
-/// bundle at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`);
-/// the harness re-derives only the PUBLIC halves so the principal can fund the
-/// persona over an ordinary wallet-built transfer.
-pub(super) fn persona_address(
+/// The persona's payment destination, derived in-test from the same master
+/// seed the wallet holds. The production wallet derives the identical bundle
+/// at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`); the
+/// harness takes only its public keys, for the one walk that pays a persona
+/// outside `stake_in` (the emission claim's post-bond fee input).
+pub(super) fn persona_destination(
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
     slot: u32,
-) -> String {
+) -> super::pending::TxDestination {
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
         .expect("derive persona keys");
-    keys.to_address(shekyl_address::Network::Mainnet)
-        .encode()
-        .expect("encode persona address")
+    super::pending::TxDestination::OwnPersona(keys.payment_destination())
 }
 
 /// Run the production P-scan (tight cadence + the shallow
@@ -3132,8 +3186,8 @@ async fn stake_persona_and_submit_bond(
     eprintln!("bond fee from daemon estimate: {bond_fee}");
 
     // Fund the principal past the persona's needs (2×: the transfer's own fee
-    // + selection churn), then fund the persona with one ordinary transfer.
-    // The floor follows the entry's holdings shape.
+    // + selection churn), then fund the persona with one `stake_in`. The
+    // floor follows the entry's holdings shape.
     let floor_holdings = match &stake_entry {
         FixtureStake::FirstStake => HoldingsDescriptor {
             kind: HoldingsKind::CompleteTree,
@@ -3151,12 +3205,14 @@ async fn stake_persona_and_submit_bond(
         MAX_MINE_BATCHES,
     )
     .await;
-    let p_address = persona_address(seed, slot_raw);
-    transfer_to(
+    // The production funding: activate the persona (nothing activates one in
+    // production yet — the test helper drives the actor's own activation),
+    // then `stake_in`, which pays the active persona's handed-over keys.
+    super::test_support::activate_persona(&*arc.read().await, slot_raw).await;
+    stake_in_and_confirm(
         daemon,
         &arc,
         &principal,
-        &p_address,
         funding,
         MINE_BATCH_BLOCKS,
         MAX_MINE_BATCHES,
@@ -3350,8 +3406,9 @@ async fn stake_persona_and_submit_bond(
 }
 
 /// PR-4 staker harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4): a staker wallet
-/// funds its persona on-chain (a wallet-built FCMP++ transfer to the persona's
-/// derived receive address — the production rung-1 `ExternalTransfer` funding),
+/// funds its persona on-chain (the production `stake_in`: a wallet-built
+/// FCMP++ transfer to the active persona's payment keys — rung-1
+/// `ExternalTransfer` funding),
 /// the production P-scan discovers the funding, and the production bond path
 /// ([`Engine::assemble_bond_post`](super::Engine::assemble_bond_post) →
 /// posture→submitter choke point) dispatches the bond post over real RPC.
@@ -3706,13 +3763,16 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // structurally, `BackingSet::fee_sweep`) and at least one fee input.
     // The sweep-all bond leaves exactly ONE (the `BondPostChange` change),
     // so fund the persona once more post-bond — an ordinary rung-1
-    // ExternalTransfer — and re-run the production P-scan so the sealed
+    // ExternalTransfer to the persona's payment keys, not `stake_in`: a bonded
+    // persona's funding is the one event before its bond, and `stake_in` is to
+    // refuse a bonded persona once the production activation path lands
+    // (`docs/FOLLOWUPS.md`). Then re-run the production P-scan so the sealed
     // state carries both records before the claim reads it.
     transfer_to(
         &daemon,
         &fixture.arc,
         &fixture.principal,
-        &persona_address(&seed, SLOT),
+        persona_destination(&seed, SLOT),
         shekyl_units::AtomicUnits::from_raw(CLAIM_FUNDING_CUSHION),
         10,
         24,
