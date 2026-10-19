@@ -66,7 +66,10 @@ fn the_engine_outlives_ensure() {
     // Tor link (TSR-F1) is usable through it, and dial_tor reads its route.
     assert_eq!(host.hub.links().get(ConnectorId::Tor).route, None);
     dial_through_tor(
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050),
+        shekyl_socks::Proxy::unauthenticated(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9050,
+        )),
         network_id,
     )
     .expect("the proxy install");
@@ -188,7 +191,10 @@ fn a_second_start_of_a_connectors_loop_starts_nothing() {
         "a second start finds it taken and starts nothing"
     );
     dial_through_tor(
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050),
+        shekyl_socks::Proxy::unauthenticated(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            9050,
+        )),
         network_id,
     )
     .expect("the proxy install is not refused by the claimed loop");
@@ -356,7 +362,8 @@ fn a_managed_tor_death_takes_its_own_incarnation_down_and_no_later_one() {
     assert_eq!(bound, 0);
     assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
     let network_id = [12u8; 16];
-    let socks = |port| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    let socks =
+        |port| Proxy::unauthenticated(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port));
     let fell_within = |host: &Host, wanted: bool| {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
@@ -403,4 +410,22 @@ fn a_managed_tor_death_takes_its_own_incarnation_down_and_no_later_one() {
     unsafe {
         shekyl_seam_bind(std::ptr::null_mut(), None);
     }
+}
+
+/// A pair is presented to the proxy it was given for and to no other
+/// (DC-Q7): a route at another address, such as a managed Tor's port, dials
+/// unauthenticated.
+#[test]
+fn a_pair_is_presented_only_at_its_own_proxy() {
+    let at = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9050);
+    let other = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9150);
+    let pair = shekyl_socks::SocksUsername::new(b"op", b"pw").expect("a pair");
+    let configured = Proxy::authenticated(at, pair);
+    let here = presented(at, Some(&configured));
+    assert_eq!(here.at(), at);
+    assert!(here.authenticates(), "its own proxy gets the pair");
+    let elsewhere = presented(other, Some(&configured));
+    assert_eq!(elsewhere.at(), other);
+    assert!(!elsewhere.authenticates(), "another proxy gets no pair");
+    assert!(!presented(at, None).authenticates());
 }

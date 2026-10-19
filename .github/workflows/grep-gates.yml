@@ -340,6 +340,15 @@ jobs:
             python3 scripts/ci/check_spawn_sites_take_the_lock.py --selftest
           run_one "Spawn sites take the spawn lock" \
             python3 scripts/ci/check_spawn_sites_take_the_lock.py
+          # DAEMON_CONFIG_CUTOVER.md §2.10: a child of the daemon's image
+          # inherits stdio and nothing else. C++ in that process opens
+          # descriptors without close-on-exec, so every production spawn in
+          # the same watched crates marks the rest in its pre_exec
+          # (shekyl-tor-control-client's `inherit`). `--selftest` first.
+          run_one "Spawn children inherit stdio only (selftest)" \
+            python3 scripts/ci/check_spawn_children_inherit_stdio_only.py --selftest
+          run_one "Spawn children inherit stdio only" \
+            python3 scripts/ci/check_spawn_children_inherit_stdio_only.py
 
           # ESR-14 (ECONOMICS_SIM_PRODUCTION_REBASE.md §5.20): the economics
           # sim's fold files form chain quantities in production's integers

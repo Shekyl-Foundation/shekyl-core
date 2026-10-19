@@ -23,7 +23,7 @@ use shekyl_capped_stream::{
 };
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
-use shekyl_socks::{connect as socks_connect, Destination, Isolation, SocksError};
+use shekyl_socks::{connect as socks_connect, Destination, Proxy, ProxyWarn, SocksError};
 use shekyl_timing_engine::{Clock, Handle, OwnerClass, Tick};
 use shekyl_transport_layer::{
     check_dial, socks_reply_is_our_request, CloseCause, CloseKind, CloseResult, ConnectorId,
@@ -40,42 +40,25 @@ fn span_ns(elapsed: Duration) -> u64 {
     u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
 }
 
-/// How often a failing Tor SOCKS proxy is named in the log: once a minute
-/// at most, never once per dial (Rick, 2026-10-14). A dead proxy fails
-/// every dial in turn, and a line per dial would bury the one fact.
-const PROXY_WARN_EVERY: Duration = Duration::from_secs(60);
-
-/// When the proxy was last named, and how many failures went unnamed since.
-struct ProxyWarn {
-    last: Option<Instant>,
-    unnamed: u64,
-}
-
-impl ProxyWarn {
-    const fn new() -> Self {
-        Self {
-            last: None,
-            unnamed: 0,
-        }
-    }
-
-    /// `Some(unnamed)` when a warning is due at `now`, with the failures
-    /// since the last one; `None` while the last is under a minute old.
-    fn due(&mut self, now: Instant) -> Option<u64> {
-        match self.last {
-            Some(last) if now.saturating_duration_since(last) < PROXY_WARN_EVERY => {
-                self.unnamed = self.unnamed.saturating_add(1);
-                None
-            }
-            _ => {
-                self.last = Some(now);
-                Some(std::mem::take(&mut self.unnamed))
-            }
-        }
-    }
-}
-
 static PROXY_WARN: std::sync::Mutex<ProxyWarn> = std::sync::Mutex::new(ProxyWarn::new());
+
+/// The operator's Tor SOCKS proxy refused the dial's authentication, named
+/// apart from an unavailable proxy so each says its own fact once a minute.
+static AUTH_WARN: std::sync::Mutex<ProxyWarn> = std::sync::Mutex::new(ProxyWarn::new());
+
+/// The proxy refused this node's authentication (`DAEMON_CONFIG_CUTOVER.md`
+/// DC-Q7). It is this node's own proxy failing, as [`proxy_unavailable`] is,
+/// and it names the rows that fix it, never the onion.
+fn proxy_refused_authentication(proxy: &Proxy, error: &SocksError) -> CloseCause {
+    let due = AUTH_WARN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .due(Instant::now());
+    if let (Some(unnamed), Some(text)) = (due, proxy.authentication_refused(error, "tor-socks")) {
+        tracing::warn!(failed_dials_since_last_warning = unnamed, "{text}");
+    }
+    CloseCause::new(CloseKind::ProxyUnavailable)
+}
 
 /// This node's own Tor SOCKS proxy failed: the TCP connect to it, or an
 /// exchange it closed without a reply. Its own close kind, not
@@ -121,7 +104,7 @@ pub struct Accept {
 
 pub struct Dial {
     pub address: NetworkAddress,
-    pub proxy: SocketAddr,
+    pub proxy: Proxy,
     pub sockets: Sockets,
     pub dial_within: Tick,
     pub gap_within: Tick,
@@ -270,13 +253,16 @@ where
     let mut wake = std::pin::pin!(owner.wait_wake_async());
     let connect = async move {
         let dialed = Instant::now();
-        let Ok(mut stream) = TcpStream::connect(proxy).await else {
-            return Err(proxy_unavailable(proxy, "the TCP connect to it failed"));
+        let Ok(mut stream) = TcpStream::connect(proxy.at()).await else {
+            return Err(proxy_unavailable(
+                proxy.at(),
+                "the TCP connect to it failed",
+            ));
         };
         let proxy_connect_ns = span_ns(dialed.elapsed());
         match socks_connect(
             &mut stream,
-            Isolation::Principal,
+            proxy.isolation(),
             Destination::Name { host: &host, port },
         )
         .await
@@ -295,15 +281,15 @@ where
             Err(SocksError::Io(_)) => {
                 drop(stream.shutdown().await);
                 Err(proxy_unavailable(
-                    proxy,
+                    proxy.at(),
                     "it closed the SOCKS exchange without a reply",
                 ))
             }
-            Err(
-                SocksError::Malformed
-                | SocksError::AuthRejected { .. }
-                | SocksError::AuthFailed { .. },
-            ) => {
+            Err(error @ (SocksError::AuthRejected { .. } | SocksError::AuthFailed { .. })) => {
+                drop(stream.shutdown().await);
+                Err(proxy_refused_authentication(&proxy, &error))
+            }
+            Err(SocksError::Malformed) => {
                 drop(stream.shutdown().await);
                 Err(CloseCause::new(CloseKind::LocalClose))
             }
@@ -600,23 +586,6 @@ fn ignore<E>(result: Result<(), E>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProxyWarn, PROXY_WARN_EVERY};
-
-    /// The proxy is named on its first failure, then not again for a
-    /// minute however many dials fail, and the next warning counts them.
-    #[test]
-    fn a_failing_proxy_is_named_once_a_minute_with_the_dials_in_between() {
-        let start = std::time::Instant::now();
-        let mut warn = ProxyWarn::new();
-        assert_eq!(warn.due(start), Some(0));
-        for i in 1..=50u32 {
-            let at = start + PROXY_WARN_EVERY * i / 51;
-            assert_eq!(warn.due(at), None, "dial {i} within the minute");
-        }
-        assert_eq!(warn.due(start + PROXY_WARN_EVERY), Some(50));
-        assert_eq!(warn.due(start + PROXY_WARN_EVERY * 3 / 2), None);
-    }
-
     use super::*;
 
     #[tokio::test]

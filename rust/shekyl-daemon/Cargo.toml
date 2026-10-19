@@ -21,6 +21,7 @@ shekyl-logging = { path = "../shekyl-logging" }
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
 # The platform probes, the panic hook and the network id's one derivation.
 shekyl-ffi = { path = "../shekyl-ffi" }
+shekyl-socks = { path = "../shekyl-socks" }
 # The one runtime constructor (D14); the signal owner runs on it.
 shekyl-runtime = { path = "../shekyl-runtime" }
 # The managed Tor's owner (§2.2 steps 6, 8, 9) and its binary discovery.

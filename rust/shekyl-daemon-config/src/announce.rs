@@ -138,9 +138,8 @@ mod tests {
     }
 
     /// The line is rendered from the resolved values after the build has
-    /// named every derived default. A SOCKS credential the dial cannot send
-    /// refuses the sections; the map is still filled, and a secret row's
-    /// value never prints.
+    /// named every derived default. A secret row shows as `set` and its
+    /// value never prints (DC-Q7: the SOCKS pair).
     #[test]
     fn the_line_shows_every_value_with_its_source_and_never_a_secret() {
         let mut resolved = resolved_only(
@@ -160,14 +159,14 @@ mod tests {
             home: Some(PathBuf::from("/srv/op")),
             program_data: None,
         };
-        let refused = build(
+        let built = build(
             &mut resolved,
             Network::Regtest,
             RunMode::User,
             &platform,
             None,
         );
-        assert!(refused.is_err(), "a SOCKS credential is refused");
+        assert!(built.is_ok(), "a SOCKS pair with its proxy builds");
         let line = effective_configuration(
             &TABLE,
             &resolved,
@@ -177,6 +176,7 @@ mod tests {
         assert!(line.starts_with("effective configuration: config-file=none-at:/etc/shekyl/shekyld-regtest.toml (default)"), "{line}");
         assert!(line.contains("dev-difficulty=7 (cli)"), "{line}");
         assert!(line.contains("log-level=info (file:3)"), "{line}");
+        assert!(line.contains("tor-socks-username=set (file:1)"), "{line}");
         assert!(line.contains("tor-socks-password=set (file:2)"), "{line}");
         assert!(!line.contains("hunter2"), "{line}");
         assert!(
