@@ -13,6 +13,12 @@
 #   - a misplaced qualifier: `max` or `min` anywhere but last;
 #   - a duplicate definition: a term with two defining rows;
 #   - a cycle: a term that is its own ancestor (IG-2);
+#   - a method that does not end in a command: its last term must be a view
+#     or a verb under the parent its walk used, read from the Kind column
+#     (`parent:view` / `parent:verb`, `—` for a bare subject; IG-3);
+#   - a kind written only in prose: a row whose meaning carries the italic
+#     *view* / *verb* marker must carry the same kinds in its Kind cell, and
+#     each Kind pair must name one of the row's own parents;
 #   - drift: a name §17 or §18 gives that the walk table (§18.1) omits,
 #     or a method the walk table lists that §17 does not.
 #
@@ -52,7 +58,8 @@ GLOSSARY = [
     ("§14.2", "### 14.2", "\n## 15."),
     ("§19", "## 19. Glossary", "\n## 20."),
 ]
-ROW = re.compile(r"^\| ([a-z0-9]+) \| ([^|]*) \|", re.M)
+ROW = re.compile(r"^\| ([a-z0-9]+) \|[^\n]*$", re.M)
+KINDS = {"view", "verb"}
 TICK = re.compile(r"`([^`]+)`")
 IDENT = re.compile(r"[a-z][a-z0-9_]*")
 
@@ -62,8 +69,13 @@ def section(doc: str, start: str, end: str) -> str:
     return doc[i:doc.index(end, i)]
 
 
+def cells(line: str) -> list[str]:
+    return [c.strip() for c in re.split(r"(?<!\\)\|", line.strip())[1:-1]]
+
+
 def glossary(doc: str, errors: list[str]):
-    """Edges, subjects and defined terms; duplicate and stray rows are errors."""
+    """Edges, subjects, defined terms and kinds; duplicate and stray rows are errors."""
+    kinds: dict[tuple[str, str], str] = {}
     defined: dict[str, list[str]] = {}
     gains: list[tuple[str, str]] = []
     edges: set[tuple[str, str]] = set()
@@ -76,18 +88,36 @@ def glossary(doc: str, errors: list[str]):
             parts = [("§19 new", sec[i:j], True), ("§19 gains", sec[j:], False)]
         for where, text, defining in parts:
             for m in ROW.finditer(text):
-                term = m.group(1)
+                row = cells(m.group(0))
+                term, parents = row[0], [x.strip() for x in row[1].split(",")]
+                meaning = row[2] if len(row) > 2 else ""
+                kind_cell = row[3] if len(row) > 3 else ""
                 if defining:
                     defined.setdefault(term, []).append(where)
                 else:
                     gains.append((term, where))
-                for p in (x.strip() for x in m.group(2).split(",")):
+                for p in parents:
                     if p in ("—", "any"):
                         subjects.add(term)
                     elif re.fullmatch(r"[a-z0-9]+", p):
                         edges.add((p, term))
                     else:
                         errors.append(f"{where}: `{term}` has a parent that is no term: {p!r}")
+                written = set()
+                for pair in (x.strip() for x in kind_cell.split(",") if x.strip()):
+                    pm = re.fullmatch(r"(—|[a-z0-9]+):(\w+)", pair)
+                    if not pm or pm.group(2) not in KINDS:
+                        errors.append(f"{where}: `{term}`'s Kind cell has {pair!r}: a pair is `parent:view` or `parent:verb`")
+                        continue
+                    if pm.group(1) not in parents:
+                        errors.append(f"{where}: `{term}`'s Kind pair {pair!r} names a parent the row does not list")
+                    kinds[(term, pm.group(1))] = pm.group(2)
+                    written.add(pm.group(2))
+                prose = set(re.findall(r"\*(view|verb)\*", meaning))
+                if prose and not written:
+                    errors.append(f"kind drift: {where}: `{term}` is marked *{'*/*'.join(sorted(prose))}* in its meaning and has no Kind cell")
+                elif prose != written and (prose or written):
+                    errors.append(f"kind drift: {where}: `{term}`'s meaning marks {sorted(prose)} and its Kind cell says {sorted(written)}")
     for term, wheres in sorted(defined.items()):
         if len(wheres) > 1:
             errors.append(f"duplicate definition: `{term}` is defined in {', '.join(wheres)}")
@@ -98,7 +128,7 @@ def glossary(doc: str, errors: list[str]):
         for t in (p, c):
             if t not in defined and t not in QUALIFIERS:
                 errors.append(f"undefined term: `{t}` is a parent in the glossary but no table defines it")
-    return edges, subjects, set(defined)
+    return edges, subjects, set(defined), kinds
 
 
 def cycles(edges: set[tuple[str, str]]) -> list[list[str]]:
@@ -178,7 +208,7 @@ def drift(doc: str, rows, errors: list[str]) -> None:
 
 def check(doc: str) -> list[str]:
     errors: list[str] = []
-    edges, subjects, defined = glossary(doc, errors)
+    edges, subjects, defined, kinds = glossary(doc, errors)
     if not edges or not defined:
         return errors + ["the glossary is empty: no subject to check (rule 47)"]
     for cyc in cycles(edges):
@@ -207,6 +237,11 @@ def check(doc: str) -> list[str]:
                     continue
                 path = segs[1:] if segs[0] == "dev" and len(segs) > 1 and segs[1] in subjects else segs
                 bad = pairs_bad(path)
+                parent = path[-2] if len(path) > 1 else "—"
+                if not bad and kinds.get((path[-1], parent)) not in KINDS:
+                    under = f"under `{parent}`" if parent != "—" else "bare"
+                    errors.append(f"not a command: {where} ends in `{path[-1]}`, which is neither a view nor a verb {under}")
+                    continue
             else:
                 bad = pairs_bad(obj + segs)
                 if bad and segs[0] in subjects and not pairs_bad(segs):
@@ -229,7 +264,21 @@ def selftest(doc: str) -> int:
         j = doc.index("\n| ", doc.index("|---", i))
         return doc[:j] + "\n" + row + doc[j:]
 
+    def add_method(name: str) -> str:
+        out = add_name("method", name)
+        i = out.index("## 17.")
+        j = out.index("\n| ", out.index("|---", i))
+        return out[:j] + f"\n| selftest | `{name}` | — | chain | selftest |" + out[j:]
+
     cases = [
+        ("add chain_coinbase as a method in §17 and §18.1", add_method("chain_coinbase"),
+         "ends in `coinbase`, which is neither a view nor a verb under `chain`"),
+        ("a meaning marked *view* with no Kind cell",
+         add_row("**New terms:**", "| selftestview | chain | *view* — a selftest | |"), "kind drift"),
+        ("a Kind cell that disagrees with its meaning's marker",
+         add_row("**New terms:**", "| selftestview | chain | *view* — a selftest | chain:verb |"), "kind drift"),
+        ("a Kind pair naming a parent the row does not list",
+         add_row("**New terms:**", "| selftestview | chain | *view* — a selftest | block:view |"), "does not list"),
         ("add socks-tor: `socks_tor` under `daemon` walks socks -> tor", add_name("`daemon`", "socks_tor"), "non-edge"),
         ("a method that starts below a subject: `socks_tor`", add_name("method", "socks_tor"), "non-edge"),
         ("an undefined term: `bogus`", add_name("`daemon`", "bogus"), "undefined term"),

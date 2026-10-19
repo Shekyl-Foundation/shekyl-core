@@ -115,79 +115,79 @@ A row narrows its kind with a constraint stated in the row and enforced by its c
 
 ## 3. Glossary — Part A's terms
 
-A term listed under two parents is one term. Part B's terms are §11; a parent added here by Part B is IG-Q32's.
+A term listed under two parents is one term. Part B's terms are §11; a parent added here by Part B is IG-Q32's. The Kind column carries IG-3's verbs and views as data: one `parent:view` or `parent:verb` pair for each parent under which the term ends a command, with `—` for a bare subject; a blank cell is a term that ends no command. The italic *view* and *verb* in a meaning are its prose, and must agree with the column (the walk gate, §18.1).
 
-| Term | Parents | Meaning |
-|---|---|---|
-| help | — | *view* — print usage |
-| version | — | *view* — print the version and the OS line |
-| network | — | which chain: `mainnet`, `testnet`, `stagenet`, `regtest` |
-| config | — | the TOML file of option values |
-| data | — | the per-network directory holding the daemon's stores and state |
-| log | — | the daemon's log sink |
-| file | config, log, ban, wallet, script, password, socket, png, address, mnemonic, recipients, constants, tor | a file path (value term) |
-| dir | data, wallet, create, recipients | a directory path (value term) |
-| level | log | a log severity: `error`, `warn`, `info`, `debug`, `trace` |
-| category | log | a log category, owned by `shekyl-logging` |
-| size | log | the disk a log may use |
-| p2p | — | the peer-to-peer protocol, independent of connector |
-| clearnet | —, dev | the clearnet connector (direct TCP) |
-| tor | — | the Tor connector |
-| socks | clearnet, tor, daemon | the SOCKS5 endpoint a connector dials through |
-| username | socks, rpc | a credential's name (SOCKS5, RFC 1929; the wallet RPC's authentication) |
-| password | socks, wallet, rpc | a secret credential; always a secret |
-| onion | tor | this node's v3 onion service |
-| listen | clearnet, onion, rpc, view, admin | a local endpoint a listener binds |
-| advertise | clearnet | the endpoint we tell peers is ours |
-| local | p2p | endpoints not dialable on the public internet (private, loopback, link-local) |
-| peer | p2p, closed, — | another Shekyl node |
-| closed | p2p | a network consisting only of the listed peers |
-| ban | p2p, — | a host or subnet refused at socket admission |
-| disclose | p2p | what this node tells other nodes of its known peers and its own address |
-| early | disclose | below the white-diversity floor |
-| inbound | p2p | connections other nodes open to us |
-| upload | p2p | bytes we send |
-| download | p2p | bytes we receive |
-| txpool | — | the transaction pool |
-| weight | txpool | transaction weight, in bytes |
-| notify | — | run an operator command on an event |
-| block | notify, —, genesis | a block: under `notify` the new one; under `genesis`, *view* — the genesis block id and transaction hash |
-| rate | block | the block-rate check |
-| reorg | notify, archival | a chain reorganization |
-| height | block, reorg, split, chain, restore | a block height: under `block` the new block's, under `reorg` the new tip's, under `split` the last block both chains share; under `chain`, *view* — the chain's height |
-| hash | block | the new block's hash |
-| split | reorg | the point where the two chains part (`{split-height}`) |
-| added | reorg | blocks in the new chain |
-| removed | reorg | blocks discarded from the old chain |
-| window | rate | the observation window, in seconds |
-| observed | rate | blocks seen in the window |
-| expected | rate | blocks expected in the window |
-| mine | — | the daemon's miner and its control |
-| address | mine, make, — | a Shekyl address (the payment meaning; never a network location); bare, *view* — the wallet's primary address |
-| threads | mine | a thread count |
-| rpc | —, wallet | an RPC service's listeners: the daemon's, or the wallet's (`shekyl-wallet-rpc`, and `wallet-rpc-*` in `shekyl-cli`) |
-| view | rpc | the `view` preset, a fixed set of grants (RPC_CHANNEL §6.1) |
-| admin | rpc | the `admin` preset, every grant (RPC_CHANNEL §6.1) |
-| cors | rpc | cross-origin resource sharing |
-| origin | cors | an allowed origin |
-| connections | rpc, peer | concurrent connections; under `peer`, *view* — the live peer connections |
-| console | — | the daemon's interactive console (interim; R8) |
-| dev | — | a development lever (IG-8) |
-| encrypt | clearnet | the pre-flip clearnet encryption switch |
-| relay | dev, tx | transaction relay (Dandelion++); under `tx`, *verb* — relay a transaction |
-| cover | relay | Dandelion++ cover traffic ([`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md)) |
-| sync | dev, — | chain synchronization |
-| difficulty | dev, chain | a fixed mining difficulty; under `chain`, *view* — the current difficulty |
-| pow | dev | the RandomX seed schedule |
-| seed | pow | the RandomX seed |
-| epoch | seed, settlement | a fixed-length run of blocks |
-| blocks | epoch | a length in blocks |
-| lag | epoch | the seed lag in blocks |
-| settlement | dev | the archival settlement schedule |
-| archival | dev, — | the archival layer |
-| depth | reorg | a reorganization depth in blocks |
-| max | any | qualifiers |
-| min | any | qualifiers |
+| Term | Parents | Meaning | Kind |
+|---|---|---|---|
+| help | — | *view* — print usage | —:view |
+| version | — | *view* — print the version and the OS line | —:view |
+| network | — | which chain: `mainnet`, `testnet`, `stagenet`, `regtest` | |
+| config | — | the TOML file of option values | |
+| data | — | the per-network directory holding the daemon's stores and state | |
+| log | — | the daemon's log sink | |
+| file | config, log, ban, wallet, script, password, socket, png, address, mnemonic, recipients, constants, tor | a file path (value term) | |
+| dir | data, wallet, create, recipients | a directory path (value term) | |
+| level | log | a log severity: `error`, `warn`, `info`, `debug`, `trace` | |
+| category | log | a log category, owned by `shekyl-logging` | |
+| size | log | the disk a log may use | |
+| p2p | — | the peer-to-peer protocol, independent of connector | |
+| clearnet | —, dev | the clearnet connector (direct TCP) | |
+| tor | — | the Tor connector | |
+| socks | clearnet, tor, daemon | the SOCKS5 endpoint a connector dials through | |
+| username | socks, rpc | a credential's name (SOCKS5, RFC 1929; the wallet RPC's authentication) | |
+| password | socks, wallet, rpc | a secret credential; always a secret | |
+| onion | tor | this node's v3 onion service | |
+| listen | clearnet, onion, rpc, view, admin | a local endpoint a listener binds | |
+| advertise | clearnet | the endpoint we tell peers is ours | |
+| local | p2p | endpoints not dialable on the public internet (private, loopback, link-local) | |
+| peer | p2p, closed, — | another Shekyl node | |
+| closed | p2p | a network consisting only of the listed peers | |
+| ban | p2p, — | a host or subnet refused at socket admission | |
+| disclose | p2p | what this node tells other nodes of its known peers and its own address | |
+| early | disclose | below the white-diversity floor | |
+| inbound | p2p | connections other nodes open to us | |
+| upload | p2p | bytes we send | |
+| download | p2p | bytes we receive | |
+| txpool | — | the transaction pool | |
+| weight | txpool | transaction weight, in bytes | |
+| notify | — | run an operator command on an event | |
+| block | notify, —, genesis | a block: under `notify` the new one; under `genesis`, *view* — the genesis block id and transaction hash | genesis:view |
+| rate | block | the block-rate check | |
+| reorg | notify, archival | a chain reorganization | |
+| height | block, reorg, split, chain, restore | a block height: under `block` the new block's, under `reorg` the new tip's, under `split` the last block both chains share; under `chain`, *view* — the chain's height | chain:view |
+| hash | block | the new block's hash | |
+| split | reorg | the point where the two chains part (`{split-height}`) | |
+| added | reorg | blocks in the new chain | |
+| removed | reorg | blocks discarded from the old chain | |
+| window | rate | the observation window, in seconds | |
+| observed | rate | blocks seen in the window | |
+| expected | rate | blocks expected in the window | |
+| mine | — | the daemon's miner and its control | |
+| address | mine, make, — | a Shekyl address (the payment meaning; never a network location); bare, *view* — the wallet's primary address | —:view |
+| threads | mine | a thread count | |
+| rpc | —, wallet | an RPC service's listeners: the daemon's, or the wallet's (`shekyl-wallet-rpc`, and `wallet-rpc-*` in `shekyl-cli`) | |
+| view | rpc | the `view` preset, a fixed set of grants (RPC_CHANNEL §6.1) | |
+| admin | rpc | the `admin` preset, every grant (RPC_CHANNEL §6.1) | |
+| cors | rpc | cross-origin resource sharing | |
+| origin | cors | an allowed origin | |
+| connections | rpc, peer | concurrent connections; under `peer`, *view* — the live peer connections | peer:view |
+| console | — | the daemon's interactive console (interim; R8) | |
+| dev | — | a development lever (IG-8) | |
+| encrypt | clearnet | the pre-flip clearnet encryption switch | |
+| relay | dev, tx | transaction relay (Dandelion++); under `tx`, *verb* — relay a transaction | tx:verb |
+| cover | relay | Dandelion++ cover traffic ([`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md)) | |
+| sync | dev, — | chain synchronization | |
+| difficulty | dev, chain | a fixed mining difficulty; under `chain`, *view* — the current difficulty | chain:view |
+| pow | dev | the RandomX seed schedule | |
+| seed | pow | the RandomX seed | |
+| epoch | seed, settlement | a fixed-length run of blocks | |
+| blocks | epoch | a length in blocks | |
+| lag | epoch | the seed lag in blocks | |
+| settlement | dev | the archival settlement schedule | |
+| archival | dev, — | the archival layer | |
+| depth | reorg | a reorganization depth in blocks | |
+| max | any | qualifiers | |
+| min | any | qualifiers | |
 
 Value keywords: `on`, `off`, `managed`, `operator`, `auto`, `unlimited`, `none`, `stdin`, the four network names, the five levels.
 
@@ -423,96 +423,96 @@ Part B names every identifier of `shekyl-cli`, `shekyl-wallet-rpc`, the daemon's
 
 ## 11. Glossary — Part B's terms
 
-Rows below add to §3; a term already in §3 is not repeated (its Part B parents are in §3). Verbs and views are marked (IG-3).
+Rows below add to §3; a term already in §3 is not repeated (its Part B parents are in §3). Verbs and views are marked (IG-3), in prose and in the Kind column, as §3 states.
 
-| Term | Parents | Meaning |
-|---|---|---|
-| wallet | — | the wallet: its files and its operations |
-| daemon | — | the daemon a wallet binary or the shell talks to |
-| service | — | run under the platform's service manager (RT-16) |
-| script | — | a file of prompt lines run as one session |
-| json | — | machine output: one object per command |
-| debug | — | show the machine detail of a failure |
-| option | — | a runtime-changeable row of the daemon's table (IG-12) |
-| tx | — | a transaction |
-| request | — | a payment request |
-| uri | — | a `shekyl:` payment URI |
-| stake | — | the staking balance and bond |
-| shard | — | an archival shard |
-| prove | — | make a proof |
-| check | — | check a proof |
-| sign | — | *verb* — sign a message with the wallet key |
-| verify | —, genesis | *verb* — check a claim against its source: a message signature, or under `genesis` every network rebuilt against the pins |
-| send | — | *verb* — send money |
-| fee | — | *view* — a fee quote |
-| balance | —, stake | *view* — a balance breakdown |
-| chain | — | the chain the daemon holds; bare, *view* — its health |
-| exit | — | *verb* — leave the prompt |
-| status | wallet, stake, mine, sync, daemon | *view* — the current state |
-| stop | mine, daemon | *verb* — stop |
-| set | option, password, note | *verb* — assign a value |
-| show | tx, shard, chain, block, ban, option | *verb* — print one item |
-| endpoint | daemon, rpc | a peer-endpoint the binary dials (IG-Q31) |
-| socket | daemon, rpc | the local socket of RPC_CHANNEL RT-15 |
-| mnemonic | create, restore | the wallet's recovery words (IG-Q24) |
-| direction | list | `in` or `out` |
-| unmatched | list | receives matching no request |
-| matched | list | requests already paid |
-| all | list | *view* — every entry |
-| held | list | *view* — the shards this wallet holds |
-| amount | make | an amount (kind `amount`) |
-| label | make | a human label |
-| expiry | create | how long a request stays valid: a duration |
-| priority | send | `economy`, `standard` or `high` |
-| yes | send, add, return, release, collect | confirm without a prompt |
-| full | address | the whole address, not the display form |
-| count | input, output | how many |
-| input | fee | a transaction input |
-| output | fee | a transaction output |
-| png | fetch | a PNG image of the shard |
-| pixels | png | the image's side, in pixels |
-| complete | archival | the whole corpus |
-| tree | complete | the CompleteTree posture (IG-Q28) |
-| acknowledge | archival | the acknowledgement phrase that posture requires |
-| short | list | the short form |
-| from | show, sum | the first height |
-| to | show | the last height |
-| last | stats, sum | the most recent N blocks |
-| body | show | a block's or transaction's serialized bytes, kind `bytes` |
-| hard | rescan | rebuild from the chain |
-| seconds | add | a duration, in seconds |
-| alt | chain | *view* — the alternative chains |
-| coinbase | chain | coinbase outputs |
-| sum | coinbase | *view* — a total |
-| stats | chain, peer, txpool, p2p | *view* — statistics |
-| white | list | the white peer list |
-| gray | list | the gray peer list |
-| spent | chain | *view* — whether a key image is spent |
-| create | wallet, request, recipients | *verb* — create |
-| open | wallet | *verb* — open |
-| close | wallet | *verb* — close |
-| restore | wallet | *verb* — restore from the recovery words |
-| refresh | wallet | *verb* — sync with the daemon |
-| rescan | wallet | *verb* — rebuild the history |
-| list | tx, request, shard, peer, ban, txpool | *verb* — print the entries |
-| note | tx | *view* — a transaction's local note |
-| abandon | tx | *verb* — give up on a dispatched send |
-| decode | tx | *verb* — decode a transaction blob |
-| make | uri | *verb* — compose |
-| read | uri | *verb* — decode |
-| outputs | stake | *view* — the staking-side outputs |
-| available | stake | *view* — what can move back to the wallet |
-| add | stake, ban | *verb* — add |
-| return | stake | *verb* — move staking funds back |
-| release | stake | *verb* — post the bond's exit |
-| collect | stake | *verb* — collect the released funds |
-| join | stake | *verb* — name the shards to serve |
-| fetch | shard | *verb* — fetch |
-| start | mine | *verb* — start |
-| payment | prove, check | *view* — a payment proof, or the verdict on one |
-| reserve | prove, check | *view* — a reserve proof, or the verdict on one |
-| remove | ban | *verb* — remove |
-| flush | txpool | *verb* — flush |
+| Term | Parents | Meaning | Kind |
+|---|---|---|---|
+| wallet | — | the wallet: its files and its operations | |
+| daemon | — | the daemon a wallet binary or the shell talks to | |
+| service | — | run under the platform's service manager (RT-16) | |
+| script | — | a file of prompt lines run as one session | |
+| json | — | machine output: one object per command | |
+| debug | — | show the machine detail of a failure | |
+| option | — | a runtime-changeable row of the daemon's table (IG-12) | |
+| tx | — | a transaction | |
+| request | — | a payment request | |
+| uri | — | a `shekyl:` payment URI | |
+| stake | — | the staking balance and bond | |
+| shard | — | an archival shard | |
+| prove | — | make a proof | |
+| check | — | check a proof | |
+| sign | — | *verb* — sign a message with the wallet key | —:verb |
+| verify | —, genesis | *verb* — check a claim against its source: a message signature, or under `genesis` every network rebuilt against the pins | —:verb, genesis:verb |
+| send | — | *verb* — send money | —:verb |
+| fee | — | *view* — a fee quote | —:view |
+| balance | —, stake | *view* — a balance breakdown | —:view, stake:view |
+| chain | — | the chain the daemon holds; bare, *view* — its health | —:view |
+| exit | — | *verb* — leave the prompt | —:verb |
+| status | wallet, stake, mine, sync, daemon | *view* — the current state | wallet:view, stake:view, mine:view, sync:view, daemon:view |
+| stop | mine, daemon | *verb* — stop | mine:verb, daemon:verb |
+| set | option, password, note | *verb* — assign a value | option:verb, password:verb, note:verb |
+| show | tx, shard, chain, block, ban, option | *verb* — print one item | tx:verb, shard:verb, chain:verb, block:verb, ban:verb, option:verb |
+| endpoint | daemon, rpc | a peer-endpoint the binary dials (IG-Q31) | |
+| socket | daemon, rpc | the local socket of RPC_CHANNEL RT-15 | |
+| mnemonic | create, restore | the wallet's recovery words (IG-Q24) | |
+| direction | list | `in` or `out` | |
+| unmatched | list | receives matching no request | |
+| matched | list | requests already paid | |
+| all | list | *view* — every entry | list:view |
+| held | list | *view* — the shards this wallet holds | list:view |
+| amount | make | an amount (kind `amount`) | |
+| label | make | a human label | |
+| expiry | create | how long a request stays valid: a duration | |
+| priority | send | `economy`, `standard` or `high` | |
+| yes | send, add, return, release, collect | confirm without a prompt | |
+| full | address | the whole address, not the display form | |
+| count | input, output | how many | |
+| input | fee | a transaction input | |
+| output | fee | a transaction output | |
+| png | fetch | a PNG image of the shard | |
+| pixels | png | the image's side, in pixels | |
+| complete | archival | the whole corpus | |
+| tree | complete | the CompleteTree posture (IG-Q28) | |
+| acknowledge | archival | the acknowledgement phrase that posture requires | |
+| short | list | the short form | |
+| from | show, sum | the first height | |
+| to | show | the last height | |
+| last | stats, sum | the most recent N blocks | |
+| body | show | a block's or transaction's serialized bytes, kind `bytes` | |
+| hard | rescan | rebuild from the chain | |
+| seconds | add | a duration, in seconds | |
+| alt | chain | *view* — the alternative chains | chain:view |
+| coinbase | chain | coinbase outputs | |
+| sum | coinbase | *view* — a total | coinbase:view |
+| stats | chain, peer, txpool, p2p | *view* — statistics | chain:view, peer:view, txpool:view, p2p:view |
+| white | list | the white peer list | |
+| gray | list | the gray peer list | |
+| spent | chain | *view* — whether a key image is spent | chain:view |
+| create | wallet, request, recipients | *verb* — create | wallet:verb, request:verb, recipients:verb |
+| open | wallet | *verb* — open | wallet:verb |
+| close | wallet | *verb* — close | wallet:verb |
+| restore | wallet | *verb* — restore from the recovery words | wallet:verb |
+| refresh | wallet | *verb* — sync with the daemon | wallet:verb |
+| rescan | wallet | *verb* — rebuild the history | wallet:verb |
+| list | tx, request, shard, peer, ban, txpool | *verb* — print the entries | tx:verb, request:verb, shard:verb, peer:verb, ban:verb, txpool:verb |
+| note | tx | *view* — a transaction's local note | tx:view |
+| abandon | tx | *verb* — give up on a dispatched send | tx:verb |
+| decode | tx | *verb* — decode a transaction blob | tx:verb |
+| make | uri | *verb* — compose | uri:verb |
+| read | uri | *verb* — decode | uri:verb |
+| outputs | stake | *view* — the staking-side outputs | stake:view |
+| available | stake | *view* — what can move back to the wallet | stake:view |
+| add | stake, ban | *verb* — add | stake:verb, ban:verb |
+| return | stake | *verb* — move staking funds back | stake:verb |
+| release | stake | *verb* — post the bond's exit | stake:verb |
+| collect | stake | *verb* — collect the released funds | stake:verb |
+| join | stake | *verb* — name the shards to serve | stake:verb |
+| fetch | shard | *verb* — fetch | shard:verb |
+| start | mine | *verb* — start | mine:verb |
+| payment | prove, check | *view* — a payment proof, or the verdict on one | prove:view, check:view |
+| reserve | prove, check | *view* — a reserve proof, or the verdict on one | prove:view, check:view |
+| remove | ban | *verb* — remove | ban:verb |
+| flush | txpool | *verb* — flush | txpool:verb |
 
 Value keywords added: `in`, `out` (direction), `economy`, `standard`, `high` (priority).
 
@@ -664,12 +664,12 @@ Each deletion fixes its consumers: the weekly workflow's comment, the logging an
 
 The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no path defaults: every path flag is required wherever it applies, so the command line records exactly what the ceremony used. Terms this table adds (the parents it gives `verify`, `create`, `dir`, `file` and `block` are in §3 and §11):
 
-| Term | Parents | Meaning |
-|---|---|---|
-| genesis | — | the genesis block and its ceremony |
-| recipients | genesis, build, verify, block | the genesis recipients: their wallets and the recipients file |
-| constants | verify, block | the C header that holds the genesis pins and nonce |
-| build | genesis | *verb* — build the genesis coinbase transaction |
+| Term | Parents | Meaning | Kind |
+|---|---|---|---|
+| genesis | — | the genesis block and its ceremony | |
+| recipients | genesis, build, verify, block | the genesis recipients: their wallets and the recipients file | |
+| constants | verify, block | the C header that holds the genesis pins and nonce | |
+| build | genesis | *verb* — build the genesis coinbase transaction | genesis:verb |
 
 | Today | New | Flags | Notes |
 |---|---|---|---|
@@ -975,161 +975,161 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 
 **New terms:**
 
-| Term | Parents | Meaning |
-|---|---|---|
-| header | block | a block's header; with `show` and `list`, the read |
-| template | block | *view* — a block to mine on, built for an address |
-| submit | block, tx | *verb* — hand to the daemon for acceptance |
-| curve | — | the curve tree, FCMP++'s membership accumulator (IG-Q47) |
-| root | curve, attestation | a tree's root hash |
-| leaf | curve, coverage | a leaf of the curve tree |
-| layers | curve | the tree's depth, in layers |
-| claim | archival | an emission claim's source record |
-| coverage | shard | *view* — holders per shard |
-| persona | — | a persona's canonical id |
-| generate | block | *verb* — mine blocks; only under `dev` |
-| pop | chain | *verb* — remove blocks from the tip; only under `dev` |
-| id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's |
-| key | spent | a key; only in `key image` |
-| image | key | a key image (a hash) |
-| prune | tx | a switch: carry the pruned body |
-| prunable | tx | the prunable part of a transaction |
-| public | tx | the pool's one bit: the relay has made the transaction public (`DAEMON_RELAY_PRIVACY.md` acceptance criterion 2) |
-| private | txpool | entries whose `public` bit is unset; with `count`, host-only (RT-O9.3) |
-| confirmations | tx | blocks since the transaction's |
-| parent | block, alt, header, template | the block this one extends (a hash) |
-| nonce | block, header | the header's nonce; under `dev block generate`, the first nonce |
-| orphan | block, header | not on the main chain |
-| reward | block, mine, header, template | the block's reward, an amount |
-| cumulative | difficulty | summed over the chain to this block |
-| longterm | weight | the long-term weight |
-| median | weight, size | the median |
-| total | fee, weight, burn, bond | a sum |
-| attestation | header | the attestation tree |
-| index | output | a global output index |
-| time | block, header, daemon, mined | a point in time (IG-Q54) |
-| adjusted | time | the network-adjusted time |
-| started | daemon, p2p | when it started, a time |
-| duration | ban, shard | a span of time (IG-Q54) |
-| spacing | block | the target time between blocks |
-| target | sync, daemon | what the node is syncing to; `target height`, its height |
-| synchronized | daemon | the node holds the target |
-| syncing | daemon | the node is syncing |
-| degraded | daemon | following, degraded |
-| peered | daemon | at least one handshaken session (`has_peers`) |
-| protocol | daemon | the P2P protocol; with `version`, its version |
-| emission | coinbase, daemon, sum, template | coins emitted |
-| burn | daemon | the share the next coinbase burns (micro) and, with `total`, what has burned |
-| tagged | version, daemon | a tagged release build |
-| multiplier | emission | the release multiplier (micro; `shekyl-economics`) |
-| share | stake | the stakers' effective emission share (micro) |
-| disk | daemon | the data directory's disk |
-| free | disk | its free space, in bytes |
-| outbound | peer, clearnet, tor, floor | connections we open |
-| grant | daemon | the grants this connection holds |
-| consensus | — | the consensus rules; `consensus digest`, the constants' digest |
-| digest | consensus | a digest |
-| connector | connection, floor, tally | one-of `clearnet`, `tor` |
-| connection | span, peer | the P2P connection downloading the span |
-| host | ban | an IP address or subnet |
-| parameter | diagnostic | a diagnostic's named parameters, a map (IG-11) |
-| diagnostic | — | a typed refusal (IG-11): a JSON-RPC error's `data` (RW-Q3) |
-| code | diagnostic | its stable dotted code (`config.value.range`) |
-| message | diagnostic | its one English rendering |
-| pooled | tx | in the pool, not yet in a block |
-| mined | tx | the block that holds the transaction; with `height` and `time` |
-| verdict | tx | the daemon's verdict on a submitted transaction |
-| cause | tx | why a rejected transaction was refused |
-| claimed | claim | the epochs this persona has claimed |
-| failure | bond, claim | an interval the bond failed, `{from, to}`; with `count`, how many |
-| offline | daemon | P2P is off (IG-Q3's offline state) |
-| economy | fee | the `economy` tier's fee per unit of weight |
-| standard | fee | the `standard` tier's |
-| high | fee | the `high` tier's |
-| name | option | an option's name |
-| value | option | an option's value, valid input to `option set` |
-| source | option, diagnostic | where the value came from: `default`, `file`, `cli`, `runtime` |
-| runtime | option | whether `option set` accepts the row (IG-12) |
-| secret | option | the row is a secret: its value is never shown |
-| assigned | option | a secret row has a value |
-| major | version | the major version |
-| minor | version | the minor version |
-| state | connection | the connection's state |
-| age | connection | how long it has lived |
-| idle | download, upload | time since the last bytes |
-| speed | download, upload, mine | per second: bytes, or under `mine` hashes |
-| average | speed | the average |
-| current | speed | the current value |
-| flags | connection | the peer's support flags |
-| packets | download, upload | a packet count |
-| span | sync | a block span being downloaded |
-| pace | span | the span queue's relative speed, a ratio (micro) |
-| tier | peer | which peer list holds it, one-of `white`, `gray` |
-| offset | extra | where the reserved extra bytes start |
-| extra | template | the coinbase's extra nonce: the bytes, and with `size` how many to reserve |
-| revision | daemon | the build's version string |
-| joined | bond, claim | the epoch the bond joined |
-| closing | epoch, shard | the epoch's closing height |
-| hashing | template, pow | the bytes proof of work hashes |
-| next | seed | the next seed |
-| active | mine | the miner is running |
-| permanent | ban | a ban with no end |
-| floor | relay | the per-connector outbound floor |
-| below | floor | under the floor |
-| tally | relay | per-successor relay outcomes |
-| propagated | tally | propagated relays |
-| silent | tally | silent relays |
-| sender | tally | a distinct peer that sent the transaction; with `count` |
-| holding | claim | one-of `shards`, `complete-tree` |
-| settled | claim, coverage | the last settled epoch |
-| bond | — | an archival bond: a subject, which the claim source, an epoch and a credit name by reference (IG-Q42) |
-| served | claim, coverage, shard | served |
-| slash | claim | slashed |
-| work | epoch, coverage | the summed work (milli, IG-Q54) |
-| budget | epoch, coverage | the budget, an amount |
-| credit | epoch | a credit pair |
-| claimant | epoch | the claiming bond's index |
-| segment | shard | the shard's segment is held |
-| freeze | shard | the freeze height |
-| frozen | coverage | frozen shards, with `count` |
-| bonded | coverage, shard | bonded holders, with `count` |
-| scarcity | coverage, shard | the join scarcity (micro, IG-Q54) |
-| profit | coverage, shard | the expected profit, an amount |
+| Term | Parents | Meaning | Kind |
+|---|---|---|---|
+| header | block | a block's header; with `show` and `list`, the read | |
+| template | block | *view* — a block to mine on, built for an address | block:view |
+| submit | block, tx | *verb* — hand to the daemon for acceptance | block:verb, tx:verb |
+| curve | — | the curve tree, FCMP++'s membership accumulator (IG-Q47) | |
+| root | curve, attestation | a tree's root hash | |
+| leaf | curve, coverage | a leaf of the curve tree | |
+| layers | curve | the tree's depth, in layers | |
+| claim | archival | an emission claim's source record | |
+| coverage | shard | *view* — holders per shard | shard:view |
+| persona | — | a persona's canonical id | |
+| generate | block | *verb* — mine blocks; only under `dev` | block:verb |
+| pop | chain | *verb* — remove blocks from the tip; only under `dev` | chain:verb |
+| id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's | |
+| key | spent | a key; only in `key image` | |
+| image | key | a key image (a hash) | |
+| prune | tx | a switch: carry the pruned body | |
+| prunable | tx | the prunable part of a transaction | |
+| public | tx | the pool's one bit: the relay has made the transaction public (`DAEMON_RELAY_PRIVACY.md` acceptance criterion 2) | |
+| private | txpool | entries whose `public` bit is unset; with `count`, host-only (RT-O9.3) | |
+| confirmations | tx | blocks since the transaction's | |
+| parent | block, alt, header, template | the block this one extends (a hash) | |
+| nonce | block, header | the header's nonce; under `dev block generate`, the first nonce | |
+| orphan | block, header | not on the main chain | |
+| reward | block, mine, header, template | the block's reward, an amount | |
+| cumulative | difficulty | summed over the chain to this block | |
+| longterm | weight | the long-term weight | |
+| median | weight, size | the median | |
+| total | fee, weight, burn, bond | a sum | |
+| attestation | header | the attestation tree | |
+| index | output | a global output index | |
+| time | block, header, daemon, mined | a point in time (IG-Q54) | |
+| adjusted | time | the network-adjusted time | |
+| started | daemon, p2p | when it started, a time | |
+| duration | ban, shard | a span of time (IG-Q54) | |
+| spacing | block | the target time between blocks | |
+| target | sync, daemon | what the node is syncing to; `target height`, its height | |
+| synchronized | daemon | the node holds the target | |
+| syncing | daemon | the node is syncing | |
+| degraded | daemon | following, degraded | |
+| peered | daemon | at least one handshaken session (`has_peers`) | |
+| protocol | daemon | the P2P protocol; with `version`, its version | |
+| emission | coinbase, daemon, sum, template | coins emitted | |
+| burn | daemon | the share the next coinbase burns (micro) and, with `total`, what has burned | |
+| tagged | version, daemon | a tagged release build | |
+| multiplier | emission | the release multiplier (micro; `shekyl-economics`) | |
+| share | stake | the stakers' effective emission share (micro) | |
+| disk | daemon | the data directory's disk | |
+| free | disk | its free space, in bytes | |
+| outbound | peer, clearnet, tor, floor | connections we open | |
+| grant | daemon | the grants this connection holds | |
+| consensus | — | the consensus rules; `consensus digest`, the constants' digest | |
+| digest | consensus | a digest | |
+| connector | connection, floor, tally | one-of `clearnet`, `tor` | |
+| connection | span, peer | the P2P connection downloading the span | |
+| host | ban | an IP address or subnet | |
+| parameter | diagnostic | a diagnostic's named parameters, a map (IG-11) | |
+| diagnostic | — | a typed refusal (IG-11): a JSON-RPC error's `data` (RW-Q3) | |
+| code | diagnostic | its stable dotted code (`config.value.range`) | |
+| message | diagnostic | its one English rendering | |
+| pooled | tx | in the pool, not yet in a block | |
+| mined | tx | the block that holds the transaction; with `height` and `time` | |
+| verdict | tx | the daemon's verdict on a submitted transaction | |
+| cause | tx | why a rejected transaction was refused | |
+| claimed | claim | the epochs this persona has claimed | |
+| failure | bond, claim | an interval the bond failed, `{from, to}`; with `count`, how many | |
+| offline | daemon | P2P is off (IG-Q3's offline state) | |
+| economy | fee | the `economy` tier's fee per unit of weight | |
+| standard | fee | the `standard` tier's | |
+| high | fee | the `high` tier's | |
+| name | option | an option's name | |
+| value | option | an option's value, valid input to `option set` | |
+| source | option, diagnostic | where the value came from: `default`, `file`, `cli`, `runtime` | |
+| runtime | option | whether `option set` accepts the row (IG-12) | |
+| secret | option | the row is a secret: its value is never shown | |
+| assigned | option | a secret row has a value | |
+| major | version | the major version | |
+| minor | version | the minor version | |
+| state | connection | the connection's state | |
+| age | connection | how long it has lived | |
+| idle | download, upload | time since the last bytes | |
+| speed | download, upload, mine | per second: bytes, or under `mine` hashes | |
+| average | speed | the average | |
+| current | speed | the current value | |
+| flags | connection | the peer's support flags | |
+| packets | download, upload | a packet count | |
+| span | sync | a block span being downloaded | |
+| pace | span | the span queue's relative speed, a ratio (micro) | |
+| tier | peer | which peer list holds it, one-of `white`, `gray` | |
+| offset | extra | where the reserved extra bytes start | |
+| extra | template | the coinbase's extra nonce: the bytes, and with `size` how many to reserve | |
+| revision | daemon | the build's version string | |
+| joined | bond, claim | the epoch the bond joined | |
+| closing | epoch, shard | the epoch's closing height | |
+| hashing | template, pow | the bytes proof of work hashes | |
+| next | seed | the next seed | |
+| active | mine | the miner is running | |
+| permanent | ban | a ban with no end | |
+| floor | relay | the per-connector outbound floor | |
+| below | floor | under the floor | |
+| tally | relay | per-successor relay outcomes | |
+| propagated | tally | propagated relays | |
+| silent | tally | silent relays | |
+| sender | tally | a distinct peer that sent the transaction; with `count` | |
+| holding | claim | one-of `shards`, `complete-tree` | |
+| settled | claim, coverage | the last settled epoch | |
+| bond | — | an archival bond: a subject, which the claim source, an epoch and a credit name by reference (IG-Q42) | |
+| served | claim, coverage, shard | served | |
+| slash | claim | slashed | |
+| work | epoch, coverage | the summed work (milli, IG-Q54) | |
+| budget | epoch, coverage | the budget, an amount | |
+| credit | epoch | a credit pair | |
+| claimant | epoch | the claiming bond's index | |
+| segment | shard | the shard's segment is held | |
+| freeze | shard | the freeze height | |
+| frozen | coverage | frozen shards, with `count` | |
+| bonded | coverage, shard | bonded holders, with `count` | |
+| scarcity | coverage, shard | the join scarcity (micro, IG-Q54) | |
+| profit | coverage, shard | the expected profit, an amount | |
 
 **Terms of §3, §11 and §14.2 that gain a parent:**
 
-| Term | Gains parents | Meaning there |
-|---|---|---|
-| pow | —, dev | proof of work (RandomX): bare, *view* — compute a block's proof-of-work hash; under `dev`, its seed schedule (IG-Q48). A header's `pow` field and the header reads' `pow` switch name it by reference (IG-Q42) |
-| coinbase | header, shard | the coinbase transaction: under `chain`, its outputs (§11); under `header`, its id |
-| output | block, coinbase, shard, tx | the block's first output; `output index`, its global index |
-| alt | daemon | §11's `alt` gains `daemon`: the alternative blocks |
-| relay | — | §3's `relay` is also a subject: transaction relay, whose statistics `relay stats` reads |
-| endpoint | connection, peer, span | §11's `endpoint`: the peer's |
-| version | header, daemon, protocol, template | the version of what its parent names: under `header` and `template`, the block format's; under `protocol`, the P2P protocol's; under `daemon`, the RPC contract's, the field RW-Q6 freezes. Bare, §3's `version` is the binary's, so none of these is a reference to it |
-| blocks | span | a length in blocks |
-| body | block, template, tx | a block's or transaction's serialized bytes, kind `bytes` |
-| complete | bond | the whole corpus |
-| count | alt, block, bonded, chain, failure, frozen, gray, inbound, leaf, outbound, private, sender, served, tx, txpool, white | how many |
-| depth | header | a depth in blocks |
-| difficulty | alt, daemon, header, mine, template | a mining difficulty (`HexU128`) |
-| download | connection, span | bytes we receive |
-| epoch | claim, joined, served, settled, slash | a fixed-length run of blocks: the epoch its parent names |
-| from | block, failure, span | the first height |
-| gray | peer | the gray peer list |
-| hash | alt, chain, daemon, header, prunable, shard | a 32-byte hash that identifies what its parent names |
-| height | alt, claim, closing, connection, coverage, curve, daemon, freeze, header, mined, pow, seed, sync, target, template | a block height, an ordinal: the height of what its parent names (a tip, a target, a block) |
-| inbound | clearnet, connection, peer, tor | connections other nodes open to us |
-| list | block, header | *verb* — print the entries; on the wire, a bounded list (RW-Q1) |
-| local | connection, peer | endpoints not dialable on the public internet |
-| seed | template | the RandomX seed |
-| show | claim, curve, header | *verb* — print one item, by a typed selector (RW-Q1) |
-| size | archival, data, extra, shard, span | a size in bytes |
-| stats | relay | *view* — statistics |
-| to | block, failure, sum | the last height, inclusive |
-| upload | connection | bytes we send |
-| weight | block, header, template, tx | a weight, in bytes |
-| white | peer | the white peer list |
+| Term | Gains parents | Meaning there | Kind |
+|---|---|---|---|
+| pow | —, dev | proof of work (RandomX): bare, *view* — compute a block's proof-of-work hash; under `dev`, its seed schedule (IG-Q48). A header's `pow` field and the header reads' `pow` switch name it by reference (IG-Q42) | —:view |
+| coinbase | header, shard | the coinbase transaction: under `chain`, its outputs (§11); under `header`, its id | |
+| output | block, coinbase, shard, tx | the block's first output; `output index`, its global index | |
+| alt | daemon | §11's `alt` gains `daemon`: the alternative blocks | |
+| relay | — | §3's `relay` is also a subject: transaction relay, whose statistics `relay stats` reads | |
+| endpoint | connection, peer, span | §11's `endpoint`: the peer's | |
+| version | header, daemon, protocol, template | the version of what its parent names: under `header` and `template`, the block format's; under `protocol`, the P2P protocol's; under `daemon`, the RPC contract's, the field RW-Q6 freezes. Bare, §3's `version` is the binary's, so none of these is a reference to it | |
+| blocks | span | a length in blocks | |
+| body | block, template, tx | a block's or transaction's serialized bytes, kind `bytes` | |
+| complete | bond | the whole corpus | |
+| count | alt, block, bonded, chain, failure, frozen, gray, inbound, leaf, outbound, private, sender, served, tx, txpool, white | how many | |
+| depth | header | a depth in blocks | |
+| difficulty | alt, daemon, header, mine, template | a mining difficulty (`HexU128`) | |
+| download | connection, span | bytes we receive | |
+| epoch | claim, joined, served, settled, slash | a fixed-length run of blocks: the epoch its parent names | |
+| from | block, failure, span | the first height | |
+| gray | peer | the gray peer list | |
+| hash | alt, chain, daemon, header, prunable, shard | a 32-byte hash that identifies what its parent names | |
+| height | alt, claim, closing, connection, coverage, curve, daemon, freeze, header, mined, pow, seed, sync, target, template | a block height, an ordinal: the height of what its parent names (a tip, a target, a block) | |
+| inbound | clearnet, connection, peer, tor | connections other nodes open to us | |
+| list | block, header | *verb* — print the entries; on the wire, a bounded list (RW-Q1) | block:verb, header:verb |
+| local | connection, peer | endpoints not dialable on the public internet | |
+| seed | template | the RandomX seed | |
+| show | claim, curve, header | *verb* — print one item, by a typed selector (RW-Q1) | claim:verb, curve:verb, header:verb |
+| size | archival, data, extra, shard, span | a size in bytes | |
+| stats | relay | *view* — statistics | relay:view |
+| to | block, failure, sum | the last height, inclusive | |
+| upload | connection | bytes we send | |
+| weight | block, header, template, tx | a weight, in bytes | |
+| white | peer | the white peer list | |
 
 Value keywords added: `unspent` (spent), `tip` (a header, block or curve selector), `shards`, `complete-tree` (holding), `clearnet`, `tor` (connector), `white`, `gray` (tier).
 
@@ -1145,7 +1145,7 @@ Each is posed for ruling. A question that amends a ruled row names it.
 - **A reference.** A field or parameter may name another subject directly: the subject alone, or a path starting at it (`block_count` walks `block` → `count`). That is a reference to the other thing, and it needs no edge from its holder: glossary edges express refinement only. The gate tries the holder's path first and the reference form second, and refuses a name valid neither way. In a method name, `dev` is followed by a reference (IG-Q49).
 - **A list-valued parameter or field** takes the singular term with an array value (`{"height": [7, 8]}`), IG-6's list convention on the wire.
 - **How the gate finds each object.** Every request and reply type in RW-Q7's table, and every type nested in one, carries its object's path as a constant on the type: a reply or element type names what it describes (`block header`, `peer connection`), a selector type names the method's subject, a modifier type names what it modifies (the transaction-body options carry `tx`), and a request type's remaining fields are inputs or arguments under the path its row gives. The schema generator emits each field with its holding type's path, and the gate walks that path followed by the field's terms. No list of objects is kept by hand.
-- **The walk checks edges, not membership.** For every method, parameter and field, each adjacent pair of terms is a parent → child edge in §3, §11, §14.2 or §19, and a method's first term is a subject; a qualifier (`max`, `min`) may end any path. A name whose pairs are all terms but not all edges fails.
+- **The walk checks edges, not membership.** For every method, parameter and field, each adjacent pair of terms is a parent → child edge in §3, §11, §14.2 or §19, and a method's first term is a subject. A method's last term is a view or a verb under the parent its walk used, read from the Kind column (a bare-subject method, such as `fee`, `pow` or `version`, by its bare kind); a qualifier (`max`, `min`) may end any path. A name whose pairs are all terms but not all edges fails.
 
 Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #1088: a secret row's `set` collides with §11's verb `set` and becomes `assigned`; `option_set`'s request, a list of `{name, value}` under the key `options`, cannot walk (`option` → `option`) and becomes `value`, a map from option name to value; and the replies' `options` wrapper goes (IG-Q53).
 
