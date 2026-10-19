@@ -113,6 +113,7 @@ mod prune;
 mod read;
 mod shard_reads;
 mod shared;
+mod snapshot_view;
 mod tx_reads;
 pub(crate) mod undo;
 mod view;
@@ -124,9 +125,9 @@ pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
 pub use connect::Connected;
 pub use error::{
-    AccrualFault, AltCannot, CellFault, EdgeFault, EngineError, ErrorClass, FrozenFault,
-    LeafCountFault, LeafDensity, PoolCannot, SettlementFault, SlashFault, StoreCannot, StoreError,
-    StoreInvariant, UndoFault,
+    AccrualFault, AltCannot, CellFault, DigestFault, DrawableFault, EdgeFault, EngineError,
+    ErrorClass, FrozenFault, LeafCountFault, LeafDensity, PoolCannot, SettlementFault, SlashFault,
+    StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{
@@ -138,6 +139,7 @@ pub use pop::Popped;
 pub use prune::{EpochFloors, Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
 pub use shard_reads::{ClosedShardRows, ShardFold};
+pub use snapshot_view::SnapshotView;
 pub use tx_reads::{PqcAuths, Prunable, SegmentBytes, TxLocation, TxRecord};
 pub use undo::{RawRows, Restorable};
 pub use view::BatchView;

@@ -1,351 +1,310 @@
 // Copyright (c) 2025-2026, The Shekyl Foundation
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The epoch's drawable set (`DrawableSet::at_epoch_open`, SO-D8 Q3).
+//! The epoch's drawable set: the builder of its [`DrawableEpoch`]
+//! (`SO-D12` increment 2, `ARCHIVAL_SETTLEMENT_WRITER.md` §16).
 //!
-//! The enumerator is a pure function over the recorded chain: tip bond
-//! records, the closed-and-final registry at `h_open(E)`, and the join
-//! filter. No snapshot table (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`
-//! §7.4). The journal walk that recovers holdings a Release or slash has
-//! cleared at tip is Slice C's — this increment lands the type and the
-//! pins that do not need those journals (E_join, CompleteTree at
-//! `h_open`, canonical order). Holder adapters until then read the same
-//! tip held sets (`shekyl-archival-fetch-sched` `HolderSource`).
+//! `D(E)` is the pairs held in the state after `h_open(E)` connects, that
+//! block's slash pass included, each with its persona's receipt key
+//! (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.1, §9.6). It is fixed for the epoch:
+//! a pair slashed or released during `E` stays in it. Two derivations
+//! produce it, through one emitter:
+//!
+//! 1. [`drawable_epoch_at_open`] — at `h_open(E)` itself, over the block's
+//!    post-state: the recorded records under this block's post-images,
+//!    after its slash pass and its close. At that height the post-state
+//!    *is* `D(E)`, so no journal is read, and a Release or a slash in the
+//!    block is applied. Its digest is written in the block's delta.
+//! 2. [`drawable_epoch_walked_back`] — at any later tip, from the records
+//!    at tip with every Release (the Release journal, A20) and every slash
+//!    (the slash log, A21) connected strictly above `h_open(E)` undone,
+//!    newest first. The settlement pass that settles `E` compares its
+//!    digest with the one written at the open (§9.5 check 2).
+//!
+//! **The two are independent.** The first reads no journal; the second
+//! reads no value the first produced — not the digest, and not a cached
+//! set. The check compares them, and a shared shortcut would make it test
+//! nothing (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §6.3 item 2).
+//!
+//! # The filters both apply
+//!
+//! [`emit`] holds the three pins of the proposal's §7.4 for both: a bond
+//! that joined in `E` or later is excluded (pin 1); a complete tree expands
+//! to the shards closed and final at `h_open(E)`, not at tip (pin 2); and
+//! the pairs are in canonical order (pin 3, [`DrawablePair`]'s `Ord`).
+//!
+//! Closed and final at `h_open` is one count for both arms. Shards close
+//! in order, so the shards closed and final at `h_open` are the prefix
+//! `0..final_count`, with `final_count` the
+//! [`ClosedUniverse::final_before`] count for a block connecting at
+//! `h_open + 1` ([`closed_and_final`](super::closed_and_final) taken over
+//! every shard at once). A compact holding keeps a shard below it. The
+//! count reads blocks at or below `h_open − reorg_cap`, so derivation 1 can
+//! take it while block `h_open` is connecting, and derivation 2 reads the
+//! same blocks at any later tip.
+//!
+//! # What the walk undoes, and what it need not
+//!
+//! Holdings change by two events only: a slash removes a shard (or demotes
+//! a complete tree to the empty set), and a Release empties the record.
+//! A JoinMarket above `h_open(E)` joins in `E` or later and is excluded by
+//! pin 1. A Reinstate changes no holdings: it is refused unless the post's
+//! shard set equals the record's, and its one write ends the open bad
+//! interval (§16.7). No other post changes holdings: `HoldingsUpdate` is
+//! rejected and the bond is immutable. Records are never deleted, so a
+//! journal row always finds its persona's record.
+//!
+//! The receipt key is not restored by anything: a Release keeps the
+//! record and no post changes the key, so tip and the pre-image agree on
+//! it.
+//!
+//! # The walk's span, and the journals' floor
+//!
+//! The walk reads everything strictly above `h_open(E)`. It runs at the
+//! slash pass that settles `E`, in the block whose `count` (one above its
+//! height) first passes `E`'s slash deadline: the last block of epoch
+//! `E + k`, with `k` the slash grace, so the span is under `(k + 1)·SEB`. A
+//! reorg can run that pass again with the tip up to `reorg_cap` blocks
+//! lower than the tip the last prune ran at. Both
+//! journals are retired below [`SlashLogFloor`], `(k + n)·SEB + reorg_cap`
+//! below the pruning tip, so the walk stays above the floor when
+//! `(k + 1)·SEB + reorg_cap ≤ (k + n)·SEB + reorg_cap`. Both sides scale
+//! with `SEB` and carry the same cap, so the relation is in epochs and
+//! holds under every schedule, Fakechain's included:
+//! [`WALK_BACK_EPOCHS`] against the floor's epochs, asserted at compile
+//! time. A walk asked to start below the floor anyway is refused, never
+//! degraded ([`DrawableEpochFault::BelowFloor`], §7.4 pin 4).
 
-use shekyl_archival_retention::DrawablePair;
-use shekyl_types::archival::{BondRecord, Holdings};
+use std::collections::BTreeMap;
+
+use shekyl_archival_retention::{
+    DrawableEpoch, DrawablePair, SettlementSchedule, FAILURE_WINDOW_N, SLASH_GRACE_EPOCHS,
+};
+use shekyl_types::archival::{
+    BondRecord, HeldShard, Holdings, LoggedSlash, ReleasedRecord, SlashedHolding,
+};
 use shekyl_types::{BlockCount, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
-use crate::archival::{closed_and_final, ClosedUniverse};
-use crate::fault::ViewRead;
-use crate::rule_set::RuleSet;
+use crate::archival::ClosedUniverse;
+use crate::fault::{Corrupt, DrawableEpochFault, ViewRead};
+use crate::reorg::SlashLogFloor;
 use crate::view::ChainView;
 
-/// The drawable `(P, s)` pairs of one settlement epoch, in canonical
-/// order (persona canonical-id bytes, then `shard_id` numeric).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DrawableSet {
-    pairs: Vec<DrawablePair>,
+/// The epochs the walk back reads, from `h_open(E)` to the slash pass
+/// that settles `E`: the epoch itself and the slash grace after it (module
+/// docs, *The walk's span*).
+pub const WALK_BACK_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
+
+// The walk stays above the journals' floor under every schedule: the floor
+// is `(k + n)` epochs and a reorg cap below the tip, the walk `(k + 1)`
+// epochs and at most a reorg cap. Re-pinning the grace or the window so
+// the walk reaches below the floor fails here.
+#[allow(clippy::cast_lossless)] // `u64::from` is not const.
+const _: () = assert!(WALK_BACK_EPOCHS <= SLASH_GRACE_EPOCHS + FAILURE_WINDOW_N as u64);
+
+/// The count of shards closed and final at `h_open`: the prefix both
+/// derivations expand a complete tree to and keep a compact shard inside
+/// (module docs, *The filters both apply*).
+pub(crate) fn final_count_at_open<'id, V: ChainView<'id>>(
+    view: &V,
+    h_open: BlockHeight,
+    reorg_cap: BlockCount,
+) -> Result<u64, ViewRead<V::Fault>> {
+    let h_next = h_open
+        .checked_add(BlockCount::ONE)
+        .expect("an open height below u64::MAX");
+    Ok(ClosedUniverse::final_before(view, h_next, reorg_cap)?
+        .count()
+        .get())
 }
 
-impl DrawableSet {
-    /// The pairs `E` can draw, computed at this view's tip against
-    /// holdings as they stand and the shards that were closed and final
-    /// at `h_open(E)` (SO-D8 §7.4 pins 1–3).
-    ///
-    /// An empty chain, or an epoch that has not opened on this tip,
-    /// yields an empty set — genesis and a future `E` schedule nothing.
-    ///
-    /// # Errors
-    ///
-    /// The view's fault, or [`crate::Corrupt::ShardCloseUnplaced`] from
-    /// [`closed_and_final`] when a shard the count says is closed has no
-    /// close height.
-    pub fn at_epoch_open<'id, V: ChainView<'id>>(
-        view: &V,
-        epoch: SettlementEpoch,
-        rule_set: &RuleSet,
-    ) -> Result<Self, ViewRead<V::Fault>> {
-        let Some(tip) = view.tip().map_err(ViewRead::View)? else {
-            return Ok(Self::default());
-        };
-        let h_open =
-            BlockHeight::from_raw(rule_set.settlement_schedule().open_height(epoch.to_raw()));
-        if h_open > tip.height {
-            return Ok(Self::default());
-        }
-        let records = view.bond_records().map_err(ViewRead::View)?;
-        let cap = rule_set.reorg_cap();
-        // `final_before(h_open + 1, cap)` is `closed_and_final` at `h_open`
-        // over the set. The per-shard walk re-derived the same predicate.
-        let h_next = h_open
-            .checked_add(BlockCount::ONE)
-            .expect("h_open + 1 fits");
-        let final_count = ClosedUniverse::final_before(view, h_next, cap)?
-            .count()
-            .get();
-        let mut is_final = |shard: ShardId| closed_and_final(view, shard, h_open, cap);
-        let pairs = emit_pairs(records, epoch, final_count, &mut is_final)?;
-        Ok(Self { pairs })
-    }
-
-    /// The pairs, in canonical order.
-    #[must_use]
-    pub fn pairs(&self) -> &[DrawablePair] {
-        &self.pairs
-    }
-
-    /// The pairs, consuming the set.
-    #[must_use]
-    pub fn into_pairs(self) -> Vec<DrawablePair> {
-        self.pairs
-    }
-}
-
-/// Pin 1 (exclude `E_join ≥ E`), pin 2 (`CompleteTree` over the
-/// closed-and-final registry at `h_open`, not tip), pin 3 (sort persona
-/// canonical-id bytes, then `shard_id` numeric). `final_count` is
-/// [`ClosedUniverse::final_before`] at `h_open + 1`: a CompleteTree expands
-/// `0..final_count` and does not re-derive the predicate per shard.
-/// `is_final` is that same predicate for a compact holding, which names
-/// shards rather than a prefix.
-fn emit_pairs<E>(
-    records: impl IntoIterator<Item = (PCanonicalId, BondRecord)>,
+/// Derivation 1: `D(epoch)` over the state after `h_open(epoch)` connects
+/// — `records` is every bond record as the connecting block leaves it, its
+/// slash pass included — with `final_count` from [`final_count_at_open`].
+///
+/// # Errors
+///
+/// [`DrawableEpochFault::Construction`] when a record's receipt key does
+/// not parse.
+pub(crate) fn drawable_epoch_at_open<'r>(
     epoch: SettlementEpoch,
+    records: impl IntoIterator<Item = (&'r PCanonicalId, &'r BondRecord)>,
     final_count: u64,
-    is_final: &mut impl FnMut(ShardId) -> Result<bool, E>,
-) -> Result<Vec<DrawablePair>, E> {
+) -> Result<DrawableEpoch, DrawableEpochFault> {
+    emit(epoch, records, final_count)
+}
+
+/// Derivation 2: `D(epoch)` rebuilt at this view's tip from the records at
+/// tip and the two bond journals, with every Release and slash above
+/// `h_open(epoch)` undone. `None` when `epoch` has not opened on this view:
+/// there is no state after `h_open(epoch)` to rebuild.
+///
+/// `schedule` and `reorg_cap` are the rule set's, and `floor` is the
+/// journals' floor under it — the caller's, as for every slash-log read
+/// (`SLK-2`).
+///
+/// # Errors
+///
+/// The view's fault; [`Corrupt::DrawableEpoch`] when the walk would start
+/// below `floor`, when a journal row names a persona with no record, when
+/// a slash cannot be undone on the record the walk holds, or when the
+/// rebuilt set cannot be built; or [`closed_and_final`](super::closed_and_final)'s
+/// [`Corrupt::ShardCloseUnplaced`].
+pub fn drawable_epoch_walked_back<'id, V: ChainView<'id>>(
+    view: &V,
+    epoch: SettlementEpoch,
+    schedule: SettlementSchedule,
+    reorg_cap: BlockCount,
+    floor: SlashLogFloor,
+) -> Result<Option<DrawableEpoch>, ViewRead<V::Fault>> {
+    let corrupt = |why| ViewRead::Corrupt(Corrupt::DrawableEpoch { epoch, why });
+    let Some(tip) = view.tip().map_err(ViewRead::View)? else {
+        return Ok(None);
+    };
+    let h_open = BlockHeight::from_raw(schedule.open_height(epoch.to_raw()));
+    if h_open > tip.height {
+        return Ok(None);
+    }
+    // Rows strictly above `h_open` are read; the lowest is `h_open + 1`, and
+    // the floor is the lowest retained.
+    if let Some(kept_from) = floor.height() {
+        if h_open.to_raw().saturating_add(1) < kept_from.to_raw() {
+            return Err(corrupt(DrawableEpochFault::BelowFloor {
+                h_open,
+                floor: kept_from,
+            }));
+        }
+    }
+    let records = view.bond_records().map_err(ViewRead::View)?;
+    let releases = view
+        .release_journal_after(h_open, floor)
+        .map_err(ViewRead::View)?;
+    let slashes = view
+        .slash_log_rows_after(h_open, floor)
+        .map_err(ViewRead::View)?;
+    let at_open = rewind(records, releases, slashes).map_err(corrupt)?;
+    let final_count = final_count_at_open(view, h_open, reorg_cap)?;
+    emit(epoch, at_open.iter(), final_count)
+        .map(Some)
+        .map_err(corrupt)
+}
+
+/// One event the walk undoes. Within a block a Release (an input) connects
+/// before a slash (the slash pass), so at one height a slash is the newer.
+enum Undo {
+    Release(ReleasedRecord),
+    Slash(LoggedSlash),
+}
+
+impl Undo {
+    /// The order the events connected in: height, then the Release before
+    /// the slash pass. Ties within a kind keep the read's order.
+    fn connected_at(&self) -> (BlockHeight, u8) {
+        match self {
+            Self::Release(release) => (release.height, 0),
+            Self::Slash(slash) => (slash.height, 1),
+        }
+    }
+}
+
+/// The records as they stood after `h_open(E)` connected: `records` at tip
+/// with every journaled event above `h_open(E)` undone, newest first. A
+/// Release is undone by restoring its pre-image; a slash by giving back the
+/// shard it removed, with its add epoch, or the complete tree it demoted.
+///
+/// Pure: the fold over three reads, so its arms are tested on plain data.
+fn rewind(
+    records: Vec<(PCanonicalId, BondRecord)>,
+    releases: Vec<ReleasedRecord>,
+    slashes: Vec<LoggedSlash>,
+) -> Result<BTreeMap<PCanonicalId, BondRecord>, DrawableEpochFault> {
+    let mut records: BTreeMap<PCanonicalId, BondRecord> = records.into_iter().collect();
+    let mut events: Vec<Undo> = releases
+        .into_iter()
+        .map(Undo::Release)
+        .chain(slashes.into_iter().map(Undo::Slash))
+        .collect();
+    // Stable, so rows of one kind at one height keep their read order.
+    events.sort_by_key(Undo::connected_at);
+    for event in events.into_iter().rev() {
+        match event {
+            Undo::Release(release) => {
+                let persona = release.persona;
+                let record = records
+                    .get_mut(&persona)
+                    .ok_or(DrawableEpochFault::NoRecord { persona })?;
+                *record = release.pre_image;
+            }
+            Undo::Slash(LoggedSlash { entry, .. }) => {
+                let (persona, shard) = (entry.persona, entry.shard);
+                let record = records
+                    .get_mut(&persona)
+                    .ok_or(DrawableEpochFault::NoRecord { persona })?;
+                record.holdings = unslashed(&record.holdings, shard, entry.holding)
+                    .ok_or(DrawableEpochFault::SlashNotUndoable { persona, shard })?;
+            }
+        }
+    }
+    Ok(records)
+}
+
+/// `holdings` with one slash undone, or `None` when `holdings` is not a
+/// state that slash can have left: a compact set that already holds the
+/// removed shard (or that the shard cannot rejoin), or anything but the
+/// empty set for a complete-tree demotion.
+fn unslashed(holdings: &Holdings, shard: ShardId, took: SlashedHolding) -> Option<Holdings> {
+    match (holdings, took) {
+        (Holdings::ShardSet(held), SlashedHolding::Shard { add_epoch }) => {
+            let mut restored = held.as_slice().to_vec();
+            restored.push(HeldShard { shard, add_epoch });
+            Holdings::shard_set(restored).ok()
+        }
+        (Holdings::ShardSet(held), SlashedHolding::CompleteTree) if held.is_empty() => {
+            Some(Holdings::CompleteTree)
+        }
+        _ => None,
+    }
+}
+
+/// The emitter both derivations share: pins 1 to 3 over `records`, and
+/// each persona's receipt key, into the one constructor.
+fn emit<'r>(
+    epoch: SettlementEpoch,
+    records: impl IntoIterator<Item = (&'r PCanonicalId, &'r BondRecord)>,
+    final_count: u64,
+) -> Result<DrawableEpoch, DrawableEpochFault> {
     let mut pairs = Vec::new();
-    for (persona, record) in records {
+    let mut keys = Vec::new();
+    for (&persona, record) in records {
         if record.join_settlement_epoch >= epoch {
             continue;
         }
-        let p_id = persona.to_bytes();
+        let held = pairs.len();
         match &record.holdings {
             Holdings::CompleteTree => {
-                for shard in 0..final_count {
-                    pairs.push(DrawablePair {
-                        p_id,
-                        shard_id: shard,
-                    });
-                }
+                pairs.extend((0..final_count).map(|shard| DrawablePair {
+                    persona,
+                    shard: ShardId::from_raw(shard),
+                }));
             }
-            Holdings::ShardSet(held) => {
-                for held in held.iter() {
-                    if is_final(held.shard)? {
-                        pairs.push(DrawablePair {
-                            p_id,
-                            shard_id: held.shard.to_raw(),
-                        });
-                    }
-                }
+            Holdings::ShardSet(set) => {
+                pairs.extend(
+                    set.iter()
+                        .filter(|h| h.shard.to_raw() < final_count)
+                        .map(|h| DrawablePair {
+                            persona,
+                            shard: h.shard,
+                        }),
+                );
             }
         }
+        if pairs.len() > held {
+            keys.push((persona, &record.receipt_sign_pk));
+        }
     }
-    pairs.sort_unstable();
-    Ok(pairs)
+    DrawableEpoch::new(epoch, keys, pairs).map_err(DrawableEpochFault::Construction)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::archival::{closed_and_final, ClosedUniverse};
-    use crate::harness::fixture::{recorded, root};
-    use crate::harness::MockChain;
-    use crate::view::RecordedBlock;
-    use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
-    use shekyl_types::archival::HeldShard;
-    use shekyl_types::{ArchivalLength, BlockCount, SHARD_LENGTH};
-    use shekyl_units::AtomicUnits;
-
-    const P1: [u8; 32] = [0xa1; 32];
-    const P2: [u8; 32] = [0xa2; 32];
-
-    fn persona(p: [u8; 32]) -> PCanonicalId {
-        PCanonicalId::from_bytes(p)
-    }
-
-    fn compact(p: [u8; 32], shards: &[u64], join: u64) -> (PCanonicalId, BondRecord) {
-        (
-            persona(p),
-            BondRecord {
-                hybrid_pubkey: vec![0xb1; 4],
-                bond_spend_pk: vec![0xb5; 4],
-                receipt_sign_pk: shekyl_types::archival::ReceiptSignPk::from_bytes(
-                    [0x5c; shekyl_types::archival::RECEIPT_SIGN_PK_LEN],
-                ),
-                endpoint: [0xe0; 32],
-                join_settlement_epoch: SettlementEpoch::from_raw(join),
-                bonded_total: AtomicUnits::from_raw(
-                    ARCHIVAL_BOND_FLOOR_ATOMIC * shards.len() as u64,
-                ),
-                holdings: Holdings::shard_set(
-                    shards
-                        .iter()
-                        .map(|&shard| HeldShard {
-                            shard: ShardId::from_raw(shard),
-                            add_epoch: SettlementEpoch::from_raw(join),
-                        })
-                        .collect(),
-                )
-                .expect("distinct shards under the cap"),
-                bad_intervals: Vec::new(),
-                claimed_settlement_epochs: Vec::new(),
-                first_paying_emission_height: None,
-            },
-        )
-    }
-
-    fn complete(p: [u8; 32], join: u64) -> (PCanonicalId, BondRecord) {
-        let (id, mut record) = compact(p, &[], join);
-        record.holdings = Holdings::CompleteTree;
-        record.bonded_total = AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC);
-        (id, record)
-    }
-
-    fn pair(p: [u8; 32], shard: u64) -> DrawablePair {
-        DrawablePair {
-            p_id: p,
-            shard_id: shard,
-        }
-    }
-
-    /// **Height 0 issues nothing** (`SO-D12` increment 1, ruled
-    /// 2026-10-10), and neither does any other block of epoch 0.
-    ///
-    /// The genesis block carries a `0x0C` commitment like every block, and
-    /// no reader treats it specially. It issues no draw for a reason that
-    /// has nothing to do with its commitment's value: the drawable set of
-    /// epoch 0 is empty. A bond is drawable from the epoch after it joins,
-    /// and no bond joins before epoch 0, so every record is excluded,
-    /// whatever it holds. With `D = 0` the count rule gives zero draws at
-    /// every block and the selection has no pair to pick, so no draw index
-    /// `j` exists at height 0 and no carrier's record can name one.
-    #[test]
-    fn height_zero_and_all_of_epoch_zero_issue_no_draw() {
-        use shekyl_archival_retention::{
-            draw_count, draw_horizon, select_draw, CHALLENGE_RESPONSE_BLOCKS,
-            SETTLEMENT_EPOCH_BLOCKS,
-        };
-        // The earliest bonds there can be: joined in epoch 0, compact and
-        // complete-tree, with every shard final.
-        let records = [compact(P1, &[0, 1], 0), complete(P2, 0)];
-        let set = emit_pairs(records, SettlementEpoch::from_raw(0), 4, &mut |_| {
-            Ok::<_, ()>(true)
-        })
-        .expect("no predicate fault");
-        assert!(set.is_empty(), "nothing is drawable in epoch 0");
-        let d = set.len() as u64;
-
-        // The shortfall is a sum over the set, so it is zero with it.
-        let shortfall = 0;
-        let mut carry = 0;
-        for r in [
-            0,
-            1,
-            SETTLEMENT_EPOCH_BLOCKS / 2,
-            SETTLEMENT_EPOCH_BLOCKS - 1,
-        ] {
-            let horizon = draw_horizon(r, SETTLEMENT_EPOCH_BLOCKS, CHALLENGE_RESPONSE_BLOCKS);
-            let (count, next) = draw_count(d, shortfall, horizon, SETTLEMENT_EPOCH_BLOCKS, carry)
-                .expect("the schedule's epoch and horizon are non-zero");
-            assert_eq!(count, 0, "no draw at block {r} of epoch 0");
-            carry = next;
-        }
-        assert_eq!(carry, 0, "and no fraction accumulates toward one");
-
-        // Whatever seed a block committed to, and whatever it hashes to,
-        // there is no pair for a draw to select.
-        const BLOCK_HASH: [u8; 32] = [0x22; 32];
-        for seed in [[0u8; 32], [0x11; 32]] {
-            assert_eq!(
-                select_draw(&seed, &BLOCK_HASH, 0, d, |_| Ok::<_, ()>(true)),
-                Ok(None)
-            );
-        }
-    }
-
-    #[test]
-    fn empty_records_emit_nothing() {
-        let pairs = emit_pairs(Vec::new(), SettlementEpoch::from_raw(1), 4, &mut |_| {
-            Ok::<_, ()>(true)
-        })
-        .expect("no predicate read");
-        assert!(pairs.is_empty());
-    }
-
-    #[test]
-    fn a_bond_that_joined_in_e_is_not_drawable_in_e() {
-        let records = [compact(P1, &[0], 1)];
-        let pairs = emit_pairs(records, SettlementEpoch::from_raw(1), 4, &mut |_| {
-            Ok::<_, ()>(true)
-        })
-        .expect("no predicate read");
-        assert!(pairs.is_empty());
-    }
-
-    #[test]
-    fn compact_holdings_keep_only_final_shards_and_sort_canonically() {
-        let records = [compact(P2, &[2, 0], 0), compact(P1, &[1], 0)];
-        let pairs = emit_pairs(records, SettlementEpoch::from_raw(1), 4, &mut |s| {
-            Ok::<_, ()>(s.to_raw() != 2)
-        })
-        .expect("no predicate fault");
-        assert_eq!(pairs, [pair(P1, 1), pair(P2, 0)]);
-    }
-
-    #[test]
-    fn complete_tree_expands_the_closed_and_final_registry_not_tip() {
-        let records = [complete(P1, 0)];
-        let pairs = emit_pairs(records, SettlementEpoch::from_raw(1), 1, &mut |s| {
-            Ok::<_, ()>(s.to_raw() == 0)
-        })
-        .expect("no predicate fault");
-        assert_eq!(pairs, [pair(P1, 0)]);
-    }
-
-    /// Exemption 1: an empty chain has no tip and no pairs — the
-    /// enumerator, not a planted archival state.
-    #[test]
-    fn an_empty_chain_has_an_empty_drawable_set() {
-        MockChain::default().with_view(|view| {
-            let set =
-                DrawableSet::at_epoch_open(&view, SettlementEpoch::from_raw(0), &RuleSet::GENESIS)
-                    .expect("no view fault");
-            assert!(set.pairs().is_empty());
-        });
-    }
-
-    /// Exemption 1: `h_open(E)` past the tip is a future epoch, not a
-    /// fold to invent pairs from.
-    #[test]
-    fn an_epoch_that_has_not_opened_is_empty() {
-        let w = SHARD_LENGTH.to_raw();
-        let chain = MockChain::default().push(
-            RecordedBlock {
-                cumulative_archival_len: ArchivalLength::from_raw(w),
-                ..recorded(1_000)
-            },
-            root(0x11),
-        );
-        chain.with_view(|view| {
-            let set =
-                DrawableSet::at_epoch_open(&view, SettlementEpoch::from_raw(1), &RuleSet::GENESIS)
-                    .expect("genesis SEB opens epoch 1 far above this tip");
-            assert!(set.pairs().is_empty());
-        });
-    }
-
-    /// The closed-and-final predicate this enumerator uses is the same
-    /// function CEN-J15 already pins on this fold sequence.
-    #[test]
-    fn closed_and_final_on_the_two_shard_fold_is_the_registry() {
-        let w = SHARD_LENGTH.to_raw();
-        let folds = [0, w, w + 3, 2 * w + 4, 2 * w + 4];
-        let chain = folds
-            .into_iter()
-            .enumerate()
-            .fold(MockChain::default(), |chain, (h, fold)| {
-                chain.push(
-                    RecordedBlock {
-                        cumulative_archival_len: ArchivalLength::from_raw(fold),
-                        ..recorded(1_000 + h as u64)
-                    },
-                    root(0x11),
-                )
-            });
-        let cap = BlockCount::from_raw(2);
-        chain.with_view(|view| {
-            let h_open = BlockHeight::from_raw(4);
-            assert!(closed_and_final(&view, ShardId::from_raw(0), h_open, cap).unwrap());
-            assert!(!closed_and_final(&view, ShardId::from_raw(1), h_open, cap).unwrap());
-            let universe = ClosedUniverse::final_before(
-                &view,
-                h_open.checked_add(BlockCount::ONE).expect("fits"),
-                cap,
-            )
-            .unwrap();
-            assert_eq!(universe.count().get(), 1);
-        });
-    }
-}
+#[path = "drawable_tests.rs"]
+mod tests;

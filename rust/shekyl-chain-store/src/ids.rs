@@ -762,6 +762,79 @@ impl SlashLogKey {
     }
 }
 
+/// The key of one Release's pre-image:
+/// `archival_release_journal[(height, persona)]` (`SO-D12` increment 2).
+///
+/// Height-major, as the slash log is, for the same two readers: the walk
+/// that rebuilds a drawable set takes every row strictly above one height
+/// ([`Self::above`]), and the boundary batch retires every row strictly
+/// below the slash log's floor ([`Self::below`]). Inside a height the rows
+/// run by persona; a persona releases once, so a height holds at most one
+/// row per persona and the key is insert-once. Fields are private: the
+/// tuple is assembled only through [`Self::key`] / [`Self::from_key`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ReleaseJournalKey {
+    height: BlockHeight,
+    persona: PCanonicalId,
+}
+
+/// The redb tuple a [`ReleaseJournalKey`] is stored under.
+pub type ReleaseJournalTuple = (u64, [u8; 32]);
+
+impl ReleaseJournalKey {
+    /// The key of `persona`'s Release at `height`.
+    #[must_use]
+    pub const fn new(height: BlockHeight, persona: PCanonicalId) -> Self {
+        Self { height, persona }
+    }
+
+    /// The connecting height of the Release.
+    #[must_use]
+    pub const fn height(self) -> BlockHeight {
+        self.height
+    }
+
+    /// The releasing persona.
+    #[must_use]
+    pub const fn persona(self) -> PCanonicalId {
+        self.persona
+    }
+
+    /// The stored tuple.
+    #[must_use]
+    pub const fn key(self) -> ReleaseJournalTuple {
+        (self.height.to_raw(), self.persona.to_bytes())
+    }
+
+    /// The key a stored tuple names.
+    #[must_use]
+    pub const fn from_key((height, persona): ReleaseJournalTuple) -> Self {
+        Self {
+            height: BlockHeight::from_raw(height),
+            persona: PCanonicalId::from_bytes(persona),
+        }
+    }
+
+    /// Every row at a height **strictly above** `h`: `(h + 1, 0³²) ..`.
+    /// `None` when `h` is the last height, for [`SlashLogKey::above`]'s
+    /// reason.
+    #[must_use]
+    pub const fn above(h: BlockHeight) -> Option<core::ops::RangeFrom<ReleaseJournalTuple>> {
+        match h.checked_add(BlockCount::ONE) {
+            Some(next) => Some((next.to_raw(), [0; 32])..),
+            None => None,
+        }
+    }
+
+    /// Every row at a height **strictly below** `floor`: `.. (floor, 0³²)`,
+    /// the range the boundary batch retires with the slash log's. The read
+    /// refuses when [`Self::above`]'s start lies in it (SI-28).
+    #[must_use]
+    pub const fn below(floor: BlockHeight) -> core::ops::RangeTo<ReleaseJournalTuple> {
+        ..(floor.to_raw(), [0; 32])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

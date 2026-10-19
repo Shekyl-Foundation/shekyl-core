@@ -940,3 +940,6 @@ fn slash_scan_bench() {
 
 #[path = "settlement_slash_tests.rs"]
 mod settlement_slash_tests;
+
+#[path = "drawable_walk_tests.rs"]
+mod drawable_walk_tests;

@@ -17,7 +17,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_crypto_pq::signature::HybridPublicKey;
 use shekyl_types::archival::{
     BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, Holdings, IndexedDraw, IssuedDigest,
-    PassCount, RMarket, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
+    SlashLogEntry,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -537,5 +538,21 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
         floor: EpochFloor<Claimable>,
     ) -> Result<Option<CompleteTreeSet>, Infallible> {
         self.inner.complete_trees(epoch, floor)
+    }
+
+    fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: crate::SlashLogFloor,
+    ) -> Result<Vec<ReleasedRecord>, Infallible> {
+        self.inner.release_journal_after(height, floor)
+    }
+
+    fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: crate::SlashLogFloor,
+    ) -> Result<Vec<LoggedSlash>, Infallible> {
+        self.inner.slash_log_rows_after(height, floor)
     }
 }

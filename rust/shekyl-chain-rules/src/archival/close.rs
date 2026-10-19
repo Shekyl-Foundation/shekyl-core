@@ -364,7 +364,7 @@ pub(crate) struct EpochSnapshot<'r> {
 /// can change after the pass — a complete tree that is slashed or released
 /// holds a compact set — and the market membership it decides must not:
 /// the pass freezes the set it gathered with ([`freeze_complete_trees`])
-/// and a claim's re-gather reads that set back (A20). Taking the flag as
+/// and a claim's re-gather reads that set back (A22). Taking the flag as
 /// an operand is what makes the two readers one read; a gather that
 /// consulted the record could not be told which of the two it was.
 ///
@@ -624,7 +624,7 @@ pub(crate) struct ServedAt {
 
 impl ServedAt {
     /// Read `epochs` for each persona, each at or above `floor` (the
-    /// claimable family's at the caller's connecting height; SI-29). An
+    /// claimable family's at the caller's connecting height; SI-32). An
     /// empty `epochs` reads nothing.
     ///
     /// # Errors

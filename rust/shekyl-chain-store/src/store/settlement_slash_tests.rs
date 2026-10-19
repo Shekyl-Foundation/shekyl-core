@@ -291,7 +291,7 @@ fn popping_the_deadline_connect_unsettles_the_epoch() {
     assert_eq!(
         frozen(&chain.store),
         None,
-        "the frozen set went with the block that settled the epoch (SI-28)"
+        "the frozen set went with the block that settled the epoch (SI-31)"
     );
     let snap = chain.store.begin_read().expect("read");
     assert_eq!(
@@ -358,7 +358,7 @@ fn a_settlement_row_already_recorded_refuses_the_second_write() {
     chain.finish();
 }
 
-/// What a settled epoch's pass freezes (`SO-D12h`, SI-28): the personas
+/// What a settled epoch's pass freezes (`SO-D12h`, SI-31): the personas
 /// its gather excluded from the market as complete trees. Every persona of
 /// this chain is a complete tree. In epoch 1 persona 0 is Served and
 /// persona 1 Missed: the gather credits persona 0 alone and excludes it as
@@ -413,7 +413,7 @@ fn a_settled_epoch_freezes_the_complete_trees_its_gather_excluded() {
 }
 
 /// The pass freezes an epoch's complete trees once. A set already under
-/// the epoch's key when the pass writes it is SI-28 at the insert.
+/// the epoch's key when the pass writes it is SI-31 at the insert.
 #[test]
 fn a_frozen_complete_tree_set_already_recorded_refuses_the_second_write() {
     let epoch = SettlementEpoch::from_raw(1);
@@ -441,7 +441,7 @@ fn a_frozen_complete_tree_set_already_recorded_refuses_the_second_write() {
     };
     assert!(
         message.contains("freezes an epoch's complete trees once"),
-        "the insert names SI-28: {message}"
+        "the insert names SI-31: {message}"
     );
     chain.finish();
 }

@@ -32,8 +32,9 @@ use shekyl_chain_rules::{
     TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
-    RMarket, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest,
+    LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
+    SlashLogEntry,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -238,5 +239,19 @@ impl<'id, T> ChainView<'id> for Stub<T> {
         _: EpochFloor<Claimable>,
     ) -> Result<Option<CompleteTreeSet>, Infallible> {
         Ok(None)
+    }
+    fn release_journal_after(
+        &self,
+        _: BlockHeight,
+        _: SlashLogFloor,
+    ) -> Result<Vec<ReleasedRecord>, Infallible> {
+        Ok(Vec::new())
+    }
+    fn slash_log_rows_after(
+        &self,
+        _: BlockHeight,
+        _: SlashLogFloor,
+    ) -> Result<Vec<LoggedSlash>, Infallible> {
+        Ok(Vec::new())
     }
 }

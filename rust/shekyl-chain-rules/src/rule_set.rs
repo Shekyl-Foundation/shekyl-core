@@ -753,8 +753,10 @@ impl AdmissionPolicyId {
 /// ([`crate::PolicyRow`]) as an input, separate from [`RuleSet`] by type so
 /// a consensus verdict cannot depend on it.
 ///
-/// Consumer: DRS-E5 (`PoolView`, `PolicyCoverage`). Its parameters populate
-/// there; increment 1 stages the identity only.
+/// Consumer: [`policy_form`](crate::policy_form), the pool door's third
+/// call (DRS-E5 PR-b). Its rows read frozen constants today, so the policy
+/// is its identity alone; the first row whose bound varies by policy step
+/// adds the parameter here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AdmissionPolicy {
     id: AdmissionPolicyId,

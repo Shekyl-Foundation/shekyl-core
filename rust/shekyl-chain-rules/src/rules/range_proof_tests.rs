@@ -164,6 +164,29 @@ fn h19_names_the_first_bad_transaction_whichever_way_its_proof_is_bad() {
     refused_at(vec![filler, valid(2)], TxSlot::Listed(0));
 }
 
+/// A lone transaction is a batch of one (DRS-E5 PR-b, the pool door): the
+/// verdict at `Lone` is the block fold's at the transaction's slot — a
+/// valid proof passes, a broken or unreassemblable one is refused at
+/// `Lone`, and a body with no proof passes vacuously, as an empty batch
+/// does.
+#[test]
+fn h19_alone_is_the_folds_verdict_at_the_lone_slot() {
+    for tx in [valid(1), valid(2), serve_credit_only([7; 32])] {
+        assert_eq!(H19::verify_lone(&tx), Ok(()));
+        assert_eq!(H19::verify_block(&candidate(vec![tx])), Ok(()));
+    }
+    for tx in [broken(1), unreassemblable(2)] {
+        assert_eq!(
+            H19::verify_lone(&tx),
+            Err(InvalidBlock::new(
+                CenRow::H19,
+                Locus::Tx { slot: TxSlot::Lone }
+            ))
+        );
+        refused_at(vec![tx], TxSlot::Listed(0));
+    }
+}
+
 /// A proof whose point does not decompress is sane-checked out of the
 /// batch, and named.
 #[test]

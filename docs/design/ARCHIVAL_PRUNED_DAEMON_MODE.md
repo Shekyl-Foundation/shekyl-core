@@ -2023,7 +2023,7 @@ the claimable family (`archival_sigma_work`, `archival_budget`,
 settling family (the issued-draw index and digest, the drawable digest,
 `archival_slash_applied`) `k`, and `archival_r_market` `k + 1`, each below
 the epoch before the boundary's, with reads below each floor refused
-(SI-29). `archival_serve_credit` is not retired there: its "ever served"
+(SI-32). `archival_serve_credit` is not retired there: its "ever served"
 reader has no horizon until `SO-D12j` is ruled.
 
 ### 9.5 Node-local, never chain state

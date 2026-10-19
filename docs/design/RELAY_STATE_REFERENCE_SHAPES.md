@@ -138,22 +138,21 @@ arrival — intended for the *behaviour* (§92.4: "past that point the pin's
 sign flips") but it takes the *fact* with it. "Has it been broadcast" and "did
 we originate it" cannot be asked separately.
 
-**The correct shape.** Three lifetimes, not one enum value.
-`DRS_E1_SPOOL.md` `SPL-Q9` poses provenance (permanent; the store refuses an
-update that changes it), phase (the ratchet — how it is travelling now — with
-the pin that an originated entry never walks to `Stem`/`Fluff` and yields to
-`Block`), and responsibility (`Armed` / `Disarmed`, originated entries only;
-F-10's verdict writes `Disarmed`). **As built (2026-09-24, review on the
-increment):** those three are one `RelayState`. The phase enum is chosen by
-the provenance — `OriginatedPhase` is `Held | Block`, `ArrivedPhase` is
-`Stem | Fluff | Block` — so the forbidden pairs have no value, and
-responsibility is a field of the originated arm only. Permanence compares
-`RelayState::origin()` (originated, or arrived over a zone), not the whole
-state, so a phase step or a disarm is not an origin change. `upgrade` is the
-strict forward step; an update stores a new phase only when it is that step
-or the same phase. The disarm *timer* is the Zone's; the pool holds no timer.
-The byte enum `RelayMethod` stays what it is — the FFI seam's word for an
-arrival class or a routing plan — and is derived at the seam, not persisted.
+**The correct shape.** Three lifetimes, not one enum value, and none of
+them on the pool record (DX-F6, 2026-10-16; `DRS_E5_POOL_ALT_PRUNE.md`
+§2.2). Provenance, phase and responsibility are the relay's: stem, fluff,
+embargo and the arrival connector are relay decisions, and
+`Responsibility` (`Armed` / `Disarmed`, originated transactions only,
+F-10's verdict writes `Disarmed` and nothing re-arms it) lives in
+`shekyl-relay`'s `stem_watch.rs`, keyed by transaction hash beside the
+stem watch whose verdict disarms it. The pool record carries the one fact
+the pool reads — whether the transaction is public yet (D++ acceptance
+criterion 2) — written by the relay's fluff event, and by a block carrying
+the transaction (a block has published it; a pool that kept it hidden
+would be a possession oracle), and never cleared.
+The disarm *timer* is the Zone's; the pool holds no timer. The byte enum
+`RelayMethod` stays what it is — the FFI seam's word for an arrival class
+or a routing plan — and is never persisted.
 
 **Drift looks like.** A single `RelayMethod` field that callers mutate to
 record progress — `local` → `fluff` on first relay. One variable carrying

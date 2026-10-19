@@ -16,10 +16,10 @@
 //! write transaction observe that transaction's own writes, so projecting
 //! the view from the batch gives block *h+1* the chain block *h* left.
 //!
-//! A `ReadSnapshot`-backed view (RPC-side re-validation, DRS-E5's pool
-//! decorator) is a later, separate implementor. It carries no batch brand,
-//! and so cannot mint a `ChainValid` that `connect` accepts — which is the
-//! point of the brand (C2-R8 Q3).
+//! The `ReadSnapshot`-backed view is a separate implementor,
+//! [`SnapshotView`](super::SnapshotView) — what the pool door judges
+//! against. It carries no batch brand, and so cannot mint a `ChainValid`
+//! that `connect` accepts — which is the point of the brand (C2-R8 Q3).
 //!
 //! # The root at `h` is key `h`
 //!
@@ -483,5 +483,23 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         floor: EpochFloor<Claimable>,
     ) -> Result<Option<CompleteTreeSet>, StoreError> {
         archival_reads::complete_trees(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
+    }
+
+    fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
+        archival_reads::release_journal_after(self.batch.txn(), height, floor)
+            .map_err(|f| self.arm(f))
+    }
+
+    fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::LoggedSlash>, StoreError> {
+        archival_reads::slash_log_rows_after(self.batch.txn(), height, floor)
+            .map_err(|f| self.arm(f))
     }
 }

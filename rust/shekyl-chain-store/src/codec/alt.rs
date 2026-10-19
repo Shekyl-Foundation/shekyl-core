@@ -93,11 +93,11 @@ use shekyl_chain_rules::AltValid;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_store_codec::{BlobKind, Canonical, CodecError};
 use shekyl_types::{BlockHeight, BlockWeight};
-use shekyl_wire::Block;
+use shekyl_wire::{Block, Transaction};
 
 use super::archival::AttestationWitnessBytes;
 use super::chain::{BlockBody, RecordedPow};
-use shekyl_store_codec::reader::{put_bytes, Reader};
+use shekyl_store_codec::reader::{put_bytes, put_count, Reader};
 
 /// Why [`AltBlock::checked`] refused to build a record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,8 +175,11 @@ impl AltBlock {
     /// (`DRS_E5_POOL_ALT_PRUNE.md` §2.1). Infallible — module docs, *The row
     /// is built from the verdict*. `V` is the view the tier judged over;
     /// the row does not keep it.
+    ///
+    /// The second value is the block's listed bodies, which AL1 writes to
+    /// `alt_block_bodies` under the same key ([`AltBodies`]).
     #[must_use]
-    pub fn admitted<V>(valid: AltValid<'_, V>) -> Self {
+    pub fn admitted<V>(valid: AltValid<'_, V>) -> (Self, AltBodies) {
         let height = valid.height();
         let cumulative_difficulty = valid.cumulative_difficulty();
         let block_weight = valid.block_weight();
@@ -186,16 +189,19 @@ impl AltBlock {
             "a measured block weight is at least its coinbase's bytes"
         );
         let candidate = valid.into_candidate();
-        Self {
-            height,
-            block_weight,
-            cumulative_difficulty,
-            pow,
-            block: candidate.block,
-            attestation_witness: candidate
-                .attestation_witness
-                .map(|witness| witness.as_bytes().to_vec()),
-        }
+        (
+            Self {
+                height,
+                block_weight,
+                cumulative_difficulty,
+                pow,
+                block: candidate.block,
+                attestation_witness: candidate
+                    .attestation_witness
+                    .map(|witness| witness.as_bytes().to_vec()),
+            },
+            AltBodies(candidate.transactions),
+        )
     }
 
     /// Build a value from bare facts and bytes, refusing what the codec
@@ -339,6 +345,89 @@ impl Canonical for AltBlock {
             block,
             attestation_witness,
         })
+    }
+}
+
+/// An alternative block's listed bodies, in the order its header lists
+/// them — `alt_block_bodies[hash] → Coded<AltBodies>` (DRS-E5 PR-b, the
+/// review of #1102's B1).
+///
+/// **The bodies are consensus data.** A switch promoting an alternative
+/// connects these bodies; a store that did not hold them could not follow a
+/// heavier valid chain, and a pool refuses, evicts and discards by local
+/// policy, so they are not the pool's to hold. AL1 writes them from
+/// the cheap tier's verdict, whose candidate `form` paired with the header
+/// (CEN-G2) before the tier ran, and AL2 and AL3 remove them with the row.
+///
+/// **A table of its own, not a field of [`AltBlock`].** Every switch plan
+/// and every connect's dead-row sweep walks the alt rows for their heights
+/// and headers; a field would make each of those walks parse every listed
+/// transaction. The bodies are read only when a block is promoted. The
+/// pairing the field would have made structural is a read belt instead:
+/// AL8 holds the bodies to the row's listed hashes, and a row without its
+/// bodies, or the converse, is SI-7.
+///
+/// # Layout
+///
+/// ```text
+/// count u32 ‖ count × (len u32 ‖ transaction bytes)
+/// ```
+///
+/// Each transaction is parsed at decode and must re-encode to its own
+/// bytes: one value, one encoding. Trailing bytes are a codec error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AltBodies(Vec<Transaction>);
+
+impl AltBodies {
+    /// Bodies for this crate's fixtures and tests; AL1 builds its value
+    /// from the verdict ([`AltBlock::admitted`]).
+    #[cfg(test)]
+    pub(crate) const fn of(transactions: Vec<Transaction>) -> Self {
+        Self(transactions)
+    }
+
+    /// The bodies, in listed order.
+    #[must_use]
+    pub fn transactions(&self) -> &[Transaction] {
+        &self.0
+    }
+
+    /// The bodies, owned.
+    #[must_use]
+    pub fn into_transactions(self) -> Vec<Transaction> {
+        self.0
+    }
+}
+
+impl Canonical for AltBodies {
+    const NAME: &'static str = "alt_bodies";
+    const FIXED_WIDTH: Option<usize> = None;
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        put_count(out, self.0.len());
+        for tx in &self.0 {
+            put_bytes(out, &tx.serialize());
+        }
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        // Each body is at least its four-byte length.
+        let count = r.count_bounded(4, usize::MAX, "unreachable: usize::MAX cap")?;
+        let mut out = Vec::with_capacity(count);
+        for _ in 0..count {
+            let raw = r.bytes()?;
+            let tx = Transaction::from_bytes(raw)
+                .map_err(|_| r.invalid("a listed body does not parse as a transaction"))?;
+            if tx.serialize() != raw {
+                return Err(r.invalid("a listed body does not re-encode to its own bytes"));
+            }
+            out.push(tx);
+        }
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the alt block's bodies"));
+        }
+        Ok(Self(out))
     }
 }
 

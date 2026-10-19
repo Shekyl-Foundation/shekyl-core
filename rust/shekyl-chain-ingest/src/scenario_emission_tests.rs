@@ -821,7 +821,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
     };
 
     // One epoch older is expired: refused at CEN-J25's window, before any
-    // row is read — not CEN-J23's missing row, and not the store's SI-29
+    // row is read — not CEN-J23's missing row, and not the store's SI-32
     // fault a read below the claimable floor would be. The block does not
     // connect.
     let expired = SettlementEpoch::from_raw(served.to_raw() - 1);

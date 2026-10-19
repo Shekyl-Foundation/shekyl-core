@@ -292,17 +292,41 @@ use super::{Canonical, CodecError};
 ///   mis-framed, so the bump refuses it at open; `alt_block.snap` re-pins
 ///   and `recorded_pow.snap` is new. Rebuild from the block corpus, as at
 ///   every bump.
-/// - `27` — a settled epoch's market membership is frozen at its pass
+/// - `27` — `alt_block_bodies` (`LmdbHashKey → alt_bodies`, Rust-only,
+///   ordinal 43) is born: an alternative block's listed bodies are
+///   consensus data the switch connects, so the store holds them beside the
+///   alt row instead of the pool (DRS-E5 PR-b; the review of #1102, B1).
+///   `alt_bodies.snap` is new and `tables.snap` re-pins; no existing table,
+///   ordinal or property cell moves. The pool file leaves this number
+///   (`SPL-Q8` as ruled, 2026-10-17): `pool_record.snap` and
+///   `pool_tables.snap` move to `pool_schemas/` under the pool file's own
+///   `POOL_SCHEMA_VERSION` (`crate::pool`), whose history records the
+///   record's reshaping in the same PR. A `26` chain file is refused, as
+///   at every bump.
+/// - `28` — the Release journal (`ARCHIVAL_SETTLEMENT_WRITER.md` §16,
+///   `SO-D12` increment 2). `archival_release_journal` (`(u64, [u8; 32]) →
+///   bond_record`, the record a Release replaced) is born Rust-only,
+///   appended at ordinal 44, written by `connect` for every Release and
+///   retired at the slash log's floor. The same increment gives
+///   `archival_drawable_digest` its writer: every block at an epoch's
+///   open, genesis included, writes the epoch's digest, which the
+///   settlement pass checks. A `27` file lacks the table and holds no
+///   digest for the epochs it opened, so its first settlement would halt;
+///   the bump refuses it at open instead. No value codec moves:
+///   `bond_record.snap` and `drawable_digest.snap` are unchanged, and
+///   `tables.snap` gains the row. Rebuild from the block corpus, as at
+///   every bump.
+/// - `29` — a settled epoch's market membership is frozen at its pass
 ///   (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`).
 ///   `archival_complete_trees` (`u64 → complete_tree_set`: a `u32` count
 ///   and the persona ids, strictly increasing) is born Rust-only, appended
-///   at ordinal 43, written by the slash pass beside `archival_sigma_work`
-///   for every settled epoch. A `26` file lacks the table, and a claim on
-///   one of its settled epochs would find `Σwork` without the set (SI-28),
+///   at ordinal 45, written by the slash pass beside `archival_sigma_work`
+///   for every settled epoch. A `28` file lacks the table, and a claim on
+///   one of its settled epochs would find `Σwork` without the set (SI-31),
 ///   so the bump refuses it at open; `complete_tree_set.snap` is new. The
 ///   per-epoch retirement of the same change moves no row's bytes. Rebuild
 ///   from the block corpus, as at every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(27);
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(29);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -359,10 +383,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(27));
-        assert_eq!(SCHEMA_VERSION.encode(), [27, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(29));
+        assert_eq!(SCHEMA_VERSION.encode(), [29, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[27, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[29, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

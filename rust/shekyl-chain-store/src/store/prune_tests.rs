@@ -54,7 +54,7 @@ use shekyl_chain_rules::{Candidate, EpochFloor, FakechainSchedule, RuleSet, Slas
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, ShardId, SHARD_LENGTH};
 use shekyl_wire::{Ct, Transaction};
 
-use super::archival_read_tests::{persona, plant, plant_slash, slash_entry};
+use super::archival_read_tests::{persona, plant, plant_slash, record, slash_entry};
 use super::connect_fixtures::{
     at, candidate, candidate_over, judge_under, root_going_into, serve_credit, spends, Grown,
     Listed, FIRST_SPEND_HEIGHT,
@@ -2439,6 +2439,121 @@ fn the_boundary_retires_slash_rows_below_the_floor_and_the_read_asserts_it() {
     cleanup(&path);
 }
 
+/// A boundary past the first slash floor: the Release journal retires
+/// below that floor, and drawable digests retire below the settling
+/// family's floor at the same height.
+const DIGEST_RETIRING_BOUNDARY: u64 = FIRST_FLOORED_BOUNDARY + 2 * WINDOW_SEB;
+
+/// **The Release journal retires with the slash log; drawable digests
+/// retire with the settling family** (`SO-D12` increment 2, `SO-D12h`): at
+/// a floored boundary, journal rows below the slash floor are gone and rows
+/// at and above it stay, and the journal's reader asserts that floor
+/// (SI-28). Drawable digests retire below the settling family's floor at
+/// the same boundary (`retire_epoch_rows`), which is inside the slash
+/// floor, so more than the one epoch the slash floor would drop is gone.
+///
+/// **Falsifiers:** delete `retire_release_rows` and the journal assertion
+/// fails with the planted rows intact; delete the drawable-digest arm of
+/// `retire_epoch_rows` and the digest assertion fails with the epochs below
+/// the settling floor still present; delete the SI-28 arm in
+/// `archival_reads::release_journal_after` and the `unwrap_err` panics on an
+/// `Ok`.
+#[test]
+fn the_boundary_retires_release_rows_and_settled_digests_below_the_floor() {
+    let path = tmp("release-retire");
+    let boundary = DIGEST_RETIRING_BOUNDARY;
+    let floor = floor_at(boundary)
+        .height()
+        .expect("a floored boundary")
+        .to_raw();
+    let schedule = WINDOW_RULES.settlement_schedule();
+    assert_eq!(floor, 25, "the slash log's floor at this boundary");
+    let first_kept = epoch_floors_at(boundary)
+        .settling
+        .kept_from()
+        .expect("the settling floor is above zero")
+        .to_raw();
+    assert!(
+        first_kept > 1,
+        "the settling horizon retires past the one epoch the slash floor would"
+    );
+    let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
+
+    // A pre-image one below, at, and one above the floor.
+    let p = persona(0x61);
+    plant(&path, |txn| {
+        let mut journal = txn
+            .open_table(crate::schema::ARCHIVAL_RELEASE_JOURNAL)
+            .expect("t");
+        for h in [floor - 1, floor, floor + 1] {
+            journal
+                .insert(
+                    crate::ids::ReleaseJournalKey::new(BlockHeight::from_raw(h), p).key(),
+                    record().encoded().as_encoded(),
+                )
+                .expect("insert");
+        }
+    });
+    let digests = |store: &ChainStore| -> Vec<u64> {
+        let snap = store.begin_read().expect("read");
+        let table = snap
+            .open_table(crate::schema::ARCHIVAL_DRAWABLE_DIGEST)
+            .expect("table");
+        table
+            .range::<u64>(..)
+            .expect("range")
+            .map(|item| item.expect("row").0.value())
+            .collect()
+    };
+    let store = window_store(&path, WINDOW_CAP);
+    let opened = schedule.epoch_at_height(boundary - 1);
+    let already_kept = epoch_floors_at(boundary - WINDOW_SEB)
+        .settling
+        .kept_from()
+        .expect("the previous boundary retired drawable digests")
+        .to_raw();
+    assert_eq!(
+        digests(&store),
+        (already_kept..=opened).collect::<Vec<_>>(),
+        "earlier boundaries retired below their settling floor; later opens remain"
+    );
+
+    let pruned = b
+        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+        .remove(0)
+        .pruned
+        .expect("a floored boundary");
+    let snap = store.begin_read().expect("read");
+    let kept = snap
+        .release_journal_after(BlockHeight::from_raw(floor - 1), pruned.slash_floor)
+        .expect("a read starting at the floor is sound");
+    assert_eq!(
+        kept.iter().map(|r| r.height.to_raw()).collect::<Vec<_>>(),
+        [floor, floor + 1],
+        "below the floor gone, at and above it kept"
+    );
+    let err = snap
+        .release_journal_after(BlockHeight::from_raw(floor - 2), pruned.slash_floor)
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::ReleaseJournalReadBelowFloor {
+                asked,
+                floor: at
+            }) if asked == BlockHeight::from_raw(floor - 2) && at == BlockHeight::from_raw(floor)
+        ),
+        "a read starting below the floor is SI-28: {err}"
+    );
+    drop(snap);
+    assert_eq!(
+        digests(&store),
+        (first_kept..=schedule.epoch_at_height(boundary)).collect::<Vec<_>>(),
+        "drawable digests retire below the settling floor; the epoch at it stays"
+    );
+    cleanup(&path);
+}
+
 /// A session that stubs `SlashLog` does not retire it (`ARW-9`). The
 /// boundary still runs — bodies and the undo journal are not that family —
 /// and reports no slash floor, because none was enforced. The planted rows
@@ -2607,7 +2722,7 @@ fn keyed_epochs(store: &ChainStore) -> [Vec<u64>; 4] {
 /// own passes and closes wrote (`Σwork`, the complete-tree sets, the
 /// budgets) start at the claimable floor afterwards; the rows planted on
 /// either side of each floor keep only the side at or above it. A read
-/// below a family's floor is SI-29, with the table and both epochs in it;
+/// below a family's floor is SI-32, with the table and both epochs in it;
 /// a read at the floor answers. Then a pop across the boundary and a
 /// different block reconnected: nothing comes back (the retirement is not
 /// journaled), and the batch re-derives the same floors.
@@ -2736,7 +2851,11 @@ fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
         "budgets kept from the claimable floor"
     );
     assert_eq!(after.3, vec![settle]);
-    assert_eq!(after.4, vec![settle]);
+    assert_eq!(
+        after.4,
+        (settle..=WINDOW_RULES.settlement_schedule().epoch_at_height(boundary)).collect::<Vec<_>>(),
+        "the chain's opens at or above the settling floor stay; the planted epoch below it does not"
+    );
     assert_eq!(
         after.5,
         [vec![claim], vec![settle], vec![settle], vec![price]],
@@ -2753,7 +2872,7 @@ fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
                     table: t, asked: a, floor: f
                 }) if t == table && a == e(asked) && f == e(floor)
             ),
-            "{table} at {asked} is SI-29, not an absent row: {err}"
+            "{table} at {asked} is SI-32, not an absent row: {err}"
         );
     };
     assert!(snap
@@ -2825,10 +2944,16 @@ fn each_per_epoch_table_retires_at_its_familys_floor_and_the_read_asserts_it() {
     let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
     assert_eq!(out.map(|popped| popped.height.to_raw()), Ok(boundary));
     b.forget(1);
+    // Retirement is not journaled. The boundary block's own open writes
+    // its epoch's drawable digest through the journal, and pop removes
+    // that insert. Nothing the batch retired comes back.
+    let mut popped_rows = after.clone();
+    let opened_here = WINDOW_RULES.settlement_schedule().epoch_at_height(boundary);
+    assert_eq!(popped_rows.4.pop(), Some(opened_here));
     assert_eq!(
         retained(&store),
-        after,
-        "a pop restores no retired row: the retirement is not journaled"
+        popped_rows,
+        "pop undoes the boundary's digest and restores no retired row"
     );
     let again = b
         .connect_sized(&store, boundary, boundary, 0, |_| vec![credit(1_000)])

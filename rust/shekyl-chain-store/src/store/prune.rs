@@ -21,7 +21,7 @@
 //! (`shekyl_chain_rules::EpochFloor`): each table is retired below the
 //! epoch its last reader stops asking for, computed from the rule set's
 //! schedule and consensus constants, and each read of it is refused below
-//! the same floor (SI-29). They keep no cell either, and a re-run at the
+//! the same floor (SI-32). They keep no cell either, and a re-run at the
 //! same boundary deletes the same empty ranges. The slash log's horizon is a
 //! consensus expression ([`SlashLogFloor`], `DRS_E4_SLASH_LOG_ROUND.md`):
 //! the batch computes it from the rule set `connect` holds — its epoch and
@@ -144,12 +144,15 @@ use shekyl_types::{
 
 use crate::apply_policy::ArchivalFamily;
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
-use crate::ids::{IssuedDrawKey, IssuedDrawTuple, SlashLogKey, SlashLogTuple};
+use crate::ids::{
+    IssuedDrawKey, IssuedDrawTuple, ReleaseJournalKey, ReleaseJournalTuple, SlashLogKey,
+    SlashLogTuple,
+};
 use crate::schema::{
     ARCHIVAL_BUDGET, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
-    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK,
-    ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN,
-    TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
+    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET, ARCHIVAL_SETTLEMENT,
+    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES,
+    TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
 };
 
 use super::chain_reads::{self, ReadFault, ReadTables};
@@ -413,11 +416,15 @@ impl WriteBatch<'_, '_> {
         let undo_floor = self.retire_undo_rows(height.to_raw())?;
         // Both operands are the rule set's (SLK-2); `check_against` has
         // already held its epoch equal to the pinned one at this height.
-        let slash_floor = self.retire_slash_rows(SlashLogFloor::under(
-            height,
-            in_force.settlement_schedule().blocks(),
-            in_force.reorg_cap(),
-        ))?;
+        let schedule = in_force.settlement_schedule();
+        let floor = SlashLogFloor::under(height, schedule.blocks(), in_force.reorg_cap());
+        let slash_floor = self.retire_slash_rows(floor)?;
+        // The Release journal stays on the slash log's floor (SI-28).
+        // Drawable digests retire with the settling family inside
+        // `retire_epoch_rows`: that horizon is inside the slash log's, so a
+        // second pass at the slash floor would keep rows the family has
+        // already dropped.
+        self.retire_release_rows(floor)?;
         let epochs = self.retire_epoch_rows(height, in_force)?;
         Ok(Some(Pruned {
             shard_start: discard.shards.start,
@@ -435,7 +442,7 @@ impl WriteBatch<'_, '_> {
     /// same rows. Not journaled and not pop-reversible, like the slash
     /// log's: every block that can connect after this one is in epoch
     /// `B − 1` or later and reads each family at or above the floor
-    /// retired here (SI-29 refuses one that does not).
+    /// retired here (SI-32 refuses one that does not).
     ///
     /// The epoch-keyed tables and the epoch-major issued-draw index lose
     /// one range. `archival_settlement` and `archival_slash_applied` are
@@ -494,6 +501,30 @@ impl WriteBatch<'_, '_> {
             }
         }
         Ok(floors)
+    }
+
+    /// Delete `archival_release_journal` rows below `floor`, the slash
+    /// log's: the two journals the drawable set's rebuild reads keep one
+    /// span. Nothing while the chain is under the window, and nothing when
+    /// this session does not apply [`ArchivalFamily::Bond`], the family the
+    /// rows are written under. The read asserts the floor where it reads
+    /// (SI-28, `archival_reads::release_journal_after`); not pop-reversible,
+    /// for [`Self::retire_slash_rows`]'s reason.
+    fn retire_release_rows(&self, floor: SlashLogFloor) -> Result<(), StoreError> {
+        let Some(kept_from) = floor.height() else {
+            return Ok(());
+        };
+        if !self.apply_policy().applies(ArchivalFamily::Bond) {
+            return Ok(());
+        }
+        let mut journal = self
+            .txn()
+            .open_table(ARCHIVAL_RELEASE_JOURNAL)
+            .map_err(EngineError::Table)?;
+        journal
+            .retain_in::<ReleaseJournalTuple, _>(ReleaseJournalKey::below(kept_from), |_, _| false)
+            .map_err(EngineError::Storage)?;
+        Ok(())
     }
 
     /// Delete `archival_slash_log` rows below `floor` — the slash log's

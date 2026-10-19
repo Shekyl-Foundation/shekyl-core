@@ -360,7 +360,50 @@ pub enum StoreInvariant {
         /// The lowest retained height under the caller's rule set.
         floor: shekyl_types::BlockHeight,
     },
-    /// **SI-28** — a settled epoch's market membership is frozen with its
+    /// **SI-28** — the Release journal is read only where it is kept. An
+    /// A20 read (`release_journal_after`, rows strictly above `asked`)
+    /// whose range starts below the slash log's floor, which the journal is
+    /// retired at, would restore too few pre-images and rebuild a drawable
+    /// set that never was; the store refuses it instead of answering, as
+    /// SI-26 refuses A2. The floor is the caller's, and this store
+    /// compares. Fires on a mis-composed schedule, never on data: the walk's
+    /// span is held inside the floor's window at compile time
+    /// (`WALK_BACK_EPOCHS`). Fatal, never a verdict on the block.
+    ReleaseJournalReadBelowFloor {
+        /// The height the read asked for rows strictly above.
+        asked: shekyl_types::BlockHeight,
+        /// The lowest retained height under the caller's rule set.
+        floor: shekyl_types::BlockHeight,
+    },
+    /// **SI-29** — one drawable digest per epoch, written at its open.
+    /// `archival_drawable_digest[E]` is written insert-once by the block
+    /// at `h_open(E)` and by nothing else ([`DigestFault::Rewritten`]), so
+    /// an epoch that settles has one ([`DigestFault::Missing`], observed by
+    /// the settlement pass and arriving through `refuse_corrupt`). A
+    /// `27`-layout file is refused at open, so a store this crate opens
+    /// wrote every open it holds.
+    DrawableDigestNotSingular {
+        /// The epoch.
+        epoch: shekyl_types::SettlementEpoch,
+        /// What was observed.
+        observed: DigestFault,
+    },
+    /// **SI-30** — the drawable set did not drift. At the slash pass that
+    /// settles `E`, the set rebuilt from the records at tip and the two
+    /// bond journals digests to `archival_drawable_digest[E]`
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 check 2), the rebuild reads
+    /// inside the journals' floor, and every journal row is one the records
+    /// can have been left by. Observed by the validator, which derives the
+    /// set (`ARW-Q1`), and arriving through `refuse_corrupt`. Never a
+    /// verdict on the block: the block is not invalid, this node cannot
+    /// settle the epoch.
+    DrawableSetNotSound {
+        /// The epoch whose drawable set was being built or checked.
+        epoch: shekyl_types::SettlementEpoch,
+        /// What was observed.
+        observed: DrawableFault,
+    },
+    /// **SI-31** — a settled epoch's market membership is frozen with its
     /// `Σwork` (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`).
     /// `archival_complete_trees[E]` is in the slash pass's write set beside
     /// `archival_sigma_work[E]` (SI-21): written whole by the block that
@@ -376,7 +419,7 @@ pub enum StoreInvariant {
         /// Which half failed.
         observed: FrozenFault,
     },
-    /// **SI-29** — a per-epoch table is read only where it is kept
+    /// **SI-32** — a per-epoch table is read only where it is kept
     /// (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`). Each read of
     /// `archival_sigma_work`, `archival_budget`, `archival_complete_trees`,
     /// `archival_settlement`, `archival_issued_draw`,
@@ -400,7 +443,49 @@ pub enum StoreInvariant {
     },
 }
 
-/// What SI-28 observed (payload of [`StoreInvariant::CompleteTreesNotFrozen`]).
+/// What an SI-29 check observed (payload of
+/// [`StoreInvariant::DrawableDigestNotSingular`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DigestFault {
+    /// A digest is already recorded for the epoch the block opens: the
+    /// epoch was opened twice.
+    Rewritten,
+    /// No digest is recorded for the epoch being settled.
+    Missing,
+}
+
+/// What an SI-30 check observed (payload of
+/// [`StoreInvariant::DrawableSetNotSound`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawableFault {
+    /// The rebuilt set's digest is not the recorded one: a Release
+    /// pre-image, a slash-log row, a record or the digest changed after
+    /// the epoch opened.
+    Drift,
+    /// The rebuild would start below the journals' floor.
+    BelowFloor {
+        /// `h_open(E)`.
+        h_open: shekyl_types::BlockHeight,
+        /// The lowest retained height.
+        floor: shekyl_types::BlockHeight,
+    },
+    /// A journal row names a persona with no bond record.
+    NoRecord {
+        /// The persona the row names.
+        persona: shekyl_types::PCanonicalId,
+    },
+    /// A slash cannot be undone on the record the rebuild holds.
+    SlashNotUndoable {
+        /// The slashed persona.
+        persona: shekyl_types::PCanonicalId,
+        /// The shard the slash removed.
+        shard: shekyl_types::ShardId,
+    },
+    /// The set could not be built: a record's receipt key is not a key.
+    Construction(shekyl_chain_rules::DrawableEpochError),
+}
+
+/// What SI-31 observed (payload of [`StoreInvariant::CompleteTreesNotFrozen`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrozenFault {
     /// The pass's write found a set already recorded for the epoch.
@@ -559,8 +644,11 @@ impl StoreInvariant {
             Self::ArchivalLengthsDisagree { .. } => 24,
             Self::SettlementNotSound { .. } => 25,
             Self::SlashLogReadBelowFloor { .. } => 26,
-            Self::CompleteTreesNotFrozen { .. } => 28,
-            Self::EpochReadBelowFloor { .. } => 29,
+            Self::ReleaseJournalReadBelowFloor { .. } => 28,
+            Self::DrawableDigestNotSingular { .. } => 29,
+            Self::DrawableSetNotSound { .. } => 30,
+            Self::CompleteTreesNotFrozen { .. } => 31,
+            Self::EpochReadBelowFloor { .. } => 32,
         }
     }
 }
@@ -756,6 +844,52 @@ impl core::fmt::Display for StoreInvariant {
                  {floor} may be retired; the slash pass reads outside the window its own rule \
                  set keeps — the schedule is mis-composed, not the data"
             ),
+            Self::ReleaseJournalReadBelowFloor { asked, floor } => write!(
+                f,
+                "archival_release_journal was asked for rows strictly above {asked} while rows \
+                 below {floor} may be retired; the drawable set's rebuild reads outside the \
+                 window its own rule set keeps — the schedule is mis-composed, not the data"
+            ),
+            Self::DrawableDigestNotSingular { epoch, observed } => match observed {
+                DigestFault::Rewritten => write!(
+                    f,
+                    "archival_drawable_digest already holds a digest for epoch {epoch}; an epoch \
+                     opens once"
+                ),
+                DigestFault::Missing => write!(
+                    f,
+                    "archival_drawable_digest holds no digest for epoch {epoch}, which is \
+                     settling; every open writes one, rebuild from the block corpus"
+                ),
+            },
+            Self::DrawableSetNotSound { epoch, observed } => match observed {
+                DrawableFault::Drift => write!(
+                    f,
+                    "the drawable set of epoch {epoch} rebuilt from the bond journals does not \
+                     digest to archival_drawable_digest; the set its draws were resolved against \
+                     is not the one the journals describe, rebuild from the block corpus"
+                ),
+                DrawableFault::BelowFloor { h_open, floor } => write!(
+                    f,
+                    "the drawable set of epoch {epoch} would be rebuilt from above {h_open}, below \
+                     the bond journals' floor {floor}; the schedule is mis-composed, not the data"
+                ),
+                DrawableFault::NoRecord { persona } => write!(
+                    f,
+                    "a bond journal row names {persona}, which has no archival_bond record; \
+                     rebuild from the block corpus"
+                ),
+                DrawableFault::SlashNotUndoable { persona, shard } => write!(
+                    f,
+                    "the slash of ({persona}, {shard}) cannot have left the record archival_bond \
+                     holds; rebuild from the block corpus"
+                ),
+                DrawableFault::Construction(error) => write!(
+                    f,
+                    "the drawable set of epoch {epoch} cannot be built ({error}); rebuild from \
+                     the block corpus"
+                ),
+            },
             Self::CompleteTreesNotFrozen { epoch, observed } => match observed {
                 FrozenFault::Rewritten => write!(
                     f,
@@ -822,6 +956,9 @@ impl core::error::Error for StoreInvariant {
             | Self::ArchivalLengthsDisagree { .. }
             | Self::SettlementNotSound { .. }
             | Self::SlashLogReadBelowFloor { .. }
+            | Self::ReleaseJournalReadBelowFloor { .. }
+            | Self::DrawableDigestNotSingular { .. }
+            | Self::DrawableSetNotSound { .. }
             | Self::CompleteTreesNotFrozen { .. }
             | Self::EpochReadBelowFloor { .. }
             | Self::UndoLogIncoherent { .. } => None,

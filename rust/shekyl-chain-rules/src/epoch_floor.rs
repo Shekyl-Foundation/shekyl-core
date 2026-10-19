@@ -60,7 +60,7 @@
 //!
 //! Each read of these tables takes its family's [`EpochFloor`] from the
 //! caller, computed at the connecting height, and the store refuses a read
-//! below it (SI-29) rather than answer "absent": absent means *never
+//! below it (SI-32) rather than answer "absent": absent means *never
 //! written*, and a retired row was written. The floor at the connecting
 //! height is never below the one the last batch retired at, so the check is
 //! at least as strict as what the table has undergone. Every reader asks
@@ -149,7 +149,7 @@ impl<F: EpochFamily> EpochFloor<F> {
     /// The family's floor for a block connecting at `connecting` under
     /// `schedule`: `epoch(connecting) − LAG`, the oldest epoch that block
     /// can ask the family for. A read passes this; the store refuses a
-    /// read below it (SI-29).
+    /// read below it (SI-32).
     #[must_use]
     pub const fn under(connecting: BlockHeight, schedule: SettlementSchedule) -> Self {
         Self::below_epoch(schedule.epoch_at_height(connecting.to_raw()))

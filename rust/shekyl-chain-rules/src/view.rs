@@ -64,8 +64,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_fcmp::tree::layer_count_for_leaves;
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
-    RMarket, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest,
+    LoggedSlash, PassCount, RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli,
+    SlashLogEntry,
 };
 use shekyl_types::{
     ArchivalLength, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot,
@@ -161,13 +162,14 @@ impl Tip {
     /// saturation can never be observed; it is written rather than
     /// `unwrap`ped so no rule carries a panic path.
     ///
-    /// Crate-private (`CHAIN_RULES_SLICE_1.md` §2): the connecting height is
-    /// a rule's operand, and the store derives its own from `block_info`'s
-    /// last key at `connect` (SI-2). A second consumer would be a reason to
-    /// reopen, documented with its call site (rule 21), not a `pub` in
-    /// advance.
+    /// Public for its one consumer outside the rules (rule 21, documented
+    /// at the call site): the pool door (`shekyl-mempool`'s `door.rs`),
+    /// which judges a transaction at the height a block carrying it would
+    /// connect at — the height its reference claim and relay floor window
+    /// are read for. The store derives its own from `block_info`'s last key
+    /// at `connect` (SI-2), not from this.
     #[must_use]
-    pub(crate) fn connecting_height(tip: Option<&Self>) -> BlockHeight {
+    pub fn connecting_height(tip: Option<&Self>) -> BlockHeight {
         tip.map_or(BlockHeight::ZERO, |t| {
             BlockHeight::from_raw(t.height.to_raw().saturating_add(1))
         })
@@ -565,7 +567,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// arithmetic.
     ///
     /// `floor` is the pricing family's floor at the caller's connecting
-    /// height ([`EpochFloor`]); a read below it is refused (SI-29), never
+    /// height ([`EpochFloor`]); a read below it is refused (SI-32), never
     /// answered `None` — the rows below it may have been retired.
     fn r_market(
         &self,
@@ -578,7 +580,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// for an epoch its slash pass has not gathered (SAR-8; `SO-D11`). Its
     /// existence is what lets a claim cite the epoch (CEN-J23), and it is
     /// the stored denominator CEN-J25 compares its recompute with.
-    /// `floor`: the claimable family's ([`EpochFloor`]; SI-29).
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-32).
     fn sigma_work(
         &self,
         epoch: SettlementEpoch,
@@ -587,7 +589,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
 
     /// **A8.** The frozen `budget(E)` for `epoch`, or `None` for an epoch
     /// that never closed. CEN-J23: every claimed epoch must have one.
-    /// `floor`: the claimable family's ([`EpochFloor`]; SI-29).
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-32).
     fn budget(
         &self,
         epoch: SettlementEpoch,
@@ -621,7 +623,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// triple (`archival_challenge_failed_at_height`'s first probe,
     /// `db_lmdb.cpp:5471`). A set membership, so `bool` and never `Option`.
     ///
-    /// `floor`: the settling family's ([`EpochFloor`]; SI-29).
+    /// `floor`: the settling family's ([`EpochFloor`]; SI-32).
     fn slash_applied(
         &self,
         persona: &PCanonicalId,
@@ -648,7 +650,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// that epoch, or an epoch the slash pass has not settled: **never a
     /// miss**. A caller that counts misses reads the row's outcome.
     ///
-    /// `floor`: the claimable family's ([`EpochFloor`]; SI-29) — the
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-32) — the
     /// failure window reads back to it.
     fn settlement_row(
         &self,
@@ -664,7 +666,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// order the selection is defined over, and the whole answer is what
     /// the epoch's digest (A16) covers.
     ///
-    /// `floor`: the settling family's ([`EpochFloor`]; SI-29).
+    /// `floor`: the settling family's ([`EpochFloor`]; SI-32).
     fn issued_draws(
         &self,
         epoch: SettlementEpoch,
@@ -675,7 +677,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// folded when each was indexed. [`IssuedDigest::ZERO`] for an epoch
     /// with none: the digest of no draws.
     ///
-    /// `floor`: the settling family's ([`EpochFloor`]; SI-29). Below it
+    /// `floor`: the settling family's ([`EpochFloor`]; SI-32). Below it
     /// the read is refused, never [`IssuedDigest::ZERO`].
     fn issued_digest(
         &self,
@@ -699,7 +701,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// persona's shards once and point-reads each requested epoch. CEN-J23
     /// asks once per bonded persona, for every epoch the claim cites.
     ///
-    /// `floor`: the claimable family's ([`EpochFloor`]; SI-29); every
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-32); every
     /// requested epoch must be at or above it.
     fn served_at(
         &self,
@@ -721,7 +723,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// recorded. Every 32-byte value is a digest: an all-zero one is not
     /// an absent one.
     ///
-    /// `floor`: the settling family's ([`EpochFloor`]; SI-29), the floor
+    /// `floor`: the settling family's ([`EpochFloor`]; SI-32), the floor
     /// of its ruled reader, the pass's re-walk compare (`SO-D10g`), which
     /// is not built yet.
     fn drawable_digest(
@@ -730,7 +732,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
         floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, Self::Fault>;
 
-    /// **A20.** The personas `epoch`'s slash pass excluded from the
+    /// **A22.** The personas `epoch`'s slash pass excluded from the
     /// epoch's market as complete trees, as it froze them beside `Σwork(E)`
     /// (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`), or `None` for an epoch
     /// the pass has not settled. A written empty set is a value. CEN-J23's
@@ -738,15 +740,43 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// from the record, which may have stopped holding a complete tree
     /// since the pass.
     ///
-    /// `floor`: the claimable family's ([`EpochFloor`]; SI-29).
+    /// `floor`: the claimable family's ([`EpochFloor`]; SI-32).
     fn complete_trees(
         &self,
         epoch: SettlementEpoch,
         floor: EpochFloor<Claimable>,
     ) -> Result<Option<CompleteTreeSet>, Self::Fault>;
+
+    /// **A20.** Every Release journaled at a height **strictly above**
+    /// `height`, ascending by height and then persona: each releasing
+    /// persona's record as it stood before its Release. Empty when none.
+    /// The walk that rebuilds an epoch's drawable set from a later tip reads
+    /// it from `h_open(E)` (`SO-D12` increment 2), as it reads A21.
+    ///
+    /// `floor` is the slash log's retirement floor, which the Release
+    /// journal shares: both are retired in the same boundary batch. A read
+    /// whose range starts below it would undo too few Releases and rebuild
+    /// a set that never was, so the store refuses it (SI-28), as A2's
+    /// refusal is SI-26.
+    fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: crate::SlashLogFloor,
+    ) -> Result<Vec<ReleasedRecord>, Self::Fault>;
+
+    /// **A21.** Every slash logged at a height **strictly above** `height`,
+    /// every persona's, in log order, each with the height it was applied
+    /// at. Empty when none. The walk that rebuilds a drawable set undoes
+    /// slashes and Releases newest first, so it needs the heights A2 does
+    /// not give. Refused below `floor` (SI-26), as A2 is.
+    fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: crate::SlashLogFloor,
+    ) -> Result<Vec<LoggedSlash>, Self::Fault>;
 }
 
-/// Implement every archival [`ChainView`] read (A1–A9, A11–A20) as one policy.
+/// Implement every archival [`ChainView`] read (A1–A9, A11–A22) as one policy.
 ///
 /// Three policies, one method list. A new archival read is added here, once;
 /// every view that expands the macro then implements it. A view that answers
@@ -947,6 +977,16 @@ macro_rules! archival_reads {
             (::core::option::Option<shekyl_types::archival::CompleteTreeSet>);
             (epoch, floor);
             (::core::option::Option::None));
+        $crate::archival_reads!(@emit $policy; release_journal_after;
+            (height: shekyl_types::BlockHeight, floor: $crate::SlashLogFloor);
+            (::std::vec::Vec<shekyl_types::archival::ReleasedRecord>);
+            (height, floor);
+            (::std::vec::Vec::new()));
+        $crate::archival_reads!(@emit $policy; slash_log_rows_after;
+            (height: shekyl_types::BlockHeight, floor: $crate::SlashLogFloor);
+            (::std::vec::Vec<shekyl_types::archival::LoggedSlash>);
+            (height, floor);
+            (::std::vec::Vec::new()));
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
@@ -974,7 +1014,7 @@ macro_rules! archival_reads {
     };
     // A planted `Σwork(E)` is a settled epoch, and the pass froze its
     // complete-tree set beside it: no planted view holds a complete tree,
-    // so the set is empty exactly where a `Σwork` is planted (SI-28).
+    // so the set is empty exactly where a `Σwork` is planted (SI-31).
     (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($mark:ident).+}; complete_trees; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
         fn complete_trees(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             let _ = $floor;

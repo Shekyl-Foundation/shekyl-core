@@ -545,11 +545,11 @@ fn an_accrual_overflow_is_the_fold_overflow_belt_on_budget_accruing() {
 }
 
 /// A claim's re-gather that finds `Σwork(E)` and no frozen complete-tree
-/// set (`Corrupt::CompleteTreesAbsent`) is SI-28's absent half. The pass
+/// set (`Corrupt::CompleteTreesAbsent`) is SI-31's absent half. The pass
 /// writes the two in one write set, so no driven chain holds the state —
 /// exemption 3 — and the mapping is the arm's witness.
 #[test]
-fn a_settled_epoch_without_its_complete_tree_set_is_si28() {
+fn a_settled_epoch_without_its_complete_tree_set_is_si31() {
     use crate::store::FrozenFault;
     let path = tmp("connect-refuse-corrupt-complete-trees");
     let store = ChainStore::create(&path, EPOCH).expect("create");
@@ -565,7 +565,7 @@ fn a_settled_epoch_without_its_complete_tree_set_is_si28() {
         observed: FrozenFault::Absent,
     };
     expect_row(&out, row);
-    assert_eq!(row.row(), 28);
+    assert_eq!(row.row(), 31);
     cleanup(&path);
 }
 

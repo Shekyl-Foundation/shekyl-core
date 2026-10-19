@@ -484,6 +484,23 @@ impl Actor for Connector {
     }
 }
 
+/// The death rule's second bound (`shekyl_chain_store`'s `store/alt.rs`):
+/// after a connect at `height`, every alt block at or below the last anchor
+/// at or below it leaves with its bodies. Its fork point would be below the
+/// anchor, which CEN-E2 refuses at offer and at the switch, so nothing can
+/// promote it. The store's own connect applies the cap; the anchors are the
+/// release's trust, which the store does not hold.
+pub(crate) fn retire_below_the_anchor(
+    batch: &shekyl_chain_store::store::WriteBatch<'_, '_>,
+    trust: &shekyl_chain_rules::Trust,
+    height: BlockHeight,
+) -> Result<u64, shekyl_chain_store::store::StoreError> {
+    match trust.anchors().last_at_or_below(height) {
+        Some(anchor) => batch.retire_alt_blocks(anchor.height),
+        None => Ok(0),
+    }
+}
+
 impl Message<Apply> for Connector {
     type Reply = Result<Applied, RunFault>;
 
@@ -529,6 +546,7 @@ impl Message<Apply> for Connector {
                             .exercised
                             .extend(valid.coverage().iter().map(CenRow::as_str));
                         batch.connect(valid, in_force)?;
+                        retire_below_the_anchor(batch, &trust, height)?;
                         applied.connected.push((height, hash));
                         applied.roots.push((height, root_after));
                         applied.weights.push((height, weights));

@@ -33,7 +33,7 @@ Ordered, because each step's numbers are inputs to the next.
 | **EUP-1** | The emission speed factor per block, as designed (A below), fixed in the code on `dev`. This document and the `DESIGN_CONCEPTS.md` drift corrections (B, C, E) land beside it. | #951 (`fix/esf-per-block`); #948 | landed |
 | **EUP-2** | The economics sim realigned to the code: #936 landed on `dev` first, and the ESF fix (#951) merged over it, carrying the per-block factor into the sim and regenerating its fixtures on the design curve; ESR-8 (restated constants → imports); ESR-10 (fee multiplier and rung mix, each run on `w_ref` and the zone as they are **and** re-derived from the post-quantum ordinary weight). | [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.md) | ESR-1…ESR-7 landed (#935, #936); ESR-8 (#1052), ESR-13 (#1050) and ESR-14 (#1060) landed; ESR-11's loop deleted (§5.22); ESR-10 open |
 | **EUP-3** | Staking coupled in: the purse the economics sim computes feeds the population model; L19i's challenge egress in the same model; the bond at the shipped floor. The staking sim is checked against what has been built, and leads what has not. | `shekyl-staking-sim`; the staking-sim row in `FOLLOWUPS.md` (reworded on PR #936 to *Check `shekyl-staking-sim` against the staking code built so far*) | not started |
-| **EUP-4** | The full per-year set, run on the design curve, every scenario, both fee arms, the ESR-7 envelope. **This is the assessment baseline.** §4's criteria are graded against it, and they are written before it runs. | this document | waits on EUP-1…EUP-3 |
+| **EUP-4** | The full per-year set, run on the design curve, every scenario, both fee arms, the ESR-7 envelope. **This is the assessment baseline.** §4's criteria are graded against it, and they are written before it runs. It re-derives the readings of [`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md) §12.13–§12.14, which are dated flat-fee runs (`FOLLOWUPS.md`). | this document | waits on EUP-1…EUP-3 |
 | **EUP-5** | The decisions, with numbers: D (the floor in consensus, holistically), F (the escalation and its GF-7 asymptote), G (zone and `w_ref` derivations, FL-R13), H (challenge doctrine against the budget), I (bond sizing, first-time sim), and the stress test of the 720-block window's length. | each row's owner (§3) | waits on EUP-4 |
 
 **No production-arm table is run until the ESF fix and #936 are both on
@@ -63,7 +63,7 @@ for direction, not level, until EUP-4.
 | 1 | Emission curve | PoW security budget; predictable, no governance. ESF 22 per block | `DESIGN_CONCEPTS.md` §3, §13; FL-R12′ | → miner pay, staker share (11), fee floor (5), every onset | Code ran 21 per block (A) |
 | 2 | Perpetual tail | Avoid the fee-only end state; 0.3 SKL/min | FL-R12′ | → security budget | — |
 | 3 | Release multiplier | Demand-paced emission, 0.8–1.3× over a 720-block window | Component 1; FL-R24 (operand) | ← volume; → emission (1), correction C (6) | ESR-4 (`896d95c33`): step response over 720 blocks; ESR-6 (`49b313eeb`): pinned at 0.8 while blocks carry 22 of 50 |
-| 4 | Block-weight governance | Penalty past the median; 300 KB zone; 2× limit; penalty applied last | FL-R12′ (order); zone value punted (G) | ← weights; → floor (5), fill rule, paid reward | ESR-6: blocks carry 22 of 50 for eleven years (finding 1) |
+| 4 | Block-weight governance | Penalty past the median; 300 KB zone; 2× limit; penalty applied last | FL-R12′ (order); zone value punted (G) | ← weights; → floor (5), fill rule, paid reward | ESR-6 on #936: eleven years, growth in year 11. Re-measured 2026-10-17 (finding 1): eighteen years, growth in year 19 |
 | 5 | Fee ladder | Price block space: Economy `F = R·C·w_ref/M²`, Standard 4F, Priority `max(2RC/M, 4F)` | `FEE_LADDER_DERIVATION.md` §5, §8; FL-R13 open | ← reward, C, median, `w_ref` | ESR-1 (`9d8a52985`): Standard ≈ 3.3 SKL/tx in year 1; ESR-6: year 1 2.36, falls 4.9× once the median grows |
 | 6 | Fee correction C | Keep the miner's margin whole: `(1 − σ)·M_r/(1 − b)` | FL-R20/21 | ← σ (11), burn (8), M_r (3); → floor (5), **block growth** | ESR-6 finding 2: the year blocks first grow is set by `(1 − σ)/(1 − b)` — two-thirds burn, one-third σ |
 | 7 | Floor enforcement | Relay policy; block-carried transactions bypass it | FL-V2; **Q9 reopened as a bug, 2026-10-02** | → stuffing cost | ESR-7 (`28b0006f4`): cheapest archival byte is a miner's in every era |
@@ -73,7 +73,7 @@ for direction, not level, until EUP-4.
 | 11 | Staker emission share | Bootstrap subsidy, 15 %, ×0.90/yr | Component 4 | ← emission; → budget (12), C (6) | — |
 | 12 | Archival budget | Emission leg + fee leg; unclaimed after 26 epochs is never created | `ARCHIVAL_BUDGET_SCHEDULE.md` §4 | ← (9), (11); → reward division (13) | — |
 | 13 | Reward division | Pay-for-service by capped serve-work | `REWARD_EMISSION_LEG.md` §4 | ← budget, work; → archiver income | — |
-| 14 | The archival good | Prunable bodies + `pqc_auths`, for rescan, audit, dispute | `V3_STAKER_ARCHIVAL.md`; PDM-Q6, PDM-Q2 | → burden | ESR-6: corpus at year 10 is 229 864 closed shards, against 523 841 before |
+| 14 | The archival good | Prunable bodies + `pqc_auths`, for rescan, audit, dispute | `V3_STAKER_ARCHIVAL.md`; PDM-Q6, PDM-Q2 | → burden | ESR-6: corpus at year 10 is 229 864 closed shards |
 | 15 | Bond | Honesty anchor, slashable; 0.75 SKL per shard | Component 3; magnitude underived (I) | → locked capital, the binding burden (F-G) | — |
 | 16 | Challenge | Exhaustive, 3 per pair per epoch, whole-shard read | `ARCHIVAL_CHALLENGE_MECHANISM.md`; SF-D1 | → archiver egress cost | Not yet in the economics sim (H) |
 | 17 | Coverage | Market-set by budget → APR → entry | L11 | ← budget; → availability | — |
@@ -84,7 +84,7 @@ for direction, not level, until EUP-4.
 breaks:
 
 - **Everything rides the curve.** `F ∝ R`, so every fee, every stuffing
-  cost, every onset year and the year-11 capacity unlock move with the emission
+  cost, every onset year and the capacity unlock (year 19 on the 2026-10-17 run; year 11 on #936) move with the emission
   speed factor (A).
 - **Block growth rides the staker share and the burn** (ESR-6 finding 2). A
   change to the decay schedule, the burn curve or C moves the year the default
@@ -175,7 +175,7 @@ Monero number at 2 or above never ran, and those arms are deleted
 | Surge factor and the 100-block window | Verification time of a surge block | **Derived.** The inherited ×50 was re-derived from the device floor's verification time; the config carries 4 | C2-R2 Q3; GAP-7 |
 | Quadratic penalty and the 2× limit | Reward and weight, both as ratios | **Derived.** Scale-free in both operands; shape examined | C2-R2 Q4 |
 | Serialized-size cap, 1,000,000 B | Transaction weight | **Derived** as a parse bound: the weight cap binds first, and it admits 22 inputs of the measured shape | C2-R2 Q6; CEN-I4's measurement |
-| Pool lifetime, 3 days; pool cap, 648 MB | Block time; the zone | **Derived**, against the FCMP++ reference-age window. The cap is "3 days at the zone" and moves with it | C2-R2 Q11 |
+| Pool lifetime, 3 days; pool cap, 648 MB | Block time; the zone | **Derived**, against the FCMP++ reference-age window. The C++ cap is "3 days at the penalty-free zone" (2 160 × 300 000) and moves with it. **The Rust pool's is re-derived on another basis (ruled 2026-10-17, superseding C2-R2 Q11):** no timer — the reference window evicts; the cap is `REFERENCE_BLOCK_MAX_AGE` blocks at the block weight limit, the hard limit (100 × 600 000, 60 MB at genesis), so its horizon is the reference window and its block the heaviest that window may hold; no reorg retention (CEN-K10 deleted). The C++ pool keeps Q11's values until the flip | C2-R2 Q11; `DRS_E5_POOL_ALT_PRUNE.md` decision log 2026-10-17 |
 | `tx_extra` relay cap, 24,576 B | Transaction weight | **Derived**; Shekyl's own value | C2-R2 Q10 |
 | Fee correction `C` and the three rungs | Shekyl's `σ`, `M_r`, `b` | **Derived**, given the floor they multiply | FL-R11, FL-R17, FL-R20 |
 

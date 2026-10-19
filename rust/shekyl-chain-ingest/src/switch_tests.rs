@@ -10,25 +10,11 @@
 //! that switched equals the store that connected the winning branch
 //! directly, digest for digest.
 
-use std::collections::HashMap;
-
 use shekyl_difficulty::ForkChoiceVerdict;
 use shekyl_types::{BlockHash, BlockHeight};
-use shekyl_wire::Transaction;
 
 use crate::connector::{Offered, PlanMismatchReason, RunFault, Switched};
 use crate::scenario::{FreeHash, Mined, Scenario};
-
-/// The listed bodies of `branches`' blocks, by hash — what the pool will
-/// hold for the switch from PR-b on.
-fn bodies<'a>(
-    branches: impl IntoIterator<Item = &'a Mined>,
-) -> HashMap<BlockHash, Vec<Transaction>> {
-    branches
-        .into_iter()
-        .map(|m| (m.hash, m.template.transactions.clone()))
-        .collect()
-}
 
 /// A driver over a fresh store with `prefix` empty blocks.
 async fn with_prefix(name: &str, prefix: u64) -> Scenario<FreeHash> {
@@ -75,7 +61,7 @@ async fn a_heavier_branch_switches_and_equals_the_branch_connected_directly() {
     assert_eq!(plan.demoted.len(), 3);
     assert_eq!(plan.promoted.len(), 4);
 
-    let Switched::Done(done) = x.reorganize(&plan, &bodies(&b)).await.expect("switch") else {
+    let Switched::Done(done) = x.reorganize(&plan).await.expect("switch") else {
         panic!("the switch did not land");
     };
     assert!(
@@ -126,7 +112,7 @@ async fn switching_back_restores_the_chain_that_never_switched() {
 
     let plan = offer_branch(&x, &b).await;
     assert!(matches!(
-        x.reorganize(&plan, &bodies(&b)).await.expect("switch"),
+        x.reorganize(&plan).await.expect("switch"),
         Switched::Done(_)
     ));
     // A, extended past B, arrives: its first three blocks are held from the
@@ -137,11 +123,7 @@ async fn switching_back_restores_the_chain_that_never_switched() {
         5,
         "A's three demoted rows and its two new blocks"
     );
-    let Switched::Done(done) = x
-        .reorganize(&plan, &bodies(a.iter().chain(&a_ext)))
-        .await
-        .expect("switch back")
-    else {
+    let Switched::Done(done) = x.reorganize(&plan).await.expect("switch back") else {
         panic!("the switch back did not land");
     };
     assert_eq!(done.demoted.len(), 4, "B's four blocks");
@@ -192,7 +174,7 @@ async fn a_promoted_block_that_fails_validate_rolls_back_and_removes_its_suffix(
     let before = x.digest().await.expect("d");
 
     let plan = offer_branch(&x, &b).await;
-    match x.reorganize(&plan, &bodies(&b)).await.expect("switch") {
+    match x.reorganize(&plan).await.expect("switch") {
         Switched::Refused {
             hash,
             refused,
@@ -258,7 +240,7 @@ async fn a_checkpoint_forced_switch_discards_the_demoted_chain() {
         plan.demoted.is_empty(),
         "ForcedSwitch discards the demoted chain and does not read it"
     );
-    let Switched::Done(done) = x.reorganize(&plan, &bodies(&b)).await.expect("switch") else {
+    let Switched::Done(done) = x.reorganize(&plan).await.expect("switch") else {
         panic!("the forced switch did not land");
     };
     assert!(!done.demoted_kept, "the checkpoint arm discards (K7)");
@@ -298,10 +280,7 @@ async fn a_demoted_block_the_tier_refuses_halts_the_writer_si27() {
         .ask(crate::connector::AnchorForTests(anchoring(&wrong)))
         .await
         .expect("anchor");
-    let err = x
-        .reorganize(&plan, &bodies(&b))
-        .await
-        .expect_err("SI-27 halts");
+    let err = x.reorganize(&plan).await.expect_err("SI-27 halts");
     let want = shekyl_chain_store::store::StoreInvariant::DemotedBlockRefused {
         height: a[0].height,
     };
@@ -325,6 +304,10 @@ async fn a_demoted_block_the_tier_refuses_halts_the_writer_si27() {
 /// excluded — [`assert_same_chain`] asserts it exactly.
 const ALT_TABLE: &str = "alt_blocks";
 
+/// The alt blocks' listed bodies, keyed as [`ALT_TABLE`] is: excluded from
+/// the byte comparison with it, and asserted to hold exactly its keys.
+const ALT_BODIES_TABLE: &str = "alt_block_bodies";
+
 /// The tables other than the alt table whose rows differ between `x` and
 /// `y`, every one compared at the byte level (`TableRows`).
 async fn differing_tables(x: &Scenario<FreeHash>, y: &Scenario<FreeHash>) -> Vec<&'static str> {
@@ -334,7 +317,7 @@ async fn differing_tables(x: &Scenario<FreeHash>, y: &Scenario<FreeHash>) -> Vec
         a.keys().chain(b.keys()).copied().collect();
     names
         .into_iter()
-        .filter(|name| *name != ALT_TABLE)
+        .filter(|name| *name != ALT_TABLE && *name != ALT_BODIES_TABLE)
         .filter(|name| a.get(name) != b.get(name))
         .collect()
 }
@@ -377,6 +360,19 @@ async fn assert_same_chain(
         alt_hashes(direct).await.is_empty(),
         "{why}: the directly connected store holds no alternative block"
     );
+    for store in [switched, direct] {
+        let rows = store.table_rows().await.expect("rows");
+        let keys = |name| {
+            rows.get(name)
+                .map(|rows| rows.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>())
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            keys(ALT_BODIES_TABLE),
+            keys(ALT_TABLE),
+            "{why}: every alt row has its bodies, and no bodies outlive a row"
+        );
+    }
 }
 
 /// The levered schedule `scenario_shard` runs: a 20-block epoch and a reorg
@@ -405,7 +401,7 @@ async fn a_switch_popping_exactly_the_cap_lands_and_one_more_is_refused_locally(
         usize::try_from(LEVERED_CAP).expect("small")
     );
     assert!(matches!(
-        x.reorganize(&plan, &bodies(&b)).await.expect("switch"),
+        x.reorganize(&plan).await.expect("switch"),
         Switched::Done(_)
     ));
 
@@ -460,7 +456,7 @@ async fn a_pop_below_the_undo_floor_is_a_local_fail_stop_not_a_verdict() {
     let before = x.digest().await.expect("d");
     let plan = offer_branch(&x, &b).await;
     assert_eq!(plan.demoted.len(), 7, "inside the cap");
-    match x.reorganize(&plan, &bodies(&b)).await.expect("switch") {
+    match x.reorganize(&plan).await.expect("switch") {
         Switched::BelowFloor { tip, floor } => {
             assert!(tip < floor, "the pop that met the floor");
             assert!(
@@ -516,7 +512,7 @@ async fn a_stale_or_mismatched_plan_is_a_driver_defect_and_the_writer_stays_up()
     let mut short = plan.clone();
     short.promoted.pop();
     assert!(matches!(
-        x.reorganize(&short, &bodies(&b)).await,
+        x.reorganize(&short).await,
         Err(RunFault::PlanMismatch {
             reason: PlanMismatchReason::PromotedLength,
         })
@@ -527,7 +523,7 @@ async fn a_stale_or_mismatched_plan_is_a_driver_defect_and_the_writer_stays_up()
     witnessed.demoted[0].candidate.attestation_witness =
         Some(shekyl_types::archival::AttestationWitness::new(vec![0x5E; 8]).expect("non-empty"));
     assert!(matches!(
-        x.reorganize(&witnessed, &bodies(&b)).await,
+        x.reorganize(&witnessed).await,
         Err(RunFault::PlanMismatch {
             reason: PlanMismatchReason::DemotedChain,
         })
@@ -537,7 +533,7 @@ async fn a_stale_or_mismatched_plan_is_a_driver_defect_and_the_writer_stays_up()
     // The tip moves between the plan and the switch: the plan is stale.
     x.mine(1).await;
     assert!(matches!(
-        x.reorganize(&plan, &bodies(&b)).await,
+        x.reorganize(&plan).await,
         Err(RunFault::StalePlan { .. })
     ));
     assert_eq!(x.mine(1).await.len(), 1, "a driver defect is not a halt");
@@ -563,7 +559,7 @@ async fn a_plan_naming_a_recorded_block_as_its_alternative_tip_is_a_mismatch_not
         .expect("recorded");
     plan.promoted.clear();
     assert!(matches!(
-        x.reorganize(&plan, &bodies(&b)).await,
+        x.reorganize(&plan).await,
         Err(RunFault::PlanMismatch {
             reason: PlanMismatchReason::AlternativeTipRecorded,
         })
@@ -697,7 +693,6 @@ async fn at_the_cap_with_a_probe(
     Scenario<CountingPow>,
     CountingPow,
     Scenario<CountingPow>,
-    Vec<Mined>,
     crate::SwitchPlan,
 ) {
     let probe = CountingPow::new();
@@ -717,7 +712,7 @@ async fn at_the_cap_with_a_probe(
     let Offered::SwitchDue(plan) = x.offer(last).await.expect("offer") else {
         panic!("the heavier tip did not name a switch");
     };
-    (x, probe, y, b, plan)
+    (x, probe, y, plan)
 }
 
 #[tokio::test]
@@ -726,13 +721,13 @@ async fn a_switch_at_the_cap_calls_randomx_zero_times() {
     // when this node first judged it — the demoted ones at connect, the
     // promoted ones at arrival — and the plan carries those records. The
     // switch's forming asks RandomX nothing.
-    let (mut x, probe, y, b, plan) = at_the_cap_with_a_probe("switch-recall").await;
+    let (mut x, probe, y, plan) = at_the_cap_with_a_probe("switch-recall").await;
     assert_eq!(
         plan.demoted.len(),
         usize::try_from(LEVERED_CAP).expect("small")
     );
     let before = probe.calls();
-    let switched = x.reorganize(&plan, &bodies(&b)).await.expect("switch");
+    let switched = x.reorganize(&plan).await.expect("switch");
     assert!(matches!(switched, Switched::Done(_)), "{switched:?}");
     assert_eq!(
         probe.calls() - before,
@@ -749,10 +744,10 @@ async fn a_seed_claim_that_differs_from_the_recorded_one_recomputes() {
     // The record is keyed by (identity, seed): a claim under another seed
     // is not the recorded computation, so it goes to RandomX — once — and
     // then to CEN-D3, which refuses the claim as it would without a record.
-    let (mut x, probe, y, b, mut plan) = at_the_cap_with_a_probe("switch-recall-seed").await;
+    let (mut x, probe, y, mut plan) = at_the_cap_with_a_probe("switch-recall-seed").await;
     plan.promoted[0].at.seed = BlockHash::from_bytes([0x5D; 32]);
     let before = probe.calls();
-    let out = x.reorganize(&plan, &bodies(&b)).await;
+    let out = x.reorganize(&plan).await;
     assert_eq!(
         probe.calls() - before,
         1,
@@ -860,7 +855,7 @@ async fn a_reference_or_target_claim_the_switch_cannot_make_is_a_driver_defect()
     let shifted = BlockHeight::from_raw(plan.headers[position].height.to_raw() + 1);
     assert!(shifted < plan.promoted[0].at.height);
     wrong_height.headers[position].height = shifted;
-    match x.reorganize(&wrong_height, &bodies(&b)).await {
+    match x.reorganize(&wrong_height).await {
         Err(RunFault::StaleReference {
             height,
             slot,
@@ -882,7 +877,7 @@ async fn a_reference_or_target_claim_the_switch_cannot_make_is_a_driver_defect()
     // No claim at all for a reference the chain holds in the window.
     let mut unclaimed = plan.clone();
     unclaimed.headers.remove(position);
-    match x.reorganize(&unclaimed, &bodies(&b)).await {
+    match x.reorganize(&unclaimed).await {
         Err(RunFault::StaleReference { claims, .. }) => {
             assert_eq!(claims.claimed, None);
             assert_eq!(claims.expected.root, plan.headers[position].root);
@@ -900,7 +895,7 @@ async fn a_reference_or_target_claim_the_switch_cannot_make_is_a_driver_defect()
     );
     assert_ne!(other, claimed);
     wrong_target.promoted[0].at.target = other;
-    match x.reorganize(&wrong_target, &bodies(&b)).await {
+    match x.reorganize(&wrong_target).await {
         Err(RunFault::StaleTarget {
             height,
             claimed: was,
@@ -916,7 +911,7 @@ async fn a_reference_or_target_claim_the_switch_cannot_make_is_a_driver_defect()
     assert_eq!(x.digest().await.expect("digest"), before, "rolled back");
 
     // The writer is up and the honest plan lands.
-    let Switched::Done(done) = x.reorganize(&plan, &bodies(&b)).await.expect("switch") else {
+    let Switched::Done(done) = x.reorganize(&plan).await.expect("switch") else {
         panic!("the honest switch did not land");
     };
     assert_eq!(done.promoted.len(), 2);

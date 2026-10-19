@@ -17,6 +17,7 @@
 //! hash side, which that increment does not move.
 
 use shekyl_curve_io::write_varint;
+use shekyl_types::archival::COUNTED_DRAWS;
 use shekyl_types::BlockHeight;
 
 use crate::hash::cshake256_32;
@@ -45,6 +46,28 @@ pub const DRAW_ATTEMPTS: u32 = 256;
 /// [`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
 /// §4.3.
 pub const DRAW_HORIZON_FLOOR: u64 = 200;
+
+/// The count cap, as a multiple of `COUNTED_DRAWS · D/SEB`: a block's
+/// target is at most this many times the rate that would issue every pair
+/// its counted draws once over the epoch (spec §3, "count cap"; §4.3).
+///
+/// **PROVISIONAL** (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §13.2). Reopen on the
+/// sim or on testnet measurement.
+pub const COUNT_CAP_MULTIPLE: u64 = 3;
+
+/// The count cap as a multiple of the base rate `D/SEB`:
+/// [`COUNT_CAP_MULTIPLE`] times [`COUNTED_DRAWS`]. §4.3's `3 · 3·D/SEB`,
+/// and the `9` of its integer form.
+///
+/// The one place the product is formed. [`draw_target`] caps at it,
+/// [`cap_binds`] asks whether the top-up passes it, and
+/// [`crate::section_budget`] bounds a section by it, so the section budget
+/// cannot drift from the count rule it is derived from.
+#[allow(clippy::cast_possible_truncation)] // `COUNTED_DRAWS` is 3.
+pub const COUNT_CAP_BASE_MULTIPLE: u64 = COUNT_CAP_MULTIPLE * COUNTED_DRAWS as u64;
+
+// §4.3 writes the integer form with this product as a literal.
+const _: () = assert!(COUNT_CAP_BASE_MULTIPLE == 9);
 
 /// Reads of one draw before the challenger abandons it. Admission
 /// refuses `attempt ≥ K` (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §5.3, `SCS-P13`).
@@ -199,7 +222,8 @@ pub fn draw_horizon(r: u64, seb: u64, response_window: u64) -> u64 {
 pub struct DrawTarget {
     /// `t`: the target in draws, with 32 fractional bits.
     pub fixed: u128,
-    /// Whether the cap bound: `D·H + SEB·u > 9·D·H`, strictly. A target
+    /// Whether the cap bound: `D·H + SEB·u > 9·D·H`, strictly, with `9` the
+    /// [`COUNT_CAP_BASE_MULTIPLE`]. A target
     /// that lands exactly on the cap is not capped; nothing was held down.
     /// Exact for every input: see [`draw_target`].
     pub capped: bool,
@@ -252,7 +276,7 @@ pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Opt
     let top_up = epoch * u;
     let capped = cap_binds(base, top_up);
     let weighted = base.saturating_add(top_up);
-    let cap = base.saturating_mul(9);
+    let cap = base.saturating_mul(u128::from(COUNT_CAP_BASE_MULTIPLE));
     // `checked_shl` checks the shift amount, not the bits shifted out; a
     // multiplication refuses a numerator that does not fit.
     let numer = weighted.min(cap).checked_mul(1 << 32)?;
@@ -263,14 +287,16 @@ pub fn draw_target(set_size: u64, shortfall: u64, horizon: u64, seb: u64) -> Opt
 }
 
 /// Whether the cap bound: `SEB·u > 8·D·H`, exactly, from `base = D·H` and
-/// `top_up = SEB·u`. An `8·D·H` that does not fit a `u128` is at least
-/// `2^128`, and every `SEB·u` is strictly below that, so it is not capped.
+/// `top_up = SEB·u`. `8` is [`COUNT_CAP_BASE_MULTIPLE`] less the base the
+/// top-up is added to: `D·H + SEB·u > 9·D·H` is `SEB·u > 8·D·H`. An
+/// `8·D·H` that does not fit a `u128` is at least `2^128`, and every
+/// `SEB·u` is strictly below that, so it is not capped.
 ///
 /// Its own function so the predicate is defined on every input, including
 /// those whose target does not fit and for which [`draw_target`] has no
 /// value to return.
-const fn cap_binds(base: u128, top_up: u128) -> bool {
-    match base.checked_mul(8) {
+fn cap_binds(base: u128, top_up: u128) -> bool {
+    match base.checked_mul(u128::from(COUNT_CAP_BASE_MULTIPLE - 1)) {
         Some(room) => top_up > room,
         None => false,
     }

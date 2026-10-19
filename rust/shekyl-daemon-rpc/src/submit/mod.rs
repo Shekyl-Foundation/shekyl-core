@@ -43,6 +43,7 @@ pub mod fee;
 pub mod ffi_shim;
 pub mod gate;
 pub mod phase_a;
+pub mod rust_pool_shim;
 pub mod verifier;
 pub mod verify;
 pub use certificate::VerificationCertificate;
@@ -56,6 +57,7 @@ pub use facts::{
 pub use ffi_shim::FfiSubmitShim;
 pub use gate::phase_c_semaphore;
 pub use phase_a::{parse_submission, ParsedSubmission, PhaseAReject, SubmitTxKind};
+pub use rust_pool_shim::{ChainSource, RustPoolShim};
 pub use verifier::DaemonTxVerifier;
 pub use verify::{TxVerifier, VerifyFailure, VerifyReject};
 

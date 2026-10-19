@@ -46,9 +46,11 @@
 //! # The gate
 //!
 //! Every `impl Canonical` in this crate has a committed fixture snapshot
-//! under `rust/shekyl-chain-store/schemas/`, asserted by the
-//! `codec_snapshot` tests in [`snapshot_tests`](self) and paired against
-//! [`SCHEMA_VERSION`] by `.github/workflows/schema-snapshot.yml` — which
+//! under `rust/shekyl-chain-store/schemas/` (the pool file's under
+//! `pool_schemas/`), asserted by the `codec_snapshot` tests in
+//! [`snapshot_tests`](self) and paired against [`SCHEMA_VERSION`] (the
+//! pool file's against its own `POOL_SCHEMA_VERSION`, `SPL-Q8`) by
+//! `.github/workflows/schema-snapshot.yml` — which
 //! also triggers on `rust/shekyl-store-codec/**`, because the moved
 //! codecs' fixtures are still committed here and their bytes are still the
 //! digest's fold input. That is the rule-42 ratchet §11.1(e) recorded as
@@ -82,7 +84,7 @@ mod pool_tests;
 #[path = "alt_tests.rs"]
 mod alt_tests;
 
-pub use alt::{AltBlock, AltBlockError, AltBlockFacts};
+pub use alt::{AltBlock, AltBlockError, AltBlockFacts, AltBodies};
 pub use archival::{
     AttestationWitnessBytes, BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest,
     FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw,
@@ -95,10 +97,7 @@ pub use chain::{
 };
 pub use curve::{CurveTreeState, LayerHash, LeafCount, TreeDepth};
 pub use evidence::CoverageGaps;
-pub use pool::{
-    ArrivedPhase, BlockRef, Origin, OriginatedPhase, PoolRecord, Readiness, RelayRefusal,
-    RelayState, Responsibility,
-};
+pub use pool::{PoolRecord, ReceivedHour};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{

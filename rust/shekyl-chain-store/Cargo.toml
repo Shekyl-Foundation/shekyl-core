@@ -38,6 +38,15 @@ shekyl-difficulty = { path = "../shekyl-difficulty" }
 # The block and transaction shapes the store persists as judged.
 shekyl-wire = { path = "../shekyl-wire" }
 
+[features]
+# The pool file can refuse its next commit after the caller's closure has
+# returned `Ok`, so a test sees the closure's writes roll back with the
+# transaction (`PoolStore::refuse_next_commit`). The reconcile test in
+# `shekyl-mempool` is the one enabler, on its dev-dependency edge.
+# `check_test_only_features.py` keeps the feature off every normal edge:
+# a shipped binary's `write` commits exactly what the closure returned.
+pool-commit-fault = []
+
 [lints]
 workspace = true
 

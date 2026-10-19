@@ -54,8 +54,9 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     // leaf count 1 (DRS-E3, every connect); root 1; blocks 1,
     // block_heights 1, block_info 1; hf_versions 1; the open epoch's
     // `archival_budget_accruing` upsert 1 (DRS-E4 commit 5, every connect
-    // that is not a close); the recorded PoW 1 (`block_pow`).
-    assert_eq!(connected.journaled, 15, "no pqc_auths row, no burn rows");
+    // that is not a close); the recorded PoW 1 (`block_pow`); the drawable
+    // digest of epoch 0, which genesis opens, 1 (`SO-D12` increment 2).
+    assert_eq!(connected.journaled, 16, "no pqc_auths row, no burn rows");
 
     let miner = &block.miner_transaction;
     let miner_hash = Hash32::from(miner.hash());
@@ -283,7 +284,26 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .value()
         .decode()
         .expect("decodes");
-    assert_eq!(undo.0.len(), 15);
+    assert_eq!(undo.0.len(), 16);
+    // Genesis opens epoch 0 and writes its drawable digest: the empty
+    // set's, since no bond joins before epoch 0. A row, not an absence.
+    let empty = shekyl_chain_rules::DrawableEpoch::new(
+        shekyl_types::SettlementEpoch::from_raw(0),
+        Vec::<(
+            shekyl_types::PCanonicalId,
+            shekyl_types::archival::ReceiptSignPk,
+        )>::new(),
+        [],
+    )
+    .expect("no pair to key");
+    assert_eq!(
+        snap.drawable_digest(
+            shekyl_types::SettlementEpoch::from_raw(0),
+            shekyl_chain_rules::EpochFloor::NONE,
+        )
+        .expect("read"),
+        Some(empty.digest())
+    );
     // The recorded PoW (`block_pow`, layout 26): one row at genesis, under
     // the null seed CEN-D3 names below the first epoch.
     let pow: crate::codec::RecordedPow = snap
