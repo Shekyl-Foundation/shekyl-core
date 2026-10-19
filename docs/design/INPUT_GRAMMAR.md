@@ -2,7 +2,7 @@
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
 2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
-IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19.
+IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, POSED 2026-10-19.
 Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
@@ -1193,3 +1193,47 @@ Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #10
 - `double_spend_seen` and `num_double_spends` go. `shekyl-mempool` holds no per-entry conflict flag: its door admits one spender per key image (`view.rs`, CEN-M7's conflict map), and the `conflicted` list in `template.rs` is the template builder's, not an entry's.
 - `relayed` becomes the pool's one bit, `public` (`DAEMON_RELAY_PRIVACY.md` acceptance criterion 2; `DRS_X_STORE_FLIP.md` DX-F6). For any caller below host-only it is constant, `true`, because an entry not yet public is host-only (RT-O9.3).
 - The counts of entries not yet public, `num_not_relayed` on the statistics and `tx_pool_unbroadcast_count` on `daemon_status`, are host-only, and are named after the pool's bit: `private_count` and `txpool_private_count`.
+
+---
+
+## 21. Part D — checking a configuration, and the file an install ships
+
+**POSED 2026-10-19.** Ground: `dev` `c9eb84017`. Two needs from the alpha.10 fleet, both given to this lane by Rick on 2026-10-19:
+- **Check without starting.** Deploy tooling must validate a configuration without starting the daemon. Starting it joins the network. Running it in an unprivileged network namespace does not help: the config file's permission walk sees the real root as uid 65534 and refuses. Today the fleet validates through a harness outside the tree (`shekyl-dev` `scripts/seed/check_config.rs`), which calls the daemon config crate's `read_cli`, `read_file`, `resolve` and `build`, skips the permission walk, and hardcodes a home directory.
+- **A file on install.** An installation should leave a configuration file with comments, so an operator can see what can be set and change it without reading the source.
+
+**The ground, at `c9eb84017`** (IG-F12…IG-F15 are the gaps this Part found):
+- No check-only mode exists. The daemon's parse-and-exit path is reachable only through a C ABI for tests (`rust/shekyl-daemon/src/run.rs`, `snapshot_parse`); `--help` and `--version` print and exit before any file is read (`run.rs`, `main`).
+- Startup's `load` (`run.rs`) runs, in order: the choosers (network, run mode), the config-file path, `file::open` with the permission walk (`rust/shekyl-daemon-config/src/file.rs`: writers outside root and the daemon's account refused along every directory to the root; a file holding a secret refused if others can read it), `read_file`, `resolve` and `sections::build`. A refusal exits 2 (IG-11).
+- After `load`, startup creates things a check must not: the data directory's lock creates the directory (`lock.rs`), the network marker is written (`marker::check_or_write`), and the log check creates the log directory and file (`sections/mod.rs`, `log_location_writable`). Ports are bound late and never probed; the managed Tor binary's pin check runs during start and only warns.
+- The annotated example already exists, generated from the table: `docs::example_toml` (`rust/shekyl-daemon-config/src/docs.rs`) renders `docs/generated/shekyld.example.toml`, every line commented out; a test parses it uncommented, and `scripts/ci/check_daemon_option_docs.py` holds `docs/USER_GUIDE.md`'s copy to it (IG-9).
+- No package installs a configuration file. The `.deb` is built with `--deb-no-default-config-files` and installs nothing under `/etc` (`.github/workflows/gitian.yml`); the Windows installer copies binaries and shortcuts only (`contrib/packaging/windows/shekyl.nsi`). A missing file at the default path means defaults (§5's `config-file` row); a missing file at a named path refuses.
+
+- **IG-F12 — the shipped unit's account is created by nothing.** `contrib/packaging/linux/shekyld.service` runs as `User=shekyl`; `deb-after-install.sh` only reloads systemd, so on a fresh install the unit cannot start.
+- **IG-F13 — no installer creates the daemon's directories.** `/etc/shekyl/` (R2) and, on Windows, `%ProgramData%\shekyl\` (IG-13, IG-Q36: "only the installer creates" it) are created by no package today.
+- **IG-F14 — the user guide's Windows root.** At the ground, `docs/USER_GUIDE.md` names `C:\ProgramData\shekyl\` for a first run, where a run-as-user daemon uses the per-account `LocalAppData\Shekyl` (IG-13, `paths.rs`). This PR corrects the guide; a service install uses `%ProgramData%\shekyl\`.
+- **IG-F15 — a check that probes by creating is not a check.** The lock and the log check create what they test, so a check-only mode cannot reuse them; it needs probes that report "this account can create it" without creating it.
+
+## 22. Questions for Part D
+
+Each is posed for ruling, with a recommendation. The implementation is the daemon-configuration lane's (IG-12's coupling); the packaging is the release lane's.
+
+**IG-Q58 — the check's name — POSED 2026-10-19.** *Recommended:* `config-verify`, a command-line-only switch (IG-7, beside `help` and `version`), off by default, public. It walks `config` → `verify`: §11's `verify` already means "check a claim against its source", and here the claim is the configuration and the source is the table; `verify` gains the parent `config` (Kind `config:verb`). The alternative, `config-check`, widens §11's `check`, which today means only "check a proof".
+
+**IG-Q59 — what it does — POSED 2026-10-19.** *Recommended:* `shekyld --config-verify` runs exactly startup's `load`, the same code and not a second parser: the choosers, the file under the permission walk, `read_file`, `resolve` and `build`. Then it probes, without creating anything (IG-F15), that this account can create or write the data directory, its lock and the log file, and on Windows with `service` that the machine-wide root exists with the ruled owner and ACL (IG-13). With `tor = managed` it verifies the pinned Tor binary (a file check, IG-Q41), reported as the warning start would give. It takes no lock, writes no marker, opens no store, binds no port, starts nothing and sends nothing. It does not probe ports: one taken now may be free at start, and the bind's own refusal is the authority. Every other command-line flag is read as start would read it (`--network`, `--config-file`, `--data-dir`, …), because they are part of the configuration being checked; `--help` and `--version` take precedence.
+
+**IG-Q60 — the permission rules — POSED 2026-10-19.** *Recommended:* the real rules, always. The check refuses what start would refuse, or its verdict means nothing. There is no switch to relax the walk: it would be a negation (IG-4) and a security downgrade, which is made only as a conscious act, never as a deploy convenience. The namespace was needed only to keep a started daemon off the network; the check never touches the network, so tooling runs it on the host, as the account that will run the daemon (or as root), where the walk sees the real owners.
+
+**IG-Q61 — what it prints — POSED 2026-10-19.** *Recommended:* on success, the effective-configuration line on standard output: the same line start announces (IG-14), every value with its source and a secret shown only as set. Then the posture warnings start would give (clearnet-only, offline, a plaintext listener beyond loopback, a Tor pin failure), on standard error. On refusal, every refusal, not the first, each as IG-11's typed diagnostic: its stable code, the option, the source (`cli`, `file:path:line`, `default`) and the English rendering, one per line on standard error. The codes are the machine interface; tooling never matches the English.
+
+**IG-Q62 — exit codes — POSED 2026-10-19.** *Recommended:* IG-11's codes, unchanged: `0`, the configuration would start; `2`, a configuration refusal; `1`, the check itself failed for a reason that is not the configuration's (the file could not be read for an I/O fault). Warnings do not change the code.
+
+**IG-Q63 — the wallet binaries — POSED 2026-10-19.** *Recommended:* the same switch, with the same meaning, in each binary that reads a configuration file: `shekyl-wallet-rpc` and `shekyl-cli` (their files are IG-Q29's). One name across binaries is one name in the tree (IG-2).
+
+**IG-Q64 — the file an install ships — POSED 2026-10-19.** IG-12 holds: no binary writes its own configuration file. The installer may, as IG-13 already lets it create the machine-wide root. *Recommended:*
+- **What.** The file is IG-9's annotated example, rendered from the table for its network (defaults derived from the network row shown as that network's values), with every option line commented out: installed, it means exactly the defaults. A header names the file, says how to check it (`shekyld --config-verify`), that a command-line flag wins over the file per key, that runtime rows change with `option set` without editing the file (IG-12), and that a secret goes only in a file nobody else can read. It is generated and gated like the example, never written by hand.
+- **Where.** At the run mode's default path, one file per network the release supports: on Linux `/etc/shekyl/shekyld-<network>.toml` (R2), owner `root`, group the daemon's account, mode `0640`, which the permission walk accepts; on Windows with `service`, `%ProgramData%\shekyl\shekyld-<network>.toml` under the root's ruled ACL. A run-as-user Windows daemon has no machine path to write: the installer puts the rendered examples beside the binaries, and an absent file at the per-account default means defaults, as today.
+- **When.** On first install only. The package carries the current rendering as package data (on Linux under `/usr/share/shekyl/`, updated every release) and copies it into place only if no file exists there; an upgrade never overwrites an operator's file. On Linux this is a post-install copy, not a dpkg conffile, so a release that adds rows does not prompt on every upgrade.
+- **With it.** The installer creates what IG-F12 and IG-F13 found missing: the daemon's account (`shekyl`, no login shell, its home the data directory's parent, IG-13), `/etc/shekyl/`, and on Windows the machine-wide root when `service` lands (RT-W14).
+
+**IG-Q65 — the shipped file's comments — POSED 2026-10-19.** *Recommended:* each option's comment is its row's help text (IG-9), its kind and its default, as the generated example already renders them; rows are grouped under §5's headings; `dev-` rows, REJECTED rows and RESERVED rows never appear (IG-8, IG-10). A comment that is not generated from a row is the header alone.
