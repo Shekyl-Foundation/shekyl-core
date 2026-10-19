@@ -1613,10 +1613,12 @@ outside the tree and pinned, and its label registered.
 **The check.** At the slash pass that settles `E`, before any row for `E`
 is written and whether or not anything was drawn: the digest is read,
 the walk is run under the pass's floor, and the two are compared. A
-missing digest, a mismatch or a walk that cannot be built halts the
-writer at the height; none is a verdict on the block.
+missing digest, a rebuilt digest that differs, and a digest recorded for
+an epoch the view has not opened are three halts; only the second is
+drift. A walk that cannot be built is the same class of halt. None is a
+verdict on the block.
 
-**Tests.** Rules (17, plain data): each undo, the order, the filters, the
+**Tests.** Rules (18, plain data): each undo, the order, the filters, the
 faults, the Reinstate. Store (on the slash-scan harness, `SEB 100 / cap
 50`): the two derivations agree at every height from `h_open(2)` to the
 pass settling epoch 3, across a Release above an open and one in an open

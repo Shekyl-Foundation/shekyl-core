@@ -300,42 +300,38 @@ impl super::Transition {
     /// over this view, under this pass's floor. It reads no value the open
     /// produced but the digest it is compared with, so a Release pre-image,
     /// a slash-log row, a record or the digest that changed after the open
-    /// is a mismatch here.
+    /// is a mismatch here. The comparison itself is
+    /// [`super::drawable::compare_recorded_digest`]: a missing digest, a
+    /// digest for an epoch this view has not opened, and a digest that
+    /// differs are three faults.
     ///
     /// # Errors
     ///
-    /// [`ViewRead::Corrupt`]: [`SettlementCheck::DrawableDigestMissing`]
-    /// when the open wrote no digest, [`SettlementCheck::DrawableDrift`] when
-    /// the rebuilt set's digest is not it, and the walk's own
-    /// [`Corrupt::DrawableEpoch`] when the set cannot be rebuilt. None is a
-    /// refusal of the block.
+    /// [`ViewRead::Corrupt`]. [`SettlementCheck::DrawableDigestMissing`]
+    /// when the open wrote no digest. [`SettlementCheck::DrawableDrift`]
+    /// when the rebuilt set's digest is not the recorded one.
+    /// [`Corrupt::DrawableEpoch`] when the set cannot be rebuilt, including
+    /// [`crate::DrawableEpochFault::Unopened`] when the view's tip is below
+    /// `h_open` while a digest is recorded. Each halts the writer. None is
+    /// a verdict on the block.
     fn check_drawable<'id, V: ChainView<'id>>(
         &self,
         view: &V,
         epoch: SettlementEpoch,
     ) -> Result<(), ViewRead<V::Fault>> {
-        let integrity = |check| ViewRead::Corrupt(Corrupt::SettlementIntegrity { epoch, check });
-        let Some(written) = view
+        let h_open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
+        let written = view
             .drawable_digest(epoch, self.floor())
-            .map_err(ViewRead::View)?
-        else {
-            return Err(integrity(SettlementCheck::DrawableDigestMissing));
-        };
-        // `None` is an epoch that has not opened on this view, which a
-        // digest says it has: the journals describe no set the digest can
-        // be of.
-        let walked = super::drawable_epoch_walked_back(
+            .map_err(ViewRead::View)?;
+        let rebuilt = super::drawable_epoch_walked_back(
             view,
             epoch,
             self.schedule,
             self.reorg_cap,
             self.slash_floor,
-        )?
-        .map(|drawable| drawable.digest());
-        if walked != Some(written) {
-            return Err(integrity(SettlementCheck::DrawableDrift));
-        }
-        Ok(())
+        )?;
+        super::drawable::compare_recorded_digest(epoch, h_open, written, rebuilt.as_ref())
+            .map_err(ViewRead::Corrupt)
     }
 
     /// The settlement beacon of `epoch`: the hash of the block `W₂` after

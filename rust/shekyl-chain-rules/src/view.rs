@@ -724,8 +724,7 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// an absent one.
     ///
     /// `floor`: the settling family's ([`EpochFloor`]; SI-32), the floor
-    /// of its ruled reader, the pass's re-walk compare (`SO-D10g`), which
-    /// is not built yet.
+    /// of its ruled reader, the pass's re-walk compare (`SO-D10g`).
     fn drawable_digest(
         &self,
         epoch: SettlementEpoch,

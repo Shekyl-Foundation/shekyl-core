@@ -542,14 +542,15 @@ impl WriteBatch<'_, '_> {
     /// No floor is persisted and none is checked here (`SLK-3`): the
     /// expression is the floor, a re-run at the same height deletes the
     /// same empty range, and the one reader of the log asserts the floor
-    /// where it reads (SI-26, `archival_reads::slash_log_after`) — a
-    /// derived floor and an asserting read, rather than a watermark the
-    /// read would trust. Not pop-reversible, like the body discards: the
-    /// row for the boundary block was sealed before this ran, and `pop`
-    /// cannot reach a height this retires — the undo floor is `retention`
-    /// below the tip with `retention < SEB` ([`Horizons::new`]), the slash
-    /// floor at least `SEB + reorg_cap` below it, and a pop below the undo
-    /// floor is `PopBelowFloor`.
+    /// where it reads (SI-26, `archival_reads::slash_log_rows_after`, which
+    /// [`archival_reads::slash_log_after`](super::archival_reads::slash_log_after)
+    /// filters) — a derived floor and an asserting read, rather than a
+    /// watermark the read would trust. Not pop-reversible, like the body
+    /// discards: the row for the boundary block was sealed before this ran,
+    /// and `pop` cannot reach a height this retires — the undo floor is
+    /// `retention` below the tip with `retention < SEB` ([`Horizons::new`]),
+    /// the slash floor at least `SEB + reorg_cap` below it, and a pop below
+    /// the undo floor is `PopBelowFloor`.
     fn retire_slash_rows(&self, floor: SlashLogFloor) -> Result<SlashLogFloor, StoreError> {
         let Some(kept_from) = floor.height() else {
             return Ok(SlashLogFloor::NONE);
