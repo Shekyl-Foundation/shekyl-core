@@ -61,11 +61,13 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | Requirements | The brief's items 3 to 7 (operator-fixable states, one log stream, suspend and resume, floor-device bounds, Windows first-class) are requirements of this round |
 | Acceptance | §7's matrix on Linux, Windows and macOS, then a seven-day soak on each, a Pi 4 as the Linux host. Nothing is called "24/7" before that |
 | `TSR-Q1`: a respawn is a repair | The `DataDirectory` is kept across respawns within a boot, so guards and the consensus cache survive. The daemon holds the hs-id seed for the boot in secure memory (rules 35, 36) and republishes the **same** onion; `ADD_ONION` still sends `Flags=DiscardPK`, since Tor need not hand back a key we hold. After a run of consecutive launch failures on a kept directory, the next launch uses a fresh one; the run length is set from `TSR-M2`'s failure distribution, not chosen |
-| `TSR-Q2`: guards are per boot | Guards do not persist across boots, as today. Persisting them gains no reduction in expected exposure: a hostile guard exposes *f*·*B* boots in expectation either way, and persistence changes only the spread; the harm is per boot. It costs a guard file on disk and lets one hostile guard link every boot's onion. The one real re-roll attack, forcing respawns, is closed by `TSR-Q1` |
+| `TSR-Q2`: guards are per boot | Guards do not persist across boots, as today; the public directory cache does (`TSR-Q8`). Persisting them gains no reduction in expected exposure: a hostile guard exposes *f*·*B* boots in expectation either way, and persistence changes only the spread; the harm is per boot. It costs a guard file on disk and lets one hostile guard link every boot's onion. The one real re-roll attack, forcing respawns, is closed by `TSR-Q1` |
 | `TSR-Q3`: remedy by cause | §4.4, with the SOCKS reply classification of §4.2: only a process fault respawns |
 | `TSR-Q4`: Tor status in RPC | The unrestricted reply carries one boolean in Health, as `has_peers` does: this node can originate over an address-hiding connector now. State, cause, since and the respawn count are restricted Status fields; the RPC lane names them |
 | `TSR-Q5`: one probe per descriptor upload round (2026-10-15) | The `HS_DESC UPLOADED` events of one upload round are coalesced into one trigger, and after a jittered delay the probe runs once (§4.5). No deadline of our own and no evidence-age bookkeeping |
 | `TSR-Q7`: `__OwningControllerFD` on every platform (2026-10-15) | The launch hands Tor one end of a connected socket pair as its owning control connection; no control port, port file, cookie, `TAKEOWNERSHIP` or `RESETCONF` (§4.7) |
+| `TSR-Q8`: the public directory cache persists across boots (Rick, 2026-10-19) | The daemon keeps Tor's public directory cache across boots; guards, keys and the onion stay per boot. A daemon-owned cache directory (mode 0700) holds `cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and `cached-certs`. At launch, only those exact names are copied into the fresh per-boot `DataDirectory`, each a regular file, never reached through a symlink, and under a size limit. At a clean stop the same names are copied back; after a crash the previous cache stays as it was. `state`, keys, `lock` and every other file are never kept, and Tor is never pointed at the cache directory itself. The per-boot rule becomes: nothing identity-bearing (guards, keys, the onion) joins one boot to the next. Why: a node that bootstraps cold at every boot looks to its directory guard like a new install each time, and with a cache it looks like every other Tor client; each restart stops loading the fallback mirrors and directory authorities; and the cold-bootstrap tail, which is directory fetching (§10, `TSR-M1`), goes. What a consensus-diff request reveals, roughly how long the node was offline, adds little to a directory guard that already sees the node's address. Tor verifies the whole cache itself, so a bad cache costs one cold boot and cannot steer path selection. `tor-pin-verify`'s live tests start from a seeded cache, and one cold-start test remains. The step-8 removal (§12, increment 3) stands: a first install, and a boot after a long time offline, are still cold |
+| `TSR-Q9`: the managed Tor looks like every other Tor client (Rick, 2026-10-19) | Every choice the supervisor makes about Tor's behaviour is tested against this, increment 3's included. It bears on `TSR-M6`'s open question, how to keep a crash before Tor's first `state` write from re-picking guards. Of the two answers, `AvoidDiskWrites 0` until that first write is the more ordinary behaviour, because a stock client writes its `state` promptly, and Rick expects it to be chosen. The other, counting respawns before that write, changes nothing Tor does. Increment 3 settles it with evidence, including whether switching `AvoidDiskWrites` on the owning connection after the first write is reliable |
 | `TSR-Q6`: the private-network cases | Best effort, not a gate. The private network is chutney or a hand-built `TestingTorNetwork` from the pinned bundle, at the implementer's choice; it runs §7's two cases if it can be made to work, is never a latency source, and its absence blocks nothing |
 
 `TSR-F9` and `TSR-F10` propose amending parts of the brief's rulings; each
@@ -501,6 +503,20 @@ on Windows), the directory stays under its live name and the next start's
 sweep removes it, with the failure logged. What a respawned Tor reads is the kept directory's `state`; when Tor first
 writes it, and what a kill loses, is `TSR-M6`.
 
+The public directory cache (`TSR-Q8`) is the one thing that outlives a boot.
+The daemon owns a cache directory (mode 0700) beside the per-boot ones. At
+launch into a **fresh** directory, the launch copies in
+`cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and
+`cached-certs`, and nothing else, refusing any that is not a regular file,
+that is reached through a symlink, or that is over its size limit; a refused or
+missing file means that file starts cold. A respawn into the kept directory
+copies nothing, because the directory already holds what this boot's Tor
+fetched. At a clean stop, after the reap and before the tombstone rename, the
+same four names are copied back, each written to a temporary name and renamed
+over the old one, so a stop interrupted midway leaves either the old file or
+the new one. A crash copies nothing back, and the previous cache stays. Tor's
+`DataDirectory` is never the cache directory.
+
 ### 4.8 Identity across a respawn
 
 The onion does not change across a respawn (`TSR-Q1`): the daemon republishes
@@ -660,7 +676,7 @@ run's conditions are in `shekyl-dev`, `data/tsr-preflight/2026-10-19*/`.
 
 | Row | Measures | Sets |
 | --- | --- | --- |
-| `TSR-M1` | bootstrap time, cold directory and kept directory. **Measured 2026-10-19.** Cold, n=100: p50 11.3 s, p90 17.0 s, p99 127.1 s, max 380.8 s; 1 run over 300 s. Kept, n=30: p50 3.54 s, max 3.81 s (a respawn into its kept directory, `TSR-Q1`). x86: cold max 42.7 s, kept max 2.36 s. **Where the cold tail comes from** (300 more cold runs with each phase's time, 03:38Z to 06:45Z): of the 31 over 60 s, 26 spent their time loading relay descriptors and 5 loading the consensus; circuits took a median 0.86 s, as in fast runs. A slow run sits at one directory percentage, often for about five minutes, and then completes. Tor raised a `BOOTSTRAP` problem event in 1 of the 31. The tail's size moves with the night: 3 % over 60 s in the record (01:23Z to 03:13Z), 9 % in this run outside its overlap with the load test | the stall bound. No bootstrap is given up (`TSR-F7`, §4.4), and a slow one is not a process fault (`TSR-Q3`). A stalled directory fetch usually raises no problem event, so problem events alone cannot carry §5's operator message for it |
+| `TSR-M1` | bootstrap time, cold directory and kept directory. **Measured 2026-10-19.** Cold, n=100: p50 11.3 s, p90 17.0 s, p99 127.1 s, max 380.8 s; 1 run over 300 s. Kept, n=30: p50 3.54 s, max 3.81 s (a respawn into its kept directory, `TSR-Q1`). x86: cold max 42.7 s, kept max 2.36 s. **Where the cold tail comes from** (300 more cold runs with each phase's time, 03:38Z to 06:45Z): of the 31 over 60 s, 26 spent their time loading relay descriptors and 5 loading the consensus; circuits took a median 0.86 s, as in fast runs. A slow run sits at one directory percentage, often for about five minutes, and then completes. Tor raised a `BOOTSTRAP` problem event in 1 of the 31. The tail's size moves with the night: 3 % over 60 s in the record (01:23Z to 03:13Z), 9 % in this run outside its overlap with the load test | the stall bound. No bootstrap is given up (`TSR-F7`, §4.4), and a slow one is not a process fault (`TSR-Q3`). A stalled directory fetch usually raises no problem event, so problem events alone cannot carry §5's operator message for it. Because the tail is directory fetching, the kept directory cache (`TSR-Q8`) removes most of it |
 | `TSR-M2` | respawn to outbound usable, and to inbound reachable | the backoff base and cap |
 | `TSR-M3` | self-probe latency, and that it works at all. **Measured 2026-10-19**: 40 of 40 succeeded, the probe nonce arriving each time; p50 2.35 s, p90 7.39 s, max 12.29 s. x86: 40 of 40, max 46.15 s, with five probes in one cluster at 42.9 to 46.1 s | the probe's delay range and timeout. A timeout below about 46 s would have failed the x86 cluster's probes, each of which succeeded |
 | `TSR-M4` | Tor's resident memory at 12 outbound plus inbound load, default and set `MaxMemInQueues`. **Measured 2026-10-19 at Tor's default**, under a synthetic load (no fleet daemon could supply one; Rick, 2026-10-19): 12 outbound and 12 inbound rendezvous streams, each carrying 512 bytes every 10 s, for an hour. Resident memory **91.0 MiB**, flat once the streams were up; idle baselines 85.7 and 92.3 MiB. x86: 82.5 MiB. A set `MaxMemInQueues` was not measured | `MaxMemInQueues` |
@@ -740,7 +756,10 @@ its PR leaves draft.
    daemon's step-8 Tor wait (`rust/shekyl-daemon/src/run.rs`) and its 300 s
    bootstrap deadline (`rust/shekyl-daemon/src/tor.rs`): step 8 does not wait
    for Tor, and no bootstrap is given up (Rick, 2026-10-19; one cold bootstrap
-   in a hundred on the floor device took longer than 300 s, §10).
+   in a hundred on the floor device took longer than 300 s, §10). It carries the
+   public directory cache across boots (`TSR-Q8`, §4.7), with `tor-pin-verify`'s
+   live tests starting from a seeded cache and one cold-start test kept, and it
+   tests its Tor choices against `TSR-Q9`, settling `TSR-M6`'s open question.
 4. The probe nonce and the probe.
 5. The supervisor becomes the Tor link's publisher, in place of the zone host.
 6. Acceptance; then the C++ deletions, to Rick before they are cut.
