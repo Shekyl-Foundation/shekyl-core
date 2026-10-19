@@ -646,7 +646,7 @@ regtest C++ leg (item 8); tag `0x03`.
   family it lands in. Rules 95 and 22 amended to carry the cell. *(As
   proposed:)* endorsed 2026-09-19 as a standing check. Every `FOLLOWUPS.md` row's owner must
   resolve to a live `docs/design/` doc, an open PR, or an index-§2 family.
-  Same family as `held_by_cxx` asserting its holder exists. **Falsify by**
+  Same family as `held_by_store` asserting its holder test exists. **Falsify by**
   `scripts/ci/check_followups_owners.py` existing and refusing a row whose
   owner is "the E2 lane" with no `DRS_E2_*.md` present. **Carrier (rule 22 —
   a slot in this ruled plan, not "a small PR later"): §7 commit 0**, the

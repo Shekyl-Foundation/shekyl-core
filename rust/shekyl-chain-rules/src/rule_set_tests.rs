@@ -123,9 +123,10 @@ fn genesis_id_is_one_and_round_trips() {
     assert_eq!(RuleSetId::from_raw(1), RuleSetId::GENESIS);
 }
 
-/// Bites: a genesis rule set that omits a validator-enforced consensus row,
-/// lists one out of census order, or lets a `held_by_cxx` or `enforced_at`
-/// row into the denominator per-block coverage is measured against.
+/// Bites: a genesis rule set that omits a per-block consensus row, lists
+/// one out of census order, or lets an `enforced_at`, `by_construction` or
+/// `held_by_store` row into the denominator per-block coverage is measured
+/// against.
 #[test]
 fn genesis_enforces_the_census_minus_held_rows_in_order() {
     let genesis = RuleSet::GENESIS;
@@ -136,10 +137,7 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
         .filter(|row| {
             !matches!(
                 row.status(),
-                RowStatus::HeldByCxx
-                    | RowStatus::EnforcedAt
-                    | RowStatus::ByConstruction
-                    | RowStatus::HeldByStore
+                RowStatus::EnforcedAt | RowStatus::ByConstruction | RowStatus::HeldByStore
             )
         })
         .collect();
@@ -147,7 +145,7 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
     assert_eq!(
         enforced.len(),
         CenRow::ALL.len() - 41,
-        "A1 and A4 are held; E5 is enforced at open and K1b, K4, D5, E2 at the alt tier; A3, A6, A7, F2, F8, F19, F21, G3, G4, G5, H2, H8, H12, H13, H23, I2, I3, L8, L9, L11, L12, L16 hold by construction; B3, K1a, K2, K3, K8 are held by the store, K5, K5b, K6, K7 by its writer's switch and M2, M8, K9 by the pool"
+        "E5 is enforced at open and K1b, K4, D5, E2 at the alt tier; A3, A6, A7, F2, F8, F19, F21, G3, G4, G5, H2, H8, H12, H13, H23, I2, I3, L8, L9, L11, L12, L16 hold by construction; B3, K1a, K2, K3, K8 are held by the store, K5, K5b, K6, K7 by its writer's switch, M2, M8, K9 by the pool and A1, A4 by the ingest router"
     );
     assert_eq!(
         format!("{genesis:?}"),

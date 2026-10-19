@@ -56,8 +56,8 @@ pub enum Flag {
 }
 
 /// How a row is held: not yet, by a rule type `validate` runs, by a rule
-/// type this crate enforces at another site, by construction, by a Rust
-/// crate below the validator, or by the C++ ingest driver until cutover.
+/// type this crate enforces at another site, by construction, or by a Rust
+/// crate below the validator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RowStatus {
     /// No rule yet; the row is counted in the denominator only.
@@ -75,13 +75,13 @@ pub enum RowStatus {
     /// — and that is the only copy. The path is compile-pinned; the gate
     /// asserts the named `#[test]` is defined in this crate (rule 47). A
     /// string stored on the value would be a second copy nothing reads, free
-    /// to drift from the entry. Same shape as [`HeldByCxx`](Self::HeldByCxx).
+    /// to drift from the entry. Same shape as
+    /// [`HeldByStore`](Self::HeldByStore), whose test is in the holder.
     ///
-    /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced) for the
-    /// same reason a hold is (per-block completeness is measured over what
-    /// `validate` evaluates) and, unlike a hold, **counted as Rust-enforced**
-    /// by the gate: `held_by_cxx` would be false here — the enforcement is
-    /// not the C++'s.
+    /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced), since
+    /// per-block completeness is measured over what `validate` evaluates,
+    /// and **counted as enforced** by the gate: the enforcement is this
+    /// crate's, at another site.
     EnforcedAt,
     /// The row holds **by construction**: no runtime site evaluates it
     /// because the type system (or the wire's parser) makes the violation
@@ -132,31 +132,17 @@ pub enum RowStatus {
     /// holder refuses — `held_by_store("<crate>", "<test>")` — and the gate
     /// asserts a `#[test] fn <test>` is **defined** in that crate's `src/`
     /// or `tests/`, never merely that the token appears (the same shape as
-    /// [`HeldByCxx`](Self::HeldByCxx); a `#[test]` is to a Rust crate what
-    /// `GENERATE_AND_PLAY` is to `core_tests`). Nothing the compiler can
-    /// pin from here: the holder is outside this crate by construction.
+    /// [`EnforcedAt`](Self::EnforcedAt), whose test is in this crate).
+    /// Nothing the compiler can pin from here: the holder is outside this
+    /// crate by construction.
     ///
     /// Not `by_construction`: that status is a claim about a **type** in
     /// this crate with a falsifier in this crate, and a runtime test in
     /// another crate is neither. Not `enforced_at`: that site is this
     /// crate's. Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced)
     /// as both are (per-block completeness is what `validate` evaluates),
-    /// and **counted as Rust-enforced** by the gate, printed as its own
-    /// figure — unlike a C++ hold it has no expiry.
+    /// and **counted as enforced** by the gate, printed as its own figure.
     HeldByStore,
-    /// Acceptance topology the C++ ingest driver decides — where a block
-    /// *goes* (`ALREADY_EXISTS`, `ORPHANED`), not whether it is valid — and
-    /// so not a predicate `validate` can evaluate (`CHAIN_RULES_SLICE_1.md`
-    /// §4, Q2). The registry entry cites the C++ **test that proves the
-    /// holder refuses** (`held_by_cxx("<file>", "<test>")`); the gate asserts
-    /// the file exists and contains the test, never merely that a token
-    /// appears (PWD-B10). A **deferral with a known expiry**: the cited file
-    /// leaves the tree at cutover, the gate goes red, and the row is
-    /// re-classified then — held rows cannot outlive the C++ silently.
-    /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced), so
-    /// completeness is measured over what the validator can hold; the gate
-    /// prints the subtraction beside the fixed denominator.
-    HeldByCxx,
 }
 
 mod sealed {
@@ -186,8 +172,8 @@ pub trait Row:
 
 /// `RowStatus` from an entry's status token. A status other than `pending`,
 /// `implemented(path)`, `enforced_at(path, "test")`,
-/// `by_construction(path, "falsifier")`, `held_by_store("crate", "test")` or
-/// `held_by_cxx("file", "test")` is a macro error at the entry.
+/// `by_construction(path, "falsifier")` or `held_by_store("crate", "test")`
+/// is a macro error at the entry.
 macro_rules! census_status {
     (pending) => {
         $crate::census::RowStatus::Pending
@@ -203,9 +189,6 @@ macro_rules! census_status {
     };
     (held_by_store($krate:literal, $test:literal)) => {
         $crate::census::RowStatus::HeldByStore
-    };
-    (held_by_cxx($file:literal, $test:literal)) => {
-        $crate::census::RowStatus::HeldByCxx
     };
 }
 
@@ -223,10 +206,7 @@ macro_rules! census_status {
 /// the registry-generic face of `Rule`, so the one macro serves both enums.
 macro_rules! census_pin {
     (pending, $name:ident, $var:ident) => {};
-    // Nothing the compiler can pin: the holder is a C++ test. The gate
-    // asserts the cited file exists and contains the test (rule 47).
-    (held_by_cxx($file:literal, $test:literal), $name:ident, $var:ident) => {};
-    // Nothing the compiler can pin either: the holder is a crate this one
+    // Nothing the compiler can pin: the holder is a crate this one
     // does not import (DRS-D12 (i)). The gate asserts the named `#[test]`
     // is defined in that crate (rule 47).
     (held_by_store($krate:literal, $test:literal), $name:ident, $var:ident) => {};
@@ -259,9 +239,8 @@ macro_rules! census_pin {
 ///
 /// Per entry, `status` is `pending`, `implemented(rust::path::to::RuleType)`,
 /// `enforced_at(rust::path::to::RuleType, "test_fn_in_this_crate")`,
-/// `by_construction(rust::path::to::Property, "falsifier_test")`,
-/// `held_by_store("shekyl-chain-store", "test_fn_in_that_crate")` or
-/// `held_by_cxx("tests/…​.cpp", "gen_test_name")`.
+/// `by_construction(rust::path::to::Property, "falsifier_test")` or
+/// `held_by_store("shekyl-chain-store", "test_fn_in_that_crate")`.
 /// Entries must be listed in census §4 order restricted to the flag; the gate
 /// asserts this so `index()` is census-derived. The variant name is the census
 /// id without its `CEN-` prefix (`CEN-D1b` → `D1b`).

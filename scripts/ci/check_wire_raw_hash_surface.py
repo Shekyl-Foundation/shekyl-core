@@ -15,8 +15,8 @@ Without it RTN-7 is a cleanup that decays invisibly: `RAW_TYPE_NEWTYPE_MIGRATION
 §6 records the intent, and rows do not gate. The moment the typing lands,
 nothing stops the next wire field arriving as `[u8; 32]`. The allowlist is
 `dict[str, Allow]` with `Allow(reason, addressee)` as two fields — the same
-named-exception shape as the census bijection map, `RUST_ONLY_TABLES`,
-`DEFERRED_DOCS` and `CXX_HOLDER_RE`; unnamed occurrences are red.
+named-exception shape as the census bijection map, `RUST_ONLY_TABLES` and
+`DEFERRED_DOCS`; unnamed occurrences are red.
 
 Red in **both** directions (rule 47):
 
