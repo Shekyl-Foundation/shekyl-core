@@ -12,8 +12,8 @@ use shekyl_types::{BlockCount, BlockHeight};
 
 use super::{
     well_formed, AdmissionPolicy, AdmissionPolicyId, FakechainSchedule, FakechainScheduleRefused,
-    ReorgCapNotInsideEpoch, ResponseWindowOutrunsAnchor, RuleSchedule, RuleSet, RuleSetId,
-    SettlementEpochBlocks, SettlementSchedule,
+    ReorgCapNotInsideEpoch, ReorgCapOutrunsSeedEpoch, ResponseWindowOutrunsAnchor, RuleSchedule,
+    RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
 };
 use crate::census::{CenRow, RowStatus};
 
@@ -528,4 +528,32 @@ fn pair(seb: u64, cap: u64) -> FakechainSchedule {
         BlockCount::from_raw(cap),
     )
     .expect("a valid pair")
+}
+
+/// A lever's cap is held to the bound `D_MAX` meets at compile time: two
+/// caps inside one RandomX seed epoch, so the two cache slots hold every
+/// seed a fork inside the cap can name. Asked after the cap fits its
+/// epoch, so a cap outside the epoch keeps that refusal.
+#[test]
+fn a_fakechain_schedule_refuses_a_cap_wider_than_half_a_seed_epoch() {
+    let largest = ReorgCapOutrunsSeedEpoch::LARGEST_CAP_BLOCKS;
+    assert_eq!(largest, 1023);
+    assert!(2 * crate::D_MAX.to_raw() <= 2 * largest, "D_MAX meets it");
+    let seb = SettlementEpochBlocks::new(2_048).expect("non-zero");
+    assert!(FakechainSchedule::new(seb, BlockCount::from_raw(largest)).is_ok());
+    for cap in [largest + 1, 2_047] {
+        assert_eq!(
+            FakechainSchedule::new(seb, BlockCount::from_raw(cap)),
+            Err(FakechainScheduleRefused::ReorgCapOutrunsSeedEpoch(
+                ReorgCapOutrunsSeedEpoch {
+                    reorg_cap: BlockCount::from_raw(cap),
+                }
+            )),
+            "cap {cap}"
+        );
+    }
+    assert!(matches!(
+        FakechainSchedule::new(seb, BlockCount::from_raw(2_048)),
+        Err(FakechainScheduleRefused::ReorgCapNotInsideEpoch(_))
+    ));
 }

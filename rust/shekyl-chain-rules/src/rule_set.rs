@@ -179,6 +179,40 @@ impl fmt::Display for ReorgCapNotInsideEpoch {
 
 impl std::error::Error for ReorgCapNotInsideEpoch {}
 
+/// A [`FakechainSchedule`] whose reorg cap is wider than half a RandomX
+/// seed epoch: two caps no longer fit inside one, and an alternative
+/// inside the cap could name a seed neither of the node's two cache slots
+/// holds (`shekyl-chain-ingest`'s `cache_window`). The production cap,
+/// `D_MAX`, is pinned by that module's compile-time assertion; a lever is
+/// held to the same bound here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ReorgCapOutrunsSeedEpoch {
+    /// The cap it named.
+    pub reorg_cap: BlockCount,
+}
+
+impl ReorgCapOutrunsSeedEpoch {
+    /// The widest cap a schedule may name: two of it fit inside one seed
+    /// epoch.
+    pub const LARGEST_CAP_BLOCKS: u64 = (shekyl_difficulty::SEEDHASH_EPOCH_BLOCKS - 1) / 2;
+}
+
+impl fmt::Display for ReorgCapOutrunsSeedEpoch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "a reorg cap of {} blocks is too wide: two caps must fit inside one {}-block RandomX \
+             seed epoch, or a fork inside the cap could need a cache this node does not hold. \
+             Use a reorg cap of at most {} blocks",
+            self.reorg_cap.to_raw(),
+            shekyl_difficulty::SEEDHASH_EPOCH_BLOCKS,
+            Self::LARGEST_CAP_BLOCKS
+        )
+    }
+}
+
+impl std::error::Error for ReorgCapOutrunsSeedEpoch {}
+
 /// A [`FakechainSchedule`] whose epoch is long enough that an honest
 /// challenge read could be anchored at or above the block it answers for:
 /// `W₂ + L >` anchor depth (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.1,
@@ -254,6 +288,8 @@ impl std::error::Error for ResponseWindowOutrunsAnchor {}
 pub enum FakechainScheduleRefused {
     /// `0 < reorg_cap < SEB` fails.
     ReorgCapNotInsideEpoch(ReorgCapNotInsideEpoch),
+    /// `2 · reorg_cap < SEEDHASH_EPOCH_BLOCKS` fails.
+    ReorgCapOutrunsSeedEpoch(ReorgCapOutrunsSeedEpoch),
     /// `W₂ + L ≤` anchor depth fails.
     ResponseWindowOutrunsAnchor(ResponseWindowOutrunsAnchor),
 }
@@ -262,6 +298,7 @@ impl fmt::Display for FakechainScheduleRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ReorgCapNotInsideEpoch(refused) => refused.fmt(f),
+            Self::ReorgCapOutrunsSeedEpoch(refused) => refused.fmt(f),
             Self::ResponseWindowOutrunsAnchor(refused) => refused.fmt(f),
         }
     }
@@ -279,10 +316,12 @@ impl FakechainSchedule {
 
     /// The pair `(settlement_epoch, reorg_cap)`, if it satisfies both
     /// invariants a rule set's schedule is held to: `0 < reorg_cap < SEB`,
-    /// and `W₂ + L ≤` anchor depth with `W₂` the epoch's own response
-    /// window (`SCS-P32`). They are checked in that order.
+    /// `2 · reorg_cap < SEEDHASH_EPOCH_BLOCKS` (the two cache slots cover
+    /// every fork inside the cap), and `W₂ + L ≤` anchor depth with `W₂`
+    /// the epoch's own response window (`SCS-P32`). They are checked in
+    /// that order.
     ///
-    /// A value of this type therefore satisfies both, and
+    /// A value of this type therefore satisfies all three, and
     /// [`RuleSet::fakechain`] checks neither.
     ///
     /// # Errors
@@ -302,6 +341,11 @@ impl FakechainSchedule {
                     settlement_epoch,
                     reorg_cap,
                 },
+            ));
+        }
+        if cap > ReorgCapOutrunsSeedEpoch::LARGEST_CAP_BLOCKS {
+            return Err(FakechainScheduleRefused::ReorgCapOutrunsSeedEpoch(
+                ReorgCapOutrunsSeedEpoch { reorg_cap },
             ));
         }
         let settlement = SettlementSchedule::new(settlement_epoch);

@@ -189,8 +189,9 @@ pub use relay_floor::{fee_ladder_at, fee_operands_at, relay_floor_at, relay_floo
 pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
     AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule,
-    FakechainScheduleRefused, ReorgCapNotInsideEpoch, ResponseWindowOutrunsAnchor, RuleSchedule,
-    RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
+    FakechainScheduleRefused, ReorgCapNotInsideEpoch, ReorgCapOutrunsSeedEpoch,
+    ResponseWindowOutrunsAnchor, RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks,
+    SettlementSchedule,
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{
