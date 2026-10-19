@@ -896,6 +896,79 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Armed levers**: `generateblocks`' `amount_of_blocks` → `count`, `wallet_address` → `address`, `starting_nonce` → `nonce`, `prev_block` goes; reply `height` → `height`, `blocks` → `hash` (a list). `pop_blocks`' `nblocks` → `count`; reply `height` (a count) → `height` (ordinal).
 
+### 18.1 The names the walk reads
+
+Every method, parameter and field name above, with the holder its walk starts from (IG-Q42): `method` for a method name, otherwise the path of the object that holds or is selected or modified by the name. `scripts/ci/check_input_grammar_walk.py` walks each name over §3, §11, §14.2 and §19, and refuses a name that §17 or §18 gives and this table omits. The rename PR's schema gate (RW-Q7) replaces this table and that gate.
+
+| Names | Holder | Walked |
+|---|---|---|
+| methods (§17) | method | `version`, `chain_height`, `block_header_show`, `block_header_list`, `block_show`, `block_list`, `tx_show`, `tx_list`, `chain_spent`, `fee`, `chain_coinbase_sum`, `chain_alt`, `curve_show`, `archival_claim_show`, `shard_coverage`, `shard_fetch`, `daemon_status`, `sync_status`, `peer_connections`, `peer_list`, `p2p_stats`, `option_set`, `option_show`, `daemon_stop`, `txpool_list`, `txpool_stats`, `txpool_flush`, `tx_relay`, `tx_submit`, `block_template`, `block_submit`, `pow`, `mine_start`, `mine_stop`, `mine_status`, `ban_add`, `ban_remove`, `ban_list`, `ban_show`, `relay_stats`, `dev_block_generate`, `dev_chain_pop` |
+| parameters of block_header_show/list, block_show (selector) | `block` | `height`, `hash` |
+| parameters of block_header_list (selector) | `block` | `from`, `to`, `hash` |
+| parameters of header reads, block_show (modifier: the header) | `block header` | `pow` |
+| parameters of block_list (selector) | `block` | `height` |
+| parameters of tx_show/list (selector) | `tx` | `id` |
+| parameters of tx_show/list, block_show/list (modifier: the transaction) | `tx` | `prune` |
+| parameters of chain_spent (input) | `chain spent` | `key_image` |
+| parameters of chain_coinbase_sum (input) | `chain coinbase sum` | `from`, `to` |
+| parameters of curve_show (selector) | `curve` | `height` |
+| parameters of archival_claim_show (selector) | `archival` | `persona` |
+| parameters of shard_fetch (argument) | `shard` | `id` |
+| parameters of peer_list (input) | `peer` | `local` |
+| parameters of option_set (argument) | `option` | `value` |
+| parameters of option_show (selector) | `option` | `name` |
+| parameters of txpool_flush (argument) | `txpool` | `id` |
+| parameters of tx_relay (argument) | `tx` | `id` |
+| parameters of tx_submit (argument) | `tx` | `body` |
+| parameters of block_template (input) | `block template` | `address`, `extra`, `extra_size` |
+| parameters of block_submit (argument) | `block` | `body` |
+| parameters of pow (input) | `pow` | `height`, `hashing`, `seed` |
+| parameters of mine_start (argument) | `mine` | `address`, `threads` |
+| parameters of ban_add/remove/show | `ban` | `host`, `duration` |
+| parameters of dev_block_generate (argument) | `block` | `count`, `address`, `nonce` |
+| parameters of dev_chain_pop (argument) | `chain` | `count` |
+| block header fields | `block header` | `version_major`, `version_minor`, `time`, `parent`, `nonce`, `orphan`, `height`, `depth`, `hash`, `difficulty`, `difficulty_cumulative`, `reward`, `weight`, `weight_longterm`, `tx_count`, `pow`, `coinbase`, `curve_root`, `attestation_root` |
+| block fields | `block` | `header`, `body`, `tx`, `output_index` |
+| block tx element | `tx` | `id`, `body` |
+| chain_height fields | `chain` | `height`, `hash` |
+| tx entry fields | `tx` | `id`, `body`, `prunable_hash`, `archival_size`, `pooled`, `mined_height`, `confirmations`, `mined_time`, `output_index`, `public` |
+| fee fields | `fee` | `economy`, `standard`, `high` |
+| coinbase sum fields | `chain coinbase sum` | `emission`, `fee` |
+| alt chain element | `chain alt` | `hash`, `height`, `difficulty_cumulative`, `block`, `parent` |
+| curve fields | `curve` | `root`, `layers`, `leaf_count`, `height` |
+| claim fields | `archival claim` | `height`, `settled_epoch`, `joined_epoch`, `holding`, `shard`, `claimed`, `bond_total`, `failure_count`, `served_epoch`, `slash_epoch`, `epoch` |
+| claim epoch element | `epoch` | `id`, `closing_height`, `work`, `budget`, `bond`, `shard`, `credit`, `claimant` |
+| claim bond element | `bond` | `joined_epoch`, `complete_tree`, `failure` |
+| bond failure element | `bond failure` | `from`, `to` |
+| claim shard element | `shard` | `id`, `freeze_height`, `segment` |
+| claim credit element | `credit` | `bond`, `shard` |
+| coverage fields | `shard coverage` | `height`, `leaf_count`, `frozen_count`, `settled_epoch`, `budget`, `work`, `shard` |
+| coverage shard element | `shard` | `id`, `bonded_count`, `served_count`, `freeze_height`, `scarcity`, `profit` |
+| shard fetch fields | `shard` | `id`, `hash`, `size`, `block_count`, `tx_count`, `output_count`, `coinbase_output_count`, `duration`, `closing_height` |
+| daemon status fields | `daemon` | `height`, `hash`, `target_height`, `synchronized`, `syncing`, `offline`, `degraded`, `peered`, `protocol_version`, `difficulty`, `difficulty_cumulative`, `block_spacing`, `tx_count`, `block_weight_max`, `block_weight_median`, `time_adjusted`, `emission`, `emission_multiplier`, `burn`, `burn_total`, `stake_share`, `txpool_count`, `started`, `disk_free`, `data_size`, `revision`, `peer_outbound_count`, `peer_inbound_count`, `alt_count`, `rpc_connections`, `clearnet_inbound_count`, `clearnet_outbound_count`, `tor_inbound_count`, `tor_outbound_count`, `peer_white_count`, `peer_gray_count`, `txpool_private_count`, `grant` |
+| version (the frozen key, RW-Q6) | `daemon` | `version` |
+| version fields | `daemon` | `tagged`, `height`, `target_height`, `consensus_digest`, `network`, `genesis` |
+| connection element | `peer connection` | `inbound`, `local`, `endpoint`, `connector`, `download`, `upload`, `download_idle`, `upload_idle`, `state`, `age`, `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current`, `flags`, `id`, `height` |
+| sync status fields | `sync` | `height`, `target_height`, `peer`, `span` |
+| span element | `sync span` | `from`, `blocks`, `connection`, `download_speed`, `pace`, `size`, `endpoint` |
+| peer element | `peer` | `endpoint`, `tier` |
+| p2p stats fields | `p2p` | `started`, `download`, `upload`, `download_packets`, `upload_packets` |
+| option element | `option` | `name`, `value`, `source`, `runtime`, `secret`, `assigned` |
+| refusal data (a diagnostic, IG-11) | `diagnostic` | `code`, `option`, `source`, `message`, `parameter` |
+| pool entry fields | `tx` | `id`, `weight`, `fee` |
+| pool stats fields | `txpool` | `count`, `weight_total`, `weight_min`, `weight_max`, `weight_median`, `fee_total`, `private_count` |
+| template fields | `block template` | `difficulty`, `height`, `extra_offset`, `reward`, `parent`, `seed_height`, `body`, `hashing`, `seed`, `seed_next`, `version_major`, `weight_median`, `emission` |
+| block submit fields | `block` | `hash` |
+| tx submit fields | `tx` | `verdict`, `mined_height`, `cause` |
+| pow reply | `block` | `pow` |
+| mine status fields | `mine` | `active`, `speed`, `threads`, `address`, `block_spacing`, `reward`, `difficulty` |
+| ban element | `ban` | `host`, `duration`, `permanent` |
+| relay stats fields | `relay` | `floor`, `tally` |
+| floor element | `relay floor` | `connector`, `outbound_count`, `outbound_min`, `below` |
+| tally element | `relay tally` | `peer`, `connector`, `propagated`, `silent`, `sender_count` |
+| dev block generate reply | `block` | `height`, `hash` |
+| dev chain pop reply | `chain` | `height` |
+
 ## 19. Glossary — Part C's terms
 
 Rows below add to §3 and §11. A term already there that gains a parent here keeps its one meaning; where its meaning is stated per parent, as `height`'s is, the row under its new parent says what it names there.
