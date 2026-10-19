@@ -402,6 +402,7 @@ pub mod unstake_facade;
 /// The `submit_release` dispatch seam (PR-P4): seal a `PendingRelease`, then
 /// the persona-transport choke point; driven by `StakeFacade::unstake` (PR-C).
 pub(crate) mod release_dispatch;
+pub mod staking_outcomes;
 pub mod staking_read;
 /// `docs/design/DAEMON_SUBMIT_VERDICT.md` §5.3: the submit lifecycle
 /// driver — the wallet-side actor that lifts the [`submit_watchdog`]
@@ -506,7 +507,12 @@ pub use signer::MultisigSignerV2;
 pub use signer::{
     EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
 };
-pub use staking_read::{StakedBalance, StakedOutput, StakingReadError, StakingReadView};
+pub use staking_outcomes::{
+    AcknowledgeOutcomeError, InFlightRecord, InFlightState, ReportedOutcome,
+};
+pub use staking_read::{
+    StakedBalance, StakedOutput, StakingLedgerSnapshot, StakingReadError, StakingReadView,
+};
 pub use unstake_facade::{CollectOutcome, CollectUnstakedError, UnstakeError, UnstakeOutcome};
 pub use view_material::ViewMaterial;
 
