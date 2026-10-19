@@ -3,10 +3,12 @@
 **Status:** RULED — Round 0 posed and ruled 2026-10-15 (Rick): WR-Q1…WR-Q5
 accepted, with the amendments recorded in each ruling (§3). **WR-Q3 amended
 2026-10-16:** no daemon verdict releases a submitted record of any kind
-([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q3). **No code in this
-PR**; the rulings are implemented in a separately authorized slice. One
-dependency on the bond lane is open (§1.1), recorded in FOLLOWUPS and posed
-in the bond lane's Round 0 ([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md)). One follow-on is not ruled here (§5).
+([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md) BD-Q3).
+**Implemented in #1109** (§7), with the review rulings of 2026-10-17
+(§7.3). One dependency on the bond lane is open (§1.1), recorded in
+FOLLOWUPS and posed in the bond lane's Round 0
+([`ARCHIVAL_BOND_POST_DELAY.md`](ARCHIVAL_BOND_POST_DELAY.md)). One
+follow-on is not ruled here (§5).
 
 **Ground:** `shekyl-core` `dev` at `a0d3ebcb1` (the #1076 merge, after
 #1075), with the daemon RPC at `CORE_RPC_VERSION` 3.54 (#1057). Every
@@ -157,7 +159,7 @@ reason sentence must not blame the user.
 ## 2. What happens to each kind today
 
 The four kinds live in one sealed block, `PendingPostBlock`
-(`shekyl-engine-state/src/pending_post_block.rs:394-437`), version 12
+(`shekyl-engine-state/src/pending_post_block/mod.rs:453-507`), version 12
 (`:94`). Every kind shares one state type, `PendingPostState`
 (`:113-130`): `Pending`, or `Dispatched { at, attempts }`.
 
@@ -400,13 +402,13 @@ unaffected: a `refused` record that the scan sees land takes the confirmed
 path and writes no outcome, and a record released at its end date cannot
 gain a match (WR-Q3).
 
-**How it is cleared.**
-- By the next successful seal of the same kind for the same persona.
-- Or by `acknowledge_staking_outcome { kind }`, which acts on the active
-  persona as every staking action does (WR-Q5).
-- An outcome for a persona that is not active shows in `outcomes` but
-  cannot be acknowledged; only that persona's next seal of the same kind
-  clears it.
+**How it is cleared** (the acknowledgement RULED 2026-10-17, §7.3).
+- By the next successful seal of the same kind for the same persona,
+  except `spent_elsewhere`, which clears only on acknowledgement.
+- Or by `acknowledge_staking_outcome { kind, through_height }`, which
+  clears every outcome of `kind`, for every persona, written at or below
+  `through_height`: the newest ending the owner was shown. No persona or
+  handle is named (WR-Q5).
 
 **Schema.** `PENDING_POST_VERSION` 12 → 13, refuse-not-migrate, schema
 snapshot (rule 42), shared with WR-Q3's `reference_height`.
@@ -552,7 +554,7 @@ a record was signed under the limit in force then.
 | The post lands late | It can land only at or below its end date. The scan matches it before the frontier passes the end date, and the confirmation retire removes it as a confirmed stake. No release fires |
 | A reorg near the end date | The release waits for a frontier that is itself reorg-deep. A reorg within that depth changes nothing; one deeper is outside the wallet's finality model everywhere |
 | A hostile node holds the bytes and broadcasts them later | After the end date, every daemon refuses them for their reference age. Before it, they can land only as the user's own stake, which the scan retires as confirmed |
-| The scan stalls | The frontier does not advance and nothing is released early. The state stays `expired` with its `funds_return_at` |
+| The scan stalls | The frontier does not advance and nothing is released early. A record the scan has not shown spent stays `expired` with its `funds_return_at`. A stake the sealed funding set already shows fully spent reads `held` once the ledger reaches the end date (§7.3) |
 | The consensus age limit changes | Covered by the invariant above: the release module's sentinel fails the build |
 
 **Rejected alternatives.**
@@ -675,7 +677,7 @@ completed or been withdrawn with its funds returned."
   `kind == "drain"`, `state == "expired"` once the clock passes `r + 100`.
   It leaves `in_flight` with an `outcomes` entry once the frontier
   reaches `r + 100`.
-- `rg -n 'reference_height' rust/shekyl-engine-state/src/pending_post_block.rs`
+- `rg -n 'reference_height' rust/shekyl-engine-state/src/pending_post_block/`
   hits on `PendingBondPost`, `PendingEmissionClaim`, `PendingDrain` and
   `PendingRelease`.
 - The `-29522` message names `staking_info`.
@@ -721,11 +723,12 @@ bind (`shekyl-wallet-rpc/src/auth.rs:6-10`).
 **No slots, no handles.** Every staking action refuses a `p_slot`
 parameter (`handlers.rs:393-403`), and `stake` says "the user never names
 a slot" (`lifecycle.rs:836-838`, rule 81). So entries carry neither a
-slot nor a handle, and `acknowledge_staking_outcome` acts on the active
-persona. **Reopen** (rule 21) if a wallet must act on a record of a
-persona that is not active, including acknowledging that persona's
-outcome: the shape then is an opaque handle, random and persisted at
-seal time, never derived from the persona or the bytes.
+slot nor a handle. **The reopen clause fired and is resolved
+(RULED 2026-10-17, §7.3):** an exit's ending belongs to a persona that is
+routinely not active, so `acknowledge_staking_outcome` names no persona at
+all and clears by kind and height, across every persona. The opaque-handle
+shape stays the reopen if a wallet must ever act on one record of a
+persona that is not active.
 
 **Linkage, said to the user.** A broadcast record publishes the key
 images of its inputs to every node that saw it in a pool. When its funds
@@ -805,5 +808,110 @@ the honest outcome for that one case.
 - No byte-identical resubmit for claims, drains or exits. That stays
   leg 4's.
 - No claim-match set (§5).
-- **No code in this PR.** The rulings are implemented in a separately
-  authorized slice, with the falsifiers above as its acceptance tests.
+- The rulings are implemented in #1109 (§7), with the falsifiers above as
+  its acceptance tests.
+
+## 7. Implementation — IMPLEMENTED in #1109
+
+The rulings and BD-Q3 Rule 2 land on #1109: the state (schema v13), the
+engine (Rule 2, no sends past the end date, the end-date release), the
+integrity alarm, the wallet RPC and contract (`wallet_rpc.yaml` 0.14.0),
+and the review rulings of 2026-10-17 (§7.3).
+
+### 7.1 Shapes the rulings left open — chosen in #1109
+
+- **An `in_flight` entry is one flat object.** `kind`, `state`,
+  `dispatched_at_height`, `attempts`, `funds_return_at` and `reason`
+  are all required. `null` means there is no answer (rule 43): no send
+  yet, no return expected, no refusal. `dispatched_at_height` and
+  `attempts` are facts about the record's sends, so a `rejected` or
+  `expired` record that was sent still reports them. `attempts` is `0`
+  for a record never sent.
+- **`refused` and `expired` follow WR-Q1 as amended** (Rule 2): a record a
+  daemon refused reads `refused` until its end date and `expired` after
+  it, carrying the reason on both sides; the outcome `rejected` is written
+  at the release. A zero-fee claim with a recorded verdict ends
+  `ended_unconfirmed`, keeping the daemon's sentence, and reports
+  `funds: none_held`.
+- **One error line per start, and nothing else logged** (WR-Q3, WR-Q5).
+  The cadence driver's outcome leg writes it when it first reads a
+  `spent_elsewhere` outcome or a held stake, and again only when the
+  counts change. It names no persona, slot or record. The release itself
+  logs nothing.
+- **`held` is an `in_flight` state** (ruled 2026-10-17, §7.3): a stake whose
+  ledger tip has reached its end date, with every reserved input spent and
+  no confirmation seen. `funds_return_at` is `null`, because nothing
+  reserved is left to return. The release still waits for the scan frontier.
+- **The persisted outcome records whether the record was sent.** Only a
+  sent record published its inputs' key images, so only its ending carries
+  WR-Q5's linkage sentence. Sent means the record reached `Dispatched`,
+  which is sealed before the first send, or a daemon answered it with a
+  terminal verdict: a send that died in transport still counts, so the
+  sentence errs toward warning. Most §1.1 posts reach their end date
+  unsent. The field rides this PR's own v13 bump.
+- **`acknowledge_staking_outcome` answers `cleared`**, the number of
+  endings cleared; `0` when there were none, so it adds no error code.
+- **`-29521` now means only a refusal before any byte was sent** (the
+  persona-pairing check). A daemon's terminal verdict on a sent exit is
+  `-29522`, held to its end date, because the exit seam keeps that record
+  (Rule 2).
+- **The CLI remembers what it showed.** `stake` records, per kind, the
+  newest `at_height` it displayed; `stake acknowledge <kind>` sends that
+  as `through_height`, and refuses with "run `stake` first" when nothing
+  of that kind has been shown. Opening or closing a wallet forgets the
+  heights.
+
+### 7.2 The falsifiers, as tests
+
+| Ruling | Test |
+| --- | --- |
+| WR-Q1: no `in_flight`, or `null`, fails to decode; the tightened fields (`pscan_synced_height`, `recovery_pending_reopen`, `posture`, `serving_priority_not_lowered`) are required | `types::tests::staking_info_refuses_a_reply_missing_a_required_member` (wallet RPC) |
+| WR-Q1: expired after a reload, `funds_return_at == r + 100` | `staking_outcomes::tests::an_expired_record_reads_the_same_after_a_reload`; the boundary at `tip == end date` in `a_record_reads_expired_from_a_tip_at_its_end_date` |
+| WR-Q1: no `stalled` | `rg -nw stalled` over the three paths returns only two comments about RPC concurrency in `send.rs`; without `-w` it also matches `installed` |
+| WR-Q1, amended: `refused` below the end date, `expired` with the same reason after it | `a_recorded_verdict_reads_refused_then_expired_with_its_reason` |
+| WR-Q2, amended: the full arc against a real daemon | `e2e_the_cxx_daemon_answers_join_market_unsupported` against the C++ daemon: the stake reads `refused` with the refusal sentence and `funds_return_at` the end date, before and after a restart; `expired` with the reason once the ledger passes the end date; then the production P-scan's dispatch tick releases it and `outcomes` holds one `rejected` stake with the reason and its funds returned, before and after another restart |
+| WR-Q3: a refused zero-fee claim ends `ended_unconfirmed` | `the_release_outcome_follows_the_precedence_table`; its sentence and `none_held` in `reasons_are_user_sentences_and_linkage_follows_the_send` |
+| WR-Q3 / WR-Q5: the error line once per start | `the_integrity_error_is_written_once_per_start_and_on_change` |
+| WR-Q2: the acknowledgement by kind and height | `pending_post_block` `an_acknowledgement_clears_every_persona_through_the_height_shown`; through the facade and the seal, `an_acknowledgement_clears_every_personas_outcome_through_the_height_shown`; the CLI default, `acknowledge_defaults_to_the_newest_ending_shown` |
+| WR-Q3 / WR-Q4: the release table, every kind | `pending_post_block` tests and `the_release_moves_each_kind_from_in_flight_to_outcomes` |
+| §7.3: a stake with every input spent holds; a partly spent one releases | `the_release_outcome_follows_the_precedence_table`; `a_stake_with_every_input_spent_reads_held` (ledger at the end date while the frontier is still behind it); the alarm from the two seals, `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
+| §7.3: `spent_elsewhere` clears only on acknowledgement | `spent_elsewhere_survives_a_new_seal_and_a_new_ending`; its alarm survives a new seal in `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
+| WR-Q5: no persona, slot, delay or funding output on the wire; `p_slot` refused | `types::tests::staking_outcome_wire_names_no_persona_slot_or_funding_output`, `staking_reads_on_fresh_wallet_are_zero_and_offline` |
+
+### 7.3 Review rulings — RULED 2026-10-17 (Rick, on #1109 at `c9ac6bf52`)
+
+- **A stake whose reserved inputs are all spent is held, not released.**
+  A transaction spends all its inputs or none, so this is the stake
+  itself, landed and unmatched, or a total spend elsewhere. Releasing it
+  would remove the bridge the phantom-slot cleanup relies on
+  (`engine/stake_persist.rs` `reconcile_phantom_bonded_slots`), the slot
+  could never be adopted again, and nothing would be returned. The record
+  stays; `in_flight` reads `held`; the `PendingFundsIntegrity` alarm is
+  raised, re-derived on every cadence fire from the two seals
+  (`ReservationSpentElsewhere`, `held_stakes`). A stake with only part of
+  its inputs spent still releases as `spent_elsewhere`.
+  The read and the alarm use the ledger tip as the end-date clock, the
+  same clock as every other `in_flight` state (WR-Q1). The release still
+  waits until the sealed frontier covers the end date before it keeps the
+  record rather than freeing it. A stake the sealed funding set already
+  shows fully spent therefore reads `held` once the ledger reaches the end
+  date, including while the frontier is still behind it.
+- **`spent_elsewhere` clears only on acknowledgement.** A new seal or a
+  new ending of the same kind for that persona leaves it, and its alarm,
+  in place.
+- **The acknowledgement, and WR-Q5's reopen resolved.** An exit's ending
+  belongs to a persona that is routinely not active (`unstake` exits a
+  rotated-away persona, `wallet_rpc.yaml`'s wire-activity pin), and that
+  persona never seals another exit, so an acknowledgement scoped to the
+  active persona could never clear it. Ruled: `acknowledge_staking_outcome
+  { kind, through_height }` clears every outcome of `kind`, across all
+  personas, with `at_height <= through_height`. Idempotent, and no persona
+  or handle on the wire. The CLI form is `stake acknowledge <kind>`,
+  through the height last shown.
+- **`posture` and `serving_priority_not_lowered`** become required and
+  `null` when no host or serving process is running (rule 43), in the same
+  0.14.0 contract.
+- **The CLI word `stake acknowledge` is RULED as proposed**
+  ([`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) §12.3).
+- **Order:** #1109 merges before the bond slice, which takes pending-post
+  schema v14.
