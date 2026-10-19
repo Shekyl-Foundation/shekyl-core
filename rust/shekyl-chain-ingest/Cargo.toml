@@ -25,7 +25,13 @@ license.workspace = true
 # so `cargo test -p shekyl-chain-ingest` is the full crate.
 [features]
 default = ["pipeline", "fetch", "replay-cli"]
-pipeline = ["dep:kameo", "dep:tokio", "dep:shekyl-hash-budget", "dep:shekyl-miner"]
+pipeline = [
+    "dep:kameo",
+    "dep:tokio",
+    "dep:shekyl-hash-budget",
+    "dep:shekyl-miner",
+    "dep:shekyl-mempool",
+]
 fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
 replay-cli = [
     "pipeline",
@@ -99,6 +105,10 @@ shekyl-hash-budget = { path = "../shekyl-hash-budget", optional = true }
 # pipeline: the miner's job board and found-block sink, which the ingest
 # service's tip follower feeds and receives from (DX-Q2 item 5, DX-Q4).
 shekyl-miner = { path = "../shekyl-miner", optional = true }
+# pipeline: the pool, as a consumer of the connector (c6): reconciled per
+# tip, a switch's returns and an alternative block's bodies offered to its
+# door, a compact block's bodies resolved from what it shows.
+shekyl-mempool = { path = "../shekyl-mempool", optional = true }
 kameo = { workspace = true, optional = true }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync"], optional = true }
 
@@ -148,10 +158,6 @@ shekyl-block-template = { path = "../shekyl-block-template" }
 # a crate and not this crate's module.
 shekyl-harness-wallet = { path = "../shekyl-harness-wallet" }
 shekyl-harness-spender = { path = "../shekyl-harness-spender" }
-# The pool (DRS-E5 PR-b): the door's agreement with the validator is
-# witnessed here, over the scenario's real spends and the captured chains,
-# because this crate holds both and the pool's own crate holds neither.
-shekyl-mempool = { path = "../shekyl-mempool" }
 # Two subjects over the scenario chain: CEN-M9's witness (the submit
 # engine, with the production verifier, over
 # `shekyl_daemon_rpc::RustPoolShim` — the prepared reversion judged end to

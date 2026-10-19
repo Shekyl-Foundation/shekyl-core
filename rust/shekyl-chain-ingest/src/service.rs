@@ -71,6 +71,10 @@ use crate::follower::MinerFeed;
 use crate::plan_form::{form_plan, PlanStop};
 use crate::router::{claim_alt, claim_run, place, ClaimStop, Claims, Placed};
 use crate::schedule::ChainRules;
+use shekyl_chain_rules::{AdmissionPolicy, RuleSet};
+use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
+use shekyl_mempool::{Pool, PoolFault};
+use shekyl_types::UnixSeconds;
 
 /// The caller's name for one arrival, carried on its reply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -324,6 +328,10 @@ pub enum ServiceFault<F> {
         /// What was observed.
         corrupt: shekyl_chain_rules::Corrupt,
     },
+    /// The pool could not reconcile or judge: never a judgement about a
+    /// transaction (`shekyl_mempool::PoolFault`).
+    #[error("pool: {0:?}")]
+    Pool(PoolFault<StoreError>),
     /// A block this node connected failed its own stateless rules when a
     /// switch formed it to demote it.
     #[error("the recorded block {hash:?} refused when formed for demotion: {refused}")]
@@ -351,6 +359,8 @@ pub(crate) struct Shared<S: Substrate> {
     pinned: Mutex<Option<BlockHash>>,
     /// The last `TipChanged` publication the tip follower acted on.
     followed: tokio::sync::watch::Sender<u64>,
+    /// The pool, when one is wired.
+    pool: Option<PoolWiring>,
 }
 
 impl<S: Substrate> Shared<S>
@@ -394,6 +404,16 @@ where
 
     pub(crate) const fn substrate(&self) -> &Arc<S> {
         &self.substrate
+    }
+
+    /// The pool, locked, for a read that does not wait on anything.
+    fn pool_guard(&self) -> Option<std::sync::MutexGuard<'_, Pool>> {
+        self.pool.as_ref().map(|wiring| {
+            wiring
+                .pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        })
     }
 
     /// Record `fault` if it is the first, and stop.
@@ -567,6 +587,24 @@ impl Door {
 pub struct Follow {
     /// The miner's board, template source, sync state and found sink.
     pub miner: Option<MinerFeed>,
+    /// The pool.
+    pub pool: Option<PoolWiring>,
+}
+
+/// The pool, as a consumer of the connector (`DRS_X_STORE_FLIP.md` DX-Q5;
+/// the brief's c6): reconciled by the tip follower after every committed
+/// connect, pop and switch, before the miner's next job; offered a
+/// switch's returned bodies and an admitted alternative block's stored
+/// bodies by the span that made them; and read for a compact block's
+/// bodies, shown entries only (PR2-Q4).
+#[derive(Clone)]
+pub struct PoolWiring {
+    /// The pool.
+    pub pool: Arc<Mutex<Pool>>,
+    /// The admission policy its door runs.
+    pub policy: AdmissionPolicy,
+    /// The wall clock its door stamps arrivals with.
+    pub wall: Arc<dyn Fn() -> UnixSeconds + Send + Sync>,
 }
 
 /// The running service (module docs).
@@ -645,6 +683,7 @@ where
             fault: Mutex::new(None),
             pinned: Mutex::new(None),
             followed: tokio::sync::watch::Sender::new(0),
+            pool: follow.pool,
         });
         let (spans, mut incoming) = mpsc::unbounded_channel::<Vec<Accepted>>();
         let door = Door {
@@ -679,9 +718,10 @@ where
             }
             while spans.join_next().await.is_some() {}
         });
-        let follower = follow.miner.map(|feed| {
+        let follower = (follow.miner.is_some() || shared.pool.is_some()).then(|| {
             let shared = Arc::clone(&shared);
             let door = door.clone();
+            let feed = follow.miner;
             tokio::spawn(async move {
                 let Ok(tips) = shared.connector.ask(WatchTip).await else {
                     return;
@@ -807,6 +847,123 @@ const fn is_stale(fault: &RunFault) -> bool {
     )
 }
 
+/// Run `f` over the pool against the chain the store holds now — a
+/// snapshot, its view, the rule set in force at the connecting height —
+/// with the wiring's policy and the wall clock, on a blocking thread.
+/// `None` when no pool is wired.
+pub(crate) async fn with_pool<S, R, F>(
+    shared: &Arc<Shared<S>>,
+    f: F,
+) -> Option<Result<R, StoreError>>
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: core::fmt::Debug + Send + 'static,
+    R: Send + 'static,
+    F: FnOnce(
+            &mut Pool,
+            &ReadSnapshot<'_>,
+            &SnapshotView<'_>,
+            &RuleSet,
+            &AdmissionPolicy,
+            UnixSeconds,
+        ) -> R
+        + Send
+        + 'static,
+{
+    let wiring = shared.pool.clone()?;
+    let store = Arc::clone(&shared.store);
+    let rules = shared.rules;
+    Some(
+        tokio::task::spawn_blocking(move || {
+            let snap = store.begin_read()?;
+            let view = SnapshotView::new(&snap);
+            let tip = shekyl_chain_rules::HeaderView::tip(&view)?;
+            let rule_set = rules.in_force(shekyl_chain_rules::Tip::connecting_height(tip.as_ref()));
+            let mut pool = wiring
+                .pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Ok(f(
+                &mut pool,
+                &snap,
+                &view,
+                &rule_set,
+                &wiring.policy,
+                (wiring.wall)(),
+            ))
+        })
+        .await
+        .expect("a pool step does not panic"),
+    )
+}
+
+/// What a pool step returned: the first fault fails the service, as a
+/// store fault does — a pool that cannot judge is not one the node relays
+/// from — except a tip that moved under the judgement.
+pub(crate) fn pool_step<S, T>(
+    shared: &Shared<S>,
+    done: Option<Result<T, StoreError>>,
+    faults: impl FnOnce(T) -> Option<PoolFault<StoreError>>,
+) where
+    S: Substrate,
+    S::Fault: core::fmt::Debug,
+{
+    match done {
+        None => {}
+        Some(Err(e)) => shared.fail(e.into()),
+        Some(Ok(out)) => match faults(out) {
+            // The tip moved under a judgement: the transaction stays
+            // unjudged, and the next publication's reconcile reads the
+            // chain again.
+            None | Some(PoolFault::TipMoved { .. }) => {}
+            Some(fault) => shared.fail(ServiceFault::Pool(fault)),
+        },
+    }
+}
+
+/// Offer an admitted alternative block's stored bodies to the pool's door
+/// (CEN-K9): after it passed the cheap tier and its proof-of-work and AL1
+/// wrote its bodies, never before.
+async fn supplement<S>(shared: &Arc<Shared<S>>, block: BlockHash)
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: core::fmt::Debug + Send + 'static,
+{
+    let done = with_pool(shared, move |pool, snap, view, rule_set, policy, now| {
+        match snap.alt_block_bodies(&block) {
+            Ok(Some(bodies)) => pool
+                .supplement(&bodies, now, view, rule_set, policy)
+                .faults
+                .into_iter()
+                .next()
+                .map(|(_, f)| f),
+            // Retired or promoted since: there is nothing stored to offer.
+            Ok(None) => None,
+            Err(e) => Some(PoolFault::Chain(shekyl_chain_rules::Fault::View(e))),
+        }
+    })
+    .await;
+    pool_step(shared, done, |fault| fault);
+}
+
+/// Offer a switch's returned bodies to the pool's door, against the chain
+/// the switch left (`SwitchDone::returned`).
+async fn returned<S>(shared: &Arc<Shared<S>>, bodies: Vec<Transaction>)
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: core::fmt::Debug + Send + 'static,
+{
+    let done = with_pool(shared, move |pool, _, view, rule_set, policy, now| {
+        pool.returned(bodies, now, view, rule_set, policy)
+            .faults
+            .into_iter()
+            .next()
+            .map(|(_, f)| f)
+    })
+    .await;
+    pool_step(shared, done, |fault| fault);
+}
+
 /// Parse one accepted arrival: the block and its carried bodies. A blob the
 /// wire cannot parse is a verdict against the block (CEN-A6's holder); a
 /// carried body that does not parse is a body the block's list cannot
@@ -855,8 +1012,12 @@ const fn class_of(origin: Origin) -> Class {
 
 /// The candidate for `parsed`: its listed bodies in listed order, then any
 /// carried body the list does not name (G2 refuses it in `form`); or the
-/// indices of the listed bodies nothing supplies.
-fn assemble(parsed: &Parsed) -> Result<Candidate, Vec<usize>> {
+/// indices of the listed bodies nothing supplies. A listed body the arrival
+/// did not carry is resolved from the bodies `pool` shows, and only those
+/// (PR2-Q4): a stem transaction the pool holds counts as missing, so the
+/// block's sender cannot learn, from what this node does not ask for,
+/// which stem transactions it holds.
+fn assemble(parsed: &Parsed, pool: Option<&Pool>) -> Result<Candidate, Vec<usize>> {
     let mut carried: Vec<Option<&Transaction>> = parsed.bodies.iter().map(Some).collect();
     let mut listed = Vec::with_capacity(parsed.block.transaction_hashes.len());
     let mut missing = Vec::new();
@@ -865,7 +1026,7 @@ fn assemble(parsed: &Parsed) -> Result<Candidate, Vec<usize>> {
             .iter_mut()
             .find(|slot| slot.is_some_and(|tx| tx.txid_parts().hash == *txid))
             .and_then(Option::take);
-        match found {
+        match found.or_else(|| pool.and_then(|pool| pool.shown_body(txid))) {
             Some(tx) => listed.push(tx.clone()),
             None => missing.push(index),
         }
@@ -922,7 +1083,7 @@ where
         if shared.stopping() {
             return;
         }
-        let candidate = match assemble(&front) {
+        let candidate = match assemble(&front, shared.pool_guard().as_deref()) {
             Ok(candidate) => candidate,
             Err(indices) => {
                 front.slot.send(Reply::MissingBodies { indices });
@@ -951,7 +1112,7 @@ where
                     if next.block.header.previous != run[run.len() - 1].0.hash() {
                         break;
                     }
-                    let Ok(next_candidate) = assemble(next) else {
+                    let Ok(next_candidate) = assemble(next, shared.pool_guard().as_deref()) else {
                         break;
                     };
                     let next = queue.pop_front().expect("peeked");
@@ -1296,6 +1457,14 @@ where
             return Next::Halt;
         }
     };
+    // Stored: its bodies go to the pool's door now that it passed the
+    // tier and its proof-of-work (CEN-K9).
+    if matches!(
+        offered,
+        Offered::Held { .. } | Offered::BeyondCap(_) | Offered::SwitchDue(_)
+    ) {
+        supplement(shared, arrival.hash()).await;
+    }
     let reply = match offered {
         Offered::Refused(verdict) => return refused(arrival, verdict),
         Offered::Unlinked { at } => Reply::Unlinked { at },
@@ -1366,10 +1535,15 @@ where
         }
     };
     match switched {
-        Ok(Switched::Done(done)) => Some(Reply::Switched {
-            demoted: done.demoted,
-            promoted: done.promoted,
-        }),
+        Ok(Switched::Done(done)) => {
+            // The demoted blocks' bodies, through the door against the chain
+            // the switch left: relay and templates only.
+            returned(shared, done.returned).await;
+            Some(Reply::Switched {
+                demoted: done.demoted,
+                promoted: done.promoted,
+            })
+        }
         Ok(Switched::Refused {
             at, hash, refused, ..
         }) => Some(Reply::PromotionRefused { at, hash, refused }),
@@ -1394,3 +1568,7 @@ where
 #[cfg(test)]
 #[path = "service_tests.rs"]
 mod service_tests;
+
+#[cfg(test)]
+#[path = "service_pool_tests.rs"]
+mod service_pool_tests;

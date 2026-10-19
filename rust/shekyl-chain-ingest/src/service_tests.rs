@@ -144,15 +144,22 @@ pub(crate) fn service_on(
 
 /// Offer `blocks` as one span from `session` and wait for every reply.
 pub(crate) async fn offer_all(door: &Door, session: u64, blocks: &[Mined]) -> Vec<Reply> {
-    let span = blocks
-        .iter()
-        .enumerate()
-        .map(|(i, m)| arrival(session * 1_000 + i as u64, session, m))
-        .collect();
-    let tickets = door.offer_span(span).expect("room");
+    // A caller asks for room before it sends: spans no larger than the
+    // room the door reports, each answered before the next.
     let mut replies = Vec::new();
-    for ticket in tickets {
-        replies.push(ticket.reply().await.reply);
+    let mut index = 0u64;
+    for chunk in blocks.chunks(door.room().max(1)) {
+        let span = chunk
+            .iter()
+            .map(|m| {
+                index += 1;
+                arrival(session * 1_000 + index - 1, session, m)
+            })
+            .collect();
+        let tickets = door.offer_span(span).expect("room");
+        for ticket in tickets {
+            replies.push(ticket.reply().await.reply);
+        }
     }
     replies
 }
@@ -871,6 +878,7 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
                 synced,
                 found,
             }),
+            pool: None,
         },
     );
     let mut followed = service.followed();

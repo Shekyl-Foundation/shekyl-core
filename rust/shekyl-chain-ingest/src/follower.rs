@@ -7,7 +7,11 @@
 //! that acts on the store's side (`DRS_X_STORE_FLIP.md` DX-Q2 item 5).
 //!
 //! Per tip it publishes, in order:
-//! 1. the miner's next job, while the node is synced: the template for the
+//! 1. the pool reconciled to the tip: mined entries leave, and each
+//!    entry's view-bound half and the policy run again over its stateless
+//!    pass. First, so the job below never lists a transaction the tip
+//!    mined;
+//! 2. the miner's next job, while the node is synced: the template for the
 //!    block after the tip, from the [`TemplateSource`]; the seed it is
 //!    hashed under, `seed(tip + 1)`, pinned through the substrate **before**
 //!    [`JobBoard::publish`]; the target the miner must meet. While the node
@@ -74,37 +78,72 @@ pub(crate) async fn follow<S>(
     shared: Arc<Shared<S>>,
     door: Door,
     mut tips: watch::Receiver<TipChanged>,
-    feed: MinerFeed,
+    feed: Option<MinerFeed>,
 ) where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
-    let MinerFeed {
-        board,
-        source,
-        mut synced,
-        found,
-    } = feed;
     let postings: Postings = Arc::new(Mutex::new(BTreeMap::new()));
-    let sink = spawn_sink(found, door, Arc::clone(&postings));
+    let (miner, mut synced, sink) = match feed {
+        Some(MinerFeed {
+            board,
+            source,
+            synced,
+            found,
+        }) => {
+            let sink = spawn_sink(found, door, Arc::clone(&postings));
+            (Some((board, source)), Some(synced), Some(sink))
+        }
+        None => (None, None, None),
+    };
     let mut stopping = shared.stop_signal();
     loop {
         let tip = *tips.borrow_and_update();
-        if *synced.borrow_and_update() {
-            post(&shared, &board, source.as_ref(), &postings).await;
-        } else {
-            board.withdraw();
+        // 1. The pool, reconciled to this tip: mined entries leave, and the
+        //    view-bound half and the policy run again over each entry's
+        //    stateless pass. Before the job, so a template never lists a
+        //    transaction the tip just mined.
+        reconcile(&shared).await;
+        // 2. The miner's job for the block after it.
+        if let Some((board, source)) = &miner {
+            let is_synced = synced.as_mut().is_some_and(|s| *s.borrow_and_update());
+            if is_synced {
+                post(&shared, board, source.as_ref(), &postings).await;
+            } else {
+                board.withdraw();
+            }
         }
         shared.followed(tip.seq);
+        let sync_changed = async {
+            match synced.as_mut() {
+                Some(s) => s.changed().await.is_err(),
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             changed = tips.changed() => if changed.is_err() { break },
-            changed = synced.changed() => if changed.is_err() { break },
+            closed = sync_changed => if closed { break },
             _ = stopping.wait_for(|stop| *stop) => break,
         }
     }
-    board.withdraw();
+    if let Some((board, _)) = &miner {
+        board.withdraw();
+    }
     // The sink ends when the miner's sender goes; it is not joined here.
     drop(sink);
+}
+
+/// Reconcile the pool against the chain the store holds now (step 1).
+async fn reconcile<S>(shared: &Arc<Shared<S>>)
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: core::fmt::Debug + Send + 'static,
+{
+    let done = crate::service::with_pool(shared, |pool, _, view, rule_set, policy, _| {
+        pool.reconcile(view, rule_set, policy).err()
+    })
+    .await;
+    crate::service::pool_step(shared, done, |fault| fault);
 }
 
 /// Build, pin and post the job for the block after the tip. A tip that

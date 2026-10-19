@@ -533,6 +533,7 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
                 synced,
                 found,
             }),
+            pool: None,
         },
     );
     let miner = Miner::start(
