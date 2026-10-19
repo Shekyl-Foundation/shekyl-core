@@ -787,7 +787,7 @@ Words of `shekyl-cli` (§11, §13) that render part of another method's reply ha
 
 ## 18. The field census
 
-Each shape's fields today, and their names under this Part. A reply of `show` is the item itself, and a reply of `list` is an array of items in selector order (IG-Q53). `status` leaves every reply (RW-Q3) and is not repeated below.
+Each shape's fields today, and their names under this Part. The census from source, with each key's wire type and `file:line`, is the appendix [`INPUT_GRAMMAR_PART_C_CENSUS.md`](INPUT_GRAMMAR_PART_C_CENSUS.md). A reply of `show` is the item itself, and a reply of `list` is an array of items in selector order (IG-Q53). `status` leaves every reply (RW-Q3) and is not repeated below.
 
 **Block header** (`block_header_show`, `block_header_list`; `header` in a block):
 
