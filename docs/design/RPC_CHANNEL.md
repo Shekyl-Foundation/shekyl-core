@@ -450,7 +450,13 @@ The prologue (§4.4) is unchanged.
   the opener succeeded *and* the receiving direction itself opened at
   least one. An opener that reports success having opened nothing is
   refused like any other failure, and there is a test with exactly that
-  opener.
+  opener. **The direction must also be the session's own.** The opener
+  holds it by `&mut` and could put another session's direction in its
+  place, one that has already opened. `into_directions` stamps both
+  directions with the session's handshake hash, and the pending session
+  is released only if the receiving direction it gets back carries its
+  own (ruled in the #1039 review; landed 2026-10-18). A test swaps in a
+  second session's direction, and failed against the count-only gate.
   On success that yields `AuthenticatedSession`: the transport directions,
   the authenticated client and message 3's payload. On failure the session
   is gone. `PendingSession` does not expose the request, the directions or
@@ -655,14 +661,49 @@ is needed is decided from RT-P6's measurement, not before it.
   bodies (block batches), and orderly half-close. It is written once,
   against that framer, after the class table exists. It is not written
   against the interim framer. RT-P5 proves it.
-- **Length concealment — RULED (RT-O6, 2026-10-09): bucketed padding, in
-  the record layer.** *Harm:* a remote wallet's `submit_transaction` is one
-  upload of about 13 KB, a distinctive size for a post-quantum transaction.
+- **Length concealment — RULED (RT-O6, 2026-10-09); RE-RULED 2026-10-18
+  on RT-P5's evidence.** *Harm:* a remote wallet's `submit_transaction` is
+  one upload whose size marks it and identifies the transaction's shape.
   A path observer learns when the wallet sent and can correlate that with
-  the transaction's appearance on the network. *Mechanism:* every channel
-  record is padded up to one of a small set of size classes, inside the
-  AEAD, so a submission is indistinguishable from a block-fetch response of
-  the same class.
+  the transaction's appearance on the network. *Evidence:* RT-P5's
+  registered trace ([`rt_p5_rpc_message_sizes_20261017.md`](../benchmarks/rt_p5_rpc_message_sizes_20261017.md)):
+  submissions are 26,599 to 153,688 bytes and every other request is 431
+  bytes or smaller. So in the request direction, which a path observer
+  separates, size classes cannot hide a submission among other requests.
+  The block-fetch responses that share its classes travel the other way.
+  The ruling has three parts:
+  1. **Response records are padded to classes, `K` = 3,** each boundary
+     derived from RT-P5 rounded up to the next power of two:
+     **512, 16,384 (16 KiB) and 65,535.** The largest is the maximum
+     record, `MAX_RECORD_PLAINTEXT` (`u16::MAX`): 64 KiB would be one byte
+     more than a record can carry. The rounding is the margin RT-P5 showed
+     a table needs: optimal boundaries sit at the top of the clusters they
+     cover, and a second run's responses a few bytes larger stepped over
+     them. These classes stand until the mainnet re-derivation (the
+     rule-21 reopen below). *Not covered by this ruling:* requests other
+     than a submission. Every one in RT-P5's trace is 431 bytes or smaller.
+  2. **A submission is padded to one fixed size: the largest possible
+     transaction,** so its size identifies no transaction.
+     - The fixed size is derived from the consensus bounds when the framer
+       is built (RT-W9 step 5) and pinned by a test. The bounds are
+       `MAX_TX_EXTRA` (24,576 bytes of `tx_extra`), `TX_WEIGHT_LIMIT` and
+       `MAX_TX_SIZE` (1,000,000), all in `shekyl-wire`.
+     - The largest transaction the wallet builds is 97,585 bytes: 8 inputs
+       and 16 outputs at tree depth 24, from the weight crate's size
+       predictor. A valid transaction may carry more `tx_extra` than the
+       wallet's own do.
+     - Today the submission's body is the transaction hex-encoded in JSON,
+       twice its bytes. It becomes binary in the RPC wire-grammar round
+       (RW).
+  3. **The time of a submission stays visible to a path observer.**
+     Padding hides what was sent, not that or when.
+     - *Mitigations:* a wallet on the same host as its daemon (no path to
+       observe), or a daemon reached at an onion endpoint.
+     - *Rule-21 reopen:* a measured timing correlation on a real wallet
+       leg, or network volume sufficient to make one practical.
+     - *The designed answer for that reopen:* **submission slots.**
+       Fixed-size uploads at a fixed interval, each a real submission or
+       padding, answered identically.
   - **Two framers, one `Direction`. RE-RULED 2026-10-12 (PR #1034).**
     **SUPERSEDED:** one implementation parameterised by a class table, and
     a single-class table omits the header byte. A table's length is not a
@@ -674,8 +715,9 @@ is needed is decided from RT-P6's measurement, not before it.
     type. `ClassedRecord` stores its header-protection key against the
     key epoch `Direction::seal` reports, and derives that key again only
     when the epoch changes. The header key is not a field of `Direction`.
-  - **The class sizes are not chosen here.** They are derived from the
-    HTTP message sizes measured in RT-P5 (§9), on generated traffic.
+  - **Where the class sizes come from.** They are derived from the HTTP
+    message sizes measured in RT-P5 (§9), on generated traffic, by the
+    registered rule, then rounded as part 1 above says.
     *Rule-21 reopen (RT-O21):* the classes ship from that registered
     trace. They are derived again when a mainnet RPC trace is registered
     in the measurement ledger, the same shape as RT-P4's registration.
@@ -1618,8 +1660,8 @@ construction) instead of loopback TCP.
 | # | Question | How | Revisits on failure |
 |---|---|---|---|
 | RT-P4 | Is ML-KEM-768 decapsulation in the pinned crate constant-time with respect to the ciphertext, including the implicit-rejection path? | Statistical timing test (dudect-style) over valid, invalid, and adversarially structured ciphertexts on the floor device and on x86, plus a source read of the decapsulation path for secret-dependent branches and divisions. **Met 2026-10-11** under a re-registered method, on the floor device and on a Tiger Lake laptop core; the first registration's floor-device run failed and was traced to its harness (`docs/benchmarks/rt_p4_mlkem_decaps_timing_20261010.md`, `docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md`) | §4.3; the crate choice for the channel's static key |
-| RT-P5 | Does hyper/axum run over the record channel at full RPC load? | Two registered parts (RT-O21, sequencing re-ruled 2026-10-12). The size distribution is HTTP message sizes per method on the generated traffic, and the classes are derived from it. The adapter is `shekyl-rpc-stream` over `ClassedRecord`, not the interim framer: a block-batch response larger than one record, backpressure under a slow reader, half-close, a request split across records, observed failing with splitting removed. The flush policy is named in the registration; the record boundaries it produces are observed with the adapter | RT-W9's adapter design |
-| RT-P6 | What does a handshake cost on the floor device (Pi 4), each side? | Time each message and the whole handshake, daemon and client, on the floor device; CPU per unauthenticated message 1; the cost of padding each record to each candidate size class | The handshake-deadline constant (derived from this, not chosen); the tunnel pool size; §4.3's amplification bound |
+| RT-P5 | Does hyper/axum run over the record channel at full RPC load? | Two registered parts (RT-O21, sequencing re-ruled 2026-10-12). The size distribution is HTTP message sizes per method on the generated traffic, and the classes are derived from it. The adapter is `shekyl-rpc-stream` over `ClassedRecord`, not the interim framer: a block-batch response larger than one record, backpressure under a slow reader, half-close, a request split across records, observed failing with splitting removed. The flush policy is named in the registration; the record boundaries it produces are observed with the adapter. **Sizes part measured 2026-10-17** ([`rt_p5_rpc_message_sizes_20261017.md`](../benchmarks/rt_p5_rpc_message_sizes_20261017.md)): candidate tables for K = 1 to 8, K not yet chosen; the record also finds that, in the request direction, every K ≥ 2 puts at least one record of every submission in a class no other request uses (at K = 2 the class-union with every other request is one tail in the smaller class), and for K ≥ 3 a submission's classes are shared with at most two other requests and with none for K ≥ 6, against RT-O6's stated mechanism | RT-W9's adapter design |
+| RT-P6 | What does a handshake cost on the floor device (Pi 4), each side? | Time each message and the whole handshake, daemon and client, on the floor device; CPU per unauthenticated message 1; the cost of padding each record to each candidate size class: 512, 16,384 and 65,535 bytes (RT-O6, re-ruled 2026-10-18), and the submission's fixed size | The handshake-deadline constant (derived from this, not chosen); the tunnel pool size; §4.3's amplification bound |
 | RT-P7 | Does `hybridXK`'s canonical token order (§4.1) reach the property each stage claims? | ProVerif model: daemon authentication at message 2, client authentication classical at message 3 and hybrid at the first record, secrecy of the transport keys, client-identity hiding — each query observed **failing** under a named edit (e.g. remove `skem` from message 1; move it after `e`; remove `se` from message 3) before its success is trusted | §4.1; **gates RT-W9** |
 | RT-P8 | Windows: does RT-15's same-user pipe and RT-16's service shape hold on a real box? | Windows lane, on the built daemon: (1) the GUI dials its `shekyld` child through the rendezvous file and the peer check passes; (2) another user's pipe pre-created under a guessed daemon-style name has no effect on startup or dial; (3) a same-user client in a second logon session is refused by the pipe and the client reports it from the rendezvous without dialling; (4) every Windows-side caller of the daemon RPC (GUI backend including its mining control, `shekyld <command>`, the wallet stack) is named with its leg; (5) per-service virtual account: network access, restricted service-SID type, minimal required-privilege list, the bundled Tor as its child; (6) the `%ProgramData%` data home is created with its owner and protected DACL in one `CreateDirectoryW` call, reads back as admitting the service account and Administrators only, and an unelevated process racing the creation cannot place an entry inside; (7) the side-by-side refusal between the two modes | RT-15, RT-16; RT-W10; RT-W14 |
 
@@ -1707,7 +1749,13 @@ recorded in §6.4.
   the owning text — [`WINDOWS_WALLET_SUPPORT.md`](WINDOWS_WALLET_SUPPORT.md)
   WP-D8, reopened 2026-10-09 with the measurement and the proposed fix —
   and carried in `FOLLOWUPS.md` under that document.
-- **RT-O6 — length concealment. RULED 2026-10-09:** in scope, as bucketed
+- **RT-O6 — length concealment. RE-RULED 2026-10-18 on RT-P5's evidence
+  (§4.4):** response records in three classes, 512, 16,384 and 65,535
+  (RT-P5's `K` = 3 boundaries rounded up to powers of two, capped at the
+  maximum record); a submission padded to the largest possible transaction;
+  a submission's timing stays visible, mitigated by a same-host wallet or
+  an onion endpoint, with submission slots the designed answer for its
+  rule-21 reopen. **RULED 2026-10-09:** in scope, as bucketed
   padding in the record layer. **RE-RULED 2026-10-12 (PR #1034):** the
   shared piece is `Direction`, not one framer with a mode. `ClassedRecord`
   is the channel's framer; `FixedWindow` is the P2P end state and is not

@@ -369,6 +369,15 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_compare.py
 
+      - name: Run RT-P5 class derivation tests
+        # `scripts/bench/rt_p5_classes.py` derives the RPC channel's record
+        # size classes from RT-P5's trace, by the rule registered in
+        # `docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md`. Its fast
+        # search is checked against an exhaustive one here, so the shortcut
+        # cannot silently pick a worse table.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_rt_p5_classes.py
+
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.

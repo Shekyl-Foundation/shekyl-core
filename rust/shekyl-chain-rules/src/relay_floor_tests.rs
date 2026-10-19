@@ -9,7 +9,7 @@
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_economics::{
-    relay_floor_from, CirculatingSupply, FeeOperands, TxVolume, FULL_REWARD_ZONE,
+    fee_ladder_from, relay_floor_from, CirculatingSupply, FeeOperands, TxVolume, FULL_REWARD_ZONE,
     RELAY_FLOOR_LOOKBACK, RELAY_FLOOR_WINDOW,
 };
 use shekyl_types::{BlockHeight, LongTermWeight};
@@ -18,7 +18,7 @@ use shekyl_units::AtomicUnits;
 use crate::fault::{Corrupt, ViewRead};
 use crate::harness::fixture::{recorded_with_work, root};
 use crate::harness::MockChain;
-use crate::relay_floor::{fee_operands_at, relay_floor_at, relay_floor_window};
+use crate::relay_floor::{fee_ladder_at, fee_operands_at, relay_floor_at, relay_floor_window};
 use crate::rules::miner::economics;
 use crate::view::{AtHeight, ChainView, RecordedBlock};
 
@@ -324,5 +324,39 @@ fn the_window_on_a_forked_view_yields_the_forks_floors() {
     assert!(
         busy_tip[RELAY_FLOOR_LOOKBACK] > quiet_tip[RELAY_FLOOR_LOOKBACK],
         "a busier window raises C and the floor"
+    );
+}
+
+/// The served ladder at a height is the owner's ladder over the same
+/// operands the floor is priced from, and its economy rung is that floor
+/// (FL-R6) — at the connecting height and at a recorded one. Above the
+/// connecting height there is no ladder to serve.
+#[test]
+fn the_ladder_is_the_owners_over_the_floors_operands_and_its_economy_rung_is_the_floor() {
+    let chain = chain(12, 40).with_total_burned(AtomicUnits::from_raw(600));
+    for height in [h(12), h(7)] {
+        let operands = match chain.with_view(|view| fee_operands_at(&view, height)) {
+            Ok(AtHeight::Recorded(operands)) => operands,
+            other => panic!("operands at {height:?}: {other:?}"),
+        };
+        let ladder = match chain.with_view(|view| fee_ladder_at(&view, height)) {
+            Ok(AtHeight::Recorded(ladder)) => ladder,
+            other => panic!("ladder at {height:?}: {other:?}"),
+        };
+        assert_eq!(
+            Some(ladder),
+            fee_ladder_from(operands, economics()),
+            "the owner's ladder at {height:?}"
+        );
+        let floor = match chain.with_view(|view| relay_floor_at(&view, height)) {
+            Ok(AtHeight::Recorded(floor)) => floor,
+            other => panic!("floor at {height:?}: {other:?}"),
+        };
+        assert_eq!(ladder.economy, floor, "FL-R6 at {height:?}");
+        assert!(ladder.economy <= ladder.standard && ladder.standard <= ladder.priority);
+    }
+    assert_eq!(
+        chain.with_view(|view| fee_ladder_at(&view, h(13))),
+        Ok(AtHeight::AboveTip)
     );
 }
