@@ -159,9 +159,10 @@ the named state `InstallDefect`, no spawn, retry at the cap.
 **TSR-F7 (medium; brief correction). A fixed bootstrap deadline plus a fresh
 directory can never converge on a slow link.** If bootstrap needs longer than
 the deadline, each respawn discards the partial consensus and starts again.
-Bootstrap is killed only when progress stalls (no new `BOOTSTRAP` progress
-within a bound, with the network up), never on elapsed time. The kept
-directory (`TSR-Q1`, ruled) removes the rest. PR-3's cold-first-contact run A (fresh data
+Bootstrap is never killed: neither on elapsed time nor on stalled progress
+(Rick, 2026-10-19, §4.4). The pre-flight found the stalls to be hung directory
+connections that Tor abandons itself (§10, `TSR-M1`). The kept directory
+(`TSR-Q1`) and the public directory cache (`TSR-Q8`) remove most of the rest. PR-3's cold-first-contact run A (fresh data
 directory per sample, pinned 15.0.24 bundle, the measurement host) had 5 of 100
 managed Tors not bootstrapped within 120 s, with nothing in the log
 (`docs/benchmarks/p2p_tor_gap_cold_20261014.md`; `docs/FOLLOWUPS.md`, the
@@ -310,7 +311,7 @@ here.
 | --- | --- | --- |
 | child exited | a wait on Tor's process: the reap on Unix, the process handle on Windows (`TSR-F16`) | process fault |
 | control connection EOF, desync, or a reply past the reply bound | the control actor | process fault (a wedged Tor is a dead Tor) |
-| `BOOTSTRAP PROGRESS=` | `STATUS_CLIENT` | progress; resets the stall bound |
+| `BOOTSTRAP PROGRESS=` | `STATUS_CLIENT` | progress: the phase and when it was reached, which §5 shows; never a fault |
 | `BOOTSTRAP` with `WARNING`/`REASON` and `RECOMMENDATION=warn` | `STATUS_CLIENT` | named external cause (outbound blocked and kin). Tor sends `warn` from the tenth problem at a phase, so a few refused connections at startup raise nothing |
 | `ENOUGH_DIR_INFO` / `NOT_ENOUGH_DIR_INFO` | `STATUS_CLIENT` | outbound facet cause |
 | `NETWORK_LIVENESS UP/DOWN` | `NETWORK_LIVENESS` | external cause on or off |
@@ -374,9 +375,14 @@ faults in the Tor process, so only those respawn:
 | --- | --- | --- |
 | External | outbound blocked, `NETWORK_LIVENESS DOWN`, `DIR_ALL_UNREACHABLE`, clock skew | none but waiting; Tor retries itself; announce with the fix; **never respawn** |
 | Service | descriptor upload failing past a bound; probe failing while outbound is usable | republish on the running Tor (`ADD_ONION` again); escalate to Process only if the control command itself fails |
-| Process | child exit; control EOF or desync; reply past bound; bootstrap progress stalled with the network up; outbound dead past a bound with no external cause standing | respawn |
+| Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing | respawn |
 | Install | pin fails at spawn (`TSR-F6`) | no spawn; announce; retry at the cap |
 | Local resource | data directory unwritable or out of space (checked before each spawn); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
+
+A stalled bootstrap is not a cause in any class (Rick, 2026-10-19). Tor
+abandons a hung directory connection itself and resumes; a respawn would only
+start that fetch again. The supervisor shows the phase and how long Tor has
+been in it (§5) and waits.
 
 Backoff applies to respawns and to Install and Local-resource retries; it never
 gives up and reaches its cap with a loud announcement, repeated once per cap
@@ -546,8 +552,8 @@ wallet, `WALLET_SIDE_STORE.md:634`); the daemon's instance is re-measured once
 
 ### 4.11 Runtime and timers
 
-The daemon has one scheduler (Rick, 2026-10-13). Backoff, stall, probe and
-evidence bounds are timing-engine deadlines on one owner. The control actor
+The daemon has one scheduler (Rick, 2026-10-13). Backoff, probe and evidence
+bounds are timing-engine deadlines on one owner. The control actor
 runs on a runtime built where every runtime is built; `blocking.rs`'s own
 one-worker runtime retires with its C++ caller. The policy core is written
 sans-IO (events in, actions and the next deadline out), so it is testable on
@@ -572,6 +578,7 @@ cut (rule 15; §9).
 | Outbound blocked | `BOOTSTRAP` warn `REASON`, `NETWORK_LIVENESS DOWN` | Degraded (outbound) | this machine cannot reach the Tor network; check the firewall or network; Shekyl does not support bridges | wait |
 | No directory reachable | `DIR_ALL_UNREACHABLE` | Degraded (outbound) | as above | wait |
 | Clock skew | `CLOCK_SKEW SKEW=±s` | Degraded (outbound) | Tor reports this machine's clock is about *s* seconds off; check time sync | wait |
+| Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes | wait |
 | Resumed from suspend | `CLOCK_JUMPED` | Bootstrapping, briefly | none | re-evaluate now |
 | Onion unreachable | the probe, `HS_DESC FAILED` | Degraded (inbound) | none; recovering | republish |
 | Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | respawn |
@@ -676,7 +683,7 @@ run's conditions are in `shekyl-dev`, `data/tsr-preflight/2026-10-19*/`.
 
 | Row | Measures | Sets |
 | --- | --- | --- |
-| `TSR-M1` | bootstrap time, cold directory and kept directory. **Measured 2026-10-19.** Cold, n=100: p50 11.3 s, p90 17.0 s, p99 127.1 s, max 380.8 s; 1 run over 300 s. Kept, n=30: p50 3.54 s, max 3.81 s (a respawn into its kept directory, `TSR-Q1`). x86: cold max 42.7 s, kept max 2.36 s. **Where the cold tail comes from** (300 more cold runs with each phase's time, 03:38Z to 06:45Z): of the 31 over 60 s, 26 spent their time loading relay descriptors and 5 loading the consensus; circuits took a median 0.86 s, as in fast runs. A slow run sits at one directory percentage, often for about five minutes, and then completes. Tor raised a `BOOTSTRAP` problem event in 1 of the 31. The tail's size moves with the night: 3 % over 60 s in the record (01:23Z to 03:13Z), 9 % in this run outside its overlap with the load test | the stall bound. No bootstrap is given up (`TSR-F7`, §4.4), and a slow one is not a process fault (`TSR-Q3`). A stalled directory fetch usually raises no problem event, so problem events alone cannot carry §5's operator message for it. Because the tail is directory fetching, the kept directory cache (`TSR-Q8`) removes most of it |
+| `TSR-M1` | bootstrap time, cold directory and kept directory. **Measured 2026-10-19.** Cold, n=100: p50 11.3 s, p90 17.0 s, p99 127.1 s, max 380.8 s; 1 run over 300 s. Kept, n=30: p50 3.54 s, max 3.81 s (a respawn into its kept directory, `TSR-Q1`). x86: cold max 42.7 s, kept max 2.36 s. **Where the cold tail comes from** (300 more cold runs with each phase's time, 03:38Z to 06:45Z): of the 31 over 60 s, 26 spent their time loading relay descriptors and 5 loading the consensus; circuits took a median 0.86 s, as in fast runs. A slow run sits at one directory percentage, often for about five minutes, and then completes. Tor raised a `BOOTSTRAP` problem event in 1 of the 31. The tail's size moves with the night: 3 % over 60 s in the record (01:23Z to 03:13Z), 9 % in this run outside its overlap with the load test | §5's Bootstrapping display, not a bound: no bootstrap is given up (`TSR-F7`), and a stalled one is not a fault in any class (§4.4; Rick, 2026-10-19). A stalled directory fetch usually raises no problem event, so problem events alone cannot carry §5's operator message for it. Because the tail is directory fetching, the kept directory cache (`TSR-Q8`) removes most of it |
 | `TSR-M2` | respawn to outbound usable, and to inbound reachable | the backoff base and cap |
 | `TSR-M3` | self-probe latency, and that it works at all. **Measured 2026-10-19**: 40 of 40 succeeded, the probe nonce arriving each time; p50 2.35 s, p90 7.39 s, max 12.29 s. x86: 40 of 40, max 46.15 s, with five probes in one cluster at 42.9 to 46.1 s | the probe's delay range and timeout. A timeout below about 46 s would have failed the x86 cluster's probes, each of which succeeded |
 | `TSR-M4` | Tor's resident memory at 12 outbound plus inbound load, default and set `MaxMemInQueues`. **Measured 2026-10-19 at Tor's default**, under a synthetic load (no fleet daemon could supply one; Rick, 2026-10-19): 12 outbound and 12 inbound rendezvous streams, each carrying 512 bytes every 10 s, for an hour. Resident memory **91.0 MiB**, flat once the streams were up; idle baselines 85.7 and 92.3 MiB. x86: 82.5 MiB. A set `MaxMemInQueues` was not measured | `MaxMemInQueues` |
