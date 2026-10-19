@@ -29,6 +29,17 @@ step 5's framer pays per record.
 
 ## Registered before the run
 
+*Amended 2026-10-19, before any result was read. The first registration
+(`311266fb4`) timed `Daemon::new` inside the `read_message1` sample, kept
+one plaintext per recorded seal, and timed random 2,320-byte messages.
+`read_message1` refuses a random encapsulation key before either long-term
+operation, so those samples never paid the decapsulation or the
+Diffie-Hellman. The summary treated a step missing from one iteration as a
+zero and omitted the CPU 90th percentile and the CPU maximum. The
+amplification paragraph multiplied by `conn_limit` as though that were a
+count of attempts per deadline; `ConnGuard` releases its slot on drop.
+The question is unchanged. What follows is the method.*
+
 **Subject.** `shekyl-rpc-channel`'s handshake (`Client`, `Daemon`,
 `PendingSession`) and `shekyl-noise`'s `Direction`, at the commit the run
 is made from. Built with `cargo build --release` under the workspace's
@@ -36,49 +47,81 @@ pinned toolchain (1.94.0) and release profile, on the floor device itself,
 from a fresh clone of that commit.
 
 **Instrument.** `rust/shekyl-rpc-channel/examples/rt_p6_handshake_cost.rs`.
-It runs both roles in one process, pinned to one core with `taskset -c 3`.
-Each timed region is a single call between two clock reads, on the wall
-clock (`Instant`) and on the thread's CPU clock
-(`CLOCK_THREAD_CPUTIME_ID`). The raw samples are written one per row:
+It runs on Linux. Any other host compiles the example and exits without
+writing a run, because the registered CPU clock is Linux's
+`CLOCK_THREAD_CPUTIME_ID` and the host is the Pi 4. On the floor device it
+runs both roles in one process, pinned to one core with `taskset -c 3`.
+Each timed region is one call between two clock reads, on the wall clock
+(`Instant`) and on the thread's CPU clock. The raw samples are written one
+per row. The summary is `scripts/bench/rt_p6_summary.py`.
 
 1. **Every step of a full handshake.** The client's `start`,
    `read_message2`, `write_message3`, `read_message4`, and
-   `into_directions` with the first record's seal; the daemon's
-   `read_message1`, `write_message2`, `read_message3`, `write_message4`
-   and `open_first_message`. The two static identities are made before the
+   `into_directions` with the first record's seal (`first_record`); the
+   daemon's `new` (the initial symmetric state: protocol name, prologue,
+   static keys), `read_message1`, `write_message2`, `read_message3`,
+   `write_message4` and `open_first_message`. `new` and `read_message1`
+   are separate samples. The two static identities are made before the
    loop. The ephemeral keys each step draws are part of its cost, as in
    production. Message 3's and message 4's payloads are 64 bytes each:
    their encoding is RT-W10's and is fixed-length (§6.2), and a symmetric
    cipher's cost barely depends on the length.
-2. **A stranger's message 1:** the daemon's `read_message1` on a
-   well-formed message 1 from an honest client, and on 2,320 random bytes.
-   Every message is made before its loop, into one array: RT-P4's first
-   registration failed because its harness built inputs inside the timed
-   loop.
-3. **One record at each class:** `Direction::seal` and `Direction::open` of
-   512, 16,384 and 65,535 bytes of random plaintext. Every plaintext and
-   ciphertext is made before its loop. This is the AEAD's cost.
-   `ClassedRecord`'s header byte and its header protection do not exist
-   until RT-W9 step 5; they are measured there.
+2. **A stranger's message 1.** Two kinds, both made before the timed
+   reads. **honest:** a message 1 from `Client::start`. **tag_flipped:**
+   that message with the last byte of its tag flipped (`TAG_LEN` is the
+   suffix). The encapsulation key and the ciphertext still parse, so
+   `read_message1` pays the decapsulation and the X25519 Diffie-Hellman
+   and then the tag fails. For each message the daemon's `new` and
+   `read_message1` are timed as two calls. The attempt is their sum.
+   Every honest message is accepted and no tag-flipped one is.
+3. **One record at each class:** `Direction::seal` and `Direction::open`
+   of 512, 16,384 and 65,535 bytes. One plaintext of that length is filled
+   before the timed loop and reused. The ciphertexts are the seals'
+   outputs, kept for the open loop: about 626 MiB at the 65,535-byte class
+   (10,000 ciphertexts of 65,535 + 16 bytes), plus one plaintext. This is
+   `Direction`'s cost. The session has already carried the handshake's
+   first record, so the first recorded nonce is 1. `Direction` rekeys
+   every 1,000 nonces (`REKEY_NONCES`). Ten of the 10,000 samples of each
+   operation include that HKDF. When those ten are the slowest, the
+   maximum includes a rekey and the 99th percentile does not: nearest rank
+   9,900 of 10,000. `ClassedRecord`'s header byte and its header protection
+   do not exist until RT-W9 step 5; they are measured there.
 
-**Counts:** 200 warm-up handshakes, not recorded; then 10,000 handshakes;
-10,000 messages 1 of each kind; 10,000 seals and 10,000 opens at each class.
+**Counts.** Each cell warms up, and the warmup is not recorded: 5 on the
+dry cell, 200 on the registered cell. The record warmup is that many seals
+and opens at the class, on a session that is then dropped, so the timed
+nonces still start at 1 and the cipher has already seen the length. Then
+10,000 handshakes; 10,000 messages 1 of each kind; 10,000 seals and 10,000
+opens at each class.
 
 **Statistics** (`scripts/bench/rt_p6_summary.py`, its tests in
-`scripts/bench/test_rt_p6_summary.py`, run in CI):
-- For each step: the median, 90th and 99th percentiles and the maximum of
-  both clocks, nearest-rank.
-- The same for each side's total per handshake, and for both sides
-  together.
-- For the stranger's message 1: the daemon's CPU time.
-- For the records: seal and open time per class, and CPU nanoseconds per
-  byte.
+`scripts/bench/test_rt_p6_summary.py`, run in CI). Percentiles are
+nearest-rank. For each series: the median, the 90th and 99th percentiles
+and the maximum, of both clocks.
+
+- Each handshake step.
+- Each side's total per handshake, and both sides together. A side's total
+  is the sum of that iteration's steps. Both is the sum of the two sides.
+- A stranger's message 1, for each kind, in three parts: `new`,
+  `read_message1`, and the attempt (`new` + `read_message1` of that same
+  message).
+- Seal and open at each class, and CPU nanoseconds per byte from the CPU
+  median.
+
+The summary refuses a capture that is not this shape, and names the
+defect: a handshake step missing from an iteration, repeated, or
+unexpected; a message-1 kind missing, repeated, unexpected, or accepted
+against its kind; a record class or operation missing, repeated, or
+unexpected; a missing file. The tests' control is a complete fixture whose
+medians the test computes itself. A refusal with no such control would stay
+green if the loader rejected every file.
 
 **Gates.** A run that fails any of these is void, and the failure is
 recorded:
 
-- Every handshake step succeeds; every honest message 1 is accepted and no
-  random one is (the harness asserts it).
+- Every handshake step succeeds. Every honest message 1 is accepted and no
+  tag-flipped one is. The harness asserts it, and the summary refuses a
+  file that says otherwise.
 - The kernel's under-voltage alarm (`rpi_volt`) stays clear for the run.
 - The core spends at least 99 % of the run at its top clock speed, by
   `cpufreq/stats/time_in_state` read at both ends. `vcgencmd
@@ -86,6 +129,7 @@ recorded:
   recorded; the alarm and the time-at-speed are what can be read instead.
 
 **Conditions recorded at the start and the end:**
+
 - the governor and the SoC temperature;
 - the one-minute load;
 - the under-voltage alarm;
@@ -104,7 +148,7 @@ The alternative is to have its owner stop it for the run. That is not
 this lane's to decide.
 
 **Build and attempts.** The floor device builds from a fresh clone of the
-pushed commit and runs the dry cell first (50 of each), then the
+pushed commit and runs the dry cell first (the dry counts above), then the
 registered cell. At most two registered attempts: a void attempt is
 recorded with its cause, the cause is fixed, and the second attempt is made
 under the same lines.
@@ -129,18 +173,33 @@ compute only. The network is not in it.
     BA-T9). The deadline would therefore inherit an unmeasured term, and its
     ledger row says so.
   - With that assumption the network part is 8,125 ms, and the compute part
-    adds what this run measures.
+    adds what this run measures. The compute part includes the daemon's
+    `new` and `read_message1` as separate steps of the same handshake.
 - **Amplification.**
-  - Reported: the daemon's CPU per stranger's message 1, as a median and a
-    99th percentile.
-  - Proposed reading: at `conn_limit` concurrent handshakes, a sender can
-    hold `conn_limit` × that much CPU busy per deadline. Whether that needs
-    a further bound is §4.3's decision.
+  - Reported: the daemon's CPU for one message-1 attempt, for each kind,
+    as a median, a 90th, a 99th and a maximum. The attempt is that
+    message's `new` plus its `read_message1`. The figure used for a bound
+    is the greater of the two kinds at that percentile. Both kinds pay the
+    decapsulation and the Diffie-Hellman. The honest kind also builds the
+    next handshake state. The tag-flipped kind stops at the tag.
+  - `conn_limit` is how many connections may be in flight.
+    `ConnGuard` releases its slot when it is dropped, so a sender who
+    finishes or abandons an attempt can take the slot again inside one
+    deadline. `conn_limit` × the cost of one attempt is a picture of
+    concurrency. It is not a count of attempts per deadline, and it is not
+    a bound on sustained CPU.
+  - This run measures the cost of one attempt. It does not measure how
+    many attempts the daemon admits in a deadline: that is a rate, and the
+    network is not in the run. Whether §4.3 needs a further bound is
+    decided from those two facts kept apart.
 - **Tunnel pool.** Reported: the client's cost per handshake. The pool size
   is RT-W11's decision.
 
 **What this does not measure.**
-- The network, and contention beyond the standing daemon recorded above.
+
+- The network, and therefore how many attempts fit in a deadline.
+  Contention beyond the standing daemon recorded above is not in the run
+  either.
 - The header byte and header protection of `ClassedRecord`.
 - An x86 machine: the floor device is the provisioning floor, and RT-P6
   asks about it alone.

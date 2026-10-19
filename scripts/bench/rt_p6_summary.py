@@ -9,19 +9,50 @@
 #
 #   rt_p6_summary.py RUN_DIR    Markdown on stdout
 #
-# The statistics are the ones registered in
-# docs/benchmarks/rt_p6_handshake_cost_20261018.md: per step and side, the
-# median, 90th and 99th percentiles and the maximum of wall and CPU time;
-# the same for each side's total per handshake and for both together; the
-# daemon's CPU for a stranger's message 1, honest and random; and the cost
-# of sealing and opening one record at each class. Percentiles are
-# nearest-rank.
+# The registered shape is docs/benchmarks/rt_p6_handshake_cost_20261018.md.
+# A file that is not that shape is refused before any table is written.
+# The handshake step names are HandshakeStep in the harness.
 
 import csv
 import math
 import os
 import sys
-from collections import defaultdict
+from dataclasses import dataclass
+
+
+STEPS_FILE = "steps.tsv"
+MESSAGE1_FILE = "message1.tsv"
+RECORDS_FILE = "records.tsv"
+
+# Chronological order. The side is part of the step.
+HANDSHAKE_STEPS = (
+    ("client", "start"),
+    ("daemon", "new"),
+    ("daemon", "read_message1"),
+    ("daemon", "write_message2"),
+    ("client", "read_message2"),
+    ("client", "write_message3"),
+    ("daemon", "read_message3"),
+    ("daemon", "write_message4"),
+    ("client", "read_message4"),
+    ("client", "first_record"),
+    ("daemon", "open_first_message"),
+)
+
+MESSAGE1_KINDS = ("honest", "tag_flipped")
+# What read_message1 must report. honest completed; tag_flipped failed the tag.
+MESSAGE1_ACCEPTED = {"honest": True, "tag_flipped": False}
+MESSAGE1_PARTS = ("new", "read_message1", "attempt")
+
+# RT-O6, ruled 2026-10-18.
+RECORD_CLASSES = (512, 16_384, 65_535)
+RECORD_OPS = ("seal", "open")
+
+CLOCKS = ("median", "p90", "p99", "max")
+
+
+def refuse(message):
+    raise SystemExit(message)
 
 
 def percentile(sorted_values, p):
@@ -33,13 +64,13 @@ def percentile(sorted_values, p):
 
 
 def stats(values):
-    v = sorted(values)
+    ordered = sorted(values)
     return {
-        "n": len(v),
-        "median": percentile(v, 50),
-        "p90": percentile(v, 90),
-        "p99": percentile(v, 99),
-        "max": v[-1],
+        "n": len(ordered),
+        "median": percentile(ordered, 50),
+        "p90": percentile(ordered, 90),
+        "p99": percentile(ordered, 99),
+        "max": ordered[-1],
     }
 
 
@@ -47,92 +78,261 @@ def us(ns):
     return f"{ns / 1000:,.1f}"
 
 
-def read(run_dir, name):
-    with open(os.path.join(run_dir, name), newline="") as f:
-        return list(csv.DictReader(f, delimiter="\t"))
+def clock_cells(values):
+    summary = stats(values)
+    return " | ".join(us(summary[name]) for name in CLOCKS)
 
 
-STEP_ORDER = [
-    ("client", "start"),
-    ("daemon", "read_message1"),
-    ("daemon", "write_message2"),
-    ("client", "read_message2"),
-    ("client", "write_message3"),
-    ("daemon", "read_message3"),
-    ("daemon", "write_message4"),
-    ("client", "read_message4"),
-    ("client", "first_record"),
-    ("daemon", "open_first_message"),
-]
+def clock_heading(prefix):
+    return " | ".join(f"{prefix} {name}" for name in CLOCKS)
+
+
+@dataclass(frozen=True)
+class Clocks:
+    wall_ns: int
+    cpu_ns: int
+
+    def __add__(self, other):
+        return Clocks(self.wall_ns + other.wall_ns, self.cpu_ns + other.cpu_ns)
+
+
+@dataclass(frozen=True)
+class Message1Attempt:
+    accepted: bool
+    new: Clocks
+    read: Clocks
+
+    @property
+    def attempt(self):
+        return self.new + self.read
+
+
+@dataclass(frozen=True)
+class Run:
+    """One complete capture. Every iteration carries the registered shape."""
+
+    steps: dict
+    message1: dict
+    records: dict
+
+
+def read_rows(run_dir, name):
+    path = os.path.join(run_dir, name)
+    if not os.path.isfile(path):
+        refuse(f"{name} is missing")
+    with open(path, newline="") as handle:
+        return list(csv.DictReader(handle, delimiter="\t"))
+
+
+def field(row, column, filename):
+    value = row.get(column)
+    if value is None or value == "":
+        refuse(f"{filename} lacks {column}")
+    return value
+
+
+def parse_u64(text, filename, column):
+    try:
+        value = int(text)
+    except ValueError:
+        refuse(f"{filename} {column} is {text!r}")
+    if value < 0:
+        refuse(f"{filename} {column} is {value}")
+    return value
+
+
+def clocks_from(row, filename, wall_column, cpu_column):
+    return Clocks(
+        parse_u64(field(row, wall_column, filename), filename, wall_column),
+        parse_u64(field(row, cpu_column, filename), filename, cpu_column),
+    )
+
+
+def same_iterations(groups, filename, what):
+    sets = {frozenset(group) for group in groups}
+    if len(sets) != 1:
+        refuse(f"{filename} {what} cover different iterations")
+
+
+def load_steps(rows):
+    expected = set(HANDSHAKE_STEPS)
+    by_iteration = {}
+    for row in rows:
+        side = field(row, "side", STEPS_FILE)
+        step = field(row, "step", STEPS_FILE)
+        key = (side, step)
+        if key not in expected:
+            refuse(f"{STEPS_FILE} has unexpected step {side}/{step}")
+        iteration = parse_u64(field(row, "iteration", STEPS_FILE), STEPS_FILE, "iteration")
+        slot = by_iteration.setdefault(iteration, {})
+        if key in slot:
+            refuse(f"{STEPS_FILE} repeats {side}/{step} in iteration {iteration}")
+        slot[key] = clocks_from(row, STEPS_FILE, "wall_ns", "cpu_ns")
+    if not by_iteration:
+        refuse(f"{STEPS_FILE} has no handshakes")
+    for iteration, slot in by_iteration.items():
+        missing = [f"{side}/{step}" for side, step in HANDSHAKE_STEPS if (side, step) not in slot]
+        if missing:
+            refuse(f"{STEPS_FILE} iteration {iteration} lacks {', '.join(missing)}")
+    return by_iteration
+
+
+def parse_accepted(text):
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    refuse(f"{MESSAGE1_FILE} accepted is {text!r}")
+
+
+def load_message1(rows):
+    by_kind = {kind: {} for kind in MESSAGE1_KINDS}
+    for row in rows:
+        kind = field(row, "kind", MESSAGE1_FILE)
+        if kind not in by_kind:
+            refuse(f"{MESSAGE1_FILE} has unexpected kind {kind}")
+        iteration = parse_u64(field(row, "iteration", MESSAGE1_FILE), MESSAGE1_FILE, "iteration")
+        if iteration in by_kind[kind]:
+            refuse(f"{MESSAGE1_FILE} repeats {kind} iteration {iteration}")
+        accepted = parse_accepted(field(row, "accepted", MESSAGE1_FILE))
+        if accepted != MESSAGE1_ACCEPTED[kind]:
+            written = field(row, "accepted", MESSAGE1_FILE)
+            refuse(f"{MESSAGE1_FILE} {kind} iteration {iteration} accepted is {written}")
+        by_kind[kind][iteration] = Message1Attempt(
+            accepted=accepted,
+            new=clocks_from(row, MESSAGE1_FILE, "new_wall_ns", "new_cpu_ns"),
+            read=clocks_from(row, MESSAGE1_FILE, "read_wall_ns", "read_cpu_ns"),
+        )
+    for kind, attempts in by_kind.items():
+        if not attempts:
+            refuse(f"{MESSAGE1_FILE} lacks {kind}")
+    same_iterations(by_kind.values(), MESSAGE1_FILE, "kinds")
+    return by_kind
+
+
+def load_records(rows):
+    by_cell = {(cls, op): {} for cls in RECORD_CLASSES for op in RECORD_OPS}
+    for row in rows:
+        cls = parse_u64(field(row, "class", RECORDS_FILE), RECORDS_FILE, "class")
+        op = field(row, "op", RECORDS_FILE)
+        key = (cls, op)
+        if key not in by_cell:
+            refuse(f"{RECORDS_FILE} has unexpected class {cls} {op}")
+        iteration = parse_u64(field(row, "iteration", RECORDS_FILE), RECORDS_FILE, "iteration")
+        if iteration in by_cell[key]:
+            refuse(f"{RECORDS_FILE} repeats class {cls} {op} iteration {iteration}")
+        by_cell[key][iteration] = clocks_from(row, RECORDS_FILE, "wall_ns", "cpu_ns")
+    for cls in RECORD_CLASSES:
+        for op in RECORD_OPS:
+            if not by_cell[(cls, op)]:
+                refuse(f"{RECORDS_FILE} lacks class {cls} {op}")
+    same_iterations(by_cell.values(), RECORDS_FILE, "classes")
+    return by_cell
+
+
+def load(run_dir):
+    return Run(
+        steps=load_steps(read_rows(run_dir, STEPS_FILE)),
+        message1=load_message1(read_rows(run_dir, MESSAGE1_FILE)),
+        records=load_records(read_rows(run_dir, RECORDS_FILE)),
+    )
+
+
+def side_series(steps, side):
+    walls, cpus = [], []
+    for slot in steps.values():
+        chosen = [
+            sample
+            for (step_side, _), sample in slot.items()
+            if side == "both" or step_side == side
+        ]
+        walls.append(sum(sample.wall_ns for sample in chosen))
+        cpus.append(sum(sample.cpu_ns for sample in chosen))
+    return walls, cpus
+
+
+def render(run):
+    lines = ["## Each step (µs)", ""]
+    lines.append(
+        "| Side | Step | n | "
+        + clock_heading("Wall")
+        + " | "
+        + clock_heading("CPU")
+        + " |"
+    )
+    lines.append("|---|---|---:|" + "---:|" * (2 * len(CLOCKS)))
+    for key in HANDSHAKE_STEPS:
+        samples = [slot[key] for slot in run.steps.values()]
+        walls = [sample.wall_ns for sample in samples]
+        cpus = [sample.cpu_ns for sample in samples]
+        lines.append(
+            f"| {key[0]} | `{key[1]}` | {len(samples)} | {clock_cells(walls)} | {clock_cells(cpus)} |"
+        )
+
+    lines += ["", "## Per handshake (µs)", ""]
+    lines.append("| Total | n | " + clock_heading("Wall") + " | " + clock_heading("CPU") + " |")
+    lines.append("|---|---:|" + "---:|" * (2 * len(CLOCKS)))
+    for side in ("client", "daemon", "both"):
+        walls, cpus = side_series(run.steps, side)
+        lines.append(f"| {side} | {len(walls)} | {clock_cells(walls)} | {clock_cells(cpus)} |")
+
+    lines += ["", "## A stranger's message 1 (µs)", ""]
+    lines.append(
+        "| Kind | Part | n | Accepted | "
+        + clock_heading("Wall")
+        + " | "
+        + clock_heading("CPU")
+        + " |"
+    )
+    lines.append("|---|---|---:|---:|" + "---:|" * (2 * len(CLOCKS)))
+    for kind in MESSAGE1_KINDS:
+        attempts = list(run.message1[kind].values())
+        accepted = sum(1 for attempt in attempts if attempt.accepted)
+        parts = {
+            "new": [attempt.new for attempt in attempts],
+            "read_message1": [attempt.read for attempt in attempts],
+            "attempt": [attempt.attempt for attempt in attempts],
+        }
+        for part in MESSAGE1_PARTS:
+            samples = parts[part]
+            walls = [sample.wall_ns for sample in samples]
+            cpus = [sample.cpu_ns for sample in samples]
+            lines.append(
+                f"| {kind} | `{part}` | {len(samples)} | {accepted} | "
+                f"{clock_cells(walls)} | {clock_cells(cpus)} |"
+            )
+
+    lines += ["", "## One record at each class (µs)", ""]
+    lines.append(
+        "| Class (bytes) | Op | n | "
+        + clock_heading("Wall")
+        + " | "
+        + clock_heading("CPU")
+        + " | ns per byte (CPU median) |"
+    )
+    lines.append("|---:|---|---:|" + "---:|" * (2 * len(CLOCKS)) + "---:|")
+    for cls in RECORD_CLASSES:
+        for op in RECORD_OPS:
+            samples = list(run.records[(cls, op)].values())
+            walls = [sample.wall_ns for sample in samples]
+            cpus = [sample.cpu_ns for sample in samples]
+            per_byte = stats(cpus)["median"] / cls
+            lines.append(
+                f"| {cls:,} | {op} | {len(samples)} | {clock_cells(walls)} | "
+                f"{clock_cells(cpus)} | {per_byte:.2f} |"
+            )
+    return "\n".join(lines) + "\n"
 
 
 def summarise(run_dir):
-    steps = read(run_dir, "steps.tsv")
-    per_step = defaultdict(lambda: ([], []))
-    per_side = defaultdict(lambda: defaultdict(lambda: [0, 0]))
-    for r in steps:
-        key = (r["side"], r["step"])
-        w, c = int(r["wall_ns"]), int(r["cpu_ns"])
-        per_step[key][0].append(w)
-        per_step[key][1].append(c)
-        totals = per_side[int(r["iteration"])]
-        totals[r["side"]][0] += w
-        totals[r["side"]][1] += c
-    missing = [k for k in STEP_ORDER if k not in per_step]
-    if missing:
-        raise SystemExit(f"steps.tsv lacks {missing}")
-
-    print("## Each step (µs)\n")
-    print("| Side | Step | n | Wall median | Wall p90 | Wall p99 | Wall max | CPU median | CPU p99 |")
-    print("|---|---|---:|---:|---:|---:|---:|---:|---:|")
-    for key in STEP_ORDER:
-        w, c = stats(per_step[key][0]), stats(per_step[key][1])
-        print(f"| {key[0]} | `{key[1]}` | {w['n']} | {us(w['median'])} | {us(w['p90'])} | "
-              f"{us(w['p99'])} | {us(w['max'])} | {us(c['median'])} | {us(c['p99'])} |")
-
-    print("\n## Per handshake (µs)\n")
-    print("| Total | Wall median | Wall p90 | Wall p99 | Wall max | CPU median | CPU p99 |")
-    print("|---|---:|---:|---:|---:|---:|---:|")
-    for label, pick in [
-        ("client", lambda t: t["client"]),
-        ("daemon", lambda t: t["daemon"]),
-        ("both", lambda t: [t["client"][0] + t["daemon"][0], t["client"][1] + t["daemon"][1]]),
-    ]:
-        w = stats([pick(t)[0] for t in per_side.values()])
-        c = stats([pick(t)[1] for t in per_side.values()])
-        print(f"| {label} | {us(w['median'])} | {us(w['p90'])} | {us(w['p99'])} | {us(w['max'])} | "
-              f"{us(c['median'])} | {us(c['p99'])} |")
-
-    m1 = read(run_dir, "message1.tsv")
-    print("\n## A stranger's message 1: the daemon's `read_message1` (µs)\n")
-    print("| Kind | n | Accepted | CPU median | CPU p90 | CPU p99 | CPU max | Wall median |")
-    print("|---|---:|---:|---:|---:|---:|---:|---:|")
-    for kind in ("honest", "random"):
-        rows = [r for r in m1 if r["kind"] == kind]
-        c = stats([int(r["cpu_ns"]) for r in rows])
-        w = stats([int(r["wall_ns"]) for r in rows])
-        accepted = sum(1 for r in rows if r["accepted"] == "true")
-        print(f"| {kind} | {c['n']} | {accepted} | {us(c['median'])} | {us(c['p90'])} | "
-              f"{us(c['p99'])} | {us(c['max'])} | {us(w['median'])} |")
-
-    rec = read(run_dir, "records.tsv")
-    print("\n## One record at each class (µs)\n")
-    print("| Class (bytes) | Op | n | Wall median | Wall p99 | CPU median | CPU p99 | ns per byte (CPU median) |")
-    print("|---:|---|---:|---:|---:|---:|---:|---:|")
-    for cls in sorted({int(r["class"]) for r in rec}):
-        for op in ("seal", "open"):
-            rows = [r for r in rec if int(r["class"]) == cls and r["op"] == op]
-            w = stats([int(r["wall_ns"]) for r in rows])
-            c = stats([int(r["cpu_ns"]) for r in rows])
-            print(f"| {cls:,} | {op} | {c['n']} | {us(w['median'])} | {us(w['p99'])} | "
-                  f"{us(c['median'])} | {us(c['p99'])} | {c['median'] / cls:.2f} |")
+    return render(load(run_dir))
 
 
 def main(argv):
     if len(argv) != 2:
         print("usage: rt_p6_summary.py RUN_DIR", file=sys.stderr)
         return 2
-    summarise(argv[1])
+    print(summarise(argv[1]), end="")
     return 0
 
 

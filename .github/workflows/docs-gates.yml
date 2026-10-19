@@ -379,10 +379,12 @@ jobs:
         run: python3 scripts/bench/test_rt_p5_classes.py
 
       - name: Run RT-P6 summary tests
-        # `scripts/bench/rt_p6_summary.py` turns RT-P6's raw samples into the
-        # statistics its registration names
-        # (`docs/benchmarks/rt_p6_handshake_cost_20261018.md`): nearest-rank
-        # percentiles, and a refusal when a registered step is missing.
+        # `scripts/bench/rt_p6_summary.py` loads a run only when it has the
+        # shape registered in
+        # `docs/benchmarks/rt_p6_handshake_cost_20261018.md`: every handshake
+        # step once per iteration, both message-1 kinds with the acceptance
+        # the kind names, and every record class and operation. The control
+        # is a complete fixture whose medians the test computes itself.
         if: '!cancelled()'
         run: python3 scripts/bench/test_rt_p6_summary.py
 
