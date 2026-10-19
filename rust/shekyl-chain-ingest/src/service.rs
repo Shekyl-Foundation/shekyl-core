@@ -921,47 +921,78 @@ pub(crate) fn pool_step<S, T>(
     }
 }
 
-/// Offer an admitted alternative block's stored bodies to the pool's door
-/// (CEN-K9): after it passed the cheap tier and its proof-of-work and AL1
-/// wrote its bodies, never before.
-async fn supplement<S>(shared: &Arc<Shared<S>>, block: BlockHash)
-where
-    S: Substrate + Send + Sync + 'static,
-    S::Fault: core::fmt::Debug + Send + 'static,
-{
-    let done = with_pool(shared, move |pool, snap, view, rule_set, policy, now| {
-        match snap.alt_block_bodies(&block) {
-            Ok(Some(bodies)) => pool
-                .supplement(&bodies, now, view, rule_set, policy)
-                .faults
-                .into_iter()
-                .next()
-                .map(|(_, f)| f),
-            // Retired or promoted since: there is nothing stored to offer.
-            Ok(None) => None,
-            Err(e) => Some(PoolFault::Chain(shekyl_chain_rules::Fault::View(e))),
-        }
-    })
-    .await;
-    pool_step(shared, done, |fault| fault);
+/// Bodies a block carried, for the pool's door: an admitted alternative
+/// block's, read from its stored row, or a switch's returns.
+enum Carried {
+    /// The alternative block whose stored bodies (AL8) are offered.
+    Alt(BlockHash),
+    /// Bodies in hand.
+    Bodies(Vec<Transaction>),
 }
 
-/// Offer a switch's returned bodies to the pool's door, against the chain
-/// the switch left (`SwitchDone::returned`).
-async fn returned<S>(shared: &Arc<Shared<S>>, bodies: Vec<Transaction>)
+/// How many times a carried body is judged again after the tip moved under
+/// its judgement (`PoolFault::TipMoved`). Each retry follows a committed
+/// tip change between the door's window read and its judgement, so the
+/// count only binds when the chain moves under every one in turn.
+const TIP_MOVED_RETRIES: usize = 8;
+
+/// Offer carried bodies to the pool's door against the chain the store
+/// holds now. A body the tip moved under is judged again against the new
+/// chain, never answered as a fault (the review of #1102); every other
+/// fault fails the service, as a store fault does.
+async fn offer_carried<S>(shared: &Arc<Shared<S>>, mut carried: Carried)
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
-    let done = with_pool(shared, move |pool, _, view, rule_set, policy, now| {
-        pool.returned(bodies, now, view, rule_set, policy)
-            .faults
-            .into_iter()
-            .next()
-            .map(|(_, f)| f)
-    })
-    .await;
-    pool_step(shared, done, |fault| fault);
+    for _ in 0..=TIP_MOVED_RETRIES {
+        let done = with_pool(shared, move |pool, snap, view, rule_set, policy, now| {
+            let (offers, bodies) = match carried {
+                Carried::Alt(block) => match snap.alt_block_bodies(&block) {
+                    Ok(Some(stored)) => (
+                        pool.supplement(&stored, now, view, rule_set, policy),
+                        stored.into_transactions(),
+                    ),
+                    // Retired or promoted since: nothing stored to offer.
+                    Ok(None) => return Ok(Vec::new()),
+                    Err(e) => return Err(PoolFault::Chain(shekyl_chain_rules::Fault::View(e))),
+                },
+                Carried::Bodies(bodies) => (
+                    pool.returned(bodies.clone(), now, view, rule_set, policy),
+                    bodies,
+                ),
+            };
+            moved_bodies(offers.faults, |txid| {
+                bodies
+                    .iter()
+                    .find(|tx| tx.txid_parts().hash == *txid)
+                    .cloned()
+            })
+        })
+        .await;
+        match done {
+            None => return,
+            Some(Err(e)) => return shared.fail(e.into()),
+            Some(Ok(Err(fault))) => return shared.fail(ServiceFault::Pool(fault)),
+            Some(Ok(Ok(moved))) if moved.is_empty() => return,
+            Some(Ok(Ok(moved))) => carried = Carried::Bodies(moved),
+        }
+    }
+}
+
+/// The bodies a moved tip left unjudged, or the first other fault.
+fn moved_bodies(
+    faults: Vec<(shekyl_types::TxHash, PoolFault<StoreError>)>,
+    body: impl Fn(&shekyl_types::TxHash) -> Option<Transaction>,
+) -> Result<Vec<Transaction>, PoolFault<StoreError>> {
+    let mut moved = Vec::new();
+    for (txid, fault) in faults {
+        match fault {
+            PoolFault::TipMoved { .. } => moved.extend(body(&txid)),
+            other => return Err(other),
+        }
+    }
+    Ok(moved)
 }
 
 /// Parse one accepted arrival: the block and its carried bodies. A blob the
@@ -1463,7 +1494,7 @@ where
         offered,
         Offered::Held { .. } | Offered::BeyondCap(_) | Offered::SwitchDue(_)
     ) {
-        supplement(shared, arrival.hash()).await;
+        offer_carried(shared, Carried::Alt(arrival.hash())).await;
     }
     let reply = match offered {
         Offered::Refused(verdict) => return refused(arrival, verdict),
@@ -1538,7 +1569,7 @@ where
         Ok(Switched::Done(done)) => {
             // The demoted blocks' bodies, through the door against the chain
             // the switch left: relay and templates only.
-            returned(shared, done.returned).await;
+            offer_carried(shared, Carried::Bodies(done.returned)).await;
             Some(Reply::Switched {
                 demoted: done.demoted,
                 promoted: done.promoted,
