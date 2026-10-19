@@ -8,8 +8,10 @@
 //! The window is how many arrivals the service holds before they are
 //! answered. Three origins share it:
 //!
-//! - [`Kind::Local`] — a block this node mined. It may use the reserved
-//!   seat.
+//! - [`Kind::Local`] — a block this node mined, or one submitted to it.
+//!   It may use the reserved seat. Local and unsolicited arrivals together
+//!   hold at most the unsolicited share plus the reserve, so a flood of
+//!   submissions cannot lock sync out either.
 //! - [`Kind::Solicited`] — a span this node asked for. It may use every
 //!   seat except the reserve.
 //! - [`Kind::Unsolicited`] — a block a peer sent unasked. It may use at
@@ -50,11 +52,25 @@ const fn unsolicited_cap_for(capacity: usize) -> usize {
     capacity.saturating_sub(reserve_for(capacity)) / UNSOLICITED_SHARE_DENOMINATOR
 }
 
+/// Seats local and unsolicited arrivals may hold together at `capacity`:
+/// the unsolicited share plus the reserve, and at least one, so a window
+/// of one still takes this node's own block (module docs).
+const fn foreign_cap_for(capacity: usize) -> usize {
+    let cap = unsolicited_cap_for(capacity) + reserve_for(capacity);
+    if cap == 0 {
+        1
+    } else {
+        cap
+    }
+}
+
 struct Seats {
     reserve: usize,
     unsolicited_cap: usize,
+    foreign_cap: usize,
     free: usize,
     unsolicited: usize,
+    local: usize,
     closed: bool,
 }
 
@@ -81,8 +97,10 @@ impl Room {
             seats: Mutex::new(Seats {
                 reserve: reserve_for(capacity),
                 unsolicited_cap: unsolicited_cap_for(capacity),
+                foreign_cap: foreign_cap_for(capacity),
                 free: capacity,
                 unsolicited: 0,
+                local: 0,
                 closed: false,
             }),
             changed: Condvar::new(),
@@ -157,8 +175,10 @@ impl Room {
     fn release(&self, kind: Kind) {
         let mut seats = self.lock();
         seats.free += 1;
-        if kind == Kind::Unsolicited {
-            seats.unsolicited -= 1;
+        match kind {
+            Kind::Unsolicited => seats.unsolicited -= 1,
+            Kind::Local => seats.local -= 1,
+            Kind::Solicited => {}
         }
         drop(seats);
         self.changed.notify_all();
@@ -184,6 +204,7 @@ fn fits(seats: &Seats, kinds: &[Kind]) -> bool {
         }
     }
     seats.unsolicited + unsolicited <= seats.unsolicited_cap
+        && seats.unsolicited + seats.local + unsolicited + local <= seats.foreign_cap
         && other <= seats.free.saturating_sub(seats.reserve)
         && local + other <= seats.free
 }
@@ -191,8 +212,10 @@ fn fits(seats: &Seats, kinds: &[Kind]) -> bool {
 fn take(seats: &mut Seats, kinds: &[Kind]) {
     for kind in kinds {
         seats.free -= 1;
-        if *kind == Kind::Unsolicited {
-            seats.unsolicited += 1;
+        match kind {
+            Kind::Unsolicited => seats.unsolicited += 1,
+            Kind::Local => seats.local += 1,
+            Kind::Solicited => {}
         }
     }
 }
@@ -230,6 +253,35 @@ mod tests {
         );
     }
 
+    /// Submitted blocks are local too, and a flood of them cannot fill the
+    /// window: with the unsolicited share they hold at most half the
+    /// non-reserved seats plus the reserve, and sync keeps the rest.
+    #[test]
+    fn local_arrivals_cannot_lock_sync_out() {
+        let room = Room::new(32);
+        let mut local = Vec::new();
+        for _ in 0..16 {
+            local.push(
+                room.try_take(&[Kind::Local])
+                    .expect("the share plus the reserve"),
+            );
+        }
+        assert!(
+            room.try_take(&[Kind::Local]).is_none(),
+            "the seventeenth submission does not fill the window"
+        );
+        assert!(
+            room.try_take(&[Kind::Unsolicited]).is_none(),
+            "local and unsolicited share the cap"
+        );
+        assert_eq!(room.solicited_available(), 15, "sync keeps its seats");
+        let sync: Vec<_> = (0..15)
+            .map(|_| room.try_take(&[Kind::Solicited]).expect("a sync seat"))
+            .collect();
+        drop((local, sync));
+        assert_eq!(room.solicited_available(), 31);
+    }
+
     #[test]
     fn a_window_of_one_still_accepts_and_keeps_no_reserve() {
         let room = Room::new(1);
@@ -244,7 +296,9 @@ mod tests {
     #[test]
     fn closing_wakes_a_local_waiter_with_nothing_to_take() {
         let room = Room::new(2);
-        let held = room.try_take(&[Kind::Local, Kind::Local]).expect("both");
+        let held = room
+            .try_take(&[Kind::Solicited, Kind::Local])
+            .expect("both");
         let waiting = {
             let room = Arc::clone(&room);
             std::thread::spawn(move || room.wait_local())

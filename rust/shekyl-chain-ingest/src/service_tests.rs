@@ -1022,3 +1022,184 @@ async fn a_fork_past_the_cap_is_answered_at_the_door_without_a_hash_or_a_pin() {
     }
     cleanup(&path);
 }
+
+/// A source that panics: the follower dies on its first post.
+struct Panics;
+
+impl crate::follower::TemplateSource for Panics {
+    fn template(
+        &self,
+        _facts: &crate::connector::ChainFacts,
+    ) -> Option<(shekyl_wire::Block, Vec<shekyl_wire::Transaction>)> {
+        panic!("the template source failed");
+    }
+}
+
+/// A source with nothing to mine.
+struct Nothing;
+
+impl crate::follower::TemplateSource for Nothing {
+    fn template(
+        &self,
+        _facts: &crate::connector::ChainFacts,
+    ) -> Option<(shekyl_wire::Block, Vec<shekyl_wire::Transaction>)> {
+        None
+    }
+}
+
+/// A service over a fresh store whose follower feeds `board` from
+/// `source`, synced as `synced` says.
+fn service_mining(
+    name: &str,
+    board: &Arc<shekyl_miner::JobBoard>,
+    source: Arc<dyn crate::follower::TemplateSource>,
+    synced: tokio::sync::watch::Receiver<bool>,
+) -> (Service<Gated>, std::path::PathBuf) {
+    let path = tmp(name);
+    let (_sink, found) = shekyl_miner::found_blocks();
+    let service = Service::start(
+        Arc::new(open_store(&path)),
+        RULES,
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+        Budget::of_host(),
+        super::Follow {
+            miner: Some(crate::follower::MinerFeed {
+                board: Arc::clone(board),
+                source,
+                synced,
+                found,
+            }),
+            pool: None,
+        },
+    );
+    (service, path)
+}
+
+/// The tip follower dying is the service's fault: it stops, the door
+/// closes so no caller offers into it, and the miner's job is withdrawn.
+/// A miner left hashing a stale job is what this rules out.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tip_followers_death_fails_the_service_and_closes_the_door() {
+    let board = Arc::new(shekyl_miner::JobBoard::new());
+    let (_synced_tx, synced) = tokio::sync::watch::channel(true);
+    let (service, path) = service_mining("service-follower-dies", &board, Arc::new(Panics), synced);
+    let door = service.door();
+    let started = std::time::Instant::now();
+    while door.room() != 0 {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "the door stayed open after the follower died"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(board.posted().is_none(), "no job left to hash");
+    let ended = service.stop().await;
+    assert!(
+        matches!(ended, Err(super::ServiceFault::FollowerEnded)),
+        "{ended:?}"
+    );
+    cleanup(&path);
+}
+
+/// The sync owner going away says nothing about the chain. The job is
+/// withdrawn, as while behind, and the follower keeps following.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_closed_sync_channel_withdraws_the_job_and_following_goes_on() {
+    let mut y = Scenario::open("service-sync-closed-y");
+    let blocks = y.mine(2).await;
+    let board = Arc::new(shekyl_miner::JobBoard::new());
+    let (synced_tx, synced) = tokio::sync::watch::channel(true);
+    let (service, path) = service_mining("service-sync-closed", &board, Arc::new(Nothing), synced);
+    let mut followed = service.followed();
+    drop(synced_tx);
+    offer_all(&service.door(), 1, &blocks).await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        followed.wait_for(|at| *at >= 2),
+    )
+    .await
+    .expect("the follower still follows")
+    .expect("following");
+    assert!(board.posted().is_none(), "withdrawn: nothing says synced");
+    service
+        .stop()
+        .await
+        .expect("no fault: the chain was never the problem");
+    y.close().await;
+    cleanup(&path);
+}
+
+/// A block this node mined meets a full window: the sink waits for the
+/// local seat, then offers it again, and it connects. Nothing is dropped.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
+    let mut y = Scenario::open("service-sink-y");
+    let blocks = y.mine(3).await;
+    let substrate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-sink",
+        Arc::clone(&substrate),
+        ServiceConfig {
+            room: NonZeroUsize::new(2).expect("two"),
+        },
+    );
+    let door = service.door();
+    offer_all(&door, 1, &blocks[..1]).await;
+    // Block 1 enters as this node's own and is held in form: at a window
+    // of two it holds the one seat local arrivals share.
+    substrate.hold(blocks[1].hash);
+    let mut first = arrival(500, 9, &blocks[1]);
+    first.origin = Origin::Local;
+    let first = door.offer(first).expect("the local seat");
+    substrate.until_held().await;
+    // The miner finds block 2. The sink meets no room and waits.
+    let board = shekyl_miner::JobBoard::new();
+    let generation = board.publish(shekyl_miner::Job {
+        block: blocks[2].template.block.clone(),
+        height: blocks[2].height,
+        seed: BlockHash::NULL,
+        difficulty: shekyl_difficulty::Difficulty::from_raw(1),
+    });
+    let postings = crate::follower::Postings::default();
+    postings
+        .lock()
+        .expect("postings")
+        .insert(generation, blocks[2].template.transactions.clone());
+    let (found_tx, found_rx) = std::sync::mpsc::channel();
+    let sink = crate::follower::spawn_sink(found_rx, door.clone(), postings);
+    found_tx
+        .send(shekyl_miner::Found {
+            block: blocks[2].template.block.clone(),
+            height: blocks[2].height,
+            generation,
+            pow: PowHash::from_bytes([0; 32]),
+        })
+        .expect("the sink reads");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        homes(&service, blocks[2].hash),
+        (false, false),
+        "waiting for a seat: not connected, not stored"
+    );
+    substrate.open(blocks[1].hash);
+    assert!(
+        matches!(first.reply().await.reply, Reply::Connected { .. }),
+        "block 1 connects and gives its seat back"
+    );
+    let started = std::time::Instant::now();
+    while !homes(&service, blocks[2].hash).0 {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "the mined block was dropped"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    drop(found_tx);
+    tokio::task::spawn_blocking(move || sink.join().expect("the sink ends"))
+        .await
+        .expect("joined");
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}

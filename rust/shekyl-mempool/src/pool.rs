@@ -383,15 +383,38 @@ impl Pool {
         self.held.insert(txid, held);
     }
 
-    /// Entries whose step 1 has not run since they were read from the file.
-    /// The caller judges them outside the lock and stages the result.
-    #[must_use]
-    pub fn unverified(&self) -> Vec<(TxHash, Transaction)> {
-        self.held
-            .iter()
-            .filter(|(_, held)| held.pass.is_none())
-            .map(|(txid, held)| (*txid, held.tx.clone()))
-            .collect()
+    /// Entries whose step 1 must run before the next reconcile: none yet
+    /// (a file entry), or a pass whose claim no longer holds against
+    /// `chain` under `rule_set` (a reorg moved its reference, or the rule
+    /// set changed). The caller runs step 1 outside the pool lock and
+    /// stages it ([`Pool::stage_step1`]), so [`Pool::reconcile`] verifies
+    /// nothing while it holds the pool. Reads the chain; verifies nothing.
+    ///
+    /// # Errors
+    ///
+    /// The chain view's.
+    pub fn needing_step1<'id, V: ChainView<'id>>(
+        &self,
+        chain: &V,
+        rule_set: &RuleSet,
+    ) -> Result<Vec<(TxHash, Transaction)>, V::Fault> {
+        let connecting = shekyl_chain_rules::Tip::connecting_height(chain.tip()?.as_ref());
+        let mut needing = Vec::new();
+        for (txid, held) in &self.held {
+            let holds = match &held.pass {
+                None => false,
+                Some(pass) => {
+                    let claims = shekyl_chain_rules::ReferenceClaims::for_transaction(
+                        chain, connecting, &held.tx,
+                    )?;
+                    pass.holds_under(&held.tx, rule_set, &claims)
+                }
+            };
+            if !holds {
+                needing.push((*txid, held.tx.clone()));
+            }
+        }
+        Ok(needing)
     }
 
     /// Remember step 1 for `txid` until the next reconcile consumes it.

@@ -902,3 +902,50 @@ async fn a_connect_under_the_pool_verifies_nothing_again() {
     drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
+
+/// The follower lists, under the pool lock, every entry whose pass no
+/// longer holds, and runs step 1 for it outside the lock. Staged, the
+/// reconcile verifies nothing while it holds the pool. A pass that holds
+/// is not listed. The rule set is what moves here; a reorg that moves an
+/// entry's reference fails the same comparison (`holds_under`).
+#[tokio::test]
+async fn a_pass_that_no_longer_holds_is_verified_outside_the_pool_lock() {
+    let (mut scenario, mined) = matured("pool-needing").await;
+    let spend = paying_the_floor(&mut scenario, &mined, 0).await;
+    let txid = spend.txid_parts().hash;
+    let path = tmp("pool-needing-pool");
+    let mut pool = open_pool(&mut scenario, &path).await;
+    let (held, listed, under_lock) = scenario
+        .read_chain(|view, rule_set| {
+            let policy = AdmissionPolicy::GENESIS;
+            let now = UnixSeconds::from_raw(1);
+            pool.admit(spend.clone(), now, view, rule_set, &policy)
+                .expect("no fault");
+            let held = pool.needing_step1(view, rule_set).expect("reads").len();
+            let other = shekyl_chain_rules::RuleSet::fakechain(
+                Some(std::num::NonZeroU128::new(7).expect("non-zero")),
+                shekyl_chain_rules::FakechainSchedule::PRODUCTION,
+            );
+            assert_ne!(other, *rule_set, "fixture");
+            let listed: Vec<_> = pool
+                .needing_step1(view, &other)
+                .expect("reads")
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            // Outside the lock: step 1 for what was listed, then staged.
+            let step1 = shekyl_mempool::stateless(&spend, view, &other, None).expect("judged");
+            pool.stage_step1(txid, step1);
+            let before = probes::fcmp_verifies();
+            let reconciled = pool.reconcile(view, &other, &policy).expect("reconcile");
+            assert_eq!(reconciled.admitted, vec![txid]);
+            (held, listed, probes::fcmp_verifies() - before)
+        })
+        .await;
+    assert_eq!(held, 0, "a pass that holds is not listed");
+    assert_eq!(listed, vec![txid], "a pass that no longer holds is listed");
+    assert_eq!(under_lock, 0, "staged: no proof verified under the lock");
+    drop(pool);
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}

@@ -317,3 +317,30 @@ async fn a_moved_tip_parks_its_body_and_faults_stay_apart() {
     assert!(retired.file.is_some());
     x.close().await;
 }
+
+/// A pool-file fault retires the pool and nothing else: the service says
+/// so, keeps connecting blocks, and stops without a fault. The chain is
+/// the record; the pool file is discardable (`SPL-Q8`). The fault is
+/// delivered where every pool-file fault lands (`pool_dead`); which
+/// faults are the file's is `a_moved_tip_parks_its_body_and_faults_stay_apart`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pool_file_fault_retires_the_pool_and_ingest_goes_on() {
+    use shekyl_chain_store::store::{AltCannot, StoreCannot, StoreError};
+    let mut y = Scenario::open("svc-pool-retired-y");
+    let blocks = y.mine(3).await;
+    let pooled = Pooled::start("svc-pool-retired");
+    assert!(!pooled.service.pool_retired());
+    pooled
+        .service
+        .shared
+        .pool_dead(&StoreError::Cannot(StoreCannot::Alt(AltCannot::NotHeld)));
+    assert!(pooled.service.pool_retired(), "the retirement is reported");
+    let replies = offer_all(&pooled.service.door(), 1, &blocks).await;
+    assert!(
+        replies.iter().all(|r| matches!(r, Reply::Connected { .. })),
+        "{replies:?}"
+    );
+    pooled.followed().await;
+    pooled.stop().await;
+    y.close().await;
+}

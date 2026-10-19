@@ -266,6 +266,15 @@ impl Ticket {
             reply: self.reply.await.unwrap_or(Reply::Stopped),
         }
     }
+
+    /// [`reply`](Self::reply) from a thread that is not the runtime's: the
+    /// found-block sink's.
+    pub(crate) fn blocking_reply(self) -> Tagged {
+        Tagged {
+            tag: self.tag,
+            reply: self.reply.blocking_recv().unwrap_or(Reply::Stopped),
+        }
+    }
 }
 
 /// Where an accepted arrival's one reply goes. Dropped without a reply, it
@@ -506,9 +515,15 @@ where
         self.pool.is_some() && self.pool_live.load(Ordering::Acquire)
     }
 
-    /// The pool file faulted. Block ingest continues; the pool is not read again.
+    /// The pool file faulted. Block ingest continues; the pool is not read
+    /// or written again until a restart opens the file afresh. The file is
+    /// discardable (`SPL-Q8`), but one this process cannot read is refused
+    /// at open, never deleted, so the remedy is the operator's restart.
     pub(crate) fn pool_dead(&self, fault: &StoreError) {
-        tracing::warn!("the pool file faulted; block ingest continues without it: {fault}");
+        tracing::error!(
+            "the pool file faulted: the node keeps following the chain without a \
+             transaction pool until it restarts: {fault}"
+        );
         self.pool_live.store(false, Ordering::Release);
     }
 
@@ -830,6 +845,7 @@ where
             admission,
         };
         let loop_shared = Arc::clone(&shared);
+        let loop_door = door.clone();
         let mut stopped = shared.stop.subscribe();
         let attendant_shared = Arc::clone(&shared);
         let attendant_door = door.clone();
@@ -869,6 +885,10 @@ where
                     _ = stopped.wait_for(|stopping| *stopping) => break,
                 }
             }
+            // A stop or a fault: the door takes nothing more, so a caller
+            // asking for room — the protocol handler, the miner's sink —
+            // reads none instead of offering into a service that is gone.
+            loop_door.close();
             // Every span still queued answers `Stopped`; every running one
             // finishes its current step and drops the rest.
             incoming.close();
@@ -918,6 +938,14 @@ where
     #[must_use]
     pub fn followed(&self) -> tokio::sync::watch::Receiver<u64> {
         self.shared.followed.subscribe()
+    }
+
+    /// Whether the pool file faulted and the pool was retired: no relay,
+    /// no compact-block resolution and no transactions in a template until
+    /// a restart. What `get_info` and `mining_status` report (PR 3b).
+    #[must_use]
+    pub fn pool_retired(&self) -> bool {
+        self.shared.pool.is_some() && !self.shared.pool_live.load(Ordering::Acquire)
     }
 
     /// The door.

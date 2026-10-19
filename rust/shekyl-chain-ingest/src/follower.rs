@@ -73,7 +73,7 @@ pub struct MinerFeed {
 const KEPT_JOBS: usize = 8;
 
 /// Each posted generation's listed bodies.
-type Postings = Arc<Mutex<BTreeMap<Generation, Vec<Transaction>>>>;
+pub(crate) type Postings = Arc<Mutex<BTreeMap<Generation, Vec<Transaction>>>>;
 
 /// Withdraws the miner's job on every way out, including a panic.
 struct BoardGuard(Option<Arc<JobBoard>>);
@@ -152,7 +152,10 @@ pub(crate) async fn follow<S>(
         };
         tokio::select! {
             changed = tips.changed() => if changed.is_err() { break },
-            closed = sync_changed => if closed { break },
+            // The sync owner is gone: nothing says this node is synced
+            // any more. That is "behind" — the job is withdrawn on the
+            // next pass — not a reason to stop following the chain.
+            closed = sync_changed => if closed { synced = None },
             () = shared.pending_ready().notified() => {}
             _ = stopping.wait_for(|stop| *stop) => break,
         }
@@ -184,10 +187,19 @@ where
         return;
     }
     let pending = shared.take_pending();
-    let unverified = shared
-        .shown_pool()
-        .map(|pool| pool.unverified())
-        .unwrap_or_default();
+    // Listed under the lock, verified outside it: entries with no pass yet,
+    // and passes the new tip no longer supports (a reorg moved their
+    // reference). The reconcile then verifies nothing while it holds the
+    // pool, unless the tip moves again between the two.
+    let unverified = match with_pool(shared, |pool, _, view, rule_set, _, _| {
+        pool.needing_step1(view, rule_set)
+    })
+    .await
+    {
+        None => Vec::new(),
+        Some(Ok(Ok(needing))) => needing,
+        Some(Ok(Err(view)) | Err(view)) => return shared.fail(ServiceFault::Store(view)),
+    };
     let planted = if unverified.is_empty() && pending.is_empty() {
         None
     } else {
@@ -344,9 +356,21 @@ async fn post<S>(
     }
 }
 
+/// What became of a block this node mined, when it did not join the chain.
+fn say_mined(reply: &crate::service::Reply) {
+    use crate::service::Reply;
+    match reply {
+        Reply::Connected { .. } | Reply::Switched { .. } | Reply::Stopped => {}
+        Reply::Refused(verdict) => {
+            tracing::error!("a block this node mined was refused: {verdict:?}");
+        }
+        other => tracing::warn!("a block this node mined did not connect: {other:?}"),
+    }
+}
+
 /// The found-block sink. A full window waits for the reserved seat. A
 /// closed door drops the block: the node is stopping.
-fn spawn_sink(
+pub(crate) fn spawn_sink(
     found: mpsc::Receiver<Found>,
     door: Door,
     postings: Postings,
@@ -365,17 +389,26 @@ fn spawn_sink(
                 block: found.block.serialize(),
                 bodies: bodies.iter().map(Transaction::serialize).collect(),
             };
-            // The reply has no reader here: the tip the connect publishes
-            // is what the attendant acts on.
+            // A full window waits for the local seat. A closed door is a
+            // stopping service. Anything else is this node's own block not
+            // joining the chain, and it is said once.
             loop {
                 if door.is_closed() {
                     break;
                 }
-                if let Err(crate::service::Refusal::NoRoom) = door.offer(arrival.clone()) {
-                    door.wait_for_local_seat();
-                    continue;
+                match door.offer(arrival.clone()) {
+                    Ok(ticket) => {
+                        say_mined(&ticket.blocking_reply().reply);
+                        break;
+                    }
+                    Err(crate::service::Refusal::NoRoom) => door.wait_for_local_seat(),
+                    Err(refused) => {
+                        tracing::error!(
+                            "a block this node mined was not accepted at the door: {refused:?}"
+                        );
+                        break;
+                    }
                 }
-                break;
             }
         }
     })
