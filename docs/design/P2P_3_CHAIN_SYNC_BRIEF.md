@@ -960,8 +960,8 @@ where `try_add_next_blocks` calls the entry. It carries its own
 That is the existing mechanism, and Rick's 2026-10-15 correction allows a
 C++ seam.
 
-The flip is gated on DEL-008 (CS-Q10), so the C++ handler lives on for a
-while under these rows.
+The C++ handler lives on under these rows until the flip and then the CS
+cutover (CS-Q10).
 
 `cryptonote_protocol_handler.{inl,h}` are rows that are expected to
 **shrink**, not to disappear, at the CS cutover, because the CS-Q1 ruling
@@ -997,16 +997,12 @@ increments?
     `ReleaseAnchors`), tested against the captured chains;
   - (2) the sync model as a crate with property tests (CS-Q11);
   - (3) the new payload types in `shekyl-levin` with KATs.
-- **The cutover's horizon.** The cutover follows the DRS-X flip. The flip
-  needs PR-b, PR 2, PR 3, PR 3b and #1088; PR-b and #1088 have merged
-  (`DRS_X_STORE_FLIP.md:154`). Its archival deletion waits on DEL-008's
-  gate (`:144`, `:260`):
-  - Slice C's admission rows `implemented`;
-  - CEN-J8–J10 retired;
-  - the secret draw live.
-
-  So the CS cutover is the far end of this work. What starts now (above)
-  stands, and the freeze rows (CS-Q9) carry the C++ until then.
+- **The cutover's horizon.** The cutover follows the DRS-X flip, whose
+  prerequisites are DRS-X's record (`DRS_X_STORE_FLIP.md` §4, the flip's
+  item): PR-b, PR 2, PR 3, PR 3b and #1088, of which PR-b and #1088 have
+  merged. Where DEL-008's gate sits is DRS-X's too; chain sync needs only
+  the flip. So the CS cutover is the far end of this work. What starts now
+  (above) stands, and the freeze rows (CS-Q9) carry the C++ until then.
 - **The cutover is one PR, after the DRS-X flip.** It does three things
   at once:
   - delete the **sync half** of the handler and `block_queue`;
