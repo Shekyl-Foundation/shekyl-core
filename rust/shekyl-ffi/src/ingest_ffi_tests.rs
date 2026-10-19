@@ -271,8 +271,8 @@ fn reply_codes_are_the_headers() {
             i64::from(SHEKYL_INGEST_PROMOTION_REFUSED),
         ),
         (
-            "SHEKYL_INGEST_BELOW_FLOOR",
-            i64::from(SHEKYL_INGEST_BELOW_FLOOR),
+            "SHEKYL_INGEST_CANNOT_FOLLOW_BELOW_FLOOR",
+            i64::from(SHEKYL_INGEST_CANNOT_FOLLOW_BELOW_FLOOR),
         ),
         (
             "SHEKYL_INGEST_MISSING_BODIES",
@@ -286,6 +286,10 @@ fn reply_codes_are_the_headers() {
         (
             "SHEKYL_INGEST_OUTSIDE_WINDOW",
             i64::from(SHEKYL_INGEST_OUTSIDE_WINDOW),
+        ),
+        (
+            "SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP",
+            i64::from(SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP),
         ),
         ("SHEKYL_INGEST_ACCEPTED", i64::from(SHEKYL_INGEST_ACCEPTED)),
         ("SHEKYL_INGEST_NO_ROOM", i64::from(SHEKYL_INGEST_NO_ROOM)),
@@ -305,4 +309,116 @@ fn reply_codes_are_the_headers() {
             "{name} drifted from the header"
         );
     }
+}
+
+/// Which reply shape `reply` is. Exhaustive, so a new `Reply` or
+/// `CannotFollow` variant does not compile until it has an index here,
+/// and [`every_reply_encodes_to_its_own_header_kind`] fails until it has a
+/// sample.
+fn shape(reply: &Reply) -> usize {
+    match reply {
+        Reply::Connected { .. } => 0,
+        Reply::Refused(_) => 1,
+        Reply::Unlinked { .. } => 2,
+        Reply::AlreadyHeld => 3,
+        Reply::Held { .. } => 4,
+        Reply::BeyondCap(_) => 5,
+        Reply::OutsideWindow { .. } => 6,
+        Reply::Switched { .. } => 7,
+        Reply::PromotionRefused { .. } => 8,
+        Reply::CannotFollow(CannotFollow::BeyondCap(_)) => 9,
+        Reply::CannotFollow(CannotFollow::BelowFloor { .. }) => 10,
+        Reply::MissingBodies { .. } => 11,
+        Reply::Cancelled { .. } => 12,
+        Reply::Stopped => 13,
+    }
+}
+
+/// One reply of each shape.
+fn one_of_each() -> Vec<Reply> {
+    use shekyl_chain_ingest::connector::PopBeyondReorgCap;
+    use shekyl_chain_rules::{InvalidBlock, Locus};
+    use shekyl_types::{BlockCount, BlockHeight};
+    let height = BlockHeight::from_raw(7);
+    let hash = BlockHash::from_bytes([3; 32]);
+    let verdict = InvalidBlock::new(CenRow::B2, Locus::Block);
+    let beyond = PopBeyondReorgCap {
+        depth: BlockCount::from_raw(11),
+        cap: BlockCount::from_raw(10),
+    };
+    vec![
+        Reply::Connected { height, hash },
+        Reply::Refused(verdict),
+        Reply::Unlinked { at: hash },
+        Reply::AlreadyHeld,
+        Reply::Held { height },
+        Reply::BeyondCap(beyond),
+        Reply::OutsideWindow { height },
+        Reply::Switched {
+            demoted: vec![(height, hash)],
+            promoted: vec![(height, hash)],
+        },
+        Reply::PromotionRefused {
+            at: height,
+            hash,
+            refused: verdict,
+        },
+        Reply::CannotFollow(CannotFollow::BeyondCap(beyond)),
+        Reply::CannotFollow(CannotFollow::BelowFloor {
+            tip: height,
+            floor: BlockHeight::from_raw(2),
+        }),
+        Reply::MissingBodies { indices: vec![0] },
+        Reply::Cancelled { by: ArrivalTag(4) },
+        Reply::Stopped,
+    ]
+}
+
+/// Every reply shape encodes to a kind of its own, and the kinds are the
+/// header's reply constants, all of them and nothing else. The door's
+/// past-cap hint and the stored, proven past-cap outcome are different
+/// kinds (DX-Q2 item 8).
+#[test]
+fn every_reply_encodes_to_its_own_header_kind() {
+    let samples = one_of_each();
+    let shapes: std::collections::BTreeSet<usize> = samples.iter().map(shape).collect();
+    assert_eq!(
+        shapes,
+        (0..samples.len()).collect(),
+        "one sample per shape, every shape sampled"
+    );
+    let kinds: std::collections::BTreeSet<u32> = samples
+        .into_iter()
+        .map(|reply| {
+            encode(
+                1,
+                Tagged {
+                    tag: ArrivalTag(1),
+                    reply,
+                },
+            )
+            .0
+            .kind
+        })
+        .collect();
+    assert_eq!(kinds.len(), shapes.len(), "two shapes share a kind");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/shekyl/shekyl_ffi.h");
+    let header = std::fs::read_to_string(&path).expect("the ingest entry's header");
+    let header_kinds: std::collections::BTreeSet<u32> = header
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix("constexpr std::uint32_t SHEKYL_INGEST_")
+        })
+        .map(|rest| {
+            let value = rest.split('=').nth(1).expect("a value");
+            value.trim().trim_end_matches(';').parse().expect("a kind")
+        })
+        .collect();
+    assert_eq!(kinds, header_kinds, "the encoded kinds are the header's");
+    assert_ne!(
+        SHEKYL_INGEST_BEYOND_CAP,
+        SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP
+    );
 }

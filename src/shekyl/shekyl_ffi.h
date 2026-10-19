@@ -4394,10 +4394,14 @@ constexpr std::uint32_t SHEKYL_INGEST_REFUSED = 2;
 constexpr std::uint32_t SHEKYL_INGEST_UNLINKED = 3;
 constexpr std::uint32_t SHEKYL_INGEST_ALREADY_HELD = 4;
 constexpr std::uint32_t SHEKYL_INGEST_HELD = 5;
+/// The door's past-cap hint: judged before the block was stored or hashed,
+/// never proof of a heavier chain. `height` is the depth, `by` the cap.
 constexpr std::uint32_t SHEKYL_INGEST_BEYOND_CAP = 6;
 constexpr std::uint32_t SHEKYL_INGEST_SWITCHED = 7;
 constexpr std::uint32_t SHEKYL_INGEST_PROMOTION_REFUSED = 8;
-constexpr std::uint32_t SHEKYL_INGEST_BELOW_FLOOR = 9;
+/// A stored heavier chain this node cannot follow: a pop met the undo
+/// floor. `height` is the tip, `by` the floor.
+constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BELOW_FLOOR = 9;
 constexpr std::uint32_t SHEKYL_INGEST_MISSING_BODIES = 10;
 constexpr std::uint32_t SHEKYL_INGEST_CANCELLED = 11;
 constexpr std::uint32_t SHEKYL_INGEST_STOPPED = 12;
@@ -4405,6 +4409,9 @@ constexpr std::uint32_t SHEKYL_INGEST_STOPPED = 12;
 /// nothing was stored, nothing was hashed, and the session stays open.
 /// `height` is the block's height.
 constexpr std::uint32_t SHEKYL_INGEST_OUTSIDE_WINDOW = 13;
+/// A stored heavier chain this node cannot follow: its fork is deeper than
+/// the cap. `height` is the depth, `by` the cap.
+constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP = 14;
 /// `shekyl_ingest_offer_span`'s results. Every refusal is before
 /// acceptance and never a peer fault; THROTTLED lets the handler close the
 /// session, never score it.

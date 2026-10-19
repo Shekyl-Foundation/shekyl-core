@@ -39,7 +39,8 @@ use std::sync::{Mutex, MutexGuard};
 
 use shekyl_chain_ingest::admission::tx_names_in;
 use shekyl_chain_ingest::service::{
-    Arrival, ArrivalLengths, ArrivalTag, Door, Origin, Refusal, Reply, SessionId, Tagged, Ticket,
+    Arrival, ArrivalLengths, ArrivalTag, CannotFollow, Door, Origin, Refusal, Reply, SessionId,
+    Tagged, Ticket,
 };
 
 use crate::legacy_util::{bounded_capacity, slice_from_ptr, slice_from_typed_ptr};
@@ -101,14 +102,17 @@ pub const SHEKYL_INGEST_UNLINKED: u32 = 3;
 pub const SHEKYL_INGEST_ALREADY_HELD: u32 = 4;
 /// Stored as an alternative block.
 pub const SHEKYL_INGEST_HELD: u32 = 5;
-/// Stored; the switch it makes due is deeper than the cap.
+/// The door's past-cap hint: judged before the block was stored or
+/// hashed. Never proof of a heavier chain. `height` is the depth, `by` the
+/// cap.
 pub const SHEKYL_INGEST_BEYOND_CAP: u32 = 6;
 /// Stored, and the chain switched onto its branch.
 pub const SHEKYL_INGEST_SWITCHED: u32 = 7;
 /// Stored, and the switch was refused: a promoted block failed.
 pub const SHEKYL_INGEST_PROMOTION_REFUSED: u32 = 8;
-/// The switch met the undo floor.
-pub const SHEKYL_INGEST_BELOW_FLOOR: u32 = 9;
+/// A stored heavier chain this node cannot follow: a pop met the undo
+/// floor. `height` is the tip, `by` the floor.
+pub const SHEKYL_INGEST_CANNOT_FOLLOW_BELOW_FLOOR: u32 = 9;
 /// Listed bodies to ask for, by index.
 pub const SHEKYL_INGEST_MISSING_BODIES: u32 = 10;
 /// An earlier block in the span was refused.
@@ -118,6 +122,9 @@ pub const SHEKYL_INGEST_STOPPED: u32 = 12;
 /// The block's seed is not one of the two caches this node holds. Local:
 /// nothing was stored, nothing was hashed, and the session stays open.
 pub const SHEKYL_INGEST_OUTSIDE_WINDOW: u32 = 13;
+/// A stored heavier chain this node cannot follow: its fork is deeper than
+/// the cap. `height` is the depth, `by` the cap.
+pub const SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP: u32 = 14;
 
 /// The span was accepted: one reply per arrival follows.
 pub const SHEKYL_INGEST_ACCEPTED: i32 = 0;
@@ -636,10 +643,15 @@ fn encode(connection: u64, tagged: Tagged) -> (ShekylIngestReply, Vec<u64>) {
             out.hash = hash.to_bytes();
             out.rule = u16::from(refused.rule.index());
         }
-        Reply::BelowFloor { tip, floor } => {
-            out.kind = SHEKYL_INGEST_BELOW_FLOOR;
-            out.height = tip;
-            out.by = floor;
+        Reply::CannotFollow(CannotFollow::BeyondCap(beyond)) => {
+            out.kind = SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP;
+            out.height = beyond.depth.to_raw();
+            out.by = beyond.cap.to_raw();
+        }
+        Reply::CannotFollow(CannotFollow::BelowFloor { tip, floor }) => {
+            out.kind = SHEKYL_INGEST_CANNOT_FOLLOW_BELOW_FLOOR;
+            out.height = tip.to_raw();
+            out.by = floor.to_raw();
         }
         Reply::MissingBodies { indices: missing } => {
             out.kind = SHEKYL_INGEST_MISSING_BODIES;

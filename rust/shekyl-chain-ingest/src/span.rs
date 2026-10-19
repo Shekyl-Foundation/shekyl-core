@@ -26,7 +26,7 @@ use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, Transaction};
 use tokio::sync::oneshot;
 
-use super::{Accepted, ArrivalTag, Origin, Reply, ReplySlot, ServiceFault, Shared};
+use super::{Accepted, ArrivalTag, CannotFollow, Origin, Reply, ReplySlot, ServiceFault, Shared};
 use crate::cache_window::AltSpend;
 use crate::connector::{Apply, ObserveTarget, OfferAlt, Offered, Reorganize, RunFault, Switched};
 use crate::plan_form::{form_plan, PlanStop};
@@ -623,19 +623,59 @@ where
     ) {
         offer_carried(shared, Carried::Alt(arrival.hash())).await;
     }
-    let reply = match offered {
-        Offered::Refused(verdict) => return refuse(arrival, verdict),
-        Offered::Unlinked { at } => Reply::Unlinked { at },
-        Offered::AlreadyHeld => Reply::AlreadyHeld,
-        Offered::Held { height } => Reply::Held { height },
-        Offered::BeyondCap(beyond) => Reply::BeyondCap(beyond),
-        Offered::SwitchDue(plan) => match carry_out(shared, plan).await {
+    let reply = match settled(offered) {
+        Ok(reply) => reply,
+        Err(Carry::Refuse(verdict)) => return refuse(arrival, verdict),
+        Err(Carry::Switch(plan)) => match carry_out(shared, *plan).await {
             Some(reply) => reply,
             None => return Next::Halt,
         },
     };
     arrival.slot.send(reply);
     Next::Continue
+}
+
+/// What [`settled`] hands back for the caller to carry on.
+enum Carry {
+    /// The cheap tier's verdict: refuse the arrival.
+    Refuse(InvalidBlock),
+    /// A switch is due.
+    Switch(Box<crate::connector::SwitchPlan>),
+}
+
+/// The reply for the store's outcome, when it needs no further step.
+///
+/// A stored alternative past the cap proves a heavier chain this node
+/// cannot follow: [`CannotFollow::BeyondCap`], never the door's
+/// [`Reply::BeyondCap`] hint (DX-Q2 item 8).
+fn settled(offered: Offered) -> Result<Reply, Carry> {
+    match offered {
+        Offered::Refused(verdict) => Err(Carry::Refuse(verdict)),
+        Offered::Unlinked { at } => Ok(Reply::Unlinked { at }),
+        Offered::AlreadyHeld => Ok(Reply::AlreadyHeld),
+        Offered::Held { height } => Ok(Reply::Held { height }),
+        Offered::BeyondCap(beyond) => Ok(Reply::CannotFollow(CannotFollow::BeyondCap(beyond))),
+        Offered::SwitchDue(plan) => Err(Carry::Switch(Box::new(plan))),
+    }
+}
+
+/// The reply for a switch's outcome. `Err` hands back the landed switch,
+/// whose returned bodies the caller offers first.
+///
+/// Past the cap and below the floor are proven outcomes:
+/// [`Reply::CannotFollow`] (DX-Q2 item 8).
+fn switch_reply(switched: Switched) -> Result<Reply, crate::connector::SwitchDone> {
+    match switched {
+        Switched::Done(done) => Err(done),
+        Switched::Refused {
+            at, hash, refused, ..
+        } => Ok(Reply::PromotionRefused { at, hash, refused }),
+        Switched::BeyondCap(beyond) => Ok(Reply::CannotFollow(CannotFollow::BeyondCap(beyond))),
+        Switched::BelowFloor { tip, floor } => Ok(Reply::CannotFollow(CannotFollow::BelowFloor {
+            tip: BlockHeight::from_raw(tip),
+            floor: BlockHeight::from_raw(floor),
+        })),
+    }
 }
 
 /// The early gate's answer. Nothing was stored and nothing was hashed.
@@ -724,19 +764,15 @@ where
             return None;
         }
     };
-    match switched {
-        Ok(Switched::Done(done)) => {
+    match switched.map(switch_reply) {
+        Ok(Ok(reply)) => Some(reply),
+        Ok(Err(done)) => {
             offer_carried(shared, Carried::Bodies(done.returned)).await;
             Some(Reply::Switched {
                 demoted: done.demoted,
                 promoted: done.promoted,
             })
         }
-        Ok(Switched::Refused {
-            at, hash, refused, ..
-        }) => Some(Reply::PromotionRefused { at, hash, refused }),
-        Ok(Switched::BeyondCap(beyond)) => Some(Reply::BeyondCap(beyond)),
-        Ok(Switched::BelowFloor { tip, floor }) => Some(Reply::BelowFloor { tip, floor }),
         Err(Asked::Fault(RunFault::StalePlan { .. })) => Some(Reply::Held {
             height: plan
                 .promoted
@@ -908,4 +944,50 @@ const fn is_stale(fault: &RunFault) -> bool {
             | RunFault::StaleReference { .. }
             | RunFault::NotAlternative { .. }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connector::PopBeyondReorgCap;
+    use shekyl_types::BlockCount;
+
+    fn beyond() -> PopBeyondReorgCap {
+        PopBeyondReorgCap {
+            depth: BlockCount::from_raw(721),
+            cap: BlockCount::from_raw(720),
+        }
+    }
+
+    /// A stored alternative past the cap is the proven outcome, not the
+    /// door's hint (DX-Q2 item 8).
+    #[test]
+    fn a_stored_fork_past_the_cap_is_cannot_follow() {
+        let Ok(reply) = settled(Offered::BeyondCap(beyond())) else {
+            panic!("settled answers a stored fork past the cap");
+        };
+        assert_eq!(
+            reply,
+            Reply::CannotFollow(CannotFollow::BeyondCap(beyond()))
+        );
+    }
+
+    /// Both of a switch's refusals to follow are the proven outcome.
+    #[test]
+    fn a_switch_past_the_cap_or_below_the_floor_is_cannot_follow() {
+        let Ok(past) = switch_reply(Switched::BeyondCap(beyond())) else {
+            panic!("a switch past the cap is answered");
+        };
+        assert_eq!(past, Reply::CannotFollow(CannotFollow::BeyondCap(beyond())));
+        let Ok(floor) = switch_reply(Switched::BelowFloor { tip: 9, floor: 4 }) else {
+            panic!("a switch below the floor is answered");
+        };
+        assert_eq!(
+            floor,
+            Reply::CannotFollow(CannotFollow::BelowFloor {
+                tip: BlockHeight::from_raw(9),
+                floor: BlockHeight::from_raw(4),
+            })
+        );
+    }
 }

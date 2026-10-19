@@ -142,6 +142,23 @@ pub enum Refusal {
     Oversize,
 }
 
+/// Why this node cannot follow a heavier chain it stored and judged: the
+/// proven outcomes, apart from the door's [`Reply::BeyondCap`] hint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CannotFollow {
+    /// The stored alternative's fork is deeper than the cap (`D_max`):
+    /// the store's `OfferAlt`, or the switch when the tip moved after the
+    /// door's gate.
+    BeyondCap(PopBeyondReorgCap),
+    /// A pop met the undo floor (`StoreCannot::PopBelowFloor`).
+    BelowFloor {
+        /// The tip the pop met.
+        tip: BlockHeight,
+        /// The persisted undo floor.
+        floor: BlockHeight,
+    },
+}
+
 /// What became of one accepted arrival.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reply {
@@ -168,11 +185,10 @@ pub enum Reply {
         /// Its height on its chain.
         height: BlockHeight,
     },
-    /// The fork is deeper than the cap. Local: the session stays open.
-    ///
-    /// The early gate answers this before the block is stored or hashed.
-    /// The switch path can still answer it after storing the block, when
-    /// the tip moved between the gate and the switch.
+    /// The door's answer: the fork is deeper than the cap, judged before
+    /// the block was stored or hashed. A hint, never proof of a heavier
+    /// chain: one block nobody worked for earns it. Local: the session
+    /// stays open, and it never sets `following_degraded` (DX-Q2 item 8).
     BeyondCap(PopBeyondReorgCap),
     /// The block's seed is not one of the two caches this node holds.
     /// Local: nothing was stored and nothing was hashed.
@@ -197,14 +213,10 @@ pub enum Reply {
         /// The verdict.
         refused: InvalidBlock,
     },
-    /// The switch met the undo floor: this node cannot follow the heavier
-    /// chain. Local; nothing moved.
-    BelowFloor {
-        /// The tip the pop met.
-        tip: u64,
-        /// The persisted floor.
-        floor: u64,
-    },
+    /// A heavier chain this node stored and cannot follow: the outcomes
+    /// that set `following_degraded` at the flip (DX-Q2 item 8). Local;
+    /// nothing moved.
+    CannotFollow(CannotFollow),
     /// Listed bodies neither the arrival carried nor the pool shows, by
     /// their index in the block's list: ask for them and offer it again.
     MissingBodies {

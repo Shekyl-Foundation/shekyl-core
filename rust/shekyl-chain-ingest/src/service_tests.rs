@@ -34,6 +34,8 @@ pub(crate) struct Gated {
     hashes: AtomicUsize,
     /// Longhashes that met a closed gate and waited.
     waited: AtomicUsize,
+    /// Seeds pinned: every cache this substrate was asked to build.
+    pins: AtomicUsize,
 }
 
 impl Gated {
@@ -43,6 +45,7 @@ impl Gated {
             opened: Condvar::new(),
             hashes: AtomicUsize::new(0),
             waited: AtomicUsize::new(0),
+            pins: AtomicUsize::new(0),
         }
     }
 
@@ -60,6 +63,11 @@ impl Gated {
     /// Longhashes computed so far.
     pub(crate) fn hashes(&self) -> usize {
         self.hashes.load(Ordering::Acquire)
+    }
+
+    /// Seeds pinned so far.
+    pub(crate) fn pins(&self) -> usize {
+        self.pins.load(Ordering::Acquire)
     }
 
     /// Wait until a longhash has met a closed gate: the held block is in
@@ -90,6 +98,10 @@ impl Substrate for Gated {
         drop(held);
         self.hashes.fetch_add(1, Ordering::AcqRel);
         Ok(PowHash::from_bytes([0; 32]))
+    }
+
+    fn pin_seed(&self, _seed: &BlockHash) {
+        self.pins.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -136,6 +148,33 @@ pub(crate) fn service_on(
             substrate,
             config,
             budget,
+            super::Follow::default(),
+        ),
+        path,
+    )
+}
+
+/// [`service`] under `rules`, over a store opened under the rule set in
+/// force at genesis.
+pub(crate) fn service_under(
+    name: &str,
+    substrate: Arc<Gated>,
+    config: ServiceConfig,
+    rules: crate::schedule::ChainRules,
+) -> (Service<Gated>, std::path::PathBuf) {
+    let path = tmp(name);
+    let store = crate::test_support::open_store_under(
+        &path,
+        &rules.in_force(BlockHeight::ZERO),
+        shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+    );
+    (
+        Service::start(
+            Arc::new(store),
+            rules,
+            substrate,
+            config,
+            Budget::of_host(),
             super::Follow::default(),
         ),
         path,
@@ -925,5 +964,61 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
     }
     service.stop().await.expect("stops");
     y.close().await;
+    cleanup(&path);
+}
+
+/// The door's answer to a fork past the cap is the hint, `BeyondCap`, and
+/// it costs nothing: no hash, no pin, nothing stored. A stored heavier
+/// chain past the cap is `CannotFollow`, a different variant
+/// (`span::settled`); only that one sets `following_degraded` at the flip
+/// (DX-Q2 item 8).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fork_past_the_cap_is_answered_at_the_door_without_a_hash_or_a_pin() {
+    use crate::scenario_shard::{levered_rules, REORG_CAP_BLOCKS};
+    let rules = levered_rules();
+    let mut y = Scenario::open_under("service-cap-y", crate::scenario::FreeHash, rules);
+    let mut z = Scenario::open_under("service-cap-z", crate::scenario::FreeHash, rules);
+    // A shared prefix of two blocks: the fork's root is block 1.
+    let prefix = y.mine(2).await;
+    z.mine(2).await;
+    y.idle();
+    // The main chain's tip sits one block past the cap above the root, so
+    // the fork at height 2 would pop cap + 1 blocks.
+    let main = y.mine(REORG_CAP_BLOCKS + 1).await;
+    let fork = z.mine(1).await;
+    let substrate = Arc::new(Gated::new());
+    let (service, path) = service_under(
+        "service-cap",
+        Arc::clone(&substrate),
+        ServiceConfig::default(),
+        rules,
+    );
+    let door = service.door();
+    offer_all(&door, 1, &prefix).await;
+    offer_all(&door, 1, &main).await;
+    let (hashes, pins) = (substrate.hashes(), substrate.pins());
+    let reply = door
+        .offer(arrival(90, 2, &fork[0]))
+        .expect("room")
+        .reply()
+        .await
+        .reply;
+    assert!(
+        matches!(reply, Reply::BeyondCap(beyond)
+            if beyond.depth.to_raw() == REORG_CAP_BLOCKS + 1
+                && beyond.cap.to_raw() == REORG_CAP_BLOCKS),
+        "{reply:?}"
+    );
+    assert_eq!(substrate.hashes(), hashes, "no hash for the door's answer");
+    assert_eq!(substrate.pins(), pins, "no cache built for it");
+    assert_eq!(
+        homes(&service, fork[0].hash),
+        (false, false),
+        "nothing stored"
+    );
+    service.stop().await.expect("stops");
+    for s in [y, z] {
+        s.close().await;
+    }
     cleanup(&path);
 }
