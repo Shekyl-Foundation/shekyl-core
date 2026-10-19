@@ -54,7 +54,7 @@ use shekyl_tx_weight::{predict_size_and_weight, InputCount, OutputCount, MAX_TRE
 use shekyl_units::AtomicUnits;
 use tokio::sync::RwLock;
 
-use super::super::pending::{FeePriority, ReservationId, TxRecipient, TxRequest};
+use super::super::pending::{FeePriority, ReservationId, TxDestination, TxRecipient, TxRequest};
 use super::super::refresh::RefreshOptions;
 use super::super::{Engine, SoloSigner};
 use super::{assert_tx_confirmed, create_wallet, require_fresh_accept, RegtestDaemon};
@@ -297,7 +297,7 @@ async fn run_cell(cell: &Cell) {
         let request = TxRequest {
             recipients: (0..FANOUT_RECIPIENTS)
                 .map(|_| TxRecipient {
-                    address: wallet_address.clone(),
+                    destination: TxDestination::Address(wallet_address.clone()),
                     amount_atomic_units: AtomicUnits::from_raw(unit),
                     rid: None,
                 })
@@ -353,7 +353,7 @@ async fn run_cell(cell: &Cell) {
         let request = TxRequest {
             recipients: (0..recipients)
                 .map(|_| TxRecipient {
-                    address: funder_address.clone(),
+                    destination: TxDestination::Address(funder_address.clone()),
                     amount_atomic_units: AtomicUnits::from_raw(share),
                     rid: None,
                 })
