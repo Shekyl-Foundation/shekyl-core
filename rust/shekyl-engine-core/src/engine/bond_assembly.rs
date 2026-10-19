@@ -1093,6 +1093,8 @@ mod tests {
             anchor_t0: ChainCount::from_raw(100),
             funding_gindexes: vec![shekyl_types::GlobalOutputIndex::from_raw(1)],
             state: PendingPostState::Pending,
+            reference_height: shekyl_types::BlockHeight::from_raw(1_000_000),
+            terminal: None,
         };
         let bound = PBoundBytes::from_pending(&post);
         assert_eq!(bound.persona(), &persona);

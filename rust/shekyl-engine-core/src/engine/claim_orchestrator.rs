@@ -251,7 +251,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     handle: PersonaHandle,
     ctx: ClaimAssemblyContext<'_>,
     block_hash_at: impl Fn(BlockHeight) -> Option<[u8; 32]>,
-) -> Result<AssembledEmissionClaim, ClaimOrchestrationError> {
+) -> Result<OrchestratedClaim, ClaimOrchestrationError> {
     // 1+2a. Fetch the claim source (single-field query over the persona's
     //    OWN transport — the `PersonaIsolatedTransport` bound is the §7.4
     //    structural pin; decode enforces the settled/height invariant at
@@ -368,7 +368,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
 
     // 6. Hand the sealed operands to the actor (CB-2: derivation, proving,
     //    and signing stay inside it) and return the reply unbroadcast.
-    Ok(ctx
+    let assembled = ctx
         .stake
         .assemble_emission_claim(AssembleEmissionClaim {
             handle,
@@ -377,7 +377,24 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
             fee_floor: ctx.fee_floor,
             tx_key: TxKeyDraw::Fresh,
         })
-        .await?)
+        .await?;
+    Ok(OrchestratedClaim {
+        assembled,
+        reference_height,
+    })
+}
+
+/// What [`orchestrate_emission_claim`] returns: the actor's unbroadcast reply
+/// and the reference height every membership path in it was proved against.
+/// The seam seals that height on the pending record, whose end date it sets
+/// (`WALLET_RPC_STAKING_OUTCOMES.md` WR-Q3). It is the backing path's
+/// reference too, so a claim that sweeps no fee inputs still has one.
+#[derive(Debug)]
+pub(crate) struct OrchestratedClaim {
+    /// The actor's assembled, unbroadcast reply.
+    pub assembled: AssembledEmissionClaim,
+    /// The FCMP++ reference height of every membership path in the claim.
+    pub reference_height: BlockHeight,
 }
 
 #[cfg(test)]
@@ -829,6 +846,7 @@ mod tests {
             // Public facts: epoch 2 claimed, a live reward, and the Q11
             // surface through the WHOLE pipeline — the sweep reserved only
             // the fee spend; the backing was never selected as a fee input.
+            let reply = reply.assembled;
             assert_eq!(reply.claimed_epochs, vec![2]);
             assert!(
                 reply.total_reward > 0,
