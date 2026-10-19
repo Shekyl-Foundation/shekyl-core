@@ -366,9 +366,6 @@ census_rows! {
         // row 10). The second guard the C++ needed is unrepresentable.
         A3 by_construction(crate::block::Candidate, "cen_b4_non_empty_root_with_nothing_supplied_is_refused"),
         A4 held_by_store("shekyl-chain-ingest", "an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored"),
-        // A5: subsumed by the 4.G weight rule (slice 7); the pre-parse fast
-        // path is the driver's DoS choice, not a row.
-        A5 pending,
         // A6/A7: wire invariants (R8 arm B), held by `Block::from_bytes`:
         // no `Block` exists that the parser refused, so no rule sees one.
         // The path is the type — `use` cannot name an associated function.

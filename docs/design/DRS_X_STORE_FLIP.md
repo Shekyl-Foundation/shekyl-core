@@ -290,6 +290,14 @@ Each observed difference becomes one row.
 | the claim source's `has_budget_row` | the budget row alone; `Σwork` is written with it at the close | the claim verify's citing gate: budget, `Σwork` and close height all rows (`emission_epoch_facts`, CEN-J23); `Σwork` is the slash pass's, an epoch after the budget | **Design** (`SO-D11d`, `SO-D11g`) |
 | the coverage list's shards | the frozen leaf segments (`frozen_segment_count` over the leaf count) | the byte-cut shards closed and final, the set CEN-J15 lets a join hold (`ClosedUniverse::final_before`) | **Design** (`SHT-Q2`, `SO-D11f`) |
 
+**Rows found by PR 2** (the arrival path, staged). The p2p wire does not change; these are what a peer's blocks meet.
+
+| Subject | C++ | Rust | Category |
+| --- | --- | --- | --- |
+| `m_invalid_blocks`, CEN-A1's memory of refused ids | a process-lifetime set of refused block ids, filled at `blockchain.cpp:2802` and consulted to drop a repeat in `have_block_unlocked` (`:2837`) | none: a repeat is judged again and refused by its own verdict | **Removed** (PR2-Q2, design review 2026-10-18): a fresh junk block is a fresh id, so the memo defeats only replays, which cost the attacker as little as fresh junk |
+| the size bound before parse (CEN-A5) | the cumulative weight limit plus `BLOCK_SIZE_SANITY_LEEWAY` (100) | the header bound plus twice the ceiling limit `2·S·LTEM` at the tip's successor (`admission::ArrivalBound`), `Oversize` before acceptance | **Design** (PR2-Q2): no valid block's arrival exceeds it at any height a span reaches; CEN-A5 is bucket 3 |
+| unsolicited block announcements | no bound per session | two per target interval per session, at most two held; a dry bucket is `Throttled` before parse and never a score | **Design** (PR2-Q2; CS-Q5 (c)) |
+
 **The flip's `CORE_RPC_VERSION` bump.** One minor bump covers every row above that changes what a client reads:
 - `get_block.json` disappears;
 - an alt block's header carries its own values;

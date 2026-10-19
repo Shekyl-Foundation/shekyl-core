@@ -74,6 +74,9 @@
 
 #![deny(unsafe_code)]
 
+/// What an arrival costs, and who pays: the door's checks before parse.
+#[cfg(feature = "pipeline")]
+pub mod admission;
 /// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 2 (a)): the corpus's
 /// archival inputs, enumerated both ways.
 #[cfg(all(test, feature = "pipeline"))]

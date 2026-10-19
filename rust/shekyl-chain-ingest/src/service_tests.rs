@@ -458,3 +458,163 @@ async fn an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored() {
     y.close().await;
     cleanup(&path);
 }
+
+/// A service whose session buckets refill by a clock the test advances.
+fn service_with_clock(
+    name: &str,
+    substrate: Arc<Gated>,
+    config: ServiceConfig,
+) -> (
+    Service<Gated>,
+    std::path::PathBuf,
+    Arc<std::sync::atomic::AtomicU64>,
+) {
+    let path = tmp(name);
+    let store: ChainStore = open_store(&path);
+    let millis = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let read = Arc::clone(&millis);
+    let clock: super::Clock =
+        Arc::new(move || std::time::Duration::from_millis(read.load(Ordering::Acquire)));
+    (
+        Service::start_with_clock(Arc::new(store), RULES, substrate, config, clock),
+        path,
+        millis,
+    )
+}
+
+/// An arrival of `len` junk bytes on `session`.
+fn junk(tag: u64, session: u64, solicited: bool, len: usize) -> Arrival {
+    Arrival {
+        tag: ArrivalTag(tag),
+        origin: Origin::Peer {
+            session: SessionId(session),
+            solicited,
+        },
+        block: vec![0xA5; len],
+        bodies: Vec::new(),
+    }
+}
+
+/// Two unsolicited arrivals per target interval pass a session's bucket
+/// and the third is `Throttled` before it is parsed: its bytes are junk,
+/// and no reply is owed for it. The bucket refills a token per half
+/// interval. A span this node asked for takes no tokens, and another
+/// session has its own bucket.
+#[tokio::test]
+async fn the_third_unsolicited_arrival_in_an_interval_is_throttled_before_parse() {
+    let (service, path, millis) = service_with_clock(
+        "service-bucket",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    let first = door.offer(junk(1, 5, false, 64)).expect("a token");
+    let second = door.offer(junk(2, 5, false, 64)).expect("a token");
+    assert_eq!(
+        door.offer(junk(3, 5, false, 64)).err(),
+        Some(Refusal::Throttled)
+    );
+    // The two accepted ones were parsed, and are junk.
+    for ticket in [first, second] {
+        assert!(matches!(ticket.reply().await.reply, Reply::Refused(_)));
+    }
+    let solicited: Vec<_> = (10..15).map(|tag| junk(tag, 5, true, 64)).collect();
+    let tickets = door
+        .offer_span(solicited)
+        .expect("solicited takes no tokens");
+    for ticket in tickets {
+        let _ = ticket.reply().await;
+    }
+    assert!(
+        door.offer(junk(20, 6, false, 64)).is_ok(),
+        "another session"
+    );
+    let half = shekyl_difficulty::T_SECONDS * 1_000 / 2;
+    millis.store(half - 1, Ordering::Release);
+    assert_eq!(
+        door.offer(junk(4, 5, false, 64)).err(),
+        Some(Refusal::Throttled)
+    );
+    millis.store(half, Ordering::Release);
+    assert!(
+        door.offer(junk(5, 5, false, 64)).is_ok(),
+        "one token earned"
+    );
+    service.stop().await.expect("stops");
+    cleanup(&path);
+}
+
+/// An arrival one byte over the bound is refused before parse; one at the
+/// bound is accepted, and its junk is then refused by the parser.
+#[tokio::test]
+async fn an_arrival_one_byte_over_the_bound_is_oversize_before_parse() {
+    let (service, path) = service(
+        "service-oversize",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    let (_, bound) = crate::admission::ArrivalBound::at(&service.shared.store).expect("bound");
+    let at = usize::try_from(bound.0).expect("fits");
+    assert_eq!(
+        door.offer(junk(1, 1, true, at + 1)).err(),
+        Some(Refusal::Oversize)
+    );
+    let accepted = door.offer(junk(2, 1, true, at)).expect("at the bound");
+    assert!(matches!(accepted.reply().await.reply, Reply::Refused(_)));
+    service.stop().await.expect("stops");
+    cleanup(&path);
+}
+
+/// A span with a refused block in the middle: the blocks before it
+/// connect, it is `Refused`, every block after it is `Cancelled` by it, and
+/// no hash starts after the refusal — the substrate's calls are the
+/// connected blocks' alone. The refused block carries a non-zero
+/// `minor_version` (CEN-B2), a header row `form` judges before the
+/// longhash, and the block after it names it as its parent, so it is in
+/// the same run and launched behind it.
+#[tokio::test]
+async fn a_refused_block_cancels_the_rest_of_its_span_and_no_hash_starts_after_it() {
+    let mut y = Scenario::open("service-cancel-y");
+    let blocks = y.mine(6).await;
+    let gate = Arc::new(Gated::new());
+    let config = ServiceConfig {
+        room: ServiceConfig::default().room,
+        hashers: NonZeroUsize::MIN,
+    };
+    let (service, path) = service("service-cancel", Arc::clone(&gate), config);
+    let door = service.door();
+    offer_all(&door, 1, &blocks[..2]).await;
+    let hashed = gate.hashes();
+    let mut bad = blocks[4].template.block.clone();
+    bad.header.minor_version = 1;
+    let mut after = blocks[5].template.block.clone();
+    after.header.previous = bad.hash();
+    let span = vec![
+        arrival(20, 2, &blocks[2]),
+        arrival(21, 2, &blocks[3]),
+        Arrival {
+            block: bad.serialize(),
+            ..arrival(22, 2, &blocks[4])
+        },
+        Arrival {
+            block: after.serialize(),
+            ..arrival(23, 2, &blocks[5])
+        },
+    ];
+    let mut replies = Vec::new();
+    for ticket in door.offer_span(span).expect("room") {
+        replies.push(ticket.reply().await.reply);
+    }
+    assert!(matches!(replies[0], Reply::Connected { .. }), "{replies:?}");
+    assert!(matches!(replies[1], Reply::Connected { .. }), "{replies:?}");
+    assert!(
+        matches!(replies[2], Reply::Refused(refused) if refused.rule == shekyl_chain_rules::CenRow::B2),
+        "{replies:?}"
+    );
+    assert_eq!(replies[3], Reply::Cancelled { by: ArrivalTag(22) });
+    assert_eq!(gate.hashes(), hashed + 2, "no hash after the refusal");
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}

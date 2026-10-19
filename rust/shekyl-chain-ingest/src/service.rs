@@ -48,6 +48,7 @@ use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use kameo::actor::{ActorRef, PreparedActor};
 use kameo::error::SendError;
@@ -60,6 +61,7 @@ use shekyl_wire::{Block, Transaction};
 use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio::task::JoinSet;
 
+use crate::admission::{ArrivalBound, Buckets};
 use crate::connector::{
     Apply, Connector, ConnectorArgs, ObserveTarget, OfferAlt, Offered, PopBeyondReorgCap,
     RefusePromotion, Reorganize, RunFault, Switched,
@@ -112,6 +114,13 @@ pub enum Refusal {
     /// The service has no room for the span now ([`Door::room`]), or it is
     /// stopping.
     NoRoom,
+    /// The session's bucket for unsolicited arrivals is dry
+    /// (`admission` module docs). The handler may close the session: a
+    /// close, never a score.
+    Throttled,
+    /// An arrival is larger than any valid block near this tip can be
+    /// (`admission` module docs).
+    Oversize,
 }
 
 /// What became of one accepted arrival.
@@ -172,6 +181,13 @@ pub enum Reply {
     MissingBodies {
         /// The indices, ascending.
         indices: Vec<usize>,
+    },
+    /// A block earlier in the same span was refused, and this one was not
+    /// formed after it (PR2-Q2): never a peer fault. `by` is the refused
+    /// arrival.
+    Cancelled {
+        /// The refused arrival.
+        by: ArrivalTag,
     },
     /// The service stopped before the arrival connected. Never a peer
     /// fault.
@@ -240,7 +256,7 @@ impl Drop for ReplySlot {
 /// An accepted arrival, parsed or not.
 struct Accepted {
     slot: ReplySlot,
-    origin: Origin,
+    tag: ArrivalTag,
     block: Vec<u8>,
     bodies: Vec<Vec<u8>>,
 }
@@ -248,6 +264,7 @@ struct Accepted {
 /// What a span task carries for an arrival once its bytes parsed.
 struct Parsed {
     slot: ReplySlot,
+    tag: ArrivalTag,
     block: Block,
     /// The carried bodies, by the hash they claim to list.
     bodies: Vec<Transaction>,
@@ -350,12 +367,51 @@ where
     }
 }
 
+/// A monotonic reading: the time since the service started.
+pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
+
+/// The door's checks before acceptance (`admission` module docs).
+struct Admission {
+    store: Arc<ChainStore>,
+    /// The size bound, and the tip it was derived at.
+    bound: Mutex<Option<(Option<BlockHash>, ArrivalBound)>>,
+    buckets: Buckets,
+    clock: Clock,
+}
+
+impl Admission {
+    /// The size bound at the store's tip now, derived once per tip.
+    fn bound(&self) -> Option<ArrivalBound> {
+        let tip = self
+            .store
+            .begin_read()
+            .ok()?
+            .tip()
+            .ok()?
+            .recorded
+            .map(|t| t.hash);
+        let mut cached = self
+            .bound
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, bound)) = *cached {
+            if at == tip {
+                return Some(bound);
+            }
+        }
+        let (at, bound) = ArrivalBound::at(&self.store).ok()?;
+        *cached = Some((at, bound));
+        Some(bound)
+    }
+}
+
 /// The door: the one way in (module docs). Cheap to clone.
 #[derive(Clone)]
 pub struct Door {
     spans: mpsc::UnboundedSender<Vec<Accepted>>,
     room: Arc<AtomicUsize>,
     closed: Arc<AtomicBool>,
+    admission: Arc<Admission>,
 }
 
 impl Door {
@@ -378,7 +434,16 @@ impl Door {
         Ok(tickets.pop().expect("one arrival, one ticket"))
     }
 
-    /// Offer a span: every arrival in it is accepted, or none is.
+    /// Forget `session`'s bucket: its connection closed.
+    pub fn session_closed(&self, session: SessionId) {
+        self.admission.buckets.forget(session);
+    }
+
+    /// Offer a span: every arrival in it is accepted, or none is. In
+    /// order, before anything is parsed: the size of every arrival
+    /// (`Oversize`), the room (`NoRoom`), and the session's bucket for its
+    /// unsolicited arrivals (`Throttled`, which gives the room back). A
+    /// span is one session's.
     ///
     /// # Errors
     ///
@@ -386,6 +451,18 @@ impl Door {
     pub fn offer_span(&self, span: Vec<Arrival>) -> Result<Vec<Ticket>, Refusal> {
         if self.closed.load(Ordering::Acquire) {
             return Err(Refusal::NoRoom);
+        }
+        // A store the door cannot read has no room: the service meets the
+        // same read and fails on it.
+        let Some(bound) = self.admission.bound() else {
+            return Err(Refusal::NoRoom);
+        };
+        let oversize = span.iter().any(|arrival| {
+            let bytes = arrival.block.len() + arrival.bodies.iter().map(Vec::len).sum::<usize>();
+            !bound.admits(u64::try_from(bytes).unwrap_or(u64::MAX))
+        });
+        if oversize {
+            return Err(Refusal::Oversize);
         }
         let n = span.len();
         if self
@@ -396,6 +473,26 @@ impl Door {
             .is_err()
         {
             return Err(Refusal::NoRoom);
+        }
+        let now = (self.admission.clock)();
+        let mut unsolicited: Vec<(SessionId, u32)> = Vec::new();
+        for arrival in &span {
+            if let Origin::Peer {
+                session,
+                solicited: false,
+            } = arrival.origin
+            {
+                match unsolicited.iter_mut().find(|(s, _)| *s == session) {
+                    Some((_, count)) => *count += 1,
+                    None => unsolicited.push((session, 1)),
+                }
+            }
+        }
+        for (session, count) in unsolicited {
+            if !self.admission.buckets.take(session, count, now) {
+                self.room.fetch_add(n, Ordering::AcqRel);
+                return Err(Refusal::Throttled);
+            }
         }
         let mut tickets = Vec::with_capacity(n);
         let mut accepted = Vec::with_capacity(n);
@@ -410,7 +507,7 @@ impl Door {
                     sender: Some(sender),
                     room: Arc::clone(&self.room),
                 },
-                origin: arrival.origin,
+                tag: arrival.tag,
                 block: arrival.block,
                 bodies: arrival.bodies,
             });
@@ -449,6 +546,32 @@ where
         substrate: Arc<S>,
         config: ServiceConfig,
     ) -> Self {
+        let started = std::time::Instant::now();
+        Self::start_with_clock(
+            store,
+            rules,
+            substrate,
+            config,
+            Arc::new(move || started.elapsed()),
+        )
+    }
+
+    /// [`Self::start`] under `clock`, the reading the session buckets
+    /// refill by: a test's clock it advances itself.
+    #[must_use]
+    pub fn start_with_clock(
+        store: Arc<ChainStore>,
+        rules: ChainRules,
+        substrate: Arc<S>,
+        config: ServiceConfig,
+        clock: Clock,
+    ) -> Self {
+        let admission = Arc::new(Admission {
+            store: Arc::clone(&store),
+            bound: Mutex::new(None),
+            buckets: Buckets::new(Duration::from_secs(shekyl_difficulty::T_SECONDS)),
+            clock,
+        });
         let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
         let connector = prepared.actor_ref().clone();
         let connector_task = prepared.spawn(ConnectorArgs {
@@ -471,6 +594,7 @@ where
             spans,
             room: Arc::new(AtomicUsize::new(config.room.get())),
             closed: Arc::new(AtomicBool::new(false)),
+            admission,
         };
         let loop_shared = Arc::clone(&shared);
         let mut stopped = shared.stop.subscribe();
@@ -593,43 +717,30 @@ const fn is_stale(fault: &RunFault) -> bool {
 /// wire cannot parse is a verdict against the block (CEN-A6's holder); a
 /// carried body that does not parse is a body the block's list cannot
 /// pair (CEN-G2's).
-fn parse(accepted: Accepted) -> Result<(Parsed, Origin), (ReplySlot, InvalidBlock)> {
+fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBlock)> {
     let Accepted {
         slot,
-        origin,
+        tag,
         block,
         bodies,
     } = accepted;
+    let refused = |rule| InvalidBlock::new(rule, shekyl_chain_rules::Locus::Block);
     let Ok(block) = Block::from_bytes(&block) else {
-        return Err((
-            slot,
-            InvalidBlock::new(
-                shekyl_chain_rules::CenRow::A6,
-                shekyl_chain_rules::Locus::Block,
-            ),
-        ));
+        return Err((slot, tag, refused(shekyl_chain_rules::CenRow::A6)));
     };
     let mut parsed = Vec::with_capacity(bodies.len());
     for body in &bodies {
         let Ok(tx) = Transaction::from_bytes(body) else {
-            return Err((
-                slot,
-                InvalidBlock::new(
-                    shekyl_chain_rules::CenRow::G2,
-                    shekyl_chain_rules::Locus::Block,
-                ),
-            ));
+            return Err((slot, tag, refused(shekyl_chain_rules::CenRow::G2)));
         };
         parsed.push(tx);
     }
-    Ok((
-        Parsed {
-            slot,
-            block,
-            bodies: parsed,
-        },
-        origin,
-    ))
+    Ok(Parsed {
+        slot,
+        tag,
+        block,
+        bodies: parsed,
+    })
 }
 
 /// The candidate for `parsed`: its listed bodies in listed order, then any
@@ -656,6 +767,24 @@ fn assemble(parsed: &Parsed) -> Result<Candidate, Vec<usize>> {
     Ok(Candidate::new(parsed.block.clone(), listed))
 }
 
+/// What one step of a span leaves for the rest of it.
+enum Next {
+    /// Go on with the queue.
+    Continue,
+    /// Place these again, at the front of the queue, in order.
+    Again(Vec<Parsed>),
+    /// `by` was refused: these and every arrival still queued reply
+    /// `Cancelled { by }` (PR2-Q2).
+    Cancel {
+        /// The refused arrival.
+        by: ArrivalTag,
+        /// The rest of the step's arrivals.
+        rest: Vec<Parsed>,
+    },
+    /// The service is stopping or failed: what is left answers `Stopped`.
+    Halt,
+}
+
 /// Work one accepted span (module docs).
 async fn run_span<S>(shared: Arc<Shared<S>>, span: Vec<Accepted>)
 where
@@ -663,11 +792,21 @@ where
     S::Fault: core::fmt::Debug + Send + 'static,
 {
     let mut queue: VecDeque<Parsed> = VecDeque::with_capacity(span.len());
+    let mut refused_by = None;
     for accepted in span {
         match parse(accepted) {
-            Ok((parsed, _origin)) => queue.push_back(parsed),
-            Err((slot, refused)) => slot.send(Reply::Refused(refused)),
+            Ok(parsed) => queue.push_back(parsed),
+            Err((slot, tag, refused)) => {
+                slot.send(Reply::Refused(refused));
+                refused_by.get_or_insert(tag);
+            }
         }
+    }
+    if let Some(by) = refused_by {
+        for parsed in queue {
+            parsed.slot.send(Reply::Cancelled { by });
+        }
+        return;
     }
     while let Some(front) = queue.pop_front() {
         if shared.stopping() {
@@ -684,14 +823,16 @@ where
             Ok(placed) => placed,
             Err(e) => return shared.fail(e.into()),
         };
-        match placed {
-            Placed::AlreadyHeld => front.slot.send(Reply::AlreadyHeld),
-            Placed::Unlinked { at } => front.slot.send(Reply::Unlinked { at }),
-            Placed::Alt => {
-                if let Some(again) = offer_alt(&shared, front, candidate).await {
-                    queue.push_front(again);
-                }
+        let next = match placed {
+            Placed::AlreadyHeld => {
+                front.slot.send(Reply::AlreadyHeld);
+                Next::Continue
             }
+            Placed::Unlinked { at } => {
+                front.slot.send(Reply::Unlinked { at });
+                Next::Continue
+            }
+            Placed::Alt => offer_alt(&shared, front, candidate).await,
             Placed::Extend { height } => {
                 // The run: this arrival, then each next one whose parent is
                 // the one before it.
@@ -706,10 +847,23 @@ where
                     let next = queue.pop_front().expect("peeked");
                     run.push((next, next_candidate));
                 }
-                for again in extend_run(&shared, height, run).await.into_iter().rev() {
-                    queue.push_front(again);
+                extend_run(&shared, height, run).await
+            }
+        };
+        match next {
+            Next::Continue => {}
+            Next::Again(again) => {
+                for parsed in again.into_iter().rev() {
+                    queue.push_front(parsed);
                 }
             }
+            Next::Cancel { by, rest } => {
+                for parsed in rest.into_iter().chain(queue.drain(..)) {
+                    parsed.slot.send(Reply::Cancelled { by });
+                }
+                return;
+            }
+            Next::Halt => return,
         }
     }
 }
@@ -741,23 +895,42 @@ where
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(seed);
 }
 
-/// `form` one block under a hasher permit, off the runtime's threads.
-async fn form_one<S>(
-    shared: &Arc<Shared<S>>,
-    candidate: Candidate,
-    claims: Claims,
-) -> Result<Result<StructurallyValid, InvalidBlock>, S::Fault>
+/// A block's `form`, or nothing when the run was abandoned before it began.
+type Formed<F> = Result<Result<StructurallyValid, InvalidBlock>, F>;
+
+/// Take a hasher permit for a block under `seed`, pinning the seed first.
+async fn permit<S>(shared: &Arc<Shared<S>>, seed: BlockHash) -> tokio::sync::OwnedSemaphorePermit
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
-    pin(shared, claims.seed).await;
-    let permit = Arc::clone(&shared.hashers)
+    pin(shared, seed).await;
+    Arc::clone(&shared.hashers)
         .acquire_owned()
         .await
-        .expect("the hasher semaphore is never closed");
+        .expect("the hasher semaphore is never closed")
+}
+
+/// `form` one block on a blocking thread, holding `permit` for the life of
+/// the `form`. `abandon` is checked first, and set by a refusal before the
+/// permit is given back, so no block launched behind a refused one starts
+/// a hash (PR2-Q2): `None` when it was set.
+fn spawn_form<S>(
+    shared: &Arc<Shared<S>>,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    candidate: Candidate,
+    claims: Claims,
+    abandon: Arc<AtomicBool>,
+) -> tokio::task::JoinHandle<Option<Formed<S::Fault>>>
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: core::fmt::Debug + Send + 'static,
+{
     let substrate = Arc::clone(&shared.substrate);
     tokio::task::spawn_blocking(move || {
+        if abandon.load(Ordering::Acquire) {
+            return None;
+        }
         let verdict = form(
             candidate,
             &claims.rule_set,
@@ -767,21 +940,22 @@ where
             &claims.references,
             FormAttempt::FIRST,
         );
+        if matches!(verdict, Ok(Err(_))) {
+            abandon.store(true, Ordering::Release);
+        }
         drop(permit);
-        verdict
+        Some(verdict)
     })
-    .await
-    .expect("a form worker does not panic")
 }
 
-/// A run extending the tip from `first`: claims off one snapshot, every
-/// block formed in parallel, connected in order. Returns the arrivals to
-/// place again (a stale placement, or blocks after one), in order.
+/// A run extending the tip from `first`: claims off one snapshot, then each
+/// block launched in run order — the next takes its permit only after the
+/// one before it took its own — and connected in order.
 async fn extend_run<S>(
     shared: &Arc<Shared<S>>,
     first: BlockHeight,
     run: Vec<(Parsed, Candidate)>,
-) -> Vec<Parsed>
+) -> Next
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
@@ -793,36 +967,90 @@ where
         tokio::task::spawn_blocking(move || claim_run(&store, rules, first, &candidates))
             .await
             .expect("the claim reader does not panic");
-    let claimed = claims.len();
     let mut arrivals: VecDeque<(Parsed, Candidate)> = run.into();
-    // Form every claimed block at once; each waits for a permit.
-    let mut forming = Vec::with_capacity(claimed);
+    let abandon = Arc::new(AtomicBool::new(false));
+    let mut receivers = Vec::with_capacity(claims.len());
+    let mut jobs = Vec::with_capacity(claims.len());
     for (claim, (_, candidate)) in claims.into_iter().zip(arrivals.iter()) {
-        let shared = Arc::clone(shared);
-        let candidate = candidate.clone();
-        let height = claim.height;
-        forming.push((
-            height,
-            tokio::spawn(async move { form_one(&shared, candidate, claim).await }),
-        ));
+        let (sender, receiver) = oneshot::channel();
+        receivers.push((claim.height, receiver));
+        jobs.push((candidate.clone(), claim, sender));
     }
-    for (height, handle) in forming {
-        let (arrival, _) = arrivals.pop_front().expect("one arrival per claim");
-        if shared.stopping() {
-            return Vec::new();
-        }
-        let formed = match handle.await.expect("a form task does not panic") {
-            Ok(formed) => formed,
-            Err(fault) => {
-                shared.fail(ServiceFault::Substrate(fault));
-                return Vec::new();
+    let launcher = {
+        let shared = Arc::clone(shared);
+        let abandon = Arc::clone(&abandon);
+        // The launcher: in run order, each block's permit, then its `form`
+        // on a blocking thread, without waiting for the `form` itself. It
+        // ends once every `form` it started has: no hash of this run
+        // outlives the run.
+        tokio::spawn(async move {
+            let mut forming = Vec::new();
+            for (candidate, claims, sender) in jobs {
+                if shared.stopping() || abandon.load(Ordering::Acquire) {
+                    // Dropping the sender is the receiver's "not formed".
+                    break;
+                }
+                let held = permit(&shared, claims.seed).await;
+                let form = spawn_form(&shared, held, candidate, claims, Arc::clone(&abandon));
+                forming.push(tokio::spawn(async move {
+                    if let Ok(Some(formed)) = form.await {
+                        let _unread = sender.send(formed);
+                    }
+                }));
             }
+            for form in forming {
+                let _joined = form.await;
+            }
+        })
+    };
+    let next = connect_run(shared, &mut arrivals, receivers, stop, &abandon).await;
+    // Whatever ended the run, nothing launched for it is still hashing.
+    abandon.store(true, Ordering::Release);
+    let _joined = launcher.await;
+    next
+}
+
+/// The arrivals of a run, as the replies leave them.
+fn rest(arrivals: &mut VecDeque<(Parsed, Candidate)>) -> Vec<Parsed> {
+    arrivals.drain(..).map(|(a, _)| a).collect()
+}
+
+/// Connect a run's formed blocks in order as each `form` ends, then answer
+/// the claim that stopped the run, if one did.
+async fn connect_run<S>(
+    shared: &Arc<Shared<S>>,
+    arrivals: &mut VecDeque<(Parsed, Candidate)>,
+    receivers: Vec<(BlockHeight, oneshot::Receiver<Formed<S::Fault>>)>,
+    stop: Option<ClaimStop>,
+    abandon: &AtomicBool,
+) -> Next
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: core::fmt::Debug + Send + 'static,
+{
+    for (height, receiver) in receivers {
+        let (arrival, _) = arrivals.pop_front().expect("one arrival per claim");
+        let Ok(formed) = receiver.await else {
+            // Not formed: the run was abandoned for a stop.
+            return Next::Halt;
         };
+        if shared.stopping() {
+            abandon.store(true, Ordering::Release);
+            return Next::Halt;
+        }
         let formed = match formed {
-            Ok(formed) => formed,
-            Err(refused) => {
+            Ok(Ok(formed)) => formed,
+            Ok(Err(refused)) => {
                 arrival.slot.send(Reply::Refused(refused));
-                return arrivals.into_iter().map(|(a, _)| a).collect();
+                return Next::Cancel {
+                    by: arrival.tag,
+                    rest: rest(arrivals),
+                };
+            }
+            Err(fault) => {
+                abandon.store(true, Ordering::Release);
+                shared.fail(ServiceFault::Substrate(fault));
+                return Next::Halt;
             }
         };
         match shared
@@ -832,8 +1060,12 @@ where
         {
             Ok(applied) => match applied.refused {
                 Some((_, refused)) => {
+                    abandon.store(true, Ordering::Release);
                     arrival.slot.send(Reply::Refused(refused));
-                    return arrivals.into_iter().map(|(a, _)| a).collect();
+                    return Next::Cancel {
+                        by: arrival.tag,
+                        rest: rest(arrivals),
+                    };
                 }
                 None => {
                     let (height, hash) = applied.connected[0];
@@ -841,53 +1073,53 @@ where
                 }
             },
             Err(SendError::HandlerError(fault)) if is_stale(&fault) => {
+                abandon.store(true, Ordering::Release);
                 let mut again = vec![arrival];
-                again.extend(arrivals.into_iter().map(|(a, _)| a));
-                return again;
+                again.extend(rest(arrivals));
+                return Next::Again(again);
             }
             Err(err) => {
+                abandon.store(true, Ordering::Release);
                 shared.fail(unreachable_or(err));
-                return Vec::new();
+                return Next::Halt;
             }
         }
     }
     match stop {
-        None => Vec::new(),
+        None => Next::Continue,
         Some(ClaimStop::Refused { refused, .. }) => {
             let (arrival, _) = arrivals.pop_front().expect("the refused block is next");
             arrival.slot.send(Reply::Refused(refused));
-            arrivals.into_iter().map(|(a, _)| a).collect()
+            Next::Cancel {
+                by: arrival.tag,
+                rest: rest(arrivals),
+            }
         }
         Some(ClaimStop::Corrupt { height, .. }) => {
             // The writer re-derives the window over its own view and halts
             // on what it sees; a consistent view means the run's ledger was
             // the defect, and the arrivals are placed again.
             match shared.connector.ask(ObserveTarget { height }).await {
-                Ok(()) => arrivals.into_iter().map(|(a, _)| a).collect(),
+                Ok(()) => Next::Again(rest(arrivals)),
                 Err(SendError::HandlerError(fault)) if is_stale(&fault) => {
-                    arrivals.into_iter().map(|(a, _)| a).collect()
+                    Next::Again(rest(arrivals))
                 }
                 Err(err) => {
                     shared.fail(unreachable_or(err));
-                    Vec::new()
+                    Next::Halt
                 }
             }
         }
         Some(ClaimStop::Store(e)) => {
             shared.fail(e.into());
-            Vec::new()
+            Next::Halt
         }
     }
 }
 
 /// An alternative arrival: claims on its own chain, `form`, `OfferAlt`,
-/// and the switch it makes due. Returns the arrival if it is to be placed
-/// again.
-async fn offer_alt<S>(
-    shared: &Arc<Shared<S>>,
-    arrival: Parsed,
-    candidate: Candidate,
-) -> Option<Parsed>
+/// and the switch it makes due.
+async fn offer_alt<S>(shared: &Arc<Shared<S>>, arrival: Parsed, candidate: Candidate) -> Next
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
@@ -898,59 +1130,74 @@ where
     let claims = tokio::task::spawn_blocking(move || claim_alt(&store, rules, &for_claims))
         .await
         .expect("the claim reader does not panic");
+    let refused = |arrival: Parsed, refused| {
+        let by = arrival.tag;
+        arrival.slot.send(Reply::Refused(refused));
+        Next::Cancel {
+            by,
+            rest: Vec::new(),
+        }
+    };
     let claims = match claims {
         Ok(claims) => claims,
-        Err(ClaimStop::Refused { refused, .. }) => {
-            arrival.slot.send(Reply::Refused(refused));
-            return None;
-        }
+        Err(ClaimStop::Refused {
+            refused: verdict, ..
+        }) => return refused(arrival, verdict),
         // The parent left the store between the placement and the claim.
         Err(ClaimStop::Store(StoreError::Cannot(StoreCannot::Alt(AltCannot::Unlinked {
             ..
-        })))) => return Some(arrival),
+        })))) => return Next::Again(vec![arrival]),
         Err(ClaimStop::Store(e)) => {
             shared.fail(e.into());
-            return None;
+            return Next::Halt;
         }
         // A corrupt window on the stitched view is the store's state, not
         // the arrival's: placing it again would read the same rows.
         Err(ClaimStop::Corrupt { height, corrupt }) => {
             shared.fail(ServiceFault::Corrupt { height, corrupt });
-            return None;
+            return Next::Halt;
         }
     };
-    let formed = match form_one(shared, candidate, claims).await {
-        Ok(Ok(formed)) => formed,
-        Ok(Err(refused)) => {
-            arrival.slot.send(Reply::Refused(refused));
-            return None;
-        }
-        Err(fault) => {
+    let held = permit(shared, claims.seed).await;
+    let forming = spawn_form(
+        shared,
+        held,
+        candidate,
+        claims,
+        Arc::new(AtomicBool::new(false)),
+    );
+    let formed = match forming.await.expect("a form worker does not panic") {
+        Some(Ok(Ok(formed))) => formed,
+        Some(Ok(Err(verdict))) => return refused(arrival, verdict),
+        Some(Err(fault)) => {
             shared.fail(ServiceFault::Substrate(fault));
-            return None;
+            return Next::Halt;
         }
+        None => unreachable!("a lone arrival's form is never abandoned"),
     };
     let offered = match shared.connector.ask(OfferAlt(formed)).await {
         Ok(offered) => offered,
-        Err(SendError::HandlerError(fault)) if is_stale(&fault) => return Some(arrival),
+        Err(SendError::HandlerError(fault)) if is_stale(&fault) => {
+            return Next::Again(vec![arrival])
+        }
         Err(err) => {
             shared.fail(unreachable_or(err));
-            return None;
+            return Next::Halt;
         }
     };
     let reply = match offered {
-        Offered::Refused(refused) => Reply::Refused(refused),
+        Offered::Refused(verdict) => return refused(arrival, verdict),
         Offered::Unlinked { at } => Reply::Unlinked { at },
         Offered::AlreadyHeld => Reply::AlreadyHeld,
         Offered::Held { height } => Reply::Held { height },
         Offered::BeyondCap(beyond) => Reply::BeyondCap(beyond),
         Offered::SwitchDue(plan) => match carry_out(shared, plan).await {
             Some(reply) => reply,
-            None => return None,
+            None => return Next::Halt,
         },
     };
     arrival.slot.send(reply);
-    None
+    Next::Continue
 }
 
 /// Carry out a switch an arrival made due: form the plan's blocks off the
