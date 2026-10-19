@@ -328,6 +328,7 @@ impl super::Transition {
             epoch,
             self.schedule,
             self.reorg_cap,
+            crate::ReleaseJournalFloor::of(self.floor(), self.schedule),
             self.slash_floor,
         )?;
         super::drawable::compare_recorded_digest(epoch, h_open, written, rebuilt.as_ref())

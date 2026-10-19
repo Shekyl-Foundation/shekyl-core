@@ -40,7 +40,8 @@
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{
-    AtHeight, Claimable, EpochFloor, Pricing, RecordedWeights, Settling, SlashLogFloor, Tip,
+    AtHeight, Claimable, EpochFloor, Pricing, RecordedWeights, ReleaseJournalFloor, Settling,
+    SlashLogFloor, Tip,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
@@ -1266,12 +1267,12 @@ impl ReadSnapshot<'_> {
 
     /// **A20.** Every Release journaled strictly above `height`, ascending
     /// by height and then persona, each with the record it replaced.
-    /// `floor` is the slash log's, which the journal is retired at; a range
-    /// starting below it is SI-28, not an empty answer.
+    /// `floor` is the journal's ([`ReleaseJournalFloor`]); a range starting
+    /// below it is SI-28, not an empty answer.
     pub fn release_journal_after(
         &self,
         height: BlockHeight,
-        floor: SlashLogFloor,
+        floor: ReleaseJournalFloor,
     ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
         archival_reads::release_journal_after(&self.txn, height, floor)
             .map_err(chain_reads::ReadFault::into_plain)

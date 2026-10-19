@@ -14,6 +14,7 @@
 //! | Bodies (`txs_prunable`, `txs_pqc_auths`) | shard `k`, whole | the epoch boundary after `k`'s freeze epoch: `close_epoch(k) + 2 ≤ E` |
 //! | Pop-undo journal (`undo_log`) | rows below `tip − retention` | every boundary; `retention` is `D_max` in production |
 //! | Slash log (`archival_slash_log`) | rows below `tip − ((k + n)·SEB + reorg_cap)` | every boundary whose session applies `SlashLog`; the cap is the in-force rule set's (`SLK-Q1`, `ARW-9`) |
+//! | Release journal (`archival_release_journal`) | rows at or below `h_open` of the settling family's oldest kept epoch | every boundary whose session applies `Bond` ([`ReleaseJournalFloor`], SI-28) |
 //! | Per-epoch tables (`archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement`; `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied`; `archival_r_market`) | rows of epochs below their family's floor, `(B − 1) − LAG` at the boundary of `B` | every boundary; a table whose family the session stubs is not opened (`ARW-9`) (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`) |
 //!
 //! The body horizon is a rule of the epoch calendar — there is no constant
@@ -136,7 +137,9 @@
 use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
-use shekyl_chain_rules::{Claimable, EpochFloor, Pricing, RuleSet, Settling, SlashLogFloor};
+use shekyl_chain_rules::{
+    Claimable, EpochFloor, Pricing, ReleaseJournalFloor, RuleSet, Settling, SlashLogFloor,
+};
 use shekyl_types::{
     shard_floor, shard_of, storage_ids_through, ArchivalLength, BlockCount, BlockHeight,
     SettlementEpoch,
@@ -419,12 +422,13 @@ impl WriteBatch<'_, '_> {
         let schedule = in_force.settlement_schedule();
         let floor = SlashLogFloor::under(height, schedule.blocks(), in_force.reorg_cap());
         let slash_floor = self.retire_slash_rows(floor)?;
-        // The Release journal stays on the slash log's floor (SI-28).
-        // Drawable digests retire with the settling family inside
-        // `retire_epoch_rows`: that horizon is inside the slash log's, so a
-        // second pass at the slash floor would keep rows the family has
-        // already dropped.
-        self.retire_release_rows(floor)?;
+        // The Release journal retires at the settling family's horizon
+        // (SI-28): one above `h_open` of the oldest epoch that family
+        // keeps. That height is inside the slash log's floor, so the
+        // journal does not share it. Drawable digests retire with the
+        // same family, by epoch, inside `retire_epoch_rows`.
+        let settling = EpochFloor::<Settling>::at_boundary(height, schedule);
+        self.retire_release_rows(ReleaseJournalFloor::of(settling, schedule))?;
         let epochs = self.retire_epoch_rows(height, in_force)?;
         Ok(Some(Pruned {
             shard_start: discard.shards.start,
@@ -503,14 +507,14 @@ impl WriteBatch<'_, '_> {
         Ok(floors)
     }
 
-    /// Delete `archival_release_journal` rows below `floor`, the slash
-    /// log's: the two journals the drawable set's rebuild reads keep one
-    /// span. Nothing while the chain is under the window, and nothing when
-    /// this session does not apply [`ArchivalFamily::Bond`], the family the
-    /// rows are written under. The read asserts the floor where it reads
-    /// (SI-28, `archival_reads::release_journal_after`); not pop-reversible,
-    /// for [`Self::retire_slash_rows`]'s reason.
-    fn retire_release_rows(&self, floor: SlashLogFloor) -> Result<(), StoreError> {
+    /// Delete `archival_release_journal` rows below `floor`. `floor` is
+    /// one above `h_open` of the settling family's oldest kept epoch
+    /// ([`ReleaseJournalFloor`]), the same height A20 refuses below
+    /// (SI-28). Nothing while that family retains every epoch, and nothing
+    /// when this session does not apply [`ArchivalFamily::Bond`], the
+    /// family the rows are written under. Not pop-reversible, for
+    /// [`Self::retire_slash_rows`]'s reason.
+    fn retire_release_rows(&self, floor: ReleaseJournalFloor) -> Result<(), StoreError> {
         let Some(kept_from) = floor.height() else {
             return Ok(());
         };

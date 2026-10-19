@@ -31,7 +31,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
     AtHeight, BlockOutputs, ChainView, Claimable, EpochFloor, HeaderRecord, HeaderView, Pricing,
-    RecordedBlock, RecordedWeights, Settling, SlashLogFloor, Tip, TreeFrontier,
+    RecordedBlock, RecordedWeights, ReleaseJournalFloor, Settling, SlashLogFloor, Tip,
+    TreeFrontier,
 };
 use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
@@ -352,7 +353,7 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
     fn release_journal_after(
         &self,
         height: BlockHeight,
-        floor: SlashLogFloor,
+        floor: ReleaseJournalFloor,
     ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
         archival_reads::release_journal_after(self.snapshot.txn(), height, floor)
             .map_err(ReadFault::into_plain)

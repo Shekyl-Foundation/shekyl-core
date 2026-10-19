@@ -543,7 +543,7 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
     fn release_journal_after(
         &self,
         height: BlockHeight,
-        floor: crate::SlashLogFloor,
+        floor: crate::ReleaseJournalFloor,
     ) -> Result<Vec<ReleasedRecord>, Infallible> {
         self.inner.release_journal_after(height, floor)
     }

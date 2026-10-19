@@ -38,7 +38,7 @@
 
 use shekyl_chain_rules::{
     drawable_epoch_walked_back, ChainView as _, DrawableEpoch, DrawableEpochFault, EpochFloor,
-    HeaderView as _,
+    ReleaseJournalFloor, Settling,
 };
 use shekyl_types::archival::{DrawableDigest, ReleasedRecord};
 
@@ -105,26 +105,30 @@ fn released_chain(label: &str, through: u64) -> SlashedChain {
     chain
 }
 
-/// The walk for `epoch` over the committed chain, under the floor the next
-/// block's transition would read with. Read in a batch that is aborted, so
-/// it writes nothing.
-fn walked(store: &ChainStore, epoch: u64) -> Option<DrawableEpoch> {
+/// The walk for `epoch` over the committed chain, under the floors a
+/// block connecting at `connecting` would read with. Read in a batch that
+/// is aborted, so it writes nothing.
+///
+/// `connecting` is that block's height, not the height after it. The
+/// settlement walk runs at the block that settles the epoch; the next
+/// block's journal horizon has stepped past it (SI-28).
+fn walked(store: &ChainStore, epoch: u64, connecting: BlockHeight) -> Option<DrawableEpoch> {
     let mut walked = None;
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let tip = view.tip()?.expect("a built chain has a tip").height;
-        let connecting = tip.checked_add(BlockCount::ONE).expect("fits");
-        let floor = SlashLogFloor::under(
-            connecting,
-            RULES.settlement_schedule().blocks(),
-            RULES.reorg_cap(),
+        let schedule = RULES.settlement_schedule();
+        let slash = SlashLogFloor::under(connecting, schedule.blocks(), RULES.reorg_cap());
+        let journal = ReleaseJournalFloor::of(
+            EpochFloor::<Settling>::under(connecting, schedule),
+            schedule,
         );
         walked = drawable_epoch_walked_back(
             &view,
             SettlementEpoch::from_raw(epoch),
-            RULES.settlement_schedule(),
+            schedule,
             RULES.reorg_cap(),
-            floor,
+            journal,
+            slash,
         )
         .expect("the walk reads");
         Err(TestErr::Abort)
@@ -147,13 +151,17 @@ fn personas_of(drawable: &DrawableEpoch) -> Vec<PCanonicalId> {
         .collect()
 }
 
-/// **The two derivations agree at every height** from `h_open(E)` to the
-/// pass that settles `E`, on a chain with a Release above the open and a
+/// **The two derivations agree at every height** from `h_open(E)` through
+/// the pass that settles `E`, on a chain with a Release above the open and a
 /// Release in the open block, for epochs 2 and 3. The digest the open
 /// wrote (derivation 1, over the open block's post-state) is compared with
-/// the walk from each later tip (derivation 2, over tip and the journal).
-/// Both settlement passes, at `399` and `499`, run the same comparison and
-/// connect.
+/// the walk at that block (derivation 2), under the floor the block
+/// connected with. Both settlement passes, at `399` and `499`, run the
+/// same comparison and connect.
+///
+/// The next block's journal horizon has stepped past the epoch this one
+/// settled, so the walk is refused (SI-28) and is not a read the chain
+/// makes. The rows remain until the boundary after that.
 ///
 /// The sets are the ones §4.1 defines: epoch 2 holds all four personas,
 /// both releases undone; epoch 3 holds neither releasing persona — one
@@ -169,18 +177,30 @@ fn the_two_derivations_agree_at_every_height_across_releases() {
     let settles_3 = schedule.slash_deadline_height(3);
     let mut chain =
         SlashedChain::build_with("drawable-agree", WITNESS_PERSONAS, h_open(2) - 1, no_draws);
+    let mut epoch_2_at_pass = None;
+    let mut epoch_3_at_pass = None;
     for h in h_open(2)..=settles_3 {
         connect(&mut chain, &releases_at(h));
+        let connecting = BlockHeight::from_raw(h);
         for epoch in [2, 3] {
-            if h < h_open(epoch) {
+            if h < h_open(epoch) || !horizon_holds(connecting, epoch) {
                 continue;
             }
-            let walked = walked(&chain.store, epoch).expect("the epoch has opened");
+            let walked =
+                walked(&chain.store, epoch, connecting).expect("the epoch is inside the horizon");
             assert_eq!(
                 Some(walked.digest()),
                 recorded(&chain.store, epoch),
                 "epoch {epoch} rebuilt at tip {h}"
             );
+            if h == schedule.slash_deadline_height(epoch) {
+                let personas = personas_of(&walked);
+                if epoch == 2 {
+                    epoch_2_at_pass = Some(personas);
+                } else {
+                    epoch_3_at_pass = Some(personas);
+                }
+            }
         }
     }
     let snap = chain.store.begin_read().expect("read");
@@ -192,17 +212,34 @@ fn the_two_derivations_agree_at_every_height_across_releases() {
     drop(snap);
 
     let all: Vec<PCanonicalId> = ids_in_table_order(WITNESS_PERSONAS);
-    let epoch_2 = walked(&chain.store, 2).expect("opened");
-    assert_eq!(personas_of(&epoch_2), all, "epoch 2 keeps both releasers");
+    let epoch_2 = epoch_2_at_pass.expect("epoch 2's pass walked the set");
+    assert_eq!(epoch_2, all, "epoch 2 keeps both releasers");
     let released = [Persona::at(FIRST).id(), Persona::at(SECOND).id()];
-    let epoch_3 = walked(&chain.store, 3).expect("opened");
+    let epoch_3 = epoch_3_at_pass.expect("epoch 3's pass walked the set");
     let kept: Vec<PCanonicalId> = all
         .iter()
         .copied()
         .filter(|p| !released.contains(p))
         .collect();
-    assert_eq!(personas_of(&epoch_3), kept, "epoch 3 holds neither");
+    assert_eq!(epoch_3, kept, "epoch 3 holds neither");
     chain.finish();
+}
+
+/// Whether a block connecting at `connecting` may still walk `epoch`: the
+/// walk starts one above `h_open`, and that start is inside the journal
+/// horizon at `connecting`. The same comparison as the walk's own check.
+fn horizon_holds(connecting: BlockHeight, epoch: u64) -> bool {
+    let schedule = RULES.settlement_schedule();
+    let Some(kept) = ReleaseJournalFloor::of(
+        EpochFloor::<Settling>::under(connecting, schedule),
+        schedule,
+    )
+    .height() else {
+        return true;
+    };
+    !BlockHeight::from_raw(h_open(epoch))
+        .checked_add(BlockCount::ONE)
+        .is_some_and(|start| start < kept)
 }
 
 /// Each Release writes its record's pre-image under `(height, persona)`:
@@ -214,7 +251,7 @@ fn a_release_journals_the_record_it_replaced() {
     let chain = released_chain("drawable-journal", h_open(3));
     let snap = chain.store.begin_read().expect("read");
     let rows = snap
-        .release_journal_after(BlockHeight::from_raw(h_open(2)), SlashLogFloor::NONE)
+        .release_journal_after(BlockHeight::from_raw(h_open(2)), ReleaseJournalFloor::NONE)
         .expect("read");
     let heights: Vec<(u64, PCanonicalId)> = rows
         .iter()
@@ -238,7 +275,7 @@ fn a_release_journals_the_record_it_replaced() {
         assert_eq!(now.receipt_sign_pk, pre_image.receipt_sign_pk);
     }
     assert!(snap
-        .release_journal_after(BlockHeight::from_raw(h_open(3)), SlashLogFloor::NONE)
+        .release_journal_after(BlockHeight::from_raw(h_open(3)), ReleaseJournalFloor::NONE)
         .expect("read")
         .is_empty());
     drop(snap);
@@ -277,7 +314,7 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
             .chain_view()
             .release_journal_after(
                 BlockHeight::from_raw(FIRST_RELEASE - 1),
-                SlashLogFloor::NONE,
+                ReleaseJournalFloor::NONE,
             )?
             .into_iter()
             .find(|r| r.persona == key.persona())
@@ -424,7 +461,10 @@ fn popping_an_open_removes_its_digest_and_reconnecting_writes_it_again() {
         store
             .begin_read()
             .expect("read")
-            .release_journal_after(BlockHeight::from_raw(h_open(3) - 1), SlashLogFloor::NONE)
+            .release_journal_after(
+                BlockHeight::from_raw(h_open(3) - 1),
+                ReleaseJournalFloor::NONE,
+            )
             .expect("read")
     };
     let digest = recorded(&chain.store, 3).expect("the open wrote it");
@@ -455,33 +495,45 @@ fn popping_an_open_removes_its_digest_and_reconnecting_writes_it_again() {
 
 /// A walk whose floor is above its open is refused at the enumerator, and
 /// the store refuses the journal read beneath it (SI-28), as it refuses the
-/// slash log's (SI-26). The schedule keeps a settlement's walk inside the
-/// window (`WALK_BACK_EPOCHS`), so this is the floor handed in by a caller.
-/// Red edit: drop either check.
+/// slash log's (SI-26). The two floors are separate: the journal's is the
+/// settling family's horizon, the slash log's its own. Red edit: drop
+/// either check.
 #[test]
 fn a_walk_below_the_floor_is_refused_and_so_is_the_read() {
     let chain = released_chain("drawable-floor", FIRST_RELEASE);
-    let floor = SlashLogFloor::under(
+    let schedule = RULES.settlement_schedule();
+    let slash = SlashLogFloor::under(
         BlockHeight::from_raw(
-            SlashLogFloor::window(RULES.settlement_schedule().blocks(), RULES.reorg_cap())
+            SlashLogFloor::window(schedule.blocks(), RULES.reorg_cap())
                 .expect("fits")
                 .to_raw()
                 + h_open(2)
                 + 5,
         ),
-        RULES.settlement_schedule().blocks(),
+        schedule.blocks(),
         RULES.reorg_cap(),
     );
-    let kept_from = floor.height().expect("a floor");
-    assert!(kept_from.to_raw() > h_open(2) + 1);
+    let slash_kept = slash.height().expect("a slash floor");
+    assert!(slash_kept.to_raw() > h_open(2) + 1);
+    // Oldest kept epoch 3: the journal of epoch 2 starts below it.
+    let connecting = BlockHeight::from_raw(
+        schedule.open_height(3 + shekyl_archival_retention::SLASH_GRACE_EPOCHS),
+    );
+    let journal = ReleaseJournalFloor::of(
+        EpochFloor::<Settling>::under(connecting, schedule),
+        schedule,
+    );
+    let journal_kept = journal.height().expect("a journal floor");
+    assert!(journal_kept.to_raw() > h_open(2) + 1);
     let out: Result<(), TestErr> = chain.store.write(|batch| {
         let view = batch.chain_view();
         let refused = drawable_epoch_walked_back(
             &view,
             SettlementEpoch::from_raw(2),
-            RULES.settlement_schedule(),
+            schedule,
             RULES.reorg_cap(),
-            floor,
+            journal,
+            slash,
         );
         assert!(
             matches!(
@@ -500,21 +552,21 @@ fn a_walk_below_the_floor_is_refused_and_so_is_the_read() {
     assert!(matches!(out, Err(TestErr::Abort)));
     let snap = chain.store.begin_read().expect("read");
     let asked = BlockHeight::from_raw(h_open(2));
-    let journal = snap.release_journal_after(asked, floor).map(drop);
+    let refused_journal = snap.release_journal_after(asked, journal).map(drop);
     assert!(
         matches!(
-            journal,
+            refused_journal,
             Err(StoreError::InvariantViolated(StoreInvariant::ReleaseJournalReadBelowFloor { asked: a, floor: f }))
-                if a == asked && f == kept_from
+                if a == asked && f == journal_kept
         ),
-        "{journal:?}"
+        "{refused_journal:?}"
     );
-    let log = snap.slash_log_rows_after(asked, floor).map(drop);
+    let log = snap.slash_log_rows_after(asked, slash).map(drop);
     assert!(
         matches!(
             log,
             Err(StoreError::InvariantViolated(StoreInvariant::SlashLogReadBelowFloor { asked: a, floor: f }))
-                if a == asked && f == kept_from
+                if a == asked && f == slash_kept
         ),
         "{log:?}"
     );
@@ -626,7 +678,8 @@ fn a_slash_row_naming_another_shard_halts_the_settlement_as_drift() {
     let settles = RULES.settlement_schedule().slash_deadline_height(2);
     let chain = compact_bond_chain("drawable-compact", settles - 1);
     let compact = Persona::at(COMPACT).id();
-    let held = walked(&chain.store, 2).expect("opened");
+    // The settling block, one above this tip, is the walk's reader.
+    let held = walked(&chain.store, 2, BlockHeight::from_raw(settles)).expect("opened");
     assert!(
         personas_of(&held).contains(&compact),
         "epoch 2 holds the compact bond's pair"

@@ -295,7 +295,7 @@ impl Transition {
         ChainCount::with_tip(self.connecting).expect("a connecting height below u64::MAX")
     }
 
-    /// A per-epoch family's floor at this block (`EpochFloor`, SI-29): the
+    /// A per-epoch family's floor at this block (`EpochFloor`, SI-32): the
     /// oldest epoch the pass may ask the family for. The pass reads the
     /// settling family for the epoch it settles and the claimable family
     /// back to the failure window's bound, both at their floors exactly.

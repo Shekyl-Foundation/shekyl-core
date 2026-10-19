@@ -768,7 +768,8 @@ impl SlashLogKey {
 /// Height-major, as the slash log is, for the same two readers: the walk
 /// that rebuilds a drawable set takes every row strictly above one height
 /// ([`Self::above`]), and the boundary batch retires every row strictly
-/// below the slash log's floor ([`Self::below`]). Inside a height the rows
+/// below the settling family's horizon ([`Self::below`],
+/// [`shekyl_chain_rules::ReleaseJournalFloor`]). Inside a height the rows
 /// run by persona; a persona releases once, so a height holds at most one
 /// row per persona and the key is insert-once. Fields are private: the
 /// tuple is assembled only through [`Self::key`] / [`Self::from_key`].
@@ -827,7 +828,8 @@ impl ReleaseJournalKey {
     }
 
     /// Every row at a height **strictly below** `floor`: `.. (floor, 0³²)`,
-    /// the range the boundary batch retires with the slash log's. The read
+    /// the range the boundary batch retires at the settling family's
+    /// horizon ([`shekyl_chain_rules::ReleaseJournalFloor`]). The read
     /// refuses when [`Self::above`]'s start lies in it (SI-28).
     #[must_use]
     pub const fn below(floor: BlockHeight) -> core::ops::RangeTo<ReleaseJournalTuple> {

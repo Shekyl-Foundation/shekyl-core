@@ -752,15 +752,15 @@ pub trait ChainView<'id>: HeaderView<'id> {
     /// The walk that rebuilds an epoch's drawable set from a later tip reads
     /// it from `h_open(E)` (`SO-D12` increment 2), as it reads A21.
     ///
-    /// `floor` is the slash log's retirement floor, which the Release
-    /// journal shares: both are retired in the same boundary batch. A read
+    /// `floor` is the journal's own ([`crate::ReleaseJournalFloor`]), one
+    /// above `h_open` of the settling family's oldest kept epoch. A read
     /// whose range starts below it would undo too few Releases and rebuild
-    /// a set that never was, so the store refuses it (SI-28), as A2's
-    /// refusal is SI-26.
+    /// a set that never was, so the store refuses it (SI-28). The slash
+    /// log keeps its own floor (SI-26).
     fn release_journal_after(
         &self,
         height: BlockHeight,
-        floor: crate::SlashLogFloor,
+        floor: crate::ReleaseJournalFloor,
     ) -> Result<Vec<ReleasedRecord>, Self::Fault>;
 
     /// **A21.** Every slash logged at a height **strictly above** `height`,
@@ -977,7 +977,7 @@ macro_rules! archival_reads {
             (epoch, floor);
             (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; release_journal_after;
-            (height: shekyl_types::BlockHeight, floor: $crate::SlashLogFloor);
+            (height: shekyl_types::BlockHeight, floor: $crate::ReleaseJournalFloor);
             (::std::vec::Vec<shekyl_types::archival::ReleasedRecord>);
             (height, floor);
             (::std::vec::Vec::new()));

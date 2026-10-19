@@ -16,12 +16,15 @@ use shekyl_types::archival::{ReceiptSignPk, SlashLogEntry};
 use shekyl_types::{ArchivalLength, SHARD_LENGTH};
 use shekyl_units::AtomicUnits;
 
+use shekyl_archival_retention::SLASH_GRACE_EPOCHS;
+
 use super::*;
 use crate::archival::closed_and_final;
 use crate::harness::fixture::{recorded, root};
 use crate::harness::MockChain;
 use crate::rule_set::RuleSet;
 use crate::view::RecordedBlock;
+use crate::{EpochFloor, ReleaseJournalFloor, Settling};
 
 /// The height the rewind tests journal an event at, above the open they
 /// rewind to (the rewind reads no open: its rows are already the ones
@@ -413,6 +416,7 @@ fn a_walk_with_no_open_to_walk_back_to_is_none() {
             SettlementEpoch::from_raw(epoch),
             rules.settlement_schedule(),
             rules.reorg_cap(),
+            ReleaseJournalFloor::NONE,
             SlashLogFloor::NONE,
         )
     }
@@ -432,38 +436,39 @@ fn a_walk_with_no_open_to_walk_back_to_is_none() {
     });
 }
 
-/// A walk that would start below the journals' floor is refused, never
-/// answered from what is left. Red edit: drop the check, and the walk
-/// reads a truncated journal as a complete one.
+/// A walk that would start below the Release journal's floor is refused,
+/// never answered from what is left. The slash log's floor is `NONE` here,
+/// so only the journal check can fire. Red edit: drop the check, and the
+/// walk reads a truncated journal as a complete one.
 #[test]
 fn a_walk_below_the_floor_is_refused() {
     let rules = RuleSet::GENESIS;
+    let schedule = rules.settlement_schedule();
+    // Epoch 0 opens at 0. A settling floor whose oldest kept epoch is 1
+    // retains the journal from one above that epoch's open.
+    let connecting = BlockHeight::from_raw(schedule.open_height(1 + SLASH_GRACE_EPOCHS));
+    let journal = ReleaseJournalFloor::of(
+        EpochFloor::<Settling>::under(connecting, schedule),
+        schedule,
+    );
+    let kept = journal.height().expect("epoch 1 has an open above zero");
+    assert!(kept.to_raw() > 1);
     let chain = MockChain::default().push(recorded(1_000), root(0x11));
     chain.with_view(|view| {
-        let floor = SlashLogFloor::under(
-            BlockHeight::from_raw(
-                SlashLogFloor::window(rules.settlement_schedule().blocks(), rules.reorg_cap())
-                    .expect("the window fits")
-                    .to_raw()
-                    + 5,
-            ),
-            rules.settlement_schedule().blocks(),
-            rules.reorg_cap(),
-        );
-        assert_eq!(floor.height(), Some(BlockHeight::from_raw(5)));
         assert_eq!(
             drawable_epoch_walked_back(
                 &view,
                 SettlementEpoch::from_raw(0),
-                rules.settlement_schedule(),
+                schedule,
                 rules.reorg_cap(),
-                floor,
+                journal,
+                SlashLogFloor::NONE,
             ),
             Err(ViewRead::Corrupt(Corrupt::DrawableEpoch {
                 epoch: SettlementEpoch::from_raw(0),
                 why: DrawableEpochFault::BelowFloor {
                     h_open: BlockHeight::from_raw(0),
-                    floor: BlockHeight::from_raw(5),
+                    floor: kept,
                 },
             }))
         );

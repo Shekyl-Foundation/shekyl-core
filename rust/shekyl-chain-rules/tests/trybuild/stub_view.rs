@@ -28,7 +28,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
     AtHeight, BlockOutputs, ChainValid, ChainView, Claimable, EpochFloor, HeaderRecord, HeaderView,
-    Pricing, RecordedBlock, RecordedWeights, Settling, SlashLogFloor, StructurallyValid, Tip,
+    Pricing, RecordedBlock, RecordedWeights, ReleaseJournalFloor, Settling, SlashLogFloor,
+    StructurallyValid, Tip,
     TreeFrontier,
 };
 use shekyl_types::archival::{
@@ -243,7 +244,7 @@ impl<'id, T> ChainView<'id> for Stub<T> {
     fn release_journal_after(
         &self,
         _: BlockHeight,
-        _: SlashLogFloor,
+        _: ReleaseJournalFloor,
     ) -> Result<Vec<ReleasedRecord>, Infallible> {
         Ok(Vec::new())
     }

@@ -52,9 +52,19 @@
 //! first block of an epoch), so a floor one higher would refuse a read the
 //! chain makes, and one lower would keep a row no block can ask for.
 //!
-//! `archival_drawable_digest`'s reader — the pass's compare against a
-//! re-walk (`SO-D10g`) — is ruled and not built in Rust. Its horizon is
-//! that reader's, and nothing reads it yet.
+//! `archival_drawable_digest`'s reader is the pass's compare against the
+//! re-walk (`SO-D10g`), in the epoch the pass settles, with the other
+//! settling tables.
+//!
+//! # The Release journal
+//!
+//! `archival_release_journal` is keyed by height, not epoch. Its reader is
+//! the drawable walk, which reads strictly above `h_open` of an epoch the
+//! settling family still keeps. [`ReleaseJournalFloor`] is that height —
+//! one above that open — and the boundary batch retires below it. The
+//! slash log keeps its own floor ([`crate::SlashLogFloor`]): the walk
+//! undoes slashes across the failure window, which is longer than the
+//! journal's span.
 //!
 //! # A read below its horizon is refused
 //!
@@ -64,8 +74,8 @@
 //! written*, and a retired row was written. The floor at the connecting
 //! height is never below the one the last batch retired at, so the check is
 //! at least as strict as what the table has undergone. Every reader asks
-//! inside its family by construction — a claim's cited epochs are checked
-//! against the claim window first (CEN-J23) — so the refusal fires on a
+//! inside its family by construction — a claim's cited epochs pass
+//! CEN-J25's window before CEN-J23 reads them — so the refusal fires on a
 //! mis-composed schedule, never on data.
 
 use core::marker::PhantomData;
@@ -189,6 +199,46 @@ impl<F: EpochFamily> EpochFloor<F> {
     #[must_use]
     pub fn retains(self, epoch: SettlementEpoch) -> bool {
         self.kept_from.is_none_or(|floor| epoch >= floor)
+    }
+}
+
+/// The lowest height of `archival_release_journal` a walk may still read
+/// (module docs, *The Release journal*).
+///
+/// One expression, two sites. The boundary batch retires below
+/// [`Self::height`]; A20 refuses a scan whose start lies below it (SI-28).
+/// The store compares and does not source the floor: the caller builds it
+/// from the settling [`EpochFloor`] it already holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReleaseJournalFloor(Option<BlockHeight>);
+
+impl ReleaseJournalFloor {
+    /// Nothing retired: the settling family still keeps every epoch.
+    pub const NONE: Self = Self(None);
+
+    /// The journal floor the settling family's `floor` names under
+    /// `schedule`. The walk of the oldest kept epoch reads strictly above
+    /// its open, so the first retained height is one above that open. The
+    /// row at the open itself is never read.
+    #[must_use]
+    pub const fn of(floor: EpochFloor<Settling>, schedule: SettlementSchedule) -> Self {
+        let Some(epoch) = floor.kept_from() else {
+            return Self::NONE;
+        };
+        let open = schedule.open_height(epoch.to_raw());
+        match open.checked_add(1) {
+            Some(height) => Self(Some(BlockHeight::from_raw(height))),
+            // An open at the last height has no row strictly above it.
+            None => Self(Some(BlockHeight::from_raw(open))),
+        }
+    }
+
+    /// The lowest retained height, or `None` while nothing is retired.
+    /// The store builds the retired key range from this height and refuses
+    /// a scan whose start lies in it (SI-28).
+    #[must_use]
+    pub const fn height(self) -> Option<BlockHeight> {
+        self.0
     }
 }
 

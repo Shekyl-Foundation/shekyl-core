@@ -1585,20 +1585,24 @@ transition's own Reinstate arm and fails if one ever writes holdings.
 
 **The span.** The pass that settles `E` runs in the last block of
 `E + k`; the walk's span is under `WALK_BACK_EPOCHS = 1 + k` epochs, and a
-reorg re-runs it at most a reorg cap below the last pruning tip. Both
-journals are retired at the slash log's floor, `(k + n)` epochs and a cap
-below the pruning tip, so the relation is `1 + k ≤ k + n`, asserted at
-compile time. A walk asked to start below the floor anyway is refused.
+reorg re-runs it at most a reorg cap below the last pruning tip. The slash
+log is retired at its own floor, `(k + n)` epochs and a cap below the
+pruning tip, so the relation is `1 + k ≤ k + n`, asserted at compile time.
+The Release journal is retired at the settling family's horizon: one above
+`h_open` of the oldest epoch that family keeps (`ReleaseJournalFloor`).
+The walk of that epoch starts at exactly that height. A walk asked to
+start below either floor is refused.
 
 **The store** (`shekyl-chain-store`, layout 28):
 
 - `archival_release_journal`, Rust-only, ordinal 44: `(height, persona)`
   → the record a Release replaced, written insert-once beside the
   post-image under the Bond family, popped through the journal, retired
-  at the slash log's floor.
+  at `ReleaseJournalFloor` (one above `h_open` of the settling family's
+  oldest kept epoch, `SO-D12h`), inside the slash log's window.
 - `archival_drawable_digest` gets its writer: insert-once at every open,
-  genesis's the empty set's; popped through the journal; retired once
-  its epoch's settlement is below the floor.
+  genesis's the empty set's; popped through the journal; retired with the
+  settling family, below that family's epoch floor (`SO-D12h`).
 - Reads A20 `release_journal_after` and A21 `slash_log_rows_after`, both
   floored.
 - `SI-28` (the journal read below its floor), `SI-29` (one digest per

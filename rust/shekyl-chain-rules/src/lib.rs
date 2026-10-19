@@ -181,7 +181,7 @@ pub use block::{
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use drain::{tree_after, Drain, DrainedOutput};
-pub use epoch_floor::{Claimable, EpochFamily, EpochFloor, Pricing, Settling};
+pub use epoch_floor::{Claimable, EpochFamily, EpochFloor, Pricing, ReleaseJournalFloor, Settling};
 pub use fault::{
     Corrupt, DrawableEpochFault, Fault, FormAttempt, PerHeightRecord, RecordInvariant,
     ReferenceMismatch, Retry, SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,

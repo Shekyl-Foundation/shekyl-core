@@ -50,7 +50,9 @@
 
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::fixture;
-use shekyl_chain_rules::{Candidate, EpochFloor, FakechainSchedule, RuleSet, SlashLogFloor};
+use shekyl_chain_rules::{
+    Candidate, EpochFloor, FakechainSchedule, ReleaseJournalFloor, RuleSet, SlashLogFloor,
+};
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, ShardId, SHARD_LENGTH};
 use shekyl_wire::{Ct, Transaction};
 
@@ -2440,17 +2442,16 @@ fn the_boundary_retires_slash_rows_below_the_floor_and_the_read_asserts_it() {
 }
 
 /// A boundary past the first slash floor: the Release journal retires
-/// below that floor, and drawable digests retire below the settling
-/// family's floor at the same height.
+/// at the settling family's horizon, and drawable digests retire below
+/// that family's epoch floor, at the same height.
 const DIGEST_RETIRING_BOUNDARY: u64 = FIRST_FLOORED_BOUNDARY + 2 * WINDOW_SEB;
 
-/// **The Release journal retires with the slash log; drawable digests
-/// retire with the settling family** (`SO-D12` increment 2, `SO-D12h`): at
-/// a floored boundary, journal rows below the slash floor are gone and rows
-/// at and above it stay, and the journal's reader asserts that floor
-/// (SI-28). Drawable digests retire below the settling family's floor at
-/// the same boundary (`retire_epoch_rows`), which is inside the slash
-/// floor, so more than the one epoch the slash floor would drop is gone.
+/// **The Release journal and the drawable digests retire with the settling
+/// family** (`SO-D12h`): at a floored boundary, journal rows at or below
+/// `h_open` of the oldest kept settling epoch are gone and rows above it
+/// stay, and the journal's reader asserts that height (SI-28). Drawable
+/// digests retire below the same family's epoch floor. Both horizons sit
+/// inside the slash log's floor.
 ///
 /// **Falsifiers:** delete `retire_release_rows` and the journal assertion
 /// fails with the planted rows intact; delete the drawable-digest arm of
@@ -2462,20 +2463,29 @@ const DIGEST_RETIRING_BOUNDARY: u64 = FIRST_FLOORED_BOUNDARY + 2 * WINDOW_SEB;
 fn the_boundary_retires_release_rows_and_settled_digests_below_the_floor() {
     let path = tmp("release-retire");
     let boundary = DIGEST_RETIRING_BOUNDARY;
-    let floor = floor_at(boundary)
+    let schedule = WINDOW_RULES.settlement_schedule();
+    let slash = floor_at(boundary)
         .height()
         .expect("a floored boundary")
         .to_raw();
-    let schedule = WINDOW_RULES.settlement_schedule();
-    assert_eq!(floor, 25, "the slash log's floor at this boundary");
-    let first_kept = epoch_floors_at(boundary)
-        .settling
+    let settling = epoch_floors_at(boundary).settling;
+    let journal = ReleaseJournalFloor::of(settling, schedule);
+    let floor = journal
+        .height()
+        .expect("the settling family has retired an epoch")
+        .to_raw();
+    assert!(
+        floor > slash,
+        "the journal horizon is inside the slash log's floor"
+    );
+    let first_kept = settling
         .kept_from()
         .expect("the settling floor is above zero")
         .to_raw();
-    assert!(
-        first_kept > 1,
-        "the settling horizon retires past the one epoch the slash floor would"
+    assert_eq!(
+        floor,
+        schedule.open_height(first_kept) + 1,
+        "the journal keeps rows strictly above the oldest kept epoch's open"
     );
     let (mut b, _) = window_chain_to(&path, WINDOW_CAP, boundary - 1, boundary - WINDOW_SEB);
 
@@ -2518,14 +2528,16 @@ fn the_boundary_retires_release_rows_and_settled_digests_below_the_floor() {
         "earlier boundaries retired below their settling floor; later opens remain"
     );
 
-    let pruned = b
-        .connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
-        .remove(0)
-        .pruned
-        .expect("a floored boundary");
+    assert!(
+        b.connect_sized(&store, boundary, boundary, 0, |_| Vec::new())
+            .remove(0)
+            .pruned
+            .is_some(),
+        "a floored boundary"
+    );
     let snap = store.begin_read().expect("read");
     let kept = snap
-        .release_journal_after(BlockHeight::from_raw(floor - 1), pruned.slash_floor)
+        .release_journal_after(BlockHeight::from_raw(floor - 1), journal)
         .expect("a read starting at the floor is sound");
     assert_eq!(
         kept.iter().map(|r| r.height.to_raw()).collect::<Vec<_>>(),
@@ -2533,7 +2545,7 @@ fn the_boundary_retires_release_rows_and_settled_digests_below_the_floor() {
         "below the floor gone, at and above it kept"
     );
     let err = snap
-        .release_journal_after(BlockHeight::from_raw(floor - 2), pruned.slash_floor)
+        .release_journal_after(BlockHeight::from_raw(floor - 2), journal)
         .unwrap_err();
     assert!(
         matches!(

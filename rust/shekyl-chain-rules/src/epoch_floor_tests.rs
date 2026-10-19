@@ -137,3 +137,33 @@ fn a_young_chain_retires_nothing() {
     );
     assert!(EpochFloor::<Pricing>::NONE.retains(SettlementEpoch::from_raw(0)));
 }
+
+/// The Release journal keeps rows strictly above `h_open` of the settling
+/// family's oldest kept epoch. At the pass that settles `E` that open is
+/// `E`'s, so the walk starts at the first retained height. Red edit: retire
+/// at `h_open` itself — the pass's first journal row is gone.
+#[test]
+fn the_release_journal_starts_one_above_the_oldest_kept_open() {
+    let schedule = schedule();
+    for h in heights() {
+        let settling = EpochFloor::<Settling>::under(h, schedule);
+        let journal = ReleaseJournalFloor::of(settling, schedule);
+        match settling.kept_from() {
+            None => assert_eq!(journal.height(), None, "at {h:?}"),
+            Some(epoch) => assert_eq!(
+                journal.height().map(BlockHeight::to_raw),
+                Some(schedule.open_height(epoch.to_raw()) + 1),
+                "at {h:?}"
+            ),
+        }
+    }
+    let epoch = 3;
+    let pass = BlockHeight::from_raw(schedule.slash_deadline_height(epoch));
+    let at_the_pass =
+        ReleaseJournalFloor::of(EpochFloor::<Settling>::under(pass, schedule), schedule);
+    assert_eq!(
+        at_the_pass.height().map(BlockHeight::to_raw),
+        Some(schedule.open_height(epoch) + 1),
+        "the pass of {epoch} reads from the first retained height"
+    );
+}

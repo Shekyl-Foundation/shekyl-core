@@ -324,8 +324,11 @@ use super::{Canonical, CodecError};
 ///   for every settled epoch. A `28` file lacks the table, and a claim on
 ///   one of its settled epochs would find `Σwork` without the set (SI-31),
 ///   so the bump refuses it at open; `complete_tree_set.snap` is new. The
-///   per-epoch retirement of the same change moves no row's bytes. Rebuild
-///   from the block corpus, as at every bump.
+///   per-epoch retirement of the same change moves no row's bytes, and the
+///   Release journal's horizon moves from the slash log's floor to one
+///   above `h_open` of the settling family's oldest kept epoch, which
+///   moves no row's bytes either. Rebuild from the block corpus, as at
+///   every bump.
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(29);
 
 /// A layout version as stored in the `schema_version` cell.

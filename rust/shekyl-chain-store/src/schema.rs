@@ -468,8 +468,9 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
     (
         "archival_release_journal",
         "each Release's pre-image, the bond record as it stood before the Release emptied its \
-         holdings, keyed by the releasing height and persona and retired at the slash log's \
-         floor (SO-D12b): the walk that rebuilds an epoch's drawable set at its settlement, two \
+         holdings, keyed by the releasing height and persona and retired one above \
+         h_open of the settling family's oldest kept epoch (SO-D12h): the walk that \
+         rebuilds an epoch's drawable set at its settlement, two \
          epochs after it opened, restores it, as it gives back the shards the slash log says \
          were taken. The undo log holds the same pre-image only for its window. The C++ \
          archival_bond_unbond_log is a pop journal with no reader past pop (NOT_PORTED), so \
@@ -843,10 +844,11 @@ tables! {
     /// `(height, persona)` → the [`BondRecord`] a Release at that height
     /// replaced, exactly as it stood before the Release arm changed it.
     /// Written insert-once by `connect` beside the record's post-image and
-    /// reversed by `pop` through the journal; retired at the slash log's
-    /// floor in the same boundary batch, so the walk that rebuilds an
-    /// epoch's drawable set reads both journals over one span (A20,
-    /// `SO-D12` increment 2). Appended last but one (ordinal 44).
+    /// reversed by `pop` through the journal; retired one above `h_open` of
+    /// the settling family's oldest kept epoch
+    /// ([`shekyl_chain_rules::ReleaseJournalFloor`], SI-28), inside the
+    /// slash log's window. The slash log keeps its own floor (A20,
+    /// `SO-D12` increment 2, `SO-D12h`). Appended last but one (ordinal 44).
     pub const ARCHIVAL_RELEASE_JOURNAL: TableDefinition<ReleaseJournalTuple, Coded<BondRecord>> =
         TableDefinition::new("archival_release_journal");
 

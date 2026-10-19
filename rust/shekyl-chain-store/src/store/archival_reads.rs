@@ -122,7 +122,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use redb::ReadableTable;
 use shekyl_chain_rules::{
-    AtHeight, Claimable, EpochFamily, EpochFloor, Pricing, Settling, SlashLogFloor,
+    AtHeight, Claimable, EpochFamily, EpochFloor, Pricing, ReleaseJournalFloor, Settling,
+    SlashLogFloor,
 };
 use shekyl_store_codec::{BlobKind, CodecError};
 use shekyl_types::archival::SettlementOutcome;
@@ -276,14 +277,14 @@ pub(super) fn slash_log_rows_after<T: ReadTables>(
 
 /// **A20.** Every Release journaled at a height **strictly above**
 /// `height`, ascending by height and then persona, each with the record it
-/// replaced. `floor` is the slash log's, which the journal is retired at: a
-/// start that lies in [`ReleaseJournalKey::below`] is SI-28, refused before
-/// the table is opened. The last height has no range, so it needs no check.
-/// A row that does not decode is SI-7.
+/// replaced. `floor` is [`ReleaseJournalFloor`], the height the boundary
+/// batch retires below: a start that lies in [`ReleaseJournalKey::below`]
+/// is SI-28, refused before the table is opened. The last height has no
+/// range, so it needs no check. A row that does not decode is SI-7.
 pub(super) fn release_journal_after<T: ReadTables>(
     txn: &T,
     height: BlockHeight,
-    floor: SlashLogFloor,
+    floor: ReleaseJournalFloor,
 ) -> Result<Vec<ReleasedRecord>, ReadFault> {
     let Some(above) = ReleaseJournalKey::above(height) else {
         return Ok(Vec::new());

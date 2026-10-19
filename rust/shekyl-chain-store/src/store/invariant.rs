@@ -362,13 +362,14 @@ pub enum StoreInvariant {
     },
     /// **SI-28** — the Release journal is read only where it is kept. An
     /// A20 read (`release_journal_after`, rows strictly above `asked`)
-    /// whose range starts below the slash log's floor, which the journal is
-    /// retired at, would restore too few pre-images and rebuild a drawable
-    /// set that never was; the store refuses it instead of answering, as
-    /// SI-26 refuses A2. The floor is the caller's, and this store
-    /// compares. Fires on a mis-composed schedule, never on data: the walk's
-    /// span is held inside the floor's window at compile time
-    /// (`WALK_BACK_EPOCHS`). Fatal, never a verdict on the block.
+    /// whose range starts below `ReleaseJournalFloor` — one above
+    /// `h_open` of the settling family's oldest kept epoch, the height the
+    /// boundary batch retires below — would restore too few pre-images and
+    /// rebuild a drawable set that never was; the store refuses it instead
+    /// of answering, as SI-26 refuses A2. The floor is the caller's, and
+    /// this store compares. Fires on a mis-composed schedule, never on
+    /// data: the walk of the oldest kept epoch starts at that height.
+    /// Fatal, never a verdict on the block.
     ReleaseJournalReadBelowFloor {
         /// The height the read asked for rows strictly above.
         asked: shekyl_types::BlockHeight,
