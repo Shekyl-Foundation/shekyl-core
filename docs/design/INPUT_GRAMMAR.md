@@ -762,7 +762,7 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 | `get_info`, `/get_info` (`/getinfo`) | `daemon_status` | — | health; each field by its grant | §13's word |
 | `sync_info` | `sync_status` | — | peers | §13's word |
 | `get_connections` | `peer_connections` | — | peers | §13's word |
-| `/get_peer_list` | `peer_list` | `local` (switch), `banned` (switch) | peers | IG-Q51 |
+| `/get_peer_list` | `peer_list` | `local` (switch) | peers | IG-Q51 |
 | `/get_net_stats` | `p2p_stats` | — | status | §13's word |
 | `option_set` | `option_set` | `option` (a list of `name`, `value`) | node | named today |
 | `option_show` | `option_show` | `name` (a list, optional) | per row (IG-9) | named today |
@@ -870,7 +870,7 @@ Each shape's fields today, and their names under this Part. A reply of `show` is
 
 **Sync status** (`sync_status`): `height` (a count) → `height` (ordinal, IG-Q45); `target_height` (a count) → `target_height` (ordinal, IG-Q45); `peers`, each `{info: …}` → `peer`, a list of connections, unwrapped; `spans` → `span`, whose element is `start_block_height` → `from`, `nblocks` → `blocks`, `connection_id` → `connection`, `rate` → `download_speed` (bytes per second), `speed` (the queue's relative speed, a percentage today) → `pace` (micro), `size` → `size` (bytes), `remote_address` → `endpoint`; `overview`, an ASCII picture, goes: it is the console's rendering.
 
-**Peer list** (`peer_list`, an element per peer): `host`, `ip`, `port` → `endpoint`; each element names its list in `tier`, one-of `white`, `gray` (IG-Q51); `white_list`, `gray_list` go. `public_only` (default true) → `local` (switch, default off: include local endpoints); `include_blocked` → `banned` (switch).
+**Peer list** (`peer_list`, an element per peer): `host`, `ip`, `port` → `endpoint`; each element names its list in `tier`, one-of `white`, `gray` (IG-Q51); `white_list`, `gray_list` go. `public_only` (default true) → `local` (switch, default off: include local endpoints); `include_blocked` goes: banned hosts are `ban_list`'s (IG-Q51).
 
 **P2P statistics** (`p2p_stats`): `start_time` → `started`; `total_bytes_in`, `total_bytes_out` → `download`, `upload` (bytes); `total_packets_in`, `total_packets_out` → `download_packets`, `upload_packets`.
 
@@ -959,7 +959,6 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | connector | connection, floor, tally | one-of `clearnet`, `tor` |
 | connection | span | the P2P connection downloading the span |
 | host | ban | an IP address or subnet |
-| banned | peer | include banned peers |
 | parameter | — | a diagnostic's named parameters (IG-11) |
 | offline | daemon | P2P is off (IG-Q3's offline state) |
 | economy | fee | the `economy` tier's fee per unit of weight |
@@ -1069,7 +1068,7 @@ Each is posed for ruling. A question that amends a ruled row names it.
 
 **IG-Q50 — one transaction and many — POSED 2026-10-18.** `/get_transactions` takes a list of ids; §13's word is `tx show <id>`. *Recommended:* two methods, two reply types (RW-Q1): `tx_show {"id": h}` and `tx_list {"id": [h, …]}`, bounded by the resource policy (`RPC_CHANNEL.md` §6.3). Unrelayed entries stay host-only in both (RT-O9.3).
 
-**IG-Q51 — the peer list — POSED 2026-10-18.** `/get_peer_list` returns two arrays, and `public_only` defaults to true, against IG-4's "a switch defaults to off"; §13's word is `peer list [--white] [--gray] [--max N]`. *Recommended:* `peer_list` returns one list, each element naming its list in `tier` (`white` or `gray`); `public_only` becomes `local` (default off: include local endpoints, §3's `local`) and `include_blocked` becomes `banned`; the bound is the resource policy's, and the console's `--white`, `--gray` and `--max` filter the one reply.
+**IG-Q51 — the peer list — POSED 2026-10-18.** `/get_peer_list` returns two arrays, and `public_only` defaults to true, against IG-4's "a switch defaults to off"; §13's word is `peer list [--white] [--gray] [--max N]`. *Recommended:* `peer_list` returns one list, each element naming its list in `tier` (`white` or `gray`); `public_only` becomes `local` (default off: include local endpoints, §3's `local`) and `include_blocked` goes, because listing banned hosts is a `bans` fact (`RPC_CHANNEL.md` §6.1) that `ban_list` already answers, one method per fact; the bound is the resource policy's, and the console's `--white`, `--gray` and `--max` filter the one reply.
 
 **IG-Q52 — the fee read — POSED 2026-10-18.** `get_fee_estimate` returns three positional tiers. `fee` is the wallet's view "a fee quote". *Recommended:* the daemon method is `fee`, with that one meaning; its reply names its tiers by §11's priority keywords (`economy`, `standard`, `high`), each an amount per unit of weight, and the wallet's `fee` view prints a quote computed from it.
 
