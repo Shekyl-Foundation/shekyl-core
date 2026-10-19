@@ -14,7 +14,7 @@ use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_p_host::sign_pass_transcript;
 use shekyl_tor_control_wallet::service::OnionIdentity;
 
-use crate::engine::{Network, ShekylAddress};
+use shekyl_crypto_pq::archival_p::PersonaDestination;
 
 use super::actor::StakeEngine;
 use super::types::*;
@@ -372,28 +372,22 @@ impl Message<ActivePersona> for StakeEngine {
     }
 }
 
-/// Project the currently-active persona's public
-/// [`ShekylAddress`](shekyl_address::ShekylAddress), or `None` when idle — the
-/// funding side of `Engine::stake_in`. The reply is structurally public-only (an
-/// address cannot carry a secret; rule 36) and built **in-actor** from the live
-/// bundle. Distinct from [`ActivePersona`], which reports the *identity*
-/// (`bond_id`, a signing key), not an address. `network` is the principal
-/// wallet's network, supplied by the caller (the actor is network-agnostic).
-pub(crate) struct ActivePersonaReceiveAddress {
-    pub network: Network,
-}
+/// The currently-active persona's payment destination, or `None` when idle —
+/// the funding side of `Engine::stake_in`. The reply holds public keys only
+/// (rule 36) and is taken **in-actor** from the live bundle. Distinct from
+/// [`ActivePersona`], which reports the *identity* (`bond_id`, a signing
+/// key), not where a payment to the persona goes.
+pub(crate) struct ActivePersonaPaymentDestination;
 
-impl Message<ActivePersonaReceiveAddress> for StakeEngine {
-    type Reply = Result<Option<ShekylAddress>, StakeEngineError>;
+impl Message<ActivePersonaPaymentDestination> for StakeEngine {
+    type Reply = Result<Option<PersonaDestination>, StakeEngineError>;
 
     async fn handle(
         &mut self,
-        msg: ActivePersonaReceiveAddress,
+        _msg: ActivePersonaPaymentDestination,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(self
-            .active
-            .map(|slot| self.receive_address_of(slot, msg.network)))
+        Ok(self.active.map(|slot| self.payment_destination_of(slot)))
     }
 }
 

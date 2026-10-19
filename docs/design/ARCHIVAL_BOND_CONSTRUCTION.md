@@ -684,16 +684,14 @@ below are what make that isolation hold rather than merely declare it; they are
 design dispositions for PR 2, not open questions.
 
 **Efficiency -- derivation is CPU-bound; keep it off the async hot path.**
-`derive_archival_p_keys` is dominated by PQ keygen (ML-DSA-65 + ML-KEM-768
-keygen; HKDF and Ed25519 are cheap). A single-`P` wallet is ~1 ms, borderline
-inline. The multi-`P` whale -- the operator this dependability work exists for
--- derives `N` bundles on wallet open; `N` serial keygens run inside an async
-`kameo` handler block the Tokio worker thread (cooperative scheduling, no
-preemption), stalling the whole runtime for tens of ms at open. **Disposition:**
-run derivation on `spawn_blocking`, and since per-slot keygens are independent,
-either parallelize them or derive lazily per-`P` on first use rather than all
-up-front. This keeps a whale's wallet-open from becoming a visible stall and
-keeps the actor responsive to other messages during derivation.
+`derive_archival_p_keys` costs **6.71 ms per slot** on the development host
+(`FN_DSA_HYBRID.md` `FND-25`), of which the receipt key's FN-DSA-1024 keygen
+is 6.03 ms; the ML-DSA-65 and ML-KEM-768 keygens, HKDF and Ed25519 are the
+rest. The floor device is not re-measured for this bundle. A wallet open
+derives one bundle for every bonded slot and every lookahead slot, `k + 3` for
+`k` bonded slots, one after another inside the blocking open call that async
+callers run on `spawn_blocking` (§10.2), so derivation never runs on a Tokio
+worker thread and the actor never derives inside a handler.
 
 **Robustness -- the message protocol stays operation-shaped, never
 key-shaped.** Actor isolation holds *only* if the message API never leaks the
@@ -891,10 +889,8 @@ and sequentially** inside the sync `create` / `open_full` call (staker-only).
 That whole call is the blocking unit async callers already wrap in
 `spawn_blocking` (see the lifecycle module docs), so the keygens are off the
 *async* hot path at that granularity without `assemble()` itself spawning
-anything. Intra-call parallelism across the (small, `k`-bounded) `union` is a
-documented perf follow-up (`docs/FOLLOWUPS.md`), not a correctness concern. This
-is the perf side of the zero-root-exposure trade (privacy/security over
-performance, the correct priority direction).
+anything. This is the perf side of the zero-root-exposure trade
+(privacy/security over performance, the correct priority direction).
 
 **Robustness -- isolate the transport, not just the request (§11.1 Q3).** The
 parallel request type isolates *construction*; the residual gap is the network

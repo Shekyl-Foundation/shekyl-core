@@ -70,7 +70,7 @@ use super::pscan::dispatch::{DispatchConfig, PendingPostStore, PendingSealStore}
 use super::pscan::start::{
     pending_post_store_for_engine, PScanHandle, SealingRunOverrides, DEFAULT_PSCAN_CADENCE,
 };
-use super::regtest_e2e::{persona_address, staker_wallet, try_generate_blocks, RegtestDaemon};
+use super::regtest_e2e::{staker_wallet, try_generate_blocks, RegtestDaemon};
 use super::{Engine, SoloSigner};
 
 // ---------------------------------------------------------------------------
@@ -533,7 +533,17 @@ async fn gf7_sealing_run_writes_receipts_artifact() {
     );
 
     let daemon = RegtestDaemon::start().await;
-    let miner_address = persona_address(&wallet_seed(0xff, 0, 0), 0);
+    // Mined to a wallet no run opens: the principal address of an arm tag
+    // (0xff) no run draws.
+    let miner_address = shekyl_crypto_pq::account::rederive_account(
+        &wallet_seed(0xff, 0, 0),
+        shekyl_crypto_pq::account::DerivationNetwork::Mainnet,
+        shekyl_crypto_pq::account::SeedFormat::Bip39,
+    )
+    .expect("derive the miner's account")
+    .to_address(shekyl_address::Network::Mainnet)
+    .encode()
+    .expect("encode the miner's address");
 
     // Pre-mine once (≈ 30 min): past `tip − 720` every sweep does real fetch
     // work (§19.8.2 chain row).
