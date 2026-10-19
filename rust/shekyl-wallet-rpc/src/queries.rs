@@ -456,7 +456,9 @@ mod tests {
                     dispatched_at_height: shekyl_types::BlockHeight::from_raw(100),
                     fee: 700,
                     recipients: vec![SendRecipient {
-                        address: "shekyl1a".to_owned(),
+                        destination: shekyl_engine_state::SendDestination::Address(
+                            "shekyl1a".to_owned(),
+                        ),
                         amount: 3_500,
                         rid: None,
                     }],
@@ -676,12 +678,12 @@ mod tests {
         let row = block.rows.get_mut(&[0x05; 32]).expect("row");
         row.recipients = vec![
             SendRecipient {
-                address: "shekyl1a".to_owned(),
+                destination: shekyl_engine_state::SendDestination::Address("shekyl1a".to_owned()),
                 amount: u64::MAX,
                 rid: None,
             },
             SendRecipient {
-                address: "shekyl1b".to_owned(),
+                destination: shekyl_engine_state::SendDestination::Address("shekyl1b".to_owned()),
                 amount: 1,
                 rid: None,
             },

@@ -30,7 +30,7 @@ use super::super::network::Network;
 use super::super::output_selector::{OutputCandidate, OutputSelector, SelectedOutputs};
 use super::super::pending::{
     InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome, TxHash,
-    TxRecipientSummary, TxRequest,
+    TxRecipient, TxRecipientSummary, TxRequest,
 };
 use super::super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::super::signer::{SignedTransfer, Signer, TransferSigningContext};
@@ -911,10 +911,7 @@ where
         let summary: Vec<TxRecipientSummary> = request
             .recipients
             .iter()
-            .map(|recipient| TxRecipientSummary {
-                address: recipient.address.clone(),
-                amount_atomic_units: recipient.amount_atomic_units,
-            })
+            .map(TxRecipient::summary)
             .collect();
 
         // CT-5d: the realized content fingerprint `content_gen` advances against
@@ -923,9 +920,12 @@ where
         // the build rather than feed a wrong value into a consent decision.
         // Ledger-independent, so it runs before the guard to keep the guarded
         // section minimal.
-        let fingerprint =
-            ContentFingerprint::from_build(meta.fee, &summary, meta.selected.total_covered)
-                .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
+        let fingerprint = ContentFingerprint::from_build(
+            meta.fee,
+            &request.recipients,
+            meta.selected.total_covered,
+        )
+        .map_err(|err| fail_build_after_attempted(self.sink.as_ref(), err))?;
 
         // Build's lock₂ — the same discipline the re-anchor's lock₂
         // applies to its reference (`CT5D_REANCHOR.md` §5), on the axis
@@ -1070,15 +1070,6 @@ where
                 selected.sort_unstable();
                 (held.request.clone(), selected)
             };
-
-            let summary: Vec<TxRecipientSummary> = request
-                .recipients
-                .iter()
-                .map(|r| TxRecipientSummary {
-                    address: r.address.clone(),
-                    amount_atomic_units: r.amount_atomic_units,
-                })
-                .collect();
 
             // --- phase 0 (async, no state lock): fresh reference + fixed-input fee ---
             let fee_snapshot = self
@@ -1258,8 +1249,9 @@ where
             } = signed;
             // Checked + single-sourced with the fresh-build path (§4 F-G); the
             // fee-coverage check above guarantees this succeeds here.
-            let new_fingerprint = ContentFingerprint::from_build(fee, &summary, total_covered)
-                .map_err(ReanchorError::Failed)?;
+            let new_fingerprint =
+                ContentFingerprint::from_build(fee, &request.recipients, total_covered)
+                    .map_err(ReanchorError::Failed)?;
 
             // --- lock₂ (sync): authoritative re-validation + commit the swap ---
             let mut state = self.state.lock().map_err(|_| {
@@ -1525,7 +1517,7 @@ where
                     .recipients
                     .iter()
                     .map(|r| shekyl_engine_state::SendRecipient {
-                        address: r.address.clone(),
+                        destination: r.destination.recorded(),
                         amount: r.amount_atomic_units.to_raw(),
                         rid: r.rid,
                     })

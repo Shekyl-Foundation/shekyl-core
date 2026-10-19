@@ -74,8 +74,8 @@ pub use pending_post_block::{
 };
 pub use safety_constants::NetworkSafetyConstants;
 pub use send_journal_block::{
-    AbandonEdge, InFlightSpendLocks, SendInputRef, SendJournalBlock, SendRecipient, SendRecord,
-    SendState, SEND_JOURNAL_BLOCK_VERSION,
+    AbandonEdge, InFlightSpendLocks, SendDestination, SendInputRef, SendJournalBlock,
+    SendRecipient, SendRecord, SendState, SEND_JOURNAL_BLOCK_VERSION,
 };
 pub use staking_block::{StakingBlock, STAKING_BLOCK_VERSION};
 pub use sync_state_block::{SyncStateBlock, SYNC_STATE_BLOCK_VERSION};

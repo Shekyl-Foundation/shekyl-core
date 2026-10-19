@@ -32,8 +32,9 @@ pub use engine::{
     RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent,
     RefreshSummary, ReservationId, ScannableBlock, SendError, SoloSigner, StakeInError,
     StakePosture, StakedBalance, StakedOutput, StakingReadError, StakingReadView, StateWrapKey,
-    SubmitOutcome, SuppressedClass, TracingDiagnosticSink, TxError, TxHash, TxRecipient,
-    TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome, ViewMaterial,
+    SubmitOutcome, SuppressedClass, TracingDiagnosticSink, TxDestination, TxError, TxHash,
+    TxRecipient, TxRecipientSummary, TxRequest, TxShapeEstimate, UnstakeError, UnstakeOutcome,
+    ViewMaterial,
 };
 pub use outbound_label::{label_plaintext_for_recipient, RidNotEncodable};
 // The fault [`IoError::CurveTreeStore`] carries, re-exported so a consumer can

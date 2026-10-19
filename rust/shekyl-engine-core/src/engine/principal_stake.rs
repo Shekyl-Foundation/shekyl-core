@@ -32,7 +32,7 @@ use shekyl_standoff::{draw_cover_amount, COVER_RUNG_ATOMIC};
 use shekyl_units::AtomicUnits;
 
 use super::fee_estimator::FeePriority;
-use super::pending::{PendingTx, TxRecipient, TxRequest};
+use super::pending::{PendingTx, TxDestination, TxRecipient, TxRequest};
 use super::stake_timing::OsRngGapAdapter;
 use super::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
@@ -227,7 +227,7 @@ where
             .map_err(StakeInError::Address)?;
         Ok(TxRequest {
             recipients: vec![TxRecipient {
-                address,
+                destination: TxDestination::Address(address),
                 amount_atomic_units: funded,
                 rid: None,
             }],
@@ -240,6 +240,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::StakeInError;
+    use crate::engine::pending::TxDestination;
     use crate::engine::test_support::{activate_persona, staker_engine};
     use shekyl_standoff::COVER_RUNG_ATOMIC;
     use shekyl_units::AtomicUnits;
@@ -309,7 +310,8 @@ mod tests {
             .encode()
             .expect("encode");
         assert_eq!(
-            request.recipients[0].address, projected,
+            request.recipients[0].destination,
+            TxDestination::Address(projected),
             "the recipient is the active persona's projected address"
         );
     }

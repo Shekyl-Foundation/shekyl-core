@@ -655,6 +655,20 @@ impl ArchivalPKeys {
         }
     }
 
+    /// Where a payment to this persona is built to: its spend, view and
+    /// ML-KEM-768 encapsulation keys, public only (rule 36). The **only**
+    /// producer of [`PersonaDestination`], so the three keys are one
+    /// persona's by construction. A persona has no address: this value is
+    /// handed to the transfer path directly and is never encoded or parsed.
+    #[must_use]
+    pub fn payment_destination(&self) -> PersonaDestination {
+        PersonaDestination {
+            spend_pk: self.spend_pk,
+            view_pk: self.view_pk,
+            ml_kem_ek: Box::new(self.ml_kem_ek),
+        }
+    }
+
     /// The serving-onion seed, borrowed from the heap buffer this bundle
     /// wipes on drop.
     ///
@@ -677,6 +691,51 @@ impl ArchivalPKeys {
             self.msg_sign_pk,
             self.ml_kem_ek.to_vec(),
         )
+    }
+}
+
+/// A persona's payment destination: the spend, view and ML-KEM-768
+/// encapsulation keys an output to it is built from, public only.
+///
+/// Fields are private and the sole producer is
+/// [`ArchivalPKeys::payment_destination`], so holding one witnesses that the
+/// three keys are the *same persona's*: a destination assembled from loose
+/// keys could pair one persona's spend key with another's KEM key and build
+/// an output neither can open. `Debug` names the kind and never prints a key,
+/// so a request or reservation that carries one logs no persona key material.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PersonaDestination {
+    spend_pk: SpendPublicKey,
+    view_pk: ViewPublicKey,
+    ml_kem_ek: Box<[u8; ML_KEM_768_EK_LEN]>,
+}
+
+impl PersonaDestination {
+    /// The persona's Ed25519 spend public key: the output's one-time key is
+    /// derived over it.
+    #[must_use]
+    pub fn spend_pk(&self) -> &SpendPublicKey {
+        &self.spend_pk
+    }
+
+    /// The persona's Ed25519 view public key: the X25519 half of the
+    /// output's KEM encapsulates to its Montgomery image.
+    #[must_use]
+    pub fn view_pk(&self) -> &ViewPublicKey {
+        &self.view_pk
+    }
+
+    /// The persona's ML-KEM-768 encapsulation key: the post-quantum half of
+    /// the output's KEM.
+    #[must_use]
+    pub fn ml_kem_ek(&self) -> &[u8; ML_KEM_768_EK_LEN] {
+        &self.ml_kem_ek
+    }
+}
+
+impl std::fmt::Debug for PersonaDestination {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PersonaDestination(..)")
     }
 }
 

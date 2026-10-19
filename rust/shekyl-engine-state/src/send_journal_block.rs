@@ -56,7 +56,12 @@ use shekyl_types::BlockHeight;
 /// (`WALLET_SEND_RECORD.md` §1), so "paid request #N" never needs the
 /// trial re-derivation. A new field in a positional postcard struct;
 /// strict-equality gating, pre-genesis, no migration.
-pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 4;
+/// Version `5` (2026-10-18): [`SendRecipient::destination`] replaces the
+/// address string with [`SendDestination`], so a `stake_in` row records
+/// that it funded this wallet's own persona instead of a persona address
+/// (persona addresses no longer exist). Strict-equality gating,
+/// pre-genesis, no migration.
+pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 5;
 
 /// The wallet's own outputs that must not be spent again yet, keyed by
 /// `global_output_index`: for each, a transaction spending it is already
@@ -139,13 +144,26 @@ impl InFlightSpendLocks {
     }
 }
 
+/// Where one output of a recorded send went — the counterparty fact the
+/// journal alone holds (SJ-DQ-1). Persisted: variants are append-only, and
+/// the discriminant KAT below pins each encoding.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
+pub enum SendDestination {
+    /// The Shekyl-encoded address the user sent to.
+    Address(String),
+    /// This wallet funding its own active staking persona (`stake_in`).
+    /// A persona has no address, and the row records the kind of
+    /// destination, never the persona's keys.
+    OwnPersonaFunding,
+}
+
 /// One recipient of a recorded send, exactly as realized in the built
 /// transaction (SJ-DQ-1: full row, addresses stored, no knob — settled by
 /// the envelope frame, C1).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, postcard_schema::Schema)]
 pub struct SendRecipient {
-    /// Shekyl-encoded destination address.
-    pub address: String,
+    /// Where this output went.
+    pub destination: SendDestination,
     /// Amount sent to this recipient, in atomic units.
     pub amount: u64,
     /// The payment request this output answered — the `rid` echoed in its
@@ -553,7 +571,7 @@ mod tests {
             dispatched_at_height: BlockHeight::from_raw(42),
             fee: 700,
             recipients: vec![SendRecipient {
-                address: "shekyl1example".to_owned(),
+                destination: SendDestination::Address("shekyl1example".to_owned()),
                 amount: 7_000,
                 rid: None,
             }],
@@ -662,6 +680,30 @@ mod tests {
         }
     }
 
+    /// Discriminant-stability KAT for [`SendDestination`], the same
+    /// append-only promise as the `SendState` pins above: a new kind of
+    /// destination appends after `OwnPersonaFunding`, and these bytes
+    /// never move.
+    #[test]
+    fn send_destination_discriminants_are_pinned() {
+        let pins: [(SendDestination, &[u8]); 2] = [
+            // variant index 0, then the string's varint length and bytes
+            (
+                SendDestination::Address("ab".to_owned()),
+                &[0, 2, b'a', b'b'],
+            ),
+            (SendDestination::OwnPersonaFunding, &[1]),
+        ];
+        for (destination, expected) in pins {
+            let bytes = postcard::to_allocvec(&destination).expect("serialize");
+            assert_eq!(
+                bytes.as_slice(),
+                expected,
+                "SendDestination discriminant moved for {destination:?} — append-only violated"
+            );
+        }
+    }
+
     /// A v1 block with no rows deserializes from its minimal encoding —
     /// the forward-compat floor old files rest on.
     #[test]
@@ -684,7 +726,7 @@ mod tests {
             BlockHeight::from_raw(42),
             700,
             vec![SendRecipient {
-                address: "shekyl1example".to_owned(),
+                destination: SendDestination::Address("shekyl1example".to_owned()),
                 amount: 7_000,
                 rid: None,
             }],

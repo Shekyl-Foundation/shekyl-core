@@ -42,7 +42,7 @@ use crate::engine::network::Network;
 use crate::engine::output_selector::WalletGreedyOutputSelector;
 use crate::engine::pending::{
     FeePriority, InFlightSubmit, PendingTx, ReservationId, ReservationTTLConfig, SubmitOutcome,
-    TxRecipient, TxRecipientSummary, TxRequest,
+    TxDestination, TxRecipient, TxRequest,
 };
 use crate::engine::signer::LocalSigner;
 use crate::engine::traits::FeeEstimates;
@@ -344,7 +344,7 @@ fn populate_ledger(
 fn standard_request(amount: u64) -> TxRequest {
     TxRequest {
         recipients: vec![TxRecipient {
-            address: test_payment_address(),
+            destination: TxDestination::Address(test_payment_address()),
             amount_atomic_units: AtomicUnits::from_raw(amount),
             rid: None,
         }],
@@ -986,9 +986,10 @@ async fn real_root_membership_proof_builds_and_submits() {
 /// but it does move on any change to *who gets how much* or the fee.
 #[test]
 fn content_fingerprint_is_order_invariant_and_amount_sensitive() {
-    let r = |addr: &str, amt: u64| TxRecipientSummary {
-        address: addr.to_string(),
+    let r = |addr: &str, amt: u64| TxRecipient {
+        destination: TxDestination::Address(addr.to_string()),
         amount_atomic_units: AtomicUnits::from_raw(amt),
+        rid: None,
     };
     let fee = AtomicUnits::from_raw(1_000);
     let change = AtomicUnits::from_raw(500);
@@ -1029,6 +1030,44 @@ fn content_fingerprint_is_order_invariant_and_amount_sensitive() {
         base,
         ContentFingerprint::from_parts(fee, &[r("addr_a", 11), r("addr_b", 20)], change),
         "a different recipient amount is a content change"
+    );
+}
+
+/// CT-5d (§4 F-G) for `stake_in`'s destination: a persona destination is
+/// compared by its payment keys, so paying a different persona is a content
+/// change, paying the same persona again is not, and a persona never compares
+/// equal to an address.
+#[test]
+fn content_fingerprint_compares_persona_destinations_by_their_keys() {
+    use crate::engine::stake_engine::test_fixtures::derive_bundle;
+    let persona = |slot: u32| TxRecipient {
+        destination: TxDestination::OwnPersona(derive_bundle(slot).payment_destination()),
+        amount_atomic_units: AtomicUnits::from_raw(10),
+        rid: None,
+    };
+    let fee = AtomicUnits::from_raw(1_000);
+    let change = AtomicUnits::from_raw(500);
+
+    let base = ContentFingerprint::from_parts(fee, &[persona(0)], change);
+    assert_eq!(
+        base,
+        ContentFingerprint::from_parts(fee, &[persona(0)], change),
+        "the same persona's keys, derived again, are the same destination"
+    );
+    assert_ne!(
+        base,
+        ContentFingerprint::from_parts(fee, &[persona(1)], change),
+        "a different persona is a content change"
+    );
+    let address = TxRecipient {
+        destination: TxDestination::Address("addr_a".to_string()),
+        amount_atomic_units: AtomicUnits::from_raw(10),
+        rid: None,
+    };
+    assert_ne!(
+        base,
+        ContentFingerprint::from_parts(fee, &[address], change),
+        "a persona never compares equal to an address"
     );
 }
 

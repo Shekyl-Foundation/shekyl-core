@@ -1165,7 +1165,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 north-star spend gate; needs SHEKYLD_BIN + a running regtest daemon (the scanner/tx-builder shekyl-wire migrations have landed)"]
 async fn e2e_fcmp_spend_accepted_by_daemon() {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
     use shekyl_scanner::WalletLedgerExt;
@@ -1232,7 +1232,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     // Build a real FCMP++ spend (self-send half the balance; the engine adds change + fee).
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: address.clone(),
+            destination: TxDestination::Address(address.clone()),
             amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
             rid: None,
         }],
@@ -1336,7 +1336,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
     use shekyl_rpc_types::KeyImageStatus;
@@ -1395,7 +1395,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
 
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: address.clone(),
+            destination: TxDestination::Address(address.clone()),
             amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
             rid: None,
         }],
@@ -1609,7 +1609,7 @@ async fn create_wallet(
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; slow (~750 blocks, several min)"]
 async fn e2e_fcmp_spend_over_depth3_tree() {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::Engine;
     use shekyl_scanner::WalletLedgerExt;
@@ -1699,7 +1699,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     );
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: address.clone(),
+            destination: TxDestination::Address(address.clone()),
             amount_atomic_units: AtomicUnits::from_raw(spend_amount),
             rid: None,
         }],
@@ -1782,7 +1782,7 @@ async fn overfill_pool(
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     address: &str,
 ) -> Overfilled {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use shekyl_economics::FULL_REWARD_ZONE;
     use shekyl_units::AtomicUnits;
     use shekyl_wire::Transaction;
@@ -1815,7 +1815,7 @@ async fn overfill_pool(
     for n in 0..POOL_SPENDS {
         let request = TxRequest {
             recipients: vec![TxRecipient {
-                address: address.to_owned(),
+                destination: TxDestination::Address(address.to_owned()),
                 amount_atomic_units: AtomicUnits::from_raw(1_000_000),
                 rid: None,
             }],
@@ -2641,10 +2641,10 @@ async fn submit_transfer(
     batch: u64,
     max_batches: usize,
 ) -> TxHash {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: recipient.to_string(),
+            destination: TxDestination::Address(recipient.to_string()),
             amount_atomic_units: amount,
             rid: None,
         }],
@@ -4254,7 +4254,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
 async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     use super::drain_dispatch::DrainRequestError;
     use super::drain_orchestrator::DrainOrchestrationError;
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::stake_engine::PSlot;
     use super::traits::DaemonEngine;
     use shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC;
@@ -4323,7 +4323,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     refresh(&fixture.arc).await;
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: principal.clone(),
+            destination: TxDestination::Address(principal.clone()),
             amount_atomic_units: AtomicUnits::from_raw(100_000_000),
             rid: None,
         }],
