@@ -851,9 +851,9 @@ Each shape's fields today, and their names under this Part. A reply of `show` is
 | `wide_cumulative_difficulty` | `difficulty_cumulative` | `target` (seconds) | `block_spacing` (duration) |
 | `tx_count` | `tx_count` | `block_weight_limit` | `block_weight_max` |
 | `block_weight_median` | `block_weight_median` | `adjusted_time` | `time_adjusted` |
-| `already_generated_coins` | `emission` | `release_multiplier` | `emission_multiplier` |
-| `burn_pct` | `burn` (percent) | `total_burned` | `burn_total` |
-| `staker_emission_share_effective` | `stake_share` | `tx_pool_size` | `txpool_count` |
+| `already_generated_coins` | `emission` | `release_multiplier` | `emission_multiplier` (micro) |
+| `burn_pct` | `burn` (micro) | `total_burned` | `burn_total` |
+| `staker_emission_share_effective` | `stake_share` (micro) | `tx_pool_size` | `txpool_count` |
 | `start_time` | `started` | `free_space` | `disk_free` |
 | `database_size` | `data_size` | `version` (a build string) | `revision` |
 | `outgoing_connections_count` | `peer_outbound_count` | `incoming_connections_count` | `peer_inbound_count` |
@@ -868,7 +868,7 @@ Each shape's fields today, and their names under this Part. A reply of `show` is
 
 **Connection** (`peer_connections`; `peer` in `sync_status`): `incoming` → `inbound` (switch); `localhost`, `local_ip` → `local` (switch); `address`, `host`, `ip`, `port` → `endpoint` (peer-endpoint); `address_type` → `connector` (one-of `clearnet`, `tor`); `recv_count`, `send_count` → `download`, `upload` (bytes); `recv_idle_time`, `send_idle_time` → `download_idle`, `upload_idle` (duration); `state` → `state`; `live_time` → `age` (duration); `avg_download`, `current_download`, `avg_upload`, `current_upload` → `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current` (bytes per second; KiB/s today); `support_flags` → `flags`; `connection_id` → `id`; `height` → `height`.
 
-**Sync status** (`sync_status`): `height` (a count) → `height` (ordinal); `target_height` → `target_height`; `peers`, each `{info: …}` → `peer`, a list of connections, unwrapped; `spans` → `span`, whose element is `start_block_height` → `from`, `nblocks` → `blocks`, `connection_id` → `connection`, `rate` → `download_speed` (bytes per second), `speed` (a percentage) → `progress` (percent), `size` → `size` (bytes), `remote_address` → `endpoint`; `overview`, an ASCII picture, goes: it is the console's rendering.
+**Sync status** (`sync_status`): `height` (a count) → `height` (ordinal); `target_height` → `target_height`; `peers`, each `{info: …}` → `peer`, a list of connections, unwrapped; `spans` → `span`, whose element is `start_block_height` → `from`, `nblocks` → `blocks`, `connection_id` → `connection`, `rate` → `download_speed` (bytes per second), `speed` (the queue's relative speed, a percentage today) → `pace` (micro), `size` → `size` (bytes), `remote_address` → `endpoint`; `overview`, an ASCII picture, goes: it is the console's rendering.
 
 **Peer list** (`peer_list`, an element per peer): `host`, `ip`, `port` → `endpoint`; each element names its list in `tier`, one-of `white`, `gray` (IG-Q51); `white_list`, `gray_list` go. `public_only` (default true) → `local` (switch, default off: include local endpoints); `include_blocked` → `banned` (switch).
 
@@ -946,10 +946,10 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | peered | daemon | at least one handshaken session (`has_peers`) |
 | protocol | daemon | the P2P protocol's version |
 | emission | coinbase, daemon | coins emitted |
-| burn | daemon | the burn rate (percent) and, with `total`, what has burned |
+| burn | daemon | the share the next coinbase burns (micro) and, with `total`, what has burned |
 | tagged | version | a tagged release build |
-| multiplier | emission | the release multiplier (`shekyl-economics`) |
-| share | stake | the stakers' effective emission share |
+| multiplier | emission | the release multiplier (micro; `shekyl-economics`) |
+| share | stake | the stakers' effective emission share (micro) |
 | disk | daemon | the data directory's disk |
 | free | disk | its free space, in bytes |
 | outbound | peer, clearnet, tor | connections we open |
@@ -983,7 +983,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | flags | connection | the peer's support flags |
 | packets | download, upload | a packet count |
 | span | sync | a block span being downloaded |
-| progress | span | a percent |
+| pace | span | the span queue's relative speed, a ratio (micro) |
 | tier | peer | which peer list holds it, one-of `white`, `gray` |
 | offset | extra | where the reserved extra bytes start |
 | extra | template | the coinbase's extra nonce: the bytes, and with `size` how many to reserve |
@@ -1076,7 +1076,7 @@ Each is posed for ruling. A question that amends a ruled row names it.
 
 **IG-Q53 — a read's reply — POSED 2026-10-18.** Today each read wraps its result under its own key (`block_header`, `block_headers`, `headers`, `txs`, `chains`, `bans`, `connections`, `pool_stats`), and a by-hash read echoes each hash in a slot. *Recommended:* a `show` or view reply is the item itself; a `list` reply is an array of items in selector order, an unknown item `null` in its slot (RK-D23). The wrappers, the slots and `missed_tx` go.
 
-**IG-Q54 — the wire kinds of time, quantities and fractions — POSED 2026-10-18.** RW-Q10 takes units out of names (`_seconds`, `_time`, `_timestamp`, `_milli`, `_micro`, `_pct`, KiB/s), so each unit must live in its kind. RW-Q4's shared-kind rule ("where a wire kind is also a grammar kind, the syntax is IG-6's") would make a duration or a byte count IG-6's `quantity`, a string such as `"3600s"` or `"100MiB"`, on the wire. *Recommended:* as RW-Q4 did for the amount, these are wire kinds of their own, integers whose unit the kind fixes: `time` (unix seconds), `duration` (seconds), byte counts (bytes), rates (units per second), and `percent`, `milli` and `micro` (integers in those units). A client does arithmetic on them, and a renderer applies the unit once. Each kind's unit is stated once in RW-Q4's registry, never in a name. The console keeps IG-6's `quantity` for what an operator types (`--duration 1h`).
+**IG-Q54 — the wire kinds of time, quantities and fractions — POSED 2026-10-18.** RW-Q10 takes units out of names (`_seconds`, `_time`, `_timestamp`, `_milli`, `_micro`, `_pct`, KiB/s), so each unit must live in its kind. The economics ratios (`burn_pct`, `release_multiplier`, `staker_emission_share_effective`) are fixed-point at `shekyl_fixed_point_scale` = 1,000,000 (`config/economics_params.json`; `SCALE` in `rust/shekyl-economics/src/params.rs`), whatever their names say. RW-Q4's shared-kind rule ("where a wire kind is also a grammar kind, the syntax is IG-6's") would make a duration or a byte count IG-6's `quantity`, a string such as `"3600s"` or `"100MiB"`, on the wire. *Recommended:* as RW-Q4 did for the amount, these are wire kinds of their own, integers whose unit the kind fixes: `time` (unix seconds), `duration` (seconds), byte counts (bytes), rates (units per second), and `milli` and `micro`, a ratio in thousandths and in millionths. No field needs a percent: the economics ratios and the sync span's relative speed are `micro`, so no `percent` kind is minted. A client does arithmetic on them, and a renderer applies the unit once. Each kind's unit is stated once in RW-Q4's registry, never in a name. The console keeps IG-6's `quantity` for what an operator types (`--duration 1h`).
 
 **IG-Q55 — a transaction's body — POSED 2026-10-18.** `/get_transactions` takes three switches that choose which of four always-present fields are filled (`decode_as_json`, `prune`, `split`). The wallet's block fetch reads the pruned form (`rust/shekyl-engine-core/src/engine/block_fetch.rs`), and only tests read the prunable part alone. *Recommended:* the entry carries one `body`; the input `prune` (a switch, off by default) makes it the pruned form, and the entry then carries `prunable_hash`. `split` and the JSON rendering go (RW-Q4).
 
