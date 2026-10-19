@@ -1,7 +1,7 @@
 # Chain sync — headers-first sync in Rust: Round 0 (`CS-`)
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
-**Ground:** `dev` at `52b3c73bb` (2026-10-18), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool). The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
+**Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
 **Status:** OPEN — Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 7); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Nothing here is implemented; the pure-Rust work of CS-Q10 starts first.
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
@@ -12,7 +12,7 @@ belongs to DRS-X (R2, 2026-10-15; `626cadea2` renames "E3's p2p feed" to
 DRS-X). §A states what chain sync needs from that entry. **DRS-X has
 adopted it, landed on `dev`:** `DRS_X_STORE_FLIP.md` takes it up in DX-Q2
 items 2, 3, 5 and 6 (`:58-73`), "carried here", and assigns CS-F5's doc
-fix to its PR 2 (`:292`). §A records the couplings that remain.
+fix to its PR 2 (`:330`). §A records the couplings that remain.
 
 ---
 
@@ -34,8 +34,8 @@ fix to its PR 2 (`:292`). §A records the couplings that remain.
   - The C++ downloads and connects bodies along whatever hash list a
     peer sends, before any chain-work comparison.
   - The Rust alt tier refuses any switch deeper than `D_max`:
-    `Offered::BeyondCap` and `Switched::BeyondCap` (`switch.rs:122`,
-    `:336`). `D_MAX` takes `archival_reorg_depth_blocks`, which is
+    `Offered::BeyondCap` and `Switched::BeyondCap` (`switch.rs:123`,
+    `:338`). `D_MAX` takes `archival_reorg_depth_blocks`, which is
     provisional at 720 blocks (`config/consensus_constants.json`). That
     is 24 h at `daa_target_seconds = 120`.
   - Consequence: a node eclipsed during initial sync connects the
@@ -66,7 +66,7 @@ fix to its PR 2 (`:292`). §A records the couplings that remain.
 - **CS-F6. The wire can be headers-first with no new primitive.**
   - `Block::pow_blob()` is `header ‖ tx_tree_hash ‖ V(count)`.
     `identity_of_pow_blob()` names the block from that alone
-    (`shekyl-wire/src/block.rs:237-271`).
+    (`shekyl-wire/src/block.rs:253-287`).
   - Difficulty is `lwma1_next` over timestamps and cumulative
     difficulties only.
   - `ReleaseAnchors` is a genesis hash plus a static table of
@@ -285,8 +285,11 @@ ingest deciding forks.**
    - `Held`, `SwitchDue` and the switch outcomes: ingest's. Sync only
      reads the new `L`.
    - `BeyondCap`: arises only on the **announce path**, because bodies
-     are requested only along reachable `H*`. It feeds the `Diverged`
-     alarm below, and it is not that alarm's primary source.
+     are requested only along reachable `H*`. The entry may answer it at
+     the door, before proof of work (DRS-X PR 2, #1123), so the reply is
+     unverified and **never raises the alarm**. Sync treats it as a hint:
+     it requests headers, and a verified run can raise the alarm through
+     `T` (step 7).
 7. **State, published as one source.** **A claim's value never changes
    the sync state; only verified headers do.** A higher claim only starts
    a header request (step 1).
@@ -305,7 +308,11 @@ ingest deciding forks.**
        than `L` and forks deeper than `D_max`. Those headers pass the
        same step-3 run, so raising the alarm costs no more than any
        other header chain. A claim alone never raises it.
-     - **Secondary source:** an announce answered `BeyondCap`.
+     - **Secondary source:** ingest's switch results,
+       `Switched::BelowFloor` and `Switched::BeyondCap`, which come after
+       proof of work and storage (§A, coupling 4). A `BeyondCap` reply
+       from the door never sets it: one free block would otherwise turn
+       off a staker's serving until a resync.
      - It never withholds `Synced`, and it never stops the miner or the
        relay gate (CS-Q4).
      - **Its wire is the existing `following_degraded`** (C2-R1b F-1(a);
@@ -323,7 +330,7 @@ ingest deciding forks.**
        - (a) **The field's meaning widens,** from "a switch refused at
          the prune watermark" to "a heavier chain refused at either cap:
          the undo floor (`Switched::BelowFloor`) or `D_max`
-         (`BeyondCap`)". Both mean the node knows it is not on
+         (`Switched::BeyondCap`, or a verified run in `T`)". Both mean the node knows it is not on
          the heaviest chain it has seen, which is what the wallet
          consumer acts on.
        - (b) **The latch stays.** The alarm latches until a resync, as
@@ -349,10 +356,10 @@ ingest deciding forks.**
      funds ride on that chain, not only the operator's console.
      - The stake engine already reads `following_degraded` (above).
      - Outside the stake engine, no wallet code reads it. Its other
-       hits, `synced_chain_facts.rs:542` and `shekyl-cli/src/daemon.rs:469`,
+       hits, `synced_chain_facts.rs:542` and `shekyl-cli/src/daemon.rs:450`,
        only build a response with it set to `false`.
      - Showing it to the person in plain terms is the wallet lane's. The
-       engine's `AlarmBoard` (`shekyl-engine-core/src/lib.rs:100`) is
+       engine's `AlarmBoard` (`shekyl-engine-core/src/lib.rs:102`) is
        the obvious place, but this document does not choose. It is named here
        as a consumer.
 
@@ -396,9 +403,9 @@ emits `Rewind`; it offers blocks, and the alt tier switches.
   `m_block_weights`, `cumulative_difficulty`.
 - Messages that need no flag still carry one:
   - `prune` is set to false everywhere, yet the responder still honours
-    it (FOLLOWUPS:244).
+    it (FOLLOWUPS:242).
   - `missed_ids` has no reader.
-- `RESPONSE_GET_OBJECTS` has no byte budget (FOLLOWUPS:1101). Its
+- `RESPONSE_GET_OBJECTS` has no byte budget (FOLLOWUPS:1098). Its
   ingress cap is the 100 MB packet.
 - Once DRS-SB discard lands, peers will hold no prunable bytes below the
   discard frontier. So full-body sync from genesis stops being possible,
@@ -439,7 +446,7 @@ the wire can still change?
    - The receiver checks the form against the same rule, so a full body
      below the frontier, or a skeleton above it, is a violation.
    - This takes **F28 into this slice**: the `PDM-Q-F28` row
-     (FOLLOWUPS:1408) is owned by CS.
+     (FOLLOWUPS:1413) is owned by CS.
 4. **Encoding.** Keep Levin portable storage for these messages. A move
    to canonical binary is a P2P-wide decision, not this slice's.
 
@@ -683,7 +690,7 @@ nothing:
     - Until the throttle is built, the residual is an inbound flood
       that delays tip learning, bounded by the unsolicited share.
   - **Outside this slice: PWD-B1's per-peer token bucket** (RULED, NOT
-    IMPLEMENTED; `SHEKYL_P2P_PROTOCOL.md` §PWD-B1, FOLLOWUPS:1120,
+    IMPLEMENTED; `SHEKYL_P2P_PROTOCOL.md` §PWD-B1, FOLLOWUPS:1117,
     "Extend PWD-B1's bucket to *every* dispatch").
     - Its surface is every dispatch, including the nine
       `HANDLE_NOTIFY_T2` routes in this handler
@@ -886,12 +893,9 @@ as shrink-only rows now?
 - `block_queue.{h,cpp}`;
 - `cryptonote_protocol_defs.h`.
 
-Two DRS-X PRs edit the handler before the CS cutover, and each carries
-its own `UNFREEZE` line:
-- **DRS-X PR 2:** "Until the chain-sync cutover the C++ handler's span
-  scheduler asks once per span" (`DRS_X_STORE_FLIP.md:63`). That is the
-  room check before each span.
-- **The flip:** `try_add_next_blocks` calls the entry.
+One DRS-X PR edits the handler before the CS cutover: **the flip**,
+where `try_add_next_blocks` calls the entry. It carries its own
+`UNFREEZE` line. DRS-X PR 2 (#1123) touches no handler file.
 
 That is the existing mechanism, and Rick's 2026-10-15 correction allows a
 C++ seam.
@@ -922,7 +926,7 @@ addition visible.
 - RD, unbuilt;
 - the DRS-X entry, ruled in Round 0 (#1101). PR-b, the pool door, has
   merged (#1102); PR 2, which builds the entry, is "briefed after PR-b's
-  door lands" (`DRS_X_STORE_FLIP.md:286`).
+  door lands" (`DRS_X_STORE_FLIP.md:324`).
 
 **Question.** What can start now, and does the cutover land whole or in
 increments?
@@ -953,7 +957,7 @@ increments?
   `relay_transactions` and complement serving
   (`handle_notify_get_txpool_complement`).
   - **`DRS_X_STORE_FLIP.md` says the opposite.** `DRS_X_STORE_FLIP.md` §4
-    item 6 (`:290`): "Chain sync's cutover follows the flip and deletes
+    item 6 (`:328`): "Chain sync's cutover follows the flip and deletes
     the shell's protocol-handler half. **RD** deletes `levin_notify` and
     the relay entry." That gives the handler's transaction routes to CS.
     It is §A's coupling 1, settled by the CS-Q1 ruling, and needs a docs
@@ -1032,8 +1036,8 @@ half-cut, and one cutover PR avoids it.
 
   These figures set the byte budgets, the run budget, the rate floor,
   the unsolicited share and the deadlines, which are `Assumption`s until
-  then. They also discharge FOLLOWUPS:1126 (the initial-sync cost at
-  the floor) and :1101 (the response byte budget).
+  then. They also discharge FOLLOWUPS:1123 (the initial-sync cost at
+  the floor) and :1098 (the response byte budget).
 
 ---
 
@@ -1101,15 +1105,16 @@ document says it carries.
 4. **Tip publication.** `shekyl_core_publish_tip` moves from
    `Blockchain` to the connector's commit, after every connect, pop and
    switch, as one source. The dialer and sync both read it.
-5. **`BeyondCap` reaches sync** as a reply, as the secondary source of
-   the `Diverged` alarm on the announce path (CS-Q2 step 7).
+5. **`BeyondCap` reaches sync** as a reply. A door refusal, before proof
+   of work, is a hint to request headers and never raises the alarm
+   (CS-Q2 steps 6 and 7).
 6. **A doc fix:** `source.rs:28` and `:43` (CS-F5). DRS-X assigned it to
    its PR 2.
 
 **Each coupling below is a docs PR against `DRS_X_STORE_FLIP.md`,**
 relayed to the DRS-X lane.
 
-1. **§4 item 6, the order of work (`:290`),** has chain sync delete the
+1. **§4 item 6, the order of work (`:328`),** has chain sync delete the
    whole protocol-handler half of the shell. Under CS-Q1, the
    transaction routes in that handler are RD's.
    - Wording: "Chain sync's cutover deletes the protocol handler's sync
@@ -1122,7 +1127,7 @@ relayed to the DRS-X lane.
 3. **The carried requirement.** DRS-X says "chain sync's Round 0
    requirement, ruled 2026-10, carried here" (`:60`, `:73`).
    - Ruled 2026-10-18, with §A as written, so the carried text stands.
-   - `:292` cites "chain sync CS-F5"; the family is registered with this
+   - `:330` cites "chain sync CS-F5"; the family is registered with this
      document.
    - The carried text can name this document now: chain sync is row
      **CS** of the §4.2 register, beside **TE** and **RD**, not a
@@ -1135,16 +1140,23 @@ relayed to the DRS-X lane.
      (CS-Q2 step 7).
    - **Ruled: a Rust-held latch, not shell state.** After the flip the
      switch is Rust ingest's, and its results already carry the two
-     refusals: `Switched::BelowFloor` (the undo floor) and `BeyondCap`
-     (`D_max`) (`switch.rs:336-340`). Ingest sets the latch from them.
-     The sync owner also sets it from the CS cutover (CS-Q2).
+     refusals: `Switched::BelowFloor` (the undo floor) and
+     `Switched::BeyondCap` (`D_max`) (`switch.rs:338-342`). Ingest sets
+     the latch from those switch results only.
+   - **Not from the door.** DRS-X PR 2 (#1123) refuses a past-cap
+     alternative at the door, before its proof of work is checked or it
+     is stored, and answers `BeyondCap`. That reply never sets the
+     latch. Since the door and `within_cap` (`switch.rs:640`) use the
+     same depth, `Switched::BeyondCap` is reached only when the tip
+     moves between the claim and the connector. In practice the `D_max`
+     alarm comes from the sync owner's verified headers (CS-Q2 step 7),
+     from the CS cutover.
    - The RPC reads it in Rust (`info_facts.rs:88`, DX-Q3, #1106). The
      latch semantics are C2-R1b's: one-way until a resync.
    - Without this, the flip silently retires a field the wallet acts
      on. Rule 82 puts that in scope.
-5. **DRS-X PR 2 edits the C++ handler** ("asks once per span",
-   `:63`). It needs its own `UNFREEZE` line under CS-Q9's rows, if those
-   rows land first.
+5. **The flip's `UNFREEZE`.** The flip PR edits `try_add_next_blocks`
+   and carries its own `UNFREEZE` line under CS-Q9's rows (§4 item 5).
 6. **`NoRoom`** is in CS-Q2's verdicts and in §A.1. #1101 names it
    (DX-Q2 item 3, `:62`), so this coupling only needs the two to stay in
    step.
