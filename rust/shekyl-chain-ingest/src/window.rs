@@ -119,7 +119,10 @@ fn height_of(corrupt: &Corrupt) -> BlockHeight {
         | Corrupt::BondRecordInvariant { .. }
         | Corrupt::BondHybridKeyMalformed { .. }
         | Corrupt::AccrualOverflow { .. }
-        | Corrupt::SettlementIntegrity { .. } => BlockHeight::ZERO,
+        | Corrupt::SettlementIntegrity { .. }
+        // An epoch's drawable set, like settlement: the fault names the
+        // epoch, not a block.
+        | Corrupt::DrawableEpoch { .. } => BlockHeight::ZERO,
     }
 }
 
