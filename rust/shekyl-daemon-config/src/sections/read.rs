@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
-use shekyl_options::{Code, Diagnostic, PeerEndpoint, Source, Value};
+use shekyl_options::{Code, Diagnostic, PeerEndpoint, Secret, Source, Value};
 
 use crate::resolve::Resolved;
 
@@ -271,6 +271,29 @@ impl<'a> Reader<'a> {
             Some(Value::Endpoint(endpoint)) => Read::Present(endpoint),
             Some(other) => {
                 self.syntax(name, &other.render(), "an endpoint");
+                Read::Unreadable
+            }
+        }
+    }
+
+    /// One half of an RFC 1929 pair: 1 to `max` bytes, the field RFC 1929
+    /// carries. A refusal never shows the text.
+    pub(super) fn socks_secret(&mut self, name: &str, max: usize) -> Read<Secret> {
+        match self.take(name).cloned() {
+            None => Read::Absent,
+            Some(Value::Secret(secret)) if (1..=max).contains(&secret.expose().len()) => {
+                Read::Present(secret)
+            }
+            Some(Value::Secret(_)) => {
+                self.range(
+                    name,
+                    "(not shown)",
+                    &format!("1 to {max} bytes, as RFC 1929 carries it"),
+                );
+                Read::Unreadable
+            }
+            Some(_) => {
+                self.syntax(name, "(not shown)", "a secret");
                 Read::Unreadable
             }
         }

@@ -108,6 +108,9 @@ impl Restorable for (u64, u32) {}
 // `archival_issued_draw`'s `(epoch, persona, shard, issuing height, draw)`
 // (`IssuedDrawKey`): 60 fixed bytes, the tuple's derived width.
 impl Restorable for (u64, [u8; 32], u64, u64, u32) {}
+// `archival_release_journal`'s `(height, persona)` (`ReleaseJournalKey`,
+// `SO-D12` increment 2): 40 fixed bytes, the tuple's derived width.
+impl Restorable for (u64, [u8; 32]) {}
 // `curve_tree_meta`'s unit key (S-CURVE `SCU-Q1`): the one-row table.
 impl Restorable for () {}
 impl Restorable for LmdbHashKey {}

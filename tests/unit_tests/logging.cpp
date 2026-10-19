@@ -81,6 +81,7 @@
 
 #include "gtest/gtest.h"
 #include "misc_log_ex.h"
+#include "shekyl/shekyl_log.h"
 
 #if !defined(_WIN32)
 #include <cerrno>
@@ -95,13 +96,18 @@ namespace
   /// RAII stderr redirector. Constructs a pipe, points
   /// `STDERR_FILENO` at its write end, and restores the original fd
   /// on destruction. `drain_through(marker)` reads until the line
-  /// holding `marker` has arrived. The Rust subscriber's stderr sink is
-  /// a queue with its own writer thread (`log-stderr`,
-  /// `rust/shekyl-logging/src/queue.rs`), so a line reaches the pipe
-  /// some time after the call that logged it returns, and lines an
-  /// earlier test logged can reach it first. The queue is FIFO: a
-  /// marker logged last arrives after every line logged before it, so
-  /// each test ends its capture with one.
+  /// holding `marker` has arrived.
+  ///
+  /// The Rust subscriber's stderr sink is a queue with its own writer
+  /// thread (`log-stderr`, `rust/shekyl-logging/src/queue.rs`), so a
+  /// line reaches the pipe some time after the call that logged it
+  /// returns. The capture flushes that queue (`shekyl_log_flush`)
+  /// before it points stderr at the pipe, so lines logged earlier (the
+  /// binary's startup line, an earlier test's) go to the real stderr,
+  /// and again before each read, so every line the test logged is in
+  /// the pipe. The queue is FIFO, and each test also ends its capture
+  /// with a marker: a line a background thread logs while the capture
+  /// is open still lands in it, and the fences say where.
   class stderr_capture
   {
   public:
@@ -126,6 +132,11 @@ namespace
       read_fd_ = pipefd[0];
       write_fd_ = pipefd[1];
 
+      if (shekyl_log_flush(flush_within_ms) != SHEKYL_LOG_OK)
+      {
+        setup_error_ = "shekyl_log_flush: earlier lines were still queued at the deadline";
+        return;
+      }
       std::fflush(stderr);
       saved_stderr_ = ::dup(STDERR_FILENO);
       if (saved_stderr_ < 0)
@@ -148,19 +159,14 @@ namespace
       if (write_fd_ >= 0) ::close(write_fd_);
     }
 
-    /// Pull whatever the subscriber has written to our pipe end.
-    /// Polls for `timeout` total wall time; returns as soon as a
-    /// read returns 0 bytes twice in a row (drained) or the timeout
-    /// elapses. `fflush(stderr)` flushes any libc-buffered output
-    /// but the Rust subscriber writes via `std::io::stderr` which is
-    /// unbuffered on pipes, so the bulk of the payload is already
-    /// resident after the emit returns.
     /// Everything read up to the end of the first line holding
     /// `marker`, or "" when that line has not arrived within `timeout`.
-    /// Bytes after it are kept for the next call.
+    /// Flushes the log queue first (`flushed()` records whether it
+    /// finished). Bytes after the line are kept for the next call.
     std::string drain_through(const std::string &marker,
                               std::chrono::milliseconds timeout = std::chrono::milliseconds(5000))
     {
+      flushed_ = shekyl_log_flush(flush_within_ms) == SHEKYL_LOG_OK;
       const auto deadline = std::chrono::steady_clock::now() + timeout;
       char buf[4096];
       for (;;)
@@ -215,12 +221,20 @@ namespace
     /// `setup_error()` instead of a silently passing no-op test.
     bool usable() const { return usable_; }
     const std::string &setup_error() const { return setup_error_; }
+    /// Whether the last `drain_through()` found the queue flushed
+    /// before it read. A test asserting what is absent must gate on it too.
+    bool flushed() const { return flushed_; }
+
+    /// Generous on a loaded runner; a flush returns as soon as the
+    /// queue is written.
+    static constexpr uint32_t flush_within_ms = 5000;
 
   private:
     int read_fd_ = -1;
     int write_fd_ = -1;
     int saved_stderr_ = -1;
     bool usable_ = false;
+    bool flushed_ = false;
     std::string setup_error_;
     std::string pending_;
   };
@@ -284,6 +298,8 @@ TEST(logging, no_logs)
   MGINFO("marker-no-logs-close");
   const std::string fenced = cap.drain_through("marker-no-logs-close");
   cap.restore();
+  ASSERT_TRUE(cap.flushed())
+    << "the log queue was not flushed before the read; an empty drain would be a false negative.";
   ASSERT_FALSE(fenced.empty()) << "the close fence never reached the pipe";
   // What arrived before the close fence's own line.
   const size_t close_line = fenced.rfind('\n', fenced.find("marker-no-logs-close"));
@@ -395,6 +411,7 @@ TEST(logging, concurrent_emits_do_not_deadlock)
 
   const std::string out = cap.drain_through("marker-concurrent-close");
   cap.restore();
+  ASSERT_TRUE(cap.flushed()) << "the log queue was not flushed before the read.";
 
   EXPECT_NE(out.find("marker-concurrent-thread-1"), std::string::npos)
     << "thread 1 emit missing from captured stderr:\n" << out;

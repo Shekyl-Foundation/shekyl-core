@@ -31,8 +31,8 @@ use shekyl_chain_rules::{
     RecordedWeights, SlashLogFloor, StructurallyValid, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, RMarket,
-    ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    BlockDraws, BondRecord, DrawableDigest, IndexedDraw, IssuedDigest, LoggedSlash, PassCount,
+    RMarket, ReleasedRecord, ServedShard, SettlementRow, SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -202,5 +202,19 @@ impl<'id, T> ChainView<'id> for Stub<T> {
     }
     fn drawable_digest(&self, _: SettlementEpoch) -> Result<Option<DrawableDigest>, Infallible> {
         Ok(None)
+    }
+    fn release_journal_after(
+        &self,
+        _: BlockHeight,
+        _: SlashLogFloor,
+    ) -> Result<Vec<ReleasedRecord>, Infallible> {
+        Ok(Vec::new())
+    }
+    fn slash_log_rows_after(
+        &self,
+        _: BlockHeight,
+        _: SlashLogFloor,
+    ) -> Result<Vec<LoggedSlash>, Infallible> {
+        Ok(Vec::new())
     }
 }

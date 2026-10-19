@@ -53,10 +53,13 @@
 //! a failed flush. What that leaves, on the record (Rick's review
 //! of #1069, 2026-10-14):
 //!
-//! - **Shutdown.** Dropping the [`LoggerGuard`] queues a shutdown (waiting
-//!   at most 100 ms for room) and then waits at most 1 s for the writer
-//!   thread to drain, and returns either way: about a second. Lines still
-//!   queued then are lost. A sink still stalled at that point can hold the
+//! - **Flushing and shutdown.** [`flush`] waits until every line logged
+//!   before the call has reached its sink, or until its deadline, and
+//!   never longer; a full queue is retried, never waited on. A process
+//!   about to exit calls it last, and so does a test that reads what a
+//!   sink wrote. Dropping the [`LoggerGuard`] flushes the same way within
+//!   [`FLUSH_WITHIN`] and stops the writers. Lines still queued at the
+//!   deadline are lost. A sink still stalled at that point can hold the
 //!   process's exit anyway: a writer thread inside a write the kernel
 //!   cannot interrupt (a stalled disk) keeps the process from exiting, and
 //!   anything else writing to the same stalled stderr blocks with it. The
@@ -67,9 +70,9 @@
 //!   subscriber is installed.
 //! - **The bound is lines, not bytes.** [`SINK_QUEUE_LINES`] counts lines,
 //!   so a queue of long lines holds more memory than the figure suggests.
-//! - **The thread ledger does not count them.** `tracing_appender` spawns
-//!   the two writer threads itself, not through `shekyl-thread-ledger`, so
-//!   the daemon's ledger print leaves them out.
+//! - **The thread ledger does not count them.** This crate spawns the two
+//!   writer threads with `std::thread`, not through `shekyl-thread-ledger`,
+//!   so the daemon's ledger print leaves them out.
 //!
 //! # Quick-start
 //!
@@ -98,7 +101,7 @@ mod colour;
 mod legacy;
 mod queue;
 
-pub use queue::SINK_QUEUE_LINES;
+pub use queue::{flush, Flushed, FLUSH_WITHIN, SINK_QUEUE_LINES};
 
 #[doc(hidden)]
 pub use colour::LineColour;
@@ -113,7 +116,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use colour::NoColor;
 
 use thiserror::Error;
-use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::filter::EnvFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
@@ -197,10 +199,10 @@ pub struct LoggerGuard {
     // `shekyl_log_shutdown`.
     /// stderr's writer thread. stderr is always queued.
     #[allow(dead_code)]
-    pub(crate) stderr: WorkerGuard,
+    pub(crate) stderr: queue::SinkGuard,
     /// The file sink's writer thread, when a file sink is configured.
     #[allow(dead_code)]
-    pub(crate) file: Option<WorkerGuard>,
+    pub(crate) file: Option<queue::SinkGuard>,
 }
 
 /// Errors returned from [`init`].
@@ -235,6 +237,10 @@ pub enum InitError {
     /// directory, etc.).
     #[error("invalid file-sink directory: {0}")]
     InvalidDirectory(std::path::PathBuf),
+
+    /// A sink's writer thread could not be started.
+    #[error("failed to start a log writer thread: {0}")]
+    WriterThread(#[source] std::io::Error),
 }
 
 /// Install the global [`tracing`] subscriber described by `config`.
@@ -329,13 +335,16 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
 
     // Queued like every sink: a log call never waits on stderr. The
     // line's fields are unchanged; colour is the `colour` argument.
-    let (stderr_writer, stderr_guard) = queue::queued(stderr, queue::Sink::Stderr, lines);
+    let (stderr_writer, stderr_guard) =
+        queue::queued(stderr, queue::Sink::Stderr, lines).map_err(InitError::WriterThread)?;
+    let mut producers = vec![stderr_writer.clone()];
     let stderr_layer = fmt::layer()
         .with_writer(stderr_writer)
         .with_ansi(colour.ansi());
 
     let (file_layer, file_guard) = if let Some(file_sink) = config.file_sink {
         let (writer, guard) = appender::open(&file_sink, lines)?;
+        producers.push(writer.clone());
         (
             Some(
                 fmt::layer()
@@ -354,6 +363,7 @@ fn install_subscriber_with_stderr<W: std::io::Write + Send + 'static>(
         .with(file_layer)
         .try_init()
         .map_err(|e| InitError::SubscriberInstall(e.to_string()))?;
+    queue::install(producers);
 
     Ok((
         LoggerGuard {

@@ -73,11 +73,12 @@ jobs:
             host: x86_64-linux-gnu
             runner: ubuntu-latest
             exe: tor
-            client_floor: 8
+            client_floor: 9
             wallet_floor: 4
             daemon_floor: 3
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
               blocking::tests::blocking_facade_full_lifecycle_from_plain_thread
@@ -86,11 +87,12 @@ jobs:
             host: aarch64-linux-gnu
             runner: ubuntu-24.04-arm
             exe: tor
-            client_floor: 8
+            client_floor: 9
             wallet_floor: 4
             daemon_floor: 3
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
+              control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
               blocking::tests::blocking_facade_full_lifecycle_from_plain_thread
@@ -214,7 +216,8 @@ jobs:
           ../scripts/ci/require_live_tests.sh ignored-control.out ${{ matrix.target.client_tests }}
           # And guard the FULL set — not just that one — against a silent
           # coverage drop. Floor = this crate's current ignored count on the
-          # entry's platform (8 on every entry: pin + 6 actor + 1 launch).
+          # entry's platform: Linux 9 (pin + 7 actor + 1 launch), Windows 8,
+          # the descriptor-inheritance test being Linux-only.
           # `-ge` so a new live test does not fail the lane before this floor
           # is raised with it. Lower the floor only when a test is
           # deliberately removed. `sed ... q`, not a pipe into `head`: the

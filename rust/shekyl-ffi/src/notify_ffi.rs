@@ -189,6 +189,11 @@ fn fill(command: &[String], fills: &[(&str, String)]) -> Vec<OsString> {
 /// from the OS and never from this process's environment, the rule the Tor
 /// launcher follows (`TOR_BUNDLE_DISTRIBUTION.md` TB-7 part 2).
 ///
+/// On Unix the child inherits standard input, output and error and no other
+/// descriptor ([`shekyl_tor_control_client::inherit`]): C++ in this process
+/// opens sockets and files without close-on-exec, and none of them is the
+/// operator's command's (§2.10).
+///
 /// The spawn takes the spawn lock (`TOR_SUPERVISOR.md` §4.7): this runs in
 /// the daemon's process, which launches the managed Tor, and on Windows a
 /// child started while the launch holds Tor's end inheritable would inherit
@@ -203,6 +208,7 @@ async fn run(argv: &[OsString]) -> std::io::Result<std::process::ExitStatus> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(false);
+    shekyl_tor_control_client::inherit::stdio_only(&mut cmd);
     #[cfg(windows)]
     {
         let root = shekyl_win_sec::system_dir::system_windows_directory()
@@ -422,5 +428,99 @@ mod tests {
             })
             .expect("a sibling child reports its status");
         assert!(status.success());
+    }
+
+    /// A descriptor opened without close-on-exec, as C++ in the daemon's
+    /// process opens one.
+    #[cfg(unix)]
+    struct Planted(libc::c_int);
+
+    #[cfg(unix)]
+    impl Planted {
+        fn open() -> Self {
+            // SAFETY: `open` on a NUL-terminated path, without `O_CLOEXEC`.
+            let fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+            assert!(fd >= 3, "a descriptor above stdio");
+            Self(fd)
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for Planted {
+        fn drop(&mut self) {
+            // SAFETY: closes the descriptor this value opened.
+            unsafe { libc::close(self.0) };
+        }
+    }
+
+    #[cfg(unix)]
+    fn run_now(argv: &[&str]) -> std::process::ExitStatus {
+        let argv: Vec<OsString> = argv.iter().map(OsString::from).collect();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(run(&argv))
+            .expect("the command runs")
+    }
+
+    /// The operator's command inherits standard input, output and error and
+    /// nothing else (§2.10): a planted descriptor without close-on-exec does
+    /// not reach it. Fails when [`run`] stops calling
+    /// [`shekyl_tor_control_client::inherit::stdio_only`].
+    #[cfg(unix)]
+    #[test]
+    fn the_command_does_not_inherit_a_descriptor_c_plus_plus_left_open() {
+        let planted = Planted::open();
+        // `/dev/fd/N`, not `<&N`: dash takes only one-digit descriptor
+        // numbers in a redirection, and a test process can hold ten.
+        let status = run_now(&["/bin/sh", "-c", &format!("test -e /dev/fd/{}", planted.0)]);
+        assert!(
+            !status.success(),
+            "the planted descriptor reached the command"
+        );
+    }
+
+    /// The whole table on Linux: every descriptor the command holds from 3 up is
+    /// `ls`'s own handle on the directory it lists, so the command was handed
+    /// 0, 1 and 2 only.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_command_holds_only_stdio_on_linux() {
+        let _planted = Planted::open();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("fds");
+        let out_arg = out.to_str().expect("a UTF-8 temporary path");
+        let status = run_now(&[
+            "/bin/sh",
+            "-c",
+            "exec /bin/ls -l /proc/self/fd > \"$1\"",
+            "sh",
+            out_arg,
+        ]);
+        assert!(status.success(), "the listing ran");
+        let listing = std::fs::read_to_string(&out).unwrap();
+        let mut held = Vec::new();
+        for line in listing.lines() {
+            let Some((name, target)) = line.split_once(" -> ") else {
+                continue;
+            };
+            let fd: u32 = name
+                .rsplit(' ')
+                .next()
+                .and_then(|n| n.parse().ok())
+                .expect("a descriptor number before the arrow");
+            held.push(fd);
+            if fd >= 3 {
+                assert!(
+                    target.starts_with("/proc/") && target.ends_with("/fd"),
+                    "descriptor {fd} reached the command: {target}"
+                );
+            }
+        }
+        assert!(
+            [0, 1, 2].iter().all(|fd| held.contains(fd)),
+            "the listing names stdio: {listing}"
+        );
     }
 }

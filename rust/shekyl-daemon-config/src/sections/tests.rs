@@ -11,7 +11,7 @@ use shekyl_options::{Code, Diagnostic, Source, Value};
 
 use super::{
     build, link_limits, log_location_writable, read_ban_file, Ban, Clearnet, DaemonConfig, Onion,
-    Socks, Tor,
+    Socks, SocksCredential, Tor,
 };
 use crate::network::Network;
 use crate::platform::{Platform, RunMode};
@@ -186,44 +186,115 @@ fn socks_credentials_need_each_other_and_their_endpoint() {
     ));
     assert_eq!(
         d,
-        vec![(Code::ValueConflict, "clearnet-socks-username".into())],
-        "one reason: the dial sends no credentials"
+        vec![(Code::ValueRequires, "clearnet-socks-username".into())],
+        "a username names the password it needs"
     );
-    let d = codes(build_from(&[], "clearnet-socks-password = \"p\"\n"));
-    assert_eq!(
-        d,
-        vec![(Code::ValueConflict, "clearnet-socks-password".into())]
-    );
-    // Both given: well-formed, and refused all the same, because the
-    // dial sends no credentials; the refusal names each key.
     let d = codes(build_from(
         &["--clearnet-socks", "127.0.0.1:1080"],
-        "clearnet-socks-username = \"u\"\nclearnet-socks-password = \"hunter2\"\n",
+        "clearnet-socks-password = \"p\"\n",
+    ));
+    assert_eq!(
+        d,
+        vec![(Code::ValueRequires, "clearnet-socks-password".into())]
+    );
+    let d = codes(build_from(
+        &[],
+        "clearnet-socks-username = \"u\"\nclearnet-socks-password = \"p\"\n",
     ));
     assert_eq!(
         d,
         vec![
-            (Code::ValueConflict, "clearnet-socks-username".into()),
-            (Code::ValueConflict, "clearnet-socks-password".into())
-        ]
-    );
-    let d = build_from(
-        &["--clearnet-socks", "127.0.0.1:1080"],
-        "clearnet-socks-username = \"u\"\nclearnet-socks-password = \"hunter2\"\n",
-    )
-    .unwrap_err();
-    assert!(
-        !format!("{d:?}").contains("hunter2"),
-        "a secret never prints, not even in a refusal"
+            (Code::ValueRequires, "clearnet-socks-username".into()),
+            (Code::ValueRequires, "clearnet-socks-password".into())
+        ],
+        "a pair without its proxy names the proxy"
     );
     let c = build_from(&["--clearnet-socks", "127.0.0.1:1080"], "").unwrap();
     assert!(matches!(
         c.clearnet,
         Clearnet::On {
-            socks: Some(Socks { endpoint }) ,
+            socks: Some(Socks { endpoint, credential: None }),
             ..
         } if endpoint.port() == 1080
     ));
+}
+
+#[test]
+fn a_socks_pair_is_carried_to_its_proxy_and_never_shown() {
+    let c = build_from(
+        &["--clearnet-socks", "127.0.0.1:1080"],
+        "clearnet-socks-username = \"u\"\nclearnet-socks-password = \"hunter2\"\n",
+    )
+    .unwrap();
+    let Clearnet::On {
+        socks: Some(Socks {
+            credential: Some(credential),
+            ..
+        }),
+        ..
+    } = &c.clearnet
+    else {
+        panic!("the clearnet proxy carries its pair: {:?}", c.clearnet);
+    };
+    assert_eq!(credential.username(), b"u");
+    assert_eq!(credential.password(), b"hunter2");
+    assert!(
+        !format!("{c:?}").contains("hunter2"),
+        "the configuration's Debug shows no secret"
+    );
+    let c = build_from(
+        &["--tor", "operator", "--tor-socks", "127.0.0.1:9050"],
+        "tor-socks-username = \"op\"\ntor-socks-password = \"pw\"\n",
+    )
+    .unwrap();
+    assert!(matches!(
+        &c.tor,
+        Tor::Operator {
+            socks: Socks { credential: Some(credential), .. },
+            ..
+        } if credential.username() == b"op" && credential.password() == b"pw"
+    ));
+}
+
+#[test]
+fn a_socks_pair_is_one_to_255_bytes_each_as_rfc_1929_carries_it() {
+    // Empty: the grammar refuses an empty secret before the sections read it.
+    let d = codes(build_from(
+        &["--clearnet-socks", "127.0.0.1:1080"],
+        "clearnet-socks-username = \"\"\nclearnet-socks-password = \"p\"\n",
+    ));
+    assert_eq!(
+        d,
+        vec![(Code::ValueSyntax, "clearnet-socks-username".into())]
+    );
+    // Longer than RFC 1929's one-byte length can carry.
+    let long = "x".repeat(SocksCredential::MAX_BYTES + 1);
+    let d = build_from(
+        &["--clearnet-socks", "127.0.0.1:1080"],
+        &format!("clearnet-socks-username = \"{long}\"\nclearnet-socks-password = \"{long}\"\n"),
+    )
+    .unwrap_err();
+    let found: Vec<(Code, String)> = d
+        .iter()
+        .map(|d| (d.code, d.option.clone().unwrap_or_default()))
+        .collect();
+    assert_eq!(
+        found,
+        vec![
+            (Code::ValueRange, "clearnet-socks-username".into()),
+            (Code::ValueRange, "clearnet-socks-password".into())
+        ]
+    );
+    assert!(
+        !format!("{d:?}").contains(&long),
+        "a refusal never prints the secret"
+    );
+    let most = "x".repeat(SocksCredential::MAX_BYTES);
+    assert!(build_from(
+        &["--clearnet-socks", "127.0.0.1:1080"],
+        &format!("clearnet-socks-username = \"{most}\"\nclearnet-socks-password = \"{most}\"\n"),
+    )
+    .is_ok());
 }
 
 #[test]
