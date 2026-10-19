@@ -660,10 +660,13 @@ census_rows! {
         L11 by_construction(crate::drain::tree_after, "l11_an_accepted_output_left_out_of_the_tree_is_a_different_root"),
         L12 by_construction(crate::drain::tree_after, "l12_a_coinbase_leaf_joins_at_sixty_and_a_listed_leaf_at_ten_and_neither_earlier"),
         // L14: the mechanism is ruled and built (every keyed write is a
-        // declared verb); the five per-site semantics are R8b-3…R8b-7, and
-        // R8b-3…R8b-6 carry no ruling — the porters chose the verbs
-        // (`DRS_E4_ARCHIVAL_WRITER.md`: "L14's four sites are C2-R8b's to
-        // name"). Pending until each is named.
+        // declared verb). The three sites that outlive SO-D12 are named
+        // against their write (DX-Q9, the census row): bond records insert
+        // at the join and replace after it (SI-19, SI-20), the accrual row
+        // is an intended upsert held to one row (SI-23), and curve-root
+        // heights insert (SI-4). Pending until SO-D12's merged increment
+        // deletes the other two, the pass bits and the witness rows
+        // (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3).
         L14 pending,
         // L16: the as-of-height holdings fold is `holds_shard_at` (DRS-E4
         // commit 2), evaluated by this crate's `ChainView` walk over A1's
