@@ -576,9 +576,23 @@ impl Message<Rewind> for Connector {
                 Some(tip) if tip >= to => tip.to_raw() - to.to_raw(),
                 other => return Err(RunFault::RewindTarget { to, tip: other }),
             };
+            // The popped blocks' identities, read before they go: an alt
+            // branch built on one no longer reaches the main chain, and
+            // leaves with them (`store/alt.rs`, the invariant). A switch's
+            // pops demote what they pop instead, so this is the rewind's.
+            let view = batch.chain_view();
+            let mut gone = Vec::new();
+            for height in to.to_raw() + 1..=to.to_raw() + popped {
+                match view.header_at(BlockHeight::from_raw(height))? {
+                    AtHeight::Recorded(record) => gone.push(record.hash),
+                    AtHeight::AboveTip => unreachable!("every height to the tip is recorded"),
+                }
+            }
+            drop(view);
             // One run of pops, then SI-5 over the tree they left
             // (`pop_many`): the belt is the run's, not each pop's.
             batch.pop_many(popped)?;
+            batch.retire_alt_blocks_on(&gone)?;
             Ok(Rewound { popped })
         })
     }

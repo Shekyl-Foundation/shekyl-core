@@ -14,12 +14,13 @@ fixtures and Rust self-differential, a8's docs — merged 2026-10-16
 on `BatchView`, the bundle verifier inside `validate` at the switch) land
 with SO-D12's merged increment, which puts the bundle section on the block
 wire (`ARCHIVAL_SETTLEMENT_WRITER.md` §16.3 item 3; the wire's `Block`
-carries no section, `shekyl-wire/src/block.rs:117–124`). PR-b (b1–b7,
-#1102, `feat/drs-e5-pool-prb`), DRS-X's PR 1 (`DRS_X_STORE_FLIP.md` DX-Q7,
-ruled 2026-10-16), builds the Rust pool staged for the DRS-X flip: the door
-is the validator's own judgement at `TxSlot::Lone`, the pool record knows
-one relay fact (DX-F6), the bundle work is SO-D12's (§2.2, §5). This file
-stays open for the residue §9 names for its owners.** Round 0 posed
+carries no section, `shekyl-wire/src/block.rs:117–124`). PR-b (b1–b7),
+DRS-X's PR 1 (`DRS_X_STORE_FLIP.md` DX-Q7, ruled 2026-10-16), merged
+2026-10-18 (#1102): the Rust pool, staged for the DRS-X flip and wired by
+it — the door is the validator's own judgement at `TxSlot::Lone`, the pool
+record knows one relay fact (DX-F6), reorg retention is deleted (CEN-K10),
+the bundle work is SO-D12's (§2.2, §5). This file stays open for the
+bundle legs and for the residue §9 names for its owners.** Round 0 posed
 2026-10-10 at `dev@14d68c00fc`, merged to `dev@ac95d6d04` before the PR
 opened. Pre-flight in §1.1, findings `E5-1…E5-18` (`E5-13…E5-15` are PR-a
 commit 1's measurement, §1.7; `E5-16` and `E5-17` are the review's;
@@ -795,7 +796,13 @@ brief, 2026-10-16). Three calls, in order:
    tip moved between snapshot and view), answered by judging again.
 3. `policy_form(tx, &AdmissionPolicy, …)` for the `PolicyRow`s (M3 fee
    floor, M4 extra cap, M5 unlock ban), which populates `PolicyCoverage`
-   and lifts the policy gate off `implemented 0`.
+   and lifts the policy gate off `implemented 0`. Its operand is the relay
+   floor window at the connecting height. A window the tip has dropped
+   under is `DoorFault::TipMoved { asked, now }` (`PoolFault::TipMoved` at
+   the pool): the transaction is unjudged, nothing is written, and the
+   caller reads the chain again and judges once more. The policy never sees
+   an empty window made up for that answer; an empty window the chain did
+   record is CEN-M3's refusal.
 
 No proof or signature is verified anywhere in `shekyl-mempool`: the
 crate calls the two validator functions and holds no rule (`E5-Q2`'s
@@ -1642,7 +1649,10 @@ Not E5's; found while reading the census at the pin.
   mining, and asserts `len() ≤ pool.len()`; and the relay nudge stays on
   `CommitOutcome::Committed` only (`engine.rs`), never on a concealed
   `Accepted` — a peer's stem transaction resubmitted over RPC must never
-  make this node its originator.
+  make this node its originator. The router judges against a live view,
+  so `PoolFault::TipMoved` can reach it, where today's callers judge over
+  a fixed snapshot whose tip cannot move: it re-reads the chain and judges
+  again, and never answers a moved tip as an internal fault.
 
 ---
 

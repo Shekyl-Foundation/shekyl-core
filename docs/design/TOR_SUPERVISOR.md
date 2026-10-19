@@ -216,17 +216,18 @@ stop" holds only after the dialer stop; #1066's step 9 is sequential today.
 else the routine leaves beside the directory are named under that prefix, and
 the sweep removes files as well as directories.
 
-**TSR-F15 (medium; TB lane). Windows and macOS have no managed Tor yet, and
-§7 is what gives them one.** Both are `unavailable` with `"pending": "TB-11"`
-in `config/tor_pins.json`; TB-11 makes a target pinned only with a launch test,
+**TSR-F15 (medium; TB lane). macOS has no managed Tor yet, and §7 is what
+gives it one.** Both macOS rows are `unavailable` with `"pending": "TB-11"` in
+`config/tor_pins.json`; TB-11 makes a target pinned only with a launch test,
 and the digests are already verified (`TOR_BUNDLE_DISTRIBUTION.md` §4). §7's
-Windows and macOS cases are those launch tests: the change whose job passes
-them adopts that platform's pin and removes its `pending` marker. Windows run
-of 2026-10-15 (the Windows development host): the pinned `tor.exe` imports 21
-libraries, all the operating system's (8 System32 libraries and 13 UCRT
-apisets), with no delay-loads. With `TSR-F17`'s `SystemRoot` fix, the Windows
-launch evidence TB-11 asks for is in hand; adopting the Windows pin waits only
-on that fix and on §7's Windows cases.
+macOS cases are that launch test: the change whose job passes them adopts the
+macOS pin and removes its `pending` marker. TB-11's Windows launch test is
+this lane's Windows entry, the `windows-x86_64` entry of `tor-pin-verify`;
+§7's Windows cases are the supervisor's acceptance tests, not the pin's gate.
+Windows run of 2026-10-15 (the Windows development host): the pinned
+`tor.exe` imports 21 libraries, all the operating system's (8 System32
+libraries and 13 UCRT apisets), with no delay-loads; the pin's `imports`
+list is that set, re-derived from the 15.0.25 `tor.exe`.
 
 **TSR-F16 (medium; Tor lane). A leaked copy of Tor's socket end hides Tor's
 death.** Measured on Windows (case C6b, 2026-10-15): with the handle leaked
@@ -393,7 +394,7 @@ no failure memory and no target.
 **What fires it (`TSR-Q5`, ruled 2026-10-15): one probe per descriptor
 upload round.** Tor re-uploads our descriptor on its own schedule, every 60 to
 120 minutes at random (`HS_SERVICE_NEXT_UPLOAD_TIME_MIN` and `_MAX`,
-lines 34 and 36 of Tor's own `hs_service.h`, in its `feature/hs` directory, at tag `tor-0.4.9.13`), and at once when it
+lines 34 and 36 of Tor's own `hs_service.h`, in its `feature/hs` directory, at tags `tor-0.4.9.13` and `tor-0.4.9.14`), and at once when it
 picks new introduction points, when the proof-of-work effort changes, or when
 the HSDir ring changes. Each upload reaches us as `HS_DESC UPLOADED`, one per
 HSDir. The events of one round are coalesced into one trigger; after a
@@ -593,8 +594,10 @@ Every question of this round is ruled (§1).
 
 Linux, Windows, macOS; the Pi 4 is the Linux host for the soak. Each case
 asserts the announced transitions, the recovery, the RPC fields, **and that the
-gray list is unchanged by the outage**. On Windows and macOS these cases are
-TB-11's launch tests (`TSR-F15`); the respawn case runs in the Windows CI job
+gray list is unchanged by the outage**. On macOS these cases are TB-11's
+launch test; on Windows TB-11's launch test is `tor-pin-verify`'s Windows
+entry, and these cases are the supervisor's acceptance tests (`TSR-F15`). The
+respawn case runs in the Windows CI job
 beside the boot-and-stop smoke test (#1072), and in a macOS job once one
 exists.
 
@@ -707,7 +710,8 @@ its PR leaves draft.
 - **RPC:** `TSR-Q4` (ruled): one Health boolean, this node can originate over
   an address-hiding connector now; state, cause, since and the respawn count
   are restricted Status fields, named by the RPC lane.
-- **TB:** §7's Windows and macOS rows are TB-11's launch tests (`TSR-F15`).
+- **TB:** §7's macOS rows are TB-11's macOS launch test; the Windows launch
+  test is `tor-pin-verify`'s Windows entry (`TSR-F15`).
 - **Wallet:** none this round; the sans-IO core is there to adopt.
 
 ## 12. Increments (rule 26)

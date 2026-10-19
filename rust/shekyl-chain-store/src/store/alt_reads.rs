@@ -26,6 +26,8 @@
 //! does not decode: membership is the key's presence, which is what
 //! `have_block` asks.
 
+use std::collections::{HashMap, HashSet};
+
 use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_store_codec::{Canonical, CodecError};
 use shekyl_types::BlockHash;
@@ -60,6 +62,85 @@ pub struct AltEntry {
 
 /// SI-7 reason when a decoded alt row's block does not hash to its key.
 pub(super) const ALT_KEY_MISMATCH: &str = "alt block does not hash to its key";
+
+/// The parent index of one alt table: each block's id under the hash its
+/// header names as `previous`.
+///
+/// The death rule's closure and the listing's tip selection are this one
+/// index. A second walk would be free to disagree about which rows descend
+/// from which, which is the bug a height-only retirement already had.
+pub(super) struct AltLinks {
+    /// Children of each parent hash, in the table's key order. A parent
+    /// that is not itself an alt row — a main-chain block, or a hash the
+    /// table does not hold — is a key with children and not a tip.
+    children: HashMap<BlockHash, Vec<BlockHash>>,
+}
+
+impl AltLinks {
+    /// Index `entries` (AL7's order).
+    pub(super) fn of(entries: &[AltEntry]) -> Self {
+        let mut children: HashMap<BlockHash, Vec<BlockHash>> = HashMap::new();
+        for entry in entries {
+            children
+                .entry(entry.block.block().header.previous)
+                .or_default()
+                .push(entry.id);
+        }
+        Self { children }
+    }
+
+    /// The rows `roots` names and every row that descends from one of them
+    /// by naming it, or one of its descendants, as `previous`.
+    ///
+    /// `on_main` is a hash the main chain holds. The walk stops there: a
+    /// child of that hash reaches the recorded block, the way
+    /// [`AltChain::build`](super::AltChain::build) does, so removing a
+    /// duplicate row does not take the branch above it. A root that is
+    /// itself on the main chain is included and not walked past. A link
+    /// that returns to a row already taken is not walked again.
+    pub(super) fn closure(
+        &self,
+        roots: impl IntoIterator<Item = BlockHash>,
+        on_main: impl Fn(&BlockHash) -> bool,
+    ) -> HashSet<BlockHash> {
+        let mut dead = HashSet::new();
+        let mut frontier = Vec::new();
+        for id in roots {
+            if on_main(&id) {
+                // Selected, and the recorded block is where the walk stops.
+                let _ = dead.insert(id);
+            } else if dead.insert(id) {
+                frontier.push(id);
+            }
+        }
+        while let Some(id) = frontier.pop() {
+            let Some(children) = self.children.get(&id) else {
+                continue;
+            };
+            for child in children {
+                // A recorded hash stops the walk the way `AltChain::build`
+                // does: the rows above it reach that block, so they stay.
+                if on_main(child) || !dead.insert(*child) {
+                    continue;
+                }
+                frontier.push(*child);
+            }
+        }
+        dead
+    }
+
+    /// The entries no alt row names as its parent, in `entries`' order.
+    /// A cycle in which every row is someone's parent has no tip: the
+    /// listing does not invent one the table does not have.
+    pub(super) fn tips<'a>(
+        &'a self,
+        entries: &'a [AltEntry],
+    ) -> impl Iterator<Item = &'a AltEntry> + 'a {
+        entries
+            .iter()
+            .filter(|entry| !self.children.contains_key(&entry.id))
+    }
+}
 
 /// The table key for a block hash. `alt_blocks` keeps LMDB's
 /// `compare_hash32` order (the key-types gate holds it), so the key is

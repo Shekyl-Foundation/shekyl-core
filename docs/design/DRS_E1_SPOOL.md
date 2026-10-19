@@ -15,7 +15,7 @@ two rows kept, one layout number for the crate's two files (closed
 structural — `RelayState` chooses the phase enum by provenance, so
 `PhaseWithoutOrigin` and `responsibility: Option` are not the shape that
 landed. The census row's method for S-ALT is unchanged.
-**DX-F6 (2026-10-16, DRS-E5 PR-b) retires the record's relay decomposition:** the pool record carries a receive hour, `public: bool` and a standing (the review of #1102, S2/S7), `Responsibility` is `shekyl-relay`'s, and the rows that say otherwise (§3.4's `RelayCategory`, `PoolRecord`, `Origin`, `RelayPhase`, `Responsibility`, `FcmpVerificationHash`; SPL-17, SPL-18, `SPL-Q9`) are marked RETIRED in their own lines.
+**DX-F6 (2026-10-16, DRS-E5 PR-b) retires the record's relay decomposition:** the pool record carries a receive hour and `public: bool` (the review of #1102, S2/S7; its standing left with reorg retention, CEN-K10, deleted 2026-10-17), under the pool file's own `POOL_SCHEMA_VERSION` (`SPL-Q8`), `Responsibility` is `shekyl-relay`'s, and the rows that say otherwise (§3.4's `RelayCategory`, `PoolRecord`, `Origin`, `RelayPhase`, `Responsibility`, `FcmpVerificationHash`; SPL-17, SPL-18, `SPL-Q9`) are marked RETIRED in their own lines.
 **Round 0 executed 2026-09-24** at `dev` @ `a1159f1a2`;
 **Round 1 RULED 2026-09-24** (maintainer, on PR #849; §9, each row
 line-local): **Q1, Q2, Q3, Q4, Q5, Q7, Q8 approved, four with their reason
