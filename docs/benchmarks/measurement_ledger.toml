@@ -113,7 +113,9 @@ stale_through = [
   { through = "0d374fdfc3", note = "One commit to signature.rs: a third scheme-3 domain constant, SCHEME_DOMAIN_WITNESS_BUNDLE, beside the receipt's and the carrier's. It is a byte string and its doc comment. No function is added or changed, and the Ed25519 + ML-DSA-65 sign and verify that block verification prices do not read it. Not re-measured; nothing the capture priced has moved." },
   { through = "d4a50e127c", note = "Doc comments only in signature.rs: SCHEME_DOMAIN_WITNESS_CARRIER is marked SUPERSEDED and SCHEME_DOMAIN_WITNESS_BUNDLE's doc names it so. No byte string, function or code path changed, and the Ed25519 + ML-DSA-65 sign and verify that block verification prices are untouched. Not re-measured; nothing the capture priced has moved." },
   { through = "e5035fcfb", note = "#1081 (review item 2, R3 applied): proof::verify and verify_membership_only draw their three batch verifiers' weights from a ChaCha20Rng seeded by one cSHAKE256 over the verify's inputs, in place of OsRng. The verify gains that hash (a preimage of the proof bytes plus 32 bytes per key image, PQC key point and pseudo-out) and a ChaCha20 stream for the weights; it already computed each PQC key point, now compressed once more for the preimage. No statement, multiexp or inner-product pass is added or removed. Not re-measured; the block-weight rows stay stale from PL-D3." },
-  { through = "0da922834", note = "#1081 review: the batch-weight statement moves from proof.rs into its own module, batch_weights.rs (BatchWeights, BatchKind), with its tests beside it. The preimage, both domains, the seed and the weights the verifiers draw are byte-for-byte unchanged (the pinned seed KATs moved with it and pass); no verify step is added, removed or reordered. Not re-measured." }
+  { through = "0da922834", note = "#1081 review: the batch-weight statement moves from proof.rs into its own module, batch_weights.rs (BatchWeights, BatchKind), with its tests beside it. The preimage, both domains, the seed and the weights the verifiers draw are byte-for-byte unchanged (the pinned seed KATs moved with it and pass); no verify step is added, removed or reordered. Not re-measured." },
+  { through = "a6b029e82", note = "DRS-X PR 3 (#1106): the crate-level doc comment in shekyl-pow-randomx's lib.rs names its consumers. Doc text only; no code path changed, and nothing the capture priced has moved." },
+  { through = "fe6f6bfa1", note = "DRS-X PR 3 (#1106): the crate doc in shekyl-pow-randomx's lib.rs names that calc_pow and the Rust miner call CacheStore::lookup and never derive, and that pin_canonical is the validator's epoch fill. Doc text only; no hash, derivation or verify function changed, and nothing the block-verify capture priced has moved. The rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -540,6 +542,7 @@ stale_through = [
   { through = "f60ab687f", note = "Republishing the usable route keeps its incarnation and tells no watcher; a return from down is a new incarnation. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
   { through = "21524f1a8", note = "A link subscription unsubscribes when dropped. Watcher bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
   { through = "7e9ea0f61", note = "The managed-Tor death watch follows the route now installed, and a shutdown publishes ProcessStopped. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
+  { through = "0d882303c3", note = "Direction carries a 32-byte handshake-hash stamp set once by into_directions, so the P2P handshake's split copies 32 bytes per direction once per session. No record seal, open or rekey reads it; the per-record path is unchanged. Not re-measured." }
 ]
 
 [[constant]]
@@ -782,7 +785,9 @@ stale_through = [
   { through = "7c30a39804", note = "PR #996: the layer-0 comments in frontier.rs, assemble.rs and types.rs, and CT6_PROVING_STATE.md, now say the path API takes points and the circuit tape hashes scalars. No executable code in these paths changed, so no cost moved. Not measured." },
   { through = "24f769906", note = "SF-D8 amendment (PR #1015): served_frame.rs is deleted from shekyl-curve-tree and the serving read in redb_backend.rs no longer derives a frame header for the segment it serves. That is the serving side of the store; the spend path — tree build, path assembly, the prover — is untouched. Not measured." },
   { through = "e5035fcfb", note = "#1081 (review item 2, R3 applied): the FCMP++ verify's batch weights come from a ChaCha20Rng seeded by cSHAKE256 over the verify's inputs instead of OsRng. The prover, the tree and the spend path are untouched; the verify gains one hash over the proof and its inputs and a ChaCha20 stream. Not re-measured; the rows stay ungraded." },
-  { through = "0da922834", note = "#1081 review: the batch-weight statement moves from proof.rs into its own module, batch_weights.rs (BatchWeights, BatchKind), with its tests beside it. The preimage, both domains, the seed and the weights the verifiers draw are byte-for-byte unchanged (the pinned seed KATs moved with it and pass); no verify step is added, removed or reordered. Not re-measured." }
+  { through = "0da922834", note = "#1081 review: the batch-weight statement moves from proof.rs into its own module, batch_weights.rs (BatchWeights, BatchKind), with its tests beside it. The preimage, both domains, the seed and the weights the verifiers draw are byte-for-byte unchanged (the pinned seed KATs moved with it and pass); no verify step is added, removed or reordered. Not re-measured." },
+  { through = "196717b00", note = "#1108: the wallet's spend gate takes in_tree_at_reference, one comparison now defined in reference.rs, and drained_through moves there from client.rs, its callers in client.rs, assemble.rs and capture.rs calling it by its new path. The cutoff is the same value; path assembly, the tree and the prover do the same work. Not measured." },
+  { through = "7679944f3", note = "#1108: in_tree_at_reference is the drain cutoff. It does one saturating subtraction and a zero-height check where it compared maturity with the reference directly. The boolean is the same at every height, and blocks_until_in_tree returns zero when the predicate holds. Path assembly, the tree and the prover do the same work. Not measured." }
 ]
 
 [[constant]]
@@ -851,6 +856,8 @@ id = "randomx-cache"
 spec = ["rust/shekyl-pow-randomx/src"]
 stale_through = [
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. Covers the Phase 2d dispatch core and everything after it; the 341 ms record predates them all." },
+  { through = "a6b029e82", note = "DRS-X PR 3 (#1106): the crate-level doc comment in lib.rs names its consumers (shekyl-ffi, the ingest substrate, shekyl-miner). Doc text only; no code changed. An incidental reading, not BA-T14's protocol: the miner's rate test derived one cache in 2.19 s on the floor device in release at bf45b6d30, against the 200 ms target." },
+  { through = "fe6f6bfa1", note = "DRS-X PR 3 (#1106): the crate doc in lib.rs names that calc_pow and the Rust miner call CacheStore::lookup and never derive, and that pin_canonical is the validator's epoch fill. Doc text only; cache derivation is unchanged. The 341 ms record and the 200 ms target are untouched, and the row stays stale." },
 ]
 
 [[constant]]

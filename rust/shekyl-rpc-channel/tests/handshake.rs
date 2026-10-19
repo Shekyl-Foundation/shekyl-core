@@ -364,6 +364,46 @@ fn an_opener_that_opened_nothing_is_refused_whatever_it_returns() {
     assert_eq!(session.send.opened(), 0);
 }
 
+/// The count says a direction opened a ciphertext; it does not say which
+/// session's. An opener holds the receiving direction by `&mut`, so it can
+/// put another session's direction in its place, one that has already
+/// opened. The pending session must refuse that: the direction it gets back
+/// must carry its own handshake hash, which `into_directions` stamps.
+#[test]
+fn a_direction_from_another_session_does_not_release_this_one() {
+    let (client_id, daemon_id) = identities();
+
+    // Session B, completed: its receiving direction has opened a message.
+    let (pending_b, mut send_b, _) = through_message_4(&client_id, &daemon_id);
+    let (message_b, _) = send_b.seal(b"b's first request", TRANSPORT_AD).unwrap();
+    let (session_b, _) = pending_b.open_first_message(bare(&message_b)).unwrap();
+    let mut borrowed = session_b.recv;
+    assert_eq!(borrowed.opened(), 1);
+
+    // Session A: the opener swaps B's direction in and opens nothing of A's.
+    let (pending_a, _, _) = through_message_4(&client_id, &daemon_id);
+    assert!(matches!(
+        pending_a.open_first_message(|recv| {
+            core::mem::swap(recv, &mut borrowed);
+            Ok::<_, ()>(())
+        }),
+        Err(FirstMessageRefused)
+    ));
+
+    // Session A again: the opener opens A's own first message, then swaps
+    // B's direction in. The direction it hands back is still not A's.
+    let (pending_a, mut send_a, _) = through_message_4(&client_id, &daemon_id);
+    let (message_a, _) = send_a.seal(b"a's first request", TRANSPORT_AD).unwrap();
+    assert!(matches!(
+        pending_a.open_first_message(|recv| {
+            recv.open(&message_a, TRANSPORT_AD).unwrap();
+            core::mem::swap(recv, &mut borrowed);
+            Ok::<_, ()>(())
+        }),
+        Err(FirstMessageRefused)
+    ));
+}
+
 /// §4.1, §6.2: until the client's first transport message opens, the daemon
 /// holds a pending session and nothing it could serve with. That the
 /// directions, the client and the request are unreachable before then is a

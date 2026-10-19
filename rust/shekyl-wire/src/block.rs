@@ -98,6 +98,22 @@ impl BlockHeader {
         w.write_all(self.attestation_root.as_bytes())
     }
 
+    /// Where [`nonce`](Self::nonce)'s four little-endian bytes sit in
+    /// [`write`](Self::write)'s output — after the three varints and
+    /// `previous` — and so in [`Block::pow_blob`], which begins with the
+    /// header. A miner writes each attempt's nonce there instead of
+    /// re-serializing the header and re-hashing the transaction tree. The
+    /// offset depends on the varints' lengths, so it is this header's, not
+    /// a constant.
+    #[must_use]
+    pub fn nonce_offset(&self) -> usize {
+        let mut prefix = Vec::with_capacity(32);
+        write_varint(self.major_version, &mut prefix).expect("Vec write is infallible");
+        write_varint(self.minor_version, &mut prefix).expect("Vec write is infallible");
+        write_varint(self.timestamp, &mut prefix).expect("Vec write is infallible");
+        prefix.len() + self.previous.as_bytes().len()
+    }
+
     /// Read the header.
     pub fn read<R: Read>(r: &mut R) -> io::Result<BlockHeader> {
         Ok(BlockHeader {
@@ -299,6 +315,41 @@ mod tests {
         let back = BlockHeader::read(&mut &bytes[..]).unwrap();
         assert_eq!(back, h);
         assert_eq!(back.attestation_root, AttestationRoot::from_bytes(empty));
+    }
+
+    /// The four bytes at `nonce_offset` in the PoW preimage are the nonce:
+    /// writing a nonce there gives the preimage of the header carrying it.
+    /// The timestamps cover a one-byte and a five-byte varint, so the
+    /// offset's arithmetic is exercised beyond a fixed layout.
+    #[test]
+    fn the_nonce_offset_is_where_the_pow_preimage_carries_the_nonce() {
+        for timestamp in [1u64, 1_700_000_000] {
+            let mut block = Block {
+                header: BlockHeader {
+                    timestamp,
+                    ..header(empty_attestation_root())
+                },
+                miner_transaction: Transaction {
+                    prefix: crate::transaction::TxPrefix {
+                        unlock_time: 0,
+                        inputs: vec![Input::Gen(7)],
+                        outputs: Vec::new(),
+                        extra: Vec::new(),
+                    },
+                    ct: Ct::Null(crate::transaction::CtBase {
+                        enc_amounts: Vec::new(),
+                        enc_labels: Vec::new(),
+                        commitments: Vec::new(),
+                    }),
+                },
+                transaction_hashes: vec![TxHash::from_bytes([0x33; 32])],
+            };
+            let offset = block.header.nonce_offset();
+            let mut patched = block.pow_blob();
+            patched[offset..offset + 4].copy_from_slice(&0x0102_0304u32.to_le_bytes());
+            block.header.nonce = 0x0102_0304;
+            assert_eq!(patched, block.pow_blob(), "timestamp {timestamp}");
+        }
     }
 
     #[test]

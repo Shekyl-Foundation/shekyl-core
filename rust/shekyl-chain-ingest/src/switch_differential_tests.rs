@@ -59,25 +59,29 @@ async fn spend_differential(name: &str, rules: crate::schedule::ChainRules, dept
         "the demoted spend comes back for the pool"
     );
     // The death rule: the switch's last connect takes the tip to
-    // `AT + depth`, so a demoted row at or below `AT + depth − cap` left
-    // with its bodies — at the cap, A's first block, which no switch back
-    // could reach (it would pop `depth + 1`).
+    // `AT + depth`, so a demoted row at or below `AT + depth − cap` leaves
+    // with its bodies, and every row built on it with it (`store/alt.rs`:
+    // every stored alternative chain reaches a main-chain block). At the
+    // cap that is A's first block, which no switch back could reach (it
+    // would pop `depth + 1`), so the whole of A leaves.
     let cap = x_cap(rules);
-    let kept: Vec<&Mined> = a
-        .iter()
-        .filter(|m| m.height.to_raw() + cap > AT + depth)
-        .collect();
-    assert_eq!(kept.len(), a.len() - usize::from(depth == cap));
+    let crossed = a.iter().any(|m| m.height.to_raw() + cap <= AT + depth);
+    assert_eq!(crossed, depth == cap);
+    let kept: Vec<&Mined> = if crossed {
+        Vec::new()
+    } else {
+        a.iter().collect()
+    };
     assert_same_chain(&x, &y, &kept, "A → B equals B").await;
 
     // Back to A: B is one block longer than A was, so the way back pops
     // `depth + 1`. Inside the cap it lands and equals the chain that never
-    // switched. At the cap it is one past it: A's first block is gone, so
-    // A's extension does not link (it would have been refused on the cap).
+    // switched. At the cap it is one past it: A is gone, so A's extension
+    // does not link (it would have been refused on the cap).
     if depth == cap {
         match x.offer(&a_ext[0]).await.expect("offer") {
-            Offered::Unlinked { at } => assert_eq!(at, a[0].hash),
-            other => panic!("A's first block was retired: {other:?}"),
+            Offered::Unlinked { at } => assert_eq!(at, a[a.len() - 1].hash),
+            other => panic!("A was retired: {other:?}"),
         }
         for s in [x, y, z] {
             s.close().await;

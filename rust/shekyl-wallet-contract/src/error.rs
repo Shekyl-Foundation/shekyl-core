@@ -935,17 +935,19 @@ pub enum WalletRpcError {
         /// The refusing stage's own rendering.
         detail: String,
     },
-    /// `unstake` (`-29521`): definite refusal, seal released — retry at will
-    /// after addressing `data.detail`.
-    #[error("the daemon refused the exit and nothing was sent — see data.detail, then retry")]
+    /// `unstake` (`-29521`): refused before anything was sent, seal released
+    /// — retry at will after addressing `data.detail`.
+    #[error("the exit was refused before anything was sent — see data.detail, then retry")]
     UnstakeRefusedReleased {
         /// The daemon's verdict rendering.
         detail: String,
     },
-    /// `unstake` (`-29522`): fate unknown; sealed record held funds-safe.
+    /// `unstake` (`-29522`): the exit was sent; its record is held
+    /// funds-safe until it lands or its end date passes (WR-Q3).
     #[error(
-        "the exit's network fate is unknown; its record is held funds-safe \
-         and the exit lane stays shut until it settles — do not retry blindly"
+        "the exit was sent and its record is held funds-safe; do not retry. \
+         Check staking_info: by the height it names, this exit will either \
+         have completed or been withdrawn with its funds returned"
     )]
     UnstakeFateUnknown {
         /// The transport/verdict rendering.
@@ -2070,8 +2072,9 @@ impl From<shekyl_engine_core::UnstakeError> for WalletRpcError {
     /// The `unstake` code table (PR-C): `-29513..-29522`, every arm named —
     /// no engine refusal falls through to `-32603` (the round-5 lesson from
     /// `-29512`). The two dispatch dispositions stay distinct because they
-    /// demand opposite client behavior: `-29521` (seal released — retry at
-    /// will) vs `-29522` (seal held — do not re-fire).
+    /// demand opposite client behavior: `-29521` (refused before sending,
+    /// seal released — retry at will) vs `-29522` (sent, seal held until it
+    /// lands or its end date passes — do not re-fire).
     fn from(err: shekyl_engine_core::UnstakeError) -> Self {
         use shekyl_engine_core::UnstakeError as E;
         match err {

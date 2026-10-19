@@ -219,7 +219,9 @@ fn print_block(
     }
     out.push_str(&render_block_header(&reply.block_header));
     out.push('\n');
-    out.push_str(&reply.json);
+    if let Some(json) = &reply.json {
+        out.push_str(json);
+    }
     Ok(out)
 }
 
