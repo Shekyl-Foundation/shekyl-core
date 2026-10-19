@@ -237,9 +237,14 @@ fn horizon_holds(connecting: BlockHeight, epoch: u64) -> bool {
     .height() else {
         return true;
     };
-    !BlockHeight::from_raw(h_open(epoch))
-        .checked_add(BlockCount::ONE)
-        .is_some_and(|start| start < kept)
+    // The scan starts at `h_open + 1`. That start is inside the horizon
+    // when it is at or above `kept`. The last height has no row above it,
+    // so it is not below the floor — the same comparison as
+    // `scan_starts_below`, stated as the walk being allowed.
+    let Some(start) = BlockHeight::from_raw(h_open(epoch)).checked_add(BlockCount::ONE) else {
+        return true;
+    };
+    start >= kept
 }
 
 /// Each Release writes its record's pre-image under `(height, persona)`:
