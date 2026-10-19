@@ -23,6 +23,32 @@ use crate::found::{Found, FoundBlocks};
 use crate::job::{JobBoard, NONE_SEEN};
 use crate::rate::{HashRate, RateRing};
 
+/// Why [`Miner::start`] started nothing.
+#[derive(Debug)]
+pub enum MinerStartRefused {
+    /// The budget holds one permit. The miner never takes the last free
+    /// permit (`shekyl-hash-budget` module docs), so on this budget it would
+    /// never hash: a miner reported active at zero. Refused instead.
+    OnePermit,
+    /// The OS refused a thread. The workers already started were stopped
+    /// and joined.
+    Thread(io::Error),
+}
+
+impl core::fmt::Display for MinerStartRefused {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::OnePermit => f.write_str(
+                "this host has one hashing permit, and the miner never takes the last one; \
+                 it would never hash",
+            ),
+            Self::Thread(e) => write!(f, "a miner thread could not start: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for MinerStartRefused {}
+
 /// The OS thread name and ledger label of every worker.
 const WORKER_NAME: &str = "sk-miner";
 
@@ -178,15 +204,19 @@ impl Miner {
     ///
     /// # Errors
     ///
-    /// The OS refused a thread. The workers already started are stopped
-    /// and joined before this returns.
+    /// [`MinerStartRefused`]: a one-permit budget, before anything starts;
+    /// or the OS refused a thread, and the workers already started are
+    /// stopped and joined before this returns.
     pub fn start(
         config: &MinerConfig,
         board: Arc<JobBoard>,
         caches: Arc<CacheStore>,
         budget: Budget,
         found: FoundBlocks,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, MinerStartRefused> {
+        if budget.permits() < 2 {
+            return Err(MinerStartRefused::OnePermit);
+        }
         let threads = config.threads;
         let shared = Arc::new(Shared {
             board,
@@ -209,7 +239,8 @@ impl Miner {
             let range = nonce_range(index, threads);
             // On an error `miner` drops here, which stops and joins the
             // workers already running.
-            let worker = spawn_dedicated(&name, move || work(&shared, index, range))?;
+            let worker = spawn_dedicated(&name, move || work(&shared, index, range))
+                .map_err(MinerStartRefused::Thread)?;
             miner.workers.push(worker);
         }
         Ok(miner)

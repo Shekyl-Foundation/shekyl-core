@@ -189,6 +189,8 @@ impl Budget {
             if state.grantable(class) {
                 return Some(self.grant(class, state));
             }
+            #[cfg(test)]
+            tests::pause_before_wait();
             state = self
                 .0
                 .changed
@@ -215,7 +217,13 @@ impl Budget {
 
     /// Wake every waiter so it re-checks [`acquire_unless`](Self::acquire_unless)'s
     /// stop flag, or a permit a grant left free.
+    ///
+    /// The budget lock is taken first. A waiter holds it from its stop
+    /// check until the wait releases it, so a wake cannot land between the
+    /// two: the waiter either sees the flag set, or is already waiting when
+    /// the notify comes.
     pub fn wake(&self) {
+        drop(self.0.lock());
         self.0.changed.notify_all();
     }
 
@@ -331,8 +339,8 @@ mod tests {
         let held = budget.acquire(Class::Chain);
         let order = Arc::new(Mutex::new(Vec::new()));
         let mut threads = Vec::new();
-        // The miner is absent: a one-permit budget never grants it, so this
-        // join would wait forever. Its place in the order is the next test.
+        // The miner is absent: a one-permit budget never grants it. Its
+        // place in the order is `the_miner_waits_behind_every_higher_class`.
         for class in [Class::CalcPow, Class::Unsolicited, Class::HeaderPow] {
             let (waiter, order) = (budget.clone(), Arc::clone(&order));
             threads.push(std::thread::spawn(move || {
@@ -350,6 +358,91 @@ mod tests {
             *order.lock().expect("order"),
             vec![Class::HeaderPow, Class::Unsolicited, Class::CalcPow]
         );
+    }
+
+    /// The miner waits first and is granted last: every higher class that
+    /// came after it goes ahead, and it is granted only once two permits
+    /// are free.
+    #[test]
+    fn the_miner_waits_behind_every_higher_class() {
+        let budget = Budget::new(NonZeroUsize::new(2).expect("two"));
+        let first = budget.acquire(Class::Chain);
+        let second = budget.acquire(Class::Chain);
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let mut threads = Vec::new();
+        for class in [
+            Class::Miner,
+            Class::CalcPow,
+            Class::Unsolicited,
+            Class::HeaderPow,
+        ] {
+            let (waiter, order) = (budget.clone(), Arc::clone(&order));
+            threads.push(std::thread::spawn(move || {
+                let permit = waiter.acquire(class);
+                order.lock().expect("order").push(class);
+                drop(permit);
+            }));
+            until(|| budget.waiting(class) == 1);
+        }
+        let miner = threads.remove(0);
+        drop(second);
+        for thread in threads {
+            thread.join().expect("joins");
+        }
+        assert_eq!(
+            *order.lock().expect("order"),
+            vec![Class::HeaderPow, Class::Unsolicited, Class::CalcPow],
+            "the higher classes, highest first; the miner still waits"
+        );
+        assert_eq!(budget.waiting(Class::Miner), 1);
+        drop(first);
+        miner.join().expect("joins");
+        assert_eq!(order.lock().expect("order").last(), Some(&Class::Miner));
+    }
+
+    thread_local! {
+        /// Set on a waiter's thread: before its next condvar wait, it says
+        /// so and sleeps, holding the budget lock, for this long.
+        static PAUSE: std::cell::RefCell<Option<(Duration, Arc<AtomicBool>)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// The hook [`Budget::acquire_unless`] calls between its stop check and
+    /// its wait, on a thread that set [`PAUSE`]. Once.
+    pub(super) fn pause_before_wait() {
+        if let Some((pause, paused)) = PAUSE.with(|cell| cell.borrow_mut().take()) {
+            paused.store(true, Ordering::Release);
+            std::thread::sleep(pause);
+        }
+    }
+
+    /// A stop set while the waiter is between its stop check and its wait
+    /// is still seen: `wake` takes the budget lock, so it cannot notify in
+    /// that gap. The waiter is held in the gap on purpose; without the
+    /// lock, the notify lands there, is lost, and the waiter sleeps on a
+    /// full budget for good.
+    #[test]
+    fn a_wake_cannot_land_between_a_waiters_stop_check_and_its_wait() {
+        let budget = one();
+        let held = budget.acquire(Class::Chain);
+        let stop = Arc::new(AtomicBool::new(false));
+        let paused = Arc::new(AtomicBool::new(false));
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        {
+            let (budget, stop, paused) = (budget.clone(), Arc::clone(&stop), Arc::clone(&paused));
+            std::thread::spawn(move || {
+                PAUSE.with(|cell| *cell.borrow_mut() = Some((Duration::from_millis(300), paused)));
+                let _sent = done_tx.send(budget.acquire_unless(Class::Miner, &stop).is_none());
+            });
+        }
+        until(|| paused.load(Ordering::Acquire));
+        stop.store(true, Ordering::Release);
+        budget.wake();
+        let stopped = done_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the waiter saw the stop: the wake was not lost");
+        assert!(stopped);
+        drop(held);
     }
 
     /// The miner is the lowest class, and it still leaves the last permit.

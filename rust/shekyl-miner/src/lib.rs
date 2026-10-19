@@ -87,5 +87,5 @@ mod rate;
 pub use address::{MiningAddress, MiningAddressRefused};
 pub use found::{found_blocks, Found, FoundBlocks};
 pub use job::{Generation, Job, JobBoard};
-pub use miner::{Miner, MinerConfig, MinerStatus};
+pub use miner::{Miner, MinerConfig, MinerStartRefused, MinerStatus};
 pub use rate::{HashRate, RATE_WINDOW};

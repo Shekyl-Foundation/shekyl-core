@@ -578,3 +578,26 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
     y.close().await;
     crate::test_support::cleanup(&path);
 }
+
+/// A one-permit budget never grants the miner a permit: it leaves the
+/// last one for a higher class. Starting a miner there is refused before
+/// a thread starts, rather than reported active and hashing nothing.
+#[test]
+fn a_miner_on_a_one_permit_budget_is_refused() {
+    let (sink, _found) = found_blocks();
+    let refused = Miner::start(
+        &MinerConfig {
+            address: MiningAddress::decode(&harness_address(), Network::Mainnet)
+                .expect("the harness address"),
+            threads: NonZeroUsize::new(1).expect("one"),
+        },
+        Arc::new(JobBoard::new()),
+        Arc::new(CacheStore::new()),
+        shekyl_hash_budget::Budget::new(NonZeroUsize::MIN),
+        sink,
+    );
+    assert!(matches!(
+        refused,
+        Err(shekyl_miner::MinerStartRefused::OnePermit)
+    ));
+}
