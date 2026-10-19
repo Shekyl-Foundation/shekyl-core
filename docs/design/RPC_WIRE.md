@@ -8,7 +8,7 @@
 4. Bans and `stop_daemon` fold into DRS-X PR 3b, so the flip deletes the C++ RPC server whole.
 5. The console moves to `shekyl-cli` as an RPC-lane slice (R8).
 
-**Ground:** `dev` `0be5ead54`; #1088 `daf109d23`; #1101 `b9be94775`; #1106 `5b1c97b2b`.
+**Ground of the findings:** `dev` `0be5ead54` (RW-F1…RW-F3); the contract is verified at the Status line's commit.
 
 ## RW-Q1 — What a method name is — RULED 2026-10-18
 
