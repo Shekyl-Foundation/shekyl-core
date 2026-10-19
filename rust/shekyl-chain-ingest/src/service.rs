@@ -584,6 +584,21 @@ impl Door {
         self.room.solicited_available()
     }
 
+    /// Seats the window was opened with. No span longer than this is accepted.
+    #[must_use]
+    pub fn window(&self) -> usize {
+        self.room.window()
+    }
+
+    /// The largest arrival, in bytes, accepted at the current tip.
+    ///
+    /// `None` is a store read the service has recorded. The caller answers
+    /// as no room.
+    #[must_use]
+    pub fn max_arrival_bytes(&self) -> Option<u64> {
+        self.admission.bound().ok().map(|bound| bound.0)
+    }
+
     /// Whether [`Service::stop`](crate::service::Service::stop) has closed the door.
     #[must_use]
     pub(crate) fn is_closed(&self) -> bool {

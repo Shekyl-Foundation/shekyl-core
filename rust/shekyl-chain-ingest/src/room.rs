@@ -60,6 +60,8 @@ struct Seats {
 
 /// The arrival window (module docs).
 pub(crate) struct Room {
+    /// Seats the window was opened with. A span longer than this cannot fit.
+    capacity: usize,
     seats: Mutex<Seats>,
     changed: Condvar,
 }
@@ -75,6 +77,7 @@ impl Room {
     #[must_use]
     pub(crate) fn new(capacity: usize) -> Arc<Self> {
         Arc::new(Self {
+            capacity,
             seats: Mutex::new(Seats {
                 reserve: reserve_for(capacity),
                 unsolicited_cap: unsolicited_cap_for(capacity),
@@ -84,6 +87,12 @@ impl Room {
             }),
             changed: Condvar::new(),
         })
+    }
+
+    /// Seats the window was opened with.
+    #[must_use]
+    pub(crate) fn window(&self) -> usize {
+        self.capacity
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Seats> {
@@ -201,6 +210,7 @@ mod tests {
     #[test]
     fn the_reserve_and_the_unsolicited_cap_follow_the_window() {
         let room = Room::new(32);
+        assert_eq!(room.window(), 32);
         assert_eq!(room.solicited_available(), 31);
         let mut unsolicited = Vec::new();
         for _ in 0..15 {

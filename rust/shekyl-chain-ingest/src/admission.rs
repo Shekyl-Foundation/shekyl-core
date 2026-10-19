@@ -19,10 +19,10 @@
 //! weight is at least its transactions' serialized size, coinbase
 //! included, and is at most the limit in force where it connects. The rest
 //! of the block blob is the header, bounded by the wire
-//! ([`MAX_BLOCK_HEADER_SIZE`]), and the list of listed hashes, 32 bytes
-//! each — no more bytes than the bodies they name, each of which serializes
-//! to more than its hash. So an arrival's bytes are at most the header
-//! bound plus twice the limit.
+//! ([`MAX_BLOCK_HEADER_SIZE`]), and the list of listed hashes, one
+//! [`TxHash`] each ([`tx_names_in`]) — no more bytes than the bodies they
+//! name, each of which serializes to more than its hash. So an arrival's
+//! bytes are at most the header bound plus twice the limit.
 //!
 //! Which limit: before parse the arrival's height is not known, and a span
 //! reaches past the tip's successor. The short-term median can move within
@@ -53,7 +53,7 @@ use std::time::Duration;
 use shekyl_chain_rules::{effective_median_at, HeaderView, Tip, ViewRead};
 use shekyl_chain_store::store::{ChainStore, SnapshotView, StoreError};
 use shekyl_economics::block_weight::BLOCK_WEIGHT_SURGE_FACTOR;
-use shekyl_types::BlockHash;
+use shekyl_types::{BlockHash, TxHash};
 use shekyl_wire::block::MAX_BLOCK_HEADER_SIZE;
 
 use crate::service::SessionId;
@@ -101,6 +101,16 @@ impl ArrivalBound {
     pub fn admits(self, bytes: u64) -> bool {
         bytes <= self.0
     }
+}
+
+/// How many listed transactions a block of `block_len` bytes can name.
+///
+/// Each name is one [`TxHash`] inside the blob (module docs). A body list
+/// longer than this cannot be that block, so the arrival path uses this as
+/// the list's allocation ceiling, beside [`ArrivalBound`]'s byte ceiling.
+#[must_use]
+pub const fn tx_names_in(block_len: usize) -> usize {
+    block_len / std::mem::size_of::<TxHash>()
 }
 
 /// Tokens a session's bucket holds at most, and earns per target block
@@ -279,5 +289,14 @@ mod tests {
         assert_eq!(bound.0, header + 2 * (2 * BLOCK_WEIGHT_SURGE_FACTOR * ltem));
         assert!(bound.admits(bound.0));
         assert!(!bound.admits(bound.0 + 1), "one byte over is refused");
+    }
+
+    #[test]
+    fn a_block_names_one_transaction_per_hash_it_can_hold() {
+        let width = std::mem::size_of::<TxHash>();
+        assert_eq!(tx_names_in(0), 0);
+        assert_eq!(tx_names_in(width - 1), 0);
+        assert_eq!(tx_names_in(width), 1);
+        assert_eq!(tx_names_in(width * 2 + (width - 1)), 2);
     }
 }

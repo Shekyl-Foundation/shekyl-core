@@ -17,7 +17,9 @@
 //! - [`shekyl_ingest_offer_span`] takes a span from one connection and
 //!   returns at once: accepted, or a refusal before acceptance (`NoRoom`,
 //!   `Throttled`, `Oversize`), never a peer fault. Lengths, room and the
-//!   session bucket are judged before any block byte is copied.
+//!   session bucket are judged before any block byte is copied. The span
+//!   reserves at most the window, and each body list at most the
+//!   transaction hashes its block can name.
 //! - Each accepted arrival gets exactly one reply, tagged with the arrival
 //!   and the connection, posted through the bound callback, which only
 //!   enqueues onto the connection's strand (the seam's shape,
@@ -31,14 +33,16 @@
 //! here keeps a pointer into them.
 
 use std::ffi::c_void;
+use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
+use shekyl_chain_ingest::admission::tx_names_in;
 use shekyl_chain_ingest::service::{
     Arrival, ArrivalLengths, ArrivalTag, Door, Origin, Refusal, Reply, SessionId, Tagged, Ticket,
 };
 
-use crate::legacy_util::{slice_from_ptr, slice_from_typed_ptr};
+use crate::legacy_util::{bounded_capacity, slice_from_ptr, slice_from_typed_ptr};
 
 /// A borrowed byte buffer.
 #[repr(C)]
@@ -297,6 +301,8 @@ pub extern "C" fn shekyl_ingest_room() -> u64 {
 /// `solicited` is nonzero for blocks this node asked for. Returns
 /// `SHEKYL_INGEST_ACCEPTED` or a refusal code.
 ///
+/// The door is taken first, so an unbound call does not read the store.
+/// A span longer than the window is refused before the entries are read.
 /// Lengths and null buffers are judged before a seat is taken, and the
 /// block bytes are copied only after the door has reserved the span.
 ///
@@ -310,16 +316,6 @@ pub unsafe extern "C" fn shekyl_ingest_offer_span(
     arrivals: *const ShekylIngestArrival,
     len: usize,
 ) -> i32 {
-    let Some(entries) = (unsafe { slice_from_typed_ptr(arrivals, len) }) else {
-        return SHEKYL_INGEST_INVALID;
-    };
-    let origin = Origin::Peer {
-        session: SessionId(connection),
-        solicited: solicited != 0,
-    };
-    let Some(lengths) = (unsafe { lengths_of(entries, origin) }) else {
-        return SHEKYL_INGEST_INVALID;
-    };
     if !lock(&GATE).accepting {
         return SHEKYL_INGEST_UNBOUND;
     }
@@ -330,6 +326,27 @@ pub unsafe extern "C" fn shekyl_ingest_offer_span(
         };
         installed.door.clone()
     };
+    // The window and the byte bound are the ceilings. A store the door
+    // cannot read has no room, the same answer `reserve` gives.
+    let Some(ceilings) = Ceilings::of(&door) else {
+        return SHEKYL_INGEST_NO_ROOM;
+    };
+    if !ceilings.fits_span(len) {
+        return SHEKYL_INGEST_NO_ROOM;
+    }
+    let Some(entries) = (unsafe { slice_from_typed_ptr(arrivals, len) }) else {
+        return SHEKYL_INGEST_INVALID;
+    };
+    let origin = Origin::Peer {
+        session: SessionId(connection),
+        solicited: solicited != 0,
+    };
+    let lengths = match unsafe { ceilings.measure(entries, origin) } {
+        Ok(lengths) => lengths,
+        Err(CeilingFault::Oversize) => return SHEKYL_INGEST_OVERSIZE,
+        Err(CeilingFault::Invalid) => return SHEKYL_INGEST_INVALID,
+        Err(CeilingFault::PastWindow) => return SHEKYL_INGEST_NO_ROOM,
+    };
     let reserved = match door.reserve(&lengths) {
         Ok(reserved) => reserved,
         Err(Refusal::NoRoom) => return SHEKYL_INGEST_NO_ROOM,
@@ -339,7 +356,7 @@ pub unsafe extern "C" fn shekyl_ingest_offer_span(
     // Copied out of C++'s buffers now: the reservation already holds the
     // seats, and nothing keeps a pointer past the return. A buffer that
     // fails this read gives the reservation back.
-    let Some(span) = (unsafe { copy_span(entries, origin) }) else {
+    let Some(span) = (unsafe { ceilings.copy(entries, origin) }) else {
         drop(reserved);
         return SHEKYL_INGEST_INVALID;
     };
@@ -364,60 +381,161 @@ fn readable(ptr: *const u8, len: usize) -> bool {
     len == 0 || (!ptr.is_null() && isize::try_from(len).is_ok())
 }
 
-/// The lengths `entries` name, or `None` when a buffer due is missing.
-/// The block bytes are not read.
+/// What an untrusted span may reserve before the door judges it.
 ///
-/// # Safety
-/// `entries` is a slice the caller already formed from a readable pointer.
-unsafe fn lengths_of(
-    entries: &[ShekylIngestArrival],
-    origin: Origin,
-) -> Option<Vec<ArrivalLengths>> {
-    let mut lengths = Vec::with_capacity(entries.len());
-    for entry in entries {
-        if !readable(entry.block.ptr, entry.block.len) {
-            return None;
+/// The window is seats ([`Door::window`]). `max_bytes` is
+/// [`Door::max_arrival_bytes`]. A body list is at most [`tx_names_in`]
+/// the block blob.
+struct Ceilings {
+    window: usize,
+    max_bytes: u64,
+}
+
+/// Why a span is not reserved. A seat is taken only for a successful measure.
+enum CeilingFault {
+    /// An arrival's bytes exceed the bound.
+    Oversize,
+    /// A buffer is missing, or the body list cannot fit in the block.
+    Invalid,
+    /// The span is longer than the window, so it can never be seated.
+    PastWindow,
+}
+
+impl Ceilings {
+    /// The door's ceilings. `None` is a store read the service has recorded.
+    fn of(door: &Door) -> Option<Self> {
+        Some(Self {
+            window: door.window(),
+            max_bytes: door.max_arrival_bytes()?,
+        })
+    }
+
+    /// A span of `len` arrivals can be seated in this window.
+    fn fits_span(&self, len: usize) -> bool {
+        len <= self.window
+    }
+
+    /// The lengths `entries` name. Block bytes are not read.
+    ///
+    /// # Safety
+    /// `entries` is a slice the caller already formed from a readable pointer.
+    unsafe fn measure(
+        &self,
+        entries: &[ShekylIngestArrival],
+        origin: Origin,
+    ) -> Result<Vec<ArrivalLengths>, CeilingFault> {
+        if !self.fits_span(entries.len()) {
+            return Err(CeilingFault::PastWindow);
         }
-        let blobs = unsafe { slice_from_typed_ptr(entry.bodies, entry.bodies_len) }?;
-        let mut body_lens = Vec::with_capacity(blobs.len());
+        let Some(mut lengths) = capped_slots::<ArrivalLengths>(
+            entries.len(),
+            size_of::<ShekylIngestArrival>(),
+            self.window,
+        ) else {
+            return Err(CeilingFault::PastWindow);
+        };
+        for entry in entries {
+            lengths.push(unsafe { self.measure_one(entry, origin) }?);
+        }
+        Ok(lengths)
+    }
+
+    /// One arrival's lengths. The body list is reserved only after the
+    /// block fits the byte bound and the list fits the names in that block.
+    ///
+    /// # Safety
+    /// `entry`'s pointers are the caller's, checked here before any copy.
+    unsafe fn measure_one(
+        &self,
+        entry: &ShekylIngestArrival,
+        origin: Origin,
+    ) -> Result<ArrivalLengths, CeilingFault> {
+        if !readable(entry.block.ptr, entry.block.len) {
+            return Err(CeilingFault::Invalid);
+        }
+        let Ok(block_len) = u64::try_from(entry.block.len) else {
+            return Err(CeilingFault::Oversize);
+        };
+        if block_len > self.max_bytes {
+            return Err(CeilingFault::Oversize);
+        }
+        let named = tx_names_in(entry.block.len);
+        if entry.bodies_len > named {
+            return Err(CeilingFault::Invalid);
+        }
+        let Some(blobs) = (unsafe { slice_from_typed_ptr(entry.bodies, entry.bodies_len) }) else {
+            return Err(CeilingFault::Invalid);
+        };
+        let Some(mut body_lens) =
+            capped_slots::<usize>(blobs.len(), size_of::<ShekylIngestBlob>(), named)
+        else {
+            return Err(CeilingFault::Invalid);
+        };
+        let mut carried = block_len;
         for blob in blobs {
             if !readable(blob.ptr, blob.len) {
-                return None;
+                return Err(CeilingFault::Invalid);
             }
+            let Ok(n) = u64::try_from(blob.len) else {
+                return Err(CeilingFault::Oversize);
+            };
+            let Some(next) = carried.checked_add(n) else {
+                return Err(CeilingFault::Oversize);
+            };
+            if next > self.max_bytes {
+                return Err(CeilingFault::Oversize);
+            }
+            carried = next;
             body_lens.push(blob.len);
         }
-        lengths.push(ArrivalLengths {
+        Ok(ArrivalLengths {
             tag: ArrivalTag(entry.tag),
             origin,
             block_len: entry.block.len,
             body_lens,
-        });
+        })
     }
-    Some(lengths)
+
+    /// Copy `entries` into owned arrivals, under the same ceilings.
+    ///
+    /// # Safety
+    /// Each buffer was accepted by [`Self::measure`]: a non-zero length has a
+    /// non-null pointer and fits `isize`, and the byte total fits the bound.
+    unsafe fn copy(&self, entries: &[ShekylIngestArrival], origin: Origin) -> Option<Vec<Arrival>> {
+        if !self.fits_span(entries.len()) {
+            return None;
+        }
+        let mut span =
+            capped_slots::<Arrival>(entries.len(), size_of::<ShekylIngestArrival>(), self.window)?;
+        for entry in entries {
+            let named = tx_names_in(entry.block.len);
+            if entry.bodies_len > named {
+                return None;
+            }
+            let block = unsafe { slice_from_ptr(entry.block.ptr, entry.block.len) }?.to_vec();
+            let blobs = unsafe { slice_from_typed_ptr(entry.bodies, entry.bodies_len) }?;
+            let mut bodies =
+                capped_slots::<Vec<u8>>(blobs.len(), size_of::<ShekylIngestBlob>(), named)?;
+            for blob in blobs {
+                bodies.push(unsafe { slice_from_ptr(blob.ptr, blob.len) }?.to_vec());
+            }
+            span.push(Arrival {
+                tag: ArrivalTag(entry.tag),
+                origin,
+                block,
+                bodies,
+            });
+        }
+        Some(span)
+    }
 }
 
-/// Copy `entries` into owned arrivals.
+/// `count` slots, when `max_count` elements of `stride` bytes is the budget.
 ///
-/// # Safety
-/// Each buffer was accepted by [`lengths_of`]: a non-zero length has a
-/// non-null pointer and fits `isize`.
-unsafe fn copy_span(entries: &[ShekylIngestArrival], origin: Origin) -> Option<Vec<Arrival>> {
-    let mut span = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let block = unsafe { slice_from_ptr(entry.block.ptr, entry.block.len) }?.to_vec();
-        let blobs = unsafe { slice_from_typed_ptr(entry.bodies, entry.bodies_len) }?;
-        let mut bodies = Vec::with_capacity(blobs.len());
-        for blob in blobs {
-            bodies.push(unsafe { slice_from_ptr(blob.ptr, blob.len) }?.to_vec());
-        }
-        span.push(Arrival {
-            tag: ArrivalTag(entry.tag),
-            origin,
-            block,
-            bodies,
-        });
-    }
-    Some(span)
+/// [`bounded_capacity`] checks that byte budget. `max_count` is the protocol
+/// ceiling, so the budget stays that many wire elements.
+fn capped_slots<T>(count: usize, stride: usize, max_count: usize) -> Option<Vec<T>> {
+    bounded_capacity(count, stride, max_count.checked_mul(stride)?)
 }
 
 /// Post every accepted reply. A drain finishes the tickets queued ahead of

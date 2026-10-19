@@ -77,9 +77,10 @@ fn blob(bytes: &[u8]) -> ShekylIngestBlob {
 /// door accepts is answered once per arrival, tagged with the arrival and
 /// its connection, through the bound post — here, junk the wire refuses
 /// (CEN-A6). Unbinding drains those replies before it returns. A span past
-/// the room is `NO_ROOM` before acceptance, and a null buffer is `INVALID`
-/// before a seat is taken. Three seats: one stays reserved, so a sync
-/// caller sees two.
+/// the room is `NO_ROOM` before acceptance, a null buffer is `INVALID`
+/// before a seat is taken, a block past the arrival bound is `OVERSIZE`,
+/// and a body list the block cannot name is `INVALID`. Three seats: one
+/// stays reserved, so a sync caller sees two.
 #[test]
 fn a_span_is_answered_per_arrival_through_the_bound_post() {
     let _lane = LANE
@@ -133,6 +134,13 @@ fn a_span_is_answered_per_arrival_through_the_bound_post() {
         SHEKYL_INGEST_NO_ROOM,
         "past the room, before acceptance"
     );
+    let four: Vec<ShekylIngestArrival> = arrivals.iter().cycle().take(4).copied().collect();
+    assert_eq!(
+        unsafe { shekyl_ingest_offer_span(7, 1, four.as_ptr(), four.len()) },
+        SHEKYL_INGEST_NO_ROOM,
+        "a span longer than the window is never seated"
+    );
+    assert_eq!(shekyl_ingest_room(), 2);
     let mut missing = arrivals[0];
     missing.block.ptr = std::ptr::null();
     missing.block.len = 4;
@@ -142,6 +150,53 @@ fn a_span_is_answered_per_arrival_through_the_bound_post() {
         "a missing buffer is refused before a seat is taken"
     );
     assert_eq!(shekyl_ingest_room(), 2, "the invalid span took no seat");
+    let max_bytes = service
+        .door()
+        .max_arrival_bytes()
+        .expect("the arrival bound");
+    let over = usize::try_from(max_bytes)
+        .expect("the bound fits")
+        .saturating_add(1);
+    assert!(u64::try_from(over).expect("over fits") > max_bytes);
+    let stub = [0u8; 1];
+    let mut huge = arrivals[0];
+    huge.block = ShekylIngestBlob {
+        ptr: stub.as_ptr(),
+        len: over,
+    };
+    assert_eq!(
+        unsafe { shekyl_ingest_offer_span(7, 1, std::ptr::from_ref(&huge), 1) },
+        SHEKYL_INGEST_OVERSIZE,
+        "a block past the arrival bound is refused before a seat is taken"
+    );
+    assert_eq!(shekyl_ingest_room(), 2, "the oversize span took no seat");
+    let empty = ShekylIngestBlob {
+        ptr: std::ptr::null(),
+        len: 0,
+    };
+    let listed = [empty, empty];
+    let mut unnamed = arrivals[0];
+    unnamed.bodies = listed.as_ptr();
+    unnamed.bodies_len = listed.len();
+    assert_eq!(
+        unsafe { shekyl_ingest_offer_span(7, 1, std::ptr::from_ref(&unnamed), 1) },
+        SHEKYL_INGEST_INVALID,
+        "more bodies than the block can name is refused before a seat is taken"
+    );
+    assert_eq!(shekyl_ingest_room(), 2, "the unnamed span took no seat");
+    let one = [ShekylIngestBlob {
+        ptr: stub.as_ptr(),
+        len: over,
+    }];
+    let mut heavy = arrivals[0];
+    heavy.bodies = one.as_ptr();
+    heavy.bodies_len = one.len();
+    assert_eq!(
+        unsafe { shekyl_ingest_offer_span(7, 1, std::ptr::from_ref(&heavy), 1) },
+        SHEKYL_INGEST_OVERSIZE,
+        "carried bytes past the bound are refused before they are copied"
+    );
+    assert_eq!(shekyl_ingest_room(), 2, "the heavy span took no seat");
     assert_eq!(
         unsafe { shekyl_ingest_offer_span(7, 1, arrivals.as_ptr(), arrivals.len()) },
         SHEKYL_INGEST_ACCEPTED
