@@ -30,12 +30,13 @@ use tokio::sync::oneshot;
 
 /// Install the seed window, or leave it when it is already the pair the
 /// slots hold. A stop returns before a pin. A store read that fails is the
-/// caller's to record.
+/// caller's to record ([`record_store_read`]).
 ///
 /// # Errors
 ///
-/// The store's, while reading the seeds.
-pub(super) fn install_blocking<S>(shared: &Shared<S>) -> Result<(), StoreError>
+/// The store's, while reading the seeds, or a hole below the tip where a
+/// seed block belongs.
+pub(super) fn install_blocking<S>(shared: &Shared<S>) -> Result<(), ViewRead<StoreError>>
 where
     S: Substrate + Send + Sync,
     S::Fault: core::fmt::Debug,
@@ -75,8 +76,8 @@ where
 ///
 /// # Errors
 ///
-/// The store's.
-pub(crate) async fn install_window<S>(shared: &Arc<Shared<S>>) -> Result<(), StoreError>
+/// As [`install_blocking`].
+pub(crate) async fn install_window<S>(shared: &Arc<Shared<S>>) -> Result<(), ViewRead<StoreError>>
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
@@ -89,7 +90,7 @@ where
 
 /// Record a door-side store read that failed, and stop. The door still
 /// answers [`super::Refusal::NoRoom`]: the span was not accepted.
-pub(super) fn record_store_read<S>(shared: &Shared<S>, read: ViewRead<StoreError>)
+pub(crate) fn record_store_read<S>(shared: &Shared<S>, read: ViewRead<StoreError>)
 where
     S: Substrate,
     S::Fault: core::fmt::Debug,

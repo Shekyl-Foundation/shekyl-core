@@ -122,8 +122,8 @@ pub(crate) async fn follow<S>(
             break;
         }
         let tip = *tips.borrow_and_update();
-        if let Err(store) = install_window(&shared).await {
-            shared.fail(ServiceFault::Store(store));
+        if let Err(read) = install_window(&shared).await {
+            crate::service::record_store_read(&shared, read);
             break;
         }
         if shared.stopping() {

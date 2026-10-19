@@ -15,8 +15,8 @@
 //! hasher permit.
 
 use shekyl_chain_rules::{
-    anchor_band, seed_height, AnchorBand, AtHeight, CenRow, Fork, InvalidBlock, Locus, RuleSet,
-    Trust, D_MAX,
+    anchor_band, seed_height, AnchorBand, AtHeight, CenRow, Corrupt, Fork, InvalidBlock, Locus,
+    PerHeightRecord, RuleSet, Trust, ViewRead, D_MAX,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError};
 use shekyl_difficulty::SEEDHASH_EPOCH_BLOCKS;
@@ -76,8 +76,12 @@ pub(crate) enum AltSpend {
 ///
 /// # Errors
 ///
-/// The store's.
-pub(crate) fn seeds_for(store: &ChainStore, rules: ChainRules) -> Result<SeedPair, StoreError> {
+/// The store's, or [`Corrupt::HoleBelowTip`] when the store has no block
+/// at the connecting height's seed height, which is below its tip.
+pub(crate) fn seeds_for(
+    store: &ChainStore,
+    rules: ChainRules,
+) -> Result<SeedPair, ViewRead<StoreError>> {
     let snap = store.begin_read()?;
     let tip = snap.tip()?.recorded;
     let connecting = shekyl_chain_rules::Tip::connecting_height(tip.as_ref());
@@ -87,11 +91,25 @@ pub(crate) fn seeds_for(store: &ChainStore, rules: ChainRules) -> Result<SeedPai
     // The connecting height's seed lags the tip, or is the null hash
     // before any block exists. The window's far end can name the next
     // epoch before that block is mined; that seed is not a slot.
-    let canonical = seed_hash(&snap, connecting)?
-        .expect("the connecting height's seed is the null hash or a block at or below the tip");
+    let canonical = required_seed(seed_hash(&snap, connecting)?, connecting)?;
     let older = seed_hash(&snap, low)?;
     let newer = seed_hash(&snap, high)?;
     Ok(pair_of(canonical, older, newer))
+}
+
+/// The connecting height's seed, which the store must hold: its seed
+/// height lags the tip, so a missing block there is a hole below the tip,
+/// a store fault, never a peer's doing.
+fn required_seed(
+    found: Option<BlockHash>,
+    connecting: BlockHeight,
+) -> Result<BlockHash, ViewRead<StoreError>> {
+    found.ok_or_else(|| {
+        ViewRead::Corrupt(Corrupt::HoleBelowTip {
+            at: seed_height(connecting).unwrap_or(BlockHeight::ZERO),
+            record: PerHeightRecord::Block,
+        })
+    })
 }
 
 /// The two slots from the seeds the chain can already name.
@@ -264,6 +282,25 @@ mod tests {
         let previous = BlockHash::from_bytes([3; 32]);
         let lower = pair_of(canonical, Some(previous), Some(next));
         assert_eq!(lower.transient, Some(previous));
+    }
+
+    /// A store that has no block at the connecting height's seed height is
+    /// a hole below its tip: a typed fault the service records and stops
+    /// on, not a panic.
+    #[test]
+    fn a_missing_seed_block_is_a_hole_below_the_tip() {
+        let connecting = BlockHeight::from_raw(5_000);
+        let missing = required_seed(None, connecting);
+        assert!(
+            matches!(
+                missing,
+                Err(ViewRead::Corrupt(Corrupt::HoleBelowTip { at, record: PerHeightRecord::Block }))
+                    if Some(at) == seed_height(connecting)
+            ),
+            "{missing:?}"
+        );
+        let held = BlockHash::from_bytes([6; 32]);
+        assert!(matches!(required_seed(Some(held), connecting), Ok(seed) if seed == held));
     }
 
     #[test]

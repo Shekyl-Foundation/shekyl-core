@@ -716,8 +716,8 @@ where
     let mut formed = form_switch(shared, &plan).await;
     if let Err(PlanStop::Substrate(fault)) = &formed {
         if shared.substrate().cache_absent(fault) {
-            if let Err(e) = super::install_window(shared).await {
-                shared.fail(e.into());
+            if let Err(read) = super::install_window(shared).await {
+                super::record_store_read(shared, read);
                 return None;
             }
             formed = form_switch(shared, &plan).await;

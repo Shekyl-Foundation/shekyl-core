@@ -835,8 +835,8 @@ where
         }
         // The first pair is pinned before any span can hash. Later tips
         // reinstall from the attendant.
-        if let Err(store) = window::install_blocking(&shared) {
-            shared.fail(store.into());
+        if let Err(read) = window::install_blocking(&shared) {
+            window::record_store_read(&shared, read);
         }
         let (spans_tx, mut incoming) = mpsc::unbounded_channel::<Vec<Accepted>>();
         let door = Door {
@@ -991,7 +991,9 @@ mod span;
 mod window;
 
 pub use window::Reservation;
-pub(crate) use window::{divide_pool_faults, install_window, with_pool, PoolDivision};
+pub(crate) use window::{
+    divide_pool_faults, install_window, record_store_read, with_pool, PoolDivision,
+};
 
 #[cfg(test)]
 #[path = "service_tests.rs"]
