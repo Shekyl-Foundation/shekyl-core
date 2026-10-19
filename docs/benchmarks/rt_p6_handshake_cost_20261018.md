@@ -1,9 +1,9 @@
 # `RT-P6`: what a handshake costs on the floor device, each side. Registration of 2026-10-18
 
-**State of this record: registered; not yet run.** The run waits for the
-maintainer's read of this registration, as RT-P4's did, and for a quiet
-claim on the floor device. A dry run on the floor device is recorded below
-the registration once it has been made, and it is not data. Results are
+**State of this record: measured, 2026-10-19.** The registered cell ran
+on the floor device under a quiet claim and passed both gates. The
+derivations below remain proposals for the maintainer to rule. The dry
+run is recorded below the registration, and it is not data. Results are
 added under "Results"; the section "Registered before the run" is not
 edited afterwards. An amendment made before any registered result is read
 is dated and says what changed.
@@ -206,8 +206,145 @@ compute only. The network is not in it.
 
 ## Dry run
 
-None yet.
+Two, neither of them data.
+
+- **On the development workstation**, before the registration was pushed:
+  an instrument check that the harness runs and writes its three files.
+- **On the floor device**, in the registered sequence: the dry cell (50 of
+  each, after 5 warm-up handshakes) at 18:56:58Z, 1 s, exit 0. The summary
+  script read its files without a refusal.
 
 ## Results
 
-None yet.
+**The registered cell passed both gates.** The figures below are its
+summary (`rt_p6_summary.py`), as produced. Captures, with checksums:
+[`rt_p6_handshake_cost_20261018_captures/`](rt_p6_handshake_cost_20261018_captures/).
+The three raw files are there gzipped (`gzip -9n`), with the summary, the
+conditions and the run's step log.
+
+### Conditions, recorded as registered
+
+- **Device and build:** the floor device (Raspberry Pi 4, Cortex-A72, 4
+  cores, 1.8 GHz top clock), under a quiet claim. A fresh clone of
+  `02f7665bae` (`dev`, carrying this registration as merged), built in
+  release with toolchain 1.94.0 in 170 s.
+- **Timing:** a 180 s cool-down, the dry cell, then the registered cell
+  pinned to core 3, 18:57:59Z to 18:59:17Z (78 s).
+- **The standing testnet daemon** was left running, as the registration
+  proposed. The maintainer said to start the run after merging the
+  registration with that proposal in it. The daemon was active at every
+  reading and used 70 ms of CPU over the registered cell (7 ticks).
+
+| | Before the registered cell | End |
+|---|---|---|
+| Governor | `ondemand` | `ondemand` |
+| SoC temperature | 46.3 °C | 52.1 °C |
+| Load, 1 min | 0.10 | 0.83 |
+| Under-voltage alarm | 0 | 0 |
+| Clock-speed changes, total | 7,446,668 | 7,446,700 |
+
+**Gates.**
+- The harness's assertions held: every step succeeded, all 10,000 honest
+  messages 1 were accepted, and no tag-flipped one was.
+- The under-voltage alarm stayed clear.
+- Time at top clock over the registered cell: 7,843 of 7,852 ticks at 1.8
+  GHz, **99.89 %**, against the registered 99 %.
+
+### Each step (µs)
+
+| Side | Step | n | Wall median | Wall p90 | Wall p99 | Wall max | CPU median | CPU p90 | CPU p99 | CPU max |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| client | `start` | 10000 | 873.3 | 885.7 | 890.9 | 989.0 | 875.2 | 882.9 | 887.0 | 976.4 |
+| daemon | `new` | 10000 | 8.6 | 8.6 | 9.3 | 31.6 | 10.0 | 10.1 | 16.9 | 28.7 |
+| daemon | `read_message1` | 10000 | 630.6 | 643.5 | 647.4 | 700.9 | 632.4 | 640.6 | 643.9 | 715.5 |
+| daemon | `write_message2` | 10000 | 863.5 | 876.1 | 881.1 | 1,364.6 | 865.4 | 873.3 | 877.2 | 1,294.3 |
+| client | `read_message2` | 10000 | 622.7 | 636.1 | 640.0 | 724.2 | 624.6 | 633.2 | 636.4 | 734.6 |
+| client | `write_message3` | 10000 | 345.3 | 352.8 | 366.6 | 391.9 | 346.9 | 354.5 | 363.4 | 379.7 |
+| daemon | `read_message3` | 10000 | 352.0 | 371.4 | 373.4 | 480.6 | 353.6 | 368.7 | 370.2 | 491.4 |
+| daemon | `write_message4` | 10000 | 240.4 | 248.1 | 261.0 | 357.7 | 242.2 | 249.9 | 258.3 | 362.2 |
+| client | `read_message4` | 10000 | 292.2 | 313.0 | 314.5 | 335.1 | 294.1 | 310.2 | 311.6 | 336.3 |
+| client | `first_record` | 10000 | 6.7 | 6.9 | 7.7 | 29.6 | 8.2 | 8.4 | 9.6 | 25.7 |
+| daemon | `open_first_message` | 10000 | 7.2 | 7.3 | 8.4 | 34.5 | 8.7 | 8.8 | 10.1 | 33.5 |
+
+### Per handshake (µs)
+
+| Total | n | Wall median | Wall p90 | Wall p99 | Wall max | CPU median | CPU p90 | CPU p99 | CPU max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| client | 10000 | 2,152.8 | 2,165.8 | 2,178.8 | 2,348.5 | 2,157.3 | 2,167.2 | 2,177.2 | 2,343.8 |
+| daemon | 10000 | 2,113.6 | 2,120.6 | 2,135.9 | 2,945.1 | 2,119.1 | 2,126.1 | 2,136.1 | 2,907.8 |
+| both | 10000 | 4,265.1 | 4,277.9 | 4,296.3 | 5,262.7 | 4,275.1 | 4,287.2 | 4,298.4 | 5,246.8 |
+
+### A stranger's message 1 (µs)
+
+| Kind | Part | n | Accepted | Wall median | Wall p90 | Wall p99 | Wall max | CPU median | CPU p90 | CPU p99 | CPU max |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| honest | `new` | 10000 | 10000 | 8.5 | 8.5 | 15.1 | 90.3 | 9.9 | 10.0 | 16.7 | 70.2 |
+| honest | `read_message1` | 10000 | 10000 | 628.4 | 641.1 | 682.5 | 800.8 | 630.2 | 638.4 | 685.6 | 789.6 |
+| honest | `attempt` | 10000 | 10000 | 636.9 | 649.6 | 693.5 | 810.6 | 640.1 | 648.4 | 697.1 | 810.2 |
+| tag_flipped | `new` | 10000 | 0 | 8.6 | 9.9 | 16.2 | 117.8 | 10.0 | 11.4 | 18.1 | 81.9 |
+| tag_flipped | `read_message1` | 10000 | 0 | 629.4 | 677.2 | 802.5 | 1,137.7 | 631.1 | 680.4 | 802.9 | 1,089.1 |
+| tag_flipped | `attempt` | 10000 | 0 | 637.9 | 687.4 | 815.7 | 1,163.7 | 641.1 | 692.6 | 818.5 | 1,117.1 |
+
+### One record at each class (µs)
+
+| Class (bytes) | Op | n | Wall median | Wall p90 | Wall p99 | Wall max | CPU median | CPU p90 | CPU p99 | CPU max | ns per byte (CPU median) |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 512 | seal | 10000 | 4.3 | 4.3 | 4.6 | 891.3 | 5.7 | 5.7 | 6.2 | 884.2 | 11.07 |
+| 512 | open | 10000 | 4.3 | 4.4 | 4.7 | 25.1 | 5.6 | 5.8 | 6.1 | 21.4 | 11.03 |
+| 16,384 | seal | 10000 | 113.2 | 119.5 | 145.6 | 1,066.0 | 114.7 | 121.1 | 139.8 | 1,060.1 | 7.00 |
+| 16,384 | open | 10000 | 111.1 | 116.9 | 130.0 | 158.5 | 112.6 | 118.4 | 127.4 | 147.1 | 6.87 |
+| 65,535 | seal | 10000 | 448.6 | 468.9 | 1,263.6 | 2,042.1 | 450.1 | 465.7 | 1,257.2 | 1,996.8 | 6.87 |
+| 65,535 | open | 10000 | 441.8 | 458.8 | 468.7 | 564.1 | 443.3 | 456.2 | 463.9 | 533.4 | 6.76 |
+
+### Reading the figures
+
+- **A full handshake** costs each side about 2.16 ms of CPU (client median
+  2,157.3 µs, daemon 2,119.1 µs), and 4,298.4 µs for both together at the
+  99th percentile. The wall clock tracks the CPU clock within a few
+  microseconds at every percentile up to the 99th.
+- **The 65,535-byte seal's tail is the harness's own.** Its 99th
+  percentile is 1,257.2 µs against a median of 450.1 µs, while the open at
+  the same size has a 99th percentile of 463.9 µs.
+  - The slow seals (307 above 800 µs) are periodic: one every 32 samples,
+    from sample 205 to sample 9,992, and none among the opens.
+  - The seal loop keeps every ciphertext, as registered (about 626 MiB).
+    Thirty-two ciphertexts of 65,551 bytes is 2 MiB, so these are the heap
+    growing and touching fresh pages.
+  - The cipher's own 99th percentile at that size is the open's, 463.9 µs,
+    and the seal's 90th percentile, 465.7 µs, agrees with it.
+  - The registered figure stands as recorded; this says what it contains.
+- **Rekey is not visible.** The registration expected the ten samples that
+  include a rekey to be each operation's slowest. They are not.
+  - At 512 bytes they rank 18th to 25th slowest.
+  - At the larger classes they are lost among other variation.
+  - A rekey's HKDF does not show in these percentiles or maxima.
+
+### The derivations, applied as proposed — for the maintainer to rule
+
+- **Handshake deadline:** the 99th percentile of both sides' CPU per
+  handshake (4,298.4 µs), plus five one-way transits at
+  `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (5 × 1,625 ms = 8,125 ms), is
+  8,129.3 ms. Rounded up to the next whole second: **9 s**.
+  - The compute part is 0.05 % of it. The deadline is set by the transit
+    assumption, which is *unmeasured* (BA-T9).
+- **Amplification:** the daemon's CPU for one message-1 attempt (`new` +
+  `read_message1`).
+  - Median: 640.1 µs honest, 641.1 µs tag-flipped.
+  - 99th percentile: 697.1 µs honest, 818.5 µs tag-flipped. **The figure
+    for a bound is 818.5 µs**, the greater of the two.
+  - At the median, one core serves about 1,560 attempts a second.
+  - At the median, an attempt is 641.1 of the daemon's 2,119.1 µs per
+    handshake, about 30 %.
+  - How many attempts arrive in a deadline is a rate, which this run does
+    not measure.
+- **Tunnel pool:** a handshake costs the client 2,157.3 µs of CPU at the
+  median and 2,177.2 µs at the 99th percentile, on top of two round
+  trips.
+- **The response classes:** sealing or opening a record costs about 6.9 ns
+  per byte at the two larger classes, and 11 ns per byte at 512 bytes:
+  - 512 bytes: about 5.7 µs;
+  - 16,384 bytes: about 115 µs;
+  - 65,535 bytes: about 450 µs.
+
+  A submission padded to its fixed size pays the 65,535 class's cost per
+  full record.
