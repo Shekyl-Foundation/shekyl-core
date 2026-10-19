@@ -4421,6 +4421,10 @@ constexpr int SHEKYL_INGEST_THROTTLED = 2;
 constexpr int SHEKYL_INGEST_OVERSIZE = 3;
 constexpr int SHEKYL_INGEST_UNBOUND = -1;
 constexpr int SHEKYL_INGEST_INVALID = -2;
+/// `shekyl_ingest_bind`: an unbind on a thread of the runtime that posts
+/// the replies. It cannot wait for them, so nothing changed. Unbind from
+/// another thread.
+constexpr int SHEKYL_INGEST_REENTRANT = -3;
 
 struct shekyl_ingest_blob {
   const std::uint8_t* ptr;
@@ -4451,7 +4455,9 @@ static_assert(sizeof(shekyl_ingest_reply) == 72, "ingest reply");
 using shekyl_ingest_post_fn = void (*)(void* ctx, const shekyl_ingest_reply* reply,
     const std::uint64_t* indices, std::size_t indices_len);
 
-/// Install `post`. A null `post` or `ctx` unbinds. Returns 0.
+/// Install `post`. A null `post` or `ctx` unbinds: replies already accepted
+/// are posted before it returns, and `ctx` may be released after. Returns 0,
+/// or SHEKYL_INGEST_REENTRANT for an unbind on the replies' own runtime.
 int shekyl_ingest_bind(void* ctx, shekyl_ingest_post_fn post);
 /// The arrivals the service accepts now; 0 when it is not installed.
 std::uint64_t shekyl_ingest_room(void);

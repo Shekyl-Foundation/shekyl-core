@@ -139,6 +139,10 @@ pub const SHEKYL_INGEST_OVERSIZE: i32 = 3;
 pub const SHEKYL_INGEST_UNBOUND: i32 = -1;
 /// A null pointer where a buffer was due.
 pub const SHEKYL_INGEST_INVALID: i32 = -2;
+/// An unbind called on a thread of the runtime that posts the replies.
+/// It cannot wait for that runtime to drain, so it changes nothing: the
+/// post stays bound and offers stay accepted. Unbind from another thread.
+pub const SHEKYL_INGEST_REENTRANT: i32 = -3;
 
 /// The post: nullable, as C passes it (a null post unbinds).
 type IngestPostFn = Option<
@@ -237,7 +241,10 @@ pub fn uninstall() {
 
 /// Bind the post the replies are delivered through. A null `post` or `ctx`
 /// unbinds: offers stop being accepted, replies already accepted are
-/// posted, and then the post is cleared. Returns 0.
+/// posted, and then the post is cleared, all before this returns. Returns
+/// 0, or [`SHEKYL_INGEST_REENTRANT`] for an unbind on a thread of the
+/// replies' own runtime, which could not wait for them and changes
+/// nothing.
 ///
 /// # Safety
 /// `ctx` stays valid until the next bind returns; `post` only enqueues and
@@ -252,34 +259,46 @@ pub unsafe extern "C" fn shekyl_ingest_bind(ctx: *mut c_void, post: IngestPostFn
         _ => None,
     };
     if bound.is_some() {
-        *lock(&POST) = bound;
-        POST_GENERATION.fetch_add(1, Ordering::AcqRel);
+        {
+            // The post and its generation change together, under the post
+            // lock: a drain's check reads both under the same lock.
+            let mut post = lock(&POST);
+            *post = bound;
+            POST_GENERATION.fetch_add(1, Ordering::AcqRel);
+        }
         let mut gate = lock(&GATE);
         gate.accepting = gate.pump.is_some();
         return 0;
     }
-    let generation = POST_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     // The gate lock is not held with the post lock. Bind takes the post
     // first; this drops the gate before it touches the post.
-    let (on_pump_runtime, pump) = {
+    let pump = {
         let mut gate = lock(&GATE);
-        gate.accepting = false;
         let on_pump_runtime = match (gate.runtime.clone(), tokio::runtime::Handle::try_current()) {
             (Some(runtime), Ok(current)) => current.id() == runtime.id(),
             _ => false,
         };
-        let pump = gate.pump.clone();
-        (on_pump_runtime, pump)
+        if on_pump_runtime {
+            // Waiting for the drain here would block the runtime that
+            // drains, and returning before it would let a post reach a
+            // `ctx` the caller is free to release. Neither: refuse.
+            return SHEKYL_INGEST_REENTRANT;
+        }
+        gate.accepting = false;
+        gate.pump.clone()
+    };
+    let generation = {
+        let _post = lock(&POST);
+        POST_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
     };
     let Some(pump) = pump else {
         clear_post_if(generation);
         return 0;
     };
     let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
-    // The pump posts what it already holds, then clears the post itself
-    // when this thread is the pump's runtime: waiting here would deadlock
-    // that runtime. A pump that is already gone clears the post here,
-    // or the wait below would never return.
+    // The pump posts what it already holds, then clears the post. A pump
+    // that is already gone clears it here, or the wait below would never
+    // return.
     if pump
         .send(PumpMsg::Drain {
             generation,
@@ -290,9 +309,7 @@ pub unsafe extern "C" fn shekyl_ingest_bind(ctx: *mut c_void, post: IngestPostFn
         clear_post_if(generation);
         return 0;
     }
-    if !on_pump_runtime {
-        let _drained = done_rx.recv();
-    }
+    let _drained = done_rx.recv();
     0
 }
 
@@ -578,10 +595,14 @@ async fn reply_pump(mut rx: tokio::sync::mpsc::UnboundedReceiver<PumpMsg>) {
     }
 }
 
-/// Clear the post when `generation` is still the unbind that asked.
+/// Clear the post when `generation` is still the unbind that asked. The
+/// check and the clear are under the post lock, where a bind changes both
+/// the post and the generation, so a bind that lands during a drain keeps
+/// its post.
 fn clear_post_if(generation: u64) {
+    let mut post = lock(&POST);
     if POST_GENERATION.load(Ordering::Acquire) == generation {
-        *lock(&POST) = None;
+        *post = None;
     }
 }
 

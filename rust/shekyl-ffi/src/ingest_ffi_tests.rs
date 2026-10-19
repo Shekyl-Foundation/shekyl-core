@@ -300,6 +300,10 @@ fn reply_codes_are_the_headers() {
         ("SHEKYL_INGEST_OVERSIZE", i64::from(SHEKYL_INGEST_OVERSIZE)),
         ("SHEKYL_INGEST_UNBOUND", i64::from(SHEKYL_INGEST_UNBOUND)),
         ("SHEKYL_INGEST_INVALID", i64::from(SHEKYL_INGEST_INVALID)),
+        (
+            "SHEKYL_INGEST_REENTRANT",
+            i64::from(SHEKYL_INGEST_REENTRANT),
+        ),
     ];
     assert_eq!(header_codes.len(), rust_codes.len(), "{header_codes:?}");
     for (name, value) in rust_codes {
@@ -421,4 +425,82 @@ fn every_reply_encodes_to_its_own_header_kind() {
         SHEKYL_INGEST_BEYOND_CAP,
         SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP
     );
+}
+
+/// An accepted arrival the service never reached is answered at its stop,
+/// and that `STOPPED` is posted through the bound post before an unbind
+/// returns. An unbind on the replies' own runtime cannot wait for them, so
+/// it is refused and changes nothing. The runtime is a current-thread one
+/// left undriven between the offer and the stop, so the span is still
+/// queued when the stop lands.
+#[test]
+fn an_accepted_arrival_is_answered_stopped_through_the_post_at_a_stop() {
+    let _lane = LANE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    POSTED.lock().expect("posted").clear();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let dir = tempfile::tempdir().expect("dir");
+    let epoch = SettlementEpochBlocks::new(10_000).expect("an epoch");
+    let store = ChainStore::create(dir.path().join("chain"), epoch).expect("create");
+    let service = runtime.block_on(async {
+        Service::start(
+            Arc::new(store),
+            RULES,
+            Arc::new(Free),
+            ServiceConfig::default(),
+            Budget::of_host(),
+            Follow::default(),
+        )
+    });
+    install(service.door(), runtime.handle().clone());
+    let mut ctx = 0u8;
+    assert_eq!(
+        unsafe { shekyl_ingest_bind(std::ptr::from_mut(&mut ctx).cast(), Some(collect)) },
+        0
+    );
+    let junk = vec![0xA5u8; 40];
+    let one = [ShekylIngestArrival {
+        tag: 300,
+        block: blob(&junk),
+        bodies: std::ptr::null(),
+        bodies_len: 0,
+    }];
+    // Accepted while the runtime is not driven: the span waits in the
+    // service's queue.
+    assert_eq!(
+        unsafe { shekyl_ingest_offer_span(9, 1, one.as_ptr(), one.len()) },
+        SHEKYL_INGEST_ACCEPTED
+    );
+    // An unbind on the runtime that posts the replies is refused.
+    let reentrant =
+        runtime.block_on(async { unsafe { shekyl_ingest_bind(std::ptr::null_mut(), None) } });
+    assert_eq!(reentrant, SHEKYL_INGEST_REENTRANT);
+    runtime.block_on(async { service.stop().await.expect("stops") });
+    // Unbind from another thread while this one drives the runtime: the
+    // drain posts the reply before the unbind returns.
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let unbinder = std::thread::spawn(move || {
+        let code = unsafe { shekyl_ingest_bind(std::ptr::null_mut(), None) };
+        let _sent = done_tx.send(code);
+    });
+    let code = runtime.block_on(async {
+        loop {
+            if let Ok(code) = done_rx.try_recv() {
+                break code;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    });
+    unbinder.join().expect("joins");
+    assert_eq!(code, 0);
+    assert_eq!(
+        *POSTED.lock().expect("posted"),
+        vec![(9, 300, SHEKYL_INGEST_STOPPED, 0, Vec::new())],
+        "the accepted arrival is answered STOPPED through the post"
+    );
+    uninstall();
 }
