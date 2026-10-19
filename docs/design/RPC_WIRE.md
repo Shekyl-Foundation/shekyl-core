@@ -15,7 +15,7 @@
 - **Problem.** Today's names are Monero's:
   - a `get_` verb on every read;
   - C++ handler names leaked onto the wire (`on_get_block_hash`);
-  - 14 alias spellings (`getinfo`, `getblock`, `submitblock`, …);
+  - 13 alias spellings: nine on JSON-RPC (`getblock`, `submitblock`, …) and four REST paths (`/getinfo`, `/getblocks_by_height.bin`, …), RW-F2;
   - four methods for one fact (block headers by height, by hash, last, range).
 
   The console word and the method behind it are two vocabularies (`chain height` vs `get_block_count`).
@@ -81,7 +81,7 @@
     - Its one consumer asks once per block, for the coinbase, to learn the block's first global output index (`block_fetch.rs:28–34`, `:494–519`).
     - The wallet avoids per-output asks because they leak which outputs it owns.
     - So a by-txid output-index method leaks by construction, and is kept alive to answer a fact every block carries.
-  - **`get_blocks_by_height.bin`.** It has two consumers: the engine's timing rig (`daemon_observability.rs:21`, `:80`), and `shekyl-chain-ingest`'s fetch (`fetch.rs:45`), the corpus builder behind `shekyl-chain-replay` and the chain-ingest file source that `INPUT_GRAMMAR.md` IG-Q26 names as offline bootstrap's successor (RW-F1). It also answers a second REST spelling, `/getblocks_by_height.bin` (`server.rs:273`, RW-F2). The FOLLOWUPS attestation-witness sidecar row concerns this method.
+  - **`get_blocks_by_height.bin`.** It has two consumers: the engine's timing rig (`daemon_observability.rs:21`, `:80`), and `shekyl-chain-ingest`'s fetch (`fetch.rs:45`), the corpus builder behind `shekyl-chain-replay` and the chain-ingest file source that `INPUT_GRAMMAR.md` IG-Q26 names as offline bootstrap's successor (RW-F1). It also answers a second REST spelling, `/getblocks_by_height.bin` (`server.rs:267`, RW-F2). The FOLLOWUPS attestation-witness sidecar row concerns this method.
 - **Ruling.**
   - The first output index becomes a field of the block reply, and the by-txid method is deleted. The field is the same for every caller, so it says nothing about who is asking.
   - The block view takes a bounded list of heights (`block list`, RW-Q1; resource policy §6.3), replacing `get_blocks_by_height.bin` and its REST alias, with the sidecar row re-homed to the block reply's shape, and both consumers moved to it in the same PR.
@@ -140,7 +140,7 @@
 ## Findings at the ground
 
 - **RW-F1 — a second consumer of `get_blocks_by_height.bin`.** `shekyl-chain-ingest`'s fetch (`fetch.rs:45`, `ROUTE`) builds corpora from it for `shekyl-chain-replay`; it is the chain-ingest file source IG-Q26 names as offline bootstrap's successor. RW-Q5's replacement serves it.
-- **RW-F2 — a REST alias the alias count leaves out.** `/getblocks_by_height.bin` (`server.rs:273`) answers beside `/get_blocks_by_height.bin`; RW-Q1's fourteen are JSON-RPC spellings.
+- **RW-F2 — the REST alias the first count left out.** `/getblocks_by_height.bin` (`server.rs:267`) answers beside `/get_blocks_by_height.bin`. With it the alias spellings are 13: nine on JSON-RPC (`getblockcount`, `on_getblockhash`, `getblockheaderbyheight`, `getblockheaderbyhash`, `getlastblockheader`, `getblockheadersrange`, `getblock`, `getblocktemplate`, `submitblock`) and four REST paths (`/getheight`, `/gettransactions`, `/getinfo`, `/getblocks_by_height.bin`). `on_get_block_hash` is not an alias: it is a C++ handler name leaked onto the wire, which RW-Q1's problem lists separately.
 - **RW-F3 — the counts, measured.** At `0be5ead54`, `git grep -n 'pub status:' rust/shekyl-rpc-types rust/shekyl-daemon-rpc` finds 20 fields, and `git grep -c skip_serializing_if` over the same two crates finds 61 sites.
 
 ## Carried decisions
