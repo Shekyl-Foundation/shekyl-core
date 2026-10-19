@@ -149,7 +149,8 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
   - the C++ fee floor and its FFI (DX-Q10);
   - liblmdb from `shekyld` (DEL-004);
 - deletes every LMDB-bound C++ test, each with a sentence naming the rule it tested and where Rust covers it now;
-- applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements.
+- applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements;
+- restates the two decisions `RPC_WIRE.md` carries that are bound to state the flip ends: RK-D7 (one implementation, `StoreFacts`, once the shims are deleted) and the per-lock-domain rule (over the Rust pool's lock and the store's MVCC snapshot, where today its example is `tx_memory_pool::check_for_key_images`).
 
 PR-b, PR 2 and PR 3 may run in parallel; PR 3b is briefed after PR-b and PR 2 merge. The flip needs PR-b, PR 2, PR 3, PR 3b and #1088.
 
