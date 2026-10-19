@@ -100,6 +100,7 @@ mod chain_reads;
 mod connect;
 mod curve_reads;
 mod edge;
+mod epoch_retire;
 mod error;
 mod grow;
 mod halt;
