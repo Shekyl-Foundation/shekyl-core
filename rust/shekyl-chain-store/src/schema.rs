@@ -847,8 +847,9 @@ tables! {
     /// reversed by `pop` through the journal; retired one above `h_open` of
     /// the settling family's oldest kept epoch
     /// ([`shekyl_chain_rules::ReleaseJournalFloor`], SI-28), inside the
-    /// slash log's window. The slash log keeps its own floor (A20,
-    /// `SO-D12` increment 2, `SO-D12h`). Appended last but one (ordinal 44).
+    /// slash log's window. The slash log keeps its own floor (A21);
+    /// this journal is the one A20 reads (`SO-D12` increment 2,
+    /// `SO-D12h`). Appended last but one (ordinal 44).
     pub const ARCHIVAL_RELEASE_JOURNAL: TableDefinition<ReleaseJournalTuple, Coded<BondRecord>> =
         TableDefinition::new("archival_release_journal");
 

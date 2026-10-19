@@ -672,7 +672,7 @@ async fn issue_on_shard_zero(
 /// one epoch older is refused there as expired at CEN-J25, before any read.
 ///
 /// Red edit: take the flag in CEN-J23 from the records
-/// (`freeze_complete_trees` over A11's rows in place of A20) — `T1` and
+/// (`freeze_complete_trees` over A11's rows in place of A22) — `T1` and
 /// `T2` read compact, good through `served` and credited, so both join the
 /// re-gather's market, `R_market(0, served)` reads 3 and `Σwork` grows; the
 /// claim is refused at CEN-J25.
