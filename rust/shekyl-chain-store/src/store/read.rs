@@ -1226,6 +1226,31 @@ impl ReadSnapshot<'_> {
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
+    /// **A20.** Every Release journaled strictly above `height`, ascending
+    /// by height and then persona, each with the record it replaced.
+    /// `floor` is the slash log's, which the journal is retired at; a range
+    /// starting below it is SI-28, not an empty answer.
+    pub fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
+        archival_reads::release_journal_after(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A21.** Every slash logged strictly above `height`, every
+    /// persona's, in log order, each with its height. A range starting
+    /// below `floor` is SI-26, as for A2.
+    pub fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::LoggedSlash>, StoreError> {
+        archival_reads::slash_log_rows_after(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
     /// The archival state as of this snapshot, as the E2 trace carries it
     /// (`DRS_E4_ARCHIVAL_WRITER.md` §3.8.1, `ARW-25`): the nine table
     /// families walked whole and the slash watermark cell, re-encoded

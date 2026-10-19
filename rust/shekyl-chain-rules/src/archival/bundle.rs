@@ -126,10 +126,10 @@
 //! or `validate` runs from a list and that the registry pins with
 //! `implemented(path)`. These functions are neither run nor pinned, and
 //! their view is not [`crate::ChainView`]. `archival/` already holds the
-//! other pure archival judgement of this slice that has no caller yet
-//! ([`DrawableSet`](super::DrawableSet)) and the settlement fold that
-//! consumes what admission writes. The rule types that succeed CEN-B4
-//! land in `rules/` at the cutover and call into here.
+//! builder of the drawable set this rule indexes
+//! ([`drawable_epoch_walked_back`](super::drawable_epoch_walked_back)) and
+//! the settlement fold that consumes what admission writes. The rule types
+//! that succeed CEN-B4 land in `rules/` at the cutover and call into here.
 //!
 //! # Precondition on the rule set: `W₂ + L ≤` anchor depth
 //!
@@ -682,7 +682,7 @@ pub fn verify_bundle<V: BundleView>(
             &nonce,
             record.anchor_height,
             anchor_hash.as_bytes(),
-            derived.pair.shard_id,
+            derived.pair.shard.to_raw(),
             &record.delivery_digest,
             &receipt,
         )

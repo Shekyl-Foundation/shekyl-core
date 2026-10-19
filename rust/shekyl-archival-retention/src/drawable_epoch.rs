@@ -24,30 +24,47 @@
 //! whose persona has no receipt key and on a key that does not parse, so
 //! "a pair in `D` lacks a key" is not a state the verifier meets.
 //!
-//! # Disposition: STAGED
+//! # The digest
 //!
-//! This is the type, its constructor and its tests. The value is built
-//! from the bond journals as of `h_open(E)` by `SO-D12`'s increment 2, and
-//! read by the bundle verifier in `shekyl-chain-rules` through its view
-//! ([`ARCHIVAL_SERVE_CREDIT_SPEC.md`](../../../docs/design/ARCHIVAL_SERVE_CREDIT_SPEC.md)
-//! §9.6, §11). Until then its only callers are tests.
+//! [`DrawableEpoch::digest`] is the 32 bytes the store keeps for `E`
+//! (`archival_drawable_digest`): written when `h_open(E)` connects and
+//! compared, when `E` settles, with the digest of a value rebuilt from the
+//! bond journals (spec §9.5 check 2). It covers the pairs in canonical
+//! order and each persona's receipt key, so a drift in either is a
+//! different digest (`SO-D12` ruling B, 2026-10-17). One function on the
+//! type, so the writer and the check cannot hash different encodings.
+//!
+//! # Who builds it
+//!
+//! `shekyl-chain-rules`' drawable-epoch builder, from the post-state at
+//! `h_open(E)` and by the walk back from a later tip (`SO-D12` increment
+//! 2). The bundle verifier reads it through its view from the cutover
+//! (§9.6, §11).
+
+use std::borrow::Borrow;
 
 use shekyl_crypto_pq::fn_dsa_hybrid::FnDsaHybridPublicKey;
-use shekyl_types::{PCanonicalId, SettlementEpoch};
+use shekyl_types::archival::{DrawableDigest, ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
+use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 
 use crate::drawable_pair::DrawablePair;
+use crate::hash::cshake256_32;
+
+/// cSHAKE256 customization for [`DrawableEpoch::digest`] (rule 30: one
+/// label, one function, versioned).
+pub const DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION: &[u8] = b"shekyl/archival-drawable-epoch-v1";
 
 /// Why a [`DrawableEpoch`] could not be built. Each is a defect of the
 /// state the caller read, never a verdict on a block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DrawableEpochError {
     /// A pair's persona has no receipt key among those supplied.
-    #[error("persona {persona:?} holds shard {shard_id} and has no receipt key")]
+    #[error("persona {persona:?} holds shard {shard} and has no receipt key")]
     MissingReceiptKey {
         /// The persona.
         persona: PCanonicalId,
         /// One shard it holds.
-        shard_id: u64,
+        shard: ShardId,
     },
     /// A persona's receipt key is not a canonical Ed25519 + FN-DSA-1024
     /// public key.
@@ -63,19 +80,19 @@ pub enum DrawableEpochError {
         persona: PCanonicalId,
     },
     /// One pair was supplied twice.
-    #[error("persona {persona:?} holds shard {shard_id} twice")]
+    #[error("persona {persona:?} holds shard {shard} twice")]
     DuplicatePair {
         /// The persona.
         persona: PCanonicalId,
         /// The shard.
-        shard_id: u64,
+        shard: ShardId,
     },
 }
 
 /// The `h_open(E)` state the draw and the bundle rule both read: the
 /// drawable pairs in canonical order, and each pair's receipt key.
 ///
-/// Canonical order is persona canonical-id bytes, then `shard_id`
+/// Canonical order is persona canonical-id bytes, then the shard
 /// numerically (§4.1) — [`DrawablePair`]'s `Ord`. `index(P, s)` is a
 /// pair's position in it and is constant through the epoch.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,18 +102,21 @@ pub struct DrawableEpoch {
     pairs: Vec<DrawablePair>,
     /// One parsed key per persona that holds a pair, ascending by persona
     /// id. A key is stored once and returned per pair.
-    receipt_keys: Vec<([u8; 32], FnDsaHybridPublicKey)>,
+    receipt_keys: Vec<(PCanonicalId, FnDsaHybridPublicKey)>,
 }
 
 impl DrawableEpoch {
     /// The drawable epoch of `epoch` with these receipt keys and these pairs.
     ///
-    /// `receipt_keys` is one entry per persona: its canonical id and its
-    /// receipt key's canonical bytes, as its bond record carries them at
-    /// `h_open(E)`. `pairs` is `D` in any order. The two are separate
-    /// arguments so that a key is supplied, parsed and stored once per
-    /// persona however many shards it holds; a persona that holds no pair
-    /// contributes nothing and its key is not kept.
+    /// `receipt_keys` is one entry per persona: its id and its bond
+    /// record's receipt key at `h_open(E)`. `pairs` is `D` in any order.
+    /// The two are separate arguments so that a key is supplied, parsed and
+    /// stored once per persona however many shards it holds; a persona that
+    /// holds no pair contributes nothing and its key is not kept.
+    ///
+    /// A [`ReceiptSignPk`] is a key's length and nothing more (CEN-J28
+    /// judged the content before the record was written), so the key of a
+    /// persona that holds a pair is parsed here.
     ///
     /// # Errors
     ///
@@ -107,45 +127,48 @@ impl DrawableEpoch {
     ///   not in `receipt_keys`.
     /// - [`DrawableEpochError::ReceiptKeyMalformed`]: the key of a persona
     ///   that holds a pair does not parse.
-    pub fn new<K: AsRef<[u8]>>(
+    pub fn new<K: Borrow<ReceiptSignPk>>(
         epoch: SettlementEpoch,
-        receipt_keys: impl IntoIterator<Item = ([u8; 32], K)>,
+        receipt_keys: impl IntoIterator<Item = (PCanonicalId, K)>,
         pairs: impl IntoIterator<Item = DrawablePair>,
     ) -> Result<Self, DrawableEpochError> {
         let mut pairs: Vec<DrawablePair> = pairs.into_iter().collect();
         pairs.sort_unstable();
         if let Some(twice) = pairs.windows(2).find(|w| w[0] == w[1]) {
             return Err(DrawableEpochError::DuplicatePair {
-                persona: PCanonicalId::from_bytes(twice[0].p_id),
-                shard_id: twice[0].shard_id,
+                persona: twice[0].persona,
+                shard: twice[0].shard,
             });
         }
 
-        let mut offered: Vec<([u8; 32], K)> = receipt_keys.into_iter().collect();
+        let mut offered: Vec<(PCanonicalId, K)> = receipt_keys.into_iter().collect();
         offered.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         if let Some(twice) = offered.windows(2).find(|w| w[0].0 == w[1].0) {
             return Err(DrawableEpochError::DuplicateReceiptKey {
-                persona: PCanonicalId::from_bytes(twice[0].0),
+                persona: twice[0].0,
             });
         }
 
         // `pairs` is sorted by persona first, so its personas are met in
         // ascending order and `parsed` is built sorted.
-        let mut parsed: Vec<([u8; 32], FnDsaHybridPublicKey)> = Vec::new();
+        let mut parsed: Vec<(PCanonicalId, FnDsaHybridPublicKey)> = Vec::new();
         for pair in &pairs {
-            if parsed.last().is_some_and(|(p_id, _)| *p_id == pair.p_id) {
+            if parsed
+                .last()
+                .is_some_and(|(persona, _)| *persona == pair.persona)
+            {
                 continue;
             }
-            let persona = PCanonicalId::from_bytes(pair.p_id);
-            let Ok(at) = offered.binary_search_by(|(p_id, _)| p_id.cmp(&pair.p_id)) else {
+            let persona = pair.persona;
+            let Ok(at) = offered.binary_search_by(|(offered, _)| offered.cmp(&persona)) else {
                 return Err(DrawableEpochError::MissingReceiptKey {
                     persona,
-                    shard_id: pair.shard_id,
+                    shard: pair.shard,
                 });
             };
-            let key = FnDsaHybridPublicKey::from_canonical_bytes(offered[at].1.as_ref())
+            let key = FnDsaHybridPublicKey::from_receipt_sign_pk(offered[at].1.borrow())
                 .map_err(|_| DrawableEpochError::ReceiptKeyMalformed { persona })?;
-            parsed.push((pair.p_id, key));
+            parsed.push((persona, key));
         }
 
         Ok(Self {
@@ -187,9 +210,53 @@ impl DrawableEpoch {
         let pair = self.pairs.get(usize::try_from(index).ok()?)?;
         let at = self
             .receipt_keys
-            .binary_search_by(|(p_id, _)| p_id.cmp(&pair.p_id))
+            .binary_search_by(|(persona, _)| persona.cmp(&pair.persona))
             .ok()?;
         Some(&self.receipt_keys[at].1)
+    }
+
+    /// The digest the store keeps for this epoch's drawable set (spec §9.5
+    /// check 2; `SO-D12` ruling B):
+    ///
+    /// ```text
+    /// cSHAKE256_32("shekyl/archival-drawable-epoch-v1",
+    ///       E_le8
+    ///     ‖ n_pairs_le8
+    ///     ‖ for each pair, canonical order:     p_canonical_id[32] ‖ shard_id_le8
+    ///     ‖ n_personas_le8
+    ///     ‖ for each persona, ascending by id:  p_canonical_id[32] ‖ receipt_sign_pk[1837]
+    /// )
+    /// ```
+    ///
+    /// Every field is fixed-width and each list is preceded by its count,
+    /// so no two values share an encoding. The personas are those that
+    /// hold a pair, which are the keys this value keeps; a key is hashed
+    /// once per persona, as its canonical encoding. The pair list fixes
+    /// every `index(P, s)`, and the persona list fixes the key each
+    /// index's receipt is verified under. A plain hash over the whole
+    /// value, computed once: `D` is never extended a draw at a time, as
+    /// the issued-draw index is.
+    #[must_use]
+    pub fn digest(&self) -> DrawableDigest {
+        // The epoch and the two counts are each one little-endian `u64`.
+        const WORD: usize = size_of::<u64>();
+        const PAIR_LEN: usize = size_of::<PCanonicalId>() + WORD;
+        const PERSONA_LEN: usize = size_of::<PCanonicalId>() + RECEIPT_SIGN_PK_LEN;
+        let mut input = Vec::with_capacity(
+            3 * WORD + self.pairs.len() * PAIR_LEN + self.receipt_keys.len() * PERSONA_LEN,
+        );
+        input.extend_from_slice(&self.epoch.to_raw().to_le_bytes());
+        input.extend_from_slice(&self.len().to_le_bytes());
+        for pair in &self.pairs {
+            input.extend_from_slice(pair.persona.as_bytes());
+            input.extend_from_slice(&pair.shard.to_raw().to_le_bytes());
+        }
+        input.extend_from_slice(&(self.receipt_keys.len() as u64).to_le_bytes());
+        for (persona, key) in &self.receipt_keys {
+            input.extend_from_slice(persona.as_bytes());
+            input.extend_from_slice(key.to_receipt_sign_pk().as_bytes());
+        }
+        DrawableDigest::from_bytes(cshake256_32(DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION, &input))
     }
 }
 
