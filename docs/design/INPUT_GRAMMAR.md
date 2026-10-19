@@ -764,7 +764,7 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 | `get_connections` | `peer_connections` | — | peers | §13's word |
 | `/get_peer_list` | `peer_list` | `local` (switch) | peers | IG-Q51 |
 | `/get_net_stats` | `p2p_stats` | — | status | §13's word |
-| `option_set` | `option_set` | `option` (a list of `name`, `value`) | node | named today |
+| `option_set` | `option_set` | `value` (a map from option name to value) | node | IG-Q42 |
 | `option_show` | `option_show` | `name` (a list, optional) | per row (IG-9) | named today |
 | `/stop_daemon` | `daemon_stop` | — | node | §13's word |
 | `/get_transaction_pool`, `/get_transaction_pool_hashes`, `get_txpool_backlog` | `txpool_list` | — | pool | IG-Q46, IG-Q57 |
@@ -818,7 +818,7 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Chain height** (`chain_height`): `height` (`/get_height`'s and `get_block_count`'s count) → `height`, the tip's ordinal (IG-Q45); `hash` → `hash`, the tip's.
 
-**Transaction** (`tx_show`, `tx_list`): `tx_hash` → `id`; `as_hex`, `pruned_as_hex` → `body` (bytes; the pruned form when `prune` is set, IG-Q55); `prunable_as_hex` and `as_json` go; `prunable_hash` → `prunable_hash`; `archival_len` → `archival_size` (bytes); `pruned` goes (the request says); `in_pool` → `txpool` (switch); `double_spend_seen` goes (IG-Q57); `block_height` → `block_height`; `confirmations` → `confirmations`; `block_timestamp` → `block_time`; `output_indices` → `output_index` (a list); `relayed` → `public` (switch: the pool's one bit, IG-Q57; `true` for every caller below host-only, since an entry not yet public is host-only, RT-O9.3); `received_timestamp` goes with the pool's receive time (IG-Q57). `txs_hashes` → `id`; `missed_tx` goes (`null` in the slot).
+**Transaction** (`tx_show`, `tx_list`): `tx_hash` → `id`; `as_hex`, `pruned_as_hex` → `body` (bytes; the pruned form when `prune` is set, IG-Q55); `prunable_as_hex` and `as_json` go; `prunable_hash` → `prunable_hash`; `archival_len` → `archival_size` (bytes); `pruned` goes (the request says); `in_pool` → `pooled` (switch); `double_spend_seen` goes (IG-Q57); `block_height` → `mined_height`; `confirmations` → `confirmations`; `block_timestamp` → `mined_time`; `output_indices` → `output_index` (a list); `relayed` → `public` (switch: the pool's one bit, IG-Q57; `true` for every caller below host-only, since an entry not yet public is host-only, RT-O9.3); `received_timestamp` goes with the pool's receive time (IG-Q57). `txs_hashes` → `id`; `missed_tx` goes (`null` in the slot).
 
 **Spent** (`chain_spent`): `key_images` → `key_image`; `spent_status` (0, 1, 2) → a list of one-of `unspent`, `chain`, `txpool`, in request order.
 
@@ -830,9 +830,9 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Curve tree** (`curve_show`): `root` (free-length hex today) → `root` (hash); `depth` → `layers`; `leaf_count` → `leaf_count`; `height` (`chain_height - 1` in one method) and `block_height` (the other) → `height`, ordinal.
 
-**Archival claim source** (`archival_claim_show`): `p_id` → `persona`; `chain_height` → `height` (ordinal, IG-Q45); `current_settled_epoch` → `settled_epoch`; `has_bond_record`, `join_settlement_epoch` → `joined_epoch` (`null`: no bond record); `holdings_kind` (0, 1) → `holding`, one-of `shards`, `complete-tree`; `held_shard_ids` → `shard` (a list); `claimed_settlement_epochs` → `claim_epoch` (a list); `bonded_total_atomic` → `bond_total` (amount); `bad_interval_count` → `interval_bad_count`; `has_last_served_epoch`, `last_served_epoch` → `served_epoch` (`null`: never served); `has_last_settled_slash_epoch`, `last_settled_slash_epoch` → `slash_epoch` (`null`: never slashed); `epochs` → `epoch` (a list).
-- Its epoch element: `settlement_epoch` → `epoch`; `close_block_height` → `closing_height`; `sigma_work_milli` → `work` (milli, IG-Q54); `budget_atomic`, `has_budget_row` → `budget` (amount, `null`: no budget row); `bonds` → `bond`; `shards` → `shard`; `credit_pairs` → `credit`; `claimant_bond_idx` (`u64::MAX` for none) → `claimant` (an index into `bond`, `null` for none).
-- Its bond element: `join_settlement_epoch` → `joined_epoch`; `is_foundation_complete_tree` → `complete_tree` (switch); `bad_intervals_flat` (flattened pairs) → `interval_bad`, a list of `{from, to}`, inclusive.
+**Archival claim source** (`archival_claim_show`): `p_id` → `persona`; `chain_height` → `height` (ordinal, IG-Q45); `current_settled_epoch` → `settled_epoch`; `has_bond_record`, `join_settlement_epoch` → `joined_epoch` (`null`: no bond record); `holdings_kind` (0, 1) → `holding`, one-of `shards`, `complete-tree`; `held_shard_ids` → `shard` (a list); `claimed_settlement_epochs` → `claimed` (a list of epochs); `bonded_total_atomic` → `bond_total` (amount); `bad_interval_count` → `failure_count`; `has_last_served_epoch`, `last_served_epoch` → `served_epoch` (`null`: never served); `has_last_settled_slash_epoch`, `last_settled_slash_epoch` → `slash_epoch` (`null`: never slashed); `epochs` → `epoch` (a list).
+- Its epoch element: `settlement_epoch` → `id`; `close_block_height` → `closing_height`; `sigma_work_milli` → `work` (milli, IG-Q54); `budget_atomic`, `has_budget_row` → `budget` (amount, `null`: no budget row); `bonds` → `bond`; `shards` → `shard`; `credit_pairs` → `credit`; `claimant_bond_idx` (`u64::MAX` for none) → `claimant` (an index into `bond`, `null` for none).
+- Its bond element: `join_settlement_epoch` → `joined_epoch`; `is_foundation_complete_tree` → `complete_tree` (switch); `bad_intervals_flat` (flattened pairs) → `failure`, a list of `{from, to}`, inclusive: the intervals the bond failed.
 - Its shard element: `shard_id` → `id`; `freeze_height` → `freeze_height`; `has_segment` → `segment` (switch). Its credit element: `bond_idx`, `shard_idx` → `bond`, `shard` (indices).
 
 **Shard coverage** (`shard_coverage`): `as_of_height` → `height`; `leaf_count` → `leaf_count`; `frozen_count` → `frozen_count`; `settled_epoch` → `settled_epoch`; `budget_atomic` → `budget` (amount); `sigma_work_milli` → `work` (milli); `profit_estimate_available` goes (`null` in `profit`); `shards` → `shard`, whose element is `shard_id` → `id`, `bonded_count` → `bonded_count`, `served_count` → `served_count`, `freeze_height` → `freeze_height`, `join_scarcity_micro` → `scarcity` (micro, IG-Q54), `expected_profit_atomic` → `profit` (amount, `null` when not estimated).
@@ -864,7 +864,7 @@ Each shape's fields today, and their names under this Part. The census from sour
 | `grey_peerlist_size` | `peer_gray_count` | `tx_pool_unbroadcast_count` (host-only, RT-O9.3) | `txpool_private_count` (host-only) |
 | `restricted` | `grant` (the grants the caller holds, `RPC_CHANNEL.md` §6.2) | | |
 
-**Version** (`version`): `version` (frozen); `release` → `tagged`; `current_height` (a count) → `height` (ordinal, IG-Q45); `target_height` (a count) → `target_height` (ordinal, IG-Q45); `consensus_constants_digest` → `consensus_digest`; `nettype` → `network` (its value `fakechain` is `regtest`, §3's name); `genesis_hash` → `genesis`.
+**Version** (`version`; its fields walk under `daemon`, whose build and network the read names): `version` (frozen); `release` → `tagged`; `current_height` (a count) → `height` (ordinal, IG-Q45); `target_height` (a count) → `target_height` (ordinal, IG-Q45); `consensus_constants_digest` → `consensus_digest`; `nettype` → `network` (its value `fakechain` is `regtest`, §3's name); `genesis_hash` → `genesis`.
 
 **Connection** (`peer_connections`; `peer` in `sync_status`): `incoming` → `inbound` (switch); `localhost`, `local_ip` → `local` (switch); `address`, `host`, `ip`, `port` → `endpoint` (peer-endpoint); `address_type` → `connector` (one-of `clearnet`, `tor`); `recv_count`, `send_count` → `download`, `upload` (bytes); `recv_idle_time`, `send_idle_time` → `download_idle`, `upload_idle` (duration); `state` → `state`; `live_time` → `age` (duration); `avg_download`, `current_download`, `avg_upload`, `current_upload` → `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current` (bytes per second; KiB/s today); `support_flags` → `flags`; `connection_id` → `id`; `height` → `height`.
 
@@ -874,7 +874,7 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **P2P statistics** (`p2p_stats`): `start_time` → `started`; `total_bytes_in`, `total_bytes_out` → `download`, `upload` (bytes); `total_packets_in`, `total_packets_out` → `download_packets`, `upload_packets`.
 
-**Options** (`option_set`, `option_show`): `options` → `option`, whose element keeps `name`, `value`, `source`, `runtime` and `secret`, and the secret form's `set` → `assigned` (§11's `set` is the verb; IG-Q42); `option_show`'s `names` → `name`. A refusal's `data` (IG-11, RW-Q3) keeps `code`, `option`, `source` and `message`, and its `params`, positional pairs today, become `parameter`, a map.
+**Options** (`option_set`, `option_show`): the reply's `options` unwraps (IG-Q53): the reply is the list of rows, and each row keeps `name`, `value`, `source`, `runtime` and `secret`, and the secret form's `set` → `assigned` (§11's `set` is the verb; IG-Q42). `option_set`'s `options`, a list of `{name, value}`, → `value`, a map from option name to value (IG-6's map; a name cannot be given twice); `option_show`'s `names` → `name`. A refusal's `data` is a diagnostic (IG-11, RW-Q3), whose fields walk under the subject `diagnostic`: `code`, `option`, `source` and `message` keep their names, and its `params`, positional pairs today, become `parameter`, a map.
 
 **Pool entry** (`txpool_list`): `id`, `weight`, `fee`, the Rust pool's listing (`rust/shekyl-mempool/src/relay.rs`, `Listed`; IG-Q57). Today's `tx_info` fields `id_hash` → `id`, `weight` → `weight`, `fee` → `fee`; `tx_json`, `tx_blob`, `blob_size`, `max_used_block_id_hash`, `max_used_block_height`, `kept_by_block`, `last_failed_height`, `last_failed_id_hash`, `receive_time`, `relayed`, `last_relayed_time`, `do_not_relay` and `double_spend_seen` go; the body is `tx_show`'s. `spent_key_images` goes with them. `/get_transaction_pool_hashes`' `tx_hashes` and `get_txpool_backlog`'s packed `backlog` fold into the list (IG-Q46).
 
@@ -882,7 +882,7 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Template** (`block_template`): parameters `wallet_address` → `address`, `reserve_size` → `extra_size` (bytes, at most 8), `extra_nonce` → `extra` (bytes); `prev_block`, refused when set, goes. Reply: the difficulty triple → `difficulty`; `height` → `height` (the next block's ordinal, `HEIGHT_SEMANTICS.md` §3.1 C6); `reserved_offset` → `extra_offset`; `expected_reward` → `reward`; `prev_hash` → `parent`; `seed_height` → `seed_height`; `blocktemplate_blob` → `body`; `blockhashing_blob` → `hashing` (bytes); `seed_hash` → `seed`; `next_seed_hash` (`""` when unchanged) → `seed_next` (`null` when unchanged). `get_miner_data` folds in (IG-Q46): its `major_version` → `version_major`, `median_weight` → `weight_median`, `already_generated_coins` (a number there) → `emission` (amount); its `height`, `prev_id`, `seed_hash` and `difficulty` (a `0x` string there) are the template's; its `tx_backlog` is `txpool_list`'s.
 
-**Submit** (`block_submit`, `tx_submit`): `params[0]` and `tx_blob` → `body`; `block_id` → `hash`. `tx_submit`'s `verdict`, `height` and `cause` keep their names.
+**Submit** (`block_submit`, `tx_submit`): `params[0]` and `tx_blob` → `body`; `block_id` → `hash`. `tx_submit`'s `verdict` and `cause` keep their names, and its `height` (the block that holds the transaction, on `already_in_chain`) → `mined_height`, as on the transaction entry.
 
 **Proof of work** (`block_pow`): `height` → `height`; `block_blob` → `hashing`; `seed_hash` (`""` allowed) → `seed` (optional). The bare-string reply → `{"pow": h}`.
 
@@ -907,69 +907,78 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | header | block | a block's header; with `show` and `list`, the read |
 | template | block | *view* — a block to mine on, built for an address |
 | submit | block, tx | *verb* — hand to the daemon for acceptance |
-| curve | — | the curve tree, FCMP++'s membership accumulator (IG-Q47) |
-| root | curve | a tree's root hash |
-| leaf | curve | a leaf of the curve tree |
+| curve | —, header | the curve tree, FCMP++'s membership accumulator (IG-Q47) |
+| root | curve, attestation | a tree's root hash |
+| leaf | curve, coverage | a leaf of the curve tree |
 | layers | curve | the tree's depth, in layers |
 | claim | archival | an emission claim's source record |
 | coverage | shard | *view* — holders per shard |
-| persona | — | a persona's canonical id |
+| persona | —, archival | a persona's canonical id |
 | generate | block | *verb* — mine blocks; only under `dev` |
 | pop | chain | *verb* — remove blocks from the tip; only under `dev` |
-| id | tx, connection, shard | an identifier: a transaction's id (a hash), a connection's, a shard's |
-| key | — | a key; only in `key image` |
+| id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's |
+| key | spent | a key; only in `key image` |
 | image | key | a key image (a hash) |
 | prune | tx | a switch: carry the pruned body |
 | prunable | tx | the prunable part of a transaction |
 | public | tx | the pool's one bit: the relay has made the transaction public (`DAEMON_RELAY_PRIVACY.md` acceptance criterion 2) |
 | private | txpool | entries whose `public` bit is unset; with `count`, host-only (RT-O9.3) |
 | confirmations | tx | blocks since the transaction's |
-| parent | block | the block this one extends (a hash) |
-| nonce | block | the header's nonce; under `dev block generate`, the first nonce |
-| orphan | block | not on the main chain |
-| reward | block, mine | the block's reward, an amount |
+| parent | block, alt, header, template | the block this one extends (a hash) |
+| nonce | block, header | the header's nonce; under `dev block generate`, the first nonce |
+| orphan | block, header | not on the main chain |
+| reward | block, mine, header, template | the block's reward, an amount |
 | cumulative | difficulty | summed over the chain to this block |
 | longterm | weight | the long-term weight |
 | median | weight, size | the median |
 | total | fee, weight, burn, bond | a sum |
 | attestation | header | the attestation tree |
 | index | output | a global output index |
-| time | block, header, daemon | a point in time (IG-Q54) |
+| time | block, header, daemon, mined | a point in time (IG-Q54) |
 | adjusted | time | the network-adjusted time |
 | started | daemon, p2p | when it started, a time |
 | duration | ban, shard | a span of time (IG-Q54) |
 | spacing | block | the target time between blocks |
-| target | sync | what the node is syncing to; `target height`, its height |
+| target | sync, daemon | what the node is syncing to; `target height`, its height |
 | synchronized | daemon | the node holds the target |
 | syncing | daemon | the node is syncing |
 | degraded | daemon | following, degraded |
 | peered | daemon | at least one handshaken session (`has_peers`) |
 | protocol | daemon | the P2P protocol's version |
-| emission | coinbase, daemon | coins emitted |
+| emission | coinbase, daemon, sum, template | coins emitted |
 | burn | daemon | the share the next coinbase burns (micro) and, with `total`, what has burned |
-| tagged | version | a tagged release build |
+| tagged | version, daemon | a tagged release build |
 | multiplier | emission | the release multiplier (micro; `shekyl-economics`) |
 | share | stake | the stakers' effective emission share (micro) |
 | disk | daemon | the data directory's disk |
 | free | disk | its free space, in bytes |
-| outbound | peer, clearnet, tor | connections we open |
+| outbound | peer, clearnet, tor, floor | connections we open |
 | grant | daemon | the grants this connection holds |
-| consensus | — | the consensus rules; `consensus digest`, the constants' digest |
+| consensus | —, daemon | the consensus rules; `consensus digest`, the constants' digest |
 | digest | consensus | a digest |
 | connector | connection, floor, tally | one-of `clearnet`, `tor` |
-| connection | span | the P2P connection downloading the span |
+| connection | span, peer | the P2P connection downloading the span |
 | host | ban | an IP address or subnet |
-| parameter | — | a diagnostic's named parameters (IG-11) |
+| parameter | diagnostic | a diagnostic's named parameters, a map (IG-11) |
+| diagnostic | — | a typed refusal (IG-11): a JSON-RPC error's `data` (RW-Q3) |
+| code | diagnostic | its stable dotted code (`config.value.range`) |
+| message | diagnostic | its one English rendering |
+| pooled | tx | in the pool, not yet in a block |
+| mined | tx | the block that holds the transaction; with `height` and `time` |
+| verdict | tx | the daemon's verdict on a submitted transaction |
+| cause | tx | why a rejected transaction was refused |
+| claimed | claim | the epochs this persona has claimed |
+| failure | bond, claim | an interval the bond failed, `{from, to}`; with `count`, how many |
 | offline | daemon | P2P is off (IG-Q3's offline state) |
 | economy | fee | the `economy` tier's fee per unit of weight |
 | standard | fee | the `standard` tier's |
 | high | fee | the `high` tier's |
 | name | option | an option's name |
 | value | option | an option's value, valid input to `option set` |
-| source | option | where the value came from: `default`, `file`, `cli`, `runtime` |
+| source | option, diagnostic | where the value came from: `default`, `file`, `cli`, `runtime` |
 | runtime | option | whether `option set` accepts the row (IG-12) |
 | secret | option | the row is a secret: its value is never shown |
-| assigned | secret | the secret has a value |
+| assigned | option | a secret row has a value |
 | major | version | the major version |
 | minor | version | the minor version |
 | state | connection | the connection's state |
@@ -1000,10 +1009,8 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | sender | tally | a distinct peer that sent the transaction; with `count` |
 | holding | claim | one-of `shards`, `complete-tree` |
 | settled | claim, coverage | the last settled epoch |
-| bond | claim | an archival bond |
-| interval | bond | an interval; `interval bad`, an interval the bond failed |
-| bad | interval | failed |
-| served | claim, coverage | served |
+| bond | claim, credit, epoch | an archival bond |
+| served | claim, coverage, shard | served |
 | slash | claim | slashed |
 | work | epoch, coverage | the summed work (milli, IG-Q54) |
 | budget | epoch, coverage | the budget, an amount |
@@ -1013,21 +1020,60 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | freeze | shard | the freeze height |
 | frozen | coverage | frozen shards, with `count` |
 | bonded | coverage, shard | bonded holders, with `count` |
-| scarcity | coverage | the join scarcity (micro, IG-Q54) |
-| profit | coverage | the expected profit, an amount |
+| scarcity | coverage, shard | the join scarcity (micro, IG-Q54) |
+| profit | coverage, shard | the expected profit, an amount |
 
 **Terms of §3, §11 and §14.2 that gain a parent:**
 
 | Term | Gains parents | Meaning there |
 |---|---|---|
-| pow | —, dev, block | proof of work (RandomX): under `block`, *view* — a block's proof-of-work hash; under `dev`, its seed schedule (IG-Q48) |
-| coinbase | header | the coinbase transaction: under `chain`, its outputs (§11); under `header`, its id |
-| output | block | the block's first output; `output index`, its global index |
+| pow | —, dev, block, header | proof of work (RandomX): under `block`, *view* — a block's proof-of-work hash; under `dev`, its seed schedule (IG-Q48) |
+| coinbase | header, shard | the coinbase transaction: under `chain`, its outputs (§11); under `header`, its id |
+| output | block, coinbase, shard, tx | the block's first output; `output index`, its global index |
 | alt | daemon | §11's `alt` gains `daemon`: the alternative blocks |
-| genesis | version | §14.2's `genesis` gains `version`: the genesis block's hash |
+| genesis | daemon | §14.2's `genesis` gains `daemon`: the genesis block's hash |
+| relay | — | §3's `relay` is also a subject: transaction relay, whose statistics `relay stats` reads |
 | endpoint | connection, peer, span | §11's `endpoint`: the peer's |
-| version | header | the block format's version (bare, §3's `version` is the binary's) |
+| version | header, daemon, protocol, template | the block format's version (bare, §3's `version` is the binary's) |
 | archival | tx | under `tx`, `archival size`: the archival form's length |
+| address | block, template | a Shekyl address |
+| block | alt, daemon, dev, mine, shard | a block: the block or blocks its parent names |
+| blocks | span | a length in blocks |
+| body | block, template, tx | a block's or transaction's serialized bytes, kind `bytes` |
+| chain | dev | the chain the daemon holds |
+| clearnet | daemon | the clearnet connector |
+| complete | bond | the whole corpus |
+| count | alt, block, bonded, chain, failure, frozen, gray, inbound, leaf, outbound, private, sender, served, tx, txpool, white | how many |
+| data | daemon | the per-network directory holding the daemon's stores |
+| depth | header | a depth in blocks |
+| difficulty | alt, daemon, header, mine, template | a mining difficulty (`HexU128`) |
+| download | connection, span | bytes we receive |
+| epoch | claim, joined, served, settled, slash | a fixed-length run of blocks: the epoch its parent names |
+| fee | sum, tx, txpool | a fee, an amount |
+| from | block, failure, span | the first height |
+| gray | peer | the gray peer list |
+| hash | alt, chain, daemon, header, prunable, shard | a 32-byte hash that identifies what its parent names |
+| height | alt, claim, closing, connection, coverage, curve, daemon, freeze, header, mined, pow, seed, sync, target, template | a block height, an ordinal: the height of what its parent names (a tip, a target, a block) |
+| inbound | clearnet, connection, peer, tor | connections other nodes open to us |
+| list | block, header | *verb* — print the entries; on the wire, a bounded list (RW-Q1) |
+| local | connection, peer | endpoints not dialable on the public internet |
+| network | daemon | which chain |
+| option | diagnostic | a runtime-changeable row of the daemon's table |
+| peer | daemon, sync, tally | another Shekyl node |
+| rpc | daemon | the daemon's RPC service |
+| seed | template | the RandomX seed |
+| shard | claim, coverage, credit, epoch | an archival shard: the shards its parent holds or names |
+| show | claim, curve, header | *verb* — print one item, by a typed selector (RW-Q1) |
+| size | archival, data, extra, shard, span | a size in bytes |
+| stake | daemon | the staking balance and bond |
+| stats | relay | *view* — statistics |
+| to | block, failure, sum | the last height, inclusive |
+| tor | daemon | the Tor connector |
+| tx | block, daemon, header, shard, txpool | a transaction: the transactions its parent holds or counts |
+| txpool | daemon | the transaction pool |
+| upload | connection | bytes we send |
+| weight | block, header, template, tx | a weight, in bytes |
+| white | peer | the white peer list |
 
 Value keywords added: `unspent` (spent), `tip` (a header, block or curve selector), `shards`, `complete-tree` (holding), `clearnet`, `tor` (connector), `white`, `gray` (tier).
 
@@ -1037,7 +1083,14 @@ Every term of §3 and §11 used as a field (`height`, `hash`, `count`, `weight`,
 
 Each is posed for ruling. A question that amends a ruled row names it.
 
-**IG-Q42 — a field's name, and a list-valued parameter — POSED 2026-10-18.** RW-Q10 makes parameter and field names glossary paths, and two conventions are needed to write them. *Recommended:* a field's name is the rest of its path below the object that holds it, so inside a block header the field is `hash`, never `block_hash`; and a list-valued parameter or field takes the singular term with an array value (`{"height": [7, 8]}`), IG-6's list convention on the wire. The gate reads both from the schema RW-Q7's table generates from the request and reply types, never from a hand list. One consequence amends RT-O23's reply (`RPC_CHANNEL.md` §6.4): a secret row's `set` collides with §11's verb `set`, and becomes `assigned`.
+**IG-Q42 — the names of parameters and fields, and how the gate walks them — POSED 2026-10-18.** RW-Q10 makes parameter and field names glossary paths, and the conventions below are needed to write and to check them. *Recommended:*
+- **A field's name** is the rest of its path below the object that holds it: inside a block header the field is `hash`, never `block_hash`.
+- **A parameter's name** is the rest of its path below the object it selects or modifies. A selector's object is the method's subject: `block_header_show`'s `height` walks `block` → `height`. A modifier's object is what it modifies: `prune` modifies a transaction's body, so it walks `tx` → `prune` on every method that carries one, `block_show` and `block_list` included, and `pow` modifies a header, so it walks `header` → `pow`. An input (IG-Q43) parameterizes its view, so its object is the view: `chain_spent`'s `key_image` walks `spent` → `key` → `image`. A verb's argument walks below the noun the verb acts on: `ban_add`'s `host` walks `ban` → `host`.
+- **A list-valued parameter or field** takes the singular term with an array value (`{"height": [7, 8]}`), IG-6's list convention on the wire.
+- **How the gate finds each object.** Every request and reply type in RW-Q7's table, and every type nested in one, carries its object's path as a constant on the type: a reply or element type names what it describes (`block header`, `peer connection`), a selector type names the method's subject, a modifier type names what it modifies (the transaction-body options carry `tx`), and a request type's remaining fields are inputs or arguments under the path its row gives. The schema generator emits each field with its holding type's path, and the gate walks that path followed by the field's terms. No list of objects is kept by hand.
+- **The walk checks edges, not membership.** For every method, parameter and field, each adjacent pair of terms is a parent → child edge in §3, §11, §14.2 or §19, and a method's first term is a subject; a qualifier (`max`, `min`) may end any path. A name whose pairs are all terms but not all edges fails.
+
+Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #1088: a secret row's `set` collides with §11's verb `set` and becomes `assigned`; `option_set`'s request, a list of `{name, value}` under the key `options`, cannot walk (`option` → `option`) and becomes `value`, a map from option name to value; and the replies' `options` wrapper goes (IG-Q53).
 
 **IG-Q43 — a view's inputs — POSED 2026-10-18.** RW-Q1 says a view noun takes no selector. Several reads take an input that is not a choice of stored item: `chain spent` takes key images, `block template` the address to pay, `block pow` a block's hashing bytes. *Recommended:* a *selector* picks a stored item and belongs only to `show` and `list`; an *input* parameterizes what a view computes, and a view may take inputs. `chain spent` (IG-Q25's view) stays a view.
 
