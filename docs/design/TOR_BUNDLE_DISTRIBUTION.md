@@ -35,8 +35,8 @@ the Foundation's hosts showed what that costs once Tor is not optional.
 2. **A node with no pinned tor runs clearnet-only and says so at a level nobody
    reads.** The message is `MINFO` (`src/p2p/net_node.inl:869`), hidden at the
    default log level. That is PWD-E7's ruled "calm skip"
-   (`rust/shekyl-tor-control-daemon/src/blocking.rs:65`), not a defect in the
-   code.
+   (`rust/shekyl-tor-control-daemon/src/blocking.rs` line 65 at `e0fb3eaa8`;
+   the file is since deleted), not a defect in the code.
 3. **A staged bundle under a name the resolver does not compose is not found.**
    Internal hosts held the pinned binary — its digest equals the x86_64 pin —
    under `/opt/shekyl/tor-expert-bundle-<version>/tor/`, while the resolver

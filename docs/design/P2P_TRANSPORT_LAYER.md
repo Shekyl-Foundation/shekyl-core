@@ -807,7 +807,8 @@ Connections that have no channel yet are invisible to that read.
 
 Two private tokio runtimes already exist:
 `rust/shekyl-daemon-rpc/src/ffi_exports.rs:162` and
-`rust/shekyl-tor-control-daemon/src/blocking.rs:120`. Both call
+`rust/shekyl-tor-control-daemon/src/blocking.rs` line 120 (at `0aa207208`;
+the file is since deleted). Both call
 `Builder::new_multi_thread()`. The transport layer must not silently add a
 third (D5, D14).
 

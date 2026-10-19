@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Daemon: the C++-era Tor FFI is deleted** (`TOR_SUPERVISOR.md` §9; Rick, 2026-10-17). The four `shekyl_daemon_tor_*` exports, their `shekyl_ffi.h` declarations, `shekyl-ffi`'s `daemon_tor_ffi.rs` and `shekyl-tor-control-daemon`'s blocking facade (`BlockingDaemonTor` and its one-worker runtime) had no caller once the daemon's own `main()` started and stopped the managed Tor (#1088). `shekyl-tor-control-daemon` drops its `shekyl-runtime` dependency. `tor-pin-verify` no longer requires the blocking-facade live test: the daemon floor is 2 on Linux and 1 on Windows.
+
 - **Tor: every pin moves to tor 0.4.9.14, and the Windows release carries Tor** (`TOR_BUNDLE_DISTRIBUTION.md` `TB-10`, `TB-11`). The x86_64 Linux pin moves to Expert Bundle 15.0.25 and the aarch64 Linux pin to the alpha line's 16.0a14, both tor 0.4.9.14, whose fixes affect clients and onion services (among them onion-service circuits built through relays flagged `MiddleOnly`, TROVE-2026-067). Windows is pinned at 15.0.25: the zip carries `tor.exe` in `tor/` beside the binaries, with its licence texts in `tor-licenses/`, so a Windows node runs a managed Tor. Packaging reads `tor.exe`'s import table and refuses a DLL the pin's list does not name, and any delay-load import, so a bundle that starts shipping or loading its own DLL is stopped at the build. A Windows daemon with no bundle beside it still starts, and warns. The GUI wallet's Windows installer does not carry the bundle yet (`TB-12`, tracked in `shekyl-gui-wallet`).
 
 - **The Rust transaction pool, staged for the DRS-X flip** (`DRS_E5_POOL_ALT_PRUNE.md` §2.2, PR-b). Nothing here is wired into the daemon yet: the C++ pool stays the live one until the flip.
