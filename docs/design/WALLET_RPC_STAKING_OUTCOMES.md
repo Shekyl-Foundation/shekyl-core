@@ -159,7 +159,7 @@ reason sentence must not blame the user.
 ## 2. What happens to each kind today
 
 The four kinds live in one sealed block, `PendingPostBlock`
-(`shekyl-engine-state/src/pending_post_block.rs:394-437`), version 12
+(`shekyl-engine-state/src/pending_post_block/mod.rs:453-507`), version 12
 (`:94`). Every kind shares one state type, `PendingPostState`
 (`:113-130`): `Pending`, or `Dispatched { at, attempts }`.
 
