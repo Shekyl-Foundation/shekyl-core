@@ -5384,7 +5384,7 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   step fail-closes if CMakeFiles/objects/archives leak into the tarball.
 - **`get_block` is served natively in Rust, and the two console commands
   that read it move with it (RK-3b,
-  `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
+  `docs/completed/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
   `shekyl-daemon-rpc`, by hash or by height, over a new facts export that
   reads the block under one acquisition of the chain lock. `print_block`
   renders in Rust now — the same lines in the same order, with the reward
@@ -5403,7 +5403,7 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   transaction structure, and it is already queued for deletion along with
   the field itself, which duplicates `blob`.
 - **`get_block_header_by_height` is served natively in Rust (RK-3,
-  `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
+  `docs/completed/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases answer from
   `shekyl-daemon-rpc::methods` over a new facts export that reads the
   bound, the block, its weights and both difficulties under **one**
   acquisition of the chain lock, so every field of a header describes the
@@ -5558,7 +5558,7 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   18-character lowercase hex string, now pinned by a test — so the FFI contract
   is untouched.
 - **`get_block_count` and `on_get_block_hash` are served natively in Rust
-  (RK-2, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases of each
+  (RK-2, `docs/completed/DAEMON_RPC_KV_CUTOVER.md`).** Both aliases of each
   (`getblockcount`, `on_getblockhash`) answer from
   `shekyl-daemon-rpc::methods` over the typed facts FFI; the C++ handlers,
   their `COMMAND_RPC_*` structs and the hand-rolled JSON-array parser in
@@ -5572,7 +5572,7 @@ the same `check_tx_extra_shape`. Grammar fuzzing moves to
   of `-2` — the old classification came from `std::stoull` wrapping the
   value in the deleted parser, not from a decision.
 - **Daemon RPC Phase 2 begins: `get_height` and `get_version` are served
-  natively in Rust (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`).** The
+  natively in Rust (RK-1, `docs/completed/DAEMON_RPC_KV_CUTOVER.md`).** The
   wire types are now `shekyl-rpc-types::{GetHeightResponse,
   GetVersionResponse}` — one definition for the daemon that serves them,
   the wallet that reads them and the console that renders them — and the

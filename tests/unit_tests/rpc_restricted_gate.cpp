@@ -28,7 +28,7 @@
 
 
 // The origin context the C++ dispatch bridge hands every bridged handler
-// (docs/design/DAEMON_RPC_KV_CUTOVER.md §7, 2026-08-26).
+// (docs/completed/DAEMON_RPC_KV_CUTOVER.md §7, 2026-08-26).
 //
 // Until that date `dispatch_json` / `dispatch_jsonrpc` / `dispatch_jsonrpc_we`
 // passed `nullptr`, so `restricted = m_restricted && ctx` was false on every

@@ -693,7 +693,7 @@ walking the live function will meet them. Rule-60 material throughout.
    vehicle), [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md)
    :290–293 (archival-leg `ARCHIVAL_REORG_DEPTH_BLOCKS = 720` + revert-order
    pins), and a deliberately-preserved RPC alt-block quirk
-   ([`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md) :563). Meanwhile
+   ([`DAEMON_RPC_KV_CUTOVER.md`](../completed/DAEMON_RPC_KV_CUTOVER.md) :563). Meanwhile
    the path is interleaved with Shekyl-specific state (CEN-K5b witness
    re-supply, archival pop-side belts). Survey A U-3's question — what a
    reorg does to serve credit, challenge assignment, slash watermarks

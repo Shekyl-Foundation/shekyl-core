@@ -94,7 +94,7 @@ macro_rules! json_handler {
 // Unrestricted endpoints
 
 /// `/get_height` (alias `/getheight`) — served natively (RK-1,
-/// `docs/design/DAEMON_RPC_KV_CUTOVER.md`): the body is ignored, as the C++
+/// `docs/completed/DAEMON_RPC_KV_CUTOVER.md`): the body is ignored, as the C++
 /// handler ignored its empty request struct. A facts fault answers with the
 /// same envelope a failed FFI dispatch does.
 pub async fn get_height(State(state): State<Arc<AppState>>, _body: String) -> impl IntoResponse {

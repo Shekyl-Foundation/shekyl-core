@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Chain-tip and version methods — the RK-1 slice of the daemon RPC KV
-//! cutover (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.1).
+//! cutover (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.1).
 //!
 //! These are the single Rust definitions of the wire types that
 //! `COMMAND_RPC_GET_HEIGHT` and `COMMAND_RPC_GET_VERSION` used to carry in

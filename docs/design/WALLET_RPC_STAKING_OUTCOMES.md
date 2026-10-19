@@ -696,7 +696,7 @@ bind (`shekyl-wallet-rpc/src/auth.rs:6-10`).
   call `transfer` and `unstake`.
 - The grants of `RPC_CHANNEL.md` §6.1 are the daemon's. The slice that
   puts the wallet RPC on the channel, RT-W12, is not authorized
-  (`RPC_CHANNEL.md:1978`).
+  (`RPC_CHANNEL.md:2005`).
 - If L1 ever gains per-connection grants, these fields belong to whatever
   grant then holds staking state.
 

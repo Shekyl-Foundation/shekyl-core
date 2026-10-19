@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! Console rendering for natively-served methods
-//! (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.4, RK-D5).
+//! (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.4, RK-D5).
 //!
 //! `shekyld`'s console has two arms that used to share one C++ struct: the
 //! interactive console inside the daemon (which called
