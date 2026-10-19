@@ -313,6 +313,24 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
     ) -> Result<Option<DrawableDigest>, StoreError> {
         archival_reads::drawable_digest(self.snapshot.txn(), epoch).map_err(ReadFault::into_plain)
     }
+
+    fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
+        archival_reads::release_journal_after(self.snapshot.txn(), height, floor)
+            .map_err(ReadFault::into_plain)
+    }
+
+    fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::LoggedSlash>, StoreError> {
+        archival_reads::slash_log_rows_after(self.snapshot.txn(), height, floor)
+            .map_err(ReadFault::into_plain)
+    }
 }
 
 #[cfg(test)]

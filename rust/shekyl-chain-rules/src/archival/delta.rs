@@ -7,7 +7,9 @@
 //! siblings build the delta — and private past that module. The doctest on
 //! [`ArchivalDelta`] is the pin. The store writes what it is given.
 
-use shekyl_types::archival::{BondRecord, RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry};
+use shekyl_types::archival::{
+    BondRecord, DrawableDigest, RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+};
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
@@ -27,6 +29,7 @@ use shekyl_units::AtomicUnits;
 /// ```compile_fail,E0451
 /// let delta = shekyl_chain_rules::ArchivalDelta {
 ///     records: Vec::new(),
+///     releases: Vec::new(),
 ///     serve_credits: Vec::new(),
 ///     settlements: Vec::new(),
 ///     gathers: Vec::new(),
@@ -34,6 +37,7 @@ use shekyl_units::AtomicUnits;
 ///     slash_watermark: None,
 ///     accrual: todo!(),
 ///     close: None,
+///     drawable_digest: None,
 /// };
 /// ```
 ///
@@ -42,6 +46,7 @@ use shekyl_units::AtomicUnits;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchivalDelta {
     pub(super) records: Vec<RecordWrite>,
+    pub(super) releases: Vec<ReleasePreImage>,
     pub(super) serve_credits: Vec<ServeCreditKey>,
     pub(super) settlements: Vec<Settlement>,
     pub(super) gathers: Vec<EpochGather>,
@@ -49,6 +54,7 @@ pub struct ArchivalDelta {
     pub(super) slash_watermark: Option<SettlementEpoch>,
     pub(super) accrual: Accrual,
     pub(super) close: Option<EpochClose>,
+    pub(super) drawable_digest: Option<DrawableDigestWrite>,
 }
 
 impl ArchivalDelta {
@@ -58,6 +64,15 @@ impl ArchivalDelta {
     #[must_use]
     pub fn records(&self) -> &[RecordWrite] {
         &self.records
+    }
+
+    /// Every Release this block connects, in block order, each with the
+    /// record as it stood before the Release changed it: what the store
+    /// journals under `(height, persona)` (`archival_release_journal`,
+    /// `SO-D12` increment 2). The post-image is in [`Self::records`].
+    #[must_use]
+    pub fn releases(&self) -> &[ReleasePreImage] {
+        &self.releases
     }
 
     /// The serve-credit keys this block's transactions earn, in block
@@ -117,6 +132,60 @@ impl ArchivalDelta {
     #[must_use]
     pub const fn close(&self) -> Option<&EpochClose> {
         self.close.as_ref()
+    }
+
+    /// The digest of the drawable set of the epoch this block opens, when
+    /// it is an `h_open(E)` — genesis for epoch 0, and the first block of
+    /// every later epoch; `None` at every other height. Taken over the
+    /// state after this block, its slash pass included
+    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.1, §9.5 check 2).
+    #[must_use]
+    pub const fn drawable_digest(&self) -> Option<&DrawableDigestWrite> {
+        self.drawable_digest.as_ref()
+    }
+}
+
+/// One Release's pre-image: the persona's record exactly as it stood before
+/// the Release arm changed it. `Clone` for [`ArchivalDelta`]'s one cloning
+/// caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReleasePreImage {
+    pub(super) persona: PCanonicalId,
+    pub(super) record: BondRecord,
+}
+
+impl ReleasePreImage {
+    /// The releasing persona.
+    #[must_use]
+    pub const fn persona(&self) -> &PCanonicalId {
+        &self.persona
+    }
+
+    /// The record before the Release.
+    #[must_use]
+    pub const fn record(&self) -> &BondRecord {
+        &self.record
+    }
+}
+
+/// The digest of one epoch's drawable set, written once, at its open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DrawableDigestWrite {
+    pub(super) epoch: SettlementEpoch,
+    pub(super) digest: DrawableDigest,
+}
+
+impl DrawableDigestWrite {
+    /// The epoch the block opens.
+    #[must_use]
+    pub const fn epoch(&self) -> SettlementEpoch {
+        self.epoch
+    }
+
+    /// `DrawableEpoch::digest` of its drawable set.
+    #[must_use]
+    pub const fn digest(&self) -> DrawableDigest {
+        self.digest
     }
 }
 

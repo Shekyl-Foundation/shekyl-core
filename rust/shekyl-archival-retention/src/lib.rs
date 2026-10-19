@@ -179,7 +179,7 @@ pub use constants::{
 pub use debit_auth::{
     cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
 };
-pub use drawable_epoch::{DrawableEpoch, DrawableEpochError};
+pub use drawable_epoch::{DrawableEpoch, DrawableEpochError, DRAWABLE_EPOCH_DIGEST_CUSTOMIZATION};
 pub use drawable_pair::DrawablePair;
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
@@ -230,8 +230,9 @@ pub use reward_arithmetic::{
 pub use secret_draw::{
     challenge_nonce, draw_commit, draw_count, draw_horizon, draw_target, select_draw,
     serve_credit_batch_commitment, DrawTarget, SelectedDraw, CHALLENGE_NONCE_CUSTOMIZATION,
-    CHALLENGE_READS, DRAW_ATTEMPTS, DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION,
-    DRAW_HORIZON_FLOOR, SERVE_CREDIT_BATCH_CUSTOMIZATION,
+    CHALLENGE_READS, COUNT_CAP_BASE_MULTIPLE, COUNT_CAP_MULTIPLE, DRAW_ATTEMPTS,
+    DRAW_COMMIT_CUSTOMIZATION, DRAW_CUSTOMIZATION, DRAW_HORIZON_FLOOR,
+    SERVE_CREDIT_BATCH_CUSTOMIZATION,
 };
 pub use segment_freeze::{
     challenge_leaf_chunk_bounds, challenged_leaf_offset_in_chunk, frozen_segment_count,

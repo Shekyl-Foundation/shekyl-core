@@ -50,7 +50,7 @@ fn epoch(n: u64) -> SettlementEpoch {
     SettlementEpoch::from_raw(n)
 }
 
-fn record() -> BondRecord {
+pub(super) fn record() -> BondRecord {
     BondRecord {
         hybrid_pubkey: vec![0x11; 64],
         bond_spend_pk: vec![0x22; 32],
