@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The header projection's remainder and the fee estimate — the RK-5b slice
-//! of the daemon RPC KV cutover (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.1).
+//! of the daemon RPC KV cutover (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.1).
 //!
 //! Conventions are [`crate::chain`]'s: wire field names, `deny_unknown_fields`,
 //! and every `KV_SERIALIZE_OPT(field, default)` mirrored by `#[serde(default,

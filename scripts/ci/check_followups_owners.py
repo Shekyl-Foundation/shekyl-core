@@ -85,8 +85,10 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # on 2026-10-13 when the fee-and-weight owner (dev) and the F-7 owner
 # (this lane) landed together, the list's length; 299 on 2026-10-17 when
 # the dispatch-driver row gained an owner (#1109) and dev's own burn-down
-# merged with it, the list's length.
-GRANDFATHER_CEILING = 299
+# merged with it, the list's length; 296 on 2026-10-18 when the
+# claim-source, serde-default and dual-list rows took RPC_WIRE.md as owner
+# (the KV doc's retirement, #1116) and merged with dev's, the list's length.
+GRANDFATHER_CEILING = 296
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5
