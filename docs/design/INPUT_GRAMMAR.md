@@ -774,7 +774,7 @@ Every method served at `2470176c1`: 68 served names (43 JSON-RPC names and 25 RE
 | `/submit_transaction` | `tx_submit` | `body` | submit | |
 | `get_block_template` (`getblocktemplate`), `get_miner_data` | `block_template` | `address`, `extra`, `extra_size` | mining-work | a view with inputs (IG-Q43); IG-Q46 |
 | `submit_block` (`submitblock`) | `block_submit` | `body` | mining-work | named, not positional (RW-Q2) |
-| `calc_pow` | `block_pow` | `height`, `hashing`, `seed` | mining-work | IG-Q48 |
+| `calc_pow` | `pow` | `height`, `hashing`, `seed` | mining-work | a view with inputs (IG-Q43); IG-Q48 |
 | `/start_mining`, `/stop_mining`, `/mining_status` | `mine_start`, `mine_stop`, `mine_status` | `address`, `threads` (an integer or `auto`) for `mine_start` | mining-control | §13's words |
 | `set_bans` | `ban_add`, `ban_remove` | `host`; `duration` for `ban_add` | bans | one verb per change; IG-Q44 |
 | `get_bans`, `banned` | `ban_list`, `ban_show` | `host` for `ban_show` | bans | IG-Q46 |
@@ -884,7 +884,7 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Submit** (`block_submit`, `tx_submit`): `params[0]` and `tx_blob` → `body`; `block_id` → `hash`. `tx_submit`'s `verdict` and `cause` keep their names, and its `height` (the block that holds the transaction, on `already_in_chain`) → `mined_height`, as on the transaction entry.
 
-**Proof of work** (`block_pow`): `height` → `height`; `block_blob` → `hashing`; `seed_hash` (`""` allowed) → `seed` (optional). The bare-string reply → `{"pow": h}`.
+**Proof of work** (`pow`): `height` → `height`; `block_blob` → `hashing`; `seed_hash` (`""` allowed) → `seed` (optional). The bare-string reply → `{"pow": h}`.
 
 **Miner** (`mine_start`, `mine_status`): `miner_address` → `address`; `threads_count` (0 for auto) → `threads` (an integer, or the keyword `auto`). Status: `active` → `active`; `speed` (hashes per second) → `speed`; `threads_count` → `threads`; `address` (`""` when idle) → `address` (`null` when idle); `pow_algorithm` (always `RandomX`) goes; `block_target` → `block_spacing`; `block_reward` → `reward`; the difficulty triple → `difficulty`.
 
@@ -907,13 +907,13 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | header | block | a block's header; with `show` and `list`, the read |
 | template | block | *view* — a block to mine on, built for an address |
 | submit | block, tx | *verb* — hand to the daemon for acceptance |
-| curve | —, header | the curve tree, FCMP++'s membership accumulator (IG-Q47) |
+| curve | — | the curve tree, FCMP++'s membership accumulator (IG-Q47) |
 | root | curve, attestation | a tree's root hash |
 | leaf | curve, coverage | a leaf of the curve tree |
 | layers | curve | the tree's depth, in layers |
 | claim | archival | an emission claim's source record |
 | coverage | shard | *view* — holders per shard |
-| persona | —, archival | a persona's canonical id |
+| persona | — | a persona's canonical id |
 | generate | block | *verb* — mine blocks; only under `dev` |
 | pop | chain | *verb* — remove blocks from the tip; only under `dev` |
 | id | tx, connection, shard, epoch, txpool | an identifier: a transaction's id (a hash), a connection's, a shard's |
@@ -954,7 +954,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | free | disk | its free space, in bytes |
 | outbound | peer, clearnet, tor, floor | connections we open |
 | grant | daemon | the grants this connection holds |
-| consensus | —, daemon | the consensus rules; `consensus digest`, the constants' digest |
+| consensus | — | the consensus rules; `consensus digest`, the constants' digest |
 | digest | consensus | a digest |
 | connector | connection, floor, tally | one-of `clearnet`, `tor` |
 | connection | span, peer | the P2P connection downloading the span |
@@ -1027,29 +1027,21 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 
 | Term | Gains parents | Meaning there |
 |---|---|---|
-| pow | —, dev, block, header | proof of work (RandomX): under `block`, *view* — a block's proof-of-work hash; under `dev`, its seed schedule (IG-Q48) |
+| pow | —, dev | proof of work (RandomX): bare, *view* — compute a block's proof-of-work hash; under `dev`, its seed schedule (IG-Q48). A header's `pow` field and the header reads' `pow` switch name it by reference (IG-Q42) |
 | coinbase | header, shard | the coinbase transaction: under `chain`, its outputs (§11); under `header`, its id |
 | output | block, coinbase, shard, tx | the block's first output; `output index`, its global index |
 | alt | daemon | §11's `alt` gains `daemon`: the alternative blocks |
-| genesis | daemon | §14.2's `genesis` gains `daemon`: the genesis block's hash |
 | relay | — | §3's `relay` is also a subject: transaction relay, whose statistics `relay stats` reads |
 | endpoint | connection, peer, span | §11's `endpoint`: the peer's |
 | version | header, daemon, protocol, template | the block format's version (bare, §3's `version` is the binary's) |
-| archival | tx | under `tx`, `archival size`: the archival form's length |
-| address | block, template | a Shekyl address |
-| block | alt, daemon, dev, mine, shard | a block: the block or blocks its parent names |
 | blocks | span | a length in blocks |
 | body | block, template, tx | a block's or transaction's serialized bytes, kind `bytes` |
-| chain | dev | the chain the daemon holds |
-| clearnet | daemon | the clearnet connector |
 | complete | bond | the whole corpus |
 | count | alt, block, bonded, chain, failure, frozen, gray, inbound, leaf, outbound, private, sender, served, tx, txpool, white | how many |
-| data | daemon | the per-network directory holding the daemon's stores |
 | depth | header | a depth in blocks |
 | difficulty | alt, daemon, header, mine, template | a mining difficulty (`HexU128`) |
 | download | connection, span | bytes we receive |
 | epoch | claim, joined, served, settled, slash | a fixed-length run of blocks: the epoch its parent names |
-| fee | sum, tx, txpool | a fee, an amount |
 | from | block, failure, span | the first height |
 | gray | peer | the gray peer list |
 | hash | alt, chain, daemon, header, prunable, shard | a 32-byte hash that identifies what its parent names |
@@ -1057,20 +1049,11 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | inbound | clearnet, connection, peer, tor | connections other nodes open to us |
 | list | block, header | *verb* — print the entries; on the wire, a bounded list (RW-Q1) |
 | local | connection, peer | endpoints not dialable on the public internet |
-| network | daemon | which chain |
-| option | diagnostic | a runtime-changeable row of the daemon's table |
-| peer | daemon, sync, tally | another Shekyl node |
-| rpc | daemon | the daemon's RPC service |
 | seed | template | the RandomX seed |
-| shard | claim, coverage, credit, epoch | an archival shard: the shards its parent holds or names |
 | show | claim, curve, header | *verb* — print one item, by a typed selector (RW-Q1) |
 | size | archival, data, extra, shard, span | a size in bytes |
-| stake | daemon | the staking balance and bond |
 | stats | relay | *view* — statistics |
 | to | block, failure, sum | the last height, inclusive |
-| tor | daemon | the Tor connector |
-| tx | block, daemon, header, shard, txpool | a transaction: the transactions its parent holds or counts |
-| txpool | daemon | the transaction pool |
 | upload | connection | bytes we send |
 | weight | block, header, template, tx | a weight, in bytes |
 | white | peer | the white peer list |
@@ -1086,13 +1069,14 @@ Each is posed for ruling. A question that amends a ruled row names it.
 **IG-Q42 — the names of parameters and fields, and how the gate walks them — POSED 2026-10-18.** RW-Q10 makes parameter and field names glossary paths, and the conventions below are needed to write and to check them. *Recommended:*
 - **A field's name** is the rest of its path below the object that holds it: inside a block header the field is `hash`, never `block_hash`.
 - **A parameter's name** is the rest of its path below the object it selects or modifies. A selector's object is the method's subject: `block_header_show`'s `height` walks `block` → `height`. A modifier's object is what it modifies: `prune` modifies a transaction's body, so it walks `tx` → `prune` on every method that carries one, `block_show` and `block_list` included, and `pow` modifies a header, so it walks `header` → `pow`. An input (IG-Q43) parameterizes its view, so its object is the view: `chain_spent`'s `key_image` walks `spent` → `key` → `image`. A verb's argument walks below the noun the verb acts on: `ban_add`'s `host` walks `ban` → `host`.
+- **A reference.** A field or parameter may name another subject directly: the subject alone, or a path starting at it (`block_count` walks `block` → `count`). That is a reference to the other thing, and it needs no edge from its holder: glossary edges express refinement only. The gate tries the holder's path first and the reference form second, and refuses a name valid neither way. In a method name, `dev` is followed by a reference (IG-Q49).
 - **A list-valued parameter or field** takes the singular term with an array value (`{"height": [7, 8]}`), IG-6's list convention on the wire.
 - **How the gate finds each object.** Every request and reply type in RW-Q7's table, and every type nested in one, carries its object's path as a constant on the type: a reply or element type names what it describes (`block header`, `peer connection`), a selector type names the method's subject, a modifier type names what it modifies (the transaction-body options carry `tx`), and a request type's remaining fields are inputs or arguments under the path its row gives. The schema generator emits each field with its holding type's path, and the gate walks that path followed by the field's terms. No list of objects is kept by hand.
 - **The walk checks edges, not membership.** For every method, parameter and field, each adjacent pair of terms is a parent → child edge in §3, §11, §14.2 or §19, and a method's first term is a subject; a qualifier (`max`, `min`) may end any path. A name whose pairs are all terms but not all edges fails.
 
 Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #1088: a secret row's `set` collides with §11's verb `set` and becomes `assigned`; `option_set`'s request, a list of `{name, value}` under the key `options`, cannot walk (`option` → `option`) and becomes `value`, a map from option name to value; and the replies' `options` wrapper goes (IG-Q53).
 
-**IG-Q43 — a view's inputs — POSED 2026-10-18.** RW-Q1 says a view noun takes no selector. Several reads take an input that is not a choice of stored item: `chain spent` takes key images, `block template` the address to pay, `block pow` a block's hashing bytes. *Recommended:* a *selector* picks a stored item and belongs only to `show` and `list`; an *input* parameterizes what a view computes, and a view may take inputs. `chain spent` (IG-Q25's view) stays a view.
+**IG-Q43 — a view's inputs — POSED 2026-10-18.** RW-Q1 says a view noun takes no selector. Several reads take an input that is not a choice of stored item: `chain spent` takes key images, `block template` the address to pay, `pow` a block's hashing bytes. *Recommended:* a *selector* picks a stored item and belongs only to `show` and `list`; an *input* parameterizes what a view computes, and a view may take inputs. `chain spent` (IG-Q25's view) stays a view.
 
 **IG-Q44 — §13's range reads and the ban duration — POSED 2026-10-18.** This amends §13 rows ruled 2026-10-14 (IG-Q25).
 - RW-Q1 gives `show` one item by a typed selector and makes `block header list` the bounded range of headers. §13 maps `print_bc <from> [<to>]`, a range of headers, to `chain show --from --to`.
@@ -1115,9 +1099,9 @@ Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #10
 
 **IG-Q47 — the curve tree — POSED 2026-10-18.** `get_curve_tree_info` and `get_curve_tree_checkpoint` reply one shape (root, depth, leaf count, height) for the tip and for a given height. `tree` is taken: under `complete` it is the CompleteTree posture (IG-Q28), and a term has one meaning (IG-2). *Recommended:* a new subject `curve`, the curve tree, and one method `curve_show` with the selector `{"height": n}` or `"tip"` (RW-Q1). The alternative gives `tree` the meaning "the curve tree" and renames IG-Q28's row.
 
-**IG-Q48 — `pow` — POSED 2026-10-18.** This amends §3's `pow` row, ruled 2026-10-13. `calc_pow` computes a block's proof-of-work hash for an external miner; §3 defines `pow` under `dev` as "the RandomX seed schedule". *Recommended:* `pow` means proof of work (RandomX) everywhere, a subject and a child of `dev` and `block`: `block pow` is the view that computes the hash, the header's `pow` field holds it, and `dev-pow-seed-*` keeps its spelling, now read as "proof of work's seed".
+**IG-Q48 — `pow` — POSED 2026-10-18.** This amends §3's `pow` row, ruled 2026-10-13. `calc_pow` computes a block's proof-of-work hash for an external miner; §3 defines `pow` under `dev` as "the RandomX seed schedule". *Recommended:* `pow` means proof of work (RandomX) everywhere, a subject and a child of `dev`: `pow` alone is the view that computes the hash (`calc_pow`'s successor), the header's `pow` field holds it and names it by reference (IG-Q42), and `dev-pow-seed-*` keeps its spelling, now read as "proof of work's seed".
 
-**IG-Q49 — the armed levers' names — POSED 2026-10-18.** `generateblocks` and `pop_blocks` are armed test levers (RT-O9.2): never on mainnet, served only to the host's administrator when armed. IG-Q25 gives `pop_blocks` no console word; each still needs a method name under RW-Q1. *Recommended:* they sit under `dev`, as IG-8 places development options: `dev_block_generate` and `dev_chain_pop`. Neither has a console word, and IG-Q25 stands.
+**IG-Q49 — the armed levers' names — POSED 2026-10-18.** `generateblocks` and `pop_blocks` are armed test levers (RT-O9.2): never on mainnet, served only to the host's administrator when armed. IG-Q25 gives `pop_blocks` no console word; each still needs a method name under RW-Q1. *Recommended:* they sit under `dev`, as IG-8 places development options: `dev_block_generate` and `dev_chain_pop`. In a method name, `dev` is followed by a reference (IG-Q42): `dev_block_generate` walks `dev`, then the reference `block` → `generate`, so the lever needs no `dev` → `block` edge, and its arguments and reply walk under the reference (`block` → `count`). Neither has a console word, and IG-Q25 stands.
 
 **IG-Q50 — one transaction and many — POSED 2026-10-18.** `/get_transactions` takes a list of ids; §13's word is `tx show <id>`. *Recommended:* two methods, two reply types (RW-Q1): `tx_show {"id": h}` and `tx_list {"id": [h, …]}`, bounded by the resource policy (`RPC_CHANNEL.md` §6.3). Unrelayed entries stay host-only in both (RT-O9.3).
 
