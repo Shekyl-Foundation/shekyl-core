@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Natively-served RPC methods (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.3).
+//! Natively-served RPC methods (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.3).
 //!
 //! Each function is the whole method: it takes a facts trait, applies the
 //! method's rules, and returns the wire type from `shekyl-rpc-types`. No

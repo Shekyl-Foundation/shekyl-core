@@ -50,6 +50,7 @@ use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{SettlementEpochBlocks, SigmaWorkMilli};
 use crate::ids::ServeCreditKey;
 use crate::schema::ARCHIVAL_SERVE_CREDIT;
+use shekyl_chain_rules::EpochFloor;
 
 /// The slot of the persona every join here opens a record for
 /// ([`Persona::at`]; each test has its own store).
@@ -357,15 +358,20 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
     let between = |store: &ChainStore| {
         let snap = store.begin_read().expect("read");
         assert_eq!(
-            snap.budget(epoch(CREDIT_EPOCH)).expect("read"),
+            snap.budget(epoch(CREDIT_EPOCH), EpochFloor::NONE)
+                .expect("read"),
             Some(close.budget())
         );
         assert_eq!(
-            snap.sigma_work(epoch(CREDIT_EPOCH)).expect("read"),
+            snap.sigma_work(epoch(CREDIT_EPOCH), EpochFloor::NONE)
+                .expect("read"),
             None,
             "the closed epoch has no Σwork until its slash pass"
         );
-        assert_eq!(snap.sigma_work(earlier).expect("read"), Some(zero));
+        assert_eq!(
+            snap.sigma_work(earlier, EpochFloor::NONE).expect("read"),
+            Some(zero)
+        );
         assert_eq!(
             snap.budget_accruing(epoch(CREDIT_EPOCH)).expect("read"),
             None,
@@ -380,9 +386,13 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
 
     pop(&store);
     let snap = store.begin_read().expect("read");
-    assert_eq!(snap.budget(epoch(CREDIT_EPOCH)).expect("read"), None);
     assert_eq!(
-        snap.sigma_work(earlier).expect("read"),
+        snap.budget(epoch(CREDIT_EPOCH), EpochFloor::NONE)
+            .expect("read"),
+        None
+    );
+    assert_eq!(
+        snap.sigma_work(earlier, EpochFloor::NONE).expect("read"),
         None,
         "the pop takes the gather the block wrote with it"
     );
@@ -417,18 +427,20 @@ fn a_close_freezes_the_budget_and_the_slash_pass_an_epoch_later_gathers() {
     );
     let snap = store.begin_read().expect("read");
     assert_eq!(
-        snap.sigma_work(epoch(CREDIT_EPOCH)).expect("read"),
+        snap.sigma_work(epoch(CREDIT_EPOCH), EpochFloor::NONE)
+            .expect("read"),
         Some(zero)
     );
     assert!(
-        snap.served_at(&p, &BTreeSet::from([epoch(CREDIT_EPOCH)]))
+        snap.served_at(&p, &BTreeSet::from([epoch(CREDIT_EPOCH)]), EpochFloor::NONE)
             .expect("read")
             .is_empty(),
         "no draw was issued, so no shard is Served"
     );
     for (s, r) in settling.gathers()[0].r_market() {
         assert_eq!(
-            snap.r_market(*s, epoch(CREDIT_EPOCH)).expect("read"),
+            snap.r_market(*s, epoch(CREDIT_EPOCH), EpochFloor::NONE)
+                .expect("read"),
             Some(*r)
         );
     }
@@ -838,8 +850,9 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
     let read = |e: u64| {
         let snap = store.begin_read().expect("read");
         (
-            snap.issued_draws(epoch(e)).expect("read"),
-            snap.issued_digest(epoch(e)).expect("read"),
+            snap.issued_draws(epoch(e), EpochFloor::NONE).expect("read"),
+            snap.issued_digest(epoch(e), EpochFloor::NONE)
+                .expect("read"),
         )
     };
     assert_eq!(

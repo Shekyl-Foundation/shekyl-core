@@ -167,10 +167,10 @@ use shekyl_units::AtomicUnits;
 
 use crate::codec::{
     AltBlock, AltBodies, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo,
-    BondRecord, Coded, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw, LayerHash,
-    LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RecordedPow, RuleSetInForce,
-    SettlementRow, SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
-    TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
+    BondRecord, Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw,
+    LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RecordedPow,
+    RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices,
+    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple};
 use crate::lmdb_order::LmdbHashKey;
@@ -468,12 +468,21 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
     (
         "archival_release_journal",
         "each Release's pre-image, the bond record as it stood before the Release emptied its \
-         holdings, keyed by the releasing height and persona and retired at the slash log's \
-         floor (SO-D12b): the walk that rebuilds an epoch's drawable set at its settlement, two \
+         holdings, keyed by the releasing height and persona and retired one above \
+         h_open of the settling family's oldest kept epoch (SO-D12h): the walk that \
+         rebuilds an epoch's drawable set at its settlement, two \
          epochs after it opened, restores it, as it gives back the shards the slash log says \
          were taken. The undo log holds the same pre-image only for its window. The C++ \
          archival_bond_unbond_log is a pop journal with no reader past pop (NOT_PORTED), so \
          LMDB holds nothing a reader past the window can use",
+    ),
+    (
+        "archival_complete_trees",
+        "the personas each settled epoch's slash pass excluded from the epoch's market as \
+         complete trees (ARCHIVAL_SETTLEMENT_WRITER.md SO-D12h): the record does not keep the \
+         fact, since a complete tree slashed or released afterwards holds a compact set, so a \
+         claim's re-gather reads the flag here. The C++ gathers at the epoch close and reads \
+         the records as they are now, so LMDB never holds it",
     ),
 ];
 
@@ -835,12 +844,25 @@ tables! {
     /// `(height, persona)` → the [`BondRecord`] a Release at that height
     /// replaced, exactly as it stood before the Release arm changed it.
     /// Written insert-once by `connect` beside the record's post-image and
-    /// reversed by `pop` through the journal; retired at the slash log's
-    /// floor in the same boundary batch, so the walk that rebuilds an
-    /// epoch's drawable set reads both journals over one span (A20,
-    /// `SO-D12` increment 2). Appended last (ordinal 44).
+    /// reversed by `pop` through the journal; retired one above `h_open` of
+    /// the settling family's oldest kept epoch
+    /// ([`shekyl_chain_rules::ReleaseJournalFloor`], SI-28), inside the
+    /// slash log's window. The slash log keeps its own floor (A21);
+    /// this journal is the one A20 reads (`SO-D12` increment 2,
+    /// `SO-D12h`). Appended last but one (ordinal 44).
     pub const ARCHIVAL_RELEASE_JOURNAL: TableDefinition<ReleaseJournalTuple, Coded<BondRecord>> =
         TableDefinition::new("archival_release_journal");
+
+    /// `archival_complete_trees` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// epoch → the [`CompleteTreeSet`] its slash pass excluded from the
+    /// market as complete trees (`ARCHIVAL_SETTLEMENT_WRITER.md`
+    /// `SO-D12h`). Written by the pass beside `archival_sigma_work[E]`,
+    /// insert-once and whole (SI-21, SI-31), the empty set included, and
+    /// reversed by `pop` through the journal. A claim's re-gather reads it
+    /// for every bond's complete-tree flag (A22). An epoch with no row was
+    /// not settled. Appended last (ordinal 45).
+    pub const ARCHIVAL_COMPLETE_TREES: TableDefinition<u64, Coded<CompleteTreeSet>> =
+        TableDefinition::new("archival_complete_trees");
 }
 
 #[cfg(test)]
@@ -923,6 +945,9 @@ mod tests {
             ("alt_block_bodies", 43),
             // Layout 28 (`SO-D12` increment 2): the Release journal.
             ("archival_release_journal", 44),
+            // Layout 29 (`SO-D12h`): the complete trees a settled epoch's
+            // market excluded, frozen at its slash pass.
+            ("archival_complete_trees", 45),
         ];
         for &(name, index) in pinned {
             assert_eq!(

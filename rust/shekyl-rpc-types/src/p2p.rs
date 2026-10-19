@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The p2p-facing read methods — the RK-5a slice of the daemon RPC KV
-//! cutover (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.1).
+//! cutover (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.1).
 //!
 //! Single Rust definitions of the wire types `COMMAND_RPC_SYNC_INFO`,
 //! `COMMAND_RPC_GET_NET_STATS`, `COMMAND_RPC_GET_PEER_LIST` and

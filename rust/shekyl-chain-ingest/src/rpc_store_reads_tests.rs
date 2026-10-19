@@ -19,7 +19,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use shekyl_chain_rules::AtHeight;
+use shekyl_chain_rules::{AtHeight, Claimable, EpochFloor};
 use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_daemon_rpc::info_facts::InfoFacts;
 use shekyl_daemon_rpc::methods::get_block_header_by_height;
@@ -224,14 +224,18 @@ async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
             window
         );
         let mut admitted = 0;
+        // The same claimable floor the citing gate reads through: a window
+        // epoch the boundary has retired is SI-32, not a missing row.
+        let claimable =
+            EpochFloor::<Claimable>::under(BlockHeight::from_raw(connecting), levered_schedule());
         for epoch in &source.epochs {
             let e = shekyl_types::SettlementEpoch::from_raw(epoch.settlement_epoch);
             let budget = snap
-                .budget(e)
+                .budget(e, claimable)
                 .expect("read")
                 .map(shekyl_units::AtomicUnits::to_raw);
             let sigma = snap
-                .sigma_work(e)
+                .sigma_work(e, claimable)
                 .expect("read")
                 .map(shekyl_types::archival::SigmaWorkMilli::to_raw);
             assert_eq!(epoch.budget_atomic, budget.unwrap_or(0));
@@ -306,19 +310,24 @@ async fn the_coverage_list_of_a_chain_with_no_closed_shard_is_empty() {
         assert_ne!(watermark.to_raw(), arithmetic);
         assert_eq!(coverage.settled_epoch, watermark.to_raw());
         let ahead = shekyl_types::SettlementEpoch::from_raw(arithmetic);
+        // The claimable floor at the next block: the watermark's rows sit
+        // inside it, and an epoch with no gather stays `None` rather than
+        // a swallowed below-floor fault.
+        let claimable =
+            EpochFloor::<Claimable>::under(BlockHeight::from_raw(tip.to_raw() + 1), schedule);
         assert_eq!(
-            snap.sigma_work(ahead).expect("read"),
+            snap.sigma_work(ahead, claimable).expect("read"),
             None,
             "the schedule's epoch has no gather yet"
         );
         let sigma = snap
-            .sigma_work(watermark)
+            .sigma_work(watermark, claimable)
             .expect("read")
             .expect("the watermark's gather is a row");
         assert_eq!(coverage.sigma_work_milli, sigma.to_raw());
         assert_eq!(
             coverage.budget_atomic,
-            snap.budget(watermark)
+            snap.budget(watermark, claimable)
                 .expect("read")
                 .map_or(0, shekyl_units::AtomicUnits::to_raw)
         );

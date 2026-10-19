@@ -88,11 +88,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
-    AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
-    SlashLogFloor, Tip, TreeFrontier,
+    AtHeight, BlockOutputs, ChainView, Claimable, EpochFloor, HeaderRecord, HeaderView, Pricing,
+    RecordedBlock, RecordedWeights, ReleaseJournalFloor, Settling, SlashLogFloor, Tip,
+    TreeFrontier,
 };
 use shekyl_types::archival::{
-    BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard, SettlementRow,
+    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
+    SettlementRow,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -381,16 +383,25 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         &self,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Pricing>,
     ) -> Result<Option<RMarket>, StoreError> {
-        archival_reads::r_market(self.batch.txn(), shard, epoch).map_err(|f| self.arm(f))
+        archival_reads::r_market(self.batch.txn(), shard, epoch, floor).map_err(|f| self.arm(f))
     }
 
-    fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError> {
-        archival_reads::sigma_work(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    fn sigma_work(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SigmaWorkMilli>, StoreError> {
+        archival_reads::sigma_work(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
-    fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
-        archival_reads::budget(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    fn budget(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
     /// The watermark is a property cell, read through the batch's own
@@ -409,8 +420,9 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<bool, StoreError> {
-        archival_reads::slash_applied(self.batch.txn(), persona, shard, epoch)
+        archival_reads::slash_applied(self.batch.txn(), persona, shard, epoch, floor)
             .map_err(|f| self.arm(f))
     }
 
@@ -423,25 +435,35 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
     ) -> Result<Option<SettlementRow>, StoreError> {
-        archival_reads::settlement_row(self.batch.txn(), persona, shard, epoch)
+        archival_reads::settlement_row(self.batch.txn(), persona, shard, epoch, floor)
             .map_err(|f| self.arm(f))
     }
 
-    fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, StoreError> {
-        archival_reads::issued_draws(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    fn issued_draws(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::issued_draws(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
-    fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
-        archival_reads::issued_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+    fn issued_digest(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<IssuedDigest, StoreError> {
+        archival_reads::issued_digest(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
     fn served_at(
         &self,
         persona: &PCanonicalId,
         epochs: &BTreeSet<SettlementEpoch>,
+        floor: EpochFloor<Claimable>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
-        archival_reads::served_at(self.batch.txn(), persona, epochs).map_err(|f| self.arm(f))
+        archival_reads::served_at(self.batch.txn(), persona, epochs, floor).map_err(|f| self.arm(f))
     }
 
     fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
@@ -451,14 +473,23 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     fn drawable_digest(
         &self,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, StoreError> {
-        archival_reads::drawable_digest(self.batch.txn(), epoch).map_err(|f| self.arm(f))
+        archival_reads::drawable_digest(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
+    }
+
+    fn complete_trees(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<CompleteTreeSet>, StoreError> {
+        archival_reads::complete_trees(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
     fn release_journal_after(
         &self,
         height: BlockHeight,
-        floor: SlashLogFloor,
+        floor: ReleaseJournalFloor,
     ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
         archival_reads::release_journal_after(self.batch.txn(), height, floor)
             .map_err(|f| self.arm(f))

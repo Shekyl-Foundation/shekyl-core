@@ -25,8 +25,8 @@ use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use super::archival::{
-    AttestationWitnessBytes, BondRecord, FirstPayingHeight, HeldShard, Holdings, HoldingsError,
-    RMarket, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
+    AttestationWitnessBytes, BondRecord, CompleteTreeSet, FirstPayingHeight, HeldShard, Holdings,
+    HoldingsError, RMarket, SigmaWorkMilli, MAX_BOND_KEY_BYTES,
 };
 
 fn invalid(reason: &'static str) -> CodecError {
@@ -332,6 +332,53 @@ fn the_close_row_scalars_are_the_raw_le_word_and_the_witness_refuses_empty() {
     assert!(
         AttestationWitnessBytes::well_formed(&vec![1u8; MAX_ATTESTATION_WITNESS_BYTES + 1])
             .is_err()
+    );
+}
+
+/// The frozen complete-tree set (`SO-D12h`): the empty set is written as a
+/// count of zero and read back as a value, and the decode refuses each
+/// shape the type cannot hold — a repeat, a descent, a count past the
+/// bytes, a trailing byte. Red edit: decode through `FromIterator`, which
+/// sorts — the descent then round-trips into a different encoding.
+#[test]
+fn the_complete_tree_set_refuses_an_order_the_type_cannot_hold() {
+    let id = |b: u8| shekyl_types::PCanonicalId::from_bytes([b; 32]);
+    let invalid = |reason: &'static str| CodecError::Invalid {
+        codec: CompleteTreeSet::NAME,
+        reason,
+    };
+    let empty = CompleteTreeSet::default();
+    assert_eq!(empty.encode(), [0, 0, 0, 0]);
+    assert_eq!(CompleteTreeSet::decode(&[0, 0, 0, 0]), Ok(empty));
+    let two = CompleteTreeSet::new(vec![id(1), id(2)]).expect("ascending");
+    assert_eq!(CompleteTreeSet::decode(&two.encode()), Ok(two.clone()));
+
+    let raw = |ids: &[u8]| {
+        let mut out = u32::try_from(ids.len())
+            .expect("fits")
+            .to_le_bytes()
+            .to_vec();
+        for &b in ids {
+            out.extend_from_slice(&[b; 32]);
+        }
+        out
+    };
+    let unordered = invalid("personas are not strictly increasing");
+    assert_eq!(CompleteTreeSet::decode(&raw(&[1, 1])), Err(unordered));
+    assert_eq!(CompleteTreeSet::decode(&raw(&[2, 1])), Err(unordered));
+    let mut short = raw(&[1, 2]);
+    short.truncate(4 + 32);
+    assert_eq!(
+        CompleteTreeSet::decode(&short),
+        Err(invalid(
+            "element count exceeds what the row's bytes can hold"
+        ))
+    );
+    let mut long = two.encode();
+    long.push(0);
+    assert_eq!(
+        CompleteTreeSet::decode(&long),
+        Err(invalid("trailing bytes after the complete-tree set"))
     );
 }
 

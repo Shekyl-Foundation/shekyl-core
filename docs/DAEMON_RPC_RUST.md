@@ -61,7 +61,7 @@ port — it is not part of this Phase 1 transport deletion.
   dispatch tables. `POST /submit_transaction` was the first, served by the
   Rust admission engine (`src/submit/`,
   `design/DAEMON_SUBMIT_VERDICT.md` §2–§3); the KV cutover
-  (`design/DAEMON_RPC_KV_CUTOVER.md`) has been moving the read methods over
+  (`completed/DAEMON_RPC_KV_CUTOVER.md`) has been moving the read methods over
   since, and the table under **RPC surface reachability** below is the list.
   This bullet used to say "1 native Rust endpoint", which stopped being true
   at RK-1 and stayed on the page for six slices — a count is a claim that
@@ -320,7 +320,7 @@ A method is **live** iff it has an Axum route (or `/json_rpc` → FFI method)
 
 ## Phase 2 (KV cutover)
 
-Specified in [`design/DAEMON_RPC_KV_CUTOVER.md`](design/DAEMON_RPC_KV_CUTOVER.md)
+Specified in [`design/DAEMON_RPC_KV_CUTOVER.md`](completed/DAEMON_RPC_KV_CUTOVER.md)
 (family `RK-`). The Phase-1 sentence "replace epee portable-storage in
 `core_rpc_ffi.cpp` with a Rust-native codec" was re-scoped there: a Rust
 codec cannot serialize C++ structs without a `#[repr(C)]` façade of every

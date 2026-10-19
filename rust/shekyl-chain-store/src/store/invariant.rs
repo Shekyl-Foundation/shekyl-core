@@ -362,13 +362,14 @@ pub enum StoreInvariant {
     },
     /// **SI-28** — the Release journal is read only where it is kept. An
     /// A20 read (`release_journal_after`, rows strictly above `asked`)
-    /// whose range starts below the slash log's floor, which the journal is
-    /// retired at, would restore too few pre-images and rebuild a drawable
-    /// set that never was; the store refuses it instead of answering, as
-    /// SI-26 refuses A2. The floor is the caller's, and this store
-    /// compares. Fires on a mis-composed schedule, never on data: the walk's
-    /// span is held inside the floor's window at compile time
-    /// (`WALK_BACK_EPOCHS`). Fatal, never a verdict on the block.
+    /// whose range starts below `ReleaseJournalFloor` — one above
+    /// `h_open` of the settling family's oldest kept epoch, the height the
+    /// boundary batch retires below — would restore too few pre-images and
+    /// rebuild a drawable set that never was; the store refuses it instead
+    /// of answering, as SI-26 refuses A2. The floor is the caller's, and
+    /// this store compares. Fires on a mis-composed schedule, never on
+    /// data: the walk of the oldest kept epoch starts at that height.
+    /// Fatal, never a verdict on the block.
     ReleaseJournalReadBelowFloor {
         /// The height the read asked for rows strictly above.
         asked: shekyl_types::BlockHeight,
@@ -407,6 +408,44 @@ pub enum StoreInvariant {
         /// What was observed.
         observed: DrawableFault,
     },
+    /// **SI-31** — a settled epoch's market membership is frozen with its
+    /// `Σwork` (`ARCHIVAL_SETTLEMENT_WRITER.md` `SO-D12h`).
+    /// `archival_complete_trees[E]` is in the slash pass's write set beside
+    /// `archival_sigma_work[E]` (SI-21): written whole by the block that
+    /// settles `E`, the empty set included, insert-once
+    /// ([`FrozenFault::Rewritten`]), and present wherever `Σwork(E)` is —
+    /// a claim's re-gather that finds `Σwork(E)` without it
+    /// ([`FrozenFault::Absent`]) would have to read the record's
+    /// complete-tree flag, which a later slash or release can change.
+    /// Undone with the block through the journal.
+    CompleteTreesNotFrozen {
+        /// The settled epoch.
+        epoch: shekyl_types::SettlementEpoch,
+        /// Which half failed.
+        observed: FrozenFault,
+    },
+    /// **SI-32** — a per-epoch table is read only where it is kept
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`). Each read of
+    /// `archival_sigma_work`, `archival_budget`, `archival_complete_trees`,
+    /// `archival_settlement`, `archival_issued_draw`,
+    /// `archival_issued_digest`, `archival_drawable_digest`,
+    /// `archival_slash_applied` and `archival_r_market` takes its family's
+    /// floor from the caller (`shekyl_chain_rules::EpochFloor`, a consensus
+    /// expression the store compares and does not source) and refuses an
+    /// epoch below it rather than answer "absent": absent is *never
+    /// written*, and a row below the floor may have been written and
+    /// retired. Every reader asks inside its family by construction — a
+    /// claim's epochs are checked against the claim window (CEN-J25's,
+    /// ahead of CEN-J23) before any read — so a hit is a mis-composed schedule, never data. Fatal,
+    /// never a verdict on the block.
+    EpochReadBelowFloor {
+        /// The table the read was of.
+        table: &'static str,
+        /// The epoch asked for.
+        asked: shekyl_types::SettlementEpoch,
+        /// The lowest retained epoch of the table's family.
+        floor: shekyl_types::SettlementEpoch,
+    },
 }
 
 /// What an SI-29 check observed (payload of
@@ -437,6 +476,15 @@ pub enum DrawableFault {
     /// post-state, or at settlement, by the walk back. The reason is the
     /// validator's.
     NotBuilt(shekyl_chain_rules::DrawableEpochFault),
+}
+
+/// What SI-31 observed (payload of [`StoreInvariant::CompleteTreesNotFrozen`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrozenFault {
+    /// The pass's write found a set already recorded for the epoch.
+    Rewritten,
+    /// A reader found `Σwork(E)` and no set: the write set is not whole.
+    Absent,
 }
 
 /// What an SI-25 check observed (payload of
@@ -592,6 +640,8 @@ impl StoreInvariant {
             Self::ReleaseJournalReadBelowFloor { .. } => 28,
             Self::DrawableDigestNotSingular { .. } => 29,
             Self::DrawableSetNotSound { .. } => 30,
+            Self::CompleteTreesNotFrozen { .. } => 31,
+            Self::EpochReadBelowFloor { .. } => 32,
         }
     }
 }
@@ -818,6 +868,28 @@ impl core::fmt::Display for StoreInvariant {
                      the block corpus"
                 ),
             },
+            Self::CompleteTreesNotFrozen { epoch, observed } => match observed {
+                FrozenFault::Rewritten => write!(
+                    f,
+                    "archival_complete_trees already holds settlement epoch {epoch}; the slash \
+                     pass freezes an epoch's complete trees once"
+                ),
+                FrozenFault::Absent => write!(
+                    f,
+                    "settlement epoch {epoch} has a frozen Σwork and no frozen complete-tree \
+                     set; the slash pass writes the two together"
+                ),
+            },
+            Self::EpochReadBelowFloor {
+                table,
+                asked,
+                floor,
+            } => write!(
+                f,
+                "{table} was asked for settlement epoch {asked} while rows below {floor} may be \
+                 retired; a reader asked outside the window its own rule set keeps — the \
+                 schedule is mis-composed, not the data"
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -865,6 +937,8 @@ impl core::error::Error for StoreInvariant {
             | Self::ReleaseJournalReadBelowFloor { .. }
             | Self::DrawableDigestNotSingular { .. }
             | Self::DrawableSetNotSound { .. }
+            | Self::CompleteTreesNotFrozen { .. }
+            | Self::EpochReadBelowFloor { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

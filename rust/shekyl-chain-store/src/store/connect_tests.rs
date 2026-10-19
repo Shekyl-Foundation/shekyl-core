@@ -297,8 +297,11 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     )
     .expect("no pair to key");
     assert_eq!(
-        snap.drawable_digest(shekyl_types::SettlementEpoch::from_raw(0))
-            .expect("read"),
+        snap.drawable_digest(
+            shekyl_types::SettlementEpoch::from_raw(0),
+            shekyl_chain_rules::EpochFloor::NONE,
+        )
+        .expect("read"),
         Some(empty.digest())
     );
     // The recorded PoW (`block_pow`, layout 26): one row at genesis, under

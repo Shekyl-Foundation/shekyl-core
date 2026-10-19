@@ -26,7 +26,7 @@ use shekyl_types::{BlockCount, PCanonicalId};
 use crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona;
 use crate::engine::pscan::scan_step::{FundingOutputMatch, KeyImageWatchSet};
 use crate::engine::stake_timing::{OsRngGapAdapter, DEFAULT_ENTRY_GAP};
-use crate::engine::{Network, ShekylAddress};
+use shekyl_crypto_pq::archival_p::PersonaDestination;
 
 use super::helpers::{derive_funding_key_image, draw_entry_gap_guarded};
 use super::types::*;
@@ -202,22 +202,17 @@ impl StakeEngine {
         )
     }
 
-    /// Project the held persona at `slot` into its public
-    /// [`ShekylAddress`](shekyl_address::ShekylAddress) — built **in-actor**,
-    /// from the already-live bundle (never re-derived). The reply type is
-    /// structurally public-only (an address cannot carry a secret), so
-    /// **no `P` secret leaves the actor** (rule 36). The orchestrator
-    /// uses this only to address a funding transfer *to* `P`
-    /// (`Engine::stake_in`), where `P` is a public recipient. `network`
-    /// is the principal wallet's network (the actor is
-    /// network-agnostic; the address's network is the sender's).
-    pub(crate) fn receive_address_of(&self, slot: PSlot, network: Network) -> ShekylAddress {
-        let keys = self
-            .held
+    /// The held persona at `slot`'s payment destination: its spend, view and
+    /// ML-KEM encapsulation keys, taken from the already-live bundle (never
+    /// re-derived). The reply type holds public keys only, so **no `P`
+    /// secret leaves the actor** (rule 36). The orchestrator uses this only
+    /// to pay a funding transfer *to* `P` (`Engine::stake_in`).
+    pub(crate) fn payment_destination_of(&self, slot: PSlot) -> PersonaDestination {
+        self.held
             .get(&slot)
-            .expect("receive_address_of called for a held slot")
-            .keys();
-        keys.to_address(network)
+            .expect("payment_destination_of called for a held slot")
+            .keys()
+            .payment_destination()
     }
 
     /// Wipe the retired slot iff it is ephemeral; a bonded persona is left

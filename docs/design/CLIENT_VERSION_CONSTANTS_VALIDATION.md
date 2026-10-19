@@ -25,7 +25,7 @@ lands this document (rule 94). `VC-D*` are dispositions of this round;
 `VC-1`…`VC-4` are the implementation slices §4 names. Neighbours checked:
 `CV-` (cover traffic) is taken and is a different family; `VC-`, `CDG-` and
 `HS-` were free at the anchor.
-**Parent:** [`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md) §7, the
+**Parent:** [`DAEMON_RPC_KV_CUTOVER.md`](../completed/DAEMON_RPC_KV_CUTOVER.md) §7, the
 2026-09-04 rows that found both facts below and named this round without
 building it.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)

@@ -33,7 +33,9 @@
 //! stops, and the retention horizon ruled 2026-10-09 live with the
 //! arithmetic in `shekyl-archival-retention::failure_window`. This pass
 //! supplies the standing predicate ([`good_through`]) and the settlement-row
-//! read, and the floor ([`settlement_retention_floor`]) the gather stops at.
+//! read, and the floor the gather stops at: the claimable family's
+//! [`EpochFloor`](crate::EpochFloor), equal to the retention crate's
+//! `settlement_retention_floor`.
 //!
 //! # The stale snapshot
 //!
@@ -48,8 +50,8 @@ use shekyl_archival_retention::settlement_select::{
     issued_draw_term, settle_pair, SETTLEMENT_BEACON_LEN,
 };
 use shekyl_archival_retention::{
-    good_through, holds_shard_at, settlement_retention_floor, settlement_window_slashable,
-    slash_open_interval_to_append, ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_BOND_BAD_INTERVALS,
+    good_through, holds_shard_at, settlement_window_slashable, slash_open_interval_to_append,
+    ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_BOND_BAD_INTERVALS,
 };
 use shekyl_types::archival::{
     BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
@@ -61,6 +63,7 @@ use shekyl_units::AtomicUnits;
 use crate::fault::{Corrupt, RecordInvariant, SettlementCheck, ViewRead};
 use crate::rules::recorded;
 use crate::view::ChainView;
+use crate::Claimable;
 
 use super::close::settled_for;
 use super::{emptied, Slash};
@@ -220,7 +223,9 @@ impl super::Transition {
         snapshot: &[(PCanonicalId, BondRecord)],
     ) -> Result<(), ViewRead<V::Fault>> {
         self.check_drawable(view, epoch)?;
-        let draws = view.issued_draws(epoch).map_err(ViewRead::View)?;
+        let draws = view
+            .issued_draws(epoch, self.floor())
+            .map_err(ViewRead::View)?;
         // Every stored draw, before any is dropped: the digest was folded
         // over issuance, and a pair that later stopped holding its shard
         // still had its draws issued. An epoch with no draw must have the
@@ -235,7 +240,11 @@ impl super::Transition {
                 draw.draw,
             ));
         }
-        if folded != view.issued_digest(epoch).map_err(ViewRead::View)? {
+        if folded
+            != view
+                .issued_digest(epoch, self.floor())
+                .map_err(ViewRead::View)?
+        {
             return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
                 epoch,
                 check: SettlementCheck::IssuedIndexDigest,
@@ -314,12 +323,15 @@ impl super::Transition {
         epoch: SettlementEpoch,
     ) -> Result<(), ViewRead<V::Fault>> {
         let h_open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
-        let written = view.drawable_digest(epoch).map_err(ViewRead::View)?;
+        let written = view
+            .drawable_digest(epoch, self.floor())
+            .map_err(ViewRead::View)?;
         let rebuilt = super::drawable_epoch_walked_back(
             view,
             epoch,
             self.schedule,
             self.reorg_cap,
+            crate::ReleaseJournalFloor::of(self.floor(), self.schedule),
             self.slash_floor,
         )?;
         super::drawable::compare_recorded_digest(epoch, h_open, written, rebuilt.as_ref())
@@ -442,7 +454,7 @@ impl super::Transition {
             return Ok(Some(row.outcome()));
         }
         Ok(view
-            .settlement_row(&persona, shard, epoch)
+            .settlement_row(&persona, shard, epoch, self.floor())
             .map_err(ViewRead::View)?
             .map(SettlementRow::outcome))
     }
@@ -469,7 +481,7 @@ impl super::Transition {
             return Ok(false);
         }
         let applied = view
-            .slash_applied(&persona, shard, epoch)
+            .slash_applied(&persona, shard, epoch, self.floor())
             .map_err(ViewRead::View)?
             || self.slashes.iter().any(|s| {
                 s.entry.persona == persona && s.entry.shard == shard && s.entry.epoch == epoch
@@ -494,7 +506,14 @@ impl super::Transition {
         shard: ShardId,
         epoch: SettlementEpoch,
     ) -> Result<bool, ViewRead<V::Fault>> {
-        let floor = settlement_retention_floor(self.schedule, self.connecting);
+        // The walk stops at the claimable floor its own row reads take
+        // (`EpochFloor`), one value for both. It equals the retention
+        // crate's `settlement_retention_floor`, the ruled bound, which
+        // `epoch_floor_tests` holds to it at every height.
+        let floor = self
+            .floor::<Claimable>()
+            .kept_from()
+            .unwrap_or(SettlementEpoch::from_raw(0));
         settlement_window_slashable(
             epoch,
             floor,

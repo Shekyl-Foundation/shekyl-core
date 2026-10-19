@@ -86,8 +86,8 @@ use shekyl_chain_rules::{
 use shekyl_units::AtomicUnits;
 
 use super::error::{
-    CellFault, DigestFault, DrawableFault, EngineError, SettlementFault, StoreCannot, StoreError,
-    StoreInvariant,
+    CellFault, DigestFault, DrawableFault, EngineError, FrozenFault, SettlementFault, StoreCannot,
+    StoreError, StoreInvariant,
 };
 use super::header;
 use super::keyed::{Handles, InsertTable, RemoveTable, ReplaceTable, UpsertTable};
@@ -509,6 +509,13 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             Corrupt::DrawableEpoch { epoch, why } => StoreInvariant::DrawableSetNotSound {
                 epoch,
                 observed: DrawableFault::NotBuilt(why),
+            },
+            // A claim's re-gather found `Σwork(E)` and no frozen
+            // complete-tree set: the slash pass's write set is not whole
+            // (SI-31). The block is not invalid; this node cannot judge it.
+            Corrupt::CompleteTreesAbsent { epoch } => StoreInvariant::CompleteTreesNotFrozen {
+                epoch,
+                observed: FrozenFault::Absent,
             },
         };
         self.poison.arm(row)

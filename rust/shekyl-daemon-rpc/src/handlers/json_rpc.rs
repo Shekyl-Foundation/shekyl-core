@@ -93,7 +93,7 @@ pub async fn handle(
         );
     }
 
-    // Natively-served methods (RK-1, `docs/design/DAEMON_RPC_KV_CUTOVER.md`)
+    // Natively-served methods (RK-1, `docs/completed/DAEMON_RPC_KV_CUTOVER.md`)
     // never reach the C++ dispatch table.
     if let Some(native) = native_method(&state, &method, &request.params).await {
         return match native {

@@ -37,7 +37,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_chain_rules::{
     emission_epoch_facts, release_last_served, seed_height, shard_close, AtHeight, ChainView,
-    ClosedUniverse,
+    Claimable, ClosedUniverse, EpochFloor, Pricing, SettlementSchedule,
 };
 use shekyl_chain_store::store::{
     AltCannot, AltChain, ReadSnapshot, SnapshotView, StoreCannot, StoreError,
@@ -154,44 +154,62 @@ fn alt_chain_facts(chain: &AltChain) -> Result<AltChainFacts, FactsFault> {
 /// after the epoch closes (`scan_slashes`, `SO-D11`). The coverage list's
 /// profit hint is that gather. Before any pass the watermark cell is
 /// absent: the wire epoch is [`SettlementEpoch::ZERO`] and no row is read.
+///
+/// `Σwork` and `budget` are read through the claimable floor at the
+/// caller's connecting height, and `r_market` through the pricing floor
+/// at the same height ([`EpochFloor`]). The watermark is the latest
+/// settled epoch, inside both windows on a coherent chain. A row the
+/// boundary has retired is a store fault (SI-32), not an absent gather.
 #[derive(Clone, Copy)]
 struct SlashGather {
     /// The epoch the pass wrote. `None` before any pass.
     written: Option<SettlementEpoch>,
     budget: Option<u64>,
     sigma_work_milli: Option<u64>,
+    /// Pricing floor at the connecting height this gather was read for.
+    /// [`Self::served`] reads `r_market` through it.
+    pricing: EpochFloor<Pricing>,
 }
 
 impl SlashGather {
-    fn read(view: &SnapshotView<'_>) -> Result<Self, FactsFault> {
+    fn read(
+        view: &SnapshotView<'_>,
+        connecting: BlockHeight,
+        schedule: SettlementSchedule,
+    ) -> Result<Self, FactsFault> {
+        let claimable = EpochFloor::<Claimable>::under(connecting, schedule);
+        let pricing = EpochFloor::<Pricing>::under(connecting, schedule);
         let Some(epoch) = view.last_settled_slash_epoch().map_err(store_fault)? else {
             return Ok(Self {
                 written: None,
                 budget: None,
                 sigma_work_milli: None,
+                pricing,
             });
         };
         Ok(Self {
             written: Some(epoch),
             budget: view
-                .budget(epoch)
+                .budget(epoch, claimable)
                 .map_err(store_fault)?
                 .map(shekyl_units::AtomicUnits::to_raw),
             sigma_work_milli: view
-                .sigma_work(epoch)
+                .sigma_work(epoch, claimable)
                 .map_err(store_fault)?
                 .map(shekyl_types::archival::SigmaWorkMilli::to_raw),
+            pricing,
         })
     }
 
-    /// `r_market` for `shard` at the written epoch. Before any pass there
-    /// is no epoch to read, and the served count is zero.
+    /// `r_market` for `shard` at the written epoch, through the pricing
+    /// floor captured at [`Self::read`]. Before any pass there is no epoch
+    /// to read, and the served count is zero.
     fn served(&self, view: &SnapshotView<'_>, shard: ShardId) -> Result<u64, FactsFault> {
         let Some(epoch) = self.written else {
             return Ok(0);
         };
         Ok(view
-            .r_market(shard, epoch)
+            .r_market(shard, epoch, self.pricing)
             .map_err(store_fault)?
             .map_or(0, shekyl_types::archival::RMarket::to_raw))
     }
@@ -357,7 +375,7 @@ impl ChainReadFacts for StoreFacts {
         let universe = ClosedUniverse::final_before(&view, at, rule_set.reorg_cap())
             .map_err(derivation_fault)?;
         let count = universe.count().get();
-        let gather = SlashGather::read(&view)?;
+        let gather = SlashGather::read(&view, at, rule_set.settlement_schedule())?;
         let mut bonded = vec![0u64; usize::try_from(count).map_err(|_| FactsFault::Internal)?];
         for (_, record) in view.bond_records().map_err(store_fault)? {
             if let Holdings::ShardSet(held) = &record.holdings {

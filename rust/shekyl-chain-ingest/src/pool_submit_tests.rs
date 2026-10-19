@@ -25,9 +25,9 @@ use crate::test_support::{h, tmp};
 
 /// The scenario's store as the shim's chain: one snapshot per read, and
 /// the rule set in force at its connecting height.
-struct Store<'s> {
-    store: &'s ChainStore,
-    rules: ChainRules,
+pub(crate) struct Store<'s> {
+    pub(crate) store: &'s ChainStore,
+    pub(crate) rules: ChainRules,
 }
 
 impl ChainSource for Store<'_> {
@@ -43,7 +43,7 @@ impl ChainSource for Store<'_> {
     }
 }
 
-fn hex(tx: &shekyl_wire::Transaction) -> String {
+pub(crate) fn hex(tx: &shekyl_wire::Transaction) -> String {
     tx.serialize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
