@@ -25,7 +25,7 @@ license.workspace = true
 # so `cargo test -p shekyl-chain-ingest` is the full crate.
 [features]
 default = ["pipeline", "fetch", "replay-cli"]
-pipeline = ["dep:kameo", "dep:tokio"]
+pipeline = ["dep:kameo", "dep:tokio", "dep:shekyl-hash-budget"]
 fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
 replay-cli = [
     "pipeline",
@@ -93,6 +93,9 @@ serde_json = { workspace = true }
 
 # pipeline: the one stateful stage is an actor (RD-Q11); form workers are
 # blocking tasks on the same runtime.
+# pipeline: the daemon's one hasher budget (PR2-Q3), which the ingest
+# service's form workers take permits from.
+shekyl-hash-budget = { path = "../shekyl-hash-budget", optional = true }
 kameo = { workspace = true, optional = true }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync"], optional = true }
 

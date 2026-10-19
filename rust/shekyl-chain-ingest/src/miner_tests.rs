@@ -161,6 +161,7 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
 
     let board = Arc::new(JobBoard::new());
     let (sink, found) = found_blocks();
+    let budget = shekyl_hash_budget::Budget::of_host();
     let miner = Miner::start(
         &MinerConfig {
             address: address.clone(),
@@ -168,6 +169,7 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
         },
         Arc::clone(&board),
         Arc::clone(&caches),
+        budget.clone(),
         sink,
     )
     .expect("the workers start");
@@ -284,6 +286,7 @@ async fn the_miner_extends_the_chain_block_after_block() {
         },
         Arc::clone(&board),
         caches,
+        shekyl_hash_budget::Budget::of_host(),
         sink,
     )
     .expect("the workers start");
@@ -300,6 +303,82 @@ async fn the_miner_extends_the_chain_block_after_block() {
     }
     miner.stop();
     s.close().await;
+}
+
+/// The miner takes the daemon's hasher budget a permit per hash, in the
+/// lowest class (PR2-Q3). With one permit and one worker searching a job no
+/// hash meets, a chain `form` that begins to wait is granted the permit
+/// within one hash, and the miner holds none while the form does.
+#[test]
+fn a_form_waiting_on_the_miner_is_granted_within_one_hash() {
+    use shekyl_hash_budget::{Budget, Class};
+    let _lane = MINER_LANE.blocking_lock();
+    let caches = Arc::new(CacheStore::new());
+    let seed = shekyl_types::BlockHash::from_bytes([0x5f; 32]);
+    caches.pin_canonical(&Seedhash::from_bytes(*seed.as_bytes()));
+    let template = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(async {
+            let mut s = Scenario::open_with("miner-budget", crate::scenario::FreeHash);
+            let mined = s.mine(1).await;
+            s.close().await;
+            mined[0].template.block.clone()
+        });
+    let budget = Budget::new(NonZeroUsize::MIN);
+    let board = Arc::new(JobBoard::new());
+    let (sink, _found) = found_blocks();
+    let miner = Miner::start(
+        &MinerConfig {
+            address: MiningAddress::decode(&harness_address(), Network::Mainnet)
+                .expect("the harness address"),
+            threads: NonZeroUsize::MIN,
+        },
+        Arc::clone(&board),
+        Arc::clone(&caches),
+        budget.clone(),
+        sink,
+    )
+    .expect("the worker starts");
+    board.publish(Job {
+        block: template,
+        height: shekyl_types::BlockHeight::from_raw(1),
+        seed,
+        difficulty: Difficulty::from_raw(u128::MAX),
+    });
+    // The worker is hashing: it holds the one permit, a hash at a time.
+    let started = Instant::now();
+    while budget.held(Class::Miner) == 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the miner never took a permit"
+        );
+        std::thread::yield_now();
+    }
+    // One hash's time, from the miner's own count.
+    let one = Instant::now();
+    let before = miner.status().per_thread[0].hashes;
+    while miner.status().per_thread[0].hashes == before {
+        assert!(
+            one.elapsed() < FIND_WITHIN,
+            "the miner never finished a hash"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let hash_time = one.elapsed();
+    let asked = Instant::now();
+    let permit = budget.acquire(Class::Chain);
+    let waited = asked.elapsed();
+    assert!(
+        waited <= hash_time * 2 + Duration::from_millis(200),
+        "granted within one hash: waited {waited:?}, a hash takes about {hash_time:?}"
+    );
+    assert_eq!(
+        budget.held(Class::Miner),
+        0,
+        "the miner holds nothing the form holds"
+    );
+    drop(permit);
+    miner.stop();
 }
 
 /// The loop's hash rate per worker, for the report: one worker, then every
@@ -335,6 +414,7 @@ fn the_miners_rate_per_worker() {
             },
             Arc::clone(&board),
             Arc::clone(&caches),
+            shekyl_hash_budget::Budget::of_host(),
             sink,
         )
         .expect("the workers start");

@@ -3968,6 +3968,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
+ "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-miner",
  "shekyl-pow-randomx",
@@ -4286,6 +4287,7 @@ dependencies = [
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-options",
  "shekyl-peerlist",
@@ -4691,6 +4693,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-hash-budget"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-levin"
 version = "3.1.0"
 dependencies = [
@@ -4742,6 +4748,7 @@ dependencies = [
  "shekyl-block-template",
  "shekyl-crypto-pq",
  "shekyl-difficulty",
+ "shekyl-hash-budget",
  "shekyl-pow-randomx",
  "shekyl-thread-ledger",
  "shekyl-thread-priority",

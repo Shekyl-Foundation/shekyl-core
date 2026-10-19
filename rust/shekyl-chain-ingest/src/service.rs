@@ -56,9 +56,10 @@ use shekyl_chain_rules::{
     form, Candidate, FormAttempt, InvalidBlock, StructurallyValid, Substrate,
 };
 use shekyl_chain_store::store::{AltCannot, ChainStore, StoreCannot, StoreError};
+use shekyl_hash_budget::{Budget, Class, Permit};
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, Transaction};
-use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
@@ -257,6 +258,7 @@ impl Drop for ReplySlot {
 struct Accepted {
     slot: ReplySlot,
     tag: ArrivalTag,
+    origin: Origin,
     block: Vec<u8>,
     bodies: Vec<Vec<u8>>,
 }
@@ -265,6 +267,8 @@ struct Accepted {
 struct Parsed {
     slot: ReplySlot,
     tag: ArrivalTag,
+    /// The hasher class its `form` waits in (PR2-Q3).
+    class: Class,
     block: Block,
     /// The carried bodies, by the hash they claim to list.
     bodies: Vec<Transaction>,
@@ -276,22 +280,20 @@ impl Parsed {
     }
 }
 
-/// The service's knobs, each with its reason.
+/// The service's knobs, each with its reason. How many `form` workers hash
+/// at once is not one: it is the daemon's one hasher [`Budget`], handed to
+/// [`Service::start`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServiceConfig {
     /// Arrivals accepted and not yet answered, at most: what the service
     /// holds in memory before any is formed.
     pub room: NonZeroUsize,
-    /// `form` workers hashing at once (`PipelineConfig::hashers`' reason).
-    pub hashers: NonZeroUsize,
 }
 
 impl Default for ServiceConfig {
     fn default() -> Self {
-        let pipeline = crate::pipeline::PipelineConfig::default();
         Self {
-            room: pipeline.window,
-            hashers: pipeline.hashers,
+            room: crate::pipeline::PipelineConfig::DEFAULT_WINDOW,
         }
     }
 }
@@ -338,8 +340,8 @@ struct Shared<S: Substrate> {
     rules: ChainRules,
     substrate: Arc<S>,
     connector: ActorRef<Connector>,
-    hashers: Arc<Semaphore>,
-    threads: usize,
+    /// The daemon's one hasher budget (PR2-Q3).
+    budget: Budget,
     /// Set once: the service is stopping (a stop, or a fault).
     stop: tokio::sync::watch::Sender<bool>,
     /// The first fault a span task met; the service ends on it.
@@ -508,6 +510,7 @@ impl Door {
                     room: Arc::clone(&self.room),
                 },
                 tag: arrival.tag,
+                origin: arrival.origin,
                 block: arrival.block,
                 bodies: arrival.bodies,
             });
@@ -545,6 +548,7 @@ where
         rules: ChainRules,
         substrate: Arc<S>,
         config: ServiceConfig,
+        budget: Budget,
     ) -> Self {
         let started = std::time::Instant::now();
         Self::start_with_clock(
@@ -552,6 +556,7 @@ where
             rules,
             substrate,
             config,
+            budget,
             Arc::new(move || started.elapsed()),
         )
     }
@@ -564,6 +569,7 @@ where
         rules: ChainRules,
         substrate: Arc<S>,
         config: ServiceConfig,
+        budget: Budget,
         clock: Clock,
     ) -> Self {
         let admission = Arc::new(Admission {
@@ -583,8 +589,7 @@ where
             rules,
             substrate,
             connector,
-            hashers: Arc::new(Semaphore::new(config.hashers.get())),
-            threads: config.hashers.get(),
+            budget,
             stop: tokio::sync::watch::Sender::new(false),
             fault: Mutex::new(None),
             pinned: Mutex::new(None),
@@ -721,6 +726,7 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
     let Accepted {
         slot,
         tag,
+        origin,
         block,
         bodies,
     } = accepted;
@@ -738,9 +744,24 @@ fn parse(accepted: Accepted) -> Result<Parsed, (ReplySlot, ArrivalTag, InvalidBl
     Ok(Parsed {
         slot,
         tag,
+        class: class_of(origin),
         block,
         bodies: parsed,
     })
+}
+
+/// The hasher class an arrival's `form` waits in: a block this node asked
+/// for or made is the chain's; an announcement is unsolicited (PR2-Q3).
+const fn class_of(origin: Origin) -> Class {
+    match origin {
+        Origin::Peer {
+            solicited: false, ..
+        } => Class::Unsolicited,
+        Origin::Peer {
+            solicited: true, ..
+        }
+        | Origin::Local => Class::Chain,
+    }
 }
 
 /// The candidate for `parsed`: its listed bodies in listed order, then any
@@ -898,17 +919,18 @@ where
 /// A block's `form`, or nothing when the run was abandoned before it began.
 type Formed<F> = Result<Result<StructurallyValid, InvalidBlock>, F>;
 
-/// Take a hasher permit for a block under `seed`, pinning the seed first.
-async fn permit<S>(shared: &Arc<Shared<S>>, seed: BlockHash) -> tokio::sync::OwnedSemaphorePermit
+/// Take a hasher permit in `class` for a block under `seed`, pinning the
+/// seed first. The budget blocks, so the wait is a blocking task's.
+async fn permit<S>(shared: &Arc<Shared<S>>, seed: BlockHash, class: Class) -> Permit
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
     pin(shared, seed).await;
-    Arc::clone(&shared.hashers)
-        .acquire_owned()
+    let budget = shared.budget.clone();
+    tokio::task::spawn_blocking(move || budget.acquire(class))
         .await
-        .expect("the hasher semaphore is never closed")
+        .expect("a permit wait does not panic")
 }
 
 /// `form` one block on a blocking thread, holding `permit` for the life of
@@ -917,7 +939,7 @@ where
 /// a hash (PR2-Q2): `None` when it was set.
 fn spawn_form<S>(
     shared: &Arc<Shared<S>>,
-    permit: tokio::sync::OwnedSemaphorePermit,
+    permit: Permit,
     candidate: Candidate,
     claims: Claims,
     abandon: Arc<AtomicBool>,
@@ -971,10 +993,10 @@ where
     let abandon = Arc::new(AtomicBool::new(false));
     let mut receivers = Vec::with_capacity(claims.len());
     let mut jobs = Vec::with_capacity(claims.len());
-    for (claim, (_, candidate)) in claims.into_iter().zip(arrivals.iter()) {
+    for (claim, (parsed, candidate)) in claims.into_iter().zip(arrivals.iter()) {
         let (sender, receiver) = oneshot::channel();
         receivers.push((claim.height, receiver));
-        jobs.push((candidate.clone(), claim, sender));
+        jobs.push((candidate.clone(), claim, parsed.class, sender));
     }
     let launcher = {
         let shared = Arc::clone(shared);
@@ -985,12 +1007,12 @@ where
         // outlives the run.
         tokio::spawn(async move {
             let mut forming = Vec::new();
-            for (candidate, claims, sender) in jobs {
+            for (candidate, claims, class, sender) in jobs {
                 if shared.stopping() || abandon.load(Ordering::Acquire) {
                     // Dropping the sender is the receiver's "not formed".
                     break;
                 }
-                let held = permit(&shared, claims.seed).await;
+                let held = permit(&shared, claims.seed, class).await;
                 let form = spawn_form(&shared, held, candidate, claims, Arc::clone(&abandon));
                 forming.push(tokio::spawn(async move {
                     if let Ok(Some(formed)) = form.await {
@@ -1158,7 +1180,7 @@ where
             return Next::Halt;
         }
     };
-    let held = permit(shared, claims.seed).await;
+    let held = permit(shared, claims.seed, arrival.class).await;
     let forming = spawn_form(
         shared,
         held,
@@ -1210,20 +1232,12 @@ where
 {
     let substrate = Arc::clone(&shared.substrate);
     let rules = shared.rules;
-    let threads = shared.threads;
-    let hashers = Arc::clone(&shared.hashers);
-    let runtime = tokio::runtime::Handle::current();
+    let budget = shared.budget.clone();
     let (plan, formed) = tokio::task::spawn_blocking(move || {
-        // The plan forms on scoped threads outside the runtime: each takes
-        // its permit by blocking on the runtime's semaphore through the
-        // handle taken here.
-        let gate = move || -> Box<dyn Send> {
-            Box::new(
-                runtime
-                    .block_on(Arc::clone(&hashers).acquire_owned())
-                    .expect("the hasher semaphore is never closed"),
-            )
-        };
+        // A switch's blocks are the chain this node is about to adopt: each
+        // takes its permit in the chain's class.
+        let threads = budget.permits();
+        let gate = move || -> Box<dyn Send> { Box::new(budget.acquire(Class::Chain)) };
         let formed = form_plan(&plan, rules, &*substrate, threads, &gate);
         (plan, formed)
     })

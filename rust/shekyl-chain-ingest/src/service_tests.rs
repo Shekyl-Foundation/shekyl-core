@@ -25,6 +25,7 @@ use super::{Arrival, ArrivalTag, Door, Origin, Refusal, Reply, Service, ServiceC
 use crate::connector::Rewind;
 use crate::scenario::{Mined, Scenario, CLOCK_START, RULES};
 use crate::test_support::{cleanup, open_store, tmp};
+use shekyl_hash_budget::Budget;
 
 /// The free longhash under a clock ahead of the scenarios', with a gate.
 pub(crate) struct Gated {
@@ -116,10 +117,20 @@ pub(crate) fn service(
     substrate: Arc<Gated>,
     config: ServiceConfig,
 ) -> (Service<Gated>, std::path::PathBuf) {
+    service_on(name, substrate, config, Budget::of_host())
+}
+
+/// [`service`] taking its permits from `budget`.
+pub(crate) fn service_on(
+    name: &str,
+    substrate: Arc<Gated>,
+    config: ServiceConfig,
+    budget: Budget,
+) -> (Service<Gated>, std::path::PathBuf) {
     let path = tmp(name);
     let store: ChainStore = open_store(&path);
     (
-        Service::start(Arc::new(store), RULES, substrate, config),
+        Service::start(Arc::new(store), RULES, substrate, config, budget),
         path,
     )
 }
@@ -347,9 +358,13 @@ async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
     let gate = Arc::new(Gated::new());
     let config = ServiceConfig {
         room: NonZeroUsize::new(2).expect("two"),
-        hashers: NonZeroUsize::MIN,
     };
-    let (service, path) = service("service-room", Arc::clone(&gate), config);
+    let (service, path) = service_on(
+        "service-room",
+        Arc::clone(&gate),
+        config,
+        Budget::new(NonZeroUsize::MIN),
+    );
     let door = service.door();
     assert_eq!(door.room(), 2);
     let span: Vec<_> = blocks[..3]
@@ -476,7 +491,14 @@ fn service_with_clock(
     let clock: super::Clock =
         Arc::new(move || std::time::Duration::from_millis(read.load(Ordering::Acquire)));
     (
-        Service::start_with_clock(Arc::new(store), RULES, substrate, config, clock),
+        Service::start_with_clock(
+            Arc::new(store),
+            RULES,
+            substrate,
+            config,
+            Budget::of_host(),
+            clock,
+        ),
         path,
         millis,
     )
@@ -578,11 +600,12 @@ async fn a_refused_block_cancels_the_rest_of_its_span_and_no_hash_starts_after_i
     let mut y = Scenario::open("service-cancel-y");
     let blocks = y.mine(6).await;
     let gate = Arc::new(Gated::new());
-    let config = ServiceConfig {
-        room: ServiceConfig::default().room,
-        hashers: NonZeroUsize::MIN,
-    };
-    let (service, path) = service("service-cancel", Arc::clone(&gate), config);
+    let (service, path) = service_on(
+        "service-cancel",
+        Arc::clone(&gate),
+        ServiceConfig::default(),
+        Budget::new(NonZeroUsize::MIN),
+    );
     let door = service.door();
     offer_all(&door, 1, &blocks[..2]).await;
     let hashed = gate.hashes();
@@ -614,6 +637,54 @@ async fn a_refused_block_cancels_the_rest_of_its_span_and_no_hash_starts_after_i
     );
     assert_eq!(replies[3], Reply::Cancelled { by: ArrivalTag(22) });
     assert_eq!(gate.hashes(), hashed + 2, "no hash after the refusal");
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
+/// An arrival's `form` waits in its origin's class (PR2-Q3): a block this
+/// node asked for in the chain's, an announcement in the unsolicited one.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_arrival_forms_in_the_class_its_origin_names() {
+    use shekyl_hash_budget::Class;
+    let mut y = Scenario::open("service-class-y");
+    let blocks = y.mine(3).await;
+    let budget = Budget::new(NonZeroUsize::MIN);
+    let (service, path) = service_on(
+        "service-class",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+        budget.clone(),
+    );
+    let door = service.door();
+    for (index, (solicited, class)) in [(true, Class::Chain), (false, Class::Unsolicited)]
+        .into_iter()
+        .enumerate()
+    {
+        let held = {
+            let budget = budget.clone();
+            tokio::task::spawn_blocking(move || budget.acquire(Class::HeaderPow))
+                .await
+                .expect("joins")
+        };
+        let mut offered = arrival(u64::try_from(index).expect("small"), 1, &blocks[index]);
+        offered.origin = Origin::Peer {
+            session: SessionId(1),
+            solicited,
+        };
+        let ticket = door.offer(offered).expect("room and a token");
+        let started = std::time::Instant::now();
+        while budget.waiting(class) == 0 {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(10),
+                "the form never waited in {class:?}"
+            );
+            tokio::task::yield_now().await;
+        }
+        drop(held);
+        let reply = ticket.reply().await;
+        assert!(matches!(reply.reply, Reply::Connected { .. }), "{reply:?}");
+    }
     service.stop().await.expect("stops");
     y.close().await;
     cleanup(&path);

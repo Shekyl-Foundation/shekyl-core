@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use shekyl_difficulty::check_hash;
+use shekyl_hash_budget::{Budget, Class};
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_thread_ledger::{spawn_dedicated, DedicatedThread, ThreadName};
 use shekyl_types::PowHash;
@@ -57,6 +58,8 @@ pub struct MinerStatus {
 struct Shared {
     board: Arc<JobBoard>,
     caches: Arc<CacheStore>,
+    /// The daemon's one hasher budget: a permit per hash (PR2-Q3).
+    budget: Budget,
     found: FoundBlocks,
     stop: AtomicBool,
     started: Instant,
@@ -131,7 +134,12 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
                 break;
             }
             preimage[at..at + 4].copy_from_slice(&nonce.to_le_bytes());
+            // One permit per hash, in the lowest class, and given back
+            // after: a higher class waiting is granted the permit this hash
+            // frees, so the miner never holds one it waits for.
+            let permit = shared.budget.acquire(Class::Miner);
             let pow = compute_hash(&cache, &preimage);
+            drop(permit);
             rate.record(shared.second());
             if !check_hash(&pow, posted.job.difficulty) {
                 continue;
@@ -164,7 +172,7 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
 
 impl Miner {
     /// Start `config.threads` workers on `board`, hashing with `caches`
-    /// and sending what they find to `found`.
+    /// under `budget`'s permits and sending what they find to `found`.
     ///
     /// # Errors
     ///
@@ -174,12 +182,14 @@ impl Miner {
         config: &MinerConfig,
         board: Arc<JobBoard>,
         caches: Arc<CacheStore>,
+        budget: Budget,
         found: FoundBlocks,
     ) -> io::Result<Self> {
         let threads = config.threads;
         let shared = Arc::new(Shared {
             board,
             caches,
+            budget,
             found,
             stop: AtomicBool::new(false),
             started: Instant::now(),

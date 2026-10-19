@@ -303,6 +303,10 @@ impl ChainReadFacts for StoreFacts {
         let Some(cache) = self.caches.lookup(&Seedhash::from_bytes(*seed.as_bytes())) else {
             return Ok(PowAt::SeedNotHeld { seed });
         };
+        // Under a permit in calc_pow's class: below the chain's forms and
+        // chain sync's, above the miner's. The facts run on a blocking
+        // thread, so the wait is one.
+        let _permit = self.budget.acquire(shekyl_hash_budget::Class::CalcPow);
         Ok(PowAt::Hashed(PowHash::from_bytes(compute_hash(
             &cache, pow_blob,
         ))))

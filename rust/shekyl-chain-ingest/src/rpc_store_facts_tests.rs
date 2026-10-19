@@ -146,6 +146,23 @@ pub(crate) fn facts_with_caches(
     rules: ChainRules,
     caches: Arc<CacheStore>,
 ) -> StoreFacts {
+    facts_with_budget(
+        store,
+        path,
+        rules,
+        caches,
+        shekyl_hash_budget::Budget::of_host(),
+    )
+}
+
+/// [`facts_with_caches`], hashing `calc_pow` under permits from `budget`.
+pub(crate) fn facts_with_budget(
+    store: Arc<ChainStore>,
+    path: &Path,
+    rules: ChainRules,
+    caches: Arc<CacheStore>,
+    budget: shekyl_hash_budget::Budget,
+) -> StoreFacts {
     StoreFacts::new(
         store,
         path.to_path_buf(),
@@ -153,6 +170,7 @@ pub(crate) fn facts_with_caches(
         Arc::new(TestNode::synced()),
         identity(),
         caches,
+        budget,
     )
 }
 
