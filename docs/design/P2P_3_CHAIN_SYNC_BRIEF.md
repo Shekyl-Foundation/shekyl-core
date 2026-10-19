@@ -1,9 +1,9 @@
 # Chain sync — headers-first sync in Rust: Round 0 (`CS-`)
 
-**Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, posed here for ruling) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
+**Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `52b3c73bb` (2026-10-18), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool). The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** OPEN — Round 0, posed for Rick's ruling: CS-Q1…CS-Q12. Nothing here is implemented.
-**Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, the row "The fate of `cryptonote_protocol_handler`". [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
+**Status:** OPEN — Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 7); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Nothing here is implemented; the pure-Rust work of CS-Q10 starts first.
+**Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 **Subject.** Moving chain sync (`cryptonote_protocol_handler`, `block_queue`) from C++ to Rust.
 
@@ -94,7 +94,7 @@ owner of block propagation.
 
 **Question.** Who owns which function, and what is each function's fate?
 
-**Recommendation.** The table below. Two choices in it need Rick's eye:
+**Ruled (Rick, 2026-10-18):** the table below.
 - **Block propagation is chain sync's.** That covers the compact-block
   announce, `relay_block` and the missing-tx pair. The reasons:
   - An announce is the event that drives sync at the tip: an `Unlinked`
@@ -103,10 +103,11 @@ owner of block propagation.
     carry no origin to protect.
   - The alternative splits "blocks arriving from peers" across two
     owners who share the ingest entry and the handling of failures.
-- **The transaction routes and the pool complement are RD's.** They
-  are transaction movement. Chain sync only emits the transition to
-  `Synced` (CS-Q2); RD reacts to it. **This disagrees with #1101 §4 item
-  5** (§A, coupling 1).
+- **The transaction routes are RD's,** and so is serving the pool
+  complement: they are transaction movement. **The complement request is
+  chain sync's:** it is sync's own event (the transition to `Synced`)
+  and its own Levin send (CS-Q10). `DRS_X_STORE_FLIP.md` §4 item 6 is
+  amended to match (§A, coupling 1).
 
 | C++ function | Owner | Fate |
 | --- | --- | --- |
@@ -119,10 +120,11 @@ owner of block propagation.
 | `on_connection_synchronized`, `is_synchronized`, `is_busy_syncing`, `m_synchronized` | CS | Redesign as one derived, published sync state (CS-Q2). The edge it fired into the pool complement is replaced as in CS-Q10 |
 | `on_connection_close` | CS | Keep the job (a closed session's requests are re-queued). The target recompute is deleted |
 | `kick_idle_peers`, `check_standby_peers`, `on_idle`, `on_callback` | — | Delete. They become per-request deadlines on the timing engine (CS-Q4); no polling |
-| `update_sync_search`, `needs_new_sync_connections`, and their Rust verdicts in `rust/shekyl-ffi/src/sync_ffi.rs` (landed Rust) | — | Delete (CS-Q7). The Rust half is landed code, so it is raised for Rick's ruling |
+| `update_sync_search`, `needs_new_sync_connections`, and their Rust verdicts in `rust/shekyl-ffi/src/sync_ffi.rs` (landed Rust) | — | Delete at the CS cutover (CS-Q7), the landed Rust half included |
 | `handle_notify_new_compact_block`, `relay_block`, `handle_request_compact_missing_tx` | CS | Redesign: announce → entry; relay after the entry's `Connected` |
 | `handle_notify_new_transactions`, `relay_transactions` | RD | Untouched by CS |
-| `request_txpool_complement`, `handle_notify_get_txpool_complement` | RD | RD's; triggered by CS's `Synced` transition (CS-Q10) |
+| `request_txpool_complement` | CS | Redesign: the sync owner sends the request from Rust at its transition to `Synced`; the reply, `NOTIFY_NEW_TRANSACTIONS`, goes through RD's route (CS-Q10) |
+| `handle_notify_get_txpool_complement` | RD | Serving the complement stays RD's |
 | `hit_score`, `drop_connection_with_score`, `drop_connections`, the `add_host_fail` calls | — | Per CS-Q5 |
 | `shekyl-peer-policy`'s `BlockIngest`, `BlockAnnounceAction`, `BlockSyncAction` and their FFI predicates (`peer_policy_ffi.rs`, `block_ingest.h`; landed Rust, PWD-B7) | CS | **Keep and extend additively.** CS-Q2's mapping from the entry's reply to an action is built in this crate, under PWD-B7's tri-state verdict (CS-Q4). Only the `heavier_score` arm (`block_peer.rs:103`, `:175`; used at `.inl:649`, `:1512`) retires, per CS-Q5. The C++ predicates go with the sync half |
 | Sync-time estimate pair, `cumulative_block_sync_weight` | CS | Redesign. Progress is read from the header chain (rule 80). The Monero mainnet size table is deleted (rules 60, 71) |
@@ -151,8 +153,8 @@ owner of block propagation.
 
 **Question.** What state machine does Rust sync implement?
 
-**Recommendation: headers-first, select by verified work, with ingest
-deciding forks.**
+**Ruled (Rick, 2026-10-18): headers-first, select by verified work, with
+ingest deciding forks.**
 
 **State.**
 - **Global.**
@@ -228,16 +230,34 @@ deciding forks.**
          run, so it is not enough. One the size of `T` for every session
          would be too much on a Pi 4: 64 sessions × 20 MB is about
          1.3 GB.
-       - **Proposed:** every session gets a run budget of `D_max`
-         headers. **At most one run at a time** may grow past that, up
-         to the size of `T`. Other long runs wait for it to end, under
-         the CS-Q4 deadline.
-       - So the memory bound is about `2 × |T|` plus `D_max` headers per
+     - **The rule: PoW deferred within the budget, paid to grow past it.**
+       - **Within its own `D_max` budget,** a session's run defers PoW
+         as above. An honest lighter fork costs zero hashes.
+       - **One shared long-run slot** lets a single run grow past
+         `D_max`, up to the size of `T`. A run that fills its budget
+         without exceeding `work(H*)` may claim the slot. To take it,
+         it verifies the PoW of its deferred prefix. Once in the slot,
+         it pays PoW on **each response as it arrives**.
+       - **The slot goes to the run with the most verified work.** A
+         waiting run takes the slot over when its verified work exceeds
+         the holder's verified work **at the same height**, the waiting
+         run's verified frontier. A displaced run is dropped back to its
+         budget, and its session is kept.
+       - The comparison is at equal height because a waiting run is
+         capped at `D_max` headers and could never out-total a holder
+         that keeps extending.
+       - So holding the slot costs real PoW. A run of cheap,
+         low-difficulty headers loses the slot to an honest run that is
+         heavier at the same height. A holder that is not displaced
+         still ends: within the size of `T`, or at a missed deadline.
+       - Headers in the slot join `T` only when the run's work exceeds
+         `work(H*)`, so verified but lighter headers never grow `T`.
+       - The memory bound is about `2 × |T|`, plus `D_max` headers per
          session.
-       - The alternative is Bitcoin Core's presync and redownload: keep
-         a small commitment per header, then fetch the run again once
-         its work is proven. It needs less memory, but it is a second
-         protocol pass. Not recommended unless the Pi 4 figures (CS-Q11)
+       - **Not taken: Bitcoin Core's presync and redownload,** which
+         keeps a small commitment per header and fetches the run again
+         once its work is proven. It needs less memory, but it is a
+         second protocol pass. *Reopen if* the Pi 4 figures (CS-Q11)
          show `2 × |T|` does not fit.
    - **PoW, last.** RandomX (with the seed from the header chain
      itself) on each header of the run, in order.
@@ -267,11 +287,18 @@ deciding forks.**
    - `BeyondCap`: arises only on the **announce path**, because bodies
      are requested only along reachable `H*`. It feeds the `Diverged`
      alarm below, and it is not that alarm's primary source.
-7. **State, published as one source.**
-   - **`NoView`**: no session has given a claim.
-   - **`Behind { have, best }`**: `work(L) < work(H*)`.
-   - **`Synced`**: `work(L) ≥ work(H*)`, and at least one session's view
-     agrees.
+7. **State, published as one source.** **A claim's value never changes
+   the sync state; only verified headers do.** A higher claim only starts
+   a header request (step 1).
+   - **`NoView`**: no session has completed a handshake.
+   - **`Behind { have, best }`**: `work(L) < work(H*)`, over verified
+     headers.
+   - **`Synced`**: not `NoView`, and `work(L) ≥ work(H*)` over verified
+     headers.
+   - **Why no "a peer agrees" condition.** Reading it as "peers name our
+     tip" would stop mining during an ordinary equal-work tip race.
+     Reading it as "a higher claim means we are behind" would let anyone
+     rotating sessions halt mining and transaction intake.
    - **`Diverged { fork_at }`**: an **alarm** carried beside the state,
      not a state of its own.
      - **Primary source:** `T` holds a verified chain that is heavier
@@ -292,34 +319,31 @@ deciding forks.**
        - that file records that it relies on the flag being one-way:
          "this refusal latches until a resync; that is the direction we
          want".
-     - **Recommended: reuse it.** Fit the existing mechanism instead of
-       minting a second alarm. This does two things for Rick to rule on
-       explicitly:
-       - (a) **It widens the field's meaning,** from "a switch refused at
-         the prune watermark" to "a heavier chain refused at either cap,
-         the watermark or `D_max`". Both mean the node knows it is not on
+     - **Reused, not a second alarm** (ruled). Two consequences:
+       - (a) **The field's meaning widens,** from "a switch refused at
+         the prune watermark" to "a heavier chain refused at either cap:
+         the undo floor (`Switched::BelowFloor`) or `D_max`
+         (`BeyondCap`)". Both mean the node knows it is not on
          the heaviest chain it has seen, which is what the wallet
          consumer acts on.
-       - (b) **It keeps the latch.** A derived, never-latched alarm would
-         conflict with C2-R1b's ruled sticky semantics and with the
-         wallet's reliance on them.
-         - Recommended: the alarm latches until a resync, as C2-R1b
-           ruled. `NoView`, `Behind` and `Synced` stay derived.
+       - (b) **The latch stays.** The alarm latches until a resync, as
+         C2-R1b ruled and the wallet relies on. `NoView`, `Behind` and
+         `Synced` stay derived.
          - A derived alarm would also clear on restart, because `T` is
            held in memory, until the heavier chain is seen again. That
            is the wrong direction for a fault that needs an operator.
          - If the latch must survive a restart, it is a persisted flag:
            one bit in the store, the store lane's to place.
            C2-R1b's latch is process-lifetime today.
-     - **Who produces it between the DRS-X flip and the CS cutover:**
-       §A, coupling 4.
+     - **Its producer is Rust:** a latch that ingest sets from the flip
+       and the sync owner also sets from the CS cutover (§A, coupling 4).
 
    **The consumers:**
    - the RPC (`synchronized`, plus `target` as `null` when unknown, per
      RK, plus `following_degraded` for the alarm);
    - RD's relay gate;
    - the miner;
-   - the pool-complement trigger;
+   - the sync owner's own complement request (CS-Q10);
    - **the wallet (rules 81, 82).** An eclipsed node under the alarm
      still reports `Synced`, so the alarm must reach the person whose
      funds ride on that chain, not only the operator's console.
@@ -384,7 +408,7 @@ emits `Rewind`; it offers blocks, and the alt tier switches.
 **Question.** Keep the four messages as they are, or redesign them while
 the wire can still change?
 
-**Recommendation: redesign. There are three changes, plus F28.**
+**Ruled (Rick, 2026-10-18): redesign, with three changes, and F28 taken in.**
 
 1. **Headers response.** It carries `pow_blob`s from the fork point,
    bounded by a byte budget, not a count.
@@ -414,10 +438,8 @@ the wire can still change?
    - Above the frontier it is served full.
    - The receiver checks the form against the same rule, so a full body
      below the frontier, or a skeleton above it, is a violation.
-   - This takes **F28 into this slice**. Its owner today is
-     `LV-`/`PWC-`, and nobody is building it.
-   - The `PDM-Q-F28` row (FOLLOWUPS:1408) is re-owned to CS when this
-     question is ruled.
+   - This takes **F28 into this slice**: the `PDM-Q-F28` row
+     (FOLLOWUPS:1408) is owned by CS.
 4. **Encoding.** Keep Levin portable storage for these messages. A move
    to canonical binary is a P2P-wide decision, not this slice's.
 
@@ -470,7 +492,7 @@ PWD-B7's sites are transaction rejections. It does not rule on timeouts,
 slow peers or withholding. Each arm below is tested against its principle,
 not against a ruling it never made.
 
-**Recommendation.** One rule:
+**Ruled (Rick, 2026-10-18).** One rule:
 
 > A session is closed, with a typed cause, when its peer sends input that
 > fails a universal rule: bytes that fail verification, or a response that
@@ -497,15 +519,15 @@ tested against PWD-B7:
   path attacker delaying packets, would be severed. That is what PWD-B7
   warns of: "a drop rule doing rate limiting's job is what severs honest
   peers". Two options:
-  - **(i) Reassign without closing (recommended).** The span goes to
+  - **(i) Reassign without closing (ruled).** The span goes to
     another session. The slow session stops being a body source for the
     rest of that run, a local scheduling choice, not a drop. It stays a
     relay peer and a header source.
     - What it costs: a slow-drip attacker keeps its slot.
     - Who bounds that: the dialer's composition and PWD-B1's per-peer
       bucket (CS-Q5), not sync.
-  - **(ii) Close on a missed deadline,** recorded as a named exception
-    to PWD-B7, which needs Rick's ruling as an amendment to it.
+  - **Not taken: (ii) close on a missed deadline,** which would have
+    been a named exception to PWD-B7.
 
 **Where the verdicts live.** The mapping from the entry's reply (CS-Q2
 step 6) to a session action is built in `shekyl-peer-policy`, beside
@@ -557,7 +579,7 @@ the existing types are extended, not replaced.
       heavier chain they bring within `D_max` reorganizes normally.
     - If no session holds `H*`'s bodies, that is a stall: surfaced, not
       waited on.
-- **Recommendation: (a), with (c) as the normal behaviour.** Headers-first
+- **Ruled (Rick, 2026-10-18): (a), with (c) as the normal behaviour.** Headers-first
   makes the trap need a total eclipse, then a heavier chain appearing
   after more than `D_max` blocks.
 - **Tiny network.** Two halves of a testnet that mine apart for more than
@@ -604,7 +626,7 @@ misbehaviour score, and if so, who owns it?
   a typed cause (CS-Q4). Bans stay operator configuration only (the RPC
   `set_bans`, the transport `BanList`).
 
-**Recommendation: (c).**
+**Ruled (Rick, 2026-10-18): (c).**
 
 What a persistent ban is *for*: making a host that has proven malicious
 stop costing us resources. Against Shekyl's actual inputs, it buys
@@ -671,13 +693,12 @@ nothing:
       and neither stands in for the other.
     - **The CS cutover adds new dispatch routes** (CS-Q3). They fall
       inside B1's ruled surface.
-    - **Recommended:** CS's routes carry B1's charge point, a call
-      ahead of every handler. B1's four parameters, and the bucket
-      itself, stay B1's owner's.
+    - **Ruled:** CS's routes carry B1's charge point, a call ahead of
+      every handler. B1's four parameters, and the bucket itself, stay
+      B1's owner's.
     - If B1's bucket has not landed by the CS cutover, the charge point
       is the one place it attaches. That is not a second mechanism.
-    - Rick's call: the alternative is that B1 adds the charge to CS's
-      routes when it lands.
+    - **Not taken:** B1 adding the charge to CS's routes when it lands.
   - **Not taken: priority for dialer-drawn outbound sessions.** Keying on
     solicitation gives the same protection without a rule keyed on
     direction.
@@ -687,7 +708,7 @@ nothing:
 - `P2P_IP_FAILS_BEFORE_BLOCK`;
 - `hit_score` and `m_score`;
 - the dialer brief's "score owner" sentence;
-- **landed Rust, raised for Rick's ruling:** the `heavier_score` arm of
+- **landed Rust (ruled with the rest):** the `heavier_score` arm of
   `BlockAnnounceAction` and `BlockSyncAction`
   (`shekyl-peer-policy/src/block_peer.rs:103`, `:175`), and its two FFI
   predicates (`peer_policy_ffi.rs:257`, `:292`).
@@ -701,8 +722,8 @@ go too: `tests/unit_tests/node_server.cpp:591` and
 **What stays:** operator bans and their expiry, and the registered
 reconnect throttle, which is not a ban.
 
-**This deletes landed code, so it is Rick's to rule before anything is
-cut.**
+It is cut at the CS cutover, with the sync half; slice 4's calls go with
+slice 4.
 
 **Wargame.**
 - **Invalid-PoW spam from rotating IPv6 addresses.**
@@ -724,8 +745,6 @@ cut.**
 **Problem.**
 - The C++ refusal is gone (`aebe4c5cc`, 2026-10-01), and Rick's 2026-09-30
   ruling makes a Tor-only node first-class.
-- The round doc's §6 still says "Tor cannot sync a chain"
-  (`P2P_3_IMPLEMENTATION_ROUND.md:468`).
 - What is left is the privacy cost, and the timing.
 
 **Question.** What does syncing over Tor expose, and does any of it need
@@ -746,7 +765,7 @@ a mechanism?
 - **To a local observer of our Tor guard:** volume and timing. That is
   TRC-1's domain (relay cover), not this slice's.
 
-**Recommendation.**
+**Ruled (Rick, 2026-10-18).**
 - No sync mechanism keyed on the connector.
 - Record the lag-window linkage as a named, accepted property:
   - adversary: a peer present on both networks;
@@ -755,7 +774,7 @@ a mechanism?
 - Request deadlines read the connector's declared transit (CS-Q4), which
   is data and needs no Tor branch. The Tor gap is 37.4 s, `RustPath`
   (`BENCHMARK_ALIGNMENT.md:352`).
-- Strike §6's sentence in the round doc.
+- The round doc's §6 carries this ruling.
 
 **Wargame.**
 - Linking our onion to our IP during catch-up needs the adversary in
@@ -763,7 +782,7 @@ a mechanism?
   transaction origin. D++ origin protection rides other edges.
 - If the window is to be closed, the one mechanism that does it is "a
   node behind on both connectors syncs over one". That is a connector
-  branch and a special case, so it is not recommended.
+  branch and a special case, so it is not taken.
 
 ---
 
@@ -777,7 +796,7 @@ a mechanism?
 
 **Question.** How does sync's need for peers reach the dialer?
 
-**Recommendation: it doesn't, because sync needs no demand channel.**
+**Ruled (Rick, 2026-10-18): it doesn't, because sync needs no demand channel.**
 - Sync downloads from every established session, inbound and outbound.
   The data's trust comes from PoW and validation, not from who sent it.
 - Sync closes a session only when its peer fails an obligation (CS-Q4).
@@ -797,9 +816,8 @@ a mechanism?
   - Its only consumers are the two C++ functions above. It moved their
     comparisons into Rust without ruling on the levers themselves.
 
-This deletes landed C++ and landed Rust, so it is Rick's to rule. Under
-his standing rule, the Rust half is raised on its own and is not assumed
-to follow the C++.
+Both halves, the C++ and the landed Rust, are deleted at the CS cutover.
+The Rust half was raised on its own and ruled with the C++.
 
 **Wargame.**
 - **What it buys an attacker.** It cannot make us close an honest session
@@ -824,7 +842,7 @@ to follow the C++.
 **Question.** Where does Rust sync run, how much is in flight, and how
 does it meet ingest's backpressure?
 
-**Recommendation.**
+**Ruled (Rick, 2026-10-18): as written.**
 - **One sync owner task,** on its own runtime row in the thread ledger,
   like the dialer's owner.
   - It owns all sync state: `T`, `H*`, the runs and the per-session sync
@@ -862,7 +880,7 @@ edit `try_add_next_blocks` to call its entry.
 **Question.** Should these files join `scripts/ci/dial_path_freeze.tsv`
 as shrink-only rows now?
 
-**Recommendation: yes.** Add shrink rows for:
+**Ruled (Rick, 2026-10-18): yes.** Add shrink rows for:
 - `cryptonote_protocol_handler.{inl,h}`;
 - `cryptonote_protocol_handler-base.cpp` and `_common.h`;
 - `block_queue.{h,cpp}`;
@@ -882,7 +900,7 @@ The flip is gated on DEL-008 (CS-Q10), so the C++ handler lives on for a
 while under these rows.
 
 `cryptonote_protocol_handler.{inl,h}` are rows that are expected to
-**shrink**, not to disappear, at the CS cutover, if the CS-Q1 ruling
+**shrink**, not to disappear, at the CS cutover, because the CS-Q1 ruling
 keeps the transaction routes in the same invoke map as RD's (CS-Q10). A
 shrink row retires only when its file is deleted. That happens at RD's
 cutover or at CS's, whichever lands second.
@@ -909,7 +927,7 @@ addition visible.
 **Question.** What can start now, and does the cutover land whole or in
 increments?
 
-**Recommendation.**
+**Ruled (Rick, 2026-10-18): as written.**
 - **Now, pure Rust, no FFI:**
   - (1) the header-chain verifier (over `shekyl-difficulty`, RandomX and
     `ReleaseAnchors`), tested against the captured chains;
@@ -931,8 +949,9 @@ increments?
   - start the sync owner;
   - change the wire.
 - **Only the sync half,** because the transaction routes in the same
-  `BEGIN_INVOKE_MAP2` are RD's under CS-Q1: `handle_notify_new_transactions`, `relay_transactions` and the
-  pool complement.
+  `BEGIN_INVOKE_MAP2` are RD's under CS-Q1: `handle_notify_new_transactions`,
+  `relay_transactions` and complement serving
+  (`handle_notify_get_txpool_complement`).
   - **`DRS_X_STORE_FLIP.md` says the opposite.** `DRS_X_STORE_FLIP.md` §4
     item 6 (`:290`): "Chain sync's cutover follows the flip and deletes
     the shell's protocol-handler half. **RD** deletes `levin_notify` and
@@ -941,22 +960,20 @@ increments?
     PR against that text.
   - If RD has not landed by the CS cutover, a shrunken C++ handler
     survives holding only those routes.
-  - **The pool-complement trigger needs an edge.**
+  - **The complement request moves to the sync owner.**
     - Today, `on_connection_synchronized` (`.inl:2240`) fires
       `request_txpool_complement` once, when sync completes, guarded by
       a `compare_exchange` ("One ask", `.inl:2289-2305`). CS deletes
       that function.
-    - DRS-X's shell forwards the sync state to `levin_notify`'s
-      `i_core_events::is_synchronized` (`DRS_X_STORE_FLIP.md:217`,
-      `levin_notify.cpp:1222`). That is a level that gets read, not an
-      event.
-    - Getting the edge from that level means polling, which CS-Q8 rules
-      out.
-    - So the surviving trigger takes the `Synced` transition as an
-      event: one Rust → C++ callback from the sync owner's published
-      state, deleted by whichever of RD and CS lands second.
-    - If RD lands first, it subscribes to the transition natively, and
-      no FFI is needed.
+    - After the cutover, the sync owner sends its own Levin requests
+      from Rust, and the pool is Rust (#1102). So the request is the
+      sync owner's own send, at its own transition to `Synced`.
+    - The reply is `NOTIFY_NEW_TRANSACTIONS`. It goes through RD's
+      route, C++ or Rust at the time, into the Rust pool.
+    - Serving a peer's complement request
+      (`handle_notify_get_txpool_complement`) stays RD's.
+    - No callback, and no new C++. Until the cutover, the C++ trigger
+      stays as it is.
   - Whichever of RD and CS lands second deletes the file.
 
   Increments that wired the C++ handler into Rust only to delete it a
@@ -975,7 +992,7 @@ half-cut, and one cutover PR avoids it.
 
 **Question.** What is the reference, and what is measured?
 
-**Recommendation.**
+**Ruled (Rick, 2026-10-18): as written.**
 - **Property tests against the model (CS-Q2), not against the C++:**
   - `H*` is always the most verified work among reachable chains;
   - no body is requested off `H*`;
@@ -986,11 +1003,14 @@ half-cut, and one cutover PR avoids it.
   - a refusal invalidates exactly its subtree;
   - `PayloadRefused` fires only on structurally impossible claims;
   - `NoView`, `Behind` and `Synced` are derived, never latched;
+  - a claim's value never changes the sync state;
+  - only a run in the long slot, or one taking it, pays PoW before it
+    exceeds `work(H*)`; the slot goes to the most verified work at equal
+    height;
   - the `Diverged` alarm latches until a resync and sets
-    `following_degraded`, if CS-Q2 (b) is ruled as recommended;
+    `following_degraded`;
   - `Diverged` never withholds `Synced`;
-  - a missed deadline reassigns the span and never closes the session,
-    if CS-Q4 (i) is ruled;
+  - a missed deadline reassigns the span and never closes the session;
   - a body left out of an under-budget objects response closes the
     session.
 - **Adversarial harness.** Scripted peers over real Levin framing on
@@ -1036,7 +1056,7 @@ half-cut, and one cutover PR avoids it.
 
 **Question.** Does any of the four survive as an operator option?
 
-**Recommendation: none survives.** Each becomes an **X** row, refused
+**Ruled (Rick, 2026-10-18): none survives.** Each becomes an **X** row, refused
 with its reason, under IG's REJECTED convention:
 - **`span-limit`, `block-sync-size` and `block-download-max-size`** are
   replaced by protocol constants: the per-response, objects and global
@@ -1087,43 +1107,39 @@ document says it carries.
    its PR 2.
 
 **Each coupling below is a docs PR against `DRS_X_STORE_FLIP.md`,**
-relayed to the DRS-X lane after Rick's rulings.
+relayed to the DRS-X lane.
 
 1. **§4 item 6, the order of work (`:290`),** has chain sync delete the
    whole protocol-handler half of the shell. Under CS-Q1, the
    transaction routes in that handler are RD's.
-   - Proposed wording: "Chain sync's cutover deletes the protocol
-     handler's sync half. RD deletes its transaction routes,
-     `levin_notify` and the relay entry. Whichever lands second deletes
-     the handler file."
-   - If the ruling instead gives CS the transaction routes, CS-Q1,
-     CS-Q9 and CS-Q10 change, and the landed text stands.
+   - Wording: "Chain sync's cutover deletes the protocol handler's sync
+     half, the complement request included. RD deletes its transaction
+     routes, complement serving, `levin_notify` and the relay entry.
+     Whichever lands second deletes the handler file."
 2. **DX-Q2 item 4 (`:64`)** says "Only `Refused(InvalidBlock)` is about
-   the peer… never punish". If CS-Q5 (c) is ruled, the precise wording
-   becomes: "`Refused(InvalidBlock)` is the only outcome that closes the
+   the peer… never punish". Under CS-Q5 (c) the wording becomes: "`Refused(InvalidBlock)` is the only outcome that closes the
    serving session (PWD-B7); nothing scores".
 3. **The carried requirement.** DRS-X says "chain sync's Round 0
    requirement, ruled 2026-10, carried here" (`:60`, `:73`).
-   - Chain sync Round 0 is not ruled yet. The sentence becomes true on
-     Rick's ruling, and if the ruling changes any §A item, the carried
-     text follows it.
+   - Ruled 2026-10-18, with §A as written, so the carried text stands.
    - `:292` cites "chain sync CS-F5"; the family is registered with this
      document.
-   - **This document's filename is Rick's to choose.** The existing
-     pattern is `P2P_3_SLICE_<n>_<NAME>_BRIEF.md`
-     (`P2P_3_SLICE_1_PEERLIST_BRIEF.md`, `P2P_3_SLICE_3_DIALER_BRIEF.md`).
-     It sits at the unnumbered name; if the §4.2 row makes chain sync a
-     numbered slice, it is renamed at the ruling.
+   - The carried text can name this document now: chain sync is row
+     **CS** of the §4.2 register, beside **TE** and **RD**, not a
+     numbered slice.
 4. **`following_degraded` loses its producer at the flip.**
    - The flip deletes `Blockchain` (DEL-010, `:143`), which holds
      `m_following_degraded` and sets it (`blockchain.cpp:2288`).
    - `DRS_X_STORE_FLIP.md` has no mention of `following_degraded`. Yet
      the field is landed RPC (3.26), and the wallet engine reads it
      (CS-Q2 step 7).
-   - **Proposed:** from the flip, the shell sets it from the entry's
-     `BeyondCap` reply and from the Rust store's watermark refusal, with
-     the latch as C2-R1b ruled. At the CS cutover the sync owner takes
-     it over (CS-Q2).
+   - **Ruled: a Rust-held latch, not shell state.** After the flip the
+     switch is Rust ingest's, and its results already carry the two
+     refusals: `Switched::BelowFloor` (the undo floor) and `BeyondCap`
+     (`D_max`) (`switch.rs:336-340`). Ingest sets the latch from them.
+     The sync owner also sets it from the CS cutover (CS-Q2).
+   - The RPC reads it in Rust (`info_facts.rs:88`, DX-Q3, #1106). The
+     latch semantics are C2-R1b's: one-way until a resync.
    - Without this, the flip silently retires a field the wallet acts
      on. Rule 82 puts that in scope.
 5. **DRS-X PR 2 edits the C++ handler** ("asks once per span",
@@ -1135,21 +1151,19 @@ relayed to the DRS-X lane after Rick's rulings.
 
 ---
 
-## After Rick's rulings
+## What follows the ruling
 
-1. This document is amended to the rulings, and renamed if §A coupling 3
-   asks for it.
-2. The index rows move from posed to ruled.
-3. The round doc's §4.2 row (`P2P_3_IMPLEMENTATION_ROUND.md:251`):
-   - it stops saying "not yet a slice";
-   - the `add_host_fail` anchor `net_node.inl:413` is replaced by the
-     symbol `node_server::add_host_fail` (it is at `:349` today, and has
-     moved twice);
-   - §6's Tor sentence (`:468`) is removed.
-4. The `PDM-Q-F28` row (FOLLOWUPS:1408) is re-owned to CS.
-5. The §A couplings (1, 2, 4 and 5) go to the DRS-X lane as a docs PR
-   against the landed `DRS_X_STORE_FLIP.md`.
-6. The `INPUT_GRAMMAR.md:270` row moves from **L** to **X** with
-   CS-Q12's reason, if ruled. That is the grammar lane's table, so
-   it is relayed there.
-7. The implementing agent's instructions, one consolidated brief.
+**Landed with the ruling:**
+- the round doc's §4.2 register has row **CS**, and its §6 carries
+  CS-Q6;
+- the `PDM-Q-F28` FOLLOWUPS row is owned by CS (CS-Q3);
+- the index rows read ruled.
+
+**Relayed:**
+- §A couplings 1, 2, 4 and 5 go to the DRS-X lane, as a docs PR against
+  `DRS_X_STORE_FLIP.md`;
+- the `INPUT_GRAMMAR.md:270` row moves from **L** to **X** with CS-Q12's
+  reason. That is the grammar lane's table.
+
+**Next:** the implementing agent's instructions, one consolidated brief,
+starting with CS-Q10's pure-Rust work.
