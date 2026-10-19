@@ -2,7 +2,7 @@
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
 2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
-IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, DRAFT, posed 2026-10-18.
+IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19.
 Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
@@ -178,7 +178,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | cover | relay | Dandelion++ cover traffic ([`COVER_TRAFFIC_RESTORATION.md`](COVER_TRAFFIC_RESTORATION.md)) | |
 | sync | dev, — | chain synchronization | |
 | difficulty | dev, chain | a fixed mining difficulty; under `chain`, *view* — the current difficulty | chain:view |
-| pow | dev | the RandomX seed schedule | |
+| pow | dev | proof of work (RandomX); under `dev`, its seed schedule (IG-Q48) | |
 | seed | pow | the RandomX seed | |
 | epoch | seed, settlement | a fixed-length run of blocks | |
 | blocks | epoch | a length in blocks | |
@@ -451,7 +451,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | status | wallet, stake, mine, sync, daemon | *view* — the current state | wallet:view, stake:view, mine:view, sync:view, daemon:view |
 | stop | mine, daemon | *verb* — stop | mine:verb, daemon:verb |
 | set | option, password, note | *verb* — assign a value | option:verb, password:verb, note:verb |
-| show | tx, shard, chain, block, ban, option | *verb* — print one item | tx:verb, shard:verb, chain:verb, block:verb, ban:verb, option:verb |
+| show | tx, shard, block, ban, option | *verb* — print one item | tx:verb, shard:verb, block:verb, ban:verb, option:verb |
 | endpoint | daemon, rpc | a peer-endpoint the binary dials (IG-Q31) | |
 | socket | daemon, rpc | the local socket of RPC_CHANNEL RT-15 | |
 | mnemonic | create, restore | the wallet's recovery words (IG-Q24) | |
@@ -475,12 +475,12 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | tree | complete | the CompleteTree posture (IG-Q28) | |
 | acknowledge | archival | the acknowledgement phrase that posture requires | |
 | short | list | the short form | |
-| from | show, sum | the first height | |
-| to | show | the last height | |
-| last | stats, sum | the most recent N blocks | |
+| from | list, sum | the first height | |
+| to | list, sum | the last height, inclusive | |
+| last | stats | the most recent N blocks | |
 | body | show | a block's or transaction's serialized bytes, kind `bytes` | |
 | hard | rescan | rebuild from the chain | |
-| seconds | add | a duration, in seconds | |
+| duration | add, ban, shard | a span of time: on the console IG-6's duration quantity (`--duration 1h`), on the wire the `duration` kind (IG-Q44, IG-Q54) | |
 | alt | chain | *view* — the alternative chains | chain:view |
 | coinbase | chain | coinbase outputs | |
 | sum | coinbase | *view* — a total | coinbase:view |
@@ -622,10 +622,10 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 |---|---|---|---|
 | `help [cmd]`, `apropos <kw>...` | `help [command]` | | `apropos` folds into `help` |
 | `print_height` | `chain height` | | |
-| `print_bc <from> [<to>]` | `chain show` | `--from`, `--to` integer | |
+| `print_bc <from> [<to>]` | `block header list` | `--from`, `--to` integer, inclusive heights | the method's path (IG-Q44) |
 | `bc_dyn_stats <n>` | `chain stats` | `--last` integer | |
-| `alt_chain_info [hash]` | `chain alt [hash]` | hash | |
-| `print_coinbase_tx_sum <from> [<count>]` | `chain coinbase sum` | `--from`, `--last` integer | |
+| `alt_chain_info [hash]` | `chain alt` | | the console finds a chain in the one reply (IG-Q44) |
+| `print_coinbase_tx_sum <from> [<count>]` | `chain coinbase sum` | `--from`, `--to` integer, inclusive heights | IG-Q44 |
 | `diff` | `chain difficulty` | | |
 | `is_key_image_spent <ki>` | `chain spent <key-image>` | hash | |
 | `pop_blocks <n>` | — | | –: no grammar successor; it is an armed test lever (RPC_CHANNEL RT-O9.2, §6.4) |
@@ -636,7 +636,7 @@ The catalog the Rust console and `shekyl-cli` serve (IG-Q25). The interim C++ co
 | `print_pl [white] [gray] [limit]`, `print_pl_stats`, `print_cn`, `print_net_stats` | `peer list [--white] [--gray] [--max N]`, `peer stats`, `peer connections`, `p2p stats` | | |
 | `limit [kB/s]`, `limit_up`, `limit_down`, `set_log <level\|categories>` | `option set <name> <value>`, `option show [<name>]` | an option name; a value of that row's kind | IG-12: `option set` takes only the rows §5 marks runtime, needs the `node` grant, and never writes the file; `option show` reports each source and returns each row whose grant the caller holds (§5's Grant column); `limit` (both rates at once) is one option per value and goes |
 | `out_peers <n>`, `in_peers <n>` | — | | – (each option is an X row, §5) |
-| `bans`, `ban <ip\|@file> [secs]`, `unban <ip>`, `banned <ip>` | `ban list`, `ban add <ip> [--seconds N]`, `ban remove <ip>`, `ban show <ip>` | an IP; a file is `p2p-ban-file` | |
+| `bans`, `ban <ip\|@file> [secs]`, `unban <ip>`, `banned <ip>` | `ban list`, `ban add <ip> [--duration <quantity>]`, `ban remove <ip>`, `ban show <ip>` | an IP; a file is `p2p-ban-file` | |
 | `start_mining <addr> [threads\|auto] [bg] [battery]`, `stop_mining`, `mining_status`, `show_hr`, `hide_hr` | `mine start <address> [threads\|auto]`, `mine stop`, `mine status` | address; integer or `auto` | builds `mine-address` and `mine-threads` (IG-12); the background arguments go with `bg-mining-*` (§5); the hash rate is in `mine status` |
 | `status`, `print_status`, `sync_info` | `daemon status`, `sync status` | | `print_status` is a duplicate of `status` (IG-Q33) |
 | `stop_daemon`, `exit` | `daemon stop` | | IG-Q33: no bare word in the shared shell stops the daemon |
@@ -726,7 +726,7 @@ The four acts of the genesis ceremony tool under IG-3 (IG-Q35). `geblock` has no
 
 ## 16. Part C — the RPC wire's names
 
-**DRAFT, posed 2026-10-18.** Ground: `dev` `2470176c1`. Part C applies [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q1, RW-Q6, RW-Q9 and RW-Q10 to every method the daemon serves, with its parameters and its reply fields (RW-Q8). The method census is §17, the field census §18, the glossary rows §19, and the questions §20. Each row takes its question's recommended answer until that question is ruled. The names land in one rename PR after the store flip, at `CORE_RPC_VERSION` 4.0, with every in-tree client changed in the same PR (RW-Q8); until then the wire keeps today's names.
+**RULED 2026-10-19 (Rick): IG-Q42…IG-Q57 as recommended.** Ground: `dev` `2470176c1`. Part C applies [`RPC_WIRE.md`](RPC_WIRE.md) RW-Q1, RW-Q6, RW-Q9 and RW-Q10 to every method the daemon serves, with its parameters and its reply fields (RW-Q8). The method census is §17, the field census §18, the glossary rows §19, and the questions §20. The names land in one rename PR after the store flip, at `CORE_RPC_VERSION` 4.0, with every in-tree client changed in the same PR (RW-Q8); until then the wire keeps today's names.
 
 The rules Part C applies are ruled. It adds no rule; each question in §20 is a convention needed to write the names, or a consequence of a rule for a row already ruled.
 
@@ -1010,7 +1010,6 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | time | block, header, daemon, mined | a point in time (IG-Q54) | |
 | adjusted | time | the network-adjusted time | |
 | started | daemon, p2p | when it started, a time | |
-| duration | ban, shard | a span of time (IG-Q54) | |
 | spacing | block | the target time between blocks | |
 | target | sync, daemon | what the node is syncing to; `target height`, its height | |
 | synchronized | daemon | the node holds the target | |
@@ -1126,7 +1125,7 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | show | claim, curve, header | *verb* — print one item, by a typed selector (RW-Q1) | claim:verb, curve:verb, header:verb |
 | size | archival, data, extra, shard, span | a size in bytes | |
 | stats | relay | *view* — statistics | relay:view |
-| to | block, failure, sum | the last height, inclusive | |
+| to | block, failure | the last height, inclusive | |
 | upload | connection | bytes we send | |
 | weight | block, header, template, tx | a weight, in bytes | |
 | white | peer | the white peer list | |
@@ -1137,9 +1136,9 @@ Every term of §3 and §11 used as a field (`height`, `hash`, `count`, `weight`,
 
 ## 20. Questions for Part C
 
-Each is posed for ruling. A question that amends a ruled row names it.
+Each is ruled. A question that amends a row ruled before it names that row, and the row carries the amendment.
 
-**IG-Q42 — the names of parameters and fields, and how the gate walks them — POSED 2026-10-18.** RW-Q10 makes parameter and field names glossary paths, and the conventions below are needed to write and to check them. *Recommended:*
+**IG-Q42 — the names of parameters and fields, and how the gate walks them — RULED 2026-10-19, as recommended.** RW-Q10 makes parameter and field names glossary paths, and the conventions below are needed to write and to check them. *Recommended:*
 - **A field's name** is the rest of its path below the object that holds it: inside a block header the field is `hash`, never `block_hash`.
 - **A parameter's name** is the rest of its path below the object it selects or modifies. A selector's object is the method's subject: `block_header_show`'s `height` walks `block` → `height`. A modifier's object is what it modifies: `prune` modifies a transaction's body, so it walks `tx` → `prune` on every method that carries one, `block_show` and `block_list` included, and `pow` modifies a header, so it walks `header` → `pow`. An input (IG-Q43) parameterizes its view, so its object is the view: `chain_spent`'s `key_image` walks `spent` → `key` → `image`. A verb's argument walks below the noun the verb acts on: `ban_add`'s `host` walks `ban` → `host`.
 - **A reference.** A field or parameter may name another subject directly: the subject alone, or a path starting at it (`block_count` walks `block` → `count`). That is a reference to the other thing, and it needs no edge from its holder: glossary edges express refinement only. The gate tries the holder's path first and the reference form second, and refuses a name valid neither way. In a method name, `dev` is followed by a reference (IG-Q49).
@@ -1149,9 +1148,9 @@ Each is posed for ruling. A question that amends a ruled row names it.
 
 Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #1088: a secret row's `set` collides with §11's verb `set` and becomes `assigned`; `option_set`'s request, a list of `{name, value}` under the key `options`, cannot walk (`option` → `option`) and becomes `value`, a map from option name to value; and the replies' `options` wrapper goes (IG-Q53).
 
-**IG-Q43 — a view's inputs — POSED 2026-10-18.** RW-Q1 says a view noun takes no selector. Several reads take an input that is not a choice of stored item: `chain spent` takes key images, `block template` the address to pay, `pow` a block's hashing bytes. *Recommended:* a *selector* picks a stored item and belongs only to `show` and `list`; an *input* parameterizes what a view computes, and a view may take inputs. `chain spent` (IG-Q25's view) stays a view.
+**IG-Q43 — a view's inputs — RULED 2026-10-19, as recommended.** RW-Q1 says a view noun takes no selector. Several reads take an input that is not a choice of stored item: `chain spent` takes key images, `block template` the address to pay, `pow` a block's hashing bytes. *Recommended:* a *selector* picks a stored item and belongs only to `show` and `list`; an *input* parameterizes what a view computes, and a view may take inputs. `chain spent` (IG-Q25's view) stays a view.
 
-**IG-Q44 — §13's range reads and the ban duration — POSED 2026-10-18.** This amends §13 rows ruled 2026-10-14 (IG-Q25).
+**IG-Q44 — §13's range reads and the ban duration — RULED 2026-10-19, as recommended.** This amends §13 rows ruled 2026-10-14 (IG-Q25).
 - RW-Q1 gives `show` one item by a typed selector and makes `block header list` the bounded range of headers. §13 maps `print_bc <from> [<to>]`, a range of headers, to `chain show --from --to`.
 - `print_coinbase_tx_sum <from> [<count>]` maps to `chain coinbase sum --from --last`, where `last` already means "the most recent N blocks" (§11).
 - `alt_chain_info [hash]` maps to `chain alt [hash]`, a selector on a view.
@@ -1159,9 +1158,9 @@ Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #10
 
 *Recommended:* `print_bc` becomes `block header list --from --to`, and `chain show` leaves §13; `chain coinbase sum` takes `--from` and `--to`, inclusive heights, so `last` keeps its one meaning; `chain alt` takes no argument and the console finds the chain in the one reply; `ban add <ip> [--duration <quantity>]`, an IG-6 duration.
 
-**IG-Q45 — the tip's height — POSED 2026-10-18.** `/get_height`, `get_block_count`, `get_version`'s `current_height`, `get_info`'s and `sync_info`'s `height`, the `target_height` of `get_version`, `get_info` and `sync_info` (the core's target, a count: `src/rpc/rpc_facts_ffi.cpp`, `chain_tip`'s caller), the claim source's `chain_height` and `pop_blocks`' reply carry the chain's *count* (tip + 1, `HEIGHT_SEMANTICS.md` §1), most of them under the name `height`. `HEIGHT_SEMANTICS.md` §3.1 (C1, C2) keeps the wire a raw integer whose identity is its field's name, decoded once at the edge, and RW-Q4 names height versus count in the field. *Recommended:* every tip-shaped field is an ordinal, and no field carries the count. The tip is `height`, and `target_height` on `daemon_status`, `sync_status` and `version` moves with it in the same PR, so a client never compares an ordinal with a count. Each client's decode site changes from `ChainCount::from_raw` to `BlockHeight::from_raw` in the rename PR, and computes the count where it needs one. The change is safe across versions because no client decodes a reply from a daemon of another version: RK-Q11's version-first read (`DAEMON_RPC_KV_GET_INFO.md`, ruled 2026-10-10) compares `version` with `CORE_RPC_VERSION` and refuses a mismatch before the strict decode runs, and the rename PR (at 4.0) must not relax that match. The alternative keeps the count on the wire under the name `count` (`chain_height`'s reply would then be a count named by its field), which leaves a view called `height` that prints a count.
+**IG-Q45 — the tip's height — RULED 2026-10-19, as recommended.** `/get_height`, `get_block_count`, `get_version`'s `current_height`, `get_info`'s and `sync_info`'s `height`, the `target_height` of `get_version`, `get_info` and `sync_info` (the core's target, a count: `src/rpc/rpc_facts_ffi.cpp`, `chain_tip`'s caller), the claim source's `chain_height` and `pop_blocks`' reply carry the chain's *count* (tip + 1, `HEIGHT_SEMANTICS.md` §1), most of them under the name `height`. `HEIGHT_SEMANTICS.md` §3.1 (C1, C2) keeps the wire a raw integer whose identity is its field's name, decoded once at the edge, and RW-Q4 names height versus count in the field. *Recommended:* every tip-shaped field is an ordinal, and no field carries the count. The tip is `height`, and `target_height` on `daemon_status`, `sync_status` and `version` moves with it in the same PR, so a client never compares an ordinal with a count. Each client's decode site changes from `ChainCount::from_raw` to `BlockHeight::from_raw` in the rename PR, and computes the count where it needs one. The change is safe across versions because no client decodes a reply from a daemon of another version: RK-Q11's version-first read (`DAEMON_RPC_KV_GET_INFO.md`, ruled 2026-10-10) compares `version` with `CORE_RPC_VERSION` and refuses a mismatch before the strict decode runs, and the rename PR (at 4.0) must not relax that match. The alternative keeps the count on the wire under the name `count` (`chain_height`'s reply would then be a count named by its field), which leaves a view called `height` that prints a count.
 
-**IG-Q46 — the folds — POSED 2026-10-18.** RW-Q1 gives one method per reply type, which folds methods that answer one fact twice:
+**IG-Q46 — the folds — RULED 2026-10-19, as recommended.** RW-Q1 gives one method per reply type, which folds methods that answer one fact twice:
 - `on_get_block_hash` into `block_header_show` (the hash is a header field), and `get_block_count` into `chain_height`;
 - `/get_alt_blocks_hashes` into `chain_alt`, whose elements carry their blocks' hashes;
 - `/get_transaction_pool_hashes` and `get_txpool_backlog` into `txpool_list`;
@@ -1170,27 +1169,27 @@ Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #10
 
 *Recommended:* all five. Each folded method's consumers move in the rename PR (RW-Q8).
 
-**IG-Q47 — the curve tree — POSED 2026-10-18.** `get_curve_tree_info` and `get_curve_tree_checkpoint` reply one shape (root, depth, leaf count, height) for the tip and for a given height. `tree` is taken: under `complete` it is the CompleteTree posture (IG-Q28), and a term has one meaning (IG-2). *Recommended:* a new subject `curve`, the curve tree, and one method `curve_show` with the selector `{"height": n}` or `"tip"` (RW-Q1). The alternative gives `tree` the meaning "the curve tree" and renames IG-Q28's row.
+**IG-Q47 — the curve tree — RULED 2026-10-19, as recommended.** `get_curve_tree_info` and `get_curve_tree_checkpoint` reply one shape (root, depth, leaf count, height) for the tip and for a given height. `tree` is taken: under `complete` it is the CompleteTree posture (IG-Q28), and a term has one meaning (IG-2). *Recommended:* a new subject `curve`, the curve tree, and one method `curve_show` with the selector `{"height": n}` or `"tip"` (RW-Q1). The alternative gives `tree` the meaning "the curve tree" and renames IG-Q28's row.
 
-**IG-Q48 — `pow` — POSED 2026-10-18.** This amends §3's `pow` row, ruled 2026-10-13. `calc_pow` computes a block's proof-of-work hash for an external miner; §3 defines `pow` under `dev` as "the RandomX seed schedule". *Recommended:* `pow` means proof of work (RandomX) everywhere, a subject and a child of `dev`: `pow` alone is the view that computes the hash (`calc_pow`'s successor), the header's `pow` field holds it and names it by reference (IG-Q42), and `dev-pow-seed-*` keeps its spelling, now read as "proof of work's seed".
+**IG-Q48 — `pow` — RULED 2026-10-19, as recommended.** This amends §3's `pow` row, ruled 2026-10-13. `calc_pow` computes a block's proof-of-work hash for an external miner; §3 defines `pow` under `dev` as "the RandomX seed schedule". *Recommended:* `pow` means proof of work (RandomX) everywhere, a subject and a child of `dev`: `pow` alone is the view that computes the hash (`calc_pow`'s successor), the header's `pow` field holds it and names it by reference (IG-Q42), and `dev-pow-seed-*` keeps its spelling, now read as "proof of work's seed".
 
-**IG-Q49 — the armed levers' names — POSED 2026-10-18.** `generateblocks` and `pop_blocks` are armed test levers (RT-O9.2): never on mainnet, served only to the host's administrator when armed. IG-Q25 gives `pop_blocks` no console word; each still needs a method name under RW-Q1. *Recommended:* they sit under `dev`, as IG-8 places development options: `dev_block_generate` and `dev_chain_pop`. In a method name, `dev` is followed by a reference (IG-Q42): `dev_block_generate` walks `dev`, then the reference `block` → `generate`, so the lever needs no `dev` → `block` edge, and its arguments and reply walk under the reference (`block` → `count`). Neither has a console word, and IG-Q25 stands.
+**IG-Q49 — the armed levers' names — RULED 2026-10-19, as recommended.** `generateblocks` and `pop_blocks` are armed test levers (RT-O9.2): never on mainnet, served only to the host's administrator when armed. IG-Q25 gives `pop_blocks` no console word; each still needs a method name under RW-Q1. *Recommended:* they sit under `dev`, as IG-8 places development options: `dev_block_generate` and `dev_chain_pop`. In a method name, `dev` is followed by a reference (IG-Q42): `dev_block_generate` walks `dev`, then the reference `block` → `generate`, so the lever needs no `dev` → `block` edge, and its arguments and reply walk under the reference (`block` → `count`). Neither has a console word, and IG-Q25 stands.
 
-**IG-Q50 — one transaction and many — POSED 2026-10-18.** `/get_transactions` takes a list of ids; §13's word is `tx show <id>`. *Recommended:* two methods, two reply types (RW-Q1): `tx_show {"id": h}` and `tx_list {"id": [h, …]}`, bounded by the resource policy (`RPC_CHANNEL.md` §6.3). Unrelayed entries stay host-only in both (RT-O9.3).
+**IG-Q50 — one transaction and many — RULED 2026-10-19, as recommended.** `/get_transactions` takes a list of ids; §13's word is `tx show <id>`. *Recommended:* two methods, two reply types (RW-Q1): `tx_show {"id": h}` and `tx_list {"id": [h, …]}`, bounded by the resource policy (`RPC_CHANNEL.md` §6.3). Unrelayed entries stay host-only in both (RT-O9.3).
 
-**IG-Q51 — the peer list — POSED 2026-10-18.** `/get_peer_list` returns two arrays, and `public_only` defaults to true, against IG-4's "a switch defaults to off"; §13's word is `peer list [--white] [--gray] [--max N]`. *Recommended:* `peer_list` returns one list, each element naming its list in `tier` (`white` or `gray`); `public_only` becomes `local` (default off: include local endpoints, §3's `local`) and `include_blocked` goes, because listing banned hosts is a `bans` fact (`RPC_CHANNEL.md` §6.1) that `ban_list` already answers, one method per fact; the bound is the resource policy's, and the console's `--white`, `--gray` and `--max` filter the one reply.
+**IG-Q51 — the peer list — RULED 2026-10-19, as recommended.** `/get_peer_list` returns two arrays, and `public_only` defaults to true, against IG-4's "a switch defaults to off"; §13's word is `peer list [--white] [--gray] [--max N]`. *Recommended:* `peer_list` returns one list, each element naming its list in `tier` (`white` or `gray`); `public_only` becomes `local` (default off: include local endpoints, §3's `local`) and `include_blocked` goes, because listing banned hosts is a `bans` fact (`RPC_CHANNEL.md` §6.1) that `ban_list` already answers, one method per fact; the bound is the resource policy's, and the console's `--white`, `--gray` and `--max` filter the one reply.
 
-**IG-Q52 — the fee read — POSED 2026-10-18.** `get_fee_estimate` returns three positional tiers. `fee` is the wallet's view "a fee quote". *Recommended:* the daemon method is `fee`, with that one meaning; its reply names its tiers by §11's priority keywords (`economy`, `standard`, `high`), each an amount per unit of weight, and the wallet's `fee` view prints a quote computed from it.
+**IG-Q52 — the fee read — RULED 2026-10-19, as recommended.** `get_fee_estimate` returns three positional tiers. `fee` is the wallet's view "a fee quote". *Recommended:* the daemon method is `fee`, with that one meaning; its reply names its tiers by §11's priority keywords (`economy`, `standard`, `high`), each an amount per unit of weight, and the wallet's `fee` view prints a quote computed from it.
 
-**IG-Q53 — a read's reply — POSED 2026-10-18.** Today each read wraps its result under its own key (`block_header`, `block_headers`, `headers`, `txs`, `chains`, `bans`, `connections`, `pool_stats`), and a by-hash read echoes each hash in a slot. *Recommended:* a `show` or view reply is the item itself; a `list` reply is an array of items in selector order, an unknown item `null` in its slot (RK-D23). The wrappers, the slots and `missed_tx` go.
+**IG-Q53 — a read's reply — RULED 2026-10-19, as recommended.** Today each read wraps its result under its own key (`block_header`, `block_headers`, `headers`, `txs`, `chains`, `bans`, `connections`, `pool_stats`), and a by-hash read echoes each hash in a slot. *Recommended:* a `show` or view reply is the item itself; a `list` reply is an array of items in selector order, an unknown item `null` in its slot (RK-D23). The wrappers, the slots and `missed_tx` go.
 
-**IG-Q54 — the wire kinds of time, quantities and fractions — POSED 2026-10-18.** RW-Q10 takes units out of names (`_seconds`, `_time`, `_timestamp`, `_milli`, `_micro`, `_pct`, KiB/s), so each unit must live in its kind. The economics ratios (`burn_pct`, `release_multiplier`, `staker_emission_share_effective`) are fixed-point at `shekyl_fixed_point_scale` = 1,000,000 (`config/economics_params.json`; `SCALE` in `rust/shekyl-economics/src/params.rs`), whatever their names say. RW-Q4's shared-kind rule ("where a wire kind is also a grammar kind, the syntax is IG-6's") would make a duration or a byte count IG-6's `quantity`, a string such as `"3600s"` or `"100MiB"`, on the wire. *Recommended:* as RW-Q4 did for the amount, these are wire kinds of their own, integers whose unit the kind fixes: `time` (unix seconds), `duration` (seconds), byte counts (bytes), rates (units per second), and `milli` and `micro`, a ratio in thousandths and in millionths. No field needs a percent: the economics ratios and the sync span's relative speed are `micro`, so no `percent` kind is minted. A client does arithmetic on them, and a renderer applies the unit once. Each kind's unit is stated once in RW-Q4's registry, never in a name. The console keeps IG-6's `quantity` for what an operator types (`--duration 1h`).
+**IG-Q54 — the wire kinds of time, quantities and fractions — RULED 2026-10-19, as recommended.** RW-Q10 takes units out of names (`_seconds`, `_time`, `_timestamp`, `_milli`, `_micro`, `_pct`, KiB/s), so each unit must live in its kind. The economics ratios (`burn_pct`, `release_multiplier`, `staker_emission_share_effective`) are fixed-point at `shekyl_fixed_point_scale` = 1,000,000 (`config/economics_params.json`; `SCALE` in `rust/shekyl-economics/src/params.rs`), whatever their names say. RW-Q4's shared-kind rule ("where a wire kind is also a grammar kind, the syntax is IG-6's") would make a duration or a byte count IG-6's `quantity`, a string such as `"3600s"` or `"100MiB"`, on the wire. *Recommended:* as RW-Q4 did for the amount, these are wire kinds of their own, integers whose unit the kind fixes: `time` (unix seconds), `duration` (seconds), byte counts (bytes), rates (units per second), and `milli` and `micro`, a ratio in thousandths and in millionths. No field needs a percent: the economics ratios and the sync span's relative speed are `micro`, so no `percent` kind is minted. A client does arithmetic on them, and a renderer applies the unit once. Each kind's unit is stated once in RW-Q4's registry, never in a name. The console keeps IG-6's `quantity` for what an operator types (`--duration 1h`).
 
-**IG-Q55 — a transaction's body — POSED 2026-10-18.** `/get_transactions` takes three switches that choose which of four always-present fields are filled (`decode_as_json`, `prune`, `split`). The wallet's block fetch reads the pruned form (`rust/shekyl-engine-core/src/engine/block_fetch.rs`), and only tests read the prunable part alone. *Recommended:* wherever a transaction's body is carried — `tx_show`, `tx_list`, and each transaction of `block_show` and `block_list` — the method takes the input `prune` (a switch, off by default), which makes each `body` the pruned form; a pruned entry then carries `prunable_hash`. The wallet's scan reads blocks with pruned bodies (`block_fetch.rs`), so `block_list` needs the switch as much as `tx_list` does. `split` and the JSON rendering go (RW-Q4).
+**IG-Q55 — a transaction's body — RULED 2026-10-19, as recommended.** `/get_transactions` takes three switches that choose which of four always-present fields are filled (`decode_as_json`, `prune`, `split`). The wallet's block fetch reads the pruned form (`rust/shekyl-engine-core/src/engine/block_fetch.rs`), and only tests read the prunable part alone. *Recommended:* wherever a transaction's body is carried — `tx_show`, `tx_list`, and each transaction of `block_show` and `block_list` — the method takes the input `prune` (a switch, off by default), which makes each `body` the pruned form; a pruned entry then carries `prunable_hash`. The wallet's scan reads blocks with pruned bodies (`block_fetch.rs`), so `block_list` needs the switch as much as `tx_list` does. `split` and the JSON rendering go (RW-Q4).
 
-**IG-Q56 — the proof-of-work hash in a header — POSED 2026-10-18.** `fill_pow_hash` has two restricted-listener policies: `get_block` and `get_block_header_by_height` blank the field silently, and the other three header methods refuse with `-19`. *Recommended:* one input, `pow` (a switch, off by default); a caller whose grant or resource bound does not cover it is refused with the RW-Q3 class that applies, never answered with a blank; the field is absent when not asked for.
+**IG-Q56 — the proof-of-work hash in a header — RULED 2026-10-19, as recommended.** `fill_pow_hash` has two restricted-listener policies: `get_block` and `get_block_header_by_height` blank the field silently, and the other three header methods refuse with `-19`. *Recommended:* one input, `pow` (a switch, off by default); a caller whose grant or resource bound does not cover it is refused with the RW-Q3 class that applies, never answered with a blank; the field is absent when not asked for.
 
-**IG-Q57 — the pool's listing — POSED 2026-10-18.** The Rust pool's listing is id, weight and fee, never the receive time, because receive times across many nodes' listings point at a transaction's origin (the review of #1102; `rust/shekyl-mempool/src/relay.rs`, `Pool::listing`). *Recommended:* `txpool_list`'s element is exactly that listing, the body comes from `tx_show`, and the C++ pool's other fields go; `txpool_stats` keeps the counts and weights, and its fields derived from receive times (`oldest`, `num_10m`, `histo`, `histo_98pc`) and the C++ pool's `num_failing` go. The same grounding reaches the transaction entry and the statistics:
+**IG-Q57 — the pool's listing — RULED 2026-10-19, as recommended.** The Rust pool's listing is id, weight and fee, never the receive time, because receive times across many nodes' listings point at a transaction's origin (the review of #1102; `rust/shekyl-mempool/src/relay.rs`, `Pool::listing`). *Recommended:* `txpool_list`'s element is exactly that listing, the body comes from `tx_show`, and the C++ pool's other fields go; `txpool_stats` keeps the counts and weights, and its fields derived from receive times (`oldest`, `num_10m`, `histo`, `histo_98pc`) and the C++ pool's `num_failing` go. The same grounding reaches the transaction entry and the statistics:
 - `double_spend_seen` and `num_double_spends` go. `shekyl-mempool` holds no per-entry conflict flag: its door admits one spender per key image (`view.rs`, CEN-M7's conflict map), and the `conflicted` list in `template.rs` is the template builder's, not an entry's.
 - `relayed` becomes the pool's one bit, `public` (`DAEMON_RELAY_PRIVACY.md` acceptance criterion 2; `DRS_X_STORE_FLIP.md` DX-F6). For any caller below host-only it is constant, `true`, because an entry not yet public is host-only (RT-O9.3).
 - The counts of entries not yet public, `num_not_relayed` on the statistics and `tx_pool_unbroadcast_count` on `daemon_status`, are host-only, and are named after the pool's bit: `private_count` and `txpool_private_count`.

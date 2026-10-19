@@ -1287,6 +1287,12 @@ two. Every route they replace is a REST path today.
   a secret (rule 43). Readers decode a row into a two-variant type and
   refuse a row with both forms or neither. A name the caller asked for
   but may not see is absent from the reply; an unknown name is refused.
+- **At the rename** (`RPC_WIRE.md` RW-Q8, `CORE_RPC_VERSION` 4.0),
+  `INPUT_GRAMMAR.md` IG-Q42 (ruled 2026-10-19) renames this wire:
+  `option_set` takes `{"value": {<name>: <value>, …}}`, a map, so a name
+  cannot be given twice; both replies are the list of rows itself, with no
+  `options` key; `option_show`'s `names` is `name`; and a secret row's
+  `set` is `assigned`. Every other rule above stands.
 - **What `option_show` prints, `option_set` accepts.** The text shown for
   a value is valid input to `option_set` and builds the same value. A
   property test over every runtime row holds this. **Every runtime row's

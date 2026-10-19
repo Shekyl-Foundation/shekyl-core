@@ -1,6 +1,6 @@
 # Input grammar Part C — the field census (appendix)
 
-**Status:** DRAFT — evidence for [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) Part C (§17–§18), posed for ruling with it. A read-only census from source of every served method's parameters and reply fields, taken at `945e80dad`; every cited file is unchanged at `42c133186`. Nothing here was captured from a running daemon. It is ruled with Part C and goes with the rename PR (`RPC_WIRE.md` RW-Q8), whose generated field table replaces it.
+**Status:** RULED 2026-10-19 with [`INPUT_GRAMMAR.md`](INPUT_GRAMMAR.md) Part C — the evidence for its §17–§18. A read-only census from source of every served method's parameters and reply fields, taken at `945e80dad`; every cited file is unchanged at `42c133186`. Nothing here was captured from a running daemon. It goes with the rename PR (`RPC_WIRE.md` RW-Q8), whose generated field table replaces it.
 
 **Path abbreviations used in citations**
 

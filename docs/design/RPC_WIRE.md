@@ -1,6 +1,6 @@
 # RPC wire — the daemon RPC's contract (RW)
 
-**Status:** LIVING CONTRACT — the daemon RPC wire's contract of record, last verified 2026-10-18 at `2470176c1`. RW-Q2…RW-Q7 ruled 2026-10-17; RW-Q1, RW-Q8, RW-Q9 and RW-Q10 ruled 2026-10-18 (Rick); each question carries its ruling in its own line. It carries the KV cutover's decisions still in force, with their IDs (*Carried decisions*). The name census (RW-Q1, RW-Q6, RW-Q10) is `INPUT_GRAMMAR.md` Part C. `get_info`'s wire stays in [`DAEMON_RPC_KV_GET_INFO.md`](DAEMON_RPC_KV_GET_INFO.md) until this document absorbs it. Family `RW-` (`RW-Q`, `RW-F`), registered in `IMPLEMENTATION_INDEX.md`.
+**Status:** LIVING CONTRACT — the daemon RPC wire's contract of record, last verified 2026-10-18 at `2470176c1`. RW-Q2…RW-Q7 ruled 2026-10-17; RW-Q1, RW-Q8, RW-Q9 and RW-Q10 ruled 2026-10-18 (Rick); each question carries its ruling in its own line. It carries the KV cutover's decisions still in force, with their IDs (*Carried decisions*). The name census (RW-Q1, RW-Q6, RW-Q10) is `INPUT_GRAMMAR.md` Part C, ruled 2026-10-19. `get_info`'s wire stays in [`DAEMON_RPC_KV_GET_INFO.md`](DAEMON_RPC_KV_GET_INFO.md) until this document absorbs it. Family `RW-` (`RW-Q`, `RW-F`), registered in `IMPLEMENTATION_INDEX.md`.
 **Origin:** the daemon RPC KV lane's retirement, ruled by Rick 2026-10-17:
 1. Retire the KV lane as a migration program; restructure what nobody else owns.
 2. RPC method names join the input-grammar glossary (`INPUT_GRAMMAR.md` §1 "brought in by ruling").
@@ -118,7 +118,7 @@
 
 - **Problem.**
   - PR 3b writes about 15 new request and reply types soon.
-  - RT-P5 has not run, and it derives RT-O6's padding classes from per-method HTTP message sizes (`RPC_CHANNEL.md:1621`).
+  - RT-P5 has not run, and it derives RT-O6's padding classes from per-method HTTP message sizes (`RPC_CHANNEL.md:1670`).
   - RT-W10's grant table is keyed by method name.
 - **Ruling.** The round lands in two halves.
   - **Conventions** (Q2–Q5, Q7), ruled 2026-10-17; PR 3b is built to them.
