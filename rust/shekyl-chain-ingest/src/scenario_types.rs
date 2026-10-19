@@ -77,6 +77,10 @@ impl<P: Substrate> Substrate for Clocked<P> {
     fn pin_seed(&self, seed: &BlockHash) {
         self.pow.pin_seed(seed);
     }
+
+    fn cache_absent(&self, fault: &P::Fault) -> bool {
+        self.pow.cache_absent(fault)
+    }
 }
 
 /// The harness longhash as a substrate: every target satisfied, no cache.

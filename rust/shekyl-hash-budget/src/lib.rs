@@ -25,15 +25,26 @@
 //! 4. [`Class::CalcPow`] — the RPC's `calc_pow`;
 //! 5. [`Class::Miner`] — the built-in miner.
 //!
-//! **The miner never holds a permit a higher class waits for.** It takes a
-//! permit for each hash and gives it back after: a higher class that starts
-//! waiting while a miner hash runs is granted the permit that hash frees,
-//! within one hash, and no miner worker is granted another while it waits.
-//! The miner's threads keep nice 19, but priority is by permit: nice does
-//! not arbitrate the cache and memory bandwidth light-mode RandomX is bound
-//! by.
+//! **The miner never holds a permit a higher class waits for, and it never
+//! takes the last free permit.** One hash at nice 19 can occupy a core for
+//! about a minute of wall time, so a chain form must not wait that hash
+//! out. The miner takes one permit per hash only while at least one other
+//! permit stays free, and gives it back after. A higher class that starts
+//! waiting during a hash is granted a free permit at once when one remains,
+//! and the permit that hash frees otherwise. No miner worker is granted
+//! another while a higher class waits. On a one-permit budget the miner
+//! never hashes. The miner's threads keep nice 19, but priority is by
+//! permit: nice does not arbitrate the cache and memory bandwidth
+//! light-mode RandomX is bound by.
+//!
+//! A grant that leaves a permit free wakes the waiters. Taking a permit
+//! drops the grantee's waiting count, and that drop is what can make a
+//! lower class grantable. Without the wake, the lower class can go back to
+//! sleep on the higher class's count and stay there while a permit sits
+//! idle.
 
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 /// Who is hashing, highest priority first (module docs).
@@ -64,6 +75,17 @@ impl Class {
     const fn index(self) -> usize {
         self as usize
     }
+
+    /// How many permits must be free before this class may take one.
+    ///
+    /// Every class takes exactly one. The miner requires two free, so the
+    /// last permit stays for a higher class (module docs).
+    const fn free_needed(self) -> usize {
+        match self {
+            Self::Chain | Self::HeaderPow | Self::Unsolicited | Self::CalcPow => 1,
+            Self::Miner => 2,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -76,10 +98,10 @@ struct State {
 }
 
 impl State {
-    /// Whether `class` may take a free permit now: one is free and no
-    /// higher class waits for it.
+    /// Whether `class` may take a permit now: enough are free
+    /// ([`Class::free_needed`]) and no higher class waits.
     fn grantable(&self, class: Class) -> bool {
-        self.free > 0 && self.waiting[..class.index()].iter().all(|&n| n == 0)
+        self.free >= class.free_needed() && self.waiting[..class.index()].iter().all(|&n| n == 0)
     }
 }
 
@@ -129,8 +151,8 @@ impl Budget {
         self.0.permits
     }
 
-    /// Take a permit for `class`, waiting until one is free and no higher
-    /// class waits. Blocking: call it from a thread that may block.
+    /// Take a permit for `class`, waiting until one is grantable. Blocking:
+    /// call it from a thread that may block.
     #[must_use]
     pub fn acquire(&self, class: Class) -> Permit {
         let mut state = self.0.lock();
@@ -142,19 +164,41 @@ impl Budget {
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner);
         }
-        state.waiting[class.index()] -= 1;
-        state.free -= 1;
-        state.held[class.index()] += 1;
-        drop(state);
-        // A grant can make a lower class grantable no longer, and never
-        // makes one grantable; no wake is owed here.
-        Permit {
-            budget: Arc::clone(&self.0),
-            class,
+        self.grant(class, state)
+    }
+
+    /// Take a permit for `class`, or `None` once `stop` is set.
+    ///
+    /// The waiting count is dropped before `None`, and the waiters are
+    /// woken: a stopped higher class must not keep a lower one asleep.
+    /// `stop` is read under the budget lock, so a stop that lands before
+    /// the wait begins is seen. Pair it with [`wake`](Self::wake) from the
+    /// thread that sets `stop`, or this call stays in the condvar.
+    #[must_use]
+    pub fn acquire_unless(&self, class: Class, stop: &AtomicBool) -> Option<Permit> {
+        let mut state = self.0.lock();
+        state.waiting[class.index()] += 1;
+        loop {
+            if stop.load(Ordering::Acquire) {
+                state.waiting[class.index()] -= 1;
+                drop(state);
+                // A dropped waiting count can make a lower class grantable.
+                self.0.changed.notify_all();
+                return None;
+            }
+            if state.grantable(class) {
+                return Some(self.grant(class, state));
+            }
+            state = self
+                .0
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
         }
     }
 
-    /// A permit for `class` if one is grantable now.
+    /// A permit for `class` if one is grantable now. Taking a permit never
+    /// makes a waiter newly grantable, so this does not wake anyone.
     #[must_use]
     pub fn try_acquire(&self, class: Class) -> Option<Permit> {
         let mut state = self.0.lock();
@@ -167,6 +211,30 @@ impl Budget {
             budget: Arc::clone(&self.0),
             class,
         })
+    }
+
+    /// Wake every waiter so it re-checks [`acquire_unless`](Self::acquire_unless)'s
+    /// stop flag, or a permit a grant left free.
+    pub fn wake(&self) {
+        self.0.changed.notify_all();
+    }
+
+    /// `class` is waiting and grantable. One permit, then a wake when one
+    /// remains: dropping this class's waiting count is what lets a lower
+    /// class through.
+    fn grant(&self, class: Class, mut state: MutexGuard<'_, State>) -> Permit {
+        state.waiting[class.index()] -= 1;
+        state.free -= 1;
+        state.held[class.index()] += 1;
+        let spare = state.free > 0;
+        drop(state);
+        if spare {
+            self.0.changed.notify_all();
+        }
+        Permit {
+            budget: Arc::clone(&self.0),
+            class,
+        }
     }
 
     /// Permits `class` holds now.
@@ -229,17 +297,29 @@ mod tests {
 
     #[test]
     fn the_permits_are_the_budget_and_come_back_when_dropped() {
-        let budget = Budget::new(NonZeroUsize::new(2).expect("two"));
+        // Three, so the miner can take one beside the chain and still leave
+        // the last permit free.
+        let budget = Budget::new(NonZeroUsize::new(3).expect("three"));
         let a = budget.acquire(Class::Chain);
         let b = budget.acquire(Class::Miner);
-        assert!(budget.try_acquire(Class::Chain).is_none(), "both are held");
+        assert!(
+            budget.try_acquire(Class::Miner).is_none(),
+            "the miner leaves the last permit"
+        );
+        let spare = budget
+            .try_acquire(Class::Chain)
+            .expect("the last is for the chain");
+        assert!(
+            budget.try_acquire(Class::Chain).is_none(),
+            "all three are held"
+        );
         assert_eq!(
             (budget.held(Class::Chain), budget.held(Class::Miner)),
-            (1, 1)
+            (2, 1)
         );
         drop(b);
         let c = budget.try_acquire(Class::Chain).expect("one came back");
-        drop((a, c));
+        drop((a, spare, c));
         assert_eq!(budget.held(Class::Chain), 0);
     }
 
@@ -251,12 +331,9 @@ mod tests {
         let held = budget.acquire(Class::Chain);
         let order = Arc::new(Mutex::new(Vec::new()));
         let mut threads = Vec::new();
-        for class in [
-            Class::Miner,
-            Class::CalcPow,
-            Class::Unsolicited,
-            Class::HeaderPow,
-        ] {
+        // The miner is absent: a one-permit budget never grants it, so this
+        // join would wait forever. Its place in the order is the next test.
+        for class in [Class::CalcPow, Class::Unsolicited, Class::HeaderPow] {
             let (waiter, order) = (budget.clone(), Arc::clone(&order));
             threads.push(std::thread::spawn(move || {
                 let permit = waiter.acquire(class);
@@ -271,21 +348,41 @@ mod tests {
         }
         assert_eq!(
             *order.lock().expect("order"),
-            vec![
-                Class::HeaderPow,
-                Class::Unsolicited,
-                Class::CalcPow,
-                Class::Miner
-            ]
+            vec![Class::HeaderPow, Class::Unsolicited, Class::CalcPow]
         );
     }
 
-    /// The miner takes a permit per hash. With the miner hashing on every
-    /// permit, a chain `form` that begins to wait is granted one within one
-    /// hash — the next one a miner hash frees — and the miner then holds
-    /// what is left.
+    /// The miner is the lowest class, and it still leaves the last permit.
     #[test]
-    fn a_waiting_form_is_granted_within_one_miner_hash() {
+    fn the_miner_leaves_the_last_permit_and_yields_to_a_higher_class() {
+        let budget = Budget::new(NonZeroUsize::new(2).expect("two"));
+        let chain = budget.acquire(Class::Chain);
+        assert!(
+            budget.try_acquire(Class::Miner).is_none(),
+            "one free is not enough for the miner"
+        );
+        drop(chain);
+        let miner = budget
+            .try_acquire(Class::Miner)
+            .expect("two free: the miner takes one");
+        assert!(
+            budget.try_acquire(Class::Miner).is_none(),
+            "the second miner would take the last"
+        );
+        let form = budget
+            .try_acquire(Class::Chain)
+            .expect("the last permit is the chain's");
+        drop((miner, form));
+        assert!(
+            budget.try_acquire(Class::Miner).is_some(),
+            "both permits are free again"
+        );
+    }
+
+    /// A chain form never waits out a miner hash: the miner cannot hold
+    /// every permit, so one stays grantable to the chain.
+    #[test]
+    fn a_chain_form_does_not_wait_out_a_miner_hash() {
         const HASH: Duration = Duration::from_millis(250);
         let budget = Budget::new(NonZeroUsize::new(2).expect("two"));
         let stop = Arc::new(AtomicBool::new(false));
@@ -295,30 +392,107 @@ mod tests {
                 let stop = Arc::clone(&stop);
                 std::thread::spawn(move || {
                     while !stop.load(Ordering::Acquire) {
-                        let permit = budget.acquire(Class::Miner);
+                        let Some(permit) = budget.acquire_unless(Class::Miner, &stop) else {
+                            break;
+                        };
                         std::thread::sleep(HASH);
                         drop(permit);
                     }
                 })
             })
             .collect();
-        until(|| budget.held(Class::Miner) == 2);
+        until(|| budget.held(Class::Miner) == 1);
         let started = Instant::now();
         let permit = budget.acquire(Class::Chain);
         let waited = started.elapsed();
-        // One hash, and the scheduling slack of a loaded host.
         assert!(
-            waited <= HASH + Duration::from_millis(200),
-            "granted within one hash: {waited:?}"
+            waited < HASH,
+            "the spare permit is granted without waiting out a hash: {waited:?}"
         );
-        assert!(
-            budget.held(Class::Miner) <= 1,
-            "the form holds one of the two"
+        assert_eq!(
+            budget.held(Class::Miner),
+            1,
+            "the miner still holds the other"
         );
         drop(permit);
         stop.store(true, Ordering::Release);
+        budget.wake();
         for miner in miners {
             miner.join().expect("joins");
         }
+    }
+
+    /// A grant that leaves a permit free wakes a lower class that went back
+    /// to sleep because the higher one was still waiting. The interleaving
+    /// is the scheduler's, so the trial repeats until it has been seen or
+    /// the wait says the wake is missing.
+    #[test]
+    fn a_grant_that_leaves_a_permit_wakes_the_lower_class() {
+        let budget = Budget::new(NonZeroUsize::new(2).expect("two"));
+        for _ in 0..40 {
+            let held_a = budget.acquire(Class::Chain);
+            let held_b = budget.acquire(Class::Chain);
+            let lower_done = Arc::new(AtomicBool::new(false));
+            let higher = {
+                let budget = budget.clone();
+                let lower_done = Arc::clone(&lower_done);
+                std::thread::spawn(move || {
+                    let permit = budget.acquire(Class::HeaderPow);
+                    // Stay holding it until the lower class is granted. If
+                    // the grant left a permit and did not wake, this wait is
+                    // the failure: the lower class can only proceed by the
+                    // wake, because this permit is not dropped first.
+                    let started = Instant::now();
+                    while !lower_done.load(Ordering::Acquire) {
+                        assert!(
+                            started.elapsed() < Duration::from_millis(500),
+                            "the lower class slept through a free permit"
+                        );
+                        std::thread::yield_now();
+                    }
+                    drop(permit);
+                })
+            };
+            let lower = {
+                let budget = budget.clone();
+                let lower_done = Arc::clone(&lower_done);
+                std::thread::spawn(move || {
+                    let permit = budget.acquire(Class::CalcPow);
+                    lower_done.store(true, Ordering::Release);
+                    drop(permit);
+                })
+            };
+            until(|| budget.waiting(Class::HeaderPow) == 1 && budget.waiting(Class::CalcPow) == 1);
+            drop((held_a, held_b));
+            let started = Instant::now();
+            while !lower_done.load(Ordering::Acquire) {
+                assert!(
+                    started.elapsed() < Duration::from_millis(500),
+                    "the lower class slept through a free permit"
+                );
+                std::thread::yield_now();
+            }
+            higher.join().expect("joins");
+            lower.join().expect("joins");
+        }
+    }
+
+    #[test]
+    fn stopping_unblocks_a_waiter_and_drops_its_waiting_count() {
+        let budget = one();
+        let held = budget.acquire(Class::Chain);
+        let stop = Arc::new(AtomicBool::new(false));
+        let waiting = {
+            let budget = budget.clone();
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || budget.acquire_unless(Class::HeaderPow, &stop))
+        };
+        until(|| budget.waiting(Class::HeaderPow) == 1);
+        stop.store(true, Ordering::Release);
+        budget.wake();
+        assert!(waiting.join().expect("joins").is_none());
+        assert_eq!(budget.waiting(Class::HeaderPow), 0);
+        drop(held);
+        assert!(budget.try_acquire(Class::CalcPow).is_some());
     }
 }

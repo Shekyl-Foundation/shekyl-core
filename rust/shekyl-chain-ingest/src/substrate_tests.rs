@@ -26,21 +26,41 @@ fn the_longhash_is_the_verifiers_compute_hash_under_the_same_seed() {
         PowHash::from_bytes(compute_hash(&cache, blob))
     };
     let substrate = fresh();
-    let via = substrate.longhash(blob, &seed).expect("infallible");
+    // The pin is the derive. The longhash looks the cache up.
+    substrate.pin_seed(&seed);
+    let via = substrate.longhash(blob, &seed).expect("pinned");
     assert_eq!(via, direct);
     // A second call under the same seed hits the cache store, not a second
     // derivation; the answer is the same by construction.
-    assert_eq!(substrate.longhash(blob, &seed).expect("infallible"), via);
+    assert_eq!(substrate.longhash(blob, &seed).expect("pinned"), via);
     // A different seed is a different hash — the seed is load-bearing
-    // (CEN-D3), which is why Stale::Seed exists.
-    let other = substrate
-        .longhash(blob, &BlockHash::from_bytes([0x5f; 32]))
-        .expect("infallible");
+    // (CEN-D3), which is why Stale::Seed exists. It is pinned first: a
+    // longhash does not derive.
+    let other_seed = BlockHash::from_bytes([0x5f; 32]);
+    substrate.pin_seed(&other_seed);
+    let other = substrate.longhash(blob, &other_seed).expect("pinned");
     assert_ne!(other, via);
     // The sink the substrate was given saw every hash and the one derive
-    // per seed — the counters the pipeline's artifact reads.
+    // per seed — the counters the pipeline's artifact reads. Both derives
+    // are the pins.
     let seen = substrate.metrics().snapshot();
     assert_eq!((seen.hashes, seen.cache_derives), (3, 2));
+}
+
+#[test]
+fn a_longhash_of_an_unpinned_seed_does_not_derive() {
+    let substrate = fresh();
+    let seed = BlockHash::from_bytes([0x5e; 32]);
+    let fault = substrate
+        .longhash(b"unpinned", &seed)
+        .expect_err("a miss is a fault");
+    assert!(matches!(fault, SubstrateFault::CacheAbsent), "{fault:?}");
+    assert!(substrate.cache_absent(&fault));
+    assert_eq!(
+        substrate.metrics().snapshot().cache_derives,
+        0,
+        "a miss builds nothing"
+    );
 }
 
 #[test]

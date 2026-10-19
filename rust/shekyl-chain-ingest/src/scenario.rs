@@ -277,6 +277,9 @@ where
             Ok(references) => references,
             Err(never) => match never {},
         };
+        // The longhash looks the cache up. This driver is the chain, so
+        // it pins the seed first; a harness longhash's pin does nothing.
+        self.substrate.pin_seed(&seed);
         let formed = form(
             candidate,
             &rule_set,
@@ -358,6 +361,9 @@ where
     /// the proofs are verified at promotion, where the plan carries the
     /// claims ([`SwitchPlan::references_for`]).
     pub async fn offer(&self, mined: &Mined) -> Result<Offered, RunFault> {
+        // This driver's own substrate, so the form can look the cache up.
+        // An untrusted alternative on the live service never pins.
+        self.substrate.pin_seed(&mined.seed);
         let formed = form(
             mined.candidate(),
             &self.rules.in_force(mined.height),
@@ -396,6 +402,7 @@ where
             .template(facts, now, listed)
             .map_err(StepOutcome::Template)?;
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
+        self.substrate.pin_seed(&seed);
         let formed = form(
             candidate.clone(),
             &self.rules.in_force(height),
@@ -423,6 +430,7 @@ where
     /// again here under empty reference claims, then [`OfferAlt`].
     #[cfg(test)]
     pub async fn offer_unconnected(&self, block: &Unconnected) -> Result<Offered, RunFault> {
+        self.substrate.pin_seed(&block.seed);
         let formed = form(
             block.candidate.clone(),
             &self.rules.in_force(block.height),
@@ -471,7 +479,7 @@ where
             self.rules,
             &self.substrate,
             threads,
-            &|| Box::new(()),
+            &|| (),
         ) {
             Ok(formed) => formed,
             Err(crate::plan_form::PlanStop::Substrate(fault)) => {

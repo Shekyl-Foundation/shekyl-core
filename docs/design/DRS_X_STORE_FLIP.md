@@ -153,7 +153,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 - deletes:
   - LMDB and `BlockchainDB`;
   - `Blockchain` and `tx_memory_pool` (DEL-010);
-  - the archival C++ path (DEL-008). Its gate holds at genesis, not at the flip (Rick, 2026-10-18): until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code;
+  - the archival C++ path (DEL-008). Its gate holds at genesis (Rick, 2026-10-18); its flip half is deleted. Until genesis, testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code;
   - the reorg path (DEL-009);
   - `rpc_facts_ffi.cpp`, `daemon_submit_ffi.cpp` and `miner.cpp`;
   - the C++ RPC server whole (DX-Q3's falsifier), with the interim console's commands that read its structs;
@@ -348,7 +348,7 @@ Its number is read from the tree at the flip's pin, never carried from a plan (`
 2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Under way (#1123), staged: built and tested, nothing routed.
 3. **PR 3** — the read-only RPC handlers, the store-backed facts and the miner loop. Merged (#1106).
 4. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge. Its `get_block_template` assembler is also the tip follower's template source (DX-Q2 item 5): one producer for the RPC and the miner.
-5. **The flip** needs PR-b, PR 2, PR 3, PR 3b and #1088. DEL-008's gate moves from the flip to genesis (Rick, 2026-10-18): at genesis the requirements stay — SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`). Until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code.
+5. **The flip** needs PR-b, PR 2, PR 3, PR 3b and #1088. DEL-008's gate holds at genesis (Rick, 2026-10-18); its flip half is deleted. At genesis the requirements stay — SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`). Until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code.
 6. **Chain sync's cutover** follows the flip and deletes the shell's protocol-handler half. **RD** deletes `levin_notify` and the relay entry.
 
 **Chain sync CS-F5** (fixed in PR 2): `shekyl-chain-ingest/src/source.rs` states the landed switch — the fork choice is ingest's, and a live source never emits `Rewind`.

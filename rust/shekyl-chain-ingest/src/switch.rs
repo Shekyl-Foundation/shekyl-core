@@ -79,7 +79,9 @@ use shekyl_chain_rules::{AtHeight, HeaderView};
 
 /// A switch deeper than the cap in force: refused **locally**, before any
 /// pop and before any RandomX (`E5-Q6`). Never a verdict against the alt
-/// block, never peer-punishable (C2-R1 Q1c F-1(a)): the block stays stored.
+/// block, never peer-punishable (C2-R1 Q1c F-1(a)). On the switch path the
+/// block is already stored. An arrival the early gate refuses with the same
+/// value has stored nothing and hashed nothing.
 ///
 /// The cap is a **policy** limit and `PopBelowFloor` is a **capability**
 /// limit; two independent operands earn two refusals (`E5-Q6`'s ruling,

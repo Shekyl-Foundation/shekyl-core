@@ -371,7 +371,8 @@ async fn no_room_is_refused_before_acceptance_and_a_stop_answers_stopped() {
     let blocks = y.mine(4).await;
     let gate = Arc::new(Gated::new());
     let config = ServiceConfig {
-        room: NonZeroUsize::new(2).expect("two"),
+        // Three seats: one stays reserved, so a sync caller sees two.
+        room: NonZeroUsize::new(3).expect("three"),
     };
     let (service, path) = service_on(
         "service-room",
@@ -689,7 +690,10 @@ async fn an_arrival_forms_in_the_class_its_origin_names() {
         };
         let ticket = door.offer(offered).expect("room and a token");
         let started = std::time::Instant::now();
-        while budget.waiting(class) == 0 {
+        // The attendant may already be waiting in the chain class to pin
+        // the window. The form is the increase after the offer.
+        let waiting_before = budget.waiting(class);
+        while budget.waiting(class) <= waiting_before {
             assert!(
                 started.elapsed() < std::time::Duration::from_secs(10),
                 "the form never waited in {class:?}"

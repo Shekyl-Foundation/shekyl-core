@@ -670,22 +670,12 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
                 },
             )
         };
-        // Genesis was proved under the null seed, and block 0's hash seeds
-        // heights 1 and 2. A derivation lands in the store's transient slot
-        // and only a pin makes one canonical; this driver pins none, so the
-        // second derivation replaced the first. The chain's own seed for
-        // genesis is not held, and `calc_pow` refuses it rather than derive.
-        let genesis = &mined[0];
-        assert_eq!(genesis.seed, BlockHash::NULL);
-        assert_eq!(
-            ask(
-                genesis.height,
-                &hex::encode(genesis.template.block.pow_blob()),
-                ""
-            ),
-            not_held(BlockHash::NULL)
-        );
-        for m in &mined[1..] {
+        // The driver pins each connecting seed before the hash. Genesis
+        // pins the null seed; the next block pins genesis's hash and
+        // demotes the null seed to the transient slot. Two seeds, two
+        // slots, both held. `calc_pow` answers under either.
+        assert_eq!(mined[0].seed, BlockHash::NULL);
+        for m in &mined {
             let held = caches
                 .lookup(&Seedhash::from_bytes(*m.seed.as_bytes()))
                 .expect("the validator holds the seed it proved this block under");

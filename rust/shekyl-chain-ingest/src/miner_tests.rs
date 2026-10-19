@@ -305,12 +305,11 @@ async fn the_miner_extends_the_chain_block_after_block() {
     s.close().await;
 }
 
-/// The miner takes the daemon's hasher budget a permit per hash, in the
-/// lowest class (PR2-Q3). With one permit and one worker searching a job no
-/// hash meets, a chain `form` that begins to wait is granted the permit
-/// within one hash, and the miner holds none while the form does.
+/// The miner leaves the last permit free (PR2-Q3). Two permits, one
+/// worker, a job no hash meets: the worker holds one permit and a chain
+/// `form` takes the other at once, while that hash is still running.
 #[test]
-fn a_form_waiting_on_the_miner_is_granted_within_one_hash() {
+fn a_form_takes_the_permit_the_miner_left_free() {
     use shekyl_hash_budget::{Budget, Class};
     let _lane = MINER_LANE.blocking_lock();
     let caches = Arc::new(CacheStore::new());
@@ -324,7 +323,7 @@ fn a_form_waiting_on_the_miner_is_granted_within_one_hash() {
             s.close().await;
             mined[0].template.block.clone()
         });
-    let budget = Budget::new(NonZeroUsize::MIN);
+    let budget = Budget::new(NonZeroUsize::new(2).expect("the miner and one higher class"));
     let board = Arc::new(JobBoard::new());
     let (sink, _found) = found_blocks();
     let miner = Miner::start(
@@ -345,7 +344,6 @@ fn a_form_waiting_on_the_miner_is_granted_within_one_hash() {
         seed,
         difficulty: Difficulty::from_raw(u128::MAX),
     });
-    // The worker is hashing: it holds the one permit, a hash at a time.
     let started = Instant::now();
     while budget.held(Class::Miner) == 0 {
         assert!(
@@ -354,28 +352,17 @@ fn a_form_waiting_on_the_miner_is_granted_within_one_hash() {
         );
         std::thread::yield_now();
     }
-    // One hash's time, from the miner's own count.
-    let one = Instant::now();
-    let before = miner.status().per_thread[0].hashes;
-    while miner.status().per_thread[0].hashes == before {
-        assert!(
-            one.elapsed() < FIND_WITHIN,
-            "the miner never finished a hash"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    let hash_time = one.elapsed();
     let asked = Instant::now();
     let permit = budget.acquire(Class::Chain);
-    let waited = asked.elapsed();
     assert!(
-        waited <= hash_time * 2 + Duration::from_millis(200),
-        "granted within one hash: waited {waited:?}, a hash takes about {hash_time:?}"
+        asked.elapsed() < Duration::from_millis(500),
+        "the permit the miner left free is taken at once: {:?}",
+        asked.elapsed()
     );
     assert_eq!(
         budget.held(Class::Miner),
-        0,
-        "the miner holds nothing the form holds"
+        1,
+        "the miner keeps the permit it already holds"
     );
     drop(permit);
     miner.stop();

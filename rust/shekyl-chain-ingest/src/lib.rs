@@ -103,6 +103,10 @@ mod artifact_tests;
 /// pins today's gap; flips when G2 lands (commit 6).
 #[cfg(all(test, feature = "pipeline"))]
 mod body_pairing_tests;
+/// Where an arrival goes, and the claims it is formed under.
+/// The two RandomX seeds an arrival may hash under.
+#[cfg(feature = "pipeline")]
+mod cache_window;
 #[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
@@ -113,7 +117,7 @@ pub mod corpus;
 pub mod emission_assembly;
 #[cfg(feature = "fetch")]
 pub mod fetch;
-/// The tip follower: the miner's job per tip, the seed pinned first.
+/// The tip follower: the seed window, then the pool, then the miner's job.
 #[cfg(feature = "pipeline")]
 pub mod follower;
 #[cfg(feature = "pipeline")]
@@ -143,7 +147,9 @@ mod pool_door_tests;
 mod pool_restart_tests;
 #[cfg(all(test, feature = "pipeline"))]
 mod pool_submit_tests;
-/// Where an arrival goes, and the claims it is formed under.
+/// Seats in the arrival window.
+#[cfg(feature = "pipeline")]
+mod room;
 #[cfg(feature = "pipeline")]
 pub mod router;
 /// The RPC's store-backed facts over the scenario chain and the captured

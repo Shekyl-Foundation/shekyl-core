@@ -23,16 +23,19 @@
 //! and the connect it leads to. The claims make that safe without a lock:
 //! the seed (CEN-D3), the target (CEN-D4) and the references are each
 //! compared by equality in `validate`, so a stale claim is `Fault::Stale`,
-//! never a verdict, and an `Extend` whose parent stopped being the tip is
-//! the connector's `HeightClaim`. Both come back to the service, which
-//! places the arrival again against a new snapshot.
+//! never a verdict. A run whose snapshot no longer has it extending the
+//! tip is [`ClaimStop::Moved`]: the heights below the run are not read,
+//! and the service places the arrival again. A height change at connect
+//! is the connector's `HeightClaim`. A same-height replacement is CEN-A2
+//! there, and the service places that again too — this path only submits
+//! a block whose parent was the tip.
 //!
 //! These functions read and return owned values: the snapshot never lives
 //! across an `.await`.
 
 use shekyl_chain_rules::{
     seed_height, target_claim, AtHeight, Candidate, Corrupt, Fault, HeaderRecord, HeaderView,
-    InvalidBlock, ReferenceClaims, RuleSet, Target,
+    InvalidBlock, ReferenceClaims, RuleSet, Target, Trust,
 };
 use shekyl_chain_store::store::{
     AltCannot, AltChain, AltView, ChainStore, ReadSnapshot, StoreCannot, StoreError,
@@ -40,6 +43,7 @@ use shekyl_chain_store::store::{
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::Block;
 
+use crate::cache_window::{self, AltSpend, SeedPair};
 use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
 
@@ -140,6 +144,9 @@ pub enum ClaimStop {
     },
     /// The store could not be read.
     Store(StoreError),
+    /// This snapshot's tip is not the parent the run was placed on.
+    /// The window was not read. Place the arrival again.
+    Moved,
 }
 
 impl From<StoreError> for ClaimStop {
@@ -168,6 +175,11 @@ pub fn claim_run(
         Ok(snap) => snap,
         Err(e) => return (claims, Some(ClaimStop::Store(e))),
     };
+    match still_extends(&snap, first, run) {
+        Ok(true) => {}
+        Ok(false) => return (claims, Some(ClaimStop::Moved)),
+        Err(e) => return (claims, Some(ClaimStop::Store(e))),
+    }
     let mut ledger = TargetLedger::new();
     for (index, candidate) in run.iter().enumerate() {
         let height = BlockHeight::from_raw(first.to_raw() + index as u64);
@@ -236,32 +248,57 @@ fn claim_one(
     })
 }
 
+/// [`claim_alt`]'s answer: hash it, or refuse it before the target window
+/// and before any cache is built.
+#[derive(Clone, Debug)]
+pub(crate) enum ClaimedAlt {
+    /// Inside the band and the window. The target was read.
+    Ready(Claims),
+    /// The early gate's refusal. The target was not read.
+    Spend(AltSpend),
+}
+
 /// The claims for an alternative arrival: the seed and the target on the
 /// chain it is on, the stitched view below it. No reference claims: the
 /// cheap tier judges headers (CEN-K4), and promotion verifies the proofs
 /// under the plan's claims (`SwitchPlan::references_for`).
 ///
+/// The fork and the seed are known before the target window is read. A
+/// fork outside the band, or a seed the two cache slots do not hold, comes
+/// back as [`ClaimedAlt::Spend`] and the target is not derived.
+///
 /// # Errors
 ///
 /// [`ClaimStop`]; `Unlinked` comes back as the store's `AltCannot`, which
 /// the caller places again.
-pub fn claim_alt(
+pub(crate) fn claim_alt(
     store: &ChainStore,
     rules: ChainRules,
     candidate: &Candidate,
-) -> Result<Claims, ClaimStop> {
+    window: &SeedPair,
+    trust: &Trust,
+) -> Result<ClaimedAlt, ClaimStop> {
     let snap = store.begin_read()?;
     let chain = AltChain::build(&snap, &candidate.block.header.previous)?;
     let height = chain.candidate_height();
+    let fork = chain.fork();
     let rule_set = rules.in_force(height);
     let view = AltView::new(&snap, chain);
     let seed = match seed_height(height) {
         None => BlockHash::NULL,
         Some(at) => match view.header_at(at)? {
             AtHeight::Recorded(record) => record.hash,
-            AtHeight::AboveTip => unreachable!("the seed height sits below the block's parent"),
+            // The seed block is not on the chain this alternative can see.
+            // It is not one of the two slots. Nothing is stored or hashed.
+            AtHeight::AboveTip => {
+                return Ok(ClaimedAlt::Spend(AltSpend::OutsideWindow { height }));
+            }
         },
     };
+    let outcome = cache_window::spend(&fork, &seed, height, &rule_set, trust, window);
+    if !matches!(outcome, AltSpend::Hash) {
+        return Ok(ClaimedAlt::Spend(outcome));
+    }
     let target = match target_claim(&view, height, &rule_set) {
         Ok(Ok(target)) => target,
         Ok(Err(refused)) => return Err(ClaimStop::Refused { index: 0, refused }),
@@ -269,13 +306,13 @@ pub fn claim_alt(
         Err(Fault::View(e)) => return Err(ClaimStop::Store(e)),
         Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
     };
-    Ok(Claims {
+    Ok(ClaimedAlt::Ready(Claims {
         height,
         rule_set,
         seed,
         target,
         references: ReferenceClaims::EMPTY,
-    })
+    }))
 }
 
 /// The claims a producer makes for the block after the recorded tip, on
@@ -309,22 +346,50 @@ pub fn claim_next(
     }
 }
 
-/// The identity recorded at `height`, which the caller has bounded below
-/// the tip.
-fn recorded_hash(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<BlockHash, StoreError> {
+/// Whether `run` still extends this snapshot.
+///
+/// `first` is the connecting height and the first block names the tip.
+/// A rewind or a same-height replacement since the placement is not a
+/// window this snapshot can derive: the heights below `first` would no
+/// longer be recorded.
+fn still_extends(
+    snap: &ReadSnapshot<'_>,
+    first: BlockHeight,
+    run: &[Candidate],
+) -> Result<bool, StoreError> {
+    let tip = snap.tip()?.recorded;
+    let (connecting, parent) = match tip {
+        None => (BlockHeight::ZERO, BlockHash::NULL),
+        Some(tip) => {
+            let Some(connecting) = tip.height.checked_add(BlockCount::ONE) else {
+                return Ok(false);
+            };
+            (connecting, tip.hash)
+        }
+    };
+    let names_tip = run
+        .first()
+        .is_none_or(|candidate| candidate.block.header.previous == parent);
+    Ok(connecting == first && names_tip)
+}
+
+/// The identity recorded at `height`. Above the tip, the run no longer
+/// extends this snapshot.
+fn recorded_hash(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<BlockHash, ClaimStop> {
     match snap.block_info(height)? {
         AtHeight::Recorded(info) => Ok(info.hash),
-        AtHeight::AboveTip => unreachable!("the caller bounded the height by the tip"),
+        AtHeight::AboveTip => Err(ClaimStop::Moved),
     }
 }
 
 /// The header record at `height`, as the connector's `HeaderAt` reads it.
-fn header_record(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<HeaderRecord, StoreError> {
+/// Above the tip, the run no longer extends this snapshot.
+fn header_record(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<HeaderRecord, ClaimStop> {
     let AtHeight::Recorded(info) = snap.block_info(height)? else {
-        unreachable!("the target window sits below the run");
+        return Err(ClaimStop::Moved);
     };
     let AtHeight::Recorded(body) = snap.block(height)? else {
-        unreachable!("a recorded height has its block");
+        return Err(ClaimStop::Moved);
     };
     Ok(HeaderRecord {
         hash: info.hash,

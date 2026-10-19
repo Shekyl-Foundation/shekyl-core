@@ -182,6 +182,36 @@ impl Buckets {
         true
     }
 
+    /// Give `n` tokens back to `session` at `now`. A span that took them
+    /// and was then refused did not accept the arrivals, so the bucket is
+    /// as it was. A full bucket is the same as one never seen, and is not
+    /// stored.
+    pub fn give_back(&self, session: SessionId, n: u32, now: Duration) {
+        if n == 0 {
+            return;
+        }
+        let full = self.full();
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let credit = sessions.get(&session).map_or(full, |credit| {
+            (credit.earned + now.saturating_sub(credit.at)).min(full)
+        });
+        let restored = (credit + self.per_token * n).min(full);
+        if restored >= full {
+            sessions.remove(&session);
+        } else {
+            sessions.insert(
+                session,
+                Credit {
+                    earned: restored,
+                    at: now,
+                },
+            );
+        }
+    }
+
     /// Forget `session`: its connection closed.
     pub fn forget(&self, session: SessionId) {
         self.sessions
@@ -217,6 +247,20 @@ mod tests {
         assert!(!buckets.take(s, 1, T * 100));
         // Another session is its own bucket.
         assert!(buckets.take(SessionId(8), 2, T * 100));
+    }
+
+    #[test]
+    fn a_refused_span_gives_its_tokens_back() {
+        let buckets = Buckets::new(T);
+        let s = SessionId(7);
+        assert!(buckets.take(s, 2, Duration::ZERO));
+        assert!(!buckets.take(s, 1, Duration::ZERO));
+        buckets.give_back(s, 2, Duration::ZERO);
+        assert!(
+            buckets.take(s, 2, Duration::ZERO),
+            "the refusal refunded the span"
+        );
+        assert!(!buckets.take(s, 1, Duration::ZERO));
     }
 
     #[test]

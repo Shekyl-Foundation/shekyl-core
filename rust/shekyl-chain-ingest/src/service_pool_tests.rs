@@ -285,11 +285,11 @@ async fn an_alternative_blocks_bodies_are_supplemented_only_once_it_is_stored() 
     }
 }
 
-/// A carried body the tip moved under is judged again against the new
-/// chain, never answered as a fault (the review of #1102); any other pool
-/// fault is one.
+/// A carried body the tip moved under is parked to be judged again. A
+/// chain fault is kept, and it stops the service. A pool-file fault is
+/// kept apart from it: the file is discardable and block ingest continues.
 #[tokio::test]
-async fn a_body_the_tip_moved_under_is_judged_again_and_another_fault_is_one() {
+async fn a_moved_tip_parks_its_body_and_faults_stay_apart() {
     use shekyl_chain_store::store::{AltCannot, StoreCannot, StoreError};
     use shekyl_mempool::PoolFault;
     let (mut x, prefix) = matured("svc-pool-moved-x").await;
@@ -299,14 +299,21 @@ async fn a_body_the_tip_moved_under_is_judged_again_and_another_fault_is_one() {
         asked: shekyl_types::BlockHeight::from_raw(5),
         now: shekyl_types::BlockHeight::from_raw(6),
     };
-    let lookup = |id: &TxHash| (*id == txid).then(|| tx.clone());
-    assert_eq!(
-        super::moved_bodies(vec![(txid, moved)], lookup).expect("judged again"),
-        vec![tx.clone()]
-    );
-    let other = PoolFault::Chain(shekyl_chain_rules::Fault::View(StoreError::Cannot(
+    let parked = super::divide_pool_faults(vec![(txid, moved)], std::slice::from_ref(&tx));
+    assert_eq!(parked.parked, vec![tx.clone()]);
+    assert!(parked.chain.is_none());
+    assert!(parked.file.is_none());
+    let chain = PoolFault::Chain(shekyl_chain_rules::Fault::View(StoreError::Cannot(
         StoreCannot::Alt(AltCannot::NotHeld),
     )));
-    assert!(super::moved_bodies(vec![(txid, other)], lookup).is_err());
+    let stopped = super::divide_pool_faults(vec![(txid, chain)], std::slice::from_ref(&tx));
+    assert!(stopped.parked.is_empty());
+    assert!(stopped.chain.is_some());
+    assert!(stopped.file.is_none());
+    let file = PoolFault::Store(StoreError::Cannot(StoreCannot::Alt(AltCannot::NotHeld)));
+    let retired = super::divide_pool_faults(vec![(txid, file)], std::slice::from_ref(&tx));
+    assert!(retired.parked.is_empty());
+    assert!(retired.chain.is_none());
+    assert!(retired.file.is_some());
     x.close().await;
 }

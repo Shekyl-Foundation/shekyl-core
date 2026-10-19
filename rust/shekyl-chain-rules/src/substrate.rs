@@ -63,10 +63,24 @@ pub trait Substrate {
     fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Self::Fault>;
 
     /// `seed` is about to serve a run of blocks (CEN-D3's epoch). An
-    /// implementor that caches by seed may prepare and pin it now, off the
-    /// hot path, so the first block of the epoch does not pay the cache
-    /// fill inside [`longhash`](Self::longhash) and two live seeds of a lag
-    /// window do not evict each other. Advisory: `longhash` is correct
-    /// whether or not this was called. The default does nothing.
+    /// implementor that caches by seed prepares and pins it now, under the
+    /// caller's hasher permit, so the first block of the epoch does not pay
+    /// the cache fill inside [`longhash`](Self::longhash) and two live seeds
+    /// of a lag window do not evict each other.
+    ///
+    /// A production implementor may refuse [`longhash`](Self::longhash) for
+    /// a seed it was not asked to pin. That refusal is a fault
+    /// ([`cache_absent`](Self::cache_absent)), not a verdict, and it does
+    /// not build the cache. The default pin does nothing.
     fn pin_seed(&self, _seed: &BlockHash) {}
+
+    /// Whether `fault` is a missing cache: the seed was not pinned, so
+    /// [`longhash`](Self::longhash) refused rather than deriving one.
+    ///
+    /// The default is `false`. A wrapper forwards to the substrate it
+    /// delegates the longhash to, so a generic caller can tell a miss from
+    /// a clock fault without downcasting.
+    fn cache_absent(&self, _fault: &Self::Fault) -> bool {
+        false
+    }
 }

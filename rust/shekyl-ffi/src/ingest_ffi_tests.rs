@@ -76,7 +76,10 @@ fn blob(bytes: &[u8]) -> ShekylIngestBlob {
 /// Room is reported before sending; an unbound entry refuses; a span the
 /// door accepts is answered once per arrival, tagged with the arrival and
 /// its connection, through the bound post — here, junk the wire refuses
-/// (CEN-A6); and a span past the room is `NO_ROOM` before acceptance.
+/// (CEN-A6). Unbinding drains those replies before it returns. A span past
+/// the room is `NO_ROOM` before acceptance, and a null buffer is `INVALID`
+/// before a seat is taken. Three seats: one stays reserved, so a sync
+/// caller sees two.
 #[test]
 fn a_span_is_answered_per_arrival_through_the_bound_post() {
     let _lane = LANE
@@ -93,7 +96,7 @@ fn a_span_is_answered_per_arrival_through_the_bound_post() {
             RULES,
             Arc::new(Free),
             ServiceConfig {
-                room: std::num::NonZeroUsize::new(2).expect("two"),
+                room: std::num::NonZeroUsize::new(3).expect("three"),
             },
             Budget::of_host(),
             Follow::default(),
@@ -130,18 +133,21 @@ fn a_span_is_answered_per_arrival_through_the_bound_post() {
         SHEKYL_INGEST_NO_ROOM,
         "past the room, before acceptance"
     );
+    let mut missing = arrivals[0];
+    missing.block.ptr = std::ptr::null();
+    missing.block.len = 4;
+    assert_eq!(
+        unsafe { shekyl_ingest_offer_span(7, 1, std::ptr::from_ref(&missing), 1) },
+        SHEKYL_INGEST_INVALID,
+        "a missing buffer is refused before a seat is taken"
+    );
+    assert_eq!(shekyl_ingest_room(), 2, "the invalid span took no seat");
     assert_eq!(
         unsafe { shekyl_ingest_offer_span(7, 1, arrivals.as_ptr(), arrivals.len()) },
         SHEKYL_INGEST_ACCEPTED
     );
-    let started = std::time::Instant::now();
-    while POSTED.lock().expect("posted").len() < 2 {
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(30),
-            "no replies"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    // Unbind drains the replies already accepted, then an offer is unbound.
+    unsafe { shekyl_ingest_bind(std::ptr::null_mut(), None) };
     let mut posted = POSTED.lock().expect("posted").clone();
     posted.sort_by_key(|p| p.1);
     let a6 = u16::from(CenRow::A6.index());
@@ -152,8 +158,96 @@ fn a_span_is_answered_per_arrival_through_the_bound_post() {
             (7, 101, SHEKYL_INGEST_REFUSED, a6, Vec::new()),
         ]
     );
+    assert_eq!(
+        unsafe { shekyl_ingest_offer_span(7, 1, arrivals.as_ptr(), arrivals.len()) },
+        SHEKYL_INGEST_UNBOUND,
+        "an unbind stops acceptance"
+    );
     shekyl_ingest_session_closed(7);
     uninstall();
-    unsafe { shekyl_ingest_bind(std::ptr::null_mut(), None) };
     runtime.block_on(async { service.stop().await.expect("stops") });
+}
+
+/// The reply kinds and the admission codes are the header's constexprs.
+/// A mismatch would let C++ close a session on a harmless `Cancelled`.
+#[test]
+fn reply_codes_are_the_headers() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/shekyl/shekyl_ffi.h");
+    let header = std::fs::read_to_string(&path).expect("the ingest entry's header");
+    let mut header_codes = std::collections::BTreeMap::new();
+    for line in header.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("constexpr ") else {
+            continue;
+        };
+        let Some(eq) = rest.find('=') else {
+            continue;
+        };
+        let Some(name) = rest[..eq].split_whitespace().last() else {
+            continue;
+        };
+        if !name.starts_with("SHEKYL_INGEST_") {
+            continue;
+        }
+        let value = rest[eq + 1..].trim().trim_end_matches(';').trim();
+        let value: i64 = value.parse().unwrap_or_else(|_| panic!("code {name}"));
+        header_codes.insert(name.to_string(), value);
+    }
+    let rust_codes = [
+        (
+            "SHEKYL_INGEST_CONNECTED",
+            i64::from(SHEKYL_INGEST_CONNECTED),
+        ),
+        ("SHEKYL_INGEST_REFUSED", i64::from(SHEKYL_INGEST_REFUSED)),
+        ("SHEKYL_INGEST_UNLINKED", i64::from(SHEKYL_INGEST_UNLINKED)),
+        (
+            "SHEKYL_INGEST_ALREADY_HELD",
+            i64::from(SHEKYL_INGEST_ALREADY_HELD),
+        ),
+        ("SHEKYL_INGEST_HELD", i64::from(SHEKYL_INGEST_HELD)),
+        (
+            "SHEKYL_INGEST_BEYOND_CAP",
+            i64::from(SHEKYL_INGEST_BEYOND_CAP),
+        ),
+        ("SHEKYL_INGEST_SWITCHED", i64::from(SHEKYL_INGEST_SWITCHED)),
+        (
+            "SHEKYL_INGEST_PROMOTION_REFUSED",
+            i64::from(SHEKYL_INGEST_PROMOTION_REFUSED),
+        ),
+        (
+            "SHEKYL_INGEST_BELOW_FLOOR",
+            i64::from(SHEKYL_INGEST_BELOW_FLOOR),
+        ),
+        (
+            "SHEKYL_INGEST_MISSING_BODIES",
+            i64::from(SHEKYL_INGEST_MISSING_BODIES),
+        ),
+        (
+            "SHEKYL_INGEST_CANCELLED",
+            i64::from(SHEKYL_INGEST_CANCELLED),
+        ),
+        ("SHEKYL_INGEST_STOPPED", i64::from(SHEKYL_INGEST_STOPPED)),
+        (
+            "SHEKYL_INGEST_OUTSIDE_WINDOW",
+            i64::from(SHEKYL_INGEST_OUTSIDE_WINDOW),
+        ),
+        ("SHEKYL_INGEST_ACCEPTED", i64::from(SHEKYL_INGEST_ACCEPTED)),
+        ("SHEKYL_INGEST_NO_ROOM", i64::from(SHEKYL_INGEST_NO_ROOM)),
+        (
+            "SHEKYL_INGEST_THROTTLED",
+            i64::from(SHEKYL_INGEST_THROTTLED),
+        ),
+        ("SHEKYL_INGEST_OVERSIZE", i64::from(SHEKYL_INGEST_OVERSIZE)),
+        ("SHEKYL_INGEST_UNBOUND", i64::from(SHEKYL_INGEST_UNBOUND)),
+        ("SHEKYL_INGEST_INVALID", i64::from(SHEKYL_INGEST_INVALID)),
+    ];
+    assert_eq!(header_codes.len(), rust_codes.len(), "{header_codes:?}");
+    for (name, value) in rust_codes {
+        assert_eq!(
+            header_codes.get(name).copied(),
+            Some(value),
+            "{name} drifted from the header"
+        );
+    }
 }

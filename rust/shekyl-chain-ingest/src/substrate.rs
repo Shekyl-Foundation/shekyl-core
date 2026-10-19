@@ -19,11 +19,12 @@
 //!
 //! # Faults
 //!
-//! `compute_hash` cannot fail once the cache exists, and `lookup_or_derive`
-//! derives on a miss (a 256 MiB Argon2d fill; seconds on the provisioning
-//! floor, rule 76) rather than failing. The one thing that can fail is the
-//! clock — a system time before the Unix epoch — and it is a fault, never a
-//! timestamp of zero.
+//! `compute_hash` cannot fail once the cache exists. A miss does not derive:
+//! building a 256 MiB cache is [`Substrate::pin_seed`](shekyl_chain_rules::Substrate::pin_seed)'s
+//! work, under the caller's hasher permit, and [`longhash`](Substrate::longhash)
+//! returns [`SubstrateFault::CacheAbsent`] instead of filling one a peer
+//! chose. The clock — a system time before the Unix epoch — is the other
+//! fault, never a timestamp of zero.
 //!
 //! # Pinning the epoch (RD-F20)
 //!
@@ -65,6 +66,9 @@ pub enum SubstrateFault {
     /// The system clock reads before the Unix epoch. A timestamp cannot be
     /// made of that; the FTL rule (CEN-C1) is not asked.
     ClockBeforeEpoch,
+    /// `longhash` was asked for a seed that is not in a cache slot. The
+    /// caller pins seeds; a miss here does not fill a 256 MiB cache.
+    CacheAbsent,
 }
 
 impl core::fmt::Display for SubstrateFault {
@@ -72,6 +76,9 @@ impl core::fmt::Display for SubstrateFault {
         match self {
             Self::ClockBeforeEpoch => f.write_str(
                 "the system clock reads before the Unix epoch; no local time for the FTL rule",
+            ),
+            Self::CacheAbsent => f.write_str(
+                "the RandomX cache for this seed is not held; verification does not derive one",
             ),
         }
     }
@@ -126,24 +133,28 @@ impl Substrate for ProductionSubstrate {
 
     fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, SubstrateFault> {
         let seedhash = Seedhash::from_bytes(*seed.as_bytes());
-        // A derive is the 256 MiB fill and is timed apart from the hash
-        // (metrics module docs). The store says how it served the call:
-        // only a `Derived` outcome is a derivation — a `Waited` caller spent
-        // the leader's wall time and did none of the work (RD-F20).
-        let started = Instant::now();
-        let (cache, outcome) = self.caches.lookup_or_derive_reporting(&seedhash);
-        self.record_cache(outcome, started);
+        // Lookup only. A miss is a fault: deriving here would build a
+        // 256 MiB cache for a seed the caller did not pin, outside the
+        // hasher budget, and could evict the chain's cache.
+        let Some(cache) = self.caches.lookup(&seedhash) else {
+            return Err(SubstrateFault::CacheAbsent);
+        };
         let hash = self.metrics.timed_hash(|| compute_hash(&cache, pow_blob));
         Ok(PowHash::from_bytes(hash))
     }
 
     /// Make `seed`'s cache the canonical one, deriving it if needed
-    /// (module docs: pinning the epoch).
+    /// (module docs: pinning the epoch). The one derive this substrate
+    /// performs. The caller holds a hasher permit across it.
     fn pin_seed(&self, seed: &BlockHash) {
         let seedhash = Seedhash::from_bytes(*seed.as_bytes());
         let started = Instant::now();
         let outcome = self.caches.pin_canonical(&seedhash);
         self.record_cache(outcome, started);
+    }
+
+    fn cache_absent(&self, fault: &SubstrateFault) -> bool {
+        matches!(fault, SubstrateFault::CacheAbsent)
     }
 }
 
@@ -205,6 +216,10 @@ impl<P: Substrate> Substrate for Recalled<'_, P> {
 
     fn pin_seed(&self, seed: &BlockHash) {
         self.inner.pin_seed(seed);
+    }
+
+    fn cache_absent(&self, fault: &P::Fault) -> bool {
+        self.inner.cache_absent(fault)
     }
 }
 

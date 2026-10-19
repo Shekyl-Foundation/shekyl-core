@@ -30,6 +30,7 @@ default = ["pipeline", "fetch", "replay-cli"]
 pipeline = [
     "dep:kameo",
     "dep:tokio",
+    "dep:tracing",
     "dep:shekyl-hash-budget",
     "dep:shekyl-miner",
     "dep:shekyl-mempool",
@@ -113,6 +114,8 @@ shekyl-miner = { path = "../shekyl-miner", optional = true }
 shekyl-mempool = { path = "../shekyl-mempool", optional = true }
 kameo = { workspace = true, optional = true }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync"], optional = true }
+# A pool-file fault is logged and ingest continues: the file is discardable.
+tracing = { version = "0.1", optional = true }
 
 # fetch: the daemon RPC contract the corpus fetcher speaks.
 shekyl-rpc-client = { path = "../shekyl-rpc-client", optional = true }

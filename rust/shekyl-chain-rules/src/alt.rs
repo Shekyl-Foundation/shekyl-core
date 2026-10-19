@@ -170,6 +170,53 @@ impl Fork {
     }
 }
 
+/// Why CEN-E2 refuses an alternative, before any header is read and before
+/// any coverage is recorded.
+///
+/// [`anchor_band`] returns `None` when E2 does not refuse: no anchor at or
+/// below the recorded tip (the cap does not bind as consensus, `PDM-Q11`),
+/// or the fork sits inside the band. A caller that still declines a deep
+/// unanchored fork is making a local decision, not minting this row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnchorBand {
+    /// The fork point sits below the last anchor the recorded chain has
+    /// reached.
+    BelowAnchor {
+        /// That anchor's height.
+        anchor: BlockHeight,
+    },
+    /// An anchored chain, and the pop is past the rule set's reorg cap.
+    BeyondCap {
+        /// Recorded blocks the alternative would pop.
+        pops: BlockCount,
+        /// The cap in force.
+        cap: BlockCount,
+    },
+}
+
+/// The two bands of CEN-E2, as a pure predicate. Records nothing.
+///
+/// `None` is not "inside the cap" alone. It is "E2 does not refuse": either
+/// no anchor has been reached, or the fork is inside both bands. The row's
+/// coverage is the caller's, at the site that judged it.
+#[must_use]
+pub fn anchor_band(fork: &Fork, rule_set: &RuleSet, trust: &Trust) -> Option<AnchorBand> {
+    let anchor = trust
+        .anchors()
+        .last_at_or_below(fork.recorded_tip().height)?;
+    if fork.root().height < anchor.height {
+        return Some(AnchorBand::BelowAnchor {
+            anchor: anchor.height,
+        });
+    }
+    let pops = fork.pops();
+    let cap = rule_set.reorg_cap();
+    if pops > cap {
+        return Some(AnchorBand::BeyondCap { pops, cap });
+    }
+    None
+}
+
 /// An alternative block the cheap tier admitted: what the store's AL1
 /// records (`DRS_E5` §2.1, `AltBlockFacts`), and nothing more.
 ///

@@ -16,21 +16,26 @@
 //! - [`shekyl_ingest_room`] reports the room before the caller sends.
 //! - [`shekyl_ingest_offer_span`] takes a span from one connection and
 //!   returns at once: accepted, or a refusal before acceptance (`NoRoom`,
-//!   `Throttled`, `Oversize`), never a peer fault.
+//!   `Throttled`, `Oversize`), never a peer fault. Lengths, room and the
+//!   session bucket are judged before any block byte is copied.
 //! - Each accepted arrival gets exactly one reply, tagged with the arrival
 //!   and the connection, posted through the bound callback, which only
 //!   enqueues onto the connection's strand (the seam's shape,
-//!   `seam_ffi.rs`).
+//!   `seam_ffi.rs`). One pump, started at [`install`], owns those replies.
+//!   Unbinding drains the ones already accepted — `Stopped` included —
+//!   before the post is cleared, so a shutdown cannot leave one unanswered.
 //! - [`shekyl_ingest_session_closed`] forgets the connection's bucket.
 //!
-//! The bytes a span names are copied before the call returns: C++ owns its
-//! buffers, and nothing here keeps a pointer into them.
+//! The bytes a span names are copied before the call returns, and only
+//! after the door has reserved the span: C++ owns its buffers, and nothing
+//! here keeps a pointer into them.
 
 use std::ffi::c_void;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 use shekyl_chain_ingest::service::{
-    Arrival, ArrivalTag, Door, Origin, Refusal, Reply, SessionId, Tagged,
+    Arrival, ArrivalLengths, ArrivalTag, Door, Origin, Refusal, Reply, SessionId, Tagged, Ticket,
 };
 
 use crate::legacy_util::{slice_from_ptr, slice_from_typed_ptr};
@@ -59,8 +64,9 @@ pub struct ShekylIngestArrival {
 /// `hash` for `UNLINKED`; `rule` (the census row's index) for `REFUSED` and
 /// `PROMOTION_REFUSED`; `by` for `CANCELLED`; `height` (the depth) and `by`
 /// (the cap) for `BEYOND_CAP`; `height` (the tip) and `by` (the floor) for
-/// `BELOW_FLOOR`; `height` (the promoted tip's height) for `SWITCHED`. The
-/// rest are zero. `MISSING_BODIES` carries its indices beside the struct.
+/// `BELOW_FLOOR`; `height` (the promoted tip's height) for `SWITCHED`;
+/// `height` (the block's height) for `OUTSIDE_WINDOW`. The rest are zero.
+/// `MISSING_BODIES` carries its indices beside the struct.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ShekylIngestReply {
@@ -105,6 +111,9 @@ pub const SHEKYL_INGEST_MISSING_BODIES: u32 = 10;
 pub const SHEKYL_INGEST_CANCELLED: u32 = 11;
 /// The service stopped first.
 pub const SHEKYL_INGEST_STOPPED: u32 = 12;
+/// The block's seed is not one of the two caches this node holds. Local:
+/// nothing was stored, nothing was hashed, and the session stays open.
+pub const SHEKYL_INGEST_OUTSIDE_WINDOW: u32 = 13;
 
 /// The span was accepted: one reply per arrival follows.
 pub const SHEKYL_INGEST_ACCEPTED: i32 = 0;
@@ -145,30 +154,79 @@ struct Bound {
 
 struct Installed {
     door: Door,
-    runtime: tokio::runtime::Handle,
+}
+
+/// What the reply pump is asked to do. Tickets already queued are ahead of
+/// a [`PumpMsg::Drain`] in the channel, so the drain posts them first.
+enum PumpMsg {
+    /// An accepted arrival. The pump waits for its one reply and posts it.
+    Ticket { connection: u64, ticket: Ticket },
+    /// Finish every ticket already accepted, then clear the post if `generation` is still current.
+    Drain {
+        generation: u64,
+        done: std::sync::mpsc::SyncSender<()>,
+    },
+    /// The door was reinstalled. Finish what this pump holds and exit.
+    /// The post stays: the new pump delivers through it.
+    Stop,
+}
+
+struct Gate {
+    /// Offers enqueue only while this is set. Unbind clears it before the
+    /// drain, under this mutex and not across a wait, so an offer cannot
+    /// accept a span the drain will not see.
+    accepting: bool,
+    pump: Option<tokio::sync::mpsc::UnboundedSender<PumpMsg>>,
+    runtime: Option<tokio::runtime::Handle>,
 }
 
 static DOOR: Mutex<Option<Installed>> = Mutex::new(None);
 static POST: Mutex<Option<Bound>> = Mutex::new(None);
+/// Bumped on every bind and unbind. A drain clears the post only when the
+/// generation it captured is still the current one, so a bind that landed
+/// during the drain keeps its post.
+static POST_GENERATION: AtomicU64 = AtomicU64::new(0);
+static GATE: Mutex<Gate> = Mutex::new(Gate {
+    accepting: false,
+    pump: None,
+    runtime: None,
+});
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// Install the service's door, and the runtime its replies are awaited on:
 /// the composition root's call, at the flip. A second install replaces the
-/// first.
+/// first. The reply pump starts here, before any offer.
 pub fn install(door: Door, runtime: tokio::runtime::Handle) {
-    *DOOR
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Installed { door, runtime });
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    runtime.spawn(reply_pump(rx));
+    *lock(&DOOR) = Some(Installed { door });
+    // The post lock is not held with the gate lock: bind takes them in
+    // the other order.
+    let post_bound = lock(&POST).is_some();
+    let mut gate = lock(&GATE);
+    if let Some(previous) = gate.pump.replace(tx) {
+        let _stopped = previous.send(PumpMsg::Stop);
+    }
+    gate.runtime = Some(runtime);
+    gate.accepting = post_bound;
 }
 
-/// Remove the installed door: every offer after is `UNBOUND`.
+/// Remove the installed door: every offer after is `UNBOUND`. The pump
+/// stays until the next install, so an unbind can still drain replies the
+/// service has already accepted.
 pub fn uninstall() {
-    *DOOR
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    *lock(&DOOR) = None;
+    lock(&GATE).accepting = false;
 }
 
 /// Bind the post the replies are delivered through. A null `post` or `ctx`
-/// unbinds. Returns 0.
+/// unbinds: offers stop being accepted, replies already accepted are
+/// posted, and then the post is cleared. Returns 0.
 ///
 /// # Safety
 /// `ctx` stays valid until the next bind returns; `post` only enqueues and
@@ -182,26 +240,65 @@ pub unsafe extern "C" fn shekyl_ingest_bind(ctx: *mut c_void, post: IngestPostFn
         }),
         _ => None,
     };
-    *POST
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = bound;
+    if bound.is_some() {
+        *lock(&POST) = bound;
+        POST_GENERATION.fetch_add(1, Ordering::AcqRel);
+        let mut gate = lock(&GATE);
+        gate.accepting = gate.pump.is_some();
+        return 0;
+    }
+    let generation = POST_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    // The gate lock is not held with the post lock. Bind takes the post
+    // first; this drops the gate before it touches the post.
+    let (on_pump_runtime, pump) = {
+        let mut gate = lock(&GATE);
+        gate.accepting = false;
+        let on_pump_runtime = match (gate.runtime.clone(), tokio::runtime::Handle::try_current()) {
+            (Some(runtime), Ok(current)) => current.id() == runtime.id(),
+            _ => false,
+        };
+        let pump = gate.pump.clone();
+        (on_pump_runtime, pump)
+    };
+    let Some(pump) = pump else {
+        clear_post_if(generation);
+        return 0;
+    };
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+    // The pump posts what it already holds, then clears the post itself
+    // when this thread is the pump's runtime: waiting here would deadlock
+    // that runtime. A pump that is already gone clears the post here,
+    // or the wait below would never return.
+    if pump
+        .send(PumpMsg::Drain {
+            generation,
+            done: done_tx,
+        })
+        .is_err()
+    {
+        clear_post_if(generation);
+        return 0;
+    }
+    if !on_pump_runtime {
+        let _drained = done_rx.recv();
+    }
     0
 }
 
 /// The arrivals the service will accept now; 0 when no door is installed.
 #[no_mangle]
 pub extern "C" fn shekyl_ingest_room() -> u64 {
-    DOOR.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .map_or(0, |installed| {
-            u64::try_from(installed.door.room()).unwrap_or(u64::MAX)
-        })
+    lock(&DOOR).as_ref().map_or(0, |installed| {
+        u64::try_from(installed.door.room()).unwrap_or(u64::MAX)
+    })
 }
 
 /// Offer a span of `len` arrivals from `connection` (module docs).
 /// `solicited` is nonzero for blocks this node asked for. Returns
 /// `SHEKYL_INGEST_ACCEPTED` or a refusal code.
+///
+/// Lengths and null buffers are judged before a seat is taken, and the
+/// block bytes are copied only after the door has reserved the span.
 ///
 /// # Safety
 /// `arrivals` points to `len` readable entries, and each entry's buffers
@@ -213,13 +310,6 @@ pub unsafe extern "C" fn shekyl_ingest_offer_span(
     arrivals: *const ShekylIngestArrival,
     len: usize,
 ) -> i32 {
-    if POST
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .is_none()
-    {
-        return SHEKYL_INGEST_UNBOUND;
-    }
     let Some(entries) = (unsafe { slice_from_typed_ptr(arrivals, len) }) else {
         return SHEKYL_INGEST_INVALID;
     };
@@ -227,57 +317,153 @@ pub unsafe extern "C" fn shekyl_ingest_offer_span(
         session: SessionId(connection),
         solicited: solicited != 0,
     };
-    // Copied out of C++'s buffers now: a read here is bounded by the
-    // slices just validated, and nothing keeps a pointer past the return.
-    let span: Option<Vec<Arrival>> = entries
-        .iter()
-        .map(|entry| {
-            let block = unsafe { slice_from_ptr(entry.block.ptr, entry.block.len) }?;
-            let blobs = unsafe { slice_from_typed_ptr(entry.bodies, entry.bodies_len) }?;
-            let bodies: Option<Vec<Vec<u8>>> = blobs
-                .iter()
-                .map(|blob| unsafe { slice_from_ptr(blob.ptr, blob.len) }.map(<[u8]>::to_vec))
-                .collect();
-            Some(Arrival {
-                tag: ArrivalTag(entry.tag),
-                origin,
-                block: block.to_vec(),
-                bodies: bodies?,
-            })
-        })
-        .collect();
-    let Some(span) = span else {
+    let Some(lengths) = (unsafe { lengths_of(entries, origin) }) else {
         return SHEKYL_INGEST_INVALID;
     };
-    let installed = DOOR
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some(installed) = installed.as_ref() else {
+    if !lock(&GATE).accepting {
+        return SHEKYL_INGEST_UNBOUND;
+    }
+    let door = {
+        let installed = lock(&DOOR);
+        let Some(installed) = installed.as_ref() else {
+            return SHEKYL_INGEST_UNBOUND;
+        };
+        installed.door.clone()
+    };
+    let reserved = match door.reserve(&lengths) {
+        Ok(reserved) => reserved,
+        Err(Refusal::NoRoom) => return SHEKYL_INGEST_NO_ROOM,
+        Err(Refusal::Throttled) => return SHEKYL_INGEST_THROTTLED,
+        Err(Refusal::Oversize) => return SHEKYL_INGEST_OVERSIZE,
+    };
+    // Copied out of C++'s buffers now: the reservation already holds the
+    // seats, and nothing keeps a pointer past the return. A buffer that
+    // fails this read gives the reservation back.
+    let Some(span) = (unsafe { copy_span(entries, origin) }) else {
+        drop(reserved);
+        return SHEKYL_INGEST_INVALID;
+    };
+    let gate = lock(&GATE);
+    if !gate.accepting {
+        drop(reserved);
+        return SHEKYL_INGEST_UNBOUND;
+    }
+    let Some(pump) = gate.pump.clone() else {
+        drop(reserved);
         return SHEKYL_INGEST_UNBOUND;
     };
-    match installed.door.offer_span(span) {
-        Ok(tickets) => {
-            for ticket in tickets {
-                installed.runtime.spawn(async move {
-                    post_reply(connection, ticket.reply().await);
-                });
-            }
-            SHEKYL_INGEST_ACCEPTED
+    for ticket in reserved.commit(span) {
+        let _queued = pump.send(PumpMsg::Ticket { connection, ticket });
+    }
+    SHEKYL_INGEST_ACCEPTED
+}
+
+/// `ptr` can be read for `len` bytes. A zero length names no bytes, so a
+/// null pointer there is not a fault. Nothing is copied.
+fn readable(ptr: *const u8, len: usize) -> bool {
+    len == 0 || (!ptr.is_null() && isize::try_from(len).is_ok())
+}
+
+/// The lengths `entries` name, or `None` when a buffer due is missing.
+/// The block bytes are not read.
+///
+/// # Safety
+/// `entries` is a slice the caller already formed from a readable pointer.
+unsafe fn lengths_of(
+    entries: &[ShekylIngestArrival],
+    origin: Origin,
+) -> Option<Vec<ArrivalLengths>> {
+    let mut lengths = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if !readable(entry.block.ptr, entry.block.len) {
+            return None;
         }
-        Err(Refusal::NoRoom) => SHEKYL_INGEST_NO_ROOM,
-        Err(Refusal::Throttled) => SHEKYL_INGEST_THROTTLED,
-        Err(Refusal::Oversize) => SHEKYL_INGEST_OVERSIZE,
+        let blobs = unsafe { slice_from_typed_ptr(entry.bodies, entry.bodies_len) }?;
+        let mut body_lens = Vec::with_capacity(blobs.len());
+        for blob in blobs {
+            if !readable(blob.ptr, blob.len) {
+                return None;
+            }
+            body_lens.push(blob.len);
+        }
+        lengths.push(ArrivalLengths {
+            tag: ArrivalTag(entry.tag),
+            origin,
+            block_len: entry.block.len,
+            body_lens,
+        });
+    }
+    Some(lengths)
+}
+
+/// Copy `entries` into owned arrivals.
+///
+/// # Safety
+/// Each buffer was accepted by [`lengths_of`]: a non-zero length has a
+/// non-null pointer and fits `isize`.
+unsafe fn copy_span(entries: &[ShekylIngestArrival], origin: Origin) -> Option<Vec<Arrival>> {
+    let mut span = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let block = unsafe { slice_from_ptr(entry.block.ptr, entry.block.len) }?.to_vec();
+        let blobs = unsafe { slice_from_typed_ptr(entry.bodies, entry.bodies_len) }?;
+        let mut bodies = Vec::with_capacity(blobs.len());
+        for blob in blobs {
+            bodies.push(unsafe { slice_from_ptr(blob.ptr, blob.len) }?.to_vec());
+        }
+        span.push(Arrival {
+            tag: ArrivalTag(entry.tag),
+            origin,
+            block,
+            bodies,
+        });
+    }
+    Some(span)
+}
+
+/// Post every accepted reply. A drain finishes the tickets queued ahead of
+/// it and then clears the post, when that unbind is still the latest one.
+async fn reply_pump(mut rx: tokio::sync::mpsc::UnboundedReceiver<PumpMsg>) {
+    let mut inflight = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    None | Some(PumpMsg::Stop) => {
+                        while inflight.join_next().await.is_some() {}
+                        break;
+                    }
+                    Some(PumpMsg::Ticket { connection, ticket }) => {
+                        inflight.spawn(async move {
+                            post_reply(connection, ticket.reply().await);
+                        });
+                    }
+                    Some(PumpMsg::Drain { generation, done }) => {
+                        while inflight.join_next().await.is_some() {}
+                        clear_post_if(generation);
+                        let _posted = done.send(());
+                    }
+                }
+            }
+            joined = inflight.join_next(), if !inflight.is_empty() => {
+                // A panicked reply task must not take the pump with it.
+                // The arrival's slot still answered on the service side.
+                let _finished = joined;
+            }
+        }
+    }
+}
+
+/// Clear the post when `generation` is still the unbind that asked.
+fn clear_post_if(generation: u64) {
+    if POST_GENERATION.load(Ordering::Acquire) == generation {
+        *lock(&POST) = None;
     }
 }
 
 /// `connection` closed: its bucket is forgotten.
 #[no_mangle]
 pub extern "C" fn shekyl_ingest_session_closed(connection: u64) {
-    if let Some(installed) = DOOR
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-    {
+    if let Some(installed) = lock(&DOOR).as_ref() {
         installed.door.session_closed(SessionId(connection));
     }
 }
@@ -349,6 +535,10 @@ fn encode(connection: u64, tagged: Tagged) -> (ShekylIngestReply, Vec<u64>) {
             out.by = by.0;
         }
         Reply::Stopped => out.kind = SHEKYL_INGEST_STOPPED,
+        Reply::OutsideWindow { height } => {
+            out.kind = SHEKYL_INGEST_OUTSIDE_WINDOW;
+            out.height = height.to_raw();
+        }
     }
     (out, indices)
 }
@@ -356,9 +546,7 @@ fn encode(connection: u64, tagged: Tagged) -> (ShekylIngestReply, Vec<u64>) {
 /// Post one reply through the bound callback. Unbound, it has no reader.
 fn post_reply(connection: u64, tagged: Tagged) {
     let (reply, indices) = encode(connection, tagged);
-    let bound = POST
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let bound = lock(&POST);
     if let Some(bound) = bound.as_ref() {
         // SAFETY: the bind's contract: `ctx` is live while bound, and the
         // post only enqueues.

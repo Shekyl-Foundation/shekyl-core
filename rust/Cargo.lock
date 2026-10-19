@@ -3983,6 +3983,7 @@ dependencies = [
  "shekyl-wire",
  "thiserror",
  "tokio",
+ "tracing",
  "zeroize",
 ]
 

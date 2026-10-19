@@ -4383,10 +4383,12 @@ void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_diff
 /// (DRS_X_STORE_FLIP.md DX-Q2 item 2). Built and tested; the store flip
 /// routes the handler's block arrivals here, and nothing calls it before.
 /// `shekyl_ingest_bind` installs the post, which enqueues each reply onto
-/// the connection's strand and returns. Ask `shekyl_ingest_room` before
-/// sending; `shekyl_ingest_offer_span` copies what it is given and returns
-/// at once. Each accepted arrival gets exactly one reply, tagged with the
-/// arrival and the connection.
+/// the connection's strand and returns. A null `post` or `ctx` unbinds and
+/// drains replies already accepted before the post is cleared. Ask
+/// `shekyl_ingest_room` before sending; `shekyl_ingest_offer_span` judges
+/// lengths, room and the session bucket, then copies what it is given and
+/// returns at once. Each accepted arrival gets exactly one reply, tagged
+/// with the arrival and the connection.
 constexpr std::uint32_t SHEKYL_INGEST_CONNECTED = 1;
 constexpr std::uint32_t SHEKYL_INGEST_REFUSED = 2;
 constexpr std::uint32_t SHEKYL_INGEST_UNLINKED = 3;
@@ -4399,6 +4401,10 @@ constexpr std::uint32_t SHEKYL_INGEST_BELOW_FLOOR = 9;
 constexpr std::uint32_t SHEKYL_INGEST_MISSING_BODIES = 10;
 constexpr std::uint32_t SHEKYL_INGEST_CANCELLED = 11;
 constexpr std::uint32_t SHEKYL_INGEST_STOPPED = 12;
+/// The block's seed is not one of the two caches this node holds. Local:
+/// nothing was stored, nothing was hashed, and the session stays open.
+/// `height` is the block's height.
+constexpr std::uint32_t SHEKYL_INGEST_OUTSIDE_WINDOW = 13;
 /// `shekyl_ingest_offer_span`'s results. Every refusal is before
 /// acceptance and never a peer fault; THROTTLED lets the handler close the
 /// session, never score it.

@@ -65,28 +65,26 @@ pub enum PlanStop<F> {
     Substrate(F),
 }
 
-/// What a caller wraps around each block's `form`: the hasher budget's
-/// permit for the service, nothing for the scenario. The guard it returns
-/// is held for the life of the `form`.
-pub type PermitGate<'a> = &'a (dyn Fn() -> Box<dyn Send> + Sync);
-
 /// Form `plan`'s blocks under `substrate`, across at most `threads` threads
 /// (module docs). The first refusal in plan order is the result; every
-/// thread is joined.
+/// thread is joined. `permit` is taken for the life of each block's `form`:
+/// the hasher budget's permit for the service, nothing for the scenario.
 ///
 /// # Errors
 ///
 /// [`PlanStop`].
-pub fn form_plan<S>(
+pub fn form_plan<S, G, R>(
     plan: &SwitchPlan,
     rules: ChainRules,
     substrate: &S,
     threads: usize,
-    permit: PermitGate<'_>,
+    permit: &G,
 ) -> Result<FormedPlan, PlanStop<S::Fault>>
 where
     S: Substrate + Sync,
     S::Fault: Send,
+    G: Fn() -> R + Sync,
+    R: Send,
 {
     let mut work: Vec<(Candidate, PlannedBlock, ReferenceClaims)> = Vec::new();
     if plan.verdict != ForkChoiceVerdict::ForcedSwitch {
@@ -150,16 +148,18 @@ impl<F> Stop<F> {
 }
 
 /// `form` every item, in order, across `threads` contiguous chunks.
-fn form_all<S>(
+fn form_all<S, G, R>(
     work: Vec<(Candidate, PlannedBlock, ReferenceClaims)>,
     rules: ChainRules,
     substrate: &S,
     threads: usize,
-    permit: PermitGate<'_>,
+    permit: &G,
 ) -> Result<Vec<StructurallyValid>, Stop<S::Fault>>
 where
     S: Substrate + Sync,
     S::Fault: Send,
+    G: Fn() -> R + Sync,
+    R: Send,
 {
     let chunk = work.len().div_ceil(threads).max(1);
     let mut chunks = Vec::new();

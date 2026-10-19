@@ -23,12 +23,12 @@
 //! an eviction, a discarded pool file — costs a transaction its relay,
 //! never the chain its switch (the review of #1102, B1).
 
-use shekyl_chain_rules::{AdmissionPolicy, ChainView, RuleSet};
+use shekyl_chain_rules::{AdmissionPolicy, ChainView, InvalidBlock, RuleSet, StatelessPass};
 use shekyl_chain_store::codec::AltBodies;
 use shekyl_types::{TxHash, UnixSeconds};
 use shekyl_wire::Transaction;
 
-use crate::pool::{Admission, Arrival, Pool, PoolFault};
+use crate::pool::{Admission, Arrival, Pool, PoolFault, Step1};
 
 /// What [`Pool::returned`] and [`Pool::supplement`] did: an answer per
 /// transaction offered, in order, and the first fault, if one stopped a
@@ -102,7 +102,48 @@ impl Pool {
         };
         for tx in transactions {
             let txid = tx.txid_parts().hash;
-            match self.admit_from(tx, None, arrival, now, chain, rule_set, policy) {
+            match self.admit_from(
+                tx,
+                Step1::Judge(None),
+                arrival,
+                now,
+                chain,
+                rule_set,
+                policy,
+            ) {
+                Ok(admission) => offered.admissions.push((txid, admission)),
+                Err(fault) => offered.faults.push((txid, fault)),
+            }
+        }
+        offered
+    }
+
+    /// [`Self::returned`] with step 1 already judged, outside the pool
+    /// lock. The lock then covers the duplicate check, the file, and the
+    /// view-bound half of the door — not the signatures and proofs.
+    pub fn offer_prepared<'id, V: ChainView<'id>>(
+        &mut self,
+        offers: Vec<(Transaction, Result<StatelessPass, InvalidBlock>)>,
+        now: UnixSeconds,
+        chain: &V,
+        rule_set: &RuleSet,
+        policy: &AdmissionPolicy,
+    ) -> Offers<V::Fault> {
+        let mut offered = Offers {
+            admissions: Vec::with_capacity(offers.len()),
+            faults: Vec::new(),
+        };
+        for (tx, step1) in offers {
+            let txid = tx.txid_parts().hash;
+            match self.admit_from(
+                tx,
+                Step1::Prepared(step1),
+                Arrival::Carried,
+                now,
+                chain,
+                rule_set,
+                policy,
+            ) {
                 Ok(admission) => offered.admissions.push((txid, admission)),
                 Err(fault) => offered.faults.push((txid, fault)),
             }

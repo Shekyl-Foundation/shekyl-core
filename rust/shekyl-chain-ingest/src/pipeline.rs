@@ -968,7 +968,9 @@ where
             return Ok(());
         }
         self.targets.forget_below_window_of(height);
-        if seed != BlockHash::NULL && self.pinned != Some(seed) {
+        // The null seed is genesis's cache, a real 256 MiB fill. Skipping
+        // it here would make the lookup-only longhash fault on block 0.
+        if self.pinned != Some(seed) {
             let substrate = Arc::clone(&self.substrate);
             tokio::task::spawn_blocking(move || substrate.pin_seed(&seed)).await?;
             self.pinned = Some(seed);

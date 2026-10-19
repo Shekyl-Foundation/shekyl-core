@@ -600,6 +600,13 @@ impl Message<Apply> for Connector {
                 // source is wrong about the chain, and that is a driver
                 // defect surfaced before anything is judged under the
                 // wrong schedule (#852 review).
+                // The parent's hash is CEN-A2's operand inside `validate`,
+                // not a second copy of this height check. A source that
+                // names the connecting height and a different parent is a
+                // wrong block: a verdict, and the writer stays up. The
+                // live service only applies a block whose parent was the
+                // tip, so it places that A2 again rather than cancelling
+                // the span.
                 let (height, _) = connecting(view.tip()?)?;
                 if claimed != height {
                     return Err(RunFault::HeightClaim {

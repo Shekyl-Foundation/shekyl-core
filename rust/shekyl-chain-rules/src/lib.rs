@@ -157,7 +157,7 @@ mod view;
 pub mod harness;
 pub mod relay_floor;
 
-pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
+pub use alt::{alt_against, anchor_band, AltChainView, AltValid, AnchorBand, Fork, InvertedFork};
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
     closed_and_final, shard_close, shard_close_height, Accrual, ArchivalDelta, ClosedUniverse,

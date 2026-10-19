@@ -134,10 +134,12 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
                 break;
             }
             preimage[at..at + 4].copy_from_slice(&nonce.to_le_bytes());
-            // One permit per hash, in the lowest class, and given back
-            // after: a higher class waiting is granted the permit this hash
-            // frees, so the miner never holds one it waits for.
-            let permit = shared.budget.acquire(Class::Miner);
+            // One permit per hash, and never the last: a hash at nice 19
+            // can run for about a minute, and the chain must not wait that
+            // out. Stop unblocks the wait; an in-progress hash finishes.
+            let Some(permit) = shared.budget.acquire_unless(Class::Miner, &shared.stop) else {
+                break;
+            };
             let pow = compute_hash(&cache, &preimage);
             drop(permit);
             rate.record(shared.second());
@@ -238,7 +240,11 @@ impl Miner {
     }
 
     fn halt(&mut self) {
+        // The board flag first, then the budget: a worker blocked in
+        // `acquire_unless` reads the flag only after `wake`, and a worker
+        // between hashes sees the flag in `next_after`.
         self.shared.board.stop(&self.shared.stop);
+        self.shared.budget.wake();
         for worker in &mut self.workers {
             if worker.join().is_err() {
                 tracing::error!("a miner thread panicked");
