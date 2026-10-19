@@ -1729,9 +1729,17 @@ epoch below `epoch(h) − LAG`, and each read takes that floor
 | Settling | `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied` | the slash pass of the epoch, in epoch `E + k` | `k` = `SLASH_GRACE_EPOCHS` = 1 | the pass reads its own epoch |
 | Pricing | `archival_r_market` | CEN-J15, at the slash watermark as of the parent | `k + 1` = 2 | the first block of an epoch, whose parent ran the pass of `epoch − 1 − k` |
 
-`archival_drawable_digest`'s reader, the pass's compare against a
-re-walk (`SO-D10g`), is ruled and not built in Rust. Its horizon is that
-reader's.
+`archival_drawable_digest`'s last reader is the pass's compare against
+the re-walk (`SO-D10g`, built in increment 2, §16.10), in the epoch the
+pass settles.
+
+The claimable family's floor is the claim window's own floor,
+`claim_window_floor` (`EpochFamily::oldest_read`). CEN-J25's window,
+`emission_epoch_facts` and the failure window's walk all take the
+claimable `EpochFloor`, so the window, the reads and the walk's stop are
+one value. The retention crate's `settlement_retention_floor`, the walk's
+ruled bound, is held equal to it at every height by
+`epoch_floor_tests`.
 
 **Where the batch retires, and why one epoch lower.** After the boundary
 of `B` connects, a reorg can pop back to the undo floor,
@@ -1757,7 +1765,7 @@ is the refusal at open above.
 
 **A read below a floor is refused (SI-32,
 `StoreInvariant::EpochReadBelowFloor`).** Each read of these tables (A6–A8,
-A12, A14–A17, A19, A22 takes its family's floor from the caller, as A2
+A12, A14–A17, A19, A22) takes its family's floor from the caller, as A2
 takes the slash log's (SI-26). The store compares and does not source the
 floor, and refuses an epoch below it rather than answer "absent": absent
 means never written, and a retired row was written. Every reader asks
@@ -1834,7 +1842,13 @@ bundle bytes.
 ### 17.8 Open
 
 - **#1102's `emission_epoch_facts`** is routed through the same gather:
-  the claimable floor, the frozen set, and the claim window. An expired
-  epoch is not read (its rows may be retired); it answers with its close
-  height and no frozen facts. A settled epoch without its set is
-  `Corrupt::CompleteTreesAbsent` (SI-31), as on the claim path.
+  the claimable floor, the frozen set, and the claim window. Each claimed
+  epoch answers with one `EmissionEpochStanding`: `Expired` (below the
+  claimable floor, with the window's floor; nothing is read, since its rows
+  may be retired), `Unsettled` (the rows it has), or `Settled` (the rows and
+  the snapshot). The submit shim carries the same state into its facts
+  (`EpochClaimStanding`), and the verifier refuses an expired epoch as
+  `EpochClaimExpired` at that floor before E7, so a submission is never
+  refused as a missing budget row and never becomes a `ShimFault`. A
+  settled epoch without its set is `Corrupt::CompleteTreesAbsent` (SI-31),
+  as on the claim path.
