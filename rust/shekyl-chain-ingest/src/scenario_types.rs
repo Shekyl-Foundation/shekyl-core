@@ -71,6 +71,12 @@ impl<P: Substrate> Substrate for Clocked<P> {
     fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, P::Fault> {
         self.pow.longhash(pow_blob, seed)
     }
+
+    /// The pin is the longhash's: a clock over a production substrate pins
+    /// its cache store, or a pin through the clock would pin nothing.
+    fn pin_seed(&self, seed: &BlockHash) {
+        self.pow.pin_seed(seed);
+    }
 }
 
 /// The harness longhash as a substrate: every target satisfied, no cache.

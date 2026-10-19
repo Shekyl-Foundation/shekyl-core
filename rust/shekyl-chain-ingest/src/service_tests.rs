@@ -130,7 +130,14 @@ pub(crate) fn service_on(
     let path = tmp(name);
     let store: ChainStore = open_store(&path);
     (
-        Service::start(Arc::new(store), RULES, substrate, config, budget),
+        Service::start(
+            Arc::new(store),
+            RULES,
+            substrate,
+            config,
+            budget,
+            super::Follow::default(),
+        ),
         path,
     )
 }
@@ -497,6 +504,7 @@ fn service_with_clock(
             substrate,
             config,
             Budget::of_host(),
+            super::Follow::default(),
             clock,
         ),
         path,
@@ -684,6 +692,224 @@ async fn an_arrival_forms_in_the_class_its_origin_names() {
         drop(held);
         let reply = ticket.reply().await;
         assert!(matches!(reply.reply, Reply::Connected { .. }), "{reply:?}");
+    }
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
+/// `TipChanged` (DX-Q2 item 5) is published once after each committed
+/// connect, pop and switch, and never before the commit: a watcher that
+/// reads the store on every publication finds the published tip already
+/// recorded there. A connect the validator refuses publishes nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn tip_changed_is_published_once_per_commit_and_never_before_it() {
+    use crate::connector::TipChanged;
+    let mut y = Scenario::open("service-tip-y");
+    let mut z = Scenario::open("service-tip-z");
+    let prefix = y.mine(4).await;
+    z.mine(4).await;
+    y.idle();
+    let ours = y.mine(2).await;
+    let theirs = z.mine(2).await;
+    let (service, path) = service(
+        "service-tip",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    let mut tips = service.watch_tip().await.expect("watch");
+    assert_eq!(
+        *tips.borrow_and_update(),
+        TipChanged { seq: 0, tip: None },
+        "once at start"
+    );
+
+    // The watcher: every publication's tip is already the store's record.
+    let store = Arc::clone(&service.shared.store);
+    let mut watched = service.watch_tip().await.expect("watch");
+    let watcher = tokio::spawn(async move {
+        let mut seen = 0;
+        while watched.changed().await.is_ok() {
+            let published = *watched.borrow_and_update();
+            let Some(tip) = published.tip else { continue };
+            let snap = store.begin_read().expect("read");
+            assert_eq!(
+                snap.height_of(&tip.top_id).expect("height"),
+                Some(BlockHeight::from_raw(tip.height - 1)),
+                "publication {} is ahead of the store",
+                published.seq
+            );
+            seen += 1;
+        }
+        seen
+    });
+
+    let mut expect_seq = 0;
+    let mut next = |tips: &mut tokio::sync::watch::Receiver<TipChanged>, top: BlockHash| {
+        expect_seq += 1;
+        assert!(tips.has_changed().expect("open"), "a publication");
+        let now = *tips.borrow_and_update();
+        assert_eq!(now.seq, expect_seq, "once per commit");
+        assert_eq!(now.tip.map(|t| t.top_id), Some(top));
+    };
+    for mined in &prefix {
+        assert!(matches!(
+            door.offer(arrival(mined.height.to_raw(), 1, mined))
+                .expect("room")
+                .reply()
+                .await
+                .reply,
+            Reply::Connected { .. }
+        ));
+        next(&mut tips, mined.hash);
+    }
+    door.offer(arrival(10, 1, &ours[0]))
+        .expect("room")
+        .reply()
+        .await;
+    next(&mut tips, ours[0].hash);
+    // A block `validate` refuses publishes nothing: a timestamp below the
+    // median of the blocks before it (CEN-C2), judged in the connect's
+    // write, so the `Apply` runs and commits no block.
+    let mut bad = ours[1].template.block.clone();
+    bad.header.timestamp = 0;
+    let refused = door
+        .offer(Arrival {
+            block: bad.serialize(),
+            ..arrival(11, 1, &ours[1])
+        })
+        .expect("room")
+        .reply()
+        .await;
+    assert!(
+        matches!(refused.reply, Reply::Refused(r) if r.rule == shekyl_chain_rules::CenRow::C2),
+        "{refused:?}"
+    );
+    assert!(!tips.has_changed().expect("open"), "nothing committed");
+    // An alternative block held publishes nothing; the one that makes the
+    // heavier branch the chain is a switch, published once.
+    let held = door
+        .offer(arrival(12, 2, &theirs[0]))
+        .expect("room")
+        .reply()
+        .await;
+    assert!(matches!(held.reply, Reply::Held { .. }), "{held:?}");
+    assert!(
+        !tips.has_changed().expect("open"),
+        "holding an alternative commits no tip"
+    );
+    let switched = door
+        .offer(arrival(13, 2, &theirs[1]))
+        .expect("room")
+        .reply()
+        .await;
+    assert!(
+        matches!(switched.reply, Reply::Switched { .. }),
+        "{switched:?}"
+    );
+    next(&mut tips, theirs[1].hash);
+    // A pop.
+    service
+        .connector()
+        .ask(Rewind {
+            to: theirs[0].height,
+        })
+        .await
+        .expect("rewind");
+    next(&mut tips, theirs[0].hash);
+    service.stop().await.expect("stops");
+    assert_eq!(
+        watcher.await.expect("joins"),
+        expect_seq,
+        "the watcher saw every one"
+    );
+    for s in [y, z] {
+        s.close().await;
+    }
+    cleanup(&path);
+}
+
+/// The tip follower posts the miner's job for the block after the tip
+/// while the node is synced, and withdraws it while the node is behind
+/// (DX-Q2 item 5); each new tip posts a new job.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
+    use crate::follower::{MinerFeed, TemplateSource};
+    use shekyl_miner::JobBoard;
+    /// A source that posts the block a driver mined at the job's height.
+    struct Mined(Vec<crate::scenario::Mined>);
+    impl TemplateSource for Mined {
+        fn template(
+            &self,
+            facts: &crate::connector::ChainFacts,
+        ) -> Option<(shekyl_wire::Block, Vec<shekyl_wire::Transaction>)> {
+            let at = usize::try_from(facts.connecting.to_raw()).ok()?;
+            let mined = self.0.get(at)?;
+            Some((
+                mined.template.block.clone(),
+                mined.template.transactions.clone(),
+            ))
+        }
+    }
+    let mut y = Scenario::open("service-follow-y");
+    let blocks = y.mine(3).await;
+    let path = tmp("service-follow");
+    let board = Arc::new(JobBoard::new());
+    let (synced_tx, synced) = tokio::sync::watch::channel(false);
+    let (_sink, found) = shekyl_miner::found_blocks();
+    let service = Service::start(
+        Arc::new(open_store(&path)),
+        RULES,
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+        Budget::of_host(),
+        super::Follow {
+            miner: Some(MinerFeed {
+                board: Arc::clone(&board),
+                source: Arc::new(Mined(blocks.clone())),
+                synced,
+                found,
+            }),
+        },
+    );
+    let mut followed = service.followed();
+    let until_followed = |followed: &mut tokio::sync::watch::Receiver<u64>, seq: u64| {
+        let mut followed = followed.clone();
+        async move {
+            followed.wait_for(|at| *at >= seq).await.expect("following");
+        }
+    };
+    until_followed(&mut followed, 0).await;
+    assert!(board.posted().is_none(), "behind: nothing to mine");
+    synced_tx.send_replace(true);
+    let started = std::time::Instant::now();
+    while board.posted().is_none() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "no job posted"
+        );
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        board.posted().expect("posted").1.height,
+        BlockHeight::from_raw(0)
+    );
+    offer_all(&service.door(), 1, &blocks[..1]).await;
+    until_followed(&mut followed, 1).await;
+    assert_eq!(
+        board.posted().expect("posted").1.height,
+        BlockHeight::from_raw(1),
+        "the next tip's job"
+    );
+    synced_tx.send_replace(false);
+    let started = std::time::Instant::now();
+    while board.posted().is_some() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "not withdrawn"
+        );
+        tokio::task::yield_now().await;
     }
     service.stop().await.expect("stops");
     y.close().await;

@@ -65,8 +65,9 @@ use tokio::task::JoinSet;
 use crate::admission::{ArrivalBound, Buckets};
 use crate::connector::{
     Apply, Connector, ConnectorArgs, ObserveTarget, OfferAlt, Offered, PopBeyondReorgCap,
-    RefusePromotion, Reorganize, RunFault, Switched,
+    RefusePromotion, Reorganize, RunFault, Switched, WatchTip,
 };
+use crate::follower::MinerFeed;
 use crate::plan_form::{form_plan, PlanStop};
 use crate::router::{claim_alt, claim_run, place, ClaimStop, Claims, Placed};
 use crate::schedule::ChainRules;
@@ -334,8 +335,8 @@ pub enum ServiceFault<F> {
     },
 }
 
-/// What every span task shares.
-struct Shared<S: Substrate> {
+/// What every span task, and the tip follower, shares.
+pub(crate) struct Shared<S: Substrate> {
     store: Arc<ChainStore>,
     rules: ChainRules,
     substrate: Arc<S>,
@@ -348,6 +349,8 @@ struct Shared<S: Substrate> {
     fault: Mutex<Option<ServiceFault<S::Fault>>>,
     /// The seed last pinned on the substrate.
     pinned: Mutex<Option<BlockHash>>,
+    /// The last `TipChanged` publication the tip follower acted on.
+    followed: tokio::sync::watch::Sender<u64>,
 }
 
 impl<S: Substrate> Shared<S>
@@ -356,6 +359,41 @@ where
 {
     fn stopping(&self) -> bool {
         *self.stop.borrow()
+    }
+
+    /// A receiver that reads `true` once the service is stopping.
+    pub(crate) fn stop_signal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.stop.subscribe()
+    }
+
+    /// The tip follower acted on publication `seq`.
+    pub(crate) fn followed(&self, seq: u64) {
+        self.followed.send_replace(seq);
+    }
+
+    /// The tip follower pinned `seed`: the next `form` under it pins
+    /// nothing again.
+    pub(crate) fn pinned_now(&self, seed: BlockHash) {
+        *self
+            .pinned
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(seed);
+    }
+
+    pub(crate) const fn connector(&self) -> &ActorRef<Connector> {
+        &self.connector
+    }
+
+    pub(crate) const fn store(&self) -> &Arc<ChainStore> {
+        &self.store
+    }
+
+    pub(crate) const fn rules(&self) -> ChainRules {
+        self.rules
+    }
+
+    pub(crate) const fn substrate(&self) -> &Arc<S> {
+        &self.substrate
     }
 
     /// Record `fault` if it is the first, and stop.
@@ -522,6 +560,15 @@ impl Door {
     }
 }
 
+/// What the service's tip follower feeds, beside the store
+/// (`follower` module docs). Each part is optional: a service with
+/// neither still publishes the tip.
+#[derive(Default)]
+pub struct Follow {
+    /// The miner's board, template source, sync state and found sink.
+    pub miner: Option<MinerFeed>,
+}
+
 /// The running service (module docs).
 pub struct Service<S: Substrate>
 where
@@ -530,6 +577,7 @@ where
     door: Door,
     shared: Arc<Shared<S>>,
     task: tokio::task::JoinHandle<()>,
+    follower: Option<tokio::task::JoinHandle<()>>,
     connector_task: tokio::task::JoinHandle<
         Result<(Connector, kameo::error::ActorStopReason), kameo::error::PanicError>,
     >,
@@ -549,6 +597,7 @@ where
         substrate: Arc<S>,
         config: ServiceConfig,
         budget: Budget,
+        follow: Follow,
     ) -> Self {
         let started = std::time::Instant::now();
         Self::start_with_clock(
@@ -557,6 +606,7 @@ where
             substrate,
             config,
             budget,
+            follow,
             Arc::new(move || started.elapsed()),
         )
     }
@@ -570,6 +620,7 @@ where
         substrate: Arc<S>,
         config: ServiceConfig,
         budget: Budget,
+        follow: Follow,
         clock: Clock,
     ) -> Self {
         let admission = Arc::new(Admission {
@@ -593,6 +644,7 @@ where
             stop: tokio::sync::watch::Sender::new(false),
             fault: Mutex::new(None),
             pinned: Mutex::new(None),
+            followed: tokio::sync::watch::Sender::new(0),
         });
         let (spans, mut incoming) = mpsc::unbounded_channel::<Vec<Accepted>>();
         let door = Door {
@@ -627,12 +679,46 @@ where
             }
             while spans.join_next().await.is_some() {}
         });
+        let follower = follow.miner.map(|feed| {
+            let shared = Arc::clone(&shared);
+            let door = door.clone();
+            tokio::spawn(async move {
+                let Ok(tips) = shared.connector.ask(WatchTip).await else {
+                    return;
+                };
+                crate::follower::follow(shared, door, tips, feed).await;
+            })
+        });
         Self {
             door,
             shared,
             task,
+            follower,
             connector_task,
         }
+    }
+
+    /// A receiver of `TipChanged` (`connector` module docs).
+    ///
+    /// # Errors
+    ///
+    /// The connector is gone.
+    pub async fn watch_tip(
+        &self,
+    ) -> Result<tokio::sync::watch::Receiver<crate::connector::TipChanged>, ServiceFault<S::Fault>>
+    {
+        self.shared
+            .connector
+            .ask(WatchTip)
+            .await
+            .map_err(|_| ServiceFault::Mailbox)
+    }
+
+    /// The last `TipChanged` publication the tip follower acted on: what a
+    /// caller waits on to know the pool and the miner's job are the tip's.
+    #[must_use]
+    pub fn followed(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.shared.followed.subscribe()
     }
 
     /// The door.
@@ -658,6 +744,9 @@ where
         self.door.closed.store(true, Ordering::Release);
         self.shared.stop.send_replace(true);
         let _joined = self.task.await;
+        if let Some(follower) = self.follower {
+            let _joined = follower.await;
+        }
         let _already_stopped = self.shared.connector.stop_gracefully().await.is_err();
         self.shared.connector.wait_for_shutdown().await;
         let _actor_and_reason = self.connector_task.await;

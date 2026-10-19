@@ -441,3 +441,149 @@ fn the_miners_rate_per_worker() {
         miner.stop();
     }
 }
+
+/// The tip follower's template source in tests (`follower` module docs):
+/// the scenario's template over the harness miner, stamped from the
+/// service's own clock, one tick past the chain's median so CEN-C2 holds.
+struct ScenarioSource {
+    clock: Arc<crate::scenario::Clocked<ProductionSubstrate>>,
+    miner: MinerKeys,
+    counter: std::sync::atomic::AtomicU64,
+}
+
+impl crate::follower::TemplateSource for ScenarioSource {
+    fn template(
+        &self,
+        facts: &crate::connector::ChainFacts,
+    ) -> Option<(shekyl_wire::Block, Vec<shekyl_wire::Transaction>)> {
+        let mut now = self.clock.tick();
+        if let Some(median) = facts.median_timestamp {
+            while now <= median {
+                now = self.clock.tick();
+            }
+        }
+        let counter = self
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        let template = crate::scenario::build_template(
+            RULES,
+            &shekyl_economics::EconomicParams::default(),
+            &self.miner,
+            counter,
+            facts,
+            now,
+            &[],
+        )
+        .ok()?;
+        Some((template.block, template.transactions))
+    }
+}
+
+/// The miner across a seed epoch (DX-Q2 item 5): the tip follower pins
+/// `seed(tip + 1)` before it posts the job, so the miner, which hashes only
+/// under a held cache, mines the first block of the new epoch. The first
+/// epoch boundary is height 1: genesis is hashed under the null seed, and
+/// every block from 1 under genesis's hash, which nothing else pins. The
+/// block the miner finds enters through the service's door as a local
+/// arrival and connects.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_block() {
+    use crate::follower::MinerFeed;
+    use crate::service::{Arrival, ArrivalTag, Follow, Origin, Service, ServiceConfig};
+    let _lane = MINER_LANE.lock().await;
+    let caches = Arc::new(CacheStore::new());
+    let clock = Arc::new(crate::scenario::Clocked::new(ProductionSubstrate::new(
+        Arc::clone(&caches),
+        Arc::new(Metrics::new()),
+    )));
+    // Genesis, built by a driver over the free longhash: block 0 is priced
+    // at one whatever the fixed difficulty, so any hash meets it.
+    let mut y = Scenario::open_under("miner-epoch-y", crate::scenario::FreeHash, RULES);
+    let genesis = y.mine(1).await;
+    let path = crate::test_support::tmp("miner-epoch");
+    let store = crate::test_support::open_store_under(
+        &path,
+        &RULES.in_force(shekyl_types::BlockHeight::from_raw(0)),
+        shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+    );
+    let budget = shekyl_hash_budget::Budget::of_host();
+    let board = Arc::new(JobBoard::new());
+    let (sink, found) = found_blocks();
+    let (_synced_tx, synced) = tokio::sync::watch::channel(true);
+    let recipient = MinerWallet::harness().recipient();
+    let source = ScenarioSource {
+        clock: Arc::clone(&clock),
+        miner: MinerKeys {
+            spend_public: recipient.spend_public,
+            x25519_pk: recipient.x25519_pk,
+            ml_kem_ek: recipient.ml_kem_ek.clone(),
+        },
+        counter: std::sync::atomic::AtomicU64::new(1),
+    };
+    let service = Service::start(
+        Arc::new(store),
+        RULES,
+        Arc::clone(&clock),
+        ServiceConfig::default(),
+        budget.clone(),
+        Follow {
+            miner: Some(MinerFeed {
+                board: Arc::clone(&board),
+                source: Arc::new(source),
+                synced,
+                found,
+            }),
+        },
+    );
+    let miner = Miner::start(
+        &MinerConfig {
+            address: MiningAddress::decode(&harness_address(), Network::Mainnet)
+                .expect("the harness address"),
+            threads: NonZeroUsize::new(2).expect("two"),
+        },
+        Arc::clone(&board),
+        Arc::clone(&caches),
+        budget,
+        sink,
+    )
+    .expect("the workers start");
+    let mut tips = service.watch_tip().await.expect("watch");
+    let connected = service
+        .door()
+        .offer(Arrival {
+            tag: ArrivalTag(0),
+            origin: Origin::Local,
+            block: genesis[0].template.block.serialize(),
+            bodies: Vec::new(),
+        })
+        .expect("room")
+        .reply()
+        .await;
+    assert!(
+        matches!(connected.reply, crate::service::Reply::Connected { .. }),
+        "{connected:?}"
+    );
+    let started = Instant::now();
+    loop {
+        let tip = *tips.borrow_and_update();
+        if tip.tip.is_some_and(|t| t.height >= 2) {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(120),
+            "block 1 was never mined"
+        );
+        let _waited: Result<_, tokio::time::error::Elapsed> =
+            tokio::time::timeout(Duration::from_secs(5), tips.changed()).await;
+    }
+    assert!(
+        caches
+            .lookup(&Seedhash::from_bytes(*genesis[0].hash.as_bytes()))
+            .is_some(),
+        "the new epoch's seed is held"
+    );
+    miner.stop();
+    service.stop().await.expect("stops");
+    y.close().await;
+    crate::test_support::cleanup(&path);
+}

@@ -672,55 +672,77 @@ where
         now: Timestamp,
         listed: &[Transaction],
     ) -> Result<Template, TemplateError> {
-        // Written straight into the zeroizing cell: no bare copy of the
-        // scalar's bytes exists on this stack after the context drops.
-        let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-        tx_key_secret[..8].copy_from_slice(&self.next_tx_secret.to_le_bytes());
-        // A commitment per template, from the same counter, so two
-        // templates never share one. Nothing opens it: the driver holds no
-        // witness key or seed yet, so its blocks issue no draw. The driver
-        // that reveals a seed commits to one it can open (`SO-D12`
-        // increment 3).
-        let mut commitment = *shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT.as_bytes();
-        commitment[..8].copy_from_slice(&self.next_tx_secret.to_le_bytes());
+        let counter = self.next_tx_secret;
         self.next_tx_secret += 1;
-        let rule_set: RuleSet = self.rules.in_force(facts.connecting);
-        build(&TemplateContext {
-            height: facts.connecting,
-            previous: facts.previous,
-            curve_tree_root: facts.curve_tree_root,
-            // The driver mints no attestation records (CEN-I20 admits no
-            // 0x0B field on the coinbase), so every template commits the
-            // empty set's root — the arm CEN-B4 judges a witness-less block
-            // against (slice 8 row 10).
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
-            major_version: rule_set.header_major_version(),
+        build_template(
+            self.rules,
+            &self.params,
+            &self.miner,
+            counter,
+            facts,
             now,
-            median_timestamp: facts.median_timestamp,
-            unlock_window: rule_set.mined_money_unlock_window(),
-            emission: EmissionOperands {
-                already_generated_coins: facts.parent_coins_generated,
-                total_burned: facts.total_burned,
-                // CEN-G6b: the effective median the validator will judge
-                // this block's weight against, read on the same view.
-                median_weight: facts.medians.effective_median.to_raw(),
-                tx_volume: facts.tx_volume,
-                // CEN-F17's `n`, as the validator reads it: the shards the
-                // parent chain has closed, read on the same view by the
-                // validator's own definition. (Zero until a scenario chain
-                // issues `T` ids; it was a literal zero until wave B.)
-                closed_shards: facts.closed_shards,
-            },
-            params: &self.params,
-            miner: &self.miner,
-            tx_key_secret,
-            extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
-            draw_commitment: shekyl_wire::tx_extra::DrawCommitment::from_bytes(commitment),
             listed,
-        })
+        )
     }
+}
+
+/// The scenario's template for `facts`, listing `listed`, at clock `now`:
+/// the production builder over the harness miner, with the coinbase secret
+/// and the draw commitment taken from `counter`, so two templates never
+/// share either. Nothing opens the commitment: the driver holds no witness
+/// key or seed, so its blocks issue no draw (`SO-D12` increment 3 is the
+/// driver that reveals one). The scenario's own blocks and the tip
+/// follower's test template source both build through it.
+pub(crate) fn build_template(
+    rules: ChainRules,
+    params: &EconomicParams,
+    miner: &MinerKeys,
+    counter: u64,
+    facts: &ChainFacts,
+    now: Timestamp,
+    listed: &[Transaction],
+) -> Result<Template, TemplateError> {
+    // Written straight into the zeroizing cell: no bare copy of the
+    // scalar's bytes exists on this stack after the context drops.
+    let mut tx_key_secret = Zeroizing::new([0u8; 32]);
+    tx_key_secret[..8].copy_from_slice(&counter.to_le_bytes());
+    let mut commitment = *shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT.as_bytes();
+    commitment[..8].copy_from_slice(&counter.to_le_bytes());
+    let rule_set: RuleSet = rules.in_force(facts.connecting);
+    build(&TemplateContext {
+        height: facts.connecting,
+        previous: facts.previous,
+        curve_tree_root: facts.curve_tree_root,
+        // The driver mints no attestation records (CEN-I20 admits no
+        // 0x0B field on the coinbase), so every template commits the
+        // empty set's root — the arm CEN-B4 judges a witness-less block
+        // against (slice 8 row 10).
+        attestation_root: AttestationRoot::from_bytes(
+            shekyl_archival_retention::empty_attestation_root(),
+        ),
+        major_version: rule_set.header_major_version(),
+        now,
+        median_timestamp: facts.median_timestamp,
+        unlock_window: rule_set.mined_money_unlock_window(),
+        emission: EmissionOperands {
+            already_generated_coins: facts.parent_coins_generated,
+            total_burned: facts.total_burned,
+            // CEN-G6b: the effective median the validator will judge
+            // this block's weight against, read on the same view.
+            median_weight: facts.medians.effective_median.to_raw(),
+            tx_volume: facts.tx_volume,
+            // CEN-F17's `n`, as the validator reads it: the shards the
+            // parent chain has closed, read on the same view by the
+            // validator's own definition.
+            closed_shards: facts.closed_shards,
+        },
+        params,
+        miner,
+        tx_key_secret,
+        extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
+        draw_commitment: shekyl_wire::tx_extra::DrawCommitment::from_bytes(commitment),
+        listed,
+    })
 }
 
 /// The reply error's handler arm, or a panic on a transport failure — the

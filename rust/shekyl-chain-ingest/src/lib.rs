@@ -113,6 +113,9 @@ pub mod corpus;
 pub mod emission_assembly;
 #[cfg(feature = "fetch")]
 pub mod fetch;
+/// The tip follower: the miner's job per tip, the seed pinned first.
+#[cfg(feature = "pipeline")]
+pub mod follower;
 #[cfg(feature = "pipeline")]
 pub mod grader;
 pub mod metrics;
@@ -206,10 +209,11 @@ mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    AltBlocksHeld, Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject,
-    Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock, PlannedDemotion,
-    PlannedPromotion, PopBeyondReorgCap, RefusePromotion, Reorganize, Rewind, Rewound, RunEnd,
-    RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts,
+    AltBlocksHeld, Applied, Apply, ChainFacts, ChainTip, Connector, ConnectorArgs, Digest, HashAt,
+    Inject, Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock,
+    PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, RefusePromotion, Reorganize, Rewind,
+    Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts,
+    TipChanged, WatchTip,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]

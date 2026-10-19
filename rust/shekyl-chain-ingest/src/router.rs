@@ -278,6 +278,37 @@ pub fn claim_alt(
     })
 }
 
+/// The claims a producer makes for the block after the recorded tip, on
+/// one snapshot: its height, the seed (CEN-D3) and the target (CEN-D4) —
+/// what the miner's template producer pins and hands the miner.
+///
+/// # Errors
+///
+/// [`ClaimStop`].
+pub fn claim_next(
+    store: &ChainStore,
+    rules: ChainRules,
+) -> Result<(BlockHeight, BlockHash, Target), ClaimStop> {
+    let snap = store.begin_read()?;
+    let view = shekyl_chain_store::store::SnapshotView::new(&snap);
+    let connecting = shekyl_chain_rules::Tip::connecting_height(view.tip()?.as_ref());
+    let rule_set = rules.in_force(connecting);
+    let seed = match seed_height(connecting) {
+        None => BlockHash::NULL,
+        Some(at) => recorded_hash(&snap, at)?,
+    };
+    match target_claim(&view, connecting, &rule_set) {
+        Ok(Ok(target)) => Ok((connecting, seed, target)),
+        Ok(Err(refused)) => Err(ClaimStop::Refused { index: 0, refused }),
+        Err(Fault::Corrupt(corrupt)) => Err(ClaimStop::Corrupt {
+            height: connecting,
+            corrupt,
+        }),
+        Err(Fault::View(e)) => Err(ClaimStop::Store(e)),
+        Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
+    }
+}
+
 /// The identity recorded at `height`, which the caller has bounded below
 /// the tip.
 fn recorded_hash(snap: &ReadSnapshot<'_>, height: BlockHeight) -> Result<BlockHash, StoreError> {

@@ -423,8 +423,13 @@ impl Message<Reorganize> for Connector {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let (rules, trust) = (self.rules, self.trust);
-        self.writer
-            .with_store(|store| switch(store, rules, trust, msg))
+        let switched = self
+            .writer
+            .with_store(|store| switch(store, rules, trust, msg))?;
+        if matches!(switched, Switched::Done(_)) {
+            self.publish_tip();
+        }
+        Ok(switched)
     }
 }
 

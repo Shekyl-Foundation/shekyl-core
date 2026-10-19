@@ -25,7 +25,7 @@ license.workspace = true
 # so `cargo test -p shekyl-chain-ingest` is the full crate.
 [features]
 default = ["pipeline", "fetch", "replay-cli"]
-pipeline = ["dep:kameo", "dep:tokio", "dep:shekyl-hash-budget"]
+pipeline = ["dep:kameo", "dep:tokio", "dep:shekyl-hash-budget", "dep:shekyl-miner"]
 fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
 replay-cli = [
     "pipeline",
@@ -96,6 +96,9 @@ serde_json = { workspace = true }
 # pipeline: the daemon's one hasher budget (PR2-Q3), which the ingest
 # service's form workers take permits from.
 shekyl-hash-budget = { path = "../shekyl-hash-budget", optional = true }
+# pipeline: the miner's job board and found-block sink, which the ingest
+# service's tip follower feeds and receives from (DX-Q2 item 5, DX-Q4).
+shekyl-miner = { path = "../shekyl-miner", optional = true }
 kameo = { workspace = true, optional = true }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync"], optional = true }
 
@@ -119,9 +122,6 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
-# The Rust miner loop (DRS-X PR 3), driven over the scenario chain with the
-# production template builder and connector (`miner_tests.rs`).
-shekyl-miner = { path = "../shekyl-miner" }
 # Its workers' ledger rows, counted by the same tests.
 shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 shekyl-thread-priority = { path = "../shekyl-thread-priority" }
