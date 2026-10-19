@@ -47,9 +47,10 @@ The grammar governs every identifier a person types or a script depends on:
 - command-line flags of every shipped binary;
 - config-file keys;
 - command words of `shekyl-cli` (and of the daemon console until it moves into `shekyl-cli`);
-- enumeration keywords, unit spellings, and REJECTED names.
+- enumeration keywords, unit spellings, and REJECTED names;
+- RPC method, parameter and reply-field names on the daemon's wire ([`RPC_WIRE.md`](RPC_WIRE.md) RW-Q1, RW-Q10; the census is Part C).
 
-Out of scope: RPC method names (a wire contract owned by the RPC lane) and log category names (owned by `shekyl-logging`). Either can be brought in by ruling.
+Out of scope: log category names (owned by `shekyl-logging`); they can be brought in by ruling.
 
 ---
 

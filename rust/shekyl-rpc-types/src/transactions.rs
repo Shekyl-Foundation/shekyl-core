@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 //! The transaction read set — the RK-4c slice of the daemon RPC KV cutover
-//! (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.1).
+//! (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.1).
 //!
 //! The single Rust definitions of what `COMMAND_RPC_GET_TRANSACTIONS` and
 //! `COMMAND_RPC_IS_KEY_IMAGE_SPENT` carried in C++. The conventions are

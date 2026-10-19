@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! RK-1 parity against the C++ oracle (`docs/design/DAEMON_RPC_KV_CUTOVER.md`
+//! RK-1 parity against the C++ oracle (`docs/completed/DAEMON_RPC_KV_CUTOVER.md`
 //! §3.5, RK-D4).
 //!
 //! `vectors/rpc/*_v1.json` are epee's `store_t_to_json` output over the C++

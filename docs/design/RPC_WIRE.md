@@ -1,6 +1,6 @@
-# RPC wire grammar (RW) — Round 0
+# RPC wire — the daemon RPC's contract (RW)
 
-**Status:** RULED (Rick) — RW-Q2…RW-Q7 ruled 2026-10-17; RW-Q1, RW-Q8, RW-Q9 and RW-Q10 ruled 2026-10-18. Each question carries its ruling in its own line. The name census (RW-Q1, RW-Q6, RW-Q10) is `INPUT_GRAMMAR.md` Part C. Family `RW-` (`RW-Q`, `RW-F`), registered in `IMPLEMENTATION_INDEX.md`.
+**Status:** LIVING CONTRACT — the daemon RPC wire's contract of record, last verified 2026-10-18 at `2470176c1`. RW-Q2…RW-Q7 ruled 2026-10-17; RW-Q1, RW-Q8, RW-Q9 and RW-Q10 ruled 2026-10-18 (Rick); each question carries its ruling in its own line. It carries the KV cutover's decisions still in force, with their IDs (*Carried decisions*). The name census (RW-Q1, RW-Q6, RW-Q10) is `INPUT_GRAMMAR.md` Part C. `get_info`'s wire stays in [`DAEMON_RPC_KV_GET_INFO.md`](DAEMON_RPC_KV_GET_INFO.md) until this document absorbs it. Family `RW-` (`RW-Q`, `RW-F`), registered in `IMPLEMENTATION_INDEX.md`.
 **Origin:** the daemon RPC KV lane's retirement, ruled by Rick 2026-10-17:
 1. Retire the KV lane as a migration program; restructure what nobody else owns.
 2. RPC method names join the input-grammar glossary (`INPUT_GRAMMAR.md` §1 "brought in by ruling").
@@ -112,7 +112,7 @@
   - Dispatch, the grant check, the generated docs and every client's call are built from it.
   - A gate checks that every served method is a row and every row is served (the IG-9 pattern).
 
-  It closes RK-D6 and the dual-list row, gives RT-W10 its grant table as data, and makes the rename a one-table edit.
+  It carries RK-D6 (restricted-mode policy single-sourced in Rust: the table's grant column is the policy), closes the FOLLOWUPS dual-list row, gives RT-W10 its grant table as data, and makes the rename a one-table edit.
 
 ## RW-Q8 — Sequencing — RULED 2026-10-18
 
@@ -143,18 +143,14 @@
 - **RW-F2 — a REST alias the alias count leaves out.** `/getblocks_by_height.bin` (`server.rs:273`) answers beside `/get_blocks_by_height.bin`; RW-Q1's fourteen are JSON-RPC spellings.
 - **RW-F3 — the counts, measured.** At `0be5ead54`, `git grep -n 'pub status:' rust/shekyl-rpc-types rust/shekyl-daemon-rpc` finds 20 fields, and `git grep -c skip_serializing_if` over the same two crates finds 61 sites.
 
-## Brief 2, after RW is ruled (one consolidated PR)
+## Carried decisions
 
-- `DAEMON_RPC_KV_CUTOVER.md` moves to `docs/completed/`, banner `RETIRED`, citing its SHA.
-- `docs/design/RPC_WIRE.md` becomes the living contract. It carries:
-  - RK-D1, RK-D7, RK-D10, the per-lock-domain rule, RK-D23 and RK-D25, keeping their IDs;
-  - the RW rulings;
-  - RK-D6, which goes to RW-Q7 and RT-W10.
-- `INPUT_GRAMMAR.md` §1 and rule 83's scope line bring method names in.
-- `RPC_CHANNEL.md` changes:
-  - §6.2's REST arm retires;
-  - §13 gains RT-W15 (R8, `shekyl-cli` serves the console);
-  - RT-W12 adds `shekyl-cli`.
-- `DAEMON_RPC_KV_GET_INFO.md` stays the `get_info` contract until RPC_WIRE absorbs it.
-- The FOLLOWUPS owners are re-pointed: amounts, `get_miner_data`, the witness sidecar, the claim-source tip hash, the serde defaults, and the dual-list row.
-- The index rows are updated, and the 40 files citing the KV doc are re-pointed to wherever each cited decision now lives.
+The KV cutover is retired (record: [`DAEMON_RPC_KV_CUTOVER.md`](../completed/DAEMON_RPC_KV_CUTOVER.md)). These of its decisions stay in force on the wire, with their IDs.
+
+- **RK-D1 — Rust owns the wire types, once.** `shekyl-rpc-types` is the single definition of every daemon method's request and reply, consumed by `shekyl-daemon-rpc` (the server), `shekyl-rpc-client` (the wallet), `shekyl-cli` and the GUI. A client's own reply types are a duplicate: delete them, never synchronize them. `shekyl-cli`'s private HTTP client and its reply types go with R8 (`RPC_CHANNEL.md` RT-W15). One definition is the only one that cannot drift.
+- **RK-D6 — restricted-mode policy is single-sourced in Rust.** Carried by RW-Q7's method table, whose grant column is the policy, and by RT-W10's grant table, which reads it.
+- **RK-D7 — store-agnostic handlers.** Each family's facts arrive through a trait (`ChainFacts`, `PoolFacts`, `PeerFacts`, …), with the FFI shim as today's only implementation. When the Rust store lands, a second implementation reads it directly and the shim is deleted; handlers and tests do not change.
+- **RK-D10 — a hash on this wire is `HashHex`.** 32 bytes, 64 lowercase hex characters: one wire-level type that validates the hex once, in the deserializer. It wraps raw bytes, not a domain newtype, because one block header carries hashes of four kinds; consumers name the kind at their edge (rule 18). Where a field's absent form is `""` (`block_header.pow_hash`), the type is `Option<HashHex>` with an explicit `""`-as-absent serde until RW-Q4's three states replace it.
+- **RK-D23 — `0` is a value; no answer is `null`.** In Rust an absence is `Option`; on the wire it is `null`. With grants, a field the caller may not see is absent (RW-Q4's three states). A refused computation is a fault, not an absence: it is an error (RW-Q3).
+- **RK-D25 — the version read is the one permanent part of the wire.** Frozen across every shape change, `CORE_RPC_VERSION` 4.0 included: the reply's key is `version`, and its value is the JSON integer `(major << 16) | minor`. RW-Q6 extends the freeze to the method's name (`version`; `get_version` until the rename) and its empty params. A client reads this one field through one function in `shekyl-rpc-types` before it decodes anything else, the only lenient reader of a daemon reply in the tree, because the check that diagnoses version skew has to survive the skew. A test pins that `{"version": N}` alone reads through the function.
+- **The per-lock-domain rule.** A reply that reads more than one lock domain (the chain and the pool) reads each under its own lock in turn, and never holds one while taking the other: that is the AB half of an AB-BA deadlock, since `tx_memory_pool::check_for_key_images` takes the pool lock and then the chain's. The race between the passes is named in the method's contract, not closed with a nested lock. The rule is per lock-domain, not per reply.

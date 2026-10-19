@@ -1,5 +1,5 @@
 ---
-description: The input grammar (IG-1…IG-15) — every identifier a person types or a script depends on, in every shipped binary (command-line flags, config-file keys, shekyl-cli command words, keywords, units, REJECTED names). Apply when adding, renaming, or deleting any option, key, command word or keyword, when writing a refusal a user reads, and when reviewing a name table. The glossary tree and the name tables live in docs/design/INPUT_GRAMMAR.md.
+description: The input grammar (IG-1…IG-15) — every identifier a person types or a script depends on, in every shipped binary (command-line flags, config-file keys, shekyl-cli command words, keywords, units, REJECTED names, and RPC method, parameter and reply-field names). Apply when adding, renaming, or deleting any option, key, command word or keyword, when writing a refusal a user reads, and when reviewing a name table. The glossary tree and the name tables live in docs/design/INPUT_GRAMMAR.md.
 alwaysApply: true
 ---
 
@@ -19,9 +19,10 @@ this rule holds the rules only.
 Every identifier a person types or a script depends on: command-line
 flags of every shipped binary, config-file keys, command words of
 `shekyl-cli` (and of the daemon console until it moves into
-`shekyl-cli`), enumeration keywords, unit spellings, and REJECTED names.
-Out of scope: RPC method names (the RPC lane's wire contract) and log
-category names (`shekyl-logging`'s).
+`shekyl-cli`), enumeration keywords, unit spellings, REJECTED names, and
+RPC method, parameter and reply-field names on the daemon's wire
+(`docs/design/RPC_WIRE.md` RW-Q1, RW-Q10). Out of scope: log category
+names (`shekyl-logging`'s).
 
 ## The rules
 

@@ -83,8 +83,10 @@ DESIGN_DIR = os.path.join(ROOT, "docs", "design")
 # row closed with the field it described deleted (DRS-E5 a4, CEN-K8); 307
 # on 2026-10-12 at the merge of those two lanes, the list's length; 305
 # on 2026-10-13 when the fee-and-weight owner (dev) and the F-7 owner
-# (this lane) landed together, the list's length.
-GRANDFATHER_CEILING = 305
+# (this lane) landed together, the list's length; 297 on 2026-10-18 when
+# the claim-source, serde-default and dual-list rows took RPC_WIRE.md as
+# owner (the KV doc's retirement), the list's length.
+GRANDFATHER_CEILING = 297
 # How far the ceiling may sit above the list before the gate demands it be
 # lowered. Small enough that a burn-down is locked in within a few rows.
 GRANDFATHER_SLACK = 5

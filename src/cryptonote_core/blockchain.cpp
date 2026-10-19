@@ -853,7 +853,7 @@ difficulty_type Blockchain::get_difficulty_for_next_block()
     // chain snapshot under the chain lock, RK-D20's pattern for get_info,
     // with a value-shaped test that a reply never pairs one tip's prev_id
     // with another tip's difficulty or median; the median's data race
-    // closes with it (docs/design/DAEMON_RPC_KV_CUTOVER.md, the RK-7 row;
+    // closes with it (docs/completed/DAEMON_RPC_KV_CUTOVER.md, the RK-7 row;
     // docs/FOLLOWUPS.md). Not changed here (rule 20).
     if (top_hash == m_difficulty_for_next_block_top_hash)
       return m_difficulty_for_next_block;

@@ -27,7 +27,7 @@
 // THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // The RK-2 facts shim's real logic, against a controlled chain
-// (docs/design/DAEMON_RPC_KV_CUTOVER.md §3.2).
+// (docs/completed/DAEMON_RPC_KV_CUTOVER.md §3.2).
 //
 // `shekyl_rpc_block_hash_at` unwraps a handle and delegates to
 // `daemon_rpc_facts::block_hash_at(Blockchain&, ...)`, the same split
