@@ -58,6 +58,7 @@ use super::connect_fixtures::{
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
+use shekyl_chain_rules::EpochFloor;
 
 /// One judgement, projected to what both views must agree on. The two
 /// views' fault types differ (`StoreError` vs `Infallible`), so a view fault
@@ -866,12 +867,12 @@ impl ArchivalReads {
             last_served: view.last_served_epoch(&persona, shard)?,
             served: view.served_shards(&persona)?,
             passes: view.pass_count(&persona, shard, epoch)?,
-            r_market: view.r_market(shard, epoch)?,
-            sigma_work: view.sigma_work(epoch)?,
-            budget: view.budget(epoch)?,
+            r_market: view.r_market(shard, epoch, EpochFloor::NONE)?,
+            sigma_work: view.sigma_work(epoch, EpochFloor::NONE)?,
+            budget: view.budget(epoch, EpochFloor::NONE)?,
             watermark: view.last_settled_slash_epoch()?,
             records: view.bond_records()?,
-            slash_applied: view.slash_applied(&persona, shard, epoch)?,
+            slash_applied: view.slash_applied(&persona, shard, epoch, EpochFloor::NONE)?,
             accruing: view.budget_accruing(epoch)?,
         })
     }

@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_economics::FULL_REWARD_ZONE;
-use shekyl_types::archival::{RMarket, SigmaWorkMilli};
+use shekyl_types::archival::{CompleteTreeSet, RMarket, SigmaWorkMilli};
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, KeyImage,
     LongTermWeight, SettlementEpoch, ShardId, TxHash,
@@ -147,11 +147,16 @@ pub struct MockChain {
     /// denominator, per epoch ([`with_gather`](Self::with_gather)). Empty
     /// unless a fixture settles an epoch.
     sigma_works: BTreeMap<SettlementEpoch, SigmaWorkMilli>,
+    /// Planted frozen complete-tree sets, beside `Σwork`
+    /// ([`with_complete_trees`](Self::with_complete_trees)). A key
+    /// [`with_gather`](Self::with_gather) wrote and nobody replaced is the
+    /// empty set. An epoch with no entry reads `None`.
+    complete_trees: BTreeMap<SettlementEpoch, CompleteTreeSet>,
     /// The slash watermark: the last epoch whose slash pass has run. A
     /// planted price or work total is a row that pass wrote, so planting
-    /// either raises this to its epoch. With the prices, budgets and work
-    /// totals, the archival reads this chain plants; every other archival
-    /// read answers *no bonds*.
+    /// either raises this to its epoch. With the prices, budgets, work
+    /// totals and complete-tree sets, the archival reads this chain plants;
+    /// every other archival read answers *no bonds*.
     slash_watermark: Option<SettlementEpoch>,
 }
 
@@ -169,6 +174,7 @@ impl Default for MockChain {
             r_market: BTreeMap::new(),
             budgets: BTreeMap::new(),
             sigma_works: BTreeMap::new(),
+            complete_trees: BTreeMap::new(),
             slash_watermark: None,
         }
     }
@@ -336,7 +342,22 @@ impl MockChain {
     #[must_use]
     pub fn with_gather(mut self, epoch: SettlementEpoch, sigma_work: SigmaWorkMilli) -> Self {
         self.sigma_works.insert(epoch, sigma_work);
+        // The pass writes the set beside Σwork. An empty set is that
+        // value; it does not replace one [`with_complete_trees`](Self::with_complete_trees)
+        // already planted. A missing entry would be
+        // `Corrupt::CompleteTreesAbsent` (SI-31), not an empty market.
+        self.complete_trees.entry(epoch).or_default();
         self.settled_through(epoch)
+    }
+
+    /// Plant `epoch`'s frozen complete-tree set — the personas the slash
+    /// pass excluded from that epoch's market (`SO-D12h`). Replaces a set
+    /// already planted, including the empty one [`with_gather`](Self::with_gather)
+    /// writes. An epoch with no entry reads `None`.
+    #[must_use]
+    pub fn with_complete_trees(mut self, epoch: SettlementEpoch, set: CompleteTreeSet) -> Self {
+        self.complete_trees.insert(epoch, set);
+        self
     }
 
     /// Raise the slash watermark to at least `epoch`: the slash pass has
@@ -577,15 +598,16 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     // The planted reads are the market price (`MockChain::with_r_market`,
     // which says why: CEN-J15's accept over a closed shard has no driven
     // witness, a shard being `SHARD_LENGTH` of real proof bytes), the
-    // frozen budget and the work total (`MockChain::with_close`,
-    // `with_gather`: CEN-J25's refusal needs an epoch CEN-J23 admits, and
-    // J23's a closed epoch not yet settled), and the slash watermark the
-    // price is read at.
+    // frozen budget, the work total and the complete-tree set beside it
+    // (`MockChain::with_close`, `with_gather`, `with_complete_trees`:
+    // CEN-J25's refusal needs an epoch CEN-J23 admits, and J23's a closed
+    // epoch not yet settled), and the slash watermark the price is read at.
     crate::archival_reads!(
         empty,
         r_market from chain.r_market,
         sigma_work from chain.sigma_works,
         budget from chain.budgets,
+        complete_trees from chain.complete_trees,
         slash_watermark from chain.slash_watermark
     );
 }

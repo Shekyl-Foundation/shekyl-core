@@ -40,8 +40,8 @@ use shekyl_types::{BlockHash, PCanonicalId, TxHash};
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{
-    AccrualFault, CellFault, DigestFault, DrawableFault, EdgeFault, LeafCountFault, LeafDensity,
-    SettlementFault, SlashFault, StoreInvariant, UndoFault,
+    AccrualFault, CellFault, DigestFault, DrawableFault, EdgeFault, FrozenFault, LeafCountFault,
+    LeafDensity, SettlementFault, SlashFault, StoreInvariant, UndoFault,
 };
 
 /// Why a store operation failed, by class.

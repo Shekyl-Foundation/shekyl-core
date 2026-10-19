@@ -316,7 +316,20 @@ use super::{Canonical, CodecError};
 ///   `bond_record.snap` and `drawable_digest.snap` are unchanged, and
 ///   `tables.snap` gains the row. Rebuild from the block corpus, as at
 ///   every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(28);
+/// - `29` — a settled epoch's market membership is frozen at its pass
+///   (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`).
+///   `archival_complete_trees` (`u64 → complete_tree_set`: a `u32` count
+///   and the persona ids, strictly increasing) is born Rust-only, appended
+///   at ordinal 45, written by the slash pass beside `archival_sigma_work`
+///   for every settled epoch. A `28` file lacks the table, and a claim on
+///   one of its settled epochs would find `Σwork` without the set (SI-31),
+///   so the bump refuses it at open; `complete_tree_set.snap` is new. The
+///   per-epoch retirement of the same change moves no row's bytes, and the
+///   Release journal's horizon moves from the slash log's floor to one
+///   above `h_open` of the settling family's oldest kept epoch, which
+///   moves no row's bytes either. Rebuild from the block corpus, as at
+///   every bump.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(29);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -373,10 +386,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(28));
-        assert_eq!(SCHEMA_VERSION.encode(), [28, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(29));
+        assert_eq!(SCHEMA_VERSION.encode(), [29, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[28, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[29, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

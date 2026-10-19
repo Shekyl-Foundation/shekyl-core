@@ -13,7 +13,8 @@
 //! the engine decides. Zero verdict logic lives behind this trait.
 
 use shekyl_archival_retention::{
-    BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan, ShardClose,
+    BadInterval, HoldingsDescriptor, HoldingsKind, HoldingsKindScan, LastServedScan,
+    SettlementSchedule, ShardClose,
 };
 use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
 
@@ -423,8 +424,15 @@ pub struct EmissionFacts {
     /// conflict classification).
     pub bond: Option<EmissionBondFacts>,
     /// E7: one frozen as-of-`E` snapshot per claimed epoch, claim order
-    /// (alignment is re-checked by `emission_vin_verify_claims`).
+    /// (alignment is re-checked by the claims battery).
     pub snapshots: Vec<EmissionEpochSnapshotFacts>,
+    /// The settlement schedule the facts were gathered under: the rule
+    /// set's, from the Rust shim, which read its snapshot under that set;
+    /// the process schedule from the C++ marshal. The verifier judges the
+    /// claim under it — the window, the finalisation bound and each epoch's
+    /// view — so the facts and their judgement name one schedule, as
+    /// CEN-J25 judges a block's claim under its rule set's.
+    pub schedule: SettlementSchedule,
 }
 
 /// E6: the claimant bond record's verify operands
@@ -446,9 +454,9 @@ pub struct EmissionBondFacts {
 /// view constructor the C++ oracle's FFI shim also uses).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmissionEpochSnapshotFacts {
-    /// A frozen `budget(E)` row exists — absent means the epoch never
-    /// closed (or was pruned): `Malformed` (§8.7.2 row E7).
-    pub has_budget_row: bool,
+    /// Where the epoch stands for the claim: expired, without a frozen
+    /// budget row (E7), or with one.
+    pub standing: EpochClaimStanding,
     pub settlement_epoch: u64,
     /// The close-processing height `(E+1)·SEB` (shard-age operand).
     pub close_block_height: u64,
@@ -465,6 +473,28 @@ pub struct EmissionEpochSnapshotFacts {
     pub shards: Vec<EmissionShardFacts>,
     /// The frozen serve-credit pairs, as indices into `bonds`/`shards`.
     pub credit_pairs: Vec<EmissionCreditPairFacts>,
+}
+
+/// Where one claimed epoch stands in an [`EmissionEpochSnapshotFacts`] —
+/// one state, so an expired epoch is never told by an absent budget row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EpochClaimStanding {
+    /// Below the claim window at the snapshot's connecting height
+    /// (`ARCHIVAL_SETTLEMENT_WRITER.md` §17). Nothing was read for it — its
+    /// rows may be retired — so the row's other fields are empty, and the
+    /// verifier refuses it as expired (`EpochClaimExpired` at
+    /// `window_floor`) before E7. The C++ marshal never produces it: its
+    /// store keeps rows through the window and its claims battery judges
+    /// expiry.
+    Expired {
+        /// The oldest claimable epoch at the connecting height.
+        window_floor: u64,
+    },
+    /// No frozen `budget(E)` row: the epoch never closed — `Malformed`
+    /// (§8.7.2 row E7).
+    NoBudgetRow,
+    /// A frozen `budget(E)` row exists.
+    BudgetFrozen,
 }
 
 /// One frozen bond row (owned `EpochCloseBond`).

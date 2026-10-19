@@ -42,6 +42,19 @@
 //! Minutes of proofs; the live lane (`cargo test -p shekyl-chain-ingest
 //! --features pipeline -- --ignored the_drivers_emission_claim`).
 //!
+//! # A settled epoch's market does not move (`SO-D12h`)
+//!
+//! [`a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed`]
+//! is the same claim on a chain where two complete trees were Served
+//! beside the claimant in the claimed epoch. The pass kept them out of the
+//! epoch's market as complete trees and froze that fact beside `Σwork`.
+//! After the pass one of them releases and the other is slashed through
+//! the failure window; both records then hold a compact set, so a re-gather
+//! that read the records would put both in the market. The claim connects,
+//! so CEN-J23 read the flag the pass froze. With the flag read from the
+//! records instead, the same claim is refused at CEN-J25: its recomputed
+//! `Σwork` is not the frozen row.
+//!
 //! # What this does not witness
 //!
 //! The claim's economics against the store (CEN-J21/J23/J25) and its
@@ -54,9 +67,10 @@
 
 use shekyl_archival_retention::settlement_select::issued_draw_term;
 use shekyl_archival_retention::{
-    claimant_reward_share, emission_vin_verify_auth, emission_vin_verify_backing,
-    epoch_close_compute, shard_contribution_micro, CreditPair, EmissionEpochSource, EpochCloseBond,
-    EpochCloseInputs, EpochCloseShard, ShardClose, ShardWorkEntry, WorkEpochClaim,
+    claim_window_floor, claimant_reward_share, emission_vin_verify_auth,
+    emission_vin_verify_backing, epoch_close_compute, good_through, shard_contribution_micro,
+    CreditPair, EmissionEpochSource, EpochCloseBond, EpochCloseInputs, EpochCloseShard, ShardClose,
+    ShardWorkEntry, WorkEpochClaim, MAX_CLAIM_AGE_W,
 };
 use shekyl_chain_rules::{CenRow, Locus, RecordWriteKind, TxSlot};
 use shekyl_fcmp::proof::{self, ShekylFcmpProof};
@@ -68,18 +82,32 @@ use shekyl_types::{BlockCount, BlockHeight, SettlementEpoch, ShardId};
 use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
 
+use crate::archival_driver::record_of;
 use crate::archival_driver::{first_spending_height, refused_at, ENDPOINT, FEE};
 use crate::connector::IssueDraws;
 use crate::emission_assembly::{
     assemble_emission_claim, assemble_emission_claim_breaking_fee_proof, ClaimTerms,
 };
 use crate::scenario::{FreeHash, Mined, Scenario};
-use crate::scenario_archival::{shard_set, Persona};
+use crate::scenario_archival::{complete_tree, shard_set, Persona};
 use crate::scenario_shard::{
     close_shards, first_admissible_compact_join, inside_one_epoch, levered_rules, levered_schedule,
     mine_to, EPOCH_BLOCKS,
 };
 use shekyl_harness_spender::{Owner, Recipient, Spender};
+use std::sync::Arc;
+
+use shekyl_chain_rules::AdmissionPolicy;
+use shekyl_chain_store::store::SnapshotView;
+use shekyl_daemon_rpc::submit::{
+    parse_submission, ChainSource, DaemonTxVerifier, EpochClaimStanding, RustPoolShim,
+    SubmitCaller, SubmitEngine, SubmitStateShim, TxVerifier,
+};
+use shekyl_mempool::Pool;
+use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_types::UnixSeconds;
+
+use crate::pool_submit_tests::hex;
 
 /// The fill spends coinbases from here up; the funding spend rides
 /// coinbase 0, below it.
@@ -93,6 +121,17 @@ const CLAIM_TX_KEY: [u8; 32] = [0x5c; 32];
 /// The twin claim's transaction key — a second claim for the same terms,
 /// so G9 has a pair to refuse.
 const TWIN_TX_KEY: [u8; 32] = [0x5d; 32];
+
+/// A third claim's transaction key: the `SO-D12h` chain's claim two epochs
+/// below the window.
+const OLDER_TX_KEY: [u8; 32] = [0x5e; 32];
+
+/// `FAILURE_WINDOW_M`: the misses after which the pass slashes a pair.
+const FAILURE_WINDOW: u64 = 11;
+
+/// The release's funding coinbase in the `SO-D12h` chain; the joins ride
+/// coinbases 0 to 2, below it.
+const RELEASE_COINBASE: u64 = 3;
 
 /// Feed `spender` every block of `chain` it has not seen.
 fn catch_up(spender: &mut Spender, chain: &[Mined], seen: &mut usize) {
@@ -594,5 +633,466 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
         Some(record.clone()),
         "the claim's update is the store's row"
     );
+    scenario.close().await;
+}
+
+/// Three passed draws for each of `personas` on shard 0 in `epoch`, or
+/// three failed ones, issued through the regtest door with the digest they
+/// fold to. One call per epoch: the door writes the epoch's digest whole.
+async fn issue_on_shard_zero(
+    scenario: &mut Scenario<FreeHash>,
+    epoch: SettlementEpoch,
+    personas: &[shekyl_types::PCanonicalId],
+    passed: bool,
+) {
+    let shard = ShardId::from_raw(0);
+    let open = levered_schedule().open_height(epoch.to_raw());
+    let mut digest = IssuedDigest::ZERO;
+    let mut draws = Vec::new();
+    for persona in personas {
+        for k in 0..3u64 {
+            let issuing_height = BlockHeight::from_raw(open + k);
+            digest.fold(&issued_draw_term(persona, shard, epoch, issuing_height, 0));
+            draws.push(IndexedDraw {
+                persona: *persona,
+                shard,
+                issuing_height,
+                draw: 0,
+                state: IssuedDraw {
+                    revealed_at: BlockHeight::from_raw(open + k + 1),
+                    passed,
+                },
+            });
+        }
+    }
+    scenario
+        .connector()
+        .ask(IssueDraws {
+            epoch,
+            draws,
+            digest,
+        })
+        .await
+        .expect("the door issues the draws");
+}
+
+/// `SO-D12h` on the driven chain (module docs), and the claim window's
+/// edge under the per-epoch retirement (§17). The compact persona `P`
+/// joins shard 0 beside two complete trees, `T1` and `T2`; all three are
+/// Served on shard 0 in `served`. The pass excludes `T1` and `T2` from the
+/// market as complete trees and freezes the set beside `Σwork(served)`.
+/// After the pass `T1` releases (an empty compact record, a clean
+/// zero-length interval) and `T2` misses eleven epochs and is slashed (an
+/// empty compact record, an interval that opens eleven epochs after
+/// `served`). Neither change reaches `served`'s market: the claim connects,
+/// at the first block where `served` is the oldest claimable epoch. A claim
+/// one epoch older is refused there as expired at CEN-J25, before any read.
+///
+/// Red edit: take the flag in CEN-J23 from the records
+/// (`freeze_complete_trees` over A11's rows in place of A22) — `T1` and
+/// `T2` read compact, good through `served` and credited, so both join the
+/// re-gather's market, `R_market(0, served)` reads 3 and `Σwork` grows; the
+/// claim is refused at CEN-J25.
+#[tokio::test]
+#[ignore = "minutes of proofs; the live lane"]
+async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slashed() {
+    let rules = levered_rules();
+    let mut scenario = Scenario::open_under("scenario-emission-frozen-membership", FreeHash, rules);
+    let mut mined = scenario.mine(first_spending_height().to_raw()).await;
+    let filled = close_shards(&mut scenario, &mut mined, FILL_FROM_COINBASE, 1).await;
+    let [closed] = filled.closed.as_slice() else {
+        panic!("one shard closed");
+    };
+    assert_eq!(closed.shard.to_raw(), 0);
+
+    let join_height = inside_one_epoch(first_admissible_compact_join(&rules, *closed), 1);
+    mine_to(&mut scenario, &mut mined, join_height).await;
+    let mut spender = Spender::over(&mined);
+    let mut seen = mined.len();
+
+    // The three joins in one block: `P` compactly on shard 0, funded to
+    // itself as the original claim is; the two complete trees on their own
+    // coinbases.
+    let persona = Persona::at(1);
+    let released = Persona::at(2);
+    let slashed = Persona::at(3);
+    let recipient = Recipient::persona(persona.keys());
+    let join = persona.join(shard_set(vec![0]), ENDPOINT);
+    let funding = spender.spend_coinbase_to(
+        scenario.wallet(),
+        BlockHeight::ZERO,
+        join_height,
+        FEE,
+        Some(&join),
+        &recipient,
+    );
+    let backing_key = funding.prefix.outputs[0].key;
+    let fee_key = funding.prefix.outputs[1].key;
+    spender.own(backing_key);
+    spender.own(fee_key);
+    let tree_joins: Vec<Transaction> = [&released, &slashed]
+        .into_iter()
+        .zip(1u64..)
+        .map(|(tree, coinbase)| {
+            spender.spend_coinbase_posting(
+                scenario.wallet(),
+                BlockHeight::from_raw(coinbase),
+                join_height,
+                FEE,
+                Some(&tree.join(complete_tree(), ENDPOINT)),
+            )
+        })
+        .collect();
+    let block = scenario
+        .mine_listing([vec![funding], tree_joins].concat())
+        .await
+        .unwrap_or_else(|outcome| panic!("the three joins connect: {outcome}"));
+    assert_eq!(block.height, join_height);
+    mined.push(block);
+    for tree in [&released, &slashed] {
+        assert!(
+            record_of(&scenario, tree).await.is_complete_tree(),
+            "a complete tree joined"
+        );
+    }
+    let join_epoch = levered_schedule().epoch_at(join_height);
+    let served = SettlementEpoch::from_raw(join_epoch.to_raw() + 1);
+    let all = [persona.id(), released.id(), slashed.id()];
+
+    // `served`: every pair passes. Then eleven epochs in which `T2` alone
+    // is drawn and fails — the failure window's `m`, so the pass of the
+    // eleventh slashes it.
+    issue_on_shard_zero(&mut scenario, served, &all, true).await;
+    let slash_epoch = SettlementEpoch::from_raw(served.to_raw() + FAILURE_WINDOW);
+    for raw in (served.to_raw() + 1)..=slash_epoch.to_raw() {
+        issue_on_shard_zero(
+            &mut scenario,
+            SettlementEpoch::from_raw(raw),
+            &[slashed.id()],
+            false,
+        )
+        .await;
+    }
+
+    // Through `served`'s pass.
+    let at_pass = BlockHeight::from_raw(levered_schedule().slash_deadline_height(served.to_raw()));
+    mine_to(&mut scenario, &mut mined, at_pass + BlockCount::ONE).await;
+    let count_at_close = (served.to_raw() + 1) * EPOCH_BLOCKS;
+    let close = *mined[usize::try_from(count_at_close - 1).expect("small")]
+        .archival
+        .close()
+        .expect("the block that completes the epoch carries its close");
+    let pass = &mined[usize::try_from(at_pass.to_raw()).expect("small")].archival;
+    let mut settled: Vec<_> = pass
+        .settlements()
+        .iter()
+        .map(|s| (s.persona, s.epoch, s.row.outcome()))
+        .collect();
+    settled.sort_unstable_by_key(|(persona, _, _)| *persona);
+    let mut expected_rows: Vec<_> = all
+        .iter()
+        .map(|p| (*p, served, SettlementOutcome::Served))
+        .collect();
+    expected_rows.sort_unstable_by_key(|(persona, _, _)| *persona);
+    assert_eq!(settled, expected_rows, "all three pairs settled Served");
+    let gather = pass
+        .gathers()
+        .iter()
+        .find(|g| g.epoch() == served)
+        .expect("the pass gathers the epoch it settles");
+    let mut trees = vec![released.id(), slashed.id()];
+    trees.sort_unstable();
+    assert_eq!(
+        gather.complete_trees().as_slice(),
+        trees.as_slice(),
+        "the pass froze the two complete trees it kept out of the market"
+    );
+
+    // The arithmetic the pass must have done: three credited bonds, the
+    // two complete trees out of the market. It is the one-server epoch.
+    let bond = |complete| EpochCloseBond {
+        join_settlement_epoch: join_epoch.to_raw(),
+        is_foundation_complete_tree: complete,
+        bad_intervals: &[],
+    };
+    let bonds = [bond(false), bond(true), bond(true)];
+    let shards = [EpochCloseShard {
+        shard_id: 0,
+        close: ShardClose::ClosedAt(closed.close_height),
+    }];
+    let pairs: Vec<CreditPair> = (0..bonds.len())
+        .map(|bond_idx| CreditPair {
+            bond_idx,
+            shard_idx: 0,
+        })
+        .collect();
+    let inputs = EpochCloseInputs::under_schedule(
+        levered_schedule(),
+        served.to_raw(),
+        count_at_close,
+        &bonds,
+        &shards,
+        &pairs,
+    );
+    let result = epoch_close_compute(&inputs).expect("the pairs index their bonds and shard");
+    assert_eq!(result.r_market_by_shard, vec![1], "one market member");
+    assert_eq!(gather.sigma_work().to_raw(), result.sigma_work_milli);
+    let share = claimant_reward_share(&EmissionEpochSource {
+        inputs: inputs.clone(),
+        persisted_sigma_work_milli: result.sigma_work_milli,
+        claimant_bond_idx: Some(0),
+        budget: close.budget().to_raw(),
+    })
+    .expect("the claimant indexes its bond");
+    assert!(
+        share.is_member && share.reward > 0,
+        "the server is owed a share"
+    );
+    let scarcity = shard_contribution_micro(&inputs, &result.r_market_by_shard, 0);
+
+    // After the pass, `T1` releases in the next block: an empty compact
+    // record, good through `served`. (`mine_to` leaves its target as the
+    // next height.)
+    catch_up(&mut spender, &mined, &mut seen);
+    let release_height = at_pass + BlockCount::ONE;
+    let release = released.release(record_of(&scenario, &released).await.bonded_total.to_raw());
+    let block = scenario
+        .mine_listing(vec![spender.spend_coinbase_posting(
+            scenario.wallet(),
+            BlockHeight::from_raw(RELEASE_COINBASE),
+            release_height,
+            FEE,
+            Some(&release),
+        )])
+        .await
+        .unwrap_or_else(|outcome| panic!("the release connects: {outcome}"));
+    assert_eq!(block.height, release_height);
+    mined.push(block);
+    let after_release = record_of(&scenario, &released).await;
+    assert!(
+        !after_release.is_complete_tree(),
+        "a released tree reads compact"
+    );
+    assert!(good_through(
+        join_epoch.to_raw(),
+        served.to_raw(),
+        &after_release.bad_intervals
+    ));
+
+    // Through the pass of the eleventh miss: `T2` is slashed there.
+    let slash_height =
+        BlockHeight::from_raw(levered_schedule().slash_deadline_height(slash_epoch.to_raw()));
+    mine_to(&mut scenario, &mut mined, slash_height + BlockCount::ONE).await;
+    let slashes = mined[usize::try_from(slash_height.to_raw()).expect("small")]
+        .archival
+        .slashes();
+    assert_eq!(slashes.len(), 1, "one slash, at the eleventh miss's pass");
+    assert_eq!(slashes[0].entry.persona, slashed.id());
+    let after_slash = record_of(&scenario, &slashed).await;
+    assert!(
+        !after_slash.is_complete_tree(),
+        "a slashed tree reads compact"
+    );
+    assert!(
+        good_through(
+            join_epoch.to_raw(),
+            served.to_raw(),
+            &after_slash.bad_intervals
+        ),
+        "its interval opens after `served`"
+    );
+
+    // The claim, at the first block where `served` is the oldest epoch the
+    // window admits: `served + W`'s first block (`claim_window_floor`). The
+    // claimable family's rows of `served` are kept there; the batch of that
+    // boundary retired below `served − 1` (`EpochFloor`, §17).
+    let connecting =
+        BlockHeight::from_raw(levered_schedule().open_height(served.to_raw() + MAX_CLAIM_AGE_W));
+    assert_eq!(
+        claim_window_floor(levered_schedule().epoch_at(connecting).to_raw()),
+        served.to_raw(),
+        "`served` is the oldest still-claimable epoch at the claim"
+    );
+    mine_to(&mut scenario, &mut mined, connecting).await;
+    catch_up(&mut spender, &mined, &mut seen);
+    let owner = Owner::persona(persona.keys());
+    // The relay floor at the claim's height: the submit engine's fee gate
+    // runs ahead of its verifier, so a claim must pay it to be judged on
+    // its epochs at all.
+    let relay_floor = scenario
+        .read_chain(|view, _| {
+            let next = shekyl_chain_rules::Tip::connecting_height(
+                shekyl_chain_rules::HeaderView::tip(view)
+                    .expect("tip")
+                    .as_ref(),
+            );
+            match shekyl_chain_rules::relay_floor_window(view, next).expect("floors") {
+                shekyl_chain_rules::AtHeight::Recorded(floors) => {
+                    floors.into_iter().min().expect("a window")
+                }
+                shekyl_chain_rules::AtHeight::AboveTip => unreachable!("the connecting height"),
+            }
+        })
+        .await;
+    let claim_for = |epoch: SettlementEpoch, tx_key: [u8; 32]| {
+        let terms = ClaimTerms {
+            holdings: shard_set(vec![0]),
+            settlement_epochs: vec![epoch.to_raw()],
+            work_claim: vec![WorkEpochClaim {
+                epoch: epoch.to_raw(),
+                shard_entries: vec![ShardWorkEntry {
+                    shard_id: 0,
+                    serve_credit_bit: true,
+                    scarcity_micro: u32::try_from(scarcity).expect("a per-entry term fits (F-C)"),
+                }],
+            }],
+            reward_amount_plain: vec![share.reward],
+        };
+        // Re-priced until the fee covers the floor at the claim's weight.
+        let mut fee = FEE;
+        for _ in 0..8 {
+            let backing = spender.owned_input(&owner, backing_key, connecting);
+            let fee_input = spender.owned_input(&owner, fee_key, connecting);
+            let claim = assemble_emission_claim(
+                persona.keys(),
+                &Zeroizing::new(tx_key),
+                vec![fee_input.input],
+                backing.input,
+                terms.clone(),
+                fee,
+                &backing.tree,
+            );
+            let tx = Transaction::from_bytes(&claim.bytes)
+                .expect("the encoder's bytes parse as a transaction");
+            let weight = u64::try_from(tx.weight()).expect("a weight fits");
+            let needed = shekyl_economics::quantized_fee(weight, relay_floor).expect("priceable");
+            if needed <= fee {
+                return tx;
+            }
+            fee = needed;
+        }
+        panic!("the claim's floor price did not settle")
+    };
+
+    // One epoch older is expired: refused at CEN-J25's window, before any
+    // row is read — not CEN-J23's missing row, and not the store's SI-32
+    // fault a read below the claimable floor would be. The block does not
+    // connect.
+    let expired = SettlementEpoch::from_raw(served.to_raw() - 1);
+    refused_at(
+        scenario
+            .mine_listing(vec![claim_for(expired, TWIN_TX_KEY)])
+            .await,
+        CenRow::J25,
+        Locus::Tx {
+            slot: TxSlot::Listed(0),
+        },
+    );
+
+    // The submit path over the Rust pool (CEN-M9's shim) at the same
+    // height. An expired epoch's facts are their own state and are never
+    // read (`EmissionEpochStanding::Expired`), and the verifier refuses the
+    // submission as expired: never E7's missing budget row, and never a
+    // `ShimFault` from a read below the claimable floor. Two epochs below
+    // the oldest claimable one, the rows are already retired. The claim on
+    // the oldest claimable epoch is admitted.
+    let two_below = SettlementEpoch::from_raw(served.to_raw() - 2);
+    let submitted = [
+        claim_for(expired, TWIN_TX_KEY),
+        claim_for(two_below, OLDER_TX_KEY),
+        claim_for(served, CLAIM_TX_KEY),
+    ];
+    let path = crate::test_support::tmp("scenario-emission-frozen-submit-pool");
+    let (reasons, verdicts) = scenario
+        .with_store(|store, rules| {
+            let chain = crate::pool_submit_tests::Store { store, rules };
+            let pool = chain
+                .read(|snapshot, rule_set| {
+                    Pool::open(
+                        &path,
+                        UnixSeconds::from_raw(1),
+                        &SnapshotView::new(snapshot),
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("open")
+                    .0
+                })
+                .expect("a snapshot");
+            let shim = Arc::new(RustPoolShim::new(
+                chain,
+                pool,
+                AdmissionPolicy::GENESIS,
+                || UnixSeconds::from_raw(1),
+            ));
+            let reasons: Vec<String> = submitted[..2]
+                .iter()
+                .map(|tx| {
+                    let parsed = parse_submission(&hex(tx)).expect("the claim parses");
+                    let facts = shim
+                        .snapshot_facts(
+                            &parsed.txid,
+                            &parsed.key_images,
+                            &parsed.reference_block,
+                            parsed.bond_probe(),
+                            parsed.emission_probe().as_ref().map(|(id, e)| (id, *e)),
+                        )
+                        .expect("an expired claim's facts are no shim fault");
+                    let snapshots = &facts.emission.as_ref().expect("the E6/E7 bundle").snapshots;
+                    assert!(
+                        snapshots.iter().all(|s| matches!(
+                            s.standing,
+                            EpochClaimStanding::Expired { window_floor } if window_floor == served.to_raw()
+                        )),
+                        "the expired epoch is its own state, and unread"
+                    );
+                    DaemonTxVerifier
+                        .verify(&parsed, &facts)
+                        .expect_err("an expired claim is refused")
+                        .reason()
+                        .to_owned()
+                })
+                .collect();
+            let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+            let verdicts: Vec<_> = submitted
+                .iter()
+                .map(|tx| engine.submit(&hex(tx), SubmitCaller::Owner))
+                .collect();
+            (reasons, verdicts)
+        })
+        .await;
+    drop(std::fs::remove_file(&path));
+    for reason in &reasons {
+        assert!(
+            reason.contains("below claim window floor"),
+            "refused as expired, not as a missing row: {reason}"
+        );
+    }
+    let mut verdicts = verdicts.into_iter().map(|v| v.expect("no engine fault"));
+    for _ in 0..2 {
+        assert_eq!(
+            verdicts.next(),
+            Some(SubmitVerdict::Rejected {
+                cause: RejectCause::Malformed
+            })
+        );
+    }
+    assert_eq!(
+        verdicts.next(),
+        Some(SubmitVerdict::Accepted),
+        "the oldest claimable epoch is admitted"
+    );
+
+    let claim_tx = claim_for(served, CLAIM_TX_KEY);
+    let block = scenario
+        .mine_listing(vec![claim_tx])
+        .await
+        .unwrap_or_else(|outcome| {
+            panic!("the claim on a settled epoch whose complete trees moved connects: {outcome}")
+        });
+    assert_eq!(block.height, connecting);
+    for row in [CenRow::J23, CenRow::J25] {
+        assert!(block.judged_by.contains(&row), "{row} judged the claim");
+    }
     scenario.close().await;
 }

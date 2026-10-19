@@ -26,15 +26,17 @@
 //! recompute of `Σwork(E)` is then over the rows the pass saw, and the
 //! compare with the frozen row (`EmissionVerifyError::SigmaWorkMismatch`)
 //! can fail only on a claim that lies, never on a snapshot that drifted.
-//! The bond records are read as they are now. The pass gathered after
-//! `E`'s own slashes, so a record slashed for `E` is out of `E`'s market
-//! in both readings, and a later interval opens at a later epoch. One
-//! field of a record can still move under a settled epoch: a complete
-//! tree that is slashed or released becomes a compact record, and
-//! `market_member_at_epoch` reads that flag. The epoch close had the same
-//! exposure and it is not closed here. The C++, consensus until `DEL-008`, gathers at the
-//! epoch close on any pass and reads the shard segments and bond values
-//! as they are now.
+//! The bond records are read as they are now, except for one field. The
+//! pass gathered after `E`'s own slashes, so a record slashed for `E` is
+//! out of `E`'s market in both readings, a later interval opens at a later
+//! epoch, and the join epoch never moves. The complete-tree flag can: a
+//! complete tree that is slashed or released afterwards holds a compact
+//! set, and `market_member_at_epoch` reads that flag. So the pass froze
+//! the flag beside `Σwork(E)` — the complete trees it excluded from `E`'s
+//! market (A22, SI-31; `SO-D12h`) — and the re-gather takes every bond's
+//! flag from that set and never from the record. The C++, consensus until
+//! `DEL-008`, gathers at the epoch close on any pass and reads the shard
+//! segments and bond values as they are now.
 //!
 //! **What the verify consumes and what it yields.** The crossing's inputs
 //! are the vin ([`J19::parse`]), the connecting height, the claimant's
@@ -75,18 +77,20 @@ use shekyl_archival_retention::{
     emission_vin_verify_claims_under, p_canonical_id_from_hybrid_pubkey, ArchivalRewardEmissionVin,
     ClaimantBondRecord, EmissionEpochSource, EmissionVerifyContext, EpochCloseInputs,
 };
+use shekyl_types::archival::CompleteTreeSet;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use crate::archival::{gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::ViewRead;
+use crate::fault::{Corrupt, ViewRead};
 use crate::rule_set::RuleSet;
 use crate::rules::tx_against::ReferenceContext;
 use crate::rules::tx_emission::{the_emission, J19, J22, J24};
 use crate::rules::{Rule, TxContext};
 use crate::verdict::{InvalidBlock, Verdict};
 use crate::view::{ChainView, Tip};
+use crate::{Claimable, EpochFloor};
 
 /// CEN-J23: every claimed epoch is **closed and settled** — it has its
 /// frozen budget row (A8) and its `Σwork` row (A7) — and its snapshot is
@@ -103,7 +107,10 @@ use crate::view::{ChainView, Tip};
 /// read ([`gather_universe`]) and A11's records, with the claimant named
 /// so its index among the bonds is the source's `claimant_bond_idx`; the
 /// credits are the Served rows ([`ServedAt`]) — a settled epoch's rows are
-/// all recorded, and one read per persona covers every epoch the claim cites.
+/// all recorded, and one read per persona covers every epoch the claim cites;
+/// the complete-tree flags are the set the pass froze (A22). A settled
+/// epoch without that set is a lost row, [`Corrupt::CompleteTreesAbsent`],
+/// never a refusal of the claim.
 pub(crate) struct J23;
 
 impl Rule for J23 {
@@ -121,6 +128,9 @@ struct CitedEpoch {
     close_height: BlockHeight,
     sigma_work_milli: u64,
     budget: u64,
+    /// The complete trees the epoch's pass froze (A22): every bond's
+    /// complete-tree flag in the re-gather.
+    complete_trees: CompleteTreeSet,
 }
 
 impl CitedEpoch {
@@ -131,17 +141,30 @@ impl CitedEpoch {
     fn cite<'id, V: ChainView<'id>>(
         view: &V,
         rule_set: &RuleSet,
+        floor: EpochFloor<Claimable>,
         raw: u64,
     ) -> Result<Option<Self>, ViewRead<V::Fault>> {
         let epoch = SettlementEpoch::from_raw(raw);
-        let (Some(budget), Some(sigma_work), Some(close_height)) = (
-            view.budget(epoch).map_err(ViewRead::View)?,
-            view.sigma_work(epoch).map_err(ViewRead::View)?,
-            rule_set
-                .settlement_schedule()
-                .close_height(raw)
-                .map(BlockHeight::from_raw),
-        ) else {
+        let budget = view.budget(epoch, floor).map_err(ViewRead::View)?;
+        let sigma_work = view.sigma_work(epoch, floor).map_err(ViewRead::View)?;
+        let close_height = rule_set
+            .settlement_schedule()
+            .close_height(raw)
+            .map(BlockHeight::from_raw);
+        // Written in the pass's write set with `Σwork(E)` (SI-31). A settled
+        // epoch without the set is a lost row, whether or not the budget or
+        // the close height is present yet.
+        let complete_trees = match sigma_work {
+            Some(_) => Some(
+                view.complete_trees(epoch, floor)
+                    .map_err(ViewRead::View)?
+                    .ok_or(ViewRead::Corrupt(Corrupt::CompleteTreesAbsent { epoch }))?,
+            ),
+            None => None,
+        };
+        let (Some(budget), Some(sigma_work), Some(close_height), Some(complete_trees)) =
+            (budget, sigma_work, close_height, complete_trees)
+        else {
             return Ok(None);
         };
         Ok(Some(Self {
@@ -150,6 +173,7 @@ impl CitedEpoch {
             close_height,
             sigma_work_milli: sigma_work.to_raw(),
             budget: budget.to_raw(),
+            complete_trees,
         }))
     }
 }
@@ -175,12 +199,17 @@ impl J23 {
         vin: &ArchivalRewardEmissionVin,
         persona: &PCanonicalId,
         records: &'r [(PCanonicalId, shekyl_types::archival::BondRecord)],
+        connecting: BlockHeight,
     ) -> Result<Verdict<Vec<GatheredEpoch<'r>>>, ViewRead<V::Fault>> {
+        let schedule = rule_set.settlement_schedule();
+        // Every cited epoch passed [`J25::window`], so none is below the
+        // claimable floor and no read here can reach a retired row.
+        let floor = EpochFloor::<Claimable>::under(connecting, schedule);
         // The citing gate first. A missing budget or Σwork refuses the
         // claim before any persona's settlement rows are read.
         let mut cited = Vec::with_capacity(vin.settlement_epochs.len());
         for &epoch in &vin.settlement_epochs {
-            let Some(epoch) = CitedEpoch::cite(view, rule_set, epoch)? else {
+            let Some(epoch) = CitedEpoch::cite(view, rule_set, floor, epoch)? else {
                 return Ok(Err(InvalidBlock::new(Self::ROW, cx.locus())));
             };
             cited.push(epoch);
@@ -188,11 +217,23 @@ impl J23 {
         // The read's keys. The vin's epochs are already strictly increasing
         // (`EpochsNotStrictlyIncreasing`), so the set is that list.
         let epochs: BTreeSet<SettlementEpoch> = cited.iter().map(|cited| cited.epoch).collect();
-        let credits = ServedAt::read(view, records.iter().map(|(persona, _)| *persona), &epochs)?;
+        let credits = ServedAt::read(
+            view,
+            records.iter().map(|(persona, _)| *persona),
+            &epochs,
+            floor,
+        )?;
         let mut gathered = Vec::with_capacity(cited.len());
         for cited in cited {
-            let snapshot =
-                gather_claimed_epoch(view, rule_set, records, persona, &credits, cited.epoch)?;
+            let snapshot = gather_claimed_epoch(
+                view,
+                rule_set,
+                records,
+                persona,
+                &credits,
+                cited.epoch,
+                &cited.complete_trees,
+            )?;
             gathered.push(GatheredEpoch {
                 epoch: cited.raw,
                 close_height: cited.close_height,
@@ -215,6 +256,7 @@ fn gather_claimed_epoch<'id, 'r, V: ChainView<'id>>(
     persona: &PCanonicalId,
     credits: &ServedAt,
     epoch: SettlementEpoch,
+    complete_trees: &CompleteTreeSet,
 ) -> Result<EpochSnapshot<'r>, ViewRead<V::Fault>> {
     let universe = gather_universe(
         view,
@@ -223,14 +265,21 @@ fn gather_claimed_epoch<'id, 'r, V: ChainView<'id>>(
         epoch,
     )?;
     let rows = records.iter().map(|(persona, record)| (persona, record));
-    gather_epoch_snapshot(view, &universe, rows, Some(persona), |holder| {
-        Ok(credits
-            .shards(holder, epoch)
-            .iter()
-            .copied()
-            .map(ShardId::to_raw)
-            .collect())
-    })
+    gather_epoch_snapshot(
+        view,
+        &universe,
+        rows,
+        Some(persona),
+        complete_trees,
+        |holder| {
+            Ok(credits
+                .shards(holder, epoch)
+                .iter()
+                .copied()
+                .map(ShardId::to_raw)
+                .collect())
+        },
+    )
 }
 
 /// One settlement epoch's close facts as CEN-J23 reads them for an
@@ -243,16 +292,45 @@ pub struct EmissionEpochFacts {
     pub settlement_epoch: u64,
     /// Its close height under the rule set, `None` past a `u64`.
     pub close_height: Option<BlockHeight>,
-    /// The frozen `Σwork(E)` (A7), `None` before the slash pass writes it.
-    pub sigma_work_milli: Option<u64>,
-    /// The frozen budget (A8), `None` before the close freezes it.
-    pub budget: Option<u64>,
-    /// The close snapshot, gathered only for an epoch CEN-J23's citing gate
-    /// admits — its budget, its `Σwork` and its close height all present.
-    /// `None` for an epoch that has not settled: J23 refuses a claim on it
-    /// without a gather, and its slash pass's universe may lie above the
-    /// tip.
-    pub snapshot: Option<EmissionEpochSnapshot>,
+    /// Where the epoch stands for a claim at the connecting height.
+    pub standing: EmissionEpochStanding,
+}
+
+/// Where one claimed epoch stands for a claim connecting at the view's
+/// next height: three states, so "expired" and "not settled" are never
+/// told apart by which fields happen to be absent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EmissionEpochStanding {
+    /// Below the claim window at the connecting height: under the
+    /// claimable [`EpochFloor`], which is the window's own floor
+    /// (`claim_window_floor`, the one CEN-J25's window and the verify's
+    /// `EpochClaimExpired` use). **Nothing was read for it**: its rows may
+    /// be retired, and a read below the floor is SI-32. A claim on it is
+    /// refused as expired.
+    Expired {
+        /// The oldest claimable epoch at the connecting height.
+        window_floor: SettlementEpoch,
+    },
+    /// Inside the window and not settled: CEN-J23's citing gate refuses
+    /// it. Each frozen row it already has — the budget once the close
+    /// froze it, `Σwork` once the slash pass wrote it — and no gather: its
+    /// slash pass may not have run, and its universe may lie above the tip.
+    Unsettled {
+        /// The frozen `Σwork(E)` (A7), if the slash pass wrote it.
+        sigma_work_milli: Option<u64>,
+        /// The frozen budget (A8), if the close froze it.
+        budget: Option<u64>,
+    },
+    /// Settled: CEN-J23's citing gate admits it, with the rows it read and
+    /// the snapshot its gather builds.
+    Settled {
+        /// The frozen `Σwork(E)` (A7).
+        sigma_work_milli: u64,
+        /// The frozen budget (A8).
+        budget: u64,
+        /// What the epoch's slash pass read, with the claimant named.
+        snapshot: EmissionEpochSnapshot,
+    },
 }
 
 /// The snapshot of a settled epoch in an [`EmissionEpochFacts`]: what its
@@ -283,15 +361,22 @@ pub struct EpochCloseBondFacts {
 
 /// The close facts of every epoch in `epochs` for `persona`'s emission
 /// claim, read off `view` under `rule_set` — CEN-J23's citing gate and
-/// gather ([`CitedEpoch::cite`], [`gather_claimed_epoch`]) for every epoch,
-/// without J23's refusal: an epoch the gate does not admit answers with
-/// what it has and no snapshot ([`EmissionEpochFacts::snapshot`]), because
-/// the caller presents facts and the validator judges.
+/// gather ([`CitedEpoch::cite`], [`gather_claimed_epoch`]) for every epoch
+/// the claim window still holds, without J23's refusal: each epoch
+/// answers with its [`EmissionEpochStanding`], because the caller presents
+/// facts and the validator judges.
+///
+/// The claim window is checked first, against the claimable [`EpochFloor`]
+/// of the height the view's next block connects at (the window's own
+/// floor, as [`J25`]'s window check). An epoch below it is
+/// [`EmissionEpochStanding::Expired`] and is not read: its rows may already
+/// be retired, and a read below the floor is SI-32.
 ///
 /// # Errors
 ///
 /// The view's fault, or a shard close the gather cannot place
-/// ([`crate::Corrupt::ShardCloseUnplaced`]).
+/// ([`crate::Corrupt::ShardCloseUnplaced`]), or
+/// [`crate::Corrupt::CompleteTreesAbsent`] when a frozen `Σwork` has no set.
 pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
     view: &V,
     rule_set: &RuleSet,
@@ -299,24 +384,43 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
     epochs: &[u64],
 ) -> Result<Vec<EmissionEpochFacts>, ViewRead<V::Fault>> {
     let records = view.bond_records().map_err(ViewRead::View)?;
+    let schedule = rule_set.settlement_schedule();
+    let connecting = Tip::connecting_height(view.tip().map_err(ViewRead::View)?.as_ref());
+    let floor = EpochFloor::<Claimable>::under(connecting, schedule);
     let mut cited = BTreeMap::new();
     for &raw in epochs {
-        if let Some(epoch) = CitedEpoch::cite(view, rule_set, raw)? {
+        if floor.below(SettlementEpoch::from_raw(raw)).is_some() {
+            continue;
+        }
+        if let Some(epoch) = CitedEpoch::cite(view, rule_set, floor, raw)? {
             cited.insert(raw, epoch);
         }
     }
     let settled: BTreeSet<SettlementEpoch> = cited.values().map(|cited| cited.epoch).collect();
-    let credits = ServedAt::read(view, records.iter().map(|(persona, _)| *persona), &settled)?;
-    let schedule = rule_set.settlement_schedule();
+    let credits = ServedAt::read(
+        view,
+        records.iter().map(|(persona, _)| *persona),
+        &settled,
+        floor,
+    )?;
     let mut out = Vec::with_capacity(epochs.len());
     for &raw in epochs {
-        let epoch = SettlementEpoch::from_raw(raw);
-        let snapshot = match cited.get(&raw) {
-            None => None,
-            Some(cited) => {
-                let snapshot =
-                    gather_claimed_epoch(view, rule_set, &records, persona, &credits, cited.epoch)?;
-                Some(EmissionEpochSnapshot {
+        let standing = if let Some(window_floor) = floor.below(SettlementEpoch::from_raw(raw)) {
+            EmissionEpochStanding::Expired { window_floor }
+        } else if let Some(cited) = cited.get(&raw) {
+            let snapshot = gather_claimed_epoch(
+                view,
+                rule_set,
+                &records,
+                persona,
+                &credits,
+                cited.epoch,
+                &cited.complete_trees,
+            )?;
+            EmissionEpochStanding::Settled {
+                sigma_work_milli: cited.sigma_work_milli,
+                budget: cited.budget,
+                snapshot: EmissionEpochSnapshot {
                     bonds: snapshot
                         .bonds
                         .iter()
@@ -329,21 +433,25 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
                     shards: snapshot.shards,
                     pairs: snapshot.pairs,
                     claimant_bond_idx: snapshot.claimant_bond_idx,
-                })
+                },
+            }
+        } else {
+            let epoch = SettlementEpoch::from_raw(raw);
+            EmissionEpochStanding::Unsettled {
+                sigma_work_milli: view
+                    .sigma_work(epoch, floor)
+                    .map_err(ViewRead::View)?
+                    .map(shekyl_types::archival::SigmaWorkMilli::to_raw),
+                budget: view
+                    .budget(epoch, floor)
+                    .map_err(ViewRead::View)?
+                    .map(shekyl_units::AtomicUnits::to_raw),
             }
         };
         out.push(EmissionEpochFacts {
             settlement_epoch: raw,
             close_height: schedule.close_height(raw).map(BlockHeight::from_raw),
-            sigma_work_milli: view
-                .sigma_work(epoch)
-                .map_err(ViewRead::View)?
-                .map(shekyl_types::archival::SigmaWorkMilli::to_raw),
-            budget: view
-                .budget(epoch)
-                .map_err(ViewRead::View)?
-                .map(shekyl_units::AtomicUnits::to_raw),
-            snapshot,
+            standing,
         });
     }
     Ok(out)
@@ -376,9 +484,41 @@ impl Rule for J25 {
 }
 
 impl J25 {
+    /// The claim window, before anything is read: every cited epoch is at
+    /// or above the claimable [`EpochFloor`] of the connecting height,
+    /// which is `claim_window_floor` of its epoch — the floor the verify's
+    /// step 1 refuses `EpochClaimExpired` below, and the floor J23's reads
+    /// then carry, one value for both. Run ahead
+    /// of CEN-J23 because J23 reads the cited epochs' rows, and the rows of
+    /// an expired epoch may be retired (`ARCHIVAL_SETTLEMENT_WRITER.md`
+    /// §17): the store refuses a read below the claimable floor as a fault
+    /// (SI-32), and a claim's epochs are the sender's to choose. An expired
+    /// claim is this row's refusal, as it was when the verify reached it
+    /// first; the verify still checks the window itself.
+    fn window(
+        cx: &TxContext<'_>,
+        rule_set: &RuleSet,
+        vin: &ArchivalRewardEmissionVin,
+        connecting: BlockHeight,
+    ) -> Verdict<()> {
+        let floor = EpochFloor::<Claimable>::under(connecting, rule_set.settlement_schedule());
+        if vin
+            .settlement_epochs
+            .iter()
+            .any(|&epoch| floor.below(SettlementEpoch::from_raw(epoch)).is_some())
+        {
+            return Err(InvalidBlock::new(Self::ROW, cx.locus()));
+        }
+        Ok(())
+    }
+
     /// The verify over the gathered epochs. `Ok(Err)` is this row's
     /// refusal, or J24's where the commit set is not well-defined; `Err`
     /// is the view's fault from the record read.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the claim, its context, and the connecting height the window was checked at"
+    )]
     fn verify<'id, V: ChainView<'id>>(
         cx: &TxContext<'_>,
         view: &V,
@@ -387,6 +527,7 @@ impl J25 {
         persona: &PCanonicalId,
         reference: &ReferenceContext,
         gathered: &[GatheredEpoch<'_>],
+        connecting: BlockHeight,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
         let refuse = || Err(InvalidBlock::new(Self::ROW, cx.locus()));
         let schedule = rule_set.settlement_schedule();
@@ -440,9 +581,9 @@ impl J25 {
             return Ok(refuse());
         };
 
-        // The connecting height, as the C++ passes `chain_height`: one
-        // above the tip the block is judged against.
-        let connecting = Tip::connecting_height(view.tip().map_err(ViewRead::View)?.as_ref());
+        // `connecting` is the height the C++ passes as `chain_height`: one
+        // above the tip the block is judged against, the same height the
+        // window was checked at.
         let ctx = EmissionVerifyContext {
             current_block_height: connecting.to_raw(),
             bond,
@@ -494,12 +635,12 @@ impl Rule for J26 {
 /// ([`crate::rules::proofs::judge_proofs`]), which records it, vacuous or judged.
 const CLAIM_ROWS: [CenRow; 2] = [CenRow::J23, CenRow::J25];
 
-/// The emission's view-bound sequence: J23's gathers, J25's verify, then
-/// J26's fee-input proof. Off the `Emission` class all three rows are
-/// recorded **vacuous**. On it, `reference` is J21's context from
-/// `judge_reference`; an emission the caller reached here without one is
-/// a sequence wired wrong, and the claim is refused under J25 rather than
-/// verified against nothing.
+/// The emission's view-bound sequence: J25's claim window (before any
+/// read), J23's gathers, J25's verify, then J26's fee-input proof. Off the
+/// `Emission` class all three rows are recorded **vacuous**. On it,
+/// `reference` is J21's context from `judge_reference`; an emission the
+/// caller reached here without one is a sequence wired wrong, and the claim
+/// is refused under J25 rather than verified against nothing.
 ///
 /// A vin this sequence cannot read — J19 has refused it in `tx_form`;
 /// asked alone, the parse fails here — is refused under J23, the first row
@@ -522,8 +663,13 @@ pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
             return Ok(Err(InvalidBlock::new(J23::ROW, cx.locus())));
         };
         let persona = p_canonical_id_from_hybrid_pubkey(&vin.p_pubkey);
+        let connecting = Tip::connecting_height(view.tip().map_err(ViewRead::View)?.as_ref());
+        if let Err(expired) = J25::window(cx, rule_set, &vin, connecting) {
+            return Ok(Err(expired));
+        }
         let records = view.bond_records().map_err(ViewRead::View)?;
-        let gathered = match J23::gather(cx, view, rule_set, &vin, &persona, &records)? {
+        let gathered = match J23::gather(cx, view, rule_set, &vin, &persona, &records, connecting)?
+        {
             Ok(gathered) => gathered,
             Err(refused) => return Ok(Err(refused)),
         };
@@ -531,7 +677,9 @@ pub(crate) fn judge_emission_claim<'id, V: ChainView<'id>>(
         let Some(reference) = reference else {
             return Ok(Err(InvalidBlock::new(J25::ROW, cx.locus())));
         };
-        match J25::verify(cx, view, rule_set, &vin, &persona, reference, &gathered)? {
+        match J25::verify(
+            cx, view, rule_set, &vin, &persona, reference, &gathered, connecting,
+        )? {
             Ok(()) => {}
             Err(refused) => return Ok(Err(refused)),
         }

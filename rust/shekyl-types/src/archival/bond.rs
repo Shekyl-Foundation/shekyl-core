@@ -13,7 +13,7 @@ use core::fmt;
 
 use shekyl_units::AtomicUnits;
 
-use crate::{BlockHeight, SettlementEpoch, ShardId};
+use crate::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::{
     BadInterval, HoldingsDescriptor, HoldingsKind, ShardSet, ShardSetError, MAX_HOLDINGS_SHARDS,
@@ -429,11 +429,118 @@ impl SigmaWorkMilli {
     }
 }
 
+/// `archival_complete_trees[E]` — the personas `E`'s slash pass excluded
+/// from `E`'s market **as complete trees** (`ARCHIVAL_SETTLEMENT_WRITER.md`
+/// `SO-D12h`, ruled 2026-10-17): among the bonds the gather credited at `E`,
+/// those whose record held a complete tree as the pass left it.
+///
+/// The fact is frozen at the pass because the record does not keep it. A
+/// complete tree that is slashed or released afterwards holds a compact
+/// set, and a claim's re-gather that read the record would put it in the
+/// market the pass kept it out of. So both readers of the gather — the
+/// pass, and the claim's re-gather (CEN-J23) — take every bond's
+/// complete-tree flag from this set and neither reads the record's.
+///
+/// Persona ids, strictly increasing: one order, no duplicate, so two sets
+/// with one membership have one encoding. The empty set is a value (an
+/// epoch whose credited bonds were all compact, or that credited none),
+/// written like any other (`ARW-Q4`); an epoch with no row was not settled.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct CompleteTreeSet(Vec<PCanonicalId>);
+
+/// [`CompleteTreeSet::new`]'s refusal: the ids are not strictly increasing.
+/// `index` is the first id not above the one before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompleteTreeSetError {
+    /// Position of the first out-of-order or repeated id.
+    pub index: usize,
+}
+
+impl fmt::Display for CompleteTreeSetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "complete-tree persona {} is not above the one before it",
+            self.index
+        )
+    }
+}
+
+impl CompleteTreeSet {
+    /// The set of `ids`, which must be strictly increasing.
+    ///
+    /// # Errors
+    ///
+    /// [`CompleteTreeSetError`] at the first id that is not above its
+    /// predecessor.
+    pub fn new(ids: Vec<PCanonicalId>) -> Result<Self, CompleteTreeSetError> {
+        if let Some(index) = ids
+            .windows(2)
+            .position(|pair| pair[0] >= pair[1])
+            .map(|before| before + 1)
+        {
+            return Err(CompleteTreeSetError { index });
+        }
+        Ok(Self(ids))
+    }
+
+    /// Whether `persona` is in the set: the frozen complete-tree flag.
+    #[must_use]
+    pub fn contains(&self, persona: &PCanonicalId) -> bool {
+        self.0.binary_search(persona).is_ok()
+    }
+
+    /// The ids, ascending.
+    #[must_use]
+    pub fn as_slice(&self) -> &[PCanonicalId] {
+        &self.0
+    }
+}
+
+impl FromIterator<PCanonicalId> for CompleteTreeSet {
+    /// Sorts and deduplicates, so any order of any ids makes a set.
+    fn from_iter<I: IntoIterator<Item = PCanonicalId>>(iter: I) -> Self {
+        let mut ids: Vec<PCanonicalId> = iter.into_iter().collect();
+        ids.sort_unstable();
+        ids.dedup();
+        Self(ids)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::format;
+    use alloc::vec;
 
-    use super::{ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
+    use super::{CompleteTreeSet, CompleteTreeSetError, ReceiptSignPk, RECEIPT_SIGN_PK_LEN};
+    use crate::PCanonicalId;
+
+    fn persona(byte: u8) -> PCanonicalId {
+        PCanonicalId::from_bytes([byte; 32])
+    }
+
+    /// The constructor holds the order the codec and `contains` rely on.
+    /// Red edit: drop the check — the repeated and the reversed inputs then
+    /// construct, and `contains` misses an id a binary search walks past.
+    #[test]
+    fn a_complete_tree_set_is_strictly_increasing() {
+        let set = CompleteTreeSet::new(vec![persona(1), persona(3)]).expect("ascending");
+        assert!(set.contains(&persona(3)));
+        assert!(!set.contains(&persona(2)));
+        assert_eq!(
+            CompleteTreeSet::new(vec![persona(1), persona(1)]),
+            Err(CompleteTreeSetError { index: 1 })
+        );
+        assert_eq!(
+            CompleteTreeSet::new(vec![persona(1), persona(4), persona(2)]),
+            Err(CompleteTreeSetError { index: 2 })
+        );
+        let empty = CompleteTreeSet::new(vec![]).expect("the empty set is a value");
+        assert_eq!(empty, CompleteTreeSet::default());
+        assert!(!empty.contains(&persona(0)));
+        let collected: CompleteTreeSet = [persona(3), persona(1), persona(3)].into_iter().collect();
+        assert_eq!(collected.as_slice(), &[persona(1), persona(3)]);
+    }
 
     /// Two keys that differ in either half print differently, and two that
     /// share only the encoding's header do not print alike. Red edit: print

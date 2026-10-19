@@ -100,6 +100,7 @@ mod chain_reads;
 mod connect;
 mod curve_reads;
 mod edge;
+mod epoch_retire;
 mod error;
 mod grow;
 mod halt;
@@ -126,8 +127,8 @@ pub use at_index::AtIndex;
 pub use connect::Connected;
 pub use error::{
     AccrualFault, AltCannot, CellFault, DigestFault, DrawableFault, EdgeFault, EngineError,
-    ErrorClass, LeafCountFault, LeafDensity, PoolCannot, SettlementFault, SlashFault, StoreCannot,
-    StoreError, StoreInvariant, UndoFault,
+    ErrorClass, FrozenFault, LeafCountFault, LeafDensity, PoolCannot, SettlementFault, SlashFault,
+    StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{
@@ -136,7 +137,7 @@ pub use keyed::{
 };
 pub use output_reads::RecordedOutput;
 pub use pop::Popped;
-pub use prune::{Horizons, Pruned};
+pub use prune::{EpochFloors, Horizons, Pruned};
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
 pub use shard_reads::{ClosedShardRows, ShardFold};
 pub use snapshot_view::SnapshotView;

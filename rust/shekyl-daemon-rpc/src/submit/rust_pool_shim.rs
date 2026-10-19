@@ -64,7 +64,7 @@ use shekyl_archival_retention::{
 };
 use shekyl_chain_rules::{
     emission_epoch_facts, relay_floor_at, relay_floor_window, release_last_served, AdmissionPolicy,
-    AtHeight, ChainView, EmissionEpochSnapshot, HeaderView, PolicyRow, RuleSet, Tip,
+    AtHeight, ChainView, EmissionEpochStanding, HeaderView, PolicyRow, RuleSet, Tip,
 };
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView};
 use shekyl_mempool::{shown, stateless, Admission, Judged, Pool, RelayView};
@@ -76,9 +76,9 @@ use shekyl_types::{
 use crate::submit::certificate::VerificationCertificate;
 use crate::submit::facts::{
     BondProbe, CommitOutcome, EmissionBondFacts, EmissionCloseBondFacts, EmissionCreditPairFacts,
-    EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, KeyImageConflict,
-    ReferenceFacts, ReleaseFacts, ReleaseRecordFacts, ShimFault, SubmitFacts, SubmitStateShim,
-    TxMeta,
+    EmissionEpochSnapshotFacts, EmissionFacts, EmissionShardFacts, EpochClaimStanding,
+    KeyImageConflict, ReferenceFacts, ReleaseFacts, ReleaseRecordFacts, ShimFault, SubmitFacts,
+    SubmitStateShim, TxMeta,
 };
 use crate::submit::phase_a::parse_submission;
 
@@ -292,50 +292,84 @@ fn emission_facts(
         .map_err(|_| ShimFault)?
         .into_iter()
         .map(|facts| {
-            // An epoch that has not settled has no snapshot: the engine reads
-            // the absent budget row and refuses the claim (§8.7.2 E7).
-            let snapshot = facts.snapshot.unwrap_or(EmissionEpochSnapshot {
-                bonds: Vec::new(),
-                shards: Vec::new(),
-                pairs: Vec::new(),
-                claimant_bond_idx: None,
-            });
-            EmissionEpochSnapshotFacts {
-                has_budget_row: facts.budget.is_some(),
+            let mut row = EmissionEpochSnapshotFacts {
+                standing: EpochClaimStanding::NoBudgetRow,
                 settlement_epoch: facts.settlement_epoch,
                 close_block_height: facts.close_height.map_or(0, BlockHeight::to_raw),
-                sigma_work_milli: facts.sigma_work_milli.unwrap_or(0),
-                budget_atomic: facts.budget.unwrap_or(0),
-                claimant_bond_idx: snapshot.claimant_bond_idx,
-                bonds: snapshot
-                    .bonds
-                    .into_iter()
-                    .map(|bond| EmissionCloseBondFacts {
-                        join_settlement_epoch: bond.join_settlement_epoch,
-                        is_foundation_complete_tree: bond.is_foundation_complete_tree,
-                        bad_intervals: bond.bad_intervals,
-                    })
-                    .collect(),
-                shards: snapshot
-                    .shards
-                    .into_iter()
-                    .map(|shard| EmissionShardFacts {
-                        shard_id: shard.shard_id,
-                        close: shard.close,
-                    })
-                    .collect(),
-                credit_pairs: snapshot
-                    .pairs
-                    .into_iter()
-                    .map(|pair| EmissionCreditPairFacts {
-                        bond_idx: pair.bond_idx,
-                        shard_idx: pair.shard_idx,
-                    })
-                    .collect(),
+                sigma_work_milli: 0,
+                budget_atomic: 0,
+                claimant_bond_idx: None,
+                bonds: Vec::new(),
+                shards: Vec::new(),
+                credit_pairs: Vec::new(),
+            };
+            match facts.standing {
+                // Below the claim window: nothing was read, and the
+                // verifier refuses it as expired before E7.
+                EmissionEpochStanding::Expired { window_floor } => {
+                    row.standing = EpochClaimStanding::Expired {
+                        window_floor: window_floor.to_raw(),
+                    };
+                }
+                // Not settled: the engine reads the absent budget row and
+                // refuses the claim (§8.7.2 E7).
+                EmissionEpochStanding::Unsettled {
+                    sigma_work_milli,
+                    budget,
+                } => {
+                    if budget.is_some() {
+                        row.standing = EpochClaimStanding::BudgetFrozen;
+                    }
+                    row.sigma_work_milli = sigma_work_milli.unwrap_or(0);
+                    row.budget_atomic = budget.unwrap_or(0);
+                }
+                EmissionEpochStanding::Settled {
+                    sigma_work_milli,
+                    budget,
+                    snapshot,
+                } => {
+                    row.standing = EpochClaimStanding::BudgetFrozen;
+                    row.sigma_work_milli = sigma_work_milli;
+                    row.budget_atomic = budget;
+                    row.claimant_bond_idx = snapshot.claimant_bond_idx;
+                    row.bonds = snapshot
+                        .bonds
+                        .into_iter()
+                        .map(|bond| EmissionCloseBondFacts {
+                            join_settlement_epoch: bond.join_settlement_epoch,
+                            is_foundation_complete_tree: bond.is_foundation_complete_tree,
+                            bad_intervals: bond.bad_intervals,
+                        })
+                        .collect();
+                    row.shards = snapshot
+                        .shards
+                        .into_iter()
+                        .map(|shard| EmissionShardFacts {
+                            shard_id: shard.shard_id,
+                            close: shard.close,
+                        })
+                        .collect();
+                    row.credit_pairs = snapshot
+                        .pairs
+                        .into_iter()
+                        .map(|pair| EmissionCreditPairFacts {
+                            bond_idx: pair.bond_idx,
+                            shard_idx: pair.shard_idx,
+                        })
+                        .collect();
+                }
             }
+            row
         })
         .collect();
-    Ok((conflict, EmissionFacts { bond, snapshots }))
+    Ok((
+        conflict,
+        EmissionFacts {
+            bond,
+            snapshots,
+            schedule: rule_set.settlement_schedule(),
+        },
+    ))
 }
 
 /// Every fact the contract names, off one snapshot and the pool.

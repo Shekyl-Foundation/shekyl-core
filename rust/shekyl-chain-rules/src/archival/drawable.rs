@@ -65,15 +65,18 @@
 //! height) first passes `E`'s slash deadline: the last block of epoch
 //! `E + k`, with `k` the slash grace, so the span is under `(k + 1)·SEB`. A
 //! reorg can run that pass again with the tip up to `reorg_cap` blocks
-//! lower than the tip the last prune ran at. Both
-//! journals are retired below [`SlashLogFloor`], `(k + n)·SEB + reorg_cap`
-//! below the pruning tip, so the walk stays above the floor when
+//! lower than the tip the last prune ran at. The slash log is retired
+//! below [`SlashLogFloor`], `(k + n)·SEB + reorg_cap` below the pruning
+//! tip, so the walk stays above it when
 //! `(k + 1)·SEB + reorg_cap ≤ (k + n)·SEB + reorg_cap`. Both sides scale
 //! with `SEB` and carry the same cap, so the relation is in epochs and
 //! holds under every schedule, Fakechain's included:
-//! [`WALK_BACK_EPOCHS`] against the floor's epochs, asserted at compile
-//! time. A walk asked to start below the floor anyway is refused, never
-//! degraded ([`DrawableEpochFault::BelowFloor`], §7.4 pin 4).
+//! [`WALK_BACK_EPOCHS`] against that floor's epochs, asserted at compile
+//! time. The Release journal is retired at [`crate::ReleaseJournalFloor`],
+//! one above `h_open` of the oldest epoch the settling family keeps,
+//! which is where the walk of that epoch starts. A walk asked to start
+//! below either floor is refused, never degraded
+//! ([`DrawableEpochFault::BelowFloor`], §7.4 pin 4).
 
 use std::collections::BTreeMap;
 
@@ -89,16 +92,19 @@ use crate::archival::ClosedUniverse;
 use crate::fault::{Corrupt, DrawableEpochFault, SettlementCheck, ViewRead};
 use crate::reorg::SlashLogFloor;
 use crate::view::ChainView;
+use crate::ReleaseJournalFloor;
 
 /// The epochs the walk back reads, from `h_open(E)` to the slash pass
 /// that settles `E`: the epoch itself and the slash grace after it (module
 /// docs, *The walk's span*).
 pub const WALK_BACK_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
 
-// The walk stays above the journals' floor under every schedule: the floor
-// is `(k + n)` epochs and a reorg cap below the tip, the walk `(k + 1)`
-// epochs and at most a reorg cap. Re-pinning the grace or the window so
-// the walk reaches below the floor fails here.
+// The slash-log half of the walk stays above [`SlashLogFloor`] under every
+// schedule: that floor is `(k + n)` epochs and a reorg cap below the tip,
+// the walk `(k + 1)` epochs and at most a reorg cap. The Release journal's
+// floor is [`ReleaseJournalFloor`], derived from the settling family, and
+// the pass's walk starts at it. Re-pinning the grace or the window so the
+// slash-log half reaches below its floor fails here.
 #[allow(clippy::cast_lossless)] // `u64::from` is not const.
 const _: () = assert!(WALK_BACK_EPOCHS <= SLASH_GRACE_EPOCHS + FAILURE_WINDOW_N as u64);
 
@@ -139,15 +145,15 @@ pub(crate) fn drawable_epoch_at_open<'r>(
 /// `h_open(epoch)` undone. `None` when `epoch` has not opened on this view:
 /// there is no state after `h_open(epoch)` to rebuild.
 ///
-/// `schedule` and `reorg_cap` are the rule set's, and `floor` is the
-/// journals' floor under it — the caller's, as for every slash-log read
-/// (`SLK-2`).
+/// `schedule` and `reorg_cap` are the rule set's. `journal` is the Release
+/// journal's floor and `slash` the slash log's, each the caller's
+/// (`SLK-2`): the two journals are not retired at the same height.
 ///
 /// # Errors
 ///
 /// The view's fault; [`Corrupt::DrawableEpoch`] when the walk would start
-/// below `floor`, when a journal row names a persona with no record, when
-/// a slash cannot be undone on the record the walk holds, or when the
+/// below either floor, when a journal row names a persona with no record,
+/// when a slash cannot be undone on the record the walk holds, or when the
 /// rebuilt set cannot be built; or [`closed_and_final`](super::closed_and_final)'s
 /// [`Corrupt::ShardCloseUnplaced`].
 pub fn drawable_epoch_walked_back<'id, V: ChainView<'id>>(
@@ -155,7 +161,8 @@ pub fn drawable_epoch_walked_back<'id, V: ChainView<'id>>(
     epoch: SettlementEpoch,
     schedule: SettlementSchedule,
     reorg_cap: BlockCount,
-    floor: SlashLogFloor,
+    journal: ReleaseJournalFloor,
+    slash: SlashLogFloor,
 ) -> Result<Option<DrawableEpoch>, ViewRead<V::Fault>> {
     let corrupt = |why| ViewRead::Corrupt(Corrupt::DrawableEpoch { epoch, why });
     let Some(tip) = view.tip().map_err(ViewRead::View)? else {
@@ -165,10 +172,19 @@ pub fn drawable_epoch_walked_back<'id, V: ChainView<'id>>(
     if h_open > tip.height {
         return Ok(None);
     }
-    // Rows strictly above `h_open` are read; the lowest is `h_open + 1`, and
-    // the floor is the lowest retained.
-    if let Some(kept_from) = floor.height() {
-        if h_open.to_raw().saturating_add(1) < kept_from.to_raw() {
+    // Rows strictly above `h_open` are read. Each floor is the lowest
+    // height its journal retains; the scan start lies below it on the same
+    // comparison the store's read uses (SI-28, SI-26).
+    if let Some(kept_from) = journal.height() {
+        if scan_starts_below(h_open, kept_from) {
+            return Err(corrupt(DrawableEpochFault::BelowFloor {
+                h_open,
+                floor: kept_from,
+            }));
+        }
+    }
+    if let Some(kept_from) = slash.height() {
+        if scan_starts_below(h_open, kept_from) {
             return Err(corrupt(DrawableEpochFault::BelowFloor {
                 h_open,
                 floor: kept_from,
@@ -177,16 +193,28 @@ pub fn drawable_epoch_walked_back<'id, V: ChainView<'id>>(
     }
     let records = view.bond_records().map_err(ViewRead::View)?;
     let releases = view
-        .release_journal_after(h_open, floor)
+        .release_journal_after(h_open, journal)
         .map_err(ViewRead::View)?;
     let slashes = view
-        .slash_log_rows_after(h_open, floor)
+        .slash_log_rows_after(h_open, slash)
         .map_err(ViewRead::View)?;
     let at_open = rewind(records, releases, slashes).map_err(corrupt)?;
     let final_count = final_count_at_open(view, h_open, reorg_cap)?;
     emit(epoch, at_open.iter(), final_count)
         .map(Some)
         .map_err(corrupt)
+}
+
+/// Whether a scan strictly above `asked` starts below `kept_from`.
+///
+/// The store's retired range is every row strictly below `kept_from`, and
+/// the scan starts at `asked + 1`. That start lies in the range exactly
+/// when `asked + 1 < kept_from`. The last height has no row above it, so
+/// it is not below any floor.
+fn scan_starts_below(asked: BlockHeight, kept_from: BlockHeight) -> bool {
+    asked
+        .checked_add(BlockCount::ONE)
+        .is_some_and(|start| start < kept_from)
 }
 
 /// §9.5 check 2, on the two values and nothing else.
