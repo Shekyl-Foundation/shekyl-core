@@ -487,9 +487,9 @@ impl<
         let (in_flight, outcomes) = pending.as_ref().map_or_else(
             || (Vec::new(), Vec::new()),
             |block| {
-                let held = staking_outcomes::held_spent_stakes(block, pscan.as_ref());
+                let scan = staking_outcomes::FundingScan::from_seal(pscan.as_ref());
                 (
-                    staking_outcomes::in_flight(block, ledger_tip, &held),
+                    staking_outcomes::in_flight(block, ledger_tip, scan.evidence()),
                     staking_outcomes::outcomes(block),
                 )
             },

@@ -14,17 +14,17 @@
 //! delay (WR-Q5): the report says what kind of work it was and where it
 //! stands, and a wallet acts on the active persona.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{
-    end_date, OutcomeKind, RecordKind, StakingOutcome, TerminalCause,
+    end_date, end_date_disposition, EndDateDisposition, OutcomeKind, RecordKind, SealedRecord,
+    StakingOutcome, TerminalCause,
 };
-use std::collections::BTreeSet;
-
 use shekyl_engine_state::pscan_state::PScanState;
 use shekyl_engine_state::{PendingPostBlock, PendingPostState};
-use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
 use tokio::sync::RwLock;
 
 use super::local_ledger::LocalLedger;
@@ -234,48 +234,151 @@ fn refusal(cause: TerminalCause) -> &'static str {
     }
 }
 
-/// The state of one record against the ledger clock.
-///
-/// Precedence: a held stake reads `Held` (its inputs are spent, so neither a
-/// verdict nor the clock describes it); otherwise a tip at or past the end
-/// date reads `Expired`, because the next block cannot include the
-/// transaction (the driver's no-send rule on the same clock), carrying any
-/// recorded cause; otherwise a recorded verdict reads `Refused`, so its
-/// reason shows at once; otherwise the sealed state.
-fn record(
-    kind: RecordKind,
-    state: PendingPostState,
-    reference_height: BlockHeight,
-    terminal: Option<TerminalCause>,
-    held: bool,
-    ledger_tip: BlockHeight,
-) -> InFlightRecord {
-    let sends = match state {
-        PendingPostState::Pending => None,
-        PendingPostState::Dispatched { at, attempts } => Some(Sends {
-            first_at_height: tip_of(at),
-            attempts,
-        }),
-    };
-    let funds_return_at = end_date(reference_height, REFERENCE_MAX_AGE);
-    let state = if held {
-        InFlightState::Held
-    } else if ledger_tip >= funds_return_at {
-        InFlightState::Expired {
-            funds_return_at,
-            cause: terminal,
+/// What the sealed scan contributes to a read. `live` is `Some` only when a
+/// scan exists and its frontier has moved off zero: absence from that set is
+/// a spend. `None` means the scan has not produced evidence, so absence is
+/// not a spend and a fully spent stake is not yet held.
+#[derive(Clone, Copy)]
+pub(crate) struct ScanEvidence<'a> {
+    live: Option<&'a BTreeSet<GlobalOutputIndex>>,
+    confirmed_posts: &'a BTreeSet<PCanonicalId>,
+}
+
+#[cfg(test)]
+impl ScanEvidence<'static> {
+    /// No scan evidence. A record past its end date reads expired.
+    fn unscanned() -> Self {
+        Self {
+            live: None,
+            confirmed_posts: &EMPTY_CONFIRMED,
         }
-    } else if let Some(cause) = terminal {
-        InFlightState::Refused {
+    }
+}
+
+#[cfg(test)]
+impl<'a> ScanEvidence<'a> {
+    /// Evidence the caller already knows a moved frontier produced.
+    fn scanned(
+        live: &'a BTreeSet<GlobalOutputIndex>,
+        confirmed_posts: &'a BTreeSet<PCanonicalId>,
+    ) -> Self {
+        Self {
+            live: Some(live),
+            confirmed_posts,
+        }
+    }
+}
+
+#[cfg(test)]
+static EMPTY_CONFIRMED: BTreeSet<PCanonicalId> = BTreeSet::new();
+
+/// The funding set and JoinMarket matches of one sealed scan, or the
+/// absence of evidence when there is no scan or the frontier is still zero.
+pub(crate) struct FundingScan {
+    live: Option<BTreeSet<GlobalOutputIndex>>,
+    confirmed_posts: BTreeSet<PCanonicalId>,
+}
+
+impl FundingScan {
+    /// `None` for `live` when `pscan` is absent or its frontier cannot step
+    /// back one block. An empty funding set is then not read as "every input
+    /// is spent".
+    pub(crate) fn from_seal(pscan: Option<&PScanState>) -> Self {
+        let Some(pscan) = pscan else {
+            return Self {
+                live: None,
+                confirmed_posts: BTreeSet::new(),
+            };
+        };
+        if pscan
+            .synced_height()
+            .checked_sub_count(BlockCount::ONE)
+            .is_none()
+        {
+            return Self {
+                live: None,
+                confirmed_posts: BTreeSet::new(),
+            };
+        }
+        let live = pscan
+            .funding_outputs()
+            .iter()
+            .map(|output| output.gindex)
+            .collect();
+        let confirmed_posts = pscan
+            .bond_post_matches()
+            .iter()
+            .filter(|matched| shekyl_wire::transaction::is_join_market_post_kind(matched.post_kind))
+            .map(|matched| matched.p_canonical_id)
+            .collect();
+        Self {
+            live: Some(live),
+            confirmed_posts,
+        }
+    }
+
+    pub(crate) fn evidence(&self) -> ScanEvidence<'_> {
+        ScanEvidence {
+            live: self.live.as_ref(),
+            confirmed_posts: &self.confirmed_posts,
+        }
+    }
+}
+
+/// Where one sealed record stands at `ledger_tip`.
+///
+/// Past the end date, [`end_date_disposition`] decides. A hold the scan has
+/// not matched reads [`InFlightState::Held`]. A release reads
+/// [`InFlightState::Expired`]: the funds come back once the frontier covers
+/// the end date. A settlement, and a hold the scan has already matched, do
+/// not promise a return; they fall through to the sealed state. With no scan
+/// evidence, past the end date reads expired, because absence has not been
+/// shown to be a spend. Before the end date a recorded verdict reads
+/// [`InFlightState::Refused`].
+fn project(
+    record: SealedRecord<'_>,
+    ledger_tip: BlockHeight,
+    evidence: ScanEvidence<'_>,
+) -> InFlightState {
+    let funds_return_at = end_date(record.reference_height, REFERENCE_MAX_AGE);
+    if ledger_tip >= funds_return_at {
+        match evidence.live {
+            Some(live) => {
+                match end_date_disposition(record.kind, record.reserved, record.terminal, live) {
+                    EndDateDisposition::Hold
+                        if record.kind == RecordKind::Post
+                            && !evidence.confirmed_posts.contains(record.persona) =>
+                    {
+                        return InFlightState::Held;
+                    }
+                    EndDateDisposition::Release(_) => {
+                        return InFlightState::Expired {
+                            funds_return_at,
+                            cause: record.terminal,
+                        };
+                    }
+                    EndDateDisposition::Hold | EndDateDisposition::Settled => {}
+                }
+            }
+            None => {
+                return InFlightState::Expired {
+                    funds_return_at,
+                    cause: record.terminal,
+                };
+            }
+        }
+    }
+    if let Some(cause) = record.terminal {
+        return InFlightState::Refused {
             cause,
             funds_return_at,
-        }
-    } else if sends.is_some() {
+        };
+    }
+    if matches!(record.state, PendingPostState::Dispatched { .. }) {
         InFlightState::Dispatched
     } else {
         InFlightState::Pending
-    };
-    InFlightRecord { kind, state, sends }
+    }
 }
 
 /// `at` is the claimed chain count the first send was judged against; the
@@ -287,82 +390,48 @@ fn tip_of(at: ChainCount) -> BlockHeight {
 }
 
 /// Every live record in `block`, judged at `ledger_tip` (the wallet ledger's
-/// synced height, inclusive). `held` is [`held_spent_stakes`] over the same
-/// seals.
+/// synced height, inclusive) against `evidence`.
 pub(crate) fn in_flight(
     block: &PendingPostBlock,
     ledger_tip: BlockHeight,
-    held: &BTreeSet<PCanonicalId>,
+    evidence: ScanEvidence<'_>,
 ) -> Vec<InFlightRecord> {
-    let entry = |kind, state, reference_height, terminal, held| {
-        record(kind, state, reference_height, terminal, held, ledger_tip)
-    };
-    let posts = block.posts().iter().map(|r| {
-        entry(
-            RecordKind::Post,
-            r.state,
-            r.reference_height,
-            r.terminal,
-            held.contains(&r.persona),
-        )
-    });
-    let claims = block.claims().iter().map(|r| {
-        entry(
-            RecordKind::Claim,
-            r.state,
-            r.reference_height,
-            r.terminal,
-            false,
-        )
-    });
-    let drains = block.drains().iter().map(|r| {
-        entry(
-            RecordKind::Drain,
-            r.state,
-            r.reference_height,
-            r.terminal,
-            false,
-        )
-    });
-    let releases = block.releases().iter().map(|r| {
-        entry(
-            RecordKind::Release,
-            r.state,
-            r.reference_height,
-            r.terminal,
-            false,
-        )
-    });
-    posts.chain(claims).chain(drains).chain(releases).collect()
+    block
+        .sealed_records()
+        .map(|record| InFlightRecord {
+            kind: record.kind,
+            state: project(record, ledger_tip, evidence),
+            sends: match record.state {
+                PendingPostState::Pending => None,
+                PendingPostState::Dispatched { at, attempts } => Some(Sends {
+                    first_at_height: tip_of(at),
+                    attempts,
+                }),
+            },
+        })
+        .collect()
 }
 
-/// The stakes the end-date release holds because every reserved input is
-/// spent and no confirmation retired them, read from the two seals: the
-/// sealed scan's frontier, its live funding set and its JoinMarket matches,
-/// the same evidence the dispatch tick releases on. A stake whose match is
-/// sealed is the tick's to retire, so it is not counted. No scan seal, or a
-/// frontier at zero, holds nothing.
+/// Stakes [`project`] reads as [`InFlightState::Held`] at `ledger_tip`.
+///
+/// The same classification and the same scan evidence as [`in_flight`], on
+/// the ledger clock. The release's [`PendingPostBlock::held_spent_posts`]
+/// still waits until the frontier covers the end date. No scan, or a
+/// frontier at zero, holds nothing: an empty funding set is not a total spend.
 pub(crate) fn held_spent_stakes(
     pending: &PendingPostBlock,
     pscan: Option<&PScanState>,
+    ledger_tip: BlockHeight,
 ) -> BTreeSet<PCanonicalId> {
-    let Some(pscan) = pscan else {
-        return BTreeSet::new();
-    };
-    let Some(scanned_through) = pscan.synced_height().checked_sub_count(BlockCount::ONE) else {
-        return BTreeSet::new();
-    };
-    let live: BTreeSet<_> = pscan.funding_outputs().iter().map(|f| f.gindex).collect();
-    let confirmed: BTreeSet<_> = pscan
-        .bond_post_matches()
-        .iter()
-        .filter(|m| shekyl_wire::transaction::is_join_market_post_kind(m.post_kind))
-        .map(|m| m.p_canonical_id)
-        .collect();
+    let scan = FundingScan::from_seal(pscan);
+    let evidence = scan.evidence();
     pending
-        .held_spent_posts(scanned_through, &live, REFERENCE_MAX_AGE)
-        .map(|p| p.persona)
-        .filter(|persona| !confirmed.contains(persona))
+        .sealed_records()
+        .filter(|record| {
+            record.kind == RecordKind::Post
+                && project(*record, ledger_tip, evidence) == InFlightState::Held
+        })
+        .map(|record| *record.persona)
         .collect()
 }
 
@@ -520,7 +589,7 @@ mod tests {
         let mut block = PendingPostBlock::empty();
         seal(&mut block, Record::Post(post(1, &[1])));
         assert_eq!(
-            in_flight(&block, at(5_010), &BTreeSet::new()),
+            in_flight(&block, at(5_010), ScanEvidence::unscanned()),
             vec![InFlightRecord {
                 kind: RecordKind::Post,
                 state: InFlightState::Pending,
@@ -534,7 +603,7 @@ mod tests {
         assert!(block
             .mark_dispatched(&persona(1), ChainCount::from_raw(5_012))
             .is_some());
-        let dispatched = in_flight(&block, at(5_020), &BTreeSet::new())[0];
+        let dispatched = in_flight(&block, at(5_020), ScanEvidence::unscanned())[0];
         assert_eq!(dispatched.state, InFlightState::Dispatched);
         assert_eq!(
             dispatched.sends,
@@ -555,11 +624,11 @@ mod tests {
         seal(&mut block, Record::Drain(drain(2, &[2])));
         let before = BlockHeight::from_raw(END.to_raw() - 1);
         assert_eq!(
-            in_flight(&block, before, &BTreeSet::new())[0].state,
+            in_flight(&block, before, ScanEvidence::unscanned())[0].state,
             InFlightState::Dispatched
         );
         for tip in [END, at(END.to_raw() + 900)] {
-            let expired = in_flight(&block, tip, &BTreeSet::new())[0];
+            let expired = in_flight(&block, tip, ScanEvidence::unscanned())[0];
             assert_eq!(
                 expired.state,
                 InFlightState::Expired {
@@ -590,7 +659,7 @@ mod tests {
             TerminalCause::JoinMarketUnsupported
         ));
         let cause = TerminalCause::JoinMarketUnsupported;
-        let before = in_flight(&block, at(END.to_raw() - 1), &BTreeSet::new())[0].state;
+        let before = in_flight(&block, at(END.to_raw() - 1), ScanEvidence::unscanned())[0].state;
         assert_eq!(
             before,
             InFlightState::Refused {
@@ -598,7 +667,7 @@ mod tests {
                 funds_return_at: END,
             }
         );
-        let after = in_flight(&block, END, &BTreeSet::new())[0].state;
+        let after = in_flight(&block, END, ScanEvidence::unscanned())[0].state;
         assert_eq!(
             after,
             InFlightState::Expired {
@@ -637,7 +706,7 @@ mod tests {
             }),
         );
 
-        let mut kinds: Vec<_> = in_flight(&block, END, &BTreeSet::new())
+        let mut kinds: Vec<_> = in_flight(&block, END, ScanEvidence::unscanned())
             .iter()
             .map(|r| r.kind)
             .collect();
@@ -660,14 +729,14 @@ mod tests {
             .release_ended(scanned_through, &live, REFERENCE_MAX_AGE, END)
             .is_empty());
         assert_eq!(
-            in_flight(&block, END, &BTreeSet::new()).len(),
+            in_flight(&block, END, ScanEvidence::unscanned()).len(),
             4,
             "still held at the end date"
         );
 
         let ended = block.release_ended(END, &live, REFERENCE_MAX_AGE, at(5_900));
         assert_eq!(ended.released.len(), 4);
-        assert!(in_flight(&block, at(5_900), &BTreeSet::new()).is_empty());
+        assert!(in_flight(&block, at(5_900), ScanEvidence::unscanned()).is_empty());
         let mut reported = outcomes(&block);
         reported.sort_by_key(|o| o.kind);
         assert_eq!(
@@ -828,25 +897,90 @@ mod tests {
             )
         };
 
-        let before = held_spent_stakes(&block, Some(&state(END.to_raw())));
+        let live_funding: BTreeSet<_> = gindexes(&[43]).into_iter().collect();
         assert!(
-            before.is_empty(),
-            "the block at the end date is not yet scanned"
+            block
+                .held_spent_posts(
+                    BlockHeight::from_raw(END.to_raw() - 1),
+                    &live_funding,
+                    REFERENCE_MAX_AGE,
+                )
+                .next()
+                .is_none(),
+            "the release still waits until the frontier covers the end date"
         );
-        let held = held_spent_stakes(&block, Some(&state(END.to_raw() + 1)));
-        assert_eq!(held, [persona(0x81)].into_iter().collect());
-        assert!(
-            held_spent_stakes(&block, None).is_empty(),
-            "no scan, nothing held"
+        assert_eq!(
+            block
+                .held_spent_posts(END, &live_funding, REFERENCE_MAX_AGE)
+                .map(|post| post.persona)
+                .collect::<Vec<_>>(),
+            vec![persona(0x81), persona(0x82)],
+            "the release keeps every fully spent stake; a sealed match is the tick's to retire"
         );
 
-        let entry = in_flight(&block, END, &held)
-            .into_iter()
-            .find(|r| r.state == InFlightState::Held)
-            .expect("the held stake is reported");
-        assert_eq!(entry.kind, RecordKind::Post);
-        let reason = entry.state.reason().expect("a held stake has a reason");
+        let behind = state(END.to_raw());
+        assert!(
+            held_spent_stakes(&block, Some(&behind), at(END.to_raw() - 1)).is_empty(),
+            "the ledger has not reached the end date"
+        );
+        let held = held_spent_stakes(&block, Some(&behind), END);
+        assert_eq!(
+            held,
+            [persona(0x81)].into_iter().collect(),
+            "the funding set already shows the spend, so the read does not wait for the frontier"
+        );
+        assert_eq!(
+            held_spent_stakes(&block, Some(&state(END.to_raw() + 1)), END),
+            held,
+            "once the frontier catches up the same stake is held"
+        );
+        assert!(
+            held_spent_stakes(&block, None, END).is_empty(),
+            "no scan, nothing held"
+        );
+        assert!(
+            held_spent_stakes(&block, Some(&state(0)), END).is_empty(),
+            "a frontier still at zero has not shown a spend"
+        );
+
+        let reported = in_flight(
+            &block,
+            END,
+            FundingScan::from_seal(Some(&behind)).evidence(),
+        );
+        let states: Vec<_> = reported.iter().map(|record| record.state).collect();
+        assert_eq!(
+            states
+                .iter()
+                .filter(|state| **state == InFlightState::Held)
+                .count(),
+            1
+        );
+        assert!(
+            states.contains(&InFlightState::Pending),
+            "a matched stake is the tick's to retire and does not read expired: {states:?}"
+        );
+        assert!(
+            states.contains(&InFlightState::Expired {
+                funds_return_at: END,
+                cause: None,
+            }),
+            "a partly spent stake still reads expired until the release: {states:?}"
+        );
+        let reason = InFlightState::Held
+            .reason()
+            .expect("a held stake has a reason");
         assert!(reason.contains("not lost"), "{reason}");
+
+        let mut settled = PendingPostBlock::empty();
+        seal(&mut settled, Record::Drain(drain(0x91, &[9])));
+        let live = BTreeSet::new();
+        let confirmed = BTreeSet::new();
+        assert_eq!(
+            in_flight(&settled, END, ScanEvidence::scanned(&live, &confirmed))[0].state,
+            InFlightState::Dispatched,
+            "a fully spent drain is settlement's, and does not promise a return"
+        );
     }
 
     const CAUSES: [TerminalCause; 5] = [
@@ -960,7 +1094,7 @@ mod tests {
             PendingPostBlock::from_postcard_bytes(&block.to_postcard_bytes().expect("encode"))
                 .expect("decode");
         assert_eq!(
-            in_flight(&reloaded, at(5_101), &BTreeSet::new())[0].state,
+            in_flight(&reloaded, at(5_101), ScanEvidence::unscanned())[0].state,
             InFlightState::Expired {
                 funds_return_at: BlockHeight::from_raw(REFERENCE.to_raw() + 100),
                 cause: None,

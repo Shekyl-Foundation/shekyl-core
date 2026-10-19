@@ -423,6 +423,17 @@ impl ReservationKind {
             Self::Release => "release exit",
         }
     }
+
+    /// The reservation kinds this alarm covers. A bond post is not one:
+    /// its end date ends it first.
+    const fn from_record(kind: RecordKind) -> Option<Self> {
+        match kind {
+            RecordKind::Post => None,
+            RecordKind::Claim => Some(Self::Claim),
+            RecordKind::Drain => Some(Self::Drain),
+            RecordKind::Release => Some(Self::Release),
+        }
+    }
 }
 
 /// The block-timed dispatch driver. Owned by the pscan task; [`Self::on_tick`]
@@ -593,40 +604,26 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
                     changed = true;
                 }
 
-                // Stall alarm for the reservation-observed kinds. A claim or
-                // drain that never settles holds its one-live gate shut, and
-                // the failure paths that produce one are silent by nature: a
-                // terminally-rejected transaction never spends its inputs, so
-                // it never settles and nothing else says so. Naming it in the
-                // log is the honest half-measure while terminal-reject prune
-                // is a separate slice — the record is HELD, matching the bond
-                // post's funds-safety-over-liveness posture.
-                let mut reservation_alarms = Vec::new();
-                for (kind, persona, state) in block
-                    .claims()
-                    .iter()
-                    .map(|c| (ReservationKind::Claim, c.persona, c.state))
-                    .chain(
-                        block
-                            .drains()
-                            .iter()
-                            .map(|d| (ReservationKind::Drain, d.persona, d.state)),
-                    )
-                    .chain(
-                        block
-                            .releases()
-                            .iter()
-                            .map(|u| (ReservationKind::Release, u.persona, u.state)),
-                    )
-                {
-                    if let PendingPostState::Dispatched { at, .. } = state {
-                        if tip >= at.saturating_add(horizon)
-                            && !reservation_alarmed.contains(&(kind, persona))
-                        {
-                            reservation_alarms.push((kind, persona, at));
-                        }
-                    }
-                }
+                // Scan-lag signal for a claim, drain, or exit still sealed past
+                // the alarm horizon. The end-date release, above, removes the
+                // record once the sealed frontier covers its end date; on a
+                // caught-up scan that happens before this horizon, so the line
+                // fires only when the scan is behind its ceiling. It names the
+                // kind and the heights, never a persona (WR-Q5). Bond posts are
+                // not here: their end date ends them first, and a fully spent
+                // unmatched stake is the integrity alarm.
+                let reservation_alarms: Vec<_> = block
+                    .sealed_records()
+                    .filter_map(|record| {
+                        let kind = ReservationKind::from_record(record.kind)?;
+                        let PendingPostState::Dispatched { at, .. } = record.state else {
+                            return None;
+                        };
+                        (tip >= at.saturating_add(horizon)
+                            && !reservation_alarmed.contains(&(kind, *record.persona)))
+                        .then_some((kind, *record.persona, at))
+                    })
+                    .collect();
 
                 // Select + mark (§3.2 part 2 / §3.3 step 2): at most one,
                 // deterministic order, sealed as `Dispatched` BEFORE any
@@ -714,41 +711,34 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
             self.alarmed_reservations.insert((*kind, *persona));
             tracing::error!(
                 kind = kind.as_str(),
-                persona = ?persona,
                 dispatched_at = at.to_raw(),
                 tip = tip.to_raw(),
                 horizon_blocks = self.config.alarm_horizon_blocks.to_raw(),
-                "reservation STALL: a dispatched {} has not settled past the alarm horizon — \
-                 at least one input it reserved is still live on chain, so its one-live gate \
-                 stays shut and this persona cannot start another. NOTE the reservation may \
-                 be PARTLY spent: settlement requires every reserved input to be gone, and a \
-                 half-gone reservation is held deliberately because the confirming spend \
-                 cannot produce that state — treat it as an anomaly worth looking at, not as \
-                 a wholly unsent transaction. The record and its reservation are HELD \
-                 (funds-safety over liveness). A terminal rejection and an ambiguous submit \
-                 whose bytes never arrived both look exactly like this until terminal-reject \
-                 prune and byte-identical resubmit land. Operator action: check daemon \
-                 connectivity / chain health",
+                "reservation stall: a dispatched {} is still sealed past the alarm horizon. \
+                 It ends at its end date, which staking_info shows, and a partly spent \
+                 reservation is released then as spent elsewhere. The end-date release \
+                 removes it once the staking scan has covered that height; this line means \
+                 the scan has not. Operator action: check daemon connectivity and chain health",
                 kind.as_str()
             );
         }
 
-        for &(kind, persona, _) in &plan.ended.released {
-            match kind {
+        for ended in &plan.ended.released {
+            match ended.kind {
                 RecordKind::Post => {
-                    self.held_this_session.remove(&persona);
+                    self.held_this_session.remove(&ended.persona);
                 }
                 RecordKind::Claim => {
                     self.alarmed_reservations
-                        .remove(&(ReservationKind::Claim, persona));
+                        .remove(&(ReservationKind::Claim, ended.persona));
                 }
                 RecordKind::Drain => {
                     self.alarmed_reservations
-                        .remove(&(ReservationKind::Drain, persona));
+                        .remove(&(ReservationKind::Drain, ended.persona));
                 }
                 RecordKind::Release => {
                     self.alarmed_reservations
-                        .remove(&(ReservationKind::Release, persona));
+                        .remove(&(ReservationKind::Release, ended.persona));
                 }
             }
         }

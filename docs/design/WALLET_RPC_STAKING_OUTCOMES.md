@@ -554,7 +554,7 @@ a record was signed under the limit in force then.
 | The post lands late | It can land only at or below its end date. The scan matches it before the frontier passes the end date, and the confirmation retire removes it as a confirmed stake. No release fires |
 | A reorg near the end date | The release waits for a frontier that is itself reorg-deep. A reorg within that depth changes nothing; one deeper is outside the wallet's finality model everywhere |
 | A hostile node holds the bytes and broadcasts them later | After the end date, every daemon refuses them for their reference age. Before it, they can land only as the user's own stake, which the scan retires as confirmed |
-| The scan stalls | The frontier does not advance and nothing is released early. The state stays `expired` with its `funds_return_at` |
+| The scan stalls | The frontier does not advance and nothing is released early. A record the scan has not shown spent stays `expired` with its `funds_return_at`. A stake the sealed funding set already shows fully spent reads `held` once the ledger reaches the end date (§7.3) |
 | The consensus age limit changes | Covered by the invariant above: the release module's sentinel fails the build |
 
 **Rejected alternatives.**
@@ -677,7 +677,7 @@ completed or been withdrawn with its funds returned."
   `kind == "drain"`, `state == "expired"` once the clock passes `r + 100`.
   It leaves `in_flight` with an `outcomes` entry once the frontier
   reaches `r + 100`.
-- `rg -n 'reference_height' rust/shekyl-engine-state/src/pending_post_block.rs`
+- `rg -n 'reference_height' rust/shekyl-engine-state/src/pending_post_block/`
   hits on `PendingBondPost`, `PendingEmissionClaim`, `PendingDrain` and
   `PendingRelease`.
 - The `-29522` message names `staking_info`.
@@ -838,9 +838,10 @@ and the review rulings of 2026-10-17 (§7.3).
   `spent_elsewhere` outcome or a held stake, and again only when the
   counts change. It names no persona, slot or record. The release itself
   logs nothing.
-- **`held` is an `in_flight` state** (ruled 2026-10-17, §7.3): a stake past
-  its end date with every reserved input spent and no confirmation seen.
-  `funds_return_at` is `null`, because nothing reserved is left to return.
+- **`held` is an `in_flight` state** (ruled 2026-10-17, §7.3): a stake whose
+  ledger tip has reached its end date, with every reserved input spent and
+  no confirmation seen. `funds_return_at` is `null`, because nothing
+  reserved is left to return. The release still waits for the scan frontier.
 - **The persisted outcome records whether the record was sent.** Only a
   sent record published its inputs' key images, so only its ending carries
   WR-Q5's linkage sentence. Sent means the record reached `Dispatched`,
@@ -873,7 +874,7 @@ and the review rulings of 2026-10-17 (§7.3).
 | WR-Q3 / WR-Q5: the error line once per start | `the_integrity_error_is_written_once_per_start_and_on_change` |
 | WR-Q2: the acknowledgement by kind and height | `pending_post_block` `an_acknowledgement_clears_every_persona_through_the_height_shown`; through the facade and the seal, `an_acknowledgement_clears_every_personas_outcome_through_the_height_shown`; the CLI default, `acknowledge_defaults_to_the_newest_ending_shown` |
 | WR-Q3 / WR-Q4: the release table, every kind | `pending_post_block` tests and `the_release_moves_each_kind_from_in_flight_to_outcomes` |
-| §7.3: a stake with every input spent holds; a partly spent one releases | `the_release_outcome_follows_the_precedence_table`; `a_stake_with_every_input_spent_reads_held`; the alarm from the two seals, `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
+| §7.3: a stake with every input spent holds; a partly spent one releases | `the_release_outcome_follows_the_precedence_table`; `a_stake_with_every_input_spent_reads_held` (ledger at the end date while the frontier is still behind it); the alarm from the two seals, `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
 | §7.3: `spent_elsewhere` clears only on acknowledgement | `spent_elsewhere_survives_a_new_seal_and_a_new_ending`; its alarm survives a new seal in `the_pending_outcomes_leg_re_derives_the_integrity_alarm_from_the_seal` |
 | WR-Q5: no persona, slot, delay or funding output on the wire; `p_slot` refused | `types::tests::staking_outcome_wire_names_no_persona_slot_or_funding_output`, `staking_reads_on_fresh_wallet_are_zero_and_offline` |
 
@@ -889,6 +890,12 @@ and the review rulings of 2026-10-17 (§7.3).
   raised, re-derived on every cadence fire from the two seals
   (`ReservationSpentElsewhere`, `held_stakes`). A stake with only part of
   its inputs spent still releases as `spent_elsewhere`.
+  The read and the alarm use the ledger tip as the end-date clock, the
+  same clock as every other `in_flight` state (WR-Q1). The release still
+  waits until the sealed frontier covers the end date before it keeps the
+  record rather than freeing it. A stake the sealed funding set already
+  shows fully spent therefore reads `held` once the ledger reaches the end
+  date, including while the frontier is still behind it.
 - **`spent_elsewhere` clears only on acknowledgement.** A new seal or a
   new ending of the same kind for that persona leaves it, and its alarm,
   in place.
