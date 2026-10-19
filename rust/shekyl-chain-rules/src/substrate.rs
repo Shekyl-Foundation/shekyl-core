@@ -51,6 +51,11 @@ pub trait Substrate {
     /// clock's. Opaque to every rule (no bound). A fault is not a verdict.
     type Fault;
 
+    /// A cache this substrate built for one seed and handed to the caller
+    /// ([`prepare_seed`](Self::prepare_seed)). `()` for a substrate that
+    /// caches nothing.
+    type Held: Default + Send + Sync;
+
     /// The local wall clock, Unix seconds (CEN-C1's operand). Read once per
     /// [`form`](crate::form) and carried on the verdict, so the FTL leg is
     /// judged against one instant and a consumer can see which.
@@ -82,5 +87,32 @@ pub trait Substrate {
     /// a clock fault without downcasting.
     fn cache_absent(&self, _fault: &Self::Fault) -> bool {
         false
+    }
+
+    /// Build `seed`'s cache for the caller to hold, in the transient slot
+    /// and never the canonical one, and hand it over. The caller has judged
+    /// the seed earned: the seed block of the arrival's own in-cap branch,
+    /// stored with its proof of work passed (`DRS_X_STORE_FLIP.md` DX-Q2
+    /// item 1, B2). The caller holds a hasher permit across it. The default
+    /// builds nothing.
+    fn prepare_seed(&self, _seed: &BlockHash) -> Self::Held {
+        Self::Held::default()
+    }
+
+    /// [`longhash`](Self::longhash) under `held`, the cache
+    /// [`prepare_seed`](Self::prepare_seed) returned for `seed`. There is
+    /// no second lookup, so a slot evicted since the preparation does not
+    /// fail it. The default is `longhash`.
+    ///
+    /// # Errors
+    ///
+    /// As [`longhash`](Self::longhash).
+    fn longhash_held(
+        &self,
+        pow_blob: &[u8],
+        seed: &BlockHash,
+        _held: &Self::Held,
+    ) -> Result<PowHash, Self::Fault> {
+        self.longhash(pow_blob, seed)
     }
 }

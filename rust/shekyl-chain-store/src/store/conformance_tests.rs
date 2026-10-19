@@ -113,6 +113,7 @@ struct Env {
 
 impl Substrate for Env {
     type Fault = core::convert::Infallible;
+    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         Ok(self.clock)

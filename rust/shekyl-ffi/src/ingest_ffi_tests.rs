@@ -51,6 +51,7 @@ struct Free;
 
 impl Substrate for Free {
     type Fault = std::convert::Infallible;
+    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         Ok(Timestamp::from_raw(1_800_000_000))

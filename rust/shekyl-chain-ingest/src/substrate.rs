@@ -55,7 +55,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use shekyl_chain_rules::Substrate;
-use shekyl_pow_randomx::{compute_hash, CacheOutcome, CacheStore, Seedhash};
+use shekyl_pow_randomx::{compute_hash, CacheOutcome, CacheStore, PreparedCache, Seedhash};
 use shekyl_types::{BlockHash, PowHash, Timestamp};
 
 use crate::metrics::Metrics;
@@ -123,6 +123,9 @@ impl ProductionSubstrate {
 
 impl Substrate for ProductionSubstrate {
     type Fault = SubstrateFault;
+    /// The cache a preparation built or found. `None` is the default: no
+    /// preparation, so [`longhash_held`](Substrate::longhash_held) looks up.
+    type Held = Option<Arc<PreparedCache>>;
 
     fn local_clock(&self) -> Result<Timestamp, SubstrateFault> {
         let since_epoch = SystemTime::now()
@@ -144,8 +147,9 @@ impl Substrate for ProductionSubstrate {
     }
 
     /// Make `seed`'s cache the canonical one, deriving it if needed
-    /// (module docs: pinning the epoch). The one derive this substrate
-    /// performs. The caller holds a hasher permit across it.
+    /// (module docs: pinning the epoch). One of the two derives this
+    /// substrate performs, with [`prepare_seed`](Substrate::prepare_seed).
+    /// The caller holds a hasher permit across it.
     fn pin_seed(&self, seed: &BlockHash) {
         let seedhash = Seedhash::from_bytes(*seed.as_bytes());
         let started = Instant::now();
@@ -155,6 +159,34 @@ impl Substrate for ProductionSubstrate {
 
     fn cache_absent(&self, fault: &SubstrateFault) -> bool {
         matches!(fault, SubstrateFault::CacheAbsent)
+    }
+
+    /// Build `seed`'s cache into the transient slot when no slot holds it,
+    /// and hand it over. The canonical slot does not move. The caller holds
+    /// a hasher permit across it.
+    fn prepare_seed(&self, seed: &BlockHash) -> Self::Held {
+        let seedhash = Seedhash::from_bytes(*seed.as_bytes());
+        let started = Instant::now();
+        let (cache, outcome) = self.caches.lookup_or_derive_reporting(&seedhash);
+        self.record_cache(outcome, started);
+        Some(cache)
+    }
+
+    /// The longhash under the prepared cache when it is `seed`'s, with no
+    /// lookup: an eviction since the preparation does not fail it.
+    fn longhash_held(
+        &self,
+        pow_blob: &[u8],
+        seed: &BlockHash,
+        held: &Self::Held,
+    ) -> Result<PowHash, SubstrateFault> {
+        match held {
+            Some(cache) if cache.seedhash().as_bytes() == seed.as_bytes() => {
+                let hash = self.metrics.timed_hash(|| compute_hash(cache, pow_blob));
+                Ok(PowHash::from_bytes(hash))
+            }
+            _ => self.longhash(pow_blob, seed),
+        }
     }
 }
 
@@ -201,6 +233,7 @@ impl<'a, P> Recalled<'a, P> {
 
 impl<P: Substrate> Substrate for Recalled<'_, P> {
     type Fault = P::Fault;
+    type Held = P::Held;
 
     fn local_clock(&self) -> Result<Timestamp, P::Fault> {
         self.inner.local_clock()
@@ -220,6 +253,23 @@ impl<P: Substrate> Substrate for Recalled<'_, P> {
 
     fn cache_absent(&self, fault: &P::Fault) -> bool {
         self.inner.cache_absent(fault)
+    }
+
+    fn prepare_seed(&self, seed: &BlockHash) -> P::Held {
+        self.inner.prepare_seed(seed)
+    }
+
+    fn longhash_held(
+        &self,
+        pow_blob: &[u8],
+        seed: &BlockHash,
+        held: &P::Held,
+    ) -> Result<PowHash, P::Fault> {
+        let identity = shekyl_wire::identity_of_pow_blob(pow_blob);
+        match self.recorded.get(&(identity, *seed)) {
+            Some(pow) => Ok(*pow),
+            None => self.inner.longhash_held(pow_blob, seed, held),
+        }
     }
 }
 

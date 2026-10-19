@@ -81,6 +81,7 @@ impl Gated {
 
 impl Substrate for Gated {
     type Fault = std::convert::Infallible;
+    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         Ok(Timestamp::from_raw(CLOCK_START.to_raw() + 1_000_000))

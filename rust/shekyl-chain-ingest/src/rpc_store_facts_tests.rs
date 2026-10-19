@@ -191,6 +191,7 @@ pub(crate) struct KeccakPow;
 
 impl Substrate for KeccakPow {
     type Fault = std::convert::Infallible;
+    type Held = ();
 
     fn local_clock(&self) -> Result<shekyl_types::Timestamp, Self::Fault> {
         crate::scenario::FreeHash.local_clock()
