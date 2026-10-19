@@ -4526,9 +4526,14 @@ int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 /// `rust/shekyl-daemon/src/entry.rs`, carried by the daemon image). C++
 /// `main()` fills a `ShekylDaemonEntry` and calls `shekyl_daemon_main`; Rust
 /// owns the process from there and calls `run` with the snapshot of the
-/// values whose reader is still C++. The structures below are the Rust
-/// `#[repr(C)]` definitions member for member; `SHEKYL_DAEMON_SNAPSHOT_FIELDS`
-/// is asserted against `shekyl_daemon_snapshot_field_count()` at run.
+/// values whose reader is still C++. The snapshot's structures, its field
+/// count and `shekyl_daemon_snapshot_parse` / `_free` are defined in
+/// `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs` and carried by every Rust
+/// image, so a binary that only constructs core from a snapshot (the
+/// importer, core_tests) links no daemon image (§2.9). The structures below
+/// are the Rust `#[repr(C)]` definitions member for member;
+/// `SHEKYL_DAEMON_SNAPSHOT_FIELDS` is asserted against
+/// `shekyl_daemon_snapshot_field_count()` at run.
 #define SHEKYL_DAEMON_SNAPSHOT_FIELDS 11u
 
 /// A list of NUL-terminated strings.
@@ -4599,8 +4604,9 @@ void shekyl_daemon_request_stop(void);
 /// Runs the daemon and returns its exit status: 2 a configuration refusal,
 /// 1 a runtime failure, `run`'s status otherwise; a panic aborts.
 int32_t shekyl_daemon_main(const ShekylDaemonEntry* entry);
-/// A snapshot for a C++ test binary, from a test argument list (the program
-/// first) through the one real parse: no lock, no marker, no logging. 0 and
+/// A snapshot for a C++ test binary or the importer, from an argument list
+/// (the program first) through the one real parse: no lock, no marker, no
+/// logging. In the ordinary library, not the daemon image. 0 and
 /// `*out` set; 2 with the refusal on standard error; 1 for a null argument.
 /// Released with `shekyl_daemon_snapshot_free`.
 int32_t shekyl_daemon_snapshot_parse(int argc, const char* const* argv, ShekylDaemonSnapshot** out);

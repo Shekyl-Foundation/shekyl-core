@@ -17,32 +17,30 @@
 //! 2, a runtime failure with 1, and `run`'s status becomes the exit status
 //! otherwise.
 
-use std::ffi::{c_char, CStr, CString, OsString};
+use std::ffi::{c_char, CStr, OsString};
 use std::io::Write;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use tokio::sync::oneshot::{self, Receiver};
 
 use shekyl_daemon_config::announce;
-use shekyl_daemon_config::sections::{build, log_location_writable, DaemonConfig, Tor};
-use shekyl_daemon_config::{choosers, file, marker, paths, resolve, Lock, Platform, TABLE};
-use shekyl_options::{read_cli, read_file, Code, Diagnostic, Kind, Source, Value};
+use shekyl_daemon_config::sections::{log_location_writable, DaemonConfig, Tor};
+use shekyl_daemon_config::{marker, resolve, Lock, Platform, TABLE};
+use shekyl_options::{read_cli, Code, Diagnostic, Source, Value};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 
-use crate::entry::{
-    ShekylClientEndpoint, ShekylDaemonEntry, ShekylDaemonSnapshot, ShekylMineAddress,
-    ShekylStringList,
-};
+use shekyl_daemon_config::exit::refuse;
+use shekyl_daemon_config::{load, Loaded};
+use shekyl_ffi::daemon_snapshot_ffi::SnapshotData;
+
+use crate::entry::{RunFn, ShekylDaemonEntry};
 use crate::options::DaemonOptions;
 use crate::{help, network, signals, tor};
 use shekyl_daemon_rpc::options::OptionsHandle;
 
-/// A configuration refusal.
-pub const EXIT_REFUSED: i32 = 2;
-/// A runtime failure.
-pub const EXIT_FAILED: i32 = 1;
+pub use shekyl_daemon_config::exit::{EXIT_FAILED, EXIT_REFUSED};
 
 /// One line for the operator. Help and version use standard output; a
 /// refusal or a failure uses standard error. A closed stream does not
@@ -99,9 +97,9 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         file_read,
         resolved,
         config,
-    } = match load(cli, host) {
+    } = match load(cli, &host.platform) {
         Ok(loaded) => loaded,
-        Err(status) => return status,
+        Err(ds) => return refuse(&ds),
     };
     let read_path = file_read.as_deref();
     let network = config.network;
@@ -270,7 +268,7 @@ fn supervise(
     let thread = std::thread::Builder::new()
         .name("shekyld-run".to_owned())
         .spawn(move || {
-            let status = data.call(run);
+            let status = call_with(&data, run);
             // The receiver is gone only if the entry already gave up.
             let _sent = done_tx.send(status);
         });
@@ -503,14 +501,6 @@ fn note_stop(by: &'static str) {
     tracing::warn!(target: "daemon", "stop requested by {by}");
 }
 
-/// Prints each refusal and returns the refusal status.
-fn refuse(diagnostics: &[Diagnostic]) -> i32 {
-    for d in diagnostics {
-        tell(&mut std::io::stderr(), &format!("shekyld: {}", d.render()));
-    }
-    EXIT_REFUSED
-}
-
 fn c_string(ptr: *const c_char) -> String {
     if ptr.is_null() {
         return String::new();
@@ -542,236 +532,14 @@ fn announce_all(log_file: &Path, lines: &[String]) {
     }
 }
 
-/// The owned bytes of a mining address. The snapshot's header points at
-/// these allocations, which do not move when this value moves.
-struct MineOwned {
-    text: CString,
-    spend: [u8; 32],
-    view: [u8; 32],
-    ml_kem: Vec<u8>,
-}
-
-/// The owned data behind a snapshot: built on the calling thread, moved to
-/// the run thread, and alive for as long as `run` runs.
-///
-/// The mining header is not stored here. It holds pointers, and this value
-/// is moved onto the run thread before `run` reads it. [`Self::call`] builds
-/// the header on that thread, for the duration of `run`. A lease boxes the
-/// header so the pointer stays valid after the lease is moved.
-pub(crate) struct SnapshotData {
-    data_dir: CString,
-    network: u8,
-    offline: bool,
-    fixed_difficulty: u64,
-    txpool_weight_max: u64,
-    sync: bool,
-    mine: Option<MineOwned>,
-    mine_threads: u32,
-    console: bool,
-    command: Vec<CString>,
-    client_endpoint: ShekylClientEndpoint,
-}
-
-impl SnapshotData {
-    pub(crate) fn new(config: &DaemonConfig) -> Self {
-        let c = |s: &str| CString::new(s.replace('\0', "")).expect("no NUL after the filter");
-        let mine = config.mine.address.as_ref().map(|address| MineOwned {
-            text: c(&address.text),
-            spend: address.spend,
-            view: address.view,
-            ml_kem: address.ml_kem.clone(),
-        });
-        let client_endpoint = match config.session.client_endpoint {
-            Some(endpoint) => ShekylClientEndpoint {
-                octets: endpoint.ip().octets(),
-                port: endpoint.port(),
-                present: true,
-            },
-            None => ShekylClientEndpoint {
-                octets: [0; 4],
-                port: 0,
-                present: false,
-            },
-        };
-        Self {
-            data_dir: c(&config.data_dir.display().to_string()),
-            network: config.network.cryptonote_code(),
-            offline: config.offline(),
-            fixed_difficulty: config.dev.difficulty.unwrap_or(0),
-            txpool_weight_max: config.txpool_weight_max,
-            sync: config.dev.sync,
-            mine,
-            // 0 is auto. The miner chooses the count; this does not collapse
-            // it to one thread.
-            mine_threads: config.mine.threads.map_or(0, std::num::NonZeroU32::get),
-            console: config.session.console,
-            command: config.session.command.iter().map(|w| c(w)).collect(),
-            client_endpoint,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn command_words(&self) -> Vec<String> {
-        self.command
-            .iter()
-            .map(|w| w.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn data_dir(&self) -> String {
-        self.data_dir.to_string_lossy().into_owned()
-    }
-
-    /// Calls `run` with pointers into this data, which outlives the call.
-    /// The mining header is a local: its pointers address this data's
-    /// allocations, and it lives until `run` returns.
-    fn call(&self, run: crate::entry::RunFn) -> i32 {
-        let command: Vec<*const c_char> = self.command.iter().map(|w| w.as_ptr()).collect();
-        let header = self.mine_header();
-        let snapshot = self.snapshot(&command, header.as_ref());
-        run(&raw const snapshot)
-    }
-
-    /// A view of the mining address. The pointers address `self` and are
-    /// valid while `self` is borrowed and the header this returns is alive.
-    fn mine_header(&self) -> Option<ShekylMineAddress> {
-        self.mine.as_ref().map(|mine| ShekylMineAddress {
-            text: mine.text.as_ptr(),
-            spend: mine.spend,
-            view: mine.view,
-            ml_kem: if mine.ml_kem.is_empty() {
-                std::ptr::null()
-            } else {
-                mine.ml_kem.as_ptr()
-            },
-            ml_kem_len: mine.ml_kem.len(),
-        })
-    }
-
-    /// The snapshot over this data, `command` and `mine`. All three must
-    /// outlive every read of the result. `mine` is null when there is no
-    /// address.
-    fn snapshot(
-        &self,
-        command: &[*const c_char],
-        mine: Option<&ShekylMineAddress>,
-    ) -> ShekylDaemonSnapshot {
-        ShekylDaemonSnapshot {
-            data_dir: self.data_dir.as_ptr(),
-            network: self.network,
-            offline: self.offline,
-            fixed_difficulty: self.fixed_difficulty,
-            txpool_weight_max: self.txpool_weight_max,
-            sync: self.sync,
-            mine_address: match mine {
-                Some(header) => header,
-                None => std::ptr::null(),
-            },
-            mine_threads: self.mine_threads,
-            console: self.console,
-            command: ShekylStringList {
-                items: command.as_ptr(),
-                len: command.len(),
-            },
-            client_endpoint: self.client_endpoint,
-        }
-    }
-}
-
-/// A snapshot leased to a C++ test binary: the structure first, so its
-/// address is the lease's, then what it points at.
-#[repr(C)]
-pub(crate) struct Leased {
-    snapshot: ShekylDaemonSnapshot,
-    _command: Vec<*const c_char>,
-    /// The mining header the snapshot points at. Boxed so moving the lease
-    /// does not move the header; its own pointers address `_data`'s
-    /// allocations, which a move does not relocate either.
-    _header: Option<Box<ShekylMineAddress>>,
-    _data: Box<SnapshotData>,
-}
-
-// SAFETY: the pointers are into `_data`, which the lease owns and never
-// mutates; the C++ reads them from any thread it likes.
-#[allow(unsafe_code)]
-unsafe impl Send for Leased {}
-
-/// The file, the resolved values and the sections. `config_path` is the
-/// path the announcements name, including when the default file was absent.
-/// `file_read` is set only when a file was read.
-struct Loaded {
-    config_path: PathBuf,
-    file_read: Option<PathBuf>,
-    resolved: resolve::Resolved,
-    config: DaemonConfig,
-}
-
-/// The command line through the sections: the file, its secret check, the
-/// resolution and the build. [`main`] answers `--help` and `--version`
-/// before calling this.
-fn load(cli: shekyl_options::Cli, host: &Host) -> Result<Loaded, i32> {
-    let (network, mode) = choosers(&cli);
-    let (config_path, named) = match cli.given.iter().find(|g| g.row.name == "config-file") {
-        Some(g) => match &g.value {
-            Value::Path(p) => (p.clone(), true),
-            // The row's kind is a path. Another arm does not come from the parser.
-            _ => return Err(EXIT_FAILED),
-        },
-        None => (
-            paths::config_file_default(&host.platform, mode, network).map_err(|d| refuse(&[d]))?,
-            false,
-        ),
-    };
-    let opened = file::open(&config_path, named).map_err(|d| refuse(&[d]))?;
-    let mut given = Vec::new();
-    if let Some(config_file) = &opened {
-        given = read_file(&TABLE, &config_path, &config_file.text).map_err(|ds| refuse(&ds))?;
-        for g in given.iter().filter(|g| matches!(g.row.kind, Kind::Secret)) {
-            config_file
-                .secret_readable_only_by_permitted(g.row.name)
-                .map_err(|d| refuse(&[d]))?;
-        }
-    }
-    let mut resolved = resolve(&TABLE, network, cli, given).map_err(|ds| refuse(&ds))?;
-    let file_read = opened.as_ref().map(|f| f.path.clone());
-    let config = build(
-        &mut resolved,
-        network,
-        mode,
-        &host.platform,
-        file_read.as_deref(),
-    )
-    .map_err(|ds| refuse(&ds))?;
-    Ok(Loaded {
-        config_path,
-        file_read,
-        resolved,
-        config,
-    })
-}
-
-/// The real parse for a C++ test binary (`shekyl_daemon_snapshot_parse`):
-/// the arguments through the table, the file and the sections, with the
-/// platform's roots; no lock, marker or logging. `Err` is the exit status
-/// a start would have given, the refusals printed. The secret check is the
-/// same one [`load`] runs for a daemon start.
-pub(crate) fn snapshot_for_tests(args: &[OsString], host: &Host) -> Result<Box<Leased>, i32> {
-    let rest = args.get(1..).unwrap_or(&[]);
-    let cli = read_cli(&TABLE, rest.iter().cloned()).map_err(|ds| refuse(&ds))?;
-    let Loaded { config, .. } = load(cli, host)?;
-    let data = Box::new(SnapshotData::new(&config));
-    let command: Vec<*const c_char> = data.command.iter().map(|w| w.as_ptr()).collect();
-    let header = data.mine_header().map(Box::new);
-    // The box's allocation does not move when the box is moved into the lease.
-    let mine = header.as_deref();
-    let snapshot = data.snapshot(&command, mine);
-    Ok(Box::new(Leased {
-        snapshot,
-        _command: command,
-        _header: header,
-        _data: data,
-    }))
+/// Calls `run` with a snapshot over `data`, which outlives the call. The
+/// mining header is a local: its pointers address `data`'s allocations, and
+/// it lives until `run` returns.
+fn call_with(data: &SnapshotData, run: RunFn) -> i32 {
+    let command = data.command_ptrs();
+    let header = data.mine_header();
+    let snapshot = data.snapshot(&command, header.as_ref());
+    run(&raw const snapshot)
 }
 
 fn call_run(entry: &ShekylDaemonEntry, config: &DaemonConfig) -> i32 {
@@ -779,12 +547,13 @@ fn call_run(entry: &ShekylDaemonEntry, config: &DaemonConfig) -> i32 {
         tell(&mut std::io::stderr(), "shekyld: the entry has no run");
         return EXIT_FAILED;
     };
-    SnapshotData::new(config).call(run)
+    call_with(&SnapshotData::new(config), run)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ShekylDaemonSnapshot;
     use std::ffi::c_int;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
@@ -890,38 +659,6 @@ mod tests {
         *RUN_RETURNS.lock().unwrap() = 0;
     }
 
-    #[test]
-    fn the_snapshot_carries_the_eleven_values() {
-        let d = tempfile::tempdir().unwrap();
-        let args_v: Vec<OsString> = [
-            "--network",
-            "regtest",
-            "--data-dir",
-            d.path().to_str().unwrap(),
-            "status",
-            "extra",
-        ]
-        .iter()
-        .map(OsString::from)
-        .collect();
-        let cli = read_cli(&TABLE, args_v).unwrap();
-        let (network, mode) = choosers(&cli);
-        let mut resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
-        let config = build(&mut resolved, network, mode, &host(d.path()).platform, None).unwrap();
-        let data = SnapshotData::new(&config);
-        assert_eq!(
-            data.command_words(),
-            vec!["status".to_owned(), "extra".to_owned()]
-        );
-        assert!(data.client_endpoint.present);
-        assert_eq!(data.client_endpoint.octets, [127, 0, 0, 1]);
-        assert_eq!(data.client_endpoint.port, 11029);
-        assert_eq!(data.mine_threads, 0, "auto reaches the miner as 0");
-        assert!(data.mine_header().is_none());
-        assert_eq!(data.data_dir(), d.path().display().to_string());
-        assert_eq!(data.network, 3);
-    }
-
     /// The remnant's own request — the console's `exit`, the RPC's
     /// `stop_daemon` — reaches the one owner, which calls the remnant's
     /// `stop` and returns `run`'s status: one stop path, whatever asked.
@@ -942,9 +679,7 @@ mod tests {
             "none",
         ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
-        let (network, mode) = choosers(&cli);
-        let mut resolved = resolve(&TABLE, network, cli, Vec::new()).unwrap();
-        let config = build(&mut resolved, network, mode, &host(d.path()).platform, None).unwrap();
+        let config = load(cli, &host(d.path()).platform).unwrap().config;
         let entry = ShekylDaemonEntry {
             run: Some(blocking_run),
             stop: Some(arming_stop),
