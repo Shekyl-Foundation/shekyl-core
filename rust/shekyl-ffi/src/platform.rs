@@ -81,6 +81,17 @@ pub fn program_data() -> Option<PathBuf> {
     }
 }
 
+/// This account's and this machine's roots, as the daemon's configuration
+/// takes them: the one constructor the daemon's start, the snapshot export
+/// and the utilities' default data directory share.
+#[must_use]
+pub fn current() -> shekyl_daemon_config::Platform {
+    shekyl_daemon_config::Platform {
+        home: account_home(),
+        program_data: program_data(),
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
