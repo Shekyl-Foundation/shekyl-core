@@ -10,11 +10,13 @@
 //! both come from RT-P9: round trips on an onion leg to the floor device, 300
 //! connections, each on its own Tor circuit
 //! (`docs/benchmarks/rt_p9_handshake_round_trips_20261020.md`). Each is
-//! twice the onion leg's 99th percentile, rounded up to a whole second. One
+//! twice the onion leg's 99th percentile, rounded up to a whole second (the
+//! rule confirmed 2026-10-20). One
 //! deadline has to serve an onion client, so the LAN figures (0.7 ms and
 //! 8.6 ms at the 99th percentile) are reported beside them and bound nothing.
 //!
-//! The listener that enforces them is RT-W10's.
+//! The listener that enforces them is RT-W10's. A client retries a timed-out
+//! handshake once before reporting it ([`crate::retry`]).
 
 use std::time::Duration;
 

@@ -32,6 +32,7 @@ pub mod budget;
 pub mod deadline;
 pub mod handshake;
 mod mac1;
+pub mod retry;
 
 /// First part of the handshake prologue. Not a hash customization: the bytes
 /// themselves are mixed into the handshake transcript, followed by the

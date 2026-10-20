@@ -173,6 +173,10 @@ from the same commit.
 | Message 1 received | 1,803.4 ms | **4 s** | 0.7 ms |
 | First record opened (the whole handshake) | 5,231.9 ms | **11 s** | 8.6 ms |
 
+**The maintainer confirmed the rule on 2026-10-20,** and ruled that a
+client retries a timed-out handshake once, with a fresh ephemeral, before
+it reports one (`RPC_CHANNEL.md` §4.3).
+
 They land in code as `MESSAGE1_DEADLINE` and `HANDSHAKE_DEADLINE`
 (`rust/shekyl-rpc-channel/src/deadline.rs`), each with a
 measurement-ledger row measured by `BA-T37` on this capture. RT-W10's

@@ -711,12 +711,34 @@ an onion client:
   which ends the handshake.
 
 Each is twice the onion leg's 99th percentile, rounded up to a whole
-second: 1,803.4 ms and 5,231.9 ms over 300 connections, each on its own
-circuit. The LAN figures beside them are 0.7 ms and 8.6 ms. One onion
+second (the rule confirmed 2026-10-20): 1,803.4 ms and 5,231.9 ms over 300
+connections, each on its own circuit. The LAN figures beside them are 0.7 ms and 8.6 ms. One onion
 connection in 300 took longer than the message-1 deadline. Both constants
 are rowed in the measurement ledger (`BA-T37`), and RT-W10's listener
 enforces them
 ([`rt_p9_handshake_round_trips_20261020.md`](../benchmarks/rt_p9_handshake_round_trips_20261020.md)).
+
+**When a handshake does not finish (ruled 2026-10-20), the client**
+(`HandshakeRetry`, in `shekyl_rpc_channel::retry`; RT-W10's dialer
+drives it):
+- **after a timeout, retries once,** without telling the user, from a new
+  `Client::start`, so with a fresh ephemeral. The retry has a whole
+  deadline of its own. A second timeout is reported: "The node did not
+  complete the handshake in time."
+- **after a busy reply, backs off and starts again.** The wait is 250 ms,
+  doubling to 2 s (`BUSY_BACKOFF_INITIAL`, `BUSY_BACKOFF_MAX`), so about
+  five retries fit in one deadline. "Node busy" is reported only when the
+  next start would fall at or after the current attempt's deadline.
+- **The two waits are this lane's choice, for confirmation.** The budget
+  earns a handshake every 8.7 ms at 115 a second, so a short first wait
+  usually finds room. A quarter second spreads out clients a restart
+  sends back together.
+- **Tested:** each rule fails its test when removed (a second retry
+  after a timeout, none at all, the retry keeping the old deadline, busy
+  reported at once, no backoff growth). End to end on the real
+  handshake: an empty budget answers busy, the policy says start again,
+  and the new attempt, with a different message 1, completes once the
+  budget has earned a handshake.
 
 **What remains, and why.**
 - **The budget is shared by every sender.** XK hides the client's
@@ -904,7 +926,7 @@ internals); the log may be specific.
 | A call for host-only data or an armed test lever from an enrolled key, whatever its ceiling | Yes | "METHOD is served only on the node's own computer, to its administrator." | — |
 | A request over a resource bound (§6.3) | Yes | "This request asks for N; the node serves at most LIMIT per request." Never truncated | — |
 | A call outside the connection's grant | Yes | "This connection is not granted METHOD (granted: GRANT)." — never "method not found" | — |
-| Handshake deadline expired | Yes | "The node did not complete the handshake in time." | Timeout, with the stage reached |
+| Handshake deadline expired | Yes, after one retry with a fresh ephemeral that also ran out (§4.3) | "The node did not complete the handshake in time." | Timeout, with the stage reached |
 | The node's handshake budget is spent (§4.3) | Yes — a busy reply, verified, in place of message 2. The client backs off and retries, and says so only when its handshake deadline expires | "The node is busy and did not accept the connection in time. Try again shortly." | Aggregated: "answered N handshakes busy in the last minute (budget: B a second)" |
 | Both a service and a run-as-me default daemon answer for one network (the overlap before the run-as-me daemon stands down) | Yes — both rendezvous answer | Nothing: "this computer" resolves to the service (RT-16). A client enrolled only with the run-as-me node is told "The node answered but has not enrolled this client", as that row | Run-as-me daemon: "a service node for NETWORK is now running on this computer; shutting down" then a clean shutdown |
 | Starting a run-as-me default daemon while a service default instance answers for its network | (Daemon, at start) "A Shekyl node is already running on this computer as a service for NETWORK." Refuses to start | Same line |
