@@ -652,6 +652,12 @@ durable-address warning ruled above is now stated in the flag's own descriptor
 verifier, no persisted key, restart mints a new address, a start failure
 degrades to outbound-only on the zone rather than aborting the daemon.
 
+**UPDATE 2026-10-17:** the owner is `shekyl-daemon`'s `tor.rs` over
+`DaemonTorControl` (#1088). The `shekyl_daemon_tor_*` exports, the blocking
+facade and `node_server::add_ephemeral_tor_zone` are deleted
+(`TOR_SUPERVISOR.md` §9). The paragraph above is the record of the wiring
+that landed on 2026-09-09.
+
 ### PWD-E8 — address volatility: the measurement PWD-E7 must ship **before** it can exist
 
 **DEFERRED, with a real external blocker and a falsifier chain.** An earlier
@@ -836,6 +842,11 @@ depends only on `shekyl-tor-control-client` and never names
 `shekyl-tor-control-wallet`; its tor's `DataDirectory` is a unique wiped child
 of the daemon's config folder (never reused across boots, so entry guards
 cannot join onions); it carries no vanguard state.
+
+**UPDATE 2026-10-17:** that wiring is deleted. `shekyl-daemon`'s `tor.rs`
+starts and stops the managed Tor over `DaemonTorControl`, on the daemon's
+runtime (`TOR_SUPERVISOR.md` §9, #1088). The crate no longer carries a
+blocking facade or a runtime of its own.
 
 The isolation requirement is carried in the crate's own module doc rather than
 left to this document: *no entry point here may default, infer, or discover which

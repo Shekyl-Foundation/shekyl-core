@@ -3968,6 +3968,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-harness-spender",
  "shekyl-harness-wallet",
+ "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-miner",
  "shekyl-pow-randomx",
@@ -3982,6 +3983,7 @@ dependencies = [
  "shekyl-wire",
  "thiserror",
  "tokio",
+ "tracing",
  "zeroize",
 ]
 
@@ -4287,6 +4289,7 @@ dependencies = [
  "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-fcmp",
+ "shekyl-hash-budget",
  "shekyl-mempool",
  "shekyl-options",
  "shekyl-peerlist",
@@ -4590,6 +4593,7 @@ dependencies = [
  "shekyl-capped-stream",
  "shekyl-chacha",
  "shekyl-chain-ingest",
+ "shekyl-chain-rules",
  "shekyl-chain-store",
  "shekyl-clearnet",
  "shekyl-consensus",
@@ -4608,6 +4612,7 @@ dependencies = [
  "shekyl-encoding",
  "shekyl-fcmp",
  "shekyl-fcmp-proofs",
+ "shekyl-hash-budget",
  "shekyl-levin",
  "shekyl-logging",
  "shekyl-net-address",
@@ -4628,7 +4633,6 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-tor",
  "shekyl-tor-control-client",
- "shekyl-tor-control-daemon",
  "shekyl-transport-layer",
  "shekyl-tx-builder",
  "shekyl-types",
@@ -4693,6 +4697,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-hash-budget"
+version = "3.1.0"
+
+[[package]]
 name = "shekyl-levin"
 version = "3.1.0"
 dependencies = [
@@ -4744,6 +4752,7 @@ dependencies = [
  "shekyl-block-template",
  "shekyl-crypto-pq",
  "shekyl-difficulty",
+ "shekyl-hash-budget",
  "shekyl-pow-randomx",
  "shekyl-thread-ledger",
  "shekyl-thread-priority",
@@ -5305,7 +5314,6 @@ version = "3.1.0"
 dependencies = [
  "getrandom 0.2.17",
  "kameo",
- "shekyl-runtime",
  "shekyl-tor-control-client",
  "tempfile",
  "tokio",

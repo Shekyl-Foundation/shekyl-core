@@ -74,6 +74,9 @@
 
 #![deny(unsafe_code)]
 
+/// What an arrival costs, and who pays: the door's checks before parse.
+#[cfg(feature = "pipeline")]
+pub mod admission;
 /// E6 slice 8 PR-a (`CHAIN_RULES_SLICE_8.md` §5 row 2 (a)): the corpus's
 /// archival inputs, enumerated both ways.
 #[cfg(all(test, feature = "pipeline"))]
@@ -100,6 +103,10 @@ mod artifact_tests;
 /// pins today's gap; flips when G2 lands (commit 6).
 #[cfg(all(test, feature = "pipeline"))]
 mod body_pairing_tests;
+/// Where an arrival goes, and the claims it is formed under.
+/// The two RandomX seeds an arrival may hash under.
+#[cfg(feature = "pipeline")]
+mod cache_window;
 #[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
@@ -110,6 +117,9 @@ pub mod corpus;
 pub mod emission_assembly;
 #[cfg(feature = "fetch")]
 pub mod fetch;
+/// The tip follower: the seed window, then the pool, then the miner's job.
+#[cfg(feature = "pipeline")]
+pub mod follower;
 #[cfg(feature = "pipeline")]
 pub mod grader;
 pub mod metrics;
@@ -124,6 +134,9 @@ mod mutation_tests;
 pub mod pipeline;
 #[cfg(all(test, feature = "pipeline"))]
 mod pipeline_tests;
+/// Step 1 of a switch: the blocks a plan names, formed off the actor.
+#[cfg(feature = "pipeline")]
+pub mod plan_form;
 /// DRS-E5 PR-b (`DRS_E5_POOL_ALT_PRUNE.md` §2.2): the pool door held to
 /// the validator over real spends, and the pool's own rows over them.
 #[cfg(all(test, feature = "pipeline"))]
@@ -134,6 +147,11 @@ mod pool_door_tests;
 mod pool_restart_tests;
 #[cfg(all(test, feature = "pipeline"))]
 mod pool_submit_tests;
+/// Seats in the arrival window.
+#[cfg(feature = "pipeline")]
+mod room;
+#[cfg(feature = "pipeline")]
+pub mod router;
 /// The RPC's store-backed facts over the scenario chain and the captured
 /// chains (DRS-X PR 3, `DRS_X_STORE_FLIP.md` DX-Q3).
 #[cfg(all(test, feature = "pipeline"))]
@@ -173,6 +191,9 @@ pub mod schedule;
 pub mod seed;
 #[cfg(feature = "pipeline")]
 pub mod sequencer;
+/// The live arrival path: one door, the router, the connector.
+#[cfg(feature = "pipeline")]
+pub mod service;
 pub mod snapshot_json;
 pub mod source;
 pub mod substrate;
@@ -194,10 +215,11 @@ mod vectors_tests;
 
 #[cfg(feature = "pipeline")]
 pub use connector::{
-    AltBlocksHeld, Applied, Apply, ChainFacts, Connector, ConnectorArgs, Digest, HashAt, Inject,
-    Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock, PlannedDemotion,
-    PlannedPromotion, PopBeyondReorgCap, RefusePromotion, Reorganize, Rewind, Rewound, RunEnd,
-    RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts,
+    AltBlocksHeld, Applied, Apply, ChainFacts, ChainTip, Connector, ConnectorArgs, Digest, HashAt,
+    Inject, Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock,
+    PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, RefusePromotion, Reorganize, Rewind,
+    Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts,
+    TipChanged, WatchTip,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]

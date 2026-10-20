@@ -45,33 +45,62 @@ The C++ that has no Rust owner yet — the protocol handler and `levin_notify` �
 
 ### DX-Q2 — The arrival contract
 
-1. **The router (Rust)** places every arrival by its parent:
-   - the recorded tip → the pipeline (`Extend`);
+*Amended by PR 2's rulings (PR2-Q1…PR2-Q6, design review 2026-10-18) and CS-Q5 (c) (Rick, 2026-10-18). Built in PR 2 (#1123): `shekyl-chain-ingest`'s `service.rs`, `router.rs`, `admission.rs`, `follower.rs`, and `shekyl-ffi`'s `ingest_ffi.rs`.*
+
+1. **The router (Rust)** places every arrival by its parent, on a `ReadSnapshot` at acceptance:
+   - the recorded tip → the pipeline (`Extend`), also for a block the alt table holds: its connect takes it out of the alt table;
    - a recorded or alt block → `OfferAlt` and the switch (#1082);
    - unknown → `Unlinked { at }`, with nothing stored;
    - already held → `AlreadyHeld`.
 
    **There is no orphan store.** A peer cannot make the node hold a block it cannot place.
-   - CEN-A1 and CEN-A4 become `enforced_at` the router. Their `held_by_cxx` entries and the `block_validation.cpp` citations go.
-   - **CEN-A5** moves to bucket 3 with its reason recorded: it was the parse-cost bound, not validity, which G6b judges. Its bound is re-homed as the router's admission, size before parse, under "each layer owns its admission".
-2. **One FFI entry, used by the protocol handler only.** `submit_block` and the miner enter the router natively (DX-Q3, DX-Q4).
-   - The entry takes a span and returns at once. Every arrival gets one reply, tagged with the arrival, posted to the connection's strand.
-   - The reply variants: `Connected`, `Refused(InvalidBlock)`, `Unlinked { at }`, `AlreadyHeld`, `Held`, `BeyondCap`, and the switch outcomes.
-3. **Capacity (chain sync's Round 0 requirement, ruled 2026-10, carried here).**
+   - **The router is not the writer.** The tip can move between a placement and its connect. The seed (CEN-D3), target (CEN-D4) and reference claims are compared by equality in `validate`, so a stale placement comes back as `Stale` or as the connector's `HeightClaim` and is placed again against a new snapshot, never a verdict. An `Extend` whose parent stopped being the tip is placed again as `OfferAlt`.
+   - **A block id is in at most one of the main chain and the alt table**, and the store holds it: every connect removes a same-id alt row in its own write, and AL1 refuses a recorded hash (`store/alt.rs`).
+   - CEN-A1 and CEN-A4 are held by the router: `held_by_store("shekyl-chain-ingest", …)`, since the router is a crate the validator does not import. The registry cites no C++ test for either.
+   - **CEN-A5** is bucket 3: it was the parse-cost bound, not validity, which G6b judges. Its bound is the router's admission, size before parse (PR2-Q2).
+   - **A cache is derived only for a seed the chain has earned** (the review of #1123, B1 and B2, Rick 2026-10-19; `cache_window.rs`). Before any permit, cache or hash, `cache_window::spend` judges the fork and where its seed lies. Below a reached checkpoint, or past the cap on an anchored chain, is CEN-E2's verdict. Past the cap on an unanchored chain is the door's `BeyondCap` hint. Inside the cap, a seed **below the fork** is one of the window's two slots, read on the claim's own snapshot; a miss there is this node's defect (`SeedNotInWindow`), never a reply. A seed **above the fork** is the branch's own block: a stored alt row whose proof of work passed, which no block names until 65 or more of its branch's blocks are stored. It is prepared into the transient slot under the arrival's permit (`Substrate::prepare_seed`) and never pinned, and the form hashes with the cache the preparation returned (`longhash_held`), so an eviction in between does not fail it. One branch-seed form runs at a time: the branch gate, then the permit, then the pin lock around the derive alone. The live caches are therefore the canonical, the transient, and at most one evicted cache a form still holds. A switch whose promoted run names its branch's seed prepares it the same way. Two branches alternating cost one derivation per alternation, under the arrival's class, and each costs its sender a fresh block with real proof of work on a branch already past its seed point. Only the main chain (an extending run's seeds, the window installed on each tip) and the miner's next block move the canonical slot. `longhash` looks a cache up and never derives: a miss on a below-fork seed reinstalls the window and places the arrival again, and a miss after a preparation is a fault. The window reaches the cap below the connecting height and `max(cap, 65)` above it, which fits in one seed epoch: a compile-time assertion holds `D_MAX` to it, and `FakechainSchedule::new` holds a lever's cap to it (`ReorgCapOutrunsSeedEpoch`, at most 1023).
+2. **One FFI entry, used by the protocol handler only** (`shekyl_ingest_offer_span`). `submit_block` and the miner's found-block sink enter the service's door natively (DX-Q3, DX-Q4).
+   - The entry takes a span and returns at once. Every accepted arrival gets exactly one reply, tagged with the arrival, posted to the connection's strand.
+   - **Refused before acceptance:** `NoRoom`, `Throttled`, `Oversize`. Never a peer fault; nothing is kept.
+   - **Replies after acceptance:** `Connected`, `Refused(InvalidBlock)`, `Unlinked { at }`, `AlreadyHeld`, `Held`, `BeyondCap` (the door's hint: nothing stored or hashed), the switch outcomes (`Switched`, `PromotionRefused`), `CannotFollow` (`BeyondCap` or `BelowFloor`: a stored heavier chain this node cannot follow, item 8), `MissingBodies { indices }`, `Cancelled { by }`, `Stopped`. At the FFI each has a kind of its own, pinned against `shekyl_ffi.h` by an exhaustive test.
+   - An unbind (`shekyl_ingest_bind` with a null post) posts every reply already accepted before it returns. On a thread of the replies' own runtime it cannot wait, so it is refused as `SHEKYL_INGEST_REENTRANT` and changes nothing.
+   - Built and tested in PR 2; the flip routes the handler's arrivals to it. Chain sync and RD delete it with the handler.
+3. **Capacity (chain sync's Round 0 requirement, ruled 2026-10, carried here; PR2-Q5).**
    - The entry reports room. A caller asks before sending.
-   - An arrival the entry accepted is **never dropped**. A span offered without room is `NoRoom`, before acceptance, and is never a peer fault.
+   - **While the service runs, an accepted arrival is never dropped.** A span offered without room is `NoRoom`, before acceptance, and is never a peer fault.
+   - **The seats** (the review of #1123; `room.rs`). One seat of the window is reserved for a block this node mined. Unsolicited announcements hold at most half of the rest. Local arrivals (the miner's, and `submit_block`'s from PR 3b) share that cap with them, plus the reserve. At 32 seats, sync keeps 15 or more whatever peers announce and the RPC submits. A block the miner finds when the local seats are full waits for one, and one that does not join the chain is logged.
+   - **A stop or a fault closes the door**, so a caller asking for room reads none.
+   - **At a stop** (`TOR_SUPERVISOR.md` §1; DX-Q6), the connector finishes its current message and the store closes; every accepted arrival not yet connected replies `Stopped`. Never a peer fault: sync asks again after the restart.
    - Until the chain-sync cutover the C++ handler's span scheduler asks once per span.
-4. **Peer scoring.** Only `Refused(InvalidBlock)` is about the peer. `Unlinked`, `NoRoom`, `BeyondCap`, the floor and stale outcomes never punish (C2-R1 Q1c F-1(a)).
+4. **Session close.** `Refused(InvalidBlock)` is the only outcome that closes the serving session (PWD-B7); nothing scores. Automated per-host scoring and bans are deleted (CS-Q5 (c), Rick 2026-10-18): `add_host_fail`, `hit_score` and `shekyl-peer-policy`'s `heavier_score` arm. Bans are operator configuration only (`set_bans` over the transport `BanList`). `Unlinked`, `NoRoom`, `BeyondCap`, `CannotFollow` and stale outcomes never punish (C2-R1 Q1c F-1(a)). `Throttled` lets the handler close a session that keeps announcing past its bucket: a close, never a score.
 5. **`TipChanged`, one source.**
-   - The connector publishes the tip after every committed connect, pop and switch. `shekyl_core_publish_tip`'s producer moves from `Blockchain` to that commit.
+   - The connector publishes the tip on a `watch` after every committed connect, pop and switch, and once at start; never before the commit. It carries the dialer's `SyncPayload` fields (the block count, the cumulative difficulty, the top id) and a sequence number. `shekyl_core_publish_tip`'s producer (`blockchain.cpp:5895`) moves to that publication at the flip.
    - **Consumers:**
      - the handshake (the dialer and slice 4);
      - new-block relay;
-     - the miner's template refresh;
      - the sync owner;
-     - the RPC.
-6. **One RandomX budget.** The pipeline's `Form` workers and chain sync's header PoW draw from one bounded hasher budget, so the two never exceed the scratchpads the floor device holds (chain sync's Round 0 requirement, carried here).
-7. **Deleted:** `prepare_handle_incoming_blocks` / `cleanup_handle_incoming_blocks` (Monero's batch preprocessing) and `try_add_next_blocks`' connect loop. The `Form` workers replace them.
+     - the RPC;
+     - **the pool**, reconciled per publication (the service's tip follower);
+     - **the miner's template producer**, in the same follower, after the pool. The follower first installs the cache window for the new tip under a chain permit, which pins `seed(tip + 1)` canonical. The producer posts a job only under a seed the window holds, before `JobBoard::publish`, and withdraws the board while the node is behind. A closed sync channel reads as behind. Its template source is a seam: PR 3b's `get_block_template` assembler at the flip.
+   - **The follower's death is the service's fault** (`FollowerEnded`): the service stops, the door closes and the miner's job is withdrawn, so no miner hashes a stale job.
+6. **One RandomX budget** (PR2-Q3; `shekyl-hash-budget`). `available_parallelism` permits, read at run time (rule 76), granted by class, highest first: forming on the chain or a solicited span; chain sync's header PoW; unsolicited arrivals; `calc_pow`; the miner. **The miner never holds a permit a higher class waits for, and never takes the last free one:** it takes one per hash, only while another stays free. On a one-permit budget it would never hash, so `Miner::start` refuses that budget (`MinerStartRefused::OnePermit`). Nice 19 stays, but priority is by permit. A grant that leaves a permit free wakes the waiters, and a wake takes the budget lock, so a stop is never lost. A cache is built only by a pin, under a permit (item 1). `calc_pow` and the miner look up only.
+7. **Deleted at the flip:** `prepare_handle_incoming_blocks` / `cleanup_handle_incoming_blocks` (Monero's batch preprocessing) and `try_add_next_blocks`' connect loop. The `Form` workers replace them. With them goes the last path that derives a RandomX cache on a miss: `shekyl_pow_randomx_v2_hash` (`pow_randomx_ffi.rs:227`), reached only through `hash_pow_randomx` from `get_block_longhash` (`Blockchain`, the C++ miner, `core_rpc_server`, `rpc_facts_ffi.cpp`), all of which the flip deletes.
+8. **`following_degraded` is a Rust latch** (chain sync Round 0, §A coupling 4, Rick 2026-10-18).
+   - The flip deletes `Blockchain` (DEL-010), which holds `m_following_degraded` (`blockchain.h:1071`) and sets it when a switch is refused at the prune watermark (`blockchain.cpp:2288`).
+   - The field is landed RPC (`get_info.health.following_degraded`, `CORE_RPC_VERSION` 3.26). The wallet's stake engine acts on it as `NotFollowing::Degraded` (`stake_engine/serving/daemon_tip.rs:277`).
+   - **What sets it** (design review, 2026-10-19, (a)): every outcome that proves a heavier chain this node refused. These are the store's `Offered::BeyondCap` (`switch.rs:510`), the switch's `Switched::BeyondCap` (`:722`) and `Switched::BelowFloor` (`:867`). It is set in the connector, where they are produced, never from a reply. From the chain-sync cutover the sync owner sets it too. The RPC reads it in Rust (`info_facts.rs:88`; `store_facts.rs:576` takes it from the sync facts).
+   - **The reply split** ((b), built in PR 2): those three outcomes are one reply, `CannotFollow { BeyondCap | BelowFloor }`. The door's past-cap answer stays `BeyondCap`: nothing stored or hashed, earned by one block nobody worked for, so it never sets the latch. It is a hint for sync to ask for headers. The two are different variants and different FFI kinds (13 and 6).
+   - **Where it lives** ((c)): in the chain store, cleared only by a resync. The door refuses later past-cap blocks before hashing them, so unlike the C++ latch it would not be set again after a restart, and the death rule retires the evidence. The flip implements it with its schema bump; this item is the spec.
+   - It means a heavier chain this node refused at either cap, the undo floor or `D_max`, and it is one-way until a resync (C2-R1b F-1(a)).
+   - **The gap that remains** ((d)): a chain that becomes heavier only after its fork is past the cap is invisible to ingest. Its blocks are refused at the door before they are stored, so no outcome above can see it. Chain sync's `Diverged` alarm covers it from that lane's cutover (#1117).
+
+**The door and the pool after the review of #1123** (Rick, 2026-10-19):
+- **A pool-file fault retires the pool; block ingest goes on.** The file is discardable (`SPL-Q8`), but a file this process cannot read is refused at open, never deleted, so the remedy is a restart. The retirement is logged as an error, and `Service::pool_retired` reports it for PR 3b's `get_info` and `mining_status`. A chain fault in a pool step still stops the service.
+- **Pool verification runs outside the pool lock.** A carried body's step 1 is computed before the lock. Before each reconcile the follower lists, under the lock, the entries with no pass and the passes the new tip no longer supports (`Pool::needing_step1`), and verifies them outside it. The reconcile verifies under the lock only when the tip moves again between the two. **PR 3b's obligation:** `send_raw_transaction` admits through `Pool::admit_judged`, with a pass computed before the lock.
+
+**PR 2's admission and pool rulings** (design review, 2026-10-18):
+- **PR2-Q2 — what an arrival costs, and who pays.** A light-mode hash costs about 1.25 s per core on the floor device, and a junk block costs its sender nothing. So: size before parse (the header bound plus twice the ceiling limit `2·S·LTEM`, which no valid block's arrival exceeds at any height a span reaches); unsolicited announcements take a token from a per-session bucket (two per target interval, at most two); solicited spans take none; the first `Refused(InvalidBlock)` in a span cancels its siblings, and no hash starts after it; there is no memory of invalid block ids.
+- **PR2-Q4 — compact blocks do not reveal stem possession.** A compact block's bodies are resolved from the entries the pool shows, and only those. A stem entry counts as missing and is asked for (`MissingBodies`).
 
 ### DX-Q3 — The C++ RPC server moves to Rust in the flip, whole
 
@@ -87,8 +116,8 @@ The join rule: no FFI built for a C++ handler that dies a PR later. Every method
   - **`pop_blocks`** as a connector `Rewind` message, an operator action. A live source never emits `Rewind`.
   - **`get_coinbase_tx_sum`.**
   - **RK-9:** curve-tree info and checkpoint, archival claim source, shard coverage.
-  - **Mining control:** `start_mining`, `stop_mining` and `mining_status`, over the Rust miner loop (DX-Q4). `set_log_hash_rate` deletes: the hash rate is part of mine status (`INPUT_GRAMMAR.md:632`, §13). The C++ handlers are `core_rpc_server.cpp:222`, `:273`, `:293` and `:347`.
-  - **Bans:** `set_bans`, `get_bans` and `banned` (`core_rpc_server.cpp:944`, `:881`, `:912`), over the transport layer's ban list (`rust/shekyl-transport-layer/src/ban.rs:151`, held in the socket table, `admission.rs:270`). They reach it through a handle the composition root supplies, in RT-O26's shape (`RPC_CHANNEL.md:1275`, §6.4). No FFI. The C++ forwarders through `m_p2p` delete.
+  - **Mining control:** `start_mining`, `stop_mining` and `mining_status`, over the Rust miner loop (DX-Q4). `set_log_hash_rate` deletes: the hash rate is part of mine status (`INPUT_GRAMMAR.md:640`, §13). The C++ handlers are `core_rpc_server.cpp:222`, `:273`, `:293` and `:347`.
+  - **Bans:** `set_bans`, `get_bans` and `banned` (`core_rpc_server.cpp:944`, `:881`, `:912`), over the transport layer's ban list (`rust/shekyl-transport-layer/src/ban.rs:151`, held in the socket table, `admission.rs:270`). They reach it through a handle the composition root supplies, in RT-O26's shape (`RPC_CHANNEL.md:1324`, §6.4). No FFI. The C++ forwarders through `m_p2p` delete.
     - **How Rust reaches the list today:** only through `net_node`. The C++ handlers call `m_p2p` (`net_node.inl:213`–`:345`), which calls the `shekyl_ban_*` exports (`rust/shekyl-ffi/src/seam_ban_ffi.rs:75`–`:233`). Those act on the process's one socket table, a static inside `shekyl-ffi` (`process_sockets`, `seam_ffi.rs:200`–`:201`), or on the hub the C++ zone server binds over it (`zone_server.h:105`). Rust `main` holds no handle to either.
     - **The seam the flip uses:** the composition root owns the process's `Sockets` value (`admission.rs:338`, an `Arc` handle) and hands the bans handle to the RPC from it. The FFI's static becomes a reader of the root's value for as long as the C++ zone server binds through it.
   - **`stop_daemon`** (`core_rpc_server.cpp:436`) is one more trigger of the one stop path (`TOR_SUPERVISOR.md:51`, §1, ruled 2026-10-14; the stop-trigger row at `:612`). The handler asks Rust `main` to stop; it stops nothing itself.
@@ -96,7 +125,7 @@ The join rule: no FFI built for a C++ handler that dies a PR later. Every method
 - **Deleted:** `save_bc` and `flush_cache` (durability is `Immediate`; there is no cache), and `inject_archival_serve_credit` (with DEL-008).
 - **Not this lane:** log, limits and peers (#1088's `option_set` / `option_show`).
 - **The C++ RPC server is gone whole:** every handler, request and response struct, dispatch table and error-code header, plus the facts and submit FFIs (`rpc_facts_ffi.cpp`, `daemon_submit_ffi.cpp`, `core_rpc_ffi.cpp`). The flip PR lists every file this empties, at its pin. At `b6bdadc3c` the falsifier's patterns match 28 files under `src/`, mixed headers such as `src/shekyl/shekyl_ffi.h` among them.
-- **The interim C++ console:** the console commands that read `COMMAND_RPC_*` structs delete with those structs. At #1088's head (`30a27570b`) they are nineteen words over eighteen executor methods (`src/daemon/rpc_command_executor.cpp:167`–`:963`; the words at `src/daemon/command_server.cpp:116`–`:257`): `bans`, `ban`, `unban`, `banned`, `flush_txpool`, `print_coinbase_tx_sum`, `print_pool`, `print_pool_sh`, `mining_status`, `pop_blocks`, `relay_tx`, `save`, `show_hr`, `hide_hr`, `start_mining`, `stop_mining`, `stop_daemon`, `exit` and `flush_cache`. `stop_daemon` and `exit` share one method. They are not ported into the Rust console. Their successors are `shekyl-cli`'s words (`INPUT_GRAMMAR.md` §13, `:609`), built by the R8 slice. Three have none: `pop_blocks` is an armed test lever (IG-Q25, `INPUT_GRAMMAR.md:683`), and `save` and `flush_cache` name LMDB and C++ cache internals.
+- **The interim C++ console:** the console commands that read `COMMAND_RPC_*` structs delete with those structs. At #1088's head (`30a27570b`) they are nineteen words over eighteen executor methods (`src/daemon/rpc_command_executor.cpp:167`–`:963`; the words at `src/daemon/command_server.cpp:116`–`:257`): `bans`, `ban`, `unban`, `banned`, `flush_txpool`, `print_coinbase_tx_sum`, `print_pool`, `print_pool_sh`, `mining_status`, `pop_blocks`, `relay_tx`, `save`, `show_hr`, `hide_hr`, `start_mining`, `stop_mining`, `stop_daemon`, `exit` and `flush_cache`. `stop_daemon` and `exit` share one method. They are not ported into the Rust console. Their successors are `shekyl-cli`'s words (`INPUT_GRAMMAR.md` §13, `:617`), built by the R8 slice. Three have none: `pop_blocks` is an armed test lever (IG-Q25, `INPUT_GRAMMAR.md:691`), and `save` and `flush_cache` name LMDB and C++ cache internals.
 - **Falsifier:** after the flip, `rg -n -e 'COMMAND_RPC_' -e 'core_rpc_server' src/` returns nothing.
 
 ### DX-Q4 — The miner loop is Rust
@@ -129,8 +158,8 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 | # | PR | Live? |
 | --- | --- | --- |
 | 1 | **PR-b**: the Rust pool (`DRS_E5_POOL_ALT_PRUNE.md` §5 b1–b7, as amended in its brief) | staged; merged 2026-10-18 (#1102) |
-| 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged |
-| 3 | **Briefed: the read-only RPC handlers and the store-backed facts (DX-Q3), and the miner loop (DX-Q4)**, unrouted | staged |
+| 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged; under way (#1123) |
+| 3 | **The read-only RPC handlers and the store-backed facts (DX-Q3), and the miner loop (DX-Q4)**, unrouted | staged; merged 2026-10-19 (#1106) |
 | 3b | **The pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` / `stop_mining` (with `mining_status`), the bans and `stop_daemon`** (DX-Q3), unrouted. Briefed after PR-b and PR 2 merge | staged |
 | 4 | **The flip** (below) | live |
 
@@ -141,7 +170,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 - deletes:
   - LMDB and `BlockchainDB`;
   - `Blockchain` and `tx_memory_pool` (DEL-010);
-  - the archival C++ path (DEL-008), only once DEL-008's gate holds: Slice C's admission rows `implemented`, CEN-J8–J10 retired, the draw live;
+  - the archival C++ path (DEL-008). Its gate holds at genesis (Rick, 2026-10-18). Until genesis, testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code;
   - the reorg path (DEL-009);
   - `rpc_facts_ffi.cpp`, `daemon_submit_ffi.cpp` and `miner.cpp`;
   - the C++ RPC server whole (DX-Q3's falsifier), with the interim console's commands that read its structs;
@@ -149,7 +178,8 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
   - the C++ fee floor and its FFI (DX-Q10);
   - liblmdb from `shekyld` (DEL-004);
 - deletes every LMDB-bound C++ test, each with a sentence naming the rule it tested and where Rust covers it now;
-- applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements.
+- applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements;
+- restates the two decisions `RPC_WIRE.md` carries that are bound to state the flip ends: RK-D7 (one implementation, `StoreFacts`, once the shims are deleted) and the per-lock-domain rule (over the Rust pool's lock and the store's MVCC snapshot, where today its example is `tx_memory_pool::check_for_key_images`).
 
 PR-b, PR 2 and PR 3 may run in parallel; PR 3b is briefed after PR-b and PR 2 merge. The flip needs PR-b, PR 2, PR 3, PR 3b and #1088.
 
@@ -217,6 +247,10 @@ The C++ hits are all in files the flip deletes (`blockchain.{h,cpp}`, `tx_pool.c
 - The shell implements the five `i_core_events` methods by forwarding: height and sync to `TipChanged` and the sync state; the other three to the Rust pool.
 - One Rust → C++ call hands `levin_notify` what the pool's readiness says is due. That is the only new C++ entry, and RD deletes it with `levin_notify`.
 
+**The flip's relay obligations** (carried from the review of #1102):
+- The flip drives `Responsibilities::release` from every way an entry leaves the pool — eviction, the reconcile's removals and mining — and asserts `len() ≤ pool.len()`, so the relay never holds a responsibility for a transaction the pool no longer has.
+- The relay nudge fires only on `Committed`, never on a concealed `Accepted`.
+
 **DX-F6 — the landed pool record holds the relay state machine, against D++ acceptance criterion 2.**
 - `RelayState` (`shekyl-chain-store/src/codec/pool.rs` at the ground, `d2ac8b45d`, lines 155–171; PR-b replaced it with the public bit) stores:
   - a stem/fluff phase;
@@ -257,7 +291,7 @@ Each observed difference becomes one row.
 
 **Rules for the register.**
 - There is **no "unexplained" category.** A difference that cannot be placed blocks the merge until it is.
-- **Serve-credit acceptance is a prerequisite, never a row.** DEL-008 gates the flip (`DAEMON_REDB_STORE.md:2697`): no cutover until SO-D8 Slice C's admission rows are `implemented` in `census.rs` and CEN-J8–J10 are retired, and no Rust consensus before the secret draw is live (`SO-D11b`). Deleting `check_archival_serve_credit_input` removes the only serve-credit acceptance that runs, so its successor (SO-D12's bundle admission) cannot be staged at the flip, and a difference it leaves cannot be placed as **Unbuilt by design**.
+- **Serve-credit acceptance is a prerequisite, never a row.** DEL-008 gates genesis (`DAEMON_REDB_STORE.md:2697`; moved from the flip, Rick 2026-10-18): no genesis until SO-D8 Slice C's admission rows are `implemented` in `census.rs`, CEN-J8–J10 are retired, and the secret draw is live (`SO-D11b`). Until then testnet archival runs on the Rust path as it stands, carriers included. Deleting `check_archival_serve_credit_input` removes the only serve-credit acceptance that runs, so its successor (SO-D12's bundle admission) cannot be staged at the flip, and a difference it leaves cannot be placed as **Unbuilt by design**.
 - A difference the C++ cannot exhibit (Rust-only state) is not a row.
 - The register lives in the flip's design record; the E2 grader's output is its input, not its verdict.
 - After the flip the corpus re-baselines from Rust (`DAEMON_REDB_STORE.md` §12.1). The register is the last record that compares the two, kept as records-was at its sha.
@@ -290,6 +324,14 @@ Each observed difference becomes one row.
 | the claim source's `has_budget_row` | the budget row alone; `Σwork` is written with it at the close | the claim verify's citing gate: budget, `Σwork` and close height all rows (`emission_epoch_facts`, CEN-J23); `Σwork` is the slash pass's, an epoch after the budget | **Design** (`SO-D11d`, `SO-D11g`) |
 | the coverage list's shards | the frozen leaf segments (`frozen_segment_count` over the leaf count) | the byte-cut shards closed and final, the set CEN-J15 lets a join hold (`ClosedUniverse::final_before`) | **Design** (`SHT-Q2`, `SO-D11f`) |
 
+**Rows found by PR 2** (the arrival path, staged). The p2p wire does not change; these are what a peer's blocks meet.
+
+| Subject | C++ | Rust | Category |
+| --- | --- | --- | --- |
+| `m_invalid_blocks`, CEN-A1's memory of refused ids | a process-lifetime set of refused block ids, filled at `blockchain.cpp:2802` and consulted to drop a repeat in `have_block_unlocked` (`:2837`) | none: a repeat is judged again and refused by its own verdict | **Removed** (PR2-Q2, design review 2026-10-18): a fresh junk block is a fresh id, so the memo defeats only replays, which cost the attacker as little as fresh junk |
+| the size bound before parse (CEN-A5) | the cumulative weight limit plus `BLOCK_SIZE_SANITY_LEEWAY` (100) | the header bound plus twice the ceiling limit `2·S·LTEM` at the tip's successor (`admission::ArrivalBound`), `Oversize` before acceptance | **Design** (PR2-Q2): no valid block's arrival exceeds it at any height a span reaches; CEN-A5 is bucket 3 |
+| unsolicited block announcements | no bound per session | two per target interval per session, at most two held; a dry bucket is `Throttled` before parse and never a score | **Design** (PR2-Q2; CS-Q5 (c)) |
+
 **The flip's `CORE_RPC_VERSION` bump.** One minor bump covers every row above that changes what a client reads:
 - `get_block.json` disappears;
 - an alt block's header carries its own values;
@@ -321,12 +363,10 @@ Its number is read from the tree at the flip's pin, never carried from a plan (`
 ## 4. Order of work
 
 1. **PR-b**, brief issued 2026-10-16; merged 2026-10-18 (#1102).
-2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Briefed after PR-b's door lands, because the entry's pool calls are its shape.
-3. **PR 3** — briefed: the read-only RPC handlers, the store-backed facts and the miner loop. Runs beside PR-b.
-4. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge.
-5. **The flip** needs PR-b, PR 2, PR 3, PR 3b and #1088, and DEL-008's gate: SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`).
-6. **Chain sync's cutover** follows the flip and deletes the shell's protocol-handler half. **RD** deletes `levin_notify` and the relay entry.
+2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Under way (#1123), staged: built and tested, nothing routed.
+3. **PR 3** — the read-only RPC handlers, the store-backed facts and the miner loop. Merged (#1106).
+4. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge. Its `get_block_template` assembler is also the tip follower's template source (DX-Q2 item 5): one producer for the RPC and the miner.
+5. **The flip** needs PR-b, PR 2, PR 3, PR 3b and #1088. DEL-008's gate holds at genesis (Rick, 2026-10-18). At genesis the requirements are — SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`). Until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code. The flip's edit to `try_add_next_blocks` carries its own `UNFREEZE` line in `scripts/ci/dial_path_freeze.tsv` if CS-Q9's shrink-only rows for the protocol handler have landed (CS-Q9, Rick 2026-10-18).
+6. **Chain sync's cutover** follows the flip. It deletes the protocol handler's sync half, the complement request included (CS-Q1, Rick 2026-10-18). **RD** deletes its transaction routes, complement serving, `levin_notify` and the relay entry. Whichever lands second deletes the handler file.
 
-**Docs to fix in PR 2** (chain sync CS-F5):
-- `shekyl-chain-ingest/src/source.rs:28` and `:43` still say the p2p source computes the switch and emits `Rewind`.
-- The landed switch puts the fork choice in ingest. A live source never emits `Rewind`.
+**Chain sync CS-F5** (fixed in PR 2): `shekyl-chain-ingest/src/source.rs` states the landed switch — the fork choice is ingest's, and a live source never emits `Rewind`.

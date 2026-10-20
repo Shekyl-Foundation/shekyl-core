@@ -232,25 +232,27 @@ struct gen_block_alt_ts_window_truncation : public gen_block_verification_base<2
   bool check_alt_stored_top_unmoved(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
 };
 
-// CEN-A4 (acceptance topology, `held_by_cxx` in shekyl-chain-rules'
-// registry): a block whose parent is in neither main nor alt storage is
-// ORPHANED and not stored — the outcome byte, not a rejection. The check
-// asserts orphaned ∧ ¬added ∧ ¬rejected at the candidate and that the chain
-// height did not move (check_block_purged). The rules crate's gate cites
-// this test by name; renaming it means updating that entry.
+// CEN-A4 (acceptance topology): a block whose parent is in neither main nor
+// alt storage is ORPHANED and not stored — the outcome byte, not a
+// rejection. The check asserts orphaned ∧ ¬added ∧ ¬rejected at the
+// candidate and that the chain height did not move (check_block_purged).
+// The census's holder is the Rust ingest router (shekyl-chain-ingest,
+// `an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored`); this
+// test exercises the C++ driver until the store flip deletes it.
 struct gen_block_invalid_prev_id : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
   bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/);
 };
 
-// CEN-A1 (acceptance topology, `held_by_cxx`): a block whose hash is already
-// known — in the MAIN chain, the ALT store, or the process-lifetime invalid
-// set (`have_block_unlocked`) — is ALREADY_EXISTS: an outcome byte, neither
-// added nor rejected nor orphaned, and the chain does not grow.
+// CEN-A1 (acceptance topology; held by the Rust ingest router, as A4 is): a
+// block whose hash is already known — in the MAIN chain, the ALT store, or
+// the process-lifetime invalid set (`have_block_unlocked`) — is
+// ALREADY_EXISTS: an outcome byte, neither added nor rejected nor orphaned,
+// and the chain does not grow.
 //
-// Two of the three membership arms are exercised here through the real
-// ingest path; the rules crate's registry cites the first by name:
+// Two of the three membership arms are exercised here through the C++
+// ingest path:
 //   * main-chain arm — the same block submitted twice (height stays 2);
 //   * alt-store arm  — a second child of genesis is admitted as an alt block,
 //     then submitted again (height stays 2; alt count stays 1).

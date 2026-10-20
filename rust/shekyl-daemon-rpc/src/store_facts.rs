@@ -131,12 +131,15 @@ pub struct StoreFacts {
     node: Arc<dyn NodeFacts>,
     identity: NodeIdentity,
     caches: Arc<shekyl_pow_randomx::CacheStore>,
+    /// The daemon's one hasher budget: `calc_pow` hashes under a permit.
+    budget: shekyl_hash_budget::Budget,
 }
 
 impl StoreFacts {
     /// The facts over `store`, whose data file is `store_file`. `calc_pow`
     /// hashes under the caches `caches` already holds — the daemon's one
-    /// cache store, the validator's — and never derives one.
+    /// cache store, the validator's — and never derives one, each hash
+    /// under a permit from `budget` in `calc_pow`'s class (PR2-Q3).
     pub fn new(
         store: Arc<ChainStore>,
         store_file: PathBuf,
@@ -144,6 +147,7 @@ impl StoreFacts {
         node: Arc<dyn NodeFacts>,
         identity: NodeIdentity,
         caches: Arc<shekyl_pow_randomx::CacheStore>,
+        budget: shekyl_hash_budget::Budget,
     ) -> Self {
         Self {
             store,
@@ -152,6 +156,7 @@ impl StoreFacts {
             node,
             identity,
             caches,
+            budget,
         }
     }
 

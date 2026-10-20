@@ -152,6 +152,11 @@ pub mod inbound_ceiling_ffi;
 /// before the remnant runs. Not a snapshot field (§2.9).
 pub mod remnant_prep;
 
+// The protocol handler's one entry into the ingest service (DRS-X PR 2,
+// DX-Q2 item 2): spans in, one reply per arrival posted to the strand.
+// Built and tested here; the store flip routes the handler's arrivals to it.
+pub mod ingest_ffi;
+
 // The p2p seam. C++ posts onto the connection strand. Rust records the
 // cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 pub mod seam_ffi;
@@ -195,11 +200,6 @@ pub mod network_id_ffi;
 // classification is recorded by C++ as an opaque byte on the verification
 // context; whether that byte severs a connection is decided only here.
 pub mod peer_policy_ffi;
-
-// Daemon ephemeral-onion FFI — PWD-E7 piece 3
-// (`P2P_2_ENDPOINT_ROUND.md` PWD-E7/E9). `node_server::init` obtains the
-// per-boot overlay inbound (managed tor, in-memory key, DiscardPK) here.
-pub mod daemon_tor_ffi;
 
 /// The account's home from the operating system's account interface (IG-13).
 pub mod platform;

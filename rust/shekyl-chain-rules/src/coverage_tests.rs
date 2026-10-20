@@ -107,12 +107,8 @@ fn covers_landed_requires_exactly_the_implemented_rows() {
 }
 
 #[test]
-fn complete_means_every_validator_enforced_row_and_nothing_less() {
+fn complete_means_every_per_block_row_and_nothing_less() {
     use crate::census::RowStatus;
-    let held = CenRow::ALL
-        .iter()
-        .filter(|row| row.status() == RowStatus::HeldByCxx)
-        .count();
     let at_open = CenRow::ALL
         .iter()
         .filter(|row| row.status() == RowStatus::EnforcedAt)
@@ -130,21 +126,18 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
         coverage.insert(row);
     }
     assert!(coverage.is_complete_for(&RuleSet::GENESIS));
-    // Complete is `enforced − held − at-open − by-construction −
-    // held-by-store`: the rows the C++ ingest driver holds (A1, A4 after
-    // slice 1) are not the validator's to evaluate; the rows this crate
-    // enforces at another site (E5 at writer open, slice 3; the alt tier's
-    // rows, DRS-E5 slice 9), the rows that hold by construction (F2, F8,
-    // F19, slice 4) and the rows the store and its writer hold (K1a, K2,
-    // K3, K8, slice 9; B3, the 2026-10-15 re-class; K5, K5b, K6, K7, the
-    // switch, DRS-E5 a5; M2, M8, K9, the pool, PR-b) can never be in
-    // a per-block coverage. The census denominator itself
-    // moves for none of them.
+    // Complete is `enforced − at-open − by-construction − held-by-store`:
+    // the rows this crate enforces at another site (E5 at writer open,
+    // slice 3; the alt tier's rows, DRS-E5 slice 9), the rows that hold by
+    // construction (F2, F8, F19, slice 4) and the rows the store and its
+    // writer hold (K1a, K2, K3, K8, slice 9; B3, the 2026-10-15 re-class;
+    // K5, K5b, K6, K7, the switch, DRS-E5 a5; M2, M8, K9, the pool, PR-b;
+    // A1, A4, the ingest router, DRS-X PR 2) can never be in a per-block
+    // coverage. The census denominator itself moves for none of them.
     assert_eq!(
         coverage.len(),
-        CenRow::ALL.len() - held - at_open - by_construction - held_by_store
+        CenRow::ALL.len() - at_open - by_construction - held_by_store
     );
-    assert_eq!(held, 2, "slice 1 holds exactly A1 and A4");
     assert_eq!(
         at_open, 5,
         "slice 3 enforces E5 at open; DRS-E5 slice 9 enforces K1b, K4, D5, E2 at the alt tier"
@@ -154,8 +147,8 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
         "slice 4: F2, F8, F19, F21; slice 5: H2, H8, H12, H13, H23; slice 6: I2, I3; slice 7: G3, G4, G5; DRS-E4: L8, L9; the 2026-10-15 re-class: A3, A6, A7, L11, L12, L16 hold by construction"
     );
     assert_eq!(
-        held_by_store, 12,
-        "DRS-E5 slice 9: K1a, K2, K3, K8, and the 2026-10-15 re-class's B3, are held by the store; K5, K5b, K6, K7 by its writer's switch; M2, M8, K9 by the pool (PR-b)"
+        held_by_store, 14,
+        "DRS-E5 slice 9: K1a, K2, K3, K8, and the 2026-10-15 re-class's B3, are held by the store; K5, K5b, K6, K7 by its writer's switch; M2, M8, K9 by the pool (PR-b); A1, A4 by the ingest router (DRS-X PR 2)"
     );
     for row in [
         CenRow::A1,
@@ -183,14 +176,14 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
     coverage.insert(CenRow::A1);
     assert!(coverage.is_complete_for(&RuleSet::GENESIS));
 
-    // Drop one validator-enforced row: no longer complete.
+    // Drop one per-block row: no longer complete.
     let mut short = RuleCoverage::EMPTY;
     for row in RuleSet::GENESIS.enforced().skip(1) {
         short.insert(row);
     }
     assert_eq!(
         short.len(),
-        CenRow::ALL.len() - held - at_open - by_construction - held_by_store - 1
+        CenRow::ALL.len() - at_open - by_construction - held_by_store - 1
     );
     assert!(!short.is_complete_for(&RuleSet::GENESIS));
 }

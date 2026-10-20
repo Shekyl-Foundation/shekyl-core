@@ -933,7 +933,7 @@ network, never a node.
 
 | Grant | Carries |
 |---|---|
-| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, RT-O9.4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `hard_fork_info`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, RT-O9.4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
+| `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, RT-O9.4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, RT-O9.4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
 | `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, RT-O9.3) |
 | `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), the RPC and protocol contract versions (the nettype comes from `get_version`); `option_show`, whose rows are each present only when the connection holds the grant the row names (§6.4, RT-O24) |
 | `status` | Facts about **this node**, each a fingerprint: build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_net_stats`; `option_show`'s `status` rows, this node's rate limits and log settings (§6.4) |
@@ -1040,7 +1040,7 @@ still a C++ handler, and it is the one reply that must be filled field by
 grant. Carrying a grant into C++ would widen the one boolean that crosses
 the FFI today into a structure the cutover then deletes. So the daemon's
 KV cutover slice that moves `get_info`
-([`DAEMON_RPC_KV_CUTOVER.md`](DAEMON_RPC_KV_CUTOVER.md), RK-5c; its
+([`DAEMON_RPC_KV_CUTOVER.md`](../completed/DAEMON_RPC_KV_CUTOVER.md), RK-5c; its
 pre-flight, [`DAEMON_RPC_KV_GET_INFO.md`](DAEMON_RPC_KV_GET_INFO.md), was
 ratified 2026-10-09 and records this ordering as RK-D17) lands **before**
 RT-W10, and this
@@ -1081,8 +1081,9 @@ The client's message-3 payload names the grant it requests; the effective
 grant is the request clamped to the ceiling, fixed for the connection's
 life. **The daemon returns the effective grant in the message-4 payload**,
 so a clamped client knows at connect time, not when a call fails. A call
-outside the grant is refused with its own error — a dedicated JSON-RPC
-code and HTTP 403 on REST — never "method not found" or a 404. The default
+outside the grant is refused with its own error, the grant class of the
+wire's code registry ([`RPC_WIRE.md`](RPC_WIRE.md) RW-Q3), never "method not
+found". The default
 request is the `view` preset (§6.1). Nothing is served until the client's first
 transport record decrypts (§4.1).
 
@@ -1288,6 +1289,12 @@ two. Every route they replace is a REST path today.
   a secret (rule 43). Readers decode a row into a two-variant type and
   refuse a row with both forms or neither. A name the caller asked for
   but may not see is absent from the reply; an unknown name is refused.
+- **At the rename** (`RPC_WIRE.md` RW-Q8, `CORE_RPC_VERSION` 4.0),
+  `INPUT_GRAMMAR.md` IG-Q42 (ruled 2026-10-19) renames this wire:
+  `option_set` takes `{"value": {<name>: <value>, …}}`, a map, so a name
+  cannot be given twice; both replies are the list of rows itself, with no
+  `options` key; `option_show`'s `names` is `name`; and a secret row's
+  `set` is `assigned`. Every other rule above stands.
 - **What `option_show` prints, `option_set` accepts.** The text shown for
   a value is valid input to `option_set` and builds the same value. A
   property test over every runtime row holds this. **Every runtime row's
@@ -1997,6 +2004,7 @@ rule-26 pre-flight before its first production commit.
 | RT-W9 | `shekyl-noise` holds `SymmetricState` and `Direction` (pinned handshake vectors untouched; the interim framer stays in `shekyl-p2p-transport`); the `hybridXK` handshake; `ClassedRecord` and the stream adapter `shekyl-rpc-stream` (RT-P5); padded records in size classes derived from RT-P5 and RT-P6 (RT-O6). `FixedWindow` is the P2P end state and is not built here. Two exclusion rows in the domain registry, one shared reason, for the two Noise protocol-name literals — the RPC channel's and the P2P handshake's — which are mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; the header-protection label `shekyl/noise-record-header-v1` is a separate mechanism-7 row, landed with the constant; deadline from RT-P6. **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the pinned ML-KEM crate or the Rust toolchain changes | RT-W8 | **authorized 2026-10-11, decision-anchored to PR #1034**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md); `RT-O16`…`RT-O22` ruled 2026-10-11, and `RT-O16`, `RT-O18`, `RT-O20` and the sequencing of `RT-O21` re-ruled 2026-10-12; step 1 is built (`SymmetricState`, `Direction`, `into_directions`); step 2 is built in PR #1039: the `hybridXK` handshake in `shekyl-rpc-channel`, ending in `into_directions`, compared with the pinned vectors from `rust/shekyl-rpc-channel/src/pinned_handshake.rs` (RT-O18); `ClassedRecord` and `shekyl-rpc-stream` are not |
 | RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view`. **The listener logs a connection, counts it against a client and records a last-seen time only from the authenticated client `AuthenticatedSession` yields, never from the fingerprint `DaemonReadyForMessage4` exposes for the enrolment lookup (§4.1, ruled 2026-10-12).** A copied fingerprint is still only a claim. Its pre-flight settles what message 4 carries (§6.2) | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 | not authorized |
-| RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9) | RT-W9 | not authorized |
+| RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-cli`, once it serves the console on the shared client (RT-W15); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9) | RT-W9 | not authorized |
 | RT-W13 | The check that §11.2 is empty: every row gone, no reader of a deleted flag or field left | lands with RT-W10; re-run after RT-W12 and RT-W14 | not authorized |
 | RT-W14 | Service mode (RT-16): the declared-mode switch; console key and its offline reset; enrol at install; machine-wide rendezvous; Windows service under a virtual account and its installer step (service first, fresh data home never adopted, inheritance broken); Linux unit under a dedicated user; machine-wide data home and ACL; Tor as the service's child; side-by-side refusal | RT-W10, RT-P8, the Rust process entry (the daemon-configuration cutover, PR #1066) | not authorized |
+| RT-W15 | R8: `shekyl-cli` serves the daemon console (`INPUT_GRAMMAR.md` §13), on `shekyl-rpc-client` and `shekyl-rpc-types` (RK-D1, `RPC_WIRE.md`); the Rust console's renderers move into it with their tests; its private HTTP client, its reply types and its free-text status matching go; the C++ console, `shekyld <command>`'s client mode and `rpc_client.h` are deleted | — | authorized 2026-10-17 |

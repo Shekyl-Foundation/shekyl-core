@@ -4,7 +4,7 @@
 // BSD-3-Clause
 
 // Bidirectional layout pin for shekyl_rpc_chain_tip_facts
-// (docs/design/DAEMON_RPC_KV_CUTOVER.md §3.2, RK-D3; the F26 pattern from
+// (docs/completed/DAEMON_RPC_KV_CUTOVER.md §3.2, RK-D3; the F26 pattern from
 // daemon_submit_ffi_roundtrip.cpp): C++ fills / Rust checks and Rust fills /
 // C++ checks, per field from one seed, so a width, order or padding
 // disagreement between the two views fails even where a memcpy echo passes.

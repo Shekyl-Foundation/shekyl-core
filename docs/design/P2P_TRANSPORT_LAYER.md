@@ -111,9 +111,10 @@ timeouts were cited at `:189`, `:193`, and `:192`.* `NEW_CONNECTION_TIMEOUT_LOCA
 1,200,000 with the comment still saying "2 minutes"
 (`abstract_tcp_server2.inl:60-61`). The send queue is 1,000 messages
 and 100 MiB (`abstract_tcp_server2.h:72-73`). The asio pool is 10
-(`net_node.inl:1150`). The daemon-rpc runtime is still the default
-multi-thread builder (`ffi_exports.rs:162`). Tor control still sets
-`.worker_threads(1)` (`blocking.rs:120`). `Driver::next_wake` is
+(`net_node.inl:1150`). At this pin (`0aa207208`) the daemon-rpc runtime was
+the default multi-thread builder (`shekyl-daemon-rpc` `ffi_exports.rs` line
+162) and Tor control set `.worker_threads(1)` (`shekyl-tor-control-daemon`
+`blocking.rs` line 120). `Driver::next_wake` is
 `driver/mod.rs:158`. `shekyl-p-fetch` and `shekyl-rpc-transport` dial
 through `shekyl-socks`. `shekyl-p-transport` still enables ureq's
 `socks-proxy`. D6's third falsifier does
@@ -805,11 +806,11 @@ It was not removed by this round (D8). LV-3 step c deleted it.
 `is_host_limit` is `net_node.inl:231` and reads the Levin registry.
 Connections that have no channel yet are invisible to that read.
 
-Two private tokio runtimes already exist:
-`rust/shekyl-daemon-rpc/src/ffi_exports.rs:162` and
-`rust/shekyl-tor-control-daemon/src/blocking.rs:120`. Both call
-`Builder::new_multi_thread()`. The transport layer must not silently add a
-third (D5, D14).
+At this round's pin (`0aa207208`) two private tokio runtimes existed:
+`rust/shekyl-daemon-rpc/src/ffi_exports.rs` line 162 and
+`rust/shekyl-tor-control-daemon/src/blocking.rs` line 120. Both called
+`Builder::new_multi_thread()`. The transport layer must not silently add
+another (D5, D14).
 
 Sizes that are deletable at cutover, counted at this pin: the two
 `abstract_tcp_server2` files (2,934 lines), `connection_basic` (481
@@ -1109,12 +1110,12 @@ RPC and Tor-control runtimes serve the operator. A tokio multi-thread
 runtime has no task priorities, so a shared pool would let a peer flood
 starve wallet RPC, and the reverse. Separate runtimes contain that.
 
-Today each subsystem builds its own runtime. Two already do
-(`shekyl-daemon-rpc` `ffi_exports.rs:162` builds a multi-thread runtime
-and does not set a worker count, so it takes one worker per core;
-`shekyl-tor-control-daemon` `blocking.rs:120` sets `.worker_threads(1)`).
-On a 4-core Pi-4 those two are five workers. A third runtime that also
-took the default would make nine, plus blocking pools. The transport
+At this round's pin (`0aa207208`) each subsystem built its own runtime, and
+two did (`shekyl-daemon-rpc` `ffi_exports.rs` line 162 built a multi-thread
+runtime with no worker count, so it took one worker per core;
+`shekyl-tor-control-daemon` `blocking.rs` line 120 set `.worker_threads(1)`).
+On a 4-core Pi-4 those two were five workers. A third runtime that also
+took the default would have made nine, plus blocking pools. The transport
 layer does not add one that way. The constructor is
 `shekyl-runtime::runtime(RuntimeBudget { workers, blocking }, name)`.
 Both counts are inputs, and `name` is a `ThreadName` (non-empty, no

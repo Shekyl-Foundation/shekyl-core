@@ -4,7 +4,7 @@
 // BSD-3-Clause
 //
 // RPC facts shims — the C ABI the natively-served (Rust) daemon RPC methods
-// read core state through (docs/design/DAEMON_RPC_KV_CUTOVER.md §3.2, RK-D3).
+// read core state through (docs/completed/DAEMON_RPC_KV_CUTOVER.md §3.2, RK-D3).
 //
 // A shim reads; it decides nothing. Every POD here has a #[repr(C)] twin in
 // rust/shekyl-daemon-rpc/src/ffi.rs whose layout is pinned both directions by

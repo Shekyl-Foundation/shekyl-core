@@ -16,10 +16,10 @@
 //! discardable by ruling (`SPL-Q8`): a pool that loses it loses only the
 //! transactions it held, never a fact the chain needs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, RuleSet, StatelessPass};
+use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, InvalidBlock, RuleSet, StatelessPass};
 use shekyl_chain_store::pool::{PoolOpen, PoolRecord, PoolStore, ReceivedHour};
 use shekyl_chain_store::store::StoreError;
 use shekyl_types::{BlockHeight, KeyImage, TxHash, UnixSeconds};
@@ -31,6 +31,19 @@ use crate::door::{self, DoorFault, Judged};
 use crate::evict::Limits;
 use crate::rate::{AdmissionRank, FeeRate};
 use crate::view::KeyImages;
+
+/// Step 1 of the door, relative to the pool lock.
+///
+/// [`Step1::Prepared`] was computed before the lock, so admission does not
+/// verify signatures and proofs while it holds the pool. [`Step1::Judge`]
+/// runs step 1 under the lock, reusing `prior` when the claim still holds.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Step1 {
+    /// Judge step 1 here, reusing `prior` when it holds.
+    Judge(Option<StatelessPass>),
+    /// Step 1 already ran. An error is the refusal, and it is not run again.
+    Prepared(Result<StatelessPass, InvalidBlock>),
+}
 
 /// How a transaction reached the door — which decides only whether it is
 /// public on admission. Crate-private (the review of #1102, S6): only
@@ -184,6 +197,9 @@ pub struct Pool {
     /// CEN-M10's limits, read off the chain (`Limits::at`) at open and set
     /// by the writer at each connect ([`Pool::set_limits`]).
     limits: Limits,
+    /// Step 1 already run outside the pool lock, consumed by the next
+    /// reconcile. Not durable: the file must not supply a pass.
+    prepared: HashMap<TxHash, Result<StatelessPass, InvalidBlock>>,
 }
 
 impl core::fmt::Debug for Pool {
@@ -208,6 +224,7 @@ impl Pool {
                 key_images: KeyImages::default(),
                 held: BTreeMap::new(),
                 limits,
+                prepared: HashMap::new(),
             },
             how,
         ))
@@ -237,7 +254,15 @@ impl Pool {
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<Admission, PoolFault<V::Fault>> {
-        self.admit_from(tx, None, Arrival::Relayed, now, chain, rule_set, policy)
+        self.admit_from(
+            tx,
+            Step1::Judge(None),
+            Arrival::Relayed,
+            now,
+            chain,
+            rule_set,
+            policy,
+        )
     }
 
     /// [`Pool::admit`] with `prior`, a pass the caller computed for `tx`
@@ -258,7 +283,15 @@ impl Pool {
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<Admission, PoolFault<V::Fault>> {
-        self.admit_from(tx, prior, Arrival::Relayed, now, chain, rule_set, policy)
+        self.admit_from(
+            tx,
+            Step1::Judge(prior),
+            Arrival::Relayed,
+            now,
+            chain,
+            rule_set,
+            policy,
+        )
     }
 
     /// Admission by `arrival`. A held transaction a block carries is made
@@ -273,7 +306,7 @@ impl Pool {
     pub(crate) fn admit_from<'id, V: ChainView<'id>>(
         &mut self,
         tx: Transaction,
-        prior: Option<StatelessPass>,
+        step1: Step1,
         arrival: Arrival,
         now: UnixSeconds,
         chain: &V,
@@ -303,6 +336,16 @@ impl Pool {
         if self.room_for(weight, rate).is_none() {
             return Ok(Admission::PoolFull);
         }
+        // A step 1 that already refused is the door's answer. It is not
+        // run again under this lock. One that passed is the prior `judge`
+        // reuses while its claim holds.
+        let prior = match step1 {
+            Step1::Prepared(Err(refused)) => {
+                return Ok(Admission::Refused(Judged::Stateless(refused)));
+            }
+            Step1::Prepared(Ok(pass)) => Some(pass),
+            Step1::Judge(prior) => prior,
+        };
         let judged = door::judge(
             &tx,
             chain,
@@ -338,6 +381,54 @@ impl Pool {
     pub(crate) fn hold(&mut self, txid: TxHash, held: Held) {
         self.key_images.insert(txid, held.key_images());
         self.held.insert(txid, held);
+    }
+
+    /// Entries whose step 1 must run before the next reconcile: none yet
+    /// (a file entry), or a pass whose claim no longer holds against
+    /// `chain` under `rule_set` (a reorg moved its reference, or the rule
+    /// set changed). The caller runs step 1 outside the pool lock and
+    /// stages it ([`Pool::stage_step1`]), so [`Pool::reconcile`] verifies
+    /// nothing while it holds the pool. Reads the chain; verifies nothing.
+    ///
+    /// # Errors
+    ///
+    /// The chain view's.
+    pub fn needing_step1<'id, V: ChainView<'id>>(
+        &self,
+        chain: &V,
+        rule_set: &RuleSet,
+    ) -> Result<Vec<(TxHash, Transaction)>, V::Fault> {
+        let connecting = shekyl_chain_rules::Tip::connecting_height(chain.tip()?.as_ref());
+        let mut needing = Vec::new();
+        for (txid, held) in &self.held {
+            let holds = match &held.pass {
+                None => false,
+                Some(pass) => {
+                    let claims = shekyl_chain_rules::ReferenceClaims::for_transaction(
+                        chain, connecting, &held.tx,
+                    )?;
+                    pass.holds_under(&held.tx, rule_set, &claims)
+                }
+            };
+            if !holds {
+                needing.push((*txid, held.tx.clone()));
+            }
+        }
+        Ok(needing)
+    }
+
+    /// Remember step 1 for `txid` until the next reconcile consumes it.
+    /// An entry that left the pool since the caller read it is ignored.
+    pub fn stage_step1(&mut self, txid: TxHash, step1: Result<StatelessPass, InvalidBlock>) {
+        if self.held.contains_key(&txid) {
+            self.prepared.insert(txid, step1);
+        }
+    }
+
+    /// Every staged step 1, for the reconcile that consumes them. Taken
+    /// before the held index is borrowed.
+    pub(crate) fn take_planted(&mut self) -> HashMap<TxHash, Result<StatelessPass, InvalidBlock>> {
+        std::mem::take(&mut self.prepared)
     }
 
     /// Put `held`, read back from the file at open, in the index — and not

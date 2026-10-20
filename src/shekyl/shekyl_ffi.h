@@ -3821,87 +3821,6 @@ bool shekyl_block_sync_heavier_score(uint8_t action);
 bool shekyl_block_sync_orphan_resync(uint8_t action);
 
 // ---------------------------------------------------------------------------
-// Daemon ephemeral Tor inbound -- PWD-E7 (docs/design/P2P_2_ENDPOINT_ROUND.md)
-// ---------------------------------------------------------------------------
-// The DEFAULT overlay-endpoint posture: the daemon spawns a managed, pinned
-// tor, mints a v3 onion key IN MEMORY, publishes with ADD_ONION Flags=
-// DiscardPK, and uses the returned ServiceID as its per-boot overlay inbound
-// address. The DataDirectory is a unique 0700 subdirectory of the daemon
-// config folder, wiped on teardown -- a restart cannot reuse entry guards.
-// The operator-provisioned stable posture (--anonymous-inbound + torrc) is a
-// different privacy posture, not a different custody of the same thing, and
-// configuring it makes the ephemeral posture yield. All of the posture logic
-// lives in rust/shekyl-tor-control-daemon; these exports are marshaling.
-//
-// These symbols live in shekyl-ffi (linked by every C++ binary that
-// instantiates node_server via SHEKYL_FFI_LINK_LIBS). daemon_image is a
-// superset, so shekyld sees them too. They are not in shekyl-daemon-rpc:
-// that crate is the Axum HTTP server, not the P2P overlay.
-
-#define SHEKYL_DAEMON_TOR_OK                 0
-#define SHEKYL_DAEMON_TOR_ALREADY_RUNNING    1
-#define SHEKYL_DAEMON_TOR_ARG                2
-#define SHEKYL_DAEMON_TOR_NO_BINARY          3
-#define SHEKYL_DAEMON_TOR_BAD_BINARY         4
-#define SHEKYL_DAEMON_TOR_START_FAILED       5
-#define SHEKYL_DAEMON_TOR_UNAVAILABLE        6
-#define SHEKYL_DAEMON_TOR_NOT_RUNNING        1
-#define SHEKYL_DAEMON_TOR_PUBLISH_FAILED     3
-
-//! Start the managed tor: verify the binary, create a unique wiped
-//! DataDirectory under `data_dir_parent` (the daemon config folder -- never
-//! the DataDirectory itself), bootstrap to 100%, and return its SOCKS
-//! listener. No onion is published yet -- that is shekyl_daemon_tor_publish,
-//! called after the daemon has bound its loopback inbound listener (on an
-//! OS-assigned port; a port guessed before binding could already be taken
-//! and abort init). BLOCKS for the whole sequence (tens of seconds on a
-//! cold bootstrap; bound by bootstrap_timeout_secs plus small constants).
-//! Outputs are NUL-terminated: out_socks_addr (>= 48 bytes; the managed
-//! tor's SOCKS "ip:port" -- the zone's outbound proxy), out_error (>= 256
-//! bytes recommended). Return codes: SHEKYL_DAEMON_TOR_OK; _ALREADY_RUNNING
-//! (refused, not stacked); _ARG; _NO_BINARY (no candidate at all);
-//! _BAD_BINARY (candidate found but unusable: a pinned file's digest
-//! differs, tor's directory holds something that is not pinned, unreadable);
-//! _UNAVAILABLE (Shekyl manages no tor on this build target; out_error is
-//! the reason); _START_FAILED (spawn/bootstrap -- incarnation torn down
-//! before return, so a failed start commits the caller to nothing).
-int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_parent,
-                            uint32_t bootstrap_timeout_secs,
-                            char* out_socks_addr, size_t out_socks_addr_len,
-                            char* out_error, size_t out_error_len);
-
-//! Publish the per-boot v3 onion on the running managed tor (key minted in
-//! memory, ADD_ONION Flags=DiscardPK PoWDefensesEnabled=1), forwarding
-//! virtual_port (what peers dial) to 127.0.0.1:local_port (the daemon's
-//! already-bound inbound listener), MaxStreams=max_streams per rendezvous
-//! circuit. A Tor that rejects a proof-of-work argument (control status
-//! 512 or 513, and the reply names that argument) fails the publish. Any
-//! other 512 is an ordinary publish failure. There is no second attempt
-//! without proof-of-work.
-//! Outputs are NUL-terminated: out_service_id (>= 57 bytes; 56-char service id, no
-//! ".onion"), out_error (>= 256 bytes recommended). Returns 0 = published;
-//! 1 = no instance running (start first); 2 = argument error; 3 = publish
-//! failed (detail in out_error). A publish failure leaves tor RUNNING: the
-//! ruled degrade is outbound-only on the zone (keep the SOCKS proxy, serve
-//! no overlay inbound this boot) -- do not abort the daemon.
-int shekyl_daemon_tor_publish(uint16_t virtual_port, uint16_t local_port,
-                              uint16_t max_streams,
-                              char* out_service_id, size_t out_service_id_len,
-                              char* out_error, size_t out_error_len);
-
-//! Is the ephemeral tor still up? false when never started, already shut
-//! down, or died. Per PWD-E7 there is no respawn: a death means the overlay
-//! posture is gone for this boot. The daemon's idle loop polls this and, on
-//! the true->false edge, logs once that overlay inbound is lost and that
-//! originated transactions stay fail-closed on the tor zone.
-bool shekyl_daemon_tor_is_alive(void);
-
-//! Bounded teardown of the ephemeral posture (DEL_ONION, SIGTERM -> wait ->
-//! SIGKILL, reap). Idempotent: true when an instance was running and is now
-//! down, false when there was nothing to stop.
-bool shekyl_daemon_tor_shutdown(void);
-
-// ---------------------------------------------------------------------------
 // DRS-P0d logical-state digest v0
 // (`docs/design/DAEMON_REDB_STORE.md` §7.1). One coarse call: C++ has
 // already collected height-ordered block hashes, the spent-key set, and
@@ -4378,6 +4297,91 @@ bool shekyl_sync_wants_more_outbound(std::uint32_t connector, std::uint32_t outb
 /// the tip changes, and once at start.
 void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,
     std::uint64_t cumulative_difficulty_top64, const std::uint8_t* top_id);
+
+/// The protocol handler's one entry into the Rust ingest service
+/// (DRS_X_STORE_FLIP.md DX-Q2 item 2). Built and tested; the store flip
+/// routes the handler's block arrivals here, and nothing calls it before.
+/// `shekyl_ingest_bind` installs the post, which enqueues each reply onto
+/// the connection's strand and returns. A null `post` or `ctx` unbinds and
+/// drains replies already accepted before the post is cleared. Ask
+/// `shekyl_ingest_room` before sending; `shekyl_ingest_offer_span` judges
+/// lengths, room and the session bucket, then copies what it is given and
+/// returns at once. Each accepted arrival gets exactly one reply, tagged
+/// with the arrival and the connection.
+constexpr std::uint32_t SHEKYL_INGEST_CONNECTED = 1;
+constexpr std::uint32_t SHEKYL_INGEST_REFUSED = 2;
+constexpr std::uint32_t SHEKYL_INGEST_UNLINKED = 3;
+constexpr std::uint32_t SHEKYL_INGEST_ALREADY_HELD = 4;
+constexpr std::uint32_t SHEKYL_INGEST_HELD = 5;
+/// The door's past-cap hint: judged before the block was stored or hashed,
+/// never proof of a heavier chain. `height` is the depth, `by` the cap.
+constexpr std::uint32_t SHEKYL_INGEST_BEYOND_CAP = 6;
+constexpr std::uint32_t SHEKYL_INGEST_SWITCHED = 7;
+constexpr std::uint32_t SHEKYL_INGEST_PROMOTION_REFUSED = 8;
+/// A stored heavier chain this node cannot follow: a pop met the undo
+/// floor. `height` is the tip, `by` the floor.
+constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BELOW_FLOOR = 9;
+constexpr std::uint32_t SHEKYL_INGEST_MISSING_BODIES = 10;
+constexpr std::uint32_t SHEKYL_INGEST_CANCELLED = 11;
+constexpr std::uint32_t SHEKYL_INGEST_STOPPED = 12;
+/// A stored heavier chain this node cannot follow: its fork is deeper than
+/// the cap. `height` is the depth, `by` the cap.
+constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP = 13;
+/// `shekyl_ingest_offer_span`'s results. Every refusal is before
+/// acceptance and never a peer fault; THROTTLED lets the handler close the
+/// session, never score it.
+constexpr int SHEKYL_INGEST_ACCEPTED = 0;
+constexpr int SHEKYL_INGEST_NO_ROOM = 1;
+constexpr int SHEKYL_INGEST_THROTTLED = 2;
+constexpr int SHEKYL_INGEST_OVERSIZE = 3;
+constexpr int SHEKYL_INGEST_UNBOUND = -1;
+constexpr int SHEKYL_INGEST_INVALID = -2;
+/// `shekyl_ingest_bind`: an unbind on a thread of the runtime that posts
+/// the replies. It cannot wait for them, so nothing changed. Unbind from
+/// another thread.
+constexpr int SHEKYL_INGEST_REENTRANT = -3;
+
+struct shekyl_ingest_blob {
+  const std::uint8_t* ptr;
+  std::size_t len;
+};
+
+struct shekyl_ingest_arrival {
+  std::uint64_t tag;
+  shekyl_ingest_blob block;
+  const shekyl_ingest_blob* bodies;
+  std::size_t bodies_len;
+};
+
+/// Which fields carry meaning is the kind's (`ingest_ffi.rs`); the rest are
+/// zero. MISSING_BODIES carries its indices beside the struct.
+struct shekyl_ingest_reply {
+  std::uint64_t connection;
+  std::uint64_t tag;
+  std::uint32_t kind;
+  std::uint16_t rule;
+  std::uint8_t _pad[2];
+  std::uint64_t height;
+  std::uint64_t by;
+  std::uint8_t hash[32];
+};
+static_assert(sizeof(shekyl_ingest_reply) == 72, "ingest reply");
+
+using shekyl_ingest_post_fn = void (*)(void* ctx, const shekyl_ingest_reply* reply,
+    const std::uint64_t* indices, std::size_t indices_len);
+
+/// Install `post`. A null `post` or `ctx` unbinds: replies already accepted
+/// are posted before it returns, and `ctx` may be released after. Returns 0,
+/// or SHEKYL_INGEST_REENTRANT for an unbind on the replies' own runtime.
+int shekyl_ingest_bind(void* ctx, shekyl_ingest_post_fn post);
+/// The arrivals the service accepts now; 0 when it is not installed.
+std::uint64_t shekyl_ingest_room(void);
+/// Offer `len` arrivals from `connection`; `solicited` nonzero for blocks
+/// this node asked for.
+int shekyl_ingest_offer_span(std::uint64_t connection, std::uint8_t solicited,
+    const shekyl_ingest_arrival* arrivals, std::size_t len);
+/// `connection` closed.
+void shekyl_ingest_session_closed(std::uint64_t connection);
 /// The tip the core last published (see shekyl_core_publish_tip): 1 and the
 /// fields written, 0 and nothing written before the first publish. A null
 /// out pointer is skipped.
