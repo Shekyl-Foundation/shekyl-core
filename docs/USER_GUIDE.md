@@ -106,7 +106,7 @@ blockchain from peers. The default locations are:
 
 - **Linux:** `~/.shekyl/`
 - **macOS:** `~/.shekyl/`
-- **Windows:** `C:\ProgramData\shekyl\`
+- **Windows:** `%LOCALAPPDATA%\Shekyl\` (the per-account root; a service install uses `%ProgramData%\shekyl\`)
 
 Initial sync takes several hours depending on your hardware and network. You
 will see log lines showing block height, download rate, and verification

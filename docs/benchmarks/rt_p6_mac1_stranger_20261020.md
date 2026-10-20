@@ -229,5 +229,8 @@ PR, and its measurement-ledger row is captured again on this run. At the
 ruled share, a quarter of one core, the budget now admits 250,000,000 /
 2,163,800 = 115.5, so **115 handshakes a second, 115 at once**, where it
 admitted 117. A message 1 that fails at its tag costs the daemon 665.5 µs
-at the 99th percentile here, below the charge, so the bound still holds
-for every mix.
+at the 99th percentile here, below the 2,163.8 µs charge, so a mix of
+admitted attempts is priced at or above its measured p99. That percentile
+is not a maximum. The bucket bounds charges,
+`charges ≤ share × elapsed + capacity`, with capacity one second of the
+share.

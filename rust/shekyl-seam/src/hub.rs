@@ -274,17 +274,10 @@ impl Hub {
     /// kept dial is posted: a confirm dial finishes in the dialer.
     /// It is the first post after `established`, ahead of any frame the
     /// pump will deliver.
-    pub fn post_handshake_result(
-        &self,
-        id: SocketId,
-        connector: ConnectorId,
-        support_flags: u32,
-        sync: SyncPayload,
-    ) {
+    pub fn post_handshake_result(&self, id: SocketId, connector: ConnectorId, sync: SyncPayload) {
         (self.post)(Post::HandshakeResult {
             id,
             connector,
-            support_flags,
             sync,
         });
     }
@@ -381,12 +374,6 @@ impl Hub {
     /// Record the hash the peer asserted on a live row.
     pub fn note_last_known_hash(&self, id: SocketId, hash: [u8; 32]) -> bool {
         self.edit(id, |connection| connection.note_last_known_hash(hash))
-            .is_some()
-    }
-
-    /// Record the support flags the peer asserted on a live row.
-    pub fn note_support_flags(&self, id: SocketId, flags: u32) -> bool {
-        self.edit(id, |connection| connection.note_support_flags(flags))
             .is_some()
     }
 

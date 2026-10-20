@@ -89,9 +89,6 @@ pub struct ShekylSeamAddress {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ShekylSeamHandshakeResult {
-    /// The peer's support flags, zero included.
-    pub support_flags: u32,
-    pub _pad: [u8; 4],
     /// The peer's `CORE_SYNC_DATA`.
     pub current_height: u64,
     pub cumulative_difficulty: u64,
@@ -102,22 +99,20 @@ pub struct ShekylSeamHandshakeResult {
 impl ShekylSeamHandshakeResult {
     /// The struct's bytes in its C layout, written field by field so the
     /// post carries no padding read from the stack.
-    fn to_bytes(self) -> [u8; 64] {
-        let mut out = [0u8; 64];
-        out[0..4].copy_from_slice(&self.support_flags.to_ne_bytes());
-        out[8..16].copy_from_slice(&self.current_height.to_ne_bytes());
-        out[16..24].copy_from_slice(&self.cumulative_difficulty.to_ne_bytes());
-        out[24..32].copy_from_slice(&self.cumulative_difficulty_top64.to_ne_bytes());
-        out[32..64].copy_from_slice(&self.top_id);
+    fn to_bytes(self) -> [u8; 56] {
+        let mut out = [0u8; 56];
+        out[0..8].copy_from_slice(&self.current_height.to_ne_bytes());
+        out[8..16].copy_from_slice(&self.cumulative_difficulty.to_ne_bytes());
+        out[16..24].copy_from_slice(&self.cumulative_difficulty_top64.to_ne_bytes());
+        out[24..56].copy_from_slice(&self.top_id);
         out
     }
 }
 
 const _: () = {
-    assert!(std::mem::size_of::<ShekylSeamHandshakeResult>() == 64);
-    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, support_flags) == 0);
-    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, current_height) == 8);
-    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, top_id) == 32);
+    assert!(std::mem::size_of::<ShekylSeamHandshakeResult>() == 56);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, current_height) == 0);
+    assert!(std::mem::offset_of!(ShekylSeamHandshakeResult, top_id) == 24);
 };
 
 /// What `established` carries upward.
@@ -728,13 +723,10 @@ fn post_one(bound: &Bound, item: Post) {
         Post::HandshakeResult {
             id,
             connector,
-            support_flags,
             sync,
         } => {
             let observed = routing_c(connector);
             let result = ShekylSeamHandshakeResult {
-                support_flags,
-                _pad: [0; 4],
                 current_height: sync.current_height,
                 cumulative_difficulty: sync.cumulative_difficulty,
                 cumulative_difficulty_top64: sync.cumulative_difficulty_top64,

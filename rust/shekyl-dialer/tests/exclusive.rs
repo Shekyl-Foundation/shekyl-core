@@ -18,7 +18,6 @@ use std::sync::Arc;
 
 use shekyl_dialer::Dialer;
 use shekyl_draw_rng::SplitMix64;
-use shekyl_levin::SupportFlags;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
 use shekyl_seam::{Hub, Route, RoutePublish, SyncPayload};
@@ -42,7 +41,6 @@ fn dialer() -> Arc<Dialer> {
     let dialer = Arc::new(Dialer::new(
         hub,
         RefusedSet::NON_GLOBAL,
-        SupportFlags::ADVERTISED.bits(),
         Arc::new(|| {
             Some(SyncPayload {
                 current_height: 1,

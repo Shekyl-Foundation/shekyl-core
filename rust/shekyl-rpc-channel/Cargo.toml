@@ -18,6 +18,10 @@ fips203 = "=0.4.3"
 # BLAKE2s-256 for its key. The version and features shekyl-noise's Noise
 # hash already uses, so the lock gains an edge and no crate.
 blake2 = { version = "0.10", default-features = false }
+# Constant-time compare of the busy reply. Already in the workspace
+# (shekyl-scanner, shekyl-wallet-rpc); declared here so the compare does
+# not depend on a transitive edge.
+subtle = "2"
 rand_core = { version = "0.6", features = ["getrandom"] }
 # cSHAKE256: the one audited home (`shekyl-crypto-hash`), not a second copy.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }

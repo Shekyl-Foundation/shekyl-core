@@ -128,10 +128,8 @@ def is_plain_name(value):
 # `build.rs` names the same target, and packaging selects a row by the host
 # while the binary selects one by os/arch. The suffix is the OS family and
 # the stem is the Cargo arch. darwin's trailing number is a deployment
-# version. android's triple says "linux" because that is the ABI; the row's
-# os is android.
+# version.
 _HOST_TRIPLES = (
-    (re.compile(r"([A-Za-z0-9_]+)-linux-android\Z"), "android"),
     (re.compile(r"([A-Za-z0-9_]+)-linux-gnu\Z"), "linux"),
     (re.compile(r"([A-Za-z0-9_]+)-unknown-freebsd\Z"), "freebsd"),
     (re.compile(r"([A-Za-z0-9_]+)-w64-mingw32\Z"), "windows"),

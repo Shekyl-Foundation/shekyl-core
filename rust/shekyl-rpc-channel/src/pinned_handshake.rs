@@ -34,8 +34,8 @@ use serde_json::Value;
 use shekyl_noise::KeyEpoch;
 
 use super::{
-    Client, Daemon, StaticKeypair, MESSAGE1_LEN, MESSAGE1_WIRE_LEN, MESSAGE2_LEN,
-    MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, TRANSPORT_AD,
+    Client, Daemon, Message1Admission, StaticKeypair, MESSAGE1_LEN, MESSAGE1_WIRE_LEN,
+    MESSAGE2_LEN, MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, TRANSPORT_AD,
 };
 use crate::budget::HandshakeBudget;
 use crate::{NetworkId, MAC1_LEN};
@@ -112,9 +112,13 @@ fn run() -> Run {
         "message 1's mac1 is the daemon bundle's, over the Noise message"
     );
     let budget = HandshakeBudget::new(std::time::Instant::now());
-    let daemon = Daemon::new(&network_id, &daemon_static)
+    let daemon = match Daemon::new(&network_id, &daemon_static)
         .read_message1(&message1, &budget, std::time::Instant::now())
-        .expect("daemon reads message 1");
+        .expect("daemon reads message 1")
+    {
+        Message1Admission::Continue(ready) => ready,
+        Message1Admission::Busy(_) => panic!("the pinned handshake is admitted"),
+    };
     let message1 = noise_message1.to_vec();
     let (daemon, message2) = daemon.write_from(&mut daemon_rng).expect("message 2");
     let client = client

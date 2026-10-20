@@ -841,8 +841,8 @@ three amendments folded and the padding pinned.** Single-line
   number sized for a scheme that wasn't chosen. Enforcement is on the
   **encoded input length, before decoding** — bounding decoded output
   after decode would allocate an attacker's 64 KB from a shorter
-  input; same pre-allocation discipline `decompress_payload` applies
-  in `shekyl-levin`.
+  input; the same pre-allocation discipline `shekyl-levin`'s reader
+  applies to a bucket's declared length.
 - **base64url is PINNED UNPADDED, canonical-form-strict.** Decoders
   reject `=` padding, non-alphabet characters, and non-zero trailing
   bits in the final character — one signature has exactly one

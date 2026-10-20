@@ -1362,8 +1362,8 @@ Do not reintroduce them. Archival emission is a different vin
 | CLSAG device interface removal | **Done**; Ledger sources deleted 2026-10-01 | `device.hpp`, `device_default.cpp/hpp` |
 | `get_outs`/`get_outs.bin` RPC removal | **Done** | `core_rpc_server.h/cpp`, `core_rpc_ffi.cpp`, `shekyl-daemon-rpc` |
 | Dead HF constant cleanup (mixin, CLSAG, etc.) | **Done** | `cryptonote_config.h` |
-| Zstd Levin P2P compression | **Done** | `levin_base.h/cpp`, `levin_compression.h/cpp`, `net_node.inl` |
-| `P2P_SUPPORT_FLAG_ZSTD_COMPRESSION` handshake flag | **Done** | `cryptonote_config.h` (0x02) |
+| Levin P2P compression | **Removed** (2026-10-19, `SHEKYL_P2P_PROTOCOL.md` PWD-T7) | — |
+| Handshake support flags | **Removed** (2026-10-19, `SHEKYL_P2P_PROTOCOL.md` PWD-T7) | — |
 | Stake-claim rollback: watermark + pool-balance restoration | **Done** | `blockchain_db.cpp` (`remove_transaction`) |
 | Txpool `txin_stake_claim` key-image handling (6 functions) | **Done** | `tx_pool.cpp` |
 | `get_inputs_money_amount` / `check_inputs_overflow` stake-claim support | **Done** | `cryptonote_format_utils.cpp` |

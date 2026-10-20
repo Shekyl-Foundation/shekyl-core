@@ -77,17 +77,14 @@ namespace nodetool
   struct p2p_connection_context_t: base_type //t_payload_net_handler::connection_context //public net_utils::connection_context_base
   {
     p2p_connection_context_t()
-      : support_flags(0),
-        m_in_timedsync(false)
+      : m_in_timedsync(false)
     {}
 
     p2p_connection_context_t(boost::uuids::uuid connection_id, const epee::net_utils::network_address& remote_address, bool is_income, std::uint8_t connector = 0xff)
       : base_type(connection_id, remote_address, is_income, connector),
-        support_flags(0),
         m_in_timedsync(false)
     {}
 
-    uint32_t support_flags;
     bool m_in_timedsync;
     std::set<epee::net_utils::network_address> sent_addresses;
   };
@@ -111,12 +108,10 @@ namespace nodetool
     struct config_t
     {
       config_t()
-        : m_net_config(),
-          m_support_flags(0)
+        : m_net_config()
       {}
 
       network_config m_net_config;
-      uint32_t m_support_flags;
     };
     typedef epee::misc_utils::struct_init<config_t> config;
 
@@ -146,7 +141,6 @@ namespace nodetool
         m_config.m_net_config.config_id = 0;
         m_config.m_net_config.connection_timeout = P2P_DEFAULT_CONNECTION_TIMEOUT;
         m_config.m_net_config.ping_connection_timeout = std::chrono::milliseconds{P2P_DEFAULT_PING_CONNECTION_TIMEOUT};
-        m_config.m_support_flags = 0; // only set in public zone
       }
     };
 
@@ -211,18 +205,16 @@ namespace nodetool
       // The C++ allowlist that sat here kept only HANDSHAKE, TIMED_SYNC
       // and NOTIFY_NEW_TRANSACTIONS on a non-clearnet address. D-5
       // (2026-10-02): the receiver handshaked, learned height 87, and
-      // stayed at 1 because support-flags came back empty and the chain
-      // request never left.
+      // stayed at 1 because a command the allowlist dropped came back
+      // empty and the chain request never left.
       HANDLE_INVOKE_T2(COMMAND_HANDSHAKE, &node_server::handle_handshake)
       HANDLE_INVOKE_T2(COMMAND_TIMED_SYNC, &node_server::handle_timed_sync)
-      HANDLE_INVOKE_T2(COMMAND_REQUEST_SUPPORT_FLAGS, &node_server::handle_get_support_flags)
       CHAIN_INVOKE_MAP_TO_OBJ_FORCE_CONTEXT(m_payload_handler, typename t_payload_net_handler::connection_context&)
     END_INVOKE_MAP2()
 
     //----------------- commands handlers ----------------------------------------------
     int handle_handshake(int command, typename COMMAND_HANDSHAKE::request& arg, typename COMMAND_HANDSHAKE::response& rsp, p2p_connection_context& context);
     int handle_timed_sync(int command, typename COMMAND_TIMED_SYNC::request& arg, typename COMMAND_TIMED_SYNC::response& rsp, p2p_connection_context& context);
-    int handle_get_support_flags(int command, COMMAND_REQUEST_SUPPORT_FLAGS::request& arg, COMMAND_REQUEST_SUPPORT_FLAGS::response& rsp, p2p_connection_context& context);
     bool init_config();
     bool make_default_config();
 
@@ -239,8 +231,8 @@ namespace nodetool
     virtual bool invoke_notify_to_peer(int command, epee::levin::message_writer message, const epee::net_utils::connection_context_base& context) final;
     virtual bool drop_connection(const epee::net_utils::connection_context_base& context);
     virtual void request_callback(const epee::net_utils::connection_context_base& context);
-    virtual size_t post_each(std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> note, std::function<void()> then);
-    virtual bool for_connection(const boost::uuids::uuid&, std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> f);
+    virtual size_t post_each(std::function<void(typename t_payload_net_handler::connection_context&)> note, std::function<void()> then);
+    virtual bool for_connection(const boost::uuids::uuid&, std::function<void(typename t_payload_net_handler::connection_context&)> f);
     virtual bool add_host_fail(const epee::net_utils::network_address &address, unsigned int score = 1);
     bool is_remote_host_allowed(const epee::net_utils::network_address &address, time_t *t = NULL);
 
@@ -252,8 +244,6 @@ namespace nodetool
 
     bool peer_sync_idle_maker();
     bool do_peer_timed_sync(const epee::net_utils::connection_context_base& context);
-
-    bool try_get_support_flags(const p2p_connection_context& context, std::function<void(p2p_connection_context&, const uint32_t&)> f);
 
     size_t get_incoming_connections_count();
     size_t get_incoming_connections_count(epee::net_utils::connector_id connector);

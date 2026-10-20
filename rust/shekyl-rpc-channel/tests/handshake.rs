@@ -15,9 +15,9 @@
 use shekyl_noise::{Direction, DirectionError};
 use shekyl_rpc_channel::budget::HandshakeBudget;
 use shekyl_rpc_channel::handshake::{
-    Client, Daemon, FirstMessageRefused, HandshakeError, PendingSession, StaticKeypair,
-    MESSAGE1_LEN, MESSAGE1_WIRE_LEN, MESSAGE2_LEN, MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD,
-    MLKEM768_CT_LEN, TAG_LEN, TRANSPORT_AD,
+    Client, Daemon, DaemonReadyForMessage2, FirstMessageRefused, HandshakeError, Message1Admission,
+    PendingSession, StaticKeypair, MESSAGE1_LEN, MESSAGE1_WIRE_LEN, MESSAGE2_LEN,
+    MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, MLKEM768_CT_LEN, TAG_LEN, TRANSPORT_AD,
 };
 use shekyl_rpc_channel::{NetworkId, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
 use std::time::{Duration, Instant};
@@ -34,6 +34,16 @@ fn budget() -> HandshakeBudget {
 fn remac(daemon: &StaticKeypair, wire: &mut [u8]) {
     let (noise, mac1) = wire.split_at_mut(MESSAGE1_LEN);
     mac1.copy_from_slice(&daemon.public().mac1(noise));
+}
+
+/// Read message 1 on a budget that does not run out. Busy is a test failure:
+/// these tests are about the handshake, and the budget is not what they spend.
+fn read1(daemon: &StaticKeypair, message: &[u8]) -> Result<DaemonReadyForMessage2, HandshakeError> {
+    match Daemon::new(&NETWORK, daemon).read_message1(message, &budget(), Instant::now()) {
+        Ok(Message1Admission::Continue(ready)) => Ok(ready),
+        Ok(Message1Admission::Busy(_)) => panic!("the test budget admitted this message"),
+        Err(error) => Err(error),
+    }
 }
 
 const NETWORK: NetworkId = [0x17; 16];
@@ -66,9 +76,7 @@ fn a_handshake_completes_and_keys_a_record_channel() {
 
     let (client, message1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
     assert_eq!(message1.len(), MESSAGE1_WIRE_LEN);
-    let daemon = Daemon::new(&NETWORK, &daemon_id)
-        .read_message1(&message1, &budget(), Instant::now())
-        .unwrap();
+    let daemon = read1(&daemon_id, &message1).unwrap();
     let (daemon, message2) = daemon.write_message2().unwrap();
     assert_eq!(message2.len(), MESSAGE2_LEN);
     let client = client.read_message2(&message2).unwrap();
@@ -116,9 +124,7 @@ fn two_handshakes_between_the_same_parties_share_nothing() {
     let (client_id, daemon_id) = identities();
     let run = || {
         let (client, m1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-        let daemon = Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&m1, &budget(), Instant::now())
-            .unwrap();
+        let daemon = read1(&daemon_id, &m1).unwrap();
         let (daemon, m2) = daemon.write_message2().unwrap();
         let client = client.read_message2(&m2).unwrap();
         let (client, m3) = client.write_message3(REQUEST).unwrap();
@@ -169,8 +175,7 @@ fn every_fault_in_message_1_is_the_same_error() {
         if position < MESSAGE1_LEN {
             remac(&daemon_id, &mut bad);
         }
-        let error = Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&bad, &budget(), Instant::now())
+        let error = read1(&daemon_id, &bad)
             .err()
             .expect("a changed message 1 is refused");
         seen.push((position, error, format!("{error}"), format!("{error:?}")));
@@ -182,9 +187,7 @@ fn every_fault_in_message_1_is_the_same_error() {
     }
 
     // The control: the unchanged message is accepted.
-    assert!(Daemon::new(&NETWORK, &daemon_id)
-        .read_message1(&good, &budget(), Instant::now())
-        .is_ok());
+    assert!(read1(&daemon_id, &good).is_ok());
 }
 
 #[test]
@@ -196,18 +199,14 @@ fn message_1_for_another_daemon_or_another_network_is_refused() {
     // a secret the sender never had, and the tag fails.
     let (_, message1) = Client::start(&NETWORK, &client_id, other_daemon.public()).unwrap();
     assert_eq!(
-        Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&message1, &budget(), Instant::now())
-            .err(),
+        read1(&daemon_id, &message1).err(),
         Some(HandshakeError::Message1)
     );
 
     // The right daemon, another network: the prologue differs.
     let (_, message1) = Client::start(&OTHER_NETWORK, &client_id, daemon_id.public()).unwrap();
     assert_eq!(
-        Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&message1, &budget(), Instant::now())
-            .err(),
+        read1(&daemon_id, &message1).err(),
         Some(HandshakeError::Message1)
     );
 }
@@ -218,9 +217,7 @@ fn a_changed_message_2_is_refused_as_message_2() {
     let fields = [MLKEM768_CT_LEN, X25519_PUBLIC_LEN, MLKEM768_EK_LEN, TAG_LEN];
     for position in one_bit_in_each_field(&fields) {
         let (client, m1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-        let daemon = Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&m1, &budget(), Instant::now())
-            .unwrap();
+        let daemon = read1(&daemon_id, &m1).unwrap();
         let (_, mut m2) = daemon.write_message2().unwrap();
         m2[position] ^= 0x01;
         assert_eq!(
@@ -241,9 +238,7 @@ fn a_changed_message_3_is_refused_as_message_3() {
     ];
     for position in one_bit_in_each_field(&fields) {
         let (client, m1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-        let daemon = Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&m1, &budget(), Instant::now())
-            .unwrap();
+        let daemon = read1(&daemon_id, &m1).unwrap();
         let (daemon, m2) = daemon.write_message2().unwrap();
         let client = client.read_message2(&m2).unwrap();
         let (_, mut m3) = client.write_message3(REQUEST).unwrap();
@@ -267,9 +262,7 @@ fn a_changed_or_short_message_4_is_refused_as_message_4() {
     cases.push(None);
     for case in cases {
         let (client, m1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-        let daemon = Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&m1, &budget(), Instant::now())
-            .unwrap();
+        let daemon = read1(&daemon_id, &m1).unwrap();
         let (daemon, m2) = daemon.write_message2().unwrap();
         let client = client.read_message2(&m2).unwrap();
         let (client, m3) = client.write_message3(REQUEST).unwrap();
@@ -296,15 +289,12 @@ fn an_impostor_cannot_answer_message_1() {
 
     // The impostor cannot read message 1 at all.
     let (client, m1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-    assert!(Daemon::new(&NETWORK, &impostor_id)
-        .read_message1(&m1, &budget(), Instant::now())
-        .is_err());
+    assert!(read1(&impostor_id, &m1).is_err());
 
     // And a message 2 from a different handshake does not open.
     let (other_client, other_m1) =
         Client::start(&NETWORK, &client_id, impostor_id.public()).unwrap();
-    let (_, other_m2) = Daemon::new(&NETWORK, &impostor_id)
-        .read_message1(&other_m1, &budget(), Instant::now())
+    let (_, other_m2) = read1(&impostor_id, &other_m1)
         .unwrap()
         .write_message2()
         .unwrap();
@@ -322,9 +312,7 @@ fn through_message_4(
     daemon_id: &StaticKeypair,
 ) -> (PendingSession, Direction, Direction) {
     let (client, m1) = Client::start(&NETWORK, client_id, daemon_id.public()).unwrap();
-    let daemon = Daemon::new(&NETWORK, daemon_id)
-        .read_message1(&m1, &budget(), Instant::now())
-        .unwrap();
+    let daemon = read1(daemon_id, &m1).unwrap();
     let (daemon, m2) = daemon.write_message2().unwrap();
     let client = client.read_message2(&m2).unwrap();
     let (client, m3) = client.write_message3(REQUEST).unwrap();

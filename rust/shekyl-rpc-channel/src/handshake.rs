@@ -17,9 +17,9 @@
 //!
 //! On the wire, message 1 is followed by a 16-byte mac1 (2,336 bytes in all):
 //! keyed BLAKE2s under a key derived from the daemon's public bundle,
-//! outside the Noise message. The daemon checks it, then pays for the
-//! message from its [`HandshakeBudget`], before either long-term key is used
-//! (`RPC_CHANNEL.md` §4.3).
+//! outside the Noise message. The daemon checks it, admits that mac1 once,
+//! and pays for the message from its [`HandshakeBudget`], before either
+//! long-term key is used (`RPC_CHANNEL.md` §4.3).
 //!
 //! `e` and `s` each carry an X25519 key and then an ML-KEM-768 key. Both
 //! sides are authenticated by key agreement against both primitives: the
@@ -43,18 +43,22 @@
 //!
 //! # What a stranger can make the daemon do (§4.3)
 //!
-//! Message 1 is read before anything has authenticated. Reading it runs the
-//! daemon's **long-term** keys on input the sender chose, so:
+//! Message 1 is read before anything has authenticated. The long-term keys
+//! run only after mac1, the encapsulation-key check, the replay window and
+//! one budget admission:
 //!
-//! - **One failure.** Every way message 1 can be wrong surfaces as
-//!   [`HandshakeError::Message1`] and nothing else. In particular a
-//!   ciphertext ML-KEM rejects and a ciphertext it accepts under a bad tag
-//!   are the same error. Decapsulation does not fail on a rejected
-//!   ciphertext; it returns a key nobody else has, and the tag then fails.
-//!   That is the only way a rejection shows.
-//! - **No reply.** The daemon writes nothing until message 1 has
-//!   authenticated. [`Daemon::read_message1`] returns no bytes to send on
-//!   failure, and the state it would have continued from is consumed.
+//! - **One refusal.** Every way message 1 can be wrong, a mac1 presented
+//!   before included, surfaces as [`HandshakeError::Message1`] and nothing
+//!   else. In particular a ciphertext ML-KEM rejects and a ciphertext it
+//!   accepts under a bad tag are the same error. Decapsulation does not fail
+//!   on a rejected ciphertext; it returns a key nobody else has, and the tag
+//!   then fails. That is the only way a rejection shows.
+//! - **No reply on a refusal.** [`Daemon::read_message1`] returns no bytes
+//!   to send when it returns [`Err`], and the state it would have continued
+//!   from is consumed. `?` drops only that case.
+//! - **Busy is not a refusal.** A message that passed the checks and found
+//!   the budget empty is [`Message1Admission::Busy`]. The caller sends that
+//!   reply and closes.
 //! - **A low-order `e` is refused before it is mixed**, at `es` here and at
 //!   `ee` and `se` after. Its Diffie-Hellman result is all zero whatever the
 //!   secret is, so mixing it would add nothing and accepting it would let a
@@ -79,7 +83,7 @@ use zeroize::Zeroizing;
 
 use std::time::Instant;
 
-use crate::budget::HandshakeBudget;
+use crate::budget::{Admission, HandshakeBudget};
 use crate::{
     prologue, NetworkId, StaticFingerprint, BUSY_LEN, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN,
 };
@@ -130,22 +134,15 @@ pub const TRANSPORT_AD: &[u8] = b"";
 
 /// Why a handshake stopped.
 ///
-/// One variant per message, and nothing finer, with one exception: a
-/// message 1 that passed mac1 and found the budget empty is
-/// [`HandshakeError::Busy`], because its sender is answered. Which check
-/// inside a message failed is otherwise not recorded anywhere: for message 1
-/// that is a requirement (§4.3), and for the others a finer answer would only
-/// be a finer oracle.
+/// One variant per message, and nothing finer. Which check inside a message
+/// failed is not recorded anywhere: for message 1 that is a requirement
+/// (§4.3), and for the others a finer answer would only be a finer oracle.
+/// A budget drop is not one of these. It is [`Message1Admission::Busy`],
+/// because the caller has a reply to send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakeError {
     /// The daemon did not accept message 1. The sender gets no reply.
     Message1,
-    /// Message 1 passed mac1 and the key check, and the handshake budget had
-    /// nothing to pay for it (§4.3). The daemon sends `reply`, which
-    /// [`ClientAwaitingMessage2::is_busy`] recognises, and closes. Unlike
-    /// every other refusal of message 1 this one is answered: only a holder
-    /// of the bundle gets this far, and it is told to back off and retry.
-    Busy([u8; BUSY_LEN]),
     /// The client did not accept message 2: whoever answered is not the
     /// daemon whose key the client holds, or is on another network.
     Message2,
@@ -163,7 +160,6 @@ impl core::fmt::Display for HandshakeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::Message1 => "handshake message 1 was not accepted",
-            Self::Busy(_) => "the node is busy: its handshake budget is spent",
             Self::Message2 => "handshake message 2 was not accepted",
             Self::Message3 => "handshake message 3 was not accepted",
             Self::Message4 => "handshake message 4 was not accepted",
@@ -173,6 +169,37 @@ impl core::fmt::Display for HandshakeError {
 }
 
 impl std::error::Error for HandshakeError {}
+
+/// What the daemon does with a message 1 that was not refused.
+///
+/// [`Err`] on [`Daemon::read_message1`] sends nothing. This is the other
+/// channel: the caller matches it, and a busy reply cannot be dropped with
+/// `?`.
+// CLIPPY: `Continue` is the handshake state this function already returned
+// by value. Boxing it would allocate on every admitted handshake to shrink
+// the 16-byte busy reply, and the caller unwraps it at the match.
+#[allow(clippy::large_enum_variant)]
+pub enum Message1Admission {
+    /// Message 1 was admitted. The next call writes message 2.
+    Continue(DaemonReadyForMessage2),
+    /// Message 1 passed mac1, the key check and the replay window, and the
+    /// handshake budget had nothing to pay for it (§4.3). The daemon sends
+    /// `reply`, which [`ClientAwaitingMessage2::is_busy`] recognises, and
+    /// closes. Only a holder of the bundle gets this far, and it is told to
+    /// back off and retry.
+    Busy([u8; BUSY_LEN]),
+}
+
+impl core::fmt::Debug for Message1Admission {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            // The continuation holds the handshake state. Debug names the
+            // variant and stops there.
+            Self::Continue(_) => f.write_str("Continue(..)"),
+            Self::Busy(reply) => f.debug_tuple("Busy").field(reply).finish(),
+        }
+    }
+}
 
 // Every use of a long-term secret while reading message 1 goes through
 // `long_term_key_used`, which counts it under test. A message refused on
@@ -514,21 +541,21 @@ impl<'a> Daemon<'a> {
     /// the length; the mac1, under a key derived from this daemon's public
     /// bundle, so a sender without the bundle is refused here having cost a
     /// keyed hash; FIPS 203's input check on the sender's encapsulation key;
-    /// then one admission from `budget` at `now`. Only after all four does
-    /// either long-term key touch the message (§4.3).
+    /// the replay window, so a mac1 already presented is refused with
+    /// nothing spent; then one admission from `budget` at `now`. Only an
+    /// admission lets either long-term key touch the message (§4.3).
     ///
     /// # Errors
     ///
-    /// [`HandshakeError::Message1`], for every cause, a bad mac1 and an
-    /// exhausted budget among them. See the module documentation: nothing
-    /// distinguishes one cause from another, and the caller drops the
-    /// connection with nothing to send.
+    /// [`HandshakeError::Message1`] when the message is refused. The caller
+    /// sends nothing. An empty budget is [`Message1Admission::Busy`]: the
+    /// caller sends the reply.
     pub fn read_message1(
         mut self,
         message1_wire: &[u8],
         budget: &HandshakeBudget,
         now: Instant,
-    ) -> Result<DaemonReadyForMessage2, HandshakeError> {
+    ) -> Result<Message1Admission, HandshakeError> {
         const E: usize = MLKEM768_CT_LEN;
         const EKEM: usize = E + X25519_PUBLIC_LEN;
         const TAG: usize = EKEM + MLKEM768_EK_LEN;
@@ -543,6 +570,11 @@ impl<'a> Daemon<'a> {
         let ciphertext: [u8; MLKEM768_CT_LEN] = array(&message1[..E]).ok_or(fail)?;
         let client_ephemeral: [u8; X25519_PUBLIC_LEN] = array(&message1[E..EKEM]).ok_or(fail)?;
         let client_ephemeral_ek: [u8; MLKEM768_EK_LEN] = array(&message1[EKEM..TAG]).ok_or(fail)?;
+        // The wire length makes this exactly one mac1. A fallible convert
+        // here would turn a sender who passed mac1 into a silent refusal.
+        let mac1: [u8; MAC1_LEN] = mac1
+            .try_into()
+            .expect("mac1 follows a fixed-length message 1");
 
         // FIPS 203's input check on the key message 2 will encapsulate to.
         // First, because it needs no secret and a key that fails it is
@@ -551,12 +583,16 @@ impl<'a> Daemon<'a> {
         let client_ephemeral_ek =
             ml_kem_768::EncapsKey::try_from_bytes(client_ephemeral_ek).map_err(|_| fail)?;
 
-        // The budget pays for the long-term work that follows. A message that
-        // gets here and finds it empty passed mac1, so its sender holds the
-        // bundle: it is answered "busy", not dropped (ruled 2026-10-20).
-        if !budget.admit(now) {
-            let mac1: [u8; MAC1_LEN] = array(mac1).ok_or(fail)?;
-            return Err(HandshakeError::Busy(self.own.public().busy_reply(&mac1)));
+        // Remember the mac1 and pay, under one lock. A repeat is silent: the
+        // first presentation was already answered, and a replay must not
+        // spend the budget or touch a long-term key. A new mac1 the budget
+        // cannot pay for is answered busy (ruled 2026-10-20).
+        match budget.present(&mac1, now) {
+            Admission::Replay => return Err(fail),
+            Admission::Busy => {
+                return Ok(Message1Admission::Busy(self.own.public().busy_reply(&mac1)));
+            }
+            Admission::Admitted => {}
         }
 
         // skem: decapsulate with the long-term key. This cannot tell a
@@ -592,11 +628,11 @@ impl<'a> Daemon<'a> {
         if !payload.is_empty() {
             return Err(fail);
         }
-        Ok(DaemonReadyForMessage2 {
+        Ok(Message1Admission::Continue(DaemonReadyForMessage2 {
             sym: self.sym,
             client_ephemeral,
             client_ephemeral_ek,
-        })
+        }))
     }
 }
 
@@ -950,21 +986,24 @@ impl PendingSession {
     }
 }
 
+/// Fixtures shared by the Diffie-Hellman test and the admission tests.
+///
+/// The admission file is a path module beside this one, as
+/// `pinned_handshake` is. rustfmt resolves a `#[path]` nested in an inline
+/// module under a directory that does not exist, so the fixtures live
+/// where both modules can name them.
 #[cfg(test)]
-mod tests {
-    use super::identity::draw_x25519;
+mod support {
     use super::*;
-    use x25519_dalek::{PublicKey, StaticSecret};
-    use zeroize::ZeroizeOnDrop;
 
-    const NETWORK: NetworkId = [0x42; 16];
+    pub(super) const NETWORK: NetworkId = [0x42; 16];
 
-    fn uses() -> u64 {
+    pub(super) fn uses() -> u64 {
         LONG_TERM_USES.with(std::cell::Cell::get)
     }
 
     /// A daemon identity, and a message 1 it accepts, as it travels.
-    fn accepted_message1() -> (StaticKeypair, Vec<u8>) {
+    pub(super) fn accepted_message1() -> (StaticKeypair, Vec<u8>) {
         let daemon = StaticKeypair::generate().unwrap();
         let client = StaticKeypair::generate().unwrap();
         let (_, message1) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
@@ -974,25 +1013,25 @@ mod tests {
     /// Recompute a wire message 1's mac1 after its Noise bytes were changed,
     /// as a sender holding `daemon`'s bundle can. A test whose subject is a
     /// check after mac1 uses this, so the message reaches that check.
-    fn remac(daemon: &StaticKeypair, wire: &mut [u8]) {
+    pub(super) fn remac(daemon: &StaticKeypair, wire: &mut [u8]) {
         let (noise, mac1) = wire.split_at_mut(MESSAGE1_LEN);
         mac1.copy_from_slice(&daemon.public().mac1(noise));
     }
 
     /// A budget that never runs out within a test.
-    fn plenty() -> HandshakeBudget {
+    pub(super) fn plenty() -> HandshakeBudget {
         HandshakeBudget::with_share(1_000, std::time::Duration::from_secs(3_600), Instant::now())
     }
 
     /// Read `wire` as message 1 with a budget that never runs out.
-    fn read1(
+    pub(super) fn read1(
         daemon: &StaticKeypair,
         wire: &[u8],
-    ) -> Result<DaemonReadyForMessage2, HandshakeError> {
+    ) -> Result<Message1Admission, HandshakeError> {
         Daemon::new(&NETWORK, daemon).read_message1(wire, &plenty(), Instant::now())
     }
 
-    fn unhex(text: &str) -> [u8; 32] {
+    pub(super) fn unhex(text: &str) -> [u8; 32] {
         let mut out = [0u8; 32];
         for (index, byte) in out.iter_mut().enumerate() {
             *byte = u8::from_str_radix(&text[2 * index..2 * index + 2], 16).unwrap();
@@ -1002,7 +1041,7 @@ mod tests {
 
     /// The encodings of the points of small order: every `u` for which
     /// X25519 returns zero whatever the scalar.
-    fn low_order_points() -> Vec<[u8; 32]> {
+    pub(super) fn low_order_points() -> Vec<[u8; 32]> {
         [
             "0000000000000000000000000000000000000000000000000000000000000000",
             "0100000000000000000000000000000000000000000000000000000000000000",
@@ -1016,6 +1055,15 @@ mod tests {
         .map(unhex)
         .collect()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::identity::draw_x25519;
+    use super::support::low_order_points;
+    use super::*;
+    use x25519_dalek::{PublicKey, StaticSecret};
+    use zeroize::ZeroizeOnDrop;
 
     /// §4.3: a low-order point never yields a secret to mix, at any of the
     /// three Diffie-Hellman tokens, since all three go through `dh`.
@@ -1027,281 +1075,6 @@ mod tests {
         }
         let honest = PublicKey::from(&draw_x25519(&mut OsRng).unwrap()).to_bytes();
         assert!(dh(&secret, &honest).is_some());
-    }
-
-    /// §4.3: message 1 with a low-order `e` is refused, as message 1.
-    ///
-    /// This cannot tell the refusal from the tag failing: the sender made
-    /// its tag with a different `e`, so the tag would fail anyway. That a
-    /// low-order point is never mixed is what the test above shows, on the
-    /// one function every Diffie-Hellman token goes through.
-    #[test]
-    fn message_1_with_a_low_order_ephemeral_is_refused() {
-        for point in low_order_points() {
-            let (daemon, mut message1) = accepted_message1();
-            message1[MLKEM768_CT_LEN..MLKEM768_CT_LEN + X25519_PUBLIC_LEN].copy_from_slice(&point);
-            remac(&daemon, &mut message1);
-            assert_eq!(
-                read1(&daemon, &message1).err(),
-                Some(HandshakeError::Message1)
-            );
-        }
-    }
-
-    /// §4.3: the client's ephemeral encapsulation key is input-checked, and
-    /// a key that fails the check is refused before either long-term key is
-    /// used. The control shows the count moves when message 1 is good.
-    #[test]
-    fn a_malformed_encapsulation_key_is_refused_before_any_long_term_key_is_used() {
-        let (daemon, good) = accepted_message1();
-
-        let before = uses();
-        assert!(read1(&daemon, &good).is_ok());
-        assert_eq!(uses(), before + 2, "decapsulation and `es`, once each");
-
-        let mut bad = good;
-        let ek = MLKEM768_CT_LEN + X25519_PUBLIC_LEN;
-        bad[ek..ek + MLKEM768_EK_LEN].fill(0xff);
-        remac(&daemon, &mut bad);
-        let before = uses();
-        assert_eq!(read1(&daemon, &bad).err(), Some(HandshakeError::Message1));
-        assert_eq!(uses(), before, "no long-term key touched a malformed key");
-    }
-
-    /// A message of the wrong length is refused on its length alone.
-    #[test]
-    fn a_message_1_of_the_wrong_length_uses_no_long_term_key() {
-        let (daemon, good) = accepted_message1();
-        let long = [good.as_slice(), &[0]].concat();
-        for wrong in [
-            &good[..0],
-            &good[..MESSAGE1_LEN],
-            &good[..MESSAGE1_WIRE_LEN - 1],
-            long.as_slice(),
-        ] {
-            let before = uses();
-            assert_eq!(read1(&daemon, wrong).err(), Some(HandshakeError::Message1));
-            assert_eq!(uses(), before);
-        }
-    }
-
-    /// §4.3, mac1: a stranger without the daemon's bundle cannot make it
-    /// use a long-term key, or spend from its budget. Three strangers: random
-    /// bytes; a client's genuine message 1 made for another daemon; and a
-    /// genuine message 1 for this daemon whose mac1 was changed. Each is
-    /// refused with nothing used and nothing paid, and the control after
-    /// them is admitted by a budget that holds exactly one admission.
-    #[test]
-    fn a_strangers_message_1_is_refused_before_any_long_term_key_is_used() {
-        let (daemon, good) = accepted_message1();
-        let (other, _) = accepted_message1();
-        let client = StaticKeypair::generate().unwrap();
-        let (_, for_other) = Client::start(&NETWORK, &client, other.public()).unwrap();
-        let random: Vec<u8> = (0..MESSAGE1_WIRE_LEN)
-            .map(|i| u8::try_from(i * 31 % 251).unwrap())
-            .collect();
-        let mut wrong_mac = good.clone();
-        wrong_mac[MESSAGE1_WIRE_LEN - 1] ^= 1;
-
-        let now = Instant::now();
-        let one = HandshakeBudget::with_share(
-            1_000,
-            std::time::Duration::from_nanos(crate::budget::HANDSHAKE_DAEMON_CPU_NANOS),
-            now,
-        );
-        assert_eq!(one.burst_admissions(), 1);
-        for stranger in [&random, &for_other, &wrong_mac] {
-            let before = uses();
-            assert_eq!(
-                Daemon::new(&NETWORK, &daemon)
-                    .read_message1(stranger, &one, now)
-                    .err(),
-                Some(HandshakeError::Message1)
-            );
-            assert_eq!(
-                uses(),
-                before,
-                "no long-term key touched a stranger's message"
-            );
-        }
-        let before = uses();
-        assert!(
-            Daemon::new(&NETWORK, &daemon)
-                .read_message1(&good, &one, now)
-                .is_ok(),
-            "the budget's one admission is still there: no stranger spent it"
-        );
-        assert_eq!(uses(), before + 2);
-    }
-
-    /// §4.3, ruled 2026-10-20: a message 1 that passed mac1 and finds the
-    /// budget empty is answered "busy", before any long-term key is used,
-    /// and the client that sent it recognises the answer. A stranger's
-    /// message 1 is still dropped silently, budget or no budget.
-    #[test]
-    fn an_exhausted_budget_answers_busy_before_any_long_term_key_is_used() {
-        let daemon = StaticKeypair::generate().unwrap();
-        let client = StaticKeypair::generate().unwrap();
-        let (waiting, good) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
-        let now = Instant::now();
-        let none = HandshakeBudget::with_share(1_000, std::time::Duration::ZERO, now);
-        assert_eq!(none.burst_admissions(), 0);
-        let before = uses();
-        let Some(HandshakeError::Busy(reply)) = Daemon::new(&NETWORK, &daemon)
-            .read_message1(&good, &none, now)
-            .err()
-        else {
-            panic!("a bundle holder's message 1 on an empty budget is answered busy");
-        };
-        assert_eq!(uses(), before);
-        assert!(
-            waiting.is_busy(&reply),
-            "the client recognises its own busy reply"
-        );
-
-        let mut stranger = good.clone();
-        stranger[MESSAGE1_WIRE_LEN - 1] ^= 1;
-        assert_eq!(
-            Daemon::new(&NETWORK, &daemon)
-                .read_message1(&stranger, &none, now)
-                .err(),
-            Some(HandshakeError::Message1),
-            "a mac1 failure stays silent, even on an empty budget"
-        );
-        assert_eq!(uses(), before);
-    }
-
-    /// Only the daemon's busy reply to this very message 1 counts as busy:
-    /// not random bytes, not a reply authenticated under another bundle,
-    /// not the reply to an earlier attempt, not a reply of the wrong length.
-    /// A forged "busy" is a connection closed without an answer.
-    #[test]
-    fn a_forged_busy_reply_is_not_busy() {
-        let daemon = StaticKeypair::generate().unwrap();
-        let other = StaticKeypair::generate().unwrap();
-        let client = StaticKeypair::generate().unwrap();
-        let busy_for = |wire: &[u8], who: &StaticKeypair| {
-            let mac1: [u8; MAC1_LEN] = array(&wire[MESSAGE1_LEN..]).unwrap();
-            who.public().busy_reply(&mac1)
-        };
-        let (earlier, earlier_wire) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
-        let (waiting, wire) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
-        let genuine = busy_for(&wire, &daemon);
-        assert!(waiting.is_busy(&genuine));
-        assert!(earlier.is_busy(&busy_for(&earlier_wire, &daemon)));
-
-        assert!(!waiting.is_busy(&[0u8; BUSY_LEN]), "zeros");
-        assert!(!waiting.is_busy(&[0xa5; BUSY_LEN]), "other bytes");
-        assert!(
-            !waiting.is_busy(&busy_for(&wire, &other)),
-            "authenticated under a bundle other than the daemon's"
-        );
-        assert!(
-            !waiting.is_busy(&busy_for(&earlier_wire, &daemon)),
-            "the reply to an earlier message 1"
-        );
-        let mut flipped = genuine;
-        flipped[BUSY_LEN - 1] ^= 1;
-        assert!(!waiting.is_busy(&flipped), "one bit changed");
-        assert!(!waiting.is_busy(&genuine[..BUSY_LEN - 1]), "short");
-        let mut long = genuine.to_vec();
-        long.push(0);
-        assert!(!waiting.is_busy(&long), "long");
-        assert!(!waiting.is_busy(&[]), "nothing");
-    }
-
-    /// §4.3, the budget under a flood. A session is established first. Then
-    /// a bundle holder sends message 1s with valid mac1s and broken tags, as
-    /// fast as it likes, for two simulated seconds. The long-term keys are
-    /// used only as often as the budget pays for, the CPU those admissions
-    /// stand for stays within the share of the window plus the burst, and
-    /// the established session still carries records both ways afterwards.
-    ///
-    /// The budget here is 1 % of a core, not the ruled 25 %, so that the
-    /// flood is short in a debug build; the arithmetic is the same, and the
-    /// budget module tests the ruled figures.
-    #[test]
-    fn a_flood_of_valid_mac1_messages_is_held_to_the_budget() {
-        let daemon = StaticKeypair::generate().unwrap();
-        let client = StaticKeypair::generate().unwrap();
-        let t0 = Instant::now();
-        let share = 10;
-        let burst = std::time::Duration::from_secs(1);
-        let budget = HandshakeBudget::with_share(share, burst, t0);
-
-        // The established session.
-        let (c, m1) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
-        let d = Daemon::new(&NETWORK, &daemon)
-            .read_message1(&m1, &budget, t0)
-            .unwrap();
-        let (d, m2) = d.write_message2().unwrap();
-        let c = c.read_message2(&m2).unwrap();
-        let (c, m3) = c.write_message3(b"request").unwrap();
-        let d = d.read_message3(&m3).unwrap();
-        let (pending, m4) = d.write_message4(b"grant").unwrap();
-        let (c, _) = c.read_message4(&m4).unwrap();
-        let (mut client_send, mut client_recv) = c.into_directions();
-        let (first, _) = client_send.seal(b"first", TRANSPORT_AD).unwrap();
-        let (mut session, _) = pending
-            .open_first_message(|recv| recv.open(&first, TRANSPORT_AD).map(|(p, _)| p))
-            .unwrap();
-
-        // The flood: valid mac1s over broken tags, spread over two seconds.
-        let flood: Vec<Vec<u8>> = (0..40)
-            .map(|_| {
-                let (_, mut m) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
-                m[MESSAGE1_LEN - 1] ^= 1;
-                remac(&daemon, &mut m);
-                m
-            })
-            .collect();
-        let window = std::time::Duration::from_secs(2);
-        let before = uses();
-        let mut admitted = 0u64;
-        for (i, m) in flood.iter().enumerate() {
-            let now = t0 + window * u32::try_from(i).unwrap() / 40;
-            let used = uses();
-            let result = Daemon::new(&NETWORK, &daemon).read_message1(m, &budget, now);
-            let was_admitted = uses() > used;
-            match result.err() {
-                Some(HandshakeError::Message1) => {
-                    assert!(was_admitted, "admitted, then the tag failed")
-                }
-                Some(HandshakeError::Busy(_)) => {
-                    assert!(!was_admitted, "refused, and answered busy")
-                }
-                other => panic!("a broken tag never authenticates: {other:?}"),
-            }
-            admitted += u64::from(was_admitted);
-        }
-        assert_eq!(
-            uses() - before,
-            2 * admitted,
-            "two long-term operations per admission"
-        );
-        let ns = |d: std::time::Duration| u64::try_from(d.as_nanos()).unwrap();
-        let allowed = (ns(window) + ns(burst)) * share / 1_000;
-        let spent = (admitted + 1) * crate::budget::HANDSHAKE_DAEMON_CPU_NANOS;
-        assert!(
-            spent <= allowed,
-            "{spent} ns of handshakes admitted against {allowed}"
-        );
-        assert!(
-            admitted < 40,
-            "the flood was held, not passed: {admitted} of 40"
-        );
-        assert!(
-            admitted > 0,
-            "and the budget still admits what it has earned"
-        );
-
-        // The established session is untouched.
-        let (sealed, _) = client_send.seal(b"after the flood", TRANSPORT_AD).unwrap();
-        let (opened, _) = session.recv.open(&sealed, TRANSPORT_AD).unwrap();
-        assert_eq!(opened, b"after the flood");
-        let (reply, _) = session.send.seal(b"still here", TRANSPORT_AD).unwrap();
-        let (opened, _) = client_recv.open(&reply, TRANSPORT_AD).unwrap();
-        assert_eq!(opened, b"still here");
     }
 
     /// Rule 35: the secrets this module holds wipe themselves when dropped.
@@ -1323,6 +1096,10 @@ mod tests {
         wiping_feature_is_on::<x25519_dalek::SharedSecret>();
     }
 }
+
+#[cfg(test)]
+#[path = "admission_tests.rs"]
+mod admission;
 
 #[cfg(test)]
 #[path = "pinned_handshake.rs"]
