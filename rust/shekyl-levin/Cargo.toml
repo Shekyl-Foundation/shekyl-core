@@ -55,6 +55,15 @@ shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # The regtest handshake advertises the id derived from fakechain's genesis
 # pin. Dev-only: production Levin does not know which network it is on.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# Example-only: the pure-Rust codec measured against libzstd before it
+# replaces it (Rick, 2026-10-19; `examples/zstd_corpus_compare.rs`). No
+# default features: `hash` appends an xxhash64 content checksum libzstd's
+# level-1 frames do not carry, and pulls in `twox-hash`.
+ruzstd = { version = "=0.9.1", default-features = false, features = ["std"] }
+
+[[example]]
+name = "zstd_corpus_compare"
+required-features = ["zstd"]
 
 [lints]
 workspace = true
