@@ -73,6 +73,13 @@ const RECORD_LEN: usize = PAYLOAD.len() + TAG_LEN;
 /// closed. Far beyond any deadline the run could derive.
 const SAMPLE_LIMIT: Duration = Duration::from_secs(120);
 
+/// The client's pause between samples. The daemon role runs under the
+/// ruled handshake budget (115 handshakes a second). Back to back on the
+/// LAN a handshake takes about 5 ms, so one client would reconnect at about
+/// 200 a second and, once the burst was spent, the budget would drop the
+/// excess, as it is built to. 100 ms keeps one client at 10 a second.
+const BETWEEN_SAMPLES: Duration = Duration::from_millis(100);
+
 const SERVER_HEADER: &str =
     "accepted\tsample\tok\tmessage1_received_ns\tmessage2_sent_ns\tmessage3_received_ns\tmessage4_sent_ns\tfirst_record_opened_ns\treply_sent_ns";
 const CLIENT_HEADER: &str = "sample\tleg\tok\tconnected_ns\tmessage1_sent_ns\tmessage2_received_ns\tmessage3_sent_ns\tmessage4_received_ns\tfirst_record_sent_ns\treply_received_ns";
@@ -125,7 +132,7 @@ fn serve(listen: &str, bundle_out: &str, out: &str) -> ExitCode {
     )
     .expect("write the bundle");
     // The ruled budget: the run measures a handshake under the daemon's own
-    // admission, and one handshake at a time never exhausts it.
+    // admission. The client paces itself below it (`BETWEEN_SAMPLES`).
     let budget = HandshakeBudget::new(Instant::now());
     let listener = TcpListener::bind(listen).expect("bind");
     let mut rows = String::from(SERVER_HEADER);
@@ -239,6 +246,9 @@ fn client(
     let mut rows = String::from(CLIENT_HEADER);
     rows.push('\n');
     for sample in 0..u64::try_from(samples).expect("a count") {
+        if sample > 0 {
+            std::thread::sleep(BETWEEN_SAMPLES);
+        }
         let started = Instant::now();
         let (ok, stamps) = match client_one(target, socks, &client_id, &daemon, started, sample) {
             Ok(stamps) => (true, stamps),

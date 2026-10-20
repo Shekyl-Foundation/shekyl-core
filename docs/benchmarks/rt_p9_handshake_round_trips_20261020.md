@@ -164,4 +164,38 @@ from the same commit.
 
 ## Results
 
-None yet.
+### Attempt 1, 05:34:12Z to 06:00:52Z: void
+
+At `dfc2ae3956`. **The onion leg completed 300 of 300. The LAN leg
+completed 272 of 300, below the 95 % gate, so the attempt is void** and
+nothing is derived from it. Its data is kept, with checksums, in
+[`rt_p9_handshake_round_trips_20261020_captures/attempt1_void/`](rt_p9_handshake_round_trips_20261020_captures/attempt1_void/).
+
+**The cause is the harness, and the budget did what it is built to.**
+- The client made its 300 LAN connections back to back, and they took
+  1.3 s in all: about 230 handshakes a second from one client.
+- The daemon role runs under the ruled handshake budget: 115 a second,
+  with a one-second burst.
+- From the 257th connection (sample 256) on, about every other one was
+  refused right after message 1 was received: no message 2 was sent, and
+  the client saw the connection close. That is the budget's silent drop,
+  once the burst was spent.
+- The harness's own comment said one handshake at a time never exhausts
+  the budget. On the LAN that is false: one handshake costs the daemon
+  about 2.2 ms of CPU, so a single client looping without pause asks for
+  more than a quarter of a core.
+
+**The fix, at the commit after this record:** the client waits 100 ms
+between connections (`BETWEEN_SAMPLES`), which keeps one client at 10
+handshakes a second. Checked on loopback under the ruled budget: 300 of
+300 completed on both sides, where attempt 1's LAN leg dropped 28.
+Nothing else changes; attempt 2 is made under the same lines, both legs,
+with a fresh daemon identity.
+
+**What the drop says about the design, for the record (not a gate):**
+- A client that reconnects in a tight loop on a fast link reaches the
+  budget alone.
+- The drop is silent, so that client is told what §4.5's failure table
+  tells a client whose copy of the daemon's key is wrong: the node closed the connection
+  without answering. A budget drop and a bad bundle look the same from
+  the client side.
