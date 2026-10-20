@@ -443,27 +443,38 @@ The prologue (§4.4) is unchanged.
   holds `DaemonReadyForMessage4`, whose `fingerprint` is the enrolment
   lookup and a claim, not an authenticated client. A caller can copy that
   fingerprint; the copy is still only a claim. After message 4 the daemon
-  holds `PendingSession`, whose only operation is `open_first_message`.
-  It lends its receiving direction, for that one call, to an opener the
-  caller supplies: the channel's record framer (§4.4), which the handshake
-  does not contain. **The opener's result is not what releases the
-  session (ruled 2026-10-12).** A direction counts the ciphertexts it has
-  opened, a failed tag not among them, and the session is released only if
-  the opener succeeded *and* the receiving direction itself opened at
-  least one. An opener that reports success having opened nothing is
-  refused like any other failure, and there is a test with exactly that
-  opener. **The direction must also be the session's own.** The opener
-  holds it by `&mut` and could put another session's direction in its
-  place, one that has already opened. `into_directions` stamps both
-  directions with the session's handshake hash, and the pending session
-  is released only if the receiving direction it gets back carries its
-  own (ruled in the #1039 review; landed 2026-10-18). A test swaps in a
-  second session's direction, and failed against the count-only gate.
-  On success that yields `AuthenticatedSession`: the transport directions,
-  the authenticated client and message 3's payload. On failure the session
-  is gone. `PendingSession` does not expose the request, the directions or
-  the fingerprint; examples that try are checked not to compile
-  (`rust/shekyl-rpc-channel/src/handshake.rs`, `PendingSession`).
+  holds `PendingSession`. The session is released only through one check,
+  reached by `open_first_message` or by `lend` and then
+  `WithheldSession::release`. `open_first_message` lends its receiving
+  direction, for that one call, to an opener the caller supplies, and the
+  opener runs to completion before the check. The channel's record framer
+  (§4.4) is not part of the handshake. A reader that may see a short read
+  uses `lend`: the receiving `Direction` moves out, and the sending
+  direction, the client and the request stay in a `WithheldSession` that
+  exposes none of them. The caller builds a `ClassedRecord` around the
+  lent direction. `record_len` and `open` spend nothing on a short read,
+  so the withheld session stays held while the rest of the record arrives,
+  and `into_direction` gives the direction back to `release`.
+  **The opener's result is not what releases the session (ruled
+  2026-10-12).** A direction counts the ciphertexts it has opened, a failed
+  tag not among them, and the session is released only if the open
+  succeeded *and* the receiving direction itself opened at least one. An
+  opener that reports success having opened nothing is refused like any
+  other failure, and there is a test with exactly that opener. **The
+  direction must also be the session's own.** The caller holds the
+  direction and could hand back another session's, one that has already
+  opened. `into_directions` stamps both directions with the session's
+  handshake hash, and the session is released only if the receiving
+  direction handed back carries its own (ruled in the #1039 review; landed
+  2026-10-18). A test swaps in a second session's direction, and failed
+  against the count-only gate. On success that yields
+  `AuthenticatedSession`: the transport directions, the authenticated
+  client and message 3's payload. On failure the session is gone.
+  `PendingSession` exposes none of those, and `WithheldSession` exposes
+  none of what it holds; examples that try are checked not to compile
+  (`rust/shekyl-rpc-channel/src/handshake.rs`, `PendingSession`,
+  `WithheldSession`). Dropping a `WithheldSession` drops the session
+  unreleased.
 - **Cost:** two round trips before the first request; three
   encapsulate/decapsulate pairs and two ephemeral ML-KEM key generations.
   On the wire: message 1 is 2,336 bytes, the 2,320-byte Noise message
@@ -902,12 +913,18 @@ sender that passed mac1, since that sender holds the bundle.
         and a ChaCha20 block function checked against RFC 8439
         §2.3.2), is in `shekyl-noise`'s tests.
       - **Mechanism 7 is widened** to "a label hashed by the BLAKE2s of a
-        Noise handshake or record layer", the prologue and this label.
-      - **The handshake's first record:** two functions,
-        `first_record_len` and `open_first_record`, open it through the
-        direction a pending session lends its opener. Neither spends
-        anything before the whole record is there. The direction then
-        becomes the session's receiving `ClassedRecord`.
+        Noise handshake or record layer": the prologue, the mac1 and busy
+        labels (2026-10-20), and this label.
+      - **The handshake's first record:** `PendingSession::lend` moves the
+        receiving direction out and holds the rest in `WithheldSession`.
+        The caller reads with `ClassedRecord::record_len` and `open`. A
+        short read is `Truncated` and the lend stays held. `into_direction`
+        then `WithheldSession::release` is the one success exit: the open
+        must be `Ok`, the direction must carry this session's handshake
+        hash, and it must have opened at least one ciphertext. A refused
+        open, including one whose tag already succeeded, is
+        `FirstMessageRefused`. `open_first_message` is that same check
+        around one callback, for a message that is already whole.
     - **What the mask removes:** a cleartext class byte a middlebox could
       match, and a delimiter written in the clear.
     - **What it does not remove:** burst sizes, and any segmentation the

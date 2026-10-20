@@ -37,9 +37,10 @@
 //! message 3 and message 4, [`DaemonReadyForMessage4::fingerprint`] is the
 //! enrolment lookup and a claim. A copy of that fingerprint kept afterwards
 //! is still only a claim. After message 4 the daemon holds a
-//! [`PendingSession`], whose only operation is
-//! [`PendingSession::open_first_message`]. The directions, the authenticated
-//! client and what it asked for all come out of that together, or not at all.
+//! [`PendingSession`]. The directions, the authenticated client and what it
+//! asked for come out together, through [`PendingSession::open_first_message`]
+//! or through [`PendingSession::lend`] and [`WithheldSession::release`], or
+//! not at all.
 //!
 //! # What a stranger can make the daemon do (§4.3)
 //!
@@ -128,8 +129,9 @@ pub const MESSAGE4_OVERHEAD: usize = MLKEM768_CT_LEN + TAG_LEN + TAG_LEN;
 /// One Noise ciphertext, no framing. Empty, and the same on both sides: a
 /// bare message is sealed with it on [`Established::into_directions`]'s
 /// directions and opened with it by the opener handed to
-/// [`PendingSession::open_first_message`]. The channel's record framer has
-/// its own associated data and does not use this.
+/// [`PendingSession::open_first_message`]. A record framer uses
+/// [`PendingSession::lend`] and its own associated data, and does not use
+/// this.
 pub const TRANSPORT_AD: &[u8] = b"";
 
 /// Why a handshake stopped.
@@ -751,8 +753,8 @@ impl DaemonReadyForMessage4 {
     /// A claim, not an authenticated client. [`StaticFingerprint`] is
     /// `Copy`, so a caller can keep this value past [`Self::write_message4`].
     /// The copy is still only the claim. The authenticated client is what
-    /// [`PendingSession::open_first_message`] yields, and this state does
-    /// not outlive message 4.
+    /// [`PendingSession::open_first_message`] and [`WithheldSession::release`]
+    /// yield, and this state does not outlive message 4.
     #[must_use]
     pub fn fingerprint(&self) -> StaticFingerprint {
         self.client.fingerprint()
@@ -840,9 +842,10 @@ impl Established {
 /// holder of that key can derive the transport directions, so only it can
 /// produce a first message that opens. Until one does, the client is the
 /// classical claim [`DaemonReadyForMessage4::fingerprint`] returned, and
-/// this type is how "nothing is served before then" (§6.2) is kept: its
-/// one operation is [`Self::open_first_message`]. It has no directions and
-/// no way to read who the client is or what it asked for.
+/// this type is how "nothing is served before then" (§6.2) is kept. It is
+/// released only through one check, reached by [`Self::open_first_message`]
+/// or by [`Self::lend`] and then [`WithheldSession::release`]. It has no
+/// directions and no way to read who the client is or what it asked for.
 ///
 /// ```compile_fail,E0599
 /// # use shekyl_rpc_channel::handshake::PendingSession;
@@ -880,6 +883,39 @@ impl Established {
 /// ```
 pub struct PendingSession {
     sym: SymmetricState,
+    client: StaticPublic,
+    request: Vec<u8>,
+}
+
+/// A [`PendingSession`] whose receiving direction has been lent out.
+///
+/// The sending direction, the client and the request stay here until
+/// [`Self::release`]. Dropping this drops them. Nothing here is readable:
+///
+/// ```compile_fail,E0616
+/// # use shekyl_rpc_channel::handshake::WithheldSession;
+/// fn send_while_withheld(withheld: &WithheldSession) {
+///     let _ = &withheld.send;
+/// }
+/// ```
+///
+/// ```compile_fail,E0616
+/// # use shekyl_rpc_channel::handshake::WithheldSession;
+/// fn read_the_request_while_withheld(withheld: &WithheldSession) -> &[u8] {
+///     &withheld.request
+/// }
+/// ```
+///
+/// ```compile_fail,E0616
+/// # use shekyl_rpc_channel::handshake::WithheldSession;
+/// fn name_the_client_while_withheld(withheld: &WithheldSession) {
+///     let _ = withheld.client.fingerprint();
+/// }
+/// ```
+#[must_use = "dropping this drops the session unreleased"]
+pub struct WithheldSession {
+    handshake_hash: [u8; HANDSHAKE_HASH_LEN],
+    send: Direction,
     client: StaticPublic,
     request: Vec<u8>,
 }
@@ -929,57 +965,101 @@ impl PendingSession {
         self.sym.handshake_hash()
     }
 
-    /// Let `opener` open the client's first transport message, and release
-    /// the session only if it did.
+    /// Lend the receiving direction and withhold the rest of the session.
     ///
-    /// The receiving direction is lent to `opener` for this one call. What
-    /// the first message looks like on the wire is the opener's business:
-    /// the channel's record framer is one, and it is not part of the
-    /// handshake. A bare Noise message is another, opened with
+    /// The caller owns the direction for as long as the [`WithheldSession`]
+    /// is held. A reader that has to wait for more bytes builds its framer
+    /// around the direction, and a short read leaves both where they are.
+    /// [`WithheldSession::release`] is how the session comes out.
+    #[must_use = "dropping the withheld session drops the session unreleased"]
+    pub fn lend(self) -> (WithheldSession, Direction) {
+        let handshake_hash = self.sym.handshake_hash();
+        let (send, recv) = self.sym.into_directions(SplitRole::Responder);
+        (
+            WithheldSession {
+                handshake_hash,
+                send,
+                client: self.client,
+                request: self.request,
+            },
+            recv,
+        )
+    }
+
+    /// Open the client's first transport message, when the whole message is
+    /// already in hand, and release the session only if it opened.
+    ///
+    /// This is [`Self::lend`] and [`WithheldSession::release`] around one
+    /// call. The opener runs to completion, and anything but `Ok` consumes
+    /// the session. A reader that may have to wait for more bytes uses
+    /// [`Self::lend`] and holds the withheld session across the reads.
+    ///
+    /// What the first message looks like on the wire is the opener's
+    /// business. The channel's record framer is one, and it is not part of
+    /// the handshake. A bare Noise message is another, opened with
     /// [`TRANSPORT_AD`].
     ///
-    /// **The opener's word is not what releases the session.** After it
-    /// returns, two things about the direction it hands back are checked,
-    /// and both must hold:
-    ///
-    /// - it is **this session's** direction: it carries this session's
-    ///   handshake hash ([`Direction::handshake_hash`], stamped by
-    ///   `into_directions`). The opener holds the direction by `&mut`, so it
-    ///   could put another session's direction in its place, one that has
-    ///   already opened; that is refused;
-    /// - it has itself opened at least one ciphertext
-    ///   ([`Direction::opened`]): a tag verified under a key only the
-    ///   client's ML-KEM key could have produced.
-    ///
-    /// An opener that returns `Ok` without opening anything, or after only
-    /// failed attempts, has authenticated nobody, and the session is refused
-    /// exactly as if it had returned an error. So is one that opens a
-    /// ciphertext and then returns `Err`.
-    ///
-    /// On success, returns the session and whatever the opener returned.
+    /// The release check is [`WithheldSession::release`]'s.
     ///
     /// # Errors
     ///
-    /// [`FirstMessageRefused`] when the opener fails, the direction it hands
-    /// back is not this session's, or that direction opened nothing. The session is consumed and cannot be tried again: its
-    /// sending direction, the client and the request are dropped unseen.
+    /// [`FirstMessageRefused`], on the same terms as
+    /// [`WithheldSession::release`]. The session is consumed and cannot be
+    /// tried again: its sending direction, the client and the request are
+    /// dropped unseen.
     pub fn open_first_message<T, E>(
         self,
         opener: impl FnOnce(&mut Direction) -> Result<T, E>,
     ) -> Result<(AuthenticatedSession, T), FirstMessageRefused> {
-        let handshake_hash = self.sym.handshake_hash();
-        let (send, mut recv) = self.sym.into_directions(SplitRole::Responder);
-        let opened = opener(&mut recv).map_err(|_| FirstMessageRefused)?;
-        if recv.handshake_hash() != handshake_hash || recv.opened() == 0 {
+        let (withheld, mut recv) = self.lend();
+        let opened = opener(&mut recv);
+        withheld.release(recv, opened)
+    }
+}
+
+impl WithheldSession {
+    /// Release the session if `recv` is this session's receiving direction
+    /// and `opened` is what it opened.
+    ///
+    /// **The caller's word is not what releases the session.** Two things
+    /// about `recv` are checked, and both must hold, and `opened` must be
+    /// `Ok`:
+    ///
+    /// - it is **this session's** direction: it carries this session's
+    ///   handshake hash ([`Direction::handshake_hash`], stamped by
+    ///   `into_directions`). The caller owns the direction, so it could
+    ///   hand back another session's, one that has already opened; that is
+    ///   refused;
+    /// - it has itself opened at least one ciphertext
+    ///   ([`Direction::opened`]): a tag verified under a key only the
+    ///   client's ML-KEM key could have produced.
+    ///
+    /// `Ok` with nothing opened, or after only failed attempts, has
+    /// authenticated nobody. So has a direction that opened a ciphertext
+    /// and then an `Err`: a tag can succeed and the framing after it still
+    /// refuse the record. Either one is [`FirstMessageRefused`], and the
+    /// sending direction, the client and the request are dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`FirstMessageRefused`] when `opened` is `Err`, when `recv` is not
+    /// this session's direction, or when that direction opened nothing.
+    pub fn release<T, E>(
+        self,
+        recv: Direction,
+        opened: Result<T, E>,
+    ) -> Result<(AuthenticatedSession, T), FirstMessageRefused> {
+        let opened = opened.map_err(|_| FirstMessageRefused)?;
+        if recv.handshake_hash() != self.handshake_hash || recv.opened() == 0 {
             return Err(FirstMessageRefused);
         }
         Ok((
             AuthenticatedSession {
                 client: self.client,
                 request: self.request,
-                send,
+                send: self.send,
                 recv,
-                handshake_hash,
+                handshake_hash: self.handshake_hash,
             },
             opened,
         ))
