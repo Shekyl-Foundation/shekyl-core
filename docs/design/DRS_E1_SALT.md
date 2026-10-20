@@ -424,8 +424,10 @@ lands (§10).
   is an attribute — `SAR-Q5` said so — and an attribute is a field. The
   `mdb_put` with flags `0` (an upsert the single writer never exercises as
   one) and "empty stores no row" become `Option<…>` on the record.
-- **SAL-7 — alt data never reaches `ChainView`.** CEN-A4 is *held-by-cxx*
-  because "alt-store membership is not a recorded-chain fact"; CEN-K8's
+- **SAL-7 — alt data never reaches `ChainView`.** CEN-A4 is held by the
+  ingest service's router, not the validator
+  (`held_by_store("shekyl-chain-ingest", "an_arrival_whose_parent_is_unheld_is_unlinked_and_not_stored")`,
+  DRS-X PR 2), because "alt-store membership is not a recorded-chain fact"; CEN-K8's
   reader enumeration finds no consensus-bearing reader of the alt
   bookkeeping. The validator's view is projected from the chain; AL4–AL7
   live on `ReadSnapshot` and the batch's view, and no `ChainView` accessor

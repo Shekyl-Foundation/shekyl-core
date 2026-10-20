@@ -55,6 +55,7 @@
 
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
@@ -331,10 +332,63 @@ pub struct ChainFacts {
     pub medians: EffectiveMedian,
 }
 
+/// The recorded tip, as the dialer's handshake carries it (`SyncPayload`'s
+/// fields): the block count, the tip's cumulative difficulty and its
+/// identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChainTip {
+    /// Blocks recorded: the tip's height plus one, the count the
+    /// handshake's `current_height` reports.
+    pub count: shekyl_types::ChainCount,
+    /// The tip's cumulative difficulty.
+    pub cumulative_difficulty: shekyl_difficulty::CumulativeDifficulty,
+    /// The tip's identity.
+    pub top_id: BlockHash,
+}
+
+/// `TipChanged` (`DRS_X_STORE_FLIP.md` DX-Q2 item 5): the one source of the
+/// tip. The connector publishes it on a `watch` after every committed
+/// connect, pop and switch — after the write returns, never before the
+/// commit — and once at start. `seq` rises with each publication, so a
+/// consumer can tell two publications of one tip apart (a pop and the
+/// connect back) and say which it last acted on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TipChanged {
+    /// The publication's number: 0 at start, one more each time.
+    pub seq: u64,
+    /// The tip; `None` on an empty chain.
+    pub tip: Option<ChainTip>,
+}
+
+/// A receiver of [`TipChanged`], for a consumer (the dialer's handshake,
+/// new-block relay, the sync owner, the RPC, the pool, the miner's
+/// template producer).
+#[derive(Clone, Copy, Debug)]
+pub struct WatchTip;
+
+/// The recorded tip on `store` now.
+fn chain_tip(store: &ChainStore) -> Result<Option<ChainTip>, StoreError> {
+    let read = store.begin_read()?;
+    let Some(tip) = read.tip()?.recorded else {
+        return Ok(None);
+    };
+    let AtHeight::Recorded(info) = read.block_info(tip.height)? else {
+        unreachable!("the recorded tip has its row");
+    };
+    Ok(Some(ChainTip {
+        count: shekyl_types::ChainCount::with_tip(tip.height)
+            .expect("a recorded tip has a successor count"),
+        cumulative_difficulty: info.cumulative_difficulty,
+        top_id: tip.hash,
+    }))
+}
+
 /// What the actor is built from.
 pub struct ConnectorArgs {
-    /// The store this actor alone writes.
-    pub store: ChainStore,
+    /// The store this actor alone writes. Shared, so the readers that place
+    /// arrivals and answer the RPC take their snapshots off the same file
+    /// (the ingest service's router, `StoreFacts`); none of them writes.
+    pub store: Arc<ChainStore>,
     /// Which rules are in force at each height (RD-Q10's driver half).
     pub rules: ChainRules,
 }
@@ -343,12 +397,12 @@ pub struct ConnectorArgs {
 /// every write after the first store-terminal fault (module docs). Reads
 /// stay open.
 struct Writer {
-    store: ChainStore,
+    store: Arc<ChainStore>,
     over: Option<RunEnd>,
 }
 
 impl Writer {
-    const fn live(store: ChainStore) -> Self {
+    const fn live(store: Arc<ChainStore>) -> Self {
         Self { store, over: None }
     }
 
@@ -452,6 +506,8 @@ impl Writer {
 /// The single writer (module docs).
 pub struct Connector {
     writer: Writer,
+    /// [`TipChanged`]'s one publisher.
+    tip: tokio::sync::watch::Sender<TipChanged>,
     rules: ChainRules,
     /// What the run takes on the release's word — `rules.trust()`, read
     /// once at start. A field rather than a call so a test can reach the
@@ -465,7 +521,9 @@ impl Actor for Connector {
     type Error = RunFault;
 
     async fn on_start(args: ConnectorArgs, _actor_ref: ActorRef<Self>) -> Result<Self, RunFault> {
+        let tip = chain_tip(&args.store)?;
         Ok(Self {
+            tip: tokio::sync::watch::Sender::new(TipChanged { seq: 0, tip }),
             writer: Writer::live(args.store),
             rules: args.rules,
             trust: args.rules.trust(),
@@ -481,6 +539,28 @@ impl Actor for Connector {
         err: PanicError,
     ) -> Result<ControlFlow<ActorStopReason>, RunFault> {
         Ok(ControlFlow::Break(ActorStopReason::Panicked(err)))
+    }
+}
+
+impl Connector {
+    /// Publish the tip after a committed write (module docs: `TipChanged`).
+    /// A read that fails here leaves the last publication standing: the
+    /// next write meets the same store.
+    pub(crate) fn publish_tip(&self) {
+        if let Ok(tip) = chain_tip(&self.writer.store) {
+            self.tip.send_modify(|now| {
+                now.seq += 1;
+                now.tip = tip;
+            });
+        }
+    }
+}
+
+impl Message<WatchTip> for Connector {
+    type Reply = tokio::sync::watch::Receiver<TipChanged>;
+
+    async fn handle(&mut self, _: WatchTip, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        self.tip.subscribe()
     }
 }
 
@@ -507,7 +587,7 @@ impl Message<Apply> for Connector {
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let rules = self.rules;
         let trust = self.trust;
-        self.writer.write(|batch| {
+        let applied = self.writer.write(|batch| {
             let view = batch.chain_view();
             let mut applied = Applied::default();
             for (claimed, formed) in msg.0 {
@@ -520,6 +600,13 @@ impl Message<Apply> for Connector {
                 // source is wrong about the chain, and that is a driver
                 // defect surfaced before anything is judged under the
                 // wrong schedule (#852 review).
+                // The parent's hash is CEN-A2's operand inside `validate`,
+                // not a second copy of this height check. A source that
+                // names the connecting height and a different parent is a
+                // wrong block: a verdict, and the writer stays up. The
+                // live service only applies a block whose parent was the
+                // tip, so it places that A2 again rather than cancelling
+                // the span.
                 let (height, _) = connecting(view.tip()?)?;
                 if claimed != height {
                     return Err(RunFault::HeightClaim {
@@ -561,7 +648,11 @@ impl Message<Apply> for Connector {
                 }
             }
             Ok(applied)
-        })
+        })?;
+        if !applied.connected.is_empty() {
+            self.publish_tip();
+        }
+        Ok(applied)
     }
 }
 
@@ -570,7 +661,7 @@ impl Message<Rewind> for Connector {
 
     async fn handle(&mut self, msg: Rewind, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let to = msg.to;
-        self.writer.write(|batch| {
+        let rewound = self.writer.write(|batch| {
             let tip = batch.chain_view().tip()?.map(|t| t.height);
             let popped = match tip {
                 Some(tip) if tip >= to => tip.to_raw() - to.to_raw(),
@@ -594,7 +685,11 @@ impl Message<Rewind> for Connector {
             batch.pop_many(popped)?;
             batch.retire_alt_blocks_on(&gone)?;
             Ok(Rewound { popped })
-        })
+        })?;
+        if rewound.popped > 0 {
+            self.publish_tip();
+        }
+        Ok(rewound)
     }
 }
 

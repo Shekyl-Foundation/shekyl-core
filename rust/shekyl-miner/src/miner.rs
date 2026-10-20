@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use shekyl_difficulty::check_hash;
+use shekyl_hash_budget::{Budget, Class};
 use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
 use shekyl_thread_ledger::{spawn_dedicated, DedicatedThread, ThreadName};
 use shekyl_types::PowHash;
@@ -21,6 +22,32 @@ use crate::address::MiningAddress;
 use crate::found::{Found, FoundBlocks};
 use crate::job::{JobBoard, NONE_SEEN};
 use crate::rate::{HashRate, RateRing};
+
+/// Why [`Miner::start`] started nothing.
+#[derive(Debug)]
+pub enum MinerStartRefused {
+    /// The budget holds one permit. The miner never takes the last free
+    /// permit (`shekyl-hash-budget` module docs), so on this budget it would
+    /// never hash: a miner reported active at zero. Refused instead.
+    OnePermit,
+    /// The OS refused a thread. The workers already started were stopped
+    /// and joined.
+    Thread(io::Error),
+}
+
+impl core::fmt::Display for MinerStartRefused {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::OnePermit => f.write_str(
+                "this host has one hashing permit, and the miner never takes the last one; \
+                 it would never hash",
+            ),
+            Self::Thread(e) => write!(f, "a miner thread could not start: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for MinerStartRefused {}
 
 /// The OS thread name and ledger label of every worker.
 const WORKER_NAME: &str = "sk-miner";
@@ -57,6 +84,8 @@ pub struct MinerStatus {
 struct Shared {
     board: Arc<JobBoard>,
     caches: Arc<CacheStore>,
+    /// The daemon's one hasher budget: a permit per hash (PR2-Q3).
+    budget: Budget,
     found: FoundBlocks,
     stop: AtomicBool,
     started: Instant,
@@ -131,7 +160,14 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
                 break;
             }
             preimage[at..at + 4].copy_from_slice(&nonce.to_le_bytes());
+            // One permit per hash, and never the last: a hash at nice 19
+            // can run for about a minute, and the chain must not wait that
+            // out. Stop unblocks the wait; an in-progress hash finishes.
+            let Some(permit) = shared.budget.acquire_unless(Class::Miner, &shared.stop) else {
+                break;
+            };
             let pow = compute_hash(&cache, &preimage);
+            drop(permit);
             rate.record(shared.second());
             if !check_hash(&pow, posted.job.difficulty) {
                 continue;
@@ -164,22 +200,28 @@ fn work(shared: &Shared, index: usize, range: RangeInclusive<u32>) {
 
 impl Miner {
     /// Start `config.threads` workers on `board`, hashing with `caches`
-    /// and sending what they find to `found`.
+    /// under `budget`'s permits and sending what they find to `found`.
     ///
     /// # Errors
     ///
-    /// The OS refused a thread. The workers already started are stopped
-    /// and joined before this returns.
+    /// [`MinerStartRefused`]: a one-permit budget, before anything starts;
+    /// or the OS refused a thread, and the workers already started are
+    /// stopped and joined before this returns.
     pub fn start(
         config: &MinerConfig,
         board: Arc<JobBoard>,
         caches: Arc<CacheStore>,
+        budget: Budget,
         found: FoundBlocks,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, MinerStartRefused> {
+        if budget.permits() < 2 {
+            return Err(MinerStartRefused::OnePermit);
+        }
         let threads = config.threads;
         let shared = Arc::new(Shared {
             board,
             caches,
+            budget,
             found,
             stop: AtomicBool::new(false),
             started: Instant::now(),
@@ -197,7 +239,8 @@ impl Miner {
             let range = nonce_range(index, threads);
             // On an error `miner` drops here, which stops and joins the
             // workers already running.
-            let worker = spawn_dedicated(&name, move || work(&shared, index, range))?;
+            let worker = spawn_dedicated(&name, move || work(&shared, index, range))
+                .map_err(MinerStartRefused::Thread)?;
             miner.workers.push(worker);
         }
         Ok(miner)
@@ -228,7 +271,11 @@ impl Miner {
     }
 
     fn halt(&mut self) {
+        // The board flag first, then the budget: a worker blocked in
+        // `acquire_unless` reads the flag only after `wake`, and a worker
+        // between hashes sees the flag in `next_after`.
         self.shared.board.stop(&self.shared.stop);
+        self.shared.budget.wake();
         for worker in &mut self.workers {
             if worker.join().is_err() {
                 tracing::error!("a miner thread panicked");

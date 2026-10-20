@@ -4378,6 +4378,91 @@ bool shekyl_sync_wants_more_outbound(std::uint32_t connector, std::uint32_t outb
 /// the tip changes, and once at start.
 void shekyl_core_publish_tip(std::uint64_t height, std::uint64_t cumulative_difficulty,
     std::uint64_t cumulative_difficulty_top64, const std::uint8_t* top_id);
+
+/// The protocol handler's one entry into the Rust ingest service
+/// (DRS_X_STORE_FLIP.md DX-Q2 item 2). Built and tested; the store flip
+/// routes the handler's block arrivals here, and nothing calls it before.
+/// `shekyl_ingest_bind` installs the post, which enqueues each reply onto
+/// the connection's strand and returns. A null `post` or `ctx` unbinds and
+/// drains replies already accepted before the post is cleared. Ask
+/// `shekyl_ingest_room` before sending; `shekyl_ingest_offer_span` judges
+/// lengths, room and the session bucket, then copies what it is given and
+/// returns at once. Each accepted arrival gets exactly one reply, tagged
+/// with the arrival and the connection.
+constexpr std::uint32_t SHEKYL_INGEST_CONNECTED = 1;
+constexpr std::uint32_t SHEKYL_INGEST_REFUSED = 2;
+constexpr std::uint32_t SHEKYL_INGEST_UNLINKED = 3;
+constexpr std::uint32_t SHEKYL_INGEST_ALREADY_HELD = 4;
+constexpr std::uint32_t SHEKYL_INGEST_HELD = 5;
+/// The door's past-cap hint: judged before the block was stored or hashed,
+/// never proof of a heavier chain. `height` is the depth, `by` the cap.
+constexpr std::uint32_t SHEKYL_INGEST_BEYOND_CAP = 6;
+constexpr std::uint32_t SHEKYL_INGEST_SWITCHED = 7;
+constexpr std::uint32_t SHEKYL_INGEST_PROMOTION_REFUSED = 8;
+/// A stored heavier chain this node cannot follow: a pop met the undo
+/// floor. `height` is the tip, `by` the floor.
+constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BELOW_FLOOR = 9;
+constexpr std::uint32_t SHEKYL_INGEST_MISSING_BODIES = 10;
+constexpr std::uint32_t SHEKYL_INGEST_CANCELLED = 11;
+constexpr std::uint32_t SHEKYL_INGEST_STOPPED = 12;
+/// A stored heavier chain this node cannot follow: its fork is deeper than
+/// the cap. `height` is the depth, `by` the cap.
+constexpr std::uint32_t SHEKYL_INGEST_CANNOT_FOLLOW_BEYOND_CAP = 13;
+/// `shekyl_ingest_offer_span`'s results. Every refusal is before
+/// acceptance and never a peer fault; THROTTLED lets the handler close the
+/// session, never score it.
+constexpr int SHEKYL_INGEST_ACCEPTED = 0;
+constexpr int SHEKYL_INGEST_NO_ROOM = 1;
+constexpr int SHEKYL_INGEST_THROTTLED = 2;
+constexpr int SHEKYL_INGEST_OVERSIZE = 3;
+constexpr int SHEKYL_INGEST_UNBOUND = -1;
+constexpr int SHEKYL_INGEST_INVALID = -2;
+/// `shekyl_ingest_bind`: an unbind on a thread of the runtime that posts
+/// the replies. It cannot wait for them, so nothing changed. Unbind from
+/// another thread.
+constexpr int SHEKYL_INGEST_REENTRANT = -3;
+
+struct shekyl_ingest_blob {
+  const std::uint8_t* ptr;
+  std::size_t len;
+};
+
+struct shekyl_ingest_arrival {
+  std::uint64_t tag;
+  shekyl_ingest_blob block;
+  const shekyl_ingest_blob* bodies;
+  std::size_t bodies_len;
+};
+
+/// Which fields carry meaning is the kind's (`ingest_ffi.rs`); the rest are
+/// zero. MISSING_BODIES carries its indices beside the struct.
+struct shekyl_ingest_reply {
+  std::uint64_t connection;
+  std::uint64_t tag;
+  std::uint32_t kind;
+  std::uint16_t rule;
+  std::uint8_t _pad[2];
+  std::uint64_t height;
+  std::uint64_t by;
+  std::uint8_t hash[32];
+};
+static_assert(sizeof(shekyl_ingest_reply) == 72, "ingest reply");
+
+using shekyl_ingest_post_fn = void (*)(void* ctx, const shekyl_ingest_reply* reply,
+    const std::uint64_t* indices, std::size_t indices_len);
+
+/// Install `post`. A null `post` or `ctx` unbinds: replies already accepted
+/// are posted before it returns, and `ctx` may be released after. Returns 0,
+/// or SHEKYL_INGEST_REENTRANT for an unbind on the replies' own runtime.
+int shekyl_ingest_bind(void* ctx, shekyl_ingest_post_fn post);
+/// The arrivals the service accepts now; 0 when it is not installed.
+std::uint64_t shekyl_ingest_room(void);
+/// Offer `len` arrivals from `connection`; `solicited` nonzero for blocks
+/// this node asked for.
+int shekyl_ingest_offer_span(std::uint64_t connection, std::uint8_t solicited,
+    const shekyl_ingest_arrival* arrivals, std::size_t len);
+/// `connection` closed.
+void shekyl_ingest_session_closed(std::uint64_t connection);
 /// The tip the core last published (see shekyl_core_publish_tip): 1 and the
 /// fields written, 0 and nothing written before the first publish. A null
 /// out pointer is skipped.

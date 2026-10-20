@@ -306,6 +306,8 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
     assert_eq!(
         held_by_store,
         [
+            CenRow::A1,
+            CenRow::A4,
             CenRow::B3,
             CenRow::K1a,
             CenRow::K2,
@@ -319,7 +321,8 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::M2,
             CenRow::M8
         ],
-        "the rule-set belt at connect (B3, re-classed 2026-10-15, R4); DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
+        "where a block goes, held by the ingest service's router (A1, A4; DRS-X PR 2); \
+         the rule-set belt at connect (B3, re-classed 2026-10-15, R4); DRS-E5 E5-18: the alt chain's root and linkage (K1a, K2), a held hash refused at \
          insert (K3) and no supply word on an alt row (K8) are the store's structures, \
          proved by the store's tests; promotion (K5), the witness in the alt row (K5b), the \
          fork choice's match (K6) and the demoted rows (K7) are the switch's (DRS-E5 a5), \
@@ -419,8 +422,11 @@ fn registries_are_the_expected_size_at_this_increment() {
     // 163 → 162 the same day: CEN-K10 (reorg retention, `kept_by_block`'s
     // stored-anyway admission) went to bucket 3 and its entry was deleted
     // (the rulings on #1102) — the pool parked an alternative chain's
-    // bodies, and the chain store holds them now.
-    assert_eq!(CenRow::ALL.len(), 162);
+    // bodies, and the chain store holds them now. 162 → 161 on 2026-10-18:
+    // CEN-A5 (the size bound before parse) went to bucket 3 and its entry
+    // was deleted (DRS-X PR 2, PR2-Q2) — the parse-cost bound, not
+    // validity, re-homed as the ingest router's admission.
+    assert_eq!(CenRow::ALL.len(), 161);
     assert_eq!(PolicyRow::ALL.len(), 8);
 }
 

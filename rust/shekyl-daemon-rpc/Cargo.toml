@@ -99,6 +99,9 @@ shekyl-difficulty = { path = "../shekyl-difficulty" }
 # the RPC calls `lookup` and `compute_hash`, never a derivation (ruled
 # 2026-10-17). In the graph already through shekyl-ffi and the ingest.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+# The daemon's one hasher budget (PR2-Q3): calc_pow hashes under a permit
+# in its class, below the chain's and above the miner's.
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 
 [dev-dependencies]
 # Real consensus-valid spend fixture for the production-verifier oracle test

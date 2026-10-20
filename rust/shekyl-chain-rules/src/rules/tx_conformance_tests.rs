@@ -772,9 +772,6 @@ fn hold_to_registry(row: CenRow, verdict: Verdict<()>, tx: &Transaction, locus: 
             // Nothing to hold to yet. When the row flips, the arm above runs
             // and demands the refusal — no pin to update.
         }
-        RowStatus::HeldByCxx => {
-            panic!("{row} is held by the C++; a wire arm keyed to it is a classification error")
-        }
         RowStatus::HeldByStore => {
             panic!("{row} is held by the store; a wire arm keyed to it is a classification error")
         }

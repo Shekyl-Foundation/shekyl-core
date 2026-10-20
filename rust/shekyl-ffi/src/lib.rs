@@ -152,6 +152,11 @@ pub mod inbound_ceiling_ffi;
 /// before the remnant runs. Not a snapshot field (§2.9).
 pub mod remnant_prep;
 
+// The protocol handler's one entry into the ingest service (DRS-X PR 2,
+// DX-Q2 item 2): spans in, one reply per arrival posted to the strand.
+// Built and tested here; the store flip routes the handler's arrivals to it.
+pub mod ingest_ffi;
+
 // The p2p seam. C++ posts onto the connection strand. Rust records the
 // cause and the byte cap. See P2P_TRANSPORT_LAYER.md.
 pub mod seam_ffi;

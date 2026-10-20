@@ -122,6 +122,16 @@ impl JobBoard {
         self.advance(&mut state, None)
     }
 
+    /// The job posted now and its generation; `None` while withdrawn or
+    /// before the first posting.
+    #[must_use]
+    pub fn posted(&self) -> Option<(Generation, Job)> {
+        self.lock()
+            .posted
+            .as_ref()
+            .map(|posted| (posted.generation, posted.job.clone()))
+    }
+
     /// The newest generation.
     #[must_use]
     pub fn generation(&self) -> Generation {

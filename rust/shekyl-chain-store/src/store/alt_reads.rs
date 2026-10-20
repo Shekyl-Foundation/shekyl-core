@@ -90,40 +90,18 @@ impl AltLinks {
     }
 
     /// The rows `roots` names and every row that descends from one of them
-    /// by naming it, or one of its descendants, as `previous`.
-    ///
-    /// `on_main` is a hash the main chain holds. The walk stops there: a
-    /// child of that hash reaches the recorded block, the way
-    /// [`AltChain::build`](super::AltChain::build) does, so removing a
-    /// duplicate row does not take the branch above it. A root that is
-    /// itself on the main chain is included and not walked past. A link
-    /// that returns to a row already taken is not walked again.
-    pub(super) fn closure(
-        &self,
-        roots: impl IntoIterator<Item = BlockHash>,
-        on_main: impl Fn(&BlockHash) -> bool,
-    ) -> HashSet<BlockHash> {
+    /// by naming it, or one of its descendants, as `previous`. A link that
+    /// returns to a row already taken is not walked again. No row is a
+    /// main-chain block (`store/alt.rs`: a block id has one home), so the
+    /// walk never reaches the recorded chain.
+    pub(super) fn closure(&self, roots: impl IntoIterator<Item = BlockHash>) -> HashSet<BlockHash> {
         let mut dead = HashSet::new();
-        let mut frontier = Vec::new();
-        for id in roots {
-            if on_main(&id) {
-                // Selected, and the recorded block is where the walk stops.
-                let _ = dead.insert(id);
-            } else if dead.insert(id) {
-                frontier.push(id);
-            }
-        }
+        let mut frontier: Vec<BlockHash> = roots.into_iter().collect();
         while let Some(id) = frontier.pop() {
-            let Some(children) = self.children.get(&id) else {
-                continue;
-            };
-            for child in children {
-                // A recorded hash stops the walk the way `AltChain::build`
-                // does: the rows above it reach that block, so they stay.
-                if on_main(child) || !dead.insert(*child) {
-                    continue;
+            if dead.insert(id) {
+                if let Some(children) = self.children.get(&id) {
+                    frontier.extend(children.iter().copied());
                 }
-                frontier.push(*child);
             }
         }
         dead

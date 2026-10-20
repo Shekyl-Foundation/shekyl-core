@@ -117,6 +117,42 @@ fn an_inverted_fork_is_not_a_fork() {
     assert_eq!(level.pops(), BlockCount::ZERO);
 }
 
+#[test]
+fn anchor_band_is_e2_and_records_nothing() {
+    let root = Tip {
+        height: height(4),
+        hash: BlockHash::from_bytes([4; 32]),
+    };
+    let tip = Tip {
+        height: height(11),
+        hash: BlockHash::from_bytes([11; 32]),
+    };
+    let fork = Fork::new(root, tip).expect("root below the tip");
+    let anchored = Trust::full(ANCHORED_AT_5);
+    assert_eq!(
+        anchor_band(&fork, &RuleSet::GENESIS, &anchored),
+        Some(AnchorBand::BelowAnchor { anchor: height(5) })
+    );
+    assert_eq!(
+        anchor_band(&fork, &RuleSet::GENESIS, &Trust::UNANCHORED),
+        None,
+        "no reached anchor: the cap does not bind"
+    );
+    let at_anchor = Fork::new(
+        Tip {
+            height: height(5),
+            hash: BlockHash::from_bytes([5; 32]),
+        },
+        tip,
+    )
+    .expect("the anchor is at or below the tip");
+    assert_eq!(
+        anchor_band(&at_anchor, &RuleSet::GENESIS, &anchored),
+        None,
+        "popping six on a cap of 720 is inside the band"
+    );
+}
+
 /// The rows the tier evaluates beyond `form`'s: the three alt arms and the
 /// header ladder — CEN-K4's set, in census order. A2 is the ladder's
 /// parent link, the one header fact the tier checks against its own
