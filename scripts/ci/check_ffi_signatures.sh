@@ -87,6 +87,8 @@ SURFACES=(
   # The chain-sync heuristics' two verdicts (DAEMON_CONFIG_CUTOVER.md §4.2).
   "sync:rust/shekyl-ffi/src/sync_ffi.rs"
   "tx_extra_codec:rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
+  # The protocol handler's one entry into the ingest service (DRS-X PR 2).
+  "ingest:rust/shekyl-ffi/src/ingest_ffi.rs"
 )
 
 # The hand-written header with comment lines removed: rustdoc and header

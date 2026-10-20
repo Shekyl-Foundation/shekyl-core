@@ -18,21 +18,20 @@
 //! that actually ran, and `is_complete_for` is `false` until every row the
 //! rule set holds the per-block stages to has landed, so no `ChainValid`
 //! minted during the port can be mistaken for parity evidence by anything
-//! that checks. The gate prints three readings
+//! that checks. The gate prints two readings
 //! (`check_chain_rules_coverage.py`): **enforced** `E` is the census's —
 //! every consensus row of bucket ≠ 3, fixed by the census and moved by
-//! nothing in this crate. **validator-enforced** `E − H` excludes the rows
-//! the C++ ingest driver holds until cutover (`RowStatus::HeldByCxx`).
-//! **per-block** `E − H − O − B − S` also excludes rows this crate enforces
-//! outside the per-block stages (`RowStatus::EnforcedAt` — CEN-E5 at writer
-//! open, the alt tier's rows), rows that hold by construction
-//! (`RowStatus::ByConstruction` — CEN-F2, F8, F19: the type system or the
-//! wire's parser, with a falsifier the gate asserts) and rows a Rust crate
-//! below the validator holds (`RowStatus::HeldByStore` — CEN-K1a, K2, K3,
-//! K8: the store's structures, with the store's test the gate asserts).
+//! nothing in this crate. **per-block** `E − O − B − S` excludes rows this
+//! crate enforces outside the per-block stages (`RowStatus::EnforcedAt` —
+//! CEN-E5 at writer open, the alt tier's rows), rows that hold by
+//! construction (`RowStatus::ByConstruction` — CEN-F2, F8, F19: the type
+//! system or the wire's parser, with a falsifier the gate asserts) and rows
+//! a Rust crate below the validator holds (`RowStatus::HeldByStore` —
+//! CEN-K1a, K2, K3, K8: the store's structures; A1, A4: the ingest router —
+//! with the holder's test the gate asserts).
 //! [`RuleSet::enforced`](crate::RuleSet::enforced) is that per-block
 //! reading. Completeness is measured against it. `E` is printed beside it
-//! so a hold, an at-open, a by-construction or a store-held row reads as a
+//! so an at-open, a by-construction or a store-held row reads as a
 //! subtraction, never as a smaller denominator.
 //! The live figures are the gate's, not this comment's.
 
@@ -140,9 +139,8 @@ impl Coverage<CenRow> {
     }
 
     /// `true` iff every row `rule_set` holds the per-block stages to was
-    /// evaluated — `RuleSet::enforced()`, which excludes C++-held rows
-    /// (`RowStatus::HeldByCxx`), rows enforced at another site
-    /// (`RowStatus::EnforcedAt`), rows that hold by construction
+    /// evaluated — `RuleSet::enforced()`, which excludes rows enforced at
+    /// another site (`RowStatus::EnforcedAt`), rows that hold by construction
     /// (`RowStatus::ByConstruction`) and rows the store holds
     /// (`RowStatus::HeldByStore`). See the module docs for the readings.
     ///
@@ -157,7 +155,7 @@ impl Coverage<CenRow> {
     /// implemented** was evaluated.
     ///
     /// The mint gate during porting. [`Self::is_complete_for`] waits until
-    /// every validator-enforced row has landed; this is true as soon as
+    /// every per-block row has landed; this is true as soon as
     /// every *landed* rule actually ran, and was vacuously true while every
     /// entry was `pending` (DRS-D12). A forgotten `validate` call, or a call
     /// that forgets [`Self::insert`], fails it — G9's runtime half.

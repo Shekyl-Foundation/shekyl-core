@@ -453,6 +453,7 @@ fn a_substrate_that_cannot_read_the_clock_is_a_fault_not_a_verdict() {
     struct NoClock;
     impl Substrate for NoClock {
         type Fault = Faulted;
+        type Held = ();
         fn local_clock(&self) -> Result<shekyl_types::Timestamp, Faulted> {
             Err(Faulted)
         }

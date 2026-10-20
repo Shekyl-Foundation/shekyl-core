@@ -147,6 +147,8 @@ impl Pool {
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<Reconciled, PoolFault<V::Fault>> {
+        // Taken before the held borrow: step 1 was planted outside this lock.
+        let mut planted = self.take_planted();
         let mut order: Vec<(&TxHash, &Held)> = self.held().iter().collect();
         order.sort_by_key(|(txid, held)| (held.record.received, **txid));
 
@@ -165,18 +167,29 @@ impl Pool {
                 reconciled.removed.push((*txid, Removed::Mined));
                 continue;
             }
-            // The door's pass from the entry's last judgement (S1, CEN-M8):
-            // while its rule set and its claim hold, nothing is verified
-            // again — only the view-bound half and the policy run.
-            let judged = door::judge(
-                &held.tx,
-                chain,
-                &key_images,
-                rule_set,
-                policy,
-                held.pass.as_ref(),
-            )
-            .map_err(PoolFault::door)?;
+            // Step 1 planted outside this lock (a file entry's first
+            // reconcile), else the pass from the entry's last judgement
+            // (S1, CEN-M8). While the claim holds, nothing is verified
+            // again — only the view-bound half and the policy run. A
+            // planted refusal is the answer and is not verified again.
+            let staged = planted.remove(txid);
+            let judged = if let Some(Err(refused)) = staged {
+                Judged::Stateless(refused)
+            } else {
+                let prior = match staged {
+                    Some(Ok(pass)) => Some(pass),
+                    _ => held.pass,
+                };
+                door::judge(
+                    &held.tx,
+                    chain,
+                    &key_images,
+                    rule_set,
+                    policy,
+                    prior.as_ref(),
+                )
+                .map_err(PoolFault::door)?
+            };
             let Judged::Admitted { pass, .. } = judged else {
                 judged_all.insert(*txid, None);
                 removals.push(*txid);

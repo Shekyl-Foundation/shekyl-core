@@ -138,6 +138,9 @@ pub struct Connected {
     /// transaction: those at or below the new tip less the reorg cap in
     /// force, which no switch can reach (`store/alt.rs`).
     pub retired_alts: u64,
+    /// Whether the block also sat in the alt table and left it in this
+    /// transaction: a block id has one home (`store/alt.rs`).
+    pub left_alt: bool,
 }
 
 impl<'id> WriteBatch<'_, 'id> {
@@ -383,7 +386,15 @@ impl<'id> WriteBatch<'_, 'id> {
         // slash log's floor is `in_force`'s expression (`SLK-2`).
         let height = BlockHeight::from_raw(height);
         let pruned = self.prune_at_boundary(height, &in_force)?;
-        // ---- 12. the death rule (`store/alt.rs`) -------------------------
+        // ---- 12. one home per block id (`store/alt.rs`) --------------------
+        // After the seal for the prune's reason: the alt table is not chain
+        // state. A promotion's block is its own alt row, and a live arrival
+        // can be offered as an alternative and connected as an extension
+        // from two sessions; either way the block that is now recorded
+        // leaves the alt table here. Its children stay: their parent is a
+        // main-chain block.
+        let left_alt = self.take_alt_block(&block.hash())?;
+        // ---- 13. the death rule (`store/alt.rs`) -------------------------
         // After the seal for the prune's reason: alt rows are not chain
         // state and are never journaled. A row at or below `height − cap`
         // needs a switch deeper than the cap, which none can be.
@@ -396,6 +407,7 @@ impl<'id> WriteBatch<'_, 'id> {
             journaled,
             pruned,
             retired_alts,
+            left_alt,
         })
     }
 

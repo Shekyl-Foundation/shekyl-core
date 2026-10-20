@@ -246,20 +246,20 @@ pub enum Flag { Consensus, Policy }
 
 /// How a row is held: not yet; by a rule type the per-block stages run; by a
 /// rule type this crate enforces at another site (slice 3 Q4 — CEN-E5 at
-/// writer open; A1/A4 take it at cutover); by construction — the type system
-/// or the wire's parser makes the violation unrepresentable, with a falsifier
-/// the gate asserts (slice 4 Q4 — CEN-F2, F8, F19, F21); by the C++ ingest
-/// driver until cutover (slice 1 Q2). `EnforcedAt`, `ByConstruction` and
-/// `HeldByCxx` all leave `RuleSet::enforced()` (no per-block coverage can
-/// contain them); the first two count as implemented — the enforcement is
-/// Rust's.
+/// writer open); by construction — the type system or the wire's parser
+/// makes the violation unrepresentable, with a falsifier the gate asserts
+/// (slice 4 Q4 — CEN-F2, F8, F19, F21); by a Rust crate below the validator
+/// (DRS-E5 `E5-18` — the store, its writer's switch, the pool, and the
+/// ingest router for A1/A4). `EnforcedAt`, `ByConstruction` and
+/// `HeldByStore` all leave `RuleSet::enforced()` (no per-block coverage can
+/// contain them) and all count as implemented — the enforcement is Rust's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RowStatus {
     Pending,
     Implemented,
     EnforcedAt,     // unit: the path and the proof test stay on the registry entry
     ByConstruction, // unit: the property path and the falsifier stay on the entry
-    HeldByCxx,
+    HeldByStore,    // unit: the holder crate and its test stay on the entry
 }
 
 /// A census row identity. **Sealed**: implemented only by the two registry
@@ -1368,31 +1368,27 @@ census_rows! {
 ```
 
 Grammar: header `pub enum <Name>: <Consensus|Policy> { … }`; per entry
-`<Var> <pending | implemented(<rust::path>) | enforced_at(<rust::path>, "<test_fn>") | by_construction(<rust::path>, "<falsifier>") | held_by_store("<crate>", "<test_fn>") | held_by_cxx("<repo/file.cpp>", "<test>")> ,`
+`<Var> <pending | implemented(<rust::path>) | enforced_at(<rust::path>, "<test_fn>") | by_construction(<rust::path>, "<falsifier>") | held_by_store("<crate>", "<test_fn>")> ,`
 with optional `///` doc and `//` comments between entries. `enforced_at`
 (slice 3, Q4 — [`CHAIN_RULES_SLICE_3.md`](CHAIN_RULES_SLICE_3.md)) marks a
 row **this crate** enforces at a site other than the per-block stages (CEN-E5
 at writer open; the alt tier's CEN-K1b, K4, D5, E2 — DRS-E5 slice 9); it
 takes the same compile pins as `implemented` plus a Rust `#[test]` in the
 crate that the gate asserts is *defined* (rule 47), leaves
-`RuleSet::enforced()` like a hold, and counts as implemented unlike one.
+`RuleSet::enforced()`, and counts as implemented.
 `by_construction` (slice 4, Q4) marks a row the type system or the wire's
 parser holds, with the falsifier the gate asserts (§6 table).
 `held_by_store` (DRS-E5 `E5-18`, 2026-10-11) marks a row **a Rust crate
 below the validator** holds — the store's structures make it true (CEN-K1a,
-K2, K3, K8), and the rules crate imports no store (DRS-D12 (i)), so the
+K2, K3, K8), or the ingest service's router decides it (CEN-A1, A4,
+acceptance topology: where a block *goes*, not whether it is valid), and the
+rules crate imports neither (DRS-D12 (i)), so the
 dependency runs store → rules and no compile pin from this crate can name
 the site. The value names who enforces the row: the holder crate (a
 workspace crate other than this one) and the `#[test]` in it the gate
 asserts is *defined*. It leaves `RuleSet::enforced()` and counts as
-implemented, like `enforced_at`; unlike a C++ hold it has no expiry.
-`held_by_cxx`
-(slice 1, Q2 — [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §4.1) marks
-acceptance topology the C++ ingest driver decides until cutover; the value is
-the C++ **test that proves the holder refuses**, which the gate asserts
-exists, and the row leaves `RuleSet::enforced()` so per-block completeness is
-`E − H − O − B − S` (`O` the at-open rows, `B` by construction, `S` held by
-store). Entries are in census §4 order restricted to the flag
+implemented, like `enforced_at`, so per-block completeness is `E − O − B − S`
+(`O` the at-open rows, `B` by construction, `S` held by store). Entries are in census §4 order restricted to the flag
 (subsystem, then row order within the table) — the gate asserts this so
 `index()` is census-derived, not arbitrary.
 
@@ -1465,8 +1461,8 @@ figures are still printed, as derived), **0** when they agree.
 | ≥ 1 `census_rows!` invocation; braces balance | `no census_rows! invocation` / `has no closing brace` (2) |
 | exactly one `census_rows!` per flag; header parses; flag ∈ {`Consensus`, `Policy`} | `no registry for flag F` / `N registries for flag F` / `unparseable header at line N` / `unknown flag` (2) |
 | ≥ 1 entry per registry | `registry <Name> empty` (2) |
-| entry grammar — `Var pending,`, `Var implemented(rust::path),`, `Var enforced_at(rust::path, "test_fn"),`, `Var held_by_store("crate", "test_fn"),` or `Var held_by_cxx("file", "test"),`; `implemented` / `enforced_at` **must** carry a non-empty path; `enforced_at` **must** carry a quoted identifier that is a `#[test] fn` defined in the crate (a mention in a comment or a call is not a definition); `held_by_store` **must** carry a quoted crate name (`[a-z][a-z0-9]*(-[a-z0-9]+)*` — a path or `..` is not a name) and a quoted identifier; `held_by_cxx` **must** carry a quoted repo-relative file and a quoted identifier | `unparseable entry at line N` (2) |
-| every `held_by_store` entry (DRS-E5 `E5-18`, 2026-10-11) names a holder that is a workspace crate — `rust/<crate>/src/` exists — **other than `shekyl-chain-rules`** (a row this crate holds is `enforced_at` or `by_construction`), and a test that is a `#[test] fn <test>` **defined** in that crate's `src/` or `tests/` (comments stripped; a call or a longer name is not a definition) — the test that proves the holder refuses, as `held_by_cxx`'s does | `held_by_store entry X (line N): holder crate … is this crate` / `… is not a workspace crate` / `holder test … is not a #[test] fn defined in …` (1) |
+| entry grammar — `Var pending,`, `Var implemented(rust::path),`, `Var enforced_at(rust::path, "test_fn"),`, `Var by_construction(rust::path, "falsifier"),` or `Var held_by_store("crate", "test_fn"),` — any other status form is unparseable; `implemented` / `enforced_at` **must** carry a non-empty path; `enforced_at` **must** carry a quoted identifier that is a `#[test] fn` defined in the crate (a mention in a comment or a call is not a definition); `held_by_store` **must** carry a quoted crate name (`[a-z][a-z0-9]*(-[a-z0-9]+)*` — a path or `..` is not a name) and a quoted identifier | `unparseable entry at line N` (2) |
+| every `held_by_store` entry (DRS-E5 `E5-18`, 2026-10-11) names a holder that is a workspace crate — `rust/<crate>/src/` exists — **other than `shekyl-chain-rules`** (a row this crate holds is `enforced_at` or `by_construction`), and a test that is a `#[test] fn <test>` **defined** in that crate's `src/` or `tests/` (comments stripped; a call or a longer name is not a definition) — the test that proves the holder refuses | `held_by_store entry X (line N): holder crate … is this crate` / `… is not a workspace crate` / `holder test … is not a #[test] fn defined in …` (1) |
 | `Var by_construction(rust::path, "falsifier"),` — the falsifier **must** exist (rule 47) in one of three shapes: a `#[test] fn <name>` defined in the crate; `doctest:<item>`, a ```` ```compile_fail ```` doctest in the `///` block above `fn <item>`; or `trybuild:<test>` (added 2026-10-10, DRS-E5 a2), a `#[test] fn <test>` defined in `src/` or `tests/` whose body calls `.compile_fail(…)` — the test that compares a must-not-compile program's stderr to its snapshot. A shared `#[test]` falsifier names every row it serves as `CenRow::<id>` (slice 5 Q6) | `falsifier … is not a #[test] fn defined in the crate` / `names no fn <item> … carrying a compile_fail doctest` / `is not a #[test] fn <test> defined in the crate (src/ or tests/)` / `runs no compile_fail(…) program` / `serves N rows but its body does not name CenRow::<id>` (1) |
 | no attribute on an entry (a `#[cfg]` the gate cannot evaluate would let the compiled enum and the counted enum differ; the enum's own attributes are fine) | `attribute on entry at line N` (2) |
 | nothing after the enum's closing brace inside the invocation | `text after the enum body at line N` (2) |
@@ -1474,33 +1470,29 @@ figures are still printed, as derived), **0** when they agree.
 | every entry maps to an enforced census row (`CEN-` + var) **of its registry's flag** | `entry X (line N) has no enforced census row with flag F` (1; catches bucket-3 rows, typos, and a row filed under the wrong enum) |
 | every enforced census row has an entry in the enum of its flag | `census row X (flag F) missing from registry <Name>` (1) |
 | entries in census order within the flag — judged on the ids both sides share, so a missing row reports once, not as an order cascade | `registry <Name> order differs from census at X` (1) |
-| every `held_by_cxx` entry's census row places the rule in C++ (`site(s)` names a C++ source — `.cc .cpp .cxx .h .hpp .inl`, one shared list `CXX_SUFFIXES` — or is a bare line citation, the census's §4 default `blockchain.cpp`) | `held_by_cxx entry X (line N): the census places this row at … which cites no C++ source` (1) |
-| every `held_by_cxx` entry's holder is a **repo-relative C++ file** (same suffix list; no absolute path, no `..`) — a Rust or Markdown file that contains the identifier is not a C++ holder, and the reader also refuses absolute/`..` before resolution so the registry cannot be environment-specific | `held_by_cxx entry X (line N): holder … is not a repo-relative C++ file` (1) |
-| every `held_by_cxx` entry's cited file is in the repo — its absence is cutover, and the hold expires with its holder | `held_by_cxx entry X (line N): holder file … is not in the tree — the hold has expired` (1) |
-| every `held_by_cxx` entry's cited test identifier is in that file (word-bounded, comments stripped), so a hold names a test that proves the holder refuses, not a token (PWD-B10) | `held_by_cxx entry X (line N): holder test … is not in …` (1) |
-| a `core_tests` holder (`tests/core_tests/…`) is **registered** — `GENERATE_AND_PLAY(<test>)` in `tests/core_tests/chaingen_main.cpp`, comments stripped — because an unregistered generator compiles and is never played; gtest holders self-register through `TEST(...)` | `… is defined but not registered with GENERATE_AND_PLAY …` / `core_tests registry … is not in the tree` (1) |
 | `Cargo.toml` names neither `redb` nor `shekyl-chain-store` in **any** dependency table (`[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, `[target.*.dependencies]`; a rename via `package = "redb"` reports the package) — parsed with `tomllib`, so a comment mentioning both is not a hit | `store handle in Cargo.toml: <pkg> under [table]` (1; G1, direct) / `Cargo.toml unparseable` (2) |
 
 ### 6.3 Output format (ruling §9.4, verbatim shape)
 
 ```text
-consensus: implemented I / validator-enforced (E−H)   held-by-cxx H   at-open O   by-construction B   held-by-store S   enforced E   ratified R / enforced E   (E = C-rows − bucket 3; validator-enforced = E − held; per-block completeness over E − held − at-open − by-construction − held-by-store)
-policy:    implemented I / validator-enforced (E−H)   held-by-cxx H   at-open O   by-construction B   held-by-store S   enforced E   ratified R / enforced E   (E = P-rows − bucket 3; validator-enforced = E − held; per-block completeness over E − held − at-open − by-construction − held-by-store)
+consensus: implemented I / enforced E   at-open O   by-construction B   held-by-store S   ratified R / enforced E   (E = C-rows − bucket 3; per-block completeness over E − at-open − by-construction − held-by-store)
+policy:    implemented I / enforced E   at-open O   by-construction B   held-by-store S   ratified R / enforced E   (E = P-rows − bucket 3; per-block completeness over E − at-open − by-construction − held-by-store)
 ```
 
 `I` = entries of that registry with status `implemented`, `enforced_at`,
 `by_construction` **or `held_by_store`** (Rust enforces all four); `O` =
 entries with status `enforced_at`, `B` = `by_construction`, `S` =
 `held_by_store` — printed so the per-block completeness denominator
-`E − H − O − B − S` (what `Coverage::is_complete_for` measures against) can
-be read off the line; `H` = entries with
-status `held_by_cxx`; `E` = enforced rows of that flag from the census; `R` =
-census rows of that flag in bucket 1 or 2. **`H` is a subtraction, not a
-denominator** (slice 1, Q2 condition 3): `E` is printed and never moves for a
-hold, so coverage cannot improve by moving rows out of scope — the failure the
-two-number format exists to prevent. *Records-was:* increment 1's line was
-`implemented I / enforced E   ratified R / enforced E`; the held terms were
-added by the slice-1 `held_by_cxx` PR.
+`E − O − B − S` (what `Coverage::is_complete_for` measures against) can
+be read off the line; `E` = enforced rows of that flag from the census; `R` =
+census rows of that flag in bucket 1 or 2. **`O`, `B` and `S` are
+subtractions, not denominators** (the principle of slice 1, Q2 condition 3):
+`E` is printed and never moves for any of them, so coverage cannot improve by
+moving rows out of scope — the failure the two-number format exists to
+prevent. *Records-was:* the dated records below are each verbatim in the
+format of their run; in those that print `validator-enforced` and
+`held-by-cxx H`, `H` counts the rows a C++ test held (A1, A4) and
+`validator-enforced` is `E − H`.
 At increment 1 (records-was, verified with `check_drs_e6_partition.py
 --describe` against the census in that worktree): `consensus: implemented 0 /
 enforced 153   ratified 126 / enforced 153` and `policy: implemented 0 /

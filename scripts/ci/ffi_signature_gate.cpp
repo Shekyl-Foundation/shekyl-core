@@ -47,6 +47,7 @@
 #include "shekyl_ffi_generated_data_dir.h"
 #include "shekyl_ffi_generated_daemon_snapshot.h"
 #include "shekyl_ffi_generated_sync.h"
+#include "shekyl_ffi_generated_ingest.h"
 
 int main()
 {
