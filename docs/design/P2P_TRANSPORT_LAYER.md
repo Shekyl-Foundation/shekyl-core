@@ -111,9 +111,10 @@ timeouts were cited at `:189`, `:193`, and `:192`.* `NEW_CONNECTION_TIMEOUT_LOCA
 1,200,000 with the comment still saying "2 minutes"
 (`abstract_tcp_server2.inl:60-61`). The send queue is 1,000 messages
 and 100 MiB (`abstract_tcp_server2.h:72-73`). The asio pool is 10
-(`net_node.inl:1150`). The daemon-rpc runtime is still the default
-multi-thread builder (`ffi_exports.rs:162`). Tor control still sets
-`.worker_threads(1)` (`blocking.rs:120`). `Driver::next_wake` is
+(`net_node.inl:1150`). At this pin (`0aa207208`) the daemon-rpc runtime was
+the default multi-thread builder (`shekyl-daemon-rpc` `ffi_exports.rs` line
+162) and Tor control set `.worker_threads(1)` (`shekyl-tor-control-daemon`
+`blocking.rs` line 120). `Driver::next_wake` is
 `driver/mod.rs:158`. `shekyl-p-fetch` and `shekyl-rpc-transport` dial
 through `shekyl-socks`. `shekyl-p-transport` still enables ureq's
 `socks-proxy`. D6's third falsifier does
