@@ -51,6 +51,11 @@ members = [
     "shekyl-win-sec",
     "shekyl-thread-priority",
 
+    # The daemon's one RandomX hasher budget (DRS-X PR2-Q3): permits shared
+    # by the ingest service's form workers, the miner and calc_pow, granted
+    # by priority class. See docs/design/DRS_X_STORE_FLIP.md.
+    "shekyl-hash-budget",
+
     # Genesis build/verify tool (`geblock`) — Rust replacement for the deleted
     # C++ genesis_builder (formerly shekyl-dev/tools/genesis_builder). Derives
     # the genesis tx key deterministically (domain-separated cSHAKE over the

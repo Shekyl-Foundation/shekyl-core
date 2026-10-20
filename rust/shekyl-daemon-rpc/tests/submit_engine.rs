@@ -771,6 +771,7 @@ fn emission_claim_slot_race_classifies_double_spend_conflict() {
     facts.emission = Some(shekyl_daemon_rpc::submit::EmissionFacts {
         bond: None,
         snapshots: Vec::new(),
+        schedule: shekyl_archival_retention::SettlementSchedule::GENESIS,
     });
     let mut fresh = facts.clone();
     fresh.emission_claim_conflict = Some(true);

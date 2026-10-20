@@ -39,7 +39,10 @@
 
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
-use shekyl_chain_rules::{AtHeight, RecordedWeights, SlashLogFloor, Tip};
+use shekyl_chain_rules::{
+    AtHeight, Claimable, EpochFloor, Pricing, RecordedWeights, ReleaseJournalFloor, Settling,
+    SlashLogFloor, Tip,
+};
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
     PCanonicalId, SettlementEpoch, ShardId, TreeLeaf, TreePosition, TxHash,
@@ -58,8 +61,8 @@ use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::archival_reads::{
-    self, BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow,
+    self, BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
+    ServedShard, SettlementRow,
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -978,20 +981,30 @@ impl ReadSnapshot<'_> {
         &self,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Pricing>,
     ) -> Result<Option<RMarket>, StoreError> {
-        archival_reads::r_market(&self.txn, shard, epoch)
+        archival_reads::r_market(&self.txn, shard, epoch, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A7.** Frozen `Σwork(E)`, in milli-units. `None` is an epoch that
     /// never closed.
-    pub fn sigma_work(&self, epoch: SettlementEpoch) -> Result<Option<SigmaWorkMilli>, StoreError> {
-        archival_reads::sigma_work(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    pub fn sigma_work(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SigmaWorkMilli>, StoreError> {
+        archival_reads::sigma_work(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A8.** Frozen `budget(E)`. `None` is an epoch that never closed.
-    pub fn budget(&self, epoch: SettlementEpoch) -> Result<Option<AtomicUnits>, StoreError> {
-        archival_reads::budget(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    pub fn budget(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<AtomicUnits>, StoreError> {
+        archival_reads::budget(&self.txn, epoch, floor).map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A9.** Slash watermark ([`ArchivalLastSlashEpochCell`]). `None` is
@@ -1159,8 +1172,9 @@ impl ReadSnapshot<'_> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<bool, StoreError> {
-        archival_reads::slash_applied(&self.txn, persona, shard, epoch)
+        archival_reads::slash_applied(&self.txn, persona, shard, epoch, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
@@ -1181,20 +1195,31 @@ impl ReadSnapshot<'_> {
         persona: &PCanonicalId,
         shard: ShardId,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
     ) -> Result<Option<SettlementRow>, StoreError> {
-        archival_reads::settlement_row(&self.txn, persona, shard, epoch)
+        archival_reads::settlement_row(&self.txn, persona, shard, epoch, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A15.** Every draw issued in `epoch`, in `(P, shard, h, j)` order.
-    pub fn issued_draws(&self, epoch: SettlementEpoch) -> Result<Vec<IndexedDraw>, StoreError> {
-        archival_reads::issued_draws(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    pub fn issued_draws(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::issued_draws(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A16.** The running digest of the draws issued in `epoch`;
     /// [`IssuedDigest::ZERO`] when none was.
-    pub fn issued_digest(&self, epoch: SettlementEpoch) -> Result<IssuedDigest, StoreError> {
-        archival_reads::issued_digest(&self.txn, epoch).map_err(chain_reads::ReadFault::into_plain)
+    pub fn issued_digest(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<IssuedDigest, StoreError> {
+        archival_reads::issued_digest(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A17.** The shards `persona` was Served on at each of `epochs`,
@@ -1204,8 +1229,9 @@ impl ReadSnapshot<'_> {
         &self,
         persona: &PCanonicalId,
         epochs: &BTreeSet<SettlementEpoch>,
+        floor: EpochFloor<Claimable>,
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, StoreError> {
-        archival_reads::served_at(&self.txn, persona, epochs)
+        archival_reads::served_at(&self.txn, persona, epochs, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
@@ -1221,8 +1247,46 @@ impl ReadSnapshot<'_> {
     pub fn drawable_digest(
         &self,
         epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
     ) -> Result<Option<DrawableDigest>, StoreError> {
-        archival_reads::drawable_digest(&self.txn, epoch)
+        archival_reads::drawable_digest(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A22.** The complete trees `epoch`'s slash pass excluded from its
+    /// market, as frozen beside `Σwork(E)`, or `None` for an epoch not
+    /// settled. An empty set is a value.
+    pub fn complete_trees(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<CompleteTreeSet>, StoreError> {
+        archival_reads::complete_trees(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A20.** Every Release journaled strictly above `height`, ascending
+    /// by height and then persona, each with the record it replaced.
+    /// `floor` is the journal's ([`ReleaseJournalFloor`]); a range starting
+    /// below it is SI-28, not an empty answer.
+    pub fn release_journal_after(
+        &self,
+        height: BlockHeight,
+        floor: ReleaseJournalFloor,
+    ) -> Result<Vec<archival_reads::ReleasedRecord>, StoreError> {
+        archival_reads::release_journal_after(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A21.** Every slash logged strictly above `height`, every
+    /// persona's, in log order, each with its height. A range starting
+    /// below `floor` is SI-26, as for A2.
+    pub fn slash_log_rows_after(
+        &self,
+        height: BlockHeight,
+        floor: SlashLogFloor,
+    ) -> Result<Vec<archival_reads::LoggedSlash>, StoreError> {
+        archival_reads::slash_log_rows_after(&self.txn, height, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

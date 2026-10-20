@@ -14,9 +14,16 @@
 //! | Bodies (`txs_prunable`, `txs_pqc_auths`) | shard `k`, whole | the epoch boundary after `k`'s freeze epoch: `close_epoch(k) + 2 ≤ E` |
 //! | Pop-undo journal (`undo_log`) | rows below `tip − retention` | every boundary; `retention` is `D_max` in production |
 //! | Slash log (`archival_slash_log`) | rows below `tip − ((k + n)·SEB + reorg_cap)` | every boundary whose session applies `SlashLog`; the cap is the in-force rule set's (`SLK-Q1`, `ARW-9`) |
+//! | Release journal (`archival_release_journal`) | rows at or below `h_open` of the settling family's oldest kept epoch | every boundary whose session applies `Bond` ([`ReleaseJournalFloor`], SI-28) |
+//! | Per-epoch tables (`archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement`; `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied`; `archival_r_market`) | rows of epochs below their family's floor, `(B − 1) − LAG` at the boundary of `B` | every boundary; a table whose family the session stubs is not opened (`ARW-9`) (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`) |
 //!
 //! The body horizon is a rule of the epoch calendar — there is no constant
-//! to name and no watermark to store. The slash log's horizon is a
+//! to name and no watermark to store. So are the per-epoch horizons
+//! (`epoch_retire`, `shekyl_chain_rules::EpochFloor`): each table is retired below the
+//! epoch its last reader stops asking for, computed from the rule set's
+//! schedule and consensus constants, and each read of it is refused below
+//! the same floor (SI-32). They keep no cell either, and a re-run at the
+//! same boundary deletes the same empty ranges. The slash log's horizon is a
 //! consensus expression ([`SlashLogFloor`], `DRS_E4_SLASH_LOG_ROUND.md`):
 //! the batch computes it from the rule set `connect` holds — its epoch and
 //! its **reorg cap**, never the store's `undo_retention`, which an operator
@@ -130,18 +137,20 @@
 use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
-use shekyl_chain_rules::{RuleSet, SlashLogFloor};
+use shekyl_chain_rules::{ReleaseJournalFloor, RuleSet, SlashLogFloor};
 use shekyl_types::{
     shard_floor, shard_of, storage_ids_through, ArchivalLength, BlockCount, BlockHeight,
 };
 
 use crate::apply_policy::ArchivalFamily;
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
-use crate::ids::{SlashLogKey, SlashLogTuple};
+use crate::ids::{ReleaseJournalKey, ReleaseJournalTuple, SlashLogKey, SlashLogTuple};
 use crate::schema::{
-    ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE,
-    UNDO_LOG,
+    ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN,
+    TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
 };
+
+pub use super::epoch_retire::EpochFloors;
 
 use super::chain_reads::{self, ReadFault, ReadTables};
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant, UndoFault};
@@ -348,6 +357,8 @@ pub struct Pruned {
     /// deleted nothing: the chain is under the window, or the session
     /// does not apply `SlashLog`.
     pub slash_floor: SlashLogFloor,
+    /// The per-epoch floors this boundary retired below, one per family.
+    pub epochs: EpochFloors,
 }
 
 impl Pruned {
@@ -386,17 +397,48 @@ impl WriteBatch<'_, '_> {
         let undo_floor = self.retire_undo_rows(height.to_raw())?;
         // Both operands are the rule set's (SLK-2); `check_against` has
         // already held its epoch equal to the pinned one at this height.
-        let slash_floor = self.retire_slash_rows(SlashLogFloor::under(
-            height,
-            in_force.settlement_schedule().blocks(),
-            in_force.reorg_cap(),
-        ))?;
+        let schedule = in_force.settlement_schedule();
+        let floor = SlashLogFloor::under(height, schedule.blocks(), in_force.reorg_cap());
+        let slash_floor = self.retire_slash_rows(floor)?;
+        // The Release journal retires at the settling family's horizon
+        // (SI-28): one above `h_open` of the oldest epoch that family
+        // keeps. That height is inside the slash log's floor, so the
+        // journal does not share it. Drawable digests retire with the
+        // same family, by epoch, inside `retire_epoch_rows`.
+        let floors = EpochFloors::at_boundary(height, schedule);
+        self.retire_release_rows(ReleaseJournalFloor::of(floors.settling, schedule))?;
+        let epochs = self.retire_epoch_rows(floors)?;
         Ok(Some(Pruned {
             shard_start: discard.shards.start,
             shard_end: discard.shards.end,
             undo_floor,
             slash_floor,
+            epochs,
         }))
+    }
+
+    /// Delete `archival_release_journal` rows below `floor`. `floor` is
+    /// one above `h_open` of the settling family's oldest kept epoch
+    /// ([`ReleaseJournalFloor`]), the same height A20 refuses below
+    /// (SI-28). Nothing while that family retains every epoch, and nothing
+    /// when this session does not apply [`ArchivalFamily::Bond`], the
+    /// family the rows are written under. Not pop-reversible, for
+    /// [`Self::retire_slash_rows`]'s reason.
+    fn retire_release_rows(&self, floor: ReleaseJournalFloor) -> Result<(), StoreError> {
+        let Some(kept_from) = floor.height() else {
+            return Ok(());
+        };
+        if !self.apply_policy().applies(ArchivalFamily::Bond) {
+            return Ok(());
+        }
+        let mut journal = self
+            .txn()
+            .open_table(ARCHIVAL_RELEASE_JOURNAL)
+            .map_err(EngineError::Table)?;
+        journal
+            .retain_in::<ReleaseJournalTuple, _>(ReleaseJournalKey::below(kept_from), |_, _| false)
+            .map_err(EngineError::Storage)?;
+        Ok(())
     }
 
     /// Delete `archival_slash_log` rows below `floor` — the slash log's
@@ -414,14 +456,18 @@ impl WriteBatch<'_, '_> {
     /// No floor is persisted and none is checked here (`SLK-3`): the
     /// expression is the floor, a re-run at the same height deletes the
     /// same empty range, and the one reader of the log asserts the floor
-    /// where it reads (SI-26, `archival_reads::slash_log_after`) — a
-    /// derived floor and an asserting read, rather than a watermark the
-    /// read would trust. Not pop-reversible, like the body discards: the
-    /// row for the boundary block was sealed before this ran, and `pop`
-    /// cannot reach a height this retires — the undo floor is `retention`
-    /// below the tip with `retention < SEB` ([`Horizons::new`]), the slash
-    /// floor at least `SEB + reorg_cap` below it, and a pop below the undo
-    /// floor is `PopBelowFloor`.
+    /// where it reads (SI-26,
+    /// [`scan_slash_log_after`](super::archival_reads::scan_slash_log_after),
+    /// the walk behind
+    /// [`slash_log_rows_after`](super::archival_reads::slash_log_rows_after)
+    /// and [`slash_log_after`](super::archival_reads::slash_log_after)) — a
+    /// derived floor and an asserting read, rather than a
+    /// watermark the read would trust. Not pop-reversible, like the body
+    /// discards: the row for the boundary block was sealed before this ran,
+    /// and `pop` cannot reach a height this retires — the undo floor is
+    /// `retention` below the tip with `retention < SEB` ([`Horizons::new`]),
+    /// the slash floor at least `SEB + reorg_cap` below it, and a pop below
+    /// the undo floor is `PopBelowFloor`.
     fn retire_slash_rows(&self, floor: SlashLogFloor) -> Result<SlashLogFloor, StoreError> {
         let Some(kept_from) = floor.height() else {
             return Ok(SlashLogFloor::NONE);

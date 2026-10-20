@@ -34,6 +34,10 @@ item_types = ["functions", "typedefs", "opaque"]
 # one name on both sides; the peer-list entry does not.
 [export.rename]
 "ShekylRpcPeerFacts" = "shekyl_rpc_peer_facts"
+"ShekylIngestBlob" = "shekyl_ingest_blob"
+"ShekylIngestArrival" = "shekyl_ingest_arrival"
+"ShekylIngestReply" = "shekyl_ingest_reply"
+"IngestPostFn" = "shekyl_ingest_post_fn"
 
 [parse]
 parse_deps = false

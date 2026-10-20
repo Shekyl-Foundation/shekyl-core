@@ -134,7 +134,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
     // connector is spawned on the reopened store and meets the hole.
     {
         let first = JoinedConnector::spawn(ConnectorArgs {
-            store: open_store(&path),
+            store: open_store(&path).into(),
             rules: GENESIS_RULES,
         });
         let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
@@ -158,7 +158,7 @@ async fn the_connector_stays_stopped_after_a_halt_and_does_not_come_back() {
         txn.commit().expect("commit");
     }
     let joined = JoinedConnector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules: GENESIS_RULES,
     });
     let connector = joined.actor.clone();
@@ -274,7 +274,7 @@ async fn an_inject_off_regtest_is_refused_before_the_store_is_asked() {
     let path = tmp("connector-inject-off-regtest");
     let rules = ChainRules::Scheduled(shekyl_address::Network::Testnet);
     let joined = JoinedConnector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules,
     });
     let credit = crate::source::ServeCredit {
@@ -312,7 +312,7 @@ async fn an_issue_of_draws_off_regtest_is_refused_before_the_store_is_asked() {
     let path = tmp("connector-issue-off-regtest");
     let rules = ChainRules::Scheduled(shekyl_address::Network::Testnet);
     let joined = JoinedConnector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules,
     });
     let epoch = shekyl_types::SettlementEpoch::from_raw(1);
@@ -395,7 +395,7 @@ async fn a_wrong_seed_is_a_driver_defect_surfaced_on_first_occurrence() {
     let path = tmp("connector-stale-seed");
     let chain = chain(2);
     let connector = Connector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules: GENESIS_RULES,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
@@ -456,7 +456,7 @@ async fn a_source_claiming_the_wrong_height_is_a_driver_defect_before_anything_i
     let path = tmp("connector-height-claim");
     let chain = chain(2);
     let connector = Connector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules: GENESIS_RULES,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
@@ -507,7 +507,7 @@ async fn a_refusal_is_a_verdict_and_the_writer_stays_up() {
     let path = tmp("connector-refusal");
     let chain = chain(2);
     let connector = Connector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules: GENESIS_RULES,
     });
     let (h0, f0) = formed(0, candidate(&chain[0].0, &chain[0].1), BlockHash::NULL, &[]);
@@ -818,7 +818,7 @@ async fn the_writer_observes_a_target_only_at_its_own_next_height() {
     .await
     .expect("three blocks replay");
     let joined = JoinedConnector::spawn(ConnectorArgs {
-        store: open_store(&path),
+        store: open_store(&path).into(),
         rules: GENESIS_RULES,
     });
     let ahead = joined

@@ -90,8 +90,9 @@ crate in `GOVERNED_OWNERS`, **every feature it declares must be in exactly one
 of `TEST_ONLY`, `CONSUMER_OWNED` or `PERMANENT`; an uncategorized feature is
 red** (`default` is exempt — it is the feature table's entry point, and what
 it enables is checked by the other limbs). The pattern the tree already uses
-three times — the bijection gate's `{table: reason}`, `CXX_HOLDER_RE`,
-`RUST_ONLY_TABLES`: the registry is exhaustive, not opt-in. Landed while
+three times — the bijection gate's `{table: reason}`, the census registry's
+`census_rows!` (one status per enforced row), `RUST_ONLY_TABLES`: the
+registry is exhaustive, not opt-in. Landed while
 `shekyl-chain-store` declares no features at all, which is the one moment it
 could be added for free.
 

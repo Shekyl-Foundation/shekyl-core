@@ -28,9 +28,9 @@ use shekyl_store_codec::BlobKind;
 use shekyl_types::archival::MAX_ATTESTATION_WITNESS_BYTES;
 
 pub use shekyl_types::archival::{
-    BlockDraws, BondRecord, DrawableDigest, FirstPayingHeight, HeldShard, HeldShards, Holdings,
-    HoldingsError, IssuedDigest, IssuedDraw, RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry,
-    SlashedHolding, MAX_BOND_KEY_BYTES,
+    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, FirstPayingHeight, HeldShard,
+    HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw, RMarket, SettlementRow,
+    SigmaWorkMilli, SlashLogEntry, SlashedHolding, MAX_BOND_KEY_BYTES,
 };
 
 /// `archival_attestation_witness[height]` — a block's attestation witness

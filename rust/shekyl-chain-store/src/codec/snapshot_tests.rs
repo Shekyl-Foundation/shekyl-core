@@ -119,11 +119,11 @@ use crate::schema;
 
 use super::{
     post_image, AltBlock, AltBlockFacts, AltBodies, BlockDraws, BlockInfo, BondRecord, Canonical,
-    Coded, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight, HeldShard, Holdings,
-    IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord, ProbeCell,
-    PropertyCell, RMarket, RecordedPow, RuleSetInForce, SchemaVersion, SettlementEpochBlocks,
-    SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth, TxIndex,
-    TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    Coded, CompleteTreeSet, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight,
+    HeldShard, Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord,
+    ProbeCell, PropertyCell, RMarket, RecordedPow, RuleSetInForce, SchemaVersion,
+    SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, TreeDepth,
+    TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::pool::PoolSchemaVersion;
@@ -839,6 +839,19 @@ impl Fixtures for BlockDraws {
         ]
     }
 }
+impl Fixtures for CompleteTreeSet {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        let id = |b: u8| PCanonicalId::from_bytes([b; 32]);
+        vec![
+            // The empty set is a written value, not an absent row.
+            ("empty", CompleteTreeSet::default()),
+            (
+                "two",
+                CompleteTreeSet::new(vec![id(0x11), id(0xa2)]).expect("ascending"),
+            ),
+        ]
+    }
+}
 impl Fixtures for DrawableDigest {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
@@ -1462,6 +1475,7 @@ snapshotted_codecs! {
     IssuedDigest => codec_snapshot_issued_digest in Chain,
     BlockDraws => codec_snapshot_block_draws in Chain,
     DrawableDigest => codec_snapshot_drawable_digest in Chain,
+    CompleteTreeSet => codec_snapshot_complete_tree_set in Chain,
     SettlementEpoch => codec_snapshot_settlement_epoch in Chain,
     ShardId => codec_snapshot_shard_id in Chain,
     ArchivalLength => codec_snapshot_archival_length in Chain,

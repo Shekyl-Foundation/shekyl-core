@@ -19,7 +19,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use shekyl_chain_rules::AtHeight;
+use shekyl_chain_rules::{AtHeight, Claimable, EpochFloor};
 use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_daemon_rpc::info_facts::InfoFacts;
 use shekyl_daemon_rpc::methods::get_block_header_by_height;
@@ -42,7 +42,9 @@ use shekyl_wire::{Ct, Transaction};
 
 use crate::connector::Offered;
 use crate::metrics::Metrics;
-use crate::rpc_store_facts_tests::{facts_over, facts_with_caches, hex, KeccakPow};
+use crate::rpc_store_facts_tests::{
+    facts_over, facts_with_budget, facts_with_caches, hex, KeccakPow,
+};
 use crate::scenario::{Mined, Scenario, RULES};
 use crate::substrate::ProductionSubstrate;
 use crate::test_support::{
@@ -224,14 +226,18 @@ async fn the_claim_source_lists_the_window_and_gathers_what_the_gate_admits() {
             window
         );
         let mut admitted = 0;
+        // The same claimable floor the citing gate reads through: a window
+        // epoch the boundary has retired is SI-32, not a missing row.
+        let claimable =
+            EpochFloor::<Claimable>::under(BlockHeight::from_raw(connecting), levered_schedule());
         for epoch in &source.epochs {
             let e = shekyl_types::SettlementEpoch::from_raw(epoch.settlement_epoch);
             let budget = snap
-                .budget(e)
+                .budget(e, claimable)
                 .expect("read")
                 .map(shekyl_units::AtomicUnits::to_raw);
             let sigma = snap
-                .sigma_work(e)
+                .sigma_work(e, claimable)
                 .expect("read")
                 .map(shekyl_types::archival::SigmaWorkMilli::to_raw);
             assert_eq!(epoch.budget_atomic, budget.unwrap_or(0));
@@ -306,19 +312,24 @@ async fn the_coverage_list_of_a_chain_with_no_closed_shard_is_empty() {
         assert_ne!(watermark.to_raw(), arithmetic);
         assert_eq!(coverage.settled_epoch, watermark.to_raw());
         let ahead = shekyl_types::SettlementEpoch::from_raw(arithmetic);
+        // The claimable floor at the next block: the watermark's rows sit
+        // inside it, and an epoch with no gather stays `None` rather than
+        // a swallowed below-floor fault.
+        let claimable =
+            EpochFloor::<Claimable>::under(BlockHeight::from_raw(tip.to_raw() + 1), schedule);
         assert_eq!(
-            snap.sigma_work(ahead).expect("read"),
+            snap.sigma_work(ahead, claimable).expect("read"),
             None,
             "the schedule's epoch has no gather yet"
         );
         let sigma = snap
-            .sigma_work(watermark)
+            .sigma_work(watermark, claimable)
             .expect("read")
             .expect("the watermark's gather is a row");
         assert_eq!(coverage.sigma_work_milli, sigma.to_raw());
         assert_eq!(
             coverage.budget_atomic,
-            snap.budget(watermark)
+            snap.budget(watermark, claimable)
                 .expect("read")
                 .map_or(0, shekyl_units::AtomicUnits::to_raw)
         );
@@ -495,6 +506,51 @@ async fn the_tree_after_each_block_is_the_root_the_next_block_was_built_on() {
 /// supply accumulator `get_info` reports. The C++'s emission figure —
 /// each coinbase less the block's fees — is printed beside it: on the
 /// spending block it is not what was minted.
+/// `calc_pow` hashes under a permit from the daemon's one hasher budget,
+/// in its own class (PR2-Q3): while the one permit is held, it waits, and
+/// it hashes once the permit is free.
+#[tokio::test]
+async fn calc_pow_waits_for_a_hasher_permit_in_its_class() {
+    use shekyl_hash_budget::{Budget, Class};
+    let caches = Arc::new(CacheStore::new());
+    let pow = ProductionSubstrate::new(Arc::clone(&caches), Arc::new(Metrics::new()));
+    let mut s = Scenario::open_with("rpc-reads-calc-pow-permit", pow);
+    let mined = s.mine(2).await;
+    s.reopen(|path| {
+        let store = Arc::new(open_store(path));
+        let budget = Budget::new(std::num::NonZeroUsize::MIN);
+        let facts = facts_with_budget(
+            Arc::clone(&store),
+            path,
+            RULES,
+            Arc::clone(&caches),
+            budget.clone(),
+        );
+        let request = CalcPowRequest {
+            height: mined[1].height.to_raw(),
+            block_blob: hex::encode(mined[1].template.block.pow_blob()),
+            seed_hash: String::new(),
+        };
+        let held = budget.acquire(Class::Chain);
+        std::thread::scope(|scope| {
+            let asked = scope.spawn(|| calc_pow(&facts, &request));
+            let started = std::time::Instant::now();
+            while budget.waiting(Class::CalcPow) == 0 {
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(60),
+                    "calc_pow never waited for a permit"
+                );
+                std::thread::yield_now();
+            }
+            assert!(!asked.is_finished(), "no hash while the permit is held");
+            drop(held);
+            assert!(asked.join().expect("joins").is_ok(), "it hashes once free");
+        });
+    })
+    .await;
+    s.close().await;
+}
+
 #[tokio::test]
 async fn the_coinbase_sum_is_the_supply_growth_and_the_listed_fees() {
     const AT: u64 = FIRST_SPEND_HEIGHT + 1;
@@ -623,22 +679,12 @@ async fn calc_pow_hashes_under_the_caches_the_validator_holds() {
                 },
             )
         };
-        // Genesis was proved under the null seed, and block 0's hash seeds
-        // heights 1 and 2. A derivation lands in the store's transient slot
-        // and only a pin makes one canonical; this driver pins none, so the
-        // second derivation replaced the first. The chain's own seed for
-        // genesis is not held, and `calc_pow` refuses it rather than derive.
-        let genesis = &mined[0];
-        assert_eq!(genesis.seed, BlockHash::NULL);
-        assert_eq!(
-            ask(
-                genesis.height,
-                &hex::encode(genesis.template.block.pow_blob()),
-                ""
-            ),
-            not_held(BlockHash::NULL)
-        );
-        for m in &mined[1..] {
+        // The driver pins each connecting seed before the hash. Genesis
+        // pins the null seed; the next block pins genesis's hash and
+        // demotes the null seed to the transient slot. Two seeds, two
+        // slots, both held. `calc_pow` answers under either.
+        assert_eq!(mined[0].seed, BlockHash::NULL);
+        for m in &mined {
             let held = caches
                 .lookup(&Seedhash::from_bytes(*m.seed.as_bytes()))
                 .expect("the validator holds the seed it proved this block under");

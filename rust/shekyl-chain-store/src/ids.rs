@@ -661,6 +661,13 @@ impl IssuedDrawKey {
         let e = epoch.to_raw();
         (e, [0; 32], 0, 0, 0)..=(e, [0xff; 32], u64::MAX, u64::MAX, u32::MAX)
     }
+
+    /// Every key of every epoch below `epoch`: the range the retirement
+    /// deletes (`store/prune.rs`). Epoch-major, so it is one range.
+    #[must_use]
+    pub const fn below(epoch: SettlementEpoch) -> core::ops::Range<IssuedDrawTuple> {
+        (0, [0; 32], 0, 0, 0)..(epoch.to_raw(), [0; 32], 0, 0, 0)
+    }
 }
 
 /// The key of one slash-log row: `archival_slash_log[(height, seq)]` — the
@@ -752,6 +759,81 @@ impl SlashLogKey {
     #[must_use]
     pub const fn below(floor: BlockHeight) -> core::ops::RangeTo<SlashLogTuple> {
         ..(floor.to_raw(), 0)
+    }
+}
+
+/// The key of one Release's pre-image:
+/// `archival_release_journal[(height, persona)]` (`SO-D12` increment 2).
+///
+/// Height-major, as the slash log is, for the same two readers: the walk
+/// that rebuilds a drawable set takes every row strictly above one height
+/// ([`Self::above`]), and the boundary batch retires every row strictly
+/// below the settling family's horizon ([`Self::below`],
+/// [`shekyl_chain_rules::ReleaseJournalFloor`]). Inside a height the rows
+/// run by persona; a persona releases once, so a height holds at most one
+/// row per persona and the key is insert-once. Fields are private: the
+/// tuple is assembled only through [`Self::key`] / [`Self::from_key`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct ReleaseJournalKey {
+    height: BlockHeight,
+    persona: PCanonicalId,
+}
+
+/// The redb tuple a [`ReleaseJournalKey`] is stored under.
+pub type ReleaseJournalTuple = (u64, [u8; 32]);
+
+impl ReleaseJournalKey {
+    /// The key of `persona`'s Release at `height`.
+    #[must_use]
+    pub const fn new(height: BlockHeight, persona: PCanonicalId) -> Self {
+        Self { height, persona }
+    }
+
+    /// The connecting height of the Release.
+    #[must_use]
+    pub const fn height(self) -> BlockHeight {
+        self.height
+    }
+
+    /// The releasing persona.
+    #[must_use]
+    pub const fn persona(self) -> PCanonicalId {
+        self.persona
+    }
+
+    /// The stored tuple.
+    #[must_use]
+    pub const fn key(self) -> ReleaseJournalTuple {
+        (self.height.to_raw(), self.persona.to_bytes())
+    }
+
+    /// The key a stored tuple names.
+    #[must_use]
+    pub const fn from_key((height, persona): ReleaseJournalTuple) -> Self {
+        Self {
+            height: BlockHeight::from_raw(height),
+            persona: PCanonicalId::from_bytes(persona),
+        }
+    }
+
+    /// Every row at a height **strictly above** `h`: `(h + 1, 0³²) ..`.
+    /// `None` when `h` is the last height, for [`SlashLogKey::above`]'s
+    /// reason.
+    #[must_use]
+    pub const fn above(h: BlockHeight) -> Option<core::ops::RangeFrom<ReleaseJournalTuple>> {
+        match h.checked_add(BlockCount::ONE) {
+            Some(next) => Some((next.to_raw(), [0; 32])..),
+            None => None,
+        }
+    }
+
+    /// Every row at a height **strictly below** `floor`: `.. (floor, 0³²)`,
+    /// the range the boundary batch retires at the settling family's
+    /// horizon ([`shekyl_chain_rules::ReleaseJournalFloor`]). The read
+    /// refuses when [`Self::above`]'s start lies in it (SI-28).
+    #[must_use]
+    pub const fn below(floor: BlockHeight) -> core::ops::RangeTo<ReleaseJournalTuple> {
+        ..(floor.to_raw(), [0; 32])
     }
 }
 

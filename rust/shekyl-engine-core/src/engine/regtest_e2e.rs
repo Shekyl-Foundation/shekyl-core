@@ -983,6 +983,47 @@ pub(super) async fn try_generate_blocks(
     .await
 }
 
+/// A stop's last lines reach the log file: the daemon flushes its queued
+/// sinks last, after the lock's release, before it exits (`shekyl-logging`'s
+/// `flush`; Rick's ruling of 2026-10-17, item 7). `Deinitializing core...` is
+/// the last line the stop logs; SIGTERM is the operator's stop.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn a_stops_last_line_reaches_the_log_file() {
+    const LAST_LINE: &str = "Deinitializing core...";
+    const STOP_WITHIN: Duration = Duration::from_secs(60);
+    let mut daemon = RegtestDaemon::start().await;
+    let pid = daemon.child.id().to_string();
+    let sent = shekyl_tor_control_client::spawn_lock::status(
+        std::process::Command::new("kill").args(["-TERM", &pid]),
+    )
+    .expect("run kill");
+    assert!(sent.success(), "SIGTERM delivered");
+    let deadline = std::time::Instant::now() + STOP_WITHIN;
+    let status = loop {
+        if let Some(status) = daemon.child.try_wait().expect("wait for the daemon") {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the daemon did not stop within {STOP_WITHIN:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(status.success(), "a requested stop exits 0: {status}");
+    let log = std::fs::read_to_string(daemon.data_dir.join("shekyld.log")).expect("the log file");
+    assert!(
+        log.contains("stop requested by"),
+        "the stop's first line is in the log file"
+    );
+    assert!(
+        log.contains(LAST_LINE),
+        "the stop's last line is in the log file; its tail:\n{}",
+        log.lines().rev().take(10).collect::<Vec<_>>().join("\n")
+    );
+}
+
 /// Smoke test: the harness spawns a daemon, a fresh wallet's address is mineable,
 /// and `generateblocks` advances the chain. De-risks the Phase-0 foundation
 /// (spawn, RPC, wallet creation, address-format match) before layering the spend
@@ -1165,7 +1206,7 @@ async fn e2e_refresh_scans_coinbase_balance() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 north-star spend gate; needs SHEKYLD_BIN + a running regtest daemon (the scanner/tx-builder shekyl-wire migrations have landed)"]
 async fn e2e_fcmp_spend_accepted_by_daemon() {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
     use shekyl_scanner::WalletLedgerExt;
@@ -1232,7 +1273,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
     // Build a real FCMP++ spend (self-send half the balance; the engine adds change + fee).
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: address.clone(),
+            destination: TxDestination::Address(address.clone()),
             amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
             rid: None,
         }],
@@ -1336,7 +1377,7 @@ async fn e2e_fcmp_spend_accepted_by_daemon() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
 async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::{DaemonClient, Engine, SoloSigner};
     use shekyl_rpc_types::KeyImageStatus;
@@ -1395,7 +1436,7 @@ async fn e2e_fcmp_spend_reorg_restores_pool_and_fee() {
 
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: address.clone(),
+            destination: TxDestination::Address(address.clone()),
             amount_atomic_units: AtomicUnits::from_raw(unlocked.to_raw() / 2),
             rid: None,
         }],
@@ -1609,7 +1650,7 @@ async fn create_wallet(
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "Track-2 regtest: requires SHEKYLD_BIN; slow (~750 blocks, several min)"]
 async fn e2e_fcmp_spend_over_depth3_tree() {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::refresh::RefreshOptions;
     use super::Engine;
     use shekyl_scanner::WalletLedgerExt;
@@ -1699,7 +1740,7 @@ async fn e2e_fcmp_spend_over_depth3_tree() {
     );
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: address.clone(),
+            destination: TxDestination::Address(address.clone()),
             amount_atomic_units: AtomicUnits::from_raw(spend_amount),
             rid: None,
         }],
@@ -1782,7 +1823,7 @@ async fn overfill_pool(
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     address: &str,
 ) -> Overfilled {
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use shekyl_economics::FULL_REWARD_ZONE;
     use shekyl_units::AtomicUnits;
     use shekyl_wire::Transaction;
@@ -1815,7 +1856,7 @@ async fn overfill_pool(
     for n in 0..POOL_SPENDS {
         let request = TxRequest {
             recipients: vec![TxRecipient {
-                address: address.to_owned(),
+                destination: TxDestination::Address(address.to_owned()),
                 amount_atomic_units: AtomicUnits::from_raw(1_000_000),
                 rid: None,
             }],
@@ -2611,7 +2652,16 @@ async fn submit_tier_b_spend(
 ) {
     use shekyl_units::AtomicUnits;
     let amount = AtomicUnits::from_raw(unlocked_balance(arc).await.to_raw() / 4);
-    transfer_to(daemon, arc, address, recipient, amount, batch, max_batches).await;
+    transfer_to(
+        daemon,
+        arc,
+        address,
+        super::pending::TxDestination::Address(recipient.to_string()),
+        amount,
+        batch,
+        max_batches,
+    )
+    .await;
 }
 
 /// Build (retrying past the C2 reference-spendability gate) + submit a transfer
@@ -2620,7 +2670,7 @@ async fn transfer_to(
     daemon: &RegtestDaemon,
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     address: &str,
-    recipient: &str,
+    recipient: super::pending::TxDestination,
     amount: shekyl_units::AtomicUnits,
     batch: u64,
     max_batches: usize,
@@ -2636,7 +2686,7 @@ async fn submit_transfer(
     daemon: &RegtestDaemon,
     arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
     address: &str,
-    recipient: &str,
+    recipient: super::pending::TxDestination,
     amount: shekyl_units::AtomicUnits,
     batch: u64,
     max_batches: usize,
@@ -2644,7 +2694,7 @@ async fn submit_transfer(
     use super::pending::{FeePriority, TxRecipient, TxRequest};
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: recipient.to_string(),
+            destination: recipient,
             amount_atomic_units: amount,
             rid: None,
         }],
@@ -2669,14 +2719,61 @@ async fn submit_transfer(
         }
     }
     let pending = pending.expect("transfer must build once reference-spendable");
+    submit_built(arc, &pending, "the transfer").await
+}
+
+/// Fund the active persona with `amount` through the production
+/// `stake_in` (the wallet-RPC and GUI entry: `Engine::stake`), retrying
+/// past the C2 reference-spendability gate, then submit it and mine one
+/// confirming block. The transfer carries `amount` plus the system cover
+/// draw, so callers size by `amount` and never assert the exact funded
+/// figure.
+async fn stake_in_and_confirm(
+    daemon: &RegtestDaemon,
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    address: &str,
+    amount: shekyl_units::AtomicUnits,
+    batch: u64,
+    max_batches: usize,
+) {
+    use super::principal_stake::StakeInError;
+    let mut pending = None;
+    for _ in 0..max_batches {
+        let attempt = {
+            let g = arc.read().await;
+            g.stake().stake_in(amount).await
+        };
+        match attempt {
+            Ok(p) => {
+                pending = Some(p);
+                break;
+            }
+            Err(StakeInError::Send(super::error::SendError::OutputNotYetSpendable { .. })) => {
+                daemon.generate_blocks(batch, address).await;
+                refresh(arc).await;
+            }
+            Err(e) => panic!("stake_in: {e:?}"),
+        }
+    }
+    let pending = pending.expect("stake_in must build once reference-spendable");
+    submit_built(arc, &pending, "the stake_in funding").await;
+    daemon.generate_blocks(1, address).await;
+}
+
+/// Submit a built pending transaction and require the daemon's fresh accept.
+async fn submit_built(
+    arc: &Arc<RwLock<super::Engine<super::SoloSigner>>>,
+    pending: &super::pending::PendingTx,
+    what: &str,
+) -> TxHash {
     let outcome = {
         let g = arc.read().await;
         g.submit_pending_tx_async(pending.id, pending.content_gen)
             .await
-            .expect("daemon must accept the transfer (consensus verify)")
+            .unwrap_or_else(|e| panic!("daemon must accept {what} (consensus verify): {e:?}"))
     };
-    let tx_hash = require_fresh_accept(outcome, "the transfer");
-    eprintln!("daemon accepted transfer: {tx_hash}");
+    let tx_hash = require_fresh_accept(outcome, what);
+    eprintln!("daemon accepted {what}: {tx_hash}");
     tx_hash
 }
 
@@ -2754,22 +2851,20 @@ pub(super) async fn staker_wallet(
     (Arc::new(RwLock::new(engine)), tmp, address)
 }
 
-/// The persona's on-chain receive address, derived in-test from the same
-/// master seed the wallet holds. The production wallet derives the identical
-/// bundle at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`);
-/// the harness re-derives only the PUBLIC halves so the principal can fund the
-/// persona over an ordinary wallet-built transfer.
-pub(super) fn persona_address(
+/// The persona's payment destination, derived in-test from the same master
+/// seed the wallet holds. The production wallet derives the identical bundle
+/// at open (`spawn_stake_engine_if_staker` → `derive_archival_p_keys`); the
+/// harness takes only its public keys, for the one walk that pays a persona
+/// outside `stake_in` (the emission claim's post-bond fee input).
+pub(super) fn persona_destination(
     seed: &[u8; shekyl_crypto_pq::account::MASTER_SEED_BYTES],
     slot: u32,
-) -> String {
+) -> super::pending::TxDestination {
     use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
     use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
     let keys = derive_archival_p_keys(seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot)
         .expect("derive persona keys");
-    keys.to_address(shekyl_address::Network::Mainnet)
-        .encode()
-        .expect("encode persona address")
+    super::pending::TxDestination::OwnPersona(keys.payment_destination())
 }
 
 /// Run the production P-scan (tight cadence + the shallow
@@ -3132,8 +3227,8 @@ async fn stake_persona_and_submit_bond(
     eprintln!("bond fee from daemon estimate: {bond_fee}");
 
     // Fund the principal past the persona's needs (2×: the transfer's own fee
-    // + selection churn), then fund the persona with one ordinary transfer.
-    // The floor follows the entry's holdings shape.
+    // + selection churn), then fund the persona with one `stake_in`. The
+    // floor follows the entry's holdings shape.
     let floor_holdings = match &stake_entry {
         FixtureStake::FirstStake => HoldingsDescriptor {
             kind: HoldingsKind::CompleteTree,
@@ -3151,12 +3246,14 @@ async fn stake_persona_and_submit_bond(
         MAX_MINE_BATCHES,
     )
     .await;
-    let p_address = persona_address(seed, slot_raw);
-    transfer_to(
+    // The production funding: activate the persona (nothing activates one in
+    // production yet — the test helper drives the actor's own activation),
+    // then `stake_in`, which pays the active persona's handed-over keys.
+    super::test_support::activate_persona(&*arc.read().await, slot_raw).await;
+    stake_in_and_confirm(
         daemon,
         &arc,
         &principal,
-        &p_address,
         funding,
         MINE_BATCH_BLOCKS,
         MAX_MINE_BATCHES,
@@ -3350,8 +3447,9 @@ async fn stake_persona_and_submit_bond(
 }
 
 /// PR-4 staker harness (`EMISSION_CLAIM_BUILDER.md` §8 PR-4): a staker wallet
-/// funds its persona on-chain (a wallet-built FCMP++ transfer to the persona's
-/// derived receive address — the production rung-1 `ExternalTransfer` funding),
+/// funds its persona on-chain (the production `stake_in`: a wallet-built
+/// FCMP++ transfer to the active persona's payment keys — rung-1
+/// `ExternalTransfer` funding),
 /// the production P-scan discovers the funding, and the production bond path
 /// ([`Engine::assemble_bond_post`](super::Engine::assemble_bond_post) →
 /// posture→submitter choke point) dispatches the bond post over real RPC.
@@ -3877,13 +3975,16 @@ async fn e2e_emission_claim_accepted_and_applied() {
     // structurally, `BackingSet::fee_sweep`) and at least one fee input.
     // The sweep-all bond leaves exactly ONE (the `BondPostChange` change),
     // so fund the persona once more post-bond — an ordinary rung-1
-    // ExternalTransfer — and re-run the production P-scan so the sealed
+    // ExternalTransfer to the persona's payment keys, not `stake_in`: a bonded
+    // persona's funding is the one event before its bond, and `stake_in` is to
+    // refuse a bonded persona once the production activation path lands
+    // (`docs/FOLLOWUPS.md`). Then re-run the production P-scan so the sealed
     // state carries both records before the claim reads it.
     transfer_to(
         &daemon,
         &fixture.arc,
         &fixture.principal,
-        &persona_address(&seed, SLOT),
+        persona_destination(&seed, SLOT),
         shekyl_units::AtomicUnits::from_raw(CLAIM_FUNDING_CUSHION),
         10,
         24,
@@ -4425,7 +4526,7 @@ async fn e2e_emission_claim_accepted_and_applied() {
 async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     use super::drain_dispatch::DrainRequestError;
     use super::drain_orchestrator::DrainOrchestrationError;
-    use super::pending::{FeePriority, TxRecipient, TxRequest};
+    use super::pending::{FeePriority, TxDestination, TxRecipient, TxRequest};
     use super::stake_engine::PSlot;
     use super::traits::DaemonEngine;
     use shekyl_standoff::EXIT_FEE_RESERVE_ATOMIC;
@@ -4494,7 +4595,7 @@ async fn e2e_drain_wire_shape_matches_a_real_transfer() {
     refresh(&fixture.arc).await;
     let request = TxRequest {
         recipients: vec![TxRecipient {
-            address: principal.clone(),
+            destination: TxDestination::Address(principal.clone()),
             amount_atomic_units: AtomicUnits::from_raw(100_000_000),
             rid: None,
         }],

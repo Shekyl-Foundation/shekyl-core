@@ -37,5 +37,11 @@ sha3 = { version = "0.10", default-features = false }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# RT-P6's harness reads this thread's CPU clock (`CLOCK_THREAD_CPUTIME_ID`).
+# The standard library has no thread CPU clock. The floor device is Linux;
+# other hosts compile the example and exit without a run.
+libc = "0.2"
+
 [lints]
 workspace = true

@@ -385,10 +385,11 @@ pub(crate) fn run_header<'id, R: HeaderRule, H: HeaderView<'id>>(
 /// block; position in the pool is a fact about the pool; `is_coinbase()` is
 /// a fact the submitter controls, and an input that selects the rule set it
 /// is judged under is a self-exempting input. Same family as `ChainValid`
-/// being unforgeable and `held_by_cxx` needing a rejection test rather than
-/// a grep: authority sits with something the adversary does not author. The
-/// C++ has no such gap only because `ver_non_input_consensus` never sees a
-/// coinbase — an accident of call site, not a property of the rule.
+/// being unforgeable and `held_by_store` needing its holder's rejection
+/// test rather than a grep: authority sits with something the adversary
+/// does not author. The C++ has no such gap only because
+/// `ver_non_input_consensus` never sees a coinbase — an accident of call
+/// site, not a property of the rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TxKind {
     /// The block's miner transaction — whatever its bytes; CEN-F1 judges

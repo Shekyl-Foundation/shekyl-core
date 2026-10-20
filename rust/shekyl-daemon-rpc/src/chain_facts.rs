@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! Chain-tip facts — the store-agnostic seam behind the RK-1 handlers
-//! (`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.2–§3.3, RK-D3 / RK-D7).
+//! (`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.2–§3.3, RK-D3; RK-D7 is
+//! carried in `docs/design/RPC_WIRE.md`).
 //!
 //! A handler never touches the FFI: it asks a [`ChainFacts`] for what it
 //! needs and decides the rest itself. [`FfiChainFacts`] is today's only

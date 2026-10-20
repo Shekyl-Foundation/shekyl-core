@@ -4,7 +4,7 @@ Each `<method>_<case>_v1.json` is the **byte output of epee's
 `store_t_to_json`** over the C++ `COMMAND_RPC_<METHOD>::response` built from
 fixed facts — captured by a `tests/unit_tests/rpc_oracle_vectors.cpp` that lives only in the
 commit that precedes each method's C++ deletion (RK-1 onward,
-`docs/design/DAEMON_RPC_KV_CUTOVER.md` §3.5). The Rust parity tests
+`docs/completed/DAEMON_RPC_KV_CUTOVER.md` §3.5). The Rust parity tests
 (`../../rpc_parity.rs`) feed the same fixed facts to the native handlers and
 assert **parsed** equality (RK-D4: key order and whitespace are epee's, not
 the contract's; `KV_SERIALIZE_OPT` omissions are part of the contract and

@@ -86,7 +86,8 @@ use shekyl_chain_rules::{
 use shekyl_units::AtomicUnits;
 
 use super::error::{
-    CellFault, EngineError, SettlementFault, StoreCannot, StoreError, StoreInvariant,
+    CellFault, DigestFault, DrawableFault, EngineError, FrozenFault, SettlementFault, StoreCannot,
+    StoreError, StoreInvariant,
 };
 use super::header;
 use super::keyed::{Handles, InsertTable, RemoveTable, ReplaceTable, UpsertTable};
@@ -261,7 +262,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// | `BondRecordInvariant { which, .. }` | `CellCorrupt { key: "archival_bond", .. }` with `which` as the reason (SI-7) |
     /// | `BondHybridKeyMalformed { .. }` | `CellCorrupt { key: "archival_bond", .. }` the hybrid key is not canonical (SI-7) |
     /// | `AccrualOverflow { .. }` | `FoldOverflow { cell: "archival_budget_accruing" }` (SI-8) |
-    /// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25) |
+    /// | `SettlementIntegrity { epoch, check }` | `SettlementNotSound { epoch, .. }` with `check` as the fault (SI-25), except the drawable set's two checks below |
+    /// | `SettlementIntegrity { epoch, check: DrawableDigestMissing }` | `DrawableDigestNotSingular { epoch, observed: Missing }` (SI-29) |
+    /// | `SettlementIntegrity { epoch, check: DrawableDrift }` | `DrawableSetNotSound { epoch, observed: Drift }` (SI-30) |
+    /// | `DrawableEpoch { epoch, why }` | `DrawableSetNotSound { epoch, observed: NotBuilt(why) }` (SI-30) |
     /// | `RelayFloorUnpriceable { at }` | `CellCorrupt { key: "block_info", fault: OutsideDomain { at } }` (SI-7) |
     ///
     /// (The arms between are documented inline on the match.)
@@ -473,15 +477,45 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             // digest, its own fold overcounting, or a beacon block that is
             // not strictly below the connecting height. The block is not
             // invalid; this node cannot settle the epoch.
-            Corrupt::SettlementIntegrity { epoch, check } => StoreInvariant::SettlementNotSound {
-                epoch,
-                observed: match check {
-                    SettlementCheck::IssuedIndexDigest => SettlementFault::IndexDrift,
+            //
+            // The drawable set's check (§9.5 check 2) has its own two rows:
+            // the digest the open wrote (SI-29) and the set it is of (SI-30).
+            Corrupt::SettlementIntegrity { epoch, check } => {
+                let settlement = |observed| StoreInvariant::SettlementNotSound { epoch, observed };
+                match check {
+                    SettlementCheck::IssuedIndexDigest => settlement(SettlementFault::IndexDrift),
                     SettlementCheck::PassesExceedCounted { persona, shard } => {
-                        SettlementFault::PassesExceedCounted { persona, shard }
+                        settlement(SettlementFault::PassesExceedCounted { persona, shard })
                     }
-                    SettlementCheck::BeaconNotRecorded => SettlementFault::BeaconNotRecorded,
-                },
+                    SettlementCheck::BeaconNotRecorded => {
+                        settlement(SettlementFault::BeaconNotRecorded)
+                    }
+                    SettlementCheck::DrawableDigestMissing => {
+                        StoreInvariant::DrawableDigestNotSingular {
+                            epoch,
+                            observed: DigestFault::Missing,
+                        }
+                    }
+                    SettlementCheck::DrawableDrift => StoreInvariant::DrawableSetNotSound {
+                        epoch,
+                        observed: DrawableFault::Drift,
+                    },
+                }
+            }
+            // The drawable set could not be built from the records and the
+            // journals, at an open or at the settlement's rebuild. The
+            // validator names why; the store carries that fault and supplies
+            // the halt.
+            Corrupt::DrawableEpoch { epoch, why } => StoreInvariant::DrawableSetNotSound {
+                epoch,
+                observed: DrawableFault::NotBuilt(why),
+            },
+            // A claim's re-gather found `Σwork(E)` and no frozen
+            // complete-tree set: the slash pass's write set is not whole
+            // (SI-31). The block is not invalid; this node cannot judge it.
+            Corrupt::CompleteTreesAbsent { epoch } => StoreInvariant::CompleteTreesNotFrozen {
+                epoch,
+                observed: FrozenFault::Absent,
             },
         };
         self.poison.arm(row)

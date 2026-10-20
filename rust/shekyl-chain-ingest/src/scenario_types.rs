@@ -63,6 +63,7 @@ impl<P> Clocked<P> {
 
 impl<P: Substrate> Substrate for Clocked<P> {
     type Fault = P::Fault;
+    type Held = P::Held;
 
     fn local_clock(&self) -> Result<Timestamp, P::Fault> {
         Ok(self.now())
@@ -71,6 +72,29 @@ impl<P: Substrate> Substrate for Clocked<P> {
     fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, P::Fault> {
         self.pow.longhash(pow_blob, seed)
     }
+
+    /// The pin is the longhash's: a clock over a production substrate pins
+    /// its cache store, or a pin through the clock would pin nothing.
+    fn pin_seed(&self, seed: &BlockHash) {
+        self.pow.pin_seed(seed);
+    }
+
+    fn cache_absent(&self, fault: &P::Fault) -> bool {
+        self.pow.cache_absent(fault)
+    }
+
+    fn prepare_seed(&self, seed: &BlockHash) -> P::Held {
+        self.pow.prepare_seed(seed)
+    }
+
+    fn longhash_held(
+        &self,
+        pow_blob: &[u8],
+        seed: &BlockHash,
+        held: &P::Held,
+    ) -> Result<PowHash, P::Fault> {
+        self.pow.longhash_held(pow_blob, seed, held)
+    }
 }
 
 /// The harness longhash as a substrate: every target satisfied, no cache.
@@ -78,6 +102,7 @@ pub struct FreeHash;
 
 impl Substrate for FreeHash {
     type Fault = std::convert::Infallible;
+    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Self::Fault> {
         Ok(CLOCK_START)

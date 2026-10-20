@@ -35,6 +35,7 @@
 //!                archival_last_slash_epoch = watermark, when it moves
 //!  9c. close     archival_r_market[(s, E)], archival_sigma_work[E],
 //!                archival_budget[E] — each insert-once on E          (SI-21)
+//!                archival_complete_trees[E], beside Σwork(E)        (SI-31)
 //! ```
 //!
 //! The C++'s order is kept where the C++ had one (`blockchain_db.cpp:680–
@@ -113,17 +114,21 @@ use crate::codec::{
     ArchivalLastSlashEpochCell, AttestationWitnessBytes, Canonical, Present, PropertyCell, Raw,
     TotalBurnedCell,
 };
-use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{
+    IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
+};
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
+    ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
+    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
     ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
     BLOCK_BURN, BLOCK_INFO,
 };
 
 use super::archival_reads;
 use super::error::{
-    AccrualFault, EngineError, SettlementFault, SlashFault, StoreCannot, StoreError, StoreInvariant,
+    AccrualFault, DigestFault, EngineError, FrozenFault, SettlementFault, SlashFault, StoreCannot,
+    StoreError, StoreInvariant,
 };
 use super::write::WriteBatch;
 use super::ChainStore;
@@ -142,6 +147,7 @@ impl<'id> WriteBatch<'_, 'id> {
         let bonds_apply = self.apply_policy().applies(ArchivalFamily::Bond);
         if bonds_apply {
             self.write_bond_records(delta)?;
+            self.write_release_journal(BlockHeight::from_raw(height), delta)?;
         }
         if self.apply_policy().applies(ArchivalFamily::ServeCredit) {
             self.write_serve_credits(height, delta, bonds_apply)?;
@@ -184,6 +190,34 @@ impl<'id> WriteBatch<'_, 'id> {
                     write.record().encoded().as_encoded(),
                 )?;
             }
+        }
+        Ok(())
+    }
+
+    /// `archival_release_journal[(h, p)] = pre-image` for every Release the
+    /// block connects: the record as it stood before the Release, beside
+    /// the post-image [`Self::write_bond_records`] wrote (`SO-D12`
+    /// increment 2). Insert-once on the tip's height, as the attestation
+    /// witness is (SI-2): a row already under `(h, p)` is a connect at the
+    /// wrong height, since a persona releases once. Governed with the
+    /// records it is the pre-image of, by `ArchivalFamily::Bond`; `pop`
+    /// removes it through the journal.
+    fn write_release_journal(
+        &self,
+        height: BlockHeight,
+        delta: &ArchivalDelta,
+    ) -> Result<(), StoreError> {
+        let releases = delta.releases();
+        if releases.is_empty() {
+            return Ok(());
+        }
+        let mut journal =
+            self.open_insert_table(ARCHIVAL_RELEASE_JOURNAL, StoreInvariant::TipMismatch)?;
+        for release in releases {
+            journal.insert(
+                ReleaseJournalKey::new(height, *release.persona()).key(),
+                release.record().encoded().as_encoded(),
+            )?;
         }
         Ok(())
     }
@@ -302,7 +336,8 @@ impl<'id> WriteBatch<'_, 'id> {
     /// SI-21's two write sets are here. The close freezes the budget:
     /// `archival_budget[E]`, insert-once. The slash pass settles whole:
     /// `archival_sigma_work[E]` and every `(shard, E)` row of
-    /// `archival_r_market` its snapshot named, each insert-once on `E`.
+    /// `archival_r_market` its snapshot named, each insert-once on `E`,
+    /// and with them `archival_complete_trees[E]` (SI-31).
     pub(super) fn record_archival_epoch<V: ChainView<'id>>(
         &self,
         connecting: BlockHeight,
@@ -335,6 +370,22 @@ impl<'id> WriteBatch<'_, 'id> {
                     StoreInvariant::EpochCloseRewritten { epoch },
                 )?
                 .insert(epoch.to_raw(), gather.sigma_work().encoded().as_encoded())?;
+                // SI-31: the complete trees the gather excluded, frozen
+                // with the `Σwork` they were excluded from. Governed by the
+                // family whose reader needs it — a claim reads both or
+                // neither — as `archival_budget_accruing` is by the family
+                // it serves (`ARW-Q3`).
+                self.open_insert_table(
+                    ARCHIVAL_COMPLETE_TREES,
+                    StoreInvariant::CompleteTreesNotFrozen {
+                        epoch,
+                        observed: FrozenFault::Rewritten,
+                    },
+                )?
+                .insert(
+                    epoch.to_raw(),
+                    gather.complete_trees().encoded().as_encoded(),
+                )?;
             }
         }
         if let Some(close) = delta.close() {
@@ -347,6 +398,30 @@ impl<'id> WriteBatch<'_, 'id> {
                 .insert(epoch.to_raw(), close.budget().encoded().as_encoded())?;
             }
         }
+        self.write_drawable_digest(delta)
+    }
+
+    /// 9c. `archival_drawable_digest[E] = digest` at the block that opens
+    /// `E`, insert-once: an epoch opens once, and a row already there is
+    /// SI-29 ([`DigestFault::Rewritten`]) before any journal entry. The
+    /// digest is of the state this block leaves, its slash pass included,
+    /// so it is written after the phase that writes that state. No
+    /// archival family governs it: it has no C++ counterpart to stub, and
+    /// the settlement pass of every session checks it. `pop` removes it
+    /// through the journal, and a reconnect writes the same digest.
+    fn write_drawable_digest(&self, delta: &ArchivalDelta) -> Result<(), StoreError> {
+        let Some(write) = delta.drawable_digest() else {
+            return Ok(());
+        };
+        let epoch = write.epoch();
+        self.open_insert_table(
+            ARCHIVAL_DRAWABLE_DIGEST,
+            StoreInvariant::DrawableDigestNotSingular {
+                epoch,
+                observed: DigestFault::Rewritten,
+            },
+        )?
+        .insert(epoch.to_raw(), write.digest().encoded().as_encoded())?;
         Ok(())
     }
 

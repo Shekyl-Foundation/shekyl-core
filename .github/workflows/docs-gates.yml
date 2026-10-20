@@ -378,6 +378,16 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_rt_p5_classes.py
 
+      - name: Run RT-P6 summary tests
+        # `scripts/bench/rt_p6_summary.py` loads a run only when it has the
+        # shape registered in
+        # `docs/benchmarks/rt_p6_handshake_cost_20261018.md`: every handshake
+        # step once per iteration, both message-1 kinds with the acceptance
+        # the kind names, and every record class and operation. The control
+        # is a complete fixture whose medians the test computes itself.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_rt_p6_summary.py
+
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.
@@ -669,6 +679,28 @@ jobs:
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_table_shape.py
+
+      - name: Run input-grammar walk gate
+        # IG-3's walk over the RPC wire's names (INPUT_GRAMMAR.md Part C):
+        # every method, parameter and field in §18.1 walks the glossary's
+        # edges or is a reference (IG-Q42); undefined terms, non-edges,
+        # misplaced qualifiers, duplicate definitions, cycles (IG-2), a
+        # method whose last term is no view or verb under its parent (the
+        # Kind column, IG-3), a kind written only in prose, and drift
+        # between §17/§18 and §18.1 are refused. Interim: RW-Q7's
+        # schema gate replaces it (FOLLOWUPS). Instance of
+        # 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_input_grammar_walk.py
+
+      - name: Self-test the input-grammar walk gate
+        # Each refusal fired by a named edit: add chain_coinbase (a method
+        # that ends in no command), a kind in prose only, a disagreeing Kind
+        # cell, a stray Kind pair, add socks-tor, add a cycle, an undefined
+        # term, a misplaced qualifier, a duplicate row, drift, and an empty
+        # table (rule 47).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_input_grammar_walk.py --selftest
 
       - name: Run wire raw-hash-surface check
         # RTN-7: every 32-byte chain identity leaves `shekyl-wire` as a
