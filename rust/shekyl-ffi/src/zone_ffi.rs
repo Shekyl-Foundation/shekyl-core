@@ -24,9 +24,11 @@ use shekyl_clearnet::{
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
+/// The cause [`watch_managed_tor`] records on the Tor link.
+pub use shekyl_seam::DownCause;
 use shekyl_seam::{
-    drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial, Direction, DownCause,
-    Endpoint, Hub, Route, RoutePublish, SocketId,
+    drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial, Direction, Endpoint,
+    Hub, Route, RoutePublish, SocketId,
 };
 use shekyl_socks::Proxy;
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
@@ -34,7 +36,6 @@ use shekyl_tor::{
     accept_inbound as accept_tor_inbound, dial_one as dial_tor, Admitted as TorAdmitted,
     Inbound as TorInbound,
 };
-use shekyl_tor_control_daemon::TorDeath;
 use shekyl_transport_layer::spans;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
@@ -692,27 +693,18 @@ fn publish_tor_route(host: &Host, socks: SocketAddr, authenticates: bool) {
     }
 }
 
-/// How a managed-Tor death is recorded on the link. An exit and a stop
-/// both take it down; only an exit is a fault.
-fn down_cause(death: TorDeath) -> DownCause {
-    match death {
-        TorDeath::Exited => DownCause::ProcessExited,
-        TorDeath::Stopped => DownCause::ProcessStopped,
-    }
-}
-
 /// The managed Tor's death takes the Tor link down (`TSR-F1`), so the
-/// dialer draws no onion it cannot reach. `death` resolves when that Tor
-/// ends ([`DaemonTorControl::death`]). The down names the incarnation
-/// installed now: a route published later, by another Tor, is not taken
-/// down by this one's death. Only the Tor this daemon manages is watched;
-/// an operator's Tor stays usable until the supervisor brings its outbound
-/// evidence. A later call replaces the watch. Returns false, and watches
-/// nothing, when no zone host is running or no Tor route is installed.
-///
-/// [`DaemonTorControl::death`]: shekyl_tor_control_daemon::DaemonTorControl::death
+/// dialer draws no onion it cannot reach. `death` is that end as a
+/// [`DownCause`]: an exit and a stop both take the link down, and only an
+/// exit is a fault. The caller maps its own process signal onto that
+/// cause. The down names the incarnation installed now: a route published
+/// later, by another Tor, is not taken down by this one's death. Only the
+/// Tor this daemon manages is watched; an operator's Tor stays usable
+/// until the supervisor brings its outbound evidence. A later call
+/// replaces the watch. Returns false, and watches nothing, when no zone
+/// host is running or no Tor route is installed.
 pub fn watch_managed_tor(
-    death: impl std::future::Future<Output = TorDeath> + Send + 'static,
+    death: impl std::future::Future<Output = DownCause> + Send + 'static,
 ) -> bool {
     let Some(host) = HOST.lock().expect("zone host").clone() else {
         return false;
@@ -724,7 +716,7 @@ pub fn watch_managed_tor(
     let incarnation = link.incarnation;
     let hub = host.hub.clone();
     let watch = host.handle.spawn(async move {
-        let cause = down_cause(death.await);
+        let cause = death.await;
         let fell = hub
             .links()
             .publish_down(ConnectorId::Tor, incarnation, cause, hub.now());
