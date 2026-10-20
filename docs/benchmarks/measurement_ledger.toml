@@ -499,6 +499,7 @@ spec = [
   "rust/shekyl-noise/src",
   "rust/shekyl-p2p-transport/src",
   "rust/shekyl-transport-layer/src",
+  { through = "ea68874a8", note = "RT-W9 step 5a: ClassedRecord, a new framer in shekyl-noise that the P2P transport does not use, and two crate-private reads on Direction (its next nonce and epoch, and the header-protection key). Direction's seal and open are unchanged and the P2P framer calls nothing new. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 stale_through = [
   { through = "765d6991ba", note = "PR #969 (dev, 2026-10-05): the pass-digest audit bound to its types — a rewritten doc comment in served_frame.rs and pass_anchor.rs and a new test in delivery.rs. No production code path changed, so no cost moved. Heard here by the next branch to merge it, since the gate landed between the two." },
