@@ -552,6 +552,7 @@ stale_through = [
   { through = "0d882303c3", note = "Direction carries a 32-byte handshake-hash stamp set once by into_directions, so the P2P handshake's split copies 32 bytes per direction once per session. No record seal, open or rekey reads it; the per-record path is unchanged. Not re-measured." },
   { through = "b67b94731", note = "The gap tests' frame that is not the handshake is a timed-sync request in place of the support-flags request (1007), which is deleted with the support-flags word. Only those two tests changed; no code path in these files moved. Dial, handshake, and gap waits are unchanged. Not re-measured." },
   { through = "ea68874a8", note = "RT-W9 step 5a: ClassedRecord, a new framer in shekyl-noise that the P2P transport does not use, and two crate-private reads on Direction (its next nonce and epoch, and the header-protection key). Direction's seal and open are unchanged and the P2P framer calls nothing new. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "37e6ec8ee", note = "The header-protection key is no longer a method of Direction. ClassedRecord passes the record-header label to hkdf_from_record_key and keeps the output. The P2P transport does not call it. Direction's seal and open are unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
