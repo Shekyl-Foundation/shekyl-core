@@ -67,9 +67,10 @@ of its configuration (`shekyld --help`; `docs/EXECUTABLES.md`):
   configuration file only, and is sent to that proxy and no other. A file
   that holds one may be read by root, the daemon's account and the daemon's
   group, and nobody else: a service install keeps it `root:<daemon group>`
-  `0640` under `/etc/shekyl` `root:root` `0755`, a per-account install `0600`. A proxy that refuses it
-  fails each dial through it, and the log names the two options to fix
-  once a minute; the daemon keeps running.
+  `0640` under `/etc/shekyl` `root:root` `0755`, a per-account install `0600`.
+  An access-control list that names anyone else refuses. A proxy that refuses
+  the pair fails each dial through it, and the log names the two options to
+  fix once a minute; the daemon keeps running.
 
 ```bash
 # The operator's own Tor, reachable as an onion service

@@ -18,10 +18,14 @@
 //!
 //! The permitted principals are root and the daemon's account on Unix, and
 //! for reading a file that holds a secret also the daemon's group (Rick,
-//! 2026-10-19): a service install keeps the file root:<daemon group> 0640
-//! under `/etc/shekyl` root:root 0755, written by root only and read by root,
-//! the daemon and its group; a per-account install keeps it owner-only 0600.
-//! One file, no separate secrets file. On Windows the check is an allowlist: SYSTEM, Administrators,
+//! 2026-10-19): a service install keeps the file `root:<daemon group>` `0640`
+//! under `/etc/shekyl` `root:root` `0755`, written by root only and read by
+//! root, the daemon and its group; a per-account install keeps it owner-only
+//! `0600`. One file, no separate secrets file. The mode bits are that whole
+//! policy only when the access-control list names nobody else; a list that
+//! does, or a probe that cannot be read, refuses.
+//!
+//! On Windows the check is an allowlist: SYSTEM, Administrators,
 //! TrustedInstaller (the servicing account a default `C:\` grants full
 //! control to) and the daemon's own account, and any other access-control
 //! entry that grants the right refuses, whatever it names.
@@ -145,9 +149,27 @@ fn ancestors(path: &Path) -> Vec<PathBuf> {
 pub(crate) mod unix {
     //! The Unix rule: the owner is root or the daemon's account, and no
     //! group or other write bit is set, on the file and on every directory
-    //! above it.
+    //! above it. A file that holds a secret is also refused when its
+    //! access-control list names a reader the mode bits do not.
 
     use std::path::Path;
+
+    pub(crate) use crate::acl::AclProbe;
+
+    /// A probe that could not be read. The same words name an unreadable
+    /// directory, a file whose metadata could not be read, and a list that
+    /// could not be read: the check refuses, it does not guess.
+    pub(crate) const UNREADABLE: &str = "unknown (unreadable)";
+
+    /// The principal a secret-read refusal names for [`AclProbe::Named`].
+    pub(crate) const ACL_NAMED: &str = "a named entry on its access-control list";
+
+    /// Access-class bits of a mode. The file type lives in the high bits and
+    /// is not part of either rule.
+    const OTHER_READ: u32 = 0o004;
+    const OTHER_WRITE: u32 = 0o002;
+    const GROUP_READ: u32 = 0o040;
+    const GROUP_WRITE: u32 = 0o020;
 
     /// What the rule reads of a file or directory.
     #[derive(Clone, Copy, Debug)]
@@ -166,27 +188,41 @@ pub(crate) mod unix {
             if self.uid != 0 && self.uid != me {
                 return Some(format!("its owner, uid {}", self.uid));
             }
-            if self.mode & 0o002 != 0 {
+            if self.mode & OTHER_WRITE != 0 {
                 return Some("every account (world-writable)".to_owned());
             }
-            if self.mode & 0o020 != 0 {
+            if self.mode & GROUP_WRITE != 0 {
                 return Some(format!("its group, gid {}", self.gid));
             }
             None
         }
 
-        /// A principal outside the permitted set who can read: every
-        /// account, or a group other than the daemon's own (`my_group`, the
-        /// daemon's effective group). The owner is root or the daemon's
-        /// account, which the write check has already required.
+        /// A principal outside the permitted set who can read, from the mode
+        /// bits alone: every account, or a group other than the daemon's own
+        /// (`my_group`, the daemon's effective group).
+        ///
+        /// The owner is root or the daemon's account, which the write check
+        /// has already required. A secret file is judged by [`secret_reader`],
+        /// which also takes the access-control list: these bits are the whole
+        /// read policy only when that list is [`AclProbe::ModeOnly`].
         pub fn reader(self, my_group: u32) -> Option<String> {
-            if self.mode & 0o004 != 0 {
+            if self.mode & OTHER_READ != 0 {
                 return Some("every account (world-readable)".to_owned());
             }
-            if self.mode & 0o040 != 0 && self.gid != my_group {
+            if self.mode & GROUP_READ != 0 && self.gid != my_group {
                 return Some(format!("its group, gid {}", self.gid));
             }
             None
+        }
+    }
+
+    /// Who outside the permitted set can read a secret file: the mode bits,
+    /// unless the access-control list names someone else or could not be read.
+    pub(crate) fn secret_reader(entry: Entry, my_group: u32, acl: AclProbe) -> Option<String> {
+        match acl {
+            AclProbe::Named => Some(ACL_NAMED.to_owned()),
+            AclProbe::Unreadable => Some(UNREADABLE.to_owned()),
+            AclProbe::ModeOnly => entry.reader(my_group),
         }
     }
 
@@ -206,7 +242,7 @@ pub(crate) mod unix {
         }
         for dir in dirs {
             let Some(entry) = probe(dir) else {
-                return Some((dir.display().to_string(), "unknown (unreadable)".to_owned()));
+                return Some((dir.display().to_string(), UNREADABLE.to_owned()));
             };
             if let Some(who) = entry.writer(me) {
                 return Some((dir.display().to_string(), who));
@@ -229,7 +265,9 @@ pub(crate) mod unix {
 #[cfg(unix)]
 fn writer_outside_permitted(file: &File, path: &Path) -> Option<(String, String)> {
     let me = rustix::process::geteuid().as_raw();
-    let meta = file.metadata().ok()?;
+    let Ok(meta) = file.metadata() else {
+        return Some((path.display().to_string(), unix::UNREADABLE.to_owned()));
+    };
     unix::writer_outside_permitted(me, unix::entry_of(&meta), path, &ancestors(path), &|dir| {
         std::fs::metadata(dir).ok().as_ref().map(unix::entry_of)
     })
@@ -238,9 +276,10 @@ fn writer_outside_permitted(file: &File, path: &Path) -> Option<(String, String)
 #[cfg(unix)]
 fn reader_outside_permitted(file: &File, _path: &Path) -> Option<String> {
     let my_group = rustix::process::getegid().as_raw();
-    file.metadata()
-        .ok()
-        .map(|m| unix::entry_of(&m).reader(my_group))?
+    let Ok(meta) = file.metadata() else {
+        return Some(unix::UNREADABLE.to_owned());
+    };
+    unix::secret_reader(unix::entry_of(&meta), my_group, crate::acl::probe(file))
 }
 
 #[cfg(windows)]
@@ -281,21 +320,38 @@ fn reader_outside_permitted(_file: &File, path: &Path) -> Option<String> {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::unix::{writer_outside_permitted, Entry};
+    use super::unix::{
+        secret_reader, writer_outside_permitted, AclProbe, Entry, ACL_NAMED, UNREADABLE,
+    };
     use super::*;
     use std::collections::BTreeMap;
     use std::os::unix::fs::PermissionsExt;
 
     const ME: u32 = 1000;
 
+    /// `S_IFREG` and `S_IFDIR`. The rules never read the file type; the
+    /// described trees carry it so a mode still looks like a mode.
+    const S_IFREG: u32 = 0o100000;
+    const S_IFDIR: u32 = 0o040000;
+    /// `S_ISVTX`, the restricted-deletion bit on a directory.
+    const S_ISVTX: u32 = 0o1000;
+
+    const fn reg(perm: u32) -> u32 {
+        S_IFREG | perm
+    }
+
+    const fn dir(perm: u32) -> u32 {
+        S_IFDIR | perm
+    }
+
     const fn entry(uid: u32, gid: u32, mode: u32) -> Entry {
         Entry { uid, gid, mode }
     }
 
     const CLEAN: &[(&str, Entry)] = &[
-        ("/", entry(0, 0, 0o40755)),
-        ("/etc", entry(0, 0, 0o40755)),
-        ("/etc/shekyl", entry(0, 0, 0o40755)),
+        ("/", entry(0, 0, dir(0o755))),
+        ("/etc", entry(0, 0, dir(0o755))),
+        ("/etc/shekyl", entry(0, 0, dir(0o755))),
     ];
 
     /// Judges a file at `/etc/shekyl/shekyld-mainnet.toml` over a described
@@ -321,10 +377,10 @@ mod tests {
 
     #[test]
     fn a_root_owned_tree_and_a_private_file_are_permitted() {
-        assert_eq!(judge(entry(0, 0, 0o100644), CLEAN), None);
-        assert_eq!(judge(entry(ME, ME, 0o100600), CLEAN), None);
+        assert_eq!(judge(entry(0, 0, reg(0o644)), CLEAN), None);
+        assert_eq!(judge(entry(ME, ME, reg(0o600)), CLEAN), None);
         assert_eq!(
-            judge(entry(ME, ME, 0o100644), CLEAN),
+            judge(entry(ME, ME, reg(0o644)), CLEAN),
             None,
             "world-readable is not world-writable"
         );
@@ -333,31 +389,31 @@ mod tests {
     #[test]
     fn a_writable_file_or_directory_is_refused_naming_the_place_and_the_principal() {
         let file = "/etc/shekyl/shekyld-mainnet.toml";
-        let found = judge(entry(ME, ME, 0o100602), CLEAN).unwrap();
+        let found = judge(entry(ME, ME, reg(0o602)), CLEAN).unwrap();
         assert_eq!(
             found,
             (file.to_owned(), "every account (world-writable)".to_owned())
         );
-        let found = judge(entry(ME, 7, 0o100620), CLEAN).unwrap();
+        let found = judge(entry(ME, 7, reg(0o620)), CLEAN).unwrap();
         assert_eq!(found, (file.to_owned(), "its group, gid 7".to_owned()));
-        let found = judge(entry(4242, 4242, 0o100600), CLEAN).unwrap();
+        let found = judge(entry(4242, 4242, reg(0o600)), CLEAN).unwrap();
         assert_eq!(found, (file.to_owned(), "its owner, uid 4242".to_owned()));
         let group_dir = &[
-            ("/", entry(0, 0, 0o40755)),
-            ("/etc", entry(0, 0, 0o40755)),
-            ("/etc/shekyl", entry(0, 50, 0o40775)),
+            ("/", entry(0, 0, dir(0o755))),
+            ("/etc", entry(0, 0, dir(0o755))),
+            ("/etc/shekyl", entry(0, 50, dir(0o775))),
         ];
-        let found = judge(entry(0, 0, 0o100644), group_dir).unwrap();
+        let found = judge(entry(0, 0, reg(0o644)), group_dir).unwrap();
         assert_eq!(
             found,
             ("/etc/shekyl".to_owned(), "its group, gid 50".to_owned())
         );
         let sticky = &[
-            ("/", entry(0, 0, 0o40755)),
-            ("/etc", entry(0, 0, 0o41777)),
-            ("/etc/shekyl", entry(ME, ME, 0o40700)),
+            ("/", entry(0, 0, dir(0o755))),
+            ("/etc", entry(0, 0, dir(S_ISVTX | 0o1777))),
+            ("/etc/shekyl", entry(ME, ME, dir(0o700))),
         ];
-        let found = judge(entry(ME, ME, 0o100600), sticky).unwrap();
+        let found = judge(entry(ME, ME, reg(0o600)), sticky).unwrap();
         assert_eq!(
             found,
             (
@@ -369,8 +425,8 @@ mod tests {
 
     #[test]
     fn an_unreadable_directory_is_refused_rather_than_skipped() {
-        let partial = &[("/", entry(0, 0, 0o40755))];
-        let (place, who) = judge(entry(0, 0, 0o100644), partial).unwrap();
+        let partial = &[("/", entry(0, 0, dir(0o755)))];
+        let (place, who) = judge(entry(0, 0, reg(0o644)), partial).unwrap();
         assert_eq!(place, "/etc/shekyl");
         assert!(who.contains("unreadable"));
     }
@@ -380,18 +436,38 @@ mod tests {
         // The daemon's group in these cases.
         const MINE: u32 = 50;
         // Per-account: owner-only.
-        assert_eq!(entry(ME, ME, 0o100600).reader(MINE), None);
+        assert_eq!(entry(ME, ME, reg(0o600)).reader(MINE), None);
         // Service: root:<daemon group> 0640.
-        assert_eq!(entry(0, MINE, 0o100640).reader(MINE), None);
+        assert_eq!(entry(0, MINE, reg(0o640)).reader(MINE), None);
         // Another group can read: refused.
         assert_eq!(
-            entry(0, 9, 0o100640).reader(MINE).as_deref(),
+            entry(0, 9, reg(0o640)).reader(MINE).as_deref(),
             Some("its group, gid 9")
         );
         // Every account can read: refused, whatever the group.
         assert_eq!(
-            entry(0, MINE, 0o100644).reader(MINE).as_deref(),
+            entry(0, MINE, reg(0o644)).reader(MINE).as_deref(),
             Some("every account (world-readable)")
+        );
+    }
+
+    /// The mode bits are the whole secret-read policy only when the list adds
+    /// no principal. A named entry refuses a file the mode would allow, and a
+    /// list that cannot be read refuses too.
+    #[test]
+    fn a_named_access_list_entry_is_outside_the_mode_bits() {
+        const MINE: u32 = 50;
+        let private = entry(ME, ME, reg(0o600));
+        let service = entry(0, MINE, reg(0o640));
+        assert_eq!(secret_reader(private, MINE, AclProbe::ModeOnly), None);
+        assert_eq!(secret_reader(service, MINE, AclProbe::ModeOnly), None);
+        assert_eq!(
+            secret_reader(service, MINE, AclProbe::Named).as_deref(),
+            Some(ACL_NAMED)
+        );
+        assert_eq!(
+            secret_reader(private, MINE, AclProbe::Unreadable).as_deref(),
+            Some(UNREADABLE)
         );
     }
 
@@ -401,12 +477,12 @@ mod tests {
     #[test]
     fn the_service_shape_is_written_by_root_only() {
         let dirs = &[
-            ("/", entry(0, 0, 0o40755)),
-            ("/etc", entry(0, 0, 0o40755)),
-            ("/etc/shekyl", entry(0, 0, 0o40755)),
+            ("/", entry(0, 0, dir(0o755))),
+            ("/etc", entry(0, 0, dir(0o755))),
+            ("/etc/shekyl", entry(0, 0, dir(0o755))),
         ];
-        assert_eq!(judge(entry(0, 50, 0o100640), dirs), None);
-        let found = judge(entry(0, 50, 0o100660), dirs).unwrap();
+        assert_eq!(judge(entry(0, 50, reg(0o640)), dirs), None);
+        let found = judge(entry(0, 50, reg(0o660)), dirs).unwrap();
         assert_eq!(found.1, "its group, gid 50");
     }
 
