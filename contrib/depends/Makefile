@@ -241,4 +241,12 @@ download: download-osx download-linux download-win
 
  $(foreach package,$(all_packages),$(eval $(call ext_add_stages,$(package))))
 
-.PHONY: install cached download-one download-osx download-linux download-win download check-packages check-sources
+# Prints the classified host OS and nothing else. The Android refusal
+# above is read while this file is parsed, so it fires before any recipe,
+# including the configure and build lines that make runs even under -n.
+# This goal asks which family was selected. It stays below `all`, which is
+# the default goal.
+show-host-os:
+	@echo $(host_os)
+
+.PHONY: install cached download-one download-osx download-linux download-win download check-packages check-sources show-host-os
