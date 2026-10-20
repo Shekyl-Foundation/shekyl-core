@@ -557,12 +557,13 @@ than its title suggests.
 
 ### PWD-E7 — how a node obtains an **overlay** endpoint: two postures, ephemeral by default
 
-> **Amended 2026-10-06 (ruled by Rick, not yet implemented):**
+> **Amended 2026-10-06 and 2026-10-19 (ruled by Rick):**
 > [`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md) `TB-1`…`TB-3`
-> rule that a node has Tor unless its operator explicitly declines it, and
-> that the seam row "tor control unavailable" below splits into a refused start
-> and a runtime degrade. The code behaves as this section describes until the
-> refusal lands, which `TB-12` orders last.
+> rule that a node has Tor unless its operator explicitly declines it
+> (`tor = off`). A managed Tor that is absent or fails is announced, never
+> refused (`TB-2`, `TOR_SUPERVISOR.md` `TSR-Q10`): the node starts, holds its
+> own transactions and says what it is doing, and the seam row "tor control
+> unavailable" below applies from the first boot.
 >
 > **Amended 2026-10-15 (ratified by Rick, not yet implemented):**
 > [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) (`TSR-`) makes the managed Tor a
