@@ -40,8 +40,13 @@ HANDSHAKE_STEPS = (
 )
 
 MESSAGE1_KINDS = ("honest", "tag_flipped")
-# What read_message1 must report. honest completed; tag_flipped failed the tag.
-MESSAGE1_ACCEPTED = {"honest": True, "tag_flipped": False}
+# With mac1 on message 1 (RPC_CHANNEL.md section 4.3, 2026-10-20) the harness
+# adds a third kind, a sender without the daemon's bundle. A capture is read
+# with the kinds its registration names: `--mac1` for that one.
+MESSAGE1_KINDS_MAC1 = ("honest", "tag_flipped", "no_bundle")
+# What read_message1 must report. honest completed; tag_flipped failed the
+# tag; no_bundle failed mac1.
+MESSAGE1_ACCEPTED = {"honest": True, "tag_flipped": False, "no_bundle": False}
 MESSAGE1_PARTS = ("new", "read_message1", "attempt")
 
 # RT-O6, ruled 2026-10-18.
@@ -185,8 +190,8 @@ def parse_accepted(text):
     refuse(f"{MESSAGE1_FILE} accepted is {text!r}")
 
 
-def load_message1(rows):
-    by_kind = {kind: {} for kind in MESSAGE1_KINDS}
+def load_message1(rows, kinds):
+    by_kind = {kind: {} for kind in kinds}
     for row in rows:
         kind = field(row, "kind", MESSAGE1_FILE)
         if kind not in by_kind:
@@ -230,10 +235,10 @@ def load_records(rows):
     return by_cell
 
 
-def load(run_dir):
+def load(run_dir, kinds=MESSAGE1_KINDS):
     return Run(
         steps=load_steps(read_rows(run_dir, STEPS_FILE)),
-        message1=load_message1(read_rows(run_dir, MESSAGE1_FILE)),
+        message1=load_message1(read_rows(run_dir, MESSAGE1_FILE), kinds),
         records=load_records(read_rows(run_dir, RECORDS_FILE)),
     )
 
@@ -285,7 +290,7 @@ def render(run):
         + " |"
     )
     lines.append("|---|---|---:|---:|" + "---:|" * (2 * len(CLOCKS)))
-    for kind in MESSAGE1_KINDS:
+    for kind in run.message1:
         attempts = list(run.message1[kind].values())
         accepted = sum(1 for attempt in attempts if attempt.accepted)
         parts = {
@@ -324,15 +329,20 @@ def render(run):
     return "\n".join(lines) + "\n"
 
 
-def summarise(run_dir):
-    return render(load(run_dir))
+def summarise(run_dir, kinds=MESSAGE1_KINDS):
+    return render(load(run_dir, kinds))
 
 
 def main(argv):
-    if len(argv) != 2:
-        print("usage: rt_p6_summary.py RUN_DIR", file=sys.stderr)
+    args = argv[1:]
+    kinds = MESSAGE1_KINDS
+    if args[:1] == ["--mac1"]:
+        kinds = MESSAGE1_KINDS_MAC1
+        args = args[1:]
+    if len(args) != 1:
+        print("usage: rt_p6_summary.py [--mac1] RUN_DIR", file=sys.stderr)
         return 2
-    print(summarise(argv[1]), end="")
+    print(summarise(args[0], kinds), end="")
     return 0
 
 

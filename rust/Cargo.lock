@@ -5035,6 +5035,7 @@ dependencies = [
 name = "shekyl-rpc-channel"
 version = "3.1.0"
 dependencies = [
+ "blake2",
  "fips203",
  "hex",
  "libc",

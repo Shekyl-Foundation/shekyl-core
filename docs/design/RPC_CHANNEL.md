@@ -466,8 +466,9 @@ The prologue (§4.4) is unchanged.
   (`rust/shekyl-rpc-channel/src/handshake.rs`, `PendingSession`).
 - **Cost:** two round trips before the first request; three
   encapsulate/decapsulate pairs and two ephemeral ML-KEM key generations.
-  On the wire: message 1 is 2,320 bytes (1,088 ciphertext, 32 + 1,184
-  ephemerals, 16 tag); message 2 the same; message 3 is 1,264 bytes plus
+  On the wire: message 1 is 2,336 bytes, the 2,320-byte Noise message
+  (1,088 ciphertext, 32 + 1,184 ephemerals, 16 tag) followed by its
+  16-byte mac1 (§4.3); message 2 is 2,320 bytes; message 3 is 1,264 bytes plus
   its payload (32 + 16 and 1,184 + 16 for the two statics, each encrypted
   with its own tag, and the payload's 16-byte tag); message 4 is 1,120
   bytes plus its payload — about 7.0 KB in all. These are measured, not
@@ -566,12 +567,13 @@ implementation of ML-KEM, and the cross-check needs only the Rust one.
 holds it, and enrolment moves it in the clear (§5). So there are two kinds
 of stranger:
 
-- **Without the bundle.** Message 1 opens with `skem` and ends with an
-  empty payload under an AEAD tag whose key is mixed from that `skem` and
-  from `es`; a sender who lacks the bundle
-  cannot produce a valid one. The daemon sends no byte before message 1
-  authenticates, and any failure closes the connection without reply. A
-  scanner sees a port that accepts TCP and says nothing.
+- **Without the bundle.** Message 1 carries a mac1 keyed by a hash of
+  the bundle (below), and the daemon checks it before anything else. A
+  sender who lacks the bundle cannot write one, and its message 1 is
+  dropped having cost the daemon one keyed hash: no long-term key is used.
+  The daemon sends no byte before message 1 authenticates, and any failure
+  closes the connection without reply. A scanner sees a port that accepts
+  TCP and says nothing.
 - **With the bundle, not enrolled.** Message 1 authenticates, so the daemon
   answers with message 2 — confirming that this daemon, with this key, is
   at this address. The connection closes after message 3 when the
@@ -609,10 +611,69 @@ A bundle holder additionally reaches message-2 encapsulation against a
 client-supplied ephemeral encapsulation key (input-checked per FIPS 203
 before use, as `noise.rs` already does) and message-3 decryption.
 
-Each unauthenticated message costs the daemon one DH and one
-decapsulation: a stranger-driven work amplifier, bounded by `conn_limit`
-admission before the handshake and by the handshake deadline. Whether more
-is needed is decided from RT-P6's measurement, not before it.
+**RT-P6 measured that work** on the floor device
+([`rt_p6_handshake_cost_20261018.md`](../benchmarks/rt_p6_handshake_cost_20261018.md)):
+one message-1 attempt costs the daemon 641 µs of CPU at the median and
+818.5 µs at the 99th percentile, and a whole handshake 2,136.1 µs at the
+99th. Two mechanisms bound it (ruled 2026-10-20).
+
+**mac1.** Message 1 travels as the Noise message followed by a 16-byte
+mac1. The mac1 is BLAKE2s, keyed, with a 16-byte output, over the Noise
+message. Its key is BLAKE2s-256 of the registered label
+`shekyl/rpc-mac1-v1` (domain registry, mechanism 7) followed by the
+daemon's public bundle: its X25519 key, then its ML-KEM-768 encapsulation
+key, the order §5 fixes for the fingerprint.
+- **Outside the Noise message:** the mac1 is not hashed into the
+  transcript, so the Noise bytes, and RT-W8's pinned vectors, are
+  unchanged.
+- **Checked first:** after the length and before anything else, including
+  FIPS 203's check on the sender's encapsulation key. A failure is
+  `HandshakeError::Message1` like every other, and the connection is
+  dropped silently.
+- **Public material only:** the key is derived from the bundle, so holding
+  it is holding the bundle, which this section already treats as a probing
+  capability.
+- **Tested:** a stranger's message 1 (random bytes, a genuine message 1
+  made for another daemon, a genuine one with its mac1 changed) is refused
+  before any long-term key is used and without spending from the budget.
+  The test failed with the check removed.
+
+**The handshake budget.** Every message-1 decapsulation is paid for from
+one token bucket per daemon (`HandshakeBudget`), after mac1 and the key
+check and before either long-term key. A message 1 that finds the bucket
+empty is dropped silently, as a bad mac1 is.
+- **The share: handshakes never take more than a quarter of one core**
+  (`HANDSHAKE_CPU_SHARE_PERMILLE` = 250), over any window longer than the
+  one-second burst. On the floor device that is a sixteenth of the
+  machine. The rest of that core, and the other three, stay with the
+  chain.
+- **The derivation:**
+  - Each admission is charged RT-P6's 99th percentile of the daemon's
+    whole handshake, 2,136.1 µs (`HANDSHAKE_DAEMON_CPU_NANOS`, rowed in
+    the measurement ledger), because an admitted message 1 may go on to a
+    full handshake. A message 1 that fails at its tag costs less, so the
+    bound holds for every mix.
+  - A quarter of a second of CPU per second, divided by 2,136.1 µs, is
+    **117 handshakes a second**.
+  - The burst holds one second of that, 117 at once, so the clients
+    reconnecting after a restart are served together.
+- **Tested:** a flood of message 1s with valid mac1s and broken tags,
+  spread over two simulated seconds, uses the long-term keys only as often
+  as the budget pays for. The CPU those admissions stand for stays within
+  the share of the window plus the burst, and a session established before
+  the flood still carries records both ways. The test failed with the
+  budget removed.
+
+**What remains, and why.**
+- **The budget is shared by every sender.** XK hides the client's
+  identity until message 3, so before then nothing says whose attempt a
+  message 1 is, and there is no per-client fairness. A bundle holder can
+  spend the budget and delay other clients' handshakes, within the share.
+  The limit on that is who holds the bundle: it goes only to clients that
+  will be enrolled (§5).
+- **mac2 is not built.** WireGuard's second mac carries a cookie bound to
+  the sender's source address. Over Tor a source address is the exit or
+  the rendezvous and identifies no one, so that cookie would bind nothing.
 
 ### 4.4 Binding and record layer
 
@@ -1670,7 +1731,7 @@ construction) instead of loopback TCP.
 |---|---|---|---|
 | RT-P4 | Is ML-KEM-768 decapsulation in the pinned crate constant-time with respect to the ciphertext, including the implicit-rejection path? | Statistical timing test (dudect-style) over valid, invalid, and adversarially structured ciphertexts on the floor device and on x86, plus a source read of the decapsulation path for secret-dependent branches and divisions. **Met 2026-10-11** under a re-registered method, on the floor device and on a Tiger Lake laptop core; the first registration's floor-device run failed and was traced to its harness (`docs/benchmarks/rt_p4_mlkem_decaps_timing_20261010.md`, `docs/benchmarks/rt_p4_mlkem_decaps_timing_20261011.md`) | §4.3; the crate choice for the channel's static key |
 | RT-P5 | Does hyper/axum run over the record channel at full RPC load? | Two registered parts (RT-O21, sequencing re-ruled 2026-10-12). The size distribution is HTTP message sizes per method on the generated traffic, and the classes are derived from it. The adapter is `shekyl-rpc-stream` over `ClassedRecord`, not the interim framer: a block-batch response larger than one record, backpressure under a slow reader, half-close, a request split across records, observed failing with splitting removed. The flush policy is named in the registration; the record boundaries it produces are observed with the adapter. **Sizes part measured 2026-10-17** ([`rt_p5_rpc_message_sizes_20261017.md`](../benchmarks/rt_p5_rpc_message_sizes_20261017.md)): candidate tables for K = 1 to 8, K not yet chosen; the record also finds that, in the request direction, every K ≥ 2 puts at least one record of every submission in a class no other request uses (at K = 2 the class-union with every other request is one tail in the smaller class), and for K ≥ 3 a submission's classes are shared with at most two other requests and with none for K ≥ 6, against RT-O6's stated mechanism | RT-W9's adapter design |
-| RT-P6 | What does a handshake cost on the floor device (Pi 4), each side? | Time each message and the whole handshake, daemon and client, on the floor device; CPU per unauthenticated message 1; the cost of sealing and opening one record at each response class RT-O6 ruled on 2026-10-18: 512, 16,384 and 65,535 bytes. A submission padded to its fixed size is whole 65,535-byte records and a tail, so its cost follows from the largest class's. **Measured 2026-10-19 on the floor device** ([`rt_p6_handshake_cost_20261018.md`](../benchmarks/rt_p6_handshake_cost_20261018.md)): both sides about 2.16 ms of CPU per handshake, 4.3 ms together at the 99th percentile; a stranger's message 1 costs the daemon 818.5 µs at the 99th percentile; the handshake deadlines come from measured onion and clearnet round trips, not from this run (ruled 2026-10-20); the amplification is answered by mac1 and a handshake budget sized from it (§4.3); the client's 2.16 ms is an input to RT-W11's pool | The handshake-deadline constant (derived from this, not chosen); the tunnel pool size; §4.3's amplification bound |
+| RT-P6 | What does a handshake cost on the floor device (Pi 4), each side? | Time each message and the whole handshake, daemon and client, on the floor device; CPU per unauthenticated message 1; the cost of sealing and opening one record at each response class RT-O6 ruled on 2026-10-18: 512, 16,384 and 65,535 bytes. A submission padded to its fixed size is whole 65,535-byte records and a tail, so its cost follows from the largest class's. **Measured 2026-10-19 on the floor device** ([`rt_p6_handshake_cost_20261018.md`](../benchmarks/rt_p6_handshake_cost_20261018.md)): both sides about 2.16 ms of CPU per handshake, 4.3 ms together at the 99th percentile; a stranger's message 1 costs the daemon 818.5 µs at the 99th percentile; the handshake deadlines come from measured onion and clearnet round trips, not from this run (ruled 2026-10-20); the amplification is answered by mac1 and a handshake budget sized from it (§4.3); the client's 2.16 ms is an input to RT-W11's pool. **The stranger re-measured with mac1 registered 2026-10-20** ([`rt_p6_mac1_stranger_20261020.md`](../benchmarks/rt_p6_mac1_stranger_20261020.md)) | The handshake-deadline constant (derived from this, not chosen); the tunnel pool size; §4.3's amplification bound |
 | RT-P7 | Does `hybridXK`'s canonical token order (§4.1) reach the property each stage claims? | ProVerif model: daemon authentication at message 2, client authentication classical at message 3 and hybrid at the first record, secrecy of the transport keys, client-identity hiding — each query observed **failing** under a named edit (e.g. remove `skem` from message 1; move it after `e`; remove `se` from message 3) before its success is trusted | §4.1; **gates RT-W9** |
 | RT-P8 | Windows: does RT-15's same-user pipe and RT-16's service shape hold on a real box? | Windows lane, on the built daemon: (1) the GUI dials its `shekyld` child through the rendezvous file and the peer check passes; (2) another user's pipe pre-created under a guessed daemon-style name has no effect on startup or dial; (3) a same-user client in a second logon session is refused by the pipe and the client reports it from the rendezvous without dialling; (4) every Windows-side caller of the daemon RPC (GUI backend including its mining control, `shekyld <command>`, the wallet stack) is named with its leg; (5) per-service virtual account: network access, restricted service-SID type, minimal required-privilege list, the bundled Tor as its child; (6) the `%ProgramData%` data home is created with its owner and protected DACL in one `CreateDirectoryW` call, reads back as admitting the service account and Administrators only, and an unelevated process racing the creation cannot place an entry inside; (7) the side-by-side refusal between the two modes | RT-15, RT-16; RT-W10; RT-W14 |
 

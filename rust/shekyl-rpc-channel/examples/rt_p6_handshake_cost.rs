@@ -42,12 +42,13 @@ mod linux {
     use std::fmt::Write;
     use std::path::PathBuf;
     use std::process::ExitCode;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use rand_core::{OsRng, RngCore};
     use shekyl_noise::Direction;
+    use shekyl_rpc_channel::budget::HandshakeBudget;
     use shekyl_rpc_channel::handshake::{
-        Client, Daemon, StaticKeypair, MESSAGE1_LEN, TAG_LEN, TRANSPORT_AD,
+        Client, Daemon, StaticKeypair, MESSAGE1_LEN, MESSAGE1_WIRE_LEN, TAG_LEN, TRANSPORT_AD,
     };
     use shekyl_rpc_channel::NetworkId;
 
@@ -160,6 +161,7 @@ mod linux {
     enum Message1Kind {
         Honest,
         TagFlipped,
+        NoBundle,
     }
 
     impl Message1Kind {
@@ -167,15 +169,23 @@ mod linux {
             match self {
                 Self::Honest => "honest",
                 Self::TagFlipped => "tag_flipped",
+                Self::NoBundle => "no_bundle",
             }
         }
 
         const fn accepted(self) -> bool {
             match self {
                 Self::Honest => true,
-                Self::TagFlipped => false,
+                Self::TagFlipped | Self::NoBundle => false,
             }
         }
+    }
+
+    /// A budget that cannot run out during a run: the whole of a core, a
+    /// day's burst. The run measures what an admitted message costs; how
+    /// many are admitted is the budget's, and its tests cover it.
+    fn unbounded() -> HandshakeBudget {
+        HandshakeBudget::with_share(1_000, Duration::from_secs(86_400), Instant::now())
     }
 
     #[derive(Clone, Copy)]
@@ -326,6 +336,7 @@ mod linux {
         client_id: &StaticKeypair,
         daemon_id: &StaticKeypair,
     ) -> String {
+        let budget = unbounded();
         let mut out = String::from(STEP_HEADER);
         out.push('\n');
         for i in 0..cell.warmup + cell.handshakes {
@@ -346,7 +357,8 @@ mod linux {
             let (sample, daemon) = timed(|| Daemon::new(&BENCH_NETWORK_ID, daemon_id));
             row(HandshakeStep::DaemonNew, sample);
 
-            let (sample, read) = timed(|| daemon.read_message1(&message1));
+            let now = Instant::now();
+            let (sample, read) = timed(|| daemon.read_message1(&message1, &budget, now));
             let daemon = read.expect("read_message1");
             row(HandshakeStep::DaemonReadMessage1, sample);
 
@@ -400,14 +412,16 @@ mod linux {
         daemon_id: &StaticKeypair,
     ) -> String {
         let prepared = prepare_message1(client_id, daemon_id, cell.messages1);
+        let budget = unbounded();
         let mut out = String::from(MESSAGE1_HEADER);
         out.push('\n');
         for set in &prepared {
-            warm_message1(daemon_id, &set.bodies, cell.warmup);
+            warm_message1(daemon_id, &set.bodies, cell.warmup, &budget);
             let mut accepted = 0usize;
             for (i, body) in set.bodies.iter().enumerate() {
                 let (new, daemon) = timed(|| Daemon::new(&BENCH_NETWORK_ID, daemon_id));
-                let (read, result) = timed(|| daemon.read_message1(body));
+                let now = Instant::now();
+                let (read, result) = timed(|| daemon.read_message1(body, &budget, now));
                 accepted += usize::from(result.is_ok());
                 push_message1(&mut out, i, set.kind, result.is_ok(), new, read);
             }
@@ -422,13 +436,15 @@ mod linux {
         out
     }
 
-    /// Honest message 1s from `Client::start`, and the same bytes with one
-    /// tag byte flipped. Both are built before any timed read.
+    /// Honest message 1s from `Client::start`; the same bytes with one tag
+    /// byte flipped and the mac1 made again, as a sender holding the bundle
+    /// can; and the honest bytes with one mac1 byte flipped, as a sender
+    /// without the bundle sends. All are built before any timed read.
     fn prepare_message1(
         client_id: &StaticKeypair,
         daemon_id: &StaticKeypair,
         count: usize,
-    ) -> [PreparedMessage1; 2] {
+    ) -> [PreparedMessage1; 3] {
         let honest: Vec<Vec<u8>> = (0..count)
             .map(|_| {
                 Client::start(&BENCH_NETWORK_ID, client_id, daemon_id.public())
@@ -436,7 +452,11 @@ mod linux {
                     .1
             })
             .collect();
-        let tag_flipped = honest.iter().map(|message| flip_tag(message)).collect();
+        let tag_flipped = honest
+            .iter()
+            .map(|message| flip_tag(message, daemon_id))
+            .collect();
+        let no_bundle = honest.iter().map(|message| flip_mac1(message)).collect();
         [
             PreparedMessage1 {
                 kind: Message1Kind::Honest,
@@ -446,24 +466,54 @@ mod linux {
                 kind: Message1Kind::TagFlipped,
                 bodies: tag_flipped,
             },
+            PreparedMessage1 {
+                kind: Message1Kind::NoBundle,
+                bodies: no_bundle,
+            },
         ]
     }
 
-    fn flip_tag(message: &[u8]) -> Vec<u8> {
-        assert_eq!(message.len(), MESSAGE1_LEN, "message 1 has a fixed length");
+    fn flip_tag(message: &[u8], daemon_id: &StaticKeypair) -> Vec<u8> {
+        assert_eq!(
+            message.len(),
+            MESSAGE1_WIRE_LEN,
+            "message 1 has a fixed length"
+        );
         let mut body = message.to_vec();
-        // The tag is the last TAG_LEN bytes. One flipped byte still parses
-        // as a key and a ciphertext, and the tag check fails after the
-        // decapsulation and the X25519 Diffie-Hellman.
+        // The Noise message's tag is its last TAG_LEN bytes. One flipped
+        // byte still parses as a key and a ciphertext, and the tag check
+        // fails after the decapsulation and the X25519 Diffie-Hellman. The
+        // mac1 is made again over the changed bytes, so the message passes
+        // mac1 and reaches them.
         let tag_start = MESSAGE1_LEN - TAG_LEN;
         body[tag_start + TAG_LEN - 1] ^= TAG_BYTE_FLIP;
+        let mac1 = daemon_id.public().mac1(&body[..MESSAGE1_LEN]);
+        body[MESSAGE1_LEN..].copy_from_slice(&mac1);
         body
     }
 
-    fn warm_message1(daemon_id: &StaticKeypair, bodies: &[Vec<u8>], warmup: usize) {
+    /// The honest bytes with the mac1's last byte flipped: refused at mac1,
+    /// before either long-term key.
+    fn flip_mac1(message: &[u8]) -> Vec<u8> {
+        assert_eq!(
+            message.len(),
+            MESSAGE1_WIRE_LEN,
+            "message 1 has a fixed length"
+        );
+        let mut body = message.to_vec();
+        body[MESSAGE1_WIRE_LEN - 1] ^= TAG_BYTE_FLIP;
+        body
+    }
+
+    fn warm_message1(
+        daemon_id: &StaticKeypair,
+        bodies: &[Vec<u8>],
+        warmup: usize,
+        budget: &HandshakeBudget,
+    ) {
         for body in bodies.iter().take(warmup) {
             let daemon = Daemon::new(&BENCH_NETWORK_ID, daemon_id);
-            let read = daemon.read_message1(body);
+            let read = daemon.read_message1(body, budget, Instant::now());
             let _read = std::hint::black_box(read);
         }
     }
@@ -530,7 +580,7 @@ mod linux {
         let (client, message1) =
             Client::start(&BENCH_NETWORK_ID, client_id, daemon_id.public()).expect("start");
         let daemon = Daemon::new(&BENCH_NETWORK_ID, daemon_id)
-            .read_message1(&message1)
+            .read_message1(&message1, &unbounded(), Instant::now())
             .expect("read_message1");
         let (daemon, message2) = daemon.write_message2().expect("write_message2");
         let client = client.read_message2(&message2).expect("read_message2");

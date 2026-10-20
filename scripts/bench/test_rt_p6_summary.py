@@ -49,12 +49,12 @@ def step_rows():
     return rows
 
 
-def message1_rows():
+def message1_rows(with_no_bundle=False):
     rows = []
-    for kind, new_scale, read_scale in (
-        ("honest", 1000, 3000),
-        ("tag_flipped", 2000, 4000),
-    ):
+    kinds = [("honest", 1000, 3000), ("tag_flipped", 2000, 4000)]
+    if with_no_bundle:
+        kinds.append(("no_bundle", 500, 700))
+    for kind, new_scale, read_scale in kinds:
         accepted = "true" if s.MESSAGE1_ACCEPTED[kind] else "false"
         for i in range(SAMPLES):
             new_ns = (i + 1) * new_scale
@@ -162,6 +162,29 @@ class Control(unittest.TestCase):
             text,
         )
         self.assertIn("| 65,535 | open |", text)
+
+
+class Mac1Shape(unittest.TestCase):
+    """A capture taken with mac1 on message 1 has a third kind, no_bundle,
+    read only when the caller names that shape (`--mac1`)."""
+
+    def test_a_mac1_capture_reads_with_its_kinds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            write_run(directory, message1=message1_rows(with_no_bundle=True))
+            text = s.summarise(directory, s.MESSAGE1_KINDS_MAC1)
+        self.assertIn(f"| no_bundle | `read_message1` | {SAMPLES} | 0 |", text)
+
+    def test_a_mac1_capture_is_refused_without_the_shape(self):
+        with tempfile.TemporaryDirectory() as directory:
+            write_run(directory, message1=message1_rows(with_no_bundle=True))
+            self.assertIn("unexpected kind no_bundle", refusal(self, directory))
+
+    def test_the_mac1_shape_refuses_a_capture_without_no_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            write_run(directory)
+            with self.assertRaises(SystemExit) as caught:
+                s.summarise(directory, s.MESSAGE1_KINDS_MAC1)
+        self.assertIn("lacks no_bundle", str(caught.exception))
 
 
 class Refusals(unittest.TestCase):

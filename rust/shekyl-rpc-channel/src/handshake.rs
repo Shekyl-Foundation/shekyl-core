@@ -15,6 +15,12 @@
 //! <- skem                 message 4   1,120 bytes + payload
 //! ```
 //!
+//! On the wire, message 1 is followed by a 16-byte mac1 (2,336 bytes in all):
+//! keyed BLAKE2s under a key derived from the daemon's public bundle,
+//! outside the Noise message. The daemon checks it, then pays for the
+//! message from its [`HandshakeBudget`], before either long-term key is used
+//! (`RPC_CHANNEL.md` §4.3).
+//!
 //! `e` and `s` each carry an X25519 key and then an ML-KEM-768 key. Both
 //! sides are authenticated by key agreement against both primitives: the
 //! daemon when message 2 opens, the client classically when message 3 opens
@@ -71,7 +77,10 @@ use rand_core::{CryptoRngCore, OsRng};
 use shekyl_noise::{Direction, SplitRole, SymmetricState};
 use zeroize::Zeroizing;
 
-use crate::{prologue, NetworkId, StaticFingerprint, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+use std::time::Instant;
+
+use crate::budget::HandshakeBudget;
+use crate::{prologue, NetworkId, StaticFingerprint, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
 
 #[path = "identity.rs"]
 mod identity;
@@ -94,6 +103,9 @@ pub const HANDSHAKE_HASH_LEN: usize = 32;
 /// Message 1: the `skem` ciphertext, both ephemeral keys, the empty
 /// payload's tag.
 pub const MESSAGE1_LEN: usize = MLKEM768_CT_LEN + X25519_PUBLIC_LEN + MLKEM768_EK_LEN + TAG_LEN;
+
+/// Message 1 as it travels: the Noise message, then its mac1 (§4.3).
+pub const MESSAGE1_WIRE_LEN: usize = MESSAGE1_LEN + MAC1_LEN;
 /// Message 2: the `ekem` ciphertext, both ephemeral keys, the empty
 /// payload's tag.
 pub const MESSAGE2_LEN: usize = MLKEM768_CT_LEN + X25519_PUBLIC_LEN + MLKEM768_EK_LEN + TAG_LEN;
@@ -226,7 +238,7 @@ impl Client {
         rng: &mut impl CryptoRngCore,
     ) -> Result<(ClientAwaitingMessage2<'a>, Vec<u8>), HandshakeError> {
         let mut sym = initial_state(network_id, daemon);
-        let mut message = Vec::with_capacity(MESSAGE1_LEN);
+        let mut message = Vec::with_capacity(MESSAGE1_WIRE_LEN);
 
         // skem: encapsulate to the daemon's static key. No cipher key yet,
         // so the ciphertext travels in the clear and is hashed.
@@ -261,6 +273,10 @@ impl Client {
         if message.len() != MESSAGE1_LEN {
             return Err(HandshakeError::Local);
         }
+        // mac1, outside the Noise message: proof to the daemon that the
+        // sender holds its bundle, checked before any long-term key is used.
+        let tag = daemon.mac1(&message);
+        message.extend_from_slice(&tag);
         Ok((
             ClientAwaitingMessage2 {
                 sym,
@@ -465,22 +481,36 @@ impl<'a> Daemon<'a> {
         }
     }
 
-    /// Read message 1.
+    /// Read message 1, as it travels: the Noise message and its mac1.
+    ///
+    /// In this order, each step refusing what the one before let through:
+    /// the length; the mac1, under a key derived from this daemon's public
+    /// bundle, so a sender without the bundle is refused here having cost a
+    /// keyed hash; FIPS 203's input check on the sender's encapsulation key;
+    /// then one admission from `budget` at `now`. Only after all four does
+    /// either long-term key touch the message (§4.3).
     ///
     /// # Errors
     ///
-    /// [`HandshakeError::Message1`], for every cause. See the module
-    /// documentation: nothing distinguishes one cause from another, and the
-    /// caller has nothing to send.
+    /// [`HandshakeError::Message1`], for every cause, a bad mac1 and an
+    /// exhausted budget among them. See the module documentation: nothing
+    /// distinguishes one cause from another, and the caller drops the
+    /// connection with nothing to send.
     pub fn read_message1(
         mut self,
-        message1: &[u8],
+        message1_wire: &[u8],
+        budget: &HandshakeBudget,
+        now: Instant,
     ) -> Result<DaemonReadyForMessage2, HandshakeError> {
         const E: usize = MLKEM768_CT_LEN;
         const EKEM: usize = E + X25519_PUBLIC_LEN;
         const TAG: usize = EKEM + MLKEM768_EK_LEN;
         let fail = HandshakeError::Message1;
-        if message1.len() != MESSAGE1_LEN {
+        if message1_wire.len() != MESSAGE1_WIRE_LEN {
+            return Err(fail);
+        }
+        let (message1, mac1) = message1_wire.split_at(MESSAGE1_LEN);
+        if !self.own.public().mac1_verifies(message1, mac1) {
             return Err(fail);
         }
         let ciphertext: [u8; MLKEM768_CT_LEN] = array(&message1[..E]).ok_or(fail)?;
@@ -493,6 +523,12 @@ impl<'a> Daemon<'a> {
         // the wire bytes, not what this parse returns.
         let client_ephemeral_ek =
             ml_kem_768::EncapsKey::try_from_bytes(client_ephemeral_ek).map_err(|_| fail)?;
+
+        // The budget pays for the long-term work that follows. A message that
+        // gets here and finds it empty is dropped like a bad mac1.
+        if !budget.admit(now) {
+            return Err(fail);
+        }
 
         // skem: decapsulate with the long-term key. This cannot tell a
         // rejected ciphertext from an accepted one, by design: a rejected
@@ -898,12 +934,33 @@ mod tests {
         LONG_TERM_USES.with(std::cell::Cell::get)
     }
 
-    /// A daemon identity, and a message 1 it accepts.
+    /// A daemon identity, and a message 1 it accepts, as it travels.
     fn accepted_message1() -> (StaticKeypair, Vec<u8>) {
         let daemon = StaticKeypair::generate().unwrap();
         let client = StaticKeypair::generate().unwrap();
         let (_, message1) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
         (daemon, message1)
+    }
+
+    /// Recompute a wire message 1's mac1 after its Noise bytes were changed,
+    /// as a sender holding `daemon`'s bundle can. A test whose subject is a
+    /// check after mac1 uses this, so the message reaches that check.
+    fn remac(daemon: &StaticKeypair, wire: &mut [u8]) {
+        let (noise, mac1) = wire.split_at_mut(MESSAGE1_LEN);
+        mac1.copy_from_slice(&daemon.public().mac1(noise));
+    }
+
+    /// A budget that never runs out within a test.
+    fn plenty() -> HandshakeBudget {
+        HandshakeBudget::with_share(1_000, std::time::Duration::from_secs(3_600), Instant::now())
+    }
+
+    /// Read `wire` as message 1 with a budget that never runs out.
+    fn read1(
+        daemon: &StaticKeypair,
+        wire: &[u8],
+    ) -> Result<DaemonReadyForMessage2, HandshakeError> {
+        Daemon::new(&NETWORK, daemon).read_message1(wire, &plenty(), Instant::now())
     }
 
     fn unhex(text: &str) -> [u8; 32] {
@@ -954,10 +1011,9 @@ mod tests {
         for point in low_order_points() {
             let (daemon, mut message1) = accepted_message1();
             message1[MLKEM768_CT_LEN..MLKEM768_CT_LEN + X25519_PUBLIC_LEN].copy_from_slice(&point);
+            remac(&daemon, &mut message1);
             assert_eq!(
-                Daemon::new(&NETWORK, &daemon)
-                    .read_message1(&message1)
-                    .err(),
+                read1(&daemon, &message1).err(),
                 Some(HandshakeError::Message1)
             );
         }
@@ -971,17 +1027,15 @@ mod tests {
         let (daemon, good) = accepted_message1();
 
         let before = uses();
-        assert!(Daemon::new(&NETWORK, &daemon).read_message1(&good).is_ok());
+        assert!(read1(&daemon, &good).is_ok());
         assert_eq!(uses(), before + 2, "decapsulation and `es`, once each");
 
         let mut bad = good;
         let ek = MLKEM768_CT_LEN + X25519_PUBLIC_LEN;
         bad[ek..ek + MLKEM768_EK_LEN].fill(0xff);
+        remac(&daemon, &mut bad);
         let before = uses();
-        assert_eq!(
-            Daemon::new(&NETWORK, &daemon).read_message1(&bad).err(),
-            Some(HandshakeError::Message1)
-        );
+        assert_eq!(read1(&daemon, &bad).err(), Some(HandshakeError::Message1));
         assert_eq!(uses(), before, "no long-term key touched a malformed key");
     }
 
@@ -990,14 +1044,168 @@ mod tests {
     fn a_message_1_of_the_wrong_length_uses_no_long_term_key() {
         let (daemon, good) = accepted_message1();
         let long = [good.as_slice(), &[0]].concat();
-        for wrong in [&good[..0], &good[..MESSAGE1_LEN - 1], long.as_slice()] {
+        for wrong in [
+            &good[..0],
+            &good[..MESSAGE1_LEN],
+            &good[..MESSAGE1_WIRE_LEN - 1],
+            long.as_slice(),
+        ] {
             let before = uses();
-            assert_eq!(
-                Daemon::new(&NETWORK, &daemon).read_message1(wrong).err(),
-                Some(HandshakeError::Message1)
-            );
+            assert_eq!(read1(&daemon, wrong).err(), Some(HandshakeError::Message1));
             assert_eq!(uses(), before);
         }
+    }
+
+    /// §4.3, mac1: a stranger without the daemon's bundle cannot make it
+    /// use a long-term key, or spend from its budget. Three strangers: random
+    /// bytes; a client's genuine message 1 made for another daemon; and a
+    /// genuine message 1 for this daemon whose mac1 was changed. Each is
+    /// refused with nothing used and nothing paid, and the control after
+    /// them is admitted by a budget that holds exactly one admission.
+    #[test]
+    fn a_strangers_message_1_is_refused_before_any_long_term_key_is_used() {
+        let (daemon, good) = accepted_message1();
+        let (other, _) = accepted_message1();
+        let client = StaticKeypair::generate().unwrap();
+        let (_, for_other) = Client::start(&NETWORK, &client, other.public()).unwrap();
+        let random: Vec<u8> = (0..MESSAGE1_WIRE_LEN)
+            .map(|i| u8::try_from(i * 31 % 251).unwrap())
+            .collect();
+        let mut wrong_mac = good.clone();
+        wrong_mac[MESSAGE1_WIRE_LEN - 1] ^= 1;
+
+        let now = Instant::now();
+        let one = HandshakeBudget::with_share(
+            1_000,
+            std::time::Duration::from_nanos(crate::budget::HANDSHAKE_DAEMON_CPU_NANOS),
+            now,
+        );
+        assert_eq!(one.burst_admissions(), 1);
+        for stranger in [&random, &for_other, &wrong_mac] {
+            let before = uses();
+            assert_eq!(
+                Daemon::new(&NETWORK, &daemon)
+                    .read_message1(stranger, &one, now)
+                    .err(),
+                Some(HandshakeError::Message1)
+            );
+            assert_eq!(
+                uses(),
+                before,
+                "no long-term key touched a stranger's message"
+            );
+        }
+        let before = uses();
+        assert!(
+            Daemon::new(&NETWORK, &daemon)
+                .read_message1(&good, &one, now)
+                .is_ok(),
+            "the budget's one admission is still there: no stranger spent it"
+        );
+        assert_eq!(uses(), before + 2);
+    }
+
+    /// §4.3, the budget: a message 1 with a valid mac1 that finds the budget
+    /// empty is refused as message 1, before either long-term key is used.
+    #[test]
+    fn an_exhausted_budget_refuses_before_any_long_term_key_is_used() {
+        let (daemon, good) = accepted_message1();
+        let now = Instant::now();
+        let none = HandshakeBudget::with_share(1_000, std::time::Duration::ZERO, now);
+        assert_eq!(none.burst_admissions(), 0);
+        let before = uses();
+        assert_eq!(
+            Daemon::new(&NETWORK, &daemon)
+                .read_message1(&good, &none, now)
+                .err(),
+            Some(HandshakeError::Message1)
+        );
+        assert_eq!(uses(), before);
+    }
+
+    /// §4.3, the budget under a flood. A session is established first. Then
+    /// a bundle holder sends message 1s with valid mac1s and broken tags, as
+    /// fast as it likes, for two simulated seconds. The long-term keys are
+    /// used only as often as the budget pays for, the CPU those admissions
+    /// stand for stays within the share of the window plus the burst, and
+    /// the established session still carries records both ways afterwards.
+    ///
+    /// The budget here is 1 % of a core, not the ruled 25 %, so that the
+    /// flood is short in a debug build; the arithmetic is the same, and the
+    /// budget module tests the ruled figures.
+    #[test]
+    fn a_flood_of_valid_mac1_messages_is_held_to_the_budget() {
+        let daemon = StaticKeypair::generate().unwrap();
+        let client = StaticKeypair::generate().unwrap();
+        let t0 = Instant::now();
+        let share = 10;
+        let burst = std::time::Duration::from_secs(1);
+        let budget = HandshakeBudget::with_share(share, burst, t0);
+
+        // The established session.
+        let (c, m1) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
+        let d = Daemon::new(&NETWORK, &daemon)
+            .read_message1(&m1, &budget, t0)
+            .unwrap();
+        let (d, m2) = d.write_message2().unwrap();
+        let c = c.read_message2(&m2).unwrap();
+        let (c, m3) = c.write_message3(b"request").unwrap();
+        let d = d.read_message3(&m3).unwrap();
+        let (pending, m4) = d.write_message4(b"grant").unwrap();
+        let (c, _) = c.read_message4(&m4).unwrap();
+        let (mut client_send, mut client_recv) = c.into_directions();
+        let (first, _) = client_send.seal(b"first", TRANSPORT_AD).unwrap();
+        let (mut session, _) = pending
+            .open_first_message(|recv| recv.open(&first, TRANSPORT_AD).map(|(p, _)| p))
+            .unwrap();
+
+        // The flood: valid mac1s over broken tags, spread over two seconds.
+        let flood: Vec<Vec<u8>> = (0..40)
+            .map(|_| {
+                let (_, mut m) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
+                m[MESSAGE1_LEN - 1] ^= 1;
+                remac(&daemon, &mut m);
+                m
+            })
+            .collect();
+        let window = std::time::Duration::from_secs(2);
+        let before = uses();
+        let mut admitted = 0u64;
+        for (i, m) in flood.iter().enumerate() {
+            let now = t0 + window * u32::try_from(i).unwrap() / 40;
+            let used = uses();
+            let result = Daemon::new(&NETWORK, &daemon).read_message1(m, &budget, now);
+            assert!(result.is_err(), "a broken tag never authenticates");
+            admitted += u64::from(uses() > used);
+        }
+        assert_eq!(
+            uses() - before,
+            2 * admitted,
+            "two long-term operations per admission"
+        );
+        let ns = |d: std::time::Duration| u64::try_from(d.as_nanos()).unwrap();
+        let allowed = (ns(window) + ns(burst)) * share / 1_000;
+        let spent = (admitted + 1) * crate::budget::HANDSHAKE_DAEMON_CPU_NANOS;
+        assert!(
+            spent <= allowed,
+            "{spent} ns of handshakes admitted against {allowed}"
+        );
+        assert!(
+            admitted < 40,
+            "the flood was held, not passed: {admitted} of 40"
+        );
+        assert!(
+            admitted > 0,
+            "and the budget still admits what it has earned"
+        );
+
+        // The established session is untouched.
+        let (sealed, _) = client_send.seal(b"after the flood", TRANSPORT_AD).unwrap();
+        let (opened, _) = session.recv.open(&sealed, TRANSPORT_AD).unwrap();
+        assert_eq!(opened, b"after the flood");
+        let (reply, _) = session.send.seal(b"still here", TRANSPORT_AD).unwrap();
+        let (opened, _) = client_recv.open(&reply, TRANSPORT_AD).unwrap();
+        assert_eq!(opened, b"still here");
     }
 
     /// Rule 35: the secrets this module holds wipe themselves when dropped.
