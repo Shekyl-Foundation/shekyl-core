@@ -802,7 +802,7 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 34] = [
+    let links: [(&str, &str); 35] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -939,6 +939,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v34.json"),
             include_str!("vectors/rpc/get_version_synced_v35.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v35.json"),
+            include_str!("vectors/rpc/get_version_synced_v36.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -957,7 +961,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 34] = [
+    const ADDED_AT_LINK: [&[&str]; 35] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -992,6 +996,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.56 (offline is a state on get_info and the three P2P methods; get_version gains nothing)
         &[], // 3.57 (get_fee_estimate drops grace_blocks and quantization_mask, FL-R26 / FL-R27; get_version gains nothing)
         &[], // 3.58 (option_set / option_show, the JSON-RPC error `data` member and the four runtime endpoints' deletion, DAEMON_CONFIG_CUTOVER §2.7; get_version gains nothing)
+        &[], // 3.59 (the connection rows drop support_flags with the P2P word, PWD-T7; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1003,7 +1008,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 34] = [
+    const REMOVED_AT_LINK: [&[&str]; 35] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1038,6 +1043,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.56 (offline is a state elsewhere; get_version retires nothing)
         &[], // 3.57 (get_fee_estimate's two members retire elsewhere; get_version retires nothing)
         &[], // 3.58 (the retired endpoints are not get_version's; it retires nothing)
+        &[], // 3.59 (support_flags leaves the connection rows; get_version retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),
