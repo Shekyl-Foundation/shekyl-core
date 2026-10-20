@@ -15,6 +15,8 @@
 
 #![deny(unsafe_code)]
 
+#[cfg(unix)]
+mod acl;
 pub mod announce;
 pub mod docs;
 pub mod exit;

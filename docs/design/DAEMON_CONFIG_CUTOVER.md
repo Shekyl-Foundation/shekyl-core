@@ -245,8 +245,22 @@ read:
    anyone outside the permitted principals.
 5. Apply.
 
-The permitted principals are root and the daemon's account on Unix. On
-Windows the check is an **allowlist**: write is permitted only to SYSTEM,
+The permitted principals are root and the daemon's account on Unix, and for
+reading a file that holds a secret also the daemon's group (Rick,
+2026-10-19). A service install keeps one file, `root:<daemon group>` `0640`
+under `/etc/shekyl` `root:root` `0755`: written by root only, read by root,
+the daemon's account and its group. A per-account install keeps it
+owner-only `0600`. There is no separate secrets file.
+
+The Unix rules read the mode bits. Those bits are the whole policy only
+when the access-control list names nobody else. A POSIX named user or named
+group, a Linux NFSv4 list, a macOS extended entry, or a FreeBSD list the
+system does not call trivial, refuses on a secret file: once a named entry
+exists the group-class bits are the mask, not the owning group. A list that
+only restates the mode does not refuse, and a probe that cannot be read
+refuses rather than passing, as an unreadable directory does.
+
+On Windows the check is an **allowlist**: write is permitted only to SYSTEM,
 Administrators, TrustedInstaller and the daemon's own account, and any other access-control
 entry that grants write refuses, whatever it names (Authenticated Users,
 INTERACTIVE, a user's SID, CREATOR OWNER, Everyone, Users). The installer
