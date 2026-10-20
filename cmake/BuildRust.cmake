@@ -237,12 +237,19 @@ endif()
 # FFI into the daemon.
 #
 # The dependency set below tracks the inputs that live under `rust/`: every
-# `.rs`, every `Cargo.toml`, the lockfile, and `.md` files (which feed the build
-# via `#![doc = include_str!("../README.md")]`). It is deliberately *not* a
-# complete model of cargo's inputs — `include_str!` / `include_bytes!` targets
-# that live outside `rust/` (e.g. test vectors under `docs/`, `config/*.json`)
-# are not tracked here. Those are test/doc inputs that affect test binaries and
-# rustdoc, not the linked production archives this file builds (shekyl-ffi,
+# `.rs`, every `Cargo.toml`, the lockfile, `.md` files (which feed the build
+# via `#![doc = include_str!("../README.md")]`), and `.cargo/config.toml`.
+# The globs do not see a dot-directory, so the cargo config is named
+# explicitly. It is the +crt-static flag for the MSVC targets; cargo
+# fingerprints it only once cargo runs, and this list is what makes CMake
+# run cargo. Without it an incremental build keeps archives linked to the
+# dynamic CRT.
+#
+# The set is deliberately *not* a complete model of cargo's inputs —
+# `include_str!` / `include_bytes!` targets that live outside `rust/`
+# (e.g. test vectors under `docs/`, `config/*.json`) are not tracked here.
+# Those are test/doc inputs that affect test binaries and rustdoc, not the
+# linked production archives this file builds (shekyl-ffi,
 # shekyl-daemon-image), whose `include_*!` uses are confined to
 # `#[cfg(test)]`. A tracked change still triggers a cargo run, and cargo's own
 # fingerprinting then re-checks the full input set and decides whether to
@@ -262,6 +269,7 @@ set(_shekyl_rust_deps
     ${_shekyl_rust_sources}
     ${_shekyl_rust_manifests}
     "${RUST_SOURCE_DIR}/Cargo.lock"
+    "${RUST_SOURCE_DIR}/.cargo/config.toml"
 )
 
 # ── shekyl-ffi (crypto, staking, economics, logging — the wallet-side image) ─

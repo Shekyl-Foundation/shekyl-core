@@ -961,8 +961,11 @@ spec = [
 cleared = [
   { through = "473aca852", reason = "mac1 and the handshake budget (RPC_CHANNEL.md section 4.3, 2026-10-20): read_message1 gains a keyed BLAKE2s over the 2,320-byte Noise message and one budget admission before the long-term work RT-P6 timed, and the client's start one keyed BLAKE2s. A few microseconds against 2,136.1 us; the stranger's re-measure on the floor device (rt_p6_mac1_stranger_20261020.md) measures it, and its registration moves this constant if the daemon's handshake p99 rises." },
   { through = "f94231ec8", reason = "The constant moves to the re-measure's 2,163.8 us, and the budget test's count with it (117 to 115 a second). Only the value the budget charges changes; no code path the capture timed is touched, so the capture at 5db6eeda8f prices this tree." },
+  { through = "9b5858839", reason = "Adds deadline.rs: the handshake's two deadlines as constants, which nothing in the crate reads yet, and a compile-time check of their order. No code path RT-P6 or RT-P9 timed changes." },
   { through = "3eb4b79df", reason = "The busy reply: a message 1 the budget refuses is answered with one keyed BLAKE2s over 34 bytes instead of nothing, after the admission check, so it is outside every admitted handshake the charge prices; the client computes the expected reply once with its mac1. The daemon's handshake, and what each admission costs, are unchanged." },
-  { through = "7b2ed1f26", reason = "A first presentation inserts its mac1 into a 115-slot window before the long-term work, and a busy reply is Message1Admission::Busy rather than an error. A replay returns before the long-term keys and is not an admitted handshake. The client's busy compare is subtle's constant-time equality. The charge is unchanged at 2,163,800 ns, so the captures at 5db6eeda8f still price this tree." }
+  { through = "31ba74896", reason = "Adds retry.rs, the client's retry policy: arithmetic on instants that decides when to start again. No handshake step RT-P6 or RT-P9 timed changes." },
+  { through = "7b2ed1f26", reason = "A first presentation inserts its mac1 into a 115-slot window before the long-term work, and a busy reply is Message1Admission::Busy rather than an error. A replay returns before the long-term keys and is not an admitted handshake. The client's busy compare is subtle's constant-time equality. The charge is unchanged at 2,163,800 ns, so the captures at 5db6eeda8f still price this tree." },
+  { through = "54c3aa3dd", reason = "The retry module's end-to-end test matches Message1Admission instead of an error. HandshakeRetry's decisions are the same, and no handshake step RT-P6 or RT-P9 timed changes." }
 ]
 
 [[constant]]
@@ -974,6 +977,28 @@ status = "current"
 capture = "docs/benchmarks/rt_p6_mac1_stranger_20261020_captures/summary_registered.md"
 capture_rev = "5db6eeda8f"
 rev_source = "the record's results name the build: 5db6eeda8f on the floor device, checked by its hash before building, the registered cell of 2026-10-20 (docs/benchmarks/rt_p6_mac1_stranger_20261020.md, Conditions). The constant is the daemon's per-handshake CPU at the 99th percentile with mac1, 2,163.8 us, the cost the handshake budget charges each admission. It replaces RT-P6's 2,136.1 us by that record's registered rule: the p99 rose."
+path_set = "rpc-handshake"
+
+[[constant]]
+name = "handshake_message1_deadline_s"
+defined_in = "rust/shekyl-rpc-channel/src/deadline.rs"
+needle = "pub const MESSAGE1_DEADLINE: Duration = Duration::from_secs(4);"
+measured_by = ["BA-T37"]
+status = "current"
+capture = "docs/benchmarks/rt_p9_handshake_round_trips_20261020_captures/attempt2/summary.md"
+capture_rev = "666bbded3c"
+rev_source = "the record's results name the build: 666bbded3c on the floor device, checked by its hash before building, and on the workstation, attempt 2 of 2026-10-20 (docs/benchmarks/rt_p9_handshake_round_trips_20261020.md). Twice the onion leg's 99th percentile from accept to message 1 received, 1,803.4 ms, rounded up to a whole second."
+path_set = "rpc-handshake"
+
+[[constant]]
+name = "handshake_whole_deadline_s"
+defined_in = "rust/shekyl-rpc-channel/src/deadline.rs"
+needle = "pub const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(11);"
+measured_by = ["BA-T37"]
+status = "current"
+capture = "docs/benchmarks/rt_p9_handshake_round_trips_20261020_captures/attempt2/summary.md"
+capture_rev = "666bbded3c"
+rev_source = "the record's results name the build: 666bbded3c on the floor device, checked by its hash before building, and on the workstation, attempt 2 of 2026-10-20 (docs/benchmarks/rt_p9_handshake_round_trips_20261020.md). Twice the onion leg's 99th percentile from accept to the client's first record opened, 5,231.9 ms, rounded up to a whole second."
 path_set = "rpc-handshake"
 
 [[retired_estimate]]
