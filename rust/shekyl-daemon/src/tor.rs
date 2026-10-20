@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
+use shekyl_ffi::zone_ffi::DownCause;
 use shekyl_tor_control_daemon::{
     DaemonTorConfig, DaemonTorControl, DaemonTorStartError, OnionPow, TorBinaryError, TorDeath,
 };
@@ -155,7 +156,8 @@ pub fn watch_death(
     published: Option<String>,
     handle: &tokio::runtime::Handle,
 ) {
-    if !shekyl_ffi::zone_ffi::watch_managed_tor(control.death()) {
+    let death = control.death();
+    if !shekyl_ffi::zone_ffi::watch_managed_tor(async move { down_cause(death.await) }) {
         tracing::warn!(
             target: "global",
             "the managed Tor's death is not watched: the zone host has no Tor route"
@@ -177,4 +179,28 @@ pub fn watch_death(
             }
         );
     });
+}
+
+/// The link cause for one managed-Tor end.
+///
+/// An exit and a stop both take the Tor link down. Only an exit is a fault
+/// (`TOR_SUPERVISOR.md` TSR-F1).
+fn down_cause(death: TorDeath) -> DownCause {
+    match death {
+        TorDeath::Exited => DownCause::ProcessExited,
+        TorDeath::Stopped => DownCause::ProcessStopped,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An exit and a stop are different link causes. Swapping the arms
+    /// fails this.
+    #[test]
+    fn an_exit_and_a_stop_are_different_link_causes() {
+        assert_eq!(down_cause(TorDeath::Exited), DownCause::ProcessExited);
+        assert_eq!(down_cause(TorDeath::Stopped), DownCause::ProcessStopped);
+    }
 }

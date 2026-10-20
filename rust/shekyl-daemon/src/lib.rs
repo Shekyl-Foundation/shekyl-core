@@ -22,10 +22,7 @@ pub mod run;
 pub mod signals;
 pub mod tor;
 
-pub use entry::{
-    ShekylClientEndpoint, ShekylDaemonEntry, ShekylDaemonSnapshot, ShekylMineAddress,
-    ShekylStringList, SNAPSHOT_FIELDS,
-};
+pub use entry::{RunFn, ShekylDaemonEntry, StopFn};
 pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
 
 /// The entry with the real platform: the account's roots from the
@@ -41,10 +38,7 @@ pub fn main(entry: &ShekylDaemonEntry) -> i32 {
 /// This machine's platform facts and the network id derivation.
 pub(crate) fn host() -> Host {
     Host {
-        platform: shekyl_daemon_config::Platform {
-            home: shekyl_ffi::platform::account_home(),
-            program_data: shekyl_ffi::platform::program_data(),
-        },
+        platform: shekyl_ffi::platform::current(),
         network_id_of: shekyl_ffi::network_id_ffi::network_id_of,
     }
 }
