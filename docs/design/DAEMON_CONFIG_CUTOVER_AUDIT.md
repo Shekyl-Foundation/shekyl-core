@@ -263,12 +263,12 @@ of its own, for the same reason as the negative one.
 - **The C++ Tor path.** Under the ruling in §0, `add_ephemeral_tor_zone`,
   `check_ephemeral_tor_liveness` and the C++ calls into
   `shekyl_daemon_tor_*` go. The Rust FFI exports `shekyl_daemon_tor_*`
-  ([`rust/shekyl-ffi/src/daemon_tor_ffi.rs`](../../rust/shekyl-ffi/src/daemon_tor_ffi.rs))
-  and the blocking facade
-  ([`rust/shekyl-tor-control-daemon/src/blocking.rs`](../../rust/shekyl-tor-control-daemon/src/blocking.rs))
-  then have no caller. [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.12 asks
-  that those deletions go to Rick before they are cut; they are listed in
-  commit (e)'s message and removed there only with his word.
+  (`rust/shekyl-ffi/src/daemon_tor_ffi.rs`) and the blocking facade
+  (`rust/shekyl-tor-control-daemon/src/blocking.rs`) then had no caller.
+  [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) §4.12 sent those deletions to
+  Rick; he ruled them on 2026-10-17 (`DAEMON_CONFIG_CUTOVER.md`, the
+  cutover's residue, item 5), and the Tor lane deleted both files and the
+  exports' `shekyl_ffi.h` declarations.
 - **The runtime rows (commit (d), §2.7, `RPC_CHANNEL.md` §6.4).** The
   options handle
   ([`rust/shekyl-daemon/src/options.rs`](../../rust/shekyl-daemon/src/options.rs))
