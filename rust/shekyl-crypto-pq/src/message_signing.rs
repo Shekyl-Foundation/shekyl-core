@@ -192,8 +192,8 @@ pub const MSG_SIG_CANONICAL_LEN: usize =
 
 /// Hard ceiling on the **encoded** armored payload, enforced before any
 /// decoding (SM-R-5 R5-b: bounding decoded output after decode would
-/// allocate an attacker's bytes from a shorter input — the `shekyl-levin`
-/// `decompress_payload` pre-allocation discipline). Covers either
+/// allocate an attacker's bytes from a shorter input — the discipline
+/// `shekyl-levin`'s reader applies to a bucket's declared length). Covers either
 /// parameter set (192s ≈ 21.7 KB, 192f ≈ 47.7 KB encoded) so a pre-freeze
 /// s→f flip does not reopen it.
 pub const MSG_SIG_MAX_ENCODED_LEN: usize = 64 * 1024;

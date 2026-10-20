@@ -19,7 +19,6 @@ use std::time::{Duration, Instant};
 
 use shekyl_dialer::{Dialer, WAKE_BASE_NANOS, WAKE_JITTER_NANOS};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_levin::SupportFlags;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
 use shekyl_seam::{Hub, Post, Route, RoutePublish, SocketId, SyncPayload};
@@ -66,7 +65,6 @@ fn the_owner_dials_only_after_the_engine_wakes_it_and_once_per_wake() {
     let dialer = Arc::new(Dialer::new(
         hub.clone(),
         RefusedSet::NON_GLOBAL,
-        SupportFlags::ADVERTISED.bits(),
         Arc::new(|| {
             Some(SyncPayload {
                 current_height: 1,

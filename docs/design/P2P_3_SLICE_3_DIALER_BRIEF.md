@@ -44,6 +44,10 @@ until slice 4".*
 
 **UNFREEZE (Rick, 2026-10-13):** src/cryptonote_protocol/levin_notify.cpp — the cutover's commit (c): `make_relay` and the `notify` constructors take no connector mask and no carrier flag; the relay's identity and `dev-relay-cover` are the posture the Rust `main()` records (`shekyl_relay_zone_new` reads it).
 
+**UNFREEZE (Rick, 2026-10-19):** src/p2p/net_node.inl — compression and support flags leave the protocol (rulings on #1134, `SHEKYL_P2P_PROTOCOL.md` PWD-T7). `relay_notify_to_list` sends the finalized message itself, its compressed alternative and the choice between them deleted; `post_each` and `for_connection` hand their callbacks the connection alone, the support-flags argument gone; `handle_get_support_flags`, `try_get_support_flags`, the inbound handshake's re-ask, and the support-flags writes in `init_config`, `get_local_node_data` and `on_outbound_handshake` are deleted. Edits to existing lines and deletions only; no line is added.
+
+**UNFREEZE (Rick, 2026-10-19):** src/p2p/net_node.h — with the above: the `post_each` and `for_connection` declarations take a callback of the connection alone; the connection's `support_flags`, the zone config's `m_support_flags`, the 1007 handler's map entry and the two support-flags declarations are deleted.
+
 **UPDATE 2026-10-09 (Rick):** `COMMAND_HANDSHAKE` carries no address
 field on any connector (the handshake-address ruling below, which
 replaces "The address we announce"); `disclose_count` is the protocol

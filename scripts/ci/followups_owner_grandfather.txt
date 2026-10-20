@@ -209,7 +209,6 @@ Relay: `F'` may be per-POSTURE even though §89.2 correctly refused per-ZONE.
 Relay: populate the 48-cell Pi verification surface, then consume it per shape.
 Execute PWD-T6's PWC-F3 deletion: remove `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size`, and `network_config`'s KV serializer.
 The rustdoc gate enumerates crates by name, so a crate outside the list is never documented and its errors accumulate unseen — `shekyl-relay` currently has 5.
-Gate PWD-T7's compression invariant mechanically: assert that only notify routes reach `try_compress_message`, and that no message carrying confidential material of any lifetime — session key, node-local secret, reused token — is routed through one.
 Size the Levin bucket header's length field, once `NOTIFY_RESPONSE_GET_OBJECTS`'s byte budget has a value.
 Re-derive `drop_connections(address)`'s host-keyed severing together with the anonymity-zone inbound bound.
 Carry an anonymity-zone peer's endpoint in the handshake, and delete the `unknown()` sentinel with it.

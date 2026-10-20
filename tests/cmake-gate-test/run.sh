@@ -32,7 +32,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TOOLCHAIN_FILE="$SCRIPT_DIR/fake32-toolchain.cmake"
 
 BUILD_DIR="$(mktemp -d)"
-trap 'rm -rf "$BUILD_DIR"' EXIT
+ANDROID_SYSTEM_DIR="$(mktemp -d)"
+ANDROID_FLAG_DIR="$(mktemp -d)"
+trap 'rm -rf "$BUILD_DIR" "$ANDROID_SYSTEM_DIR" "$ANDROID_FLAG_DIR"' EXIT
 
 cd "$REPO_ROOT"
 
@@ -95,4 +97,48 @@ if grep -qE '^-- (Looking for|Found |Could NOT find|Performing Test)' \
 fi
 
 echo "PASS: gate fired correctly on fake 32-bit toolchain."
+
+# Android refusal. The two configures hit the two calls in CMakeLists.txt.
+# `-DCMAKE_SYSTEM_NAME=Android` is visible before project(); left alone,
+# project() enters Platform/Android and reports a missing NDK instead of
+# Shekyl's refusal. The toolchain file sets ANDROID only, which project()
+# loads, so only the call after project() can see it.
+refuse_android() {
+  local name="$1"
+  local dir="$2"
+  shift 2
+  cmake -S . -B "$dir" "$@" >"$dir/stdout.log" 2>"$dir/stderr.log"
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "FAIL: ${name}: configure succeeded." >&2
+    echo "--- stdout:" >&2; cat "$dir/stdout.log" >&2
+    echo "--- stderr:" >&2; cat "$dir/stderr.log" >&2
+    exit 1
+  fi
+  if ! grep -q 'Shekyl refuses to configure for Android' "$dir/stderr.log"; then
+    echo "FAIL: ${name}: refusal missing from stderr." >&2
+    echo "--- stderr:" >&2; cat "$dir/stderr.log" >&2
+    exit 1
+  fi
+  if grep -q 'Neither the NDK' "$dir/stderr.log"; then
+    echo "FAIL: ${name}: project() entered the Android platform module." >&2
+    echo "--- stderr:" >&2; cat "$dir/stderr.log" >&2
+    exit 1
+  fi
+  if grep -qE '^-- (Looking for|Found |Could NOT find|Performing Test)' \
+       "$dir/stdout.log" "$dir/stderr.log"; then
+    echo "FAIL: ${name}: configure progressed into probe-module / find_package territory." >&2
+    echo "--- stdout:" >&2; cat "$dir/stdout.log" >&2
+    echo "--- stderr:" >&2; cat "$dir/stderr.log" >&2
+    exit 1
+  fi
+  echo "PASS: ${name}."
+}
+
+refuse_android "command-line Android system name" "$ANDROID_SYSTEM_DIR" \
+  -DCMAKE_SYSTEM_NAME=Android
+refuse_android "toolchain ANDROID flag" "$ANDROID_FLAG_DIR" \
+  -DCMAKE_TOOLCHAIN_FILE="$SCRIPT_DIR/android-flag-toolchain.cmake"
+
+echo "PASS: Android configure is refused before and after project()."
 exit 0

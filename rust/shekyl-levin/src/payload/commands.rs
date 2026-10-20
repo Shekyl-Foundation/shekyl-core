@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Levin command 1001 / 1002 / 1007 request and response maps.
+//! Levin command 1001 / 1002 request and response maps.
 
 use shekyl_portable_storage::{Section, Value};
 
@@ -11,7 +11,6 @@ use super::error::Error;
 use super::get;
 use super::types::{
     insert_peerlist, peerlist_from_section, BasicNodeData, CoreSyncData, PeerlistEntry,
-    SupportFlags,
 };
 use super::PortableMap;
 
@@ -20,9 +19,9 @@ pub const COMMAND_HANDSHAKE: u32 = 1001;
 /// `COMMAND_TIMED_SYNC`.
 pub const COMMAND_TIMED_SYNC: u32 = 1002;
 // COMMAND_PING (1003) is deleted (PWD-B10 / PWC-B1); the id is retired,
-// never reused.
-/// `COMMAND_REQUEST_SUPPORT_FLAGS` = `P2P_COMMANDS_POOL_BASE + 7`.
-pub const COMMAND_REQUEST_SUPPORT_FLAGS: u32 = 1007;
+// never reused. COMMAND_REQUEST_SUPPORT_FLAGS (1007) is deleted with the
+// support-flags word it carried (Rick, 2026-10-19); the id is retired, never
+// reused.
 
 /// Handshake invoke body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,41 +141,6 @@ impl PortableMap for TimedSyncResponse {
         Ok(Self {
             payload_data: CoreSyncData::from_section(get::object(section, "payload_data")?)?,
             local_peerlist_new: peerlist_from_section(section, "local_peerlist_new")?,
-        })
-    }
-}
-
-/// Support-flags invoke body — empty map.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct SupportFlagsRequest;
-
-impl PortableMap for SupportFlagsRequest {
-    fn to_section(&self) -> Result<Section, Error> {
-        Ok(Section::new())
-    }
-
-    fn from_section(_section: &Section) -> Result<Self, Error> {
-        Ok(Self)
-    }
-}
-
-/// Support-flags response body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SupportFlagsResponse {
-    /// Peer's `support_flags`.
-    pub support_flags: SupportFlags,
-}
-
-impl PortableMap for SupportFlagsResponse {
-    fn to_section(&self) -> Result<Section, Error> {
-        let mut section = Section::new();
-        section.insert("support_flags", Value::UInt32(self.support_flags.bits()));
-        Ok(section)
-    }
-
-    fn from_section(section: &Section) -> Result<Self, Error> {
-        Ok(Self {
-            support_flags: SupportFlags::from_bits(get::u32_val(section, "support_flags")?),
         })
     }
 }

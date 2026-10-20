@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Levin command schemas (LV-2b: 1001 / 1002 / 1007 and notifies 2002–2004 /
+//! Levin command schemas (LV-2b: 1001 / 1002 and notifies 2002–2004 /
 //! 2006–2010).
 //!
 //! Encode/decode sit on `shekyl-portable-storage`. Cryptonote blobs stay
@@ -22,8 +22,7 @@ mod types;
 pub use address::{NetworkAddress, ADDR_IPV4, ADDR_IPV6, ADDR_TOR};
 pub use block::{BlockCompleteEntry, TxBlobEntry, ATTESTATION_WITNESS_MAX_BYTES};
 pub use commands::{
-    HandshakeRequest, HandshakeResponse, SupportFlagsRequest, SupportFlagsResponse,
-    TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE, COMMAND_REQUEST_SUPPORT_FLAGS,
+    HandshakeRequest, HandshakeResponse, TimedSyncRequest, TimedSyncResponse, COMMAND_HANDSHAKE,
     COMMAND_TIMED_SYNC,
 };
 pub use error::Error;
@@ -35,7 +34,7 @@ pub use notifies::{
     NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY,
     NOTIFY_RESPONSE_GET_OBJECTS,
 };
-pub use types::{BasicNodeData, CoreSyncData, PeerlistEntry, SupportFlags};
+pub use types::{BasicNodeData, CoreSyncData, PeerlistEntry};
 
 /// A C++ `BEGIN_KV_SERIALIZE_MAP` as a portable_storage section.
 pub trait PortableMap: Sized {

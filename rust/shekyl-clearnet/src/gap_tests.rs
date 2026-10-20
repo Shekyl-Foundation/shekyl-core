@@ -149,10 +149,10 @@ fn handshake_request(body: usize) -> Vec<u8> {
     )
 }
 
-/// A support-flags request: a complete frame that is not a handshake.
-fn support_flags_frame() -> Vec<u8> {
+/// A timed-sync request: a complete frame that is not a handshake.
+fn timed_sync_frame() -> Vec<u8> {
     frame(
-        shekyl_levin::COMMAND_REQUEST_SUPPORT_FLAGS,
+        shekyl_levin::COMMAND_TIMED_SYNC,
         shekyl_levin::Flags::REQUEST,
         10,
     )
@@ -260,12 +260,12 @@ fn a_complete_frame_ends_the_gap_while_the_verdict_is_slow() {
 }
 
 /// **A complete frame that is not the handshake does not end the gap**
-/// (Copilot on #1056). A dialed peer that answers with a support-flags
+/// (Copilot on #1056). A dialed peer that answers with another command's
 /// request and stops has not answered: the gap times it out.
 #[test]
-fn a_dialed_peer_that_sends_support_flags_and_stops_is_timed_out() {
+fn a_dialed_peer_that_sends_a_timed_sync_and_stops_is_timed_out() {
     let (cause, seen) = dial_against(Tick::new(200_000_000), move |mut sock| {
-        sock.write_all(&support_flags_frame()).expect("frame");
+        sock.write_all(&timed_sync_frame()).expect("frame");
         std::thread::sleep(Duration::from_secs(2));
         drop(sock);
     });
@@ -297,13 +297,12 @@ fn an_inbound_peer_s_handshake_request_ends_the_gap() {
     drop(peer.engine);
 }
 
-/// **An inbound peer that sends a support-flags request and stops is timed
-/// out** (Copilot on #1056): the strand answers that request before any
-/// handshake, and the session had then held an admission slot with no
-/// deadline at all.
+/// **An inbound peer that sends another command's request and stops is
+/// timed out** (Copilot on #1056): the session had held an admission slot
+/// with no deadline at all.
 #[test]
-fn an_inbound_peer_that_sends_support_flags_and_stops_is_timed_out() {
-    let mut peer = accept_peer_that_writes(Tick::new(200_000_000), &support_flags_frame());
+fn an_inbound_peer_that_sends_a_timed_sync_and_stops_is_timed_out() {
+    let mut peer = accept_peer_that_writes(Tick::new(200_000_000), &timed_sync_frame());
     // Bounded: with the defect the session stays open, and the test fails
     // instead of waiting for ever.
     let cause = peer.pool.block_on(async {

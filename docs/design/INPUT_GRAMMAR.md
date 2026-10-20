@@ -866,7 +866,7 @@ Each shape's fields today, and their names under this Part. The census from sour
 
 **Version** (`version`; its fields walk under `daemon`, whose build and network the read names): `version` (frozen); `release` → `tagged`; `current_height` (a count) → `height` (ordinal, IG-Q45); `target_height` (a count) → `target_height` (ordinal, IG-Q45); `consensus_constants_digest` → `consensus_digest`; `nettype` → `network` (its value `fakechain` is `regtest`, §3's name); `genesis_hash` → `genesis`.
 
-**Connection** (`peer_connections`; `peer` in `sync_status`): `incoming` → `inbound` (switch); `localhost`, `local_ip` → `local` (switch); `address`, `host`, `ip`, `port` → `endpoint` (peer-endpoint); `address_type` → `connector` (one-of `clearnet`, `tor`); `recv_count`, `send_count` → `download`, `upload` (bytes); `recv_idle_time`, `send_idle_time` → `download_idle`, `upload_idle` (duration); `state` → `state`; `live_time` → `age` (duration); `avg_download`, `current_download`, `avg_upload`, `current_upload` → `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current` (bytes per second; KiB/s today); `support_flags` → `flags`; `connection_id` → `id`; `height` → `height`.
+**Connection** (`peer_connections`; `peer` in `sync_status`): `incoming` → `inbound` (switch); `localhost`, `local_ip` → `local` (switch); `address`, `host`, `ip`, `port` → `endpoint` (peer-endpoint); `address_type` → `connector` (one-of `clearnet`, `tor`); `recv_count`, `send_count` → `download`, `upload` (bytes); `recv_idle_time`, `send_idle_time` → `download_idle`, `upload_idle` (duration); `state` → `state`; `live_time` → `age` (duration); `avg_download`, `current_download`, `avg_upload`, `current_upload` → `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current` (bytes per second; KiB/s today); `connection_id` → `id`; `height` → `height`.
 
 **Sync status** (`sync_status`): `height` (a count) → `height` (ordinal, IG-Q45); `target_height` (a count) → `target_height` (ordinal, IG-Q45); `peers`, each `{info: …}` → `peer`, a list of connections, unwrapped; `spans` → `span`, whose element is `start_block_height` → `from`, `nblocks` → `blocks`, `connection_id` → `connection`, `rate` → `download_speed` (bytes per second), `speed` (the queue's relative speed, a percentage today) → `pace` (micro), `size` → `size` (bytes), `remote_address` → `endpoint`; `overview`, an ASCII picture, goes: it is the console's rendering.
 
@@ -948,7 +948,7 @@ Every method, parameter and field name above, with the holder its walk starts fr
 | daemon status fields | `daemon` | `height`, `hash`, `target_height`, `synchronized`, `syncing`, `offline`, `degraded`, `peered`, `protocol_version`, `difficulty`, `difficulty_cumulative`, `block_spacing`, `tx_count`, `block_weight_max`, `block_weight_median`, `time_adjusted`, `emission`, `emission_multiplier`, `burn`, `burn_total`, `stake_share`, `txpool_count`, `started`, `disk_free`, `data_size`, `revision`, `peer_outbound_count`, `peer_inbound_count`, `alt_count`, `rpc_connections`, `clearnet_inbound_count`, `clearnet_outbound_count`, `tor_inbound_count`, `tor_outbound_count`, `peer_white_count`, `peer_gray_count`, `txpool_private_count`, `grant` |
 | version (the frozen key, RW-Q6) | `daemon` | `version` |
 | version fields | `daemon` | `tagged`, `height`, `target_height`, `consensus_digest`, `network`, `genesis` |
-| connection element | `peer connection` | `inbound`, `local`, `endpoint`, `connector`, `download`, `upload`, `download_idle`, `upload_idle`, `state`, `age`, `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current`, `flags`, `id`, `height` |
+| connection element | `peer connection` | `inbound`, `local`, `endpoint`, `connector`, `download`, `upload`, `download_idle`, `upload_idle`, `state`, `age`, `download_speed_average`, `download_speed_current`, `upload_speed_average`, `upload_speed_current`, `id`, `height` |
 | sync status fields | `sync` | `height`, `target_height`, `peer`, `span` |
 | span element | `sync span` | `from`, `blocks`, `connection`, `download_speed`, `pace`, `size`, `endpoint` |
 | peer element | `peer` | `endpoint`, `tier` |
@@ -1059,7 +1059,6 @@ Rows below add to §3 and §11. A term already there that gains a parent here ke
 | speed | download, upload, mine | per second: bytes, or under `mine` hashes | |
 | average | speed | the average | |
 | current | speed | the current value | |
-| flags | connection | the peer's support flags | |
 | packets | download, upload | a packet count | |
 | span | sync | a block span being downloaded | |
 | pace | span | the span queue's relative speed, a ratio (micro) | |

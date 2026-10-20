@@ -142,7 +142,6 @@ pub struct Dialer {
     stop: Arc<AtomicBool>,
     /// Set when the zone host starts; the lists exist before it does.
     network_id: Mutex<Option<[u8; 16]>>,
-    support_flags: u32,
     snapshot: SnapshotSource,
     /// The address file, once [`Self::open_address_file`] named it.
     store: Mutex<Option<AddressStore>>,
@@ -170,18 +169,13 @@ pub fn session_of(id: SocketId) -> ConnectionId {
 impl Dialer {
     /// A dialer over `hub`, with empty lists built over `refused`.
     ///
-    /// `support_flags` is what every handshake request carries, with the
-    /// network id given later by [`Self::set_network_id`]. `snapshot` is
-    /// the core's latest published tip, and [`Self::tip_published`] says
+    /// Every handshake request carries the network id given later by
+    /// [`Self::set_network_id`]. `snapshot` is the core's latest published
+    /// tip, and [`Self::tip_published`] says
     /// when it changes. Until both are known, and the connector's link on
     /// `hub` is usable, the owner loops draw nothing.
     #[must_use]
-    pub fn new(
-        hub: Hub,
-        refused: RefusedSet,
-        support_flags: u32,
-        snapshot: SnapshotSource,
-    ) -> Self {
+    pub fn new(hub: Hub, refused: RefusedSet, snapshot: SnapshotSource) -> Self {
         let mut targets = vec![0usize; ConnectorId::COUNT];
         targets[ConnectorId::Clearnet.index()] = P2P_DEFAULT_OUT_PEERS as usize;
         targets[ConnectorId::Tor.index()] = MIN_PROVISIONED_OUT_PEERS as usize;
@@ -207,7 +201,6 @@ impl Dialer {
             nonces: HandshakeNonceSet::new(),
             stop: Arc::new(AtomicBool::new(false)),
             network_id: Mutex::new(None),
-            support_flags,
             snapshot,
             store: Mutex::new(None),
             owners: Mutex::new([false; ConnectorId::COUNT]),
@@ -567,7 +560,7 @@ impl Dialer {
         tracing::debug!("{connector:?} dial {address:?} kept as {:?}", kept.id);
         self.hub.session_established(kept.id);
         self.hub
-            .post_handshake_result(kept.id, connector, kept.support_flags, kept.sync);
+            .post_handshake_result(kept.id, connector, kept.sync);
         self.hub.drive(kept.id, kept.session);
         true
     }
