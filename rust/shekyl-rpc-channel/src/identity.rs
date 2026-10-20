@@ -16,7 +16,10 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 use super::HandshakeError;
-use crate::{static_fingerprint, StaticFingerprint, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+use crate::mac1::{self, MAC1_KEY_LEN};
+use crate::{
+    static_fingerprint, StaticFingerprint, BUSY_LEN, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN,
+};
 
 /// A static public bundle: an X25519 key and an ML-KEM-768 encapsulation
 /// key, the latter already checked as FIPS 203 requires.
@@ -28,6 +31,8 @@ pub struct StaticPublic {
     x25519: [u8; X25519_PUBLIC_LEN],
     mlkem_ek_bytes: [u8; MLKEM768_EK_LEN],
     pub(super) mlkem_ek: ml_kem_768::EncapsKey,
+    /// The mac1 key, derived once from the bundle (`crate::mac1`).
+    mac1_key: [u8; MAC1_KEY_LEN],
 }
 
 /// The two halves did not form a usable bundle.
@@ -58,6 +63,7 @@ impl StaticPublic {
             x25519,
             mlkem_ek_bytes: mlkem_ek,
             mlkem_ek: parsed,
+            mac1_key: mac1::mac1_key(&x25519, &mlkem_ek),
         })
     }
 
@@ -74,6 +80,24 @@ impl StaticPublic {
     /// The fingerprint an operator compares and an allowlist stores (§5).
     pub fn fingerprint(&self) -> StaticFingerprint {
         static_fingerprint(&self.x25519, &self.mlkem_ek_bytes)
+    }
+
+    /// The mac1 a sender holding this bundle puts after its Noise message 1
+    /// (§4.3). [`crate::handshake::Client::start`] adds it; this is the same
+    /// computation, for a caller that builds the bytes itself.
+    #[must_use]
+    pub fn mac1(&self, noise_message1: &[u8]) -> [u8; MAC1_LEN] {
+        mac1::mac1(&self.mac1_key, noise_message1)
+    }
+
+    /// Whether `tag` is the mac1 of `noise_message1` under this bundle.
+    pub(super) fn mac1_verifies(&self, noise_message1: &[u8], tag: &[u8]) -> bool {
+        mac1::verify(&self.mac1_key, noise_message1, tag)
+    }
+
+    /// The daemon's busy reply to the message 1 whose mac1 is `mac1_tag`.
+    pub(super) fn busy_reply(&self, mac1_tag: &[u8; MAC1_LEN]) -> [u8; BUSY_LEN] {
+        mac1::busy(&self.mac1_key, mac1_tag)
     }
 }
 

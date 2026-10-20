@@ -28,7 +28,9 @@ use std::fmt;
 
 use shekyl_crypto_hash::cshake256_32;
 
+pub mod budget;
 pub mod handshake;
+mod mac1;
 
 /// First part of the handshake prologue. Not a hash customization: the bytes
 /// themselves are mixed into the handshake transcript, followed by the
@@ -40,6 +42,22 @@ pub const STATIC_FINGERPRINT_DST: &[u8] = b"shekyl/rpc-static-fingerprint-v1";
 
 /// cSHAKE256 customization of [`rendezvous_name`].
 pub const RENDEZVOUS_NAME_DST: &[u8] = b"shekyl/rpc-rendezvous-name-v1";
+
+/// The label the mac1 key is derived from: the key is BLAKE2s-256 of these
+/// bytes followed by the daemon's public bundle (`RPC_CHANNEL.md` §4.3).
+pub const MAC1_DST: &[u8] = b"shekyl/rpc-mac1-v1";
+
+/// Length of the mac1 that follows the Noise message 1 on the wire.
+pub const MAC1_LEN: usize = 16;
+
+/// The label in front of what a busy reply authenticates: the reply is
+/// keyed BLAKE2s-128 under the mac1 key over these bytes followed by the
+/// mac1 of the message 1 it answers (`RPC_CHANNEL.md` §4.3, ruled
+/// 2026-10-20).
+pub const BUSY_DST: &[u8] = b"shekyl/rpc-busy-v1";
+
+/// Length of a busy reply.
+pub const BUSY_LEN: usize = 16;
 
 /// Length of the genesis-derived network id (`shekyl-p2p-transport`'s
 /// `NetworkId`; a test holds the two equal).

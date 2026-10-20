@@ -948,6 +948,32 @@ capture_rev = "301ed05b73"
 rev_source = "capture header, the tree line"
 path_set = "archival-serve-fetch"
 
+# --- the RPC channel's handshake --------------------------------------
+
+[[path_set]]
+id = "rpc-handshake"
+spec = [
+  "rust/shekyl-noise/src",
+  "rust/shekyl-rpc-channel/src",
+]
+cleared = [
+  { through = "473aca852", reason = "mac1 and the handshake budget (RPC_CHANNEL.md section 4.3, 2026-10-20): read_message1 gains a keyed BLAKE2s over the 2,320-byte Noise message and one budget admission before the long-term work RT-P6 timed, and the client's start one keyed BLAKE2s. A few microseconds against 2,136.1 us; the stranger's re-measure on the floor device (rt_p6_mac1_stranger_20261020.md) measures it, and its registration moves this constant if the daemon's handshake p99 rises." },
+  { through = "f94231ec8", reason = "The constant moves to the re-measure's 2,163.8 us, and the budget test's count with it (117 to 115 a second). Only the value the budget charges changes; no code path the capture timed is touched, so the capture at 5db6eeda8f prices this tree." },
+  { through = "3eb4b79df", reason = "The busy reply: a message 1 the budget refuses is answered with one keyed BLAKE2s over 34 bytes instead of nothing, after the admission check, so it is outside every admitted handshake the charge prices; the client computes the expected reply once with its mac1. The daemon's handshake, and what each admission costs, are unchanged." },
+  { through = "7b2ed1f26", reason = "A first presentation inserts its mac1 into a 115-slot window before the long-term work, and a busy reply is Message1Admission::Busy rather than an error. A replay returns before the long-term keys and is not an admitted handshake. The client's busy compare is subtle's constant-time equality. The charge is unchanged at 2,163,800 ns, so the captures at 5db6eeda8f still price this tree." }
+]
+
+[[constant]]
+name = "handshake_daemon_cpu_ns"
+defined_in = "rust/shekyl-rpc-channel/src/budget.rs"
+needle = "pub const HANDSHAKE_DAEMON_CPU_NANOS: u64 = 2_163_800;"
+measured_by = ["BA-T36"]
+status = "current"
+capture = "docs/benchmarks/rt_p6_mac1_stranger_20261020_captures/summary_registered.md"
+capture_rev = "5db6eeda8f"
+rev_source = "the record's results name the build: 5db6eeda8f on the floor device, checked by its hash before building, the registered cell of 2026-10-20 (docs/benchmarks/rt_p6_mac1_stranger_20261020.md, Conditions). The constant is the daemon's per-handshake CPU at the 99th percentile with mac1, 2,163.8 us, the cost the handshake budget charges each admission. It replaces RT-P6's 2,136.1 us by that record's registered rule: the p99 rose."
+path_set = "rpc-handshake"
+
 [[retired_estimate]]
 name = "serve_median_per_response_single_pass_floor"
 estimate = { low = 40.0, high = 60.0, unit = "ms" }
