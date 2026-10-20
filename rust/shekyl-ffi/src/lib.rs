@@ -172,6 +172,9 @@ pub mod rpc_peerlist_ffi;
 /// The daemon's default data directory for the C++ blockchain utilities
 /// (`DAEMON_CONFIG_CUTOVER.md` §2.6): one layout, the Rust one.
 pub mod data_dir_ffi;
+// The configuration snapshot the C++ remnant reads, and its export for the
+// C++ test binaries and the importer (DAEMON_CONFIG_CUTOVER.md §2.9).
+pub mod daemon_snapshot_ffi;
 pub mod link_ffi;
 /// The notify runner: the owner of the three notify commands
 /// (`DAEMON_CONFIG_CUTOVER.md` §2.10); the C++ event sites push facts to it.
@@ -200,11 +203,6 @@ pub mod network_id_ffi;
 // classification is recorded by C++ as an opaque byte on the verification
 // context; whether that byte severs a connection is decided only here.
 pub mod peer_policy_ffi;
-
-// Daemon ephemeral-onion FFI — PWD-E7 piece 3
-// (`P2P_2_ENDPOINT_ROUND.md` PWD-E7/E9). `node_server::init` obtains the
-// per-boot overlay inbound (managed tor, in-memory key, DiscardPK) here.
-pub mod daemon_tor_ffi;
 
 /// The account's home from the operating system's account interface (IG-13).
 pub mod platform;

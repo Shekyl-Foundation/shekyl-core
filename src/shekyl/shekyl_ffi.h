@@ -3821,87 +3821,6 @@ bool shekyl_block_sync_heavier_score(uint8_t action);
 bool shekyl_block_sync_orphan_resync(uint8_t action);
 
 // ---------------------------------------------------------------------------
-// Daemon ephemeral Tor inbound -- PWD-E7 (docs/design/P2P_2_ENDPOINT_ROUND.md)
-// ---------------------------------------------------------------------------
-// The DEFAULT overlay-endpoint posture: the daemon spawns a managed, pinned
-// tor, mints a v3 onion key IN MEMORY, publishes with ADD_ONION Flags=
-// DiscardPK, and uses the returned ServiceID as its per-boot overlay inbound
-// address. The DataDirectory is a unique 0700 subdirectory of the daemon
-// config folder, wiped on teardown -- a restart cannot reuse entry guards.
-// The operator-provisioned stable posture (--anonymous-inbound + torrc) is a
-// different privacy posture, not a different custody of the same thing, and
-// configuring it makes the ephemeral posture yield. All of the posture logic
-// lives in rust/shekyl-tor-control-daemon; these exports are marshaling.
-//
-// These symbols live in shekyl-ffi (linked by every C++ binary that
-// instantiates node_server via SHEKYL_FFI_LINK_LIBS). daemon_image is a
-// superset, so shekyld sees them too. They are not in shekyl-daemon-rpc:
-// that crate is the Axum HTTP server, not the P2P overlay.
-
-#define SHEKYL_DAEMON_TOR_OK                 0
-#define SHEKYL_DAEMON_TOR_ALREADY_RUNNING    1
-#define SHEKYL_DAEMON_TOR_ARG                2
-#define SHEKYL_DAEMON_TOR_NO_BINARY          3
-#define SHEKYL_DAEMON_TOR_BAD_BINARY         4
-#define SHEKYL_DAEMON_TOR_START_FAILED       5
-#define SHEKYL_DAEMON_TOR_UNAVAILABLE        6
-#define SHEKYL_DAEMON_TOR_NOT_RUNNING        1
-#define SHEKYL_DAEMON_TOR_PUBLISH_FAILED     3
-
-//! Start the managed tor: verify the binary, create a unique wiped
-//! DataDirectory under `data_dir_parent` (the daemon config folder -- never
-//! the DataDirectory itself), bootstrap to 100%, and return its SOCKS
-//! listener. No onion is published yet -- that is shekyl_daemon_tor_publish,
-//! called after the daemon has bound its loopback inbound listener (on an
-//! OS-assigned port; a port guessed before binding could already be taken
-//! and abort init). BLOCKS for the whole sequence (tens of seconds on a
-//! cold bootstrap; bound by bootstrap_timeout_secs plus small constants).
-//! Outputs are NUL-terminated: out_socks_addr (>= 48 bytes; the managed
-//! tor's SOCKS "ip:port" -- the zone's outbound proxy), out_error (>= 256
-//! bytes recommended). Return codes: SHEKYL_DAEMON_TOR_OK; _ALREADY_RUNNING
-//! (refused, not stacked); _ARG; _NO_BINARY (no candidate at all);
-//! _BAD_BINARY (candidate found but unusable: a pinned file's digest
-//! differs, tor's directory holds something that is not pinned, unreadable);
-//! _UNAVAILABLE (Shekyl manages no tor on this build target; out_error is
-//! the reason); _START_FAILED (spawn/bootstrap -- incarnation torn down
-//! before return, so a failed start commits the caller to nothing).
-int shekyl_daemon_tor_start(const char* tor_binary_path, const char* data_dir_parent,
-                            uint32_t bootstrap_timeout_secs,
-                            char* out_socks_addr, size_t out_socks_addr_len,
-                            char* out_error, size_t out_error_len);
-
-//! Publish the per-boot v3 onion on the running managed tor (key minted in
-//! memory, ADD_ONION Flags=DiscardPK PoWDefensesEnabled=1), forwarding
-//! virtual_port (what peers dial) to 127.0.0.1:local_port (the daemon's
-//! already-bound inbound listener), MaxStreams=max_streams per rendezvous
-//! circuit. A Tor that rejects a proof-of-work argument (control status
-//! 512 or 513, and the reply names that argument) fails the publish. Any
-//! other 512 is an ordinary publish failure. There is no second attempt
-//! without proof-of-work.
-//! Outputs are NUL-terminated: out_service_id (>= 57 bytes; 56-char service id, no
-//! ".onion"), out_error (>= 256 bytes recommended). Returns 0 = published;
-//! 1 = no instance running (start first); 2 = argument error; 3 = publish
-//! failed (detail in out_error). A publish failure leaves tor RUNNING: the
-//! ruled degrade is outbound-only on the zone (keep the SOCKS proxy, serve
-//! no overlay inbound this boot) -- do not abort the daemon.
-int shekyl_daemon_tor_publish(uint16_t virtual_port, uint16_t local_port,
-                              uint16_t max_streams,
-                              char* out_service_id, size_t out_service_id_len,
-                              char* out_error, size_t out_error_len);
-
-//! Is the ephemeral tor still up? false when never started, already shut
-//! down, or died. Per PWD-E7 there is no respawn: a death means the overlay
-//! posture is gone for this boot. The daemon's idle loop polls this and, on
-//! the true->false edge, logs once that overlay inbound is lost and that
-//! originated transactions stay fail-closed on the tor zone.
-bool shekyl_daemon_tor_is_alive(void);
-
-//! Bounded teardown of the ephemeral posture (DEL_ONION, SIGTERM -> wait ->
-//! SIGKILL, reap). Idempotent: true when an instance was running and is now
-//! down, false when there was nothing to stop.
-bool shekyl_daemon_tor_shutdown(void);
-
-// ---------------------------------------------------------------------------
 // DRS-P0d logical-state digest v0
 // (`docs/design/DAEMON_REDB_STORE.md` §7.1). One coarse call: C++ has
 // already collected height-ordered block hashes, the spent-key set, and
@@ -4611,9 +4530,14 @@ int shekyl_network_id(std::uint8_t nettype, std::uint8_t* out);
 /// `rust/shekyl-daemon/src/entry.rs`, carried by the daemon image). C++
 /// `main()` fills a `ShekylDaemonEntry` and calls `shekyl_daemon_main`; Rust
 /// owns the process from there and calls `run` with the snapshot of the
-/// values whose reader is still C++. The structures below are the Rust
-/// `#[repr(C)]` definitions member for member; `SHEKYL_DAEMON_SNAPSHOT_FIELDS`
-/// is asserted against `shekyl_daemon_snapshot_field_count()` at run.
+/// values whose reader is still C++. The snapshot's structures, its field
+/// count and `shekyl_daemon_snapshot_parse` / `_free` are defined in
+/// `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs` and carried by every Rust
+/// image, so a binary that only constructs core from a snapshot (the
+/// importer, core_tests) links no daemon image (§2.9). The structures below
+/// are the Rust `#[repr(C)]` definitions member for member;
+/// `SHEKYL_DAEMON_SNAPSHOT_FIELDS` is asserted against
+/// `shekyl_daemon_snapshot_field_count()` at run.
 #define SHEKYL_DAEMON_SNAPSHOT_FIELDS 11u
 
 /// A list of NUL-terminated strings.
@@ -4684,8 +4608,9 @@ void shekyl_daemon_request_stop(void);
 /// Runs the daemon and returns its exit status: 2 a configuration refusal,
 /// 1 a runtime failure, `run`'s status otherwise; a panic aborts.
 int32_t shekyl_daemon_main(const ShekylDaemonEntry* entry);
-/// A snapshot for a C++ test binary, from a test argument list (the program
-/// first) through the one real parse: no lock, no marker, no logging. 0 and
+/// A snapshot for a C++ test binary or the importer, from an argument list
+/// (the program first) through the one real parse: no lock, no marker, no
+/// logging. In the ordinary library, not the daemon image. 0 and
 /// `*out` set; 2 with the refusal on standard error; 1 for a null argument.
 /// Released with `shekyl_daemon_snapshot_free`.
 int32_t shekyl_daemon_snapshot_parse(int argc, const char* const* argv, ShekylDaemonSnapshot** out);

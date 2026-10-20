@@ -51,6 +51,13 @@ ALLOWED = {
         "are not required contexts, so a skipped job blocks no merge",
     ("randomx-v2-differential.yml", "rotating"):
         "scheduled rotating lane; same basis as runtime-modes above",
+    ("depends.yml", "build-cross"):
+        "the cross-build legs (ARM v8, Win64, ...) are not required contexts: "
+        "the workflow has always been path-filtered on pull requests, so no "
+        "required check can name a leg (dev's required list, 2026-10-19). The "
+        "job-level `if:` is the empty matrix: on a PR that touches nothing a "
+        "leg builds, depends_legs.py chooses no leg, and fromJSON('[]') is "
+        "not a matrix GitHub accepts",
 }
 
 

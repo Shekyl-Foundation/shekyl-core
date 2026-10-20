@@ -509,6 +509,18 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`RPC_WIRE.md`](design/RPC_WIRE.md) RW-Q7 (the schema gate) and RW-Q8 (the rename PR)
   - Target: pre-genesis
 
+- **The Linux packages create no `shekyl` account, though the shipped unit runs as it (`INPUT_GRAMMAR.md` IG-F12).** `contrib/packaging/linux/shekyld.service` sets `User=shekyl`, and `deb-after-install.sh` only reloads systemd, so on a fresh install the unit cannot start. The disposition is IG-Q64 (posed, amended 2026-10-20). Falsify by a fresh `.deb` and RPM install whose `id shekyl` succeeds before the unit first starts.
+  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
+  - Target: pre-genesis
+
+- **No installer creates the daemon's configuration directory (`INPUT_GRAMMAR.md` IG-F13).** Nothing creates `/etc/shekyl/` (R2) on Linux, and the Windows installer does not create `%ProgramData%\shekyl\`, which IG-13 says only the installer creates. The disposition is IG-Q64 (posed, amended 2026-10-20). Falsify by a fresh install that leaves the configuration directory that question names.
+  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
+  - Target: pre-genesis
+
+- **The shipped systemd unit runs mainnet only (`INPUT_GRAMMAR.md` IG-F16).** `contrib/packaging/linux/shekyld.service` passes no `--network`, so a package cannot run testnet, the network every alpha release runs, without an operator's own unit. The disposition is IG-Q64 (posed, amended 2026-10-20). Falsify by a packaged unit whose `ExecStart` passes `--network` for the instance and still pairs `--data-dir` and `--log-file` with `StateDirectory` and `LogsDirectory`.
+  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
+  - Target: pre-genesis
+
 - **Phase 4b: `rescan_blockchain` needs an Engine rescan API** — **CLOSED 2026-08-04 (Phase 4c, `feat/wallet-rpc-phase-4c-rescan`)**.
   - Target: pre-genesis
 
