@@ -101,7 +101,7 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // reserve, and it left with the callerless cache FFI. The remaining
     // reserve is the collapsed-sign input vec.
     ("legacy_tx.rs", 1, 1),
-    ("levin_ffi.rs", 4, 0),
+    ("levin_ffi.rs", 2, 0),
     ("pow_randomx_ffi.rs", 1, 0),
     // Curve-tree replica (test-generator surface, 2026-09-05): one typed-slice
     // borrow of the caller-owned tx / output arrays (`borrow<T>`, which

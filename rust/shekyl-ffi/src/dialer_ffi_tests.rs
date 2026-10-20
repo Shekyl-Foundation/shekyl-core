@@ -21,8 +21,7 @@ use std::time::Duration;
 
 use shekyl_dialer::DialAim;
 use shekyl_levin::{
-    response, BasicNodeData, CoreSyncData, HandshakeResponse, PortableMap, SupportFlags,
-    COMMAND_HANDSHAKE,
+    response, BasicNodeData, CoreSyncData, HandshakeResponse, PortableMap, COMMAND_HANDSHAKE,
 };
 use shekyl_seam::{Channel, CloseCause, Dial, Loopback};
 use shekyl_timing_engine::Tick;
@@ -330,7 +329,6 @@ fn handshake_frame() -> Vec<u8> {
     let body = HandshakeResponse {
         node_data: BasicNodeData {
             network_id: [7; 16],
-            support_flags: SupportFlags::ADVERTISED,
         },
         payload_data: CoreSyncData {
             current_height: 20,

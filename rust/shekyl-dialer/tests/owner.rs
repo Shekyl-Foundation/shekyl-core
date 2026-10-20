@@ -27,7 +27,7 @@ use shekyl_dialer::{DialAim, Dialer};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_levin::{
     response, BasicNodeData, CoreSyncData, HandshakeResponse, PeerlistEntry, PortableMap,
-    SupportFlags, COMMAND_HANDSHAKE,
+    COMMAND_HANDSHAKE,
 };
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{
@@ -80,7 +80,6 @@ fn dialer_for(hub: &Hub) -> Arc<Dialer> {
     let dialer = Arc::new(Dialer::new(
         hub.clone(),
         RefusedSet::NON_GLOBAL,
-        SupportFlags::ADVERTISED.bits(),
         Arc::new(|| {
             Some(SyncPayload {
                 current_height: 10,
@@ -126,10 +125,7 @@ fn reply(network_id: [u8; 16], peers: Vec<NetworkAddress>) -> Vec<u8> {
 
 fn reply_at(network_id: [u8; 16], peers: Vec<NetworkAddress>, height: u64) -> Vec<u8> {
     let body = HandshakeResponse {
-        node_data: BasicNodeData {
-            network_id,
-            support_flags: SupportFlags::ADVERTISED,
-        },
+        node_data: BasicNodeData { network_id },
         payload_data: CoreSyncData {
             current_height: height,
             cumulative_difficulty: 200,
@@ -220,16 +216,12 @@ fn a_well_formed_response_is_adopted_and_its_result_is_posted_before_any_frame()
     let posts = rig.posts.lock().expect("posts");
     assert_eq!(kinds(&posts), vec!["established", "handshake", "deliver"]);
     let Some(Post::HandshakeResult {
-        id: posted,
-        support_flags,
-        sync,
-        ..
+        id: posted, sync, ..
     }) = posts.get(1)
     else {
         panic!("the second post is the handshake result");
     };
     assert_eq!(*posted, id);
-    assert_eq!(*support_flags, SupportFlags::ADVERTISED.bits());
     assert_eq!(sync.current_height, 20);
     assert_eq!(sync.top_id, [2; 32]);
     drop(posts);
@@ -398,7 +390,6 @@ fn a_dial_that_cannot_open_is_dial_failed_with_the_cause() {
     let dialer = Dialer::new(
         hub.clone(),
         RefusedSet::NON_GLOBAL,
-        SupportFlags::ADVERTISED.bits(),
         Arc::new(|| {
             Some(SyncPayload {
                 current_height: 10,

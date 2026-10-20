@@ -1777,7 +1777,7 @@ ran on `async_invoke`'s caller.*
 | --- | --- |
 | `:283` `anvoke_handler::cancel` | Yes. `release_protocol` from `begin_closed`, and `begin_closed` runs from `on_strand`. |
 | `:329`, `:331` the invoke-timeout completion | Yes. Posted onto the connection strand. |
-| `post_each` (`net_node.inl`), via `collect_context_posts` then `post_on_strand` | Yes. The protocol handler still reads support flags, pull state, and byte counters. The walk does not wait. **UPDATE 2026-10-07:** the admin connection view does, for two seconds. *Records-was: the caller does not wait. Before that: No, and waiting on each strand from that walk is the deadlock this step does not introduce.* |
+| `post_each` (`net_node.inl`), via `collect_context_posts` then `post_on_strand` | Yes. The protocol handler still reads pull state and byte counters. The walk does not wait. **UPDATE 2026-10-07:** the admin connection view does, for two seconds. *Records-was: the caller does not wait. Before that: No, and waiting on each strand from that walk is the deadlock this step does not introduce.* |
 | `peer_sync_idle_maker` (`net_node.inl`), via `foreach_connection` | Yes. It writes `m_in_timedsync` on the strand. *Records-was: No. Same wait.* |
 | `node_server::for_connection` (`net_node.inl`) | Yes. Reached from `try_add_next_blocks`, `update_sync_search`, `should_download_next_span`, `drop_connection`, `drop_connections`, and `levin_notify.cpp`. Those read or write sync state on the strand. The return is whether the id was queued. The callback is void. *Records-was: No.* |
 
