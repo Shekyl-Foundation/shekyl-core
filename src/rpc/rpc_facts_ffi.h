@@ -359,18 +359,17 @@ typedef struct shekyl_rpc_connection_facts {
     double       current_speed_down;
     double       current_speed_up;
     uint64_t     height;               // the peer's claimed blockchain height
-    uint32_t     support_flags;
     uint16_t     port;                 // `network_address::port()`, 0 if none
     uint8_t      state;                // cryptonote_connection_context::state
     uint8_t      address_type;         // epee type id: 1 ipv4, 2 ipv6, 4 tor…
     uint8_t      incoming;
     uint8_t      localhost;
     uint8_t      local_ip;
-    /// 1 when height, support flags, and state were read on the strand.
-    /// 0 means those three are unknown: state 0 would otherwise read as
-    /// "before handshake". `height` and `support_flags` are then JSON null.
+    /// 1 when height and state were read on the strand. 0 means those two
+    /// are unknown: state 0 would otherwise read as "before handshake".
+    /// `height` is then JSON null.
     uint8_t      claims_known;
-    uint8_t      reserved[4];
+    uint8_t      reserved[8];
 } shekyl_rpc_connection_facts;
 
 // Fills a C++-owned view of the live connections and the instant they were

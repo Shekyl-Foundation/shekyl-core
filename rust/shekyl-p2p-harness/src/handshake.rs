@@ -13,7 +13,7 @@
 
 use shekyl_levin::{
     invoke, response, BasicNodeData, CoreSyncData, HandshakeRequest, HandshakeResponse,
-    PortableMap, SupportFlags, COMMAND_HANDSHAKE,
+    PortableMap, COMMAND_HANDSHAKE,
 };
 
 use crate::Error;
@@ -57,7 +57,6 @@ pub fn handshake() -> Result<Handshake, Error> {
 fn node() -> BasicNodeData {
     BasicNodeData {
         network_id: [NETWORK_ID_BYTE; 16],
-        support_flags: SupportFlags::default(),
     }
 }
 

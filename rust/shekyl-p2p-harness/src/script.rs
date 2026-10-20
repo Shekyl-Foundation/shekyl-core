@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use shekyl_levin::{
     ingress_payload_cap, notify, response, BucketHead, Flags, COMMAND_HANDSHAKE,
-    COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK,
+    COMMAND_TIMED_SYNC, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK,
 };
 
 use crate::handshake::handshake;
@@ -29,7 +29,7 @@ pub enum NamedSeed {
     Handshake = 1,
     SplitHeader = 2,
     SplitEachByte = 3,
-    SizeSupport = 10,
+    SizeTimedSync = 10,
     SizeCompact = 11,
     Concurrent = 20,
     CloseMid = 30,
@@ -43,7 +43,7 @@ impl NamedSeed {
         Self::Handshake,
         Self::SplitHeader,
         Self::SplitEachByte,
-        Self::SizeSupport,
+        Self::SizeTimedSync,
         Self::SizeCompact,
         Self::Concurrent,
         Self::CloseMid,
@@ -214,10 +214,10 @@ fn named_script(named: NamedSeed) -> Result<Script, Error> {
             End::Established,
             (1..=base.invoke.len()).collect(),
         )),
-        NamedSeed::SizeSupport => {
-            let cap = payload_cap(COMMAND_REQUEST_SUPPORT_FLAGS)?;
-            let invoke = shekyl_levin::invoke(COMMAND_REQUEST_SUPPORT_FLAGS, &vec![0x5a; cap]);
-            let expected = response(COMMAND_REQUEST_SUPPORT_FLAGS, &[]);
+        NamedSeed::SizeTimedSync => {
+            let cap = payload_cap(COMMAND_TIMED_SYNC)?;
+            let invoke = shekyl_levin::invoke(COMMAND_TIMED_SYNC, &vec![0x5a; cap]);
+            let expected = response(COMMAND_TIMED_SYNC, &[]);
             Ok(one_write(
                 invoke.clone(),
                 expected,

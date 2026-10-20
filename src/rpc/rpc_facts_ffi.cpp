@@ -1498,18 +1498,16 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
     struct sync_bits
     {
       uint64_t height = 0;
-      uint32_t support_flags = 0;
       uint8_t state = 0;
     };
     auto bits = std::make_shared<std::map<boost::uuids::uuid, sync_bits>>();
     auto bits_mu = std::make_shared<std::mutex>();
     auto ready = std::make_shared<std::promise<void>>();
     endpoint.post_each(
-      [bits, bits_mu](cryptonote::cryptonote_connection_context& ctx, uint32_t support_flags)
+      [bits, bits_mu](cryptonote::cryptonote_connection_context& ctx)
       {
         sync_bits row;
         row.height = ctx.m_remote_blockchain_height;
-        row.support_flags = support_flags;
         row.state = static_cast<uint8_t>(ctx.m_state);
         std::lock_guard<std::mutex> lock(*bits_mu);
         (*bits)[ctx.m_connection_id] = row;
@@ -1558,7 +1556,6 @@ int shekyl_rpc_connections(core_rpc_handle* h, uint64_t* out_now,
         if (found != bits->end())
         {
           e.height = found->second.height;
-          e.support_flags = found->second.support_flags;
           e.state = found->second.state;
           e.claims_known = 1;
         }

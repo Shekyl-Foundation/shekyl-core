@@ -1252,7 +1252,6 @@ fn project_connection(c: &crate::core::ConnectionFacts, now: u64) -> ConnectionI
         current_download: kib_per_second(c.current_speed_down),
         avg_upload: average_kib(c.send_count, live_time),
         current_upload: kib_per_second(c.current_speed_up),
-        support_flags: c.claims_known.then_some(c.support_flags),
         // `hex::encode` is lowercase and undashed, which is exactly what
         // `epee::string_tools::pod_to_hex` produced for this uuid — and it is
         // the encoder this file already uses four times over.
@@ -2963,7 +2962,6 @@ pub(crate) mod tests {
             current_speed_down: 4096.0,
             current_speed_up: 2048.0,
             height: 1_234_567,
-            support_flags: 3,
             port: 18080,
             state: 3,
             claims_known: true,
@@ -3015,7 +3013,6 @@ pub(crate) mod tests {
         assert_eq!(c.connection_id, "151c232a31383f464d545b626970777e");
         assert_eq!(c.state, ConnectionState::Normal);
         assert_eq!(c.height, Some(1_234_567));
-        assert_eq!(c.support_flags, Some(3));
         // ipv4: `ip` echoes the host and `port` is the number as a string.
         assert_eq!(c.ip, "192.0.2.7");
         assert_eq!(c.port, "18080");
@@ -3028,7 +3025,6 @@ pub(crate) mod tests {
         let mut raw = connection_facts();
         raw.claims_known = false;
         raw.height = 1_234_567;
-        raw.support_flags = 3;
         raw.state = 3;
         let facts = FakeP2p {
             connections: Ok(ConnectionsSnapshot {
@@ -3044,10 +3040,11 @@ pub(crate) mod tests {
             .connections[0];
         assert_eq!(c.state, ConnectionState::Unknown);
         assert_eq!(c.height, None);
-        assert_eq!(c.support_flags, None);
         let json = serde_json::to_value(c).expect("json");
         assert!(json["height"].is_null());
-        assert!(json["support_flags"].is_null());
+        // `support_flags` left the P2P wire (2026-10-19), and with it the
+        // only source this field had.
+        assert!(json.get("support_flags").is_none());
         assert_eq!(json["state"], "unknown");
     }
 

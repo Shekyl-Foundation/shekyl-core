@@ -15,8 +15,9 @@
 //! it would pass equally against a reader that decodes a whole feed at once.
 
 use shekyl_levin::{
-    fragmented_notify, invoke, noise_notify, notify, response, BucketReader, Error, Received,
-    DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
+    fragmented_notify, ingress_payload_cap, invoke, noise_notify, notify, response, BucketReader,
+    Error, Flags, Received, COMMAND_HANDSHAKE, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE,
+    INITIAL_MAX_PACKET_SIZE,
 };
 
 /// Feed a whole stream, then pull exactly one message and assert it is the
@@ -442,23 +443,26 @@ fn reassembled_response_classifies_by_inner_protocol_version() {
 
 #[test]
 fn per_command_limit_caps_below_packet_limit() {
-    // Support-flags (1007) is the tight table cap (256). 300 bytes is under
-    // the 256 KiB packet limit and over the command's own cap — rejected on
-    // the header, as in the C++.
-    let message = invoke(1007, &[0u8; 300]);
+    // The handshake (1001) has a tight derived cap. One byte over it is
+    // under the 256 KiB packet limit and over the command's own cap —
+    // rejected on the header, as in the C++.
+    let cap = ingress_payload_cap(COMMAND_HANDSHAKE, Flags::REQUEST).unwrap();
+    let over = usize::try_from(cap).unwrap() + 1;
+    assert!(u64::try_from(over).unwrap() < INITIAL_MAX_PACKET_SIZE);
+    let message = invoke(COMMAND_HANDSHAKE, &vec![0u8; over]);
     let mut reader = BucketReader::new();
     reader.feed(&message[..HEADER_SIZE]).unwrap();
     assert_eq!(
         reader.next_message(),
         Err(Error::OversizePacket {
-            claimed: 300,
-            limit: 256,
+            claimed: cap + 1,
+            limit: cap,
         })
     );
 
     // The same size on 2002 (packet-limit arm until PWD-B12) passes.
     let mut reader = BucketReader::new();
-    reader.feed(&invoke(2002, &[0u8; 300])).unwrap();
+    reader.feed(&invoke(2002, &vec![0u8; over])).unwrap();
     assert!(reader.next_message().unwrap().is_some());
 }
 

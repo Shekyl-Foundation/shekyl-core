@@ -355,6 +355,13 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 > **UPDATE 2026-09-09 — PWD-B6:** `PWC-B5`'s advertised aggregate is now
 > `ZSTD_COMPRESSION` (0x02) only. `FLUFFY_BLOCKS` (0x01) fell with 2001; 0x01
 > is unassigned. The public-zone-only half of the row is unchanged.
+>
+> **Ruled 2026-10-19 — `SHEKYL_P2P_PROTOCOL.md` PWD-T7: support flags are
+> deleted, so two p2p commands survive (1001, 1002).** With compression gone
+> `ZSTD_COMPRESSION` negotiated nothing and the word was a constant zero:
+> `basic_node_data` (PWC-B2) carries `network_id` alone, 1007 is refused as
+> unknown dispatch (PWC-B1), and PWC-B5's re-query is gone with it. Capability
+> negotiation, if needed, is designed at the genesis wire freeze.
 
 ### 4.C cryptonote notify schemas (2001-2010)
 

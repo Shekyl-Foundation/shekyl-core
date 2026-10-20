@@ -4310,8 +4310,6 @@ constexpr int SHEKYL_PEERLIST_BAD_ARGUMENT = 5;
 /// does not answer; it does not parse a Levin response. A confirm dial
 /// is not posted.
 struct shekyl_seam_handshake_result {
-  std::uint32_t support_flags;
-  std::uint8_t _pad[4];
   std::uint64_t current_height;
   std::uint64_t cumulative_difficulty;
   std::uint64_t cumulative_difficulty_top64;

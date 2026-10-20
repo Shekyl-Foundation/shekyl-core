@@ -321,10 +321,9 @@ first complete handshake frame, on both connectors: its
 `COMMAND_HANDSHAKE` request on a session it opened, its response on one
 this node dialed (`shekyl_levin::HandshakeFrame`). It never ends at
 `session_established`, which is this node's own work, and a complete
-frame of any other command does not end it: the strand answers a
-support-flags request before any handshake, and a peer that sent one
-and stopped would otherwise have held an admission slot with no
-deadline at all. A peer that sends no complete handshake frame inside
+frame of any other command does not end it: a peer that sent one and
+stopped would otherwise have held an admission slot with no deadline at
+all. A peer that sends no complete handshake frame inside
 the gap is the Levin handshake timeout. Each
 driver polls its reader before the gap's wake. A fired wake then waits
 one IO driver turn for the reader (`SilenceGap` in
@@ -848,7 +847,7 @@ The session layer judges misbehaviour. The transport layer enforces
 the ban. It does not score a host, and a transport close does not
 call `add_host_fail`. The session layer (Levin framing and the p2p
 protocol) owns session admission: may this peer have a session? That
-is `network_id`, the self-detection nonce, support flags, and
+is `network_id`, the self-detection nonce, and
 PWD-B3's per-command caps, in `handle_handshake`, plus the judgment
 that issues the ban call. Neither layer reads the other's state to
 decide. No wall-clock time crosses that call.

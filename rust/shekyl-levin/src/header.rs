@@ -260,7 +260,7 @@ impl HandshakeKind {
 ///
 /// Only the handshake frame of the expected [`HandshakeKind`] counts. A
 /// complete frame of any other command is read past: a peer that sends a
-/// support-flags request, or anything else, and never its handshake stays
+/// timed-sync request, or anything else, and never its handshake stays
 /// under the gap (Copilot on #1056: one such frame had disarmed it, and
 /// the session then held an admission slot with no deadline at all). A
 /// header whose signature is not [`LEVIN_SIGNATURE`] ends the tracking:

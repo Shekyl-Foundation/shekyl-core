@@ -2573,11 +2573,12 @@ TEST_F(levin_notify, fluff_via_scheduled_drive)
 
 TEST_F(levin_notify, command_max_bytes)
 {
-    // COMMAND_PING is deleted (PWD-B10). SUPPORT_FLAGS is the remaining
-    // tight cap (PWD-B3 derived the inherited 4096 to the four-byte field
-    // envelope). Size the payload from the same admit function handle_recv
-    // uses so this cannot silently re-pin an inherited number.
-    static constexpr int capped_command = nodetool::COMMAND_REQUEST_SUPPORT_FLAGS::ID;
+    // COMMAND_PING (PWD-B10) and COMMAND_REQUEST_SUPPORT_FLAGS (2026-10-19)
+    // are deleted. Timed sync carries the tight derived cap the handshake
+    // does (DISCLOSE_COUNT entries beside the fixed part). Size the payload
+    // from the same admit function handle_recv uses so this cannot silently
+    // re-pin an inherited number.
+    static constexpr int capped_command = nodetool::COMMAND_TIMED_SYNC_T<cryptonote::CORE_SYNC_DATA>::ID;
     const auto cap = cryptonote::cryptonote_connection_context::get_max_bytes(
         capped_command, LEVIN_PACKET_REQUEST);
     ASSERT_TRUE(cap.has_value());

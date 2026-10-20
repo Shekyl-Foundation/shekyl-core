@@ -589,7 +589,6 @@ pub struct ConnectionFactsFfi {
     pub current_speed_up: f64,
     /// The peer's claimed blockchain height.
     pub height: u64,
-    pub support_flags: u32,
     pub port: u16,
     /// `cryptonote_connection_context::state`.
     pub state: u8,
@@ -598,10 +597,10 @@ pub struct ConnectionFactsFfi {
     pub incoming: u8,
     pub localhost: u8,
     pub local_ip: u8,
-    /// 1 when `height`, `support_flags`, and `state` were read. 0 means
-    /// those three are unknown.
+    /// 1 when `height` and `state` were read. 0 means those two are
+    /// unknown.
     pub claims_known: u8,
-    pub reserved: [u8; 4],
+    pub reserved: [u8; 8],
 }
 
 /// Twin of `shekyl_rpc_sync_span_facts` (RK-5a). Pinned by layout.
@@ -739,15 +738,14 @@ const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, send_count) == 80
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_down) == 88);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, current_speed_up) == 96);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, height) == 104);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, support_flags) == 112);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, port) == 116);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, state) == 118);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 119);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 120);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 121);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 122);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, claims_known) == 123);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 124);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, port) == 112);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, state) == 114);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_type) == 115);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 116);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 117);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 118);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, claims_known) == 119);
+const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 120);
 
 const _: () = assert!(std::mem::size_of::<SyncSpanFactsFfi>() == 72);
 const _: () = assert!(std::mem::align_of::<SyncSpanFactsFfi>() == 8);

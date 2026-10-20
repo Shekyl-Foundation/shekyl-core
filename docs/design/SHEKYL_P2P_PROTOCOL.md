@@ -146,7 +146,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages and the record after one rekey in each direction. The transport keys and their rekey (`ck'`, `k'`) are pinned from that transcript's chaining key in `shekyl-noise` (`split_of_the_pinned_chaining_key_rekeys_to_the_pinned_keys`); the initial chaining key is the hash of the protocol name, pinned beside `SymmetricState`. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis, recorded in `network_id_ffi.rs` (`each_genesis_derives_its_recorded_id_and_prefix`) | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | **the surface is *every* dispatch, invoke and notify** — not the four p2p invokes; all four invoke routes and all nine `HANDLE_NOTIFY_T2` entries (`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`) are still unguarded, so transaction floods spend no tokens and PWD-B12's memory bound rests on a charge that is not happening. *Records-was: this cell read “the decision names four unguarded invoke handlers” until 2026-10-07 — the same scope error §PWD-B1 records making twice, restated in the status table where a grep reader meets it first.* **MEASURED ON A LIVE DAEMON 2026-10-06 — on Windows this is the ONLY inbound bound available, and it is an ADDITION to the p2p Rust migration rather than a transfer.** `InboundCeiling` resolves `NoPerProcessLimit` there (no per-process descriptor quantity exists to read), PWD-I7's per-host cap is deleted, and an unset `--in-peers` is `UINT32_MAX` — so a Windows node has no inbound bound of any kind until this lands, by count, by source address or by rate. **There is no C++ mechanism to port**, so a slice that moves the p2p stack faithfully still lands Windows unbounded; the bound has to be engineered in. See the Windows inbound-bound row in [`FOLLOWUPS.md`](../FOLLOWUPS.md) | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
-| **B3** per-command caps | **IMPLEMENTED** | 11-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001 and 1003 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; support-flags 4096→256; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
+| **B3** per-command caps | **IMPLEMENTED** | 10-arm `DefinedCommand` table in `rust/shekyl-levin/src/ingress.rs` (2001, 1003 and 1007 are unknown dispatch; sole block path is 2008 `NOTIFY_NEW_COMPACT_BLOCK`); handshake 65536 reconstructed; 2003/2006 hash-list derived; 2007/2008/2009/2010 keep inherited envelopes (4/4/1/4 MiB); 2002/2004 take the packet limit until PWD-B12 / the 2004 byte budget; C++ `connection_context.cpp` is the FFI shim | **YES** — with B3a and B4, as one unit |
 | **B3a** unknown input rejected at ingress | **IMPLEMENTED** | `ingress_payload_cap` flag-class discriminator; unknown bits rejected on every bucket; noise/fragment with command 0 admitted; a Q/S-flagged 2001 is unknown input, same class as ping 1003 | **YES** — with B3 and B4, as one unit |
 | **B4** places B3a's ingress check | **IMPLEMENTED** | `shekyl_levin_ingress_admit` + `get_max_bytes(command, flags)` on outer and inner header parse; decompress uses the cached cap; codec still round-trips unknown bits (PWC-A6) | **YES** — with B3 and B3a; B4 is B3a's placement, so splitting them ships a check with nowhere to live |
 | **B5** `return_code` deleted | **IMPLEMENTED** | field absent from `bucket_head2`; `static_assert(sizeof(bucket_head2) == 29)` in `levin_base.h`; Rust `HEADER_SIZE = 29`; deletion comment at `levin_base.h:73`. `git grep m_return_code contrib/epee` hits that comment only. | **YES** — delete before nodes exist; cheaper than carrying four dead bytes into the Rust rewrite |
@@ -3107,8 +3107,9 @@ these states, the word *handshake* is not used unqualified.
 > about the session rides the Levin handshake, on every zone.**
 
 The Levin handshake's content, read at source (`src/p2p/p2p_protocol_defs.h`):
-the request carries `basic_node_data` (`network_id`, the advertised `address`,
-`support_flags`), the chain-sync payload, and the self-detection nonce; the
+the request carries `basic_node_data` (`network_id` alone: the advertised
+`address` and `support_flags` are deleted), the chain-sync payload, and the
+self-detection nonce; the
 response carries `basic_node_data`, the chain-sync payload, and
 `local_peerlist_new`.
 
@@ -3766,6 +3767,17 @@ encoding cannot give, and compression for it can be applied without exposing
 its size: after padding into fixed buckets, with no confidential material in
 the compression context.
 
+**Support flags are deleted with it (Rick, 2026-10-19).** The only flag a
+Shekyl node advertised was zstd compression (`0x02`; `0x01` was already
+retired). With compression gone the word negotiated nothing, and a field
+always sent as zero is a sentinel. `basic_node_data` carries no
+`support_flags`, the support-flags request (command 1007) is refused as
+unknown dispatch, and the C++ re-ask of a peer that reported zero is gone.
+The RPC `get_connections` and `sync_info` rows lose their `support_flags`
+field, which had no other source. Testnet upgrades all at once. **Any
+capability negotiation the protocol needs is designed at the genesis wire
+freeze**, not carried as a vestigial word.
+
 ### PWD-T8 — Shekyl mints its own KATs, and pins both transport-handshake directions
 
 **RULED.** There is no upstream oracle for this transport handshake: it is `NN` + `hfs`
@@ -4114,10 +4126,10 @@ is not a table of constants.**
 
 | Command | Inherited cap | Disposition |
 | --- | --- | --- |
-| `COMMAND_HANDSHAKE` (1001) | 1434 (*records-was* 65536) | Derived from `DISCLOSE_COUNT` (12) × the entry's pinned in-array encoding (98 bytes: the address alone; `last_seen` left the wire the same day, Rick's ruling) + the pinned fixed part (258 bytes: `basic_node_data`, `CORE_SYNC_DATA`, the list envelope, the request's nonce); `shekyl-levin/tests/handshake_bounds.rs` pins both (2026-10-13). *Records-was:* `P2P_MAX_PEERS_IN_HANDSHAKE` (250) × a 256-byte over-bound + 1536 |
+| `COMMAND_HANDSHAKE` (1001) | 1415 (*records-was* 65536) | Derived from `DISCLOSE_COUNT` (12) × the entry's pinned in-array encoding (98 bytes: the address alone; `last_seen` left the wire the same day, Rick's ruling) + the pinned fixed part (239 bytes: `basic_node_data`'s network id, `CORE_SYNC_DATA`, the list envelope, the request's nonce; `support_flags` left the wire 2026-10-19); `shekyl-levin/tests/handshake_bounds.rs` pins both (2026-10-13). *Records-was:* `P2P_MAX_PEERS_IN_HANDSHAKE` (250) × a 256-byte over-bound + 1536 |
 | `COMMAND_TIMED_SYNC` (1002) | 65536 | Same derivation as 1001 |
 | `COMMAND_PING` (1003) | 4096 | **Arm deleted** — PWD-B10 |
-| `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) | 4096 | A four-byte reply behind a 4 KiB cap; derive to the field |
+| `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) | 4096 | **Arm deleted** — support flags removed with compression (2026-10-19, PWD-T7) |
 | `NOTIFY_NEW_BLOCK` (2001) | 128 MB | **Arm deleted** — PWD-B6 |
 | `NOTIFY_NEW_TRANSACTIONS` (2002) | 128 MB | **Not derivable yet — there is no relay batch bound.** See below |
 | `NOTIFY_REQUEST_GET_OBJECTS` (2003) | 2 MB | A hash list; derives from its length bound |
