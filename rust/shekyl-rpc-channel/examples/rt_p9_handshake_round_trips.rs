@@ -53,8 +53,8 @@ use rand_core::{OsRng, RngCore};
 use shekyl_noise::Direction;
 use shekyl_rpc_channel::budget::HandshakeBudget;
 use shekyl_rpc_channel::handshake::{
-    Client, Daemon, StaticKeypair, StaticPublic, MESSAGE1_WIRE_LEN, MESSAGE2_LEN,
-    MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, TAG_LEN, TRANSPORT_AD,
+    Client, Daemon, Message1Admission, StaticKeypair, StaticPublic, MESSAGE1_WIRE_LEN,
+    MESSAGE2_LEN, MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, TAG_LEN, TRANSPORT_AD,
 };
 use shekyl_rpc_channel::{NetworkId, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
 
@@ -182,9 +182,21 @@ fn serve_one(
     let mut m1 = vec![0u8; MESSAGE1_WIRE_LEN];
     stream.read_exact(&mut m1).map_err(|_| stamps)?;
     stamps[0] = Some(ns(accepted));
-    let daemon = Daemon::new(&BENCH_NETWORK_ID, daemon_id)
-        .read_message1(&m1, budget, Instant::now())
-        .map_err(|_| stamps)?;
+    // An admission continues the handshake. A budget refusal is a reply
+    // this function sends, and then a sample that did not finish. A
+    // refusal sends nothing.
+    let daemon = match Daemon::new(&BENCH_NETWORK_ID, daemon_id).read_message1(
+        &m1,
+        budget,
+        Instant::now(),
+    ) {
+        Ok(Message1Admission::Continue(daemon)) => daemon,
+        Ok(Message1Admission::Busy(reply)) => {
+            stream.write_all(&reply).map_err(|_| stamps)?;
+            return Err(stamps);
+        }
+        Err(_) => return Err(stamps),
+    };
     let (daemon, m2) = daemon.write_message2().map_err(|_| stamps)?;
     stream.write_all(&m2).map_err(|_| stamps)?;
     stamps[1] = Some(ns(accepted));

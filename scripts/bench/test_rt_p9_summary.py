@@ -12,6 +12,7 @@
 # to name it. A refusal with no control stays green when the loader
 # rejects everything.
 
+import io
 import os
 import sys
 import tempfile
@@ -107,6 +108,12 @@ class Base(unittest.TestCase):
         self.assertIn(fragment, text)
         self.assertNotIn("## The deadlines", text)
 
+    def fail_every(self, leg):
+        # Both sides recorded every attempt, and none of them finished.
+        for i in range(SAMPLES):
+            self.fixture.clients[leg][i] = [i, leg, "false"] + [""] * 7
+            self.fixture.servers[leg][i] = [i, i, "false"] + [""] * 6
+
 
 class Control(Base):
     def test_a_complete_run_is_met_and_derives_both_deadlines(self):
@@ -185,6 +192,17 @@ class Failures(Base):
     def test_two_failures_in_twenty_void_the_run(self):
         self.fail_onion(2)
         self.assert_void("onion: 18 of 20 completed, below 95%")
+
+    def test_a_leg_with_no_completed_handshake_stays_in_the_completion_table(self):
+        self.fail_every("onion")
+        text, verdict = self.run_it()
+        self.assertFalse(verdict.met)
+        self.assertIn("**VOID.**", text)
+        self.assertIn("onion: 0 of 20 completed, below 95%", text)
+        self.assertIn("| onion | 20 | 0 | 0.0% |", text)
+        self.assertNotIn("| onion | message1_received", text)
+        self.assertIn("| lan | message1_received", text)
+        self.assertNotIn("## The deadlines", text)
 
     def test_an_accept_that_never_reached_the_first_record_is_counted(self):
         self.fixture.servers["lan"].append([SAMPLES, "", "false", 5 * MS] + [""] * 5)
@@ -265,6 +283,23 @@ class Exit(Base):
                 devnull.close()
         finally:
             other.cleanup()
+
+    def test_main_exits_3_when_neither_leg_completed(self):
+        self.fail_every("onion")
+        self.fail_every("lan")
+        self.fixture.write(self.dir)
+        saved, sys.stdout = sys.stdout, io.StringIO()
+        try:
+            code = s.main(["x", "--samples", str(SAMPLES), self.dir])
+            text = sys.stdout.getvalue()
+        finally:
+            sys.stdout = saved
+        self.assertEqual(code, 3)
+        self.assertIn("**VOID.**", text)
+        self.assertIn("| onion | 20 | 0 | 0.0% |", text)
+        self.assertIn("| lan | 20 | 0 | 0.0% |", text)
+        self.assertNotIn("| onion | message1_received", text)
+        self.assertNotIn("## The deadlines", text)
 
 
 if __name__ == "__main__":

@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn busy_then_a_fresh_attempt_completes() {
         use crate::budget::{HandshakeBudget, HANDSHAKE_DAEMON_CPU_NANOS};
-        use crate::handshake::{Client, Daemon, HandshakeError, StaticKeypair, MESSAGE1_LEN};
+        use crate::handshake::{Client, Daemon, Message1Admission, StaticKeypair, MESSAGE1_LEN};
 
         let network = [0x29u8; 16];
         let daemon = StaticKeypair::generate().unwrap();
@@ -202,15 +202,18 @@ mod tests {
         );
         let other = StaticKeypair::generate().unwrap();
         let (_, spends) = Client::start(&network, &other, daemon.public()).unwrap();
-        assert!(Daemon::new(&network, &daemon)
-            .read_message1(&spends, &budget, t0)
-            .is_ok());
+        assert!(
+            matches!(
+                Daemon::new(&network, &daemon).read_message1(&spends, &budget, t0),
+                Ok(Message1Admission::Continue(_))
+            ),
+            "the one admission is spent on another client"
+        );
         let mut retry = HandshakeRetry::new(t0);
 
         let (first, m1) = Client::start(&network, &client, daemon.public()).unwrap();
-        let Some(HandshakeError::Busy(reply)) = Daemon::new(&network, &daemon)
-            .read_message1(&m1, &budget, t0)
-            .err()
+        let Ok(Message1Admission::Busy(reply)) =
+            Daemon::new(&network, &daemon).read_message1(&m1, &budget, t0)
         else {
             panic!("an empty budget answers busy");
         };
@@ -230,9 +233,11 @@ mod tests {
             !second.is_busy(&reply),
             "the first attempt's busy reply is not the second's"
         );
-        let daemon_side = Daemon::new(&network, &daemon)
-            .read_message1(&m1_again, &budget, at)
-            .expect("the budget earned a handshake by then");
+        let Ok(Message1Admission::Continue(daemon_side)) =
+            Daemon::new(&network, &daemon).read_message1(&m1_again, &budget, at)
+        else {
+            panic!("the budget earned a handshake by then");
+        };
         let (_, m2) = daemon_side.write_message2().unwrap();
         second.read_message2(&m2).unwrap();
     }

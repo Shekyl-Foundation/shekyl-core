@@ -267,6 +267,18 @@ def series(leg, side, column):
     return [getattr(pair, side)[column] for pair in leg.pairs]
 
 
+def append_timing(lines, legs, side, columns):
+    """One timing table. A leg with no completed handshake has nothing to
+    summarise; its completion count is already in the table above."""
+    for leg in legs:
+        if not leg.pairs:
+            continue
+        for column in columns:
+            summary = stats(series(leg, side, column))
+            cells = " | ".join(ms(summary[c]) for c in CLOCKS)
+            lines.append(f"| {leg.name} | {column[:-3]} | {summary['n']} | {cells} |")
+
+
 def render(legs, verdict):
     lines = ["## Completion", ""]
     lines.append("| Leg | Connections | Completed | Share | Accepted by the daemon, not completed |")
@@ -279,19 +291,11 @@ def render(legs, verdict):
     lines += ["", "## The daemon, from `accept` (ms)", ""]
     lines.append("| Leg | Stamp | n | " + " | ".join(CLOCKS) + " |")
     lines.append("|---|---|---:|" + "---:|" * len(CLOCKS))
-    for leg in legs:
-        for column in SERVER_STAMPS:
-            summary = stats(series(leg, "server", column))
-            cells = " | ".join(ms(summary[c]) for c in CLOCKS)
-            lines.append(f"| {leg.name} | {column[:-3]} | {summary['n']} | {cells} |")
+    append_timing(lines, legs, "server", SERVER_STAMPS)
     lines += ["", "## The client, from the start of its connect (ms)", ""]
     lines.append("| Leg | Stamp | n | " + " | ".join(CLOCKS) + " |")
     lines.append("|---|---|---:|" + "---:|" * len(CLOCKS))
-    for leg in legs:
-        for column in CLIENT_STAMPS:
-            summary = stats(series(leg, "client", column))
-            cells = " | ".join(ms(summary[c]) for c in CLOCKS)
-            lines.append(f"| {leg.name} | {column[:-3]} | {summary['n']} | {cells} |")
+    append_timing(lines, legs, "client", CLIENT_STAMPS)
 
     lines += ["", "## Gates", ""]
     if verdict.met:
