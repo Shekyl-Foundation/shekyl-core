@@ -161,7 +161,10 @@ again only when the epoch changes. The header key is not a field of
 never send. The label is read in one function, `header_protection_key`,
 which is crate-private and born with `ClassedRecord` in step 5. The
 epoch is part of `Direction` in step 1, so step 5 does not change the
-signature.
+signature. **UPDATE 2026-10-20:** `header_protection_key` is gone. The
+label stays in `classed.rs` as `RECORD_HEADER_DST`, and the one read is
+`HeaderKey::mask`, which passes those bytes to
+`Direction::hkdf_from_record_key`. `Direction` no longer names the label.
 
 ### RT-O18 — Where does the seeded generator live?
 

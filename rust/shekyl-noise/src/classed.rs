@@ -44,8 +44,7 @@ use crate::aead::{nonce, HASH_LEN, TAG_LEN};
 use crate::direction::{Direction, DirectionError, KeyEpoch};
 
 /// The label the header-protection key is derived under. Registered in
-/// `CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 7. Read only by
-/// [`Direction::header_protection_key`].
+/// `CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 7. Read only by [`HeaderKey::mask`].
 pub(crate) const RECORD_HEADER_DST: &[u8] = b"shekyl/noise-record-header-v1";
 
 /// The masked class byte in front of every record.
@@ -155,7 +154,7 @@ impl ClassTable {
     }
 }
 
-/// What [`ClassedRecord`] and the first-record functions can fail at.
+/// What [`ClassedRecord`] can fail at.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ClassedError {
     /// Not a whole record yet. Nothing was spent; read more and try again.
@@ -204,7 +203,7 @@ impl HeaderKey {
     fn mask(&mut self, direction: &Direction) -> u8 {
         let (n, epoch) = direction.next();
         if self.epoch != Some(epoch) {
-            self.key = direction.header_protection_key();
+            self.key = direction.hkdf_from_record_key(RECORD_HEADER_DST);
             self.epoch = Some(epoch);
         }
         mask(&self.key, n)
@@ -256,8 +255,10 @@ fn open_next(
         .open(&record[HEADER_LEN..], &[class.0])
         .map_err(ClassedError::from)?;
     let plaintext = Zeroizing::new(plaintext);
-    let occupancy = usize::from(u16::from_le_bytes([plaintext[0], plaintext[1]]));
-    let body = &plaintext[OCCUPANCY_LEN..];
+    let Some((occupancy_bytes, body)) = plaintext.split_first_chunk::<OCCUPANCY_LEN>() else {
+        return Err(ClassedError::Refused);
+    };
+    let occupancy = usize::from(u16::from_le_bytes(*occupancy_bytes));
     let (payload, pad) = body
         .split_at_checked(occupancy)
         .ok_or(ClassedError::Refused)?;
@@ -358,43 +359,25 @@ impl ClassedRecord {
         self.poison_on_refusal(result)
     }
 
+    /// End this half and return the direction it framed.
+    ///
+    /// The header-key cache stays with the half. The next [`ClassedRecord`]
+    /// around this direction derives the key again, once, for the epoch the
+    /// direction is on. Poison stays with the half too: a direction taken
+    /// after [`ClassedError::Refused`] starts a new half, and a session that
+    /// must not continue refuses the open instead of wrapping the direction
+    /// again.
+    #[must_use = "the direction is the session's receiving half"]
+    pub fn into_direction(self) -> Direction {
+        self.direction
+    }
+
     fn poison_on_refusal<T>(&mut self, result: Result<T, ClassedError>) -> Result<T, ClassedError> {
         if matches!(result, Err(ClassedError::Refused)) {
             self.poisoned = true;
         }
         result
     }
-}
-
-/// How many wire bytes the first record, starting with `header`, takes, for
-/// a handshake that lends its receiving direction out before the session is
-/// released. Spends nothing.
-///
-/// # Errors
-///
-/// [`ClassedError::Refused`] for a class outside the table.
-pub fn first_record_len(
-    direction: &Direction,
-    table: &ClassTable,
-    header: u8,
-) -> Result<usize, ClassedError> {
-    announced(direction, table, &mut HeaderKey::new(), header).map(|(_, len)| len)
-}
-
-/// Open the first record through a lent direction: the opener a pending
-/// session is released by. The same bytes and checks as
-/// [`ClassedRecord::open`].
-///
-/// # Errors
-///
-/// As [`ClassedRecord::open`]. A caller that gets anything but `Ok` drops
-/// the session.
-pub fn open_first_record(
-    direction: &mut Direction,
-    table: &ClassTable,
-    wire: &[u8],
-) -> Result<Opened, ClassedError> {
-    open_next(direction, table, &mut HeaderKey::new(), wire)
 }
 
 #[cfg(test)]
@@ -429,7 +412,7 @@ mod tests {
     #[test]
     fn known_answer_from_an_independent_implementation() {
         let direction = keyed();
-        let key = direction.header_protection_key();
+        let key = direction.hkdf_from_record_key(RECORD_HEADER_DST);
         assert_eq!(
             hex(&key[..]),
             "0a5950b1e43f16769fa704b21ee5165652c90d1b417d7c18eb9ce3ccc7e93897"
@@ -594,10 +577,10 @@ mod tests {
         let (mut send, mut recv) = pair();
         send.direction.force_nonce(REKEY_NONCES - 1);
         recv.direction.force_nonce(REKEY_NONCES - 1);
-        let old_key = send.direction.header_protection_key();
+        let old_key = send.direction.hkdf_from_record_key(RECORD_HEADER_DST);
         let last = send.seal(ClassId(0), b"last").unwrap();
         assert_eq!(last[0], mask(&old_key, REKEY_NONCES - 1));
-        let new_key = send.direction.header_protection_key();
+        let new_key = send.direction.hkdf_from_record_key(RECORD_HEADER_DST);
         assert_ne!(*old_key, *new_key, "rekey moved the record key");
         let first = send.seal(ClassId(0), b"first").unwrap();
         assert_eq!(first[0], mask(&new_key, 0));
@@ -615,24 +598,17 @@ mod tests {
         assert!(bytes.len() > 16, "{} distinct header bytes", bytes.len());
     }
 
-    /// The first record through a lent direction is the framer's own bytes,
-    /// and reading its length spends nothing.
+    /// Taking the direction out ends the half. The next half derives its
+    /// header key again and opens the following record.
     #[test]
-    fn the_first_record_opens_through_a_lent_direction() {
-        let mut send = ClassedRecord::new(keyed(), table());
-        let mut direction = keyed();
+    fn a_direction_taken_out_opens_the_next_record_in_a_new_half() {
+        let (mut send, mut recv) = pair();
         let wire = send.seal(ClassId(1), b"request").unwrap();
-        let t = table();
-        assert_eq!(first_record_len(&direction, &t, wire[0]), Ok(wire.len()));
-        assert_eq!(
-            open_first_record(&mut direction, &t, &wire[..10]),
-            Err(ClassedError::Truncated)
-        );
-        let opened = open_first_record(&mut direction, &t, &wire).unwrap();
-        assert_eq!(opened.payload, b"request");
+        assert_eq!(recv.open(&wire[..1]), Err(ClassedError::Truncated));
+        assert_eq!(recv.open(&wire).unwrap().payload, b"request");
+        let direction = recv.into_direction();
         assert_eq!(direction.opened(), 1);
-        // The direction carries on as the session's receiving half.
-        let mut recv = ClassedRecord::new(direction, t);
+        let mut recv = ClassedRecord::new(direction, table());
         let wire = send.seal(ClassId(0), b"second").unwrap();
         assert_eq!(recv.open(&wire).unwrap().payload, b"second");
     }
