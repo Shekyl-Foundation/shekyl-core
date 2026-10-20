@@ -320,7 +320,8 @@ def main(argv: list[str]) -> int:
     if not os.path.exists(path):
         print(f"input grammar walk: {path} is missing: no subject to check (rule 47)")
         return 1
-    doc = open(path, encoding="utf-8").read()
+    with open(path, encoding="utf-8") as source:
+        doc = source.read()
     if "--selftest" in argv:
         return selftest(doc)
     errors = check(doc)
