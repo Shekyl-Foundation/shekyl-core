@@ -5046,6 +5046,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-noise",
  "shekyl-p2p-transport",
+ "subtle",
  "x25519-dalek",
  "zeroize",
 ]

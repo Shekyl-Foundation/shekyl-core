@@ -48,7 +48,8 @@ mod linux {
     use shekyl_noise::Direction;
     use shekyl_rpc_channel::budget::HandshakeBudget;
     use shekyl_rpc_channel::handshake::{
-        Client, Daemon, StaticKeypair, MESSAGE1_LEN, MESSAGE1_WIRE_LEN, TAG_LEN, TRANSPORT_AD,
+        Client, Daemon, DaemonReadyForMessage2, HandshakeError, Message1Admission, StaticKeypair,
+        MESSAGE1_LEN, MESSAGE1_WIRE_LEN, TAG_LEN, TRANSPORT_AD,
     };
     use shekyl_rpc_channel::NetworkId;
 
@@ -186,6 +187,19 @@ mod linux {
     /// many are admitted is the budget's, and its tests cover it.
     fn unbounded() -> HandshakeBudget {
         HandshakeBudget::with_share(1_000, Duration::from_secs(86_400), Instant::now())
+    }
+
+    /// The measurement budget does not run out, so a read that is not a
+    /// refusal has continued the handshake.
+    fn expect_continue(read: Result<Message1Admission, HandshakeError>) -> DaemonReadyForMessage2 {
+        match read.expect("read_message1") {
+            Message1Admission::Continue(ready) => ready,
+            Message1Admission::Busy(_) => panic!("the measurement budget does not run out"),
+        }
+    }
+
+    fn continued(read: &Result<Message1Admission, HandshakeError>) -> bool {
+        matches!(read, Ok(Message1Admission::Continue(_)))
     }
 
     #[derive(Clone, Copy)]
@@ -359,7 +373,7 @@ mod linux {
 
             let now = Instant::now();
             let (sample, read) = timed(|| daemon.read_message1(&message1, &budget, now));
-            let daemon = read.expect("read_message1");
+            let daemon = expect_continue(read);
             row(HandshakeStep::DaemonReadMessage1, sample);
 
             let (sample, written) = timed(|| daemon.write_message2());
@@ -416,14 +430,14 @@ mod linux {
         let mut out = String::from(MESSAGE1_HEADER);
         out.push('\n');
         for set in &prepared {
-            warm_message1(daemon_id, &set.bodies, cell.warmup, &budget);
+            warm_message1(daemon_id, &set.bodies, cell.warmup);
             let mut accepted = 0usize;
             for (i, body) in set.bodies.iter().enumerate() {
                 let (new, daemon) = timed(|| Daemon::new(&BENCH_NETWORK_ID, daemon_id));
                 let now = Instant::now();
                 let (read, result) = timed(|| daemon.read_message1(body, &budget, now));
-                accepted += usize::from(result.is_ok());
-                push_message1(&mut out, i, set.kind, result.is_ok(), new, read);
+                accepted += usize::from(continued(&result));
+                push_message1(&mut out, i, set.kind, continued(&result), new, read);
             }
             let expect = usize::from(set.kind.accepted()) * set.bodies.len();
             assert_eq!(
@@ -505,15 +519,14 @@ mod linux {
         body
     }
 
-    fn warm_message1(
-        daemon_id: &StaticKeypair,
-        bodies: &[Vec<u8>],
-        warmup: usize,
-        budget: &HandshakeBudget,
-    ) {
+    /// Warm the read on its own budget, so the mac1s it presents are not
+    /// the ones the timed loop admits. A shared window would make the timed
+    /// read of those bytes a replay.
+    fn warm_message1(daemon_id: &StaticKeypair, bodies: &[Vec<u8>], warmup: usize) {
+        let budget = unbounded();
         for body in bodies.iter().take(warmup) {
             let daemon = Daemon::new(&BENCH_NETWORK_ID, daemon_id);
-            let read = daemon.read_message1(body, budget, Instant::now());
+            let read = daemon.read_message1(body, &budget, Instant::now());
             let _read = std::hint::black_box(read);
         }
     }
@@ -579,9 +592,11 @@ mod linux {
     ) -> (Direction, Direction) {
         let (client, message1) =
             Client::start(&BENCH_NETWORK_ID, client_id, daemon_id.public()).expect("start");
-        let daemon = Daemon::new(&BENCH_NETWORK_ID, daemon_id)
-            .read_message1(&message1, &unbounded(), Instant::now())
-            .expect("read_message1");
+        let daemon = expect_continue(Daemon::new(&BENCH_NETWORK_ID, daemon_id).read_message1(
+            &message1,
+            &unbounded(),
+            Instant::now(),
+        ));
         let (daemon, message2) = daemon.write_message2().expect("write_message2");
         let client = client.read_message2(&message2).expect("read_message2");
         let (client, message3) = client.write_message3(&PAYLOAD).expect("write_message3");

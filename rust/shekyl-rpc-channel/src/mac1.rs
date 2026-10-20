@@ -22,6 +22,7 @@
 use blake2::digest::consts::U16;
 use blake2::digest::{Digest, Mac};
 use blake2::{Blake2s256, Blake2sMac};
+use subtle::ConstantTimeEq;
 
 use crate::{BUSY_DST, BUSY_LEN, MAC1_DST, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
 
@@ -71,17 +72,11 @@ pub(crate) fn busy(key: &[u8; MAC1_KEY_LEN], mac1_tag: &[u8; MAC1_LEN]) -> [u8; 
     mac.finalize().into_bytes().into()
 }
 
-/// Whether `reply` is `expected`, compared without an early exit, so the
-/// time taken does not say how many leading bytes of a forgery were right.
+/// Whether `reply` is `expected`. A different length is not busy; the bytes
+/// of a same-length reply are compared without an early exit, so the time
+/// taken does not say how many leading bytes of a forgery were right.
 pub(crate) fn busy_matches(expected: &[u8; BUSY_LEN], reply: &[u8]) -> bool {
-    if reply.len() != BUSY_LEN {
-        return false;
-    }
-    let difference = expected
-        .iter()
-        .zip(reply)
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b));
-    core::hint::black_box(difference) == 0
+    reply.len() == BUSY_LEN && bool::from(reply.ct_eq(expected.as_slice()))
 }
 
 #[cfg(test)]

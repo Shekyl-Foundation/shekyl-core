@@ -573,9 +573,10 @@ of stranger:
   dropped having cost the daemon one keyed hash: no long-term key is used.
   The daemon sends no byte before message 1 authenticates, and any failure
   closes the connection without reply, with one exception: a message 1
-  that passed mac1 and found the handshake budget empty is answered
-  "busy" (below), and only a holder of the bundle can write such a
-  message. A scanner sees a port that accepts TCP and says nothing.
+  that passed mac1, was new to the replay window, and found the handshake
+  budget empty is answered "busy" (below), and only a holder of the bundle
+  can write such a message. A scanner sees a port that accepts TCP and says
+  nothing.
 - **With the bundle, not enrolled.** Message 1 authenticates, so the daemon
   answers with message 2 — confirming that this daemon, with this key, is
   at this address. The connection closes after message 3 when the
@@ -644,40 +645,62 @@ key, the order §5 fixes for the fingerprint.
   before any long-term key is used and without spending from the budget.
   The test failed with the check removed.
 
-**The handshake budget.** Every message-1 decapsulation is paid for from
-one token bucket per daemon (`HandshakeBudget`), after mac1 and the key
-check and before either long-term key. A message 1 that finds the bucket
-empty is answered with the busy reply below. A bad mac1 stays silent.
-- **The share: handshakes never take more than a quarter of one core**
-  (confirmed 2026-10-20)
-  (`HANDSHAKE_CPU_SHARE_PERMILLE` = 250), over any window longer than the
-  one-second burst. On the floor device that is a sixteenth of the
-  machine. The rest of that core, and the other three, stay with the
-  chain.
+**The handshake budget.** Every first presentation of a message 1 that
+passed mac1 and FIPS 203's encapsulation-key check is paid for from one
+token bucket per daemon (`HandshakeBudget`), before either long-term key.
+The order is the length, the mac1, the key check, the replay window, then
+the charge. A message 1 that finds the bucket empty is answered with the
+busy reply below. A bad mac1, a malformed key, and a mac1 already in the
+replay window stay silent.
+- **The charge bound.** The bucket bounds charges, not measured CPU.
+  While it starts full,
+
+  `charges ≤ share × elapsed + capacity`,
+
+  where the share is `HANDSHAKE_CPU_SHARE_PERMILLE` = 250 thousandths of
+  one core (confirmed 2026-10-20) and `capacity` is one second of that
+  share (`HANDSHAKE_BUDGET_BURST`). A window of one second can therefore
+  be charged the burst already saved plus what that second earns. On the
+  floor device the share is a sixteenth of the machine, as a consequence
+  of the rate. Nothing here reserves a core.
 - **The derivation:**
   - Each admission is charged the 99th percentile of the daemon's whole
     handshake with mac1, 2,163.8 µs (`HANDSHAKE_DAEMON_CPU_NANOS`, rowed
     in the measurement ledger on the re-measure), because an admitted
     message 1 may go on to a full handshake. A message 1 that fails at its
-    tag costs less (665.5 µs at that percentile), so the bound holds for
-    every mix.
+    tag costs 665.5 µs at that percentile, below the charge, so a mix of
+    admitted attempts is priced at or above its measured p99. The
+    percentile is not a maximum: a slower handshake, the mac1 and key
+    check that run before any charge, and work an admission does in a
+    later window sit outside the bound.
   - A quarter of a second of CPU per second, divided by 2,163.8 µs, is
     **115 handshakes a second**.
   - The burst holds one second of that, 115 at once, so the clients
     reconnecting after a restart are served together.
+- **One presentation.** The same lock holds a window of
+  `HANDSHAKE_REPLAY_SLOTS` mac1s, one ruled burst (115). A mac1 is
+  inserted when it passes mac1 and the key check, whether the bucket then
+  pays or answers busy. A second presentation is
+  `HandshakeError::Message1`: nothing is sent, nothing is charged, and no
+  long-term key is used. The window drops the oldest once a newer mac1
+  arrives past that count. A quiet daemon never evicts, so a captured
+  message stays dead.
 - **Tested:** a flood of message 1s with valid mac1s and broken tags,
   spread over two simulated seconds, uses the long-term keys only as often
-  as the budget pays for. The CPU those admissions stand for stays within
-  the share of the window plus the burst, and a session established before
-  the flood still carries records both ways. Every message the budget
-  refused was answered busy. The test failed with the budget removed.
+  as the budget pays for. The charges those admissions stand for stay
+  within the share of the window plus the burst, and a session established
+  before the flood still carries records both ways. Every message the
+  budget refused for emptiness was answered busy. A replay of an admitted
+  message is silent and leaves the next admission for a different mac1.
+  A malformed encapsulation key is refused before the window and before
+  the charge. The test failed with the budget removed.
 
 **The busy reply (ruled 2026-10-20).** A budget drop is not silent to a
 sender that passed mac1, since that sender holds the bundle.
 - **The reply:** 16 bytes, keyed BLAKE2s-128 under the mac1 key over the
   registered label `shekyl/rpc-busy-v1` (domain registry, mechanism 7)
   followed by the mac1 of the message 1 it answers
-  (`HandshakeError::Busy` carries it). The daemon writes it in place of
+  (`Message1Admission::Busy` carries it). The daemon writes it in place of
   message 2 and closes.
 - **Bound to one attempt:** every message 1 carries a fresh ephemeral and
   so a fresh mac1. The reply to an earlier attempt is not the reply to
@@ -689,7 +712,8 @@ sender that passed mac1, since that sender holds the bundle.
   expires. Anything else, a forged "busy" included, is a connection closed
   without an answer.
 - **Who gets it:** only a message 1 that passed mac1 and FIPS 203's key
-  check. A mac1 failure stays silent, budget or no budget.
+  check and was not already in the replay window. A mac1 failure stays
+  silent, budget or no budget. So does a second presentation.
 - **Tested:** an empty budget answers busy before any long-term key is
   used, and the sender recognises the reply. A stranger's message on the
   same empty budget is still refused silently. Random bytes, a reply
@@ -703,9 +727,13 @@ sender that passed mac1, since that sender holds the bundle.
 - **The budget is shared by every sender.** XK hides the client's
   identity until message 3, so before then nothing says whose attempt a
   message 1 is, and there is no per-client fairness. A bundle holder can
-  spend the budget and delay other clients' handshakes, within the share.
-  The limit on that is who holds the bundle: it goes only to clients that
-  will be enrolled (§5).
+  spend the budget and delay other clients' handshakes, within the charge
+  bound. The bundle goes only to clients that will be enrolled (§5), and
+  that is what limits who can write a mac1.
+- **The replay window is one burst.** After `HANDSHAKE_REPLAY_SLOTS`
+  newer presentations the oldest mac1 can be presented once more. A
+  bundle holder can spend the budget with fresh mac1s and thereby flush
+  the window. A path observer cannot mint a mac1, so cannot flush it.
 - **A path observer sees "busy".** The reply is 16 bytes where message 2
   is 2,320, so whoever watches the connection learns the node refused a
   handshake for load. It learns nothing about the client.
