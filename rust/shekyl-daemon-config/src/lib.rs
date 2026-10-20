@@ -15,9 +15,13 @@
 
 #![deny(unsafe_code)]
 
+#[cfg(unix)]
+mod acl;
 pub mod announce;
 pub mod docs;
+pub mod exit;
 pub mod file;
+pub mod load;
 pub mod lock;
 pub mod marker;
 pub mod network;
@@ -27,6 +31,7 @@ pub mod resolve;
 pub mod sections;
 pub mod table;
 
+pub use load::{load, Loaded};
 pub use lock::Lock;
 pub use marker::{MarkerOutcome, NetworkId};
 pub use network::Network;

@@ -245,8 +245,22 @@ read:
    anyone outside the permitted principals.
 5. Apply.
 
-The permitted principals are root and the daemon's account on Unix. On
-Windows the check is an **allowlist**: write is permitted only to SYSTEM,
+The permitted principals are root and the daemon's account on Unix, and for
+reading a file that holds a secret also the daemon's group (Rick,
+2026-10-19). A service install keeps one file, `root:<daemon group>` `0640`
+under `/etc/shekyl` `root:root` `0755`: written by root only, read by root,
+the daemon's account and its group. A per-account install keeps it
+owner-only `0600`. There is no separate secrets file.
+
+The Unix rules read the mode bits. Those bits are the whole policy only
+when the access-control list names nobody else. A POSIX named user or named
+group, a Linux NFSv4 list, a macOS extended entry, or a FreeBSD list the
+system does not call trivial, refuses on a secret file: once a named entry
+exists the group-class bits are the mask, not the owning group. A list that
+only restates the mode does not refuse, and a probe that cannot be read
+refuses rather than passing, as an unreadable directory does.
+
+On Windows the check is an **allowlist**: write is permitted only to SYSTEM,
 Administrators, TrustedInstaller and the daemon's own account, and any other access-control
 entry that grants write refuses, whatever it names (Authenticated Users,
 INTERACTIVE, a user's SID, CREATOR OWNER, Everyone, Users). The installer
@@ -456,6 +470,19 @@ C++ keeps today's defaults as constants until their lanes decide.
 slice that moves a reader deletes its field. If the pre-flight finds a C++
 reader of the advertised address on `dev`, it is a twelfth field,
 recorded there.
+
+**Where it is defined.** The snapshot's structures, its field count and
+the parse export the C++ test binaries and `shekyl-blockchain-import`
+construct core from (`shekyl_daemon_snapshot_parse` / `_free`, through
+`shekyl_daemon_config::load`, the one parse the start also runs; rule 26
+B2) are `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs`, in the ordinary
+library. A binary that only constructs core from a snapshot links
+`libshekyl_ffi.a` and no daemon image, so none of the daemon RPC's
+imports of the C++ `rpc` library reach its link; MinGW, whose linker
+keeps unreferenced sections, refused that link otherwise (Rick,
+2026-10-19). `shekyl-daemon` keeps the entry ABI (`shekyl_daemon_main`,
+`shekyl_daemon_request_stop`) and builds the start's snapshot from the
+same `SnapshotData`.
 
 The relay's identity and the descriptors reserved for the inbound ceiling
 are read inside Rust (the zone the remnant opens, and the seam bind). They
