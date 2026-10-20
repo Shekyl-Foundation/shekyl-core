@@ -962,7 +962,8 @@ cleared = [
   { through = "9b5858839", reason = "Adds deadline.rs: the handshake's two deadlines as constants, which nothing in the crate reads yet, and a compile-time check of their order. No code path RT-P6 or RT-P9 timed changes." },
   { through = "3eb4b79df", reason = "The busy reply: a message 1 the budget refuses is answered with one keyed BLAKE2s over 34 bytes instead of nothing, after the admission check, so it is outside every admitted handshake the charge prices; the client computes the expected reply once with its mac1. The daemon's handshake, and what each admission costs, are unchanged." },
   { through = "31ba74896", reason = "Adds retry.rs, the client's retry policy: arithmetic on instants that decides when to start again. No handshake step RT-P6 or RT-P9 timed changes." },
-  { through = "7b2ed1f26", reason = "A first presentation inserts its mac1 into a 115-slot window before the long-term work, and a busy reply is Message1Admission::Busy rather than an error. A replay returns before the long-term keys and is not an admitted handshake. The client's busy compare is subtle's constant-time equality. The charge is unchanged at 2,163,800 ns, so the captures at 5db6eeda8f still price this tree." }
+  { through = "7b2ed1f26", reason = "A first presentation inserts its mac1 into a 115-slot window before the long-term work, and a busy reply is Message1Admission::Busy rather than an error. A replay returns before the long-term keys and is not an admitted handshake. The client's busy compare is subtle's constant-time equality. The charge is unchanged at 2,163,800 ns, so the captures at 5db6eeda8f still price this tree." },
+  { through = "54c3aa3dd", reason = "The retry module's end-to-end test matches Message1Admission instead of an error. HandshakeRetry's decisions are the same, and no handshake step RT-P6 or RT-P9 timed changes." }
 ]
 
 [[constant]]
