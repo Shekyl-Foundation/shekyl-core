@@ -509,16 +509,16 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`RPC_WIRE.md`](design/RPC_WIRE.md) RW-Q7 (the schema gate) and RW-Q8 (the rename PR)
   - Target: pre-genesis
 
-- **The Linux packages create no `shekyl` account, though the shipped unit runs as it (`INPUT_GRAMMAR.md` IG-F12).** `contrib/packaging/linux/shekyld.service` sets `User=shekyl`, and `deb-after-install.sh` only reloads systemd, so on a fresh install the unit cannot start. IG-Q64 recommends a `sysusers.d` entry shipped in `contrib/packaging/linux/` and used by both the `.deb` and the RPM. Falsify by a fresh `.deb` and RPM install whose `id shekyl` succeeds before the unit first starts.
-  - Owner: [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) (the release lane's packaging), per `INPUT_GRAMMAR.md` IG-Q64
+- **The Linux packages create no `shekyl` account, though the shipped unit runs as it (`INPUT_GRAMMAR.md` IG-F12).** `contrib/packaging/linux/shekyld.service` sets `User=shekyl`, and `deb-after-install.sh` only reloads systemd, so on a fresh install the unit cannot start. The disposition is IG-Q64 (posed, amended 2026-10-20). Falsify by a fresh `.deb` and RPM install whose `id shekyl` succeeds before the unit first starts.
+  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
   - Target: pre-genesis
 
-- **No installer creates the daemon's configuration directories (`INPUT_GRAMMAR.md` IG-F13).** Nothing creates `/etc/shekyl/` (R2) on Linux, and the Windows installer does not create `%ProgramData%\shekyl\`, which IG-13 says only the installer creates. IG-Q64 recommends a `tmpfiles.d` entry (`/etc/shekyl/`, `root:shekyl`, `0750`) for both Linux packages, and the machine-wide root on Windows when `service` lands (RT-W14). Falsify by a fresh install that leaves `/etc/shekyl/` with that owner and mode.
-  - Owner: [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) (the release lane's packaging), per `INPUT_GRAMMAR.md` IG-Q64
+- **No installer creates the daemon's configuration directory (`INPUT_GRAMMAR.md` IG-F13).** Nothing creates `/etc/shekyl/` (R2) on Linux, and the Windows installer does not create `%ProgramData%\shekyl\`, which IG-13 says only the installer creates. The disposition is IG-Q64 (posed, amended 2026-10-20). Falsify by a fresh install that leaves the configuration directory that question names.
+  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
   - Target: pre-genesis
 
-- **The shipped systemd unit runs mainnet only (`INPUT_GRAMMAR.md` IG-F16).** `contrib/packaging/linux/shekyld.service` passes no `--network`, so a package cannot run testnet, the network every alpha release runs, without an operator's own unit. IG-Q64 recommends the template unit `shekyld@<network>.service` (`--network %i`, per-network `StateDirectory`, `LogsDirectory` and `ReadWritePaths`), with `scripts/ci/check_launch_recipes.py` reading the per-network files' paths. Falsify by `systemctl enable --now shekyld@testnet` on a fresh package install.
-  - Owner: [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) (the release lane's packaging), per `INPUT_GRAMMAR.md` IG-Q64
+- **The shipped systemd unit runs mainnet only (`INPUT_GRAMMAR.md` IG-F16).** `contrib/packaging/linux/shekyld.service` passes no `--network`, so a package cannot run testnet, the network every alpha release runs, without an operator's own unit. The disposition is IG-Q64 (posed, amended 2026-10-20). Falsify by a packaged unit whose `ExecStart` passes `--network` for the instance and still pairs `--data-dir` and `--log-file` with `StateDirectory` and `LogsDirectory`.
+  - Owner: [`INPUT_GRAMMAR.md`](design/INPUT_GRAMMAR.md) IG-Q64
   - Target: pre-genesis
 
 - **Phase 4b: `rescan_blockchain` needs an Engine rescan API** — **CLOSED 2026-08-04 (Phase 4c, `feat/wallet-rpc-phase-4c-rescan`)**.
