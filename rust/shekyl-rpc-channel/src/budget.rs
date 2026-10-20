@@ -8,8 +8,9 @@
 //! A message 1 that carries a valid mac1 makes the daemon decapsulate with
 //! its long-term ML-KEM key and agree with its long-term X25519 key, and if
 //! it authenticates, the rest of the handshake follows. Each one is paid for
-//! from this token bucket before either long-term key is touched; one with
-//! nothing to pay with is dropped without a reply, exactly as a bad mac1 is.
+//! from this token bucket before either long-term key is touched. One with
+//! nothing to pay with is answered "busy" (`HandshakeError::Busy`), which
+//! its sender, a holder of the bundle, can verify; a bad mac1 gets nothing.
 //!
 //! The bucket is kept in nanoseconds of daemon CPU, so the rule it enforces
 //! reads directly: **handshakes never take more than
@@ -34,7 +35,8 @@ use std::time::{Duration, Instant};
 /// `docs/benchmarks/rt_p6_mac1_stranger_20261020.md`, 2,163.8 µs).
 pub const HANDSHAKE_DAEMON_CPU_NANOS: u64 = 2_163_800;
 
-/// The share of one core handshakes may take, in thousandths: a quarter.
+/// The share of one core handshakes may take, in thousandths: a quarter
+/// (confirmed 2026-10-20).
 ///
 /// On the floor device that is a sixteenth of the machine, and at
 /// [`HANDSHAKE_DAEMON_CPU_NANOS`] it admits 115 handshakes a second, far

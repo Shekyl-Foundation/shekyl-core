@@ -81,6 +81,9 @@ SURFACES=(
   "notify:rust/shekyl-ffi/src/notify_ffi.rs"
   # The utilities' default data directory (DAEMON_CONFIG_CUTOVER.md §2.6).
   "data_dir:rust/shekyl-ffi/src/data_dir_ffi.rs"
+  # The configuration snapshot, its field count and the test binaries' and
+  # the importer's parse (DAEMON_CONFIG_CUTOVER.md §2.9).
+  "daemon_snapshot:rust/shekyl-ffi/src/daemon_snapshot_ffi.rs"
   # The chain-sync heuristics' two verdicts (DAEMON_CONFIG_CUTOVER.md §4.2).
   "sync:rust/shekyl-ffi/src/sync_ffi.rs"
   "tx_extra_codec:rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"

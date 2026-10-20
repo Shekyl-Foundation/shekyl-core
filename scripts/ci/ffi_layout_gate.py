@@ -47,6 +47,12 @@ GROUPS = [
         # shekyl-address, which alias further constants; see EXEMPT.
         "exclude": ["ShekylAllKeysBlob"],
         "pairs": {
+            # The configuration snapshot the C++ remnant reads, and the
+            # importer's and core_tests' (daemon_snapshot_ffi.rs, §2.9).
+            "ShekylStringList": "ShekylStringList",
+            "ShekylClientEndpoint": "ShekylClientEndpoint",
+            "ShekylMineAddress": "ShekylMineAddress",
+            "ShekylDaemonSnapshot": "ShekylDaemonSnapshot",
             "ShekylBuffer": "ShekylBuffer",
             "ShekylPqcKeypair": "ShekylPqcKeypair",
             "ShekylPqcSignatureResult": "ShekylPqcSignatureResult",
@@ -127,8 +133,9 @@ GROUPS = [
         },
     },
     {
-        # The daemon's Rust main() hands the C++ remnant its entry and the
-        # configuration snapshot the remnant still reads.
+        # The daemon's Rust main() hands the C++ remnant its entry. The
+        # configuration snapshot the remnant reads is shekyl-ffi's
+        # (daemon_snapshot_ffi.rs), paired in the entry above.
         "crate": "rust/shekyl-daemon/src/lib.rs",
         "namespace": "rust_daemon",
         # `run` and `stop` are `Option<RunFn>` and `Option<StopFn>`.
@@ -137,10 +144,6 @@ GROUPS = [
         "bounds": [],
         "exclude": [],
         "pairs": {
-            "ShekylStringList": "ShekylStringList",
-            "ShekylClientEndpoint": "ShekylClientEndpoint",
-            "ShekylMineAddress": "ShekylMineAddress",
-            "ShekylDaemonSnapshot": "ShekylDaemonSnapshot",
             "ShekylDaemonEntry": "ShekylDaemonEntry",
         },
     },

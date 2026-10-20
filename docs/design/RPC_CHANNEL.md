@@ -575,8 +575,10 @@ of stranger:
   sender who lacks the bundle cannot write one, and its message 1 is
   dropped having cost the daemon one keyed hash: no long-term key is used.
   The daemon sends no byte before message 1 authenticates, and any failure
-  closes the connection without reply. A scanner sees a port that accepts
-  TCP and says nothing.
+  closes the connection without reply, with one exception: a message 1
+  that passed mac1 and found the handshake budget empty is answered
+  "busy" (below), and only a holder of the bundle can write such a
+  message. A scanner sees a port that accepts TCP and says nothing.
 - **With the bundle, not enrolled.** Message 1 authenticates, so the daemon
   answers with message 2 — confirming that this daemon, with this key, is
   at this address. The connection closes after message 3 when the
@@ -648,8 +650,9 @@ key, the order §5 fixes for the fingerprint.
 **The handshake budget.** Every message-1 decapsulation is paid for from
 one token bucket per daemon (`HandshakeBudget`), after mac1 and the key
 check and before either long-term key. A message 1 that finds the bucket
-empty is dropped silently, as a bad mac1 is.
+empty is answered with the busy reply below. A bad mac1 stays silent.
 - **The share: handshakes never take more than a quarter of one core**
+  (confirmed 2026-10-20)
   (`HANDSHAKE_CPU_SHARE_PERMILLE` = 250), over any window longer than the
   one-second burst. On the floor device that is a sixteenth of the
   machine. The rest of that core, and the other three, stay with the
@@ -669,8 +672,35 @@ empty is dropped silently, as a bad mac1 is.
   spread over two simulated seconds, uses the long-term keys only as often
   as the budget pays for. The CPU those admissions stand for stays within
   the share of the window plus the burst, and a session established before
-  the flood still carries records both ways. The test failed with the
-  budget removed.
+  the flood still carries records both ways. Every message the budget
+  refused was answered busy. The test failed with the budget removed.
+
+**The busy reply (ruled 2026-10-20).** A budget drop is not silent to a
+sender that passed mac1, since that sender holds the bundle.
+- **The reply:** 16 bytes, keyed BLAKE2s-128 under the mac1 key over the
+  registered label `shekyl/rpc-busy-v1` (domain registry, mechanism 7)
+  followed by the mac1 of the message 1 it answers
+  (`HandshakeError::Busy` carries it). The daemon writes it in place of
+  message 2 and closes.
+- **Bound to one attempt:** every message 1 carries a fresh ephemeral and
+  so a fresh mac1. The reply to an earlier attempt is not the reply to
+  this one.
+- **The client** keeps the reply it expects when it sends message 1 and
+  compares what came back without an early exit
+  (`ClientAwaitingMessage2::is_busy`). A match means busy: it backs off
+  and retries, and reports "node busy" only when its handshake deadline
+  expires. Anything else, a forged "busy" included, is a connection closed
+  without an answer.
+- **Who gets it:** only a message 1 that passed mac1 and FIPS 203's key
+  check. A mac1 failure stays silent, budget or no budget.
+- **Tested:** an empty budget answers busy before any long-term key is
+  used, and the sender recognises the reply. A stranger's message on the
+  same empty budget is still refused silently. Random bytes, a reply
+  under another bundle, the reply to an earlier attempt, one bit changed,
+  and a short or long reply are each not busy. Each test failed with its
+  check removed: the drop made silent again, the reply unbound from the
+  message 1, the length unchecked, and a mac1 failure answered. A known
+  answer for the reply, computed with Python's `hashlib`, pins the bytes.
 
 **The deadlines (RT-P9, ruled 2026-10-20 to come from a measurement).**
 Both run on the daemon's clock from `accept`, and both come from round
@@ -695,6 +725,9 @@ enforces them
   spend the budget and delay other clients' handshakes, within the share.
   The limit on that is who holds the bundle: it goes only to clients that
   will be enrolled (§5).
+- **A path observer sees "busy".** The reply is 16 bytes where message 2
+  is 2,320, so whoever watches the connection learns the node refused a
+  handshake for load. It learns nothing about the client.
 - **mac2 is not built.** WireGuard's second mac carries a cookie bound to
   the sender's source address. Over Tor a source address is the exit or
   the rendezvous and identifies no one, so that cookie would bind nothing.
@@ -872,6 +905,7 @@ internals); the log may be specific.
 | A request over a resource bound (§6.3) | Yes | "This request asks for N; the node serves at most LIMIT per request." Never truncated | — |
 | A call outside the connection's grant | Yes | "This connection is not granted METHOD (granted: GRANT)." — never "method not found" | — |
 | Handshake deadline expired | Yes | "The node did not complete the handshake in time." | Timeout, with the stage reached |
+| The node's handshake budget is spent (§4.3) | Yes — a busy reply, verified, in place of message 2. The client backs off and retries, and says so only when its handshake deadline expires | "The node is busy and did not accept the connection in time. Try again shortly." | Aggregated: "answered N handshakes busy in the last minute (budget: B a second)" |
 | Both a service and a run-as-me default daemon answer for one network (the overlap before the run-as-me daemon stands down) | Yes — both rendezvous answer | Nothing: "this computer" resolves to the service (RT-16). A client enrolled only with the run-as-me node is told "The node answered but has not enrolled this client", as that row | Run-as-me daemon: "a service node for NETWORK is now running on this computer; shutting down" then a clean shutdown |
 | Starting a run-as-me default daemon while a service default instance answers for its network | (Daemon, at start) "A Shekyl node is already running on this computer as a service for NETWORK." Refuses to start | Same line |
 | Session closed by revocation (§5) | Yes | "The node revoked this client's enrolment." | "revoked FINGERPRINT; closed N open sessions" |
