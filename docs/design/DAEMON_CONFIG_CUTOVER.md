@@ -457,6 +457,19 @@ slice that moves a reader deletes its field. If the pre-flight finds a C++
 reader of the advertised address on `dev`, it is a twelfth field,
 recorded there.
 
+**Where it is defined.** The snapshot's structures, its field count and
+the parse export the C++ test binaries and `shekyl-blockchain-import`
+construct core from (`shekyl_daemon_snapshot_parse` / `_free`, through
+`shekyl_daemon_config::load`, the one parse the start also runs; rule 26
+B2) are `rust/shekyl-ffi/src/daemon_snapshot_ffi.rs`, in the ordinary
+library. A binary that only constructs core from a snapshot links
+`libshekyl_ffi.a` and no daemon image, so none of the daemon RPC's
+imports of the C++ `rpc` library reach its link; MinGW, whose linker
+keeps unreferenced sections, refused that link otherwise (Rick,
+2026-10-19). `shekyl-daemon` keeps the entry ABI (`shekyl_daemon_main`,
+`shekyl_daemon_request_stop`) and builds the start's snapshot from the
+same `SnapshotData`.
+
 The relay's identity and the descriptors reserved for the inbound ceiling
 are read inside Rust (the zone the remnant opens, and the seam bind). They
 are one preparation the Rust `main()` installs before `run`, not snapshot
