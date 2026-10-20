@@ -29,8 +29,8 @@
 
 // The previous implementation relied on easylogging++'s
 // `ELPP_FEATURE_CRASH_LOG` path (`el::base::debug::StackTrace`) for
-// targets where libunwind wasn't in play (GCC-Linux, MSVC, MinGW,
-// Android). The vendored tree is gone. We now key the libunwind
+// targets where libunwind wasn't in play (GCC-Linux, MSVC, MinGW).
+// The vendored tree is gone. We now key the libunwind
 // walker entirely off the CMake-provided `HAVE_LIBUNWIND` macro
 // (see the `find_package(Libunwind)` block in the root
 // `CMakeLists.txt`): when it's defined we call `unw_*`, otherwise
@@ -225,7 +225,7 @@ void log_stack_trace(const char *msg)
     free(dsym);
   }
 #else
-  // Non-libunwind targets (MSVC / MinGW / Android) no longer have
+  // Non-libunwind targets (MSVC / MinGW) no longer have
   // the vendored easylogging++ stack walker. Emit a placeholder so
   // operators and crash-handler smoke tests still see the
   // `log_stack_trace` call site in the stream; the dedicated Rust
