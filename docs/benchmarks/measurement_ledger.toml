@@ -939,6 +939,29 @@ capture_rev = "301ed05b73"
 rev_source = "capture header, the tree line"
 path_set = "archival-serve-fetch"
 
+# --- the RPC channel's handshake --------------------------------------
+
+[[path_set]]
+id = "rpc-handshake"
+spec = [
+  "rust/shekyl-noise/src",
+  "rust/shekyl-rpc-channel/src",
+]
+cleared = [
+  { through = "473aca852", reason = "mac1 and the handshake budget (RPC_CHANNEL.md section 4.3, 2026-10-20): read_message1 gains a keyed BLAKE2s over the 2,320-byte Noise message and one budget admission before the long-term work RT-P6 timed, and the client's start one keyed BLAKE2s. A few microseconds against 2,136.1 us; the stranger's re-measure on the floor device (rt_p6_mac1_stranger_20261020.md) measures it, and its registration moves this constant if the daemon's handshake p99 rises." },
+]
+
+[[constant]]
+name = "handshake_daemon_cpu_ns"
+defined_in = "rust/shekyl-rpc-channel/src/budget.rs"
+needle = "pub const HANDSHAKE_DAEMON_CPU_NANOS: u64 = 2_136_100;"
+measured_by = ["BA-T36"]
+status = "current"
+capture = "docs/benchmarks/rt_p6_handshake_cost_20261018_captures/summary_registered.md"
+capture_rev = "02f7665bae"
+rev_source = "the record's results name the build: a fresh clone of 02f7665bae on the floor device, the registered cell of 2026-10-19 (docs/benchmarks/rt_p6_handshake_cost_20261018.md, Conditions). The constant is the daemon's per-handshake CPU at the 99th percentile, 2,136.1 us, the cost the handshake budget charges each admission."
+path_set = "rpc-handshake"
+
 [[retired_estimate]]
 name = "serve_median_per_response_single_pass_floor"
 estimate = { low = 40.0, high = 60.0, unit = "ms" }
