@@ -130,8 +130,8 @@ owner of block propagation.
 | Sync-time estimate pair, `cumulative_block_sync_weight` | CS | Redesign. Progress is read from the header chain (rule 80). The Monero mainnet size table is deleted (rules 60, 71) |
 | `log_connections` | console | Delete. The console reads the board |
 | `safesyncmode`, the `pause_mine`/`resume_mine` coupling | — | Delete. `safesyncmode` is an LMDB knob and leaves with DRS-X; the miner reacts to tip changes, not to sync |
-| `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:260`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner is not started. Read from the snapshot (`net_node.inl:429-430`) |
-| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:270`, **L** chain-sync), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12 |
+| `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:262`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner is not started. Read from the snapshot (`net_node.inl:429-430`) |
+| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:272`, **L** chain-sync), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12 |
 
 **Wargame.**
 - **Remote trigger or benefit.** None. This is an ownership question.
@@ -1242,7 +1242,7 @@ half-cut, and one cutover PR avoids it.
 **Problem.**
 - The input grammar hands four daemon options to this lane:
   `prep-blocks-threads`, `block-sync-size`, `span-limit` and
-  `block-download-max-size` (`INPUT_GRAMMAR.md:270`, legend **L**,
+  `block-download-max-size` (`INPUT_GRAMMAR.md:272`, legend **L**,
   "lane-owned (not ported; IG-Q4)").
 - The daemon no longer reads them. Today's defaults are hardcoded "until
   that lane decides":
@@ -1385,7 +1385,7 @@ record in `99542387b`, and the latch's reply split, `CannotFollow`, in
   8, the sync owner sets `following_degraded` through the connector (§A
   item 7), and the evidence check's `Class::Evidence` with its own cache
   lands with chain sync's first caller, not in PR 2;
-- the `INPUT_GRAMMAR.md:270` row moves from **L** to **X** with CS-Q12's
+- the `INPUT_GRAMMAR.md:272` row moves from **L** to **X** with CS-Q12's
   reason. That is the grammar lane's table.
 
 **Next:** the implementing agent's instructions, one consolidated brief,

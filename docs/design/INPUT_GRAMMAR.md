@@ -269,7 +269,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `test-drop-download`, `test-drop-download-height`, `test-dbg-lock-sleep`, `show-time-stats` | — | | | |  |  | – |
 | `keep-fakechain` | — | | | |  |  | – (nothing is wiped, R3) |
 | `fixed-difficulty` | `dev-difficulty` | integer ≥ 1 | unset | both |  |  | R; regtest |
-| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` | — | | | |  |  | L chain-sync |
+| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` | — | | | |  |  | X (chain sync's protocol constants replace `span-limit`, `block-sync-size` and `block-download-max-size`: its per-response, objects and global byte budgets and its deadlines, provisioned at the floor device, rule 76; `prep-blocks-threads` is the shared hasher budget's, derived from the floor device's scratchpads, DRS-X DX-Q2 item 6; metered links reopen as IG-Q40's byte quota; [`P2P_3_CHAIN_SYNC_BRIEF.md`](P2P_3_CHAIN_SYNC_BRIEF.md) CS-Q12, ruled 2026-10-18) |
 | `db-sync-mode`, `db-salvage` | — | | | |  |  | L DRS |
 | `keep-alt-blocks` | — | | | |  |  | L DRS-E5 |
 | `max-txpool-weight` | `txpool-weight-max` | quantity (bytes) | `648000000B` | both |  |  | R; a Monero-derived operand; deleted at the DRS-X flip, the pool's cap deriving from the chain (IG-Q11, amended 2026-10-17) |
