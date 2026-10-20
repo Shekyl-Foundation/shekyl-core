@@ -46,17 +46,16 @@
 //!   ([`ephemeral::DaemonTorControl::is_alive`] /
 //!   [`ephemeral::DaemonTorControl::wait_death`]) rather than papered over.
 
-pub mod blocking;
 mod data_dir;
 pub mod ephemeral;
 
-pub use blocking::{BlockingDaemonTor, BlockingDaemonTorConfig, BlockingStartError};
 pub use ephemeral::{
     DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError, TorDeath,
 };
 pub use shekyl_tor_control_client::control::OnionPow;
-// Re-exported so the FFI crate's probe/start seam names one crate (this one)
-// rather than reaching around it to the client for the error type alone.
+// Re-exported so the daemon's start seam (`shekyl-daemon`'s `tor.rs`) names
+// one crate (this one) rather than reaching around it to the client for the
+// error type alone.
 pub use shekyl_tor_control_client::binary::TorBinaryError;
 
 #[cfg(test)]

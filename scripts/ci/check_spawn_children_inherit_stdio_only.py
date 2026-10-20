@@ -46,8 +46,10 @@
 # Usage:  check_spawn_children_inherit_stdio_only.py            # check the tree
 #         check_spawn_children_inherit_stdio_only.py --selftest # bite each failure
 
+import atexit
 import pathlib
 import re
+import shutil
 import sys
 import tempfile
 
@@ -216,6 +218,8 @@ def check(root, watched, subjects):
 def selftest():
     def tree(files):
         root = pathlib.Path(tempfile.mkdtemp(prefix="spawn-inherit-gate-"))
+        # Removed when the selftest exits, whatever a case found.
+        atexit.register(shutil.rmtree, root, True)
         for rel, text in files.items():
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
