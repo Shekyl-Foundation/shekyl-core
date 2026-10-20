@@ -4787,6 +4787,7 @@ name = "shekyl-noise"
 version = "3.1.0"
 dependencies = [
  "blake2",
+ "chacha20",
  "chacha20poly1305",
  "x25519-dalek",
  "zeroize",

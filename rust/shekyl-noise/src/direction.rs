@@ -16,6 +16,7 @@
 use zeroize::Zeroizing;
 
 use crate::aead::{self, HASH_LEN};
+use crate::classed::RECORD_HEADER_DST;
 
 /// Nonce uses of one record key before rekey. One name for both framers.
 pub const REKEY_NONCES: u64 = 1_000;
@@ -146,6 +147,21 @@ impl Direction {
             self.n = n;
         }
         Ok(())
+    }
+
+    /// The nonce and the epoch the next [`Self::seal`] or [`Self::open`] will
+    /// use. Reading them spends neither.
+    pub(crate) fn next(&self) -> (u64, KeyEpoch) {
+        (self.n, self.epoch)
+    }
+
+    /// The header-protection key of the record key in use: the first output
+    /// of `HKDF(record key, shekyl/noise-record-header-v1)`, the record key
+    /// in the chaining-key position and the label as input
+    /// (`RPC_CHANNEL.md` section 4.4). The one place the label is read.
+    pub(crate) fn header_protection_key(&self) -> Zeroizing<[u8; HASH_LEN]> {
+        let [key, _] = aead::hkdf(&self.k, RECORD_HEADER_DST);
+        key
     }
 
     /// Set the nonce, so a test can stand on the rekey boundary.

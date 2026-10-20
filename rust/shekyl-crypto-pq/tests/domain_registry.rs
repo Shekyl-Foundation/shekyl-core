@@ -67,7 +67,7 @@ const PRODUCTION_PINS: [(&str, usize, usize); 7] = [
     ("4", 8, 0), // PL-D3: -1 (shekyl-pqc-leaf retired; the leaf key hash is mech 1 now)
     ("5", 6, 8), // SA-3c: -1 (snapshot-id left mechanism 5)
     ("6", 1, 0),
-    ("7", 1, 0), // RT-W8: the RPC channel's Noise prologue label (rpc-channel-v1)
+    ("7", 2, 0), // RT-W8: the RPC channel's Noise prologue label (rpc-channel-v1); RT-W9 step 5: +1 (noise-record-header-v1, ClassedRecord's header-protection key)
 ];
 /// Pinned counts for the non-production sections.
 const EXCLUDED_EXPECTED: usize = 8;

@@ -326,6 +326,60 @@ names (F-20), is accepted. The §13 row says so.
 
 ---
 
+## 4a. Step 5's two questions — POSED 2026-10-20
+
+Step 5 split in two when it was built (the plan below). `ClassedRecord`
+is specified to the byte in the parent's §4.4 and is built in step 5a.
+The adapter, `shekyl-rpc-stream`, meets two points neither document
+settles. They are posed here before 5b is built.
+
+**A finding first, which closes a third point.** The fixed size of a
+submission is derived from the consensus bounds (§4.4, RT-O6 part 2).
+The binding bound is `TX_WEIGHT_LIMIT`, 149,400, not `MAX_TX_SIZE`
+(1,000,000). A transaction's weight is its serialized size plus the Bp+
+clawback, and the pool refuses any transaction whose weight exceeds the
+limit. So no admissible transaction is larger than 149,400 bytes
+(`shekyl-wire`'s `transaction.rs`, `TX_WEIGHT_LIMIT` and its comment). In
+today's hex-in-JSON body that is 298,800 bytes plus the envelope: about
+five largest-class records, not the thirty a megabyte would take. The
+exact count follows from the envelope's largest size, which 5b derives
+and pins by a test.
+
+### RT-O28 — Where is a submission padded to its fixed size?
+
+The adapter is a byte stream under HTTP. It cannot tell a submission
+from any other request, and hyper writes the message and flushes once
+(RT-P5's registered flush policy).
+
+- **(a) The RPC client asks the adapter to pad the message it has just
+  written.** The client that sends `submit_transaction` knows it is
+  submitting. The adapter fills the message out to a fixed number of
+  largest-class records, the last ones carrying occupancy 0, a valid
+  record (§4.4), and the daemon's adapter delivers no bytes for them.
+  The HTTP body is untouched.
+- **(b) Pad the HTTP body itself,** with whitespace in the JSON, or a
+  padding member. That puts the rule in each client and makes the
+  daemon's parser carry it. Once the body is binary (RW), the padding
+  would need a field of its own.
+
+**Recommended: (a).** It is one rule in the one adapter, enforced by
+record count, and it survives the move to a binary body unchanged.
+
+### RT-O29 — Which class table does the request direction use?
+
+§4.4 rules the response classes and the submission's fixed size, and
+says "requests other than a submission" are not covered.
+
+**Recommended: the same table, 512, 16,384 and 65,535, in both
+directions.** RT-P5's registration derived the classes from every record
+of the trace, both directions together
+(`rt_p5_rpc_message_sizes_20261017.md`, "How the classes are derived").
+Every request but a submission in that trace is 431 bytes or smaller, so
+it is one 512-byte record. Under RT-O28 (a), a submission is whole
+65,535-byte records. One table in both directions means one
+`ClassTable` constant, and a request learns nothing from its direction's
+table.
+
 ## 5. Plan
 
 One pull request per step, each a draft off `dev`, each reviewable alone.
@@ -338,7 +392,7 @@ This document is step 0 and is the only content of the first.
 | 2 | The handshake, red first | RT-O18, RT-O19 | The comparison is an in-crate test, written and observed failing before the implementation. Production construction takes no generator. One generator source, compiled into that test and into the cross-check crate. Then one test per requirement of §4.3. Built in PR #1039 (`rust/shekyl-rpc-channel/src/pinned_handshake.rs`) |
 | 3 | RT-P5 sizes | step 2; RT-O21 | HTTP message sizes per method, on the generated wallet and the generated chain. No adapter. The method, the flush policy and the host claim are registered before it runs. The classes are derived from this trace |
 | 4 | RT-P6: handshake cost on the floor device | step 2; step 3's candidate classes | Registered before it runs; quiet claim |
-| 5 | `ClassedRecord` and `shekyl-rpc-stream` | RT-O20; steps 3 and 4 | The wire format is §4.4 of the parent, already specified. The adapter is written once, against `ClassedRecord`, and observed failing with splitting removed. Record boundaries are observed here, under step 3's flush policy. The header-label registry row lands with the constant. `FixedWindow` is not built. The interim framer is not copied into `shekyl-noise` |
+| 5 | `ClassedRecord` and `shekyl-rpc-stream` | RT-O20; steps 3 and 4 | The wire format is §4.4 of the parent, already specified. The adapter is written once, against `ClassedRecord`, and observed failing with splitting removed. Record boundaries are observed here, under step 3's flush policy. The header-label registry row lands with the constant. `FixedWindow` is not built. The interim framer is not copied into `shekyl-noise`. **Split 2026-10-20:** **5a** is `ClassedRecord` in `shekyl-noise`, with the registry row, a known answer and a test for each check, seen failing without it. **5b** is `shekyl-rpc-stream`, the submission's fixed size, and the record boundaries. 5b waits on RT-O28 and RT-O29 (§4a) |
 | 6 | Two registry exclusion rows; the standing-check gate | RT-O22 | One row for each protocol-name literal, one reason, excluded-count pin 8 → 10. Each gate is shown failing under a named edit |
 
 **Named edits, fixed now so they are not improvised later.**
