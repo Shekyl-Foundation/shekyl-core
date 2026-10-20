@@ -133,9 +133,9 @@ impl ShekylBuffer {
     /// path — [`shekyl_buffer_free`] — must reconstruct the allocation as
     /// `Vec::from_raw_parts(ptr, len, len)`. That is sound *only* when the
     /// leaked allocation was exactly `len` bytes wide, and a `Vec` is under
-    /// no obligation to be: `zstd::bulk::compress`, for one, returns a
-    /// `Vec` sized at `compress_bound(input)` with `len` set to the (always
-    /// strictly smaller) compressed size. Freeing that through a
+    /// no obligation to be: a `Vec` reserved at an upper bound and filled to
+    /// less — the shape of any encoder that sizes its output before it
+    /// knows the result — has capacity above `len`. Freeing that through a
     /// `len`-capacity `Vec` hands the allocator a `Layout` that never
     /// matched the allocation — benign under glibc `free()`, which ignores
     /// the size, and heap corruption under any size-aware allocator.

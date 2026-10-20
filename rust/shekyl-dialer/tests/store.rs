@@ -16,7 +16,6 @@ use std::sync::Arc;
 
 use shekyl_dialer::{AddressStore, Dialer, LoadError, STORE_INTERVAL_NANOS};
 use shekyl_draw_rng::SplitMix64;
-use shekyl_levin::SupportFlags;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::address_file::AddressFileError;
 use shekyl_peerlist::{ConnectorId, NetworkAddress, RefusedSet, Tick};
@@ -42,7 +41,6 @@ fn dialer() -> (Arc<Dialer>, ManualClock) {
     let dialer = Arc::new(Dialer::new(
         hub,
         RefusedSet::NON_GLOBAL,
-        SupportFlags::ADVERTISED.bits(),
         Arc::new(|| {
             Some(SyncPayload {
                 current_height: 1,

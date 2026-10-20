@@ -74,7 +74,7 @@ impl StdioOnly {
     /// The `fcntl` error for a descriptor that is open but could not be
     /// marked. The spawn then fails with it.
     pub fn apply(&self) -> std::io::Result<()> {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(target_os = "linux")]
         if mark_by_range() {
             return Ok(());
         }
@@ -113,7 +113,7 @@ pub fn stdio_only(_cmd: &mut tokio::process::Command) {}
 /// Linux 5.11 and later: one call marks the whole range. `false` on a kernel
 /// that predates the call (`ENOSYS`) or its close-on-exec flag (`EINVAL`), or
 /// on any other refusal, and the caller walks the table instead.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 fn mark_by_range() -> bool {
     // The raw call, not glibc's wrapper: the wrapper needs glibc 2.34.
     // SAFETY: `close_range` with `CLOSE_RANGE_CLOEXEC` changes only the

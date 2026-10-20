@@ -34,10 +34,11 @@ use serde_json::Value;
 use shekyl_noise::KeyEpoch;
 
 use super::{
-    Client, Daemon, StaticKeypair, MESSAGE1_LEN, MESSAGE2_LEN, MESSAGE3_OVERHEAD,
-    MESSAGE4_OVERHEAD, TRANSPORT_AD,
+    Client, Daemon, Message1Admission, StaticKeypair, MESSAGE1_LEN, MESSAGE1_WIRE_LEN,
+    MESSAGE2_LEN, MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, TRANSPORT_AD,
 };
-use crate::NetworkId;
+use crate::budget::HandshakeBudget;
+use crate::{NetworkId, MAC1_LEN};
 use seeded::SeededRng;
 
 const PINNED: &str =
@@ -100,9 +101,25 @@ fn run() -> Run {
         &mut client_rng,
     )
     .expect("message 1");
-    let daemon = Daemon::new(&network_id, &daemon_static)
-        .read_message1(&message1)
-        .expect("daemon reads message 1");
+    // On the wire, message 1 is the Noise message and its mac1. The Noise
+    // bytes are what is compared with clatter's, exactly as before mac1
+    // existed; the mac1 is the daemon bundle's over exactly those bytes.
+    assert_eq!(message1.len(), MESSAGE1_WIRE_LEN);
+    let (noise_message1, mac1) = message1.split_at(MESSAGE1_LEN);
+    assert_eq!(
+        mac1,
+        daemon_static.public().mac1(noise_message1),
+        "message 1's mac1 is the daemon bundle's, over the Noise message"
+    );
+    let budget = HandshakeBudget::new(std::time::Instant::now());
+    let daemon = match Daemon::new(&network_id, &daemon_static)
+        .read_message1(&message1, &budget, std::time::Instant::now())
+        .expect("daemon reads message 1")
+    {
+        Message1Admission::Continue(ready) => ready,
+        Message1Admission::Busy(_) => panic!("the pinned handshake is admitted"),
+    };
+    let message1 = noise_message1.to_vec();
     let (daemon, message2) = daemon.write_from(&mut daemon_rng).expect("message 2");
     let client = client
         .read_message2(&message2)
@@ -239,6 +256,8 @@ fn our_message_sizes_are_the_designs() {
     assert_eq!(run.messages[0].len(), MESSAGE1_LEN);
     assert_eq!(run.messages[1].len(), MESSAGE2_LEN);
     assert_eq!(MESSAGE1_LEN, 2320);
+    assert_eq!(MESSAGE1_WIRE_LEN, 2320 + MAC1_LEN);
+    assert_eq!(MAC1_LEN, 16);
     assert_eq!(MESSAGE2_LEN, 2320);
     assert_eq!(MESSAGE3_OVERHEAD, 1264);
     assert_eq!(MESSAGE4_OVERHEAD, 1120);

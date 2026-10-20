@@ -114,7 +114,7 @@ any of them would be reporting on the wrong tree:
 | The NOTIFY pair | `cryptonote_protocol_defs.h:115-130` (2001) and `:265-280` (2008) | **FOUND** — both still present |
 | Timed-sync cadence | `cryptonote_config.h:184` (`P2P_DEFAULT_HANDSHAKE_INTERVAL 60`), driven by `net_node.h:618` → `net_node.inl:2023` → `:2063` | **FOUND** — and it is in `net_node.inl`, not the protocol handler |
 | Fragmentation | `rust/shekyl-levin/src/fragment.rs:81-127` | **FOUND** — production-live via FFI |
-| Compression | `rust/shekyl-levin/src/compress.rs:24-32` | **FOUND** — production-live since 2026-08-06 |
+| Compression | — | **ABSENT** — the protocol has no compression (`SHEKYL_P2P_PROTOCOL.md` PWD-T7, rejected 2026-10-19); `0x10` is an undefined flag bit, refused at ingress |
 
 > **UPDATE 2026-09-09 — PWD-B6 deleted 2001.** The pin found both; the live
 > tree has 2008 only (`NOTIFY_NEW_COMPACT_BLOCK`). The row above is the census
@@ -330,8 +330,8 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 | PWC-A7 | `return_code: i32` rides every bucket, including notifications where it is always 0 — an RPC-over-Levin affordance | `header.rs:102-103`, `:119` | `none` | 4 | PW-12 |
 | PWC-A8 | `expect_response` is carried as a raw truthy `uint8_t`, not narrowed to `bool`, so a sender's `0x02` re-encodes unchanged | `header.rs:96-99`, `:128-130` | `spec` | 1 | — |
 | PWC-A9 | Noise/fragment emit pads every message to exactly `noise_size`; fragment headers claim a full body, command `0`, B/E on first/last, middles flagless | `fragment.rs:47-127` | `KAT-port` | 4 | — |
-| PWC-A10 | Compression is zstd level 1, floor 256 B, inflate bounded by `min(packet limit, per-command limit)`, applied to a whole finalized message. **Recorded as a constraint on P2P-2, not as a present defect:** there is no encryption on this wire today, so no compression-before-encryption oracle exists to census. *If* the redesign places compression below encryption, this becomes a CRIME/BREACH-class oracle that interacts with D++ padding — which is why the parameters are enumerated here rather than left for the transport round to rediscover | `compress.rs:24-32`, `:62-70` | `none` | 4 | PW-13 |
-| PWC-A11 | The reader latches on framing error (`Error::Poisoned`), and verifies the inner reassembled fragment signature the C++ `memcpy`s unchecked — both **stricter** than the oracle | `rust/shekyl-levin/src/lib.rs:79-112` (divergence census entries 1-2, 5) | `spec` | 1 | — |
+| PWC-A10 | The wire has no compression: `0x10` is not a defined flag bit, so a compressed bucket is refused at ingress like any undefined bit. Rejected 2026-10-19 (`SHEKYL_P2P_PROTOCOL.md` PWD-T7): libzstd level 1 enlarged every block and transaction payload measured, compression before encryption is a size side channel, and it undoes the padding buckets | `rust/shekyl-levin/src/ingress.rs` (`FLAGS_DEFINED`) | `spec` | 1 | PWD-T7 |
+| PWC-A11 | The reader latches on framing error (`Error::Poisoned`), and verifies the inner reassembled fragment signature the C++ `memcpy`s unchecked — both **stricter** than the oracle | `rust/shekyl-levin/src/lib.rs:79-100` (divergence census entries 1-2, 4) | `spec` | 1 | — |
 
 > **UPDATE 2026-09-10 — PWD-B5:** `return_code` is deleted; the live header is
 > 29 bytes (`static_assert(sizeof(bucket_head2)==29)`). PWC-A2's 33-byte
@@ -355,6 +355,13 @@ support is that someone recalls deciding it is **bucket 4**, not bucket 2.
 > **UPDATE 2026-09-09 — PWD-B6:** `PWC-B5`'s advertised aggregate is now
 > `ZSTD_COMPRESSION` (0x02) only. `FLUFFY_BLOCKS` (0x01) fell with 2001; 0x01
 > is unassigned. The public-zone-only half of the row is unchanged.
+>
+> **Ruled 2026-10-19 — `SHEKYL_P2P_PROTOCOL.md` PWD-T7: support flags are
+> deleted, so two p2p commands survive (1001, 1002).** With compression gone
+> `ZSTD_COMPRESSION` negotiated nothing and the word was a constant zero:
+> `basic_node_data` (PWC-B2) carries `network_id` alone, 1007 is refused as
+> unknown dispatch (PWC-B1), and PWC-B5's re-query is gone with it. Capability
+> negotiation, if needed, is designed at the genesis wire freeze.
 
 ### 4.C cryptonote notify schemas (2001-2010)
 

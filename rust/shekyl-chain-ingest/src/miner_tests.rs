@@ -92,7 +92,7 @@ fn job_for(next: &NextBlock) -> Job {
 /// read back from `/proc` — Linux's readback, as `shekyl-thread-priority`'s
 /// own tests read it. Elsewhere the status's not-lowered count is the
 /// signal.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 fn miner_thread_nices() -> Vec<i32> {
     let mut nices = Vec::new();
     for task in std::fs::read_dir("/proc/self/task").expect("list threads") {
@@ -242,7 +242,7 @@ async fn the_miner_mines_through_the_connector_and_leaves_a_superseded_job() {
 
     // Below the daemon, and reported: on Linux read back from the kernel;
     // on every platform the status counts the workers the OS refused.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(target_os = "linux")]
     assert_eq!(
         miner_thread_nices(),
         vec![shekyl_thread_priority::SERVING_NICE; 2],

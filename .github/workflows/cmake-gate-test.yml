@@ -29,14 +29,18 @@ on:
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
+      - "contrib/depends/Makefile"
       - "tests/cmake-gate-test/**"
+      - "tests/build-target-refusal/**"
       - ".github/workflows/cmake-gate-test.yml"
   push:
     branches: [dev]
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
+      - "contrib/depends/Makefile"
       - "tests/cmake-gate-test/**"
+      - "tests/build-target-refusal/**"
       - ".github/workflows/cmake-gate-test.yml"
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).
@@ -96,3 +100,10 @@ jobs:
 
       - name: run gate test
         run: ./tests/cmake-gate-test/run.sh
+
+      - name: refuse an Android depends triple
+        # findstring linux matches config.sub's linux-android. This step
+        # is the regression test for that collision. It does not build
+        # a dependency; make -n stops at the refusal, or passes it for
+        # the Linux control.
+        run: ./tests/build-target-refusal/run.sh

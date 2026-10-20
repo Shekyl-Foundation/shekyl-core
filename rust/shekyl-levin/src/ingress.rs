@@ -46,20 +46,18 @@ use shekyl_peer_bounds::DISCLOSE_COUNT;
 
 use crate::header::{Flags, DEFAULT_MAX_PACKET_SIZE};
 use crate::{
-    Error, COMMAND_HANDSHAKE, COMMAND_REQUEST_SUPPORT_FLAGS, COMMAND_TIMED_SYNC, HASH_SIZE,
-    NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
-    NOTIFY_REQUEST_CHAIN, NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS,
-    NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
+    Error, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
+    NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_CHAIN,
+    NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_RESPONSE_CHAIN_ENTRY,
+    NOTIFY_RESPONSE_GET_OBJECTS,
 };
 
-/// The five defined Levin flag bits. Bits outside this mask are unknown at
-/// ingress (PWD-B3a).
+/// The four defined Levin flag bits. Bits outside this mask are unknown at
+/// ingress (PWD-B3a). `0x10`, the compressed-payload bit, is not one of
+/// them: compression is not part of the protocol (Rick, 2026-10-19), so a
+/// bucket carrying it is refused like any undefined bit.
 pub const FLAGS_DEFINED: Flags = Flags::from_bits(
-    Flags::REQUEST.bits()
-        | Flags::RESPONSE.bits()
-        | Flags::BEGIN.bits()
-        | Flags::END.bits()
-        | Flags::COMPRESSED.bits(),
+    Flags::REQUEST.bits() | Flags::RESPONSE.bits() | Flags::BEGIN.bits() | Flags::END.bits(),
 );
 
 /// What the largest `peerlist_entry` this codec writes adds to a message
@@ -73,11 +71,12 @@ pub const FLAGS_DEFINED: Flags = Flags::from_bits(
 pub const PEERLIST_ENTRY_MAX_ENCODED_BYTES: u64 = 98;
 
 /// The largest handshake or timed-sync message with its entries taken
-/// off: the storage header, `basic_node_data`, `CORE_SYNC_DATA` with every
+/// off: the storage header, `basic_node_data` (its network id alone: no
+/// `support_flags`, Rick, 2026-10-19), `CORE_SYNC_DATA` with every
 /// optional field present, the list's own envelope where there is one,
 /// and the request's 32-byte nonce. Pinned by `tests/handshake_bounds.rs`
 /// the same way.
-pub const HANDSHAKE_FIXED_MAX_BYTES: u64 = 258;
+pub const HANDSHAKE_FIXED_MAX_BYTES: u64 = 239;
 
 /// `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT`
 /// (`cryptonote_protocol_handler.h`).
@@ -100,10 +99,6 @@ const fn hash_list_cap(count: u64) -> u64 {
 /// envelope the C++ reconstructed from 250 entries is gone with the C++.
 const CAP_HANDSHAKE: u64 =
     DISCLOSE_COUNT as u64 * PEERLIST_ENTRY_MAX_ENCODED_BYTES + HANDSHAKE_FIXED_MAX_BYTES;
-
-/// Four-byte `uint32` support-flags field plus a portable-storage section
-/// envelope. Inherited cap was 4096; the field is four bytes.
-const CAP_SUPPORT_FLAGS: u64 = 256;
 
 const CAP_REQUEST_GET_OBJECTS: u64 = hash_list_cap(MAX_OBJECT_REQUEST_COUNT);
 const CAP_REQUEST_CHAIN: u64 = hash_list_cap(BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT);
@@ -143,16 +138,15 @@ const _: () = assert!(HASH_SIZE == 32);
 
 /// Commands this protocol defines at ingress. Wire ids stay `u32` on the
 /// header; converting a dispatch command through [`DefinedCommand::from_wire`]
-/// is the closed set a Q/S-flagged bucket may name. `COMMAND_PING` (1003)
-/// and `NOTIFY_NEW_BLOCK` (2001) are deleted and are **not** in this set.
+/// is the closed set a Q/S-flagged bucket may name. `COMMAND_PING` (1003),
+/// `COMMAND_REQUEST_SUPPORT_FLAGS` (1007) and `NOTIFY_NEW_BLOCK` (2001) are
+/// deleted and are **not** in this set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefinedCommand {
     /// `COMMAND_HANDSHAKE` (1001).
     Handshake,
     /// `COMMAND_TIMED_SYNC` (1002).
     TimedSync,
-    /// `COMMAND_REQUEST_SUPPORT_FLAGS` (1007).
-    SupportFlags,
     /// `NOTIFY_NEW_TRANSACTIONS` (2002).
     NewTransactions,
     /// `NOTIFY_REQUEST_GET_OBJECTS` (2003).
@@ -178,7 +172,6 @@ impl DefinedCommand {
         match self {
             Self::Handshake => COMMAND_HANDSHAKE,
             Self::TimedSync => COMMAND_TIMED_SYNC,
-            Self::SupportFlags => COMMAND_REQUEST_SUPPORT_FLAGS,
             Self::NewTransactions => NOTIFY_NEW_TRANSACTIONS,
             Self::RequestGetObjects => NOTIFY_REQUEST_GET_OBJECTS,
             Self::ResponseGetObjects => NOTIFY_RESPONSE_GET_OBJECTS,
@@ -191,13 +184,12 @@ impl DefinedCommand {
     }
 
     /// Convert a wire command id into the closed set, or `None` if this
-    /// protocol does not define it (including retired 1003 and 2001).
+    /// protocol does not define it (including retired 1003, 1007 and 2001).
     #[must_use]
     pub const fn from_wire(command: u32) -> Option<Self> {
         match command {
             COMMAND_HANDSHAKE => Some(Self::Handshake),
             COMMAND_TIMED_SYNC => Some(Self::TimedSync),
-            COMMAND_REQUEST_SUPPORT_FLAGS => Some(Self::SupportFlags),
             NOTIFY_NEW_TRANSACTIONS => Some(Self::NewTransactions),
             NOTIFY_REQUEST_GET_OBJECTS => Some(Self::RequestGetObjects),
             NOTIFY_RESPONSE_GET_OBJECTS => Some(Self::ResponseGetObjects),
@@ -216,7 +208,6 @@ impl DefinedCommand {
     pub const fn payload_cap(self) -> u64 {
         match self {
             Self::Handshake | Self::TimedSync => CAP_HANDSHAKE,
-            Self::SupportFlags => CAP_SUPPORT_FLAGS,
             Self::NewTransactions => CAP_NEW_TRANSACTIONS,
             Self::RequestGetObjects => CAP_REQUEST_GET_OBJECTS,
             Self::ResponseGetObjects => CAP_RESPONSE_GET_OBJECTS,
@@ -260,7 +251,6 @@ mod tests {
     const ALL_DEFINED: &[DefinedCommand] = &[
         DefinedCommand::Handshake,
         DefinedCommand::TimedSync,
-        DefinedCommand::SupportFlags,
         DefinedCommand::NewTransactions,
         DefinedCommand::RequestGetObjects,
         DefinedCommand::ResponseGetObjects,
@@ -272,10 +262,12 @@ mod tests {
     ];
 
     #[test]
-    fn defined_set_has_eleven_arms() {
-        // 11 live commands: ping gone (PWD-B10), 2001 gone (PWD-B6).
-        assert_eq!(ALL_DEFINED.len(), 11);
+    fn defined_set_has_ten_arms() {
+        // 10 live commands: ping gone (PWD-B10), support flags gone
+        // (2026-10-19), 2001 gone (PWD-B6).
+        assert_eq!(ALL_DEFINED.len(), 10);
         assert!(DefinedCommand::from_wire(1003).is_none());
+        assert!(DefinedCommand::from_wire(1007).is_none());
         assert!(DefinedCommand::from_wire(2001).is_none());
         assert!(DefinedCommand::from_wire(0).is_none());
         assert_eq!(
@@ -332,6 +324,26 @@ mod tests {
         );
     }
 
+    /// `0x10` was the compressed-payload bit. Compression left the
+    /// protocol (Rick, 2026-10-19), so a bucket carrying it is refused at
+    /// ingress like any undefined bit, never read as plaintext.
+    #[test]
+    fn the_retired_compression_bit_is_refused() {
+        for flags in [
+            Flags::from_bits(Flags::REQUEST.bits() | 0x10),
+            Flags::from_bits(Flags::RESPONSE.bits() | 0x10),
+            Flags::from_bits(Flags::BEGIN.bits() | 0x10),
+        ] {
+            assert_eq!(
+                ingress_payload_cap(NOTIFY_NEW_TRANSACTIONS, flags),
+                Err(Error::UnknownFlags {
+                    flags: flags.bits()
+                })
+            );
+        }
+        assert_eq!(FLAGS_DEFINED.bits(), 0x0f);
+    }
+
     #[test]
     fn unknown_flag_bit_rejected_on_dispatch_and_noise() {
         let extra = Flags::from_bits(Flags::REQUEST.bits() | 0x20);
@@ -368,12 +380,17 @@ mod tests {
         assert_ne!(CAP_RESPONSE_CHAIN_ENTRY, DEFAULT_MAX_PACKET_SIZE);
     }
 
+    /// The support-flags request (1007) went with the word it carried
+    /// (Rick, 2026-10-19): a peer that still asks is dispatching an unknown
+    /// command, in either direction.
     #[test]
-    fn support_flags_is_the_derived_field_cap() {
-        assert_eq!(
-            ingress_payload_cap(COMMAND_REQUEST_SUPPORT_FLAGS, Flags::REQUEST).unwrap(),
-            CAP_SUPPORT_FLAGS
-        );
+    fn support_flags_dispatch_is_unknown() {
+        for flags in [Flags::REQUEST, Flags::RESPONSE] {
+            assert_eq!(
+                ingress_payload_cap(1007, flags),
+                Err(Error::UnknownCommand { command: 1007 })
+            );
+        }
     }
 
     #[test]

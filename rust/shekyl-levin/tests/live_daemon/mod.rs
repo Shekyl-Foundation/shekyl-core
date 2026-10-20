@@ -18,9 +18,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_levin::{
-    invoke, response, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, PortableMap,
-    Received, SupportFlags, SupportFlagsRequest, SupportFlagsResponse, COMMAND_HANDSHAKE,
-    COMMAND_REQUEST_SUPPORT_FLAGS,
+    invoke, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, PortableMap, Received,
+    COMMAND_HANDSHAKE,
 };
 
 pub struct Daemon {
@@ -215,7 +214,6 @@ pub fn spawn_peer(
         let req = HandshakeRequest {
             node_data: BasicNodeData {
                 network_id: regtest_network_id(),
-                support_flags: SupportFlags::ADVERTISED,
             },
             payload_data: CoreSyncData {
                 current_height: 1,
@@ -246,19 +244,6 @@ pub fn spawn_peer(
                         if command == COMMAND_HANDSHAKE =>
                     {
                         shook.store(true, Ordering::SeqCst);
-                    }
-                    Ok(Some(Received::Request { command, payload }))
-                        if command == COMMAND_REQUEST_SUPPORT_FLAGS =>
-                    {
-                        if SupportFlagsRequest::load(&payload).is_ok() {
-                            if let Ok(b) = (SupportFlagsResponse {
-                                support_flags: SupportFlags::ADVERTISED,
-                            })
-                            .store()
-                            {
-                                drop(s.write_all(&response(COMMAND_REQUEST_SUPPORT_FLAGS, &b)));
-                            }
-                        }
                     }
                     Ok(Some(_)) => {}
                     Ok(None) => break,
