@@ -29,6 +29,7 @@ use std::fmt;
 use shekyl_crypto_hash::cshake256_32;
 
 pub mod budget;
+pub mod deadline;
 pub mod handshake;
 mod mac1;
 

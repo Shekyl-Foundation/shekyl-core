@@ -1,6 +1,6 @@
 # `RT-P9`: the channel's handshake on a real network leg to the floor device. Registration of 2026-10-20
 
-**State of this record: registered; not yet run.** Results are added under
+**State of this record: run 2026-10-20; attempt 1 void, attempt 2 met its gates; results below.** Results are added under
 "Results"; "Registered before the run" is not edited afterwards. An
 amendment made before any registered result is read is dated and says
 what changed.
@@ -163,6 +163,115 @@ the harness links none of them. The client is built on the workstation
 from the same commit.
 
 ## Results
+
+### The deadlines: message 1 in 4 s, the whole handshake in 11 s
+
+**Attempt 2 met both gates**, and by the registered rule:
+
+| Deadline, from `accept` | Onion p99 | Deadline | LAN p99, beside it |
+|---|---:|---:|---:|
+| Message 1 received | 1,803.4 ms | **4 s** | 0.7 ms |
+| First record opened (the whole handshake) | 5,231.9 ms | **11 s** | 8.6 ms |
+
+They land in code as `MESSAGE1_DEADLINE` and `HANDSHAKE_DEADLINE`
+(`rust/shekyl-rpc-channel/src/deadline.rs`), each with a
+measurement-ledger row measured by `BA-T37` on this capture. RT-W10's
+listener enforces them.
+
+**What the rule leaves out, counted:**
+- Message 1: one of attempt 2's 300 onion connections took longer than
+  4 s (4,488.8 ms), so a daemon with this deadline would have closed it.
+  So did one of void attempt 1's 300 (17,557.9 ms).
+- The whole handshake: none of attempt 2's took longer than 11 s (the
+  slowest took 7,791.1 ms). One of attempt 1's did (20,441.8 ms).
+- So about one onion connection in 300 meets a closed connection under
+  these deadlines. §4.5's failure table names the case ("The node did not
+  complete the handshake in time."). It does not say whether the client
+  retries it; that is for RT-W10 to settle.
+
+### Attempt 2, 06:07:07Z to 06:31:29Z: met
+
+At `666bbded3c`, with the client waiting 100 ms between connections.
+Fresh output directories and a fresh daemon identity for each leg. The
+onion service and the client's Tor were the same processes as attempt
+1's. Captures, with checksums:
+[`rt_p9_handshake_round_trips_20261020_captures/attempt2/`](rt_p9_handshake_round_trips_20261020_captures/attempt2/).
+`rt_p9_summary.py` reproduces the summary below from them.
+
+**Conditions.**
+- The device: the floor device (Raspberry Pi 4, Cortex-A72), its
+  `ondemand` governor, the daemon role unpinned.
+- The client: the development workstation, its Tor client from the Tor
+  Expert Bundle 15.0.24 (Tor 0.4.9.13), on the Foundation's uplink.
+- The run began 25 s after the device's build ended, so the 1-minute load
+  read 2.76 at the start, and 0.11 at the end. Temperature went from
+  51.6 °C to 46.7 °C, and the under-voltage alarm stayed clear.
+- The testnet daemon was active throughout and used 8.85 s of CPU over the
+  24 minutes.
+- **The LAN leg's daemon turns are about twice attempt 1's:**
+  `accept` → message 2 sent, 5.2 ms at the median, against 2.4 ms. The
+  likely reason, not checked by this run (which did not record clock
+  speed per connection): the connections are now 100 ms apart, so under
+  `ondemand` the cores probably clock down between them, while attempt 1's
+  back-to-back loop held them up. The onion leg, at seconds per
+  connection, would be in the first state in both attempts. The LAN
+  figure is reported, not used.
+
+#### Completion
+
+| Leg | Connections | Completed | Share | Accepted by the daemon, not completed |
+|---|---:|---:|---:|---:|
+| onion | 300 | 300 | 100.0% | 0 |
+| lan | 300 | 300 | 100.0% | 0 |
+
+#### The daemon, from `accept` (ms)
+
+| Leg | Stamp | n | median | p90 | p99 | max |
+|---|---|---:|---:|---:|---:|---:|
+| onion | message1_received | 300 | 550.8 | 1,027.9 | 1,803.4 | 4,488.8 |
+| onion | message2_sent | 300 | 555.4 | 1,032.0 | 1,808.4 | 4,493.1 |
+| onion | message3_received | 300 | 1,129.3 | 1,957.2 | 3,122.4 | 6,281.4 |
+| onion | message4_sent | 300 | 1,131.3 | 1,959.4 | 3,124.5 | 6,283.5 |
+| onion | first_record_opened | 300 | 1,704.5 | 2,802.4 | 5,231.9 | 7,791.1 |
+| onion | reply_sent | 300 | 1,704.7 | 2,802.5 | 5,232.0 | 7,791.2 |
+| lan | message1_received | 300 | 0.4 | 0.5 | 0.7 | 1.0 |
+| lan | message2_sent | 300 | 5.2 | 5.3 | 5.5 | 5.6 |
+| lan | message3_received | 300 | 5.9 | 6.1 | 6.3 | 6.7 |
+| lan | message4_sent | 300 | 6.9 | 7.8 | 8.0 | 8.1 |
+| lan | first_record_opened | 300 | 7.4 | 8.3 | 8.6 | 8.6 |
+| lan | reply_sent | 300 | 7.4 | 8.3 | 8.6 | 8.6 |
+
+#### The client, from the start of its connect (ms)
+
+| Leg | Stamp | n | median | p90 | p99 | max |
+|---|---|---:|---:|---:|---:|---:|
+| onion | connected | 300 | 2,040.7 | 3,552.6 | 16,852.9 | 45,107.3 |
+| onion | message1_sent | 300 | 2,040.9 | 3,552.8 | 16,853.1 | 45,107.5 |
+| onion | message2_received | 300 | 2,631.6 | 4,395.3 | 17,180.2 | 46,708.8 |
+| onion | message3_sent | 300 | 2,631.8 | 4,395.5 | 17,180.4 | 46,709.0 |
+| onion | message4_received | 300 | 3,234.3 | 5,426.8 | 17,513.6 | 47,857.8 |
+| onion | first_record_sent | 300 | 3,234.4 | 5,427.0 | 17,513.7 | 47,857.9 |
+| onion | reply_received | 300 | 3,782.1 | 6,361.7 | 17,848.8 | 49,466.8 |
+| lan | connected | 300 | 0.4 | 0.5 | 0.5 | 0.6 |
+| lan | message1_sent | 300 | 0.6 | 0.7 | 0.9 | 1.2 |
+| lan | message2_received | 300 | 6.0 | 6.2 | 6.4 | 6.6 |
+| lan | message3_sent | 300 | 6.2 | 6.4 | 6.6 | 7.0 |
+| lan | message4_received | 300 | 7.7 | 8.6 | 8.9 | 8.9 |
+| lan | first_record_sent | 300 | 7.8 | 8.7 | 9.0 | 9.0 |
+| lan | reply_received | 300 | 8.1 | 9.0 | 9.3 | 9.4 |
+
+#### Gates
+
+Met: every leg completed at least 95%, and on every completed sample the two sides' stamps describe one exchange.
+
+#### The deadlines
+
+Each is 2 × the onion leg's 99th percentile from `accept`, rounded up to a whole second. The LAN figure beside it is the same rule applied to the LAN leg, reported, not used.
+
+| Deadline | Onion p99 (ms) | Deadline (s) | LAN p99 (ms) | LAN by the same rule (s) |
+|---|---:|---:|---:|---:|
+| message 1 | 1,803.4 | 4 | 0.7 | 1 |
+| whole handshake | 5,231.9 | 11 | 8.6 | 1 |
 
 ### Attempt 1, 05:34:12Z to 06:00:52Z: void
 
