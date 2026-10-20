@@ -265,14 +265,6 @@ fn a_closed_admission_keeps_the_dial_cause() {
     });
 }
 
-/// An exit and a stop both take the link down, and they are not the same
-/// cause. Swapping the arms fails this.
-#[test]
-fn an_exit_and_a_stop_record_different_causes() {
-    assert_eq!(down_cause(TorDeath::Exited), DownCause::ProcessExited);
-    assert_eq!(down_cause(TorDeath::Stopped), DownCause::ProcessStopped);
-}
-
 /// A listener that cannot bind is a refusal naming the endpoint, and
 /// nothing of that start survives: the endpoint already taken by one host's
 /// clearnet is refused to a second start (the C++ `bind_same_p2p_port`
@@ -376,9 +368,10 @@ fn a_managed_tor_death_takes_its_own_incarnation_down_and_no_later_one() {
     let host = ensure(network_id).expect("zone host");
     let (died, death) = tokio::sync::oneshot::channel();
     assert!(watch_managed_tor(async move {
-        death.await.unwrap_or(TorDeath::Stopped)
+        death.await.unwrap_or(DownCause::ProcessStopped)
     }));
-    died.send(TorDeath::Exited).expect("the watch waits");
+    died.send(DownCause::ProcessExited)
+        .expect("the watch waits");
     assert!(fell_within(&host, true), "the death took the link down");
     assert!(matches!(
         host.hub.links().get(ConnectorId::Tor).outbound,
@@ -390,10 +383,11 @@ fn a_managed_tor_death_takes_its_own_incarnation_down_and_no_later_one() {
 
     let (died, death) = tokio::sync::oneshot::channel();
     assert!(watch_managed_tor(async move {
-        death.await.unwrap_or(TorDeath::Stopped)
+        death.await.unwrap_or(DownCause::ProcessStopped)
     }));
     dial_through_tor(socks(9051), network_id).expect("a later route");
-    died.send(TorDeath::Exited).expect("the watch waits");
+    died.send(DownCause::ProcessExited)
+        .expect("the watch waits");
     assert!(
         !fell_within(&host, true),
         "the later route is not the dead Tor's"

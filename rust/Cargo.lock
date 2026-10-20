@@ -4626,7 +4626,6 @@ dependencies = [
  "shekyl-timing-engine",
  "shekyl-tor",
  "shekyl-tor-control-client",
- "shekyl-tor-control-daemon",
  "shekyl-transport-layer",
  "shekyl-tx-builder",
  "shekyl-types",
