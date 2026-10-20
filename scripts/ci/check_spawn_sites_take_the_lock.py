@@ -48,8 +48,10 @@
 # Usage:  check_spawn_sites_take_the_lock.py            # check the tree
 #         check_spawn_sites_take_the_lock.py --selftest # bite each failure
 
+import atexit
 import pathlib
 import re
+import shutil
 import sys
 import tempfile
 
@@ -227,6 +229,8 @@ def check(root, watched, subject):
 def selftest():
     def tree(files):
         root = pathlib.Path(tempfile.mkdtemp(prefix="spawn-lock-gate-"))
+        # Removed when the selftest exits, whatever a case found.
+        atexit.register(shutil.rmtree, root, True)
         for rel, text in files.items():
             path = root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
