@@ -90,6 +90,10 @@ note = "Pins rustc at 1.94.0. The RandomX allocation record names only the works
 commit = "5aac523ad"
 note = "Comment only: the bump policy gains the gitian descriptors. The channel does not move."
 
+[[toolchain]]
+commit = "2fb779723"
+note = "Comment only: the gitian bump-policy line drops the deleted Android descriptor. The channel does not move."
+
 # --- consensus: block weight ------------------------------------------
 
 [[path_set]]
@@ -411,6 +415,9 @@ id = "serving-runtime"
 spec = [
   "rust/shekyl-thread-priority/src",
   "rust/shekyl-p-host/src/runtime.rs",
+]
+cleared = [
+  { through = "2fb779723", reason = "The Android target_os gates are deleted. Linux still calls setpriority with SERVING_NICE 19, and the serving runtime's Linux test still reads that value back. The BA-T5 session 3 T1 capture still prices this tree." },
 ]
 
 [[constant]]

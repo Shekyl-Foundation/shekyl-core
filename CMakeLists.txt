@@ -1,3 +1,4 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
 # Copyright (c) 2014-2022, The Monero Project
 #
 # All rights reserved.
@@ -53,7 +54,32 @@ if(POLICY CMP0167)
   cmake_policy(SET CMP0167 NEW)  # use Boost's own cmake config instead of deprecated FindBoost
 endif()
 
+# Shekyl ships nothing on Android. Called twice because the two ways a
+# configure becomes Android are visible at different moments:
+#   - `-DCMAKE_SYSTEM_NAME=Android` and `-DANDROID=TRUE` are set before
+#     project(), and project() would otherwise enter Platform/Android
+#     and search for an NDK.
+#   - A toolchain file is read during project(). Its ANDROID or system
+#     name is visible only once project() returns, which is also when
+#     an installed NDK would let configure succeed.
+# Reopen only when a release decision names an Android product and a CI
+# host that builds it. That decision deletes this macro and both calls
+# in the same change as the host recipe. See docs/CHANGELOG.md, "the
+# Android target is removed".
+macro(shekyl_refuse_android_target)
+  if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+    message(FATAL_ERROR
+      "Shekyl refuses to configure for Android "
+      "(CMAKE_SYSTEM_NAME='${CMAKE_SYSTEM_NAME}', ANDROID='${ANDROID}'). "
+      "Shekyl ships nothing on Android. "
+      "See docs/CHANGELOG.md, \"the Android target is removed\".")
+  endif()
+endmacro()
+shekyl_refuse_android_target()
+
 project(shekyl)
+
+shekyl_refuse_android_target()
 
 # ---------------------------------------------------------------------------
 # 64-bit-only gate — Chore #3, v3.1.0-alpha.5 (Tripwire D).
@@ -687,7 +713,7 @@ add_definitions("-DBLOCKCHAIN_DB=${BLOCKCHAIN_DB}")
 # On ARM, having libunwind package (with .so's only) installed breaks static link.
 # Historical note: the vendored easylogging++ tree used to supply
 # `el::base::debug::StackTrace()` as a libunwind-free backend for
-# targets like MSVC / MinGW / Android. It was retired in Chore #2 of
+# targets like MSVC / MinGW. It was retired in Chore #2 of
 # the shekyl-logging migration (see `docs/CHANGELOG.md`), so those
 # targets no longer install a stack-tracing hook by default;
 # `src/common/stack_trace.cpp` emits a `"<stack trace capture not
@@ -1207,8 +1233,7 @@ else()
   endif(ARM)
 
   # random crash on startup when asan is on if pie is enabled
-  if(NOT SANITIZE AND (ANDROID AND NOT BUILD_GUI_DEPS STREQUAL "ON" OR IOS))
-    #From Android 5: "only position independent executables (PIE) are supported" 
+  if(NOT SANITIZE AND IOS)
     message(STATUS "Enabling PIE executable")
     set(PIC_FLAG "")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIE")
@@ -1282,7 +1307,7 @@ if(STATIC)
   endif()
 
   set(Boost_USE_STATIC_LIBS ON)
-  if(MINGW OR ANDROID)
+  if(MINGW)
     set(Boost_USE_STATIC_RUNTIME ON)
   endif()
 endif()
@@ -1413,7 +1438,7 @@ if(MINGW)
     set(ICU_LIBRARIES ${ICUIO_LIBRARIES} ${ICUIN_LIBRARIES} ${ICUUC_LIBRARIES} ${ICUDT_LIBRARIES} ${ICUTU_LIBRARIES} ${ICONV_LIBRARIES})
     set(CMAKE_FIND_LIBRARY_SUFFIXES ${OLD_LIB_SUFFIXES})
   endif()
-elseif(APPLE OR OPENBSD OR ANDROID)
+elseif(APPLE OR OPENBSD)
   set(EXTRA_LIBRARIES "")
 elseif(FREEBSD)
   set(EXTRA_LIBRARIES execinfo)
@@ -1448,11 +1473,6 @@ elseif(USE_READLINE AND DEPENDS AND NOT MINGW)
   set(GNU_READLINE_LIBRARY ${Readline_LIBRARY})
   add_definitions(-DHAVE_READLINE)
   set(EPEE_READLINE epee_readline)
-endif()
-
-if(ANDROID)
-  set(ATOMIC libatomic.a)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=user-defined-warnings")
 endif()
 
 find_library(SODIUM_LIBRARY NAMES sodium libsodium)
