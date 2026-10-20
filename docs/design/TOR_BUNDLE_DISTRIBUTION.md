@@ -282,8 +282,8 @@ with that as the stated reason.
      clearnet-only warning on every boot. A node with no tor found, which has
      not declined, also warns (it was an info line); that state becomes a
      refusal in step 4.
-   - macOS, FreeBSD, riscv64 Linux and Android are `Unavailable` rows with
-     their reasons. FreeBSD, riscv64 Linux and Android are rulings. The macOS
+   - macOS, FreeBSD and riscv64 Linux are `Unavailable` rows with
+     their reasons. FreeBSD and riscv64 Linux are rulings. The macOS
      rows are not: they also carry `"pending": "TB-11"`,
      which says the target is unavailable only until its pin is adopted. A
      pending row compiles as `Unavailable`, which is what the binary does

@@ -500,10 +500,9 @@ You can also cross-compile static binaries on Linux for Windows and macOS with t
   * Requires: `g++-riscv64-linux-gnu`
 * ```make depends target=x86_64-unknown-freebsd``` for freebsd binaries.
   * Requires: `clang-8`
-* ```make depends target=aarch64-linux-android``` for 64bit android binaries
 
-32-bit depends targets (`i686-w64-mingw32`, `arm-linux-gnueabihf`,
-`arm-linux-android`) were permanently retired in v3.1.0-alpha.5
+32-bit depends targets (`i686-w64-mingw32`, `arm-linux-gnueabihf`)
+were permanently retired in v3.1.0-alpha.5
 (Chore #3) on PQC constant-time grounds. See `docs/CHANGELOG.md`
 entry "Retired 32-bit build targets".
 

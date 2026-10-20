@@ -224,7 +224,7 @@ the narrow side:
 | `CMakeLists.txt:1352` | `libatomic` link pulled on `Clang AND ARCH_WIDTH==32 AND !IOS AND !FREEBSD` | Build-only, untested. Delete with Chore #3 as dead scaffolding. |
 | `tests/hash/main.cpp` / `src/crypto/variant2_int_sqrt.h` | SUPERSEDED: CN variant-2 integer-sqrt test **DELETED** with the Phase 4 follow-on cleanup | **CLOSED.** No remaining inverted coverage of a deleted PoW helper. |
 | `contrib/depends/packages/{boost,openssl}.mk` | Separate `i686_mingw32` / `x86_64_mingw32` config variants | Build-only; parallel config paths, one CI runner. Delete the `i686_mingw32` variants under Chore #3. |
-| `contrib/gitian/gitian-win.yml:26-30`, `Makefile` 32-bit targets — `debug-static-win32` (L84), `release-static-linux-armv6` (L117), `release-static-linux-armv7` (L121), `release-static-android-armv7` (L125), `release-static-linux-i686` (L151), `release-static-win32` (L159) — `cmake/32-bit-toolchain.cmake`, `contrib/depends/README.md:31` | Entire `i686-w64-mingw32` + 32-bit Linux + Android ARM32 target set | Advertised build targets with no CI runners and no release workflow shipping binaries. Delete with Chore #3. (Earlier drafts of this row named `release-static-armv7` / `release-static-armv6` *without* the `linux-` prefix; those two identifiers are phantoms and do not exist in `Makefile` at any point on `dev`. The live 32-bit `Makefile` targets are the six above.) |
+| `contrib/gitian/gitian-win.yml:26-30`, `Makefile` 32-bit targets — `debug-static-win32` (L84), `release-static-linux-armv6` (L117), `release-static-linux-armv7` (L121), `release-static-android-armv7` (L125, CLOSED 2026-04-22 with Chore #3; the 64-bit Android target is deleted 2026-10-19), `release-static-linux-i686` (L151), `release-static-win32` (L159) — `cmake/32-bit-toolchain.cmake`, `contrib/depends/README.md:31` | Entire `i686-w64-mingw32` + 32-bit Linux target set. Android ARM32 in the site list is CLOSED (2026-10-19: Shekyl ships nothing on Android) | Advertised build targets with no CI runners and no release workflow shipping binaries. Delete with Chore #3. (Earlier drafts of this row named `release-static-armv7` / `release-static-armv6` *without* the `linux-` prefix; those two identifiers are phantoms and do not exist in `Makefile` at any point on `dev`. The live 32-bit `Makefile` targets are the six above.) |
 
 Note the pattern within the pattern: the `unbound.mk` `_cflags_mingw32`
 line (since deleted with the libunbound de-requisition, PR #305) and the
@@ -271,7 +271,7 @@ question.
     `dev`: `debug-static-win32` (L84),
     `release-static-linux-armv6` (L117),
     `release-static-linux-armv7` (L121),
-    `release-static-android-armv7` (L125),
+    `release-static-android-armv7` (L125, CLOSED with Chore #3; no Android target remains, 2026-10-19),
     `release-static-linux-i686` (L151), and
     `release-static-win32` (L159). Earlier drafts of this entry
     named `release-static-armv7` / `release-static-armv6`
@@ -343,8 +343,10 @@ question.
   A systematic pass over every `#if`, `#ifdef`, CMake `if()`, and
   Makefile conditional that gates on a platform predicate that
   *still exists* after Chore #3 — principally `__APPLE__`,
-  `__ANDROID__`, `_MSC_VER`, `__FreeBSD__`, `BSD`, `__linux__`,
+  `_MSC_VER`, `__FreeBSD__`, `BSD`, `__linux__`,
   plus any residual host-triple patterns in `contrib/depends/`.
+  `__ANDROID__` does not: the Android build target is deleted
+  (2026-10-19).
   Produces a coverage report with three columns — site, claimed
   platform, CI-covered y/n — and classifies each row as **delete**
   (platform not actually claimed), **CI add** (claimed and about
@@ -649,7 +651,10 @@ hazard table and framing block in this document are retained in
 place as the canonical reviewer-facing copy referenced by the
 CHANGELOG entry and all four tripwire comment blocks; an earlier
 revision of this trailer incorrectly summarised the `Makefile`
-target count as three instead of six.*
+target count as three instead of six. The 64-bit Android target is
+deleted 2026-10-19: Shekyl ships nothing on Android.
+`release-static-android-armv7` in the list above is the 32-bit target
+Chore #3 removed.*
 *2026-04-19 — Swept resolved items to
 `docs/audit_trail/RESOLVED_260419.md`. Closed the POSIX-header
 consolidation item (migrated to `common/compat.h` + CI lint guard).
