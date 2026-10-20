@@ -1,10 +1,15 @@
 # The managed Tor supervisor — the link under the Tor connector
 
-**Status: RULED 2026-10-15 — ratified as a whole by Rick. Increment 2 of §12
-(the control client's groundwork: the bounded sink, the event parsers, the
-`__OwningControllerFD` launch and the two death signals) is implemented;
-increments 1 and 3 to 6 are not.** Every question is ruled: `TSR-Q1` to `TSR-Q4` and `TSR-Q6` on
-2026-10-14, `TSR-Q5` and `TSR-Q7` on 2026-10-15. The brief was the
+**Status: RULED 2026-10-15 — ratified as a whole by Rick. Increments 1 and 2
+of §12 are implemented. Increment 1 is the link the dialer reads (#1092).
+Increment 2 is the control client's groundwork: the bounded sink, the event
+parsers, the `__OwningControllerFD` launch and the two death signals (#1091).
+Increments 3 to 6 are not.** The C++ managed-Tor path and the
+`shekyl_daemon_tor_*` exports are deleted (§9; Rick, 2026-10-17). Increment 6
+is the supervisor's acceptance, and it remains open. Every question is ruled:
+`TSR-Q1` to `TSR-Q4`
+and `TSR-Q6` on 2026-10-14, `TSR-Q5` and `TSR-Q7` on 2026-10-15, `TSR-Q8` and
+`TSR-Q9` on 2026-10-19. The brief was the
 daemon-configuration lane's, carrying Rick's rulings of 2026-10-14; those and
 the rulings on this round's questions are §1. Implementation follows §12's
 increments, after §10's pre-flight measurements and the prerequisites
@@ -26,8 +31,7 @@ This round amends, and restates none of (each amended at ratification,
 "Restart" and "tor control unavailable" (`:605-606`);
 [`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md) `TB-3`; PWD-E7's
 *Tor is the onion key's only holder* (`DiscardPK` custody), which `TSR-Q1`
-reverses for the life of a boot; and the no-respawn disposition in `rust/shekyl-tor-control-daemon/src/lib.rs:40-46`
-with its FFI echo (`rust/shekyl-ffi/src/daemon_tor_ffi.rs:320-323`).
+reverses for the life of a boot; and the no-respawn disposition in `rust/shekyl-tor-control-daemon/src/lib.rs:40-46`.
 
 ---
 
@@ -557,8 +561,8 @@ wallet, `WALLET_SIDE_STORE.md:634`); the daemon's instance is re-measured once
 
 The daemon has one scheduler (Rick, 2026-10-13). Backoff, probe and evidence
 bounds are timing-engine deadlines on one owner. The control actor
-runs on a runtime built where every runtime is built; `blocking.rs`'s own
-one-worker runtime retires with its C++ caller. The policy core is written
+runs on a runtime built where every runtime is built; the daemon's Tor crate
+builds none of its own. The policy core is written
 sans-IO (events in, actions and the next deadline out), so it is testable on
 `ManualClock` and the wallet could adopt it later. The wallet's supervisor is
 not changed in this round. Where both need the same arithmetic (backoff, the
@@ -569,10 +573,11 @@ already name; PWD-E9 forbids sharing an instance, not a library.
 
 Nothing is added to C++. The probe reuses the existing self-detection call. The
 route moves from the FFI-installed `tor_proxy` to the published link inside
-Rust. At the daemon-configuration cutover, `add_ephemeral_tor_zone`,
-`check_ephemeral_tor_liveness`, `shekyl_daemon_tor_{start,publish,is_alive,shutdown}`
-and `blocking.rs` have no caller; those deletions go to Rick before they are
-cut (rule 15; §9).
+Rust. The C++ managed-Tor path is gone: the daemon-configuration cutover
+deleted `add_ephemeral_tor_zone` and `check_ephemeral_tor_liveness`, and the
+four `shekyl_daemon_tor_*` exports, their header declarations and the blocking
+facade they wrapped are deleted (Rick, 2026-10-17; §9). The Rust `main()` starts
+and stops the managed Tor (#1088).
 
 ## 5. Rule-82 states
 
@@ -663,7 +668,7 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 
 | Deleted | Where | Replaced by |
 | --- | --- | --- |
-| The no-respawn disposition and its FFI echo | `rust/shekyl-tor-control-daemon/src/lib.rs:40-46`; `rust/shekyl-ffi/src/daemon_tor_ffi.rs:320-323` | §4.4 |
+| The no-respawn disposition | `rust/shekyl-tor-control-daemon/src/lib.rs:40-46` | §4.4 |
 | `DEL_ONION` on stop (the daemon's path; the wallet keeps its own) | `rust/shekyl-tor-control-client/src/control/actor.rs:1042-1052` | §4.7 |
 | `SIGTERM` in the managed shutdown | `rust/shekyl-tor-control-client/src/control/actor.rs:889-908` | §4.7 |
 | The per-publish seed, minted and dropped inside `publish` so that Tor is the key's only holder | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:328-332` | the boot's seed in secure memory, republished on each respawn (`TSR-Q1`) |
@@ -671,7 +676,7 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 | `EventSink::unsubscribed()` on the daemon's path | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:253` | §4.2 |
 | The zone host's Tor route and the managed Tor's death edge | `zone_ffi::start_tor`, `zone_ffi::dial_through_tor`, `zone_ffi::watch_managed_tor` (`TSR-F1`) | the supervisor publishes the link (§4.1) |
 | The control port, its port file, cookie authentication and `TAKEOWNERSHIP` on the daemon's managed launch (the wallet's attached posture keeps its authentication) | gone from the managed launch (`rust/shekyl-tor-control-client/src/control/launch.rs:203-204`); the attached handshake stays (`rust/shekyl-tor-control-client/src/control/actor.rs:1068-1076`) | the inherited owning socket (`TSR-Q7`, §4.7) |
-| The C++ start, liveness poll and teardown, and their FFI exports | `src/p2p/net_node.inl` lines 756 to 810 and 1209 to 1232 (at `d26148535e`; deleted by the daemon-configuration cutover's commit (c)); `rust/shekyl-ffi/src/daemon_tor_ffi.rs:61`, `:142-341`; `blocking.rs` | the supervisor, started and stopped by the Rust `main()` (#1066); to Rick before they are cut |
+| The C++ start, liveness poll and teardown, and their FFI exports | **Deleted.** `src/p2p/net_node.inl` lines 756 to 810 and 1209 to 1232 (at `d26148535e`) by the daemon-configuration cutover's commit (c); the four `shekyl_daemon_tor_*` exports with their `shekyl_ffi.h` declarations, `daemon_tor_ffi.rs` and the crate's `blocking.rs` (Rick, 2026-10-17, `DAEMON_CONFIG_CUTOVER.md` residue item 5) | the Rust `main()` starts and stops the managed Tor (#1088); the supervisor replaces that start |
 
 ## 10. Bounds to measure (FOLLOWUPS rows)
 
@@ -756,7 +761,7 @@ its PR leaves draft.
    from it. The daemon watches only the Tor it manages
    (`DaemonTorControl::death`), and the down names the incarnation installed
    when the watch began. An exit and a shutdown both take the link down;
-   only an exit is reported.
+   only an exit is reported. **Implemented** (#1092).
 2. Control client: the bounded sink; parsers for `STATUS_GENERAL`,
    `STATUS_CLIENT`, `NETWORK_LIVENESS`, `HS_DESC` and log events; the launch
    recipe and `AvoidDiskWrites` in the closed list; the process wait as the
@@ -772,7 +777,10 @@ its PR leaves draft.
    tests its Tor choices against `TSR-Q9`, settling `TSR-M6`'s open question.
 4. The probe nonce and the probe.
 5. The supervisor becomes the Tor link's publisher, in place of the zone host.
-6. Acceptance; then the C++ deletions, to Rick before they are cut.
+6. Acceptance of the supervisor. The C++ deletions this increment used to
+   sequence after acceptance are already cut (§9; Rick, 2026-10-17): the four
+   `shekyl_daemon_tor_*` exports, their `shekyl_ffi.h` declarations,
+   `daemon_tor_ffi.rs` and the blocking facade. Acceptance remains open.
 
 ## 13. Review denominator
 

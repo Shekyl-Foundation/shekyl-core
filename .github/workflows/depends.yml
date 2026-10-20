@@ -6,15 +6,26 @@ on:
   # cross-compiles (~124 billed minutes) on every merge group; the depends
   # tree is not the cross-lane surface the queue exists to test.
   pull_request:
-    # Full six-target `make depends` only when the depends tree, the
-    # Makefile target, or this workflow changes. Unrelated PRs used to
-    # pay ~124 billed minutes for six cross-compiles. ARM v8 qemu KATs
-    # live in depends-aarch64-kats.yml (path-filtered to the three
+    # Which legs a pull request runs is scripts/ci/depends_legs.py's (the
+    # `legs` job below): all six when the depends tree, the Makefile, this
+    # workflow or that script changes; the MinGW leg alone when a change can
+    # alter how an executable links (a CMakeLists.txt, cmake/, a C header
+    # under src/shekyl/, or a Rust crate that defines a C export; Rick,
+    # 2026-10-19); none otherwise. These paths only wake the selector:
+    # `rust/**` is wide because which crates define an export is read from
+    # the tree, not listed here. Unrelated PRs used to pay ~124 billed
+    # minutes for six cross-compiles. ARM v8 qemu KATs live in
+    # depends-aarch64-kats.yml (path-filtered to the three
     # cross-arch-deterministic crates).
     paths:
       - 'contrib/depends/**'
       - 'Makefile'
       - '.github/workflows/depends.yml'
+      - 'scripts/ci/depends_legs.py'
+      - '**/CMakeLists.txt'
+      - 'cmake/**'
+      - 'src/shekyl/**'
+      - 'rust/**'
   schedule:
     - cron: "0 4 * * *"   # daily 04:00 UTC — the rest of the matrix
   workflow_dispatch:
@@ -44,8 +55,34 @@ env:
     ccache --set-config=compression=true
 
 jobs:
-  build-cross:
+  # The legs this run takes, as a matrix (scripts/ci/depends_legs.py). It
+  # fails closed: anything it cannot decide runs every leg.
+  legs:
+    name: 'Depends legs'
     runs-on: ubuntu-latest
+    outputs:
+      legs: ${{ steps.legs.outputs.legs }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: legs
+        shell: bash
+        run: |
+          set -u
+          python3 scripts/ci/depends_legs.py --event "${{ github.event_name }}" \
+            --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.sha }}" \
+            || python3 -c 'import json; print("legs=" + json.dumps(json.load(open("contrib/depends/ci-toolchains.json")), separators=(",", ":")))' >> "$GITHUB_OUTPUT"
+
+  build-cross:
+    needs: legs
+    if: needs.legs.outputs.legs != '[]'
+    runs-on: ubuntu-latest
+    # A nightly red reaches a human: the on-failure step opens or comments
+    # on a tracking issue (the slow-gate nightly's route).
+    permissions:
+      contents: read
+      issues: write
     container:
       image: ubuntu:22.04
       env:
@@ -54,43 +91,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        toolchain:
-          # Deferred targets -- re-enable when there is user demand:
-          # - name: "RISCV 64bit"
-          #   host: "riscv64-linux-gnu"
-          #   packages: "python3 gperf g++-riscv64-linux-gnu"
-          #   rust_target: "riscv64gc-unknown-linux-gnu"
-          #
-          # 32-bit targets (armv7, i686) permanently retired in v3.1.0-alpha.5
-          # (Chore #3). See docs/CHANGELOG.md "Retired 32-bit build targets"
-          # for the PQC constant-time security argument that makes this
-          # retirement load-bearing rather than cosmetic.
-          - name: "ARM v8"
-            host: "aarch64-linux-gnu"
-            packages: "python3 gperf g++-aarch64-linux-gnu qemu-user-static"
-            rust_target: "aarch64-unknown-linux-gnu"
-          - name: "Win64"
-            host: "x86_64-w64-mingw32"
-            packages: "cmake python3 g++-mingw-w64-x86-64"
-            rust_target: "x86_64-pc-windows-gnu"
-          - name: "x86_64 Linux"
-            host: "x86_64-unknown-linux-gnu"
-            packages: "gperf cmake libdbus-1-dev libharfbuzz-dev"
-            rust_target: ""
-          - name: "Cross-Mac x86_64"
-            host: "x86_64-apple-darwin11"
-            packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python3-dev python3-setuptools-git libtinfo5 clang"
-            rust_target: "x86_64-apple-darwin"
-            osx_sdk: "11.1"
-          - name: "Cross-Mac aarch64"
-            host: "aarch64-apple-darwin11"
-            packages: "cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python3-dev python3-setuptools-git libtinfo5 clang"
-            rust_target: "aarch64-apple-darwin"
-            osx_sdk: "11.1"
-          - name: "x86_64 Freebsd"
-            host: "x86_64-unknown-freebsd"
-            packages: "clang-14 libc++-14-dev libc++abi-14-dev gperf cmake libdbus-1-dev libharfbuzz-dev"
-            rust_target: "x86_64-unknown-freebsd"
+        # The legs are contrib/depends/ci-toolchains.json, chosen by the
+        # `legs` job. Deferred: RISC-V 64-bit (riscv64-linux-gnu,
+        # g++-riscv64-linux-gnu, riscv64gc-unknown-linux-gnu), re-enabled when
+        # there is user demand. 32-bit targets (armv7, i686) were permanently
+        # retired in v3.1.0-alpha.5 (Chore #3); see docs/CHANGELOG.md
+        # "Retired 32-bit build targets" for the PQC constant-time security
+        # argument that makes this retirement load-bearing rather than
+        # cosmetic.
+        toolchain: ${{ fromJSON(needs.legs.outputs.legs) }}
     name: ${{ matrix.toolchain.name }}
     steps:
     - name: set apt conf
@@ -160,3 +169,43 @@ jobs:
           build/${{ matrix.toolchain.host }}/release/bin/shekyl-cli*
           build/${{ matrix.toolchain.host }}/release/bin/shekyld*
           build/${{ matrix.toolchain.host }}/release/bin/shekyl-mdb-copy*
+    - name: notify on a nightly red
+      # A nightly leg that fails is pushed at a human, not left to be
+      # noticed (Rick, 2026-10-19): it opens a tracking issue, or comments on
+      # the open one so repeats thread. The slow-gate nightly's route
+      # (nightly-live-daemon-slow.yml): github-script, because this job runs
+      # in a container without the GitHub CLI, and an exact-title match over
+      # open issues, because the search API's in:title lags and would fork
+      # the thread on back-to-back reds.
+      if: failure() && github.event_name == 'schedule'
+      uses: actions/github-script@v8
+      with:
+        script: |
+          const title = `nightly depends cross-build RED (${{ matrix.toolchain.name }})`;
+          const body = [
+            `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            'Leg: ${{ matrix.toolchain.name }} (${{ matrix.toolchain.host }})',
+            'The release cross-build for this target failed on the nightly run of dev.',
+          ].join('\n');
+          const open = await github.paginate(github.rest.issues.listForRepo, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open',
+            per_page: 100,
+          });
+          const existing = open.find((i) => !i.pull_request && i.title === title);
+          if (existing) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: existing.number,
+              body,
+            });
+          } else {
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+            });
+          }

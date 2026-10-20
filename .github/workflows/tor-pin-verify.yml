@@ -21,8 +21,9 @@
 #     point is that a unit test cannot reach them. On Windows this is TB-11's
 #     launch test: the pinned tor.exe started by Shekyl's own launcher.
 #  3. daemon ephemeral-onion lifecycle (PWD-E7) — `shekyl-tor-control-daemon`'s
-#     `#[ignore]`d boot-publish-rotate test: two boots, two different onion
-#     addresses, real reaps.
+#     `#[ignore]`d live tests: two boots publishing two different onion
+#     addresses with real reaps, and (Linux) the death watcher telling a
+#     killed tor from a stopped one.
 #
 # The live tests bootstrap against the real Tor network, which times out now
 # and then from a runner. scripts/ci/run_live_tor_tests.sh retries a step once
@@ -75,13 +76,12 @@ jobs:
             exe: tor
             client_floor: 9
             wallet_floor: 4
-            daemon_floor: 3
+            daemon_floor: 2
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
               control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
-              blocking::tests::blocking_facade_full_lifecycle_from_plain_thread
               ephemeral::tests::a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop
           - label: linux-aarch64
             host: aarch64-linux-gnu
@@ -89,13 +89,12 @@ jobs:
             exe: tor
             client_floor: 9
             wallet_floor: 4
-            daemon_floor: 3
+            daemon_floor: 2
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
               control::actor::live_tests::the_managed_tor_inherits_its_control_end_and_nothing_else
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
-              blocking::tests::blocking_facade_full_lifecycle_from_plain_thread
               ephemeral::tests::a_death_watcher_hears_tor_exit_and_tells_it_from_a_stop
           - label: windows-x86_64
             host: x86_64-w64-mingw32
@@ -103,12 +102,11 @@ jobs:
             exe: tor.exe
             client_floor: 8
             wallet_floor: 1
-            daemon_floor: 2
+            daemon_floor: 1
             client_tests: >-
               binary::tests::bundled_tor_matches_recorded_pin
             daemon_tests: >-
               ephemeral::tests::ephemeral_onion_publishes_and_rotates_across_boots
-              blocking::tests::blocking_facade_full_lifecycle_from_plain_thread
     env:
       HOST: ${{ matrix.target.host }}
       TOR_EXE: ${{ matrix.target.exe }}
@@ -252,11 +250,11 @@ jobs:
           # The PWD-E7 posture end-to-end: spawn → bootstrap → ADD_ONION with
           # DiscardPK → ServiceID verified → bounded teardown with a real reap,
           # twice, asserting the two boots publish DIFFERENT addresses (the
-          # ephemeral property observed, not asserted), plus the blocking
-          # facade on a plain thread (the FFI consumer's exact shape). Floor =
-          # this crate's current ignored count on the entry's platform (Linux 3,
-          # with TSR-F1's death edge: a killed tor is Exited, a shutdown is
-          # Stopped; Windows 2, that test killing tor with `kill -9`). `-ge` so
+          # ephemeral property observed, not asserted). Floor = this crate's
+          # current ignored count on the entry's platform: Linux 2, the
+          # rotation test and TSR-F1's death watcher (a killed tor is Exited,
+          # a shutdown is Stopped); Windows 1, the rotation test alone, since
+          # the death watcher kills tor with `kill -9` and is Linux-only. `-ge` so
           # adding a live test never breaks the lane; bump only on a
           # deliberate removal.
           ../scripts/ci/require_live_tests.sh ignored-daemon.out ${{ matrix.target.daemon_tests }}
