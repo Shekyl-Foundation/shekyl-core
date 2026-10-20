@@ -6,9 +6,12 @@
 # +crt-static for the MSVC target family. Rust otherwise links the dynamic
 # CRT, and the cc-built C objects inside the staticlibs follow this feature
 # (/MT). The feature selects libcmt in every profile, debug included.
-# CMake requires -DSTATIC=ON and rewrites /MD to /MT on Debug, Release,
-# RelWithDebInfo and MinSizeRel (CMakeLists.txt); Debug's /MDd becomes
-# /MTd, which is the static triplet's debug libraries and not libcmt.
+# CMake requires -DSTATIC=ON (cmake/MsvcStaticRuntime.cmake). With CMP0091
+# OLD it rewrites /MD to /MT on Debug, Release, RelWithDebInfo and
+# MinSizeRel, and Debug's /MDd becomes /MTd. With CMP0091 NEW the runtime
+# is CMAKE_MSVC_RUNTIME_LIBRARY, the static selection, set before any
+# target; the rewrite only removes a stray /MD. /MTd is the static
+# triplet's debug libraries and not libcmt.
 # Cargo reads this file because CMake runs cargo from this directory
 # (cmake/BuildRust.cmake, WORKING_DIRECTORY ${RUST_SOURCE_DIR}), and so
 # does every direct cargo invocation here. That cmake file lists this path
