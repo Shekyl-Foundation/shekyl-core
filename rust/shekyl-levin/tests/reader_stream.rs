@@ -15,8 +15,9 @@
 //! it would pass equally against a reader that decodes a whole feed at once.
 
 use shekyl_levin::{
-    fragmented_notify, invoke, noise_notify, notify, response, BucketReader, Error, Received,
-    DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE, INITIAL_MAX_PACKET_SIZE,
+    fragmented_notify, ingress_payload_cap, invoke, noise_notify, notify, response, BucketReader,
+    Error, Flags, Received, COMMAND_HANDSHAKE, DEFAULT_MAX_PACKET_SIZE, HEADER_SIZE,
+    INITIAL_MAX_PACKET_SIZE,
 };
 
 /// Feed a whole stream, then pull exactly one message and assert it is the
@@ -164,8 +165,8 @@ fn a_fatal_error_poisons_the_reader() {
     assert_eq!(reader.next_message(), Err(Error::Poisoned));
 }
 
-/// The three errors raised after the offending bucket has been consumed
-/// (`Decompress`, `InnerLengthTruncated`, inner-header `BadSignature`) leave
+/// The two errors raised after the offending bucket has been consumed
+/// (`InnerLengthTruncated`, inner-header `BadSignature`) leave
 /// the state machine looking clean, so they are the ones a missing latch
 /// would let a caller walk straight past.
 #[test]
@@ -442,23 +443,26 @@ fn reassembled_response_classifies_by_inner_protocol_version() {
 
 #[test]
 fn per_command_limit_caps_below_packet_limit() {
-    // Support-flags (1007) is the tight table cap (256). 300 bytes is under
-    // the 256 KiB packet limit and over the command's own cap — rejected on
-    // the header, as in the C++.
-    let message = invoke(1007, &[0u8; 300]);
+    // The handshake (1001) has a tight derived cap. One byte over it is
+    // under the 256 KiB packet limit and over the command's own cap —
+    // rejected on the header, as in the C++.
+    let cap = ingress_payload_cap(COMMAND_HANDSHAKE, Flags::REQUEST).unwrap();
+    let over = usize::try_from(cap).unwrap() + 1;
+    assert!(u64::try_from(over).unwrap() < INITIAL_MAX_PACKET_SIZE);
+    let message = invoke(COMMAND_HANDSHAKE, &vec![0u8; over]);
     let mut reader = BucketReader::new();
     reader.feed(&message[..HEADER_SIZE]).unwrap();
     assert_eq!(
         reader.next_message(),
         Err(Error::OversizePacket {
-            claimed: 300,
-            limit: 256,
+            claimed: cap + 1,
+            limit: cap,
         })
     );
 
     // The same size on 2002 (packet-limit arm until PWD-B12) passes.
     let mut reader = BucketReader::new();
-    reader.feed(&invoke(2002, &[0u8; 300])).unwrap();
+    reader.feed(&invoke(2002, &vec![0u8; over])).unwrap();
     assert!(reader.next_message().unwrap().is_some());
 }
 
@@ -577,86 +581,24 @@ fn non_canonical_expect_response_byte_is_a_request() {
     );
 }
 
-#[cfg(feature = "zstd")]
+/// `0x10` was the compressed-payload bit. Compression left the protocol
+/// (Rick, 2026-10-19), so a bucket that still carries it is refused at the
+/// header, before its body is read as plaintext — on a notification and on
+/// a dummy alike.
 #[test]
-fn compressed_dummy_is_discarded_without_decompression() {
-    // The noise check precedes the COMPRESSED check in handle_recv, so a
-    // dummy with a garbage "compressed" body is discarded, not an error.
-    let mut dummy = noise_notify(256).unwrap();
-    // Set the COMPRESSED bit on the flags field (bytes 21..25) — body stays
-    // zeros, which is not a valid zstd frame.
-    let flags = u32::from_le_bytes(dummy[21..25].try_into().unwrap()) | 0x10;
-    dummy[21..25].copy_from_slice(&flags.to_le_bytes());
-
-    let mut reader = BucketReader::new();
-    reader.feed(&dummy).unwrap();
-    assert_eq!(reader.next_message().unwrap(), None);
-}
-
-#[cfg(feature = "zstd")]
-#[test]
-fn compressed_bucket_inflates_before_delivery() {
-    use shekyl_levin::try_compress_message;
-
-    let payload = vec![7u8; 4096];
-    let compressed = try_compress_message(notify(2002, &payload));
-    assert!(compressed.len() < HEADER_SIZE + payload.len());
-
-    assert_eq!(
-        only_message(&compressed),
-        Received::Notification {
-            command: 2002,
-            payload,
-        }
-    );
-}
-
-/// Divergence "post-inflate limit" pin: a compressed bucket small enough to
-/// pass the header check must not be able to deliver a payload past the
-/// limit in force. Without the post-inflate bound, a ~4 KB bucket inflates
-/// to over 100 MB and is handed to the caller.
-#[cfg(feature = "zstd")]
-#[test]
-fn compressed_payload_cannot_exceed_the_limit_in_force() {
-    use shekyl_levin::{try_compress_message, Flags};
-
-    // 512 KiB of zeros: compresses to a couple of hundred bytes, so the
-    // header sails under the 256 KiB pre-handshake limit while the inflated
-    // payload is twice that limit.
-    let payload = vec![0u8; 512 * 1024];
-    let inflated_len = u64::try_from(payload.len()).unwrap();
-    assert!(inflated_len > INITIAL_MAX_PACKET_SIZE);
-
-    // Build the compressed bucket post-handshake, where the packet limit
-    // permits it, then present it to a pre-handshake reader.
-    let builder = shekyl_levin::BucketHead::make(2002, inflated_len, Flags::REQUEST, false);
-    let mut raw = builder.write().to_vec();
-    raw.extend_from_slice(&payload);
-    let compressed = try_compress_message(raw);
-    assert!(
-        u64::try_from(compressed.len()).unwrap() < INITIAL_MAX_PACKET_SIZE,
-        "the bucket itself must pass the header check"
-    );
-
-    let mut reader = BucketReader::new();
-    reader.feed(&compressed).unwrap();
-    assert_eq!(
-        reader.next_message().unwrap_err(),
-        Error::OversizeInflate {
-            declared: inflated_len,
-            limit: INITIAL_MAX_PACKET_SIZE
-        }
-    );
-
-    // The same bucket is fine once the handshake has raised the limit.
-    let mut post = BucketReader::new();
-    post.complete_handshake(DEFAULT_MAX_PACKET_SIZE);
-    post.feed(&compressed).unwrap();
-    assert_eq!(
-        post.next_message().unwrap(),
-        Some(Received::Notification {
-            command: 2002,
-            payload,
-        })
-    );
+fn a_bucket_with_the_retired_compression_bit_is_refused() {
+    let with_bit = |mut bucket: Vec<u8>| {
+        let flags = u32::from_le_bytes(bucket[21..25].try_into().unwrap()) | 0x10;
+        bucket[21..25].copy_from_slice(&flags.to_le_bytes());
+        (bucket, flags)
+    };
+    for bucket in [notify(2002, &[7u8; 4096]), noise_notify(256).unwrap()] {
+        let (bucket, flags) = with_bit(bucket);
+        let mut reader = BucketReader::new();
+        reader.feed(&bucket).unwrap();
+        assert_eq!(
+            reader.next_message().unwrap_err(),
+            Error::UnknownFlags { flags }
+        );
+    }
 }

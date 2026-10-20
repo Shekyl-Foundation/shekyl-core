@@ -103,9 +103,8 @@ shekyl-relay = { path = "../shekyl-relay" }
 # Peer-attribution policy (PWD-B7): owns the drop rule. This crate only
 # marshals the verdict byte; the decision never lives on the C++ side.
 shekyl-peer-policy = { path = "../shekyl-peer-policy" }
-# Levin payload compression (`levin_ffi.rs`): the C++ epee::levin compression
-# shim reaches the Rust-pinned libzstd through these exports, making it the
-# single zstd in the binary (system-libzstd link dropped).
+# Levin ingress policy and white-noise emit (`levin_ffi.rs`): the C++
+# epee::levin handle_recv and noise shims reach this crate's single copy.
 shekyl-levin = { path = "../shekyl-levin" }
 shekyl-p2p-transport = { path = "../shekyl-p2p-transport" }
 # Genesis block-hash pins (`genesis_hash_for`). `shekyl_network_id` derives

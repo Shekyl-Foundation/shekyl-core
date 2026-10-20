@@ -28,7 +28,6 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use shekyl_daemon_config::sections::P2p;
 use shekyl_dialer::{seeds, BanSnapshot, Dialer, LoadError, SeedNetwork, Shared};
-use shekyl_levin::SupportFlags;
 use shekyl_options::PeerEndpoint;
 use std::net::SocketAddr;
 
@@ -76,7 +75,6 @@ pub(crate) fn ensure_dialer(hub: &Hub) -> Arc<Dialer> {
     let dialer = Arc::new(Dialer::new(
         hub.clone(),
         refused_set(),
-        SupportFlags::ADVERTISED.bits(),
         Arc::new(|| *TIP.lock().expect("tip")),
     ));
     *slot = Some(Arc::clone(&dialer));

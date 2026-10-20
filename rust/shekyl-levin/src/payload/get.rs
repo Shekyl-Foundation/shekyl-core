@@ -45,14 +45,6 @@ pub(crate) fn u64_val(section: &Section, key: &'static str) -> Result<u64, Error
     }
 }
 
-pub(crate) fn opt_u32(section: &Section, key: &'static str, default: u32) -> Result<u32, Error> {
-    match section.get(key) {
-        None => Ok(default),
-        Some(Value::UInt32(v)) => Ok(*v),
-        Some(_) => Err(mismatch(key, "uint32")),
-    }
-}
-
 pub(crate) fn blob<const N: usize>(section: &Section, key: &'static str) -> Result<[u8; N], Error> {
     match require(section, key)? {
         Value::Bytes(b) => <[u8; N]>::try_from(b.as_slice()).map_err(|_| Error::InvalidLength {
@@ -80,12 +72,6 @@ pub(crate) fn object<'a>(section: &'a Section, key: &'static str) -> Result<&'a 
     match require(section, key)? {
         Value::Object(inner) => Ok(inner),
         _ => Err(mismatch(key, "object")),
-    }
-}
-
-pub(crate) fn insert_opt_u32(section: &mut Section, key: &'static str, value: u32, default: u32) {
-    if value != default {
-        section.insert(key, Value::UInt32(value));
     }
 }
 

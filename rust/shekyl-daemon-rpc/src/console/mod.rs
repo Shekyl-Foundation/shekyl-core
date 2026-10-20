@@ -1061,10 +1061,9 @@ fn print_connections(src: &Source) -> Result<String, String> {
         .unwrap_or(0)
         .max(21);
     let mut out = vec![format!(
-        "{:<width$}{:<8}{:<15}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{}",
+        "{:<width$}{:<8}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{}",
         "Remote Host",
         "Type",
-        "Support Flags",
         "Recv/Sent (inactive,sec)",
         "State",
         "Livetime(sec)",
@@ -1081,12 +1080,9 @@ fn print_connections(src: &Source) -> Result<String, String> {
             if c.local_ip { "[LAN]" } else { "" }
         );
         out.push(format!(
-            "{:<width$}{:<8}{:<15}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{:<8}{tail}",
+            "{:<width$}{:<8}{:<30}{:<18}{:<15}{:<12}{:<14}{:<10}{:<8}{tail}",
             format!("{direction}{}", c.address),
             address_type_name(c.address_type),
-            c.support_flags
-                .map(|flags| flags.to_string())
-                .unwrap_or_else(|| "unknown".to_owned()),
             format!(
                 "{}({})/{}({})",
                 c.recv_count, c.recv_idle_time, c.send_count, c.send_idle_time
