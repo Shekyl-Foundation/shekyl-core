@@ -54,7 +54,32 @@ if(POLICY CMP0167)
   cmake_policy(SET CMP0167 NEW)  # use Boost's own cmake config instead of deprecated FindBoost
 endif()
 
+# Shekyl ships nothing on Android. Called twice because the two ways a
+# configure becomes Android are visible at different moments:
+#   - `-DCMAKE_SYSTEM_NAME=Android` and `-DANDROID=TRUE` are set before
+#     project(), and project() would otherwise enter Platform/Android
+#     and search for an NDK.
+#   - A toolchain file is read during project(). Its ANDROID or system
+#     name is visible only once project() returns, which is also when
+#     an installed NDK would let configure succeed.
+# Reopen only when a release decision names an Android product and a CI
+# host that builds it. That decision deletes this macro and both calls
+# in the same change as the host recipe. See docs/CHANGELOG.md, "the
+# Android target is removed".
+macro(shekyl_refuse_android_target)
+  if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+    message(FATAL_ERROR
+      "Shekyl refuses to configure for Android "
+      "(CMAKE_SYSTEM_NAME='${CMAKE_SYSTEM_NAME}', ANDROID='${ANDROID}'). "
+      "Shekyl ships nothing on Android. "
+      "See docs/CHANGELOG.md, \"the Android target is removed\".")
+  endif()
+endmacro()
+shekyl_refuse_android_target()
+
 project(shekyl)
+
+shekyl_refuse_android_target()
 
 # ---------------------------------------------------------------------------
 # 64-bit-only gate — Chore #3, v3.1.0-alpha.5 (Tripwire D).
