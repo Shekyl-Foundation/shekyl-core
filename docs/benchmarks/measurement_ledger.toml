@@ -949,6 +949,7 @@ spec = [
 ]
 cleared = [
   { through = "473aca852", reason = "mac1 and the handshake budget (RPC_CHANNEL.md section 4.3, 2026-10-20): read_message1 gains a keyed BLAKE2s over the 2,320-byte Noise message and one budget admission before the long-term work RT-P6 timed, and the client's start one keyed BLAKE2s. A few microseconds against 2,136.1 us; the stranger's re-measure on the floor device (rt_p6_mac1_stranger_20261020.md) measures it, and its registration moves this constant if the daemon's handshake p99 rises." },
+  { through = "f94231ec8", reason = "The constant moves to the re-measure's 2,163.8 us, and the budget test's count with it (117 to 115 a second). Only the value the budget charges changes; no code path the capture timed is touched, so the capture at 5db6eeda8f prices this tree." },
 ]
 
 [[constant]]
