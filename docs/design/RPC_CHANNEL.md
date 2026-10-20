@@ -662,7 +662,32 @@ is needed is decided from RT-P6's measurement, not before it.
   over `ClassedRecord`, with backpressure, record splitting for large
   bodies (block batches), and orderly half-close. It is written once,
   against that framer, after the class table exists. It is not written
-  against the interim framer. RT-P5 proves it.
+  against the interim framer. RT-P5 proves it. **Built in RT-W9 step 5b
+  (2026-10-20):**
+  - **Writes are combined until a flush.** A record is cut at the flush,
+    or when a full record's payload is waiting. A full record is the
+    largest class, and the tail is the smallest class that holds it.
+  - **Backpressure:** the adapter holds at most one record's payload and
+    one sealed record, so a slow reader holds the writer.
+  - **Reads:** a record with occupancy 0 delivers nothing.
+  - **Half-close:** an end of the transport at a record boundary is the
+    end of the stream, and an end inside a record is an error.
+  - **One table in both directions** (RT-O29).
+  - **A submission** (RT-O28): the client arms the stream's
+    `SubmissionMark` before it sends `submit_transaction`. The message
+    then goes out as exactly `SUBMISSION_RECORDS` = 5 records of the
+    largest class, the tail and padding at occupancy 0. Five records hold
+    the largest admissible transaction's request body, 298,814 bytes,
+    with 28,851 bytes left for the head; a test pins the count to
+    `TX_WEIGHT_LIMIT`. A message that would need a sixth record is
+    refused before it is sealed.
+  - **Tested through hyper:** every `submit_transaction` upload, for a
+    transaction of 0, 1, 26,599, 97,585 and 149,400 bytes, is exactly
+    five records. hyper flushes once per message in both directions,
+    which is RT-P5's registered flush policy, observed.
+  - **Each check seen failing with it removed:** the splitting (the
+    pre-flight's named edit, which fails the block-batch test), the
+    padding, the count limit, and an end inside a record.
 - **Length concealment — RULED (RT-O6, 2026-10-09); RE-RULED 2026-10-18
   on RT-P5's evidence.** *Harm:* a remote wallet's `submit_transaction` is
   one upload whose size marks it and identifies the transaction's shape.
@@ -2025,7 +2050,7 @@ rule-26 pre-flight before its first production commit.
 | Slice | Contents | Depends on | Authorization |
 |---|---|---|---|
 | RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, vectors pinned from clatter 2.3.0 under seeded randomness, which RT-W9 compares our handshake against (RT-O11), each observed changing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4; creates `shekyl-rpc-channel` with the constants and naming functions (RT-O13); deletes `shekyl-rt-p2-spike` (§11.2) | ratification (given 2026-10-09) | **Authorized 2026-10-09.** Pre-flight: [`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) |
-| RT-W9 | `shekyl-noise` holds `SymmetricState` and `Direction` (pinned handshake vectors untouched; the interim framer stays in `shekyl-p2p-transport`); the `hybridXK` handshake; `ClassedRecord` and the stream adapter `shekyl-rpc-stream` (RT-P5); padded records in size classes derived from RT-P5 and RT-P6 (RT-O6). `FixedWindow` is the P2P end state and is not built here. Two exclusion rows in the domain registry, one shared reason, for the two Noise protocol-name literals — the RPC channel's and the P2P handshake's — which are mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; the header-protection label `shekyl/noise-record-header-v1` is a separate mechanism-7 row, landed with the constant; deadline from RT-P6. **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the pinned ML-KEM crate or the Rust toolchain changes | RT-W8 | **authorized 2026-10-11, decision-anchored to PR #1034**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md); `RT-O16`…`RT-O22` ruled 2026-10-11, and `RT-O16`, `RT-O18`, `RT-O20` and the sequencing of `RT-O21` re-ruled 2026-10-12; step 1 is built (`SymmetricState`, `Direction`, `into_directions`); step 2 is built in PR #1039: the `hybridXK` handshake in `shekyl-rpc-channel`, ending in `into_directions`, compared with the pinned vectors from `rust/shekyl-rpc-channel/src/pinned_handshake.rs` (RT-O18); step 5a builds `ClassedRecord` in `shekyl-noise` (2026-10-20); `shekyl-rpc-stream` (step 5b) follows RT-O28 and RT-O29, ruled 2026-10-20 in the pre-flight's §4a |
+| RT-W9 | `shekyl-noise` holds `SymmetricState` and `Direction` (pinned handshake vectors untouched; the interim framer stays in `shekyl-p2p-transport`); the `hybridXK` handshake; `ClassedRecord` and the stream adapter `shekyl-rpc-stream` (RT-P5); padded records in size classes derived from RT-P5 and RT-P6 (RT-O6). `FixedWindow` is the P2P end state and is not built here. Two exclusion rows in the domain registry, one shared reason, for the two Noise protocol-name literals — the RPC channel's and the P2P handshake's — which are mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; the header-protection label `shekyl/noise-record-header-v1` is a separate mechanism-7 row, landed with the constant; deadline from RT-P6. **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the pinned ML-KEM crate or the Rust toolchain changes | RT-W8 | **authorized 2026-10-11, decision-anchored to PR #1034**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md); `RT-O16`…`RT-O22` ruled 2026-10-11, and `RT-O16`, `RT-O18`, `RT-O20` and the sequencing of `RT-O21` re-ruled 2026-10-12; step 1 is built (`SymmetricState`, `Direction`, `into_directions`); step 2 is built in PR #1039: the `hybridXK` handshake in `shekyl-rpc-channel`, ending in `into_directions`, compared with the pinned vectors from `rust/shekyl-rpc-channel/src/pinned_handshake.rs` (RT-O18); step 5a builds `ClassedRecord` in `shekyl-noise` (2026-10-20); step 5b builds `shekyl-rpc-stream` (2026-10-20), to RT-O28 and RT-O29 as ruled in the pre-flight's §4a |
 | RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view`. **The listener logs a connection, counts it against a client and records a last-seen time only from the authenticated client `AuthenticatedSession` yields, never from the fingerprint `DaemonReadyForMessage4` exposes for the enrolment lookup (§4.1, ruled 2026-10-12).** A copied fingerprint is still only a claim. Its pre-flight settles what message 4 carries (§6.2) | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
 | RT-W11 | `shekyl-rpc-tunnel`, with session pooling | RT-W9 | not authorized |
 | RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-cli`, once it serves the console on the shared client (RT-W15); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9) | RT-W9 | not authorized |

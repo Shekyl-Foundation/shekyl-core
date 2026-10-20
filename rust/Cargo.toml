@@ -283,6 +283,10 @@ members = [
     # it (RT-O11, RT-O12). Nothing may depend on it; the gate is
     # scripts/ci/check_clatter_not_in_production.py.
     "shekyl-rpc-channel-xcheck",
+    # The RPC channel's stream adapter: AsyncRead and AsyncWrite over
+    # ClassedRecord, for hyper and axum (RPC_CHANNEL.md section 4.4, RT-W9
+    # step 5b). Depends on shekyl-noise, never on the handshake.
+    "shekyl-rpc-stream",
 
     # The peer address union. Levin frames it; the transport layer selects
     # a connector from it. Neither crate defines a second copy.
