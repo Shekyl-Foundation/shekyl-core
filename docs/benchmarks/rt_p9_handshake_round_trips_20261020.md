@@ -135,7 +135,32 @@ under the same lines.
 
 ## Dry run
 
-None yet.
+**2026-10-20, 05:32:19Z to 05:34:03Z, at `dfc2ae3956`** (this
+registration with #1137's results and the budget constant they moved,
+merged in). Ten connections a leg, through the same scripts and the
+summary (`--samples 10`). Both gates were met, and every connection on
+both legs completed. Its figures are not data. What it showed of the
+instrument:
+- **The onion leg works end to end:** the client's Tor reaches the
+  device's temporary onion service, and each connection, under its own
+  SOCKS username, takes its own circuit. A sample takes about 9 s, mostly
+  the client's connect (3.2 s at the median, and 37 s for one connection
+  that waited on circuits). So 300 samples take about 45 minutes.
+- **The daemon's clock** reads `accept` → message 1 in hundreds of
+  milliseconds on the onion leg (median 708 ms) and 0.4 ms on the LAN.
+  That is the round trip the onion service's `CONNECTED` cell and the
+  client's first write make, as expected.
+- **The two sides' stamps agree** on every sample, within the slack.
+
+**How the source reached the device.** GitHub was slow or unreachable
+from the device and the workstation that morning (it served the device
+at about 33 KB/s at 04:50Z, and a push from the workstation timed out at
+05:15Z). The device's source is therefore a depth-1 clone of
+`dfc2ae3956`, made on the workstation and copied over the LAN, and the
+script checks the commit by its hash before building. The submodules come
+from the device's own checkout: their pinned commits are unchanged, and
+the harness links none of them. The client is built on the workstation
+from the same commit.
 
 ## Results
 
