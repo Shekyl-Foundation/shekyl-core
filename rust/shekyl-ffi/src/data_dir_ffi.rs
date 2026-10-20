@@ -16,16 +16,12 @@
 
 use std::ffi::{c_char, CStr};
 
-use shekyl_daemon_config::{paths, Network, Platform, RunMode};
+use shekyl_daemon_config::{paths, Network, RunMode};
 
 /// The default data directory, as UTF-8, of the network `network` names.
 fn default_for(word: &str) -> Option<String> {
     let network = Network::from_word(word)?;
-    let platform = Platform {
-        home: crate::platform::account_home(),
-        program_data: crate::platform::program_data(),
-    };
-    let root = paths::root(&platform, RunMode::User, "data-dir").ok()?;
+    let root = paths::root(&crate::platform::current(), RunMode::User, "data-dir").ok()?;
     paths::data_dir_default(&root, network)
         .into_os_string()
         .into_string()
@@ -71,6 +67,7 @@ pub unsafe extern "C" fn shekyl_daemon_data_dir_default(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_daemon_config::Platform;
 
     fn ask(word: &str) -> Option<String> {
         let c = std::ffi::CString::new(word).unwrap();
