@@ -542,9 +542,11 @@ kinds and defaults are `INPUT_GRAMMAR.md` §5's and are not restated. The
 
 In no section, because nothing is configured: `keep-fakechain` (no wipe),
 `max-concurrency` (IG-Q7), the three test levers, `show-time-stats`.
-Lane-owned and not ported (IG-Q4): `prep-blocks-threads`, `block-sync-size`,
-`span-limit`, `block-download-max-size`, `db-sync-mode`, `db-salvage`,
-`keep-alt-blocks`, `pad-transactions`.
+Lane-owned and not ported (IG-Q4): `db-sync-mode`, `db-salvage`,
+`keep-alt-blocks`, `pad-transactions`. Chain sync's four (`prep-blocks-threads`,
+`block-sync-size`, `span-limit`, `block-download-max-size`) are rejected rows,
+refused with CS-Q12's reason (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q12, Rick
+2026-10-18).
 
 ---
 

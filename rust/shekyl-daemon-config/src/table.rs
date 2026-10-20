@@ -132,6 +132,7 @@ const fn rejected(name: &'static str, reason: &'static str) -> Row {
     }
 }
 
+const SYNC_BUDGETS: &str = "chain sync's protocol constants replace it: byte budgets and deadlines provisioned at the floor device (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12)";
 const NO_DAEMONIZE: &str = "shekyld never daemonizes or registers itself; installing is the installer's and shekyl-cli's, and on Windows shekyld answers the service manager through `service` (RPC_CHANNEL.md RT-16)";
 const NO_TLS: &str = "the RPC channel replaces TLS and HTTP authentication (RPC_CHANNEL.md RT-11)";
 const NO_BOOTSTRAP: &str = "no proxying to a third-party daemon";
@@ -228,6 +229,10 @@ const ROWS: &[Row] = &[
     rejected("tos-flag", "a traffic-class marking is a label any on-path observer can classify Shekyl traffic by"),
     dev("dev-clearnet-encrypt", Kind::Switch, Default::Unset, TEST_NETWORKS, "Encrypt the clearnet transport; deleted at the Noise flip."),
     dev("dev-sync", Kind::OneOf(&["on", "off"]), Default::Value("on"), REGTEST, "Chain synchronisation with peers."),
+    rejected("span-limit", SYNC_BUDGETS),
+    rejected("block-sync-size", SYNC_BUDGETS),
+    rejected("block-download-max-size", SYNC_BUDGETS),
+    rejected("prep-blocks-threads", "the shared hasher budget sets it, from what the floor device's scratchpads hold (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12, DRS_X_STORE_FLIP.md DX-Q2 item 6)"),
     dev("dev-relay-cover", Kind::Switch, Default::Unset, TEST_NETWORKS, "The relay's development cover carrier."),
     // Core, pool, notify, mine
     dev("dev-difficulty", COUNT, Default::Unset, REGTEST, "A fixed difficulty."),
@@ -316,6 +321,30 @@ mod tests {
                 assert!(!networks.is_empty());
             }
             other => panic!("dev-relay-cover is a dev row, not {other:?}"),
+        }
+    }
+
+    /// CS-Q12 (Rick, 2026-10-18): none of chain sync's four options
+    /// survives. Each is refused with its reason, from the command line and
+    /// from the file alike (IG-10), not as an unknown name.
+    #[test]
+    fn the_four_chain_sync_options_are_refused_with_cs_q12() {
+        use shekyl_options::{Code, Source};
+        let file = Source::File {
+            path: std::path::PathBuf::from("shekyld.toml"),
+            line: 1,
+        };
+        for name in [
+            "span-limit",
+            "block-sync-size",
+            "block-download-max-size",
+            "prep-blocks-threads",
+        ] {
+            for source in [&Source::Cli, &file] {
+                let refusal = TABLE.live(name, source).unwrap_err();
+                assert_eq!(refusal.code, Code::NameRejected, "{name}");
+                assert!(refusal.render().contains("CS-Q12"), "{name}");
+            }
         }
     }
 
