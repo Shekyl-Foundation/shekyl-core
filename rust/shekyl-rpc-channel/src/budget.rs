@@ -15,10 +15,10 @@
 //! reads directly: **handshakes never take more than
 //! [`HANDSHAKE_CPU_SHARE_PERMILLE`] thousandths of one core**, over any
 //! window longer than [`HANDSHAKE_BUDGET_BURST`]. Each admission costs
-//! [`HANDSHAKE_DAEMON_CPU_NANOS`], the daemon's whole handshake at RT-P6's
-//! 99th percentile on the floor device, because an admitted message 1 may
-//! go on to a full handshake. A message 1 that fails at its tag costs less
-//! (818.5 µs at that percentile), so the bound holds for every mix.
+//! [`HANDSHAKE_DAEMON_CPU_NANOS`], the daemon's whole handshake at the 99th
+//! percentile on the floor device, because an admitted message 1 may go on
+//! to a full handshake. A message 1 that fails at its tag costs less
+//! (665.5 µs at that percentile), so the bound holds for every mix.
 //!
 //! What it cannot do: XK hides the client until message 3, so nothing
 //! before then says whose attempt a message 1 is, and the budget is shared
@@ -28,15 +28,16 @@
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-/// The daemon's CPU for one handshake, in nanoseconds: RT-P6's 99th
-/// percentile on the floor device, the daemon's steps summed per handshake
-/// (`docs/benchmarks/rt_p6_handshake_cost_20261018.md`, 2,136.1 µs).
-pub const HANDSHAKE_DAEMON_CPU_NANOS: u64 = 2_136_100;
+/// The daemon's CPU for one handshake, in nanoseconds: the 99th percentile
+/// on the floor device, the daemon's steps summed per handshake, mac1
+/// included (RT-P6 re-measured with mac1,
+/// `docs/benchmarks/rt_p6_mac1_stranger_20261020.md`, 2,163.8 µs).
+pub const HANDSHAKE_DAEMON_CPU_NANOS: u64 = 2_163_800;
 
 /// The share of one core handshakes may take, in thousandths: a quarter.
 ///
 /// On the floor device that is a sixteenth of the machine, and at
-/// [`HANDSHAKE_DAEMON_CPU_NANOS`] it admits 117 handshakes a second, far
+/// [`HANDSHAKE_DAEMON_CPU_NANOS`] it admits 115 handshakes a second, far
 /// above what an enrolled set of wallets and tunnels makes (a tunnel holds
 /// its sessions open). The rest of the core, and the other three, stay with
 /// the chain.
@@ -117,17 +118,17 @@ fn nanos(d: Duration) -> u64 {
 mod tests {
     use super::*;
 
-    /// The ruled budget admits 117 at once and 117 a second after.
+    /// The ruled budget admits 115 at once and 115 a second after.
     #[test]
-    fn the_ruled_budget_is_117_handshakes_a_second() {
+    fn the_ruled_budget_is_115_handshakes_a_second() {
         let t0 = Instant::now();
         let budget = HandshakeBudget::new(t0);
-        assert_eq!(budget.burst_admissions(), 117);
+        assert_eq!(budget.burst_admissions(), 115);
         let admitted = (0..1_000).filter(|_| budget.admit(t0)).count();
-        assert_eq!(admitted, 117, "the burst, then nothing");
+        assert_eq!(admitted, 115, "the burst, then nothing");
         let later = t0 + Duration::from_secs(1);
         let admitted = (0..1_000).filter(|_| budget.admit(later)).count();
-        assert_eq!(admitted, 117, "one second earns one second's share");
+        assert_eq!(admitted, 115, "one second earns one second's share");
     }
 
     /// Over any window, admissions times their cost never exceed the share
