@@ -925,11 +925,16 @@ if(MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FIiso646.h")
   # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Dinline=__inline")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10485760")
-  if(STATIC)
-    foreach(VAR CMAKE_C_FLAGS_DEBUG CMAKE_CXX_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE CMAKE_CXX_FLAGS_RELEASE)
-      string(REPLACE "/MD" "/MT" ${VAR} "${${VAR}}")
-    endforeach()
+  # The Rust staticlibs link the static C runtime on MSVC (+crt-static,
+  # rust/.cargo/config.toml), so the C++ must too: one runtime per image.
+  if(NOT STATIC)
+    message(FATAL_ERROR "An MSVC build links the static C runtime: the Rust libraries are "
+      "built with +crt-static (rust/.cargo/config.toml), and a non-static build would "
+      "mix /MD C++ with them. Configure with -DSTATIC=ON (the MSVC default).")
   endif()
+  foreach(VAR CMAKE_C_FLAGS_DEBUG CMAKE_CXX_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE CMAKE_CXX_FLAGS_RELEASE)
+    string(REPLACE "/MD" "/MT" ${VAR} "${${VAR}}")
+  endforeach()
   include_directories(SYSTEM src/platform/msc)
 else()
   include(TestCXXAcceptsFlag)
