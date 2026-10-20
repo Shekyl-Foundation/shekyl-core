@@ -53,11 +53,16 @@ use std::time::{Duration, Instant};
 
 use ruzstd::decoding::FrameDecoder;
 use ruzstd::encoding::{compress_to_vec, CompressionLevel};
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use shekyl_levin::{
-    compress_payload, decompress_into, inflated_size, BlockCompleteEntry, NewCompactBlock,
-    NewTransactions, PortableMap, ResponseGetObjects, TxBlobEntry, COMPRESSION_MIN_PAYLOAD,
+    compress_payload, decompress_into, inflated_size, BasicNodeData, BlockCompleteEntry,
+    CoreSyncData, HandshakeRequest, HandshakeResponse, NetworkAddress, NewCompactBlock,
+    NewTransactions, PeerlistEntry, PortableMap, ResponseGetObjects, SupportFlags,
+    TimedSyncRequest, TimedSyncResponse, TxBlobEntry, COMPRESSION_MIN_PAYLOAD,
     DECOMPRESSED_MAX_SIZE, HASH_SIZE,
 };
+use shekyl_peer_bounds::DISCLOSE_COUNT;
 
 /// `0xFD2FB528`, little-endian on the wire.
 const MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
@@ -70,11 +75,13 @@ fn main() {
         Some("compare") if args.len() == 4 => compare(Path::new(&args[2]), Path::new(&args[3])),
         Some("emit") if args.len() == 4 => emit(Path::new(&args[2]), Path::new(&args[3])),
         Some("decode") if args.len() == 3 => decode(Path::new(&args[2])),
+        Some("peers") if args.len() == 3 => peers(Path::new(&args[2])),
         _ => {
             eprintln!(
                 "usage: zstd_corpus_compare compare <corpus> <report.tsv>\n\
                  \x20      zstd_corpus_compare emit <corpus> <dir>\n\
-                 \x20      zstd_corpus_compare decode <dir>"
+                 \x20      zstd_corpus_compare decode <dir>\n\
+                 \x20      zstd_corpus_compare peers <report.tsv>"
             );
             std::process::exit(2);
         }
@@ -106,9 +113,17 @@ struct Row {
 }
 
 fn compare(corpus: &Path, report: &Path) {
-    let payloads = payloads(corpus);
+    let mut about = vec![format!("corpus: {}", corpus.display())];
+    if let Ok(p) = std::fs::read_to_string(corpus.join("provenance")) {
+        about.extend(p.lines().map(|line| format!("  {line}")));
+    }
+    run(&payloads(corpus), report, &about);
+}
+
+/// Measure `payloads`, write the TSV to `report`, print the summary.
+fn run(payloads: &[Payload], report: &Path, about: &[String]) -> Vec<Row> {
     let mut rows = Vec::new();
-    for p in &payloads {
+    for p in payloads {
         rows.push(measure(p));
     }
     let mut tsv = String::from(
@@ -137,11 +152,8 @@ fn compare(corpus: &Path, report: &Path) {
     }
     std::fs::write(report, tsv).expect("write the report");
 
-    println!("corpus: {}", corpus.display());
-    if let Ok(p) = std::fs::read_to_string(corpus.join("provenance")) {
-        for line in p.lines() {
-            println!("  {line}");
-        }
+    for line in about {
+        println!("{line}");
     }
     println!(
         "\n{:<15} {:>4} {:>11} {:>8} {:>8} {:>8} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}",
@@ -216,6 +228,7 @@ fn compare(corpus: &Path, report: &Path) {
         rows.len()
     );
     println!("report: {}", report.display());
+    rows
 }
 
 fn measure(p: &Payload) -> Row {
@@ -586,5 +599,161 @@ fn decode(dir: &Path) {
             ns / 1e3,
             payload.len() as f64 / ns * 1e3
         );
+    }
+}
+
+/// The handshake and timed-sync payloads (Rick, 2026-10-19, on #1134:
+/// "Measure the handshake and timed-sync peer lists with the same rig").
+///
+/// No corpus holds these: a regtest daemon has no peers. The values are
+/// synthetic and the encoder is production's: a fixed-seed generator
+/// draws the addresses, the node identifier, the nonce and the tip, and
+/// every peer listens on testnet's default port (12021), which is the
+/// most repetitive and so the most compressible case. Each list is full,
+/// at [`DISCLOSE_COUNT`] entries, the most a message may carry.
+fn peers(report: &Path) {
+    let mut rng = SplitMix(0x5e1f_c0de_2026_1019);
+    let node_data = BasicNodeData {
+        network_id: rng.bytes(),
+        support_flags: SupportFlags::ADVERTISED,
+    };
+    let sync = CoreSyncData {
+        current_height: 21_011,
+        cumulative_difficulty: 0x0000_0123_4567_89ab,
+        cumulative_difficulty_top64: 0,
+        top_id: rng.bytes(),
+    };
+    let mut out = vec![
+        Payload {
+            class: "handshake-req",
+            name: "request".to_owned(),
+            bytes: HandshakeRequest {
+                node_data: node_data.clone(),
+                payload_data: sync.clone(),
+                nonce: rng.bytes(),
+            }
+            .store()
+            .expect("store a handshake request"),
+        },
+        Payload {
+            class: "timed-sync-req",
+            name: "request".to_owned(),
+            bytes: TimedSyncRequest {
+                payload_data: sync.clone(),
+            }
+            .store()
+            .expect("store a timed-sync request"),
+        },
+    ];
+    for mix in ["ipv4", "ipv6", "tor", "mixed"] {
+        let list: Vec<PeerlistEntry> = (0..DISCLOSE_COUNT)
+            .map(|i| PeerlistEntry {
+                adr: rng.address(match mix {
+                    "mixed" => ["ipv4", "ipv6", "tor"][i % 3],
+                    one => one,
+                }),
+            })
+            .collect();
+        out.push(Payload {
+            class: "handshake-resp",
+            name: format!("{mix}-{DISCLOSE_COUNT}"),
+            bytes: HandshakeResponse {
+                node_data: node_data.clone(),
+                payload_data: sync.clone(),
+                local_peerlist_new: list.clone(),
+            }
+            .store()
+            .expect("store a handshake response"),
+        });
+        out.push(Payload {
+            class: "timed-sync-resp",
+            name: format!("{mix}-{DISCLOSE_COUNT}"),
+            bytes: TimedSyncResponse {
+                payload_data: sync.clone(),
+                local_peerlist_new: list,
+            }
+            .store()
+            .expect("store a timed-sync response"),
+        });
+    }
+    out.sort_by_key(|p| p.class);
+    let about = [format!(
+        "synthetic handshake and timed-sync payloads: production encoder, fixed-seed values, \
+         {DISCLOSE_COUNT} peers per list, every peer on port {TESTNET_P2P_PORT}"
+    )];
+    let rows = run(&out, report, &about);
+    println!(
+        "\n{:<16} {:<10} {:>7} {:>9} {:>12} {:>12}",
+        "class", "list", "input B", "libzstd1", "ruzstd+fcs", "saved B"
+    );
+    for r in rows {
+        let best = [(r.lib_sent, r.lib), (r.ru_sent, r.ru_fcs)]
+            .into_iter()
+            .filter(|(sent, _)| *sent)
+            .map(|(_, len)| r.input - len)
+            .max()
+            .unwrap_or(0);
+        println!(
+            "{:<16} {:<10} {:>7} {:>9} {:>12} {:>12}",
+            r.class, r.name, r.input, r.lib, r.ru_fcs, best
+        );
+    }
+}
+
+/// Testnet's default P2P port (`src/cryptonote_config.h`).
+const TESTNET_P2P_PORT: u16 = 12021;
+
+/// SplitMix64: a fixed-seed source for the synthetic values, so a rerun
+/// measures the same bytes.
+struct SplitMix(u64);
+
+impl SplitMix {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    fn bytes<const N: usize>(&mut self) -> [u8; N] {
+        let mut out = [0u8; N];
+        for chunk in out.chunks_mut(8) {
+            let word = self.next().to_le_bytes();
+            chunk.copy_from_slice(&word[..chunk.len()]);
+        }
+        out
+    }
+
+    /// A public-looking address of `family` on the default port. A Tor
+    /// host is a v3-length name: 56 base32 characters and `.onion`.
+    fn address(&mut self, family: &str) -> NetworkAddress {
+        let port = TESTNET_P2P_PORT;
+        match family {
+            "ipv4" => {
+                let [a, b, c, d] = self.bytes::<4>();
+                NetworkAddress::Ipv4 {
+                    ip: Ipv4Addr::new(a % 223 + 1, b, c, d),
+                    port,
+                }
+            }
+            "ipv6" => {
+                let mut octets = self.bytes::<16>();
+                octets[0] = 0x20 | (octets[0] & 0x0f);
+                NetworkAddress::Ipv6 {
+                    ip: Ipv6Addr::from(octets),
+                    port,
+                }
+            }
+            "tor" => {
+                const BASE32: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+                let mut host: String = (0..56)
+                    .map(|_| char::from(BASE32[(self.next() % 32) as usize]))
+                    .collect();
+                host.push_str(".onion");
+                NetworkAddress::Tor { host, port }
+            }
+            other => unreachable!("no address family {other}"),
+        }
     }
 }

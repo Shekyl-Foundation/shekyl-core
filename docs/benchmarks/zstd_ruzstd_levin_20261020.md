@@ -158,11 +158,57 @@ pays about 33 ms of CPU, against about 0.6 ms now. One maximal 128 MiB
 payload would take about 14 s. Under libzstd level 1 the same work
 produces frames that are thrown away for being larger than their input.
 
+### 6. Handshake and timed-sync peer lists
+
+The maintainer's ruling on #1134 (2026-10-19) asked for these with the
+same rig, as a check rather than a gate. No corpus holds them, because a
+regtest daemon has no peers. The example's `peers` mode builds them with
+the production encoder from fixed-seed values: random public addresses,
+node identifier, nonce and tip, with every peer on testnet's default port
+(12021). Each list is full, at `DISCLOSE_COUNT` (12) entries, the most a
+message may carry. A shared port and full lists are the most repetitive
+case, so these are the best case for compression.
+
+| payload | input B | libzstd 1 | ruzstd + fcs | saved B, best codec |
+| --- | ---: | ---: | ---: | ---: |
+| handshake request | 258 | 244 | 264 | 14 |
+| handshake response, 12 IPv4 | 731 | 334 | 353 | 397 |
+| handshake response, 12 IPv6 | 887 | 476 | 501 | 411 |
+| handshake response, 12 Tor | 1,415 | 767 | 991 | 648 |
+| handshake response, mixed | 1,011 | 586 | 661 | 425 |
+| timed-sync request | 158 | 146 | 168 | 0 (under 256 B, never compressed) |
+| timed-sync response, 12 IPv4 | 671 | 277 | 294 | 394 |
+| timed-sync response, 12 IPv6 | 827 | 419 | 441 | 408 |
+| timed-sync response, 12 Tor | 1,355 | 710 | 930 | 645 |
+| timed-sync response, mixed | 951 | 533 | 599 | 418 |
+
+Full rows are in `_peer_lists.tsv`. All 10 payloads passed the four-way
+decode check.
+
+**In proportion, the saving is large: a full list compresses to 41–58 %
+of its size.** Each entry is one address. That is 6 to 64 bytes of value
+(an IPv4 address and port, up to a 62-character onion name and port)
+inside a portable-storage section that repeats the same key names (`adr`,
+`addr`, `type`, `m_ip`/`addr`/`host`, `m_port`/`port`) in every entry.
+The redundancy is in the encoding, not the addresses.
+
+**In absolute terms it is under 650 bytes per message.** A handshake is
+once per connection; a timed sync is every 60 s
+(`P2P_DEFAULT_HANDSHAKE_INTERVAL`). So the best case is about 650 bytes a
+minute per connection, about 11 bytes a second.
+
+**No send path compresses these commands today.** The three C++ call
+sites (§5) send notifications. Handshakes and timed syncs are invokes:
+the Rust dialer sends the outbound requests, the epee handler answers
+inbound ones, and neither path has a compressor. So
+removing compression changes nothing on the wire for these payloads
+either. The saving above is what compression would add if a send path
+were written for them.
+
 ## What this does not cover
 
-- **Other message classes.** Handshake and timed-sync peer lists, chain
-  entries, and the remaining Levin commands are not in the corpus. Those
-  are the payloads where compression might still pay.
+- **Other message classes.** Chain entries and the remaining Levin
+  commands are not measured.
 - **A network's activity mix.** Multi-input spends, staking transactions
   and real block fill were not captured. A testnet capture needs a host
   claim and is not this run.
