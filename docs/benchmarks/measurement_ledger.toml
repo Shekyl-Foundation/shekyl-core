@@ -954,12 +954,12 @@ cleared = [
 [[constant]]
 name = "handshake_daemon_cpu_ns"
 defined_in = "rust/shekyl-rpc-channel/src/budget.rs"
-needle = "pub const HANDSHAKE_DAEMON_CPU_NANOS: u64 = 2_136_100;"
+needle = "pub const HANDSHAKE_DAEMON_CPU_NANOS: u64 = 2_163_800;"
 measured_by = ["BA-T36"]
 status = "current"
-capture = "docs/benchmarks/rt_p6_handshake_cost_20261018_captures/summary_registered.md"
-capture_rev = "02f7665bae"
-rev_source = "the record's results name the build: a fresh clone of 02f7665bae on the floor device, the registered cell of 2026-10-19 (docs/benchmarks/rt_p6_handshake_cost_20261018.md, Conditions). The constant is the daemon's per-handshake CPU at the 99th percentile, 2,136.1 us, the cost the handshake budget charges each admission."
+capture = "docs/benchmarks/rt_p6_mac1_stranger_20261020_captures/summary_registered.md"
+capture_rev = "5db6eeda8f"
+rev_source = "the record's results name the build: 5db6eeda8f on the floor device, checked by its hash before building, the registered cell of 2026-10-20 (docs/benchmarks/rt_p6_mac1_stranger_20261020.md, Conditions). The constant is the daemon's per-handshake CPU at the 99th percentile with mac1, 2,163.8 us, the cost the handshake budget charges each admission. It replaces RT-P6's 2,136.1 us by that record's registered rule: the p99 rose."
 path_set = "rpc-handshake"
 
 [[retired_estimate]]
