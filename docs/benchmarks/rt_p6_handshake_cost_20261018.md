@@ -319,16 +319,25 @@ conditions and the run's step log.
   - At the larger classes they are lost among other variation.
   - A rekey's HKDF does not show in these percentiles or maxima.
 
-### The derivations, applied as proposed — for the maintainer to rule
+### What the figures feed — ruled 2026-10-20
 
-- **Handshake deadline:** the 99th percentile of both sides' CPU per
-  handshake (4,298.4 µs), plus five one-way transits at
-  `ANON_ZONE_TRANSIT_ASSUMPTION_MS` (5 × 1,625 ms = 8,125 ms), is
-  8,129.3 ms. Rounded up to the next whole second: **9 s**.
-  - The compute part is 0.05 % of it. The deadline is set by the transit
-    assumption, which is *unmeasured* (BA-T9).
-- **Amplification:** the daemon's CPU for one message-1 attempt (`new` +
-  `read_message1`).
+The maintainer ruled the follow-through on 2026-10-20. The proposals
+registered above are superseded where this says so.
+
+- **Handshake deadline: not derived from this run.** The registered
+  proposal added a transit *assumption* to the compute. The ruling is to
+  derive the message-1 deadline and the whole-handshake deadline from
+  round trips **measured** on an onion RPC leg to the floor device, with a
+  clearnet figure beside it, registered and run on their own. This run
+  contributes the compute part: 4,298.4 µs for both sides at the 99th
+  percentile.
+- **Amplification: answered by mac1 and a handshake budget** (`RPC_CHANNEL.md`
+  §4.3). A message 1 carries a mac1 keyed by the daemon's bundle, checked
+  before any long-term key is used. Message-1 decapsulations are paid from
+  a token bucket sized from this run, so handshakes stay within a fixed
+  share of one core. The stranger's cost is measured again on the floor
+  device with mac1 in place. The figures this run gives for that bound:
+  the daemon's CPU for one message-1 attempt (`new` + `read_message1`):
   - Median: 640.1 µs honest, 641.1 µs tag-flipped.
   - 99th percentile: 697.1 µs honest, 818.5 µs tag-flipped. **The figure
     for a bound is 818.5 µs**, the greater of the two.
@@ -337,9 +346,9 @@ conditions and the run's step log.
     handshake, about 30 %.
   - How many attempts arrive in a deadline is a rate, which this run does
     not measure.
-- **Tunnel pool:** a handshake costs the client 2,157.3 µs of CPU at the
-  median and 2,177.2 µs at the 99th percentile, on top of two round
-  trips.
+- **Tunnel pool: an input to RT-W11.** A handshake costs the client
+  2,157.3 µs of CPU at the median and 2,177.2 µs at the 99th percentile, on
+  top of two round trips.
 - **The response classes:** sealing or opening a record costs about 6.9 ns
   per byte at the two larger classes, and 11 ns per byte at 512 bytes:
   - 512 bytes: about 5.7 µs;
