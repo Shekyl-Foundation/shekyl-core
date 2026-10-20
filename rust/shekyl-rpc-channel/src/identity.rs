@@ -17,7 +17,9 @@ use zeroize::Zeroizing;
 
 use super::HandshakeError;
 use crate::mac1::{self, MAC1_KEY_LEN};
-use crate::{static_fingerprint, StaticFingerprint, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+use crate::{
+    static_fingerprint, StaticFingerprint, BUSY_LEN, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN,
+};
 
 /// A static public bundle: an X25519 key and an ML-KEM-768 encapsulation
 /// key, the latter already checked as FIPS 203 requires.
@@ -91,6 +93,11 @@ impl StaticPublic {
     /// Whether `tag` is the mac1 of `noise_message1` under this bundle.
     pub(super) fn mac1_verifies(&self, noise_message1: &[u8], tag: &[u8]) -> bool {
         mac1::verify(&self.mac1_key, noise_message1, tag)
+    }
+
+    /// The daemon's busy reply to the message 1 whose mac1 is `mac1_tag`.
+    pub(super) fn busy_reply(&self, mac1_tag: &[u8; MAC1_LEN]) -> [u8; BUSY_LEN] {
+        mac1::busy(&self.mac1_key, mac1_tag)
     }
 }
 

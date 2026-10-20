@@ -80,7 +80,9 @@ use zeroize::Zeroizing;
 use std::time::Instant;
 
 use crate::budget::HandshakeBudget;
-use crate::{prologue, NetworkId, StaticFingerprint, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+use crate::{
+    prologue, NetworkId, StaticFingerprint, BUSY_LEN, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN,
+};
 
 #[path = "identity.rs"]
 mod identity;
@@ -128,13 +130,22 @@ pub const TRANSPORT_AD: &[u8] = b"";
 
 /// Why a handshake stopped.
 ///
-/// One variant per message, and nothing finer. Which check inside a message
-/// failed is not recorded anywhere: for message 1 that is a requirement
-/// (§4.3), and for the others a finer answer would only be a finer oracle.
+/// One variant per message, and nothing finer, with one exception: a
+/// message 1 that passed mac1 and found the budget empty is
+/// [`HandshakeError::Busy`], because its sender is answered. Which check
+/// inside a message failed is otherwise not recorded anywhere: for message 1
+/// that is a requirement (§4.3), and for the others a finer answer would only
+/// be a finer oracle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakeError {
     /// The daemon did not accept message 1. The sender gets no reply.
     Message1,
+    /// Message 1 passed mac1 and the key check, and the handshake budget had
+    /// nothing to pay for it (§4.3). The daemon sends `reply`, which
+    /// [`ClientAwaitingMessage2::is_busy`] recognises, and closes. Unlike
+    /// every other refusal of message 1 this one is answered: only a holder
+    /// of the bundle gets this far, and it is told to back off and retry.
+    Busy([u8; BUSY_LEN]),
     /// The client did not accept message 2: whoever answered is not the
     /// daemon whose key the client holds, or is on another network.
     Message2,
@@ -152,6 +163,7 @@ impl core::fmt::Display for HandshakeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::Message1 => "handshake message 1 was not accepted",
+            Self::Busy(_) => "the node is busy: its handshake budget is spent",
             Self::Message2 => "handshake message 2 was not accepted",
             Self::Message3 => "handshake message 3 was not accepted",
             Self::Message4 => "handshake message 4 was not accepted",
@@ -198,6 +210,8 @@ pub struct ClientAwaitingMessage2<'a> {
     sym: SymmetricState,
     own: &'a StaticKeypair,
     ephemeral: Ephemeral,
+    /// The busy reply the daemon would send to this message 1.
+    busy: [u8; BUSY_LEN],
 }
 
 /// The client after message 2: the daemon is authenticated. The next call
@@ -277,11 +291,13 @@ impl Client {
         // sender holds its bundle, checked before any long-term key is used.
         let tag = daemon.mac1(&message);
         message.extend_from_slice(&tag);
+        let busy = daemon.busy_reply(&tag);
         Ok((
             ClientAwaitingMessage2 {
                 sym,
                 own,
                 ephemeral,
+                busy,
             },
             message,
         ))
@@ -289,6 +305,17 @@ impl Client {
 }
 
 impl<'a> ClientAwaitingMessage2<'a> {
+    /// Whether `reply`, what the daemon sent in place of message 2 before it
+    /// closed, is its busy reply to this message 1: authenticated under the
+    /// mac1 key, so only the daemon, or another holder of its bundle, can
+    /// send it, and bound to this message 1's mac1, so an earlier attempt's
+    /// reply is not this one's. Anything else is not "busy" and is treated
+    /// as a connection closed without an answer.
+    #[must_use]
+    pub fn is_busy(&self, reply: &[u8]) -> bool {
+        crate::mac1::busy_matches(&self.busy, reply)
+    }
+
     /// Read message 2. Success means the daemon holds the static keys the
     /// client was given.
     ///
@@ -525,9 +552,11 @@ impl<'a> Daemon<'a> {
             ml_kem_768::EncapsKey::try_from_bytes(client_ephemeral_ek).map_err(|_| fail)?;
 
         // The budget pays for the long-term work that follows. A message that
-        // gets here and finds it empty is dropped like a bad mac1.
+        // gets here and finds it empty passed mac1, so its sender holds the
+        // bundle: it is answered "busy", not dropped (ruled 2026-10-20).
         if !budget.admit(now) {
-            return Err(fail);
+            let mac1: [u8; MAC1_LEN] = array(mac1).ok_or(fail)?;
+            return Err(HandshakeError::Busy(self.own.public().busy_reply(&mac1)));
         }
 
         // skem: decapsulate with the long-term key. This cannot tell a
@@ -1105,22 +1134,80 @@ mod tests {
         assert_eq!(uses(), before + 2);
     }
 
-    /// §4.3, the budget: a message 1 with a valid mac1 that finds the budget
-    /// empty is refused as message 1, before either long-term key is used.
+    /// §4.3, ruled 2026-10-20: a message 1 that passed mac1 and finds the
+    /// budget empty is answered "busy", before any long-term key is used,
+    /// and the client that sent it recognises the answer. A stranger's
+    /// message 1 is still dropped silently, budget or no budget.
     #[test]
-    fn an_exhausted_budget_refuses_before_any_long_term_key_is_used() {
-        let (daemon, good) = accepted_message1();
+    fn an_exhausted_budget_answers_busy_before_any_long_term_key_is_used() {
+        let daemon = StaticKeypair::generate().unwrap();
+        let client = StaticKeypair::generate().unwrap();
+        let (waiting, good) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
         let now = Instant::now();
         let none = HandshakeBudget::with_share(1_000, std::time::Duration::ZERO, now);
         assert_eq!(none.burst_admissions(), 0);
         let before = uses();
+        let Some(HandshakeError::Busy(reply)) = Daemon::new(&NETWORK, &daemon)
+            .read_message1(&good, &none, now)
+            .err()
+        else {
+            panic!("a bundle holder's message 1 on an empty budget is answered busy");
+        };
+        assert_eq!(uses(), before);
+        assert!(
+            waiting.is_busy(&reply),
+            "the client recognises its own busy reply"
+        );
+
+        let mut stranger = good.clone();
+        stranger[MESSAGE1_WIRE_LEN - 1] ^= 1;
         assert_eq!(
             Daemon::new(&NETWORK, &daemon)
-                .read_message1(&good, &none, now)
+                .read_message1(&stranger, &none, now)
                 .err(),
-            Some(HandshakeError::Message1)
+            Some(HandshakeError::Message1),
+            "a mac1 failure stays silent, even on an empty budget"
         );
         assert_eq!(uses(), before);
+    }
+
+    /// Only the daemon's busy reply to this very message 1 counts as busy:
+    /// not random bytes, not a reply authenticated under another bundle,
+    /// not the reply to an earlier attempt, not a reply of the wrong length.
+    /// A forged "busy" is a connection closed without an answer.
+    #[test]
+    fn a_forged_busy_reply_is_not_busy() {
+        let daemon = StaticKeypair::generate().unwrap();
+        let other = StaticKeypair::generate().unwrap();
+        let client = StaticKeypair::generate().unwrap();
+        let busy_for = |wire: &[u8], who: &StaticKeypair| {
+            let mac1: [u8; MAC1_LEN] = array(&wire[MESSAGE1_LEN..]).unwrap();
+            who.public().busy_reply(&mac1)
+        };
+        let (earlier, earlier_wire) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
+        let (waiting, wire) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
+        let genuine = busy_for(&wire, &daemon);
+        assert!(waiting.is_busy(&genuine));
+        assert!(earlier.is_busy(&busy_for(&earlier_wire, &daemon)));
+
+        assert!(!waiting.is_busy(&[0u8; BUSY_LEN]), "zeros");
+        assert!(!waiting.is_busy(&[0xa5; BUSY_LEN]), "other bytes");
+        assert!(
+            !waiting.is_busy(&busy_for(&wire, &other)),
+            "authenticated under a bundle other than the daemon's"
+        );
+        assert!(
+            !waiting.is_busy(&busy_for(&earlier_wire, &daemon)),
+            "the reply to an earlier message 1"
+        );
+        let mut flipped = genuine;
+        flipped[BUSY_LEN - 1] ^= 1;
+        assert!(!waiting.is_busy(&flipped), "one bit changed");
+        assert!(!waiting.is_busy(&genuine[..BUSY_LEN - 1]), "short");
+        let mut long = genuine.to_vec();
+        long.push(0);
+        assert!(!waiting.is_busy(&long), "long");
+        assert!(!waiting.is_busy(&[]), "nothing");
     }
 
     /// §4.3, the budget under a flood. A session is established first. Then
@@ -1175,8 +1262,17 @@ mod tests {
             let now = t0 + window * u32::try_from(i).unwrap() / 40;
             let used = uses();
             let result = Daemon::new(&NETWORK, &daemon).read_message1(m, &budget, now);
-            assert!(result.is_err(), "a broken tag never authenticates");
-            admitted += u64::from(uses() > used);
+            let was_admitted = uses() > used;
+            match result.err() {
+                Some(HandshakeError::Message1) => {
+                    assert!(was_admitted, "admitted, then the tag failed")
+                }
+                Some(HandshakeError::Busy(_)) => {
+                    assert!(!was_admitted, "refused, and answered busy")
+                }
+                other => panic!("a broken tag never authenticates: {other:?}"),
+            }
+            admitted += u64::from(was_admitted);
         }
         assert_eq!(
             uses() - before,
