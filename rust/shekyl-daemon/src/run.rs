@@ -35,7 +35,7 @@ use shekyl_daemon_config::exit::refuse;
 use shekyl_daemon_config::{load, Loaded};
 use shekyl_ffi::daemon_snapshot_ffi::SnapshotData;
 
-use crate::entry::{RunFn, ShekylDaemonEntry};
+use crate::entry::ShekylDaemonEntry;
 use crate::options::DaemonOptions;
 use crate::{help, network, signals, tor};
 use shekyl_daemon_rpc::options::OptionsHandle;
@@ -268,7 +268,7 @@ fn supervise(
     let thread = std::thread::Builder::new()
         .name("shekyld-run".to_owned())
         .spawn(move || {
-            let status = call_with(&data, run);
+            let status = data.call(run);
             // The receiver is gone only if the entry already gave up.
             let _sent = done_tx.send(status);
         });
@@ -532,28 +532,18 @@ fn announce_all(log_file: &Path, lines: &[String]) {
     }
 }
 
-/// Calls `run` with a snapshot over `data`, which outlives the call. The
-/// mining header is a local: its pointers address `data`'s allocations, and
-/// it lives until `run` returns.
-fn call_with(data: &SnapshotData, run: RunFn) -> i32 {
-    let command = data.command_ptrs();
-    let header = data.mine_header();
-    let snapshot = data.snapshot(&command, header.as_ref());
-    run(&raw const snapshot)
-}
-
 fn call_run(entry: &ShekylDaemonEntry, config: &DaemonConfig) -> i32 {
     let Some(run) = entry.run else {
         tell(&mut std::io::stderr(), "shekyld: the entry has no run");
         return EXIT_FAILED;
     };
-    call_with(&SnapshotData::new(config), run)
+    SnapshotData::new(config).call(run)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ShekylDaemonSnapshot;
+    use shekyl_ffi::daemon_snapshot_ffi::ShekylDaemonSnapshot;
     use std::ffi::c_int;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;

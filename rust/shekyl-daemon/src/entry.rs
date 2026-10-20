@@ -28,7 +28,7 @@
 
 use std::ffi::{c_char, c_int};
 
-pub use shekyl_ffi::daemon_snapshot_ffi::ShekylDaemonSnapshot;
+use shekyl_ffi::daemon_snapshot_ffi::ShekylDaemonSnapshot;
 
 /// The remnant's `run`: constructs core, the protocol handler, the node
 /// server and the RPC from the snapshot, runs until stopped, and returns

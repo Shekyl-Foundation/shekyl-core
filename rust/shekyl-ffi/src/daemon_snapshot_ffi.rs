@@ -22,8 +22,8 @@
 //! the export in the daemon image, those binaries linked on Linux and macOS
 //! only because `--gc-sections` / `-dead_strip` dropped the unreferenced RPC
 //! code; MinGW keeps it and failed the link (Rick, 2026-10-19). The daemon
-//! image carries this module too: `shekyl-daemon` builds the start's
-//! snapshot from [`SnapshotData`].
+//! image carries this module too: `shekyl-daemon` starts the remnant with
+//! [`SnapshotData::call`].
 //!
 //! **A test's snapshot.** [`shekyl_daemon_snapshot_parse`] builds a snapshot
 //! from an argument list through the one real parse
@@ -206,9 +206,20 @@ impl SnapshotData {
         }
     }
 
-    /// The console's command words, as text.
+    /// Calls `run` with a snapshot over this data, which outlives the call.
+    /// The mining header is a local: its pointers address this data's
+    /// allocations, and it lives until `run` returns.
     #[must_use]
-    pub fn command_words(&self) -> Vec<String> {
+    pub fn call(&self, run: extern "C" fn(*const ShekylDaemonSnapshot) -> c_int) -> c_int {
+        let command = self.command_ptrs();
+        let header = self.mine_header();
+        let snapshot = self.snapshot(&command, header.as_ref());
+        run(&raw const snapshot)
+    }
+
+    /// The console's command words, as text.
+    #[cfg(test)]
+    fn command_words(&self) -> Vec<String> {
         self.command
             .iter()
             .map(|w| w.to_string_lossy().into_owned())
@@ -216,21 +227,21 @@ impl SnapshotData {
     }
 
     /// The resolved data directory, as text.
-    #[must_use]
-    pub fn data_dir(&self) -> String {
+    #[cfg(test)]
+    fn data_dir(&self) -> String {
         self.data_dir.to_string_lossy().into_owned()
     }
 
-    /// Pointers to the command words. Valid while `self` is borrowed.
-    #[must_use]
-    pub fn command_ptrs(&self) -> Vec<*const c_char> {
+    /// Pointers to the command words. Valid while `self` is borrowed, and
+    /// while the returned vector is: the snapshot's `command.items` addresses
+    /// this vector's buffer, not `self`.
+    fn command_ptrs(&self) -> Vec<*const c_char> {
         self.command.iter().map(|w| w.as_ptr()).collect()
     }
 
     /// A view of the mining address. The pointers address `self` and are
     /// valid while `self` is borrowed and the header this returns is alive.
-    #[must_use]
-    pub fn mine_header(&self) -> Option<ShekylMineAddress> {
+    fn mine_header(&self) -> Option<ShekylMineAddress> {
         self.mine.as_ref().map(|mine| ShekylMineAddress {
             text: mine.text.as_ptr(),
             spend: mine.spend,
@@ -246,9 +257,8 @@ impl SnapshotData {
 
     /// The snapshot over this data, `command` and `mine`. All three must
     /// outlive every read of the result. `mine` is null when there is no
-    /// address.
-    #[must_use]
-    pub fn snapshot(
+    /// address. `command.items` addresses `command`'s buffer.
+    fn snapshot(
         &self,
         command: &[*const c_char],
         mine: Option<&ShekylMineAddress>,
@@ -275,23 +285,22 @@ impl SnapshotData {
     }
 }
 
-/// A snapshot leased to a C++ test binary: the structure first, so its
-/// address is the lease's, then what it points at.
+/// A snapshot leased to a C++ caller: the structure first, so its address
+/// is the lease's, then what it points at.
+///
+/// The command pointers address `_command`'s buffer. The mining header is
+/// boxed so the snapshot's pointer stays valid when the lease is moved into
+/// the box `shekyl_daemon_snapshot_parse` hands to C++; the header's own
+/// pointers address `_data`'s allocations, which that move does not relocate.
+/// C++ frees the lease on the same thread or any other; the value is not
+/// sent between Rust threads.
 #[repr(C)]
-pub struct Leased {
+struct Leased {
     snapshot: ShekylDaemonSnapshot,
     _command: Vec<*const c_char>,
-    /// The mining header the snapshot points at. Boxed so moving the lease
-    /// does not move the header; its own pointers address `_data`'s
-    /// allocations, which a move does not relocate either.
     _header: Option<Box<ShekylMineAddress>>,
     _data: Box<SnapshotData>,
 }
-
-// SAFETY: the pointers are into `_data`, which the lease owns and never
-// mutates; the C++ reads them from any thread it likes.
-#[allow(unsafe_code)]
-unsafe impl Send for Leased {}
 
 /// A snapshot leased to a C++ caller, from `args` (the program first)
 /// through the one real parse.
@@ -299,7 +308,7 @@ unsafe impl Send for Leased {}
 /// # Errors
 ///
 /// The refusal's exit status, once its diagnostics are printed.
-pub fn snapshot_for(args: &[OsString], platform: &Platform) -> Result<Box<Leased>, i32> {
+fn snapshot_for(args: &[OsString], platform: &Platform) -> Result<Box<Leased>, i32> {
     let rest = args.get(1..).unwrap_or(&[]);
     let cli = shekyl_options::read_cli(&TABLE, rest.iter().cloned()).map_err(|ds| refuse(&ds))?;
     let config = load(cli, platform).map_err(|ds| refuse(&ds))?.config;

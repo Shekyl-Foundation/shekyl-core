@@ -24,10 +24,6 @@ pub mod tor;
 
 pub use entry::{RunFn, ShekylDaemonEntry, StopFn};
 pub use run::{Host, EXIT_FAILED, EXIT_REFUSED};
-pub use shekyl_ffi::daemon_snapshot_ffi::{
-    ShekylClientEndpoint, ShekylDaemonSnapshot, ShekylMineAddress, ShekylStringList,
-    SNAPSHOT_FIELDS,
-};
 
 /// The entry with the real platform: the account's roots from the
 /// operating system, the network id's one derivation, and the arguments
