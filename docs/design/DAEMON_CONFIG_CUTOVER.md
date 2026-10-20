@@ -245,7 +245,12 @@ read:
    anyone outside the permitted principals.
 5. Apply.
 
-The permitted principals are root and the daemon's account on Unix. On
+The permitted principals are root and the daemon's account on Unix, and for
+reading a file that holds a secret also the daemon's group (Rick,
+2026-10-19). A service install keeps one file, `root:<daemon group>` `0640`
+under `/etc/shekyl` `root:root` `0755`: written by root only, read by root,
+the daemon's account and its group. A per-account install keeps it
+owner-only `0600`. There is no separate secrets file. On
 Windows the check is an **allowlist**: write is permitted only to SYSTEM,
 Administrators, TrustedInstaller and the daemon's own account, and any other access-control
 entry that grants write refuses, whatever it names (Authenticated Users,

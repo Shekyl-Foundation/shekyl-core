@@ -16,8 +16,12 @@
 //!    [`ConfigFile::secret_readable_only_by_permitted`]);
 //! 5. apply.
 //!
-//! The permitted principals are root and the daemon's account on Unix. On
-//! Windows the check is an allowlist: SYSTEM, Administrators,
+//! The permitted principals are root and the daemon's account on Unix, and
+//! for reading a file that holds a secret also the daemon's group (Rick,
+//! 2026-10-19): a service install keeps the file root:<daemon group> 0640
+//! under `/etc/shekyl` root:root 0755, written by root only and read by root,
+//! the daemon and its group; a per-account install keeps it owner-only 0600.
+//! One file, no separate secrets file. On Windows the check is an allowlist: SYSTEM, Administrators,
 //! TrustedInstaller (the servicing account a default `C:\` grants full
 //! control to) and the daemon's own account, and any other access-control
 //! entry that grants the right refuses, whatever it names.
@@ -55,7 +59,7 @@ impl ConfigFile {
                 .option(secret)
                 .param("path", self.path.display().to_string())
                 .param("principal", principal)
-                .param("permitted", PERMITTED));
+                .param("permitted", READ_PERMITTED));
         }
         Ok(())
     }
@@ -66,6 +70,13 @@ impl ConfigFile {
 const PERMITTED: &str = "root and the daemon's account, with no group or other write bit";
 #[cfg(windows)]
 const PERMITTED: &str = "SYSTEM, Administrators, TrustedInstaller and the daemon's account";
+
+/// Who may read a file that holds a secret, as a refusal names them.
+#[cfg(unix)]
+const READ_PERMITTED: &str = "root, the daemon's account and the daemon's group \
+    (root:<daemon group> 0640 for a service, or 0600 owned by the daemon's account)";
+#[cfg(windows)]
+const READ_PERMITTED: &str = PERMITTED;
 
 /// Opens and checks the file at `path`.
 ///
@@ -164,12 +175,15 @@ pub(crate) mod unix {
             None
         }
 
-        /// A principal outside the permitted set who can read.
-        pub fn reader(self) -> Option<String> {
+        /// A principal outside the permitted set who can read: every
+        /// account, or a group other than the daemon's own (`my_group`, the
+        /// daemon's effective group). The owner is root or the daemon's
+        /// account, which the write check has already required.
+        pub fn reader(self, my_group: u32) -> Option<String> {
             if self.mode & 0o004 != 0 {
                 return Some("every account (world-readable)".to_owned());
             }
-            if self.mode & 0o040 != 0 {
+            if self.mode & 0o040 != 0 && self.gid != my_group {
                 return Some(format!("its group, gid {}", self.gid));
             }
             None
@@ -223,7 +237,10 @@ fn writer_outside_permitted(file: &File, path: &Path) -> Option<(String, String)
 
 #[cfg(unix)]
 fn reader_outside_permitted(file: &File, _path: &Path) -> Option<String> {
-    file.metadata().ok().map(|m| unix::entry_of(&m).reader())?
+    let my_group = rustix::process::getegid().as_raw();
+    file.metadata()
+        .ok()
+        .map(|m| unix::entry_of(&m).reader(my_group))?
 }
 
 #[cfg(windows)]
@@ -359,16 +376,38 @@ mod tests {
     }
 
     #[test]
-    fn a_secret_is_readable_only_by_owner_and_root() {
-        assert_eq!(entry(ME, ME, 0o100600).reader(), None);
+    fn a_secret_is_readable_by_root_the_daemon_and_its_group_only() {
+        // The daemon's group in these cases.
+        const MINE: u32 = 50;
+        // Per-account: owner-only.
+        assert_eq!(entry(ME, ME, 0o100600).reader(MINE), None);
+        // Service: root:<daemon group> 0640.
+        assert_eq!(entry(0, MINE, 0o100640).reader(MINE), None);
+        // Another group can read: refused.
         assert_eq!(
-            entry(ME, 9, 0o100640).reader().as_deref(),
+            entry(0, 9, 0o100640).reader(MINE).as_deref(),
             Some("its group, gid 9")
         );
+        // Every account can read: refused, whatever the group.
         assert_eq!(
-            entry(ME, ME, 0o100644).reader().as_deref(),
+            entry(0, MINE, 0o100644).reader(MINE).as_deref(),
             Some("every account (world-readable)")
         );
+    }
+
+    /// The service shape writes as root only: root:<daemon group> 0640 under
+    /// a root:root 0755 directory passes the write check, and the same file
+    /// group-writable does not.
+    #[test]
+    fn the_service_shape_is_written_by_root_only() {
+        let dirs = &[
+            ("/", entry(0, 0, 0o40755)),
+            ("/etc", entry(0, 0, 0o40755)),
+            ("/etc/shekyl", entry(0, 0, 0o40755)),
+        ];
+        assert_eq!(judge(entry(0, 50, 0o100640), dirs), None);
+        let found = judge(entry(0, 50, 0o100660), dirs).unwrap();
+        assert_eq!(found.1, "its group, gid 50");
     }
 
     /// Real files: `open` judges the handle, and the file's own mode is
