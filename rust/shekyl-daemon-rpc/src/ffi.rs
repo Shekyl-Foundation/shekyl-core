@@ -600,7 +600,6 @@ pub struct ConnectionFactsFfi {
     /// 1 when `height` and `state` were read. 0 means those two are
     /// unknown.
     pub claims_known: u8,
-    pub reserved: [u8; 8],
 }
 
 /// Twin of `shekyl_rpc_sync_span_facts` (RK-5a). Pinned by layout.
@@ -723,7 +722,13 @@ const _: () = assert!(std::mem::size_of::<InfoPeersFactsFfi>() == 32);
 // `tests/unit_tests/rpc_facts_ffi_roundtrip.cpp` are the whole pin.
 const _: () = assert!(std::mem::size_of::<NetStatsFactsFfi>() == 40);
 
-const _: () = assert!(std::mem::size_of::<ConnectionFactsFfi>() == 128);
+// `port` (u16) and the six trailing `u8`s fill the slot after `height`,
+// so the POD ends on `claims_known`. A tail pad would be a field it does
+// not have.
+const _: () = assert!(std::mem::size_of::<ConnectionFactsFfi>() == 120);
+const _: () = assert!(
+    std::mem::offset_of!(ConnectionFactsFfi, claims_known) + std::mem::size_of::<u8>() == 120
+);
 const _: () = assert!(std::mem::align_of::<ConnectionFactsFfi>() == 8);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address) == 0);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, address_len) == 8);
@@ -745,7 +750,6 @@ const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, incoming) == 116)
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, localhost) == 117);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, local_ip) == 118);
 const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, claims_known) == 119);
-const _: () = assert!(std::mem::offset_of!(ConnectionFactsFfi, reserved) == 120);
 
 const _: () = assert!(std::mem::size_of::<SyncSpanFactsFfi>() == 72);
 const _: () = assert!(std::mem::align_of::<SyncSpanFactsFfi>() == 8);

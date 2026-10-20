@@ -367,9 +367,9 @@ typedef struct shekyl_rpc_connection_facts {
     uint8_t      local_ip;
     /// 1 when height and state were read on the strand. 0 means those two
     /// are unknown: state 0 would otherwise read as "before handshake".
-    /// `height` is then JSON null.
+    /// `height` is then JSON null. Last field: `port` and these six bytes
+    /// fill the slot after `height`, so the struct ends here.
     uint8_t      claims_known;
-    uint8_t      reserved[8];
 } shekyl_rpc_connection_facts;
 
 // Fills a C++-owned view of the live connections and the instant they were
