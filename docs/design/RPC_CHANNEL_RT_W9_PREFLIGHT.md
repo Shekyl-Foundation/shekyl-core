@@ -326,7 +326,7 @@ names (F-20), is accepted. The §13 row says so.
 
 ---
 
-## 4a. Step 5's two questions — POSED 2026-10-20
+## 4a. Step 5's two questions — RULED 2026-10-20 (Rick)
 
 Step 5 split in two when it was built (the plan below). `ClassedRecord`
 is specified to the byte in the parent's §4.4 and is built in step 5a.
@@ -365,6 +365,10 @@ from any other request, and hyper writes the message and flushes once
 **Recommended: (a).** It is one rule in the one adapter, enforced by
 record count, and it survives the move to a binary body unchanged.
 
+**RULED: (a), as recommended,** with a test that every
+`submit_transaction` upload is exactly the fixed record count, whatever
+the transaction's size.
+
 ### RT-O29 — Which class table does the request direction use?
 
 §4.4 rules the response classes and the submission's fixed size, and
@@ -380,6 +384,9 @@ it is one 512-byte record. Under RT-O28 (a), a submission is whole
 `ClassTable` constant, and a request learns nothing from its direction's
 table.
 
+**RULED: one table in both directions.** The class table stays 512,
+16,384 and 65,535, as RT-O6 ruled.
+
 ## 5. Plan
 
 One pull request per step, each a draft off `dev`, each reviewable alone.
@@ -392,7 +399,7 @@ This document is step 0 and is the only content of the first.
 | 2 | The handshake, red first | RT-O18, RT-O19 | The comparison is an in-crate test, written and observed failing before the implementation. Production construction takes no generator. One generator source, compiled into that test and into the cross-check crate. Then one test per requirement of §4.3. Built in PR #1039 (`rust/shekyl-rpc-channel/src/pinned_handshake.rs`) |
 | 3 | RT-P5 sizes | step 2; RT-O21 | HTTP message sizes per method, on the generated wallet and the generated chain. No adapter. The method, the flush policy and the host claim are registered before it runs. The classes are derived from this trace |
 | 4 | RT-P6: handshake cost on the floor device | step 2; step 3's candidate classes | Registered before it runs; quiet claim |
-| 5 | `ClassedRecord` and `shekyl-rpc-stream` | RT-O20; steps 3 and 4 | The wire format is §4.4 of the parent, already specified. The adapter is written once, against `ClassedRecord`, and observed failing with splitting removed. Record boundaries are observed here, under step 3's flush policy. The header-label registry row lands with the constant. `FixedWindow` is not built. The interim framer is not copied into `shekyl-noise`. **Split 2026-10-20:** **5a** is `ClassedRecord` in `shekyl-noise`, with the registry row, a known answer and a test for each check, seen failing without it. **5b** is `shekyl-rpc-stream`, the submission's fixed size, and the record boundaries. 5b waits on RT-O28 and RT-O29 (§4a) |
+| 5 | `ClassedRecord` and `shekyl-rpc-stream` | RT-O20; steps 3 and 4 | The wire format is §4.4 of the parent, already specified. The adapter is written once, against `ClassedRecord`, and observed failing with splitting removed. Record boundaries are observed here, under step 3's flush policy. The header-label registry row lands with the constant. `FixedWindow` is not built. The interim framer is not copied into `shekyl-noise`. **Split 2026-10-20:** **5a** is `ClassedRecord` in `shekyl-noise`, with the registry row, a known answer and a test for each check, seen failing without it. **5b** is `shekyl-rpc-stream`, the submission's fixed size, and the record boundaries, built to RT-O28 and RT-O29 as ruled 2026-10-20 (§4a) |
 | 6 | Two registry exclusion rows; the standing-check gate | RT-O22 | One row for each protocol-name literal, one reason, excluded-count pin 8 → 10. Each gate is shown failing under a named edit |
 
 **Named edits, fixed now so they are not improvised later.**
