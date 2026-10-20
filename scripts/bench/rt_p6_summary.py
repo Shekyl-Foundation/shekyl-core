@@ -41,9 +41,10 @@ HANDSHAKE_STEPS = (
 
 MESSAGE1_KINDS = ("honest", "tag_flipped")
 # With mac1 on message 1 (RPC_CHANNEL.md section 4.3, 2026-10-20) the harness
-# adds a third kind, a sender without the daemon's bundle. A capture is read
-# with the kinds its registration names: `--mac1` for that one.
+# adds a third kind, a sender without the daemon's bundle. A capture carries
+# one of these two sets, and the set it carries is the shape it is read as.
 MESSAGE1_KINDS_MAC1 = ("honest", "tag_flipped", "no_bundle")
+REGISTERED_MESSAGE1_KINDS = (MESSAGE1_KINDS, MESSAGE1_KINDS_MAC1)
 # What read_message1 must report. honest completed; tag_flipped failed the
 # tag; no_bundle failed mac1.
 MESSAGE1_ACCEPTED = {"honest": True, "tag_flipped": False, "no_bundle": False}
@@ -190,6 +191,25 @@ def parse_accepted(text):
     refuse(f"{MESSAGE1_FILE} accepted is {text!r}")
 
 
+def message1_kinds(rows):
+    """The registered set this capture carries, in that set's order.
+
+    The kind column is the shape. A flag beside it can only agree with the
+    file or make this refuse a capture the file already names.
+    """
+    present = []
+    seen = set()
+    for row in rows:
+        kind = field(row, "kind", MESSAGE1_FILE)
+        if kind not in seen:
+            seen.add(kind)
+            present.append(kind)
+    for kinds in REGISTERED_MESSAGE1_KINDS:
+        if set(kinds) == set(present):
+            return kinds
+    refuse(f"{MESSAGE1_FILE} kinds {present} are not a registered set")
+
+
 def load_message1(rows, kinds):
     by_kind = {kind: {} for kind in kinds}
     for row in rows:
@@ -235,10 +255,11 @@ def load_records(rows):
     return by_cell
 
 
-def load(run_dir, kinds=MESSAGE1_KINDS):
+def load(run_dir):
+    message1_rows = read_rows(run_dir, MESSAGE1_FILE)
     return Run(
         steps=load_steps(read_rows(run_dir, STEPS_FILE)),
-        message1=load_message1(read_rows(run_dir, MESSAGE1_FILE), kinds),
+        message1=load_message1(message1_rows, message1_kinds(message1_rows)),
         records=load_records(read_rows(run_dir, RECORDS_FILE)),
     )
 
@@ -329,20 +350,16 @@ def render(run):
     return "\n".join(lines) + "\n"
 
 
-def summarise(run_dir, kinds=MESSAGE1_KINDS):
-    return render(load(run_dir, kinds))
+def summarise(run_dir):
+    return render(load(run_dir))
 
 
 def main(argv):
     args = argv[1:]
-    kinds = MESSAGE1_KINDS
-    if args[:1] == ["--mac1"]:
-        kinds = MESSAGE1_KINDS_MAC1
-        args = args[1:]
     if len(args) != 1:
-        print("usage: rt_p6_summary.py [--mac1] RUN_DIR", file=sys.stderr)
+        print("usage: rt_p6_summary.py RUN_DIR", file=sys.stderr)
         return 2
-    print(summarise(args[0], kinds), end="")
+    print(summarise(args[0]), end="")
     return 0
 
 
