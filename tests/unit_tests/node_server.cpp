@@ -561,24 +561,24 @@ namespace
     }
 
     virtual size_t post_each(
-      std::function<void(cryptonote::cryptonote_connection_context&, uint32_t)> note,
+      std::function<void(cryptonote::cryptonote_connection_context&)> note,
       std::function<void()> then) override
     {
       for (auto &c : conns)
-        note(c, 0);
+        note(c);
       if (then)
         then();
       return conns.size();
     }
     virtual bool for_connection(const boost::uuids::uuid &id,
-      std::function<void(cryptonote::cryptonote_connection_context&, uint32_t)> f) override
+      std::function<void(cryptonote::cryptonote_connection_context&)> f) override
     {
       // Production returns false only when the id is absent. The callback
       // runs on the connection strand and does not report the lookup.
       for (auto &c : conns)
         if (c.m_connection_id == id)
         {
-          f(c, 0);
+          f(c);
           return true;
         }
       return false;

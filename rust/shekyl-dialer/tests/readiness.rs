@@ -25,7 +25,6 @@ use shekyl_dialer::{
     DialAim, Dialer, NotReady, SnapshotSource, WAKE_BASE_NANOS, WAKE_JITTER_NANOS,
 };
 use shekyl_draw_rng::SplitMix64;
-use shekyl_levin::SupportFlags;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_peerlist::{ConnectorId, ListName, NetworkAddress, RefusedSet, Tick};
 use shekyl_seam::{DownCause, Hub, Route, RoutePublish, SyncPayload};
@@ -62,12 +61,7 @@ fn dialer(clock: &ManualClock, snapshot: SnapshotSource) -> Arc<Dialer> {
         Arc::new(|_post| {}),
         Arc::new(clock.clone()),
     );
-    let dialer = Arc::new(Dialer::new(
-        hub,
-        RefusedSet::NON_GLOBAL,
-        SupportFlags::ADVERTISED.bits(),
-        snapshot,
-    ));
+    let dialer = Arc::new(Dialer::new(hub, RefusedSet::NON_GLOBAL, snapshot));
     let mut rng = SplitMix64::new(1);
     for n in 1..=4 {
         dialer

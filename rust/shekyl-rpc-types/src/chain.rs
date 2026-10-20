@@ -194,7 +194,12 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// mining's options and runtime arguments); `/mining_status` loses
 /// `is_background_mining_enabled` and the four `bg_*` members with the
 /// miner's background half.
-pub const CORE_RPC_VERSION_MINOR: u32 = 58;
+/// 3.59: `get_connections` and `sync_info` rows lose `support_flags` with
+/// the P2P support-flags word (`SHEKYL_P2P_PROTOCOL.md` PWD-T7): it had no
+/// other source. A row from a 3.58 daemon carries the key, which this
+/// version's `ConnectionInfo` refuses, so the identity check reports the
+/// contract before a reply is decoded.
+pub const CORE_RPC_VERSION_MINOR: u32 = 59;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -612,11 +617,12 @@ mod tests {
         // 3.58 adds `option_set` / `option_show` and the error object's
         // `data`, and retires the four runtime endpoints
         // (DAEMON_CONFIG_CUTOVER §2.7). Both branches had written 57, so the
-        // later merge took the next minor, as 3.44 did.
-        assert_eq!(CORE_RPC_VERSION, 196_666);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 58);
+        // later merge took the next minor, as 3.44 did. 3.59 drops
+        // `support_flags` from the connection rows (PWD-T7).
+        assert_eq!(CORE_RPC_VERSION, 196_667);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 59);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 58);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 59);
     }
 
     #[test]

@@ -39,7 +39,6 @@
 #include <memory>
 
 #include "levin_base.h"
-#include "levin_compression.h"
 #include "buffer.h"
 #include "misc_language.h"
 #include "syncobj.h"
@@ -167,8 +166,9 @@ class async_protocol_handler
   }
 
   //! PWD-B4: admit this header's `(command, flags)` or close the connection.
-  //! Caches the cap on `m_admitted_cap` so decompress uses the same bound
-  //! without a second FFI round-trip. Fatal even for a zero-length payload.
+  //! Caches the cap on `m_admitted_cap` so the reassembled-fragment check
+  //! uses the same bound without a second FFI round-trip. Fatal even for a
+  //! zero-length payload.
   bool admit_current_head()
   {
     int32_t rc = 0;
@@ -565,23 +565,6 @@ public:
               return false;
             }
             buff_to_invoke = {reinterpret_cast<const uint8_t*>(temp.data()) + sizeof(bucket_head2), temp.size() - sizeof(bucket_head2)};
-          }
-
-          std::string decompressed_buf;
-          if (m_current_head.m_flags & LEVIN_PACKET_COMPRESSED)
-          {
-            // Bound the inflated size by the same limit the bucket header was
-            // checked against, so a compressed payload cannot expand past the
-            // packet-size / per-command caps in force.
-            const uint64_t max_decompressed = std::min<uint64_t>(
-                max_packet_size, m_admitted_cap);
-            if (!levin::decompress_payload(buff_to_invoke, decompressed_buf, max_decompressed))
-            {
-              MERROR(m_connection_context << "Failed to decompress Levin payload, cmd=" << m_current_head.m_command);
-              return false;
-            }
-            buff_to_invoke = {reinterpret_cast<const uint8_t*>(decompressed_buf.data()), decompressed_buf.size()};
-            m_current_head.m_flags &= ~LEVIN_PACKET_COMPRESSED;
           }
 
           bool is_response = (m_oponent_protocol_ver == LEVIN_PROTOCOL_VER_1 && m_current_head.m_flags&LEVIN_PACKET_RESPONSE);

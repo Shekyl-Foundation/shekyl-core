@@ -44,8 +44,6 @@ pub enum Post {
         id: SocketId,
         /// The connector this id was established on, as on `Deliver`.
         connector: ConnectorId,
-        /// The peer's support flags, zero included.
-        support_flags: u32,
         /// The peer's sync payload.
         sync: SyncPayload,
     },

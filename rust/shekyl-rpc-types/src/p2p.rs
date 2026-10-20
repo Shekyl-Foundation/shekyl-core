@@ -226,8 +226,6 @@ pub struct ConnectionInfo {
     pub current_download: u64,
     pub avg_upload: u64,
     pub current_upload: u64,
-    /// JSON null when the strand has not reported the claim.
-    pub support_flags: Option<u32>,
     /// The connection uuid as 32 lowercase hex characters.
     pub connection_id: String,
     /// The peer's claimed blockchain height. JSON null when the strand

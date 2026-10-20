@@ -103,15 +103,12 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::init_config()
   {
     TRY_ENTRY();
-    network_zone& public_zone = m_network_zones[epee::net_utils::connector_id::clearnet];
-    public_zone.m_config.m_support_flags = P2P_SUPPORT_FLAGS;
-
     CATCH_ENTRY_L0("node_server::init_config", false);
     return true;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  size_t node_server<t_payload_net_handler>::post_each(std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> note, std::function<void()> then)
+  size_t node_server<t_payload_net_handler>::post_each(std::function<void(typename t_payload_net_handler::connection_context&)> note, std::function<void()> then)
   {
     // The count is stored before any post runs. The last strand calls
     // `then`. No connections calls it here. `n == 0` does not post.
@@ -123,7 +120,7 @@ namespace nodetool
     {
       zone.second.m_net_server.get_config_object().collect_context_posts(
         [note, left, ran, finish](p2p_connection_context& cntx){
-          note(cntx, cntx.support_flags);
+          note(cntx);
           if (left->fetch_sub(1, std::memory_order_acq_rel) == 1
               && !ran->exchange(true, std::memory_order_acq_rel)
               && *finish)
@@ -139,14 +136,14 @@ namespace nodetool
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::for_connection(const boost::uuids::uuid &connection_id, std::function<void(typename t_payload_net_handler::connection_context&, uint32_t)> f)
+  bool node_server<t_payload_net_handler>::for_connection(const boost::uuids::uuid &connection_id, std::function<void(typename t_payload_net_handler::connection_context&)> f)
   {
     // True when some zone queued the callback. The callback runs on that
     // connection's strand. False means the id is not in a zone.
     for(auto& zone : m_network_zones)
     {
       const bool queued = zone.second.m_net_server.get_config_object().for_connection(connection_id, [f](p2p_connection_context& cntx){
-        f(cntx, cntx.support_flags);
+        f(cntx);
       });
       if (queued)
         return true;
@@ -719,15 +716,7 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::get_local_node_data(const epee::net_utils::connector_id zone_type, basic_node_data& node_data, const network_zone& zone) const
   {
     node_data.network_id = m_network_id;
-    node_data.support_flags = zone.m_config.m_support_flags;
     return true;
-  }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  int node_server<t_payload_net_handler>::handle_get_support_flags(int command, COMMAND_REQUEST_SUPPORT_FLAGS::request& arg, COMMAND_REQUEST_SUPPORT_FLAGS::response& rsp, p2p_connection_context& context)
-  {
-    rsp.support_flags = m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_config.m_support_flags;
-    return 1;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -740,8 +729,6 @@ namespace nodetool
   bool node_server<t_payload_net_handler>::relay_notify_to_list(int command, epee::levin::message_writer data_buff, std::vector<std::pair<epee::net_utils::connector_id, boost::uuids::uuid>> connections)
   {
     epee::byte_slice message = data_buff.finalize_notify(command);
-    epee::byte_slice compressed = epee::levin::try_compress_message(message.clone());
-    const bool use_compressed = (compressed.size() < message.size());
 
     std::sort(connections.begin(), connections.end());
     auto zone = m_network_zones.begin();
@@ -760,10 +747,7 @@ namespace nodetool
         ++zone;
       }
       if (zone->first == c_id.first)
-      {
-        const auto& msg = use_compressed ? compressed : message;
-        zone->second.m_net_server.get_config_object().send(msg.clone(), c_id.second);
-      }
+        zone->second.m_net_server.get_config_object().send(message.clone(), c_id.second);
     }
     return true;
   }
@@ -863,7 +847,6 @@ namespace nodetool
     std::memcpy(payload.top_id.data, result.top_id, sizeof(payload.top_id.data));
     m_payload_handler.process_payload_sync_data(payload, context, true);
     m_notifier.on_session_established(context.m_connection_id, context.m_is_income, context.m_connector);
-    context.support_flags = result.support_flags;
   }
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
@@ -871,7 +854,6 @@ namespace nodetool
   {
     network_zone& zone = m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector));
     epee::byte_slice msg = message.finalize_notify(command);
-    msg = epee::levin::try_compress_message(std::move(msg));
     int res = zone.m_net_server.get_config_object().send(std::move(msg), context.m_connection_id);
     return res > 0;
   }
@@ -882,32 +864,6 @@ namespace nodetool
     m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object().close(context.m_connection_id);
     return true;
   }
-  //-----------------------------------------------------------------------------------
-  template<class t_payload_net_handler>
-  bool node_server<t_payload_net_handler>::try_get_support_flags(const p2p_connection_context& context, std::function<void(p2p_connection_context&, const uint32_t&)> f)
-  {
-    COMMAND_REQUEST_SUPPORT_FLAGS::request support_flags_request;
-    bool r = epee::net_utils::async_invoke_remote_command2<typename COMMAND_REQUEST_SUPPORT_FLAGS::response>
-    (
-      context,
-      COMMAND_REQUEST_SUPPORT_FLAGS::ID, 
-      support_flags_request, 
-      m_network_zones.at(epee::net_utils::require_session_connector(context.m_connector)).m_net_server.get_config_object(),
-      [=](int code, const typename COMMAND_REQUEST_SUPPORT_FLAGS::response& rsp, p2p_connection_context& context_)
-      {  
-        if(code < 0)
-        {
-          LOG_WARNING_CC(context_, "COMMAND_REQUEST_SUPPORT_FLAGS invoke failed. (" << code <<  ", " << epee::levin::get_err_descr(code) << ")");
-          return;
-        }
-        
-        f(context_, rsp.support_flags);
-      },
-      std::chrono::milliseconds{P2P_DEFAULT_HANDSHAKE_INVOKE_TIMEOUT}
-    );
-
-    return r;
-  }  
   //-----------------------------------------------------------------------------------
   template<class t_payload_net_handler>
   int node_server<t_payload_net_handler>::handle_timed_sync(int command, typename COMMAND_TIMED_SYNC::request& arg, typename COMMAND_TIMED_SYNC::response& rsp, p2p_connection_context& context)
@@ -990,13 +946,6 @@ namespace nodetool
     }
 
     context.m_in_timedsync = false;
-    context.support_flags = arg.node_data.support_flags;
-
-    if (context.support_flags == 0)
-      try_get_support_flags(context, [](p2p_connection_context& flags_context, const uint32_t& support_flags) 
-      {
-        flags_context.support_flags = support_flags;
-      });
 
     //fill response
     rsp.local_peerlist_new = shekyl::disclose(context.m_connection_id);

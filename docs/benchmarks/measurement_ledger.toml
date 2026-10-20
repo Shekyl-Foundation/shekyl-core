@@ -549,7 +549,8 @@ stale_through = [
   { through = "f60ab687f", note = "Republishing the usable route keeps its incarnation and tells no watcher; a return from down is a new incarnation. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
   { through = "21524f1a8", note = "A link subscription unsubscribes when dropped. Watcher bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
   { through = "7e9ea0f61", note = "The managed-Tor death watch follows the route now installed, and a shutdown publishes ProcessStopped. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
-  { through = "0d882303c3", note = "Direction carries a 32-byte handshake-hash stamp set once by into_directions, so the P2P handshake's split copies 32 bytes per direction once per session. No record seal, open or rekey reads it; the per-record path is unchanged. Not re-measured." }
+  { through = "0d882303c3", note = "Direction carries a 32-byte handshake-hash stamp set once by into_directions, so the P2P handshake's split copies 32 bytes per direction once per session. No record seal, open or rekey reads it; the per-record path is unchanged. Not re-measured." },
+  { through = "b67b94731", note = "The gap tests' frame that is not the handshake is a timed-sync request in place of the support-flags request (1007), which is deleted with the support-flags word. Only those two tests changed; no code path in these files moved. Dial, handshake, and gap waits are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -635,6 +636,7 @@ cleared = [
   { through = "f60ab687f", reason = "The Tor link keeps one incarnation across a repeated publish of the same route, so the managed-Tor death watcher is armed once. The dial, the gap and their I/O are unchanged." },
   { through = "21524f1a8", reason = "Link subscriptions are removed when dropped. The dial, the gap and their I/O are unchanged." },
   { through = "7e9ea0f61", reason = "The Tor link's death watch is re-planned on each publish and a stop has its own cause; the dial, the gap and their I/O are unchanged, so the capture still prices this tree." },
+  { through = "b67b94731", reason = "The listener test's frame that is not the handshake is a timed-sync request in place of the deleted support-flags request (1007). No code path in these files changes, so the capture still prices this tree." },
 ]
 
 [[constant]]
@@ -945,6 +947,32 @@ capture = "docs/benchmarks/ba_t5_serve_floor_device_20261009_obs.tsv"
 capture_rev = "301ed05b73"
 rev_source = "capture header, the tree line"
 path_set = "archival-serve-fetch"
+
+# --- the RPC channel's handshake --------------------------------------
+
+[[path_set]]
+id = "rpc-handshake"
+spec = [
+  "rust/shekyl-noise/src",
+  "rust/shekyl-rpc-channel/src",
+]
+cleared = [
+  { through = "473aca852", reason = "mac1 and the handshake budget (RPC_CHANNEL.md section 4.3, 2026-10-20): read_message1 gains a keyed BLAKE2s over the 2,320-byte Noise message and one budget admission before the long-term work RT-P6 timed, and the client's start one keyed BLAKE2s. A few microseconds against 2,136.1 us; the stranger's re-measure on the floor device (rt_p6_mac1_stranger_20261020.md) measures it, and its registration moves this constant if the daemon's handshake p99 rises." },
+  { through = "f94231ec8", reason = "The constant moves to the re-measure's 2,163.8 us, and the budget test's count with it (117 to 115 a second). Only the value the budget charges changes; no code path the capture timed is touched, so the capture at 5db6eeda8f prices this tree." },
+  { through = "3eb4b79df", reason = "The busy reply: a message 1 the budget refuses is answered with one keyed BLAKE2s over 34 bytes instead of nothing, after the admission check, so it is outside every admitted handshake the charge prices; the client computes the expected reply once with its mac1. The daemon's handshake, and what each admission costs, are unchanged." },
+  { through = "7b2ed1f26", reason = "A first presentation inserts its mac1 into a 115-slot window before the long-term work, and a busy reply is Message1Admission::Busy rather than an error. A replay returns before the long-term keys and is not an admitted handshake. The client's busy compare is subtle's constant-time equality. The charge is unchanged at 2,163,800 ns, so the captures at 5db6eeda8f still price this tree." }
+]
+
+[[constant]]
+name = "handshake_daemon_cpu_ns"
+defined_in = "rust/shekyl-rpc-channel/src/budget.rs"
+needle = "pub const HANDSHAKE_DAEMON_CPU_NANOS: u64 = 2_163_800;"
+measured_by = ["BA-T36"]
+status = "current"
+capture = "docs/benchmarks/rt_p6_mac1_stranger_20261020_captures/summary_registered.md"
+capture_rev = "5db6eeda8f"
+rev_source = "the record's results name the build: 5db6eeda8f on the floor device, checked by its hash before building, the registered cell of 2026-10-20 (docs/benchmarks/rt_p6_mac1_stranger_20261020.md, Conditions). The constant is the daemon's per-handshake CPU at the 99th percentile with mac1, 2,163.8 us, the cost the handshake budget charges each admission. It replaces RT-P6's 2,136.1 us by that record's registered rule: the p99 rose."
+path_set = "rpc-handshake"
 
 [[retired_estimate]]
 name = "serve_median_per_response_single_pass_floor"
