@@ -41,8 +41,6 @@ impl Flags {
     pub const BEGIN: Flags = Flags(0x0000_0004);
     /// `E` — last fragment of a fragmented message. `B|E` marks a dummy.
     pub const END: Flags = Flags(0x0000_0008);
-    /// Payload is a zstd frame (Shekyl extension to the inherited protocol).
-    pub const COMPRESSED: Flags = Flags(0x0000_0010);
 
     /// Construct from a raw wire value, preserving unknown bits.
     #[must_use]
@@ -100,7 +98,7 @@ pub struct BucketHead {
     pub expect_response: u8,
     /// Command identifier (e.g. 1001 handshake, 2002 new-transactions).
     pub command: u32,
-    /// Q/S/B/E/COMPRESSED flag word.
+    /// Q/S/B/E flag word.
     pub flags: Flags,
     /// Protocol version; always [`PROTOCOL_VERSION_1`] from conforming peers.
     pub protocol_version: u32,
@@ -195,7 +193,7 @@ mod tests {
             payload_len: 0xDEAD_BEEF,
             expect_response: 1,
             command: 1001,
-            flags: Flags::REQUEST.union(Flags::COMPRESSED),
+            flags: Flags::REQUEST.union(Flags::END),
             protocol_version: PROTOCOL_VERSION_1,
         };
         let bytes = head.write();

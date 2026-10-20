@@ -26,11 +26,9 @@
 # `levin_base.h` carries a `static_assert(sizeof(bucket_head2) == 29)` for
 # this script to read. That assert is load-bearing; see the comment on it.
 #
-# The compression constants (COMPRESSION_MIN_PAYLOAD, DECOMPRESSED_MAX_SIZE,
-# ZSTD_COMPRESSION_LEVEL) are no longer compared: the C++ compression path
-# is a marshaling shim over the shekyl_levin_* FFI, so those constants are
-# single-sourced in rust/shekyl-levin/src/compress.rs with no C++ copy to
-# drift. Remaining twice-defined constants: framing values in levin_base.h,
+# The protocol has no compression (Rick, 2026-10-19), so there are no
+# compression constants and no 0x10 flag to compare. Twice-defined
+# constants: framing values in levin_base.h,
 # advertised support flags (`cryptonote_config.h` vs `SupportFlags` in
 # types.rs, added PWD-B6 so a dropped bit cannot silently diverge), and
 # the PWD-B3 ingress table inputs (`BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT`,
@@ -161,8 +159,6 @@ compare "Flags::BEGIN" \
   "$(cpp_define LEVIN_PACKET_BEGIN "$levin_base")" "$(rust_flag BEGIN)"
 compare "Flags::END" \
   "$(cpp_define LEVIN_PACKET_END "$levin_base")" "$(rust_flag END)"
-compare "Flags::COMPRESSED" \
-  "$(cpp_define LEVIN_PACKET_COMPRESSED "$levin_base")" "$(rust_flag COMPRESSED)"
 
 # HEADER_SIZE: read the C++ side out of the static_assert, since
 # `sizeof(bucket_head2)` leaves no literal of its own.

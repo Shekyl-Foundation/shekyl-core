@@ -52,14 +52,12 @@ use crate::{
     NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
 };
 
-/// The five defined Levin flag bits. Bits outside this mask are unknown at
-/// ingress (PWD-B3a).
+/// The four defined Levin flag bits. Bits outside this mask are unknown at
+/// ingress (PWD-B3a). `0x10`, the compressed-payload bit, is not one of
+/// them: compression is not part of the protocol (Rick, 2026-10-19), so a
+/// bucket carrying it is refused like any undefined bit.
 pub const FLAGS_DEFINED: Flags = Flags::from_bits(
-    Flags::REQUEST.bits()
-        | Flags::RESPONSE.bits()
-        | Flags::BEGIN.bits()
-        | Flags::END.bits()
-        | Flags::COMPRESSED.bits(),
+    Flags::REQUEST.bits() | Flags::RESPONSE.bits() | Flags::BEGIN.bits() | Flags::END.bits(),
 );
 
 /// What the largest `peerlist_entry` this codec writes adds to a message
@@ -330,6 +328,26 @@ mod tests {
             ingress_payload_cap(2001, Flags::RESPONSE),
             Err(Error::UnknownCommand { command: 2001 })
         );
+    }
+
+    /// `0x10` was the compressed-payload bit. Compression left the
+    /// protocol (Rick, 2026-10-19), so a bucket carrying it is refused at
+    /// ingress like any undefined bit, never read as plaintext.
+    #[test]
+    fn the_retired_compression_bit_is_refused() {
+        for flags in [
+            Flags::from_bits(Flags::REQUEST.bits() | 0x10),
+            Flags::from_bits(Flags::RESPONSE.bits() | 0x10),
+            Flags::from_bits(Flags::BEGIN.bits() | 0x10),
+        ] {
+            assert_eq!(
+                ingress_payload_cap(NOTIFY_NEW_TRANSACTIONS, flags),
+                Err(Error::UnknownFlags {
+                    flags: flags.bits()
+                })
+            );
+        }
+        assert_eq!(FLAGS_DEFINED.bits(), 0x0f);
     }
 
     #[test]

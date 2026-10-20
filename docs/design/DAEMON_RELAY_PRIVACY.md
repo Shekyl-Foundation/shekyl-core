@@ -665,8 +665,8 @@ against the latency cost for Shekyl's expected topology.
 ### D-7 — the port seam
 
 Rust decides *when* and *to whom*. C++ keeps *how to serialize and send*:
-epee binary serialization, the 1024-byte padding walk, levin framing,
-fragmentation and compression. This workspace has no epee or levin
+epee binary serialization, the 1024-byte padding walk, levin framing and
+fragmentation. This workspace has no epee or levin
 implementation and building one is a separate multi-thousand-line project
 (§8).
 

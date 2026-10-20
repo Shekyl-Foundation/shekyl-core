@@ -142,7 +142,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **T4** `e1` / `ekem1` normative | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` writes `e, e1` then `e, ee, ekem1`; empty payloads | No — transport cluster |
 | **T5** 8-byte prefix stays | **INTERIM** (as of 2026-09-25) | The encrypting path uses `prefix_for` (`prefix.rs`). The plaintext path still starts with `LEVIN_SIGNATURE`. That start is deleted at the flip; it is not a finished wire | n/a |
 | **T6** packet limits derived | NOT IMPLEMENTED | still the inherited `LEVIN_INITIAL/DEFAULT_MAX_PACKET_SIZE` | No — transport cluster |
-| **T7** compression survives | **NO BUILD REQUIRED** | rules the status quo; `COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1` present at `rust/shekyl-levin/src/compress.rs:25,32` | n/a |
+| **T7** no compression | **IMPLEMENTED** (2026-10-19) | the protocol has no compressor; `FLAGS_DEFINED` (`rust/shekyl-levin/src/ingress.rs`) leaves `0x10` undefined, so a bucket carrying it is refused at ingress on both stacks | n/a |
 | **T8** Shekyl mints its own KATs | **IMPLEMENTED** (as of 2026-09-24) | `noise.rs` `pinned_messages_mix_steps_and_rekey` pins both messages and the record after one rekey in each direction. The transport keys and their rekey (`ck'`, `k'`) are pinned from that transcript's chaining key in `shekyl-noise` (`split_of_the_pinned_chaining_key_rekeys_to_the_pinned_keys`); the initial chaining key is the hash of the protocol name, pinned beside `SymmetricState`. `wrong_prologue_and_wrong_suite_fail_like_garbage` is one `Decrypt` for a wrong prologue, random message 2, and a different protocol name. `pipe.rs` `wrong_prefix_fails_before_the_noise_message` drops eight wrong prefix bytes before Noise. The prefix KAT is `prefix_for` of the id derived from each genesis, recorded in `network_id_ffi.rs` (`each_genesis_derives_its_recorded_id_and_prefix`) | No — follows T1 |
 | **B1** rate limiting adopted | NOT IMPLEMENTED | **the surface is *every* dispatch, invoke and notify** — not the four p2p invokes; all four invoke routes and all nine `HANDLE_NOTIFY_T2` entries (`src/cryptonote_protocol/cryptonote_protocol_handler.h:94-102`) are still unguarded, so transaction floods spend no tokens and PWD-B12's memory bound rests on a charge that is not happening. *Records-was: this cell read “the decision names four unguarded invoke handlers” until 2026-10-07 — the same scope error §PWD-B1 records making twice, restated in the status table where a grep reader meets it first.* **MEASURED ON A LIVE DAEMON 2026-10-06 — on Windows this is the ONLY inbound bound available, and it is an ADDITION to the p2p Rust migration rather than a transfer.** `InboundCeiling` resolves `NoPerProcessLimit` there (no per-process descriptor quantity exists to read), PWD-I7's per-host cap is deleted, and an unset `--in-peers` is `UINT32_MAX` — so a Windows node has no inbound bound of any kind until this lands, by count, by source address or by rate. **There is no C++ mechanism to port**, so a slice that moves the p2p stack faithfully still lands Windows unbounded; the bound has to be engineered in. See the Windows inbound-bound row in [`FOLLOWUPS.md`](../FOLLOWUPS.md) | No — hardening; does not change the wire |
 | **B2** jitter, scoped by observability | NOT IMPLEMENTED | all seven timers still fixed-interval (`net_node.h:628-632`, `cryptonote_protocol_handler.h:210,212`); no per-connection deadline anywhere in p2p | No — hardening |
@@ -3654,15 +3654,16 @@ been given a responder-side check of its own.
 
 ### PWD-T6 — packet limits are derived per connection state, and the inherited 256 KiB is replaced
 
-**RULED.** One limit per connection state (*Two handshakes*), plus the
-plaintext ceiling, each derived rather than inherited:
+**RULED.** One limit per connection state (*Two handshakes*), each derived
+rather than inherited. There is no separate plaintext ceiling: the protocol has
+no compression (PWD-T7), so a payload is never larger than the bucket that
+carried it:
 
 | State | Limit | Derivation |
 | --- | --- | --- |
 | **Before channel established** — clearnet only | **exactly one first flight, plus its 8-byte prefix** — **1224 B** initiator, **1160 B** responder on the wire, from PWD-T1's **1216**/**1152** Noise-message tables plus PWD-T5's prefix | The only legal bytes are the transport handshake, and it is fixed-size. Anything larger is not a slow peer, it is not a peer |
 | **Channel established, session not yet** — every zone | **PWD-B3's cap for `COMMAND_HANDSHAKE` (1001)** | The only legal message is the Levin handshake, so the largest legitimate message in this state is its cap. On Tor and I2P this is the first limit a connection meets |
 | **Session established** | the largest legitimate message, from PWD-B3's per-command caps | Derived from what the protocol can legitimately send, not from a round number |
-| **Post-decompression** | the plaintext ceiling, above the session-established limit | `compress.rs:64-68` states why: bounding the compressor's *input* by the wire limit would reject exactly the payloads compression exists to bring under it |
 
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
@@ -3730,66 +3731,40 @@ parameter owned further down is not a bound"* is the reason to say so plainly in
 derived session-established limit** — a message the protocol must send and the limit
 forbids falsifies the derivation directly.
 
-### PWD-T7 — compression survives, and it is safe here for a stated reason
+### PWD-T7 — the protocol has no compression
 
-**RULED.** zstd stays, before encryption, with its floor and ceiling unchanged
-(`COMPRESSION_MIN_PAYLOAD = 256`, `ZSTD_COMPRESSION_LEVEL = 1`).
+**REJECTED (Rick, 2026-10-19).** Levin carries no compressed payloads. The
+`0x10` flag bit is undefined, so a bucket carrying it is refused at ingress on
+both stacks (`FLAGS_DEFINED`, `rust/shekyl-levin/src/ingress.rs`), and
+`shekyl-levin`, `shekyl-ffi` and `contrib/epee` carry no codec. The measurement
+is `docs/benchmarks/zstd_ruzstd_levin_20261020.md`.
 
-**Compress-then-encrypt is the CRIME/BREACH shape, and the reason it is safe
-here is specific rather than general.** That attack needs **a secret and
-attacker-influenced data compressed in the same context**, so the adversary can
-observe ciphertext length while varying its own input. **p2p payloads are blocks
-and transactions — public consensus data.** There is **no confidential value of
-any kind** in a compression context, so there is nothing for a length oracle to
-extract.
+The reasons, each sufficient on the blocks and transactions the protocol
+carries:
 
-> **The invariant, stated so it can be checked rather than assumed: no message
-> containing secret or otherwise confidential material — *of any lifetime* — is
-> ever compressed.**
+- **It saved nothing.** libzstd level 1 enlarged all 76 block and transaction
+  payloads measured, so none was ever sent compressed.
+- **The pure-Rust alternative costs more than it saves.** ruzstd's `Fastest`
+  encoder shrank the largest payloads by under 0.6 %, at 18–62 times
+  libzstd's CPU on payloads of 13 KB and more.
+- **Compressing before encrypting is a size side channel.** Compressed length
+  follows content, so a path observer reads what the payload is from its frame
+  size.
+- **It undoes the padding buckets.** Padding quantizes a message's size so an
+  observer cannot read volume from it; compression after padding puts the size
+  back in step with the content.
 
-**"Per-connection" was an earlier and narrower wording, and the narrowing had no
-justification behind it.** CRIME/BREACH turns on a secret being compressed
-beside attacker-influenced data; **the secret's lifetime is irrelevant to the
-attack**. A node-local static value or a reused token is as extractable as a
-session key and is worth *more* once extracted, because it does not expire with
-the connection. The invariant is scoped to **confidentiality**, not to lifetime.
+The one class compression would shrink is the handshake and timed-sync peer
+lists: a full list compresses to 41–58 % of its size, at most about 650 bytes a
+message, a timed sync every 60 s. No send path compressed those commands, so
+that saving needed code that did not exist. Their redundancy is the key names
+the portable-storage encoding repeats in every entry, and the fix for it is a
+compact P2P wire encoding, not a compressor (FOLLOWUPS).
 
-That is true today because no such message exists. **It is written as an
-invariant rather than an observation because the property is a fact about the
-*message set*, and the message set is what future rounds change** — PWD-B3 and
-cluster A both add or alter commands.
-
-**And it is stated at the dispatch site, not only here, because an invariant
-enforced by "a reviewer must check this section" is enforced by attention.**
-`try_compress_message` (`rust/shekyl-levin/src/compress.rs`) now carries the
-invariant, its reasoning, and the retreat in its own doc comment — **that is
-where the decision is actually made**, by whoever adds the next message type,
-and they are far more likely to read the function they are calling than the
-design round that ruled it three clusters earlier.
-
-**A doc comment is still not a gate**, and this round series has produced three
-consecutive coverage claims narrower than believed, so the mechanical form is
-queued rather than assumed. Its **named blocker: there is no message
-classification to gate on** — nothing in the tree marks a command as
-secret-carrying, so a check today would be a gate whose subject does not exist
-(§1's discipline, and rule 47's). The classification lands with PWD-B3's command
-table; the gate lands with it.
-
-| Option | Adversary / channel | Verdict |
-| --- | --- | --- |
-| **Compress, then encrypt** | The length-observing path observer | **Adopted** under the invariant above. Block relay is the bandwidth case the chain actually has |
-| Encrypt only | The same | **Refused.** It pays real bandwidth on every block for a leak that requires a secret we do not put in the payload |
-| Compress, then pad to buckets | The same | **Refused as unnecessary here, and recorded as the retreat.** If the invariant above is ever broken, this is the position to move to rather than dropping compression |
-
-**Conceded.** Compressed length still correlates with *content entropy*, so a
-observer learns something coarse — a full block versus a single transaction —
-which the noise/padding path (PWC-A9) masks where it applies and does not mask
-elsewhere. This is arrival metadata, which §1.5 assigns to D++, taxed not
-eliminated.
-
-**Falsifier.** **Reopen if any message is specified that carries confidential
-material of any kind** — the invariant's own trigger, recognisable by inspection of a
-new command rather than by measurement.
+**Reopen if** a message class shows a large measured saving that a compact
+encoding cannot give, and compression for it can be applied without exposing
+its size: after padding into fixed buckets, with no confidential material in
+the compression context.
 
 ### PWD-T8 — Shekyl mints its own KATs, and pins both transport-handshake directions
 
@@ -3916,7 +3891,7 @@ self-minted set is no longer the strongest evidence obtainable.
 | PWC-A4 (256 KiB limit until the Levin handshake completes) | **Ruled** — replaced on every zone by the Levin handshake's PWD-B3 cap; clearnet adds a one-flight limit before channel established | PWD-T6 |
 | PWC-A5 (100 MB once a session is established, inherited) | **Ruled** — replaced by a derivation terminating on PWD-B3 | PWD-T6 |
 | PWC-A9 (noise/fragment padding to `noise_size`) | **Absorbed** | PWD-T7 (the padded path is where the length leak is already masked) |
-| PWC-A10 (zstd level 1, floor 256) | **Ruled** — kept, with the no-secret invariant stated | PWD-T7 |
+| PWC-A10 (zstd level 1, floor 256) | **Rejected** — compression removed from the protocol (2026-10-19) | PWD-T7 |
 | PWC-F3 (50 MB dead constant; never-sent `network_config` KV map) | **Ruled** — `P2P_DEFAULT_PACKET_MAX_SIZE`, `network_config::packet_max_size` and the struct's KV serializer are deleted; the struct keeps its live fields. Decidable *because* PWD-T6 names the authoritative limits; implementation is P2P-3 like every other ruling here, queued in FOLLOWUPS | PWD-T6 |
 
 **Sum check: 6 ruled + 1 absorbed + 1 deferred = 8 rows.** ✅
@@ -3951,13 +3926,10 @@ attention each row deserves (rule 19). It is therefore split into sub-rounds,
 following the consensus lane's R1a/R1b/R1c precedent, and **this one goes
 first because PWD-B3 is a hub rather than merely a blocker.**
 
-> **Four already-ruled commitments terminate on PWD-B3**, one of them in a
+> **Three already-ruled commitments terminate on PWD-B3**, one of them in a
 > merged PR: PWD-T6's session-established limit, PWC-A2's deferral (the bucket
-> header's length field cannot be sized before the caps it must express),
-> PWD-B10's deletion of `COMMAND_PING` — which is *arm 3 of B3's own table* —
-> and PWD-T7's compression gate, whose named blocker is that nothing in the
-> tree classifies a command as confidentiality-bearing. **B3's command table is
-> what resolves that classification.**
+> header's length field cannot be sized before the caps it must express), and
+> PWD-B10's deletion of `COMMAND_PING` — which is *arm 3 of B3's own table*.
 
 **PWD-B6 is in this sub-round because it decides B3's table membership, not
 because it is convenient.** The two block-propagation commands have **byte-
@@ -4020,7 +3992,7 @@ command and exactly what this rule exists to reject.
 | --- | --- | --- |
 | **Reject unrecognised input at ingress** | The peer probing for a permissive path — an unknown command id that falls back to the **global** packet limit instead of a bound sized for what it claims to be, or an undefined flag bit accepted as uninterpreted semantics | **Adopted.** It is the only answer that is the same on both surfaces, and it makes the *defined* set the specification rather than a subset of what is tolerated |
 | Fall back to the global limit (today's command behaviour) | The same | **Refused.** `DEFAULT_MAX_PACKET_SIZE` is a *framing* bound, not a statement about what the message is — using it as the cap for an unknown command means the only thing sizing the buffer is how big a bucket may be, which is precisely the derivation PWD-T6 refused |
-| Accept uninterpreted semantics (today's flag behaviour) | The same | **Refused.** The codec round-trips unknown bits, and **PWC-A6a records that no relay carries them today** — the relay path re-frames rather than forwarding a received header — so this is a *latent* permission, not a live forwarding path. Closing it now costs nothing; leaving it means `COMPRESSED` (0x10) proves the range is one **we allocate from**, and the next Shekyl extension collides with a bit some peer was already permitted to set |
+| Accept uninterpreted semantics (today's flag behaviour) | The same | **Refused.** The codec round-trips unknown bits, and **PWC-A6a records that no relay carries them today** — the relay path re-frames rather than forwarding a received header — so this is a *latent* permission, not a live forwarding path. Closing it now costs nothing; leaving it means the next Shekyl extension collides with a bit some peer was already permitted to set |
 | Ignore-and-drop the field, keep the message | The same | **Refused, and it is the subtle one.** It looks conservative and silently changes the message: a peer that sent `flags = REQUEST\|0x20` believes it sent something this node did not act on, and neither side can tell. **Silent divergence, which rule 71 forbids on the consensus surface and PW-18 dislikes everywhere** |
 | Cap unknown commands at a per-command default | The resource exhauster | **Refused.** A default cap answers "how much of an unknown thing should I buffer", which is a question with no good answer; rejecting answers it with zero |
 
@@ -4119,7 +4091,7 @@ serialized. On receive of a `RESPONSE` bucket the async callback gets
 | --- | --- | --- |
 | **Delete the field** | A peer reading implementation state from a header status; a port that has to carry four bytes nobody consumes | **Adopted.** Pre-genesis, cheaper than carrying the field into the Rust rewrite |
 | Keep, zero, ignore | The same | **Refused.** Four bytes of always-zero is a fingerprint and a lie about a status that is not there |
-| Park a NACK in the flag word | The same | **Refused.** The flag word is framing (Q/S/B/E/COMPRESSED). PWD-B4 rejects unknown bits. A later NACK is a **command body**, not a header `i32` |
+| Park a NACK in the flag word | The same | **Refused.** The flag word is framing (Q/S/B/E). PWD-B4 rejects unknown bits. A later NACK is a **command body**, not a header `i32` |
 
 **Conceded.** There is no header-level "understood, refused, stay up"
 without hanging up or putting the refusal in a reply body. No
@@ -4188,7 +4160,7 @@ signature; the figures below are computed from that)
 
 > **Corrected 2026-09-04: `entry_max`'s only consumer is 2008.** This block
 > originally gave 2004 `n × entry_max`, and the ruling further down then showed
-> that a cardinality-derived bound **exceeds the plaintext ceiling** and
+> that a cardinality-derived bound **exceeds the session packet limit** and
 > replaced it with a byte budget. **Both forms were left standing**, so a reader
 > could take either. The byte budget governs 2004; `n × entry_max` is retired.
 >
@@ -4267,7 +4239,7 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 | Option | Adversary / channel | Verdict |
 | --- | --- | --- |
 | **Derive from the receiver's own current weight limit × a fixed margin** | The oversize-block flooder, pre-validation | **Adopted — for the single-block announce (2008), where it is `entry_max`.** The only form that is a real bound at every chain height, and it uses state the receiver already has and the peer cannot influence — §1's fourth check, observation over claim. *Scope narrowed by the 2026-09-04 correction: 2004's batch does NOT take a cardinality multiple of this bound; it takes the byte budget of the Ruled block below* |
-| A static ceiling picked to survive expected growth | The same | **Refused** — for the announce bound this table decides. It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does. *2004's byte budget (Ruled below) is static but is not this option: it is anchored at the transport's own plaintext ceiling with truncation semantics, and its value is named as owed to sync measurements — not a growth guess standing in for a per-block bound* |
+| A static ceiling picked to survive expected growth | The same | **Refused** — for the announce bound this table decides. It is a number that has not yet been questioned (§1's second check); it becomes wrong in one direction or the other and gives no signal when it does. *2004's byte budget (Ruled below) is static but is not this option: it is anchored at the transport's session packet limit with truncation semantics, and its value is named as owed to sync measurements — not a growth guess standing in for a per-block bound* |
 | Keep 128 MB | The same | **Refused.** It is 32× the compact path's own inherited figure and bounds nothing a node would otherwise reject |
 
 > **Two inputs this round does not have, and the ruling says so rather than
@@ -4284,7 +4256,7 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 > that bound existed.* Ruling it is cluster B's own work and belongs with the
 > relay cadence rows (PWD-B1/PWD-B2), not here.
 >
-> **(b) The cardinality-derived batch bound exceeds the plaintext ceiling,
+> **(b) The cardinality-derived batch bound exceeds the session packet limit,
 > which contradicts PWD-T6.** The consensus weight limit **floors** at
 > `2 × get_min_block_weight` = **600,000 bytes**
 > (`src/cryptonote_core/blockchain.cpp:6150-6153` at `dev` `059aca264`; the
@@ -4293,12 +4265,11 @@ own value is owed to sync measurements instead (FOLLOWUPS).*
 > `:6543` anchors were written against a superseded tree and now land on a
 > blank line and an unrelated statement — substance unchanged, citation
 > refreshed.*). So even at `margin = 1`,
-> `100 × (600,000 + 885,000)` = **148,500,000 bytes**, above
-> `DECOMPRESSED_MAX_SIZE` = 128 MiB = **134,217,728**
-> (`rust/shekyl-levin/src/compress.rs:29`). PWD-T6 requires the plaintext
-> ceiling to sit **above** the session-established limit; this inverts it, so a
-> conforming compressed 2004 could be legal on the wire and rejected after
-> inflation.
+> `100 × (600,000 + 885,000)` = **148,500,000 bytes**, above the session
+> packet limit `DEFAULT_MAX_PACKET_SIZE` = **100,000,000**
+> (`rust/shekyl-levin/src/header.rs`). PWD-T6 requires the session-established
+> limit to admit every legitimate message; this inverts it, so a conforming
+> 2004 could be legal by cardinality and refused at ingress.
 
 **Ruled, because the contradiction forces the shape even though it does not
 fix the number: `NOTIFY_RESPONSE_GET_OBJECTS` is bounded in BYTES, not by
@@ -4330,9 +4301,9 @@ batch**, leaving the requester to ask for the remainder.
 A cardinality bound multiplies two
 independent worst cases (every block at maximum weight *and* maximum witness
 simultaneously), producing a buffer no honest exchange ever fills, and here it
-produces one the decompressor is required to reject.
+produces one ingress is required to refuse.
 
-> **The budget is chosen at or below the plaintext ceiling, so PWD-T6's
+> **The budget is chosen at or below the session packet limit, so PWD-T6's
 > ordering holds by construction rather than by arithmetic that has to be
 > re-checked whenever a consensus constant moves.** The budget's value is
 > **owed**, with the same discipline as `margin`: it is a bandwidth/latency
@@ -4353,29 +4324,8 @@ round owes:**
   *An earlier version of this bullet declared it sized; that was premature, and
   premature-clear is the more expensive direction — nobody re-checks a gate
   that says it is closed.*
-- **PWD-T7's compression gate** gets its classification — **but from the
-  *route*, not from this table, and the difference matters.** *An earlier
-  version of this bullet said "every command in this table carries public
-  consensus data", which is false: `COMMAND_HANDSHAKE` and
-  `COMMAND_TIMED_SYNC` carry peerlists and support flags
-  (`src/p2p/p2p_protocol_defs.h:120-244`) — peer metadata, not consensus data,
-  and peerlist disclosure is a thing PWD-I2 deliberately controls.*
-
-  **The set is empty because of what can reach the compressor, which is a
-  narrower question than what is in the table.** All three call sites finalize
-  as **notifications** — `levin_notify.cpp:437`, and
-  `src/p2p/net_node.inl` line 2186 (at the pin) / `:2503`, both via `finalize_notify(command)`.
-  **Every p2p command is an *invoke***: `COMMAND_HANDSHAKE`
-  (`net_node.inl:1078`), `COMMAND_TIMED_SYNC` (`:1165`), `COMMAND_PING`
-  (`:2581`) and `COMMAND_REQUEST_SUPPORT_FLAGS` (`:2623`) all go through
-  `async_invoke_remote_command2`, so **they cannot reach the compressor at
-  all** — structurally, not by convention. What remains is the cryptonote
-  notify family, which carries blocks and transactions.
-
-  > **So the confidentiality-bearing set is empty today, and the gate is a
-  > check on the *routes into `try_compress_message`*, not on the command
-  > table.** A gate written against the table would pass while a future
-  > invoke-carried secret was quietly re-routed through a notify.
+- **PWD-T7** needs no classification from this table: the protocol has no
+  compressor (rejected 2026-10-19), so there is no route into one to gate.
 
 **Conceded, and it is a real cost.** A dynamic cap means two nodes at different
 heights admit different maxima, so a node far behind the tip rejects a block a

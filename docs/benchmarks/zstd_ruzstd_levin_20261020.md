@@ -1,13 +1,17 @@
 # libzstd level 1 against ruzstd `Fastest` on Levin block and transaction payloads, 2026-10-20
 
-**State of this record: measured, not registered.** One run per host, no
-cool-down and no frequency gate. It answers the measurement the
+**State of this record: measured, not registered, and decided.** One run
+per host, no cool-down and no frequency gate. It answers the measurement the
 maintainer asked for before the codec swap (2026-10-19): "Before the swap,
 measure on the Rust path: ratio and throughput vs libzstd level 1 on real
 block/tx payloads, Pi decode time for a full block", with the
-declared-frame-size guard (`rust/shekyl-levin/src/compress.rs`,
-`zstd_inflated_size`) kept. The swap decision is the maintainer's; this
-record is its input.
+declared-frame-size guard kept. The decision it fed is at the end: no swap,
+and compression left the protocol.
+
+**The instrument is at `5fbba83ab`.** The corpus capture, the comparison
+example and the codec they measured were deleted with compression in the
+next commit, so a rerun checks out that commit. The paths below are paths in
+that tree.
 
 ## What was measured
 
@@ -204,6 +208,31 @@ inbound ones, and neither path has a compressor. So
 removing compression changes nothing on the wire for these payloads
 either. The saving above is what compression would add if a send path
 were written for them.
+
+## Decision (Rick, 2026-10-19)
+
+Neither the swap nor a decode-only ruzstd. **Compression is removed from the
+P2P protocol entirely**: the Levin compression flag, the C++ compression shim,
+`shekyl-levin`'s compress module and its FFI exports, and the `zstd` and
+`zstd-sys` crates. Testnet upgrades all at once, so no decode-only path is
+kept. A bucket that still carries the old `0x10` bit is refused at ingress
+like any undefined bit (`SHEKYL_P2P_PROTOCOL.md` PWD-T7).
+
+The reasons:
+
+1. **libzstd level 1 enlarged all 76 block and transaction payloads**
+   (§2), so nothing was ever sent compressed.
+2. **ruzstd's gain is under 0.6 % at 18–62 times the CPU** (§2, §3).
+3. **Compression before encryption is a size side channel**: compressed
+   length follows content, and a path observer reads it from the frame.
+4. **It undoes the padding buckets**: padding quantizes a message's size so
+   its volume cannot be read; compressing after it puts the size back in
+   step with the content.
+
+The peer lists (§6) are not a large saving: about 650 bytes a minute per
+connection, and earned only by code that does not exist. Their redundancy is
+the encoding's repeated key names, and the fix for that is a compact P2P wire
+encoding, not a compressor (FOLLOWUPS).
 
 ## What this does not cover
 

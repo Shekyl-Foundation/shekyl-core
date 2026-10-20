@@ -757,9 +757,6 @@ find_package(OpenSSL REQUIRED)
 message(STATUS "Using OpenSSL include dir at ${OPENSSL_INCLUDE_DIR}")
 include_directories(${OPENSSL_INCLUDE_DIR})
 
-# No system-libzstd detection: Levin p2p compression is provided by the
-# Rust image (shekyl_levin_* FFI; the vendored, pinned libzstd inside
-# libshekyl_ffi.a / libshekyl_daemon_image.a is the binary's single zstd).
 if(STATIC AND NOT IOS)
   if(UNIX)
     set(OPENSSL_LIBRARIES "${OPENSSL_LIBRARIES};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")

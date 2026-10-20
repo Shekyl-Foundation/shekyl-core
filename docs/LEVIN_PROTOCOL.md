@@ -109,6 +109,10 @@ command being invoked.
  * `B` - Bit is set if this is a the beginning of a [fragmented message](#fragmented-messages).
  * `E` - Bit is set if this is the end of a [fragmented message](#fragmented-messages).
 
+No other bit is defined. A bucket that sets one is refused and the connection
+closed. That includes `0x10`, the compressed-payload bit: Shekyl's Levin has no
+compression (`SHEKYL_P2P_PROTOCOL.md` PWD-T7, rejected 2026-10-19).
+
 ### Version
 A fixed value of `1` as an unsigned 32-bit little endian integer.
 

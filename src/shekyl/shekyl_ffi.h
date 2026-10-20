@@ -3666,68 +3666,21 @@ void shekyl_relay_zone_force_fluff(RelayZoneHandle* handle, std::uint64_t now_ms
 //! as a deadline-crossing rollover's do.
 void shekyl_relay_zone_force_epoch(RelayZoneHandle* handle, std::uint64_t now_ms);
 
-// ── Levin ingress + emit framing + compression (IMPLEMENTATION_INDEX.md LV row) ──────
+// ── Levin ingress + emit framing (IMPLEMENTATION_INDEX.md LV row) ──────
 //
-// Levin FFI: ingress admit (PWD-B3 / B3a / B4) plus compression / noise /
-// fragment emit. Ingress policy lives in rust/shekyl-levin; C++ handle_recv
-// is a marshaling shim over shekyl_levin_ingress_admit.
+// Levin FFI: ingress admit (PWD-B3 / B3a / B4) plus noise / fragment emit.
+// Ingress policy lives in rust/shekyl-levin; C++ handle_recv is a
+// marshaling shim over shekyl_levin_ingress_admit. The protocol has no
+// compression (Rick, 2026-10-19): the old compressed-payload flag bit, 0x10,
+// is an undefined bit and is refused at ingress with -8.
 //
-// The epee::levin compression path is a marshaling shim over these exports
-// (emit: contrib/epee/src/levin_base.cpp try_compress_message; receive:
-// contrib/epee/src/levin_compression.cpp), so the Rust-pinned libzstd is the
-// single zstd implementation in the binary — the system-libzstd link and the
-// HAVE_ZSTD build gate are gone. The C++ carries no compression policy: what
-// may be compressed, at what level, above what size, and the COMPRESSED
-// header rewrite are all in rust/shekyl-levin.
+// Return codes (rule 40): 0 = ok (output parameter set); -3 = a noise or
+// fragment size that cannot be emitted; -4 = null pointer; -8 = unknown
+// flag bits at ingress; -9 = unknown dispatch command.
 //
-// Emit is message-level and receive is frame-level, because the questions
-// differ: on the way out, whether a buffer may be compressed at all is a
-// property of its bucket header; on the way in, the handler has already
-// parsed and range-checked that header and holds one opaque zstd frame.
-//
-// Return codes (rule 40): 0 = ok (output parameter set); 1 = compression
-// declined, send uncompressed (not an error; out is nulled); -3 = malformed
-// or size-less frame; -4 = null pointer / undersized output buffer;
-// -6 = the Rust image was built without the zstd feature (production always
-// has it on; pure-Rust feature-off builds only); -7 = a size limit was
-// exceeded; -8 = unknown flag bits at ingress; -9 = unknown dispatch
-// command.
-//
-// -3 and -7 are separate because they call for opposite operator responses
-// — a corrupt or hostile peer versus an honest peer whose batch outgrew the
-// per-command cap — and the receive path closes the connection on both.
-//
-// Variable-length emit (compress, noise, fragment) returns a Rust-allocated
-// ShekylBuffer that MUST be freed with shekyl_buffer_free. Receive is
-// direct-write: size with shekyl_levin_inflated_size, then inflate with
-// shekyl_levin_decompress_into — nothing is allocated on the Rust side on
-// that path, which matters during IBD where these are multi-megabyte block
-// batches once per packet per connection.
+// Noise and fragment emit return a Rust-allocated ShekylBuffer that MUST be
+// freed with shekyl_buffer_free.
 
-//! Compress one finalized Levin message — header and payload together.
-//! 0 = out holds the re-framed COMPRESSED message (free with
-//! shekyl_buffer_free); 1 = declined, send the input unchanged. Decline
-//! covers every refusal: below the 256-byte payload minimum, not smaller
-//! compressed, already compressed, not exactly one message, or the
-//! noise/fragment class whose constant on-wire size must not move. The
-//! caller keeps its input in both cases.
-int32_t shekyl_levin_compress_message(const uint8_t* input, size_t input_len,
-                                      ShekylBuffer* out);
-//! Read a COMPRESSED payload's frame header and report the exact inflated
-//! size. The frame must declare its content size, and that size is checked
-//! against min(max_output, 128 MiB) before the caller sizes anything from
-//! it — pass the packet-size limit the bucket header was checked against,
-//! which makes the bound on an inflated payload identical to the bound the
-//! same connection enforces on an uncompressed one.
-int32_t shekyl_levin_inflated_size(const uint8_t* input, size_t input_len,
-                                   uint64_t max_output, size_t* out_size);
-//! Inflate a COMPRESSED payload directly into caller-owned storage. `out`
-//! must be `out_cap` writable bytes sized from shekyl_levin_inflated_size on
-//! the same input; a frame that does not deliver exactly `out_cap` bytes is
-//! rejected rather than partially written.
-int32_t shekyl_levin_decompress_into(const uint8_t* input, size_t input_len,
-                                     uint8_t* out, size_t out_cap,
-                                     size_t* out_written);
 //! Build a dummy ("noise") message of exactly noise_bytes total length —
 //! command 0, B|E set, zeroed payload; the white-noise cover-traffic unit.
 //! 0 = out set (free with shekyl_buffer_free); -3 when noise_bytes cannot
