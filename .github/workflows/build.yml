@@ -750,28 +750,12 @@ jobs:
       # WP-W5 of that design round owns renaming this job back.
       - name: build daemon
         shell: pwsh
+        # mdb_copy rides along (one vendored C file): the daemon's prune
+        # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
+        # here. The link gate itself is the script: the three Rust-linking
+        # binaries exist, and the link log has no LNK4098.
         run: |
-          # mdb_copy rides along (one vendored C file): the daemon's prune
-          # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
-          # here rather than discovered by the first Windows operator.
-          #
-          # The MSVC link check (Rick, 2026-10-19): the importer and
-          # core_tests link the ordinary Rust library (#1130), and every Rust
-          # crate links the static C runtime the C++ links
-          # (rust/.cargo/config.toml), so no link may warn LNK4098 (a second
-          # C runtime). BUILD_TESTS=ON above only defines core_tests; only the
-          # named targets build. The log is a file, not a pipe, so the
-          # build's status is read directly (rule 46).
-          cmake --build build --config Release --target daemon mdb_copy blockchain_import core_tests --parallel 2 *> msvc-link.log
-          $rc = $LASTEXITCODE
-          Get-Content msvc-link.log
-          if ($rc -ne 0) { Write-Error "the build failed ($rc)"; exit $rc }
-          foreach ($bin in 'build\bin\Release\shekyld.exe', 'build\bin\Release\shekyl-blockchain-import.exe', 'build\tests\core_tests\Release\core_tests.exe') {
-            if (-not (Test-Path $bin)) { Write-Error "no $bin: the link check has no subject (rule 47)"; exit 1 }
-          }
-          $mixed = Select-String -Path msvc-link.log -Pattern 'LNK4098'
-          if ($mixed) { $mixed | ForEach-Object { $_.Line }; Write-Error "a link warned LNK4098: two C runtimes in one image"; exit 1 }
-          Write-Output "MSVC link check: shekyld, shekyl-blockchain-import and core_tests linked; no LNK4098"
+          pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage link
       - name: smoke-test daemon boot and stop
         shell: pwsh
         # The daemon's runtime gate on Windows: boot the built shekyld.exe
@@ -799,16 +783,10 @@ jobs:
           pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\Release\shekyld.exe'
       - name: core_tests on MSVC
         shell: pwsh
-        # The link check's "and pass" half (Rick, 2026-10-19): core_tests
-        # constructs core from the snapshot the ordinary library's parse
-        # builds, on the CRT the whole image now shares. 40 tests, 0
-        # failures on Linux and on the Windows build box (446 s).
+        # The link gate's run half. The script requires the suite's own
+        # report: a positive run count and zero failures.
         run: |
-          & 'build\tests\core_tests\Release\core_tests.exe' --generate_and_play_test_data *> core-tests.log
-          $rc = $LASTEXITCODE
-          Get-Content core-tests.log | Select-Object -Last 40
-          if ($rc -ne 0) { Write-Error "core_tests failed ($rc)"; exit $rc }
-          if (-not (Select-String -Path core-tests.log -Pattern 'Failures: 0' -Quiet)) { Write-Error "core_tests printed no 'Failures: 0' report"; exit 1 }
+          pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage core-tests
 
   source-archive:
     name: "source archive"

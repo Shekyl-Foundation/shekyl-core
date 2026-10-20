@@ -3,19 +3,17 @@
 # All rights reserved.
 # BSD-3-Clause
 
-# Every Rust crate linked into a Windows MSVC binary links the static C
-# runtime, as the C++ does (`CMakeLists.txt`: under MSVC, `STATIC` is on by
-# default and replaces `/MD` with `/MT`). Rust defaults to the dynamic
-# runtime on MSVC, and the `cc`-built C objects inside the Rust staticlibs
-# follow the target's `crt-static` feature. A mixed image warned LNK4098 at
-# every link and worked only while no allocation crossed the boundary (Rick,
-# 2026-10-19). Set once here, where cargo reads it: CMake runs cargo from
-# this directory (`cmake/BuildRust.cmake`, WORKING_DIRECTORY
-# ${RUST_SOURCE_DIR}), and so does every direct `cargo` invocation. An
-# environment RUSTFLAGS would replace these flags, and nothing in the build
-# sets one for an MSVC target. A non-static MSVC build is refused at
-# configure time (`CMakeLists.txt`), since it would mix the runtimes the
-# other way.
+# +crt-static for the MSVC target family. Rust otherwise links the dynamic
+# CRT, and the cc-built C objects inside the staticlibs follow this feature
+# (/MT). The feature selects libcmt in every profile, debug included.
+# CMake requires -DSTATIC=ON and rewrites /MD to /MT on Debug, Release,
+# RelWithDebInfo and MinSizeRel (CMakeLists.txt); Debug's /MDd becomes
+# /MTd, which is the static triplet's debug libraries and not libcmt.
+# Cargo reads this file because CMake runs cargo from this directory
+# (cmake/BuildRust.cmake, WORKING_DIRECTORY ${RUST_SOURCE_DIR}), and so
+# does every direct cargo invocation here. That cmake file lists this path
+# in _shekyl_rust_deps, so an edit rebuilds the archives. An environment
+# RUSTFLAGS replaces these flags; the build sets none for an MSVC target.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
 

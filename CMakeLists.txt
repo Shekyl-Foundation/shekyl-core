@@ -925,16 +925,48 @@ if(MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FIiso646.h")
   # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /Dinline=__inline")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /STACK:10485760")
-  # The Rust staticlibs link the static C runtime on MSVC (+crt-static,
-  # rust/.cargo/config.toml), so the C++ must too: one runtime per image.
+  # Rust's +crt-static (rust/.cargo/config.toml) links libcmt in every
+  # profile. STATIC off leaves the C++ flags on /MD, and it also selects
+  # the dynamic libraries, so the image would mix runtimes either way.
   if(NOT STATIC)
     message(FATAL_ERROR "An MSVC build links the static C runtime: the Rust libraries are "
       "built with +crt-static (rust/.cargo/config.toml), and a non-static build would "
       "mix /MD C++ with them. Configure with -DSTATIC=ON (the MSVC default).")
   endif()
-  foreach(VAR CMAKE_C_FLAGS_DEBUG CMAKE_CXX_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE CMAKE_CXX_FLAGS_RELEASE)
-    string(REPLACE "/MD" "/MT" ${VAR} "${${VAR}}")
+  # The MSVC configuration family: CMake's four, plus any name the
+  # generator added. A single-config generator leaves
+  # CMAKE_CONFIGURATION_TYPES empty and still initializes all four flag
+  # variables, so the four are always rewritten. Each
+  # CMAKE_<LANG>_FLAGS_<CONFIG> is rewritten in place. A result that does
+  # not name /MT stops configure, which is what a typo or an empty custom
+  # config produces.
+  # Debug's default is /MDd, and the same replacement yields /MTd. That
+  # matches the x64-windows-static triplet's debug libraries. It does not
+  # match Rust: +crt-static is libcmt in every profile, and cc passes /MT.
+  # A Debug image still mixes libcmtd with libcmt. Release, RelWithDebInfo
+  # and MinSizeRel are /MT, which is libcmt, and the link check builds Release.
+  set(SHEKYL_MSVC_CRT_CONFIGS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+  foreach(SHEKYL_MSVC_CRT_CONFIG IN LISTS CMAKE_CONFIGURATION_TYPES)
+    string(TOUPPER "${SHEKYL_MSVC_CRT_CONFIG}" SHEKYL_MSVC_CRT_CONFIG)
+    list(APPEND SHEKYL_MSVC_CRT_CONFIGS "${SHEKYL_MSVC_CRT_CONFIG}")
   endforeach()
+  list(REMOVE_DUPLICATES SHEKYL_MSVC_CRT_CONFIGS)
+  foreach(SHEKYL_MSVC_CRT_CONFIG IN LISTS SHEKYL_MSVC_CRT_CONFIGS)
+    foreach(SHEKYL_MSVC_CRT_LANG C CXX)
+      set(_shekyl_crt_flags "CMAKE_${SHEKYL_MSVC_CRT_LANG}_FLAGS_${SHEKYL_MSVC_CRT_CONFIG}")
+      string(REPLACE "/MD" "/MT" ${_shekyl_crt_flags} "${${_shekyl_crt_flags}}")
+      if(NOT "${${_shekyl_crt_flags}}" MATCHES "/MT")
+        message(FATAL_ERROR
+          "${_shekyl_crt_flags} does not name the static C runtime (/MT) after the rewrite. "
+          "The MSVC configuration family is SHEKYL_MSVC_CRT_CONFIGS.")
+      endif()
+    endforeach()
+  endforeach()
+  message(STATUS "MSVC static C runtime: /MT (Debug: /MTd) across ${SHEKYL_MSVC_CRT_CONFIGS}")
+  unset(_shekyl_crt_flags)
+  unset(SHEKYL_MSVC_CRT_LANG)
+  unset(SHEKYL_MSVC_CRT_CONFIG)
+  unset(SHEKYL_MSVC_CRT_CONFIGS)
   include_directories(SYSTEM src/platform/msc)
 else()
   include(TestCXXAcceptsFlag)
