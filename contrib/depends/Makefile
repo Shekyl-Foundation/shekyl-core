@@ -58,10 +58,7 @@ endif
 host_arch=$(firstword $(subst -, ,$(canonical_host)))
 host_vendor=$(word 2,$(subst -, ,$(canonical_host)))
 full_host_os:=$(subst $(host_arch)-$(host_vendor)-,,$(canonical_host))
-host_os:=$(findstring android,$(full_host_os))
-ifeq ($(host_os),)
 host_os:=$(findstring linux,$(full_host_os))
-endif
 host_os+=$(findstring darwin,$(full_host_os))
 host_os+=$(findstring freebsd,$(full_host_os))
 host_os+=$(findstring mingw32,$(full_host_os))
@@ -85,9 +82,6 @@ host_cmake=FreeBSD
 endif
 ifeq ($(host_os),darwin)
 host_cmake=Darwin
-endif
-ifeq ($(host_os),android)
-host_cmake=Android
 endif
 
 AT_$(V):=
