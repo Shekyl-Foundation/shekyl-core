@@ -2285,8 +2285,8 @@ by default.
    - **Windows:** `SetThreadPriority(GetCurrentThread(),
      THREAD_PRIORITY_LOWEST)`. Not `THREAD_MODE_BACKGROUND_BEGIN`, which
      also lowers the thread's I/O and memory priority.
-   - **Android** shares Linux's per-thread nice. **The other unix
-     targets (the BSDs)** have no mapping under normal scheduling:
+   - **The other unix targets (the BSDs)** have no mapping under
+     normal scheduling:
      `setpriority(PRIO_PROCESS, 0, …)` there is the whole process, and
      the only per-thread alternative is the idle class, which the ruling
      forbids. On those targets the call reports *unsupported* and the

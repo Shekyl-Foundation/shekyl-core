@@ -61,13 +61,6 @@
       "reason": "the Tor Project publishes no Expert Bundle for riscv64 Linux"
     },
     {
-      "os": "android",
-      "arch": "aarch64",
-      "gitian_host": "aarch64-linux-android",
-      "disposition": "unavailable",
-      "reason": "Shekyl does not manage a Tor process on Android"
-    },
-    {
       "os": "freebsd",
       "arch": "x86_64",
       "gitian_host": "x86_64-unknown-freebsd",
