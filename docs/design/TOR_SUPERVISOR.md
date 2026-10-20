@@ -57,7 +57,7 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | Ruling | Content |
 | --- | --- |
 | Supervisor | One Rust owner holds the managed Tor's state; its inputs are the child, Tor's status and descriptor events, and an end-to-end probe of our own onion; *usable* is defined by the probe; every other component reads this owner and none reads Tor state on its own |
-| Start is iteration one | No separate bootstrap-failure path; capped backoff from the first launch; never gives up. A Tor-only node waits and announces (hop-0 fail-closed), and never switches to clearnet by itself (`TSR-Q11`, 2026-10-20); a dual-posture node runs clearnet meanwhile |
+| Start is iteration one | No separate bootstrap-failure path; capped backoff from the first launch; never gives up. While Tor is down, a Tor-only node and a node with clearnet on behave as the posture table (`TSR-Q10`, `TSR-Q11`) |
 | Respawn (as amended by `TSR-Q1` and `TSR-Q3`) | On a process fault (§4.4): reap; the `DataDirectory` and the onion are kept; republish the same onion; the connector parks and resumes on the new route; each death and recovery announced; a crash loop reaches the cap loudly. Backoff with resume for an operator's Tor |
 | Teardown (as amended by `TSR-Q1`) | One routine for stop and respawn: close the owning control connection, wait within `SHUTDOWN_GRACE` (5 s), kill and reap. `SIGTERM` and `DEL_ONION` dropped. The directory's disposition follows why it ran: at boot end it is tombstone-renamed **after** the reap, deleted off the runtime under a bound, and swept at the next start; at a respawn it is kept |
 | Launch (as amended by `TSR-Q7`) | Tor starts with `__OwningControllerFD`: an inherited socket that is already an authenticated, owning control connection (§4.7) |
@@ -72,11 +72,44 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | `TSR-Q7`: `__OwningControllerFD` on every platform (2026-10-15) | The launch hands Tor one end of a connected socket pair as its owning control connection; no control port, port file, cookie, `TAKEOWNERSHIP` or `RESETCONF` (§4.7) |
 | `TSR-Q8`: the public directory cache persists across boots (Rick, 2026-10-19) | The daemon keeps Tor's public directory cache across boots; guards, keys and the onion stay per boot. A daemon-owned cache directory (mode 0700) holds `cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and `cached-certs`. At launch, only those exact names are copied into the fresh per-boot `DataDirectory`, each a regular file, never reached through a symlink, and under a size limit. At a clean stop the same names are copied back; after a crash the previous cache stays as it was. `state`, keys, `lock` and every other file are never kept, and Tor is never pointed at the cache directory itself. The per-boot rule becomes: nothing identity-bearing (guards, keys, the onion) joins one boot to the next. Why: a node that bootstraps cold at every boot looks to its directory guard like a new install each time, and with a cache it looks like every other Tor client; each restart stops loading the fallback mirrors and directory authorities; and the cold-bootstrap tail, which is directory fetching (§10, `TSR-M1`), goes. What a consensus-diff request reveals, roughly how long the node was offline, adds little to a directory guard that already sees the node's address. Tor verifies the whole cache itself, so a bad cache costs one cold boot and cannot steer path selection. `tor-pin-verify`'s live tests start from a seeded cache, and one cold-start test remains. The step-8 removal (§12, increment 3) stands: a first install, and a boot after a long time offline, are still cold |
 | `TSR-Q9`: the managed Tor looks like every other Tor client (Rick, 2026-10-19) | Every choice the supervisor makes about Tor's behaviour is tested against this, increment 3's included. It bears on `TSR-M6`'s open question, how to keep a crash before Tor's first `state` write from re-picking guards. Of the two answers, `AvoidDiskWrites 0` until that first write is the more ordinary behaviour, because a stock client writes its `state` promptly, and Rick expects it to be chosen. The other, counting respawns before that write, changes nothing Tor does. Increment 3 settles it with evidence, including whether switching `AvoidDiskWrites` on the owning connection after the first write is reliable |
-| `TSR-Q10`: a managed Tor that is absent or fails is announced, never refused (Rick, 2026-10-19) | The node starts and holds its own transactions while its managed Tor is not running: not installed, failing its pin, or failing to start. With clearnet on it syncs over clearnet; a Tor-only node (`clearnet = off`) waits for Tor and syncs nothing (§1, "Start is iteration one"), and the node never switches to clearnet by itself (`TSR-Q11`). The message says exactly what the node is doing, says why, and names the fixes: restore the bundle, or point `tor-file` at it; attach a Tor of the operator's own with `tor = operator`, which is also the route for bridges; or a clearnet choice, with its consequence: on a Tor-only node `clearnet = on` (the node syncs over clearnet and holds its own transactions until Tor runs), and on any node clearnet-only, `tor = off` with `clearnet = on`. `tor = off` alone on a Tor-only node leaves no connector, an offline node, so the message never offers it alone. It repeats once per backoff cap, and `TSR-Q4`'s Health boolean is false meanwhile. Clearnet-only (`tor = off` with `clearnet = on`) is a supported posture, never a default and never automatic (`TSR-Q11`); the node states its consequence: the node's transactions go out over clearnet without Tor's address hiding (unencrypted until the Noise flip). TB-2 is amended to match |
-| `TSR-Q11`: no automatic fallback (Rick, 2026-10-20) | A fallback that gives up privacy happens only by the operator's own act. A Tor-only node waits for Tor and announces; it never switches to clearnet by itself, even with an announcement, because "Tor is down" can be an adversary's doing: whoever can block or break the node's Tor would otherwise choose its transport. With clearnet on, the node syncs over clearnet and still holds its own transactions until Tor runs. The clearnet choices `TSR-Q10` names are the operator's act |
-| `TSR-Q12`: the operator sees the reason through RPC (Rick, 2026-10-20) | Restricted Status (the node's own CLI and GUI) carries: the posture, which is the `tor` and `clearnet` settings; the Tor state, as §4.3's projection (Restarting, Restarting (held), Bootstrapping, Usable, Degraded); the cause, as a typed §5 value, not English text; since when, and the respawn count; whether the node is syncing, and over what; whether it is holding its own transactions; and the fixes that apply, as typed values (restore the bundle at a named location, `tor = operator`, the clearnet choices with their consequences). Unrestricted Health keeps `TSR-Q4`'s one boolean: Tor's state and timing would let an outsider tie the RPC endpoint to the onion's lifetime (§8). One rendering: a single Rust function in a shared crate turns the typed values into words, under rule 81; `shekyl-cli` uses it, the GUI uses it or its exact strings, and the daemon's posture log line renders from it, so the log and both clients say the same thing. The wallet's send flow reads Health before broadcasting; when the node cannot originate, it says the transaction is held, not sent. Who builds what: increment 3 exposes all of it as one typed read and renders the posture line from the same values (§12); the RW round ([`RPC_WIRE.md`](RPC_WIRE.md)) names the Status and Health fields. The GUI's daemon, running as the same user, gets Status: `RPC_CHANNEL.md` RT-15 makes a same-user caller on the owner-only socket or pipe the owner, with every grant, and names that default install as its case (confirmed by the RW lane, 2026-10-20). A GUI pointed at a service-mode daemon, another user's or another machine's goes over the channel and sees Status only if its enrolment grants it; the plaintext loopback listener carries only the `view` preset, which has no Status; `shekyl-cli` and `shekyl-gui-wallet` display it, the GUI's item tracked in that repository |
+| `TSR-Q10`: a managed Tor that is absent or fails is announced, never refused (Rick, 2026-10-19) | The daemon starts. A pin failure does not execute the binary (`TSR-F6`). What the node does, and which `ManagedTorFix` values the message offers, is the posture table in this section. Health is false meanwhile (`TSR-Q4`). A failed start is a Process cause (§4.4), not this row. TB-2 matches this row |
+| `TSR-Q11`: no automatic fallback (Rick, 2026-10-20) | A fallback that gives up privacy happens only by the operator's own act: whoever can block or break the node's Tor would otherwise choose its transport. The `Clearnet::Off` row of the posture table is that rule. `ClearnetOn` and `ClearnetOnly` are the operator's act, and the node does not apply them |
+| `TSR-Q12`: the operator sees the reason through RPC (Rick, 2026-10-20) | Restricted Status (the node's own CLI and GUI) carries: the posture, which is the `tor` and `clearnet` settings; the Tor state, as §4.3's projection (Restarting, Restarting (held), Bootstrapping, Usable, Degraded); the cause, as a typed §5 value, not English text; since when, and the respawn count; whether the node is syncing, and over what; whether it is holding its own transactions; and the fixes that apply, as `ManagedTorFix` values from the posture table, never sentences. Unrestricted Health keeps `TSR-Q4`'s one boolean: Tor's state and timing would let an outsider tie the RPC endpoint to the onion's lifetime (§8). One rendering: a single Rust function in a shared crate turns the typed values into words, under rule 81; `shekyl-cli` uses it, the GUI uses it or its exact strings, and the daemon's posture log line renders from it, so the log and both clients say the same thing. The wallet's send flow reads Health before broadcasting; when the node cannot originate, it says the transaction is held, not sent. Who builds what: increment 3 exposes all of it as one typed read and renders the posture line from the same values (§12); the RW round ([`RPC_WIRE.md`](RPC_WIRE.md)) names the Status and Health fields. The GUI's daemon, running as the same user, gets Status: `RPC_CHANNEL.md` RT-15 makes a same-user caller on the owner-only socket or pipe the owner, with every grant, and names that default install as its case (confirmed by the RW lane, 2026-10-20). A GUI pointed at a service-mode daemon, another user's or another machine's goes over the channel and sees Status only if its enrolment grants it; the plaintext loopback listener carries only the `view` preset, which has no Status; `shekyl-cli` and `shekyl-gui-wallet` display it, the GUI's item tracked in that repository |
 | `TSR-Q13`: polling, and typed values on the wire (Rick, 2026-10-20) | Clients read Status on their normal refresh: state changes are rare and already announced in the log. Pushed events wait until the RW round has a subscription mechanism. The wire carries typed causes and fixes, never sentences: sentences would be reworded differently by each client and could not be translated, while typed values keep the meaning fixed and leave the words to the one renderer (`TSR-Q12`) |
 | `TSR-Q6`: the private-network cases | Best effort, not a gate. The private network is chutney or a hand-built `TestingTorNetwork` from the pinned bundle, at the implementer's choice; it runs §7's two cases if it can be made to work, is never a latency source, and its absence blocks nothing |
+
+### Posture while the managed Tor is down — RULED 2026-10-20 (`TSR-Q10`, `TSR-Q11`)
+
+The daemon starts. Two facts stay separate. A pin failure does not execute
+the binary: discovery found nothing, or the pin gate refused the spawn, and
+no spawn is attempted (`TSR-F6`, §4.4 Install). A start that fails after a
+good pin is a Process cause (§4.4). It is announced the same way, and it is
+not an install cause.
+
+What the node does is fixed by the connector settings. The message offers
+`ManagedTorFix` values. Increment 3 defines that enum next to the typed
+Status read (§12). Each variant names a `Tor` or `Clearnet` setting from
+`shekyl-daemon-config`; the enum is not a config key and not a second way
+to set those types. The wire carries the variant. One renderer turns it
+into words (`TSR-Q13`).
+
+| `ManagedTorFix` | The settings it names |
+| --- | --- |
+| `RestoreManaged` | Stay `Tor::Managed`. Restore the pinned bundle, or set `tor-file` to a bundle that passes the pin |
+| `Operator` | `Tor::Operator`. Bridges are this route, not a managed-Tor option |
+| `ClearnetOn` | `Clearnet::On`, and Tor stays `Tor::Managed`. The node syncs over clearnet and holds its own transactions until Tor runs |
+| `ClearnetOnly` | `Tor::Off` and `Clearnet::On` |
+
+`Tor::Off` with `Clearnet::Off` is offline. The message does not offer that pair.
+
+| Connectors, managed Tor down | What the node does | Fixes offered |
+| --- | --- | --- |
+| `Clearnet::On` | Syncs over clearnet. Holds its own transactions until Tor runs. `TSR-Q4`'s Health boolean is false. Announces once per backoff cap | `RestoreManaged`, `Operator`, `ClearnetOnly` |
+| `Clearnet::Off` | Waits for Tor. Syncs nothing. Holds its own transactions. Does not set `Clearnet::On`: whoever can block or break the node's Tor would otherwise choose its transport (`TSR-Q11`). Health is false. Announces once per backoff cap | `RestoreManaged`, `Operator`, `ClearnetOn`, `ClearnetOnly` |
+
+Clearnet-only is the operator's `ClearnetOnly` act, never a default
+(`TSR-Q11`). The node warns on every boot. TB-1 states the consequence,
+including that the link is unencrypted until the Noise flip.
 
 `TSR-F9` and `TSR-F10` propose amending parts of the brief's rulings; each
 says which and why.
@@ -161,8 +194,8 @@ growing difference is suspended time.
 **TSR-F6 (medium; Tor lane). A respawn through a held witness re-runs a binary
 verified hours earlier.** The wallet closed this gap (`service.rs:17-22`): the
 daemon re-runs discovery and the pin gate at every spawn. A failed pin at
-respawn is announced, never refused (TB-2): it is the named state
-`InstallDefect`, no spawn, retry at the cap.
+respawn does not spawn that binary, and the daemon still starts (the posture
+table, `TSR-Q10`): the state is `InstallDefect`, retry at the cap.
 
 **TSR-F7 (medium; brief correction). A fixed bootstrap deadline plus a fresh
 directory can never converge on a slow link.** If bootstrap needs longer than
@@ -385,7 +418,7 @@ faults in the Tor process, so only those respawn:
 | External | outbound blocked, `NETWORK_LIVENESS DOWN`, `DIR_ALL_UNREACHABLE`, clock skew | none but waiting; Tor retries itself; announce with the fix; **never respawn** |
 | Service | descriptor upload failing past a bound; probe failing while outbound is usable | republish on the running Tor (`ADD_ONION` again); escalate to Process only if the control command itself fails |
 | Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing | respawn |
-| Install | pin fails at spawn (`TSR-F6`) | no spawn; announce; retry at the cap |
+| Install | pin fails at spawn, or discovery finds nothing (`TSR-F6`) | no spawn, so the binary is not executed; the daemon starts (the posture table); announce; retry at the cap |
 | Local resource | data directory unwritable or out of space (checked before each spawn); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
 
 A stalled bootstrap is not a cause in any class (Rick, 2026-10-19). In the
@@ -586,9 +619,12 @@ and stops the managed Tor (#1088).
 
 ## 5. Rule-82 states
 
-Each row is one typed cause, and each fix one typed value, that the Status
-read carries (`TSR-Q12`). The words in the "Shown as" and "Fix named" columns
-are the one renderer's, never the wire's (`TSR-Q13`).
+Each row is one typed cause, and each fix one `ManagedTorFix` value, that
+the Status read carries (`TSR-Q12`). The words in the "Shown as" and "Fix
+named" columns are the one renderer's, never the wire's (`TSR-Q13`). While
+the managed Tor is down, the message is this row's cause-fix composed with
+the fixes the posture table offers for the connector settings. The posture
+sentence lives in that table.
 
 | State | Source | Shown as | Fix named to the operator | Remedy |
 | --- | --- | --- | --- | --- |
@@ -599,19 +635,17 @@ are the one renderer's, never the wire's (`TSR-Q13`).
 | Resumed from suspend | `CLOCK_JUMPED` | Bootstrapping, briefly | none | re-evaluate now |
 | Onion unreachable | the probe, `HS_DESC FAILED` | Degraded (inbound) | none; recovering | republish |
 | Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | respawn |
-| Tor install defect, or no Tor installed | the pin gate at spawn; discovery finding nothing | Restarting (held) | what the node is doing (syncing over clearnet and holding its own transactions, or, Tor-only, waiting for Tor and holding them), why (the file that failed, or none found), and the fixes: restore the bundle or point `tor-file` at it; `tor = operator` with a Tor of your own (also the route for bridges); or a clearnet choice with its consequence: `clearnet = on` on a Tor-only node (syncs over clearnet, holds its own transactions until Tor runs), clearnet-only (`tor = off` with `clearnet = on`) on any (`TSR-Q10`, `TSR-Q11`) | retry at the cap; the message repeats once per cap |
+| Tor install defect | the pin gate at spawn | Restarting (held) | `RestoreManaged`, naming the file that failed. The binary is not executed. Also the fixes the posture table offers | retry at the cap; the message repeats once per cap |
+| No Tor installed | discovery finding nothing | Restarting (held) | `RestoreManaged`, naming that none was found. `tor-file` may name a bundle that passes the pin. Also the fixes the posture table offers | retry at the cap; the message repeats once per cap |
 | Data directory unusable | the pre-spawn check | Restarting (held) | the path's problem: not writable, or out of space | retry at the cap |
 | Open-file limit reached | `TOO_MANY_CONNECTIONS` | Degraded | the limit and the count; raise it, in the platform's terms | wait; retry at the cap |
 | Tor version flagged | `DANGEROUS_VERSION` | announcement | upgrade Shekyl when a release re-pins Tor (TB-10), never Tor itself | none |
 
 Rule 81 applies to every message: the words name what the operator sees and
-can do, not Tor's vocabulary. While the managed Tor is not running, every
-message that names the posture says what the node is doing: syncing over
-clearnet and holding its own transactions, or, on a Tor-only node, waiting for
-Tor and holding them (`TSR-Q10`). It never says "clearnet-only": that word is
-the operator's choice of `tor = off` with `clearnet = on`. Bridges are not configured on the managed
-Tor; an operator who needs them runs a Tor of their own with `tor = operator`
-(`TSR-Q10`).
+can do, not Tor's vocabulary. While the managed Tor is not running, the
+message is the cause's fix composed with the posture table (`TSR-Q10`). It
+says "clearnet-only" only for the operator's `ClearnetOnly` act. Bridges are
+`ManagedTorFix::Operator`.
 
 ## 6. Rejected alternatives
 
@@ -792,8 +826,9 @@ its PR leaves draft.
    public directory cache across boots (`TSR-Q8`, §4.7), with `tor-pin-verify`'s
    live tests starting from a seeded cache and one cold-start test kept, and it
    tests its Tor choices against `TSR-Q9`, settling `TSR-M6`'s open question.
-   It exposes `TSR-Q12`'s values as one typed read, and the posture log line
-   renders from the same values through the one renderer.
+   It defines `ManagedTorFix` (§1's posture table) and exposes `TSR-Q12`'s
+   values as one typed read beside that enum. The posture log line renders
+   from the same values through the one renderer.
 4. The probe nonce and the probe.
 5. The supervisor becomes the Tor link's publisher, in place of the zone host.
 6. Acceptance of the supervisor. The C++ deletions this increment used to

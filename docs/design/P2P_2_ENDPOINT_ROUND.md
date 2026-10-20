@@ -561,9 +561,9 @@ than its title suggests.
 > [`TOR_BUNDLE_DISTRIBUTION.md`](TOR_BUNDLE_DISTRIBUTION.md) `TB-1`…`TB-3`
 > rule that a node has Tor unless its operator explicitly declines it
 > (`tor = off`). A managed Tor that is absent or fails is announced, never
-> refused (`TB-2`, `TOR_SUPERVISOR.md` `TSR-Q10`): the node starts, holds its
-> own transactions and says what it is doing, and the seam row "tor control
-> unavailable" below applies from the first boot.
+> refused (`TB-2`, [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) posture table,
+> `TSR-Q10`). The seam row "tor control unavailable" below applies from the
+> first boot.
 >
 > **Amended 2026-10-15 (ratified by Rick, not yet implemented):**
 > [`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) (`TSR-`) makes the managed Tor a
