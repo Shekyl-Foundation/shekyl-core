@@ -182,6 +182,10 @@ ARMED_SLOW=(
 # name-check below, so the decision cannot rot silently.
 #   generate_ct2_tier_b_fixture — fixture regenerator, not a pass/fail
 #     proposition; run manually when the CT-2 Tier-B scenarios change.
+#   zstd_corpus::zstd_corpus_capture — the block and transaction corpus
+#     the zstd → ruzstd measurement reads (Rick, 2026-10-19), not a
+#     pass/fail proposition: it writes blobs under ZSTD_CORPUS_OUT and is
+#     run by hand for that measurement.
 #   rt_p5::rt_p5_dry_run, rt_p5::rt_p5_registered_run — RT-P5's sizes
 #     part, a registered measurement
 #     (docs/benchmarks/rt_p5_rpc_message_sizes_20261017.md), not a
@@ -223,6 +227,7 @@ DECIDED_DARK=(
   engine::regtest_e2e::generate_ct2_tier_b_fixture
   engine::regtest_e2e::rt_p5::rt_p5_dry_run
   engine::regtest_e2e::rt_p5::rt_p5_registered_run
+  engine::regtest_e2e::zstd_corpus::zstd_corpus_capture
   engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied
   engine::regtest_e2e::e2e_drain_wire_shape_matches_a_real_transfer
   engine::regtest_e2e::e2e_release_accepted_and_connected

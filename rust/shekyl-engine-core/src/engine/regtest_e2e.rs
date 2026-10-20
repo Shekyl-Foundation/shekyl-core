@@ -6131,3 +6131,6 @@ mod origin;
 
 #[path = "regtest_e2e_rt_p5.rs"]
 mod rt_p5;
+
+#[path = "regtest_e2e_zstd_corpus.rs"]
+mod zstd_corpus;
