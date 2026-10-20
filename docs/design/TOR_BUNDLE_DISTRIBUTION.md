@@ -317,9 +317,8 @@ with that as the stated reason.
      pinned target does until step 4.
 3. **FreeBSD:** TB-5's `Unavailable` arm and its user guide.
 4. **Close the `Unavailable` gaps** (TB-4, Rick 2026-10-19): every OS ships
-   its Tor. The Tor Project publishes an `android-aarch64` Expert Bundle, so
-   Android can be pinned as the others are; FreeBSD and riscv64 Linux have no
-   Expert Bundle and wait on building tor from the signed source (§3).
+   its Tor. FreeBSD and riscv64 Linux have no Expert Bundle and wait on
+   building tor from the signed source (§3).
    `check_tor_pin_targets.py` prints every pending row on every run.
 
 The Foundation's own hosts are reconfigured one at a time after step 1, to the

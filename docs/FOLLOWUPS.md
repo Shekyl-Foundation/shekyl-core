@@ -1156,7 +1156,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-11`, `TB-12`
 
-- **Ship a Tor on Android, FreeBSD and riscv64 Linux: their `unavailable` rows are gaps to close (`TB-4`, Rick 2026-10-19).** Every OS ships its Tor. Android: the Tor Project publishes an `android-aarch64` Expert Bundle, so it can be pinned as the other targets are, with its own launch test (`TB-11`'s rule). FreeBSD and riscv64 Linux: no Expert Bundle exists, so they wait on building tor from the signed source inside gitian (`TOR_BUNDLE_DISTRIBUTION.md` §3), and meanwhile an operator attaches a Tor of their own with `tor = operator` (`TB-5`'s guide). Blocker for Android: none beyond the work; for FreeBSD and riscv64, the source-build round. Falsify by each row of `config/tor_pins.json` reading `pinned`. — [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) §5 step 4
+- **Ship a Tor on FreeBSD and riscv64 Linux: their `unavailable` rows are gaps to close (`TB-4`, Rick 2026-10-19).** Every OS ships its Tor. No Expert Bundle exists for either, so they wait on building tor from the signed source inside gitian (`TOR_BUNDLE_DISTRIBUTION.md` §3), and meanwhile an operator attaches a Tor of their own with `tor = operator` (`TB-5`'s guide). Blocker: the source-build round. Falsify by each row of `config/tor_pins.json` reading `pinned`. — [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) §5 step 4
   - Target: pre-genesis
   - Owner: [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-4`, `TB-5`
 
