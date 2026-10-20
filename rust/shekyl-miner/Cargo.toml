@@ -19,6 +19,9 @@ shekyl-block-template = { path = "../shekyl-block-template" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # `check_hash` and `Difficulty`: the comparison the validator's D1b makes.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+# The daemon's one hasher budget (PR2-Q3): a permit per hash, in the
+# miner's class, the lowest.
+shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 # The longhash: the verifier's cache path, the one RandomX in the daemon.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 # One ledger row per worker (D5).

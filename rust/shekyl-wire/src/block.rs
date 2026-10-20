@@ -35,7 +35,7 @@ use crate::READ_LEN_CAP;
 /// their own blobs), so its largest parseable form is the sum of what
 /// [`Block::read`]'s caps already accept:
 ///
-/// * header — fixed fields with varint slack (`< 128` bytes);
+/// * header — fixed fields with varint slack ([`MAX_BLOCK_HEADER_SIZE`]);
 /// * the coinbase [`Transaction`] — `≤ MAX_TX_SIZE` (a vast over-estimate: a
 ///   coinbase is one `gen` input, `≤ MAX_OUTPUTS` outputs, an extra the
 ///   coinbase grammar fixes at `1184·n` bytes of payload plus the pubkey,
@@ -51,7 +51,12 @@ use crate::READ_LEN_CAP;
 /// from a hostile/oversized blob *before* the structured count-caps run (the
 /// same role the up-front `MAX_TX_SIZE` check plays in
 /// [`Transaction::from_bytes`]). It is a DoS bound, **not** a consensus bound.
-pub const MAX_BLOCK_BLOB_SIZE: usize = MAX_TX_SIZE + READ_LEN_CAP * 32 + 128;
+pub const MAX_BLOCK_BLOB_SIZE: usize = MAX_TX_SIZE + READ_LEN_CAP * 32 + MAX_BLOCK_HEADER_SIZE;
+
+/// The largest serialized [`BlockHeader`]: its fixed fields with varint
+/// slack. The header part of [`MAX_BLOCK_BLOB_SIZE`], and of the ingest
+/// door's size bound before parse (`shekyl_chain_ingest::admission`).
+pub const MAX_BLOCK_HEADER_SIZE: usize = 128;
 
 /// The value every valid header's `minor_version` carries (CEN-B2).
 ///

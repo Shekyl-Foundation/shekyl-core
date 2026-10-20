@@ -161,6 +161,19 @@ impl Pool {
             .map(|(txid, held)| (*txid, &held.tx))
     }
 
+    /// The body of `txid` if the node shows it: what a compact block's
+    /// listed hash is resolved from (`DRS_X_STORE_FLIP.md` PR2-Q4). An entry
+    /// the pool holds that is not public is `None`, as if not held: a node
+    /// that resolved a stem transaction from its pool would tell the block's
+    /// sender, by not asking for it, that it holds it.
+    #[must_use]
+    pub fn shown_body(&self, txid: &TxHash) -> Option<&Transaction> {
+        self.held()
+            .get(txid)
+            .filter(|held| shown(&held.record))
+            .map(|held| &held.tx)
+    }
+
     /// What the relay still holds back: entries not yet public — what it
     /// takes at open (module docs).
     pub fn unpublished(&self) -> impl Iterator<Item = (TxHash, &Transaction)> + '_ {

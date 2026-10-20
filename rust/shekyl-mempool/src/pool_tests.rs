@@ -10,7 +10,7 @@ use shekyl_chain_rules::harness::fixture::{listed_on, spendable_chain};
 use shekyl_chain_rules::{AdmissionPolicy, RuleSet};
 use shekyl_types::UnixSeconds;
 
-use super::{Admission, Arrival, Duplicate, Pool};
+use super::{Admission, Arrival, Duplicate, Pool, Step1};
 use crate::door::Judged;
 
 fn tmp(name: &str) -> std::path::PathBuf {
@@ -73,7 +73,7 @@ fn a_refused_transaction_leaves_no_trace() {
         let admission = pool
             .admit_from(
                 tx,
-                None,
+                Step1::Judge(None),
                 Arrival::Carried,
                 UnixSeconds::from_raw(1),
                 &view,

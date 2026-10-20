@@ -73,6 +73,7 @@ struct BenchSubstrate {
 
 impl Substrate for BenchSubstrate {
     type Fault = Infallible;
+    type Held = ();
 
     fn local_clock(&self) -> Result<Timestamp, Infallible> {
         Ok(self.clock)

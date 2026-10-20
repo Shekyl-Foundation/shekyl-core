@@ -16,7 +16,7 @@ use super::Scenario;
 
 impl<P: Substrate + Send + Sync + 'static> Scenario<P>
 where
-    P::Fault: std::fmt::Debug,
+    P::Fault: std::fmt::Debug + Send,
 {
     /// The switch, then the pool (DRS-E5 PR-b b4): the demoted blocks'
     /// listed transactions go to `pool` after the switch lands

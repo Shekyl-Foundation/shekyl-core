@@ -159,7 +159,7 @@ mod view;
 pub mod harness;
 pub mod relay_floor;
 
-pub use alt::{alt_against, AltChainView, AltValid, Fork, InvertedFork};
+pub use alt::{alt_against, anchor_band, AltChainView, AltValid, AnchorBand, Fork, InvertedFork};
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
     closed_and_final, drawable_epoch_walked_back, shard_close, shard_close_height, Accrual,
@@ -192,8 +192,9 @@ pub use relay_floor::{fee_ladder_at, fee_operands_at, relay_floor_at, relay_floo
 pub use reorg::{journal_horizon, journal_horizon_under, SlashLogFloor, D_MAX};
 pub use rule_set::{
     AdmissionPolicy, AdmissionPolicyId, DifficultyRule, FakechainSchedule,
-    FakechainScheduleRefused, ReorgCapNotInsideEpoch, ResponseWindowOutrunsAnchor, RuleSchedule,
-    RuleSet, RuleSetId, SettlementEpochBlocks, SettlementSchedule,
+    FakechainScheduleRefused, ReorgCapNotInsideEpoch, ReorgCapOutrunsSeedEpoch,
+    ResponseWindowOutrunsAnchor, RuleSchedule, RuleSet, RuleSetId, SettlementEpochBlocks,
+    SettlementSchedule,
 };
 pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::block_weight::{

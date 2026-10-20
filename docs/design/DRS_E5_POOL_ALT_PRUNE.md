@@ -889,9 +889,14 @@ The decorator and the pool live in a **new crate `shekyl-mempool`**
 interface (the public bit), M10 eviction, template selection
 (`fill_block_template`'s successor), and the open-time reconcile (`E5-8`).
 It depends on `shekyl-chain-rules` and `shekyl-chain-store`, and
-`shekyl-chain-ingest` depends on it for the switch's returns. **No FFI
-crate depends on it** (DX-Q5, DX-Q7): the Rust daemon wires the pool at
-the DRS-X flip, and C++ never reaches it through the FFI. It
+`shekyl-chain-ingest` depends on it: the ingest service is its consumer of
+the connector (DRS-X PR 2) — reconciled by the tip follower per committed
+tip, offered a switch's returns and an admitted alternative's stored
+bodies, and read, shown entries only, for a compact block's bodies. **No
+FFI export reaches it** (DX-Q5, DX-Q7): `shekyl-ffi` links it only through
+the ingest service its one arrival entry offers into, and exports nothing
+of the pool; the Rust daemon wires it at the DRS-X flip, and C++ never
+reaches it through the FFI. It
 never implements `connect`'s view type, so rule 23's STAGED surface is
 clean: every symbol it mints has a caller in the same PR, and the crate is
 staged whole for the flip.
@@ -1563,7 +1568,9 @@ fixture would be among the first retired. The oracle is a Rust
 self-differential (a6): a store that went A → switch → B equals a store
 that connected B directly. No exporter change, no `alt_blocks` read, no
 corpus arrival event — the scenario driver feeds arrivals straight to the
-actor, and the DRS-X Round 0 designs the arrival event for live sources.
+actor. The live arrival event is the ingest service's door (DRS-X PR 2,
+`DRS_X_STORE_FLIP.md` DX-Q2): the router places each arrival by its
+parent and drives this switch through `OfferAlt` and `Reorganize`.
 
 ### E5-Q10 — PR-a before PR-b?
 
@@ -1650,9 +1657,11 @@ Not E5's; found while reading the census at the pin.
   `CommitOutcome::Committed` only (`engine.rs`), never on a concealed
   `Accepted` — a peer's stem transaction resubmitted over RPC must never
   make this node its originator. The router judges against a live view,
-  so `PoolFault::TipMoved` can reach it, where today's callers judge over
-  a fixed snapshot whose tip cannot move: it re-reads the chain and judges
-  again, and never answers a moved tip as an internal fault.
+  so `PoolFault::TipMoved` can reach it, where a fixed snapshot's callers
+  cannot meet it: it re-reads the chain and judges again, and never
+  answers a moved tip as an internal fault. Built in DRS-X PR 2: a carried
+  body the tip moved under is offered again against a fresh snapshot, and
+  the tip follower's reconcile follows the next publication.
 
 ---
 

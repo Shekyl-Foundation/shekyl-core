@@ -176,20 +176,11 @@ impl E2 {
         // against the specification, not toward the C++ (census CEN-E2,
         // ruled 2026-10-15): an unreached anchor is no floor, and a block at
         // its height that does not match it is CEN-E1's refusal.
-        let Some(anchor) = trust.anchors().last_at_or_below(fork.recorded_tip().height) else {
-            // No anchored chain: no floor to stand on and no cap to bind.
-            coverage.insert(Self::ROW);
-            return Ok(());
-        };
-        if fork.root().height < anchor.height {
-            return Err(InvalidBlock::new(Self::ROW, Locus::Block));
-        }
-        // How many recorded blocks the alternative would pop. [`Fork::new`]
-        // refused a root above the recorded tip, so the span is defined;
-        // the store faults that pair as SI-7 before a `Fork` exists
-        // (`AltChain::build`).
-        let pops = fork.pops();
-        if pops > rule_set.reorg_cap() {
+        //
+        // A hit records nothing: the row did not pass. No reached anchor,
+        // and a fork inside the band, record the row and pass. The cap does
+        // not bind on an unanchored chain (`anchor_band`).
+        if crate::alt::anchor_band(fork, rule_set, trust).is_some() {
             return Err(InvalidBlock::new(Self::ROW, Locus::Block));
         }
         coverage.insert(Self::ROW);

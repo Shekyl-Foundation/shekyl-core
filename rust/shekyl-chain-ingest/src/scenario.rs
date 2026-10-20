@@ -51,8 +51,7 @@ use shekyl_block_template::{
     build, EmissionOperands, MinerKeys, Template, TemplateContext, TemplateError,
 };
 use shekyl_chain_rules::{
-    form, seed_height, Candidate, CenRow, FormAttempt, InvalidBlock, ReferenceClaims, RuleSet,
-    StructurallyValid, Substrate, Target,
+    form, seed_height, Candidate, CenRow, FormAttempt, ReferenceClaims, RuleSet, Substrate, Target,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::ChainStore;
@@ -69,8 +68,8 @@ use zeroize::Zeroizing;
 
 use crate::connector::{
     AltBlocksHeld, Apply, BondRecordOf, BudgetAccruingOf, ChainFacts, Connector, ConnectorArgs,
-    Digest, HashAt, HeaderAt, OfferAlt, Offered, PlannedBlock, RefusePromotion, Reorganize, Rewind,
-    Rewound, RootAt, RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
+    Digest, HashAt, HeaderAt, OfferAlt, Offered, RefusePromotion, Reorganize, Rewind, Rewound,
+    RootAt, RunFault, SwitchPlan, Switched, TableRows, TemplateFacts,
 };
 use crate::schedule::ChainRules;
 use crate::target::TargetLedger;
@@ -82,18 +81,6 @@ mod types;
 pub use types::{
     Clocked, FreeHash, Mined, NextBlock, ReorgTiming, StepOutcome, Unconnected, CLOCK_START,
 };
-
-/// One block `form` refused while a switch was forming, in the
-/// demoted-then-promoted order the plan named.
-struct FormRefusal {
-    /// Its place in that order. Below the demoted length, the block is one
-    /// this node connected; at or above it, the block is a promotion.
-    index: usize,
-    /// The block's identity.
-    hash: BlockHash,
-    /// The verdict.
-    refused: InvalidBlock,
-}
 
 /// The connector actor's task handle.
 type ConnectorTask = tokio::task::JoinHandle<
@@ -153,7 +140,7 @@ impl Scenario<FreeHash> {
 
 impl<P: Substrate + Send + Sync + 'static> Scenario<P>
 where
-    P::Fault: std::fmt::Debug,
+    P::Fault: std::fmt::Debug + Send,
 {
     /// A scenario over `pow`'s longhash, at a fresh store named `name`.
     pub fn open_with(name: &str, pow: P) -> Self {
@@ -184,7 +171,7 @@ where
     ) -> Self {
         let path = tmp(name);
         let (connector, task) = spawn_connector(ConnectorArgs {
-            store: store(&path),
+            store: store(&path).into(),
             rules,
         });
         Self {
@@ -290,6 +277,9 @@ where
             Ok(references) => references,
             Err(never) => match never {},
         };
+        // The longhash looks the cache up. This driver is the chain, so
+        // it pins the seed first; a harness longhash's pin does nothing.
+        self.substrate.pin_seed(&seed);
         let formed = form(
             candidate,
             &rule_set,
@@ -371,6 +361,9 @@ where
     /// the proofs are verified at promotion, where the plan carries the
     /// claims ([`SwitchPlan::references_for`]).
     pub async fn offer(&self, mined: &Mined) -> Result<Offered, RunFault> {
+        // This driver's own substrate, so the form can look the cache up.
+        // An untrusted alternative on the live service never pins.
+        self.substrate.pin_seed(&mined.seed);
         let formed = form(
             mined.candidate(),
             &self.rules.in_force(mined.height),
@@ -409,6 +402,7 @@ where
             .template(facts, now, listed)
             .map_err(StepOutcome::Template)?;
         let candidate = Candidate::new(template.block.clone(), template.transactions.clone());
+        self.substrate.pin_seed(&seed);
         let formed = form(
             candidate.clone(),
             &self.rules.in_force(height),
@@ -436,6 +430,7 @@ where
     /// again here under empty reference claims, then [`OfferAlt`].
     #[cfg(test)]
     pub async fn offer_unconnected(&self, block: &Unconnected) -> Result<Offered, RunFault> {
+        self.substrate.pin_seed(&block.seed);
         let formed = form(
             block.candidate.clone(),
             &self.rules.in_force(block.height),
@@ -478,31 +473,21 @@ where
         plan: &SwitchPlan,
     ) -> Result<(Switched, ReorgTiming), RunFault> {
         let started = std::time::Instant::now();
-        // Demoted blocks carry no reference claims: the cheap tier never
-        // compares one (it judges headers), so a claim would buy no
-        // verdict and cost N blocks' proofs verified again — proofs the
-        // chain verified when it connected them. Promoted blocks claim off
-        // the plan's header chain (`SwitchPlan::references_for`).
-        let mut work: Vec<(Candidate, PlannedBlock, ReferenceClaims)> = Vec::new();
-        if plan.verdict != shekyl_difficulty::ForkChoiceVerdict::ForcedSwitch {
-            work.extend(
-                plan.demoted
-                    .iter()
-                    .map(|d| (d.candidate.clone(), d.at.clone(), ReferenceClaims::EMPTY)),
-            );
-        }
-        let demoted_len = work.len();
-        work.extend(plan.promoted.iter().map(|p| {
-            let candidate = Candidate::new(p.block.clone(), p.transactions.clone())
-                .with_attestation_witness(p.witness.clone());
-            let references = plan.references_for(&p.at, &candidate);
-            (candidate, p.at.clone(), references)
-        }));
-        let mut formed_all = match self.form_parallel(work) {
+        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let formed_plan = match crate::plan_form::form_plan(
+            plan,
+            self.rules,
+            &self.substrate,
+            threads,
+            &|| (),
+        ) {
             Ok(formed) => formed,
-            Err(refusal) => {
+            Err(crate::plan_form::PlanStop::Substrate(fault)) => {
+                panic!("the driver's substrate does not fault: {fault:?}")
+            }
+            Err(crate::plan_form::PlanStop::Refused(refusal)) => {
                 let formed = started.elapsed();
-                if refusal.index < demoted_len {
+                if refusal.demoted {
                     let (hash, refused) = (refusal.hash, refusal.refused);
                     panic!(
                         "a demoted block this node connected forms without reference claims: {refused} ({hash:?})"
@@ -528,8 +513,7 @@ where
                 ));
             }
         };
-        let promoted = formed_all.split_off(demoted_len);
-        let demoted = formed_all;
+        let crate::plan_form::FormedPlan { demoted, promoted } = formed_plan;
         let formed = started.elapsed();
         let started = std::time::Instant::now();
         let switched = self
@@ -558,96 +542,6 @@ where
                 switch: started.elapsed(),
             },
         ))
-    }
-
-    /// `form` every `(candidate, plan)` pair, in order, across the cores
-    /// this host offers — step 1 of the switch, which production runs on
-    /// its RandomX workers off the actor (`DRS_E5_POOL_ALT_PRUNE.md` §2.3).
-    ///
-    /// Through [`Recalled`](crate::substrate::Recalled): every block a plan
-    /// names was hashed when this node first judged it, and the plan
-    /// carries that record, so a switch calls RandomX only where a seed
-    /// claim differs from the recorded one (ruling 3, 2026-10-15). The
-    /// first refusal, in plan order, is the result; every thread is joined.
-    fn form_parallel(
-        &self,
-        work: Vec<(Candidate, PlannedBlock, ReferenceClaims)>,
-    ) -> Result<Vec<StructurallyValid>, FormRefusal> {
-        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-        let chunk = work.len().div_ceil(threads).max(1);
-        let recalled = crate::substrate::Recalled::new(
-            &self.substrate,
-            work.iter()
-                .map(|(_, at, _)| (at.hash, at.recorded.seed(), at.recorded.pow())),
-        );
-        let substrate = &recalled;
-        let rules = self.rules;
-        let mut chunks = Vec::new();
-        let mut rest = work;
-        let mut start = 0;
-        while !rest.is_empty() {
-            let n = chunk.min(rest.len());
-            let tail = rest.split_off(n);
-            chunks.push((start, rest));
-            start += n;
-            rest = tail;
-        }
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = chunks
-                .into_iter()
-                .map(|(start, chunk)| {
-                    scope.spawn(move || {
-                        let mut formed = Vec::with_capacity(chunk.len());
-                        for (local, (candidate, at, references)) in chunk.into_iter().enumerate() {
-                            let hash = at.hash;
-                            match form(
-                                candidate,
-                                &rules.in_force(at.height),
-                                substrate,
-                                at.seed,
-                                at.target,
-                                &references,
-                                FormAttempt::FIRST,
-                            ) {
-                                Ok(Ok(valid)) => formed.push(valid),
-                                Ok(Err(refused)) => {
-                                    return Err(FormRefusal {
-                                        index: start + local,
-                                        hash,
-                                        refused,
-                                    });
-                                }
-                                Err(fault) => {
-                                    panic!("the driver's substrate does not fault: {fault:?}")
-                                }
-                            }
-                        }
-                        Ok(formed)
-                    })
-                })
-                .collect();
-            let mut formed = Vec::new();
-            let mut refusal: Option<FormRefusal> = None;
-            for handle in handles {
-                match handle.join().expect("a forming thread") {
-                    Ok(blocks) => {
-                        if refusal.is_none() {
-                            formed.extend(blocks);
-                        }
-                    }
-                    Err(found) => {
-                        refusal = Some(match refusal {
-                            Some(kept) if kept.index <= found.index => kept,
-                            _ => found,
-                        });
-                    }
-                }
-            }
-            match refusal {
-                Some(refusal) => Err(refusal),
-                None => Ok(formed),
-            }
-        })
     }
 
     /// Pop the chain back to `to`.
@@ -706,7 +600,7 @@ where
     /// A fresh connector over the store at [`Self`]'s path, under the same rules.
     fn start_connector(&mut self) {
         let (connector, task) = spawn_connector(ConnectorArgs {
-            store: (self.opener)(&self.path),
+            store: (self.opener)(&self.path).into(),
             rules: self.rules,
         });
         self.task = Some(task);
@@ -786,55 +680,77 @@ where
         now: Timestamp,
         listed: &[Transaction],
     ) -> Result<Template, TemplateError> {
-        // Written straight into the zeroizing cell: no bare copy of the
-        // scalar's bytes exists on this stack after the context drops.
-        let mut tx_key_secret = Zeroizing::new([0u8; 32]);
-        tx_key_secret[..8].copy_from_slice(&self.next_tx_secret.to_le_bytes());
-        // A commitment per template, from the same counter, so two
-        // templates never share one. Nothing opens it: the driver holds no
-        // witness key or seed yet, so its blocks issue no draw. The driver
-        // that reveals a seed commits to one it can open (`SO-D12`
-        // increment 3).
-        let mut commitment = *shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT.as_bytes();
-        commitment[..8].copy_from_slice(&self.next_tx_secret.to_le_bytes());
+        let counter = self.next_tx_secret;
         self.next_tx_secret += 1;
-        let rule_set: RuleSet = self.rules.in_force(facts.connecting);
-        build(&TemplateContext {
-            height: facts.connecting,
-            previous: facts.previous,
-            curve_tree_root: facts.curve_tree_root,
-            // The driver mints no attestation records (CEN-I20 admits no
-            // 0x0B field on the coinbase), so every template commits the
-            // empty set's root — the arm CEN-B4 judges a witness-less block
-            // against (slice 8 row 10).
-            attestation_root: AttestationRoot::from_bytes(
-                shekyl_archival_retention::empty_attestation_root(),
-            ),
-            major_version: rule_set.header_major_version(),
+        build_template(
+            self.rules,
+            &self.params,
+            &self.miner,
+            counter,
+            facts,
             now,
-            median_timestamp: facts.median_timestamp,
-            unlock_window: rule_set.mined_money_unlock_window(),
-            emission: EmissionOperands {
-                already_generated_coins: facts.parent_coins_generated,
-                total_burned: facts.total_burned,
-                // CEN-G6b: the effective median the validator will judge
-                // this block's weight against, read on the same view.
-                median_weight: facts.medians.effective_median.to_raw(),
-                tx_volume: facts.tx_volume,
-                // CEN-F17's `n`, as the validator reads it: the shards the
-                // parent chain has closed, read on the same view by the
-                // validator's own definition. (Zero until a scenario chain
-                // issues `T` ids; it was a literal zero until wave B.)
-                closed_shards: facts.closed_shards,
-            },
-            params: &self.params,
-            miner: &self.miner,
-            tx_key_secret,
-            extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
-            draw_commitment: shekyl_wire::tx_extra::DrawCommitment::from_bytes(commitment),
             listed,
-        })
+        )
     }
+}
+
+/// The scenario's template for `facts`, listing `listed`, at clock `now`:
+/// the production builder over the harness miner, with the coinbase secret
+/// and the draw commitment taken from `counter`, so two templates never
+/// share either. Nothing opens the commitment: the driver holds no witness
+/// key or seed, so its blocks issue no draw (`SO-D12` increment 3 is the
+/// driver that reveals one). The scenario's own blocks and the tip
+/// follower's test template source both build through it.
+pub(crate) fn build_template(
+    rules: ChainRules,
+    params: &EconomicParams,
+    miner: &MinerKeys,
+    counter: u64,
+    facts: &ChainFacts,
+    now: Timestamp,
+    listed: &[Transaction],
+) -> Result<Template, TemplateError> {
+    // Written straight into the zeroizing cell: no bare copy of the
+    // scalar's bytes exists on this stack after the context drops.
+    let mut tx_key_secret = Zeroizing::new([0u8; 32]);
+    tx_key_secret[..8].copy_from_slice(&counter.to_le_bytes());
+    let mut commitment = *shekyl_wire::tx_extra::CONFORMING_DRAW_COMMITMENT.as_bytes();
+    commitment[..8].copy_from_slice(&counter.to_le_bytes());
+    let rule_set: RuleSet = rules.in_force(facts.connecting);
+    build(&TemplateContext {
+        height: facts.connecting,
+        previous: facts.previous,
+        curve_tree_root: facts.curve_tree_root,
+        // The driver mints no attestation records (CEN-I20 admits no
+        // 0x0B field on the coinbase), so every template commits the
+        // empty set's root — the arm CEN-B4 judges a witness-less block
+        // against (slice 8 row 10).
+        attestation_root: AttestationRoot::from_bytes(
+            shekyl_archival_retention::empty_attestation_root(),
+        ),
+        major_version: rule_set.header_major_version(),
+        now,
+        median_timestamp: facts.median_timestamp,
+        unlock_window: rule_set.mined_money_unlock_window(),
+        emission: EmissionOperands {
+            already_generated_coins: facts.parent_coins_generated,
+            total_burned: facts.total_burned,
+            // CEN-G6b: the effective median the validator will judge
+            // this block's weight against, read on the same view.
+            median_weight: facts.medians.effective_median.to_raw(),
+            tx_volume: facts.tx_volume,
+            // CEN-F17's `n`, as the validator reads it: the shards the
+            // parent chain has closed, read on the same view by the
+            // validator's own definition.
+            closed_shards: facts.closed_shards,
+        },
+        params,
+        miner,
+        tx_key_secret,
+        extra_nonce: [0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
+        draw_commitment: shekyl_wire::tx_extra::DrawCommitment::from_bytes(commitment),
+        listed,
+    })
 }
 
 /// The reply error's handler arm, or a panic on a transport failure — the

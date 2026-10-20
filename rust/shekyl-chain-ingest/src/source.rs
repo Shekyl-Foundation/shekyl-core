@@ -24,9 +24,13 @@
 //! - The **digest sink** records after each `Rewind` commit — the "digest
 //!   after each switch" the reorg fixture family needs.
 //!
-//! Who *decides* a rewind is the source's business: the reorg fixture scripts
-//! it; DRS-X's p2p source computes the heavier-chain switch (the daemon's
-//! alt-chain logic) and emits it. The pipeline only executes.
+//! Who *decides* a rewind is the source's business, and only a scripted
+//! source has one to decide: the reorg fixture scripts it. A live arrival
+//! is never a `Rewind`. The fork choice is ingest's: an arrival whose parent
+//! is not the tip is offered to the alt table, and the switch (`OfferAlt`,
+//! `Reorganize`, `switch.rs`) decides and carries out the heavier chain on
+//! the connector. An operator's `pop_blocks` reaches the connector as its own
+//! `Rewind` message, not through a source. The pipeline only executes.
 //!
 //! **`Inject` is the one out-of-band event** (DRS-E4 §3.8 item 3): a
 //! serve-credit bit the regtest injector wrote beside the chain, at its
@@ -40,7 +44,9 @@
 //! no captured chain but `emission-claim`.
 //!
 //! The corpus source (E2's first) carries all three kinds; the mutation
-//! family is Extend-only; the reorg family and DRS-X's p2p feed emit `Rewind`.
+//! family is Extend-only; the reorg family emits `Rewind`. The live daemon's
+//! arrivals are not a `Source`: they enter the ingest service's one door,
+//! which places each by its parent and replies per arrival.
 
 use shekyl_chain_rules::Candidate;
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
@@ -242,8 +248,8 @@ pub struct Sequenced<T> {
 
 /// A supplier of ordered ingest events.
 ///
-/// Implemented by the corpus reader (E2), the mutation and reorg fixture
-/// families, and DRS-X's p2p feed. A source is pulled, not pushed: the
+/// Implemented by the corpus reader (E2) and the mutation and reorg fixture
+/// families. A source is pulled, not pushed: the
 /// pipeline asks for the next event when it has room, so back-pressure is
 /// the caller's `next` cadence and no channel is hidden inside the trait.
 pub trait Source {
