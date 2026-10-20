@@ -1161,6 +1161,14 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-4`, `TB-5`
 
+- **Name the Tor Status and Health fields, and confirm the GUI's daemon grants Status (`TSR-Q12`, Rick 2026-10-20).** The supervisor's increment 3 exposes one typed read: the posture, the Tor state, the cause, since when and the respawn count, syncing and over what, whether the node holds its own transactions, and the fixes that apply. The RW round names those restricted Status fields and Health's one boolean (`TSR-Q4`), as typed values (`TSR-Q13`), and confirms that the GUI's daemon, running as the same user, gets a grant that carries Status (`RPC_CHANNEL.md` RT-15 makes a same-user caller the owner). Blocker: the RW round's naming pass, which Rick assigned to that round, not the Tor lane. Falsify by: `RPC_WIRE.md` naming each field and the grant. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) `TSR-Q12`
+  - Target: pre-genesis
+  - Owner: [`RPC_WIRE.md`](design/RPC_WIRE.md)
+
+- **Show the Tor posture in `shekyl-cli`, and hold a send the node cannot originate (`TSR-Q12`, Rick 2026-10-20).** `shekyl-cli` reads Status on its normal refresh (`TSR-Q13`) and shows it through the one renderer; the wallet's send flow reads Health before broadcasting and says the transaction is held, not sent, when the node cannot originate. The GUI's display is the same work in `shekyl-gui-wallet`, tracked there. Blocker: the Status read (increment 3) and its field names (the RW row above). Falsify by: a test in which a node with no usable address-hiding connector reports the send as held. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) `TSR-Q12`
+  - Target: pre-genesis
+  - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) `TSR-Q12`
+
 - **The wallet's Tor recovery has never run on Windows: three live respawn tests are `#[cfg(unix)]`.** `crash_is_survived_respawn_reaches_ready_again`, `onion_is_republished_on_every_incarnation` and `degraded_episode_clears_only_after_sustained_ready` (`rust/shekyl-tor-control-wallet/src/service.rs`) kill the managed tor with `pkill`, which Windows does not have, so `tor-pin-verify`'s Windows entry runs one wallet live test, not four. The GUI wallet is the primary Windows wallet, so the supervisor's crash, respawn and degraded-episode paths are the ones Windows users will meet first. Needs a Windows termination path for the tests (the managed tor's process, terminated by its handle or PID), then the three tests ungated and the Windows wallet floor raised to 4. Falsify by: the Windows entry of `tor-pin-verify` running all four wallet live tests green. — [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-11`
   - Target: pre-genesis
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §7
