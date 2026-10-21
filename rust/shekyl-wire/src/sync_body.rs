@@ -21,7 +21,7 @@ use std::io;
 use shekyl_crypto_hash::keccak256;
 use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash, TxHash};
 
-use crate::transaction::Transaction;
+use crate::transaction::{Ct, Transaction};
 
 /// A transaction in a synced block body.
 #[derive(Clone, PartialEq, Eq)]
@@ -63,6 +63,14 @@ impl SkeletonTx {
     /// and proof data, and the txid below ignores both.
     pub fn txid(&self) -> io::Result<TxHash> {
         let tx = Transaction::from_pruned_bytes(&self.unprunable)?;
+        // A null transaction is the coinbase, and the coinbase rides in the
+        // block. It has no prunable region and no authentication hash, so a
+        // skeleton's supplied components would not be part of its txid.
+        if matches!(tx.ct, Ct::Null(_)) {
+            return Err(io::Error::other(
+                "shekyl-wire: a null transaction is not a skeleton",
+            ));
+        }
         Ok(tx.hash_with_supplied_components(
             self.pqc_auth_hash,
             self.prunable_hash,

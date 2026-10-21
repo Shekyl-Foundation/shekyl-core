@@ -438,16 +438,6 @@ const SITES: &[Site] = &[
         "exact consumption: a blob that does not parse cleanly is not a transaction — H23's byte face, by construction",
     ),
     read_rule(
-        "unsupported ct type",
-        CenRow::H15,
-        "the pruned reader's second site (`Ct::read_base`); the same two arms",
-    ),
-    read_rule(
-        "transaction version {version} != {TX_VERSION}",
-        CenRow::H2,
-        "the pruned reader's second site (`Transaction::from_pruned_bytes`)",
-    ),
-    read_rule(
         "pruned segment {} exceeds {MAX_TX_SIZE}",
         CenRow::H1,
         "the size cap before the pruned parse; the full blob's cap is the arm above",
@@ -904,13 +894,14 @@ fn every_refusal_arm_of_the_twin_is_classified() {
     let invariant = count(|a| matches!(a, Arm::Invariant));
     assert_eq!(
         (parse, rule, policy, invariant),
-        (17, 44, 1, 5),
+        (17, 42, 1, 5),
         "the four counts (parse, rule, policy, invariant) moved — re-derive them, do not re-pin \
          (records-was: (15, 38, 1, 5) over the 59 `Err(` sites, before the key was widened; \
          (16, 40, 1, 5) over 62 until 2026-10-12, when the retired keyless JoinMarket byte \
-         gained its parse refusal; (17, 40, 1, 5) over 63 until the pruned-segment reader)"
+         gained its parse refusal; (17, 40, 1, 5) over 63 until the pruned-segment reader; \
+         (17, 44, 1, 5) over 67 while the pruned reader repeated the version and ct-type arms)"
     );
-    assert_eq!(parse + rule + policy + invariant, 67);
+    assert_eq!(parse + rule + policy + invariant, 65);
 }
 
 /// Shape: a trip is a rule or a policy arm's; a rule arm without one is a
