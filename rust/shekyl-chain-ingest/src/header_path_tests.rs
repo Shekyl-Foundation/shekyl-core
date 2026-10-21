@@ -118,7 +118,9 @@ where
     V::Fault: std::fmt::Debug,
 {
     let pow = PowBlob::read(&candidate.block.pow_blob()).expect("the preimage parses");
-    match form_header(&pow, rule_set, substrate, seed, target).expect("the mock answers") {
+    match form_header(&pow, rule_set, substrate, seed, target, FormAttempt::FIRST)
+        .expect("the mock answers")
+    {
         Err(refused) => Said::Refused(refused.rule),
         Ok(formed) => match judge_header(&formed, view, rule_set, trust) {
             Err(fault) => stale(&fault),
@@ -172,7 +174,7 @@ where
     V::Fault: std::fmt::Debug,
 {
     let pow = PowBlob::read(&candidate.block.pow_blob()).expect("the preimage parses");
-    let open = OpenHeader::from_pow(&pow, seed, target);
+    let open = OpenHeader::from_pow(&pow, seed, target, FormAttempt::FIRST);
     match judge_header_cheap(&open, view, rule_set, trust, substrate) {
         Err(ProspectFault::Substrate(_)) => panic!("the mock clock faulted"),
         Err(ProspectFault::Chain(fault)) => stale(&fault),
@@ -279,7 +281,7 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
                                 manifest.shape
                             );
                             let pow = PowBlob::read(&candidate.block.pow_blob()).expect("preimage");
-                            let open = OpenHeader::from_pow(&pow, seed, target);
+                            let open = OpenHeader::from_pow(&pow, seed, target, FormAttempt::FIRST);
                             let prospect = judge_header_cheap(
                                 &open,
                                 &view,
@@ -306,6 +308,7 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
 }
 
 fn at_first_later_block(
+    name: &str,
     body: impl FnOnce(
         &Candidate,
         &WriteBatch<'_, '_>,
@@ -321,7 +324,7 @@ fn at_first_later_block(
     let rules = rules_for(&manifest);
     let trust = rules.trust();
     let substrate = mock_with_the_real_clock();
-    let path = tmp("header-path-mutations");
+    let path = tmp(name);
     let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
     store
         .write(|batch| -> Result<(), StoreError> {
@@ -375,6 +378,7 @@ fn at_first_later_block(
 fn header_mutations_agree_with_validate() {
     let mut ran = false;
     at_first_later_block(
+        "header-path-mutations",
         |candidate, batch, rule_set, trust, substrate, seed, target| {
             let view = batch.chain_view();
             let mut major = candidate.clone();
@@ -463,6 +467,7 @@ fn header_mutations_agree_with_validate() {
 #[test]
 fn coinbase_rows_are_not_on_the_header_path() {
     at_first_later_block(
+        "header-path-coinbase",
         |candidate, batch, rule_set, trust, substrate, seed, target| {
             let view = batch.chain_view();
             let mut two = candidate.clone();
@@ -544,7 +549,7 @@ fn formed_header(
     target: Target,
 ) -> shekyl_chain_rules::FormedHeader {
     let pow = PowBlob::read(&candidate.block.pow_blob()).expect("preimage");
-    form_header(&pow, rule_set, substrate, seed, target)
+    form_header(&pow, rule_set, substrate, seed, target, FormAttempt::FIRST)
         .expect("mock")
         .expect("the header forms")
 }
@@ -915,7 +920,7 @@ fn the_cheap_checks_name_the_version_and_do_not_hash() {
             let seed = seed_of(&view, height);
             let target = target_of(&view, height, &rule_set);
             let pow = PowBlob::read(&chain[0].block.pow_blob()).expect("preimage");
-            let open = OpenHeader::from_pow(&pow, seed, target);
+            let open = OpenHeader::from_pow(&pow, seed, target, FormAttempt::FIRST);
             let prospect = judge_header_cheap(&open, &view, &rule_set, &trust, &substrate)
                 .expect("the cheap path does not hash")
                 .expect("the genesis header passes the cheap checks");
@@ -923,7 +928,7 @@ fn the_cheap_checks_name_the_version_and_do_not_hash() {
             assert!(prospect.coverage.contains(CenRow::B2));
             let mut bad = pow.clone();
             bad.header.major_version = bad.header.major_version.saturating_add(1);
-            let open = OpenHeader::from_pow(&bad, seed, target);
+            let open = OpenHeader::from_pow(&bad, seed, target, FormAttempt::FIRST);
             match judge_header_cheap(&open, &view, &rule_set, &trust, &substrate).expect("clock") {
                 Err(refused) => assert_eq!(refused.rule, CenRow::B1),
                 Ok(_) => panic!("a wrong major version passed the cheap checks"),
@@ -953,7 +958,15 @@ fn a_longhash_the_target_refuses_is_d1_on_both_paths() {
             let rule_set = rules.in_force(height);
             let seed = seed_of(&view, height);
             let pow = PowBlob::read(&chain[0].block.pow_blob()).expect("preimage");
-            match form_header(&pow, &rule_set, &substrate, seed, target).expect("the mock answers")
+            match form_header(
+                &pow,
+                &rule_set,
+                &substrate,
+                seed,
+                target,
+                FormAttempt::FIRST,
+            )
+            .expect("the mock answers")
             {
                 Err(refused) => assert_eq!(refused.rule, CenRow::D1),
                 Ok(_) => panic!("form_header accepted a longhash the target refuses"),

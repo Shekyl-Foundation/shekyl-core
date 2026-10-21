@@ -21,6 +21,7 @@ use shekyl_wire::{BlockHeader, PowBlob};
 
 use crate::coverage::RuleCoverage;
 use crate::fault::FormAttempt;
+use crate::rule_set::RuleSet;
 use crate::rules::difficulty::Target;
 use crate::rules::pow::LonghashSeal;
 
@@ -84,16 +85,16 @@ pub struct OpenHeader {
 }
 
 impl OpenHeader {
-    /// The identity is [`PowBlob::identity`]; the attempt is
-    /// [`FormAttempt::FIRST`]. No clock is read.
+    /// The identity is [`PowBlob::identity`]. `attempt` is which try this
+    /// is, the same value [`crate::form`] takes. No clock is read.
     #[must_use]
-    pub fn from_pow(pow: &PowBlob, seed: BlockHash, target: Target) -> Self {
+    pub fn from_pow(pow: &PowBlob, seed: BlockHash, target: Target, attempt: FormAttempt) -> Self {
         Self {
             header: pow.header.clone(),
             identity: pow.identity(),
             seed,
             target,
-            attempt: FormAttempt::FIRST,
+            attempt,
         }
     }
 
@@ -121,6 +122,9 @@ pub struct FormedHeader {
     /// The rows `form_header` ran and passed. Not a `validate` coverage,
     /// and this token mints no [`crate::ChainValid`].
     pub coverage: RuleCoverage,
+    /// The rules `form_header` was given. [`crate::judge_header`] faults
+    /// when it is handed another, the same check `validate` makes.
+    pub(crate) rule_set: RuleSet,
 }
 
 impl FormedHeader {

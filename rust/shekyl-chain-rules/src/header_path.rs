@@ -22,7 +22,7 @@ use shekyl_wire::{Block, BlockBody, PowBlob, Transaction, TxBody};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::fault::{Fault, FormAttempt};
+use crate::fault::{Fault, FormAttempt, Stale};
 use crate::header_facts::{FormedHeader, HeaderFacts, OpenHeader};
 use crate::header_ladder::{self, Derived};
 use crate::rule_set::RuleSet;
@@ -67,6 +67,9 @@ pub struct HeaderProspect {
 ///
 /// Order: the clock, once; B1; B2; the identity (B6); the longhash (D2);
 /// CEN-D1 against `target`. A refusal is the row `form` would name.
+/// `attempt` is which try this is, the same value `form` takes: a driver
+/// starts at [`FormAttempt::FIRST`] and passes back only the attempt a
+/// [`crate::Fault::Stale`] hands it. The rule set stays on the token.
 ///
 /// # Errors
 ///
@@ -78,6 +81,7 @@ pub fn form_header<S: Substrate>(
     substrate: &S,
     seed: BlockHash,
     target: Target,
+    attempt: FormAttempt,
 ) -> Result<Verdict<FormedHeader>, S::Fault> {
     let clock = substrate.local_clock()?;
     let mut coverage = RuleCoverage::EMPTY;
@@ -99,13 +103,17 @@ pub fn form_header<S: Substrate>(
         judged_at: clock,
         seed,
         target,
-        attempt: FormAttempt::FIRST,
+        attempt,
         proof,
     };
     if let Err(refused) = D1::judge(&facts, &mut coverage) {
         return Ok(Err(refused));
     }
-    Ok(Ok(FormedHeader { facts, coverage }))
+    Ok(Ok(FormedHeader {
+        facts,
+        coverage,
+        rule_set: *rule_set,
+    }))
 }
 
 /// Why [`judge_header_cheap`] stopped before a verdict: the substrate's
@@ -171,6 +179,13 @@ pub fn judge_header<'id, H: HeaderView<'id>>(
     rule_set: &RuleSet,
     trust: &Trust,
 ) -> Result<Verdict<HeaderJudged>, Fault<H::Fault>> {
+    if header.rule_set != *rule_set {
+        return Err(Fault::Stale(Stale::RuleSet {
+            formed_under: Box::new(header.rule_set),
+            in_force: Box::new(*rule_set),
+            retry: header.facts.attempt.next(),
+        }));
+    }
     let (derived, mut coverage) = match judge_rules(&header.facts, view, rule_set, trust)? {
         Ok(judged) => judged,
         Err(refused) => return Ok(Err(refused)),
@@ -257,5 +272,83 @@ fn txid_of(tx: &TxBody) -> Result<TxHash, ()> {
             .map(|tx| tx.hash())
             .map_err(|_| ()),
         TxBody::Skeleton(skeleton) => skeleton.txid().map_err(|_| ()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use shekyl_types::BlockHash;
+
+    use super::*;
+    use crate::fault::Retry;
+    use crate::harness::fixture::candidate;
+    use crate::harness::{expected_target, MockChain, MockSubstrate};
+    use crate::trust::Trust;
+
+    /// `judge_header` faults a rule set other than the one `form_header`
+    /// kept, and the retry is the attempt that was formed, not a fresh one.
+    #[test]
+    fn a_header_formed_under_another_rule_set_is_stale() {
+        let admits_two = RuleSet::admitting_for_tests(2);
+        let mut input = candidate(Vec::new());
+        input.block.header.major_version = 2;
+        let chain = MockChain::default();
+        let target = expected_target(&chain, &admits_two);
+        let pow = PowBlob::read(&input.block.pow_blob()).expect("the preimage parses");
+        let formed = form_header(
+            &pow,
+            &admits_two,
+            &MockSubstrate::default(),
+            BlockHash::NULL,
+            target,
+            FormAttempt::FIRST,
+        )
+        .expect("the mock answers")
+        .expect("major 2 passes B1 under a set that admits 2");
+        chain.with_view(|view| {
+            let fault = judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+                .expect_err("a different rule set is a fault");
+            let Fault::Stale(Stale::RuleSet {
+                formed_under,
+                in_force,
+                retry,
+            }) = fault
+            else {
+                panic!("expected Stale::RuleSet, got {fault:?}");
+            };
+            assert_eq!(*formed_under, admits_two);
+            assert_eq!(*in_force, RuleSet::GENESIS);
+            assert_eq!(retry, Retry::Again(FormAttempt::FIRST.next_for_tests()));
+        });
+    }
+
+    #[test]
+    fn the_last_header_attempt_does_not_restart() {
+        let admits_two = RuleSet::admitting_for_tests(2);
+        let mut input = candidate(Vec::new());
+        input.block.header.major_version = 2;
+        let chain = MockChain::default();
+        let target = expected_target(&chain, &admits_two);
+        let pow = PowBlob::read(&input.block.pow_blob()).expect("the preimage parses");
+        let formed = form_header(
+            &pow,
+            &admits_two,
+            &MockSubstrate::default(),
+            BlockHash::NULL,
+            target,
+            FormAttempt::last_for_tests(),
+        )
+        .expect("the mock answers")
+        .expect("the header forms");
+        chain.with_view(|view| {
+            let fault = judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED)
+                .expect_err("a different rule set is a fault");
+            match fault {
+                Fault::Stale(Stale::RuleSet { retry, .. }) => {
+                    assert_eq!(retry, Retry::Exhausted);
+                }
+                other => panic!("expected Stale::RuleSet, got {other:?}"),
+            }
+        });
     }
 }
