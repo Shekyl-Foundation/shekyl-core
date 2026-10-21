@@ -83,7 +83,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, BlockWeight};
 use crate::block::{Candidate, ProvenPow, StructurallyValid};
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, Stale};
-use crate::header_ladder::{self, HeaderFacts};
+use crate::header_ladder;
 use crate::rule_set::RuleSet;
 use crate::rules::alt::{K1b, D5, E2, K4};
 use crate::rules::block_weight::block_weight;
@@ -391,14 +391,26 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
     // The definitions over the stitched chain, the same derivation
     // `validate` runs over the recorded one. CEN-D5 records only when that
     // derivation produced a target: a D6 refusal is D4's verdict.
-    let HeaderFacts {
-        connecting,
-        cumulative_difficulty,
-        context,
-    } = match header_ladder::derive(&formed, alt_view, rule_set, trust, &mut coverage)? {
-        Ok(facts) => facts,
+    let derived = match header_ladder::derive(
+        formed.seed(),
+        formed.target(),
+        formed.attempt(),
+        alt_view,
+        rule_set,
+        &mut coverage,
+    )? {
+        Ok(derived) => derived,
         Err(refused) => return Ok(Err(refused)),
     };
+    let connecting = derived.connecting;
+    let cumulative_difficulty = derived.cumulative_difficulty;
+    let context = crate::rules::BlockContext::new(
+        &formed,
+        derived.tip,
+        derived.mtp_window,
+        derived.target,
+        trust,
+    );
     D5::record(&mut coverage);
 
     // The header ladder (`DRS_E5` §2.1, CEN-K4): the three segments

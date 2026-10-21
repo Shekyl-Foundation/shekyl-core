@@ -29,7 +29,7 @@
 
 use crate::census::CenRow;
 use crate::fault::ViewRead;
-use crate::rules::{BlockContext, HeaderRule, Rule};
+use crate::rules::{HeaderRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::HeaderView;
 use shekyl_types::BlockHash;
@@ -54,15 +54,15 @@ impl Rule for A2 {
 }
 
 impl HeaderRule for A2 {
-    fn check<'id, H: HeaderView<'id>>(
-        cx: &BlockContext<'_>,
+    fn check<'id, C: crate::rules::HeaderSource, H: HeaderView<'id>>(
+        cx: &C,
         _view: &H,
     ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
-        let expected = match cx.tip {
+        let expected = match cx.tip() {
             Some(tip) => tip.hash,
             None => Self::GENESIS_PREVIOUS,
         };
-        if cx.candidate().block.header.previous == expected {
+        if cx.block_header().previous == expected {
             Ok(Ok(()))
         } else {
             refused(Self::ROW, Locus::Block)

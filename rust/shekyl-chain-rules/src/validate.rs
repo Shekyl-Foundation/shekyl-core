@@ -58,7 +58,8 @@ use crate::block::{
 use crate::coverage::RuleCoverage;
 use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
-use crate::header_ladder::{self, HeaderFacts};
+use crate::header_facts::{HeaderFacts, Proven};
+use crate::header_ladder;
 use crate::rule_set::RuleSet;
 use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
@@ -165,12 +166,21 @@ pub fn form<S: Substrate>(
     // derived here, once, and travels on the token), then the expensive one
     // (D2; the seed is the caller's claim, D3 verifies it in `validate`).
     let hash = B6::identity(&candidate.block, &mut coverage);
-    let pow = D2::longhash(substrate, &candidate, seed, &mut coverage)?;
+    let pow = D2::longhash(substrate, &candidate.block.pow_blob(), seed, &mut coverage)?;
+    let facts = HeaderFacts {
+        header: candidate.block.header.clone(),
+        identity: hash,
+        judged_at: clock,
+        seed,
+        target,
+        attempt,
+        proof: Proven { longhash: pow },
+    };
 
     // CEN-D1 against the claimed target, before any body work: a block
     // short of its proof-of-work costs RandomX and nothing more. The claim
     // is verified where D4 derives the target (`validate`, `alt_against`).
-    if let Err(refused) = D1::judge(pow, target, &mut coverage) {
+    if let Err(refused) = D1::judge(&facts, &mut coverage) {
         return Ok(Err(refused));
     }
 
@@ -202,7 +212,7 @@ pub fn form<S: Substrate>(
     judge_form!(FormContext::new(&candidate, rule_set), coverage; H19);
 
     Ok(Ok(StructurallyValid::new(
-        candidate, *rule_set, coverage, clock, hash, seed, target, pow, attempt, verified,
+        candidate, *rule_set, coverage, facts, verified,
     )))
 }
 
@@ -411,14 +421,26 @@ pub fn validate<'id, V: ChainView<'id>>(
     // recorded by `form` and rides on the token. CEN-D6's zero is a
     // refusal, not a fault (rules::difficulty module docs). This tier does
     // not record D5: the window is the recorded chain.
-    let HeaderFacts {
-        connecting,
-        cumulative_difficulty,
-        context: cx,
-    } = match header_ladder::derive(&formed, view, rule_set, trust, &mut coverage)? {
-        Ok(facts) => facts,
+    let derived = match header_ladder::derive(
+        formed.seed(),
+        formed.target(),
+        formed.attempt(),
+        view,
+        rule_set,
+        &mut coverage,
+    )? {
+        Ok(derived) => derived,
         Err(refused) => return Ok(Err(refused)),
     };
+    let connecting = derived.connecting;
+    let cumulative_difficulty = derived.cumulative_difficulty;
+    let cx = crate::rules::BlockContext::new(
+        &formed,
+        derived.tip,
+        derived.mtp_window,
+        derived.target,
+        trust,
+    );
     let target = cx.target;
 
     // View-bound block-level predicates (4.A–4.G). The header rules are the
@@ -438,7 +460,10 @@ pub fn validate<'id, V: ChainView<'id>>(
         return Ok(Err(refused));
     }
     judge_block!(cx, view, coverage; B4);
-    if let Err(refused) = header_ladder::anchor_and_coinbase(&cx, view, &mut coverage)? {
+    if let Err(refused) = header_ladder::anchor(&cx, view, &mut coverage)? {
+        return Ok(Err(refused));
+    }
+    if let Err(refused) = header_ladder::coinbase_height(&cx, view, &mut coverage)? {
         return Ok(Err(refused));
     }
     judge_block!(cx, view, coverage; G1);

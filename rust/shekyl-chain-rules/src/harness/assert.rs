@@ -220,16 +220,21 @@ pub fn token_for_one_rule(chain: &MockChain, candidate: Candidate) -> Structural
         Ok(pow) => pow,
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
+    let target = expected_target(chain, &RuleSet::GENESIS);
+    let header = candidate.block.header.clone();
     StructurallyValid::new(
         candidate,
         RuleSet::GENESIS,
         crate::coverage::RuleCoverage::EMPTY,
-        substrate.clock,
-        hash,
-        seed,
-        expected_target(chain, &RuleSet::GENESIS),
-        pow,
-        FormAttempt::FIRST,
+        crate::header_facts::HeaderFacts {
+            header,
+            identity: hash,
+            judged_at: substrate.clock,
+            seed,
+            target,
+            attempt: FormAttempt::FIRST,
+            proof: crate::header_facts::Proven { longhash: pow },
+        },
         Vec::new(),
     )
 }

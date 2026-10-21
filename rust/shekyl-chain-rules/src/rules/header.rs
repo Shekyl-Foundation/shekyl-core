@@ -38,11 +38,12 @@
 
 use shekyl_types::BlockHash;
 use shekyl_wire::block::HEADER_MINOR_VERSION;
-use shekyl_wire::Block;
+use shekyl_wire::{Block, BlockHeader};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::ViewRead;
+use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{refused, InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView};
@@ -54,13 +55,20 @@ impl Rule for B1 {
     const ROW: CenRow = CenRow::B1;
 }
 
-impl FormRule for B1 {
-    fn check(cx: &FormContext<'_>) -> Verdict<()> {
-        if cx.candidate.block.header.major_version == cx.rule_set.header_major_version() {
+impl B1 {
+    /// The comparison `form` and `form_header` share.
+    pub(crate) fn judge(header: &BlockHeader, rule_set: &RuleSet) -> Verdict<()> {
+        if header.major_version == rule_set.header_major_version() {
             Ok(())
         } else {
             Err(InvalidBlock::new(Self::ROW, Locus::Block))
         }
+    }
+}
+
+impl FormRule for B1 {
+    fn check(cx: &FormContext<'_>) -> Verdict<()> {
+        Self::judge(&cx.candidate.block.header, cx.rule_set)
     }
 }
 
@@ -73,13 +81,20 @@ impl Rule for B2 {
     const ROW: CenRow = CenRow::B2;
 }
 
-impl FormRule for B2 {
-    fn check(cx: &FormContext<'_>) -> Verdict<()> {
-        if cx.candidate.block.header.minor_version == HEADER_MINOR_VERSION {
+impl B2 {
+    /// The comparison `form` and `form_header` share.
+    pub(crate) fn judge(header: &BlockHeader) -> Verdict<()> {
+        if header.minor_version == HEADER_MINOR_VERSION {
             Ok(())
         } else {
             Err(InvalidBlock::new(Self::ROW, Locus::Block))
         }
+    }
+}
+
+impl FormRule for B2 {
+    fn check(cx: &FormContext<'_>) -> Verdict<()> {
+        Self::judge(&cx.candidate.block.header)
     }
 }
 
@@ -147,8 +162,14 @@ impl B6 {
     /// The block's identity under CEN-B6, recorded in `coverage` as this
     /// row having been applied.
     pub(crate) fn identity(block: &Block, coverage: &mut RuleCoverage) -> BlockHash {
+        Self::identity_of(&block.pow_blob(), coverage)
+    }
+
+    /// [`Self::identity`] over a PoW preimage that is already bytes. One
+    /// function: `identity_of_pow_blob`, the same keccak `Block::hash` runs.
+    pub(crate) fn identity_of(pow_blob: &[u8], coverage: &mut RuleCoverage) -> BlockHash {
         coverage.insert(Self::ROW);
-        block.hash()
+        shekyl_wire::identity_of_pow_blob(pow_blob)
     }
 }
 

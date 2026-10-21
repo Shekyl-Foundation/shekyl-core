@@ -228,6 +228,10 @@ pub struct StructurallyValid {
     target: Target,
     pow: PowHash,
     attempt: FormAttempt,
+    /// The same claims, as the header rules read them. Built from the
+    /// fields above in [`Self::new`]; those fields stay so a reader of one
+    /// accessor and a reader of [`Self::facts`] see one construction.
+    facts: crate::header_facts::HeaderFacts<crate::header_facts::Proven>,
     /// Per listed slot, what its proof was verified against — `None` for a
     /// slot with nothing to verify or no claim to verify it under.
     references: Vec<Option<VerifiedReference>>,
@@ -236,34 +240,33 @@ pub struct StructurallyValid {
 impl StructurallyValid {
     /// Called by `form` once every stateless rule has passed, and nowhere
     /// else.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one field per stateless-stage output; a builder would let a caller omit one"
-    )]
-    pub(crate) const fn new(
+    pub(crate) fn new(
         candidate: Candidate,
         rule_set: RuleSet,
         coverage: RuleCoverage,
-        judged_at: Timestamp,
-        hash: BlockHash,
-        seed: BlockHash,
-        target: Target,
-        pow: PowHash,
-        attempt: FormAttempt,
+        facts: crate::header_facts::HeaderFacts<crate::header_facts::Proven>,
         references: Vec<Option<VerifiedReference>>,
     ) -> Self {
         Self {
             candidate,
             rule_set,
             coverage,
-            judged_at,
-            hash,
-            seed,
-            target,
-            pow,
-            attempt,
+            judged_at: facts.judged_at,
+            hash: facts.identity,
+            seed: facts.seed,
+            target: facts.target,
+            pow: facts.proof.longhash,
+            attempt: facts.attempt,
+            facts,
             references,
         }
+    }
+
+    /// The header facts `form` established, including the longhash.
+    pub(crate) const fn facts(
+        &self,
+    ) -> &crate::header_facts::HeaderFacts<crate::header_facts::Proven> {
+        &self.facts
     }
 
     /// What the listed transaction at `slot` had its proof verified
@@ -372,6 +375,7 @@ impl fmt::Debug for StructurallyValid {
             .field("pow", &self.pow)
             .field("attempt", &self.attempt)
             .field("references", &self.references)
+            .field("facts", &self.facts)
             .finish()
     }
 }
