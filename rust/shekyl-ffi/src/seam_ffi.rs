@@ -185,12 +185,31 @@ pub(crate) fn seam_bind_lock() -> &'static Mutex<()> {
     &LOCK
 }
 
-/// One admission table for the process. A new binding does not mint ids
+/// The node's socket table, installed once at start. A reader that arrives
+/// first creates the table itself; [`install_process_sockets`] then refuses,
+/// so `main` installs before any ban or bind.
+static PROCESS_SOCKETS: OnceLock<shekyl_seam::Sockets> = OnceLock::new();
+
+/// Install the node's socket table as the process table.
+///
+/// `false` when a table already exists: a reader called [`process_sockets`]
+/// first, and the two would not be the same table. The caller stops.
+#[must_use]
+pub fn install_process_sockets(sockets: shekyl_seam::Sockets) -> bool {
+    PROCESS_SOCKETS.set(sockets).is_ok()
+}
+
+/// The process's one admission table. A new binding does not mint ids
 /// again: a `reap` that arrives after the swap names an id the new hub
 /// does not hold.
-pub(crate) fn process_sockets() -> shekyl_seam::Sockets {
-    static TABLE: OnceLock<shekyl_seam::Sockets> = OnceLock::new();
-    TABLE.get_or_init(shekyl_seam::Sockets::new).clone()
+///
+/// Before [`install_process_sockets`], the first call creates the table.
+/// After it, every call is the node's table.
+#[must_use]
+pub fn process_sockets() -> shekyl_seam::Sockets {
+    PROCESS_SOCKETS
+        .get_or_init(shekyl_seam::Sockets::new)
+        .clone()
 }
 
 /// The process's one clock (Rick, 2026-10-14): ban deadlines, the bound
