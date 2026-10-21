@@ -407,9 +407,10 @@ pub enum Corrupt {
 /// [`Corrupt::DrawCount`]'s discriminant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DrawCountFault {
-    /// Height `h > 0` has no row at `h − 1`. Every connected height writes
-    /// one, so a hole is a row the file lost, including at an epoch
-    /// boundary where the count does not use the prior row's numbers.
+    /// The block before this one has no draw row. Every height whose count
+    /// is computed reads that row: inside an epoch its numbers are the
+    /// inputs, and at a later open the read is the hole check. A schedule
+    /// with no response window does not compute a count and does not read.
     MissingPrior {
         /// The height whose row is absent.
         prior: BlockHeight,

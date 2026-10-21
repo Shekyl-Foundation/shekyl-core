@@ -16,7 +16,7 @@
 
 use shekyl_archival_retention::{draw_count, draw_horizon, DrawableEpoch};
 use shekyl_types::archival::{BlockDraws, COUNTED_DRAWS};
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
@@ -49,21 +49,19 @@ pub(crate) struct CountMemo<'a> {
     pub memo: Option<&'a mut DrawableMemo>,
 }
 
-fn zero() -> BlockDraws {
-    BlockDraws {
-        count: 0,
-        carry: 0,
-        shortfall: 0,
-        issued_short: 0,
-        revealed: false,
-    }
-}
-
 /// The row stores the count in a `u32`. A count that does not fit is the
 /// width fault, not a wrapped value. Production's cap keeps a count far
 /// below this; the fault is what a target past it becomes.
 fn narrow_count(count: u64) -> Result<u32, DrawCountFault> {
     u32::try_from(count).map_err(|_| DrawCountFault::CountPastWidth { count })
+}
+
+/// `COUNTED_DRAWS · |D|`, the visible shortfall an epoch opens at.
+fn opening_shortfall(set_size: u64) -> Result<u64, DrawCountFault> {
+    u64::try_from(COUNTED_DRAWS)
+        .ok()
+        .and_then(|counted| counted.checked_mul(set_size))
+        .ok_or(DrawCountFault::ShortfallOverflow)
 }
 
 fn fault<VF>(height: BlockHeight, why: DrawCountFault) -> ViewRead<VF> {
@@ -94,48 +92,39 @@ impl super::Transition {
         let connecting = self.connecting;
         let schedule = self.schedule;
         let epoch = self.epoch;
-        // One match, the same fact `bundle_section::inside_window` reads: a
-        // schedule with no window has nothing a bundle can land inside, so it
-        // draws nothing. `draw_horizon` is not called — a stand-in window is
-        // not a window. The row is still written, so the next height's read of
-        // this one finds it. The shortfall is zero because the count is not
-        // computed: there is no visible shortfall to carry when nothing is drawn.
+        // The same fact `bundle_section::inside_window` reads. A schedule
+        // with no window has nothing a bundle can land inside, so no count
+        // is computed and the row chain is not consulted: there is no prior
+        // read and `draw_horizon` is not called. A stand-in window is not a
+        // window. The row is still written, a zero, so a connected height
+        // has a row for the boundary to retire.
         let Some(window) = schedule.challenge_response_blocks() else {
             coverage.insert(L17::ROW);
-            return Ok(zero());
+            return Ok(BlockDraws::ZERO);
         };
 
-        let height = connecting.to_raw();
-        let h_open = schedule.open_height(epoch.to_raw());
-        let at_open = height == h_open;
+        let open = BlockHeight::from_raw(schedule.open_height(epoch.to_raw()));
+        let at_open = connecting == open;
         let floor = BlockDrawsFloor::in_force(connecting, schedule);
-        let prior = if height > 0 {
-            Some(require_row(
-                view,
-                BlockHeight::from_raw(height - 1),
-                floor,
-                connecting,
-            )?)
-        } else {
-            None
-        };
-
         let set_size = self.resolve_len(view, at_open, opened, count_memo)?;
         let (visible, carry_in) = if at_open {
-            let visible = u64::try_from(COUNTED_DRAWS)
-                .ok()
-                .and_then(|counted| counted.checked_mul(set_size))
-                .ok_or_else(|| fault(connecting, DrawCountFault::ShortfallOverflow))?;
+            // The block before a later open wrote a row. Its numbers belong
+            // to the epoch that closed; this epoch counts `D` afresh. The
+            // read is the hole: every height whose count is computed wrote
+            // one. Height 0 is the first open and has no predecessor.
+            if let Some(prior) = connecting.checked_sub_count(BlockCount::ONE) {
+                require_row(view, prior, floor, connecting)?;
+            }
+            let visible = opening_shortfall(set_size).map_err(|why| fault(connecting, why))?;
             (visible, 0)
         } else {
-            let prior = prior.ok_or_else(|| {
-                fault(
-                    connecting,
-                    DrawCountFault::MissingPrior {
-                        prior: BlockHeight::from_raw(height.saturating_sub(1)),
-                    },
-                )
-            })?;
+            // Height 0 opens epoch 0, so a block inside an epoch has a
+            // predecessor. The prior row's shortfall, less what its
+            // admissions issued, is this block's visible shortfall.
+            let prior_height = connecting
+                .checked_sub_count(BlockCount::ONE)
+                .expect("height 0 opens its epoch");
+            let prior = require_row(view, prior_height, floor, connecting)?;
             let issued = u64::from(prior.issued_short);
             if issued > prior.shortfall {
                 return Err(fault(
@@ -149,9 +138,18 @@ impl super::Transition {
             (prior.shortfall - issued, prior.carry)
         };
 
-        let in_flight = in_flight(view, connecting, h_open, window.get(), floor, connecting)?;
+        let in_flight = in_flight(
+            view,
+            connecting,
+            open,
+            BlockCount::from_raw(window.get()),
+            floor,
+        )?;
         let unsettled = visible.saturating_sub(in_flight);
-        let horizon = draw_horizon(height - h_open, schedule.blocks().get(), window.get());
+        let relative = connecting
+            .checked_sub(open)
+            .expect("a block is at or after its epoch's open");
+        let horizon = draw_horizon(relative.to_raw(), schedule.blocks().get(), window.get());
         let Some((count, carry)) = draw_count(
             set_size,
             unsettled,
@@ -167,8 +165,7 @@ impl super::Transition {
             count,
             carry,
             shortfall: visible,
-            issued_short: 0,
-            revealed: false,
+            ..BlockDraws::ZERO
         })
     }
 
@@ -258,27 +255,30 @@ fn require_row<'id, V: ChainView<'id>>(
 }
 
 /// The draws still in flight: the `count` of every unrevealed row in
-/// `[max(h − W₂, h_open), h)`.
+/// `[max(connecting − window, open), connecting)`.
 fn in_flight<'id, V: ChainView<'id>>(
     view: &V,
-    height: BlockHeight,
-    h_open: u64,
-    window: u64,
-    floor: BlockDrawsFloor,
     connecting: BlockHeight,
+    open: BlockHeight,
+    window: BlockCount,
+    floor: BlockDrawsFloor,
 ) -> Result<u64, ViewRead<V::Fault>> {
-    let height = height.to_raw();
-    let start = height.saturating_sub(window).max(h_open);
+    let mut at = connecting.saturating_sub_count(window);
+    if at < open {
+        at = open;
+    }
     let mut sum = 0u64;
-    let mut at = start;
-    while at < height {
-        let row = require_row(view, BlockHeight::from_raw(at), floor, connecting)?;
+    while at < connecting {
+        let row = require_row(view, at, floor, connecting)?;
         if !row.revealed {
             sum = sum
                 .checked_add(u64::from(row.count))
                 .ok_or_else(|| fault(connecting, DrawCountFault::InFlightOverflow))?;
         }
-        at += 1;
+        // `at` is below `connecting`, so the successor fits.
+        at = at
+            .checked_add(BlockCount::ONE)
+            .expect("a height below the connecting block has a successor");
     }
     Ok(sum)
 }
@@ -288,7 +288,7 @@ mod tests {
     use super::*;
     use crate::harness::fixture::chain_of;
     use crate::view::{AtHeight, HeaderView};
-    use crate::{Corrupt, RuleSet, SettlementCheck};
+    use crate::RuleSet;
     use shekyl_archival_retention::{draw_count, draw_horizon, DrawablePair};
     use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
     use shekyl_types::archival::SettlementEpochBlocks;
@@ -352,24 +352,27 @@ mod tests {
             let row = transition
                 .block_draws(&view, None, &mut count_memo, &mut coverage)
                 .expect("a windowless count does not read the chain");
-            assert_eq!(row, zero());
+            assert_eq!(row, BlockDraws::ZERO);
             assert!(coverage.contains(CenRow::L17));
         });
     }
 
     /// The memo answers `|D|` only for the opening block's own hash. A
-    /// different hash misses and rebuilds. This chain records no digest,
-    /// so the rebuild is [`SettlementCheck::DrawableDigestMissing`] rather
-    /// than the other fork's set. Red edit: key the memo by the epoch alone.
+    /// different hash misses, the walk rebuilds this chain's empty set, and
+    /// that rebuild matches the digest an open with no bonds records. The
+    /// prior row on this view is [`BlockDraws::ZERO`], so both shortfalls
+    /// are zero and the carry is what tells the sets apart. Red edit: key
+    /// the memo by the epoch alone — the miss reads the other fork's pair.
     #[test]
     fn the_count_reads_the_set_stored_under_the_opening_hash() {
         let rules = RuleSet::GENESIS;
         let schedule = rules.settlement_schedule();
+        let seb = schedule.blocks().get();
         let window = schedule
             .challenge_response_blocks()
             .expect("genesis has a window")
             .get();
-        let chain = chain_of(2).without_drawable_digest();
+        let chain = chain_of(2);
         chain.with_view(|view| {
             let open = match view.header_at(BlockHeight::ZERO).expect("header") {
                 AtHeight::Recorded(header) => header.hash,
@@ -388,36 +391,47 @@ mod tests {
             let hit = transition
                 .block_draws(&view, None, &mut count_memo, &mut coverage)
                 .expect("the opening hash hits");
-            let (count, carry) = draw_count(
-                1,
-                0,
-                draw_horizon(1, schedule.blocks().get(), window),
-                schedule.blocks().get(),
-                0,
-            )
-            .expect("the horizon fits");
-            assert_eq!(hit.count, u32::try_from(count).expect("the count fits"));
-            assert_eq!(hit.carry, carry);
-            assert_eq!(hit.shortfall, 0);
-            assert_eq!(hit.issued_short, 0);
-            assert!(!hit.revealed);
+            let horizon = draw_horizon(1, seb, window);
+            let (count, carry) = draw_count(1, 0, horizon, seb, 0).expect("the horizon fits");
+            assert_ne!(carry, 0, "one pair leaves a fraction");
+            assert_eq!(
+                hit,
+                BlockDraws {
+                    count: u32::try_from(count).expect("the count fits"),
+                    carry,
+                    ..BlockDraws::ZERO
+                }
+            );
+            assert!(coverage.contains(CenRow::L17));
 
+            let other_hash = BlockHash::from_bytes([0xff; 32]);
             let mut other = DrawableMemo::new();
-            other.insert(epoch, BlockHash::from_bytes([0xff; 32]), one_pair(epoch));
+            other.insert(epoch, other_hash, one_pair(epoch));
             let mut miss_coverage = RuleCoverage::EMPTY;
             let mut miss_memo = CountMemo {
                 open_hash: open,
                 memo: Some(&mut other),
             };
-            let miss = transition.block_draws(&view, None, &mut miss_memo, &mut miss_coverage);
+            let miss = transition
+                .block_draws(&view, None, &mut miss_memo, &mut miss_coverage)
+                .expect("the miss rebuilds the empty set");
+            let (empty_count, empty_carry) =
+                draw_count(0, 0, horizon, seb, 0).expect("the horizon fits");
+            assert_eq!((empty_count, empty_carry), (0, 0));
+            assert_eq!(miss, BlockDraws::ZERO);
+            assert_ne!(hit.carry, miss.carry);
             assert_eq!(
-                miss,
-                Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
-                    epoch,
-                    check: SettlementCheck::DrawableDigestMissing,
-                })),
-                "a set stored under another opening hash is not this chain's"
+                other.get(epoch, &open).expect("the rebuild is kept").len(),
+                0
             );
+            assert_eq!(
+                other
+                    .get(epoch, &other_hash)
+                    .expect("the other fork stays")
+                    .len(),
+                1
+            );
+            assert!(miss_coverage.contains(CenRow::L17));
         });
     }
 }

@@ -156,12 +156,10 @@ pub struct MockChain {
     /// planted price or work total is a row that pass wrote, so planting
     /// either raises this to its epoch. With the prices, budgets, work
     /// totals and complete-tree sets, the archival reads this chain plants;
-    /// every other archival read answers *no bonds*.
+    /// every other archival read answers *no bonds*. The draw row is the
+    /// zero row and the drawable digest is the empty set's: this chain
+    /// has no bond history, and the count treats a missing row as a hole.
     slash_watermark: Option<SettlementEpoch>,
-    /// When set, `drawable_digest` answers `None`. The count's
-    /// missing-digest fault. Unset, the read is the empty set's digest:
-    /// the row an open with no bonds writes.
-    omit_drawable_digest: bool,
 }
 
 impl Default for MockChain {
@@ -180,7 +178,6 @@ impl Default for MockChain {
             sigma_works: BTreeMap::new(),
             complete_trees: BTreeMap::new(),
             slash_watermark: None,
-            omit_drawable_digest: false,
         }
     }
 }
@@ -370,15 +367,6 @@ impl MockChain {
     #[must_use]
     pub fn settled_through(mut self, epoch: SettlementEpoch) -> Self {
         self.slash_watermark = Some(self.slash_watermark.map_or(epoch, |w| w.max(epoch)));
-        self
-    }
-
-    /// `drawable_digest` answers `None`. A chain that connected writes the
-    /// empty set's digest; this is the open that wrote none, so a memo
-    /// miss is the missing-digest fault.
-    #[must_use]
-    pub fn without_drawable_digest(mut self) -> Self {
-        self.omit_drawable_digest = true;
         self
     }
 

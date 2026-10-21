@@ -368,6 +368,23 @@ pub struct BlockDraws {
     pub revealed: bool,
 }
 
+impl BlockDraws {
+    /// A block that drew nothing: no count, no carry, no shortfall, nothing
+    /// issued, and the seed unrevealed.
+    ///
+    /// The row a schedule with no response window writes, and the row a
+    /// view with no draw table answers. A store height that was never
+    /// written is `None`, not this value: absence is a hole, and this row
+    /// is a height that drew nothing.
+    pub const ZERO: Self = Self {
+        count: 0,
+        carry: 0,
+        shortfall: 0,
+        issued_short: 0,
+        revealed: false,
+    };
+}
+
 /// The digest of one epoch's drawable set, written when the epoch opens
 /// and compared with a re-walk when the epoch settles (`SO-D8d` layer 2,
 /// `SO-D10g`).

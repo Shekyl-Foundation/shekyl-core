@@ -17,6 +17,12 @@
 ///
 /// * `archival_reads!(empty)` — no bonds: `None`, empty, `PassCount::ZERO`,
 ///   `false`. The `Ok` is any `Self::Fault`, including [`Infallible`](core::convert::Infallible).
+///   Two reads answer the row an open with no bonds records, because the
+///   count treats absence as a hole. `block_draws` is
+///   `Some(BlockDraws::ZERO)`: a height that drew nothing. `drawable_digest`
+///   is [`crate::DrawableEpoch::empty`]'s digest for the epoch asked. The store
+///   answers `None` for a height or an epoch never written, and that
+///   absence is the hole.
 /// * `archival_reads!(empty, r_market from <path>, sigma_work from <path>,
 ///   budget from <path>, complete_trees from <path>, slash_watermark from <path>)`
 ///   — `empty`, except that five reads answer from `self.<path>`:
@@ -31,7 +37,9 @@
 ///   `rules/tx_emission_against.rs`). These are settled values the close
 ///   and the slash pass wrote, not records, so planting them tests no
 ///   construction. `complete_trees` is its own map: a planted `Σwork` does
-///   not invent a set (SI-31). An absent key stays `None`.
+///   not invent a set (SI-31). An absent key stays `None`. `block_draws`
+///   and `drawable_digest` are `empty`'s: this view has no bond history
+///   either, so it records the same zero row and the same empty digest.
 /// * `archival_reads!(fault <expr>)` — every read returns `Err(<expr>)`.
 ///   The expression is pasted into each method, so it is a unit constructor
 ///   or another value that is cheap to repeat.
@@ -194,7 +202,7 @@ macro_rules! archival_reads {
             (height: shekyl_types::BlockHeight, floor: $crate::BlockDrawsFloor);
             (::core::option::Option<shekyl_types::archival::BlockDraws>);
             (height, floor);
-            (::core::option::Option::None));
+            (::core::option::Option::Some(shekyl_types::archival::BlockDraws::ZERO)));
         $crate::archival_reads!(@emit $policy; drawable_digest;
             (
                 epoch: shekyl_types::SettlementEpoch,
@@ -222,45 +230,13 @@ macro_rules! archival_reads {
             (height, floor);
             (::std::vec::Vec::new()));
     };
-    // A view with no draw table is not a hole in one. The count refuses a
-    // missing prior row, and these views exist so a transition can be
-    // derived over them, so they answer the zero row a height that drew
-    // nothing recorded. They also answer the empty set's digest: an empty
-    // view's drawable set is empty, and the count compares the walk with
-    // the digest the open would have written. The store answers `None` for
-    // a height or an epoch never written; that absence is the hole.
-    (@emit {empty}; block_draws; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
-        fn block_draws(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
-            $crate::archival_reads!(@touch $($arg),*);
-            ::core::result::Result::Ok(::core::option::Option::Some(
-                shekyl_types::archival::BlockDraws {
-                    count: 0,
-                    carry: 0,
-                    shortfall: 0,
-                    issued_short: 0,
-                    revealed: false,
-                },
-            ))
-        }
-    };
+    // `block_draws` is the method table's `Some(BlockDraws::ZERO)`: the
+    // zero row does not depend on the height. `drawable_digest` does
+    // depend on the epoch, so both bondless policies share one body. The
+    // store answers `None` for an epoch never written; that absence is
+    // the hole.
     (@emit {empty}; drawable_digest; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
-        fn drawable_digest(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
-            $crate::archival_reads!(@touch $floor);
-            ::core::result::Result::Ok(::core::option::Option::Some({
-                let pairs: ::std::vec::Vec<shekyl_archival_retention::DrawablePair> =
-                    ::std::vec::Vec::new();
-                shekyl_archival_retention::DrawableEpoch::new(
-                    $epoch,
-                    ::std::vec::Vec::<(
-                        shekyl_types::PCanonicalId,
-                        shekyl_types::archival::ReceiptSignPk,
-                    )>::new(),
-                    pairs,
-                )
-                .expect("an empty set has no key to refuse")
-                .digest()
-            }))
-        }
+        $crate::archival_reads!(@empty_digest ($($params)*); $ok; $epoch; $floor);
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
@@ -307,40 +283,15 @@ macro_rules! archival_reads {
             ::core::result::Result::Ok(self.$($mark).+)
         }
     };
-    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; block_draws; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
-        fn block_draws(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
-            $crate::archival_reads!(@touch $($arg),*);
-            ::core::result::Result::Ok(::core::option::Option::Some(
-                shekyl_types::archival::BlockDraws {
-                    count: 0,
-                    carry: 0,
-                    shortfall: 0,
-                    issued_short: 0,
-                    revealed: false,
-                },
-            ))
-        }
-    };
     (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; drawable_digest; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
+        $crate::archival_reads!(@empty_digest ($($params)*); $ok; $epoch; $floor);
+    };
+    (@empty_digest ($($params:tt)*); $ok:ty; $epoch:expr; $floor:expr) => {
         fn drawable_digest(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $floor);
-            if self.chain.omit_drawable_digest {
-                return ::core::result::Result::Ok(::core::option::Option::None);
-            }
-            ::core::result::Result::Ok(::core::option::Option::Some({
-                let pairs: ::std::vec::Vec<shekyl_archival_retention::DrawablePair> =
-                    ::std::vec::Vec::new();
-                shekyl_archival_retention::DrawableEpoch::new(
-                    $epoch,
-                    ::std::vec::Vec::<(
-                        shekyl_types::PCanonicalId,
-                        shekyl_types::archival::ReceiptSignPk,
-                    )>::new(),
-                    pairs,
-                )
-                .expect("an empty set has no key to refuse")
-                .digest()
-            }))
+            ::core::result::Result::Ok(::core::option::Option::Some(
+                shekyl_archival_retention::DrawableEpoch::empty($epoch).digest()
+            ))
         }
     };
     (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {

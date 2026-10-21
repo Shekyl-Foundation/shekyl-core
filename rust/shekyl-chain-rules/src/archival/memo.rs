@@ -108,15 +108,6 @@ mod tests {
     use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
     use shekyl_types::{PCanonicalId, ShardId};
 
-    fn empty(epoch: SettlementEpoch) -> DrawableEpoch {
-        DrawableEpoch::new(
-            epoch,
-            Vec::<(PCanonicalId, shekyl_types::archival::ReceiptSignPk)>::new(),
-            [],
-        )
-        .expect("an empty set")
-    }
-
     fn one_pair(epoch: SettlementEpoch) -> DrawableEpoch {
         let persona = PCanonicalId::from_bytes([0x10; 32]);
         let key = HybridEd25519FnDsa::keypair_from_seeds(&[1; 32], &[101; 32])
@@ -146,7 +137,7 @@ mod tests {
         let epoch = SettlementEpoch::from_raw(4);
         let mut memo = DrawableMemo::new();
         memo.insert(epoch, hash(1), one_pair(epoch));
-        memo.insert(epoch, hash(2), empty(epoch));
+        memo.insert(epoch, hash(2), DrawableEpoch::empty(epoch));
         assert_eq!(memo.get(epoch, &hash(1)).expect("the first fork").len(), 1);
         assert_eq!(memo.get(epoch, &hash(2)).expect("the second fork").len(), 0);
         assert!(memo.get(epoch, &hash(3)).is_none());
@@ -157,9 +148,9 @@ mod tests {
     fn a_third_fork_drops_the_oldest() {
         let epoch = SettlementEpoch::from_raw(4);
         let mut memo = DrawableMemo::new();
-        memo.insert(epoch, hash(1), empty(epoch));
-        memo.insert(epoch, hash(2), empty(epoch));
-        memo.insert(epoch, hash(3), empty(epoch));
+        memo.insert(epoch, hash(1), DrawableEpoch::empty(epoch));
+        memo.insert(epoch, hash(2), DrawableEpoch::empty(epoch));
+        memo.insert(epoch, hash(3), DrawableEpoch::empty(epoch));
         assert!(memo.get(epoch, &hash(1)).is_none());
         assert!(memo.get(epoch, &hash(2)).is_some());
         assert!(memo.get(epoch, &hash(3)).is_some());
@@ -174,8 +165,8 @@ mod tests {
         let mut memo = DrawableMemo::new();
         let epoch0 = SettlementEpoch::from_raw(0);
         let epoch1 = SettlementEpoch::from_raw(1);
-        memo.insert(epoch0, hash(1), empty(epoch0));
-        memo.insert(epoch1, hash(1), empty(epoch1));
+        memo.insert(epoch0, hash(1), DrawableEpoch::empty(epoch0));
+        memo.insert(epoch1, hash(1), DrawableEpoch::empty(epoch1));
         // `h_close(0) + W₂ = 19 + 1`. Height 21 is past it; epoch 1 is not.
         memo.evict(BlockHeight::from_raw(21), schedule);
         assert!(memo.get(epoch0, &hash(1)).is_none());
