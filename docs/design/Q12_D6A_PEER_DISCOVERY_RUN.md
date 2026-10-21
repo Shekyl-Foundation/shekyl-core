@@ -25,10 +25,15 @@ been measured.
 The 2026-08-13 correction kept *"no arm run"*, which was true when it was
 written and is no longer: §§13–15 ran the arms the next day. Read §§10–12 as
 instrument-building and dress rehearsal, §§13–15 as the arms, and §16 as what
-the floor's number means. The seed estate carries a current binary and four
-hidden services. Ground findings below are verified at source and against the
-live estate on 2026-08-11 at pin
-[`14c2ee599`](https://github.com/Shekyl-Foundation/shekyl-core/commit/14c2ee599).
+the floor's number means. Ground findings below are verified at source and
+against the live estate on 2026-08-11 at pin
+[`14c2ee599`](https://github.com/Shekyl-Foundation/shekyl-core/commit/14c2ee599),
+and a sentence that describes that code says so. **Current (Q12-R1,
+2026-10-21):** the six testnet onions are compiled in `shekyl-dialer`'s
+`seeds`, one row with each clearnet host, and they are the canonical Tor
+bootstrap. *Records-was (2026-08-13):* the seed estate carried a current
+binary and four hidden services.
+
 Identifiers `Q12-R1…R7` extend the already-registered `Q12-` family (rule 94 §1;
 no new prefix is minted).
 
@@ -115,35 +120,47 @@ weakens the guarantee for every non-seed node, because the receiver cannot
 verify that the sender is a seed. Mission hierarchy: privacy is the product and
 is not a per-peer setting (`00-mission` §2, `10-shekyl-first`).
 
-### 2.3 The intent *is* served — by two different mechanisms
+### 2.3 The intent *is* served — by two different mechanisms (*records the code at `14c2ee599`, 2026-08-11*)
 
 "A bootstrapping node immediately gets seed IPs **and** Tor addresses" is a
-correct goal. It is met by:
+correct goal. **Current (Q12-R1, 2026-10-21):** hop one is `shekyl-dialer`'s
+`seeds` for `SeedNetwork::Testnet` — six v3 onions, one row with each clearnet
+host, admitted by the Tor connector. The connector is Tor. Mainnet's `seeds`
+has no onion. Hop two onward is still self-announce. *Records-was, the two
+mechanisms this section named:*
 
-- **hop one — the compiled per-zone list.** `get_seed_nodes(zone::tor)` gives a
-  node with a tor zone its anon seeds without any peerlist exchange. This is
-  the mechanism that should carry the four Shekyl seeds' onions.
-- **hop two onward — seed self-announce.** Once the four seeds interconnect
-  over tor, each has outgoing anon connections and so self-announces
-  (`:2637-2643`), and their onions enter anon gossip normally.
+- **hop one — the compiled per-zone list.** *Records-was:*
+  `get_seed_nodes(zone::tor)` gave a node with a Tor zone its seeds without
+  any peerlist exchange, and this section said that list should carry four
+  onions.
+- **hop two onward — seed self-announce.** *Records-was:* once the seeds
+  interconnect over Tor, each has outgoing connections and so self-announces
+  (`net_node.inl:2637-2643`, as that file stood), and their onions enter
+  gossip.
 
-### 2.4 The compiled tor/i2p seed lists are still Monero's — rule 60 defect
+### 2.4 *Records-was at `14c2ee599`:* the compiled tor/i2p seed lists were still Monero's
 
-`net_node.inl:762-769` returns six `.onion` addresses on port **18083** —
-`plowsof3t5hogddwabaeiyrno25efmzfxyro2vligremt7sxpsclfaid.onion` and
-siblings — which are **Monero's mainnet hidden-service seeds**. `:775-779`
-likewise returns three Monero `.b32.i2p` addresses. The IPv4 list (`:726-731`)
-is correct and is the four Shekyl seeds.
+*Records-was:* `net_node.inl:762-769` returned six `.onion` addresses on port
+**18083** — `plowsof3t5hogddwabaeiyrno25efmzfxyro2vligremt7sxpsclfaid.onion`
+and siblings — which are **Monero's mainnet hidden-service seeds**. `:775-779`
+likewise returned three Monero `.b32.i2p` addresses. The IPv4 list
+(`:726-731`) was the four clearnet seeds that existed then. **Current:**
+`get_seed_nodes` is gone with that file's seed callers. Testnet's six onions
+are `seeds` (Q12-R1). Mainnet's compiled list is the six clearnet addresses
+and no onion.
 
-So a Shekyl **mainnet** node started with `--tx-proxy tor,...` today attempts to
-bootstrap its anon zone against Monero's infrastructure. This is a live
-[`60-no-monero-legacy`](../../.cursor/rules/60-no-monero-legacy.mdc) violation,
-not a stylistic one: it is a wrong-network connection attempt over Tor.
+*Records-was:* a Shekyl **mainnet** node started with `--tx-proxy tor,...`
+attempted to bootstrap its Tor zone against Monero's infrastructure. That was
+a live [`60-no-monero-legacy`](../../.cursor/rules/60-no-monero-legacy.mdc)
+violation: a wrong-network connection attempt over Tor. The connector is Tor.
+*Records-was:* this section called it the anon zone.
 
-Both anon lists return `{}` for testnet — so **testnet has no anon seeds at
-all**, which Q12-R2 turns from a defect into a convenience for this run.
+*Records-was:* both of those lists returned `{}` for testnet, so **testnet had
+no Tor seeds at all**, which Q12-R2 turned from a defect into a convenience
+for the run. **Current:** testnet admits the six compiled onions. Stagenet
+and regtest admit none (`SeedNetwork::None`).
 
-### 2.5 The seed estate is not currently configured correctly
+### 2.5 The seed estate was not configured correctly (*probed 2026-08-11*; the readout is in `shekyl-dev`)
 
 Probed over ssh, 2026-08-11, across the four seeds that existed then. The
 per-host readout — daemon state, binary date, RPC port layout, and which
@@ -180,9 +197,9 @@ mined, `grey_peerlist_size: 0`. §6 depends on this.
 
 ## 3. Decisions
 
-**Q12-R1 — LANDED 2026-10-21, testnet. The onions go in the compiled seed list, not the pushed peerlist.** §2.2 forecloses the pushed peerlist; §2.3 names what replaces it. The six testnet onions are `shekyl-dialer`'s `seeds` (`SeedNetwork::Testnet`, port 12021), beside the six clearnet addresses. Mainnet's `seeds` is the six clearnet addresses and no onion: those hidden services do not exist. Propagation past hop one is ordinary self-announce gossip — which is *the mechanism this run measured*. *Records-was:* the ruling named four seeds and `get_seed_nodes(zone::tor)`; the list is `seeds`, and two seeds were added after the August snapshot.
+**Q12-R1 — LANDED 2026-10-21, testnet. The onions go in the compiled seed list, not the pushed peerlist.** §2.2 forecloses the pushed peerlist; §2.3 names what replaces it. The six testnet onions are `shekyl-dialer`'s `seeds` (`SeedNetwork::Testnet`, port 12021), one row with each clearnet host. They are the canonical Tor bootstrap: a testnet node does not hand-configure them. Mainnet's `seeds` is the six clearnet addresses and no onion: those hidden services do not exist. The connector is Tor. *Records-was:* this run called that connector anon. Propagation past hop one is ordinary self-announce gossip — which is *the mechanism this run measured*. *Records-was:* the ruling named four seeds and `get_seed_nodes(zone::tor)`; the list is `seeds`, and two seeds were added after the August snapshot.
 
-**Q12-R2 — DISCHARGED 2026-10-21. The run used a current-`dev` build and bootstrapped purely via `--add-peer`; the compiled testnet list landed after the runs.** *Records-was, the hold:* these collide if the onions are compiled in before the fleet is built, because every fleet binary would carry anon seeds that no CLI flag can suppress, and the late-joiner control in Q12-R5 depends on "exactly one seed" meaning exactly one. The runs landed 2026-08-14. Q12-R1's compile is the discharge.
+**Q12-R2 — DISCHARGED 2026-10-21. The run used a current-`dev` build and bootstrapped purely via `--add-peer`; the compiled testnet list landed after the runs.** *Records-was, the hold:* these collide if the onions are compiled in before the fleet is built, because every fleet binary would carry Tor seeds that no CLI flag can suppress, and the late-joiner control in Q12-R5 depends on "exactly one seed" meaning exactly one. The runs landed 2026-08-14. Q12-R1's compile is the discharge.
 
 The **mainnet** Monero-seed deletion (§2.4) is separable and lands immediately —
 it does not touch the testnet fleet.
@@ -566,9 +583,9 @@ design outright, which is the cheapest thing to learn early.
 5. **Late joiner** (Q12-R5) — two runs, one node each: one `--add-peer` at a
    seed, one at an ordinary fleet node.
 6. Teardown; verify no instance survives.
-7. Land the compiled **testnet** tor seed list (deferred by Q12-R2).
+7. ~~Land the compiled **testnet** Tor seed list (deferred by Q12-R2).~~ **LANDED 2026-10-21.** The six onions are `shekyl-dialer`'s testnet `seeds`, the canonical Tor bootstrap. A node does not hand-configure them.
 8. **Q12-U1** — the txpool origin-zone field.
-9. **Q12-U2** — the receive path, so anon arrivals relay at arrival. Steps 8–9
+9. **Q12-U2** — the receive path, so Tor arrivals relay at arrival. Steps 8–9
    are what give the isolation arm something to detect (§6.1); they are ordered
    by Q12-D7 and are next regardless of the fleet.
 10. Mine and fund the testnet — spendable outputs for the isolation arm.
@@ -695,11 +712,11 @@ fleet survey on 2026-09-21** (PWD-I7's falsifier precondition,
 record of the August run; the corrections are stated here so a reader does not
 plan against them:
 
-| §9 says | Surveyed 2026-09-21 |
+| §9 says | Surveyed 2026-09-21; the compile cell corrected 2026-10-21 |
 | --- | --- |
-| **four** `skl-` seeds | **six** — `seedjp` and `seedbrz` were provisioned after this snapshot and are reachable, serving, and compiled into `get_seed_nodes` |
-| one seed **down** with an unedited example config | **up, serving at the fleet height**, with a real configuration |
-| *(not covered)* | `skl-seedeu`'s `12021` was **closed during a Frankfurt provider incident on 2026-09-21 and has since recovered** — a transient, not a configuration state |
+| **four** seeds | **six** Foundation hosts. *Records-was (2026-09-21):* the two added after the August snapshot were described as compiled into `get_seed_nodes`. **Current:** each host is one row of `shekyl-dialer`'s `seeds`. |
+| one seed **down** with an unedited example config | **up at the 2026-09-21 survey**, serving at the fleet height, with a real configuration. Which host is in `shekyl-dev`. |
+| *(not covered)* | *Records-was:* the EU Frankfurt seed's testnet port was **closed during a provider incident on 2026-09-21 and has since recovered** — a transient, not a configuration state. |
 
 **What is unchanged and still load-bearing:** the portable-baseline ruling
 (§9.1) and the build artifact (§9.2). The hidden-service key custody
@@ -759,14 +776,14 @@ staged by SP-T3 (`/opt/shekyl/tor-expert-bundle-15.0.17/tor/tor`).
 SOCKS up on 9050. The table below is the live set, including the two seeds
 added after that snapshot.
 
-| host | testnet `.onion` (live 2026-10-21) |
+| place | testnet `.onion` (live 2026-10-21) |
 | --- | --- |
-| `skl-seedaus` | `aghoxa757l2wqribeto2hv2rk3wjwcwdqzvu5hjkqdjcm24nuhaszjqd.onion` |
-| `skl-seedeu` | `aks2vbpjb5ojfyqcataqedodws7ardjxczy76bqwmlv55mgfunsxoiyd.onion` |
-| `skl-seeduse` | `23dkgevx7qnhrx2wmhmjvhsz2mpp54xomkujcvhuhm3ajgdciwztypad.onion` |
-| `skl-seedusw` | `nqkfnallpz5kaoxkj2y6bmeifk4helrwp5z2fdtayo3rfzbx4q7z2tqd.onion` |
-| `skl-seedjp` | `e2fafquqkf4jodx6rwh2akgyu2gy3spxcyc2ustnuqw46vrk2xe365qd.onion` |
-| `skl-seedbrz` | `mjgznic6uwrccelrq6fqjmmv2f7gaskd3nxcs76hjrrfc4tse7wioqqd.onion` |
+| Sydney | `aghoxa757l2wqribeto2hv2rk3wjwcwdqzvu5hjkqdjcm24nuhaszjqd.onion` |
+| EU Frankfurt | `aks2vbpjb5ojfyqcataqedodws7ardjxczy76bqwmlv55mgfunsxoiyd.onion` |
+| US East | `23dkgevx7qnhrx2wmhmjvhsz2mpp54xomkujcvhuhm3ajgdciwztypad.onion` |
+| US West | `nqkfnallpz5kaoxkj2y6bmeifk4helrwp5z2fdtayo3rfzbx4q7z2tqd.onion` |
+| Tokyo | `e2fafquqkf4jodx6rwh2akgyu2gy3spxcyc2ustnuqw46vrk2xe365qd.onion` |
+| Brazil | `mjgznic6uwrccelrq6fqjmmv2f7gaskd3nxcs76hjrrfc4tse7wioqqd.onion` |
 
 **These are testnet services** — `HiddenServiceDir ~/tor-hs-testnet`,
 `HiddenServicePort 12021 127.0.0.1:12023`. Mainnet gets its own directory and
@@ -778,7 +795,7 @@ A seed runs **two** p2p listeners:
 | listener | bound | reached by |
 | --- | --- | --- |
 | clearnet p2p | `0.0.0.0:12021` (`p2p-bind-port`) | direct IP |
-| anonymity-zone p2p | `127.0.0.1:12023` (`--anonymous-inbound` local port) | tor, forwarded from the onion |
+| Tor p2p | `127.0.0.1:12023` (local forward; the option that bound it was `--anonymous-inbound`) | Tor, forwarded from the onion |
 
 `HiddenServicePort 12021 127.0.0.1:12023` reads *virtual port → local target*:
 the onion is **advertised on 12021**, which is why `--add-peer <onion>:12021`
@@ -786,12 +803,12 @@ is right and matches the clearnet port. Only the *forwarding target* differs.
 
 It differs because it has to. `p2p-bind-ip=0.0.0.0` already occupies
 `127.0.0.1:12021`, so pointing the hidden service at 12021 would make the
-daemon's anonymity-zone listener collide with its own clearnet listener and
+daemon's Tor listener collide with its own clearnet listener and
 fail to bind. The asymmetry looks like an inconsistency precisely because the
 virtual port and the local port are different kinds of thing.
 
-Verified on the running estate — every seed shows both `0.0.0.0:12021` and
-`127.0.0.1:12023` listening.
+Verified on the estate at the §9 probe — every seed showed both
+`0.0.0.0:12021` and `127.0.0.1:12023` listening.
 
 **A second copy of the keys exists (2026-10-21),** so the compile is not
 gated on custody. The location is in `shekyl-dev`,
@@ -799,11 +816,12 @@ gated on custody. The location is in `shekyl-dev`,
 *Records-was:* the backup was a single copy on one machine, and that
 gated compiling the addresses into source.
 
-The six testnet onions are compiled in `shekyl-dialer`'s `seeds`.
+The six testnet onions are compiled in `shekyl-dialer`'s `seeds` and are
+the canonical Tor bootstrap. A node does not hand-configure them.
 Mainnet's list is the six clearnet addresses; it has no onion services.
 *Records-was, per Q12-R2:* they were not in `get_seed_nodes` yet, because
 compiling the testnet list before the runs would give every fleet binary
-unsuppressable anon seeds and contaminate the late-joiner control. The
+unsuppressable Tor seeds and contaminate the late-joiner control. The
 runs landed 2026-08-14.
 
 ### 9.4 ~~Blocked: privileged install~~ — CLEARED 2026-08-11
@@ -1139,8 +1157,8 @@ already has both, in the shipped binary.**
 | property R10 requires | stagenet, at source |
 | --- | --- |
 | distinct `NETWORK_ID` | `network_id_from_genesis` of stagenet's genesis block hash and of testnet's differ; the KAT in [`network_id_ffi.rs`](../../rust/shekyl-ffi/src/network_id_ffi.rs) records both |
-| no compiled IP seeds | `get_ip_seed_nodes()`'s `STAGENET` branch is empty — `else if` at [`net_node.inl:737`](../../src/p2p/net_node.inl#L737), the block `:738-740` holding only the comment at `:739`; the four production seeds are inside the `TESTNET` branch |
-| no compiled anon seeds | `get_seed_nodes()` returns `{}` for `tor` and `i2p` on **every** network ([`:770-772`](../../src/p2p/net_node.inl#L770)) — Q12-R2 has not landed the testnet list yet |
+| no compiled IP seeds | Stagenet admits no compiled seeds (`SeedNetwork::None` in `shekyl-dialer`'s `seeds`). *Records-was, 2026-08-11:* `get_ip_seed_nodes()`'s `STAGENET` branch was empty at `net_node.inl`. |
+| no compiled Tor seeds | Stagenet admits no compiled Tor seeds. Testnet's six are compiled (Q12-R1, landed 2026-10-21) and are the canonical Tor bootstrap. *Records-was:* `get_seed_nodes()` returned nothing for Tor on every network, and this row called that connector anon. |
 
 Everything else is the same chain: the block version is 1 on every network
 and nothing selects rules by network, so stagenet is v3-from-genesis with every

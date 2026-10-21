@@ -11,8 +11,10 @@
 //! `init` triggers — offline, the local-address rule, the relay's
 //! posture, the descriptors reserved for the inbound ceiling, the link
 //! bounds and the ban file's entries. [`start`] runs at step 8, once the
-//! remnant's one RPC start has completed: the zone host's listeners and
-//! dialers, this node's own addresses, and the dialer's peers.
+//! remnant's one RPC start has completed: this node's own addresses and
+//! the dialer's peers first, then the zone host's listeners and owner
+//! loops. The loops start after the p2p section, so a closed network is
+//! the population at the first wake.
 //!
 //! Nothing here branches on the network: the sections already did.
 
@@ -193,9 +195,14 @@ impl From<shekyl_ffi::dialer_ffi::NoDialer> for StartError {
     }
 }
 
-/// Step 8: the zone host's connectors from their sections, this node's
-/// own addresses, and the dialer's peers. `tor` is what the Tor owner
-/// resolved at this point.
+/// Step 8: this node's own addresses and the dialer's peers, then the
+/// zone host's connectors. `tor` is what the Tor owner resolved at this
+/// point.
+///
+/// The p2p section is applied before any owner loop. The loop arms its
+/// first wake half a second after it starts, and until a closed network
+/// is installed every gray address is eligible, including the compiled
+/// seeds. Listeners come up after that declaration.
 ///
 /// # Errors
 /// [`StartError`]; nothing started is undone here, the stop path does that.
@@ -211,6 +218,11 @@ pub fn start(
     if config.offline() {
         return Ok(started);
     }
+    shekyl_ffi::dialer_ffi::set_own_addresses(ConnectorId::Clearnet, own_clearnet(config))?;
+    if let Some(onion) = own_onion(config) {
+        shekyl_ffi::dialer_ffi::set_own_addresses(ConnectorId::Tor, vec![onion])?;
+    }
+    shekyl_ffi::dialer_ffi::apply_p2p(&config.p2p, &address_file(&config.data_dir))?;
     if let Clearnet::On { listen, socks, .. } = &config.clearnet {
         started.clearnet = shekyl_ffi::zone_ffi::start_clearnet(
             listen,
@@ -237,11 +249,6 @@ pub fn start(
             }
         }
     }
-    shekyl_ffi::dialer_ffi::set_own_addresses(ConnectorId::Clearnet, own_clearnet(config))?;
-    if let Some(onion) = own_onion(config) {
-        shekyl_ffi::dialer_ffi::set_own_addresses(ConnectorId::Tor, vec![onion])?;
-    }
-    shekyl_ffi::dialer_ffi::apply_p2p(&config.p2p, &address_file(&config.data_dir))?;
     Ok(started)
 }
 

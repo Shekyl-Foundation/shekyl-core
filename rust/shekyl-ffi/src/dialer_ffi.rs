@@ -146,10 +146,12 @@ pub extern "C" fn shekyl_dialer_note_network(nettype: u8) -> i32 {
 /// connector enter gray first, as operator-named addresses (slice 1
 /// brief §3): clearnet admits the IPv4 seeds, Tor admits the onion
 /// seeds. A connector that is not started admits nothing of the other
-/// connector's list. Once per connector: a second call finds the loop
-/// claimed and starts nothing (the ephemeral-tor listen and the
-/// proxy-only zone branch both reach here for Tor, 2026-10-13: two
-/// loops ran). Returns whether this call started the loop.
+/// connector's list. The daemon applies the p2p section, including a
+/// closed network, before this loop exists, so the first wake already
+/// draws inside that population. Once per connector: a second call finds
+/// the loop claimed and starts nothing (the ephemeral-tor listen and the
+/// proxy-only zone branch both reach here for Tor, 2026-10-13: two loops
+/// ran). Returns whether this call started the loop.
 pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicClock>) -> bool {
     let Some(dialer) = dialer() else {
         return false;
@@ -175,16 +177,7 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
             "clearnet is dial-only: this node discloses no address of its own until a public address is configured"
         );
     }
-    let network = *NETWORK.lock().expect("network");
-    let now = dialer.hub().now();
-    for seed in seeds(network) {
-        if Peerlist::connector_of(&seed) != Some(connector) {
-            continue;
-        }
-        if let Err(refusal) = dialer.admit_operator(&seed, now, &mut SecureRelayRng) {
-            tracing::warn!("{connector:?}: seed {seed:?} was not admitted: {refusal:?}");
-        }
-    }
+    admit_compiled_seeds(&dialer, connector);
     let name = format!("p2p-dial-{connector:?}").to_lowercase();
     let running = Arc::clone(&dialer);
     let spawned = std::thread::Builder::new().name(name).spawn(move || {
@@ -205,6 +198,24 @@ pub(crate) fn start_connector(connector: ConnectorId, engine: &Handle<MonotonicC
         return false;
     }
     true
+}
+
+/// Admit the compiled seeds that belong to `connector`.
+///
+/// The other connector's rows stay out: a clearnet start does not put
+/// onions in gray, and a Tor start does not put the IPv4 seeds there.
+/// Called from the owner-loop start, after the p2p section is applied.
+fn admit_compiled_seeds(dialer: &Dialer, connector: ConnectorId) {
+    let network = *NETWORK.lock().expect("network");
+    let now = dialer.hub().now();
+    for seed in seeds(network) {
+        if Peerlist::connector_of(&seed) != Some(connector) {
+            continue;
+        }
+        if let Err(refusal) = dialer.admit_operator(&seed, now, &mut SecureRelayRng) {
+            tracing::warn!("{connector:?}: seed {seed:?} was not admitted: {refusal:?}");
+        }
+    }
 }
 
 /// The per-boot onion `shekyl-tor` published, as this node's own address

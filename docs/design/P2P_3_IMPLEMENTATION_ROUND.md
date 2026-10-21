@@ -471,7 +471,8 @@ Owed to the maintainer, and **not** to be decided inside a slice:
   Q12-R2 for experimental control, precondition in
   [`Q12_D6A_PEER_DISCOVERY_RUN.md`](Q12_D6A_PEER_DISCOVERY_RUN.md) §9.3.~~
   **LANDED 2026-10-21:** the six testnet onions are in `shekyl-dialer`'s
-  `seeds`; mainnet has no onion seeds. A second copy of the hidden-service
+  `seeds`, one row with each clearnet host, and they are the canonical Tor
+  bootstrap. Mainnet has no onion seeds. A second copy of the hidden-service
   keys exists; the location is in `shekyl-dev` and is not named here.
 - ~~**No cap number. No `--in-peers` number.** Both dissolved into design
   questions by PWD-I7's re-diagnosis and PWD-I8's routing.~~ **AMENDED

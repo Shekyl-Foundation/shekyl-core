@@ -2870,13 +2870,15 @@ problem solved.
    changed?* **Tor-by-default cannot carry initial sync while that line
    stands**, so the intended end state is a change to that line, not only to a
    default — which is a larger commitment than "turn Tor on" and should be
-   ratified as one. The other dependencies stand and are named: the four
-   testnet seed onions exist (`Q12_D6A_PEER_DISCOVERY_RUN.md` §9.3) but are
-   deliberately **not** in `get_seed_nodes` per Q12-R2, so Tor is a bootstrap
-   path for operators who hand-configure it and **not yet a default**; Q12-R1
-   is the row that would change that, and §9.3 names a precondition — the
-   hidden-service secret-key backup is a single copy on one machine beside the
-   genesis wallet. **`:452` is out of scope for this row** (different
+   ratified as one. The other dependencies stand and are named: the six
+   testnet seed onions are compiled in `shekyl-dialer`'s `seeds` (Q12-R1,
+   landed 2026-10-21; `Q12_D6A_PEER_DISCOVERY_RUN.md` §9.3) and are the
+   canonical Tor bootstrap. A testnet node does not hand-configure them.
+   Mainnet has no onion seeds yet. *Records-was:* four testnet onions existed
+   and were deliberately not in `get_seed_nodes` per Q12-R2, so Tor bootstrap
+   was hand-configured, and the hidden-service backup was a single copy on
+   one machine. A second copy exists; its location is in `shekyl-dev`.
+   **`:452` is out of scope for this row** (different
    subsystem, different owner) and is flagged, not fixed, here.
 3. **Whether visible refusal is wanted despite the oracle argument.** Rejected
    on analysis here: a reason code before the drop is a co-residency oracle over
