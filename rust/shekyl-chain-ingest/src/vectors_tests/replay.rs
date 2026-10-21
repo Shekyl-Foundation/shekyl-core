@@ -28,6 +28,28 @@ use crate::trace::Trace;
 
 use super::{Manifest, UntilRetiredJoin};
 
+/// The rule set the daemon mined `manifest` under: fixed difficulty and
+/// the `(SEB, cap)` pair the manifest records.
+pub(crate) fn rules_for(manifest: &Manifest) -> ChainRules {
+    let schedule = FakechainSchedule::new(
+        SettlementEpochBlocks::new(manifest.settlement_epoch_blocks)
+            .expect("a captured chain's epoch is non-zero"),
+        BlockCount::from_raw(manifest.reorg_cap_blocks),
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "{}: the manifest's pair is not a schedule: {e}",
+            manifest.shape
+        )
+    });
+    ChainRules::Regtest {
+        fixed_difficulty: Some(
+            NonZeroU128::new(manifest.fixed_difficulty).expect("a regtest difficulty is non-zero"),
+        ),
+        schedule,
+    }
+}
+
 /// [`super::replay_under`] without the cleanup: the replayed store stays at
 /// the returned path, under the returned rules, for a test that reads the
 /// chain the run connected. The caller removes it. `tag` names the store's
@@ -50,23 +72,7 @@ where
         CorpusReader::open(std::io::Cursor::new(corpus.as_slice())).expect("open corpus"),
     );
     let trace = Arc::new(Trace::read(std::io::Cursor::new(trace.as_slice())).expect("read trace"));
-    let schedule = FakechainSchedule::new(
-        SettlementEpochBlocks::new(manifest.settlement_epoch_blocks)
-            .expect("a captured chain's epoch is non-zero"),
-        BlockCount::from_raw(manifest.reorg_cap_blocks),
-    )
-    .unwrap_or_else(|e| {
-        panic!(
-            "{}: the manifest's pair is not a schedule: {e}",
-            manifest.shape
-        )
-    });
-    let rules = ChainRules::Regtest {
-        fixed_difficulty: Some(
-            NonZeroU128::new(manifest.fixed_difficulty).expect("a regtest difficulty is non-zero"),
-        ),
-        schedule,
-    };
+    let rules = rules_for(manifest);
     let path = tmp(&format!("vectors-{}-{tag}", manifest.shape));
     // The store runs the pair the chain was mined under, read off the same
     // rule set `connect` judges by — not the production epoch the other

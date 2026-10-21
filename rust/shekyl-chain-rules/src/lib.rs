@@ -132,7 +132,9 @@ mod coverage;
 mod drain;
 mod epoch_floor;
 mod fault;
+mod header_facts;
 mod header_ladder;
+mod header_path;
 mod policy;
 mod reorg;
 mod rule_set;
@@ -189,6 +191,11 @@ pub use epoch_floor::{
 pub use fault::{
     Corrupt, DrawCountFault, DrawableEpochFault, Fault, FormAttempt, PerHeightRecord,
     RecordInvariant, ReferenceMismatch, Retry, SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,
+};
+pub use header_facts::{FormedHeader, OpenHeader};
+pub use header_path::{
+    bind_body, form_header, judge_header, judge_header_cheap, HeaderJudged, HeaderProspect,
+    ProspectFault,
 };
 pub use policy::{policy_form, PolicyRefused};
 pub use relay_floor::{fee_ladder_at, fee_operands_at, relay_floor_at, relay_floor_window};

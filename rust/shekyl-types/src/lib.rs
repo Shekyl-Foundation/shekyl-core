@@ -550,6 +550,18 @@ hash32! {
     BlockHash
 }
 
+hash32! {
+    /// The Merkle root over a block's transaction hashes
+    /// `[miner_tx_hash, transaction_hashes…]`
+    /// (`GENESIS_TX_WIRE_FORMAT.md` §11).
+    ///
+    /// The middle field of the PoW preimage. Not a [`TxHash`]: a txid names
+    /// one transaction, and this names the tree of them. Not a [`BlockHash`]:
+    /// the block identity is keccak over the length-prefixed preimage that
+    /// contains this root.
+    TxTreeHash
+}
+
 impl BlockHash {
     /// The **null hash** — 32 zero bytes — as a block identity: the genesis
     /// block's `previous` (CEN-A2: a candidate's parent is the tip's hash,

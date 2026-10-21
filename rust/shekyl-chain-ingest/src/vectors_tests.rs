@@ -69,8 +69,8 @@ mod corpus_census;
 mod h19_cost;
 mod pool_door;
 mod relay_floor;
-mod replay;
-mod retired_keyless_join;
+pub(crate) mod replay;
+pub(crate) mod retired_keyless_join;
 pub(crate) use replay::replay_keeping_store;
 pub(crate) use retired_keyless_join::{retired_keyless_join, UntilRetiredJoin};
 

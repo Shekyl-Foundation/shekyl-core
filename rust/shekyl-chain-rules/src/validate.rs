@@ -58,15 +58,15 @@ use crate::block::{
 use crate::coverage::RuleCoverage;
 use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
-use crate::header_ladder::{self, HeaderFacts};
+use crate::header_facts::{prove_header, HeaderProof};
+use crate::header_ladder;
 use crate::rule_set::RuleSet;
 use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
 use crate::rules::body::{G1, G10, G2, G7, G9};
 use crate::rules::difficulty::Target;
-use crate::rules::header::{B1, B2, B5, B6};
+use crate::rules::header::{B1, B2, B5};
 use crate::rules::miner::{Emission, F1, F10, F3, F7, F9};
-use crate::rules::pow::{D1, D2};
 use crate::rules::proofs::judge_proofs;
 use crate::rules::reward;
 use crate::rules::tx::{H1, H10, H11, H14, H15, H16, H17, H18, H19, H20, H21, H22, H3, H4, H7, H9};
@@ -159,20 +159,26 @@ pub fn form<S: Substrate>(
     let cx = FormContext::new(&candidate, rule_set);
     judge_form!(cx, coverage; B1, B2, G2, F1, F3, F7, F9, F10);
 
-    // Two definitions, after the cheap refusals and outside any
-    // transaction. The identity first (B6: one keccak over the hashing
-    // blob; a view-bound rule — E1 — reads it while the rules run, so it is
-    // derived here, once, and travels on the token), then the expensive one
-    // (D2; the seed is the caller's claim, D3 verifies it in `validate`).
-    let hash = B6::identity(&candidate.block, &mut coverage);
-    let pow = D2::longhash(substrate, &candidate, seed, &mut coverage)?;
-
-    // CEN-D1 against the claimed target, before any body work: a block
-    // short of its proof-of-work costs RandomX and nothing more. The claim
-    // is verified where D4 derives the target (`validate`, `alt_against`).
-    if let Err(refused) = D1::judge(pow, target, &mut coverage) {
-        return Ok(Err(refused));
-    }
+    // The proof tail `form_header` shares: identity (B6), longhash (D2),
+    // CEN-D1 against the claimed target. Before any body work, so a block
+    // short of its proof-of-work costs RandomX and nothing more. The seed
+    // and the target are claims; `validate` and `alt_against` verify them.
+    let pow_blob = candidate.block.pow_blob();
+    let facts = match prove_header(
+        HeaderProof {
+            header: candidate.block.header.clone(),
+            pow_blob: &pow_blob,
+            substrate,
+            seed,
+            target,
+            attempt,
+            judged_at: clock,
+        },
+        &mut coverage,
+    )? {
+        Ok(facts) => facts,
+        Err(refused) => return Ok(Err(refused)),
+    };
 
     // The transactions on their own (census 4.H and the stateless 4.I and
     // 4.J rows): the miner slot, then every listed slot in order, each
@@ -202,7 +208,7 @@ pub fn form<S: Substrate>(
     judge_form!(FormContext::new(&candidate, rule_set), coverage; H19);
 
     Ok(Ok(StructurallyValid::new(
-        candidate, *rule_set, coverage, clock, hash, seed, target, pow, attempt, verified,
+        candidate, *rule_set, coverage, facts, verified,
     )))
 }
 
@@ -427,14 +433,21 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
     // recorded by `form` and rides on the token. CEN-D6's zero is a
     // refusal, not a fault (rules::difficulty module docs). This tier does
     // not record D5: the window is the recorded chain.
-    let HeaderFacts {
-        connecting,
-        cumulative_difficulty,
-        context: cx,
-    } = match header_ladder::derive(&formed, view, rule_set, trust, &mut coverage)? {
-        Ok(facts) => facts,
+    let derived = match header_ladder::derive(
+        formed.seed(),
+        formed.target(),
+        formed.attempt(),
+        view,
+        rule_set,
+        &mut coverage,
+    )? {
+        Ok(derived) => derived,
         Err(refused) => return Ok(Err(refused)),
     };
+    let connecting = derived.connecting;
+    let cumulative_difficulty = derived.cumulative_difficulty;
+    let cx = crate::rules::BlockContext::from_derived(&formed, derived, trust);
+    let header = cx.as_header();
     let target = cx.target;
 
     // View-bound block-level predicates (4.A–4.G). The header rules are the
@@ -446,15 +459,18 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
     // extra that does not parse no longer reaches B4 through both stages:
     // the miner slot's `tx_form` (CEN-I19) refuses it in `form`. The C++
     // names B4 there; one refusal either way, the row differs.
-    if let Err(refused) = header_ladder::parent_link(&cx, view, &mut coverage)? {
+    if let Err(refused) = header_ladder::parent_link(&header, view, &mut coverage)? {
         return Ok(Err(refused));
     }
     judge_block!(cx, view, coverage; B5);
-    if let Err(refused) = header_ladder::clock(&cx, view, &mut coverage)? {
+    if let Err(refused) = header_ladder::clock(&header, view, &mut coverage)? {
         return Ok(Err(refused));
     }
     judge_block!(cx, view, coverage; B4);
-    if let Err(refused) = header_ladder::anchor_and_coinbase(&cx, view, &mut coverage)? {
+    if let Err(refused) = header_ladder::anchor(&header, view, &mut coverage)? {
+        return Ok(Err(refused));
+    }
+    if let Err(refused) = header_ladder::coinbase_height(&cx, view, &mut coverage)? {
         return Ok(Err(refused));
     }
     judge_block!(cx, view, coverage; G1);

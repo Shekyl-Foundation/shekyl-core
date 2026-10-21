@@ -1284,6 +1284,33 @@ impl Ct {
         Ok(())
     }
 
+    /// The pruned segment's ct: the type byte, the fee and reference block,
+    /// and the committed base. Stops there. [`Transaction::read`] continues
+    /// into authentications and the prunable region when bytes remain;
+    /// those bytes are not part of the pruned segment, and a skeleton that
+    /// carried them would store a form the txid does not commit to.
+    fn read_base<R: Read>(outputs: usize, r: &mut R) -> io::Result<Ct> {
+        let ct_type = read_byte(r)?;
+        match ct_type {
+            CT_TYPE_NULL => Ok(Ct::Null(CtBase::read(outputs, r)?)),
+            CT_TYPE_FCMP => {
+                let fee = read_varint(r)?;
+                let reference_block = BlockHash::from_bytes(read_array(r)?);
+                let base = CtBase::read(outputs, r)?;
+                Ok(Ct::Fcmp {
+                    fee,
+                    reference_block,
+                    base,
+                    pqc_auths: Vec::new(),
+                    prunable: None,
+                })
+            }
+            other => Err(io::Error::other(format!(
+                "shekyl-wire: unsupported ct type {other:#04x}"
+            ))),
+        }
+    }
+
     /// Read the ct section. `inputs`/`outputs` (the vin/vout counts) size the
     /// per-input/per-output arrays that carry no length prefix; `spend_inputs`
     /// (the `ToKey` subset of vin) sizes `pseudoOuts`, which a bond-post input
@@ -1299,63 +1326,82 @@ impl Ct {
         outputs: usize,
         r: &mut R,
     ) -> io::Result<Ct> {
-        let ct_type = read_byte(r)?;
-        match ct_type {
-            CT_TYPE_NULL => Ok(Ct::Null(CtBase::read(outputs, r)?)),
-            CT_TYPE_FCMP => {
-                let fee = read_varint(r)?;
-                let reference_block = BlockHash::from_bytes(read_array(r)?);
-                let base = CtBase::read(outputs, r)?;
-                // EOF-tolerant tail (§9.8 / §4). A genuine spend that ends
-                // after the base is the storage-pruned form with empty
-                // `pqc_auths` *and* no prunable — only reachable on a
-                // malformed blob; the live storage-pruned spend still
-                // carries `pqc_auths` and hits the second EOF check below.
-                // Serve-credit is **not** this case: after RF-D1 it has a
-                // prunable region, so bytes remain after the base.
-                if r.fill_buf()?.is_empty() {
-                    return Ok(Ct::Fcmp {
-                        fee,
-                        reference_block,
-                        base,
-                        pqc_auths: Vec::new(),
-                        prunable: None,
-                    });
-                }
-                // Typed off the vin, exactly as the C++ oracle does
-                // (`cryptonote_basic.h`, `RF-D9`). Deciding a transaction's
-                // shape from how far a stream has been consumed is what made
-                // that side unwritable; the same heuristic would make this
-                // side unreadable.
-                let mut pqc_auths = Vec::new();
-                if !serve_credit_only {
-                    for _ in 0..inputs {
-                        pqc_auths.push(PqcAuth::read(r)?);
-                    }
-                }
-                // EOF after pqc_auths ⇒ the **storage-pruned full-spend form**:
-                // the daemon's pruned fetch (`get_transactions prune:true`)
-                // keeps consensus pqc_auths but drops the prunable proof
-                // (cryptonote_basic.h gates `rctsig_prunable` on `!pruned`).
-                // Serve-credit never takes this arm: it skipped pqc_auths
-                // and still has pruned-record bytes to read.
-                let prunable = if r.fill_buf()?.is_empty() {
-                    None
-                } else {
-                    Some(Prunable::read(spend_inputs, serve_credit_inputs, r)?)
-                };
-                Ok(Ct::Fcmp {
-                    fee,
-                    reference_block,
-                    base,
-                    pqc_auths,
-                    prunable,
-                })
-            }
-            other => Err(io::Error::other(format!(
-                "shekyl-wire: unsupported ct type {other:#04x}"
-            ))),
+        let base = Self::read_base(outputs, r)?;
+        Self::read_remainder(
+            base,
+            inputs,
+            spend_inputs,
+            serve_credit_inputs,
+            serve_credit_only,
+            r,
+        )
+    }
+
+    /// Authentications and the prunable region, on top of [`Self::read_base`].
+    /// An empty tail is the pruned segment. [`Transaction::from_pruned_bytes`]
+    /// stops before this.
+    fn read_remainder<R: BufRead>(
+        base: Ct,
+        inputs: usize,
+        spend_inputs: usize,
+        serve_credit_inputs: usize,
+        serve_credit_only: bool,
+        r: &mut R,
+    ) -> io::Result<Ct> {
+        let Ct::Fcmp {
+            fee,
+            reference_block,
+            base,
+            ..
+        } = base
+        else {
+            return Ok(base);
+        };
+        // EOF-tolerant tail (§9.8 / §4). A genuine spend that ends
+        // after the base is the storage-pruned form with empty
+        // `pqc_auths` *and* no prunable — only reachable on a
+        // malformed blob; the live storage-pruned spend still
+        // carries `pqc_auths` and hits the second EOF check below.
+        // Serve-credit is **not** this case: after RF-D1 it has a
+        // prunable region, so bytes remain after the base.
+        if r.fill_buf()?.is_empty() {
+            return Ok(Ct::Fcmp {
+                fee,
+                reference_block,
+                base,
+                pqc_auths: Vec::new(),
+                prunable: None,
+            });
         }
+        // Typed off the vin, exactly as the C++ oracle does
+        // (`cryptonote_basic.h`, `RF-D9`). Deciding a transaction's
+        // shape from how far a stream has been consumed is what made
+        // that side unwritable; the same heuristic would make this
+        // side unreadable.
+        let mut pqc_auths = Vec::new();
+        if !serve_credit_only {
+            for _ in 0..inputs {
+                pqc_auths.push(PqcAuth::read(r)?);
+            }
+        }
+        // EOF after pqc_auths ⇒ the **storage-pruned full-spend form**:
+        // the daemon's pruned fetch (`get_transactions prune:true`)
+        // keeps consensus pqc_auths but drops the prunable proof
+        // (cryptonote_basic.h gates `rctsig_prunable` on `!pruned`).
+        // Serve-credit never takes this arm: it skipped pqc_auths
+        // and still has pruned-record bytes to read.
+        let prunable = if r.fill_buf()?.is_empty() {
+            None
+        } else {
+            Some(Prunable::read(spend_inputs, serve_credit_inputs, r)?)
+        };
+        Ok(Ct::Fcmp {
+            fee,
+            reference_block,
+            base,
+            pqc_auths,
+            prunable,
+        })
     }
 }
 
@@ -1614,8 +1660,10 @@ impl Transaction {
         archival_len_of(&pqc_auths, prunable)
     }
 
-    /// Read the transaction.
-    pub fn read<R: BufRead>(r: &mut R) -> io::Result<Transaction> {
+    /// Version, prefix and the committed base. [`Self::read`] continues
+    /// into authentications and the prunable region; [`Self::from_pruned_bytes`]
+    /// stops here and requires the cursor to be empty.
+    fn read_up_to_base<R: BufRead>(r: &mut R) -> io::Result<(TxPrefix, Ct)> {
         let version: u64 = read_varint(r)?;
         if version != TX_VERSION {
             return Err(io::Error::other(format!(
@@ -1623,14 +1671,21 @@ impl Transaction {
             )));
         }
         let prefix = TxPrefix::read(r)?;
+        let ct = Ct::read_base(prefix.outputs.len(), r)?;
+        Ok((prefix, ct))
+    }
+
+    /// Read the transaction.
+    pub fn read<R: BufRead>(r: &mut R) -> io::Result<Transaction> {
+        let (prefix, base) = Self::read_up_to_base(r)?;
         // Counts taken from the prefix, never carried on the wire: spend vins
         // size pseudoOuts, serve-credit vins size the pruned pass-record array.
-        let ct = Ct::read(
+        let ct = Ct::read_remainder(
+            base,
             prefix.inputs.len(),
             prefix.spend_input_count(),
             prefix.serve_credit_input_count(),
             prefix.is_serve_credit_only(),
-            prefix.outputs.len(),
             r,
         )?;
         Ok(Transaction { prefix, ct })
@@ -1741,6 +1796,37 @@ impl Transaction {
             )));
         }
         Ok(tx)
+    }
+
+    /// Parse the pruned segment exactly: version, prefix and the committed
+    /// base, the bytes [`Self::write_pruned`] emits, and nothing after them.
+    ///
+    /// [`Self::read`] treats bytes after the base as authentications and
+    /// proof data. A skeleton's txid ignores both, so those bytes would
+    /// bind and then be stored as if they were the pruned form. This entry
+    /// refuses them, the same exact-consumption rule [`Self::from_bytes`]
+    /// applies to a full transaction.
+    ///
+    /// # Errors
+    ///
+    /// The blob is over `MAX_TX_SIZE`, is not a pruned segment, or has
+    /// bytes left after the base.
+    pub fn from_pruned_bytes(blob: &[u8]) -> io::Result<Transaction> {
+        if blob.len() > MAX_TX_SIZE {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: pruned segment {} exceeds {MAX_TX_SIZE}",
+                blob.len()
+            )));
+        }
+        let mut cursor = blob;
+        let (prefix, ct) = Self::read_up_to_base(&mut cursor)?;
+        if !cursor.is_empty() {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: {} trailing byte(s) after the pruned segment",
+                cursor.len()
+            )));
+        }
+        Ok(Transaction { prefix, ct })
     }
 
     /// Structural / canonical-form validation for an ingested **pruned** transaction:

@@ -88,7 +88,7 @@ pub const BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT: u64 = 25_000;
 /// Portable-storage over-bound for an array of `count` 32-byte hashes:
 /// 48 bytes/entry covers type tag + length + blob + array share; +256
 /// for the enclosing section.
-const fn hash_list_cap(count: u64) -> u64 {
+pub(crate) const fn hash_list_cap(count: u64) -> u64 {
     count.saturating_mul(48).saturating_add(256)
 }
 
