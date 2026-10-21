@@ -20,7 +20,7 @@ use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
     bind_body, form, form_header, judge_header, judge_header_cheap, seed_height, target_claim,
     validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, HeaderView, OpenHeader,
-    ReferenceClaims, ReleaseAnchors, RuleSet, Stale, Target, Trust,
+    ProspectFault, ReferenceClaims, ReleaseAnchors, RuleSet, Stale, Target, Trust,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{StoreError, WriteBatch};
@@ -159,6 +159,28 @@ fn validate_said<'id, V: ChainView<'id, Fault = StoreError>>(
     }
 }
 
+fn cheap_said<'id, V: HeaderView<'id>>(
+    candidate: &Candidate,
+    view: &V,
+    rule_set: &RuleSet,
+    trust: &Trust,
+    substrate: &MockSubstrate,
+    seed: BlockHash,
+    target: Target,
+) -> Said
+where
+    V::Fault: std::fmt::Debug,
+{
+    let pow = PowBlob::read(&candidate.block.pow_blob()).expect("the preimage parses");
+    let open = OpenHeader::from_pow(&pow, seed, target);
+    match judge_header_cheap(&open, view, rule_set, trust, substrate) {
+        Err(ProspectFault::Substrate(_)) => panic!("the mock clock faulted"),
+        Err(ProspectFault::Chain(fault)) => stale(&fault),
+        Ok(Err(refused)) => Said::Refused(refused.rule),
+        Ok(Ok(prospect)) => Said::Accepted(prospect.cumulative_difficulty),
+    }
+}
+
 fn same<'id, V: ChainView<'id, Fault = StoreError>>(
     candidate: &Candidate,
     view: &V,
@@ -234,6 +256,15 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
                                 manifest.shape, refused.rule
                             )
                         });
+                    let cheap = cheap_said(
+                        candidate,
+                        &view,
+                        &rule_set,
+                        &trust,
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
                     match said {
                         Said::Accepted(work) => {
                             assert_eq!(
@@ -241,7 +272,24 @@ fn the_header_path_agrees_with_validate_on_every_captured_block() {
                                 valid.block().cumulative_difficulty(),
                                 "{}",
                                 manifest.shape
+                            );
+                            assert_eq!(
+                                cheap, said,
+                                "{} {height}: the cheap path and judge_header disagree",
+                                manifest.shape
+                            );
+                            let pow = PowBlob::read(&candidate.block.pow_blob()).expect("preimage");
+                            let open = OpenHeader::from_pow(&pow, seed, target);
+                            let prospect = judge_header_cheap(
+                                &open,
+                                &view,
+                                &rule_set,
+                                &trust,
+                                substrate.as_ref(),
                             )
+                            .expect("clock")
+                            .expect("the cheap path accepts");
+                            assert_eq!(prospect.connecting, height);
                         }
                         other => panic!("{} {height}: header path {other:?}", manifest.shape),
                     }
@@ -349,11 +397,19 @@ fn header_mutations_agree_with_validate() {
                 same(&orphan, &view, rule_set, trust, substrate, seed, target),
                 Said::Refused(CenRow::A2)
             );
+            assert_eq!(
+                cheap_said(&orphan, &view, rule_set, trust, substrate, seed, target),
+                Said::Refused(CenRow::A2)
+            );
 
             let mut stale_time = candidate.clone();
             stale_time.block.header.timestamp = 0;
             assert_eq!(
                 same(&stale_time, &view, rule_set, trust, substrate, seed, target),
+                Said::Refused(CenRow::C2)
+            );
+            assert_eq!(
+                cheap_said(&stale_time, &view, rule_set, trust, substrate, seed, target),
                 Said::Refused(CenRow::C2)
             );
 
@@ -362,6 +418,10 @@ fn header_mutations_agree_with_validate() {
                 substrate.clock.to_raw().saturating_add(FTL_SECONDS + 1);
             assert_eq!(
                 same(&future, &view, rule_set, trust, substrate, seed, target),
+                Said::Refused(CenRow::C1)
+            );
+            assert_eq!(
+                cheap_said(&future, &view, rule_set, trust, substrate, seed, target),
                 Said::Refused(CenRow::C1)
             );
 
@@ -670,6 +730,18 @@ fn an_anchored_height_with_the_wrong_hash_is_e1_on_both_paths() {
                 ),
                 Said::Refused(CenRow::E1)
             );
+            assert_eq!(
+                cheap_said(
+                    &chain[0],
+                    &view,
+                    &rule_set,
+                    &trust,
+                    substrate.as_ref(),
+                    seed,
+                    target
+                ),
+                Said::Refused(CenRow::E1)
+            );
             Ok(())
         })
         .expect("inspect");
@@ -704,17 +776,25 @@ fn appended_bytes_are_not_the_transaction() {
                     let header =
                         formed_header(candidate, &rule_set, substrate.as_ref(), seed, target);
                     let mut full = body_of(candidate);
-                    let TxBody::Full(bytes) = &mut full.txs[0] else {
-                        panic!("body_of writes a full transaction");
+                    let trailing = {
+                        let TxBody::Full(bytes) = &mut full.txs[0] else {
+                            panic!("body_of writes a full transaction");
+                        };
+                        bytes.push(0xff);
+                        bytes.clone()
                     };
-                    bytes.push(0xff);
+                    assert_eq!(
+                        bind_body(&header, &full).map_err(|e| e.rule),
+                        Err(CenRow::G2),
+                        "a byte after a full transaction"
+                    );
                     assert!(
-                        bind_body(&header, &full).is_err(),
-                        "a byte after a full transaction still bound"
+                        shekyl_wire::Transaction::from_bytes(&trailing).is_err(),
+                        "validate's parser accepts a trailing byte"
                     );
                     let segments = tx.write_segments().expect("segments");
                     let archival_len = segments.archival_len();
-                    let mut unprunable = segments.pruned;
+                    let mut unprunable = segments.pruned.clone();
                     unprunable.push(0xff);
                     let mut skeleton = body_of(candidate);
                     skeleton.txs[0] = TxBody::Skeleton(SkeletonTx {
@@ -723,9 +803,67 @@ fn appended_bytes_are_not_the_transaction() {
                         pqc_auth_hash: tx.pqc_auth_hash(),
                         archival_len,
                     });
+                    assert_eq!(
+                        bind_body(&header, &skeleton).map_err(|e| e.rule),
+                        Err(CenRow::G2),
+                        "a byte after the pruned base"
+                    );
+                    // The whole encoding parses under Transaction::read and
+                    // its txid matches, which is what the old skeleton parser
+                    // bound. The pruned reader stops at the base.
+                    let whole = tx.serialize();
+                    let mut cursor = whole.as_slice();
+                    let read = shekyl_wire::Transaction::read(&mut cursor).expect("read");
+                    assert!(cursor.is_empty());
+                    assert_eq!(
+                        read.hash_with_supplied_components(
+                            tx.pqc_auth_hash(),
+                            tx.prunable_hash(),
+                            archival_len,
+                        ),
+                        tx.hash()
+                    );
+                    assert!(shekyl_wire::Transaction::from_pruned_bytes(&whole).is_err());
+                    skeleton.txs[0] = TxBody::Skeleton(SkeletonTx {
+                        unprunable: whole,
+                        prunable_hash: tx.prunable_hash(),
+                        pqc_auth_hash: tx.pqc_auth_hash(),
+                        archival_len,
+                    });
+                    assert_eq!(
+                        bind_body(&header, &skeleton).map_err(|e| e.rule),
+                        Err(CenRow::G2),
+                        "the whole transaction presented as the pruned segment"
+                    );
+                    let parsed = validate_said(
+                        {
+                            let mut replaced = candidate.clone();
+                            replaced.transactions[0] = read;
+                            replaced
+                        },
+                        &view,
+                        &rule_set,
+                        &rules.trust(),
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
+                    let honest = validate_said(
+                        candidate.clone(),
+                        &view,
+                        &rule_set,
+                        &rules.trust(),
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
+                    assert_eq!(
+                        parsed, honest,
+                        "the whole encoding is the transaction validate accepts"
+                    );
                     assert!(
-                        bind_body(&header, &skeleton).is_err(),
-                        "a byte after the pruned base still bound"
+                        matches!(honest, Said::Accepted(_)),
+                        "validate refused the transaction: {honest:?}"
                     );
                     pinned = true;
                     break;
@@ -777,7 +915,7 @@ fn the_cheap_checks_name_the_version_and_do_not_hash() {
             let seed = seed_of(&view, height);
             let target = target_of(&view, height, &rule_set);
             let pow = PowBlob::read(&chain[0].block.pow_blob()).expect("preimage");
-            let open = OpenHeader::from_pow(&pow, &substrate, seed, target).expect("clock");
+            let open = OpenHeader::from_pow(&pow, seed, target);
             let prospect = judge_header_cheap(&open, &view, &rule_set, &trust, &substrate)
                 .expect("the cheap path does not hash")
                 .expect("the genesis header passes the cheap checks");
@@ -785,7 +923,7 @@ fn the_cheap_checks_name_the_version_and_do_not_hash() {
             assert!(prospect.coverage.contains(CenRow::B2));
             let mut bad = pow.clone();
             bad.header.major_version = bad.header.major_version.saturating_add(1);
-            let open = OpenHeader::from_pow(&bad, &substrate, seed, target).expect("clock");
+            let open = OpenHeader::from_pow(&bad, seed, target);
             match judge_header_cheap(&open, &view, &rule_set, &trust, &substrate).expect("clock") {
                 Err(refused) => assert_eq!(refused.rule, CenRow::B1),
                 Ok(_) => panic!("a wrong major version passed the cheap checks"),

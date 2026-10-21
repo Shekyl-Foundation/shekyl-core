@@ -79,8 +79,24 @@ fn every_captured_pow_blob_is_the_block_hash() {
 fn every_captured_skeleton_txid_is_the_transaction_hash() {
     let mut spends = 0u64;
     each_captured_block(|shape, candidate| {
+        // A null transaction is the coinbase, which rides in the block, and
+        // `SkeletonTx` refuses one: it has no prunable region and no
+        // authentication hash, so the supplied components are not its txid.
+        // A listed null, if a chain ever carries one, is the same refusal.
         for tx in &candidate.transactions {
             if matches!(tx.ct, Ct::Null(_)) {
+                let segments = tx.write_segments().expect("segment");
+                let archival_len = segments.archival_len();
+                let skeleton = SkeletonTx {
+                    unprunable: segments.pruned,
+                    prunable_hash: tx.prunable_hash(),
+                    pqc_auth_hash: tx.pqc_auth_hash(),
+                    archival_len,
+                };
+                assert!(
+                    skeleton.txid().is_err(),
+                    "{shape}: a null transaction is not a skeleton"
+                );
                 continue;
             }
             let segments = tx.write_segments().expect("segment");
@@ -97,6 +113,19 @@ fn every_captured_skeleton_txid_is_the_transaction_hash() {
             assert_eq!(got, tx.hash(), "{shape}: skeleton txid");
             spends += 1;
         }
+        let coinbase = &candidate.block.miner_transaction;
+        let segments = coinbase.write_segments().expect("coinbase segments");
+        let archival_len = segments.archival_len();
+        let skeleton = SkeletonTx {
+            unprunable: segments.pruned,
+            prunable_hash: coinbase.prunable_hash(),
+            pqc_auth_hash: coinbase.pqc_auth_hash(),
+            archival_len,
+        };
+        assert!(
+            skeleton.txid().is_err(),
+            "{shape}: the coinbase is not a skeleton"
+        );
     });
     assert!(
         spends > 0,
