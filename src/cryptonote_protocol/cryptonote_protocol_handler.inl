@@ -245,8 +245,9 @@ namespace cryptonote
     m_sync_download_chain_size = 0;
     m_sync_download_objects_size = 0;
 
-    // `block-download-max-size` and `span-limit` are the chain-sync lane's
-    // (INPUT_GRAMMAR.md §5, IG-Q4): today's defaults until that lane decides.
+    // `block-download-max-size` and `span-limit` are refused
+    // (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12): today's defaults until the
+    // chain-sync cutover replaces these callers.
     m_block_download_max_size = 0;
     m_span_time = 2;
 

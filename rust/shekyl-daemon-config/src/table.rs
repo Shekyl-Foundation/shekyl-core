@@ -132,6 +132,8 @@ const fn rejected(name: &'static str, reason: &'static str) -> Row {
     }
 }
 
+const SYNC_PROTOCOL_BUDGETS: &str = "chain sync's protocol constants replace it: the per-response, objects and global byte budgets and the deadlines, provisioned at the floor device (rule 76); a metered link is `p2p-download-max`, and a byte quota reopens under IG-Q40 (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12)";
+const SYNC_HASHER_BUDGET: &str = "the shared hasher budget sets it, derived from the floor device's scratchpads (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12, DRS_X_STORE_FLIP.md DX-Q2 item 6)";
 const NO_DAEMONIZE: &str = "shekyld never daemonizes or registers itself; installing is the installer's and shekyl-cli's, and on Windows shekyld answers the service manager through `service` (RPC_CHANNEL.md RT-16)";
 const NO_TLS: &str = "the RPC channel replaces TLS and HTTP authentication (RPC_CHANNEL.md RT-11)";
 const NO_BOOTSTRAP: &str = "no proxying to a third-party daemon";
@@ -231,6 +233,10 @@ const ROWS: &[Row] = &[
     dev("dev-relay-cover", Kind::Switch, Default::Unset, TEST_NETWORKS, "The relay's development cover carrier."),
     // Core, pool, notify, mine
     dev("dev-difficulty", COUNT, Default::Unset, REGTEST, "A fixed difficulty."),
+    rejected("span-limit", SYNC_PROTOCOL_BUDGETS),
+    rejected("block-sync-size", SYNC_PROTOCOL_BUDGETS),
+    rejected("block-download-max-size", SYNC_PROTOCOL_BUDGETS),
+    rejected("prep-blocks-threads", SYNC_HASHER_BUDGET),
     public("txpool-weight-max", BYTES, Default::Value("648000000B"), Surface::Both, "The transaction pool's weight bound."),
     public("notify-block", Kind::Command { placeholders: &["height", "hash"] }, Default::Unset, Surface::File, "A command to run on a new block, with {height} and {hash}."),
     public("notify-reorg", Kind::Command { placeholders: &["split-height", "height", "added", "removed"] }, Default::Unset, Surface::File, "A command to run on a reorganization, with {split-height}, {height}, {added} and {removed}."),
@@ -316,6 +322,36 @@ mod tests {
                 assert!(!networks.is_empty());
             }
             other => panic!("dev-relay-cover is a dev row, not {other:?}"),
+        }
+    }
+
+    /// CS-Q12 (Rick, 2026-10-18): none of chain sync's four options
+    /// survives. The three budget names share one reason; the hasher count
+    /// has its own. Each is refused from the command line and from the file
+    /// (IG-10), with that reason, not as an unknown name.
+    #[test]
+    fn the_four_chain_sync_options_are_refused_with_cs_q12() {
+        use shekyl_options::{Code, Source};
+        let file = Source::File {
+            path: std::path::PathBuf::from("shekyld.toml"),
+            line: 1,
+        };
+        let cases = [
+            ("span-limit", SYNC_PROTOCOL_BUDGETS),
+            ("block-sync-size", SYNC_PROTOCOL_BUDGETS),
+            ("block-download-max-size", SYNC_PROTOCOL_BUDGETS),
+            ("prep-blocks-threads", SYNC_HASHER_BUDGET),
+        ];
+        for (name, reason) in cases {
+            for source in [&Source::Cli, &file] {
+                let refusal = TABLE.live(name, source).unwrap_err();
+                assert_eq!(refusal.code, Code::NameRejected, "{name}");
+                assert_eq!(refusal.option.as_deref(), Some(name), "{name}");
+                assert_eq!(&refusal.source, source, "{name}");
+                assert_eq!(refusal.get("reason"), Some(reason), "{name}");
+                let rendered = refusal.render();
+                assert!(rendered.contains(reason), "{name}: {rendered}");
+            }
         }
     }
 

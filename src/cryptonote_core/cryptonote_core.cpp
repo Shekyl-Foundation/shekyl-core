@@ -304,8 +304,9 @@ namespace cryptonote
 
     // Lane-owned knobs (INPUT_GRAMMAR.md §5, IG-Q4): not ported; today's
     // defaults, as constants, until their lanes decide. `db-sync-mode` and
-    // `db-salvage` are the DRS lane's, `prep-blocks-threads` the chain-sync
-    // lane's, `keep-alt-blocks` DRS-E5's.
+    // `db-salvage` are the DRS lane's, `keep-alt-blocks` DRS-E5's.
+    // `prep-blocks-threads` is refused (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12);
+    // 4 is today's default until the chain-sync cutover replaces this caller.
     const std::string db_sync_mode = "fast:async:250000000bytes";
     const bool db_sync_mode_is_default = true;
     const bool db_salvage = false;
@@ -411,7 +412,8 @@ namespace cryptonote
     // the persisted pool and drop what this binary refuses
     m_mempool.validate();
 
-    // `block-sync-size` is the chain-sync lane's (IG-Q4): 0, adaptive.
+    // `block-sync-size` is refused (P2P_3_CHAIN_SYNC_BRIEF.md CS-Q12):
+    // 0, adaptive, until the chain-sync cutover replaces this caller.
     block_sync_size = 0;
 
     MGINFO("Enforcing checkpoints");
