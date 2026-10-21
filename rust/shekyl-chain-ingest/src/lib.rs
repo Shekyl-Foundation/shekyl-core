@@ -205,6 +205,8 @@ mod switch_tests;
 /// DRS-E5 a6: the switch at the genesis cap, timed (ignored lane).
 #[cfg(all(test, feature = "pipeline"))]
 mod switch_timing_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod sync_wire_tests;
 #[cfg(feature = "pipeline")]
 pub mod target;
 #[cfg(test)]
