@@ -1,5 +1,7 @@
 # DRS-X PR 3b — Round 0, ruled
 
+**Status:** OPEN — Round 0 ruled 2026-10-21. PR 3b implements these rulings.
+
 **Ground:** `dev` at `ba0b28379`. **Ruled by Rick, 2026-10-21.** The brief is `claude/DRS_X_PR3B_BRIEF.md`.
 
 ## The two global rulings
