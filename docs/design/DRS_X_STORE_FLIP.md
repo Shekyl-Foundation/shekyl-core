@@ -149,7 +149,7 @@ The join rule: no FFI built for a C++ handler that dies a PR later. Every method
 - Rust `main` (`shekyl-daemon`) builds `shekyl-node`'s `Node` after the network marker (#1088 step 4) and before `run(snapshot)` (step 7). The node opens `ChainStore::with_release`, starts the ingest service, and is where the store opens (N1, `DRS_X_PR3B_ROUND0.md`). Nothing is routed from C++. The flip still hands the remnant the shell's handle.
 - **Genesis.** An empty store connects the pinned genesis through the ingest (`form` → `validate` → `connect`, CEN-E5's pin). `reset_and_set_genesis_block` deletes.
 - **Stop.** `Node::stop` is one step of the daemon's `finish`, after the dialer and the RPC and before the managed Tor teardown (`TOR_SUPERVISOR.md` §1): the service stops, the follower withdraws the job board, the connector finishes its current message, and the store closes. `Immediate` durability means there is no flush step.
-- **No migration.** A release wipes, and an LMDB directory is ignored.
+- **No migration.** A release wipes, and an LMDB directory is ignored. A chain file whose `schema_version` is not this binary's is removed and a fresh store opened, logged with both versions. A corrupt file, an invariant, or an I/O error still refuses: a wipe is for a version the binary does not speak. A pool file this process cannot read stays refused and kept (`SPL-Q8`, the ruling at the pool-file bullet above).
 
 ### DX-Q7 — The PR shape
 

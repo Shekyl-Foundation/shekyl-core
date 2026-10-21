@@ -42,7 +42,9 @@ tracing = "0.1"
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-ffi = { path = "../shekyl-ffi" }
 shekyl-options = { path = "../shekyl-options" }
+shekyl-store-codec = { path = "../shekyl-store-codec" }
 tempfile = "3"
+redb = { workspace = true }
 
 [lints]
 workspace = true

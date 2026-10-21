@@ -162,6 +162,8 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         config: &config,
         version: version_full.clone(),
         protocol_version: u64::from(entry.protocol_version),
+        // Not the C++ `release_build` flag. This feeds only the staged
+        // identity the handles carry. The flip decides the one definition.
         release_build: !cfg!(debug_assertions),
         request_stop: Arc::new(signals::request_stop),
     }) {
@@ -782,7 +784,9 @@ mod tests {
     }
 
     /// The one test that starts a daemon: logging installs once per
-    /// process, so this is the only test that reaches it.
+    /// process, so this is the only test that reaches it. Red edit: build
+    /// the node after `network::record`, or return success when the node
+    /// fails to open. The fake remnant does not cover a live `shekyld`.
     #[test]
     fn a_daemon_start_locks_marks_logs_announces_and_runs_the_remnant() {
         let _serial = SERIAL

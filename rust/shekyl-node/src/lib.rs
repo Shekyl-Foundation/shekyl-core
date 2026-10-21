@@ -20,16 +20,27 @@
 //!
 //! 1. `network::stop` — the dialer and the zone host, so nothing new arrives.
 //! 2. The RPC drains. It still reads the C++ core.
-//! 3. [`Node::stop`] — the ingest service stops, the follower withdraws the
-//!    job board, the connector finishes its current message, and the store
-//!    closes. Durability is `Immediate`: there is no flush.
+//! 3. [`Node::stop`] — drops the found-block sender, then stops the ingest
+//!    service. The follower withdraws the job board, the connector finishes
+//!    its current message, the sink's `recv` returns disconnected, and the
+//!    store closes. Durability is `Immediate`: there is no flush.
 //! 4. The remnant's stop and the managed Tor's teardown run together.
 //!
 //! A second [`Node::stop`] is a no-op.
 //!
+//! # Blocking threads
+//!
+//! The runtime's blocking-thread count equals the hasher budget's permits.
+//! [`Budget::acquire`](shekyl_hash_budget::Budget::acquire) waits on the
+//! calling thread, so every permit waiter sits on a blocking thread. A
+//! holder never waits for another thread: it hashes and drops the permit.
+//! The two counts can stay equal. A later sizing that makes a holder wait
+//! for a blocking thread has to split them, or a full set of waiters
+//! deadlocks.
+//!
 //! # The template
 //!
-//! The follower still takes a [`TemplateSource`](shekyl_chain_ingest::follower::TemplateSource).
+//! The follower still takes a [`TemplateSource`].
 //! This node gives it one that builds nothing, and holds the sync watch
 //! closed (the node is behind until a sync owner exists), so the board
 //! stays withdrawn. PR 3b deletes that source: the follower builds the one
@@ -88,6 +99,9 @@ pub enum OpenError {
     /// The store or a read of it failed.
     #[error("the chain store: {0}")]
     Store(#[from] shekyl_chain_store::store::StoreError),
+    /// A layout-mismatched chain file could not be removed.
+    #[error("the chain file could not be removed: {0}")]
+    Wipe(std::io::Error),
     /// The pool file did not open.
     #[error("the pool did not open: {0}")]
     Pool(String),
@@ -131,8 +145,9 @@ pub struct Node {
     runtime: Mutex<Option<shekyl_runtime::Pool>>,
     /// Kept so the follower's sync watch stays open and reads `false`.
     _synced: watch::Sender<bool>,
-    /// Kept so the found-block sink's sender outlives the service.
-    _found: FoundBlocks,
+    /// Kept so the found-block sink's sender outlives the service until
+    /// [`Node::stop`] drops it. PR 3b clones it into the miner.
+    found: Mutex<Option<FoundBlocks>>,
 }
 
 impl Node {
@@ -149,12 +164,7 @@ impl Node {
         std::fs::create_dir_all(&args.config.data_dir).map_err(OpenError::Directory)?;
         let store_path = args.config.data_dir.join("chain.db");
         let pool_path = args.config.data_dir.join("pool.db");
-        let store = Arc::new(ChainStore::with_release(
-            &store_path,
-            ApplyPolicy::Full,
-            horizons,
-            &anchors,
-        )?);
+        let store = Arc::new(open_chain(&store_path, horizons, &anchors)?);
         let parallelism = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
         let budget = Budget::new(parallelism);
         let caches = Arc::new(CacheStore::new());
@@ -182,6 +192,9 @@ impl Node {
             }),
         };
         let runtime = shekyl_runtime::runtime(
+            // Blocking threads equal permits. See the module docs: a waiter
+            // blocks its thread inside `acquire`, and a holder does not wait
+            // for a thread.
             RuntimeBudget {
                 workers: parallelism,
                 blocking: parallelism,
@@ -258,7 +271,7 @@ impl Node {
             service: Mutex::new(Some(service)),
             runtime: Mutex::new(Some(runtime)),
             _synced: synced,
-            _found: found,
+            found: Mutex::new(Some(found)),
         })
     }
 
@@ -282,7 +295,22 @@ impl Node {
         Arc::clone(&self.board)
     }
 
-    /// Stop (module docs). A second call does nothing.
+    /// The found-block sender, while the node is running. PR 3b clones it
+    /// into the miner. [`Node::stop`] drops this node's sender first.
+    #[must_use]
+    pub fn found_blocks(&self) -> Option<FoundBlocks> {
+        self.found
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Stop. Drops the found-block sender, then the service, then the runtime.
+    ///
+    /// The sink lives as long as a sender does. This drop is what makes
+    /// `recv` return disconnected, so the follower's join finishes. A miner
+    /// that cloned the sender must already have dropped its clone. A second
+    /// call does nothing.
     pub fn stop(&self) {
         let Some(runtime) = self
             .runtime
@@ -292,6 +320,12 @@ impl Node {
         else {
             return;
         };
+        drop(
+            self.found
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
         if let Some(service) = self
             .service
             .lock()
@@ -371,6 +405,32 @@ fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
         _ => Err(OpenError::Rules(
             "the settlement epoch and the archival reorg depth are set together".to_owned(),
         )),
+    }
+}
+
+fn open_chain(
+    path: &std::path::Path,
+    horizons: Horizons,
+    anchors: &ReleaseAnchors,
+) -> Result<ChainStore, OpenError> {
+    use shekyl_chain_store::store::{StoreCannot, StoreError};
+    match ChainStore::with_release(path, ApplyPolicy::Full, horizons, anchors) {
+        Ok(store) => Ok(store),
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, expected })) => {
+            tracing::warn!(
+                %found,
+                %expected,
+                "the chain file is a layout this release does not speak; removing it and opening a fresh store"
+            );
+            std::fs::remove_file(path).map_err(OpenError::Wipe)?;
+            Ok(ChainStore::with_release(
+                path,
+                ApplyPolicy::Full,
+                horizons,
+                anchors,
+            )?)
+        }
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -492,6 +552,9 @@ mod tests {
         .expect("node")
     }
 
+    /// An empty store connects the pinned genesis, and the chain handle
+    /// reads it back. Red edit: connect genesis through anything but the
+    /// door, or answer the handle from a hard-coded hash.
     #[test]
     fn an_empty_store_holds_the_pinned_genesis_and_the_chain_handle_answers_it() {
         let dir = tempfile::tempdir().expect("temp");
@@ -515,6 +578,9 @@ mod tests {
         node.stop();
     }
 
+    /// Stop closes the store, withdraws the board, and a second stop is a
+    /// no-op. A handle held past stop is not ready. Red edit: leave the
+    /// facts slot filled, or skip the second stop.
     #[test]
     fn stop_closes_the_store_withdraws_the_board_and_a_second_stop_is_a_no_op() {
         let dir = tempfile::tempdir().expect("temp");
@@ -552,6 +618,9 @@ mod tests {
         );
     }
 
+    /// A ban through the node is on the table `process_sockets` reads.
+    /// Red edit: install a second table, or ban on a table the node does
+    /// not hold.
     #[test]
     fn a_ban_through_the_node_is_on_the_process_socket_table() {
         let dir = tempfile::tempdir().expect("temp");
@@ -570,6 +639,9 @@ mod tests {
         node.stop();
     }
 
+    /// The node's stop handle is the latch `main` passed in. The absent
+    /// handle is not ready, never a success. Red edit: call the latch from
+    /// the absent handle, or ignore `request_stop`.
     #[test]
     fn the_stop_handle_asks_the_latch_and_the_absent_one_does_not() {
         let asked = Arc::new(AtomicBool::new(false));
@@ -586,5 +658,141 @@ mod tests {
             Err(FactsFault::NotReady)
         );
         node.stop();
+    }
+
+    fn genesis_hash() -> BlockHash {
+        BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain))
+    }
+
+    fn put_chain_version(path: &std::path::Path, version: u64) {
+        use shekyl_chain_store::codec::{PropertyCellBytes, SchemaVersion};
+        use shekyl_chain_store::schema::PROPERTIES;
+        use shekyl_store_codec::{Canonical, Raw};
+        let db = redb::Database::open(path).expect("the chain file opens");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut table = txn.open_table(PROPERTIES).expect("properties");
+            let version = SchemaVersion::new(version);
+            table
+                .insert(
+                    "schema_version",
+                    Raw::<PropertyCellBytes>::new(&version.encode()),
+                )
+                .expect("version");
+        }
+        txn.commit().expect("commit");
+    }
+
+    fn put_pool_version(path: &std::path::Path, version: u64) {
+        use shekyl_chain_store::codec::PropertyCellBytes;
+        use shekyl_chain_store::pool::schema::POOL_HEADER;
+        use shekyl_chain_store::pool::{PoolSchemaVersion, POOL_VERSION_KEY};
+        use shekyl_store_codec::{Canonical, Raw};
+        let db = redb::Database::open(path).expect("the pool file opens");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut table = txn.open_table(POOL_HEADER).expect("header");
+            let version = PoolSchemaVersion::new(version);
+            table
+                .insert(
+                    POOL_VERSION_KEY,
+                    Raw::<PropertyCellBytes>::new(&version.encode()),
+                )
+                .expect("version");
+        }
+        txn.commit().expect("commit");
+    }
+
+    /// A chain file at another layout is removed and a fresh store holds
+    /// genesis. A file that is not a store is refused and left in place.
+    /// Red edit: refuse the version mismatch, or wipe a corrupt header.
+    #[test]
+    fn a_foreign_chain_file_is_replaced_and_a_corrupt_one_is_kept() {
+        use shekyl_chain_store::codec::SCHEMA_VERSION;
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_at(dir.path(), Arc::new(|| {}));
+        node.stop();
+        let chain = dir.path().join("chain.db");
+        put_chain_version(&chain, SCHEMA_VERSION.get() + 1);
+        let node = open_at(dir.path(), Arc::new(|| {}));
+        assert_eq!(
+            node.handles()
+                .chain
+                .block_hash_at(BlockHeight::ZERO)
+                .expect("height 0")
+                .hash,
+            Some(genesis_hash())
+        );
+        node.stop();
+        put_chain_version(&chain, SCHEMA_VERSION.get());
+        let garbage = b"not a chain store";
+        std::fs::write(&chain, garbage).expect("overwrite");
+        let config = config_at(dir.path());
+        let opened = Node::open(OpenArgs {
+            config: &config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            request_stop: Arc::new(|| {}),
+        });
+        assert!(
+            opened.is_err(),
+            "a corrupt chain file is not a layout mismatch"
+        );
+        assert_eq!(std::fs::read(&chain).expect("still there"), garbage);
+    }
+
+    /// A pool file at another version is recreated and the node starts. A
+    /// pool file that is not a pool file is refused and kept. Red edit:
+    /// refuse the version, or delete the corrupt file.
+    #[test]
+    fn a_foreign_pool_file_is_recreated_and_a_corrupt_one_is_kept() {
+        use shekyl_chain_store::pool::POOL_SCHEMA_VERSION;
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_at(dir.path(), Arc::new(|| {}));
+        node.stop();
+        let pool = dir.path().join("pool.db");
+        put_pool_version(&pool, POOL_SCHEMA_VERSION.get() + 1);
+        let node = open_at(dir.path(), Arc::new(|| {}));
+        assert_eq!(node.handles().pool.broadcast_count().expect("pool"), 0);
+        node.stop();
+        let garbage = b"not a pool file";
+        std::fs::write(&pool, garbage).expect("overwrite");
+        let config = config_at(dir.path());
+        let opened = Node::open(OpenArgs {
+            config: &config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            request_stop: Arc::new(|| {}),
+        });
+        assert!(opened.is_err(), "a corrupt pool file is refused");
+        assert_eq!(std::fs::read(&pool).expect("still there"), garbage);
+    }
+
+    /// The sink joins because stop drops the sender. A sender kept alive
+    /// across stop holds the join. Red edit: poll the door and return
+    /// while the sender still lives.
+    #[test]
+    fn stop_hangs_while_a_found_block_sender_lives() {
+        let dir = tempfile::tempdir().expect("temp");
+        let node = Arc::new(open_at(dir.path(), Arc::new(|| {})));
+        let held = node.found_blocks().expect("the sender");
+        let stopping = Arc::clone(&node);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            stopping.stop();
+            done_tx.send(()).expect("the test is listening");
+        });
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .is_err(),
+            "stop returned while a found-block sender still lived"
+        );
+        drop(held);
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("stop finishes once the sender is dropped");
     }
 }

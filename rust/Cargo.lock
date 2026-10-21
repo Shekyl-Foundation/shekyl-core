@@ -4781,6 +4781,7 @@ name = "shekyl-node"
 version = "3.1.0"
 dependencies = [
  "hex",
+ "redb",
  "rustix",
  "shekyl-address",
  "shekyl-chain-ingest",
@@ -4798,6 +4799,7 @@ dependencies = [
  "shekyl-pow-randomx",
  "shekyl-rpc-types",
  "shekyl-runtime",
+ "shekyl-store-codec",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
  "shekyl-types",
