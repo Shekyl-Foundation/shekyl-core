@@ -201,10 +201,10 @@ pub unsafe extern "C" fn shekyl_rpc_peerlist_sizes(out_white: *mut u64, out_gray
 #[cfg(test)]
 mod tests {
     use crate::seam_ffi::shekyl_seam_set_ceiling;
-    use std::ffi::c_void;
-    use std::net::Ipv4Addr;
     use shekyl_peerlist::Tick;
     use shekyl_seam::CloseCause;
+    use std::ffi::c_void;
+    use std::net::Ipv4Addr;
 
     use super::*;
     use crate::inbound_ceiling_ffi::{ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_UNLIMITED};
