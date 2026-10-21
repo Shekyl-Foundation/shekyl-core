@@ -17,9 +17,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_crypto_hash::keccak256;
-use shekyl_portable_storage::{load_from_binary, store_to_binary, Limits, Section, Value};
+use shekyl_portable_storage::{load_from_binary, Limits, Section, Value};
 use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash};
-use shekyl_wire::{Block, BlockBody, SkeletonTx, TxBody};
+use shekyl_wire::{Block, BlockBody, SkeletonTx, TxBody, MIN_POW_BLOB_SIZE};
 
 use super::block::ATTESTATION_WITNESS_MAX_BYTES;
 use super::error::Error;
@@ -53,15 +53,27 @@ pub const HEADERS_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 /// and peak memory, after the cutover.
 pub const BODIES_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 
+/// The smallest string whose portable-storage length varint is two bytes.
+/// `0..=63` is one byte (`shekyl-portable-storage`'s `write_varint`).
+const TWO_BYTE_LENGTH_FROM: u64 = 64;
+/// The largest string whose portable-storage length varint is two bytes.
+const TWO_BYTE_LENGTH_TO: u64 = 16_383;
+/// Bytes of that two-byte length prefix.
+const PREIMAGE_LENGTH_PREFIX: u64 = 2;
+/// Section keys, the array envelope, and the work fields. Smaller than this.
+const RESPONSE_HEADERS_SECTION: u64 = 4_096;
+
 /// Length prefixes a budget of preimages can force, plus the section.
 ///
-/// A preimage of 64 bytes or more encodes its length in two varint bytes.
-/// Filling [`HEADERS_RESPONSE_BYTES`] with those is one prefix per 64
-/// bytes. The section keys and the array envelope are smaller than 4 KiB.
-/// A shorter preimage is not a header; [`ResponseHeaders`] still refuses
-/// the value when the encoding exceeds the cap, so a list of tiny blobs
-/// cannot pass `store` and fail `decode`.
-const RESPONSE_HEADERS_OVERHEAD: u64 = (HEADERS_RESPONSE_BYTES / 64) * 2 + 4_096;
+/// A preimage of [`TWO_BYTE_LENGTH_FROM`] bytes or more encodes its length
+/// in [`PREIMAGE_LENGTH_PREFIX`] bytes. Filling [`HEADERS_RESPONSE_BYTES`]
+/// with the shortest such preimage is one prefix per that many bytes. The
+/// section is smaller than [`RESPONSE_HEADERS_SECTION`]. A preimage shorter
+/// than [`MIN_POW_BLOB_SIZE`] is refused, and that minimum sits in the
+/// two-byte band, so this allowance is an upper bound.
+const RESPONSE_HEADERS_OVERHEAD: u64 = (HEADERS_RESPONSE_BYTES / TWO_BYTE_LENGTH_FROM)
+    * PREIMAGE_LENGTH_PREFIX
+    + RESPONSE_HEADERS_SECTION;
 
 /// Encoded cap of [`RequestHeaders`]. Derived from the locator count
 /// [`RequestChain`](super::RequestChain) already uses.
@@ -86,6 +98,8 @@ const _: () = assert!(CAP_RESPONSE_HEADERS < DEFAULT_MAX_PACKET_SIZE);
 const _: () = assert!(CAP_RESPONSE_BODIES == DEFAULT_MAX_PACKET_SIZE);
 const _: () = assert!(HEADERS_RESPONSE_BYTES == 2 * 1024 * 1024);
 const _: () = assert!(BODIES_RESPONSE_BYTES == 8 * 1024 * 1024);
+const _: () = assert!(MIN_POW_BLOB_SIZE as u64 >= TWO_BYTE_LENGTH_FROM);
+const _: () = assert!(MIN_POW_BLOB_SIZE as u64 <= TWO_BYTE_LENGTH_TO);
 const _: () = assert!(NOTIFY_REQUEST_HEADERS == 2011);
 const _: () = assert!(NOTIFY_RESPONSE_HEADERS == 2012);
 const _: () = assert!(NOTIFY_REQUEST_BODIES == 2013);
@@ -185,7 +199,8 @@ impl ResponseHeaders {
     ///
     /// # Errors
     ///
-    /// [`Error::OverCap`], [`Error::OverBudget`], or a schema error.
+    /// [`Error::OverCap`], [`Error::OverBudget`], [`Error::PreimageTooShort`],
+    /// or a schema error.
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let value = capped::<Self>(bytes, CAP_RESPONSE_HEADERS)?;
         value.check_budget()?;
@@ -193,24 +208,31 @@ impl ResponseHeaders {
     }
 
     fn check_budget(&self) -> Result<(), Error> {
-        let got = self
-            .blobs
-            .iter()
-            .fold(0usize, |n, blob| n.saturating_add(blob.len()));
         let max = usize::try_from(HEADERS_RESPONSE_BYTES).expect("the budget fits usize");
+        let mut got = 0usize;
+        for blob in &self.blobs {
+            if blob.len() < MIN_POW_BLOB_SIZE {
+                return Err(Error::PreimageTooShort {
+                    got: blob.len(),
+                    min: MIN_POW_BLOB_SIZE,
+                });
+            }
+            got = match got.checked_add(blob.len()) {
+                Some(sum) => sum,
+                None => {
+                    return Err(Error::OverBudget {
+                        field: "blobs",
+                        got: usize::MAX,
+                        max,
+                    })
+                }
+            };
+        }
         if got > max {
             return Err(Error::OverBudget {
                 field: "blobs",
                 got,
                 max,
-            });
-        }
-        let encoded = store_to_binary(&self.section())?;
-        let cap = usize::try_from(CAP_RESPONSE_HEADERS).expect("the cap fits usize");
-        if encoded.len() > cap {
-            return Err(Error::OverCap {
-                got: encoded.len(),
-                max: cap,
             });
         }
         Ok(())
@@ -321,10 +343,6 @@ pub enum BodiesFormFault {
     /// `requested` names one hash twice. That list is the caller's, so this
     /// is not a fault of the peer's response.
     RequestRepeated,
-    /// The sent bodies do not fit [`BODIES_RESPONSE_BYTES`]. The first sent
-    /// body is exempt, as it is in [`plan_bodies`]; a later one that does
-    /// not fit is this fault.
-    OverBudget,
     /// A listed hash was not requested.
     Unrequested,
     /// In request order, a sent block follows a deferred one.
@@ -358,13 +376,16 @@ pub struct ResponseBodies {
 
 impl ResponseBodies {
     /// Decode, refusing a payload over [`CAP_RESPONSE_BODIES`] before the
-    /// codec runs.
+    /// codec runs, and a body list over [`BODIES_RESPONSE_BYTES`]. The
+    /// first body is exempt, as it is in [`plan_bodies`].
     ///
     /// # Errors
     ///
-    /// [`Error::OverCap`] or a schema error.
+    /// [`Error::OverCap`], [`Error::OverBudget`], or a schema error.
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        capped(bytes, CAP_RESPONSE_BODIES)
+        let value = capped::<Self>(bytes, CAP_RESPONSE_BODIES)?;
+        value.enforce_budget()?;
+        Ok(value)
     }
 
     /// The partition of `requested`.
@@ -373,7 +394,9 @@ impl ResponseBodies {
     /// `missed_ids`, and nothing else is. Deferral is a suffix of what the
     /// responder holds: no sent block follows a deferred one, and the first
     /// held block is sent. A peer that marks a block unavailable is not at
-    /// fault; that case is the scheduler's.
+    /// fault; that case is the scheduler's. The byte budget is charged by
+    /// [`Self::decode`] and [`PortableMap::to_section`], with the first
+    /// body exempt.
     ///
     /// # Errors
     ///
@@ -385,7 +408,6 @@ impl ResponseBodies {
                 return Err(BodiesFormFault::RequestRepeated);
             }
         }
-        self.within_budget()?;
         let body_ids = self.body_ids()?;
         let mut seen: BTreeMap<[u8; HASH_SIZE], Slot> = BTreeMap::new();
         let mut claim = |hash: [u8; HASH_SIZE], slot: Slot| -> Result<(), BodiesFormFault> {
@@ -437,17 +459,33 @@ impl ResponseBodies {
     }
 
     /// The sent bodies, measured by [`body_budget_bytes`] and admitted by
-    /// [`charge`], the same step [`plan_bodies`] uses.
-    fn within_budget(&self) -> Result<(), BodiesFormFault> {
+    /// [`charge`], the same step [`plan_bodies`] uses. The first body is
+    /// exempt. A later body that does not fit is [`Error::OverBudget`].
+    fn enforce_budget(&self) -> Result<(), Error> {
+        let max = usize::try_from(BODIES_RESPONSE_BYTES).expect("the budget fits usize");
         let mut sent_bytes = 0usize;
         let mut sent_one = false;
         for body in &self.bodies {
-            match charge(sent_bytes, body_budget_bytes(body), sent_one) {
+            let size = body_budget_bytes(body);
+            match charge(sent_bytes, size, sent_one) {
                 Some(next) => {
                     sent_bytes = next;
                     sent_one = true;
                 }
-                None => return Err(BodiesFormFault::OverBudget),
+                None => {
+                    // The sum that did not fit. Overflow is not a length the
+                    // peer sent; `usize::MAX` is the report, the same sentinel
+                    // `ResponseHeaders::check_budget` uses.
+                    let got = match sent_bytes.checked_add(size) {
+                        Some(sum) => sum,
+                        None => usize::MAX,
+                    };
+                    return Err(Error::OverBudget {
+                        field: "bodies",
+                        got,
+                        max,
+                    });
+                }
             }
         }
         Ok(())
@@ -467,6 +505,7 @@ impl ResponseBodies {
 
 impl PortableMap for ResponseBodies {
     fn to_section(&self) -> Result<Section, Error> {
+        self.enforce_budget()?;
         let mut section = Section::new();
         let mut bodies = Vec::with_capacity(self.bodies.len());
         for body in &self.bodies {
@@ -510,7 +549,7 @@ pub struct BodyPlan {
 ///
 /// `held` is the body the responder has for that hash, or `None` when it
 /// does not. The size is [`body_budget_bytes`], the measure
-/// [`ResponseBodies::check_form`] charges.
+/// [`ResponseBodies::decode`] and [`PortableMap::to_section`] charge.
 pub fn plan_bodies<'a>(
     requested: &[[u8; HASH_SIZE]],
     held: impl Fn(&[u8; HASH_SIZE]) -> Option<&'a BlockBody>,
@@ -548,7 +587,8 @@ pub fn plan_bodies<'a>(
 
 /// The bytes one sent body counts toward [`BODIES_RESPONSE_BYTES`]: the
 /// block, each carried transaction, and the witness. [`plan_bodies`] and
-/// [`ResponseBodies::check_form`] both charge this and nothing else.
+/// the body codec ([`ResponseBodies::decode`], [`PortableMap::to_section`])
+/// both charge this and nothing else.
 #[must_use]
 pub fn body_budget_bytes(body: &BlockBody) -> usize {
     let mut n = body.block.len();

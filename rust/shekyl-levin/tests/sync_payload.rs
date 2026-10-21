@@ -113,7 +113,7 @@ fn request_headers_bytes_are_pinned() {
 #[test]
 fn response_headers_bytes_are_pinned() {
     let msg = ResponseHeaders {
-        blobs: vec![vec![0xab, 0xcd]],
+        blobs: vec![vec![0xab; shekyl_wire::MIN_POW_BLOB_SIZE]],
         tip_work: (u128::from(0x9u64) << 64) | 0x4,
         more: false,
     };
@@ -122,7 +122,7 @@ fn response_headers_bytes_are_pinned() {
     assert!(section_has_more, "more is stored even when false");
     pin(
         &msg,
-        "0111010101010201011005626c6f62738a0408abcd046d6f72650b00087469705f776f726b0504000000000000000e7469705f776f726b5f746f703634050900000000000000",
+        "0111010101010201011005626c6f62738a042102abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab046d6f72650b00087469705f776f726b0504000000000000000e7469705f776f726b5f746f703634050900000000000000",
     );
 }
 
@@ -209,9 +209,9 @@ fn header_response_refuses_a_preimage_total_over_the_budget() {
     }
 }
 
-/// Short preimages fill the byte budget and still round-trip. Each length
-/// is a two-byte varint, which the old 4 KiB allowance did not cover, so
-/// `store` used to succeed and `decode` used to refuse.
+/// Preimages of 140 bytes fill the byte budget and still round-trip.
+/// 140 is a PoW preimage or longer and still a two-byte length varint,
+/// which is the case the allowance is sized for.
 #[test]
 fn a_budget_of_short_preimages_round_trips() {
     let each = 140;
@@ -227,25 +227,36 @@ fn a_budget_of_short_preimages_round_trips() {
     assert_eq!(ResponseHeaders::decode(&bytes).expect("decode"), msg);
 }
 
-/// One-byte blobs maximise the length prefixes. The allowance is sized for
-/// a 64-byte preimage, so this list is inside the byte budget and outside
-/// the encoded cap, and `store` refuses it.
+/// A preimage shorter than a PoW preimage is refused at `store` and at
+/// `decode`. The length-prefix allowance assumes every preimage is in the
+/// two-byte band, and a shorter blob is not a header.
 #[test]
-fn tiny_preimages_that_overflow_the_cap_are_refused_at_store() {
-    // Two bytes on the wire per one-byte preimage. Half the cap of them
-    // still fits; past that the prefixes push the encoding over the cap
-    // while the preimage bytes themselves stay inside the budget.
-    let count = usize::try_from(CAP_RESPONSE_HEADERS / 2).expect("cap") + 100_000;
+fn a_preimage_shorter_than_a_block_is_refused_at_store_and_decode() {
     let msg = ResponseHeaders {
-        blobs: vec![vec![0u8; 1]; count],
+        blobs: vec![vec![0xab, 0xcd]],
         tip_work: 0,
         more: false,
     };
-    let sum: usize = msg.blobs.iter().map(Vec::len).sum();
-    assert!(sum < usize::try_from(HEADERS_RESPONSE_BYTES).expect("budget"));
     match msg.store() {
-        Err(PayloadError::OverCap { .. }) => {}
-        other => panic!("expected OverCap, got {other:?}"),
+        Err(PayloadError::PreimageTooShort { got, min }) => {
+            assert_eq!(got, 2);
+            assert_eq!(min, shekyl_wire::MIN_POW_BLOB_SIZE);
+        }
+        other => panic!("expected PreimageTooShort, got {other:?}"),
+    }
+
+    let mut section = Section::new();
+    section.insert("blobs", Value::Array(Array::Bytes(vec![vec![0u8; 1]])));
+    section.insert("tip_work", Value::UInt64(0));
+    section.insert("tip_work_top64", Value::UInt64(0));
+    section.insert("more", Value::Bool(false));
+    let bytes = store_to_binary(&section).expect("encode");
+    match ResponseHeaders::decode(&bytes) {
+        Err(PayloadError::PreimageTooShort { got, min }) => {
+            assert_eq!(got, 1);
+            assert_eq!(min, shekyl_wire::MIN_POW_BLOB_SIZE);
+        }
+        other => panic!("expected PreimageTooShort, got {other:?}"),
     }
 }
 
@@ -490,33 +501,50 @@ fn sized_body(block_len: usize) -> BlockBody {
 }
 
 /// The first sent body may pass the budget. A second that does not fit is
-/// the form's refusal, measured the same way the planner measures.
+/// refused by `store` and by `decode`, measured the same way the planner
+/// measures. The bytes of an over-budget response are built by hand:
+/// `store` will not emit them.
 #[test]
-fn a_second_body_past_the_budget_fails_the_form() {
+fn a_second_body_past_the_budget_is_refused_at_store_and_decode() {
     let budget = usize::try_from(BODIES_RESPONSE_BYTES).expect("budget");
-    let have = ids(2);
-    let first = sized_body(budget);
-    let second = sized_body(1);
-    let msg = ResponseBodies {
-        bodies: vec![first, second],
+    let two = ResponseBodies {
+        bodies: vec![sized_body(budget), sized_body(1)],
         deferred: Vec::new(),
         missed_ids: Vec::new(),
     };
-    assert_eq!(
-        msg.check_form(&have),
-        Err(BodiesFormFault::OverBudget),
-        "two bodies whose sum passes the budget"
-    );
+    match two.store() {
+        Err(PayloadError::OverBudget { field, .. }) => assert_eq!(field, "bodies"),
+        other => panic!("expected OverBudget, got {other:?}"),
+    }
+    let bytes = encode_bodies_unchecked(&[sized_body(budget), sized_body(1)]);
+    match ResponseBodies::decode(&bytes) {
+        Err(PayloadError::OverBudget { field, .. }) => assert_eq!(field, "bodies"),
+        other => panic!("expected OverBudget, got {other:?}"),
+    }
     let one = ResponseBodies {
         bodies: vec![sized_body(budget + 1)],
         deferred: Vec::new(),
         missed_ids: Vec::new(),
     };
-    assert_ne!(
-        one.check_form(&have[..1]),
-        Err(BodiesFormFault::OverBudget),
-        "the first body is sent whatever its size"
-    );
+    let stored = one
+        .store()
+        .expect("the first body is sent whatever its size");
+    assert_eq!(ResponseBodies::decode(&stored).expect("decode"), one);
+}
+
+/// A body list the codec would refuse, encoded without the budget check.
+fn encode_bodies_unchecked(bodies: &[BlockBody]) -> Vec<u8> {
+    let objects = bodies
+        .iter()
+        .map(|body| {
+            let mut section = Section::new();
+            section.insert("block", Value::Bytes(body.block.clone()));
+            section
+        })
+        .collect();
+    let mut root = Section::new();
+    root.insert("bodies", Value::Array(Array::Object(objects)));
+    store_to_binary(&root).expect("encode")
 }
 
 /// A duplicate in the request is the caller's list, not the peer's response.

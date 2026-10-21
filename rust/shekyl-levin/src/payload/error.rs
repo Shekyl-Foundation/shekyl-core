@@ -76,6 +76,16 @@ pub enum Error {
         /// The budget.
         max: usize,
     },
+    /// A header preimage is shorter than a PoW preimage. The header
+    /// response's length-prefix allowance counts two bytes per preimage,
+    /// which holds at and above [`shekyl_wire::MIN_POW_BLOB_SIZE`].
+    #[error("header preimage is {got} bytes, minimum {min}")]
+    PreimageTooShort {
+        /// Observed length.
+        got: usize,
+        /// [`shekyl_wire::MIN_POW_BLOB_SIZE`].
+        min: usize,
+    },
     /// A list is longer than the count it is held to.
     #[error("field {field} has {got} entries, max {max}")]
     OverCount {
