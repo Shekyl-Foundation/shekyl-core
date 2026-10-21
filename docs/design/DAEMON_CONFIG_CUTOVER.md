@@ -450,7 +450,10 @@ and the posture line says so.
 One read-only structure, filled once by Rust before the C++ remnant is
 constructed, holding exactly the values whose reader is still C++. The
 lane-owned knobs are not in it: under IG-Q4 they are not ported, and the
-C++ keeps today's defaults as constants until their lanes decide.
+C++ keeps today's defaults as constants until their lanes decide. Chain
+sync's four are rejected rows (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q12), not an open lane decision: they
+stay out of the snapshot, and the C++ keeps today's constants until the
+cutover replaces their callers.
 
 | Field | Reader | From |
 | --- | --- | --- |

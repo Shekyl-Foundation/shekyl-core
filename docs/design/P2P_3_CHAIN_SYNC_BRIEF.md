@@ -131,7 +131,7 @@ owner of block propagation.
 | `log_connections` | console | Delete. The console reads the board |
 | `safesyncmode`, the `pause_mine`/`resume_mine` coupling | — | Delete. `safesyncmode` is an LMDB knob and leaves with DRS-X; the miner reacts to tip changes, not to sync |
 | `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:262`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner is not started. Read from the snapshot (`net_node.inl:429-430`) |
-| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:272`, **L** chain-sync), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12 |
+| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:272`, **X**), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12: refused; the constants stand until the cutover |
 
 **Wargame.**
 - **Remote trigger or benefit.** None. This is an ownership question.
@@ -1403,8 +1403,10 @@ record in `99542387b`, and the latch's reply split, `CannotFollow`, in
   8, the sync owner sets `following_degraded` through the connector (§A
   item 7), and the evidence check's `Class::Evidence` with its own cache
   lands with chain sync's first caller, not in PR 2;
-- the `INPUT_GRAMMAR.md:272` row moves from **L** to **X** with CS-Q12's
-  reason. That is the grammar lane's table.
+- the `INPUT_GRAMMAR.md:272` row is **X** (#1142), with CS-Q12's reason.
+  The daemon table refuses the four names with that reason: the three
+  budget options name `p2p-download-max` and the IG-Q40 reopening, and
+  `prep-blocks-threads` names the shared hasher budget.
 
 **Next:** the implementing agent's instructions, one consolidated brief,
 starting with CS-Q10's pure-Rust work.
