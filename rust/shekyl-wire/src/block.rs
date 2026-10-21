@@ -297,6 +297,29 @@ pub fn identity_of_pow_blob(blob: &[u8]) -> BlockHash {
     BlockHash::from_bytes(keccak256(&preimage))
 }
 
+/// Every hash on a PoW preimage: `previous`, the two roots, and the
+/// transaction-tree hash.
+const PREIMAGE_HASH_BYTES: usize = 32;
+/// Varints that open a header. Each is one byte when the value is below 128.
+const HEADER_LEADING_VARINTS: usize = 3;
+/// `previous`, `curve_tree_root`, `attestation_root`.
+const HEADER_HASH_FIELD_COUNT: usize = 3;
+/// Those three hashes.
+const HEADER_HASH_FIELDS: usize = HEADER_HASH_FIELD_COUNT * PREIMAGE_HASH_BYTES;
+/// The nonce, little-endian `u32`.
+const HEADER_NONCE_BYTES: usize = 4;
+/// A wire varint of `tx_count = 1`: the miner, and no other transaction.
+const MIN_TX_COUNT_VARINT: usize = 1;
+/// The transaction-tree hash plus that shortest count.
+const POW_TAIL_BYTES: usize = PREIMAGE_HASH_BYTES + MIN_TX_COUNT_VARINT;
+
+/// The shortest [`PowBlob`]. Three one-byte header varints, three hashes,
+/// the nonce, the transaction-tree hash, and `tx_count = 1`. A header
+/// response refuses a preimage shorter than this, so its length-prefix
+/// allowance stays inside the two-byte portable-storage band.
+pub const MIN_POW_BLOB_SIZE: usize =
+    HEADER_LEADING_VARINTS + HEADER_HASH_FIELDS + HEADER_NONCE_BYTES + POW_TAIL_BYTES;
+
 /// The PoW preimage, parsed: the header, the transaction-tree hash, and the
 /// count the trailing varint carries (`tx_count = n_tx + 1`, the miner
 /// included). [`Block::pow_blob`] writes this and nothing else.
@@ -386,6 +409,27 @@ mod tests {
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
             attestation_root: AttestationRoot::from_bytes(attestation_root),
         }
+    }
+
+    /// The named minimum is the bytes the shortest preimage actually writes.
+    #[test]
+    fn the_shortest_pow_blob_is_the_named_minimum() {
+        let blob = PowBlob {
+            header: BlockHeader {
+                major_version: 0,
+                minor_version: 0,
+                timestamp: 0,
+                previous: BlockHash::from_bytes([0; 32]),
+                nonce: 0,
+                curve_tree_root: CurveTreeRoot::from_bytes([0; 32]),
+                attestation_root: AttestationRoot::from_bytes([0; 32]),
+            },
+            tx_tree_hash: TxTreeHash::from_bytes([0; 32]),
+            tx_count: 1,
+        };
+        let bytes = blob.write();
+        assert_eq!(bytes.len(), MIN_POW_BLOB_SIZE);
+        assert_eq!(PowBlob::read(&bytes).expect("the minimum parses"), blob);
     }
 
     #[test]
