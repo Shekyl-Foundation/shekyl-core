@@ -324,6 +324,9 @@ macro_rules! archival_reads {
     (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; drawable_digest; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
         fn drawable_digest(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $floor);
+            if self.chain.omit_drawable_digest {
+                return ::core::result::Result::Ok(::core::option::Option::None);
+            }
             ::core::result::Result::Ok(::core::option::Option::Some({
                 let pairs: ::std::vec::Vec<shekyl_archival_retention::DrawablePair> =
                     ::std::vec::Vec::new();
