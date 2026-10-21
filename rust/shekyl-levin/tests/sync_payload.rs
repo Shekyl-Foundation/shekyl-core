@@ -209,6 +209,72 @@ fn header_response_refuses_a_preimage_total_over_the_budget() {
     }
 }
 
+/// Short preimages fill the byte budget and still round-trip. Each length
+/// is a two-byte varint, which the old 4 KiB allowance did not cover, so
+/// `store` used to succeed and `decode` used to refuse.
+#[test]
+fn a_budget_of_short_preimages_round_trips() {
+    let each = 140;
+    let count = usize::try_from(HEADERS_RESPONSE_BYTES).expect("budget") / each;
+    let msg = ResponseHeaders {
+        blobs: vec![vec![0u8; each]; count],
+        tip_work: 1,
+        more: false,
+    };
+    let bytes = msg
+        .store()
+        .expect("the allowance covers a 140-byte preimage");
+    assert_eq!(ResponseHeaders::decode(&bytes).expect("decode"), msg);
+}
+
+/// One-byte blobs maximise the length prefixes. The allowance is sized for
+/// a 64-byte preimage, so this list is inside the byte budget and outside
+/// the encoded cap, and `store` refuses it.
+#[test]
+fn tiny_preimages_that_overflow_the_cap_are_refused_at_store() {
+    // Two bytes on the wire per one-byte preimage. Half the cap of them
+    // still fits; past that the prefixes push the encoding over the cap
+    // while the preimage bytes themselves stay inside the budget.
+    let count = usize::try_from(CAP_RESPONSE_HEADERS / 2).expect("cap") + 100_000;
+    let msg = ResponseHeaders {
+        blobs: vec![vec![0u8; 1]; count],
+        tip_work: 0,
+        more: false,
+    };
+    let sum: usize = msg.blobs.iter().map(Vec::len).sum();
+    assert!(sum < usize::try_from(HEADERS_RESPONSE_BYTES).expect("budget"));
+    match msg.store() {
+        Err(PayloadError::OverCap { .. }) => {}
+        other => panic!("expected OverCap, got {other:?}"),
+    }
+}
+
+/// A response of small skeletons fits the byte budget and exceeds the
+/// inherited Levin field and object ceilings. The cap is the ceiling, so
+/// the response decodes.
+#[test]
+fn many_small_skeletons_round_trip() {
+    let tx = TxBody::Skeleton(SkeletonTx {
+        unprunable: vec![1],
+        prunable_hash: PrunableHash::from_bytes([3u8; 32]),
+        pqc_auth_hash: None,
+        archival_len: ArchivalLength::from_raw(0),
+    });
+    let body = BlockBody {
+        block: vec![0x11],
+        txs: vec![tx; 90],
+        attestation_witness: Vec::new(),
+    };
+    let msg = ResponseBodies {
+        bodies: vec![body; 100],
+        deferred: Vec::new(),
+        missed_ids: Vec::new(),
+    };
+    let bytes = msg.store().expect("store");
+    assert!(bytes.len() < usize::try_from(BODIES_RESPONSE_BYTES).expect("budget"));
+    assert_eq!(ResponseBodies::decode(&bytes).expect("decode"), msg);
+}
+
 /// One hundred and one hashes fit under the encoded over-bound and are
 /// still refused: the count is the request's cap.
 #[test]

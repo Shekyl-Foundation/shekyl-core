@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_crypto_hash::keccak256;
-use shekyl_portable_storage::{Section, Value};
+use shekyl_portable_storage::{load_from_binary, store_to_binary, Limits, Section, Value};
 use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash};
 use shekyl_wire::{Block, BlockBody, SkeletonTx, TxBody};
 
@@ -53,9 +53,15 @@ pub const HEADERS_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 /// and peak memory, after the cutover.
 pub const BODIES_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Section overhead beside the header preimages: the two difficulty halves,
-/// `more`, and the array envelope.
-const RESPONSE_HEADERS_OVERHEAD: u64 = 4_096;
+/// Length prefixes a budget of preimages can force, plus the section.
+///
+/// A preimage of 64 bytes or more encodes its length in two varint bytes.
+/// Filling [`HEADERS_RESPONSE_BYTES`] with those is one prefix per 64
+/// bytes. The section keys and the array envelope are smaller than 4 KiB.
+/// A shorter preimage is not a header; [`ResponseHeaders`] still refuses
+/// the value when the encoding exceeds the cap, so a list of tiny blobs
+/// cannot pass `store` and fail `decode`.
+const RESPONSE_HEADERS_OVERHEAD: u64 = (HEADERS_RESPONSE_BYTES / 64) * 2 + 4_096;
 
 /// Encoded cap of [`RequestHeaders`]. Derived from the locator count
 /// [`RequestChain`](super::RequestChain) already uses.
@@ -75,7 +81,7 @@ pub const CAP_RESPONSE_BODIES: u64 = DEFAULT_MAX_PACKET_SIZE;
 
 const _: () = assert!(CAP_REQUEST_HEADERS == 1_200_256);
 const _: () = assert!(CAP_REQUEST_BODIES == 5_056);
-const _: () = assert!(CAP_RESPONSE_HEADERS == HEADERS_RESPONSE_BYTES + 4_096);
+const _: () = assert!(CAP_RESPONSE_HEADERS == HEADERS_RESPONSE_BYTES + RESPONSE_HEADERS_OVERHEAD);
 const _: () = assert!(CAP_RESPONSE_HEADERS < DEFAULT_MAX_PACKET_SIZE);
 const _: () = assert!(CAP_RESPONSE_BODIES == DEFAULT_MAX_PACKET_SIZE);
 const _: () = assert!(HEADERS_RESPONSE_BYTES == 2 * 1024 * 1024);
@@ -93,7 +99,16 @@ fn capped<T: PortableMap>(bytes: &[u8], cap: u64) -> Result<T, Error> {
             max,
         });
     }
-    T::load(bytes)
+    // The inherited Levin ceilings (16 384 fields, 8 192 objects) refuse a
+    // response this cap already bounds: a body list of small skeletons
+    // exceeds both while staying inside the byte budget. A field, an object
+    // or a string consumes at least one byte, so the cap ceilings all three.
+    let limits = Limits {
+        objects: max,
+        fields: max,
+        strings: max,
+    };
+    T::from_section(&load_from_binary(bytes, limits)?)
 }
 
 fn within_count(field: &'static str, got: usize, max: u64) -> Result<(), Error> {
@@ -190,13 +205,18 @@ impl ResponseHeaders {
                 max,
             });
         }
+        let encoded = store_to_binary(&self.section())?;
+        let cap = usize::try_from(CAP_RESPONSE_HEADERS).expect("the cap fits usize");
+        if encoded.len() > cap {
+            return Err(Error::OverCap {
+                got: encoded.len(),
+                max: cap,
+            });
+        }
         Ok(())
     }
-}
 
-impl PortableMap for ResponseHeaders {
-    fn to_section(&self) -> Result<Section, Error> {
-        self.check_budget()?;
+    fn section(&self) -> Section {
         let mut section = Section::new();
         get::insert_bytes_array(&mut section, "blobs", &self.blobs);
         let low = u64::try_from(self.tip_work & u128::from(u64::MAX)).expect("the low half fits");
@@ -204,7 +224,14 @@ impl PortableMap for ResponseHeaders {
         section.insert("tip_work", Value::UInt64(low));
         section.insert("tip_work_top64", Value::UInt64(high));
         section.insert("more", Value::Bool(self.more));
-        Ok(section)
+        section
+    }
+}
+
+impl PortableMap for ResponseHeaders {
+    fn to_section(&self) -> Result<Section, Error> {
+        self.check_budget()?;
+        Ok(self.section())
     }
 
     fn from_section(section: &Section) -> Result<Self, Error> {
