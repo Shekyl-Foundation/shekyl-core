@@ -846,23 +846,41 @@ drives it):
   - **Writes are combined until a flush.** A record is cut at the flush,
     or when a full record's payload is waiting. A full record is the
     largest class, and the tail is the smallest class that holds it.
-  - **Backpressure:** the adapter holds at most one record's payload and
-    one sealed record, so a slow reader holds the writer.
-  - **Reads:** a record with occupancy 0 delivers nothing.
+    A submission is the exception below: its bytes stay buffered until
+    the flush, so the padding can be sealed first.
+  - **Backpressure.** An ordinary message holds at most one record's
+    payload and one sealed record, so a slow reader holds the writer.
+    A submission holds its payload until the flush, at most
+    `SUBMISSION_RECORDS` times the largest payload, and then one sealed
+    record at a time.
+  - **Reads.** A record delivers its payload. Occupancy 0 delivers
+    nothing, and only a padding record has occupancy 0. A record that
+    carries payload has that payload's occupancy, including the record
+    a submission's payload ends in.
   - **Half-close:** an end of the transport at a record boundary is the
     end of the stream, and an end inside a record is an error.
   - **One table in both directions** (RT-O29).
   - **A submission** (RT-O28): the client arms the stream's
-    `SubmissionMark` before it sends `submit_transaction`. The message
-    then goes out as exactly `SUBMISSION_RECORDS` = 5 records of the
-    largest class, the tail and padding at occupancy 0. Five records hold
-    the largest admissible transaction's request body, 298,814 bytes,
-    with 28,851 bytes left for the head; a test pins the count to
+    `SubmissionMark` before the message is classified. Classification is
+    when the kind first changes what is sealed: a further byte arrives
+    while one full record is buffered, or a flush finds bytes waiting.
+    The mark is taken once, at that moment. An arm after it covers the
+    next message, and finishing the flush does not clear a mark set for
+    that next message. A flush that seals nothing leaves the mark armed.
+    The message goes out as exactly `SUBMISSION_RECORDS` = 5 records of
+    the largest class. The padding records, occupancy 0, are sealed
+    first and the HTTP bytes are a suffix, so the body is not complete,
+    and a response cannot start, until the last record. Five records
+    hold the largest admissible transaction's request body, 298,814
+    bytes, with 28,851 bytes left for the head; a test pins the count to
     `TX_WEIGHT_LIMIT`. A message that would need a sixth record is
-    refused before it is sealed.
+    refused before that record is sealed. The first five of it may
+    already be on the wire as payload, since a message that large leaves
+    no room to pad.
   - **Tested through hyper:** every `submit_transaction` upload, for a
     transaction of 0, 1, 26,599, 97,585 and 149,400 bytes, is exactly
-    five records. hyper flushes once per message in both directions,
+    five records, and the handler has those five records open before it
+    has the body. hyper flushes once per message in both directions,
     which is RT-P5's registered flush policy, observed.
   - **Each check seen failing with it removed:** the splitting (the
     pre-flight's named edit, which fails the block-batch test), the

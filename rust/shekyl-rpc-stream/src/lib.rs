@@ -12,27 +12,29 @@
 //! [`ClassedRecord`] halves and a transport:
 //!
 //! - **Writing combines bytes until a flush** (RT-P5's registered flush
-//!   policy). A record is cut when the writer flushes, or when the buffer
-//!   holds a full record's payload. A full record is the largest class; the
-//!   bytes left at a flush go in the smallest class that holds them. A
-//!   message larger than one record is so cut into full records and a tail.
-//! - **Backpressure.** The adapter holds at most one record's payload and
-//!   one sealed record waiting for the transport. It cuts no new record
-//!   until the last one is written, so a slow reader holds the writer.
-//! - **Reading** delivers each record's payload in order. A record with no
-//!   payload (occupancy 0, the padding below) delivers nothing.
+//!   policy). [`message`] decides the cut. An ordinary record is cut when
+//!   the next byte would start another record, or at the flush. A full
+//!   record is the largest class; the bytes left at a flush go in the
+//!   smallest class that holds them.
+//! - **A submission is padded to a fixed size** (RT-O28). The client arms
+//!   the [`SubmissionMark`] before the message is classified. The mark is
+//!   taken once, at classification: a further byte while one full record
+//!   is buffered, or a flush that has bytes. The message then goes out as
+//!   exactly [`SUBMISSION_RECORDS`] records of the largest class, padding
+//!   first, so the HTTP body is a suffix and is not complete until the
+//!   last record. A flush that seals nothing leaves the mark armed.
+//! - **Backpressure.** An ordinary message holds at most one record's
+//!   payload and one sealed record. A submission holds its payload until
+//!   the flush, at most [`SUBMISSION_CAP`], and then one sealed record
+//!   at a time. Either way a slow reader holds the writer.
+//! - **Reading** delivers each record's payload in order. Only a padding
+//!   record has occupancy 0, and it delivers nothing.
 //! - **Half-close.** Shutting down the write side flushes, then shuts the
 //!   transport's write side. A reader sees the end of the stream when the
-//!   transport ends at a record boundary; an end inside a record is an
-//!   error, since it is a truncation.
+//!   transport ends at a record boundary; an end inside a record is a
+//!   truncation.
 //! - **One class table in both directions** ([`class_table`], RT-O29):
 //!   512, 16,384 and 65,535.
-//! - **A submission is padded to a fixed size** (RT-O28): the client arms
-//!   the [`SubmissionMark`] before it sends a `submit_transaction`
-//!   request, and the message it flushes next goes out as exactly
-//!   [`SUBMISSION_RECORDS`] records of the largest class, the last ones
-//!   carrying no payload. A message that would need more is refused before
-//!   a record past the count is sealed.
 
 use std::io;
 use std::pin::Pin;
@@ -40,53 +42,44 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-use shekyl_noise::{
-    ClassId, ClassTable, ClassedError, ClassedRecord, Direction, MAX_RECORD_PLAINTEXT,
-    OCCUPANCY_LEN,
-};
+#[cfg(test)]
+use shekyl_noise::ClassId;
+use shekyl_noise::{ClassedError, ClassedRecord, Direction};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-/// The channel's class table, in both directions (RT-O6 re-ruled
-/// 2026-10-18; RT-O29, 2026-10-20): plaintext lengths, occupancy included.
-pub const CLASS_LENGTHS: [usize; 3] = [512, 16_384, MAX_RECORD_PLAINTEXT];
+mod message;
 
-/// The most payload one record carries: a record of the largest class.
-pub const MAX_PAYLOAD: usize = MAX_RECORD_PLAINTEXT - OCCUPANCY_LEN;
+use message::{FlushPlan, Message, MessageKind, SealPlan, WritePlan};
 
-/// The records every `submit_transaction` upload takes, whatever the
-/// transaction's size (RT-O28).
-///
-/// The largest admissible transaction is `TX_WEIGHT_LIMIT` = 149,400 bytes
-/// (weight is size plus the Bp+ clawback). Its request body,
-/// `{"tx_blob":"<hex>"}`, is at most 298,814 bytes: 4.56 records. Five
-/// leave 28,851 bytes for the request head. A test pins this against
-/// `shekyl-wire`'s `TX_WEIGHT_LIMIT`.
-pub const SUBMISSION_RECORDS: usize = 5;
+pub use message::{class_table, CLASS_LENGTHS, MAX_PAYLOAD, SUBMISSION_CAP, SUBMISSION_RECORDS};
 
 /// How much the adapter asks of the transport at once when reading.
 const READ_CHUNK: usize = 16 * 1024;
 
-/// The class table both directions pad to.
-#[must_use]
-pub fn class_table() -> ClassTable {
-    ClassTable::new(&CLASS_LENGTHS).expect("the ruled table is strictly increasing")
-}
-
-/// The switch a client sets before it sends a submission: the next message
-/// the stream flushes is padded to [`SUBMISSION_RECORDS`] records.
+/// The switch a client sets before a submission is classified.
+///
+/// hyper owns the stream on its own task, so the mark is shared. [`arm`](Self::arm)
+/// publishes with [`Ordering::Release`]; the stream takes it with one
+/// [`Ordering::AcqRel`] swap when the message is classified, and never
+/// writes it back.
 #[derive(Clone, Debug)]
 pub struct SubmissionMark(Arc<AtomicBool>);
 
 impl SubmissionMark {
-    /// Pad the next flushed message as a submission. A flush with nothing
-    /// written leaves the mark armed: the next message is the submission.
+    /// Arm the next message that has not been classified yet.
+    ///
+    /// Classification is when the kind first changes what is sealed: a
+    /// further byte arrives while one full record is buffered, or a flush
+    /// finds bytes waiting. An arm after that moment covers the following
+    /// message. A flush that seals nothing does not take the mark.
     pub fn arm(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.0.store(true, Ordering::Release);
     }
 }
 
-/// A submission that does not fit its fixed record count. Nothing past the
-/// count was sealed.
+/// A submission that does not fit [`SUBMISSION_CAP`]. The extra byte was
+/// not accepted. The cap itself may already be sealed, as payload records,
+/// because a message that large has no room to pad.
 #[derive(Debug)]
 pub struct SubmissionTooLarge;
 
@@ -101,11 +94,18 @@ impl std::fmt::Display for SubmissionTooLarge {
 
 impl std::error::Error for SubmissionTooLarge {}
 
+/// [`ClassedError`] stays the source. Truncation is an unexpected end;
+/// every other failure is data the peer will not accept.
 fn record_error(error: ClassedError) -> io::Error {
-    match error {
-        ClassedError::Truncated => io::Error::from(io::ErrorKind::UnexpectedEof),
-        other => io::Error::new(io::ErrorKind::InvalidData, format!("record: {other:?}")),
-    }
+    let kind = match error {
+        ClassedError::Truncated => io::ErrorKind::UnexpectedEof,
+        ClassedError::Refused
+        | ClassedError::Poisoned
+        | ClassedError::UnknownClass
+        | ClassedError::PayloadTooLarge
+        | ClassedError::State => io::ErrorKind::InvalidData,
+    };
+    io::Error::new(kind, error)
 }
 
 /// What a test reads off a stream: records cut per class, flushes that
@@ -118,6 +118,10 @@ pub(crate) struct Counters {
     pub(crate) flushes_with_records: u64,
     pub(crate) max_pending: usize,
     pub(crate) max_out: usize,
+    /// An ordinary write accepted payload while a sealed record was still
+    /// leaving. That overlap is the one-record backpressure: the next
+    /// payload fills during the write, and the seal after it waits.
+    pub(crate) payload_while_record_in_flight: bool,
 }
 
 /// A byte stream over the channel's records.
@@ -125,13 +129,13 @@ pub struct RecordStream<T> {
     io: T,
     send: ClassedRecord,
     recv: ClassedRecord,
-    /// Payload written and not yet sealed. At most [`MAX_PAYLOAD`].
-    pending: Vec<u8>,
+    /// The message being cut. The transport's in-flight record is `out`,
+    /// not here: a seal commits in the message only after it succeeds,
+    /// and `out` is that record until the transport takes it.
+    message: Message,
     /// One sealed record not yet written to the transport, from `out_pos`.
     out: Vec<u8>,
     out_pos: usize,
-    /// Records cut since the last flush ended.
-    records_in_message: usize,
     submission: Arc<AtomicBool>,
     /// Wire bytes read and not yet opened.
     wire: Vec<u8>,
@@ -152,9 +156,21 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         Self::after_first_record(io, send, recv, Vec::new(), Vec::new())
     }
 
-    /// A stream whose first record the handshake already opened (a pending
-    /// session is released by opening it): `first_payload` is read first,
-    /// then `unread_wire`, bytes read past that record, then the transport.
+    /// A stream whose first record the handshake already opened.
+    ///
+    /// The caller is the handshake's release of a pending session: it
+    /// lends the receiving [`Direction`], opens the first record with a
+    /// [`ClassedRecord`], and takes the direction back with
+    /// [`ClassedRecord::into_direction`]. That direction has spent the
+    /// first record's nonce. `first_payload` is read before anything
+    /// else, then `unread_wire` (bytes already read past that record,
+    /// which may be the next record or only the start of it), then the
+    /// transport. The half built here derives its header key again for
+    /// the epoch the direction is on.
+    ///
+    /// This is the handoff the session release will call. The release
+    /// itself is not in this crate: the adapter does not depend on the
+    /// handshake (RT-O19).
     #[must_use]
     pub fn after_first_record(
         io: T,
@@ -167,10 +183,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
             io,
             send: ClassedRecord::new(send, class_table()),
             recv: ClassedRecord::new(recv, class_table()),
-            pending: Vec::with_capacity(MAX_PAYLOAD),
+            message: Message::new(),
             out: Vec::new(),
             out_pos: 0,
-            records_in_message: 0,
             submission: Arc::new(AtomicBool::new(false)),
             wire: unread_wire,
             next_len: None,
@@ -182,7 +197,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         }
     }
 
-    /// The switch that pads this stream's next message as a submission.
+    /// The switch that arms this stream's next unclassified message.
     #[must_use]
     pub fn submission_mark(&self) -> SubmissionMark {
         SubmissionMark(Arc::clone(&self.submission))
@@ -191,6 +206,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
     #[cfg(test)]
     pub(crate) fn counters(&self) -> Arc<std::sync::Mutex<Counters>> {
         Arc::clone(&self.counters)
+    }
+
+    /// The mark is taken once. A later [`SubmissionMark::arm`] is the
+    /// next message, and this flush does not clear it.
+    fn take_kind(&self) -> MessageKind {
+        if self.submission.swap(false, Ordering::AcqRel) {
+            MessageKind::Submission
+        } else {
+            MessageKind::Ordinary
+        }
     }
 
     /// Write out the sealed record waiting for the transport.
@@ -207,31 +232,42 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         Poll::Ready(Ok(()))
     }
 
-    /// Seal `payload_len` bytes from the front of `pending` as one record of
-    /// `class`. The caller has drained `out`.
-    fn cut(&mut self, class: ClassId, payload_len: usize) -> io::Result<()> {
-        debug_assert!(self.out.is_empty());
-        if self.submission.load(Ordering::SeqCst) && self.records_in_message >= SUBMISSION_RECORDS {
-            return Err(io::Error::other(SubmissionTooLarge));
-        }
-        let wire = self
-            .send
-            .seal(class, &self.pending[..payload_len])
-            .map_err(record_error)?;
-        self.pending.drain(..payload_len);
-        self.out = wire;
-        self.records_in_message += 1;
+    /// Seal what `plan` names. The message keeps its bytes until the seal
+    /// returns, so a failure is retried as the same record.
+    fn seal(&mut self, plan: SealPlan) -> io::Result<()> {
+        debug_assert!(
+            self.out.is_empty(),
+            "the previous record has not left; two sealed records would wait"
+        );
+        let wire = {
+            let Self { send, message, .. } = self;
+            send.seal(plan.class, message.prefix(plan.len))
+                .map_err(record_error)?
+        };
+        self.message.commit_seal(plan);
         #[cfg(test)]
-        {
-            let mut c = self.counters.lock().unwrap();
-            c.sent[usize::from(class.0)] += 1;
-            c.max_out = c.max_out.max(self.out.len());
-        }
+        self.note_sent(plan.class, wire.len());
+        self.out = wire;
         Ok(())
     }
 
-    fn largest(&self) -> ClassId {
-        self.send.table().largest()
+    #[cfg(test)]
+    fn note_sent(&self, class: ClassId, wire_len: usize) {
+        let mut counters = self.counters.lock().unwrap();
+        let index = usize::from(class.0);
+        debug_assert!(index < counters.sent.len(), "the table has three classes");
+        counters.sent[index] += 1;
+        counters.max_out = counters.max_out.max(wire_len);
+    }
+
+    #[cfg(test)]
+    fn note_pending(&self) {
+        let buffered = self.message.buffered_len();
+        let mut counters = self.counters.lock().unwrap();
+        counters.max_pending = counters.max_pending.max(buffered);
+        if buffered > 0 && self.out_pos < self.out.len() {
+            counters.payload_while_record_in_flight = true;
+        }
     }
 }
 
@@ -242,63 +278,79 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RecordStream<T> {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        if this.pending.len() == MAX_PAYLOAD {
-            ready!(this.poll_drain(cx))?;
-            let largest = this.largest();
-            this.cut(largest, MAX_PAYLOAD)?;
+        let largest = this.send.table().largest();
+        loop {
+            match this.message.plan_write(buf.len(), largest) {
+                WritePlan::Accept(n) => {
+                    debug_assert!(
+                        n > 0 || buf.is_empty(),
+                        "a non-empty write made no progress"
+                    );
+                    // A sealed record may already be in flight. Move what
+                    // the transport will take, and accept these bytes
+                    // either way: the message has room for them. Waiting
+                    // here would hold the next payload until the record
+                    // was gone, which is a second record of delay the
+                    // ordinary path does not take. The next seal waits.
+                    if let Poll::Ready(result) = this.poll_drain(cx) {
+                        result?;
+                    }
+                    this.message.accept(&buf[..n]);
+                    #[cfg(test)]
+                    this.note_pending();
+                    return Poll::Ready(Ok(n));
+                }
+                WritePlan::Classify => {
+                    ready!(this.poll_drain(cx))?;
+                    this.message.classify(this.take_kind());
+                }
+                WritePlan::Seal(plan) => {
+                    ready!(this.poll_drain(cx))?;
+                    this.seal(plan)?;
+                }
+                WritePlan::TooLarge => {
+                    ready!(this.poll_drain(cx))?;
+                    this.message.finish();
+                    return Poll::Ready(Err(io::Error::other(SubmissionTooLarge)));
+                }
+                WritePlan::Sealing => {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "a flush is already sealing this message",
+                    )));
+                }
+            }
         }
-        // Start the record on its way; if the transport is not ready, the
-        // bytes below still fit in `pending`.
-        if let Poll::Ready(result) = this.poll_drain(cx) {
-            result?;
-        }
-        let n = buf.len().min(MAX_PAYLOAD - this.pending.len());
-        this.pending.extend_from_slice(&buf[..n]);
-        #[cfg(test)]
-        {
-            let mut c = this.counters.lock().unwrap();
-            c.max_pending = c.max_pending.max(this.pending.len());
-        }
-        Poll::Ready(Ok(n))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.get_mut();
         loop {
             ready!(this.poll_drain(cx))?;
-            let submission = this.submission.load(Ordering::SeqCst);
-            if this.pending.len() == MAX_PAYLOAD {
-                let largest = this.largest();
-                this.cut(largest, MAX_PAYLOAD)?;
-            } else if submission
-                && (!this.pending.is_empty()
-                    || (this.records_in_message > 0
-                        && this.records_in_message < SUBMISSION_RECORDS))
-            {
-                // A submission's tail, then its padding: every record the
-                // largest class, until the count is reached.
-                let largest = this.largest();
-                let len = this.pending.len();
-                this.cut(largest, len)?;
-            } else if !submission && !this.pending.is_empty() {
-                let len = this.pending.len();
-                let class = this
-                    .send
-                    .table()
-                    .smallest_for(len)
-                    .expect("pending never exceeds the largest class");
-                this.cut(class, len)?;
-            } else {
-                break;
+            let plan = {
+                let Self { send, message, .. } = this;
+                message.plan_flush(send.table())
+            };
+            match plan {
+                FlushPlan::Classify => this.message.classify(this.take_kind()),
+                FlushPlan::Seal(plan) => this.seal(plan)?,
+                FlushPlan::Done { counted } => {
+                    if counted {
+                        #[cfg(test)]
+                        {
+                            this.counters.lock().unwrap().flushes_with_records += 1;
+                        }
+                    }
+                    // Idle, and the mark is untouched. An arm taken for
+                    // the next message stays armed.
+                    this.message.finish();
+                    break;
+                }
+                FlushPlan::TooLarge => {
+                    this.message.finish();
+                    return Poll::Ready(Err(io::Error::other(SubmissionTooLarge)));
+                }
             }
-        }
-        if this.records_in_message > 0 {
-            #[cfg(test)]
-            {
-                this.counters.lock().unwrap().flushes_with_records += 1;
-            }
-            this.records_in_message = 0;
-            this.submission.store(false, Ordering::SeqCst);
         }
         Pin::new(&mut this.io).poll_flush(cx)
     }
@@ -339,8 +391,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncRead for RecordStream<T> {
                     this.next_len = None;
                     #[cfg(test)]
                     {
-                        this.counters.lock().unwrap().received[usize::from(opened.class.0)] += 1;
+                        let index = usize::from(opened.class.0);
+                        let mut counters = this.counters.lock().unwrap();
+                        debug_assert!(index < counters.received.len());
+                        counters.received[index] += 1;
                     }
+                    // An empty payload is padding. It is not the end of
+                    // the stream, and it delivers nothing, so the read
+                    // continues into the next record.
                     this.plain = opened.payload;
                     this.plain_pos = 0;
                     continue;
@@ -350,10 +408,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncRead for RecordStream<T> {
                 if this.wire.is_empty() {
                     return Poll::Ready(Ok(()));
                 }
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "the transport ended inside a record",
-                )));
+                return Poll::Ready(Err(record_error(ClassedError::Truncated)));
             }
             let mut chunk = [0u8; READ_CHUNK];
             let mut read = ReadBuf::new(&mut chunk);

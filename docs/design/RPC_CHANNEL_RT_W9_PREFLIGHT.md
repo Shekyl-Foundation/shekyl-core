@@ -357,8 +357,10 @@ from any other request, and hyper writes the message and flushes once
 - **(a) The RPC client asks the adapter to pad the message it has just
   written.** The client that sends `submit_transaction` knows it is
   submitting. The adapter fills the message out to a fixed number of
-  largest-class records, the last ones carrying occupancy 0, a valid
-  record (§4.4), and the daemon's adapter delivers no bytes for them.
+  largest-class records. Padding records, occupancy 0, are sealed
+  before the payload, so the HTTP bytes are a suffix of those records
+  and the body is not complete until the last one (§4.4). A padding
+  record is valid, and the daemon's adapter delivers no bytes for it.
   The HTTP body is untouched.
 - **(b) Pad the HTTP body itself,** with whitespace in the JSON, or a
   padding member. That puts the rule in each client and makes the
@@ -371,6 +373,13 @@ record count, and it survives the move to a binary body unchanged.
 **RULED: (a), as recommended,** with a test that every
 `submit_transaction` upload is exactly the fixed record count, whatever
 the transaction's size.
+
+**UPDATE 2026-10-21:** the 2026-10-20 wording of (a) put the padding
+records last ("the last ones carrying occupancy 0"). That order lets
+the peer answer once the body is complete, while the padding is still
+unsent, and the wait publishes the submission's size. Padding is sealed
+first. Occupancy 0 is only a padding record; a payload-bearing record's
+occupancy is its payload. The count and option (a) are unchanged.
 
 ### RT-O29 — Which class table does the request direction use?
 

@@ -8,6 +8,7 @@
 //! clients will.
 
 use std::convert::Infallible;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -31,6 +32,10 @@ fn directions() -> ((Direction, Direction), (Direction, Direction)) {
         state().into_directions(SplitRole::Responder),
     )
 }
+
+/// Smaller than one largest-class record (1 + 65,535 + 16 tag bytes), so
+/// sealing one record blocks until the peer reads.
+const RECORD_DOES_NOT_FIT: usize = 1 << 16;
 
 /// A client stream and a daemon stream over an in-memory transport of
 /// `capacity` bytes each way.
@@ -74,13 +79,15 @@ async fn send_one(len: usize) -> [u64; 3] {
 /// the smallest class that holds them; a full record is the largest class.
 #[tokio::test]
 async fn a_flush_cuts_the_smallest_class_that_holds_the_bytes() {
+    let table = class_table();
+    let most = |id: u8| table.max_payload(ClassId(id)).unwrap();
     assert_eq!(send_one(1).await, [1, 0, 0]);
-    assert_eq!(send_one(510).await, [1, 0, 0]);
-    assert_eq!(send_one(511).await, [0, 1, 0]);
-    assert_eq!(send_one(16_382).await, [0, 1, 0]);
-    assert_eq!(send_one(16_383).await, [0, 0, 1]);
-    assert_eq!(send_one(MAX_PAYLOAD).await, [0, 0, 1]);
-    assert_eq!(send_one(MAX_PAYLOAD + 1).await, [1, 0, 1]);
+    assert_eq!(send_one(most(0)).await, [1, 0, 0]);
+    assert_eq!(send_one(most(0) + 1).await, [0, 1, 0]);
+    assert_eq!(send_one(most(1)).await, [0, 1, 0]);
+    assert_eq!(send_one(most(1) + 1).await, [0, 0, 1]);
+    assert_eq!(send_one(most(2)).await, [0, 0, 1]);
+    assert_eq!(send_one(most(2) + 1).await, [1, 0, 1]);
 }
 
 /// A block batch, larger than one record, is cut into full records and a
@@ -123,8 +130,12 @@ async fn a_slow_reader_holds_the_writer_to_one_record() {
     assert_eq!(got, expected);
     let c = counters.lock().unwrap();
     assert!(c.max_pending <= MAX_PAYLOAD, "pending {}", c.max_pending);
-    let largest_wire = class_table().wire_len(ClassId(2)).unwrap();
+    let largest_wire = class_table().wire_len(class_table().largest()).unwrap();
     assert!(c.max_out <= largest_wire, "out {}", c.max_out);
+    assert!(
+        c.payload_while_record_in_flight,
+        "the next payload fills while the sealed record is still leaving"
+    );
 }
 
 /// Half-close: the client sends its request and shuts its write side; the
@@ -174,9 +185,13 @@ async fn an_end_inside_a_record_is_an_error_not_an_end() {
     let wire = wire_of(b"request").await;
     assert_eq!(daemon_reading(&wire).await.unwrap(), b"request");
     let cut = &wire[..wire.len() - 1];
+    let error = daemon_reading(cut).await.unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
     assert_eq!(
-        daemon_reading(cut).await.unwrap_err().kind(),
-        io::ErrorKind::UnexpectedEof
+        error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<ClassedError>()),
+        Some(&ClassedError::Truncated)
     );
 }
 
@@ -185,9 +200,13 @@ async fn a_changed_byte_is_refused() {
     let mut wire = wire_of(b"request").await;
     let last = wire.len() - 1;
     wire[last] ^= 1;
+    let error = daemon_reading(&wire).await.unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert_eq!(
-        daemon_reading(&wire).await.unwrap_err().kind(),
-        io::ErrorKind::InvalidData
+        error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<ClassedError>()),
+        Some(&ClassedError::Refused)
     );
 }
 
@@ -197,20 +216,24 @@ async fn a_changed_byte_is_refused() {
 async fn a_request_split_across_records_reads_as_one_stream() {
     let (mut client, mut daemon) = pair(4096);
     let counters = client.counters();
+    let head = b"POST / HTTP/1.1\r\n\r\n";
+    let body = bytes(20_000);
+    let head_len = head.len();
+    let body_len = body.len();
     let write = async move {
-        client.write_all(b"POST / HTTP/1.1\r\n\r\n").await.unwrap();
+        client.write_all(head).await.unwrap();
         client.flush().await.unwrap();
-        client.write_all(&bytes(20_000)).await.unwrap();
+        client.write_all(&body).await.unwrap();
         client.flush().await.unwrap();
     };
     let read = async move {
-        let mut got = vec![0u8; 19 + 20_000];
+        let mut got = vec![0u8; head_len + body_len];
         daemon.read_exact(&mut got).await.unwrap();
         got
     };
     let ((), got) = tokio::join!(write, read);
-    assert_eq!(&got[..19], b"POST / HTTP/1.1\r\n\r\n");
-    assert_eq!(&got[19..], &bytes(20_000)[..]);
+    assert_eq!(&got[..head_len], head);
+    assert_eq!(&got[head_len..], &bytes(body_len)[..]);
     let c = counters.lock().unwrap();
     assert_eq!(c.sent, [1, 0, 1]);
     assert_eq!(c.flushes_with_records, 2);
@@ -230,7 +253,7 @@ async fn a_submission_is_always_its_fixed_record_count() {
         3 * MAX_PAYLOAD + 7,
         SUBMISSION_RECORDS * MAX_PAYLOAD,
     ] {
-        let (mut client, mut daemon) = pair(1 << 16);
+        let (mut client, mut daemon) = pair(RECORD_DOES_NOT_FIT);
         let counters = client.counters();
         let received = daemon.counters();
         client.submission_mark().arm();
@@ -268,7 +291,7 @@ async fn a_submission_past_its_count_is_refused() {
     let (mut client, mut daemon) = pair(1 << 20);
     let counters = client.counters();
     client.submission_mark().arm();
-    let message = bytes(SUBMISSION_RECORDS * MAX_PAYLOAD + 1);
+    let message = bytes(SUBMISSION_CAP + 1);
     let reader = tokio::spawn(async move {
         let mut sink = Vec::new();
         // The writer's refusal ends the stream; how the reader sees that
@@ -292,34 +315,181 @@ async fn a_submission_past_its_count_is_refused() {
     reader.await.unwrap();
 }
 
+/// An armed flush with nothing written does not classify, so the mark
+/// still covers the next message.
+#[tokio::test]
+async fn an_empty_flush_leaves_the_mark_armed() {
+    let (mut client, mut daemon) = pair(RECORD_DOES_NOT_FIT);
+    let counters = client.counters();
+    let write = async move {
+        client.submission_mark().arm();
+        client.flush().await.unwrap();
+        client.write_all(&[0x11]).await.unwrap();
+        client.flush().await.unwrap();
+    };
+    let read = async move {
+        let mut got = [0u8; 1];
+        daemon.read_exact(&mut got).await.unwrap();
+        got
+    };
+    let ((), got) = tokio::join!(write, read);
+    assert_eq!(got, [0x11]);
+    assert_eq!(
+        counters.lock().unwrap().sent,
+        [0, 0, u64::try_from(SUBMISSION_RECORDS).unwrap()]
+    );
+}
+
+/// One record's bytes are still unclassified. An arm before the flush
+/// pads that message; the mark is not sampled when the bytes arrive.
+#[tokio::test]
+async fn an_arm_while_the_message_is_still_open_pads_it() {
+    let (mut client, mut daemon) = pair(RECORD_DOES_NOT_FIT);
+    let counters = client.counters();
+    let write = async move {
+        client.write_all(&[0x22]).await.unwrap();
+        client.submission_mark().arm();
+        client.flush().await.unwrap();
+    };
+    let read = async move {
+        let mut got = [0u8; 1];
+        daemon.read_exact(&mut got).await.unwrap();
+        got
+    };
+    let ((), got) = tokio::join!(write, read);
+    assert_eq!(got, [0x22]);
+    assert_eq!(
+        counters.lock().unwrap().sent,
+        [0, 0, u64::try_from(SUBMISSION_RECORDS).unwrap()]
+    );
+}
+
+/// The full record of an ordinary message is already classified. Arming
+/// on its tail covers the next message, and the flush does not clear it.
+#[tokio::test]
+async fn an_arm_after_classification_covers_the_next_message() {
+    let (mut client, mut daemon) = pair(RECORD_DOES_NOT_FIT);
+    let counters = client.counters();
+    let first_len = MAX_PAYLOAD + 1;
+    let write = async move {
+        client.write_all(&bytes(first_len)).await.unwrap();
+        client.submission_mark().arm();
+        client.flush().await.unwrap();
+        client.write_all(&[0x7e]).await.unwrap();
+        client.flush().await.unwrap();
+    };
+    let read = async move {
+        let mut got = vec![0u8; first_len + 1];
+        daemon.read_exact(&mut got).await.unwrap();
+        got
+    };
+    let ((), got) = tokio::join!(write, read);
+    assert_eq!(&got[..first_len], &bytes(first_len)[..]);
+    assert_eq!(got[first_len], 0x7e);
+    assert_eq!(
+        counters.lock().unwrap().sent,
+        [1, 0, u64::try_from(1 + SUBMISSION_RECORDS).unwrap()]
+    );
+}
+
+/// The handshake opens the first record, then hands the direction back.
+/// That payload is read before bytes already pulled past the record, and
+/// those before whatever the transport still has. The new half continues
+/// at the next nonce; a direction that had not spent the first record
+/// would refuse the second.
+#[tokio::test]
+async fn the_opened_first_record_is_read_before_the_transport() {
+    let ((c_send, _), (d_send, d_recv)) = directions();
+    let table = class_table();
+    let class = table.smallest_for(b"first".len()).unwrap();
+    let mut send = ClassedRecord::new(c_send, table.clone());
+    let first = send.seal(class, b"first").unwrap();
+    let second = send.seal(class, b"second").unwrap();
+    let third = send.seal(class, b"third").unwrap();
+
+    let mut framed = ClassedRecord::new(d_recv, table);
+    let opened = framed.open(&first).unwrap();
+    assert_eq!(opened.payload, b"first");
+    let d_recv = framed.into_direction();
+    assert_eq!(d_recv.opened(), 1);
+
+    let mut unread = second;
+    unread.push(third[0]);
+    let (mut peer, daemon_io) = duplex(RECORD_DOES_NOT_FIT);
+    let mut daemon =
+        RecordStream::after_first_record(daemon_io, d_send, d_recv, opened.payload, unread);
+    let rest = third[1..].to_vec();
+    let write = async move {
+        peer.write_all(&rest).await.unwrap();
+    };
+    let read = async move {
+        let mut got = vec![0u8; b"firstsecondthird".len()];
+        daemon.read_exact(&mut got).await.unwrap();
+        got
+    };
+    let ((), got) = tokio::join!(write, read);
+    assert_eq!(got, b"firstsecondthird");
+}
+
 /// SUBMISSION_RECORDS is derived from the consensus bound: the largest
 /// admissible transaction's request body fits five records with room for
 /// a request head, and does not fit four.
 #[test]
 fn the_submission_count_is_the_consensus_bound_in_records() {
-    let envelope = serde_json::to_vec(&shekyl_rpc_types::SubmitTransactionRequest {
+    // serde_json's encoding of an empty `tx_blob`, pinned so a change in
+    // the envelope fails here rather than silently eating the head room.
+    const PINNED_LARGEST_BODY: usize = 298_814;
+    /// Room the five records were chosen to leave for the HTTP head.
+    /// A floor for the count, not a second protocol constant.
+    const MIN_HEAD_ROOM: usize = 16 * 1024;
+    let largest_body = submit_envelope_len() + 2 * shekyl_wire::transaction::TX_WEIGHT_LIMIT;
+    assert_eq!(largest_body, PINNED_LARGEST_BODY);
+    let head_room = SUBMISSION_CAP - largest_body;
+    assert!(head_room >= MIN_HEAD_ROOM, "{head_room} bytes for the head");
+    assert!(largest_body > (SUBMISSION_RECORDS - 1) * MAX_PAYLOAD);
+}
+
+fn submit_envelope_len() -> usize {
+    serde_json::to_vec(&shekyl_rpc_types::SubmitTransactionRequest {
         tx_blob: String::new(),
     })
     .unwrap()
-    .len();
-    let largest_body = envelope + 2 * shekyl_wire::transaction::TX_WEIGHT_LIMIT;
-    assert_eq!(largest_body, 298_814);
-    let head_room = SUBMISSION_RECORDS * MAX_PAYLOAD - largest_body;
-    assert!(head_room >= 16 * 1024, "{head_room} bytes for the head");
-    assert!(largest_body > (SUBMISSION_RECORDS - 1) * MAX_PAYLOAD);
+    .len()
 }
 
 // ------------------------------------------------------------- HTTP over it
 
+/// Leading bytes of an answer that carry the request body's length.
+const ECHOED_LEN: usize = std::mem::size_of::<usize>();
+
+const SUBMIT_TRANSACTION: &str = "/submit_transaction";
+
 /// The daemon side: answers every request with the length of its body, in
-/// a body of `answer_len` bytes.
+/// a body of `answer_len` bytes. A `submit_transaction` body is collected
+/// only after all [`SUBMISSION_RECORDS`] records have been opened.
 async fn serve(daemon: RecordStream<DuplexStream>, answer_len: usize) {
-    let service = hyper::service::service_fn(move |request: Request<Incoming>| async move {
-        let body = request.into_body().collect().await.unwrap().to_bytes();
-        let mut answer = bytes(answer_len);
-        let len = body.len().to_le_bytes();
-        answer[..8].copy_from_slice(&len);
-        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from(answer))))
+    assert!(answer_len >= ECHOED_LEN);
+    let received = daemon.counters();
+    let service = hyper::service::service_fn(move |request: Request<Incoming>| {
+        let received = Arc::clone(&received);
+        async move {
+            let submission = request.uri().path() == SUBMIT_TRANSACTION;
+            let body = request.into_body().collect().await.unwrap().to_bytes();
+            if submission {
+                // Padding sealed after the payload would let the body
+                // finish while those records were still unsent.
+                let counts = received.lock().unwrap().received;
+                assert_eq!(
+                    counts,
+                    [0, 0, u64::try_from(SUBMISSION_RECORDS).unwrap()],
+                    "the body was collected with records {counts:?}"
+                );
+            }
+            let mut answer = bytes(answer_len);
+            let len = body.len().to_le_bytes();
+            answer[..ECHOED_LEN].copy_from_slice(&len);
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from(answer))))
+        }
     });
     hyper::server::conn::http1::Builder::new()
         .serve_connection(TokioIo::new(daemon), service)
@@ -332,7 +502,7 @@ fn submit(tx_len: usize) -> Request<Full<Bytes>> {
         tx_blob: hex::encode(bytes(tx_len)),
     })
     .unwrap();
-    Request::post("/submit_transaction")
+    Request::post(SUBMIT_TRANSACTION)
         .header("host", "node")
         .header("content-type", "application/json")
         .body(Full::new(Bytes::from(body)))
@@ -352,7 +522,7 @@ async fn every_submit_transaction_upload_is_the_fixed_record_count() {
         97_585,
         shekyl_wire::transaction::TX_WEIGHT_LIMIT,
     ] {
-        let (client, daemon) = pair(1 << 16);
+        let (client, daemon) = pair(RECORD_DOES_NOT_FIT);
         let mark = client.submission_mark();
         let received = daemon.counters();
         let server = tokio::spawn(serve(daemon, 64));
@@ -364,8 +534,14 @@ async fn every_submit_transaction_upload_is_the_fixed_record_count() {
         mark.arm();
         let response = sender.send_request(submit(tx_len)).await.unwrap();
         let body = response.into_body().collect().await.unwrap().to_bytes();
-        let echoed = usize::from_le_bytes(body[..8].try_into().unwrap());
-        assert_eq!(echoed, 2 * tx_len + 14, "the daemon got the whole body");
+        let mut width = [0u8; ECHOED_LEN];
+        width.copy_from_slice(&body[..ECHOED_LEN]);
+        let echoed = usize::from_le_bytes(width);
+        assert_eq!(
+            echoed,
+            submit_envelope_len() + 2 * tx_len,
+            "the daemon got the whole body"
+        );
         assert_eq!(
             received.lock().unwrap().received,
             [0, 0, u64::try_from(SUBMISSION_RECORDS).unwrap()],
@@ -396,7 +572,7 @@ async fn every_submit_transaction_upload_is_the_fixed_record_count() {
 async fn hyper_flushes_once_per_message() {
     let sizes = [0usize, 431, 20_000, 300_000];
     for answer_len in [64usize, 20_000, 300_000] {
-        let (client, daemon) = pair(1 << 16);
+        let (client, daemon) = pair(RECORD_DOES_NOT_FIT);
         let requests = client.counters();
         let responses = daemon.counters();
         let server = tokio::spawn(serve(daemon, answer_len));
