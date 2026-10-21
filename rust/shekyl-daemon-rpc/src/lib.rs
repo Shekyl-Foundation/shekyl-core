@@ -90,6 +90,7 @@ pub mod ffi;
 pub mod ffi_exports;
 pub mod ffi_test_hooks;
 pub mod handlers;
+pub mod handles;
 pub mod info;
 pub mod info_facts;
 pub mod methods;

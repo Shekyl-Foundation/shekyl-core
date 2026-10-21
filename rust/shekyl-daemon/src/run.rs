@@ -255,8 +255,12 @@ fn supervise(
         tell(&mut std::io::stderr(), "shekyld: the entry has no stop");
         return EXIT_FAILED;
     };
-    let mut constructed =
-        shekyl_daemon_rpc::ffi_exports::configure(config.rpc.clone(), options, config.offline());
+    let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(
+        config.rpc.clone(),
+        options,
+        shekyl_daemon_rpc::handles::Handles::absent(),
+        config.offline(),
+    );
     // Step 6: the notify runner, installed before the core that pushes to
     // it exists; its children run on the signal owner's runtime (§2.10).
     shekyl_ffi::notify_ffi::install(&config.notify, pool.handle().clone());

@@ -37,6 +37,7 @@ use tokio::sync::{oneshot, watch};
 use crate::bind::{bind_listener, BoundListener};
 use crate::conn_limit::ConnLimits;
 use crate::core::CoreRpc;
+use crate::handles::Handles;
 use crate::options::{OptionsAbsent, OptionsHandle};
 use crate::server::{serve_presets, ServerConfig};
 
@@ -54,6 +55,7 @@ fn daemon_rpc_budget() -> RuntimeBudget {
 struct Pending {
     section: Rpc,
     options: OptionsHandle,
+    handles: Handles,
     constructed: oneshot::Sender<Result<(), String>>,
 }
 
@@ -110,6 +112,7 @@ fn store_offline(offline: bool) {
 pub fn configure(
     section: Rpc,
     options: OptionsHandle,
+    handles: Handles,
     offline: bool,
 ) -> oneshot::Receiver<Result<(), String>> {
     let (constructed, rx) = oneshot::channel();
@@ -118,6 +121,7 @@ pub fn configure(
     *slot(&PENDING) = Some(Pending {
         section,
         options,
+        handles,
         constructed,
     });
     rx
@@ -137,6 +141,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(rpc_server_ptr: *mut c_void) ->
     let Some(Pending {
         section,
         options,
+        handles,
         constructed,
     }) = slot(&PENDING).take()
     else {
@@ -144,7 +149,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(rpc_server_ptr: *mut c_void) ->
         return -1;
     };
     // SAFETY: the caller's contract above.
-    match unsafe { start(&section, options, rpc_server_ptr) } {
+    match unsafe { start(&section, options, handles, rpc_server_ptr) } {
         Ok(running) => {
             *slot(&RUNNING) = Some(running);
             // The receiver is gone only if the entry already gave up.
@@ -168,6 +173,7 @@ pub unsafe extern "C" fn shekyl_daemon_rpc_start(rpc_server_ptr: *mut c_void) ->
 unsafe fn start(
     section: &Rpc,
     options: OptionsHandle,
+    handles: Handles,
     rpc_server_ptr: *mut c_void,
 ) -> Result<Running, String> {
     if rpc_server_ptr.is_null() {
@@ -198,6 +204,7 @@ unsafe fn start(
         cors_origins: section.cors_origins.clone(),
         conn_limits,
         options,
+        handles,
         ..Default::default()
     };
     // Level-triggered: a stop that lands before any acceptor has polled is
@@ -276,7 +283,7 @@ mod tests {
             cors_origins: Vec::new(),
             connections_max: NonZeroU32::MIN,
         };
-        let _started = configure(section, Arc::new(OptionsAbsent), true);
+        let _started = configure(section, Arc::new(OptionsAbsent), Handles::absent(), true);
         assert_eq!(CoreRpc::p2p_state(), Ok(P2pRead::Offline));
         assert_eq!(CoreRpc::peerlist_sizes(), Ok(P2pRead::Offline));
         store_offline(false);
