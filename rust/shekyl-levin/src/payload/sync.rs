@@ -287,8 +287,17 @@ impl PortableMap for RequestBodies {
 pub enum BodiesFormFault {
     /// A requested hash is in none of the three lists.
     Unaccounted,
-    /// A hash is in more than one list, or twice in one, or twice in the request.
+    /// A hash is in more than one list, or twice in one. The response
+    /// repeated it. A repeated hash in the request is
+    /// [`Self::RequestRepeated`], the caller's own list.
     Repeated,
+    /// `requested` names one hash twice. That list is the caller's, so this
+    /// is not a fault of the peer's response.
+    RequestRepeated,
+    /// The sent bodies do not fit [`BODIES_RESPONSE_BYTES`]. The first sent
+    /// body is exempt, as it is in [`plan_bodies`]; a later one that does
+    /// not fit is this fault.
+    OverBudget,
     /// A listed hash was not requested.
     Unrequested,
     /// In request order, a sent block follows a deferred one.
@@ -343,6 +352,13 @@ impl ResponseBodies {
     ///
     /// A [`BodiesFormFault`]. The header is not involved.
     pub fn check_form(&self, requested: &[[u8; HASH_SIZE]]) -> Result<(), BodiesFormFault> {
+        let mut wanted = BTreeSet::new();
+        for hash in requested {
+            if !wanted.insert(*hash) {
+                return Err(BodiesFormFault::RequestRepeated);
+            }
+        }
+        self.within_budget()?;
         let body_ids = self.body_ids()?;
         let mut seen: BTreeMap<[u8; HASH_SIZE], Slot> = BTreeMap::new();
         let mut claim = |hash: [u8; HASH_SIZE], slot: Slot| -> Result<(), BodiesFormFault> {
@@ -359,13 +375,6 @@ impl ResponseBodies {
         }
         for id in &self.missed_ids {
             claim(*id, Slot::Missed)?;
-        }
-
-        let mut wanted = BTreeSet::new();
-        for hash in requested {
-            if !wanted.insert(*hash) {
-                return Err(BodiesFormFault::Repeated);
-            }
         }
 
         let mut held = false;
@@ -396,6 +405,23 @@ impl ResponseBodies {
         }
         if body_ids != sent_in_order {
             return Err(BodiesFormFault::OutOfOrder);
+        }
+        Ok(())
+    }
+
+    /// The sent bodies, measured by [`body_budget_bytes`] and admitted by
+    /// [`charge`], the same step [`plan_bodies`] uses.
+    fn within_budget(&self) -> Result<(), BodiesFormFault> {
+        let mut sent_bytes = 0usize;
+        let mut sent_one = false;
+        for body in &self.bodies {
+            match charge(sent_bytes, body_budget_bytes(body), sent_one) {
+                Some(next) => {
+                    sent_bytes = next;
+                    sent_one = true;
+                }
+                None => return Err(BodiesFormFault::OverBudget),
+            }
         }
         Ok(())
     }
@@ -455,13 +481,13 @@ pub struct BodyPlan {
 
 /// Partition `requested` by what the responder holds.
 ///
-/// `held_len` is the encoded size of a block the responder has, or `None`
-/// when it does not have it.
-pub fn plan_bodies(
+/// `held` is the body the responder has for that hash, or `None` when it
+/// does not. The size is [`body_budget_bytes`], the measure
+/// [`ResponseBodies::check_form`] charges.
+pub fn plan_bodies<'a>(
     requested: &[[u8; HASH_SIZE]],
-    held_len: impl Fn(&[u8; HASH_SIZE]) -> Option<usize>,
+    held: impl Fn(&[u8; HASH_SIZE]) -> Option<&'a BlockBody>,
 ) -> BodyPlan {
-    let budget = usize::try_from(BODIES_RESPONSE_BYTES).expect("the budget fits usize");
     let mut plan = BodyPlan {
         send: Vec::new(),
         deferred: Vec::new(),
@@ -470,21 +496,59 @@ pub fn plan_bodies(
     let mut sent_bytes = 0usize;
     let mut sent_one = false;
     for hash in requested {
-        match held_len(hash) {
+        match held(hash) {
             None => plan.missed.push(*hash),
-            Some(size) => {
-                let fits = sent_bytes.saturating_add(size) <= budget;
-                if !sent_one || fits {
+            Some(body) => match charge(sent_bytes, body_budget_bytes(body), sent_one) {
+                Some(next) => {
                     plan.send.push(*hash);
-                    sent_bytes = sent_bytes.saturating_add(size);
+                    sent_bytes = next;
                     sent_one = true;
-                } else {
-                    plan.deferred.push(*hash);
                 }
-            }
+                None => plan.deferred.push(*hash),
+            },
         }
     }
     plan
+}
+
+/// The bytes one sent body counts toward [`BODIES_RESPONSE_BYTES`]: the
+/// block, each carried transaction, and the witness. [`plan_bodies`] and
+/// [`ResponseBodies::check_form`] both charge this and nothing else.
+#[must_use]
+pub fn body_budget_bytes(body: &BlockBody) -> usize {
+    let mut n = body.block.len();
+    n = n.saturating_add(body.attestation_witness.len());
+    for tx in &body.txs {
+        n = n.saturating_add(match tx {
+            TxBody::Full(bytes) => bytes.len(),
+            TxBody::Skeleton(skeleton) => {
+                let auth = skeleton
+                    .pqc_auth_hash
+                    .map(|hash| hash.as_bytes().len())
+                    .unwrap_or(0);
+                skeleton
+                    .unprunable
+                    .len()
+                    .saturating_add(skeleton.prunable_hash.as_bytes().len())
+                    .saturating_add(auth)
+                    .saturating_add(std::mem::size_of::<u64>())
+            }
+        });
+    }
+    n
+}
+
+/// Admit `size` onto `sent_bytes`. The first body is admitted whatever its
+/// size; a later body is admitted only while the sum stays within
+/// [`BODIES_RESPONSE_BYTES`]. `Some` is the new sum. `None` is a deferral.
+fn charge(sent_bytes: usize, size: usize, sent_one: bool) -> Option<usize> {
+    let budget = usize::try_from(BODIES_RESPONSE_BYTES).expect("the budget fits usize");
+    let fits = sent_bytes.saturating_add(size) <= budget;
+    if !sent_one || fits {
+        Some(sent_bytes.saturating_add(size))
+    } else {
+        None
+    }
 }
 
 fn block_body_section(body: &BlockBody) -> Result<Section, Error> {

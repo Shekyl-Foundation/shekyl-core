@@ -9,9 +9,9 @@
 //! body-response partition. The ids are not [`DefinedCommand`] arms.
 
 use shekyl_levin::{
-    plan_bodies, BodiesFormFault, DefinedCommand, PayloadError, PortableMap, RequestBodies,
-    RequestHeaders, ResponseBodies, ResponseHeaders, BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES,
-    CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS, HASH_SIZE,
+    body_budget_bytes, plan_bodies, BodiesFormFault, DefinedCommand, PayloadError, PortableMap,
+    RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders, BODIES_RESPONSE_BYTES,
+    CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS, HASH_SIZE,
     HEADERS_RESPONSE_BYTES, NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_HEADERS, NOTIFY_RESPONSE_BODIES,
     NOTIFY_RESPONSE_HEADERS,
 };
@@ -386,29 +386,81 @@ fn sent_bodies_follow_request_order() {
 #[test]
 fn the_planner_sends_the_first_held_block_then_fits_the_budget() {
     assert_eq!(BODIES_RESPONSE_BYTES, 8 * 1024 * 1024);
+    let budget = usize::try_from(BODIES_RESPONSE_BYTES).expect("budget");
     let have = ids(4);
+    let over = sized_body(budget + 1);
+    let one = sized_body(1);
     let plan = plan_bodies(&have, |hash| {
         match have.iter().position(|item| item == hash) {
             Some(0) | None => None,
-            Some(1) => Some(usize::MAX),
-            Some(_) => Some(1),
+            Some(1) => Some(&over),
+            Some(_) => Some(&one),
         }
     });
     assert_eq!(plan.missed, vec![have[0]]);
     assert_eq!(plan.send, vec![have[1]]);
     assert_eq!(plan.deferred, vec![have[2], have[3]]);
+    assert!(body_budget_bytes(&over) > budget);
 
-    let plan = plan_bodies(
-        &have[..3],
-        |hash| {
-            if hash == &have[2] {
-                None
-            } else {
-                Some(10)
-            }
-        },
-    );
+    let small = sized_body(10);
+    let plan = plan_bodies(&have[..3], |hash| {
+        if hash == &have[2] {
+            None
+        } else {
+            Some(&small)
+        }
+    });
     assert_eq!(plan.send, vec![have[0], have[1]]);
     assert_eq!(plan.missed, vec![have[2]]);
     assert!(plan.deferred.is_empty());
+}
+
+fn sized_body(block_len: usize) -> BlockBody {
+    BlockBody {
+        block: vec![0; block_len],
+        txs: Vec::new(),
+        attestation_witness: Vec::new(),
+    }
+}
+
+/// The first sent body may pass the budget. A second that does not fit is
+/// the form's refusal, measured the same way the planner measures.
+#[test]
+fn a_second_body_past_the_budget_fails_the_form() {
+    let budget = usize::try_from(BODIES_RESPONSE_BYTES).expect("budget");
+    let have = ids(2);
+    let first = sized_body(budget);
+    let second = sized_body(1);
+    let msg = ResponseBodies {
+        bodies: vec![first, second],
+        deferred: Vec::new(),
+        missed_ids: Vec::new(),
+    };
+    assert_eq!(
+        msg.check_form(&have),
+        Err(BodiesFormFault::OverBudget),
+        "two bodies whose sum passes the budget"
+    );
+    let one = ResponseBodies {
+        bodies: vec![sized_body(budget + 1)],
+        deferred: Vec::new(),
+        missed_ids: Vec::new(),
+    };
+    assert_ne!(
+        one.check_form(&have[..1]),
+        Err(BodiesFormFault::OverBudget),
+        "the first body is sent whatever its size"
+    );
+}
+
+/// A duplicate in the request is the caller's list, not the peer's response.
+#[test]
+fn a_repeated_request_hash_is_the_callers() {
+    let have = ids(1);
+    let (_requested, msg) = response(&[(have[0], Slot::Sent)]);
+    let repeated = vec![have[0], have[0]];
+    assert_eq!(
+        msg.check_form(&repeated),
+        Err(BodiesFormFault::RequestRepeated)
+    );
 }

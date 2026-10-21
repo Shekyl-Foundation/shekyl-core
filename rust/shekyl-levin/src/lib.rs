@@ -144,7 +144,7 @@ pub use ingress::{
 };
 pub use message::{invoke, notify, response};
 pub use payload::Error as PayloadError;
-pub use payload::{plan_bodies, BodiesFormFault, BodyPlan};
+pub use payload::{body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlan};
 pub use payload::{
     BasicNodeData, BlockCompleteEntry, CoreSyncData, GetTxpoolComplement, HandshakeRequest,
     HandshakeResponse, NetworkAddress, NewCompactBlock, NewTransactions, PeerlistEntry,

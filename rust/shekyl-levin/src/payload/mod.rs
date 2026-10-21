@@ -38,9 +38,9 @@ pub use notifies::{
     NOTIFY_RESPONSE_HEADERS,
 };
 pub use sync::{
-    plan_bodies, BodiesFormFault, BodyPlan, RequestBodies, RequestHeaders, ResponseBodies,
-    ResponseHeaders, BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS,
-    CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS, HEADERS_RESPONSE_BYTES,
+    body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlan, RequestBodies, RequestHeaders,
+    ResponseBodies, ResponseHeaders, BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES,
+    CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS, HEADERS_RESPONSE_BYTES,
 };
 pub use types::{BasicNodeData, CoreSyncData, PeerlistEntry};
 
