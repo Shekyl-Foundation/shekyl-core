@@ -66,34 +66,48 @@ pub(crate) struct HeaderFacts<P> {
     pub(crate) proof: P,
 }
 
-/// A header whose proof has not been computed. Input to
-/// [`crate::judge_header_cheap`]. Not convertible into a [`FormedHeader`]:
-/// that token is what [`crate::form_header`] returns after CEN-D1.
+/// A header whose proof has not been computed, and whose clock has not
+/// been read. Input to [`crate::judge_header_cheap`]. Not convertible into
+/// a [`FormedHeader`]: that token is what [`crate::form_header`] returns
+/// after CEN-D1.
+///
+/// The time is absent. [`Self::at`] adds it when the cheap checks read the
+/// substrate clock, so there is no stand-in for a reading that has not
+/// happened.
 #[derive(Clone, Debug)]
 pub struct OpenHeader {
-    pub(crate) facts: HeaderFacts<Unproven>,
+    header: BlockHeader,
+    identity: BlockHash,
+    seed: BlockHash,
+    target: Target,
+    attempt: FormAttempt,
 }
 
 impl OpenHeader {
-    /// The facts the cheap checks read. The identity is
-    /// [`PowBlob::identity`]; the attempt is [`FormAttempt::FIRST`].
-    ///
-    /// The clock is not read here. [`crate::judge_header_cheap`] reads the
-    /// substrate once, when it judges, and that is the instant the timestamp
-    /// rows see. `judged_at` until then is not a reading.
+    /// The identity is [`PowBlob::identity`]; the attempt is
+    /// [`FormAttempt::FIRST`]. No clock is read.
     #[must_use]
     pub fn from_pow(pow: &PowBlob, seed: BlockHash, target: Target) -> Self {
         Self {
-            facts: HeaderFacts {
-                header: pow.header.clone(),
-                identity: pow.identity(),
-                // Replaced by `judge_header_cheap` before any rule reads it.
-                judged_at: Timestamp::from_raw(0),
-                seed,
-                target,
-                attempt: FormAttempt::FIRST,
-                proof: Unproven,
-            },
+            header: pow.header.clone(),
+            identity: pow.identity(),
+            seed,
+            target,
+            attempt: FormAttempt::FIRST,
+        }
+    }
+
+    /// The facts the rules read, at the instant the cheap checks took the
+    /// clock. The proof is still [`Unproven`].
+    pub(crate) fn at(&self, judged_at: Timestamp) -> HeaderFacts<Unproven> {
+        HeaderFacts {
+            header: self.header.clone(),
+            identity: self.identity,
+            judged_at,
+            seed: self.seed,
+            target: self.target,
+            attempt: self.attempt,
+            proof: Unproven,
         }
     }
 }

@@ -136,8 +136,7 @@ pub fn judge_header_cheap<'id, S: Substrate, H: HeaderView<'id>>(
     substrate: &S,
 ) -> Result<Verdict<HeaderProspect>, ProspectFault<S::Fault, H::Fault>> {
     let judged_at = substrate.local_clock().map_err(ProspectFault::Substrate)?;
-    let mut facts = header.facts.clone();
-    facts.judged_at = judged_at;
+    let facts = header.at(judged_at);
     let mut coverage = RuleCoverage::EMPTY;
     if let Err(refused) = B1::judge(&facts.header, rule_set) {
         return Ok(Err(refused));
