@@ -12,7 +12,9 @@
 //! beside the handshake. Everything here draws from the operating system, as
 //! production does.
 
-use shekyl_noise::{Direction, DirectionError};
+use shekyl_noise::{
+    ClassId, ClassTable, ClassedError, ClassedRecord, Direction, DirectionError, OCCUPANCY_LEN,
+};
 use shekyl_rpc_channel::budget::HandshakeBudget;
 use shekyl_rpc_channel::handshake::{
     Client, Daemon, DaemonReadyForMessage2, FirstMessageRefused, HandshakeError, Message1Admission,
@@ -324,8 +326,8 @@ fn through_message_4(
 }
 
 /// The tests' opener: the first message is one bare Noise ciphertext under
-/// [`TRANSPORT_AD`]. The channel's record framer will be another opener;
-/// this one exists only here.
+/// [`TRANSPORT_AD`]. A record that may arrive in pieces uses
+/// [`PendingSession::lend`]; this opener exists for a message already whole.
 fn bare(ciphertext: &[u8]) -> impl FnOnce(&mut Direction) -> Result<Vec<u8>, DirectionError> + '_ {
     move |recv| {
         recv.open(ciphertext, TRANSPORT_AD)
@@ -471,8 +473,9 @@ fn only_the_clients_first_message_releases_the_session() {
 }
 
 /// A ciphertext that is not a whole transport message does not open, and
-/// the session is consumed: there is no second try with the rest of the
-/// bytes. Framing belongs to a later slice.
+/// the callback consumes the session: there is no second try with the rest
+/// of the bytes. A framer that must wait for the rest uses
+/// [`PendingSession::lend`].
 #[test]
 fn a_short_first_message_is_refused_and_the_session_is_consumed() {
     let (client_id, daemon_id) = identities();
@@ -488,6 +491,87 @@ fn a_short_first_message_is_refused_and_the_session_is_consumed() {
         "the first transport message was not accepted"
     );
     assert_eq!(format!("{error:?}"), "FirstMessageRefused");
+}
+
+/// The plaintext length of the lend test's one class: occupancy, then the
+/// longer of the two payloads this test seals.
+fn lend_class_len() -> usize {
+    OCCUPANCY_LEN + b"request".len().max(b"second".len())
+}
+
+/// A record that arrives in pieces stays truncated, and the session stays
+/// withheld until the whole record opens and is released. The next record
+/// then opens on the direction `release` handed back.
+#[test]
+fn a_fragmented_first_record_stays_withheld_until_it_opens() {
+    let (client_id, daemon_id) = identities();
+    let (pending, send, mut client_recv) = through_message_4(&client_id, &daemon_id);
+    let table = ClassTable::new(&[lend_class_len()]).unwrap();
+    let mut framed_send = ClassedRecord::new(send, table.clone());
+    let wire = framed_send.seal(ClassId(0), b"request").unwrap();
+
+    let (withheld, recv) = pending.lend();
+    let mut framed = ClassedRecord::new(recv, table.clone());
+    assert_eq!(framed.open(&wire[..1]), Err(ClassedError::Truncated));
+    assert_eq!(
+        framed.record_len(wire[0]),
+        Ok(wire.len()),
+        "a short read spends nothing, so the length can still be asked"
+    );
+    let opened = framed.open(&wire).unwrap();
+    let recv = framed.into_direction();
+    let (mut session, released) = withheld
+        .release(recv, Ok::<_, ClassedError>(opened.payload))
+        .unwrap();
+    assert_eq!(released, b"request");
+    assert_eq!(session.request, REQUEST);
+    assert_eq!(session.recv.opened(), 1);
+    assert_eq!(session.send.opened(), 0);
+
+    let wire = framed_send.seal(ClassId(0), b"second").unwrap();
+    let mut recv = ClassedRecord::new(session.recv, table);
+    assert_eq!(recv.open(&wire).unwrap().payload, b"second");
+    let (reply, _) = session.send.seal(b"reply", TRANSPORT_AD).unwrap();
+    let (opened, _) = client_recv.open(&reply, TRANSPORT_AD).unwrap();
+    assert_eq!(opened, b"reply");
+}
+
+/// `release` applies the same check as `open_first_message`, on a direction
+/// the caller hands back rather than one a callback holds.
+#[test]
+fn release_refuses_until_this_sessions_direction_has_opened() {
+    let (client_id, daemon_id) = identities();
+
+    let (pending, _, _) = through_message_4(&client_id, &daemon_id);
+    let (withheld, recv) = pending.lend();
+    assert!(matches!(
+        withheld.release(recv, Ok::<_, ()>(())),
+        Err(FirstMessageRefused)
+    ));
+
+    let (pending, mut send, _) = through_message_4(&client_id, &daemon_id);
+    let (message, _) = send.seal(b"first", TRANSPORT_AD).unwrap();
+    let (withheld, mut recv) = pending.lend();
+    recv.open(&message, TRANSPORT_AD).unwrap();
+    assert!(
+        matches!(
+            withheld.release(recv, Err::<(), &str>("the framing after it was wrong")),
+            Err(FirstMessageRefused)
+        ),
+        "a ciphertext that opened and a refused framing still withholds the session"
+    );
+
+    let (pending_b, mut send_b, _) = through_message_4(&client_id, &daemon_id);
+    let (message_b, _) = send_b.seal(b"b's first", TRANSPORT_AD).unwrap();
+    let (session_b, _) = pending_b.open_first_message(bare(&message_b)).unwrap();
+
+    let (pending_a, _, _) = through_message_4(&client_id, &daemon_id);
+    let (withheld, recv_a) = pending_a.lend();
+    drop(recv_a);
+    assert!(matches!(
+        withheld.release(session_b.recv, Ok::<_, ()>(())),
+        Err(FirstMessageRefused)
+    ));
 }
 
 /// This crate writes no log line. The claim is held where it can be broken:

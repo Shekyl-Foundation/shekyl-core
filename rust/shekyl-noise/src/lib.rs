@@ -19,9 +19,9 @@
 //! handshake. The hash, HKDF and AEAD stay in this crate, and no raw key
 //! leaves it.
 //!
-//! This crate has no handshake of its own, no record framer and no socket.
-//! The length-prefixed framer the clearnet seam speaks stays in
-//! `shekyl-p2p-transport`.
+//! This crate has no handshake of its own and no socket. Its one framer is
+//! [`ClassedRecord`], the RPC channel's (section 4.4). The length-prefixed
+//! framer the clearnet seam speaks stays in `shekyl-p2p-transport`.
 //!
 //! # The `rekey-timing` feature
 //!
@@ -31,11 +31,16 @@
 //! it on.
 
 pub(crate) mod aead;
+pub mod classed;
 pub mod direction;
 pub mod symmetric;
 
 #[cfg(feature = "rekey-timing")]
 pub use aead::rekey_hkdf;
 pub use aead::{HASH_LEN, TAG_LEN};
+pub use classed::{
+    ClassId, ClassTable, ClassTableError, ClassedError, ClassedRecord, Opened, CLASS_TABLE_MAX,
+    HEADER_LEN, MAX_RECORD_PLAINTEXT, OCCUPANCY_LEN,
+};
 pub use direction::{Direction, DirectionError, KeyEpoch, REKEY_NONCES};
 pub use symmetric::{SplitRole, SymmetricError, SymmetricState};

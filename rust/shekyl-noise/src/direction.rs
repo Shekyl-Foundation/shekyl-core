@@ -10,8 +10,9 @@
 //! nonce. Rekey is `HKDF(ck, k)` after [`REKEY_NONCES`] uses, the nonce
 //! resets, and [`KeyEpoch`] advances. Nothing is written to mark it.
 //!
-//! The header-protection key is not a field. A framer that needs one derives
-//! it when the epoch [`Direction::seal`] reports changes, and keeps it itself.
+//! The header-protection key is not a field. A framer derives one with
+//! `hkdf_from_record_key`, passing its own label, when the epoch
+//! [`Direction::seal`] reports changes, and keeps the output itself.
 
 use zeroize::Zeroizing;
 
@@ -146,6 +147,23 @@ impl Direction {
             self.n = n;
         }
         Ok(())
+    }
+
+    /// The nonce and the epoch the next [`Self::seal`] or [`Self::open`] will
+    /// use. Reading them spends neither.
+    pub(crate) fn next(&self) -> (u64, KeyEpoch) {
+        (self.n, self.epoch)
+    }
+
+    /// The first output of `HKDF(record key, ikm)`.
+    ///
+    /// The record key stays in this direction. A framer passes its own
+    /// label and keeps the output, deriving again when [`Self::next`]'s
+    /// epoch has moved. The second output is wiped with the temporary that
+    /// holds it.
+    pub(crate) fn hkdf_from_record_key(&self, ikm: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
+        let [key, _] = aead::hkdf(&self.k, ikm);
+        key
     }
 
     /// Set the nonce, so a test can stand on the rekey boundary.
