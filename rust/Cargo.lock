@@ -4700,11 +4700,14 @@ version = "3.1.0"
 dependencies = [
  "proptest",
  "shekyl-archival-retention",
+ "shekyl-crypto-hash",
  "shekyl-net-address",
  "shekyl-p2p-transport",
  "shekyl-peer-bounds",
  "shekyl-portable-storage",
  "shekyl-rpc-types",
+ "shekyl-types",
+ "shekyl-wire",
  "thiserror",
 ]
 

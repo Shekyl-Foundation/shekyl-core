@@ -13,6 +13,11 @@ shekyl-net-address = { path = "../shekyl-net-address" }
 # The disclosure count the handshake and timed-sync frames are bounded by.
 shekyl-peer-bounds = { path = "../shekyl-peer-bounds" }
 shekyl-portable-storage = { path = "../shekyl-portable-storage" }
+# Chain-sync bodies are `shekyl-wire` values: the validator binds them, and
+# this crate only moves them. The framing crate does not judge a block.
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+shekyl-types = { path = "../shekyl-types" }
+shekyl-wire = { path = "../shekyl-wire" }
 
 [dev-dependencies]
 # Round-trip property tests (rule 50): builder → chunked reader → same
