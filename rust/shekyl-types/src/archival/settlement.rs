@@ -355,7 +355,10 @@ pub struct BlockDraws {
     pub count: u32,
     /// The 32-bit fraction carried to the next block's count.
     pub carry: u32,
-    /// The visible shortfall the count was computed from.
+    /// The visible shortfall the count was computed from. Zero on a
+    /// schedule with no response window: no count is computed, so there is
+    /// no shortfall to carry. A windowed epoch opens at
+    /// `COUNTED_DRAWS` times the size of `D`.
     pub shortfall: u64,
     /// What this block's admissions took off the shortfall. Zero until
     /// admission lands (`SO-D12` increment 4): this increment's writer

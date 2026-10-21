@@ -32,9 +32,7 @@ use shekyl_wire::{Block, Ct, Input, Transaction};
 
 use super::super::store_tests::TestErr;
 use super::super::*;
-use super::{
-    batch_root_going_into, candidate_over, judge_or_corrupt, judge_under, root_going_into,
-};
+use super::{batch_root_going_into, candidate_over, judge_or_corrupt, root_going_into};
 
 /// What a fixture block lists. A chain is a `&[Vec<Listed>]`, one entry
 /// per height from genesis; `connect_chain*` realises each block's entries
@@ -514,8 +512,21 @@ impl Grown {
         rules: &RuleSet,
         txs: &[Transaction],
     ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+        self.judge_listing_with_memo(view, rules, txs, None)
+    }
+
+    /// [`Self::judge_listing`] with the connect loop's drawable memo.
+    /// [`None`] is the store harness: every miss rebuilds. A connector
+    /// passes the memo it holds across connects, pops and switches.
+    pub(in super::super) fn judge_listing_with_memo<'b, 'id>(
+        &mut self,
+        view: &BatchView<'b, 'id>,
+        rules: &RuleSet,
+        txs: &[Transaction],
+        memo: Option<&mut shekyl_chain_rules::DrawableMemo>,
+    ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
         let cand = candidate_at(view, self.height(), self.tip(), txs.to_vec())?;
-        let judged = judge_under(view, cand, rules)?;
+        let judged = super::connect_fixtures::judge_with_memo(view, cand, rules, memo)?;
         self.record(judged.block().block(), txs);
         Ok(judged)
     }

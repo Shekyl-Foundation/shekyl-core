@@ -128,6 +128,7 @@ pub use bundle::{
 };
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
+pub(crate) use count::CountMemo;
 pub(crate) use count::L17;
 pub use delta::{
     Accrual, ArchivalDelta, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
@@ -142,9 +143,7 @@ use std::collections::BTreeMap;
 
 use shekyl_archival_retention::SettlementSchedule;
 use shekyl_types::archival::{BondRecord, Holdings, SettlementRow};
-use shekyl_types::{
-    BlockCount, BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId,
-};
+use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
 use crate::block::Candidate;
@@ -186,16 +185,15 @@ impl Rule for L7 {
 ///
 /// `Ok(Ok(delta))` records CEN-L7 in `coverage`. `Ok(Err(_))` is a refusal
 /// at an input's locus. `Err(_)` is the view's fault or a [`Corrupt`]
-/// state the folds exposed.
-#[allow(clippy::too_many_arguments)]
+/// state the folds exposed. `count_memo` is the connecting block's hash
+/// and the memo keyed by it.
 pub(crate) fn transition<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
     rule_set: &RuleSet,
     candidate: &Candidate,
     accrual: AtomicUnits,
-    open_hash: BlockHash,
-    memo: Option<&mut DrawableMemo>,
+    count_memo: &mut count::CountMemo<'_>,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<ArchivalDelta>, ViewRead<V::Fault>> {
     let mut transition = Transition::new(
@@ -219,16 +217,10 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     let close = transition.close(accrued);
     let opened = transition.drawable_at_open(view)?;
     let drawable_digest = opened.as_ref().map(|(write, _)| *write);
-    let draws = count::block_draws(
-        transition.connecting,
-        transition.schedule,
-        transition.epoch,
-        transition.reorg_cap,
-        transition.slash_floor,
+    let draws = transition.block_draws(
         view,
         opened.as_ref().map(|(_, drawable)| drawable),
-        open_hash,
-        memo,
+        count_memo,
         coverage,
     )?;
     coverage.insert(L7::ROW);

@@ -439,12 +439,16 @@ fn run_epochs_observed(
         if h > 0 {
             for &block in &std::mem::take(&mut landing[(h - 1) as usize]) {
                 let block_draws = &draws[block as usize];
-                visible.issue(block_draws);
-                // Still inside the recent range when it landed: a bundle is
-                // admitted at most `W₂` above its block. A bundle drawn in
-                // the epoch before was never in this epoch's flight.
                 if (block as u64) >= epoch_open {
+                    visible.issue(block_draws);
+                    // A bundle is admitted at most `W₂` above its block, so
+                    // one drawn in this epoch is still in this epoch's flight.
                     in_flight -= block_draws.len() as u64;
+                } else {
+                    // Drawn against the epoch before and admitted after this
+                    // one opened. It does not reduce this epoch's shortfall,
+                    // and it was never in this epoch's flight. It was issued.
+                    run.issued += block_draws.len() as u64;
                 }
             }
         }
@@ -1079,6 +1083,61 @@ mod tests {
         assert_eq!(second[open].3, 0, "the carry resets");
         let (count, _) = count_at(D, full, 0, 0, 0);
         assert_eq!(second[open].4 as u64, count);
+    }
+
+    /// A bundle drawn in the epoch before can be admitted on the open or
+    /// after it. That admission does not reduce the new epoch's shortfall:
+    /// the draws were against the epoch that closed. The run still counts
+    /// them as issued (`run_epochs_observed` asserts that). Red edit:
+    /// `visible.issue` on every landing, including one from the epoch before.
+    #[test]
+    fn a_late_admission_from_the_epoch_before_does_not_shrink_the_new_shortfall() {
+        let timing = Timing::bundle(0, Lag::Honest, 0);
+        let mut rows = Vec::new();
+        run_epochs_observed(2, D, 0, timing, 11, &mut |b| {
+            rows.push((b.h, b.shortfall, b.fate, b.draws.to_vec()));
+        });
+        // Only a block within `W₂` of the open can still be admitted after
+        // it, and the base rate still draws there. The last block of the
+        // epoch is not that block for every seed: its carry may be short
+        // of a draw. Any earlier crossing bundle with a draw is the case.
+        let crossing: Vec<_> = rows
+            .iter()
+            .filter(|(h, _, fate, draws)| {
+                *h < SEB && matches!(fate, Fate::Admitted { at } if *at >= SEB) && !draws.is_empty()
+            })
+            .collect();
+        assert!(
+            !crossing.is_empty(),
+            "seed 11 admits a drawn bundle of the epoch before on or after the open"
+        );
+        let see = crossing
+            .iter()
+            .map(|(_, _, fate, _)| match fate {
+                Fate::Admitted { at } => *at + 1,
+                _ => unreachable!("the filter kept admitted fates"),
+            })
+            .max()
+            .expect("the crossing set is not empty");
+        let full = u64::from(D) * u64::from(COUNTED_DRAWS);
+        let mut expected = full;
+        for h in SEB..=see {
+            for (bh, _, bf, draws) in &rows {
+                if let Fate::Admitted { at: admitted } = *bf {
+                    if admitted + 1 == h && *bh >= SEB {
+                        expected -= draws.len() as u64;
+                    }
+                }
+            }
+            let (_, shortfall, _, _) = rows
+                .iter()
+                .find(|(bh, _, _, _)| *bh == h)
+                .expect("the block was traced");
+            assert_eq!(
+                *shortfall, expected,
+                "block {h}: an admission of the epoch before is not in this shortfall"
+            );
+        }
     }
 
     /// Recomputes a whole epoch from outside the run: the visible counts,

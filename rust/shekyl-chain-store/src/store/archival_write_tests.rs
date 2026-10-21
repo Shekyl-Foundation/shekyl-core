@@ -29,9 +29,9 @@ use std::collections::BTreeSet;
 
 use shekyl_chain_rules::harness::{assert_refused, fixture};
 use shekyl_chain_rules::{
-    form, validate, ArchivalDelta, AtHeight, BlockDrawsFloor, Candidate, CenRow, FakechainSchedule,
-    Fault, FormAttempt, HeaderView, Locus, RecordWriteKind, ReferenceClaims, ReleaseAnchors,
-    RuleSet, Trust, TxSlot, Verdict,
+    form, validate, ArchivalDelta, AtHeight, BlockDrawsFloor, Candidate, CenRow, Corrupt,
+    DrawCountFault, FakechainSchedule, Fault, FormAttempt, HeaderView, Locus, RecordWriteKind,
+    ReferenceClaims, ReleaseAnchors, RuleSet, Trust, TxSlot, Verdict,
 };
 use shekyl_types::archival::{
     AttestationWitness, BlockDraws, IndexedDraw, IssuedDigest, IssuedDraw,
@@ -1073,4 +1073,101 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
     );
     assert_eq!(draws_of(&store, 19, BlockDrawsFloor::NONE), Some(across));
     cleanup(&path);
+}
+
+/// SI-33's two count arms, through `refuse_corrupt` as the ingest would
+/// hand them on. A missing prior row, and a reduction larger than the
+/// stored shortfall. Red edit: clamp the reduction, or treat a missing
+/// row as a zero.
+#[test]
+fn a_count_fault_halts_the_writer_through_refuse_corrupt() {
+    let rules = RuleSet::fakechain(None, pair(20, 1));
+    let horizons = Horizons::new(
+        rules.settlement_schedule().blocks(),
+        BlockCount::from_raw(4),
+        BlockCount::from_raw(1),
+    )
+    .expect("the cap is inside the epoch");
+
+    let excess = tmp("draw_count_excess");
+    {
+        let store =
+            ChainStore::with_horizons(&excess, ApplyPolicy::Full, horizons).expect("create");
+        let mut grown = Grown::new();
+        connect_empty(&store, &mut grown, rules);
+        drop(store);
+        plant_draws(
+            &excess,
+            0,
+            BlockDraws {
+                count: 0,
+                carry: 0,
+                shortfall: 0,
+                issued_short: 1,
+                revealed: false,
+            },
+        );
+        let store =
+            ChainStore::with_horizons(&excess, ApplyPolicy::Full, horizons).expect("reopen");
+        let out: Result<(), TestErr> = store.write(|batch| {
+            let view = batch.chain_view();
+            let Err(corrupt) = grown.judge_empty_or_corrupt(&view, &rules)? else {
+                panic!("the count accepted a reduction past the shortfall");
+            };
+            assert_eq!(
+                corrupt,
+                Corrupt::DrawCount {
+                    height: BlockHeight::from_raw(1),
+                    why: DrawCountFault::IssuedExceedsShortfall {
+                        issued: 1,
+                        shortfall: 0,
+                    },
+                }
+            );
+            Err(batch.refuse_corrupt(corrupt).into())
+        });
+        let TestErr::Store(refused) = out.expect_err("the batch is refused") else {
+            panic!("aborted, not refused");
+        };
+        assert!(
+            refused.contains("issued 1 against a shortfall of 0"),
+            "{refused}"
+        );
+    }
+    cleanup(&excess);
+
+    let missing = tmp("draw_count_missing");
+    let store = ChainStore::with_horizons(&missing, ApplyPolicy::Full, horizons).expect("create");
+    let mut grown = Grown::new();
+    connect_empty(&store, &mut grown, rules);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .open_remove_table(
+                crate::schema::ARCHIVAL_BLOCK_DRAWS,
+                StoreInvariant::TipMismatch,
+            )?
+            .remove(0)?;
+        let view = batch.chain_view();
+        let Err(corrupt) = grown.judge_empty_or_corrupt(&view, &rules)? else {
+            panic!("the count accepted a height whose prior row is gone");
+        };
+        assert_eq!(
+            corrupt,
+            Corrupt::DrawCount {
+                height: BlockHeight::from_raw(1),
+                why: DrawCountFault::MissingPrior {
+                    prior: BlockHeight::ZERO,
+                },
+            }
+        );
+        Err(batch.refuse_corrupt(corrupt).into())
+    });
+    let TestErr::Store(refused) = out.expect_err("the batch is refused") else {
+        panic!("aborted, not refused");
+    };
+    assert!(
+        refused.contains("no draw row is recorded at height 0"),
+        "{refused}"
+    );
+    cleanup(&missing);
 }

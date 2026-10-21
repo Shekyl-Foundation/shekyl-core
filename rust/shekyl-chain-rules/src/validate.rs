@@ -541,14 +541,17 @@ pub fn validate_with_memo<'id, V: ChainView<'id>>(
     // transition borrows `cx`, which borrows `formed`: the hash is `Copy`
     // and the borrow ends with the statement.
     let hash = formed.hash();
+    let mut count_memo = archival::CountMemo {
+        open_hash: hash,
+        memo,
+    };
     let archival = match archival::transition(
         view,
         connecting,
         rule_set,
         cx.candidate(),
         paid.accrual,
-        hash,
-        memo,
+        &mut count_memo,
         &mut coverage,
     )? {
         Ok(delta) => delta,

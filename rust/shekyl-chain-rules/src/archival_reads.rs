@@ -225,8 +225,10 @@ macro_rules! archival_reads {
     // A view with no draw table is not a hole in one. The count refuses a
     // missing prior row, and these views exist so a transition can be
     // derived over them, so they answer the zero row a height that drew
-    // nothing recorded. The store answers `None` for a height never
-    // written; that absence is the hole.
+    // nothing recorded. They also answer the empty set's digest: an empty
+    // view's drawable set is empty, and the count compares the walk with
+    // the digest the open would have written. The store answers `None` for
+    // a height or an epoch never written; that absence is the hole.
     (@emit {empty}; block_draws; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn block_draws(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             $crate::archival_reads!(@touch $($arg),*);
@@ -239,6 +241,25 @@ macro_rules! archival_reads {
                     revealed: false,
                 },
             ))
+        }
+    };
+    (@emit {empty}; drawable_digest; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
+        fn drawable_digest(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $floor);
+            ::core::result::Result::Ok(::core::option::Option::Some({
+                let pairs: ::std::vec::Vec<shekyl_archival_retention::DrawablePair> =
+                    ::std::vec::Vec::new();
+                shekyl_archival_retention::DrawableEpoch::new(
+                    $epoch,
+                    ::std::vec::Vec::<(
+                        shekyl_types::PCanonicalId,
+                        shekyl_types::archival::ReceiptSignPk,
+                    )>::new(),
+                    pairs,
+                )
+                .expect("an empty set has no key to refuse")
+                .digest()
+            }))
         }
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
@@ -298,6 +319,25 @@ macro_rules! archival_reads {
                     revealed: false,
                 },
             ))
+        }
+    };
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; drawable_digest; ($($params:tt)*); ($ok:ty); ($epoch:expr, $floor:expr); ($empty:expr)) => {
+        fn drawable_digest(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $floor);
+            ::core::result::Result::Ok(::core::option::Option::Some({
+                let pairs: ::std::vec::Vec<shekyl_archival_retention::DrawablePair> =
+                    ::std::vec::Vec::new();
+                shekyl_archival_retention::DrawableEpoch::new(
+                    $epoch,
+                    ::std::vec::Vec::<(
+                        shekyl_types::PCanonicalId,
+                        shekyl_types::archival::ReceiptSignPk,
+                    )>::new(),
+                    pairs,
+                )
+                .expect("an empty set has no key to refuse")
+                .digest()
+            }))
         }
     };
     (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {

@@ -56,10 +56,23 @@ impl DrawableMemo {
 
     /// Remember `drawable` as the set `open` produced for `epoch`.
     ///
+    /// Visible to the archival module, and called from the count phase only:
+    /// at an open,
+    /// with the post-state set the transition just built, or after a
+    /// rebuild whose digest matched the recorded one. A hit is trusted, so
+    /// a set inserted from outside that path would make
+    /// `validate_with_memo` disagree with `validate` on the same block.
+    /// The connector constructs the memo and retains it. It does not seed it.
+    ///
     /// A second insert of the same hash replaces that slot. Past
     /// [`FORKS_PER_EPOCH`] the oldest slot of the epoch is dropped: the
     /// fork it named misses and rebuilds.
-    pub fn insert(&mut self, epoch: SettlementEpoch, open: BlockHash, drawable: DrawableEpoch) {
+    pub(super) fn insert(
+        &mut self,
+        epoch: SettlementEpoch,
+        open: BlockHash,
+        drawable: DrawableEpoch,
+    ) {
         let slots = self.by_epoch.entry(epoch).or_default();
         if let Some(slot) = slots.iter_mut().find(|slot| slot.open == open) {
             slot.drawable = drawable;
