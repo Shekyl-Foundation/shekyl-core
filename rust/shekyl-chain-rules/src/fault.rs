@@ -392,6 +392,79 @@ pub enum Corrupt {
         /// Why it could not be.
         why: DrawableEpochFault,
     },
+    /// The draw count of the block at `height` cannot be recorded
+    /// (`SO-D12` increment 3; SI-33). Never a refusal of the block: the
+    /// block is not invalid, this node's draw rows or journals are.
+    DrawCount {
+        /// The block whose count was being written.
+        height: BlockHeight,
+        /// Why it could not be.
+        why: DrawCountFault,
+    },
+}
+
+/// Why a block's draw count could not be recorded —
+/// [`Corrupt::DrawCount`]'s discriminant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawCountFault {
+    /// Height `h > 0` has no row at `h − 1`. Every connected height writes
+    /// one, so a hole is a row the file lost, including at an epoch
+    /// boundary where the count does not use the prior row's numbers.
+    MissingPrior {
+        /// The height whose row is absent.
+        prior: BlockHeight,
+    },
+    /// The prior row's `issued_short` is larger than its shortfall. A
+    /// reduction past the shortfall is a row that was rewritten, not a
+    /// count to clamp.
+    IssuedExceedsShortfall {
+        /// What the prior row says was issued.
+        issued: u32,
+        /// The prior row's visible shortfall.
+        shortfall: u64,
+    },
+    /// The count does not fit the `u32` the row holds. A draw is named by
+    /// a 32-bit index, so a wider count cannot be recorded.
+    CountPastWidth {
+        /// The count that did not fit.
+        count: u64,
+    },
+    /// [`draw_count`](shekyl_archival_retention::draw_count) returned
+    /// nothing: the epoch length or the horizon is zero, or the target
+    /// does not fit. The schedule pins both above zero.
+    NoTarget,
+    /// The count at `h_open` was asked for without the post-state set, or
+    /// a later height's opening block is not on this view.
+    OpenUnrecorded,
+    /// The in-flight sum does not fit a `u64`.
+    InFlightOverflow,
+    /// `COUNTED_DRAWS · |D|` does not fit the shortfall's `u64`.
+    ShortfallOverflow,
+}
+
+impl fmt::Display for DrawCountFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingPrior { prior } => {
+                write!(f, "no draw row is recorded at height {prior}")
+            }
+            Self::IssuedExceedsShortfall { issued, shortfall } => write!(
+                f,
+                "the prior row issued {issued} against a shortfall of {shortfall}"
+            ),
+            Self::CountPastWidth { count } => {
+                write!(f, "the count {count} does not fit the row's u32")
+            }
+            Self::NoTarget => write!(f, "the count rule has no target at this height"),
+            Self::OpenUnrecorded => {
+                write!(f, "the epoch's opening block has no recorded drawable set")
+            }
+            Self::InFlightOverflow => write!(f, "the in-flight draws do not fit a u64"),
+            Self::ShortfallOverflow => {
+                write!(f, "the visible shortfall does not fit a u64")
+            }
+        }
+    }
 }
 
 /// Why an epoch's drawable set could not be built —
@@ -798,6 +871,9 @@ impl fmt::Display for Corrupt {
                 "settled epoch {epoch} has a frozen Σwork and no frozen complete-tree set \
                  (SI-31)"
             ),
+            Self::DrawCount { height, why } => {
+                write!(f, "the draw count at height {height} cannot be recorded: {why} (SI-33)")
+            }
         }
     }
 }

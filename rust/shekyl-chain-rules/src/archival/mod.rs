@@ -102,17 +102,22 @@
 //! Listed transactions in block order, inputs in transaction order, then
 //! the accrual, then the slash pass (every epoch whose deadline `count`
 //! passes, ascending: settle, slash in persona-key order, gather), then
-//! the close. The
-//! store writes the delta in the same order (§3.2 phase 2 and phase 9), so
+//! the close, then the drawable digest of an epoch this block opens,
+//! then the count: one draw row at the connecting height, zero when the
+//! schedule has no response window. The
+//! store writes the delta in the same order (§3.2 phase 2 and phase 9,
+//! the digest and the draw row last), so
 //! the slash log's per-height sequence and every record's post-image are
 //! functions of the view and the block, not of anything the store chose.
 
 mod arm;
 mod bundle;
 mod close;
+mod count;
 mod delta;
 mod drawable;
 mod inputs;
+mod memo;
 mod slash;
 
 pub(crate) use arm::BondArm;
@@ -123,11 +128,13 @@ pub use bundle::{
 };
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
+pub(crate) use count::L17;
 pub use delta::{
     Accrual, ArchivalDelta, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
     RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
 };
 pub use drawable::{drawable_epoch_walked_back, WALK_BACK_EPOCHS};
+pub use memo::DrawableMemo;
 pub(crate) use slash::apply_slash;
 
 use std::collections::btree_map::Entry;
@@ -135,7 +142,9 @@ use std::collections::BTreeMap;
 
 use shekyl_archival_retention::SettlementSchedule;
 use shekyl_types::archival::{BondRecord, Holdings, SettlementRow};
-use shekyl_types::{BlockCount, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId};
+use shekyl_types::{
+    BlockCount, BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch, ShardId,
+};
 use shekyl_units::AtomicUnits;
 
 use crate::block::Candidate;
@@ -178,12 +187,15 @@ impl Rule for L7 {
 /// `Ok(Ok(delta))` records CEN-L7 in `coverage`. `Ok(Err(_))` is a refusal
 /// at an input's locus. `Err(_)` is the view's fault or a [`Corrupt`]
 /// state the folds exposed.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn transition<'id, V: ChainView<'id>>(
     view: &V,
     connecting: BlockHeight,
     rule_set: &RuleSet,
     candidate: &Candidate,
     accrual: AtomicUnits,
+    open_hash: BlockHash,
+    memo: Option<&mut DrawableMemo>,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<ArchivalDelta>, ViewRead<V::Fault>> {
     let mut transition = Transition::new(
@@ -205,9 +217,27 @@ pub(crate) fn transition<'id, V: ChainView<'id>>(
     let accrued = transition.accrue(view, accrual)?;
     transition.scan_slashes(view)?;
     let close = transition.close(accrued);
-    let drawable_digest = transition.drawable_digest_at_open(view)?;
+    let opened = transition.drawable_at_open(view)?;
+    let drawable_digest = opened.as_ref().map(|(write, _)| *write);
+    let draws = count::block_draws(
+        transition.connecting,
+        transition.schedule,
+        transition.epoch,
+        transition.reorg_cap,
+        transition.slash_floor,
+        view,
+        opened.as_ref().map(|(_, drawable)| drawable),
+        open_hash,
+        memo,
+        coverage,
+    )?;
     coverage.insert(L7::ROW);
-    Ok(Ok(transition.into_delta(accrued, close, drawable_digest)))
+    Ok(Ok(transition.into_delta(
+        accrued,
+        close,
+        drawable_digest,
+        draws,
+    )))
 }
 
 /// A compact holding with no shards — the Release's and the complete-tree
@@ -361,10 +391,16 @@ impl Transition {
     /// Runs after the close, as the last read of the transition, so every
     /// arm that changes a record has run. Genesis opens epoch 0 and writes
     /// the empty set's digest: no bond joins before epoch 0.
-    fn drawable_digest_at_open<'id, V: ChainView<'id>>(
+    fn drawable_at_open<'id, V: ChainView<'id>>(
         &mut self,
         view: &V,
-    ) -> Result<Option<DrawableDigestWrite>, ViewRead<V::Fault>> {
+    ) -> Result<
+        Option<(
+            DrawableDigestWrite,
+            shekyl_archival_retention::DrawableEpoch,
+        )>,
+        ViewRead<V::Fault>,
+    > {
         let h_open = self.schedule.open_height(self.epoch.to_raw());
         if self.connecting.to_raw() != h_open {
             return Ok(None);
@@ -378,10 +414,13 @@ impl Transition {
             final_count,
         )
         .map_err(|why| ViewRead::Corrupt(Corrupt::DrawableEpoch { epoch, why }))?;
-        Ok(Some(DrawableDigestWrite {
-            epoch,
-            digest: drawable.digest(),
-        }))
+        Ok(Some((
+            DrawableDigestWrite {
+                epoch,
+                digest: drawable.digest(),
+            },
+            drawable,
+        )))
     }
 
     fn into_delta(
@@ -389,6 +428,7 @@ impl Transition {
         accrual: Accrual,
         close: Option<EpochClose>,
         drawable_digest: Option<DrawableDigestWrite>,
+        draws: shekyl_types::archival::BlockDraws,
     ) -> ArchivalDelta {
         let records = self
             .posts
@@ -422,6 +462,7 @@ impl Transition {
             accrual,
             close,
             drawable_digest,
+            draws,
         }
     }
 }

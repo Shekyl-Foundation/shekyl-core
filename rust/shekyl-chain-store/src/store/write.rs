@@ -86,8 +86,8 @@ use shekyl_chain_rules::{
 use shekyl_units::AtomicUnits;
 
 use super::error::{
-    CellFault, DigestFault, DrawableFault, EngineError, FrozenFault, SettlementFault, StoreCannot,
-    StoreError, StoreInvariant,
+    CellFault, DigestFault, DrawRowFault, DrawableFault, EngineError, FrozenFault, SettlementFault,
+    StoreCannot, StoreError, StoreInvariant,
 };
 use super::header;
 use super::keyed::{Handles, InsertTable, RemoveTable, ReplaceTable, UpsertTable};
@@ -266,6 +266,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// | `SettlementIntegrity { epoch, check: DrawableDigestMissing }` | `DrawableDigestNotSingular { epoch, observed: Missing }` (SI-29) |
     /// | `SettlementIntegrity { epoch, check: DrawableDrift }` | `DrawableSetNotSound { epoch, observed: Drift }` (SI-30) |
     /// | `DrawableEpoch { epoch, why }` | `DrawableSetNotSound { epoch, observed: NotBuilt(why) }` (SI-30) |
+    /// | `DrawCount { height, why }` | `BlockDrawsNotSingular { height, observed: Count(why) }` (SI-33) |
     /// | `RelayFloorUnpriceable { at }` | `CellCorrupt { key: "block_info", fault: OutsideDomain { at } }` (SI-7) |
     ///
     /// (The arms between are documented inline on the match.)
@@ -509,6 +510,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             Corrupt::DrawableEpoch { epoch, why } => StoreInvariant::DrawableSetNotSound {
                 epoch,
                 observed: DrawableFault::NotBuilt(why),
+            },
+            Corrupt::DrawCount { height, why } => StoreInvariant::BlockDrawsNotSingular {
+                height,
+                observed: DrawRowFault::Count(why),
             },
             // A claim's re-gather found `Σwork(E)` and no frozen
             // complete-tree set: the slash pass's write set is not whole

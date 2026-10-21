@@ -7,7 +7,7 @@
 //! batch that runs **inside the connect transaction** of the block at
 //! `E·SEB`, and the pop floor it establishes.
 //!
-//! # Three horizons and a floor (§3)
+//! # The horizons (§3)
 //!
 //! | Horizon | Retires | When |
 //! | --- | --- | --- |
@@ -15,6 +15,7 @@
 //! | Pop-undo journal (`undo_log`) | rows below `tip − retention` | every boundary; `retention` is `D_max` in production |
 //! | Slash log (`archival_slash_log`) | rows below `tip − ((k + n)·SEB + reorg_cap)` | every boundary whose session applies `SlashLog`; the cap is the in-force rule set's (`SLK-Q1`, `ARW-9`) |
 //! | Release journal (`archival_release_journal`) | rows at or below `h_open` of the settling family's oldest kept epoch | every boundary whose session applies `Bond` ([`ReleaseJournalFloor`], SI-28) |
+//! | Draw rows (`archival_block_draws`) | rows strictly below `(B − 1)·SEB + 1 − W₂`, or `(B − 1)·SEB` when the schedule has no window | every boundary ([`BlockDrawsFloor`], SI-34) |
 //! | Per-epoch tables (`archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement`; `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied`; `archival_r_market`) | rows of epochs below their family's floor, `(B − 1) − LAG` at the boundary of `B` | every boundary; a table whose family the session stubs is not opened (`ARW-9`) (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`) |
 //!
 //! The body horizon is a rule of the epoch calendar — there is no constant
@@ -137,7 +138,7 @@
 use core::ops::Range;
 
 use redb::{ReadableTable, WriteTransaction};
-use shekyl_chain_rules::{ReleaseJournalFloor, RuleSet, SlashLogFloor};
+use shekyl_chain_rules::{BlockDrawsFloor, ReleaseJournalFloor, RuleSet, SlashLogFloor};
 use shekyl_types::{
     shard_floor, shard_of, storage_ids_through, ArchivalLength, BlockCount, BlockHeight,
 };
@@ -146,8 +147,8 @@ use crate::apply_policy::ArchivalFamily;
 use crate::codec::{BlockInfo, SettlementEpochBlocks, UndoLogFloorCell};
 use crate::ids::{ReleaseJournalKey, ReleaseJournalTuple, SlashLogKey, SlashLogTuple};
 use crate::schema::{
-    ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES, TXS_ARCHIVAL_LEN,
-    TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
+    ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_SLASH_LOG, BLOCK_INFO, PROPERTIES,
+    TXS_ARCHIVAL_LEN, TXS_PQC_AUTHS, TXS_PRUNABLE, UNDO_LOG,
 };
 
 pub use super::epoch_retire::EpochFloors;
@@ -407,6 +408,7 @@ impl WriteBatch<'_, '_> {
         // same family, by epoch, inside `retire_epoch_rows`.
         let floors = EpochFloors::at_boundary(height, schedule);
         self.retire_release_rows(ReleaseJournalFloor::of(floors.settling, schedule))?;
+        self.retire_block_draws(floors.draws)?;
         let epochs = self.retire_epoch_rows(floors)?;
         Ok(Some(Pruned {
             shard_start: discard.shards.start,
@@ -415,6 +417,25 @@ impl WriteBatch<'_, '_> {
             slash_floor,
             epochs,
         }))
+    }
+
+    /// Delete `archival_block_draws` rows strictly below `floor`. Every
+    /// connect writes the row, so the retirement is not gated on an
+    /// archival family. Nothing while the floor retires nothing. Not
+    /// pop-reversible, for [`Self::retire_slash_rows`]'s reason. A read
+    /// below the same floor is SI-34.
+    fn retire_block_draws(&self, floor: BlockDrawsFloor) -> Result<(), StoreError> {
+        let Some(kept_from) = floor.height() else {
+            return Ok(());
+        };
+        let mut table = self
+            .txn()
+            .open_table(ARCHIVAL_BLOCK_DRAWS)
+            .map_err(EngineError::Table)?;
+        table
+            .retain_in::<u64, _>(..kept_from.to_raw(), |_, _| false)
+            .map_err(EngineError::Storage)?;
+        Ok(())
     }
 
     /// Delete `archival_release_journal` rows below `floor`. `floor` is

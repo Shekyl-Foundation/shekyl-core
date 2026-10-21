@@ -60,8 +60,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    alt_against, seed_height, target_claim, validate, Candidate, CenRow, Fault, InvalidBlock,
-    ReferenceClaim, ReferenceClaims, StructurallyValid, Target, Tip, Trust,
+    alt_against, seed_height, target_claim, validate_with_memo, Candidate, CenRow, DrawableMemo,
+    Fault, InvalidBlock, ReferenceClaim, ReferenceClaims, StructurallyValid, Target, Tip, Trust,
     REFERENCE_BLOCK_MAX_AGE,
 };
 use shekyl_chain_store::store::{
@@ -425,9 +425,10 @@ impl Message<Reorganize> for Connector {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let (rules, trust) = (self.rules, self.trust);
+        let memo = &mut self.memo;
         let switched = self
             .writer
-            .with_store(|store| switch(store, rules, trust, msg))?;
+            .with_store(|store| switch(store, rules, trust, memo, msg))?;
         if matches!(switched, Switched::Done(_)) {
             self.publish_tip();
         }
@@ -712,6 +713,7 @@ fn switch(
     store: &ChainStore,
     rules: ChainRules,
     trust: Trust,
+    memo: &mut DrawableMemo,
     msg: Reorganize,
 ) -> Result<Switched, RunFault> {
     let snap = store.begin_read()?;
@@ -834,7 +836,7 @@ fn switch(
         for (index, (formed, entry)) in msg.promoted.into_iter().zip(&entries).enumerate() {
             let height = entry.block.height();
             let in_force = rules.in_force(height);
-            match validate(formed, &view, &in_force, &trust) {
+            match validate_with_memo(formed, &view, &in_force, &trust, Some(memo)) {
                 Ok(Ok(valid)) => {
                     let hash = valid.block().hash();
                     done.exercised

@@ -66,6 +66,17 @@
 //! undoes slashes across the failure window, which is longer than the
 //! journal's span.
 //!
+//! # The draw rows
+//!
+//! `archival_block_draws` is keyed by height. [`BlockDrawsFloor`] is the
+//! first height still retained, computed beside the journal's floor and
+//! retired by the same boundary batch. At the boundary of epoch `B` that
+//! height is `(B − 1)·SEB + 1 − W₂`, or `(B − 1)·SEB` when the schedule
+//! has no response window. A read below it is refused (SI-34). The floor
+//! sits strictly under the undo floor: after the boundary the minimum
+//! undo floor is `(B − 1)·SEB + 1` (`retention < SEB`), and `W₂` is at
+//! least one on every schedule that has a window.
+//!
 //! # A read below its horizon is refused
 //!
 //! Each read of these tables takes its family's [`EpochFloor`] from the
@@ -81,7 +92,8 @@
 use core::marker::PhantomData;
 
 use shekyl_archival_retention::{
-    claim_window_floor, SettlementSchedule, MAX_CLAIM_AGE_W, SLASH_GRACE_EPOCHS,
+    claim_window_floor, SettlementSchedule, CHALLENGE_RESPONSE_BLOCKS, MAX_CLAIM_AGE_W,
+    SETTLEMENT_EPOCH_BLOCKS, SLASH_GRACE_EPOCHS,
 };
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
@@ -149,6 +161,19 @@ const _: () = assert!(
     SLASH_GRACE_EPOCHS <= MAX_CLAIM_AGE_W,
     "the slash pass writes Σwork(E) and its siblings in epoch E + k; a claim window shorter than \
      the grace would retire them before the pass that writes them is below the undo floor"
+);
+
+// The draw rows' floor sits strictly under the undo floor. After the
+// boundary of `B` the minimum undo floor is `(B − 1)·SEB + 1`
+// (`retention < SEB`, `Horizons::new`). A windowed schedule retires draws
+// below that height minus `W₂`, so `W₂ ≥ 1` is what puts the floor under
+// the undo floor, and `W₂ < SEB` is what keeps the subtraction inside the
+// epoch the boundary can still reach. A windowless schedule retires below
+// `(B − 1)·SEB`, one under the same undo floor, and names no `W₂`.
+const _: () = assert!(
+    CHALLENGE_RESPONSE_BLOCKS >= 1 && CHALLENGE_RESPONSE_BLOCKS < SETTLEMENT_EPOCH_BLOCKS,
+    "the genesis response window is at least one block and shorter than the epoch, so the draw \
+     rows' floor is strictly below the undo floor"
 );
 
 /// The lowest epoch of family `F` a reader may still ask for: rows below
@@ -269,6 +294,77 @@ impl ReleaseJournalFloor {
     /// The lowest retained height, or `None` while nothing is retired.
     /// The store builds the retired key range from this height and refuses
     /// a scan whose start lies in it (SI-28).
+    #[must_use]
+    pub const fn height(self) -> Option<BlockHeight> {
+        self.0
+    }
+}
+
+/// The first height of `archival_block_draws` a read may still ask for
+/// (module docs, *The draw rows*).
+///
+/// One expression, two sites. The boundary batch of epoch `B` retires
+/// strictly below [`Self::retired_by`]; a count or an admission that asks
+/// for a height below [`Self::in_force`] is refused (SI-34). The store
+/// compares and does not source the floor.
+///
+/// With a response window the first retained height is
+/// `(B − 1)·SEB + 1 − W₂`. With none it is `(B − 1)·SEB`. Either
+/// expression at or below zero retires nothing: the chain is not yet old
+/// enough for a row to have fallen out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockDrawsFloor(Option<BlockHeight>);
+
+impl BlockDrawsFloor {
+    /// Nothing retired. For a test whose chain is younger than the
+    /// horizon; not built into production code.
+    #[cfg(any(test, feature = "harness"))]
+    pub const NONE: Self = Self(None);
+
+    /// The floor the boundary batch of epoch `B` (`boundary_epoch`, the
+    /// epoch of the boundary height `B·SEB`) retires below.
+    ///
+    /// Nothing for `B = 0`, and nothing when the kept height would be
+    /// zero: there is no row below height zero.
+    #[must_use]
+    pub const fn retired_by(boundary_epoch: u64, schedule: SettlementSchedule) -> Self {
+        let Some(previous) = boundary_epoch.checked_sub(1) else {
+            return Self(None);
+        };
+        let open = previous.saturating_mul(schedule.blocks().get());
+        let kept = match schedule.challenge_response_blocks() {
+            Some(window) => open.saturating_add(1).saturating_sub(window.get()),
+            None => open,
+        };
+        if kept == 0 {
+            Self(None)
+        } else {
+            Self(Some(BlockHeight::from_raw(kept)))
+        }
+    }
+
+    /// The floor in force while a block connects at `connecting`: the
+    /// floor of the last boundary whose batch has completed. The boundary
+    /// block's own prune has not run while that block is being validated,
+    /// so at height `h` the epoch is `(h − 1) / SEB` once `h − 1` is at
+    /// least one epoch, and nothing before that.
+    #[must_use]
+    pub const fn in_force(connecting: BlockHeight, schedule: SettlementSchedule) -> Self {
+        let height = connecting.to_raw();
+        if height == 0 {
+            return Self(None);
+        }
+        let previous = height - 1;
+        let seb = schedule.blocks().get();
+        if previous < seb {
+            return Self(None);
+        }
+        Self::retired_by(previous / seb, schedule)
+    }
+
+    /// The first retained height, or `None` while nothing is retired.
+    /// The store retires every row strictly below this height and refuses
+    /// a read of one (SI-34).
     #[must_use]
     pub const fn height(self) -> Option<BlockHeight> {
         self.0

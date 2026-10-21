@@ -712,11 +712,18 @@ pub trait ChainView<'id>: HeaderView<'id> {
 
     /// **A18.** What the secret draw's count rule recorded for the block at
     /// `height`: its draw count, the fraction it carried forward, the
-    /// visible shortfall it saw, and whether its seed has been revealed
-    /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10). `None` for a block the
-    /// rule has not run for. No block writes the row until admission lands
-    /// (`SO-D12`), so every height reads `None` until then.
-    fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, Self::Fault>;
+    /// visible shortfall it saw, what its admissions issued, and whether
+    /// its seed has been revealed (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3,
+    /// §10). `None` for a block the rule has not run for.
+    ///
+    /// `floor`: the draw rows' ([`BlockDrawsFloor`]; SI-34). A read below
+    /// it is refused. The count asks for every height it folds, and the
+    /// store compares.
+    fn block_draws(
+        &self,
+        height: BlockHeight,
+        floor: crate::BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, Self::Fault>;
 
     /// **A19.** The digest of `epoch`'s drawable set, as written when the
     /// epoch opened (`SO-D10g`). `None` for an epoch whose set was never

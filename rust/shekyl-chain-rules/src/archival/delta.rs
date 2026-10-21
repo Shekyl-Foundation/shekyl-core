@@ -8,8 +8,8 @@
 //! [`ArchivalDelta`] is the pin. The store writes what it is given.
 
 use shekyl_types::archival::{
-    BondRecord, CompleteTreeSet, DrawableDigest, RMarket, SettlementRow, SigmaWorkMilli,
-    SlashLogEntry,
+    BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, RMarket, SettlementRow,
+    SigmaWorkMilli, SlashLogEntry,
 };
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -39,6 +39,7 @@ use shekyl_units::AtomicUnits;
 ///     accrual: todo!(),
 ///     close: None,
 ///     drawable_digest: None,
+///     draws: todo!(),
 /// };
 /// ```
 ///
@@ -56,6 +57,9 @@ pub struct ArchivalDelta {
     pub(super) accrual: Accrual,
     pub(super) close: Option<EpochClose>,
     pub(super) drawable_digest: Option<DrawableDigestWrite>,
+    /// The draw count of the connecting block. Present at every height,
+    /// including a schedule with no response window, which records zeros.
+    pub(super) draws: BlockDraws,
 }
 
 impl ArchivalDelta {
@@ -143,6 +147,13 @@ impl ArchivalDelta {
     #[must_use]
     pub const fn drawable_digest(&self) -> Option<&DrawableDigestWrite> {
         self.drawable_digest.as_ref()
+    }
+
+    /// The draw count of the connecting block (`SO-D12` increment 3).
+    /// Written at every height. `issued_short` is zero until admission.
+    #[must_use]
+    pub const fn draws(&self) -> BlockDraws {
+        self.draws
     }
 }
 

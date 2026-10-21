@@ -106,6 +106,8 @@ fn run(bodies: Vec<Transaction>) -> Verdict<ArchivalDelta> {
             &RuleSet::GENESIS,
             &candidate,
             INFLOW,
+            candidate.block.hash(),
+            None,
             &mut coverage,
         )
         .expect("an honest-empty view neither faults nor is corrupt");

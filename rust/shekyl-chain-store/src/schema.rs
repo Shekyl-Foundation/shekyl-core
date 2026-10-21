@@ -805,10 +805,10 @@ tables! {
     /// `archival_block_draws` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// height → the [`BlockDraws`] the count rule recorded for that block
     /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10). Written when the block
-    /// connects; its `revealed` flag is set by the block that first admits
-    /// the seed. No block writes it until admission lands (`SO-D12`,
-    /// increment 3), so a height with no row is a block the rule has not
-    /// run for. Appended last but one (ordinal 40).
+    /// connects (`SO-D12` increment 3); its `issued_short` and `revealed`
+    /// flag are written by the block that admits the seed (increment 4).
+    /// A height with no row is a block the rule has not run for. Appended
+    /// last but one (ordinal 40).
     pub const ARCHIVAL_BLOCK_DRAWS: TableDefinition<u64, Coded<BlockDraws>> =
         TableDefinition::new("archival_block_draws");
 

@@ -426,7 +426,9 @@ fn registries_are_the_expected_size_at_this_increment() {
     // CEN-A5 (the size bound before parse) went to bucket 3 and its entry
     // was deleted (DRS-X PR 2, PR2-Q2) — the parse-cost bound, not
     // validity, re-homed as the ingest router's admission.
-    assert_eq!(CenRow::ALL.len(), 161);
+    // 161 → 162 on 2026-10-21: CEN-L17 (the per-block draw count) minted
+    // with its implementation, `SO-D12` increment 3.
+    assert_eq!(CenRow::ALL.len(), 162);
     assert_eq!(PolicyRow::ALL.len(), 8);
 }
 

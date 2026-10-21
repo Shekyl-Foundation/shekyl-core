@@ -448,10 +448,11 @@ impl Canonical for IssuedDigest {
 /// Layout:
 ///
 /// ```text
-/// count       u32 LE   draws this block's producer made
-/// carry       u32 LE   the fraction carried to the next block's count
-/// shortfall   u64 LE   the visible shortfall the count was computed from
-/// revealed    u8       0 = seed not revealed, 1 = revealed
+/// count         u32 LE   draws this block's producer made
+/// carry         u32 LE   the fraction carried to the next block's count
+/// shortfall     u64 LE   the visible shortfall the count was computed from
+/// issued_short  u32 LE   what this block's admissions took off the shortfall
+/// revealed      u8       0 = seed not revealed, 1 = revealed
 /// ```
 ///
 /// A third value of the flag, or trailing bytes, is refused.
@@ -463,6 +464,7 @@ impl Canonical for BlockDraws {
         out.extend_from_slice(&self.count.to_le_bytes());
         out.extend_from_slice(&self.carry.to_le_bytes());
         out.extend_from_slice(&self.shortfall.to_le_bytes());
+        out.extend_from_slice(&self.issued_short.to_le_bytes());
         out.push(u8::from(self.revealed));
     }
 
@@ -471,6 +473,7 @@ impl Canonical for BlockDraws {
         let count = r.u32()?;
         let carry = r.u32()?;
         let shortfall = r.u64()?;
+        let issued_short = r.u32()?;
         let revealed = match r.u8()? {
             0 => false,
             1 => true,
@@ -483,6 +486,7 @@ impl Canonical for BlockDraws {
             count,
             carry,
             shortfall,
+            issued_short,
             revealed,
         })
     }

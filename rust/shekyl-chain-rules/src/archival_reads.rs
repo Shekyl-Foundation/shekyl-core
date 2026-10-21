@@ -191,9 +191,9 @@ macro_rules! archival_reads {
             (persona, epochs, floor);
             (::std::collections::BTreeMap::new()));
         $crate::archival_reads!(@emit $policy; block_draws;
-            (height: shekyl_types::BlockHeight);
+            (height: shekyl_types::BlockHeight, floor: $crate::BlockDrawsFloor);
             (::core::option::Option<shekyl_types::archival::BlockDraws>);
-            (height);
+            (height, floor);
             (::core::option::Option::None));
         $crate::archival_reads!(@emit $policy; drawable_digest;
             (
@@ -221,6 +221,25 @@ macro_rules! archival_reads {
             (::std::vec::Vec<shekyl_types::archival::LoggedSlash>);
             (height, floor);
             (::std::vec::Vec::new()));
+    };
+    // A view with no draw table is not a hole in one. The count refuses a
+    // missing prior row, and these views exist so a transition can be
+    // derived over them, so they answer the zero row a height that drew
+    // nothing recorded. The store answers `None` for a height never
+    // written; that absence is the hole.
+    (@emit {empty}; block_draws; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn block_draws(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $($arg),*);
+            ::core::result::Result::Ok(::core::option::Option::Some(
+                shekyl_types::archival::BlockDraws {
+                    count: 0,
+                    carry: 0,
+                    shortfall: 0,
+                    issued_short: 0,
+                    revealed: false,
+                },
+            ))
+        }
     };
     (@emit {empty}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn $name(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
@@ -265,6 +284,20 @@ macro_rules! archival_reads {
     (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; last_settled_slash_epoch; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
         fn last_settled_slash_epoch(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
             ::core::result::Result::Ok(self.$($mark).+)
+        }
+    };
+    (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; block_draws; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
+        fn block_draws(&self, $($params)*) -> ::core::result::Result<$ok, Self::Fault> {
+            $crate::archival_reads!(@touch $($arg),*);
+            ::core::result::Result::Ok(::core::option::Option::Some(
+                shekyl_types::archival::BlockDraws {
+                    count: 0,
+                    carry: 0,
+                    shortfall: 0,
+                    issued_short: 0,
+                    revealed: false,
+                },
+            ))
         }
     };
     (@emit {planted $($price:ident).+ ; $($sigma:ident).+ ; $($budget:ident).+ ; $($trees:ident).+ ; $($mark:ident).+}; $name:ident; ($($params:tt)*); ($ok:ty); ($($arg:expr),*); ($empty:expr)) => {
