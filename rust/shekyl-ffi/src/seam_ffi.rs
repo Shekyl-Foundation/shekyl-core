@@ -185,18 +185,31 @@ pub(crate) fn seam_bind_lock() -> &'static Mutex<()> {
     &LOCK
 }
 
-/// The node's socket table, installed once at start. A reader that arrives
-/// first creates the table itself; [`install_process_sockets`] then refuses,
-/// so `main` installs before any ban or bind.
-static PROCESS_SOCKETS: OnceLock<shekyl_seam::Sockets> = OnceLock::new();
+/// The node's socket table, or the table a reader created before `main`
+/// installed one. A bound hub keeps the table it was built with, so
+/// [`install_process_sockets`] refuses once a hub exists.
+static PROCESS_SOCKETS: Mutex<Option<shekyl_seam::Sockets>> = Mutex::new(None);
 
 /// Install the node's socket table as the process table.
 ///
-/// `false` when a table already exists: a reader called [`process_sockets`]
-/// first, and the two would not be the same table. The caller stops.
+/// Returns `false` when a hub is already bound: that hub holds the previous
+/// table, and replacing it would split bans from the zone. An unbound table
+/// a reader created first is replaced, so a later reader sees the node's.
+/// Production `main` installs before any reader, and this replacement is
+/// what a shared test process needs after another test has read the table.
 #[must_use]
 pub fn install_process_sockets(sockets: shekyl_seam::Sockets) -> bool {
-    PROCESS_SOCKETS.set(sockets).is_ok()
+    if hub().is_some() {
+        return false;
+    }
+    let mut slot = PROCESS_SOCKETS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if hub().is_some() {
+        return false;
+    }
+    *slot = Some(sockets);
+    true
 }
 
 /// The process's one admission table. A new binding does not mint ids
@@ -207,9 +220,13 @@ pub fn install_process_sockets(sockets: shekyl_seam::Sockets) -> bool {
 /// After it, every call is the node's table.
 #[must_use]
 pub fn process_sockets() -> shekyl_seam::Sockets {
-    PROCESS_SOCKETS
-        .get_or_init(shekyl_seam::Sockets::new)
-        .clone()
+    let mut slot = PROCESS_SOCKETS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if slot.is_none() {
+        *slot = Some(shekyl_seam::Sockets::new());
+    }
+    slot.clone().expect("the table was just set")
 }
 
 /// The process's one clock (Rick, 2026-10-14): ban deadlines, the bound
