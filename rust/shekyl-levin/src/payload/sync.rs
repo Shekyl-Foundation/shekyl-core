@@ -495,16 +495,24 @@ pub fn plan_bodies<'a>(
     };
     let mut sent_bytes = 0usize;
     let mut sent_one = false;
+    // Once a held body does not fit, every later held body is deferred.
+    // `charge` alone would send a later small body after a deferred large
+    // one, and `check_form` refuses that as `SentAfterDeferred`.
+    let mut deferring = false;
     for hash in requested {
         match held(hash) {
             None => plan.missed.push(*hash),
+            Some(_) if deferring => plan.deferred.push(*hash),
             Some(body) => match charge(sent_bytes, body_budget_bytes(body), sent_one) {
                 Some(next) => {
                     plan.send.push(*hash);
                     sent_bytes = next;
                     sent_one = true;
                 }
-                None => plan.deferred.push(*hash),
+                None => {
+                    plan.deferred.push(*hash);
+                    deferring = true;
+                }
             },
         }
     }

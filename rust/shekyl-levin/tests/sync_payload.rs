@@ -464,3 +464,144 @@ fn a_repeated_request_hash_is_the_callers() {
         Err(BodiesFormFault::RequestRepeated)
     );
 }
+
+fn body_of_total(id: &[u8; HASH_SIZE], total: usize) -> BlockBody {
+    let block = id_block(id);
+    assert!(
+        total >= block.len(),
+        "a coined block is {} bytes",
+        block.len()
+    );
+    let extra = total - block.len();
+    BlockBody {
+        block,
+        txs: if extra == 0 {
+            Vec::new()
+        } else {
+            vec![TxBody::Full(vec![0; extra])]
+        },
+        attestation_witness: Vec::new(),
+    }
+}
+
+fn response_from_plan(
+    requested: &[[u8; HASH_SIZE]],
+    held: &[Option<BlockBody>],
+    plan: &shekyl_levin::BodyPlan,
+) -> ResponseBodies {
+    ResponseBodies {
+        bodies: plan
+            .send
+            .iter()
+            .map(|id| {
+                let index = requested.iter().position(|hash| hash == id).expect("sent");
+                held[index].clone().expect("a sent body is held")
+            })
+            .collect(),
+        deferred: plan.deferred.clone(),
+        missed_ids: plan.missed.clone(),
+    }
+}
+
+/// A budget-sized body between two small ones defers the tail. The third
+/// body would fit on its own after the first, and sending it is
+/// `SentAfterDeferred`.
+#[test]
+fn a_large_body_between_small_ones_defers_the_rest() {
+    let budget = usize::try_from(BODIES_RESPONSE_BYTES).expect("budget");
+    let have = ids(3);
+    let small_len = have
+        .iter()
+        .map(|id| id_block(id).len())
+        .max()
+        .expect("three blocks");
+    let first = body_of_total(&have[0], small_len);
+    let middle = body_of_total(&have[1], budget);
+    let last = body_of_total(&have[2], small_len);
+    let held = [Some(first), Some(middle), Some(last)];
+    let plan = plan_bodies(&have, |hash| {
+        let index = have.iter().position(|id| id == hash).expect("id");
+        held[index].as_ref()
+    });
+    assert_eq!(plan.send, vec![have[0]]);
+    assert_eq!(plan.deferred, vec![have[1], have[2]]);
+    assert!(plan.missed.is_empty());
+    assert_eq!(
+        response_from_plan(&have, &held, &plan).check_form(&have),
+        Ok(())
+    );
+}
+
+/// How many random plans the property test builds. Each is a request of
+/// one to four blocks, held at a size from the budget's edges or missing.
+const PLAN_CASES: u32 = 48;
+
+/// `check_form` accepts what `plan_bodies` produces, including a large
+/// body between small ones.
+#[test]
+fn the_plan_is_a_form_the_receiver_accepts() {
+    let budget = usize::try_from(BODIES_RESPONSE_BYTES).expect("budget");
+    let have = ids(4);
+    let mut state = 0x5eed_c0de_u64;
+    let mut cases = 0u32;
+    for len in 1..=4 {
+        for pattern in 0..12 {
+            cases += 1;
+            let requested = have[..len].to_vec();
+            let held: Vec<Option<BlockBody>> = requested
+                .iter()
+                .enumerate()
+                .map(|(index, id)| {
+                    let roll = if pattern % 8 == 0 {
+                        // Small, then the budget, then small again.
+                        if index == 1 {
+                            3
+                        } else {
+                            1
+                        }
+                    } else {
+                        (mix(&mut state) % 5) as usize
+                    };
+                    let block_len = id_block(id).len();
+                    match roll {
+                        0 => None,
+                        1 => Some(body_of_total(id, block_len)),
+                        2 => Some(body_of_total(id, block_len + 10)),
+                        3 => Some(body_of_total(id, budget)),
+                        _ => Some(body_of_total(id, budget + block_len)),
+                    }
+                })
+                .collect();
+            let plan = plan_bodies(&requested, |hash| {
+                let index = requested.iter().position(|id| id == hash).expect("id");
+                held[index].as_ref()
+            });
+            let mut deferring = false;
+            for (index, hash) in requested.iter().enumerate() {
+                if held[index].is_none() {
+                    assert!(plan.missed.contains(hash));
+                    continue;
+                }
+                if deferring {
+                    assert!(plan.deferred.contains(hash));
+                    assert!(!plan.send.contains(hash));
+                } else if plan.deferred.contains(hash) {
+                    deferring = true;
+                }
+            }
+            assert_eq!(
+                response_from_plan(&requested, &held, &plan).check_form(&requested),
+                Ok(()),
+                "plan {plan:?}"
+            );
+        }
+    }
+    assert_eq!(cases, PLAN_CASES);
+}
+
+fn mix(state: &mut u64) -> u64 {
+    *state ^= state.wrapping_shl(13);
+    *state ^= state.wrapping_shr(7);
+    *state ^= state.wrapping_shl(17);
+    *state
+}
