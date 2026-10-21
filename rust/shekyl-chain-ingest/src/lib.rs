@@ -122,6 +122,8 @@ pub mod fetch;
 pub mod follower;
 #[cfg(feature = "pipeline")]
 pub mod grader;
+#[cfg(all(test, feature = "pipeline"))]
+mod header_path_tests;
 pub mod metrics;
 /// The Rust miner loop over scenario chains (DRS-X PR 3, DX-Q4).
 #[cfg(all(test, feature = "pipeline"))]
