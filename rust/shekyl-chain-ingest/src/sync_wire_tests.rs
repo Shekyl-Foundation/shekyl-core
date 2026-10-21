@@ -65,7 +65,9 @@ fn every_captured_pow_blob_is_the_block_hash() {
         header.header.previous = shekyl_types::BlockHash::from_bytes(previous);
         assert_ne!(header.identity(), id, "header");
         let mut tree = parsed.clone();
-        tree.tx_tree_hash[0] ^= 0x01;
+        let mut root = tree.tx_tree_hash.to_bytes();
+        root[0] ^= 0x01;
+        tree.tx_tree_hash = shekyl_types::TxTreeHash::from_bytes(root);
         assert_ne!(tree.identity(), id, "tx_tree_hash");
         let mut count = parsed;
         count.tx_count = count.tx_count.wrapping_add(1);

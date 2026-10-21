@@ -19,7 +19,7 @@ use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
 
-use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
+use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash, TxTreeHash};
 
 use crate::bytes::read_array;
 use crate::hash::merkle_root;
@@ -266,7 +266,8 @@ impl Block {
         let mut leaves = Vec::with_capacity(1 + self.transaction_hashes.len());
         leaves.push(self.miner_transaction.hash().to_bytes());
         leaves.extend(self.transaction_hashes.iter().map(|h| h.to_bytes()));
-        let tx_tree_hash = merkle_root(leaves).expect("the miner tx is always present");
+        let tx_tree_hash =
+            TxTreeHash::from_bytes(merkle_root(leaves).expect("the miner tx is always present"));
         PowBlob {
             header: self.header.clone(),
             tx_tree_hash,
@@ -308,7 +309,7 @@ pub struct PowBlob {
     /// The block header, the prefix of the preimage.
     pub header: BlockHeader,
     /// Merkle root over `[miner_tx_hash, transaction_hashes…]`.
-    pub tx_tree_hash: [u8; 32],
+    pub tx_tree_hash: TxTreeHash,
     /// The value of the trailing varint: one more than the number of
     /// non-miner transaction hashes.
     pub tx_count: u64,
@@ -327,7 +328,7 @@ impl PowBlob {
     pub fn read(bytes: &[u8]) -> io::Result<Self> {
         let mut cursor = bytes;
         let header = BlockHeader::read(&mut cursor)?;
-        let tx_tree_hash = read_array::<32, _>(&mut cursor)?;
+        let tx_tree_hash = TxTreeHash::from_bytes(read_array::<32, _>(&mut cursor)?);
         let tx_count: u64 = read_varint(&mut cursor)?;
         let listed = tx_count.checked_sub(1).ok_or_else(|| {
             io::Error::other("shekyl-wire: PoW preimage tx_count is 0; the miner is always counted")
@@ -357,7 +358,7 @@ impl PowBlob {
         self.header
             .write(&mut blob)
             .expect("Vec write is infallible");
-        blob.extend_from_slice(&self.tx_tree_hash);
+        blob.extend_from_slice(self.tx_tree_hash.as_bytes());
         write_varint(self.tx_count, &mut blob).expect("Vec write is infallible");
         blob
     }
