@@ -18,9 +18,9 @@ use std::num::NonZeroU128;
 use shekyl_chain_rules::harness::fixture::{coinbase_extra, TWO_G};
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
-    bind_body, form, form_header, judge_header, seed_height, target_claim, validate, AtHeight,
-    Candidate, CenRow, ChainView, Fault, FormAttempt, HeaderView, ReferenceClaims, ReleaseAnchors,
-    RuleSet, Stale, Target, Trust,
+    bind_body, form, form_header, judge_header, judge_header_cheap, seed_height, target_claim,
+    validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, HeaderView, OpenHeader,
+    ReferenceClaims, ReleaseAnchors, RuleSet, Stale, Target, Trust,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{StoreError, WriteBatch};
@@ -670,6 +670,172 @@ fn an_anchored_height_with_the_wrong_hash_is_e1_on_both_paths() {
                 ),
                 Said::Refused(CenRow::E1)
             );
+            Ok(())
+        })
+        .expect("inspect");
+    cleanup(&path);
+}
+
+/// Bytes after a full transaction, or after a skeleton's pruned base, do
+/// not bind. `validate` parses a full transaction with exact consumption,
+/// and the skeleton is that same rule on the pruned segment: the extra
+/// byte is not the transaction.
+#[test]
+fn appended_bytes_are_not_the_transaction() {
+    let substrate = mock_with_the_real_clock();
+    let (dir, manifest) = captured_chains()
+        .into_iter()
+        .find(|(_, manifest)| manifest.shape == "spend-1in-2out")
+        .expect("the spend chain");
+    let chain = load(&dir, &manifest.shape);
+    let rules = rules_for(&manifest);
+    let path = tmp("header-path-trailing");
+    let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
+    let mut pinned = false;
+    store
+        .write(|batch| -> Result<(), StoreError> {
+            for candidate in &chain {
+                let view = batch.chain_view();
+                let height = connecting(&view);
+                let rule_set = rules.in_force(height);
+                let seed = seed_of(&view, height);
+                let target = target_of(&view, height, &rule_set);
+                if let Some(tx) = candidate.transactions.first() {
+                    let header =
+                        formed_header(candidate, &rule_set, substrate.as_ref(), seed, target);
+                    let mut full = body_of(candidate);
+                    let TxBody::Full(bytes) = &mut full.txs[0] else {
+                        panic!("body_of writes a full transaction");
+                    };
+                    bytes.push(0xff);
+                    assert!(
+                        bind_body(&header, &full).is_err(),
+                        "a byte after a full transaction still bound"
+                    );
+                    let segments = tx.write_segments().expect("segments");
+                    let archival_len = segments.archival_len();
+                    let mut unprunable = segments.pruned;
+                    unprunable.push(0xff);
+                    let mut skeleton = body_of(candidate);
+                    skeleton.txs[0] = TxBody::Skeleton(SkeletonTx {
+                        unprunable,
+                        prunable_hash: tx.prunable_hash(),
+                        pqc_auth_hash: tx.pqc_auth_hash(),
+                        archival_len,
+                    });
+                    assert!(
+                        bind_body(&header, &skeleton).is_err(),
+                        "a byte after the pruned base still bound"
+                    );
+                    pinned = true;
+                    break;
+                }
+                let references =
+                    ReferenceClaims::from_headers(&view, height, candidate).expect("references");
+                let formed = form(
+                    candidate.clone(),
+                    &rule_set,
+                    substrate.as_ref(),
+                    seed,
+                    target,
+                    &references,
+                    FormAttempt::FIRST,
+                )
+                .expect("mock")
+                .expect("form");
+                let valid = validate(formed, &view, &rule_set, &rules.trust())
+                    .expect("view")
+                    .expect("validate");
+                drop(view);
+                batch.connect(valid, rule_set)?;
+            }
+            Ok(())
+        })
+        .expect("write");
+    cleanup(&path);
+    assert!(pinned, "the chain listed no transaction");
+}
+
+/// B1 is a cheap check, and the cheap checks do not hash. A header whose
+/// major version is wrong is refused before any longhash; a header the
+/// longhash would have to refuse is still accepted here.
+#[test]
+fn the_cheap_checks_name_the_version_and_do_not_hash() {
+    let (dir, manifest) = captured_chains().into_iter().next().expect("a chain");
+    let chain = load(&dir, &manifest.shape);
+    let rules = rules_for(&manifest);
+    let trust = rules.trust();
+    let mut substrate = *mock_with_the_real_clock();
+    substrate.longhash = MockSubstrate::must_not_hash;
+    let path = tmp("header-path-cheap");
+    let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
+    store
+        .inspect(|batch| -> Result<(), StoreError> {
+            let view = batch.chain_view();
+            let height = BlockHeight::ZERO;
+            let rule_set = rules.in_force(height);
+            let seed = seed_of(&view, height);
+            let target = target_of(&view, height, &rule_set);
+            let pow = PowBlob::read(&chain[0].block.pow_blob()).expect("preimage");
+            let open = OpenHeader::from_pow(&pow, &substrate, seed, target).expect("clock");
+            let prospect = judge_header_cheap(&open, &view, &rule_set, &trust, &substrate)
+                .expect("the cheap path does not hash")
+                .expect("the genesis header passes the cheap checks");
+            assert!(prospect.coverage.contains(CenRow::B1));
+            assert!(prospect.coverage.contains(CenRow::B2));
+            let mut bad = pow.clone();
+            bad.header.major_version = bad.header.major_version.saturating_add(1);
+            let open = OpenHeader::from_pow(&bad, &substrate, seed, target).expect("clock");
+            match judge_header_cheap(&open, &view, &rule_set, &trust, &substrate).expect("clock") {
+                Err(refused) => assert_eq!(refused.rule, CenRow::B1),
+                Ok(_) => panic!("a wrong major version passed the cheap checks"),
+            }
+            Ok(())
+        })
+        .expect("inspect");
+    cleanup(&path);
+}
+
+/// All-ones under difficulty 2 fails CEN-D1. `form_header` and `form` both
+/// name that row. The zero hash would not: it satisfies every target.
+#[test]
+fn a_longhash_the_target_refuses_is_d1_on_both_paths() {
+    let (dir, manifest) = captured_chains().into_iter().next().expect("a chain");
+    let chain = load(&dir, &manifest.shape);
+    let rules = rules_for(&manifest);
+    let mut substrate = *mock_with_the_real_clock();
+    substrate.longhash = MockSubstrate::all_ones;
+    let target = Target::for_tests(NonZeroU128::new(2).expect("two"));
+    let path = tmp("header-path-d1");
+    let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
+    store
+        .inspect(|batch| -> Result<(), StoreError> {
+            let view = batch.chain_view();
+            let height = BlockHeight::ZERO;
+            let rule_set = rules.in_force(height);
+            let seed = seed_of(&view, height);
+            let pow = PowBlob::read(&chain[0].block.pow_blob()).expect("preimage");
+            match form_header(&pow, &rule_set, &substrate, seed, target).expect("the mock answers")
+            {
+                Err(refused) => assert_eq!(refused.rule, CenRow::D1),
+                Ok(_) => panic!("form_header accepted a longhash the target refuses"),
+            }
+            let references =
+                ReferenceClaims::from_headers(&view, height, &chain[0]).expect("references");
+            match form(
+                chain[0].clone(),
+                &rule_set,
+                &substrate,
+                seed,
+                target,
+                &references,
+                FormAttempt::FIRST,
+            )
+            .expect("the mock answers")
+            {
+                Err(refused) => assert_eq!(refused.rule, CenRow::D1),
+                Ok(_) => panic!("form accepted a longhash the target refuses"),
+            }
             Ok(())
         })
         .expect("inspect");
