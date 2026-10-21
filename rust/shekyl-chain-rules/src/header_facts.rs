@@ -23,7 +23,6 @@ use crate::coverage::RuleCoverage;
 use crate::fault::FormAttempt;
 use crate::rules::difficulty::Target;
 use crate::rules::pow::LonghashSeal;
-use crate::substrate::Substrate;
 
 /// The proof has not been computed. The cheap checks never read this.
 #[derive(Clone, Copy, Debug)]
@@ -77,31 +76,25 @@ pub struct OpenHeader {
 
 impl OpenHeader {
     /// The facts the cheap checks read. The identity is
-    /// [`PowBlob::identity`]; the attempt is [`FormAttempt::FIRST`]. The
-    /// clock is the substrate's, read once here; [`crate::judge_header_cheap`]
-    /// reads it again when it judges, so a caller cannot name the instant.
+    /// [`PowBlob::identity`]; the attempt is [`FormAttempt::FIRST`].
     ///
-    /// # Errors
-    ///
-    /// The substrate's fault, from the clock.
-    pub fn from_pow<S: Substrate>(
-        pow: &PowBlob,
-        substrate: &S,
-        seed: BlockHash,
-        target: Target,
-    ) -> Result<Self, S::Fault> {
-        let judged_at = substrate.local_clock()?;
-        Ok(Self {
+    /// The clock is not read here. [`crate::judge_header_cheap`] reads the
+    /// substrate once, when it judges, and that is the instant the timestamp
+    /// rows see. `judged_at` until then is not a reading.
+    #[must_use]
+    pub fn from_pow(pow: &PowBlob, seed: BlockHash, target: Target) -> Self {
+        Self {
             facts: HeaderFacts {
                 header: pow.header.clone(),
                 identity: pow.identity(),
-                judged_at,
+                // Replaced by `judge_header_cheap` before any rule reads it.
+                judged_at: Timestamp::from_raw(0),
                 seed,
                 target,
                 attempt: FormAttempt::FIRST,
                 proof: Unproven,
             },
-        })
+        }
     }
 }
 
