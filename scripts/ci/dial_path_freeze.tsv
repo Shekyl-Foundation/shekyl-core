@@ -11,10 +11,10 @@
 # where deleted means the witness identifier (the bare name unless the row
 # names one) is gone from src/ outside comments and literals. A definition
 # moved out of src/p2p is still the dial path. The shrink
-# rows are the C++ files the Rust lanes are replacing (Rick,
-# 2026-10-09): a change may add no code lines to them. Deletions are free;
-# comment-only additions are free; an edited line, or logic swapped for a
-# call into Rust, is an added code line. This file is the list the dialer
+# rows are the C++ files the Rust lanes are replacing: the dialer (Rick,
+# 2026-10-09) and chain sync (CS-Q9, Rick, 2026-10-18). A change may add
+# no code lines to them. Deletions are free; comment-only additions are
+# free; an edited line, or logic swapped for a call into Rust, is an added code line. This file is the list the dialer
 # brief's deletion table cites (docs/design/P2P_3_SLICE_3_DIALER_BRIEF.md,
 # "What is deleted").
 #
@@ -40,3 +40,10 @@
 shrink	src/p2p/net_node.inl
 shrink	src/p2p/net_node.h
 shrink	src/cryptonote_protocol/levin_notify.cpp
+shrink	src/cryptonote_protocol/cryptonote_protocol_handler.inl
+shrink	src/cryptonote_protocol/cryptonote_protocol_handler.h
+shrink	src/cryptonote_protocol/cryptonote_protocol_handler-base.cpp
+shrink	src/cryptonote_protocol/cryptonote_protocol_handler_common.h
+shrink	src/cryptonote_protocol/block_queue.h
+shrink	src/cryptonote_protocol/block_queue.cpp
+shrink	src/cryptonote_protocol/cryptonote_protocol_defs.h
