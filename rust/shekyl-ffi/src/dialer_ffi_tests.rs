@@ -13,7 +13,7 @@
 #![cfg(test)]
 
 use std::ffi::c_void;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, PoisonError};
 use std::thread;
@@ -248,6 +248,12 @@ fn a_noted_network_survives_every_id_derivation() {
     /// The first byte past `cryptonote::FAKECHAIN`.
     const UNRECOGNIZED_NETTYPE: u8 = DaemonNetwork::Fakechain.to_cryptonote() + 1;
 
+    // `NETWORK` is process-wide. The Tor seed test writes it under this
+    // same lock; restoration stays inside the lock so a parallel test
+    // cannot observe the value mid-restore.
+    let _bind = seam_bind_lock()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -322,6 +328,97 @@ fn a_noted_network_survives_every_id_derivation() {
     );
     assert_eq!(shekyl_dialer_note_network(UNRECOGNIZED_NETTYPE), -1);
     assert_eq!(recorded(), SeedNetwork::Mainnet);
+}
+
+/// A closed Tor population is the only address `choose` returns after the
+/// compiled onions have been admitted. The daemon applies the section
+/// before the owner loop; this is that order without the thread.
+#[test]
+fn a_closed_tor_network_draws_its_declaration_not_a_compiled_onion() {
+    let _bind = seam_bind_lock()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            note_network(DaemonNetwork::Stagenet);
+        }
+    }
+    let _restore = Restore;
+
+    unbind();
+    bind();
+    note_network(DaemonNetwork::Testnet);
+    let port = shekyl_daemon_config::Network::Testnet.p2p_port();
+    let host = shekyl_onion_v3::v3_onion_hostname(&[0x11; 32]);
+    let declared = NetworkAddress::Tor {
+        host: host.clone(),
+        port,
+    };
+    let compiled: Vec<_> = seeds(SeedNetwork::Testnet)
+        .into_iter()
+        .filter(|address| Peerlist::connector_of(address) == Some(ConnectorId::Tor))
+        .collect();
+    assert!(
+        !compiled.contains(&declared),
+        "the declaration is not one of the compiled onions"
+    );
+    let dir = tempfile::tempdir().expect("a directory");
+    apply_p2p(
+        &P2p {
+            peers: Vec::new(),
+            closed_peers: vec![PeerEndpoint::Onion { host, port }],
+            local: false,
+            disclose_early: false,
+            bans: Vec::new(),
+            upload_max: None,
+            download_max: None,
+        },
+        &dir.path().join("p2pstate.bin"),
+    )
+    .expect("applied");
+    let dialer = dialer().expect("built at the bind");
+    admit_compiled_seeds(&dialer, ConnectorId::Tor);
+    ready(&dialer);
+    assert!(matches!(
+        dialer.hub().links().publish_usable(
+            ConnectorId::Tor,
+            shekyl_seam::Route::Socks(SocketAddr::from((Ipv4Addr::LOCALHOST, 9050))),
+            dialer.hub().now(),
+        ),
+        shekyl_seam::RoutePublish::Installed { .. }
+    ));
+    let mut drawn = Vec::new();
+    for _ in 0..=compiled.len() {
+        if let Some((address, _aim, _nonce)) = dialer.choose(ConnectorId::Tor, &mut SecureRelayRng)
+        {
+            drawn.push(address);
+        }
+    }
+    assert_eq!(
+        drawn,
+        vec![declared],
+        "the compiled onions are gray and not eligible"
+    );
+    unbind();
+}
+
+/// The ports in the compiled list are the daemon network's P2P ports.
+#[test]
+fn compiled_seed_ports_match_the_daemon_network() {
+    use shekyl_daemon_config::Network;
+    let port = |address: &NetworkAddress| match address {
+        NetworkAddress::Ipv4 { port, .. }
+        | NetworkAddress::Ipv6 { port, .. }
+        | NetworkAddress::Tor { port, .. } => *port,
+    };
+    assert!(seeds(SeedNetwork::Mainnet)
+        .iter()
+        .all(|address| port(address) == Network::Mainnet.p2p_port()));
+    assert!(seeds(SeedNetwork::Testnet)
+        .iter()
+        .all(|address| port(address) == Network::Testnet.p2p_port()));
+    assert!(seeds(SeedNetwork::None).is_empty());
 }
 
 /// One handshake response and an empty peerlist, so admit is not a ban.
