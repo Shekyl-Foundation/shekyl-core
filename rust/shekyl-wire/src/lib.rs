@@ -54,6 +54,7 @@
 
 pub mod block;
 pub mod shard_frame;
+pub mod sync_body;
 pub mod transaction;
 pub mod tx_extra;
 pub mod varint;
@@ -68,6 +69,7 @@ mod hash;
 pub(crate) const READ_LEN_CAP: usize = 1_000_000;
 
 pub use block::{identity_of_pow_blob, Block, BlockHeader, PowBlob};
+pub use sync_body::{BlockBody, SkeletonTx, TxBody};
 pub use transaction::{
     carries_archival_good, empty_region_prunable_hash, is_join_market_post_kind, pqc_auth_hash_of,
     prunable_hash_of, BondPost, BondPostKind, BpPlus, Ct, CtBase, FullTransaction, Holdings, Input,
