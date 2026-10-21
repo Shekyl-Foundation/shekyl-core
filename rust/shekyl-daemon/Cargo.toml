@@ -19,6 +19,9 @@ shekyl-options = { path = "../shekyl-options" }
 shekyl-logging = { path = "../shekyl-logging" }
 # The RPC owner: its section is recorded before the remnant starts it once.
 shekyl-daemon-rpc = { path = "../shekyl-daemon-rpc" }
+# The one Node, built at start beside the C++ core (DRS-X N1). Nothing is
+# routed into it until the store flip.
+shekyl-node = { path = "../shekyl-node" }
 # The platform probes, the panic hook and the network id's one derivation.
 shekyl-ffi = { path = "../shekyl-ffi" }
 shekyl-socks = { path = "../shekyl-socks" }
