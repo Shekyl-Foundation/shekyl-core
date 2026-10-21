@@ -14,9 +14,9 @@
 # rows are the C++ files the Rust lanes are replacing: the dialer (Rick,
 # 2026-10-09) and chain sync (CS-Q9, Rick, 2026-10-18). A change may add
 # no code lines to them. Deletions are free; comment-only additions are
-# free; an edited line, or logic swapped for a call into Rust, is an added code line. This file is the list the dialer
-# brief's deletion table cites (docs/design/P2P_3_SLICE_3_DIALER_BRIEF.md,
-# "What is deleted").
+# free; an edited line, or logic swapped for a call into Rust, is an
+# added code line. This file is the list the dialer brief's deletion
+# table cites (docs/design/P2P_3_SLICE_3_DIALER_BRIEF.md, "What is deleted").
 #
 # The one exception is a line in the dialer brief, new in the PR, of exactly
 # this form, naming the row's full anchor or the shrink row's file path:
