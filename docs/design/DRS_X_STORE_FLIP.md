@@ -146,9 +146,9 @@ The join rule: no FFI built for a C++ handler that dies a PR later. Every method
 
 ### DX-Q6 — Where the store opens; genesis; stop
 
-- Rust `main` opens `ChainStore::with_release` after the network marker (#1088 step 4) and before `run(snapshot)` (step 7). It spawns the connector and hands the remnant the shell's handle.
+- Rust `main` (`shekyl-daemon`) builds `shekyl-node`'s `Node` after the network marker (#1088 step 4) and before `run(snapshot)` (step 7). The node opens `ChainStore::with_release`, starts the ingest service, and is where the store opens (N1, `DRS_X_PR3B_ROUND0.md`). Nothing is routed from C++. The flip still hands the remnant the shell's handle.
 - **Genesis.** An empty store connects the pinned genesis through the ingest (`form` → `validate` → `connect`, CEN-E5's pin). `reset_and_set_genesis_block` deletes.
-- **Stop.** The connector finishes its current message and the store closes before exit. `Immediate` durability means there is no flush step.
+- **Stop.** `Node::stop` is one step of the daemon's `finish`, after the dialer and the RPC and before the managed Tor teardown (`TOR_SUPERVISOR.md` §1): the service stops, the follower withdraws the job board, the connector finishes its current message, and the store closes. `Immediate` durability means there is no flush step.
 - **No migration.** A release wipes, and an LMDB directory is ignored.
 
 ### DX-Q7 — The PR shape
@@ -160,6 +160,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 | 1 | **PR-b**: the Rust pool (`DRS_E5_POOL_ALT_PRUNE.md` §5 b1–b7, as amended in its brief) | staged; merged 2026-10-18 (#1102) |
 | 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged; under way (#1123) |
 | 3 | **The read-only RPC handlers and the store-backed facts (DX-Q3), and the miner loop (DX-Q4)**, unrouted | staged; merged 2026-10-19 (#1106) |
+| 3n | **`shekyl-node`**, the daemon's one `Node` (N1): the store, ingest, the pool, the hasher budget, the cache store, the job board and the socket table. Built at start beside the C++ core; genesis through the door; nothing routed | staged |
 | 3b | **The pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` / `stop_mining` (with `mining_status`), the bans and `stop_daemon`** (DX-Q3), unrouted. Briefed after PR-b and PR 2 merge | staged |
 | 4 | **The flip** (below) | live |
 
@@ -181,7 +182,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 - applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements;
 - restates the two decisions `RPC_WIRE.md` carries that are bound to state the flip ends: RK-D7 (one implementation, `StoreFacts`, once the shims are deleted) and the per-lock-domain rule (over the Rust pool's lock and the store's MVCC snapshot, where today its example is `tx_memory_pool::check_for_key_images`).
 
-PR-b, PR 2 and PR 3 may run in parallel; PR 3b is briefed after PR-b and PR 2 merge. The flip needs PR-b, PR 2, PR 3, PR 3b and #1088.
+PR-b, PR 2 and PR 3 may run in parallel; PR 3n is the node, and PR 3b is briefed after PR-b and PR 2 merge. The flip needs PR-b, PR 2, PR 3, PR 3n, PR 3b and #1088.
 
 ### DX-Q9 — CEN-L14's remaining sites
 
@@ -365,8 +366,9 @@ Its number is read from the tree at the flip's pin, never carried from a plan (`
 1. **PR-b**, brief issued 2026-10-16; merged 2026-10-18 (#1102).
 2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Under way (#1123), staged: built and tested, nothing routed.
 3. **PR 3** — the read-only RPC handlers, the store-backed facts and the miner loop. Merged (#1106).
-4. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge. Its `get_block_template` assembler is also the tip follower's template source (DX-Q2 item 5): one producer for the RPC and the miner.
-5. **The flip** needs PR-b, PR 2, PR 3, PR 3b and #1088. DEL-008's gate holds at genesis (Rick, 2026-10-18). At genesis the requirements are — SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`). Until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code. The flip's edit to `try_add_next_blocks` carries its own `UNFREEZE` line in `scripts/ci/dial_path_freeze.tsv` if CS-Q9's shrink-only rows for the protocol handler have landed (CS-Q9, Rick 2026-10-18).
-6. **Chain sync's cutover** follows the flip. It deletes the protocol handler's sync half, the complement request included (CS-Q1, Rick 2026-10-18). **RD** deletes its transaction routes, complement serving, `levin_notify` and the relay entry. Whichever lands second deletes the handler file.
+4. **PR 3n** — `shekyl-node`, the daemon's one `Node` (N1, `DRS_X_PR3B_ROUND0.md`). Staged: Rust `main` builds it at start beside the C++ core, an empty store connects the pinned genesis through the ingest door, and nothing is routed.
+5. **PR 3b** — the pool's handlers, `get_block_template`, `submit_block`, `generateblocks`, `pop_blocks`, `start_mining` and `stop_mining` (with `mining_status`), and the bans and `stop_daemon` (DX-Q3). Staged. Briefed after PR-b and PR 2 merge. Its `get_block_template` assembler is also the tip follower's template source (DX-Q2 item 5): one producer for the RPC and the miner.
+6. **The flip** needs PR-b, PR 2, PR 3, PR 3n, PR 3b and #1088. DEL-008's gate holds at genesis (Rick, 2026-10-18). At genesis the requirements are — SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`). Until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code. The flip's edit to `try_add_next_blocks` carries its own `UNFREEZE` line in `scripts/ci/dial_path_freeze.tsv` if CS-Q9's shrink-only rows for the protocol handler have landed (CS-Q9, Rick 2026-10-18).
+7. **Chain sync's cutover** follows the flip. It deletes the protocol handler's sync half, the complement request included (CS-Q1, Rick 2026-10-18). **RD** deletes its transaction routes, complement serving, `levin_notify` and the relay entry. Whichever lands second deletes the handler file.
 
 **Chain sync CS-F5** (fixed in PR 2): `shekyl-chain-ingest/src/source.rs` states the landed switch — the fork choice is ingest's, and a live source never emits `Rewind`.
