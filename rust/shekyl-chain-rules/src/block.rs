@@ -208,10 +208,7 @@ impl Candidate {
 ///     candidate: todo!(),
 ///     rule_set: todo!(),
 ///     coverage: todo!(),
-///     judged_at: todo!(),
-///     seed: todo!(),
-///     pow: todo!(),
-///     attempt: todo!(),
+///     facts: todo!(),
 ///     references: todo!(),
 /// };
 /// ```
@@ -222,15 +219,8 @@ pub struct StructurallyValid {
     candidate: Candidate,
     rule_set: RuleSet,
     coverage: RuleCoverage,
-    judged_at: Timestamp,
-    hash: BlockHash,
-    seed: BlockHash,
-    target: Target,
-    pow: PowHash,
-    attempt: FormAttempt,
-    /// The same claims, as the header rules read them. Built from the
-    /// fields above in [`Self::new`]; those fields stay so a reader of one
-    /// accessor and a reader of [`Self::facts`] see one construction.
+    /// Header, identity, clock, seed, target, attempt and the longhash.
+    /// The accessors read this; the claims are not stored a second time.
     facts: crate::header_facts::HeaderFacts<crate::header_facts::Proven>,
     /// Per listed slot, what its proof was verified against — `None` for a
     /// slot with nothing to verify or no claim to verify it under.
@@ -251,12 +241,6 @@ impl StructurallyValid {
             candidate,
             rule_set,
             coverage,
-            judged_at: facts.judged_at,
-            hash: facts.identity,
-            seed: facts.seed,
-            target: facts.target,
-            pow: facts.proof.longhash,
-            attempt: facts.attempt,
             facts,
             references,
         }
@@ -312,7 +296,7 @@ impl StructurallyValid {
     /// judged against. See the type's docs on time-dependence.
     #[must_use]
     pub const fn judged_at(&self) -> Timestamp {
-        self.judged_at
+        self.facts.judged_at
     }
 
     /// The block's identity (CEN-B6), derived once by `form` — stateless,
@@ -322,14 +306,14 @@ impl StructurallyValid {
     /// nothing derives the identity a second time.
     #[must_use]
     pub const fn hash(&self) -> BlockHash {
-        self.hash
+        self.facts.identity
     }
 
     /// The seed the caller claimed for CEN-D3 — verified, not trusted, by
     /// `validate`.
     #[must_use]
     pub const fn seed(&self) -> BlockHash {
-        self.seed
+        self.facts.seed
     }
 
     /// The target the caller claimed and `form` judged CEN-D1 against.
@@ -337,20 +321,20 @@ impl StructurallyValid {
     /// return [`Stale::Target`](crate::Stale::Target) on a mismatch.
     #[must_use]
     pub const fn target(&self) -> Target {
-        self.target
+        self.facts.target
     }
 
     /// The longhash under the claimed seed (CEN-D2) — what CEN-D1 compares
     /// against the target once the seed is verified.
     #[must_use]
     pub const fn pow(&self) -> PowHash {
-        self.pow
+        self.facts.proof.longhash()
     }
 
     /// Which attempt at `form` produced this.
     #[must_use]
     pub const fn attempt(&self) -> FormAttempt {
-        self.attempt
+        self.facts.attempt
     }
 
     /// Hand the candidate and the stateless coverage to the view-bound
@@ -365,17 +349,11 @@ impl fmt::Debug for StructurallyValid {
     // block body is kilobytes and a failing assertion wants the token's claims.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StructurallyValid")
-            .field("hash", &self.hash)
-            .field("transactions", &self.candidate.transactions.len())
+            .field("candidate", &self.candidate.transactions.len())
             .field("rule_set", &self.rule_set)
             .field("coverage", &self.coverage)
-            .field("judged_at", &self.judged_at)
-            .field("seed", &self.seed)
-            .field("target", &self.target)
-            .field("pow", &self.pow)
-            .field("attempt", &self.attempt)
-            .field("references", &self.references)
             .field("facts", &self.facts)
+            .field("references", &self.references)
             .finish()
     }
 }

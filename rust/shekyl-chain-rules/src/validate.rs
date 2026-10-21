@@ -58,7 +58,7 @@ use crate::block::{
 use crate::coverage::RuleCoverage;
 use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
-use crate::header_facts::{HeaderFacts, Proven};
+use crate::header_facts::HeaderFacts;
 use crate::header_ladder;
 use crate::rule_set::RuleSet;
 use crate::rules::attestation::B4;
@@ -166,7 +166,7 @@ pub fn form<S: Substrate>(
     // derived here, once, and travels on the token), then the expensive one
     // (D2; the seed is the caller's claim, D3 verifies it in `validate`).
     let hash = B6::identity(&candidate.block, &mut coverage);
-    let pow = D2::longhash(substrate, &candidate.block.pow_blob(), seed, &mut coverage)?;
+    let proof = D2::longhash(substrate, &candidate.block.pow_blob(), seed, &mut coverage)?;
     let facts = HeaderFacts {
         header: candidate.block.header.clone(),
         identity: hash,
@@ -174,7 +174,7 @@ pub fn form<S: Substrate>(
         seed,
         target,
         attempt,
-        proof: Proven { longhash: pow },
+        proof,
     };
 
     // CEN-D1 against the claimed target, before any body work: a block

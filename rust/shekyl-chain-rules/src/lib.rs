@@ -192,6 +192,7 @@ pub use fault::{
 pub use header_facts::{FormedHeader, OpenHeader};
 pub use header_path::{
     bind_body, form_header, judge_header, judge_header_cheap, HeaderJudged, HeaderProspect,
+    ProspectFault,
 };
 pub use policy::{policy_form, PolicyRefused};
 pub use relay_floor::{fee_ladder_at, fee_operands_at, relay_floor_at, relay_floor_window};

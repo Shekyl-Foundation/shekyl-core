@@ -22,15 +22,32 @@ use shekyl_wire::{BlockHeader, PowBlob};
 use crate::coverage::RuleCoverage;
 use crate::fault::FormAttempt;
 use crate::rules::difficulty::Target;
+use crate::rules::pow::LonghashSeal;
+use crate::substrate::Substrate;
 
 /// The proof has not been computed. The cheap checks never read this.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Unproven;
 
 /// The longhash under the claimed seed (CEN-D2). CEN-D1 is the only reader.
+///
+/// Constructed only by [`crate::rules::pow::D2::longhash`]. The seal is
+/// what that function holds; a header is not proven by writing the hash in.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Proven {
-    pub(crate) longhash: PowHash,
+    longhash: PowHash,
+}
+
+impl Proven {
+    pub(crate) const fn from_longhash(longhash: PowHash, _seal: LonghashSeal) -> Self {
+        Self { longhash }
+    }
+
+    /// The longhash CEN-D2 computed.
+    #[must_use]
+    pub(crate) const fn longhash(self) -> PowHash {
+        self.longhash
+    }
 }
 
 /// Header, identity, the clock the header was judged at, the seed and
@@ -60,10 +77,21 @@ pub struct OpenHeader {
 
 impl OpenHeader {
     /// The facts the cheap checks read. The identity is
-    /// [`PowBlob::identity`]; the attempt is [`FormAttempt::FIRST`].
-    #[must_use]
-    pub fn from_pow(pow: &PowBlob, judged_at: Timestamp, seed: BlockHash, target: Target) -> Self {
-        Self {
+    /// [`PowBlob::identity`]; the attempt is [`FormAttempt::FIRST`]. The
+    /// clock is the substrate's, read once here; [`crate::judge_header_cheap`]
+    /// reads it again when it judges, so a caller cannot name the instant.
+    ///
+    /// # Errors
+    ///
+    /// The substrate's fault, from the clock.
+    pub fn from_pow<S: Substrate>(
+        pow: &PowBlob,
+        substrate: &S,
+        seed: BlockHash,
+        target: Target,
+    ) -> Result<Self, S::Fault> {
+        let judged_at = substrate.local_clock()?;
+        Ok(Self {
             facts: HeaderFacts {
                 header: pow.header.clone(),
                 identity: pow.identity(),
@@ -73,7 +101,7 @@ impl OpenHeader {
                 attempt: FormAttempt::FIRST,
                 proof: Unproven,
             },
-        }
+        })
     }
 }
 
@@ -116,7 +144,7 @@ impl FormedHeader {
     /// The longhash CEN-D2 computed and CEN-D1 accepted.
     #[must_use]
     pub const fn pow(&self) -> PowHash {
-        self.facts.proof.longhash
+        self.facts.proof.longhash()
     }
 }
 

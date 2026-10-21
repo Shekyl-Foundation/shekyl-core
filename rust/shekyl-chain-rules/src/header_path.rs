@@ -23,7 +23,7 @@ use shekyl_wire::{Block, BlockBody, PowBlob, Transaction, TxBody};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, FormAttempt};
-use crate::header_facts::{FormedHeader, HeaderFacts, OpenHeader, Proven};
+use crate::header_facts::{FormedHeader, HeaderFacts, OpenHeader};
 use crate::header_ladder::{self, Derived};
 use crate::rule_set::RuleSet;
 use crate::rules::attestation::B4;
@@ -92,7 +92,7 @@ pub fn form_header<S: Substrate>(
 
     let blob = pow.write();
     let hash = B6::identity_of(&blob, &mut coverage);
-    let longhash = D2::longhash(substrate, &blob, seed, &mut coverage)?;
+    let proof = D2::longhash(substrate, &blob, seed, &mut coverage)?;
     let facts = HeaderFacts {
         header: pow.header.clone(),
         identity: hash,
@@ -100,7 +100,7 @@ pub fn form_header<S: Substrate>(
         seed,
         target,
         attempt: FormAttempt::FIRST,
-        proof: Proven { longhash },
+        proof,
     };
     if let Err(refused) = D1::judge(&facts, &mut coverage) {
         return Ok(Err(refused));
@@ -108,25 +108,51 @@ pub fn form_header<S: Substrate>(
     Ok(Ok(FormedHeader { facts, coverage }))
 }
 
+/// Why [`judge_header_cheap`] stopped before a verdict: the substrate's
+/// clock, or the view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProspectFault<S, V> {
+    /// [`Substrate::local_clock`] failed. No row ran.
+    Substrate(S),
+    /// The view faulted, or the seed or target claim is not this view's.
+    Chain(Fault<V>),
+}
+
 /// The view-bound header rows, over a header whose proof has not been
-/// computed: [`header_ladder::derive`], then the parent link, the clock
-/// and the anchor. CEN-D1 is not among them. F4, F5 and F6 are not among
-/// them: those read the coinbase.
+/// computed. Order: the substrate's clock, once; B1; B2; then
+/// [`header_ladder::derive`], the parent link, the clock and the anchor.
+/// CEN-D1 is not among them, and this function does not hash. F4, F5 and
+/// F6 are not among them: those read the coinbase.
 ///
 /// # Errors
 ///
-/// [`Fault::View`] on the view's fault, [`Fault::Corrupt`] on a hole,
-/// [`Fault::Stale`] when the seed or target claim is not this view's.
-pub fn judge_header_cheap<'id, H: HeaderView<'id>>(
+/// [`ProspectFault::Substrate`] from the clock. [`ProspectFault::Chain`]
+/// carries [`Fault::View`], [`Fault::Corrupt`] or [`Fault::Stale`].
+pub fn judge_header_cheap<'id, S: Substrate, H: HeaderView<'id>>(
     header: &OpenHeader,
     view: &H,
     rule_set: &RuleSet,
     trust: &Trust,
-) -> Result<Verdict<HeaderProspect>, Fault<H::Fault>> {
-    let (derived, coverage) = match judge_rules(&header.facts, view, rule_set, trust)? {
-        Ok(judged) => judged,
-        Err(refused) => return Ok(Err(refused)),
-    };
+    substrate: &S,
+) -> Result<Verdict<HeaderProspect>, ProspectFault<S::Fault, H::Fault>> {
+    let judged_at = substrate.local_clock().map_err(ProspectFault::Substrate)?;
+    let mut facts = header.facts.clone();
+    facts.judged_at = judged_at;
+    let mut coverage = RuleCoverage::EMPTY;
+    if let Err(refused) = B1::judge(&facts.header, rule_set) {
+        return Ok(Err(refused));
+    }
+    coverage.insert(B1::ROW);
+    if let Err(refused) = B2::judge(&facts.header) {
+        return Ok(Err(refused));
+    }
+    coverage.insert(B2::ROW);
+    let (derived, view_coverage) =
+        match judge_rules(&facts, view, rule_set, trust).map_err(ProspectFault::Chain)? {
+            Ok(judged) => judged,
+            Err(refused) => return Ok(Err(refused)),
+        };
+    coverage.union(&view_coverage);
     Ok(Ok(HeaderProspect {
         connecting: derived.connecting,
         cumulative_difficulty: derived.cumulative_difficulty,
@@ -228,12 +254,9 @@ pub fn bind_body(header: &FormedHeader, body: &BlockBody) -> Verdict<()> {
 
 fn txid_of(tx: &TxBody) -> Result<TxHash, ()> {
     match tx {
-        TxBody::Full(bytes) => {
-            let mut cursor = bytes.as_slice();
-            Transaction::read(&mut cursor)
-                .map(|tx| tx.hash())
-                .map_err(|_| ())
-        }
+        TxBody::Full(bytes) => Transaction::from_bytes(bytes)
+            .map(|tx| tx.hash())
+            .map_err(|_| ()),
         TxBody::Skeleton(skeleton) => skeleton.txid().map_err(|_| ()),
     }
 }
