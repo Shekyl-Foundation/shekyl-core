@@ -17,9 +17,11 @@
 //! # Two kinds of row
 //!
 //! **Predicates** — F1, F3, F7, F9, F10 are stateless ([`FormRule`]); F4,
-//! F5, F6 read the connecting height and nothing else of the chain
-//! ([`HeaderRule`], so the alt tier judges them over a stitched chain of
-//! headers — `DRS_E5_POOL_ALT_PRUNE.md` §2.1). The height is **caller-derived** —
+//! F5, F6 read the coinbase and the connecting height
+//! ([`CoinbaseRule`](crate::rules::CoinbaseRule)). The alt tier still
+//! judges them: it holds the formed block. The header-only path does not,
+//! because a [`HeaderContext`](crate::rules::HeaderContext) is not a
+//! [`BlockContext`]. The height is **caller-derived** —
 //! `cx.connecting`, from the view's tip — and never `Input::Gen`'s claim:
 //! F5 is the one row that *reads* the claim, and it compares it to the
 //! view's height (census F4 note: "spoof closed by F5").
@@ -86,7 +88,7 @@ use shekyl_wire::{Ct, Input, Transaction};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault, ViewRead};
-use crate::rules::{recorded, BlockContext, FormContext, FormRule, HeaderRule, Rule};
+use crate::rules::{recorded, BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::{ChainView, HeaderView};
 
@@ -262,17 +264,14 @@ impl Rule for F4 {
     const ROW: CenRow = CenRow::F4;
 }
 
-impl HeaderRule for F4 {
-    fn check<'id, H: HeaderView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &H,
-    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
+impl crate::rules::CoinbaseRule for F4 {
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, _view: &H) -> Verdict<()> {
         if cx.connecting.is_zero()
             || cx.candidate().block.miner_transaction.prefix.outputs.len() == 1
         {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            Ok(Err(InvalidBlock::new(Self::ROW, MINER)))
+            Err(InvalidBlock::new(Self::ROW, MINER))
         }
     }
 }
@@ -288,11 +287,8 @@ impl Rule for F5 {
     const ROW: CenRow = CenRow::F5;
 }
 
-impl HeaderRule for F5 {
-    fn check<'id, H: HeaderView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &H,
-    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
+impl crate::rules::CoinbaseRule for F5 {
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, _view: &H) -> Verdict<()> {
         match cx
             .candidate()
             .block
@@ -301,8 +297,8 @@ impl HeaderRule for F5 {
             .inputs
             .as_slice()
         {
-            [Input::Gen(claimed)] if *claimed == cx.connecting.to_raw() => Ok(Ok(())),
-            _ => Ok(Err(InvalidBlock::new(Self::ROW, MINER))),
+            [Input::Gen(claimed)] if *claimed == cx.connecting.to_raw() => Ok(()),
+            _ => Err(InvalidBlock::new(Self::ROW, MINER)),
         }
     }
 }
@@ -318,18 +314,42 @@ impl Rule for F6 {
     const ROW: CenRow = CenRow::F6;
 }
 
-impl HeaderRule for F6 {
-    fn check<'id, H: HeaderView<'id>>(
+impl BlockRule for F4 {
+    fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
-        _view: &H,
-    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
+        view: &V,
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        Ok(<Self as crate::rules::CoinbaseRule>::check(cx, view))
+    }
+}
+
+impl BlockRule for F5 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        view: &V,
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        Ok(<Self as crate::rules::CoinbaseRule>::check(cx, view))
+    }
+}
+
+impl BlockRule for F6 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        view: &V,
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        Ok(<Self as crate::rules::CoinbaseRule>::check(cx, view))
+    }
+}
+
+impl crate::rules::CoinbaseRule for F6 {
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, _view: &H) -> Verdict<()> {
         let window = cx.formed.rule_set().mined_money_unlock_window().to_raw();
         let expected = cx.connecting.to_raw().checked_add(window);
         let unlock = cx.candidate().block.miner_transaction.prefix.unlock_time;
         if expected == Some(unlock) {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            Ok(Err(InvalidBlock::new(Self::ROW, MINER)))
+            Err(InvalidBlock::new(Self::ROW, MINER))
         }
     }
 }

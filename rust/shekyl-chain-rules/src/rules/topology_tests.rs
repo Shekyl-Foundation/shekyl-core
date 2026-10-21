@@ -22,7 +22,7 @@ fn check_on(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     let formed = formed_on(chain, candidate.clone());
     chain.with_view(|view| {
         defined(A2::check(
-            &BlockContext::for_tests(&formed, chain.tip(), None),
+            &BlockContext::for_tests(&formed, chain.tip(), None).as_header(),
             &view,
         ))
     })
@@ -75,7 +75,10 @@ fn cen_a2_reads_the_context_tip_not_the_view() {
     let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
     let view = FaultingView::default();
     assert_eq!(
-        A2::check(&BlockContext::for_tests(&formed, chain.tip(), None), &view),
+        A2::check(
+            &BlockContext::for_tests(&formed, chain.tip(), None).as_header(),
+            &view,
+        ),
         Ok(Ok(()))
     );
 }

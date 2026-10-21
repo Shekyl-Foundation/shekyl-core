@@ -83,6 +83,13 @@ pub(crate) fn opt_u64(section: &Section, key: &'static str, default: u64) -> Res
     }
 }
 
+pub(crate) fn bool_val(section: &Section, key: &'static str) -> Result<bool, Error> {
+    match require(section, key)? {
+        Value::Bool(v) => Ok(*v),
+        _ => Err(mismatch(key, "bool")),
+    }
+}
+
 pub(crate) fn opt_bool(section: &Section, key: &'static str, default: bool) -> Result<bool, Error> {
     match section.get(key) {
         None => Ok(default),

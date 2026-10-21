@@ -51,6 +51,20 @@ impl MockSubstrate {
     pub fn always_satisfies(_: &[u8], _: &BlockHash) -> Result<PowHash, Faulted> {
         Ok(PowHash::from_bytes([0; 32]))
     }
+
+    /// All-ones. At difficulty 2 this fails CEN-D1 (`check_hash`:
+    /// `(2^256 - 1) * 2` does not fit under `2^256`). The zero hash does
+    /// not: `0 * d` passes every target.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn all_ones(_: &[u8], _: &BlockHash) -> Result<PowHash, Faulted> {
+        Ok(PowHash::from_bytes([0xff; 32]))
+    }
+
+    /// Installed by a test that claims a path does not hash. Reaching it
+    /// is the failure.
+    pub fn must_not_hash(_: &[u8], _: &BlockHash) -> Result<PowHash, Faulted> {
+        panic!("this path hashed");
+    }
 }
 
 impl Default for MockSubstrate {
@@ -216,20 +230,31 @@ pub fn token_for_one_rule(chain: &MockChain, candidate: Candidate) -> Structural
     let hash = candidate.block.hash();
     let substrate = MockSubstrate::default();
     let seed = expected_seed(chain);
-    let pow = match substrate.longhash(&candidate.block.pow_blob(), &seed) {
-        Ok(pow) => pow,
+    let mut hashed = crate::coverage::RuleCoverage::EMPTY;
+    let proof = match crate::rules::pow::D2::longhash(
+        &substrate,
+        &candidate.block.pow_blob(),
+        seed,
+        &mut hashed,
+    ) {
+        Ok(proof) => proof,
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
+    let target = expected_target(chain, &RuleSet::GENESIS);
+    let header = candidate.block.header.clone();
     StructurallyValid::new(
         candidate,
         RuleSet::GENESIS,
         crate::coverage::RuleCoverage::EMPTY,
-        substrate.clock,
-        hash,
-        seed,
-        expected_target(chain, &RuleSet::GENESIS),
-        pow,
-        FormAttempt::FIRST,
+        crate::header_facts::HeaderFacts::for_harness(
+            header,
+            hash,
+            substrate.clock,
+            seed,
+            target,
+            FormAttempt::FIRST,
+            proof,
+        ),
         Vec::new(),
     )
 }

@@ -122,6 +122,8 @@ pub mod fetch;
 pub mod follower;
 #[cfg(feature = "pipeline")]
 pub mod grader;
+#[cfg(all(test, feature = "pipeline"))]
+mod header_path_tests;
 pub mod metrics;
 /// The Rust miner loop over scenario chains (DRS-X PR 3, DX-Q4).
 #[cfg(all(test, feature = "pipeline"))]
@@ -205,6 +207,8 @@ mod switch_tests;
 /// DRS-E5 a6: the switch at the genesis cap, timed (ignored lane).
 #[cfg(all(test, feature = "pipeline"))]
 mod switch_timing_tests;
+#[cfg(all(test, feature = "pipeline"))]
+mod sync_wire_tests;
 #[cfg(feature = "pipeline")]
 pub mod target;
 #[cfg(test)]

@@ -82,18 +82,18 @@ impl Rule for B4 {
     const ROW: CenRow = CenRow::B4;
 }
 
-impl BlockRule for B4 {
-    fn check<'id, V: ChainView<'id>>(
-        cx: &BlockContext<'_>,
-        view: &V,
-    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
-        let candidate = cx.candidate();
-
-        // The kept headers: the first `0x0B` field of a coinbase extra that
-        // parses; none is the committed empty set; an extra that does not
-        // parse is refused here, never read as empty.
-        let Ok(fields) = parse(&candidate.block.miner_transaction.prefix.extra) else {
-            return refused(Self::ROW, Locus::Block);
+impl B4 {
+    /// The stateless half: the coinbase's kept headers and the witness
+    /// recompute to `root`. An extra that does not parse is refused, never
+    /// read as empty. The empty set (A3) is a success and reads no view.
+    /// `validate` then runs the countersignatures; `bind_body` stops here.
+    pub(crate) fn bind_root(
+        extra: &[u8],
+        witness: &[u8],
+        root: &[u8; 32],
+    ) -> Verdict<AttestationSet> {
+        let Ok(fields) = parse(extra) else {
+            return Err(crate::verdict::InvalidBlock::new(Self::ROW, Locus::Block));
         };
         let headers: &[u8] = fields
             .iter()
@@ -102,20 +102,34 @@ impl BlockRule for B4 {
                 _ => None,
             })
             .unwrap_or(&[]);
+        let Ok(set) = AttestationSet::parse(headers, witness) else {
+            return Err(crate::verdict::InvalidBlock::new(Self::ROW, Locus::Block));
+        };
+        if set.verify_root(root).is_err() {
+            return Err(crate::verdict::InvalidBlock::new(Self::ROW, Locus::Block));
+        }
+        Ok(set)
+    }
+}
+
+impl BlockRule for B4 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        view: &V,
+    ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
+        let candidate = cx.candidate();
         let witness: &[u8] = candidate
             .attestation_witness
             .as_ref()
             .map_or(&[], |w| w.as_bytes());
-
-        let Ok(set) = AttestationSet::parse(headers, witness) else {
-            return refused(Self::ROW, Locus::Block);
+        let set = match Self::bind_root(
+            &candidate.block.miner_transaction.prefix.extra,
+            witness,
+            candidate.block.header.attestation_root.as_bytes(),
+        ) {
+            Ok(set) => set,
+            Err(refused) => return Ok(Err(refused)),
         };
-        if set
-            .verify_root(candidate.block.header.attestation_root.as_bytes())
-            .is_err()
-        {
-            return refused(Self::ROW, Locus::Block);
-        }
         if set.records().is_empty() {
             // The empty-witness arm (A3): the recompute above — the mined
             // root equals `empty_attestation_root()` — is the whole
