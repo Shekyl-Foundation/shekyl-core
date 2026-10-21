@@ -110,7 +110,7 @@ pub(crate) async fn follow<S>(
             synced,
             found,
         }) => {
-            let sink = spawn_sink(found, door, Arc::clone(&postings));
+            let sink = spawn_sink(found, door.clone(), Arc::clone(&postings));
             (Some((board, source)), Some(synced), Some(sink))
         }
         None => (None, None, None),
@@ -160,7 +160,14 @@ pub(crate) async fn follow<S>(
             _ = stopping.wait_for(|stop| *stop) => break,
         }
     }
-    drop(sink);
+    door.close();
+    if let Some(sink) = sink {
+        // The miner may still hold the sender. Closing the door ends the
+        // sink; joining it drops the door clone that holds the store.
+        if sink.join().is_err() {
+            tracing::error!("the found-block sink panicked");
+        }
+    }
 }
 
 /// Step 1 for transactions judged outside the pool lock.
@@ -368,6 +375,11 @@ fn say_mined(reply: &crate::service::Reply) {
     }
 }
 
+/// How often the found-block sink looks at the door while its channel is
+/// quiet. The receive cannot be woken by the door, and a stop joins this
+/// thread, so the wait has to be bounded.
+const SINK_DOOR_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// The found-block sink. A full window waits for the reserved seat. A
 /// closed door drops the block: the node is stopping.
 pub(crate) fn spawn_sink(
@@ -376,7 +388,18 @@ pub(crate) fn spawn_sink(
     postings: Postings,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        while let Ok(found) = found.recv() {
+        // `recv` alone would sit until the miner drops its sender, and a
+        // stop joins this thread. The door closing is the stop; the timeout
+        // is how a blocking receive notices it while the sender still lives.
+        loop {
+            if door.is_closed() {
+                break;
+            }
+            let found = match found.recv_timeout(SINK_DOOR_POLL) {
+                Ok(found) => found,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
             let bodies = postings
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)

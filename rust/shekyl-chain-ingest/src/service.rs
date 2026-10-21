@@ -671,7 +671,7 @@ impl Door {
     }
 
     /// Close the door and wake a miner waiting for a seat.
-    fn close(&self) {
+    pub(crate) fn close(&self) {
         self.room.close();
     }
 
