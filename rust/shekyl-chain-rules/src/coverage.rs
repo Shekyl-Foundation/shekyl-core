@@ -113,7 +113,7 @@ impl<R: Row> Coverage<R> {
     /// row kind: [`crate::rules::run`] for a consensus **predicate** row,
     /// after the rule bound to it passed; a consensus **definition** row's
     /// derivation function, at the site that derived — today
-    /// [`crate::rules::header::B6::identity`], the first definition row
+    /// [`crate::rules::header::B6::identity_of`], the first definition row
     /// landed (slice 1 Q5: B6 is registered as the derivation, not as a
     /// check that always passes); and, for a **policy** row, `policy_form`'s
     /// one judge (`policy.rs`, DRS-E5 PR-b), after the row passed. Another

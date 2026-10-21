@@ -47,7 +47,7 @@ use crate::rules::miner::{F4, F5, F6};
 use crate::rules::pow::{D1b, D3};
 use crate::rules::timestamps::{MtpWindow, C1, C2, C3};
 use crate::rules::topology::A2;
-use crate::rules::{self, BlockContext, HeaderSource};
+use crate::rules::{self, BlockContext, HeaderContext};
 use crate::verdict::Verdict;
 use crate::view::{HeaderView, Tip};
 
@@ -76,7 +76,7 @@ pub(crate) struct Derived {
 ///
 /// [`Fault::View`] on the view's own fault; [`Fault::Corrupt`] on a hole
 /// below the parent or a non-monotone cumulative difficulty;
-/// [`Fault::Stale`] when `formed`'s seed or target is not this view's.
+/// [`Fault::Stale`] when `seed` or `claimed_target` is not this view's.
 pub(crate) fn derive<'id, H: HeaderView<'id>>(
     seed: BlockHash,
     claimed_target: Target,
@@ -129,8 +129,8 @@ macro_rules! judge_header {
 }
 
 /// CEN-A2: the candidate's `previous` is the view's tip.
-pub(crate) fn parent_link<'id, C: HeaderSource, H: HeaderView<'id>>(
-    cx: &C,
+pub(crate) fn parent_link<'id, P, H: HeaderView<'id>>(
+    cx: &HeaderContext<'_, P>,
     view: &H,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, Fault<H::Fault>> {
@@ -141,8 +141,8 @@ pub(crate) fn parent_link<'id, C: HeaderSource, H: HeaderView<'id>>(
 /// CEN-C1, CEN-C2: the clock against the window. CEN-D1, the proof against
 /// the target, is `form`'s: it runs before any body work, against the
 /// claim [`derive`] verifies.
-pub(crate) fn clock<'id, C: HeaderSource, H: HeaderView<'id>>(
-    cx: &C,
+pub(crate) fn clock<'id, P, H: HeaderView<'id>>(
+    cx: &HeaderContext<'_, P>,
     view: &H,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, Fault<H::Fault>> {
@@ -151,8 +151,8 @@ pub(crate) fn clock<'id, C: HeaderSource, H: HeaderView<'id>>(
 }
 
 /// CEN-E1: the anchor at the connecting height.
-pub(crate) fn anchor<'id, C: HeaderSource, H: HeaderView<'id>>(
-    cx: &C,
+pub(crate) fn anchor<'id, P, H: HeaderView<'id>>(
+    cx: &HeaderContext<'_, P>,
     view: &H,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, Fault<H::Fault>> {
@@ -191,13 +191,14 @@ pub(crate) fn judge_header_ladder<'id, H: HeaderView<'id>>(
     view: &H,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, Fault<H::Fault>> {
-    if let Err(refused) = parent_link(cx, view, coverage)? {
+    let header = cx.as_header();
+    if let Err(refused) = parent_link(&header, view, coverage)? {
         return Ok(Err(refused));
     }
-    if let Err(refused) = clock(cx, view, coverage)? {
+    if let Err(refused) = clock(&header, view, coverage)? {
         return Ok(Err(refused));
     }
-    if let Err(refused) = anchor(cx, view, coverage)? {
+    if let Err(refused) = anchor(&header, view, coverage)? {
         return Ok(Err(refused));
     }
     coinbase_height(cx, view, coverage)

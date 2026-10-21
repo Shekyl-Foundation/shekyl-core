@@ -56,7 +56,7 @@
 //! coverage (G6, G9's runtime half). A **definition** row — one whose
 //! "check" is a derivation the verdict carries (CEN-B6; CEN-D4's target,
 //! CEN-D2's longhash) — is not in either list: it records its own `ROW` at
-//! the derivation site ([`header::B6::identity`]), so a gate that could
+//! the derivation site ([`header::B6::identity_of`]), so a gate that could
 //! never fail is never run as one (slice 1 Q5). Those are the writers of
 //! coverage, and `RuleCoverage::insert` names them.
 //!
@@ -115,7 +115,7 @@ use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, PerHeightRecord, ViewRead};
-use crate::header_facts::HeaderFacts;
+use crate::header_facts::{HeaderFacts, Proven};
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::Target;
 use crate::rules::timestamps::MtpWindow;
@@ -123,8 +123,8 @@ use crate::rules::tx::TxClass;
 use crate::trust::Trust;
 use crate::verdict::{Locus, TxSlot, Verdict};
 use crate::view::{AtHeight, ChainView, HeaderRecord, HeaderView, RecordedBlock, Tip};
-use shekyl_types::{BlockHash, BlockHeight, Timestamp};
-use shekyl_wire::{BlockHeader, Transaction};
+use shekyl_types::BlockHeight;
+use shekyl_wire::Transaction;
 
 /// A consensus rule, bound to the census row it implements.
 ///
@@ -203,10 +203,14 @@ pub(crate) fn run_form<R: FormRule>(
 ///
 /// The connecting height is the operand almost every view-bound rule
 /// needs (genesis exemption, seed height, MTP window, DAA window, B5's
-/// root key). It is derived from the tip here, so a rule does not
-/// re-read `view.tip()` and C1 does not infer genesis from
-/// `mtp_window.is_none()`. The view stays beside the context for
-/// per-rule lookups that are not shared (`root_at`, further `block_at`).
+/// root key). Production takes it from
+/// [`derive`](crate::header_ladder::derive)'s
+/// [`Derived`](crate::header_ladder::Derived), so the height has one
+/// source. [`Self::new`] recomputes it from the tip for a test that has
+/// no `Derived`. A rule does not re-read `view.tip()`, and C1 does not
+/// infer genesis from `mtp_window.is_none()`. The view stays beside the
+/// context for per-rule lookups that are not shared (`root_at`, further
+/// `block_at`).
 pub(crate) struct BlockContext<'a> {
     /// What `form` established — the candidate, the clock reading (C1),
     /// the seed claim, the longhash.
@@ -230,6 +234,10 @@ pub(crate) struct BlockContext<'a> {
 }
 
 impl<'a> BlockContext<'a> {
+    /// A context for a test that has no [`crate::header_ladder::Derived`].
+    /// `connecting` is the tip's successor, the same derivation `derive`
+    /// records into `Derived`. Production uses [`Self::from_derived`].
+    #[cfg(test)]
     pub(crate) fn new(
         formed: &'a StructurallyValid,
         tip: Option<Tip>,
@@ -244,6 +252,36 @@ impl<'a> BlockContext<'a> {
             mtp_window,
             target,
             trust,
+        }
+    }
+
+    /// The context `validate` and `alt_against` build. `connecting` is
+    /// `derived`'s, not a second reading of the tip.
+    pub(crate) fn from_derived(
+        formed: &'a StructurallyValid,
+        derived: crate::header_ladder::Derived,
+        trust: &'a Trust,
+    ) -> Self {
+        Self {
+            formed,
+            connecting: derived.connecting,
+            tip: derived.tip,
+            mtp_window: derived.mtp_window,
+            target: derived.target,
+            trust,
+        }
+    }
+
+    /// The header facts this block projects. A [`HeaderRule`] reads this;
+    /// it does not take a [`BlockContext`], so a header path and a block
+    /// path judge A2, C1, C2 and E1 through one type.
+    pub(crate) fn as_header(&self) -> HeaderContext<'_, Proven> {
+        HeaderContext {
+            facts: self.formed.facts(),
+            connecting: self.connecting,
+            tip: self.tip,
+            mtp_window: self.mtp_window.as_ref(),
+            trust: self.trust,
         }
     }
 
@@ -299,95 +337,39 @@ pub(crate) trait BlockRule: Rule {
     ) -> Result<Verdict<()>, ViewRead<V::Fault>>;
 }
 
-/// What A2, C1, C2 and E1 read. A formed block and a formed header both
-/// provide it, so those four rules have one body. A rule that needs the
-/// coinbase implements [`CoinbaseRule`] and takes a [`BlockContext`], which
-/// a header-only path cannot build.
-pub(crate) trait HeaderSource {
-    /// The header under judgement.
-    fn block_header(&self) -> &BlockHeader;
-    /// The block identity (CEN-B6).
-    fn block_hash(&self) -> BlockHash;
-    /// The clock the header was judged at.
-    fn judged_at(&self) -> Timestamp;
-    /// The height the view's tip derives.
-    fn connecting_height(&self) -> BlockHeight;
-    /// The recorded tip, `None` at genesis.
-    fn tip(&self) -> Option<Tip>;
-    /// C3's window. `None` at genesis.
-    fn mtp_window(&self) -> Option<&MtpWindow>;
-    /// The anchors E1 reads.
-    fn trust(&self) -> &Trust;
-}
-
-impl HeaderSource for BlockContext<'_> {
-    fn block_header(&self) -> &BlockHeader {
-        &self.formed.facts().header
-    }
-
-    fn block_hash(&self) -> BlockHash {
-        self.formed.facts().identity
-    }
-
-    fn judged_at(&self) -> Timestamp {
-        self.formed.facts().judged_at
-    }
-
-    fn connecting_height(&self) -> BlockHeight {
-        self.connecting
-    }
-
-    fn tip(&self) -> Option<Tip> {
-        self.tip
-    }
-
-    fn mtp_window(&self) -> Option<&MtpWindow> {
-        self.mtp_window.as_ref()
-    }
-
-    fn trust(&self) -> &Trust {
-        self.trust
-    }
-}
-
-/// The header path's context. It borrows [`HeaderFacts`] and holds no
-/// block, so a [`CoinbaseRule`] — whose `check` takes a [`BlockContext`] —
-/// cannot be named against it.
+/// What A2, C1, C2 and E1 read. A [`BlockContext`] projects into one
+/// ([`BlockContext::as_header`]); the header path builds one from
+/// [`derive`](crate::header_ladder::derive). It borrows [`HeaderFacts`]
+/// and holds no block, so a [`CoinbaseRule`] — whose `check` takes a
+/// [`BlockContext`] — cannot be named against it.
 pub(crate) struct HeaderContext<'a, P> {
+    /// Header, identity, clock, seed, target, attempt, proof.
     pub(crate) facts: &'a HeaderFacts<P>,
+    /// The height [`derive`](crate::header_ladder::derive) computed.
     pub(crate) connecting: BlockHeight,
+    /// The recorded tip, `None` at genesis.
     pub(crate) tip: Option<Tip>,
+    /// C3's window. `None` at genesis.
     pub(crate) mtp_window: Option<&'a MtpWindow>,
+    /// The anchors E1 reads.
     pub(crate) trust: &'a Trust,
 }
 
-impl<P> HeaderSource for HeaderContext<'_, P> {
-    fn block_header(&self) -> &BlockHeader {
-        &self.facts.header
-    }
-
-    fn block_hash(&self) -> BlockHash {
-        self.facts.identity
-    }
-
-    fn judged_at(&self) -> Timestamp {
-        self.facts.judged_at
-    }
-
-    fn connecting_height(&self) -> BlockHeight {
-        self.connecting
-    }
-
-    fn tip(&self) -> Option<Tip> {
-        self.tip
-    }
-
-    fn mtp_window(&self) -> Option<&MtpWindow> {
-        self.mtp_window
-    }
-
-    fn trust(&self) -> &Trust {
-        self.trust
+impl<'a, P> HeaderContext<'a, P> {
+    /// The context the header path builds. Borrows `derived` for the
+    /// window, so the caller drops this before moving `derived`.
+    pub(crate) fn from_derived(
+        facts: &'a HeaderFacts<P>,
+        derived: &'a crate::header_ladder::Derived,
+        trust: &'a Trust,
+    ) -> Self {
+        Self {
+            facts,
+            connecting: derived.connecting,
+            tip: derived.tip,
+            mtp_window: derived.mtp_window.as_ref(),
+            trust,
+        }
     }
 }
 
@@ -395,7 +377,7 @@ impl<P> HeaderSource for HeaderContext<'_, P> {
 /// [`HeaderView::header_at`] — and so can be judged against a chain of
 /// headers that has not been executed: the alt path's cheap tier and the
 /// header path (DRS-E5 `E5-Q3` ruled 2026-10-10; `E5-14` measured the
-/// membership). The context is any [`HeaderSource`].
+/// membership). The context is a [`HeaderContext`].
 ///
 /// A rule is a `HeaderRule` because its reads are header facts, not
 /// because a tier wants it: a rule that reads the coinbase, `root_at`,
@@ -403,10 +385,11 @@ impl<P> HeaderSource for HeaderContext<'_, P> {
 /// bound — not a list — is what keeps the header path honest about what
 /// it checked.
 pub(crate) trait HeaderRule: Rule {
-    /// As [`BlockRule::check`], over a [`HeaderView`] and a [`HeaderSource`].
-    /// A parent-side hole goes through [`recorded_header`].
-    fn check<'id, C: HeaderSource, H: HeaderView<'id>>(
-        cx: &C,
+    /// As [`BlockRule::check`], over a [`HeaderView`] and a [`HeaderContext`].
+    /// A parent-side hole goes through [`recorded_header`]. `P` is the
+    /// proof state; these four rows do not read it.
+    fn check<'id, P, H: HeaderView<'id>>(
+        cx: &HeaderContext<'_, P>,
         view: &H,
     ) -> Result<Verdict<()>, ViewRead<H::Fault>>;
 }
@@ -433,7 +416,7 @@ impl<R: HeaderRule> BlockRule for R {
         cx: &BlockContext<'_>,
         view: &V,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
-        <R as HeaderRule>::check(cx, view)
+        <R as HeaderRule>::check(&cx.as_header(), view)
     }
 }
 
@@ -443,7 +426,7 @@ impl<R: HeaderRule> BlockRule for R {
 ///
 /// Definition rows (CEN-B6) are not [`BlockRule`]s — nothing about a
 /// candidate can fail them — and record at their derivation site
-/// ([`crate::rules::header::B6::identity`]), when the identity is
+/// ([`crate::rules::header::B6::identity_of`]), when the identity is
 /// derived. Predicate rows go through this function; a definition row
 /// named `implemented(...)` is the function that produces the value.
 pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(
@@ -458,12 +441,12 @@ pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(
     Ok(verdict)
 }
 
-/// [`run`] for a [`HeaderRule`] over a [`HeaderView`] and any
-/// [`HeaderSource`]: the alt tier's runner and the header path's. A
+/// [`run`] for a [`HeaderRule`] over a [`HeaderView`] and a
+/// [`HeaderContext`]: the alt tier's runner and the header path's. A
 /// [`CoinbaseRule`] cannot be named here — its `check` takes a
-/// [`BlockContext`], and a header-only context is not one.
-pub(crate) fn run_header<'id, R: HeaderRule, C: HeaderSource, H: HeaderView<'id>>(
-    cx: &C,
+/// [`BlockContext`], and a header context is not one.
+pub(crate) fn run_header<'id, R: HeaderRule, P, H: HeaderView<'id>>(
+    cx: &HeaderContext<'_, P>,
     view: &H,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, ViewRead<H::Fault>> {

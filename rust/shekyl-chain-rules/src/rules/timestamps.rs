@@ -65,7 +65,7 @@ use shekyl_types::{BlockHeight, Timestamp};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::ViewRead;
-use crate::rules::{recorded_header, HeaderRule, Rule};
+use crate::rules::{recorded_header, HeaderContext, HeaderRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::HeaderView;
 
@@ -190,15 +190,15 @@ impl Rule for C1 {
 }
 
 impl HeaderRule for C1 {
-    fn check<'id, C: crate::rules::HeaderSource, H: HeaderView<'id>>(
-        cx: &C,
+    fn check<'id, P, H: HeaderView<'id>>(
+        cx: &HeaderContext<'_, P>,
         _view: &H,
     ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
-        if cx.connecting_height().is_zero() {
+        if cx.connecting.is_zero() {
             return Ok(Ok(()));
         }
-        let ts = Timestamp::from_raw(cx.block_header().timestamp);
-        if is_timestamp_below_ftl(ts, cx.judged_at()) {
+        let ts = Timestamp::from_raw(cx.facts.header().timestamp);
+        if is_timestamp_below_ftl(ts, cx.facts.judged_at()) {
             Ok(Ok(()))
         } else {
             refused(Self::ROW, Locus::Block)
@@ -216,17 +216,17 @@ impl Rule for C2 {
 }
 
 impl HeaderRule for C2 {
-    fn check<'id, C: crate::rules::HeaderSource, H: HeaderView<'id>>(
-        cx: &C,
+    fn check<'id, P, H: HeaderView<'id>>(
+        cx: &HeaderContext<'_, P>,
         _view: &H,
     ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
-        if cx.connecting_height().is_zero() {
+        if cx.connecting.is_zero() {
             return Ok(Ok(()));
         }
-        let Some(window) = cx.mtp_window() else {
+        let Some(window) = cx.mtp_window else {
             unreachable!("C3 yields a window at every height above genesis");
         };
-        let ts = Timestamp::from_raw(cx.block_header().timestamp);
+        let ts = Timestamp::from_raw(cx.facts.header().timestamp);
         if window.is_above_median(ts) {
             Ok(Ok(()))
         } else {

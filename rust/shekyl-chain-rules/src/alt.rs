@@ -404,13 +404,7 @@ pub fn alt_against<'id, H: AltChainView<'id>>(
     };
     let connecting = derived.connecting;
     let cumulative_difficulty = derived.cumulative_difficulty;
-    let context = crate::rules::BlockContext::new(
-        &formed,
-        derived.tip,
-        derived.mtp_window,
-        derived.target,
-        trust,
-    );
+    let context = crate::rules::BlockContext::from_derived(&formed, derived, trust);
     D5::record(&mut coverage);
 
     // The header ladder (`DRS_E5` §2.1, CEN-K4): the three segments

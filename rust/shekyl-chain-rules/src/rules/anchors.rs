@@ -36,7 +36,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 use crate::anchors::ReleaseAnchors;
 use crate::census::CenRow;
 use crate::fault::ViewRead;
-use crate::rules::{HeaderRule, Rule};
+use crate::rules::{HeaderContext, HeaderRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::{AtHeight, HeaderView, Tip};
 
@@ -64,12 +64,12 @@ impl Rule for E1 {
 }
 
 impl HeaderRule for E1 {
-    fn check<'id, C: crate::rules::HeaderSource, H: HeaderView<'id>>(
-        cx: &C,
+    fn check<'id, P, H: HeaderView<'id>>(
+        cx: &HeaderContext<'_, P>,
         _view: &H,
     ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
-        match cx.trust().anchors().expected_at(cx.connecting_height()) {
-            Some(expected) if expected != cx.block_hash() => refused(Self::ROW, Locus::Block),
+        match cx.trust.anchors().expected_at(cx.connecting) {
+            Some(expected) if expected != cx.facts.identity() => refused(Self::ROW, Locus::Block),
             Some(_) | None => Ok(Ok(())),
         }
     }

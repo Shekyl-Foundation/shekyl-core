@@ -246,15 +246,15 @@ pub fn token_for_one_rule(chain: &MockChain, candidate: Candidate) -> Structural
         candidate,
         RuleSet::GENESIS,
         crate::coverage::RuleCoverage::EMPTY,
-        crate::header_facts::HeaderFacts {
+        crate::header_facts::HeaderFacts::for_harness(
             header,
-            identity: hash,
-            judged_at: substrate.clock,
+            hash,
+            substrate.clock,
             seed,
             target,
-            attempt: FormAttempt::FIRST,
+            FormAttempt::FIRST,
             proof,
-        },
+        ),
         Vec::new(),
     )
 }

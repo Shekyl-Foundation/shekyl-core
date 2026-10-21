@@ -296,7 +296,7 @@ impl StructurallyValid {
     /// judged against. See the type's docs on time-dependence.
     #[must_use]
     pub const fn judged_at(&self) -> Timestamp {
-        self.facts.judged_at
+        self.facts.judged_at()
     }
 
     /// The block's identity (CEN-B6), derived once by `form` — stateless,
@@ -306,14 +306,14 @@ impl StructurallyValid {
     /// nothing derives the identity a second time.
     #[must_use]
     pub const fn hash(&self) -> BlockHash {
-        self.facts.identity
+        self.facts.identity()
     }
 
     /// The seed the caller claimed for CEN-D3 — verified, not trusted, by
     /// `validate`.
     #[must_use]
     pub const fn seed(&self) -> BlockHash {
-        self.facts.seed
+        self.facts.seed()
     }
 
     /// The target the caller claimed and `form` judged CEN-D1 against.
@@ -321,20 +321,20 @@ impl StructurallyValid {
     /// return [`Stale::Target`](crate::Stale::Target) on a mismatch.
     #[must_use]
     pub const fn target(&self) -> Target {
-        self.facts.target
+        self.facts.target()
     }
 
     /// The longhash under the claimed seed (CEN-D2) — what CEN-D1 compares
     /// against the target once the seed is verified.
     #[must_use]
     pub const fn pow(&self) -> PowHash {
-        self.facts.proof.longhash()
+        self.facts.proof().longhash()
     }
 
     /// Which attempt at `form` produced this.
     #[must_use]
     pub const fn attempt(&self) -> FormAttempt {
-        self.facts.attempt
+        self.facts.attempt()
     }
 
     /// Hand the candidate and the stateless coverage to the view-bound

@@ -23,14 +23,13 @@ use shekyl_wire::{Block, BlockBody, PowBlob, Transaction, TxBody};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, FormAttempt, Stale};
-use crate::header_facts::{FormedHeader, HeaderFacts, OpenHeader};
+use crate::header_facts::{prove_header, FormedHeader, HeaderFacts, HeaderProof, OpenHeader};
 use crate::header_ladder::{self, Derived};
 use crate::rule_set::RuleSet;
 use crate::rules::attestation::B4;
 use crate::rules::body::G2;
 use crate::rules::difficulty::Target;
-use crate::rules::header::{B1, B2, B6};
-use crate::rules::pow::{D1, D2};
+use crate::rules::header::{B1, B2};
 use crate::rules::HeaderContext;
 use crate::rules::Rule;
 use crate::substrate::Substrate;
@@ -95,25 +94,22 @@ pub fn form_header<S: Substrate>(
     coverage.insert(B2::ROW);
 
     let blob = pow.write();
-    let hash = B6::identity_of(&blob, &mut coverage);
-    let proof = D2::longhash(substrate, &blob, seed, &mut coverage)?;
-    let facts = HeaderFacts {
-        header: pow.header.clone(),
-        identity: hash,
-        judged_at: clock,
-        seed,
-        target,
-        attempt,
-        proof,
+    let facts = match prove_header(
+        HeaderProof {
+            header: pow.header.clone(),
+            pow_blob: &blob,
+            substrate,
+            seed,
+            target,
+            attempt,
+            judged_at: clock,
+        },
+        &mut coverage,
+    )? {
+        Ok(facts) => facts,
+        Err(refused) => return Ok(Err(refused)),
     };
-    if let Err(refused) = D1::judge(&facts, &mut coverage) {
-        return Ok(Err(refused));
-    }
-    Ok(Ok(FormedHeader {
-        facts,
-        coverage,
-        rule_set: *rule_set,
-    }))
+    Ok(Ok(FormedHeader::new(facts, coverage, *rule_set)))
 }
 
 /// Why [`judge_header_cheap`] stopped before a verdict: the substrate's
@@ -146,11 +142,11 @@ pub fn judge_header_cheap<'id, S: Substrate, H: HeaderView<'id>>(
     let judged_at = substrate.local_clock().map_err(ProspectFault::Substrate)?;
     let facts = header.at(judged_at);
     let mut coverage = RuleCoverage::EMPTY;
-    if let Err(refused) = B1::judge(&facts.header, rule_set) {
+    if let Err(refused) = B1::judge(facts.header(), rule_set) {
         return Ok(Err(refused));
     }
     coverage.insert(B1::ROW);
-    if let Err(refused) = B2::judge(&facts.header) {
+    if let Err(refused) = B2::judge(facts.header()) {
         return Ok(Err(refused));
     }
     coverage.insert(B2::ROW);
@@ -179,18 +175,18 @@ pub fn judge_header<'id, H: HeaderView<'id>>(
     rule_set: &RuleSet,
     trust: &Trust,
 ) -> Result<Verdict<HeaderJudged>, Fault<H::Fault>> {
-    if header.rule_set != *rule_set {
+    if header.rule_set() != *rule_set {
         return Err(Fault::Stale(Stale::RuleSet {
-            formed_under: Box::new(header.rule_set),
+            formed_under: Box::new(header.rule_set()),
             in_force: Box::new(*rule_set),
-            retry: header.facts.attempt.next(),
+            retry: header.attempt().next(),
         }));
     }
-    let (derived, mut coverage) = match judge_rules(&header.facts, view, rule_set, trust)? {
+    let (derived, mut coverage) = match judge_rules(header.facts(), view, rule_set, trust)? {
         Ok(judged) => judged,
         Err(refused) => return Ok(Err(refused)),
     };
-    coverage.union(&header.coverage);
+    coverage.union(header.coverage());
     Ok(Ok(HeaderJudged {
         connecting: derived.connecting,
         cumulative_difficulty: derived.cumulative_difficulty,
@@ -206,9 +202,9 @@ fn judge_rules<'id, P, H: HeaderView<'id>>(
 ) -> Result<Verdict<(Derived, RuleCoverage)>, Fault<H::Fault>> {
     let mut coverage = RuleCoverage::EMPTY;
     let derived = match header_ladder::derive(
-        facts.seed,
-        facts.target,
-        facts.attempt,
+        facts.seed(),
+        facts.target(),
+        facts.attempt(),
         view,
         rule_set,
         &mut coverage,
@@ -216,21 +212,18 @@ fn judge_rules<'id, P, H: HeaderView<'id>>(
         Ok(derived) => derived,
         Err(refused) => return Ok(Err(refused)),
     };
-    let cx = HeaderContext {
-        facts,
-        connecting: derived.connecting,
-        tip: derived.tip,
-        mtp_window: derived.mtp_window.as_ref(),
-        trust,
-    };
-    if let Err(refused) = header_ladder::parent_link(&cx, view, &mut coverage)? {
-        return Ok(Err(refused));
-    }
-    if let Err(refused) = header_ladder::clock(&cx, view, &mut coverage)? {
-        return Ok(Err(refused));
-    }
-    if let Err(refused) = header_ladder::anchor(&cx, view, &mut coverage)? {
-        return Ok(Err(refused));
+    // The context borrows `derived`'s window. It ends before `derived` moves.
+    {
+        let cx = HeaderContext::from_derived(facts, &derived, trust);
+        if let Err(refused) = header_ladder::parent_link(&cx, view, &mut coverage)? {
+            return Ok(Err(refused));
+        }
+        if let Err(refused) = header_ladder::clock(&cx, view, &mut coverage)? {
+            return Ok(Err(refused));
+        }
+        if let Err(refused) = header_ladder::anchor(&cx, view, &mut coverage)? {
+            return Ok(Err(refused));
+        }
     }
     Ok(Ok((derived, coverage)))
 }
@@ -246,7 +239,7 @@ pub fn bind_body(header: &FormedHeader, body: &BlockBody) -> Verdict<()> {
     let Ok(block) = Block::from_bytes(&body.block) else {
         return Err(InvalidBlock::new(CenRow::B6, Locus::Block));
     };
-    if block.hash() != header.facts.identity {
+    if block.hash() != header.facts().identity() {
         return Err(InvalidBlock::new(CenRow::B6, Locus::Block));
     }
     let mut carried = Vec::with_capacity(body.txs.len());

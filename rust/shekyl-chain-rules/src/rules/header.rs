@@ -38,7 +38,7 @@
 
 use shekyl_types::BlockHash;
 use shekyl_wire::block::HEADER_MINOR_VERSION;
-use shekyl_wire::{Block, BlockHeader};
+use shekyl_wire::BlockHeader;
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
@@ -146,8 +146,9 @@ impl BlockRule for B5 {
 /// when the identity is derived, and `implemented(rules::header::B6)`
 /// names this function (slice 1, Q5). **Derived once, by `form`**: the
 /// identity is stateless (a keccak over the hashing blob) and a view-bound
-/// rule reads it while the rules run (CEN-E1, slice 3 F8/Q7), so `form`
-/// calls [`B6::identity`] and the token carries it
+/// rule reads it while the rules run (CEN-E1, slice 3 F8/Q7), so
+/// [`crate::header_facts::prove_header`] calls [`B6::identity_of`] and the
+/// token carries it
 /// (`StructurallyValid::hash`); `ValidatedBlock::derive` takes that value
 /// and computes no second one. Slice 1 placed the derivation after the last
 /// rule on the premise that no rule reads the identity — refuted, not
@@ -159,14 +160,11 @@ impl Rule for B6 {
 }
 
 impl B6 {
-    /// The block's identity under CEN-B6, recorded in `coverage` as this
-    /// row having been applied.
-    pub(crate) fn identity(block: &Block, coverage: &mut RuleCoverage) -> BlockHash {
-        Self::identity_of(&block.pow_blob(), coverage)
-    }
-
-    /// [`Self::identity`] over a PoW preimage that is already bytes. One
-    /// function: `identity_of_pow_blob`, the same keccak `Block::hash` runs.
+    /// The block's identity under CEN-B6, over a PoW preimage that is
+    /// already bytes, recorded in `coverage` as this row. One function:
+    /// `identity_of_pow_blob`, the same keccak `Block::hash` runs.
+    /// [`crate::header_facts::prove_header`] is the production caller;
+    /// `form` and `form_header` both reach it there.
     pub(crate) fn identity_of(pow_blob: &[u8], coverage: &mut RuleCoverage) -> BlockHash {
         coverage.insert(Self::ROW);
         shekyl_wire::identity_of_pow_blob(pow_blob)

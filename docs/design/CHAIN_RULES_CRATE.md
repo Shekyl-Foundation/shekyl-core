@@ -633,8 +633,9 @@ In increment 1, `validate` derives `hash` and every `TxHash` (`Block::hash`,
 against `block.transaction_hashes` — CEN-G2 landed in `form` with slice 7
 commit 6 (§4.6), so the pairing below is judged before any body is read *as*
 its declared hash.
-CEN-B6 is the block-identity **definition**: `ValidatedBlock::derive` obtains
-the hash from `B6::identity`, which records the row in coverage there — not a
+CEN-B6 is the block-identity **definition**: `prove_header` records the row
+through `B6::identity_of`, and `ValidatedBlock::derive` reads the hash the
+token carries — not a
 `BlockRule` with a check that always passes (B7 is the no-op *policy* that
 still runs through `rules::run`).
 
@@ -1055,7 +1056,7 @@ transaction).
 Block-level **predicates** run in census order, each through
 `rules::run_form` (stateless, in `form`) or `rules::run` (view-bound, in
 `validate`), inserting `R::ROW` iff `R` passed. **Definition** rows record at
-their derivation site: CEN-B6 at `B6::identity` (in `form`, carried on `StructurallyValid::hash`);
+their derivation site: CEN-B6 at `B6::identity_of` (in `prove_header`, shared by `form` and `form_header`, carried on `StructurallyValid::hash`);
 CEN-D2 at `D2::longhash` (in `form`); CEN-C3 at `C3::window`, CEN-D4 at
 `D4::target` (D7 consulted inside it, D6 recorded at every `Target`
 production — `D6::mint` for LWMA-1, `D6::record` for genesis-block `1` and
@@ -1351,8 +1352,13 @@ header alone. None of these mint a `ChainValid`.
 
 `HeaderFacts<P>` carries the proof as a type: `Unproven` or `Proven`.
 `D1` accepts only `Proven`, so a header without a longhash cannot reach
-it. `judge_header_cheap` returns a `HeaderProspect`; `judge_header`
-returns a `HeaderJudged` (connecting height and cumulative work).
+it. B6, D2 and D1 are `prove_header`, the tail `form` and `form_header`
+share. `FormedHeader` is a stage token: private fields, constructed only
+by `form_header`. `BlockContext` projects into `HeaderContext`, and the
+header rules read that context; `validate`, `alt_against` and the header
+path build it from `derive`'s `Derived`. `judge_header_cheap` returns a
+`HeaderProspect`; `judge_header` returns a `HeaderJudged` (connecting
+height and cumulative work).
 
 `anchor_and_coinbase` is two calls, `anchor` (E1) then `coinbase_height`
 (F4, F5, F6), still the only membership list, in `header_ladder.rs`.

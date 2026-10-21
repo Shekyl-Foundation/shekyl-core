@@ -245,7 +245,7 @@ impl D1 {
         facts: &crate::header_facts::HeaderFacts<crate::header_facts::Proven>,
         coverage: &mut RuleCoverage,
     ) -> Verdict<()> {
-        if facts.target.is_satisfied_by(facts.proof.longhash()) {
+        if facts.target().is_satisfied_by(facts.proof().longhash()) {
             coverage.insert(Self::ROW);
             Ok(())
         } else {
