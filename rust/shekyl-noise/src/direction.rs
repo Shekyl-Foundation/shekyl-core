@@ -10,13 +10,13 @@
 //! nonce. Rekey is `HKDF(ck, k)` after [`REKEY_NONCES`] uses, the nonce
 //! resets, and [`KeyEpoch`] advances. Nothing is written to mark it.
 //!
-//! The header-protection key is not a field. A framer that needs one derives
-//! it when the epoch [`Direction::seal`] reports changes, and keeps it itself.
+//! The header-protection key is not a field. A framer derives one with
+//! `hkdf_from_record_key`, passing its own label, when the epoch
+//! [`Direction::seal`] reports changes, and keeps the output itself.
 
 use zeroize::Zeroizing;
 
 use crate::aead::{self, HASH_LEN};
-use crate::classed::RECORD_HEADER_DST;
 
 /// Nonce uses of one record key before rekey. One name for both framers.
 pub const REKEY_NONCES: u64 = 1_000;
@@ -155,12 +155,14 @@ impl Direction {
         (self.n, self.epoch)
     }
 
-    /// The header-protection key of the record key in use: the first output
-    /// of `HKDF(record key, shekyl/noise-record-header-v1)`, the record key
-    /// in the chaining-key position and the label as input
-    /// (`RPC_CHANNEL.md` section 4.4). The one place the label is read.
-    pub(crate) fn header_protection_key(&self) -> Zeroizing<[u8; HASH_LEN]> {
-        let [key, _] = aead::hkdf(&self.k, RECORD_HEADER_DST);
+    /// The first output of `HKDF(record key, ikm)`.
+    ///
+    /// The record key stays in this direction. A framer passes its own
+    /// label and keeps the output, deriving again when [`Self::next`]'s
+    /// epoch has moved. The second output is wiped with the temporary that
+    /// holds it.
+    pub(crate) fn hkdf_from_record_key(&self, ikm: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
+        let [key, _] = aead::hkdf(&self.k, ikm);
         key
     }
 

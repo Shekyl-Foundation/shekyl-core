@@ -57,7 +57,7 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | Ruling | Content |
 | --- | --- |
 | Supervisor | One Rust owner holds the managed Tor's state; its inputs are the child, Tor's status and descriptor events, and an end-to-end probe of our own onion; *usable* is defined by the probe; every other component reads this owner and none reads Tor state on its own |
-| Start is iteration one | No separate bootstrap-failure path; capped backoff from the first launch; never gives up. A Tor-only node waits and announces (hop-0 fail-closed); a dual-posture node runs clearnet meanwhile |
+| Start is iteration one | No separate bootstrap-failure path; capped backoff from the first launch; never gives up. While Tor is down, a Tor-only node and a node with clearnet on behave as the posture table (`TSR-Q10`, `TSR-Q11`) |
 | Respawn (as amended by `TSR-Q1` and `TSR-Q3`) | On a process fault (§4.4): reap; the `DataDirectory` and the onion are kept; republish the same onion; the connector parks and resumes on the new route; each death and recovery announced; a crash loop reaches the cap loudly. Backoff with resume for an operator's Tor |
 | Teardown (as amended by `TSR-Q1`) | One routine for stop and respawn: close the owning control connection, wait within `SHUTDOWN_GRACE` (5 s), kill and reap. `SIGTERM` and `DEL_ONION` dropped. The directory's disposition follows why it ran: at boot end it is tombstone-renamed **after** the reap, deleted off the runtime under a bound, and swept at the next start; at a respawn it is kept |
 | Launch (as amended by `TSR-Q7`) | Tor starts with `__OwningControllerFD`: an inherited socket that is already an authenticated, owning control connection (§4.7) |
@@ -67,12 +67,65 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | `TSR-Q1`: a respawn is a repair | The `DataDirectory` is kept across respawns within a boot, so guards and the consensus cache survive. The daemon holds the hs-id seed for the boot in secure memory (rules 35, 36) and republishes the **same** onion; `ADD_ONION` still sends `Flags=DiscardPK`, since Tor need not hand back a key we hold. After a run of consecutive launch failures on a kept directory, the next launch uses a fresh one; the run length is set from `TSR-M2`'s failure distribution, not chosen |
 | `TSR-Q2`: guards are per boot | Guards do not persist across boots, as today; the public directory cache does (`TSR-Q8`). Persisting them gains no reduction in expected exposure: a hostile guard exposes *f*·*B* boots in expectation either way, and persistence changes only the spread; the harm is per boot. It costs a guard file on disk and lets one hostile guard link every boot's onion. The one real re-roll attack, forcing respawns, is closed by `TSR-Q1` |
 | `TSR-Q3`: remedy by cause | §4.4, with the SOCKS reply classification of §4.2: only a process fault respawns |
-| `TSR-Q4`: Tor status in RPC | The unrestricted reply carries one boolean in Health, as `has_peers` does: this node can originate over an address-hiding connector now. State, cause, since and the respawn count are restricted Status fields; the RPC lane names them |
+| `TSR-Q4`: Tor status in RPC | The unrestricted reply carries one boolean in Health, as `has_peers` does: this node can originate over an address-hiding connector now. State, cause, since and the respawn count are restricted Status fields; `TSR-Q12` (2026-10-20) lists every Status field, and the RW round names them. Tor's state and timing stay off the unrestricted reply (§8, "Link the RPC endpoint to the onion") |
 | `TSR-Q5`: one probe per descriptor upload round (2026-10-15) | The `HS_DESC UPLOADED` events of one upload round are coalesced into one trigger, and after a jittered delay the probe runs once (§4.5). No deadline of our own and no evidence-age bookkeeping |
 | `TSR-Q7`: `__OwningControllerFD` on every platform (2026-10-15) | The launch hands Tor one end of a connected socket pair as its owning control connection; no control port, port file, cookie, `TAKEOWNERSHIP` or `RESETCONF` (§4.7) |
 | `TSR-Q8`: the public directory cache persists across boots (Rick, 2026-10-19) | The daemon keeps Tor's public directory cache across boots; guards, keys and the onion stay per boot. A daemon-owned cache directory (mode 0700) holds `cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and `cached-certs`. At launch, only those exact names are copied into the fresh per-boot `DataDirectory`, each a regular file, never reached through a symlink, and under a size limit. At a clean stop the same names are copied back; after a crash the previous cache stays as it was. `state`, keys, `lock` and every other file are never kept, and Tor is never pointed at the cache directory itself. The per-boot rule becomes: nothing identity-bearing (guards, keys, the onion) joins one boot to the next. Why: a node that bootstraps cold at every boot looks to its directory guard like a new install each time, and with a cache it looks like every other Tor client; each restart stops loading the fallback mirrors and directory authorities; and the cold-bootstrap tail, which is directory fetching (§10, `TSR-M1`), goes. What a consensus-diff request reveals, roughly how long the node was offline, adds little to a directory guard that already sees the node's address. Tor verifies the whole cache itself, so a bad cache costs one cold boot and cannot steer path selection. `tor-pin-verify`'s live tests start from a seeded cache, and one cold-start test remains. The step-8 removal (§12, increment 3) stands: a first install, and a boot after a long time offline, are still cold |
 | `TSR-Q9`: the managed Tor looks like every other Tor client (Rick, 2026-10-19) | Every choice the supervisor makes about Tor's behaviour is tested against this, increment 3's included. It bears on `TSR-M6`'s open question, how to keep a crash before Tor's first `state` write from re-picking guards. Of the two answers, `AvoidDiskWrites 0` until that first write is the more ordinary behaviour, because a stock client writes its `state` promptly, and Rick expects it to be chosen. The other, counting respawns before that write, changes nothing Tor does. Increment 3 settles it with evidence, including whether switching `AvoidDiskWrites` on the owning connection after the first write is reliable |
+| `TSR-Q10`: a managed Tor that is absent or fails is announced, never refused (Rick, 2026-10-19) | The daemon starts. A pin failure does not execute the binary (`TSR-F6`). What the node does, which `OwnTx` applies, and which `ManagedTorFix` values the message offers, is the posture table in this section. Health is false meanwhile (`TSR-Q4`). A failed start is a Process cause (§4.4), not this row. TB-2 matches this row |
+| `TSR-Q11`: no automatic fallback (Rick, 2026-10-20) | A fallback that gives up privacy happens only by the operator's own act: whoever can block or break the node's Tor would otherwise choose its transport. The `Clearnet::Off` row of the posture table is that rule. `ClearnetOn` and `ClearnetOnly` are the operator's act, and the node does not apply them |
+| `TSR-Q12`: the operator sees the reason through RPC (Rick, 2026-10-20) | Restricted Status (the node's own CLI and GUI) carries: the posture, which is the `tor` and `clearnet` settings; the Tor state, as §4.3's projection (Restarting, Restarting (held), Bootstrapping, Usable, Degraded); the cause, as a typed §5 value, and that cause's detail, not English text; since when, and the respawn count; whether the node is syncing, and over what; `OwnTx`, from the posture table; and the fixes that apply, as `ManagedTorFix` values from the posture table. Cause advice and those fixes are typed values, never sentences: clock, directory, file-limit and upgrade advice are the cause's detail, not `ManagedTorFix` variants. Unrestricted Health keeps `TSR-Q4`'s one boolean: Tor's state and timing would let an outsider tie the RPC endpoint to the onion's lifetime (§8). One rendering: a single Rust function in a shared crate turns the typed values into words, under rule 81; `shekyl-cli` uses it, the GUI uses it or its exact strings, and the daemon's posture log line renders from it, so the log and both clients say the same thing. The wallet's send flow reads `OwnTx` from Status before broadcasting, as the posture table defines. Health is not that signal. Who builds what: increment 3 exposes all of it as one typed read and renders the posture line from the same values (§12); the RW round ([`RPC_WIRE.md`](RPC_WIRE.md)) names the Status and Health fields. The GUI's daemon, running as the same user, gets Status: `RPC_CHANNEL.md` RT-15 makes a same-user caller on the owner-only socket or pipe the owner, with every grant, and names that default install as its case (confirmed by the RW lane, 2026-10-20). A GUI pointed at a service-mode daemon, another user's or another machine's goes over the channel and sees Status only if its enrolment grants it; the plaintext loopback listener carries only the `view` preset, which has no Status; `shekyl-cli` and `shekyl-gui-wallet` display it, the GUI's item tracked in that repository |
+| `TSR-Q13`: polling, and typed values on the wire (Rick, 2026-10-20) | Clients read Status on their normal refresh: state changes are rare and already announced in the log. Pushed events wait until the RW round has a subscription mechanism. The wire carries typed causes, their detail, `OwnTx`, and `ManagedTorFix` values, never sentences: sentences would be reworded differently by each client and could not be translated, while typed values keep the meaning fixed and leave the words to the one renderer (`TSR-Q12`) |
 | `TSR-Q6`: the private-network cases | Best effort, not a gate. The private network is chutney or a hand-built `TestingTorNetwork` from the pinned bundle, at the implementer's choice; it runs §7's two cases if it can be made to work, is never a latency source, and its absence blocks nothing |
+
+### Posture while the managed Tor is down — RULED 2026-10-20 (`TSR-Q10`, `TSR-Q11`)
+
+The daemon starts. Two facts stay separate. A pin failure does not execute
+the binary: discovery found nothing, or the pin gate refused the spawn, and
+no spawn is attempted (`TSR-F6`, §4.4 Install). A start that fails after a
+good pin is a Process cause (§4.4). It is announced the same way, and it is
+not an install cause.
+
+What the node does is fixed by the connector settings. The message offers
+`ManagedTorFix` values. Increment 3 defines that enum next to the typed
+Status read (§12). Each variant names a `Tor` or `Clearnet` setting from
+`shekyl-daemon-config`; the enum is not a config key and not a second way
+to set those types. The wire carries the variant. One renderer turns it
+into words (`TSR-Q13`).
+
+| `ManagedTorFix` | The settings it names |
+| --- | --- |
+| `RestoreManaged` | Stay `Tor::Managed`. Restore the pinned bundle, or set `tor-file` to a bundle that passes the pin |
+| `Operator` | `Tor::Operator`. Bridges are this route, not a managed-Tor option |
+| `ClearnetOn` | `Clearnet::On`, and Tor stays `Tor::Managed` |
+| `ClearnetOnly` | `Tor::Off` and `Clearnet::On` |
+
+`Tor::Off` with `Clearnet::Off` is offline. The message does not offer that pair.
+
+`OwnTx` is what happens to the node's own transactions. Increment 3 defines
+that enum next to `ManagedTorFix` and the typed Status read (§12). It
+projects Health and the connector settings. It is not a config key. The
+wire carries the variant (`TSR-Q13`). The send flow reads it from Status.
+A caller whose preset has no Status does not receive it, and Health false
+is not a hold. `OwnTx::Held` is the transaction. The Tor state Restarting
+(held) is the spawn waiting out the cap (§4.3).
+
+| `OwnTx` | When | The send |
+| --- | --- | --- |
+| `AddressHiding` | Health is true (`TSR-Q4`): the node can originate over an address-hiding connector now | Broadcasts over that connector |
+| `Held` | Health is false and Tor is `Tor::Managed` or `Tor::Operator` | Reported held, not sent. Stays off clearnet (`TSR-Q11`) |
+| `ClearnetOnly` | `Tor::Off` and `Clearnet::On` | Broadcasts over clearnet. Health stays false |
+| `Offline` | `Tor::Off` and `Clearnet::Off` | Not sent |
+
+| Connectors, managed Tor down | What the node does | Fixes offered |
+| --- | --- | --- |
+| `Clearnet::On` | Syncs over clearnet. `OwnTx` is `Held`. Health is false. Announces once per backoff cap | `RestoreManaged`, `Operator`, `ClearnetOnly` |
+| `Clearnet::Off` | Waits for Tor. Syncs nothing. `OwnTx` is `Held`. Does not set `Clearnet::On`: whoever can block or break the node's Tor would otherwise choose its transport (`TSR-Q11`). Health is false. Announces once per backoff cap | `RestoreManaged`, `Operator`, `ClearnetOn`, `ClearnetOnly` |
+
+Clearnet-only is the operator's `ClearnetOnly` act, never a default
+(`TSR-Q11`). The node warns on every boot. TB-1 states the consequence,
+including that the link is unencrypted until the Noise flip. The send in
+that posture is `OwnTx::ClearnetOnly`.
 
 `TSR-F9` and `TSR-F10` propose amending parts of the brief's rulings; each
 says which and why.
@@ -157,8 +210,8 @@ growing difference is suspended time.
 **TSR-F6 (medium; Tor lane). A respawn through a held witness re-runs a binary
 verified hours earlier.** The wallet closed this gap (`service.rs:17-22`): the
 daemon re-runs discovery and the pin gate at every spawn. A failed pin at
-respawn cannot "refuse the start" (TB-2), because the daemon is running: it is
-the named state `InstallDefect`, no spawn, retry at the cap.
+respawn does not spawn that binary, and the daemon still starts (the posture
+table, `TSR-Q10`): the state is `InstallDefect`, retry at the cap.
 
 **TSR-F7 (medium; brief correction). A fixed bootstrap deadline plus a fresh
 directory can never converge on a slow link.** If bootstrap needs longer than
@@ -361,11 +414,12 @@ arguments and order, as the specification requires.
 Per incarnation: `Absent { attempt, next_at } → Launching → Bootstrapping {
 progress, last_progress_at } → Running → Stopping`. The brief's four names are
 a projection of that phase and the two facets, which is what the posture line
-shows:
+and the Status read (`TSR-Q12`) show:
 
 | Shown | When |
 | --- | --- |
 | **Restarting** | phase is `Absent`, `Launching`, or `Stopping` for a respawn |
+| **Restarting (held)** | phase is `Absent` and no spawn is attempted before the cap, because a precondition of the spawn failed: the pin gate, no Tor found, or the data directory unusable (§5) |
 | **Bootstrapping** | phase is `Bootstrapping` |
 | **Usable** | `Running`, outbound `Usable`, inbound `Reachable` or `NotOffered` |
 | **Degraded** (cause) | `Running` and either facet is down, the facet and its cause named |
@@ -380,7 +434,7 @@ faults in the Tor process, so only those respawn:
 | External | outbound blocked, `NETWORK_LIVENESS DOWN`, `DIR_ALL_UNREACHABLE`, clock skew | none but waiting; Tor retries itself; announce with the fix; **never respawn** |
 | Service | descriptor upload failing past a bound; probe failing while outbound is usable | republish on the running Tor (`ADD_ONION` again); escalate to Process only if the control command itself fails |
 | Process | child exit; control EOF or desync; reply past bound; outbound dead past a bound with no external cause standing | respawn |
-| Install | pin fails at spawn (`TSR-F6`) | no spawn; announce; retry at the cap |
+| Install | pin fails at spawn, or discovery finds nothing (`TSR-F6`) | no spawn, so the binary is not executed; the daemon starts (the posture table); announce; retry at the cap |
 | Local resource | data directory unwritable or out of space (checked before each spawn); `TOO_MANY_CONNECTIONS` | no spawn (or, for the open-file limit, no respawn); announce; retry at the cap |
 
 A stalled bootstrap is not a cause in any class (Rick, 2026-10-19). In the
@@ -581,24 +635,36 @@ and stops the managed Tor (#1088).
 
 ## 5. Rule-82 states
 
-| State | Source | Shown as | Fix named to the operator | Remedy |
-| --- | --- | --- | --- | --- |
-| Outbound blocked | `BOOTSTRAP` warn `REASON`, `NETWORK_LIVENESS DOWN` | Degraded (outbound) | this machine cannot reach the Tor network; check the firewall or network; Shekyl does not support bridges | wait |
-| No directory reachable | `DIR_ALL_UNREACHABLE` | Degraded (outbound) | as above | wait |
-| Clock skew | `CLOCK_SKEW SKEW=±s` | Degraded (outbound) | Tor reports this machine's clock is about *s* seconds off; check time sync | wait |
-| Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes | wait |
-| Resumed from suspend | `CLOCK_JUMPED` | Bootstrapping, briefly | none | re-evaluate now |
-| Onion unreachable | the probe, `HS_DESC FAILED` | Degraded (inbound) | none; recovering | republish |
-| Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | respawn |
-| Tor install defect | the pin gate at spawn | Restarting (held) | the file that failed and the reinstall remedy | retry at the cap |
-| Data directory unusable | the pre-spawn check | Restarting (held) | the path's problem: not writable, or out of space | retry at the cap |
-| Open-file limit reached | `TOO_MANY_CONNECTIONS` | Degraded | the limit and the count; raise it, in the platform's terms | wait; retry at the cap |
-| Tor version flagged | `DANGEROUS_VERSION` | announcement | upgrade Shekyl when a release re-pins Tor (TB-10), never Tor itself | none |
+Each row is one typed cause the Status read carries (`TSR-Q12`). The cause's
+detail is typed data: the skew in seconds, the file the pin rejected,
+whether the data directory is not writable or out of space, the open-file
+limit and the count, and, when a restart repeats, the last exit. The
+"Rendered from the cause" column is the one renderer's words for that cause
+and its detail (`TSR-Q13`). `ManagedTorFix` is a separate field, the
+connector acts from the posture table, and only a row where the managed Tor
+is down carries any. Clock, directory, file-limit and upgrade advice are
+that detail, not variants of `ManagedTorFix`.
+
+| State | Source | Shown as | Rendered from the cause | `ManagedTorFix` | Remedy |
+| --- | --- | --- | --- | --- | --- |
+| Outbound blocked | `BOOTSTRAP` warn `REASON`, `NETWORK_LIVENESS DOWN` | Degraded (outbound) | this machine cannot reach the Tor network; check the firewall or network. Bridges are `Operator`, not a managed-Tor option | none | wait |
+| No directory reachable | `DIR_ALL_UNREACHABLE` | Degraded (outbound) | as above | none | wait |
+| Clock skew | `CLOCK_SKEW SKEW=±s` | Degraded (outbound) | the clock is off by the reported seconds; check time sync | none | wait |
+| Waiting on the Tor directory | the last `BOOTSTRAP PROGRESS` phase and when it was reached | Bootstrapping (the phase, and since when) | none; Tor is fetching the network's directory, and a slow mirror can hold it for minutes | none | wait |
+| Resumed from suspend | `CLOCK_JUMPED` | Bootstrapping, briefly | none | none | re-evaluate now |
+| Onion unreachable | the probe, `HS_DESC FAILED` | Degraded (inbound) | none; recovering | none | republish |
+| Tor exited or wedged | exit, EOF, reply bound | Restarting | none unless repeated; then the count and the last exit, and where the previous log is | none | respawn |
+| Tor install defect | the pin gate at spawn | Restarting (held) | the file that failed the pin. The binary is not executed | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
+| No Tor installed | discovery finding nothing | Restarting (held) | none was found. `tor-file` may name a bundle that passes the pin | `RestoreManaged`, plus the fixes the posture table offers | retry at the cap; the message repeats once per cap |
+| Data directory unusable | the pre-spawn check | Restarting (held) | the path is not writable, or out of space | none | retry at the cap |
+| Open-file limit reached | `TOO_MANY_CONNECTIONS` | Degraded | the limit and the count; raise it, in the platform's terms | none | wait; retry at the cap |
+| Tor version flagged | `DANGEROUS_VERSION` | announcement | upgrade Shekyl when a release re-pins Tor (TB-10), never Tor itself | none | none |
 
 Rule 81 applies to every message: the words name what the operator sees and
-can do, not Tor's vocabulary. Bridges are out of scope; reopen when an operator
-reports a network that blocks Tor and the typed launch surface
-(`launch.rs:263`) has a reviewed bridge option.
+can do, not Tor's vocabulary. While the managed Tor is not running, the
+renderer composes this row's words with the `ManagedTorFix` values the
+posture table offers (`TSR-Q10`). It says "clearnet-only" only for the
+operator's `ClearnetOnly` act. Bridges are `ManagedTorFix::Operator`.
 
 ## 6. Rejected alternatives
 
@@ -691,7 +757,7 @@ run's conditions are in `shekyl-dev`, `data/tsr-preflight/2026-10-19*/`.
 
 | Row | Measures | Sets |
 | --- | --- | --- |
-| `TSR-M1` | bootstrap time, cold directory and kept directory. **Measured 2026-10-19.** Cold, n=100: p50 11.3 s, p90 17.0 s, p99 127.1 s, max 380.8 s; 1 run over 300 s. Kept, n=30: p50 3.54 s, max 3.81 s (a respawn into its kept directory, `TSR-Q1`). x86: cold max 42.7 s, kept max 2.36 s. **Where the cold tail comes from** (300 more cold runs with each phase's time, 03:38Z to 06:45Z): of the 31 over 60 s, 26 spent their time loading relay descriptors and 5 loading the consensus; circuits took a median 0.86 s, as in fast runs. A slow run sits at one directory percentage, often for about five minutes, with nothing in Tor's log, and then completes; none reached the 600 s limit. Tor raised a `BOOTSTRAP` problem event in 1 of the 31, a `NOROUTE` at its first relay that it passed within 3 s, long before its stall. In 6 of the 31 Tor re-sent a status event during the stall, so its event loop was running; the other 25 show nothing either way. **The tail is the floor device's**: the x86 host on the same office network, minutes before the tail run, had no cold run over 43 s, while 3 % of the floor device's runs were over 60 s in the record and 9 % in the tail run. What holds it, from 150 more cold runs sampling Tor's CPU and sockets: in the 17 clean runs over 60 s Tor used at most 3 s of CPU per stall, and in 16 of them one connection was moving directory data throughout, 0.2 to 8.7 MB at a median 79 KB/s (the percentage holds while a large batch arrives). A slow cold bootstrap is a slow directory source, with Tor waiting on it; one run waited on a connection that moved nothing. Why the floor device meets slow sources more often than the x86 host is open | §5's Bootstrapping display, not a bound: no bootstrap is given up (`TSR-F7`), and a stalled one is not a fault in any class (§4.4; Rick, 2026-10-19). A stalled directory fetch usually raises no problem event, so problem events alone cannot carry §5's operator message for it. Because the tail is directory fetching, the kept directory cache (`TSR-Q8`) removes most of it |
+| `TSR-M1` | bootstrap time, cold directory and kept directory. **Measured 2026-10-19.** Cold, n=100: p50 11.3 s, p90 17.0 s, p99 127.1 s, max 380.8 s; 1 run over 300 s. Kept, n=30: p50 3.54 s, max 3.81 s (a respawn into its kept directory, `TSR-Q1`). x86: cold max 42.7 s, kept max 2.36 s. **Where the cold tail comes from** (300 more cold runs with each phase's time, 03:38Z to 06:45Z): of the 31 over 60 s, 26 spent their time loading relay descriptors and 5 loading the consensus; circuits took a median 0.86 s, as in fast runs. A slow run sits at one directory percentage, often for about five minutes, with nothing in Tor's log, and then completes; none reached the 600 s limit. Tor raised a `BOOTSTRAP` problem event in 1 of the 31, a `NOROUTE` at its first relay that it passed within 3 s, long before its stall. In 6 of the 31 Tor re-sent a status event during the stall, so its event loop was running; the other 25 show nothing either way. **The tail is not one machine's, and its size moves over time**: the x86 host on the same office network had no cold run over 43 s in 100 from 03:16Z to 03:35Z on 2026-10-19, but 4 of 10 over 60 s (max 145.1 s) at 14:14Z on 2026-10-20, while 3 % of the floor device's runs were over 60 s in the record and 9 % in the tail run. What holds it, from 150 more cold runs sampling Tor's CPU and sockets: in the 17 clean runs over 60 s Tor used at most 3 s of CPU per stall, and in 16 of them one connection was moving directory data throughout, 0.2 to 8.7 MB at a median 79 KB/s (the percentage holds while a large batch arrives). A slow cold bootstrap is a slow directory source, with Tor waiting on it; one run waited on a connection that moved nothing. | §5's Bootstrapping display, not a bound: no bootstrap is given up (`TSR-F7`), and a stalled one is not a fault in any class (§4.4; Rick, 2026-10-19). A stalled directory fetch usually raises no problem event, so problem events alone cannot carry §5's operator message for it. Because the tail is directory fetching, the kept directory cache (`TSR-Q8`) removes most of it |
 | `TSR-M2` | respawn to outbound usable, and to inbound reachable | the backoff base and cap |
 | `TSR-M3` | self-probe latency, and that it works at all. **Measured 2026-10-19**: 40 of 40 succeeded, the probe nonce arriving each time; p50 2.35 s, p90 7.39 s, max 12.29 s. x86: 40 of 40, max 46.15 s, with five probes in one cluster at 42.9 to 46.1 s | the probe's delay range and timeout. A timeout below about 46 s would have failed the x86 cluster's probes, each of which succeeded |
 | `TSR-M4` | Tor's resident memory at 12 outbound plus inbound load, default and set `MaxMemInQueues`. **Measured 2026-10-19 at Tor's default**, under a synthetic load (no fleet daemon could supply one; Rick, 2026-10-19): 12 outbound and 12 inbound rendezvous streams, each carrying 512 bytes every 10 s, for an hour. Resident memory **91.0 MiB**, flat once the streams were up; idle baselines 85.7 and 92.3 MiB. x86: 82.5 MiB. A set `MaxMemInQueues` was not measured | `MaxMemInQueues` |
@@ -747,11 +813,18 @@ its PR leaves draft.
   supervisor's input; `tor-socks` is the operator route; `TSR-F8`; DC-F12 is a
   prerequisite (`TSR-F12`).
 - **RPC:** `TSR-Q4` (ruled): one Health boolean, this node can originate over
-  an address-hiding connector now; state, cause, since and the respawn count
-  are restricted Status fields, named by the RPC lane.
+  an address-hiding connector now. `TSR-Q12` lists the restricted Status
+  fields, as typed values (`TSR-Q13`). The RW round names the Status and Health
+  fields; the GUI's same-user daemon already grants Status (RT-15).
 - **TB:** §7's macOS rows are TB-11's macOS launch test; the Windows launch
   test is `tor-pin-verify`'s Windows entry (`TSR-F15`).
-- **Wallet:** none this round; the sans-IO core is there to adopt.
+- **Wallet and clients:** the send flow reads `OwnTx` from Status before
+  broadcasting (§1). `Held` is reported held, not sent. `ClearnetOnly` is
+  sent over clearnet and is not reported held, and Health stays false.
+  `Offline` is not sent. Health is not this signal. Falsify by a managed Tor
+  that is down, reported held, and by `Tor::Off` with `Clearnet::On`, sent
+  with Health false. `shekyl-cli` and the GUI show Status through the one
+  renderer (`TSR-Q12`). The wallet's own Tor can adopt the sans-IO core.
 
 ## 12. Increments (rule 26)
 
@@ -775,6 +848,9 @@ its PR leaves draft.
    public directory cache across boots (`TSR-Q8`, §4.7), with `tor-pin-verify`'s
    live tests starting from a seeded cache and one cold-start test kept, and it
    tests its Tor choices against `TSR-Q9`, settling `TSR-M6`'s open question.
+   It defines `ManagedTorFix` and `OwnTx` (§1's posture table) and exposes
+   `TSR-Q12`'s values as one typed read beside those enums. The posture log
+   line renders from the same values through the one renderer.
 4. The probe nonce and the probe.
 5. The supervisor becomes the Tor link's publisher, in place of the zone host.
 6. Acceptance of the supervisor. The C++ deletions this increment used to

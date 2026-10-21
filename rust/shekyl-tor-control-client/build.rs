@@ -231,11 +231,11 @@ fn main() {
         "unavailable" => {
             let reason = str_field(row, "reason", &context);
             assert!(!reason.trim().is_empty(), "{context}: an empty reason");
-            // A row may carry `pending`: the identifier of the work that will
-            // pin it. It compiles exactly as a ruled-unavailable row does,
-            // because that is what this binary does about Tor today. The
-            // difference is for `scripts/ci/check_tor_pin_targets.py`, which
-            // counts pending rows so the startup refusal cannot land over one.
+            // A row may carry `pending`: the work item that will pin it.
+            // It compiles as `Unavailable`, which is what this binary does.
+            // `check_tor_pin_targets.py` prints each pending row. An
+            // unavailable target is a gap to close (TB-4). A missing managed
+            // Tor is announced, never a startup refusal (TB-2).
             if let Some(pending) = row.get("pending") {
                 let ok = pending
                     .as_str()

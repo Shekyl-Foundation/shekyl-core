@@ -49,12 +49,12 @@ def step_rows():
     return rows
 
 
-def message1_rows():
+def message1_rows(with_no_bundle=False):
     rows = []
-    for kind, new_scale, read_scale in (
-        ("honest", 1000, 3000),
-        ("tag_flipped", 2000, 4000),
-    ):
+    kinds = [("honest", 1000, 3000), ("tag_flipped", 2000, 4000)]
+    if with_no_bundle:
+        kinds.append(("no_bundle", 500, 700))
+    for kind, new_scale, read_scale in kinds:
         accepted = "true" if s.MESSAGE1_ACCEPTED[kind] else "false"
         for i in range(SAMPLES):
             new_ns = (i + 1) * new_scale
@@ -164,6 +164,30 @@ class Control(unittest.TestCase):
         self.assertIn("| 65,535 | open |", text)
 
 
+class Mac1Shape(unittest.TestCase):
+    """A capture taken with mac1 on message 1 has a third kind, no_bundle.
+    The kind column names the set. There is no flag beside it."""
+
+    def test_a_mac1_capture_reads_with_its_kinds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            write_run(directory, message1=message1_rows(with_no_bundle=True))
+            text = s.summarise(directory)
+        self.assertIn(f"| no_bundle | `read_message1` | {SAMPLES} | 0 |", text)
+
+    def test_a_kind_outside_both_registered_sets_is_refused(self):
+        rows = message1_rows(with_no_bundle=True)
+        rows.append(rows[-1][:1] + ("other",) + rows[-1][2:])
+        with tempfile.TemporaryDirectory() as directory:
+            write_run(directory, message1=rows)
+            self.assertIn("not a registered set", refusal(self, directory))
+
+    def test_a_single_kind_is_not_a_registered_set(self):
+        rows = [row for row in message1_rows() if row[1] == "honest"]
+        with tempfile.TemporaryDirectory() as directory:
+            write_run(directory, message1=rows)
+            self.assertIn("not a registered set", refusal(self, directory))
+
+
 class Refusals(unittest.TestCase):
     def test_missing_step_names_the_step(self):
         rows = [row for row in step_rows() if row[2] != "read_message1"]
@@ -202,7 +226,7 @@ class Refusals(unittest.TestCase):
         rows = [row for row in message1_rows() if row[1] != "tag_flipped"]
         with tempfile.TemporaryDirectory() as directory:
             write_run(directory, message1=rows)
-            self.assertIn("lacks tag_flipped", refusal(self, directory))
+            self.assertIn("not a registered set", refusal(self, directory))
 
     def test_tag_flipped_accepted_is_refused(self):
         rows = []
@@ -222,7 +246,7 @@ class Refusals(unittest.TestCase):
         rows.append((0, "random", "false", 1, 1, 1, 1))
         with tempfile.TemporaryDirectory() as directory:
             write_run(directory, message1=rows)
-            self.assertIn("unexpected kind random", refusal(self, directory))
+            self.assertIn("not a registered set", refusal(self, directory))
 
     def test_repeated_message1(self):
         rows = message1_rows()

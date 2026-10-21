@@ -238,9 +238,6 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          # No system zstd: Levin compression is the Rust-pinned vendored
-          # libzstd inside the linked shekyl image (PR #411). Installing a
-          # host libzstd would reintroduce the dual-lib story we deleted.
           brew install --quiet cmake boost openssl libpgm libunwind-headers ccache
       # Pinned to match rust/rust-toolchain.toml (avoids a parallel-cargo
       # auto-install race in the daemon build). Bump both together.
@@ -738,7 +735,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DSTATIC=ON `
             -DBUILD_SHARED_LIBS=OFF `
-            -DBUILD_TESTS=OFF `
+            -DBUILD_TESTS=ON `
             -DSTACK_TRACE=OFF `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static
@@ -750,11 +747,12 @@ jobs:
       # WP-W5 of that design round owns renaming this job back.
       - name: build daemon
         shell: pwsh
+        # mdb_copy rides along (one vendored C file): the daemon's prune
+        # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
+        # here. The link gate itself is the script: the three Rust-linking
+        # binaries exist, and the link log has no LNK4098.
         run: |
-          # mdb_copy rides along (one vendored C file): the daemon's prune
-          # warning names shekyl-mdb-copy, so its MSVC compile-fit is gated
-          # here rather than discovered by the first Windows operator.
-          cmake --build build --config Release --target daemon mdb_copy --parallel 2
+          pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage link
       - name: smoke-test daemon boot and stop
         shell: pwsh
         # The daemon's runtime gate on Windows: boot the built shekyld.exe
@@ -780,6 +778,12 @@ jobs:
         # (install, start, SERVICE_RUNNING, stop).
         run: |
           pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\Release\shekyld.exe'
+      - name: core_tests on MSVC
+        shell: pwsh
+        # The link gate's run half. The script requires the suite's own
+        # report: a positive run count and zero failures.
+        run: |
+          pwsh -NoProfile -File scripts/ci/msvc_static_crt.ps1 -Stage core-tests
 
   source-archive:
     name: "source archive"

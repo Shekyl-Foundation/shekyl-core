@@ -15,6 +15,12 @@
 //! <- skem                 message 4   1,120 bytes + payload
 //! ```
 //!
+//! On the wire, message 1 is followed by a 16-byte mac1 (2,336 bytes in all):
+//! keyed BLAKE2s under a key derived from the daemon's public bundle,
+//! outside the Noise message. The daemon checks it, admits that mac1 once,
+//! and pays for the message from its [`HandshakeBudget`], before either
+//! long-term key is used (`RPC_CHANNEL.md` §4.3).
+//!
 //! `e` and `s` each carry an X25519 key and then an ML-KEM-768 key. Both
 //! sides are authenticated by key agreement against both primitives: the
 //! daemon when message 2 opens, the client classically when message 3 opens
@@ -31,24 +37,29 @@
 //! message 3 and message 4, [`DaemonReadyForMessage4::fingerprint`] is the
 //! enrolment lookup and a claim. A copy of that fingerprint kept afterwards
 //! is still only a claim. After message 4 the daemon holds a
-//! [`PendingSession`], whose only operation is
-//! [`PendingSession::open_first_message`]. The directions, the authenticated
-//! client and what it asked for all come out of that together, or not at all.
+//! [`PendingSession`]. The directions, the authenticated client and what it
+//! asked for come out together, through [`PendingSession::open_first_message`]
+//! or through [`PendingSession::lend`] and [`WithheldSession::release`], or
+//! not at all.
 //!
 //! # What a stranger can make the daemon do (§4.3)
 //!
-//! Message 1 is read before anything has authenticated. Reading it runs the
-//! daemon's **long-term** keys on input the sender chose, so:
+//! Message 1 is read before anything has authenticated. The long-term keys
+//! run only after mac1, the encapsulation-key check, the replay window and
+//! one budget admission:
 //!
-//! - **One failure.** Every way message 1 can be wrong surfaces as
-//!   [`HandshakeError::Message1`] and nothing else. In particular a
-//!   ciphertext ML-KEM rejects and a ciphertext it accepts under a bad tag
-//!   are the same error. Decapsulation does not fail on a rejected
-//!   ciphertext; it returns a key nobody else has, and the tag then fails.
-//!   That is the only way a rejection shows.
-//! - **No reply.** The daemon writes nothing until message 1 has
-//!   authenticated. [`Daemon::read_message1`] returns no bytes to send on
-//!   failure, and the state it would have continued from is consumed.
+//! - **One refusal.** Every way message 1 can be wrong, a mac1 presented
+//!   before included, surfaces as [`HandshakeError::Message1`] and nothing
+//!   else. In particular a ciphertext ML-KEM rejects and a ciphertext it
+//!   accepts under a bad tag are the same error. Decapsulation does not fail
+//!   on a rejected ciphertext; it returns a key nobody else has, and the tag
+//!   then fails. That is the only way a rejection shows.
+//! - **No reply on a refusal.** [`Daemon::read_message1`] returns no bytes
+//!   to send when it returns [`Err`], and the state it would have continued
+//!   from is consumed. `?` drops only that case.
+//! - **Busy is not a refusal.** A message that passed the checks and found
+//!   the budget empty is [`Message1Admission::Busy`]. The caller sends that
+//!   reply and closes.
 //! - **A low-order `e` is refused before it is mixed**, at `es` here and at
 //!   `ee` and `se` after. Its Diffie-Hellman result is all zero whatever the
 //!   secret is, so mixing it would add nothing and accepting it would let a
@@ -71,7 +82,12 @@ use rand_core::{CryptoRngCore, OsRng};
 use shekyl_noise::{Direction, SplitRole, SymmetricState};
 use zeroize::Zeroizing;
 
-use crate::{prologue, NetworkId, StaticFingerprint, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+use std::time::Instant;
+
+use crate::budget::{Admission, HandshakeBudget};
+use crate::{
+    prologue, NetworkId, StaticFingerprint, BUSY_LEN, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN,
+};
 
 #[path = "identity.rs"]
 mod identity;
@@ -94,6 +110,9 @@ pub const HANDSHAKE_HASH_LEN: usize = 32;
 /// Message 1: the `skem` ciphertext, both ephemeral keys, the empty
 /// payload's tag.
 pub const MESSAGE1_LEN: usize = MLKEM768_CT_LEN + X25519_PUBLIC_LEN + MLKEM768_EK_LEN + TAG_LEN;
+
+/// Message 1 as it travels: the Noise message, then its mac1 (§4.3).
+pub const MESSAGE1_WIRE_LEN: usize = MESSAGE1_LEN + MAC1_LEN;
 /// Message 2: the `ekem` ciphertext, both ephemeral keys, the empty
 /// payload's tag.
 pub const MESSAGE2_LEN: usize = MLKEM768_CT_LEN + X25519_PUBLIC_LEN + MLKEM768_EK_LEN + TAG_LEN;
@@ -110,8 +129,9 @@ pub const MESSAGE4_OVERHEAD: usize = MLKEM768_CT_LEN + TAG_LEN + TAG_LEN;
 /// One Noise ciphertext, no framing. Empty, and the same on both sides: a
 /// bare message is sealed with it on [`Established::into_directions`]'s
 /// directions and opened with it by the opener handed to
-/// [`PendingSession::open_first_message`]. The channel's record framer has
-/// its own associated data and does not use this.
+/// [`PendingSession::open_first_message`]. A record framer uses
+/// [`PendingSession::lend`] and its own associated data, and does not use
+/// this.
 pub const TRANSPORT_AD: &[u8] = b"";
 
 /// Why a handshake stopped.
@@ -119,6 +139,8 @@ pub const TRANSPORT_AD: &[u8] = b"";
 /// One variant per message, and nothing finer. Which check inside a message
 /// failed is not recorded anywhere: for message 1 that is a requirement
 /// (§4.3), and for the others a finer answer would only be a finer oracle.
+/// A budget drop is not one of these. It is [`Message1Admission::Busy`],
+/// because the caller has a reply to send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakeError {
     /// The daemon did not accept message 1. The sender gets no reply.
@@ -149,6 +171,37 @@ impl core::fmt::Display for HandshakeError {
 }
 
 impl std::error::Error for HandshakeError {}
+
+/// What the daemon does with a message 1 that was not refused.
+///
+/// [`Err`] on [`Daemon::read_message1`] sends nothing. This is the other
+/// channel: the caller matches it, and a busy reply cannot be dropped with
+/// `?`.
+// CLIPPY: `Continue` is the handshake state this function already returned
+// by value. Boxing it would allocate on every admitted handshake to shrink
+// the 16-byte busy reply, and the caller unwraps it at the match.
+#[allow(clippy::large_enum_variant)]
+pub enum Message1Admission {
+    /// Message 1 was admitted. The next call writes message 2.
+    Continue(DaemonReadyForMessage2),
+    /// Message 1 passed mac1, the key check and the replay window, and the
+    /// handshake budget had nothing to pay for it (§4.3). The daemon sends
+    /// `reply`, which [`ClientAwaitingMessage2::is_busy`] recognises, and
+    /// closes. Only a holder of the bundle gets this far, and it is told to
+    /// back off and retry.
+    Busy([u8; BUSY_LEN]),
+}
+
+impl core::fmt::Debug for Message1Admission {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            // The continuation holds the handshake state. Debug names the
+            // variant and stops there.
+            Self::Continue(_) => f.write_str("Continue(..)"),
+            Self::Busy(reply) => f.debug_tuple("Busy").field(reply).finish(),
+        }
+    }
+}
 
 // Every use of a long-term secret while reading message 1 goes through
 // `long_term_key_used`, which counts it under test. A message refused on
@@ -186,6 +239,8 @@ pub struct ClientAwaitingMessage2<'a> {
     sym: SymmetricState,
     own: &'a StaticKeypair,
     ephemeral: Ephemeral,
+    /// The busy reply the daemon would send to this message 1.
+    busy: [u8; BUSY_LEN],
 }
 
 /// The client after message 2: the daemon is authenticated. The next call
@@ -226,7 +281,7 @@ impl Client {
         rng: &mut impl CryptoRngCore,
     ) -> Result<(ClientAwaitingMessage2<'a>, Vec<u8>), HandshakeError> {
         let mut sym = initial_state(network_id, daemon);
-        let mut message = Vec::with_capacity(MESSAGE1_LEN);
+        let mut message = Vec::with_capacity(MESSAGE1_WIRE_LEN);
 
         // skem: encapsulate to the daemon's static key. No cipher key yet,
         // so the ciphertext travels in the clear and is hashed.
@@ -261,11 +316,17 @@ impl Client {
         if message.len() != MESSAGE1_LEN {
             return Err(HandshakeError::Local);
         }
+        // mac1, outside the Noise message: proof to the daemon that the
+        // sender holds its bundle, checked before any long-term key is used.
+        let tag = daemon.mac1(&message);
+        message.extend_from_slice(&tag);
+        let busy = daemon.busy_reply(&tag);
         Ok((
             ClientAwaitingMessage2 {
                 sym,
                 own,
                 ephemeral,
+                busy,
             },
             message,
         ))
@@ -273,6 +334,17 @@ impl Client {
 }
 
 impl<'a> ClientAwaitingMessage2<'a> {
+    /// Whether `reply`, what the daemon sent in place of message 2 before it
+    /// closed, is its busy reply to this message 1: authenticated under the
+    /// mac1 key, so only the daemon, or another holder of its bundle, can
+    /// send it, and bound to this message 1's mac1, so an earlier attempt's
+    /// reply is not this one's. Anything else is not "busy" and is treated
+    /// as a connection closed without an answer.
+    #[must_use]
+    pub fn is_busy(&self, reply: &[u8]) -> bool {
+        crate::mac1::busy_matches(&self.busy, reply)
+    }
+
     /// Read message 2. Success means the daemon holds the static keys the
     /// client was given.
     ///
@@ -465,27 +537,46 @@ impl<'a> Daemon<'a> {
         }
     }
 
-    /// Read message 1.
+    /// Read message 1, as it travels: the Noise message and its mac1.
+    ///
+    /// In this order, each step refusing what the one before let through:
+    /// the length; the mac1, under a key derived from this daemon's public
+    /// bundle, so a sender without the bundle is refused here having cost a
+    /// keyed hash; FIPS 203's input check on the sender's encapsulation key;
+    /// the replay window, so a mac1 already presented is refused with
+    /// nothing spent; then one admission from `budget` at `now`. Only an
+    /// admission lets either long-term key touch the message (§4.3).
     ///
     /// # Errors
     ///
-    /// [`HandshakeError::Message1`], for every cause. See the module
-    /// documentation: nothing distinguishes one cause from another, and the
-    /// caller has nothing to send.
+    /// [`HandshakeError::Message1`] when the message is refused. The caller
+    /// sends nothing. An empty budget is [`Message1Admission::Busy`]: the
+    /// caller sends the reply.
     pub fn read_message1(
         mut self,
-        message1: &[u8],
-    ) -> Result<DaemonReadyForMessage2, HandshakeError> {
+        message1_wire: &[u8],
+        budget: &HandshakeBudget,
+        now: Instant,
+    ) -> Result<Message1Admission, HandshakeError> {
         const E: usize = MLKEM768_CT_LEN;
         const EKEM: usize = E + X25519_PUBLIC_LEN;
         const TAG: usize = EKEM + MLKEM768_EK_LEN;
         let fail = HandshakeError::Message1;
-        if message1.len() != MESSAGE1_LEN {
+        if message1_wire.len() != MESSAGE1_WIRE_LEN {
+            return Err(fail);
+        }
+        let (message1, mac1) = message1_wire.split_at(MESSAGE1_LEN);
+        if !self.own.public().mac1_verifies(message1, mac1) {
             return Err(fail);
         }
         let ciphertext: [u8; MLKEM768_CT_LEN] = array(&message1[..E]).ok_or(fail)?;
         let client_ephemeral: [u8; X25519_PUBLIC_LEN] = array(&message1[E..EKEM]).ok_or(fail)?;
         let client_ephemeral_ek: [u8; MLKEM768_EK_LEN] = array(&message1[EKEM..TAG]).ok_or(fail)?;
+        // The wire length makes this exactly one mac1. A fallible convert
+        // here would turn a sender who passed mac1 into a silent refusal.
+        let mac1: [u8; MAC1_LEN] = mac1
+            .try_into()
+            .expect("mac1 follows a fixed-length message 1");
 
         // FIPS 203's input check on the key message 2 will encapsulate to.
         // First, because it needs no secret and a key that fails it is
@@ -493,6 +584,18 @@ impl<'a> Daemon<'a> {
         // the wire bytes, not what this parse returns.
         let client_ephemeral_ek =
             ml_kem_768::EncapsKey::try_from_bytes(client_ephemeral_ek).map_err(|_| fail)?;
+
+        // Remember the mac1 and pay, under one lock. A repeat is silent: the
+        // first presentation was already answered, and a replay must not
+        // spend the budget or touch a long-term key. A new mac1 the budget
+        // cannot pay for is answered busy (ruled 2026-10-20).
+        match budget.present(&mac1, now) {
+            Admission::Replay => return Err(fail),
+            Admission::Busy => {
+                return Ok(Message1Admission::Busy(self.own.public().busy_reply(&mac1)));
+            }
+            Admission::Admitted => {}
+        }
 
         // skem: decapsulate with the long-term key. This cannot tell a
         // rejected ciphertext from an accepted one, by design: a rejected
@@ -527,11 +630,11 @@ impl<'a> Daemon<'a> {
         if !payload.is_empty() {
             return Err(fail);
         }
-        Ok(DaemonReadyForMessage2 {
+        Ok(Message1Admission::Continue(DaemonReadyForMessage2 {
             sym: self.sym,
             client_ephemeral,
             client_ephemeral_ek,
-        })
+        }))
     }
 }
 
@@ -650,8 +753,8 @@ impl DaemonReadyForMessage4 {
     /// A claim, not an authenticated client. [`StaticFingerprint`] is
     /// `Copy`, so a caller can keep this value past [`Self::write_message4`].
     /// The copy is still only the claim. The authenticated client is what
-    /// [`PendingSession::open_first_message`] yields, and this state does
-    /// not outlive message 4.
+    /// [`PendingSession::open_first_message`] and [`WithheldSession::release`]
+    /// yield, and this state does not outlive message 4.
     #[must_use]
     pub fn fingerprint(&self) -> StaticFingerprint {
         self.client.fingerprint()
@@ -739,9 +842,10 @@ impl Established {
 /// holder of that key can derive the transport directions, so only it can
 /// produce a first message that opens. Until one does, the client is the
 /// classical claim [`DaemonReadyForMessage4::fingerprint`] returned, and
-/// this type is how "nothing is served before then" (§6.2) is kept: its
-/// one operation is [`Self::open_first_message`]. It has no directions and
-/// no way to read who the client is or what it asked for.
+/// this type is how "nothing is served before then" (§6.2) is kept. It is
+/// released only through one check, reached by [`Self::open_first_message`]
+/// or by [`Self::lend`] and then [`WithheldSession::release`]. It has no
+/// directions and no way to read who the client is or what it asked for.
 ///
 /// ```compile_fail,E0599
 /// # use shekyl_rpc_channel::handshake::PendingSession;
@@ -779,6 +883,39 @@ impl Established {
 /// ```
 pub struct PendingSession {
     sym: SymmetricState,
+    client: StaticPublic,
+    request: Vec<u8>,
+}
+
+/// A [`PendingSession`] whose receiving direction has been lent out.
+///
+/// The sending direction, the client and the request stay here until
+/// [`Self::release`]. Dropping this drops them. Nothing here is readable:
+///
+/// ```compile_fail,E0616
+/// # use shekyl_rpc_channel::handshake::WithheldSession;
+/// fn send_while_withheld(withheld: &WithheldSession) {
+///     let _ = &withheld.send;
+/// }
+/// ```
+///
+/// ```compile_fail,E0616
+/// # use shekyl_rpc_channel::handshake::WithheldSession;
+/// fn read_the_request_while_withheld(withheld: &WithheldSession) -> &[u8] {
+///     &withheld.request
+/// }
+/// ```
+///
+/// ```compile_fail,E0616
+/// # use shekyl_rpc_channel::handshake::WithheldSession;
+/// fn name_the_client_while_withheld(withheld: &WithheldSession) {
+///     let _ = withheld.client.fingerprint();
+/// }
+/// ```
+#[must_use = "dropping this drops the session unreleased"]
+pub struct WithheldSession {
+    handshake_hash: [u8; HANDSHAKE_HASH_LEN],
+    send: Direction,
     client: StaticPublic,
     request: Vec<u8>,
 }
@@ -828,85 +965,153 @@ impl PendingSession {
         self.sym.handshake_hash()
     }
 
-    /// Let `opener` open the client's first transport message, and release
-    /// the session only if it did.
+    /// Lend the receiving direction and withhold the rest of the session.
     ///
-    /// The receiving direction is lent to `opener` for this one call. What
-    /// the first message looks like on the wire is the opener's business:
-    /// the channel's record framer is one, and it is not part of the
-    /// handshake. A bare Noise message is another, opened with
+    /// The caller owns the direction for as long as the [`WithheldSession`]
+    /// is held. A reader that has to wait for more bytes builds its framer
+    /// around the direction, and a short read leaves both where they are.
+    /// [`WithheldSession::release`] is how the session comes out.
+    #[must_use = "dropping the withheld session drops the session unreleased"]
+    pub fn lend(self) -> (WithheldSession, Direction) {
+        let handshake_hash = self.sym.handshake_hash();
+        let (send, recv) = self.sym.into_directions(SplitRole::Responder);
+        (
+            WithheldSession {
+                handshake_hash,
+                send,
+                client: self.client,
+                request: self.request,
+            },
+            recv,
+        )
+    }
+
+    /// Open the client's first transport message, when the whole message is
+    /// already in hand, and release the session only if it opened.
+    ///
+    /// This is [`Self::lend`] and [`WithheldSession::release`] around one
+    /// call. The opener runs to completion, and anything but `Ok` consumes
+    /// the session. A reader that may have to wait for more bytes uses
+    /// [`Self::lend`] and holds the withheld session across the reads.
+    ///
+    /// What the first message looks like on the wire is the opener's
+    /// business. The channel's record framer is one, and it is not part of
+    /// the handshake. A bare Noise message is another, opened with
     /// [`TRANSPORT_AD`].
     ///
-    /// **The opener's word is not what releases the session.** After it
-    /// returns, two things about the direction it hands back are checked,
-    /// and both must hold:
-    ///
-    /// - it is **this session's** direction: it carries this session's
-    ///   handshake hash ([`Direction::handshake_hash`], stamped by
-    ///   `into_directions`). The opener holds the direction by `&mut`, so it
-    ///   could put another session's direction in its place, one that has
-    ///   already opened; that is refused;
-    /// - it has itself opened at least one ciphertext
-    ///   ([`Direction::opened`]): a tag verified under a key only the
-    ///   client's ML-KEM key could have produced.
-    ///
-    /// An opener that returns `Ok` without opening anything, or after only
-    /// failed attempts, has authenticated nobody, and the session is refused
-    /// exactly as if it had returned an error. So is one that opens a
-    /// ciphertext and then returns `Err`.
-    ///
-    /// On success, returns the session and whatever the opener returned.
+    /// The release check is [`WithheldSession::release`]'s.
     ///
     /// # Errors
     ///
-    /// [`FirstMessageRefused`] when the opener fails, the direction it hands
-    /// back is not this session's, or that direction opened nothing. The session is consumed and cannot be tried again: its
-    /// sending direction, the client and the request are dropped unseen.
+    /// [`FirstMessageRefused`], on the same terms as
+    /// [`WithheldSession::release`]. The session is consumed and cannot be
+    /// tried again: its sending direction, the client and the request are
+    /// dropped unseen.
     pub fn open_first_message<T, E>(
         self,
         opener: impl FnOnce(&mut Direction) -> Result<T, E>,
     ) -> Result<(AuthenticatedSession, T), FirstMessageRefused> {
-        let handshake_hash = self.sym.handshake_hash();
-        let (send, mut recv) = self.sym.into_directions(SplitRole::Responder);
-        let opened = opener(&mut recv).map_err(|_| FirstMessageRefused)?;
-        if recv.handshake_hash() != handshake_hash || recv.opened() == 0 {
+        let (withheld, mut recv) = self.lend();
+        let opened = opener(&mut recv);
+        withheld.release(recv, opened)
+    }
+}
+
+impl WithheldSession {
+    /// Release the session if `recv` is this session's receiving direction
+    /// and `opened` is what it opened.
+    ///
+    /// **The caller's word is not what releases the session.** Two things
+    /// about `recv` are checked, and both must hold, and `opened` must be
+    /// `Ok`:
+    ///
+    /// - it is **this session's** direction: it carries this session's
+    ///   handshake hash ([`Direction::handshake_hash`], stamped by
+    ///   `into_directions`). The caller owns the direction, so it could
+    ///   hand back another session's, one that has already opened; that is
+    ///   refused;
+    /// - it has itself opened at least one ciphertext
+    ///   ([`Direction::opened`]): a tag verified under a key only the
+    ///   client's ML-KEM key could have produced.
+    ///
+    /// `Ok` with nothing opened, or after only failed attempts, has
+    /// authenticated nobody. So has a direction that opened a ciphertext
+    /// and then an `Err`: a tag can succeed and the framing after it still
+    /// refuse the record. Either one is [`FirstMessageRefused`], and the
+    /// sending direction, the client and the request are dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`FirstMessageRefused`] when `opened` is `Err`, when `recv` is not
+    /// this session's direction, or when that direction opened nothing.
+    pub fn release<T, E>(
+        self,
+        recv: Direction,
+        opened: Result<T, E>,
+    ) -> Result<(AuthenticatedSession, T), FirstMessageRefused> {
+        let opened = opened.map_err(|_| FirstMessageRefused)?;
+        if recv.handshake_hash() != self.handshake_hash || recv.opened() == 0 {
             return Err(FirstMessageRefused);
         }
         Ok((
             AuthenticatedSession {
                 client: self.client,
                 request: self.request,
-                send,
+                send: self.send,
                 recv,
-                handshake_hash,
+                handshake_hash: self.handshake_hash,
             },
             opened,
         ))
     }
 }
 
+/// Fixtures shared by the Diffie-Hellman test and the admission tests.
+///
+/// The admission file is a path module beside this one, as
+/// `pinned_handshake` is. rustfmt resolves a `#[path]` nested in an inline
+/// module under a directory that does not exist, so the fixtures live
+/// where both modules can name them.
 #[cfg(test)]
-mod tests {
-    use super::identity::draw_x25519;
+mod support {
     use super::*;
-    use x25519_dalek::{PublicKey, StaticSecret};
-    use zeroize::ZeroizeOnDrop;
 
-    const NETWORK: NetworkId = [0x42; 16];
+    pub(super) const NETWORK: NetworkId = [0x42; 16];
 
-    fn uses() -> u64 {
+    pub(super) fn uses() -> u64 {
         LONG_TERM_USES.with(std::cell::Cell::get)
     }
 
-    /// A daemon identity, and a message 1 it accepts.
-    fn accepted_message1() -> (StaticKeypair, Vec<u8>) {
+    /// A daemon identity, and a message 1 it accepts, as it travels.
+    pub(super) fn accepted_message1() -> (StaticKeypair, Vec<u8>) {
         let daemon = StaticKeypair::generate().unwrap();
         let client = StaticKeypair::generate().unwrap();
         let (_, message1) = Client::start(&NETWORK, &client, daemon.public()).unwrap();
         (daemon, message1)
     }
 
-    fn unhex(text: &str) -> [u8; 32] {
+    /// Recompute a wire message 1's mac1 after its Noise bytes were changed,
+    /// as a sender holding `daemon`'s bundle can. A test whose subject is a
+    /// check after mac1 uses this, so the message reaches that check.
+    pub(super) fn remac(daemon: &StaticKeypair, wire: &mut [u8]) {
+        let (noise, mac1) = wire.split_at_mut(MESSAGE1_LEN);
+        mac1.copy_from_slice(&daemon.public().mac1(noise));
+    }
+
+    /// A budget that never runs out within a test.
+    pub(super) fn plenty() -> HandshakeBudget {
+        HandshakeBudget::with_share(1_000, std::time::Duration::from_secs(3_600), Instant::now())
+    }
+
+    /// Read `wire` as message 1 with a budget that never runs out.
+    pub(super) fn read1(
+        daemon: &StaticKeypair,
+        wire: &[u8],
+    ) -> Result<Message1Admission, HandshakeError> {
+        Daemon::new(&NETWORK, daemon).read_message1(wire, &plenty(), Instant::now())
+    }
+
+    pub(super) fn unhex(text: &str) -> [u8; 32] {
         let mut out = [0u8; 32];
         for (index, byte) in out.iter_mut().enumerate() {
             *byte = u8::from_str_radix(&text[2 * index..2 * index + 2], 16).unwrap();
@@ -916,7 +1121,7 @@ mod tests {
 
     /// The encodings of the points of small order: every `u` for which
     /// X25519 returns zero whatever the scalar.
-    fn low_order_points() -> Vec<[u8; 32]> {
+    pub(super) fn low_order_points() -> Vec<[u8; 32]> {
         [
             "0000000000000000000000000000000000000000000000000000000000000000",
             "0100000000000000000000000000000000000000000000000000000000000000",
@@ -930,6 +1135,15 @@ mod tests {
         .map(unhex)
         .collect()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::identity::draw_x25519;
+    use super::support::low_order_points;
+    use super::*;
+    use x25519_dalek::{PublicKey, StaticSecret};
+    use zeroize::ZeroizeOnDrop;
 
     /// §4.3: a low-order point never yields a secret to mix, at any of the
     /// three Diffie-Hellman tokens, since all three go through `dh`.
@@ -941,63 +1155,6 @@ mod tests {
         }
         let honest = PublicKey::from(&draw_x25519(&mut OsRng).unwrap()).to_bytes();
         assert!(dh(&secret, &honest).is_some());
-    }
-
-    /// §4.3: message 1 with a low-order `e` is refused, as message 1.
-    ///
-    /// This cannot tell the refusal from the tag failing: the sender made
-    /// its tag with a different `e`, so the tag would fail anyway. That a
-    /// low-order point is never mixed is what the test above shows, on the
-    /// one function every Diffie-Hellman token goes through.
-    #[test]
-    fn message_1_with_a_low_order_ephemeral_is_refused() {
-        for point in low_order_points() {
-            let (daemon, mut message1) = accepted_message1();
-            message1[MLKEM768_CT_LEN..MLKEM768_CT_LEN + X25519_PUBLIC_LEN].copy_from_slice(&point);
-            assert_eq!(
-                Daemon::new(&NETWORK, &daemon)
-                    .read_message1(&message1)
-                    .err(),
-                Some(HandshakeError::Message1)
-            );
-        }
-    }
-
-    /// §4.3: the client's ephemeral encapsulation key is input-checked, and
-    /// a key that fails the check is refused before either long-term key is
-    /// used. The control shows the count moves when message 1 is good.
-    #[test]
-    fn a_malformed_encapsulation_key_is_refused_before_any_long_term_key_is_used() {
-        let (daemon, good) = accepted_message1();
-
-        let before = uses();
-        assert!(Daemon::new(&NETWORK, &daemon).read_message1(&good).is_ok());
-        assert_eq!(uses(), before + 2, "decapsulation and `es`, once each");
-
-        let mut bad = good;
-        let ek = MLKEM768_CT_LEN + X25519_PUBLIC_LEN;
-        bad[ek..ek + MLKEM768_EK_LEN].fill(0xff);
-        let before = uses();
-        assert_eq!(
-            Daemon::new(&NETWORK, &daemon).read_message1(&bad).err(),
-            Some(HandshakeError::Message1)
-        );
-        assert_eq!(uses(), before, "no long-term key touched a malformed key");
-    }
-
-    /// A message of the wrong length is refused on its length alone.
-    #[test]
-    fn a_message_1_of_the_wrong_length_uses_no_long_term_key() {
-        let (daemon, good) = accepted_message1();
-        let long = [good.as_slice(), &[0]].concat();
-        for wrong in [&good[..0], &good[..MESSAGE1_LEN - 1], long.as_slice()] {
-            let before = uses();
-            assert_eq!(
-                Daemon::new(&NETWORK, &daemon).read_message1(wrong).err(),
-                Some(HandshakeError::Message1)
-            );
-            assert_eq!(uses(), before);
-        }
     }
 
     /// Rule 35: the secrets this module holds wipe themselves when dropped.
@@ -1019,6 +1176,10 @@ mod tests {
         wiping_feature_is_on::<x25519_dalek::SharedSecret>();
     }
 }
+
+#[cfg(test)]
+#[path = "admission_tests.rs"]
+mod admission;
 
 #[cfg(test)]
 #[path = "pinned_handshake.rs"]

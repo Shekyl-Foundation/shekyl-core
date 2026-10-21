@@ -388,6 +388,17 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_rt_p6_summary.py
 
+      - name: Run RT-P9 summary tests
+        # `scripts/bench/rt_p9_summary.py` checks the gates registered in
+        # `docs/benchmarks/rt_p9_handshake_round_trips_20261020.md` (each
+        # leg's completion, and the two sides' stamps describing one
+        # exchange) and derives the handshake's two deadlines from the onion
+        # leg. The control is a complete fixture whose 99th percentiles and
+        # deadlines the test computes itself; each gate is shown voiding a
+        # run that breaks it.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_rt_p9_summary.py
+
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.

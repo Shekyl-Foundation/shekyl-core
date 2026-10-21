@@ -26,14 +26,10 @@
 # `levin_base.h` carries a `static_assert(sizeof(bucket_head2) == 29)` for
 # this script to read. That assert is load-bearing; see the comment on it.
 #
-# The compression constants (COMPRESSION_MIN_PAYLOAD, DECOMPRESSED_MAX_SIZE,
-# ZSTD_COMPRESSION_LEVEL) are no longer compared: the C++ compression path
-# is a marshaling shim over the shekyl_levin_* FFI, so those constants are
-# single-sourced in rust/shekyl-levin/src/compress.rs with no C++ copy to
-# drift. Remaining twice-defined constants: framing values in levin_base.h,
-# advertised support flags (`cryptonote_config.h` vs `SupportFlags` in
-# types.rs, added PWD-B6 so a dropped bit cannot silently diverge), and
-# the PWD-B3 ingress table inputs (`BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT`,
+# The protocol has no compression (Rick, 2026-10-19), so there are no
+# compression constants and no 0x10 flag to compare, and no support flags
+# either (deleted with compression). Twice-defined constants: framing values
+# in levin_base.h and the PWD-B3 ingress table inputs (`BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT`,
 # `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT`) copied into
 # rust/shekyl-levin/src/ingress.rs. The handshake cap's input is
 # `DISCLOSE_COUNT`, Rust-owned since the P2P-3 cutover (2026-10-13): the C++
@@ -47,11 +43,10 @@ cd "$repo_root"
 levin_base="contrib/epee/include/net/levin_base.h"
 rust_header="rust/shekyl-levin/src/header.rs"
 config_h="src/cryptonote_config.h"
-rust_types="rust/shekyl-levin/src/payload/types.rs"
 rust_ingress="rust/shekyl-levin/src/ingress.rs"
 protocol_h="src/cryptonote_protocol/cryptonote_protocol_handler.h"
 
-for f in "$levin_base" "$rust_header" "$config_h" "$rust_types" "$rust_ingress" "$protocol_h"; do
+for f in "$levin_base" "$rust_header" "$config_h" "$rust_ingress" "$protocol_h"; do
   if [[ ! -f "$f" ]]; then
     echo "FAIL: expected file is missing: $f" >&2
     echo "      (a move or rename must update this gate, not bypass it)" >&2
@@ -129,11 +124,6 @@ rust_flag() { # name
     sed -E 's/.*Flags\(([^)]*)\).*/\1/'; } || true
 }
 
-rust_support_flag() { # name
-  { grep -E "^[[:space:]]*pub const $1[[:space:]]*: SupportFlags = SupportFlags\(" "$rust_types" | head -1 |
-    sed -E 's/.*SupportFlags\(([^)]*)\).*/\1/'; } || true
-}
-
 echo "Levin wire-constant parity: $levin_base vs rust/shekyl-levin"
 echo
 
@@ -161,8 +151,6 @@ compare "Flags::BEGIN" \
   "$(cpp_define LEVIN_PACKET_BEGIN "$levin_base")" "$(rust_flag BEGIN)"
 compare "Flags::END" \
   "$(cpp_define LEVIN_PACKET_END "$levin_base")" "$(rust_flag END)"
-compare "Flags::COMPRESSED" \
-  "$(cpp_define LEVIN_PACKET_COMPRESSED "$levin_base")" "$(rust_flag COMPRESSED)"
 
 # HEADER_SIZE: read the C++ side out of the static_assert, since
 # `sizeof(bucket_head2)` leaves no literal of its own.
@@ -178,18 +166,6 @@ if [[ -z "$header_size_cpp" ]]; then
 else
   compare "HEADER_SIZE" "$header_size_cpp" "$(rust_const HEADER_SIZE "$rust_header")"
 fi
-
-# PWD-B6: advertised support flags. C++ `P2P_SUPPORT_FLAGS` is
-# `(P2P_SUPPORT_FLAG_ZSTD_COMPRESSION)`; expand the name so arithmetic
-# comparison works. Absence of either file or either define fails closed
-# via the extractors above.
-zstd_cpp="$(cpp_define P2P_SUPPORT_FLAG_ZSTD_COMPRESSION "$config_h")"
-flags_cpp="$(cpp_define P2P_SUPPORT_FLAGS "$config_h")"
-flags_cpp="${flags_cpp//P2P_SUPPORT_FLAG_ZSTD_COMPRESSION/${zstd_cpp}}"
-compare "P2P_SUPPORT_FLAG_ZSTD_COMPRESSION" \
-  "$zstd_cpp" "$(rust_support_flag ZSTD_COMPRESSION)"
-compare "P2P_SUPPORT_FLAGS" \
-  "$flags_cpp" "$(rust_support_flag ADVERTISED)"
 
 # PWD-B3: the hash-list cap inputs. (The handshake cap is derived in Rust
 # from DISCLOSE_COUNT and the entry's pinned encoding; no C++ copy exists.)

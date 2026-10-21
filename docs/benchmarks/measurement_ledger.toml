@@ -90,6 +90,10 @@ note = "Pins rustc at 1.94.0. The RandomX allocation record names only the works
 commit = "5aac523ad"
 note = "Comment only: the bump policy gains the gitian descriptors. The channel does not move."
 
+[[toolchain]]
+commit = "2fb779723"
+note = "Comment only: the gitian bump-policy line drops the deleted Android descriptor. The channel does not move."
+
 # --- consensus: block weight ------------------------------------------
 
 [[path_set]]
@@ -412,6 +416,9 @@ spec = [
   "rust/shekyl-thread-priority/src",
   "rust/shekyl-p-host/src/runtime.rs",
 ]
+cleared = [
+  { through = "2fb779723", reason = "The Android target_os gates are deleted. Linux still calls setpriority with SERVING_NICE 19, and the serving runtime's Linux test still reads that value back. The BA-T5 session 3 T1 capture still prices this tree." },
+]
 
 [[constant]]
 name = "serving_priority_nice"
@@ -543,7 +550,9 @@ stale_through = [
   { through = "21524f1a8", note = "A link subscription unsubscribes when dropped. Watcher bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
   { through = "7e9ea0f61", note = "The managed-Tor death watch follows the route now installed, and a shutdown publishes ProcessStopped. Link bookkeeping only; no deadline and no dial I/O changes. Not re-measured." },
   { through = "0d882303c3", note = "Direction carries a 32-byte handshake-hash stamp set once by into_directions, so the P2P handshake's split copies 32 bytes per direction once per session. No record seal, open or rekey reads it; the per-record path is unchanged. Not re-measured." },
+  { through = "b67b94731", note = "The gap tests' frame that is not the handshake is a timed-sync request in place of the support-flags request (1007), which is deleted with the support-flags word. Only those two tests changed; no code path in these files moved. Dial, handshake, and gap waits are unchanged. Not re-measured." },
   { through = "ea68874a8", note = "RT-W9 step 5a: ClassedRecord, a new framer in shekyl-noise that the P2P transport does not use, and two crate-private reads on Direction (its next nonce and epoch, and the header-protection key). Direction's seal and open are unchanged and the P2P framer calls nothing new. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "37e6ec8ee", note = "The header-protection key is no longer a method of Direction. ClassedRecord passes the record-header label to hkdf_from_record_key and keeps the output. The P2P transport does not call it. Direction's seal and open are unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -629,6 +638,7 @@ cleared = [
   { through = "f60ab687f", reason = "The Tor link keeps one incarnation across a repeated publish of the same route, so the managed-Tor death watcher is armed once. The dial, the gap and their I/O are unchanged." },
   { through = "21524f1a8", reason = "Link subscriptions are removed when dropped. The dial, the gap and their I/O are unchanged." },
   { through = "7e9ea0f61", reason = "The Tor link's death watch is re-planned on each publish and a stop has its own cause; the dial, the gap and their I/O are unchanged, so the capture still prices this tree." },
+  { through = "b67b94731", reason = "The listener test's frame that is not the handshake is a timed-sync request in place of the deleted support-flags request (1007). No code path in these files changes, so the capture still prices this tree." },
 ]
 
 [[constant]]
@@ -939,6 +949,60 @@ capture = "docs/benchmarks/ba_t5_serve_floor_device_20261009_obs.tsv"
 capture_rev = "301ed05b73"
 rev_source = "capture header, the tree line"
 path_set = "archival-serve-fetch"
+
+# --- the RPC channel's handshake --------------------------------------
+
+[[path_set]]
+id = "rpc-handshake"
+spec = [
+  "rust/shekyl-noise/src",
+  "rust/shekyl-rpc-channel/src",
+]
+cleared = [
+  { through = "473aca852", reason = "mac1 and the handshake budget (RPC_CHANNEL.md section 4.3, 2026-10-20): read_message1 gains a keyed BLAKE2s over the 2,320-byte Noise message and one budget admission before the long-term work RT-P6 timed, and the client's start one keyed BLAKE2s. A few microseconds against 2,136.1 us; the stranger's re-measure on the floor device (rt_p6_mac1_stranger_20261020.md) measures it, and its registration moves this constant if the daemon's handshake p99 rises." },
+  { through = "f94231ec8", reason = "The constant moves to the re-measure's 2,163.8 us, and the budget test's count with it (117 to 115 a second). Only the value the budget charges changes; no code path the capture timed is touched, so the capture at 5db6eeda8f prices this tree." },
+  { through = "9b5858839", reason = "Adds deadline.rs: the handshake's two deadlines as constants, which nothing in the crate reads yet, and a compile-time check of their order. No code path RT-P6 or RT-P9 timed changes." },
+  { through = "3eb4b79df", reason = "The busy reply: a message 1 the budget refuses is answered with one keyed BLAKE2s over 34 bytes instead of nothing, after the admission check, so it is outside every admitted handshake the charge prices; the client computes the expected reply once with its mac1. The daemon's handshake, and what each admission costs, are unchanged." },
+  { through = "31ba74896", reason = "Adds retry.rs, the client's retry policy: arithmetic on instants that decides when to start again. No handshake step RT-P6 or RT-P9 timed changes." },
+  { through = "7b2ed1f26", reason = "A first presentation inserts its mac1 into a 115-slot window before the long-term work, and a busy reply is Message1Admission::Busy rather than an error. A replay returns before the long-term keys and is not an admitted handshake. The client's busy compare is subtle's constant-time equality. The charge is unchanged at 2,163,800 ns, so the captures at 5db6eeda8f still price this tree." },
+  { through = "54c3aa3dd", reason = "The retry module's end-to-end test matches Message1Admission instead of an error. HandshakeRetry's decisions are the same, and no handshake step RT-P6 or RT-P9 timed changes." },
+  { through = "ea68874a8", reason = "ClassedRecord is a new framer in shekyl-noise. The handshake calls Direction's seal and open, which this commit does not change, and it does not call the framer or the two new reads (next, and the header key). The budget still charges 2,163,800 ns. The RT-P9 deadlines are onion round trips and are unchanged." },
+  { through = "37e6ec8ee", reason = "The record-header label leaves Direction. HeaderKey::mask passes it to hkdf_from_record_key and keeps the output; the handshake does not derive a header key. Direction's seal and open are unchanged. The budget still charges 2,163,800 ns, and the RT-P9 deadlines are unchanged." },
+  { through = "8c465cff7", reason = "open_first_message now lends the receiving direction, runs the same Direction::open the bench times, and releases on the checks that function already made (this session's handshake hash, one successful open, an accepted message). That step is inside the summed handshake and is moves around the same open. The charge stays 2,163,800 ns. Message 1's deadline is before this function, and the whole-handshake deadline is the onion round trip." }
+]
+
+[[constant]]
+name = "handshake_daemon_cpu_ns"
+defined_in = "rust/shekyl-rpc-channel/src/budget.rs"
+needle = "pub const HANDSHAKE_DAEMON_CPU_NANOS: u64 = 2_163_800;"
+measured_by = ["BA-T36"]
+status = "current"
+capture = "docs/benchmarks/rt_p6_mac1_stranger_20261020_captures/summary_registered.md"
+capture_rev = "5db6eeda8f"
+rev_source = "the record's results name the build: 5db6eeda8f on the floor device, checked by its hash before building, the registered cell of 2026-10-20 (docs/benchmarks/rt_p6_mac1_stranger_20261020.md, Conditions). The constant is the daemon's per-handshake CPU at the 99th percentile with mac1, 2,163.8 us, the cost the handshake budget charges each admission. It replaces RT-P6's 2,136.1 us by that record's registered rule: the p99 rose."
+path_set = "rpc-handshake"
+
+[[constant]]
+name = "handshake_message1_deadline_s"
+defined_in = "rust/shekyl-rpc-channel/src/deadline.rs"
+needle = "pub const MESSAGE1_DEADLINE: Duration = Duration::from_secs(4);"
+measured_by = ["BA-T37"]
+status = "current"
+capture = "docs/benchmarks/rt_p9_handshake_round_trips_20261020_captures/attempt2/summary.md"
+capture_rev = "666bbded3c"
+rev_source = "the record's results name the build: 666bbded3c on the floor device, checked by its hash before building, and on the workstation, attempt 2 of 2026-10-20 (docs/benchmarks/rt_p9_handshake_round_trips_20261020.md). Twice the onion leg's 99th percentile from accept to message 1 received, 1,803.4 ms, rounded up to a whole second."
+path_set = "rpc-handshake"
+
+[[constant]]
+name = "handshake_whole_deadline_s"
+defined_in = "rust/shekyl-rpc-channel/src/deadline.rs"
+needle = "pub const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(11);"
+measured_by = ["BA-T37"]
+status = "current"
+capture = "docs/benchmarks/rt_p9_handshake_round_trips_20261020_captures/attempt2/summary.md"
+capture_rev = "666bbded3c"
+rev_source = "the record's results name the build: 666bbded3c on the floor device, checked by its hash before building, and on the workstation, attempt 2 of 2026-10-20 (docs/benchmarks/rt_p9_handshake_round_trips_20261020.md). Twice the onion leg's 99th percentile from accept to the client's first record opened, 5,231.9 ms, rounded up to a whole second."
+path_set = "rpc-handshake"
 
 [[retired_estimate]]
 name = "serve_median_per_response_single_pass_floor"

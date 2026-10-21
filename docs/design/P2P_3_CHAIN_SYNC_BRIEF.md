@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** OPEN — Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction, with only an omitted first block attributable. Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). Nothing here is implemented; the pure-Rust work of CS-Q10 starts first.
+**Status:** OPEN — Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). Nothing here is implemented; the pure-Rust work of CS-Q10 starts first.
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 **Subject.** Moving chain sync (`cryptonote_protocol_handler`, `block_queue`) from C++ to Rust.
@@ -130,8 +130,8 @@ owner of block propagation.
 | Sync-time estimate pair, `cumulative_block_sync_weight` | CS | Redesign. Progress is read from the header chain (rule 80). The Monero mainnet size table is deleted (rules 60, 71) |
 | `log_connections` | console | Delete. The console reads the board |
 | `safesyncmode`, the `pause_mine`/`resume_mine` coupling | — | Delete. `safesyncmode` is an LMDB knob and leaves with DRS-X; the miner reacts to tip changes, not to sync |
-| `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:260`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner is not started. Read from the snapshot (`net_node.inl:429-430`) |
-| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:270`, **L** chain-sync), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12 |
+| `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:262`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner is not started. Read from the snapshot (`net_node.inl:429-430`) |
+| `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:272`, **X**), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12: refused; the constants stand until the cutover |
 
 **Wargame.**
 - **Remote trigger or benefit.** None. This is an ownership question.
@@ -553,20 +553,35 @@ the wire can still change?
      `total_height`. A height is the index along the chain.
 2. **Objects request and response.**
    - The request names hashes, as now.
-   - **The response carries the requested blocks in request order.** The
-     first is always sent, whatever its size. Its size is bounded by
-     consensus (the block weight limit) and by the packet cap. After it,
-     the responder adds the next block while it fits the remaining byte
-     budget, and stops at the first that does not.
-   - The response names the tail it did not send. `missed_ids` becomes
-     that not-sent list, and `prune` is deleted.
-   - **What the receiver can attribute.** It cannot see an omitted
-     block's size, so an omission after the first block is never a
-     fault: the tail is re-requested, from that session or another. A
-     response that omits the **first** requested block, when that block
-     lies inside the responder's advertised verified frontier, is
-     withholding (CS-Q4). Every node can serve every block in at least
-     skeleton form (item 3), so the first block is always servable.
+   - **The response accounts for every requested block, in request
+     order, in exactly one of three ways** (PWD-B3's continuation,
+     `SHEKYL_P2P_PROTOCOL.md` §PWD-B3; the FOLLOWUPS row "Implement 2004
+     byte-budget truncation continuation"):
+     - **sent**;
+     - **deferred**: held, but it did not fit the remaining byte budget.
+       Deferral is a suffix: after the first deferred block, every later
+       block the responder holds is deferred too. The first block it
+       holds is always sent, whatever its size, which is bounded by
+       consensus (the block weight limit) and by the packet cap. So a
+       response always makes progress;
+     - **unavailable**: the responder does not hold it. `missed_ids`
+       keeps this meaning, "I do not have it". A peer that is still
+       syncing may hold a header without its body, so this is honest.
+   - Deferred and unavailable blocks travel in separate lists, so the
+     receiver's availability bookkeeping and re-request routing never
+     confuse "ran out of room" with "does not have it". `prune` is
+     deleted.
+   - **What the receiver can attribute.**
+     - It cannot see a deferred block's size or a peer's holdings, so a
+       deferred or unavailable block is never a fault. Deferred blocks
+       are re-requested from that session or another. Unavailable ones
+       are recorded against that session and requested from one that
+       holds them.
+     - **An unmarked shortfall closes the session:** a requested block
+       that is neither sent, deferred nor unavailable. So does a
+       response that defers the first block it holds. This is the
+       not-all-returned drop, narrowed and never deleted (PWD-B3): it is
+       the withholding detector (CS-Q4).
 3. **The form is per transaction, not per block or per request flag.**
    - Each transaction is served either **full** or as a **skeleton**:
      - the unprunable part;
@@ -615,8 +630,9 @@ All four are fixed by our own constants, not by what peers claim. The
 - **Junk hashes.** Gone: there are no unproven ids on the wire.
 - **Inflated tip claim.** It costs the liar its session at the end of
   its own run, with zero hashes.
-- **Partial bodies.** Explicit, and re-requested. **Withheld bodies:**
-  only an omitted first block is attributable, and it closes the session.
+- **Partial bodies.** Explicit, as deferred or unavailable, and
+  re-requested. **Withheld bodies:** an unmarked shortfall closes the
+  session.
 - **Substituted bodies.** Bound to the header before the offer (CS-Q2
   step 6); the supplier is closed and the header stays valid.
 - **Tiny network.** No change.
@@ -662,15 +678,14 @@ tested against PWD-B7:
   wire). This arm is consistent with PWD-B7, and it is the droppable
   class PWD-B7 names.
 - **Withholding** is attributable only if the wire makes it a universal
-  rule. CS-Q3.2 does, for one case:
-  - a response that omits the **first** requested block, when that block
-    lies inside the peer's advertised verified frontier, is a form
-    failure, and the session is closed (every node can serve a block in
-    skeleton form, CS-Q3.3);
-  - an omission after the first block is never a fault, because the
-    receiver cannot see whether it would have fit; the tail is
-    re-requested;
-  - a transaction served as a skeleton where the receiver needs it full
+  rule. CS-Q3.2 does: every requested block is sent, deferred or marked
+  unavailable (PWD-B3's continuation).
+  - An unmarked shortfall is a form failure, and the session is closed.
+    So is a response that defers the first block it holds.
+  - A deferred or unavailable block is never a fault: the receiver cannot
+    see a block's size or a peer's holdings. It re-requests, and
+    repeated non-delivery is a missed deadline, handled under (i).
+  - A transaction served as a skeleton where the receiver needs it full
     is not withholding either (CS-Q3.3).
 - **A missed deadline** fails PWD-B7's second conjunct. The deadline is
   derived from our **local** rate floor, an `Assumption`, so it is local
@@ -698,7 +713,7 @@ the existing types are extended, not replaced.
 | --- | --- | --- |
 | Eclipse during initial sync | Sync cannot detect a total eclipse; defence is the dialer's uniform draw and `ReleaseAnchors`. Headers-first means that when one honest session appears, its heavier headers win before bodies are connected deep (CS-F3) | — |
 | Long low-work fork | Its claim is below `work(H*)`, so it is never asked. A liar claiming more is caught at the end of its run: the run's computed work falls short of the claim | Zero hashes if the work falls short; at most one run budget held. If the headers carry inflated work, the first PoW check fails: at most one hash per session |
-| Withholding | An omitted first block inside the advertised frontier is a form failure, and the session is closed. Omissions after the first block are re-requested, from that session or another | Bounded by the sessions holding the span |
+| Withholding | An unmarked shortfall (a requested block neither sent, deferred nor marked unavailable), or a deferred first held block, is a form failure, and the session is closed. Deferred and unavailable blocks are re-requested, from that session or another. An explicit unavailable cannot be checked: the receiver cannot see the responder's holdings. A peer that marks every block unavailable is never closed. Those blocks are recorded against the session and requested elsewhere, and the peer keeps its slot. Deliberate withholding is held to the same limits as slow drip: the dialer's peer mix and PWD-B1's token bucket. The drop catches unmarked or malformed shortfall, not withholding | Bounded by the sessions holding the span |
 | Substituted or reordered bodies under an honest header | Caught before the offer by the header binding (CS-Q2 step 6): the supplier is closed, the span is requested elsewhere, and the header is not invalidated | One session per attempt; no header is ever lost |
 | Slow drip | Each request's deadline = the connector's transit (from its declaration, `transit_ms`) plus bytes asked over a rate floor. Late means the span is reassigned and the session stops being a body source for that run. It is **not** closed, under option (i) above (PWD-B7) | The rate floor is an `Assumption` until measured. The slot it keeps is bounded by the dialer and PWD-B1, not sync |
 | Body passes framing, fails `validate` | The header's PoW is on the selected chain, so the attacker mined it at honest difficulty; subtree invalidated, session closed | Attacker: one real block's mining. Us: one block's validation |
@@ -1205,9 +1220,12 @@ half-cut, and one cutover PR avoids it.
     `following_degraded`;
   - `Diverged` never withholds `Synced`;
   - a missed deadline reassigns the span and never closes the session;
-  - an objects response closes the session only when it omits the first
-    requested block inside the advertised frontier; a later omission or a
-    skeleton where full was needed never does.
+  - an objects response closes the session only for an unmarked shortfall
+    or a deferred first held block; a deferred or unavailable block, or a
+    skeleton where full was needed, never does;
+  - deferred and unavailable blocks are re-requested along separate
+    paths: a deferred block from any session that holds it, an
+    unavailable one from another session first.
 - **Adversarial harness.** Scripted peers over real Levin framing on
   loopback (`shekyl-p2p-harness`): honest, liar, withholder, slow-drip,
   low-work fork, invalid body, and an unsolicited-announce flood during
@@ -1242,7 +1260,7 @@ half-cut, and one cutover PR avoids it.
 **Problem.**
 - The input grammar hands four daemon options to this lane:
   `prep-blocks-threads`, `block-sync-size`, `span-limit` and
-  `block-download-max-size` (`INPUT_GRAMMAR.md:270`, legend **L**,
+  `block-download-max-size` (`INPUT_GRAMMAR.md:272`, legend **L**,
   "lane-owned (not ported; IG-Q4)").
 - The daemon no longer reads them. Today's defaults are hardcoded "until
   that lane decides":
@@ -1385,8 +1403,10 @@ record in `99542387b`, and the latch's reply split, `CannotFollow`, in
   8, the sync owner sets `following_degraded` through the connector (§A
   item 7), and the evidence check's `Class::Evidence` with its own cache
   lands with chain sync's first caller, not in PR 2;
-- the `INPUT_GRAMMAR.md:270` row moves from **L** to **X** with CS-Q12's
-  reason. That is the grammar lane's table.
+- the `INPUT_GRAMMAR.md:272` row is **X** (#1142), with CS-Q12's reason.
+  The daemon table refuses the four names with that reason: the three
+  budget options name `p2p-download-max` and the IG-Q40 reopening, and
+  `prep-blocks-threads` names the shared hasher budget.
 
 **Next:** the implementing agent's instructions, one consolidated brief,
 starting with CS-Q10's pure-Rust work.

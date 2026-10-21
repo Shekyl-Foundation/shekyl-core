@@ -215,12 +215,11 @@ this lane.
    Listener, advertised address, seeds, peerlist, and inbound cap stay
    per connector. Collapsing those into one session table is LV-3. The
    protocol handler does not branch on the connector: a session syncs,
-   relays blocks, answers support flags, and takes transactions the
-   same way whatever carried it. The clearnet-only gates are gone:
-   chain sync, compact-block relay, and the support-flags request.
-   The support-flags request goes out on the session's own zone
-   server. A session established before the relay exists logs at
-   error and is not registered.
+   relays blocks, and takes transactions the same way whatever carried
+   it. The clearnet-only gates are gone: chain sync and compact-block
+   relay. (The support-flags request, also once clearnet-only, is
+   deleted with compression, 2026-10-19.) A session established before
+   the relay exists logs at error and is not registered.
 
    `NETWORK_ID` is a handshake value, not a relay field. It is the
    first 16 bytes of `cSHAKE256(S = "shekyl/p2p-network-id-v1",
@@ -665,8 +664,8 @@ against the latency cost for Shekyl's expected topology.
 ### D-7 — the port seam
 
 Rust decides *when* and *to whom*. C++ keeps *how to serialize and send*:
-epee binary serialization, the 1024-byte padding walk, levin framing,
-fragmentation and compression. This workspace has no epee or levin
+epee binary serialization, the 1024-byte padding walk, levin framing and
+fragmentation. This workspace has no epee or levin
 implementation and building one is a separate multi-thousand-line project
 (§8).
 

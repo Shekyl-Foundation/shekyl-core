@@ -25,7 +25,7 @@ use shekyl_capped_stream::Session;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{
     invoke, BasicNodeData, BucketReader, CoreSyncData, HandshakeRequest, HandshakeResponse,
-    PortableMap, Received, SupportFlags, COMMAND_HANDSHAKE,
+    PortableMap, Received, COMMAND_HANDSHAKE,
 };
 use shekyl_peerlist::{
     CloseCause, CloseKind, ConnectorId, DialOutcome, NetworkAddress, SessionRow,
@@ -51,8 +51,6 @@ pub(super) enum Attempt {
 /// A kept dial the owner has not yet recorded.
 pub(super) struct KeptDial {
     pub(super) id: SocketId,
-    /// The peer's support flags, zero included.
-    pub(super) support_flags: u32,
     /// The peer's sync payload.
     pub(super) sync: SyncPayload,
     /// The pump's end of the session. The owner starts the pump after it
@@ -99,10 +97,7 @@ impl Dialer {
         };
         let connected_at = std::time::Instant::now();
         let request = HandshakeRequest {
-            node_data: BasicNodeData {
-                network_id,
-                support_flags: SupportFlags::from_bits(self.support_flags),
-            },
+            node_data: BasicNodeData { network_id },
             payload_data: sync_data(&snapshot),
             nonce: *nonce.bytes(),
         };
@@ -187,7 +182,6 @@ impl Dialer {
         }
         Attempt::Kept(KeptDial {
             id,
-            support_flags: response.node_data.support_flags.bits(),
             sync: SyncPayload {
                 current_height: response.payload_data.current_height,
                 cumulative_difficulty: response.payload_data.cumulative_difficulty,

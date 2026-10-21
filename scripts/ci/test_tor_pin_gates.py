@@ -555,7 +555,7 @@ def workflow_yaml(hosts, steps=STAGE_STEP):
 
 def targets_tree(tmp, pins=None, hosts=("x86_64-linux-gnu riscv64-linux-gnu",),
                  workflow_hosts=("x86_64-linux-gnu",), workflow_extra="", workflow=None,
-                 checklist="Expert Bundle 9.9.9 (tor 0.0.0.1)", gate_args=()):
+                 checklist="Expert Bundle 9.9.9 (tor 0.0.0.1)"):
     root = Path(tmp) / "tree"
     (root / "scripts" / "release").mkdir(parents=True)
     (root / "scripts" / "ci").mkdir(parents=True)
@@ -583,8 +583,7 @@ def targets_tree(tmp, pins=None, hosts=("x86_64-linux-gnu riscv64-linux-gnu",),
         f"- Current pin: **{checklist}**\n", encoding="utf-8"
     )
     return subprocess.run(
-        [sys.executable, str(root / "scripts" / "ci" / TARGETS_GATE.name), "--root", str(root),
-         *gate_args],
+        [sys.executable, str(root / "scripts" / "ci" / TARGETS_GATE.name), "--root", str(root)],
         capture_output=True,
         text=True,
     )
@@ -704,21 +703,10 @@ def pending_pins():
     return pins
 
 
-@tcase("targets: a pending row is reported and passes without --refuse-pending")
+@tcase("targets: a pending row is reported and passes")
 def _(tmp):
     proc = targets_tree(tmp, pins=pending_pins())
     expect(proc, 0, "riscv64-linux-gnu is unavailable pending TB-11")
-
-
-@tcase("targets: --refuse-pending fails while a pending row remains")
-def _(tmp):
-    proc = targets_tree(tmp, pins=pending_pins(), gate_args=("--refuse-pending",))
-    expect(proc, 1, "riscv64-linux-gnu is still pending TB-11")
-
-
-@tcase("targets: --refuse-pending passes a ruled-unavailable row")
-def _(tmp):
-    expect(targets_tree(tmp, gate_args=("--refuse-pending",)), 0, "every built host")
 
 
 @tcase("targets: a malformed pin file fails")

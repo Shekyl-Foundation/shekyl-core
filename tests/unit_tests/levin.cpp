@@ -64,7 +64,6 @@ namespace cryptonote { namespace levin {
 #include "int-util.h"
 #include "p2p/net_node.h"
 #include "net/levin_base.h"
-#include "net/levin_compression.h"
 #include "span.h"
 
 namespace
@@ -321,9 +320,8 @@ namespace
         //! Sizes of the frames still queued, as they would go on the wire.
         //!
         //! The decoded-message assertions elsewhere in this file cannot see
-        //! a size defect: the receive path inflates a COMPRESSED bucket
-        //! before handing it up, so padding present in the *decoded*
-        //! message says nothing about whether it survived to the wire.
+        //! a size defect: padding present in the *decoded* message says
+        //! nothing about the size of the frame that carried it.
         std::vector<std::size_t> queued_wire_sizes() const
         {
             std::vector<std::size_t> sizes;
@@ -1123,112 +1121,25 @@ TEST(make_fragment, multiple)
     EXPECT_EQ(fragment.size(), std::count(fragment.cbegin(), fragment.cend(), 0));
 }
 
-// ── Compression shim (shekyl_levin_* FFI) ──────────────────────────────────
+// ── The retired compression bit ────────────────────────────────────────────
 //
-// These bite against the C++↔Rust marshaling seam (buffer ownership, length
-// handling, return-code mapping, limit plumbing); the codec itself — the
-// constants, the frame handling, the caps, and which messages may be
-// compressed at all — is owned and tested by rust/shekyl-levin. Before this
-// seam existed the C++ tree had no compression coverage at all.
-//
-// The emit half has no payload-level entry point to test: `epee::levin`
-// exposes only whole-message compression, because every question that
-// decides whether a buffer may be compressed is about its bucket header.
-
-TEST(levin_compression, message_roundtrips_through_the_ffi)
+// 0x10 was LEVIN_PACKET_COMPRESSED. Compression left the protocol (Rick,
+// 2026-10-19), so the bit is undefined and the production admission path —
+// the one `handle_recv` calls for every outer and reassembled inner header —
+// refuses it with the unknown-flags code. A bucket carrying it closes the
+// connection; its body is never read as plaintext.
+TEST(levin_ingress, retired_compression_bit_is_refused)
 {
-    // End-to-end over the emit path: finalize a notify, compress the whole
-    // message, verify the header rewrite, then inflate the payload back.
-    std::string payload(8 * 1024, '\0');
-    for (std::size_t i = 0; i < payload.size(); ++i)
-        payload[i] = static_cast<char>(i % 251);
-
-    epee::levin::message_writer message;
-    message.buffer.write(epee::to_span(payload));
-
-    epee::byte_slice compressed_msg =
-        epee::levin::try_compress_message(message.finalize_notify(2002));
-    ASSERT_LE(sizeof(epee::levin::bucket_head2), compressed_msg.size());
-    EXPECT_LT(compressed_msg.size(), payload.size());
-
-    epee::levin::bucket_head2 head;
-    std::memcpy(std::addressof(head), compressed_msg.data(), sizeof(head));
-    EXPECT_TRUE(SWAP32LE(head.m_flags) & LEVIN_PACKET_COMPRESSED);
-    EXPECT_EQ(SWAP64LE(head.m_cb), compressed_msg.size() - sizeof(head));
-
-    const epee::span<const uint8_t> frame{
-        compressed_msg.data() + sizeof(head), compressed_msg.size() - sizeof(head)};
-    std::string decompressed;
-    ASSERT_TRUE(epee::levin::decompress_payload(
-        frame, decompressed, LEVIN_DEFAULT_MAX_PACKET_SIZE));
-    EXPECT_EQ(payload, decompressed);
-}
-
-TEST(levin_compression, small_message_is_returned_unchanged)
-{
-    // Below the 256-byte payload minimum (single-sourced in
-    // rust/shekyl-levin) the decline must hand the caller its own message
-    // back byte for byte — not an empty slice, and not a re-framed one.
-    const std::string payload(255, 'a');
-    epee::levin::message_writer message;
-    message.buffer.write(epee::to_span(payload));
-
-    epee::byte_slice original = message.finalize_notify(2002);
-    epee::byte_slice result = epee::levin::try_compress_message(original.clone());
-
-    ASSERT_EQ(original.size(), result.size());
-    EXPECT_EQ(0, std::memcmp(original.data(), result.data(), original.size()));
-
-    epee::levin::bucket_head2 head;
-    std::memcpy(std::addressof(head), result.data(), sizeof(head));
-    EXPECT_FALSE(SWAP32LE(head.m_flags) & LEVIN_PACKET_COMPRESSED);
-}
-
-TEST(levin_compression, cover_traffic_is_returned_unchanged)
-{
-    // A noise bucket's constant on-wire size is the entire property the
-    // white-noise feature buys. The C++ this shim replaced did not check the
-    // noise class at all — it would have compressed one and shortened it.
-    epee::byte_slice noise = epee::levin::make_noise_notify(4096);
-    ASSERT_EQ(4096u, noise.size());
-
-    epee::byte_slice result = epee::levin::try_compress_message(noise.clone());
-    ASSERT_EQ(noise.size(), result.size());
-    EXPECT_EQ(0, std::memcmp(noise.data(), result.data(), noise.size()));
-}
-
-TEST(levin_compression, garbage_frame_rejected)
-{
-    // The false⇒empty contract on the decompress failure path: a reused
-    // non-empty `output` must not retain stale bytes after rejection.
-    const std::string garbage = "definitely not a zstd frame";
-    std::string decompressed = "stale-caller-reuse";
-    EXPECT_FALSE(epee::levin::decompress_payload(
-        epee::strspan<uint8_t>(garbage), decompressed, LEVIN_DEFAULT_MAX_PACKET_SIZE));
-    EXPECT_TRUE(decompressed.empty());
-}
-
-TEST(levin_compression, inflation_bounded_by_the_callers_limit)
-{
-    // A valid frame whose declared content size exceeds max_output must be
-    // rejected before allocation — this is the limit the async handler
-    // passes from min(packet limit, per-command cap).
-    const std::string payload(8 * 1024, '\0');
-    epee::levin::message_writer message;
-    message.buffer.write(epee::to_span(payload));
-    epee::byte_slice compressed_msg =
-        epee::levin::try_compress_message(message.finalize_notify(2002));
-    ASSERT_LT(sizeof(epee::levin::bucket_head2), compressed_msg.size());
-
-    const epee::span<const uint8_t> frame{
-        compressed_msg.data() + sizeof(epee::levin::bucket_head2),
-        compressed_msg.size() - sizeof(epee::levin::bucket_head2)};
-
-    std::string decompressed = "stale-caller-reuse";
-    EXPECT_FALSE(epee::levin::decompress_payload(frame, decompressed, 1024));
-    EXPECT_TRUE(decompressed.empty());
-    EXPECT_TRUE(epee::levin::decompress_payload(frame, decompressed, payload.size()));
-    EXPECT_EQ(payload, decompressed);
+    for (const uint32_t flags : {LEVIN_PACKET_REQUEST, LEVIN_PACKET_RESPONSE, LEVIN_PACKET_BEGIN})
+    {
+        int32_t rc = 0;
+        EXPECT_TRUE(cryptonote::cryptonote_connection_context::get_max_bytes(
+            cryptonote::NOTIFY_NEW_TRANSACTIONS::ID, flags, &rc).has_value());
+        EXPECT_EQ(0, rc);
+        EXPECT_FALSE(cryptonote::cryptonote_connection_context::get_max_bytes(
+            cryptonote::NOTIFY_NEW_TRANSACTIONS::ID, flags | 0x10u, &rc).has_value());
+        EXPECT_EQ(-8, rc) << "flags " << (flags | 0x10u);
+    }
 }
 
 TEST_F(levin_notify, defaulted)
@@ -1686,24 +1597,17 @@ TEST_F(levin_notify, fluff_with_padding)
 //
 // `make_tx_message` quantizes the serialized payload to a 1024-byte boundary
 // with a run of spaces so an observer cannot read transaction volume off the
-// frame size. zstd erases that run almost perfectly, so compressing a padded
-// message puts the frame size back in step with the real payload and hands
-// the observer exactly the signal the operator paid bandwidth to hide.
+// frame size. Anything between the quantizer and the socket that changes the
+// length — compression did, before it left the protocol (2026-10-19) — puts
+// the frame size back in step with the real payload and hands the observer
+// exactly the signal the operator paid bandwidth to hide.
 //
 // This has to be asserted on the *wire* bytes. Every other padding test in
-// this file inspects the decoded notification, and the decoded message
-// carries its padding either way — the receive path inflates a COMPRESSED
-// bucket before handing it up. Reverting the `if (!pad)` guard in
-// `make_payload_send_txs` leaves all of those green and fails only this.
+// this file inspects the decoded notification, which carries its padding
+// whatever happened to the frame on the way.
 //
-// The transaction bodies are pseudorandom on purpose. Real Shekyl wire
-// bytes measure 7.97–7.995 bits/B of entropy and zstd level 1 *expands*
-// them (FOLLOWUPS Z-1, 2026-08-06), so a compressible corpus here would
-// prove the guard matters for traffic that does not exist. What makes a
-// padded message compressible is not its payload, it is the padding: a run
-// of ~1000 identical spaces collapses to a couple of dozen bytes, which
-// beats the ~0.1% the incompressible bodies expand by. That is why the
-// quantization falls even when the transactions themselves are noise.
+// The transaction bodies are pseudorandom, matching real Shekyl wire bytes
+// (7.97–7.995 bits/B of entropy, FOLLOWUPS Z-1).
 TEST_F(levin_notify, padding_survives_the_emit_path)
 {
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, true);
@@ -1714,7 +1618,7 @@ TEST_F(levin_notify, padding_survives_the_emit_path)
 
     io_service_.poll();
 
-    // Incompressible bodies, matching the Z-1 measurement of real traffic.
+    // Pseudorandom bodies, matching the Z-1 measurement of real traffic.
     // A cheap deterministic PRNG, not `crypto::rand`: the test must fail the
     // same way on every run.
     std::vector<cryptonote::blobdata> txs(2);
@@ -1769,18 +1673,11 @@ TEST_F(levin_notify, padding_survives_the_emit_path)
     }
 }
 
-// The guard above must not have simply switched compression off: with
-// padding disabled the compressor still has to be reachable.
-//
-// This one deliberately uses a *compressible* corpus, which the padding
-// test deliberately does not. The claim here is only "the !pad branch
-// still reaches the codec" — a wire frame smaller than the transactions it
-// carries is possible only if the compressor ran. It is emphatically NOT a
-// claim that real traffic compresses; Z-1 measured real bodies at 7.99
-// bits/B, where zstd level 1 expands them and the only-if-smaller rule
-// declines. Using realistic bytes here would make this test pass for the
-// wrong reason — by proving nothing at all.
-TEST_F(levin_notify, unpadded_messages_still_compress)
+// An unpadded message goes on the wire whole. The protocol has no
+// compression (2026-10-19), so even a corpus a codec would collapse — runs of
+// one byte — reaches the socket at its full serialized size, and the receive
+// path hands up exactly the transactions that were sent.
+TEST_F(levin_notify, unpadded_messages_go_on_the_wire_whole)
 {
     std::shared_ptr<cryptonote::levin::notify> notifier_ptr = make_notifier(true, false);
     auto &notifier = *notifier_ptr;
@@ -1808,16 +1705,13 @@ TEST_F(levin_notify, unpadded_messages_still_compress)
     {
         for (const std::size_t wire_size : context->queued_wire_sizes())
         {
-            EXPECT_LT(wire_size, txs[0].size() + txs[1].size())
-                << "unpadded message went on the wire uncompressed";
+            EXPECT_LT(sizeof(epee::levin::bucket_head2) + txs[0].size() + txs[1].size(), wire_size)
+                << "an unpadded message went on the wire smaller than the transactions it carries";
             ++inspected;
         }
     }
     EXPECT_LT(0u, inspected) << "no frames observed; the test proved nothing";
 
-    // Draining also proves the compressed frames are the receive path's
-    // problem and not just smaller bytes: each one must inflate back into
-    // the original transactions.
     for (context = contexts_.begin(); context != contexts_.end(); ++context)
         context->process_send_queue();
     EXPECT_EQ(txs, events_.take_relayed(cryptonote::relay_method::fluff));
@@ -2679,11 +2573,12 @@ TEST_F(levin_notify, fluff_via_scheduled_drive)
 
 TEST_F(levin_notify, command_max_bytes)
 {
-    // COMMAND_PING is deleted (PWD-B10). SUPPORT_FLAGS is the remaining
-    // tight cap (PWD-B3 derived the inherited 4096 to the four-byte field
-    // envelope). Size the payload from the same admit function handle_recv
-    // uses so this cannot silently re-pin an inherited number.
-    static constexpr int capped_command = nodetool::COMMAND_REQUEST_SUPPORT_FLAGS::ID;
+    // COMMAND_PING (PWD-B10) and COMMAND_REQUEST_SUPPORT_FLAGS (2026-10-19)
+    // are deleted. Timed sync carries the tight derived cap the handshake
+    // does (DISCLOSE_COUNT entries beside the fixed part). Size the payload
+    // from the same admit function handle_recv uses so this cannot silently
+    // re-pin an inherited number.
+    static constexpr int capped_command = nodetool::COMMAND_TIMED_SYNC_T<cryptonote::CORE_SYNC_DATA>::ID;
     const auto cap = cryptonote::cryptonote_connection_context::get_max_bytes(
         capped_command, LEVIN_PACKET_REQUEST);
     ASSERT_TRUE(cap.has_value());

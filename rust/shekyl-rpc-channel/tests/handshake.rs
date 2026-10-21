@@ -12,13 +12,41 @@
 //! beside the handshake. Everything here draws from the operating system, as
 //! production does.
 
-use shekyl_noise::{Direction, DirectionError};
-use shekyl_rpc_channel::handshake::{
-    Client, Daemon, FirstMessageRefused, HandshakeError, PendingSession, StaticKeypair,
-    MESSAGE1_LEN, MESSAGE2_LEN, MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, MLKEM768_CT_LEN, TAG_LEN,
-    TRANSPORT_AD,
+use shekyl_noise::{
+    ClassId, ClassTable, ClassedError, ClassedRecord, Direction, DirectionError, OCCUPANCY_LEN,
 };
-use shekyl_rpc_channel::{NetworkId, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+use shekyl_rpc_channel::budget::HandshakeBudget;
+use shekyl_rpc_channel::handshake::{
+    Client, Daemon, DaemonReadyForMessage2, FirstMessageRefused, HandshakeError, Message1Admission,
+    PendingSession, StaticKeypair, MESSAGE1_LEN, MESSAGE1_WIRE_LEN, MESSAGE2_LEN,
+    MESSAGE3_OVERHEAD, MESSAGE4_OVERHEAD, MLKEM768_CT_LEN, TAG_LEN, TRANSPORT_AD,
+};
+use shekyl_rpc_channel::{NetworkId, MAC1_LEN, MLKEM768_EK_LEN, X25519_PUBLIC_LEN};
+use std::time::{Duration, Instant};
+
+/// A budget that never runs out within a test: the whole of a core, an
+/// hour's burst.
+fn budget() -> HandshakeBudget {
+    HandshakeBudget::with_share(1_000, Duration::from_secs(3_600), Instant::now())
+}
+
+/// Recompute a wire message 1's mac1 after its Noise bytes were changed, as
+/// a sender holding the daemon's bundle can, so the change reaches the
+/// check after mac1 that it names.
+fn remac(daemon: &StaticKeypair, wire: &mut [u8]) {
+    let (noise, mac1) = wire.split_at_mut(MESSAGE1_LEN);
+    mac1.copy_from_slice(&daemon.public().mac1(noise));
+}
+
+/// Read message 1 on a budget that does not run out. Busy is a test failure:
+/// these tests are about the handshake, and the budget is not what they spend.
+fn read1(daemon: &StaticKeypair, message: &[u8]) -> Result<DaemonReadyForMessage2, HandshakeError> {
+    match Daemon::new(&NETWORK, daemon).read_message1(message, &budget(), Instant::now()) {
+        Ok(Message1Admission::Continue(ready)) => Ok(ready),
+        Ok(Message1Admission::Busy(_)) => panic!("the test budget admitted this message"),
+        Err(error) => Err(error),
+    }
+}
 
 const NETWORK: NetworkId = [0x17; 16];
 const OTHER_NETWORK: NetworkId = [0x18; 16];
@@ -49,10 +77,8 @@ fn a_handshake_completes_and_keys_a_record_channel() {
     let (client_id, daemon_id) = identities();
 
     let (client, message1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-    assert_eq!(message1.len(), MESSAGE1_LEN);
-    let daemon = Daemon::new(&NETWORK, &daemon_id)
-        .read_message1(&message1)
-        .unwrap();
+    assert_eq!(message1.len(), MESSAGE1_WIRE_LEN);
+    let daemon = read1(&daemon_id, &message1).unwrap();
     let (daemon, message2) = daemon.write_message2().unwrap();
     assert_eq!(message2.len(), MESSAGE2_LEN);
     let client = client.read_message2(&message2).unwrap();
@@ -100,9 +126,7 @@ fn two_handshakes_between_the_same_parties_share_nothing() {
     let (client_id, daemon_id) = identities();
     let run = || {
         let (client, m1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-        let daemon = Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&m1)
-            .unwrap();
+        let daemon = read1(&daemon_id, &m1).unwrap();
         let (daemon, m2) = daemon.write_message2().unwrap();
         let client = client.read_message2(&m2).unwrap();
         let (client, m3) = client.write_message3(REQUEST).unwrap();
@@ -134,16 +158,26 @@ fn two_handshakes_between_the_same_parties_share_nothing() {
 fn every_fault_in_message_1_is_the_same_error() {
     let (client_id, daemon_id) = identities();
     let (_, good) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-    let fields = [MLKEM768_CT_LEN, X25519_PUBLIC_LEN, MLKEM768_EK_LEN, TAG_LEN];
+    // The Noise message's four fields, each re-signed so the change reaches
+    // its own check; then the mac1 itself, not re-signed.
+    let fields = [
+        MLKEM768_CT_LEN,
+        X25519_PUBLIC_LEN,
+        MLKEM768_EK_LEN,
+        TAG_LEN,
+        MAC1_LEN,
+    ];
     let positions = one_bit_in_each_field(&fields);
-    assert_eq!(positions.len(), 4);
+    assert_eq!(positions.len(), 5);
 
     let mut seen = Vec::new();
     for position in positions {
         let mut bad = good.clone();
         bad[position] ^= 0x01;
-        let error = Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&bad)
+        if position < MESSAGE1_LEN {
+            remac(&daemon_id, &mut bad);
+        }
+        let error = read1(&daemon_id, &bad)
             .err()
             .expect("a changed message 1 is refused");
         seen.push((position, error, format!("{error}"), format!("{error:?}")));
@@ -155,9 +189,7 @@ fn every_fault_in_message_1_is_the_same_error() {
     }
 
     // The control: the unchanged message is accepted.
-    assert!(Daemon::new(&NETWORK, &daemon_id)
-        .read_message1(&good)
-        .is_ok());
+    assert!(read1(&daemon_id, &good).is_ok());
 }
 
 #[test]
@@ -169,18 +201,14 @@ fn message_1_for_another_daemon_or_another_network_is_refused() {
     // a secret the sender never had, and the tag fails.
     let (_, message1) = Client::start(&NETWORK, &client_id, other_daemon.public()).unwrap();
     assert_eq!(
-        Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&message1)
-            .err(),
+        read1(&daemon_id, &message1).err(),
         Some(HandshakeError::Message1)
     );
 
     // The right daemon, another network: the prologue differs.
     let (_, message1) = Client::start(&OTHER_NETWORK, &client_id, daemon_id.public()).unwrap();
     assert_eq!(
-        Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&message1)
-            .err(),
+        read1(&daemon_id, &message1).err(),
         Some(HandshakeError::Message1)
     );
 }
@@ -191,9 +219,7 @@ fn a_changed_message_2_is_refused_as_message_2() {
     let fields = [MLKEM768_CT_LEN, X25519_PUBLIC_LEN, MLKEM768_EK_LEN, TAG_LEN];
     for position in one_bit_in_each_field(&fields) {
         let (client, m1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-        let daemon = Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&m1)
-            .unwrap();
+        let daemon = read1(&daemon_id, &m1).unwrap();
         let (_, mut m2) = daemon.write_message2().unwrap();
         m2[position] ^= 0x01;
         assert_eq!(
@@ -214,9 +240,7 @@ fn a_changed_message_3_is_refused_as_message_3() {
     ];
     for position in one_bit_in_each_field(&fields) {
         let (client, m1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-        let daemon = Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&m1)
-            .unwrap();
+        let daemon = read1(&daemon_id, &m1).unwrap();
         let (daemon, m2) = daemon.write_message2().unwrap();
         let client = client.read_message2(&m2).unwrap();
         let (_, mut m3) = client.write_message3(REQUEST).unwrap();
@@ -240,9 +264,7 @@ fn a_changed_or_short_message_4_is_refused_as_message_4() {
     cases.push(None);
     for case in cases {
         let (client, m1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-        let daemon = Daemon::new(&NETWORK, &daemon_id)
-            .read_message1(&m1)
-            .unwrap();
+        let daemon = read1(&daemon_id, &m1).unwrap();
         let (daemon, m2) = daemon.write_message2().unwrap();
         let client = client.read_message2(&m2).unwrap();
         let (client, m3) = client.write_message3(REQUEST).unwrap();
@@ -269,15 +291,12 @@ fn an_impostor_cannot_answer_message_1() {
 
     // The impostor cannot read message 1 at all.
     let (client, m1) = Client::start(&NETWORK, &client_id, daemon_id.public()).unwrap();
-    assert!(Daemon::new(&NETWORK, &impostor_id)
-        .read_message1(&m1)
-        .is_err());
+    assert!(read1(&impostor_id, &m1).is_err());
 
     // And a message 2 from a different handshake does not open.
     let (other_client, other_m1) =
         Client::start(&NETWORK, &client_id, impostor_id.public()).unwrap();
-    let (_, other_m2) = Daemon::new(&NETWORK, &impostor_id)
-        .read_message1(&other_m1)
+    let (_, other_m2) = read1(&impostor_id, &other_m1)
         .unwrap()
         .write_message2()
         .unwrap();
@@ -295,7 +314,7 @@ fn through_message_4(
     daemon_id: &StaticKeypair,
 ) -> (PendingSession, Direction, Direction) {
     let (client, m1) = Client::start(&NETWORK, client_id, daemon_id.public()).unwrap();
-    let daemon = Daemon::new(&NETWORK, daemon_id).read_message1(&m1).unwrap();
+    let daemon = read1(daemon_id, &m1).unwrap();
     let (daemon, m2) = daemon.write_message2().unwrap();
     let client = client.read_message2(&m2).unwrap();
     let (client, m3) = client.write_message3(REQUEST).unwrap();
@@ -307,8 +326,8 @@ fn through_message_4(
 }
 
 /// The tests' opener: the first message is one bare Noise ciphertext under
-/// [`TRANSPORT_AD`]. The channel's record framer will be another opener;
-/// this one exists only here.
+/// [`TRANSPORT_AD`]. A record that may arrive in pieces uses
+/// [`PendingSession::lend`]; this opener exists for a message already whole.
 fn bare(ciphertext: &[u8]) -> impl FnOnce(&mut Direction) -> Result<Vec<u8>, DirectionError> + '_ {
     move |recv| {
         recv.open(ciphertext, TRANSPORT_AD)
@@ -454,8 +473,9 @@ fn only_the_clients_first_message_releases_the_session() {
 }
 
 /// A ciphertext that is not a whole transport message does not open, and
-/// the session is consumed: there is no second try with the rest of the
-/// bytes. Framing belongs to a later slice.
+/// the callback consumes the session: there is no second try with the rest
+/// of the bytes. A framer that must wait for the rest uses
+/// [`PendingSession::lend`].
 #[test]
 fn a_short_first_message_is_refused_and_the_session_is_consumed() {
     let (client_id, daemon_id) = identities();
@@ -471,6 +491,87 @@ fn a_short_first_message_is_refused_and_the_session_is_consumed() {
         "the first transport message was not accepted"
     );
     assert_eq!(format!("{error:?}"), "FirstMessageRefused");
+}
+
+/// The plaintext length of the lend test's one class: occupancy, then the
+/// longer of the two payloads this test seals.
+fn lend_class_len() -> usize {
+    OCCUPANCY_LEN + b"request".len().max(b"second".len())
+}
+
+/// A record that arrives in pieces stays truncated, and the session stays
+/// withheld until the whole record opens and is released. The next record
+/// then opens on the direction `release` handed back.
+#[test]
+fn a_fragmented_first_record_stays_withheld_until_it_opens() {
+    let (client_id, daemon_id) = identities();
+    let (pending, send, mut client_recv) = through_message_4(&client_id, &daemon_id);
+    let table = ClassTable::new(&[lend_class_len()]).unwrap();
+    let mut framed_send = ClassedRecord::new(send, table.clone());
+    let wire = framed_send.seal(ClassId(0), b"request").unwrap();
+
+    let (withheld, recv) = pending.lend();
+    let mut framed = ClassedRecord::new(recv, table.clone());
+    assert_eq!(framed.open(&wire[..1]), Err(ClassedError::Truncated));
+    assert_eq!(
+        framed.record_len(wire[0]),
+        Ok(wire.len()),
+        "a short read spends nothing, so the length can still be asked"
+    );
+    let opened = framed.open(&wire).unwrap();
+    let recv = framed.into_direction();
+    let (mut session, released) = withheld
+        .release(recv, Ok::<_, ClassedError>(opened.payload))
+        .unwrap();
+    assert_eq!(released, b"request");
+    assert_eq!(session.request, REQUEST);
+    assert_eq!(session.recv.opened(), 1);
+    assert_eq!(session.send.opened(), 0);
+
+    let wire = framed_send.seal(ClassId(0), b"second").unwrap();
+    let mut recv = ClassedRecord::new(session.recv, table);
+    assert_eq!(recv.open(&wire).unwrap().payload, b"second");
+    let (reply, _) = session.send.seal(b"reply", TRANSPORT_AD).unwrap();
+    let (opened, _) = client_recv.open(&reply, TRANSPORT_AD).unwrap();
+    assert_eq!(opened, b"reply");
+}
+
+/// `release` applies the same check as `open_first_message`, on a direction
+/// the caller hands back rather than one a callback holds.
+#[test]
+fn release_refuses_until_this_sessions_direction_has_opened() {
+    let (client_id, daemon_id) = identities();
+
+    let (pending, _, _) = through_message_4(&client_id, &daemon_id);
+    let (withheld, recv) = pending.lend();
+    assert!(matches!(
+        withheld.release(recv, Ok::<_, ()>(())),
+        Err(FirstMessageRefused)
+    ));
+
+    let (pending, mut send, _) = through_message_4(&client_id, &daemon_id);
+    let (message, _) = send.seal(b"first", TRANSPORT_AD).unwrap();
+    let (withheld, mut recv) = pending.lend();
+    recv.open(&message, TRANSPORT_AD).unwrap();
+    assert!(
+        matches!(
+            withheld.release(recv, Err::<(), &str>("the framing after it was wrong")),
+            Err(FirstMessageRefused)
+        ),
+        "a ciphertext that opened and a refused framing still withholds the session"
+    );
+
+    let (pending_b, mut send_b, _) = through_message_4(&client_id, &daemon_id);
+    let (message_b, _) = send_b.seal(b"b's first", TRANSPORT_AD).unwrap();
+    let (session_b, _) = pending_b.open_first_message(bare(&message_b)).unwrap();
+
+    let (pending_a, _, _) = through_message_4(&client_id, &daemon_id);
+    let (withheld, recv_a) = pending_a.lend();
+    drop(recv_a);
+    assert!(matches!(
+        withheld.release(session_b.recv, Ok::<_, ()>(())),
+        Err(FirstMessageRefused)
+    ));
 }
 
 /// This crate writes no log line. The claim is held where it can be broken:

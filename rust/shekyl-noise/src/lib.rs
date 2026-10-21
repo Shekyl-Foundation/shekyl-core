@@ -39,8 +39,8 @@ pub mod symmetric;
 pub use aead::rekey_hkdf;
 pub use aead::{HASH_LEN, TAG_LEN};
 pub use classed::{
-    first_record_len, open_first_record, ClassId, ClassTable, ClassTableError, ClassedError,
-    ClassedRecord, Opened, CLASS_TABLE_MAX, HEADER_LEN, MAX_RECORD_PLAINTEXT, OCCUPANCY_LEN,
+    ClassId, ClassTable, ClassTableError, ClassedError, ClassedRecord, Opened, CLASS_TABLE_MAX,
+    HEADER_LEN, MAX_RECORD_PLAINTEXT, OCCUPANCY_LEN,
 };
 pub use direction::{Direction, DirectionError, KeyEpoch, REKEY_NONCES};
 pub use symmetric::{SplitRole, SymmetricError, SymmetricState};
