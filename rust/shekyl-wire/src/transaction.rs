@@ -1284,6 +1284,33 @@ impl Ct {
         Ok(())
     }
 
+    /// The pruned segment's ct: the type byte, the fee and reference block,
+    /// and the committed base. Stops there. [`Transaction::read`] continues
+    /// into authentications and the prunable region when bytes remain;
+    /// those bytes are not part of the pruned segment, and a skeleton that
+    /// carried them would store a form the txid does not commit to.
+    fn read_base<R: Read>(outputs: usize, r: &mut R) -> io::Result<Ct> {
+        let ct_type = read_byte(r)?;
+        match ct_type {
+            CT_TYPE_NULL => Ok(Ct::Null(CtBase::read(outputs, r)?)),
+            CT_TYPE_FCMP => {
+                let fee = read_varint(r)?;
+                let reference_block = BlockHash::from_bytes(read_array(r)?);
+                let base = CtBase::read(outputs, r)?;
+                Ok(Ct::Fcmp {
+                    fee,
+                    reference_block,
+                    base,
+                    pqc_auths: Vec::new(),
+                    prunable: None,
+                })
+            }
+            other => Err(io::Error::other(format!(
+                "shekyl-wire: unsupported ct type {other:#04x}"
+            ))),
+        }
+    }
+
     /// Read the ct section. `inputs`/`outputs` (the vin/vout counts) size the
     /// per-input/per-output arrays that carry no length prefix; `spend_inputs`
     /// (the `ToKey` subset of vin) sizes `pseudoOuts`, which a bond-post input
@@ -1741,6 +1768,44 @@ impl Transaction {
             )));
         }
         Ok(tx)
+    }
+
+    /// Parse the pruned segment exactly: version, prefix and the committed
+    /// base, the bytes [`Self::write_pruned`] emits, and nothing after them.
+    ///
+    /// [`Self::read`] treats bytes after the base as authentications and
+    /// proof data. A skeleton's txid ignores both, so those bytes would
+    /// bind and then be stored as if they were the pruned form. This entry
+    /// refuses them, the same exact-consumption rule [`Self::from_bytes`]
+    /// applies to a full transaction.
+    ///
+    /// # Errors
+    ///
+    /// The blob is over `MAX_TX_SIZE`, is not a pruned segment, or has
+    /// bytes left after the base.
+    pub fn from_pruned_bytes(blob: &[u8]) -> io::Result<Transaction> {
+        if blob.len() > MAX_TX_SIZE {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: pruned segment {} exceeds {MAX_TX_SIZE}",
+                blob.len()
+            )));
+        }
+        let mut cursor = blob;
+        let version: u64 = read_varint(&mut cursor)?;
+        if version != TX_VERSION {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: transaction version {version} != {TX_VERSION}"
+            )));
+        }
+        let prefix = TxPrefix::read(&mut cursor)?;
+        let ct = Ct::read_base(prefix.outputs.len(), &mut cursor)?;
+        if !cursor.is_empty() {
+            return Err(io::Error::other(format!(
+                "shekyl-wire: {} trailing byte(s) after the pruned segment",
+                cursor.len()
+            )));
+        }
+        Ok(Transaction { prefix, ct })
     }
 
     /// Structural / canonical-form validation for an ingested **pruned** transaction:

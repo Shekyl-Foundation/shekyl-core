@@ -38,7 +38,8 @@ pub enum TxBody {
 #[derive(Clone, PartialEq, Eq)]
 pub struct SkeletonTx {
     /// [`crate::transaction::TxSegments::pruned`]: version, prefix and the
-    /// committed base. [`Transaction::read`] accepts these bytes.
+    /// committed base, exactly. [`Transaction::from_pruned_bytes`] is the
+    /// parser; bytes after the base are not this segment.
     pub unprunable: Vec<u8>,
     /// The store's prunable digest, supplied rather than recomputed.
     pub prunable_hash: PrunableHash,
@@ -56,11 +57,12 @@ impl SkeletonTx {
     ///
     /// # Errors
     ///
-    /// The unprunable bytes are not a transaction [`Transaction::read`]
-    /// accepts.
+    /// The unprunable bytes are not exactly the pruned segment
+    /// ([`Transaction::from_pruned_bytes`]). Bytes after the base are
+    /// refused: [`Transaction::read`] would take them as authentications
+    /// and proof data, and the txid below ignores both.
     pub fn txid(&self) -> io::Result<TxHash> {
-        let mut cursor = self.unprunable.as_slice();
-        let tx = Transaction::read(&mut cursor)?;
+        let tx = Transaction::from_pruned_bytes(&self.unprunable)?;
         Ok(tx.hash_with_supplied_components(
             self.pqc_auth_hash,
             self.prunable_hash,
