@@ -6,9 +6,10 @@
 //! The last phase of the archival transition. Every connecting height
 //! records one [`BlockDraws`]: how many draws this block's producer makes,
 //! the fraction carried to the next block, and the visible shortfall the
-//! count was computed from. `issued_short` stays zero until admission
-//! (increment 4) writes it, and `revealed` stays false until a bundle is
-//! admitted.
+//! count was computed from. `issued_short` stays zero. It is the reduction
+//! this block's own admissions take, and admission (increment 4) writes it
+//! in this block's batch; the next block reads `shortfall − issued_short`.
+//! `revealed` stays false until a later block admits this height's seed.
 //!
 //! The row is written at every height, including a schedule with no
 //! response window, which draws nothing. A failure here is [`Corrupt`]:
