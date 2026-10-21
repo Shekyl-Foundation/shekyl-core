@@ -149,7 +149,7 @@ impl super::Transition {
             (prior.shortfall - issued, prior.carry)
         };
 
-        let in_flight = in_flight(view, height, h_open, window.get(), floor, connecting)?;
+        let in_flight = in_flight(view, connecting, h_open, window.get(), floor, connecting)?;
         let unsettled = visible.saturating_sub(in_flight);
         let horizon = draw_horizon(height - h_open, schedule.blocks().get(), window.get());
         let Some((count, carry)) = draw_count(
@@ -261,12 +261,13 @@ fn require_row<'id, V: ChainView<'id>>(
 /// `[max(h − W₂, h_open), h)`.
 fn in_flight<'id, V: ChainView<'id>>(
     view: &V,
-    height: u64,
+    height: BlockHeight,
     h_open: u64,
     window: u64,
     floor: BlockDrawsFloor,
     connecting: BlockHeight,
 ) -> Result<u64, ViewRead<V::Fault>> {
+    let height = height.to_raw();
     let start = height.saturating_sub(window).max(h_open);
     let mut sum = 0u64;
     let mut at = start;
@@ -287,7 +288,7 @@ mod tests {
     use super::*;
     use crate::harness::fixture::chain_of;
     use crate::view::{AtHeight, HeaderView};
-    use crate::RuleSet;
+    use crate::{Corrupt, RuleSet, SettlementCheck};
     use shekyl_archival_retention::{draw_count, draw_horizon, DrawablePair};
     use shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa;
     use shekyl_types::archival::SettlementEpochBlocks;
@@ -357,9 +358,9 @@ mod tests {
     }
 
     /// The memo answers `|D|` only for the opening block's own hash. A
-    /// different hash misses and rebuilds this view's empty set, whose
-    /// digest the harness records. The missing-digest halt is the store
-    /// test. Red edit: key the memo by the epoch alone.
+    /// different hash misses and rebuilds. This chain records no digest,
+    /// so the rebuild is [`SettlementCheck::DrawableDigestMissing`] rather
+    /// than the other fork's set. Red edit: key the memo by the epoch alone.
     #[test]
     fn the_count_reads_the_set_stored_under_the_opening_hash() {
         let rules = RuleSet::GENESIS;
@@ -368,7 +369,7 @@ mod tests {
             .challenge_response_blocks()
             .expect("genesis has a window")
             .get();
-        let chain = chain_of(2);
+        let chain = chain_of(2).without_drawable_digest();
         chain.with_view(|view| {
             let open = match view.header_at(BlockHeight::ZERO).expect("header") {
                 AtHeight::Recorded(header) => header.hash,
@@ -408,15 +409,15 @@ mod tests {
                 open_hash: open,
                 memo: Some(&mut other),
             };
-            let miss = transition
-                .block_draws(&view, None, &mut miss_memo, &mut miss_coverage)
-                .expect("the miss rebuilds this view's empty set");
+            let miss = transition.block_draws(&view, None, &mut miss_memo, &mut miss_coverage);
             assert_eq!(
                 miss,
-                zero(),
+                Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
+                    epoch,
+                    check: SettlementCheck::DrawableDigestMissing,
+                })),
                 "a set stored under another opening hash is not this chain's"
             );
-            assert_ne!(miss.carry, hit.carry);
         });
     }
 }

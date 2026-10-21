@@ -736,18 +736,18 @@ fn a_slash_row_naming_another_shard_halts_the_settlement_as_drift() {
 /// The chain is the harness's through `h_open(2) − 1`, then eleven blocks
 /// into the epoch. `|D|` is 4, nothing is admitted, and the rows are the
 /// production composition (`draw_horizon`, `draw_count`, the in-flight sum)
-/// with three blocks pinned by hand. A warm memo, an empty memo, a fresh
-/// replay and an aborted open write the same rows. A memo that saw the
-/// other fork's open, then a switch onto a release at the open, writes the
-/// winning chain's rows. A journal row changed after the open, and a
-/// removed digest, halt the next block.
+/// with three blocks pinned by hand. A warm memo, an empty memo mid-epoch,
+/// a fresh replay, the next epoch and an aborted open write the same rows.
+/// A memo that saw the other fork's open, then a switch onto a release at
+/// the open, writes the winning chain's rows. A journal row changed after
+/// the open, and a removed digest, halt the next block.
 #[test]
 fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
     let open = h_open(2);
     let last = open + 11;
     let mut chain = SlashedChain::build_with("count-set", WITNESS_PERSONAS, open - 1, no_draws);
     assert_eq!(
-        draws_of(&chain, open - 1),
+        draws_of(&chain, BlockHeight::from_raw(open - 1)),
         BlockDraws {
             count: 0,
             carry: 0,
@@ -805,6 +805,17 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
     let mut warm = DrawableMemo::new();
     let again = connect_span(&mut chain, open, last, &mut Some(&mut warm));
     assert_eq!(again, reference, "a memo and no memo write the same rows");
+
+    // The memo filled at the open, so the blocks after it hit. Drop it
+    // and continue: the next block misses, rebuilds, and matches the digest.
+    pop_back(&mut chain, 4);
+    let mut restarted = DrawableMemo::new();
+    let tail = connect_span(&mut chain, last - 3, last, &mut Some(&mut restarted));
+    assert_eq!(
+        tail.as_slice(),
+        &reference[reference.len() - 4..],
+        "an empty memo mid-epoch rebuilds and writes the same rows"
+    );
 
     pop_back(&mut chain, last - open + 1);
     let mut cold = None;
@@ -901,6 +912,13 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         "{refused}"
     );
 
+    let far = h_open(3) + 2;
+    assert_eq!(
+        rows_from_open("count-memo", far, true),
+        rows_from_open("count-none", far, false),
+        "a memo and no memo write the same rows across the next open"
+    );
+
     let chain = SlashedChain::build_with("count-digest", WITNESS_PERSONAS, open, no_draws);
     let missing: Result<(), TestErr> = chain.store.write(|batch| {
         batch
@@ -929,12 +947,24 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
     chain.finish();
 }
 
-fn draws_of(chain: &SlashedChain, height: u64) -> BlockDraws {
+/// Epoch 2's open through `through`, on a chain of its own. `with_memo`
+/// carries one memo from the open; otherwise every block rebuilds.
+fn rows_from_open(label: &str, through: u64, with_memo: bool) -> Vec<BlockDraws> {
+    let open = h_open(2);
+    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, open - 1, no_draws);
+    let mut memo = DrawableMemo::new();
+    let mut slot = if with_memo { Some(&mut memo) } else { None };
+    let rows = connect_span(&mut chain, open, through, &mut slot);
+    chain.finish();
+    rows
+}
+
+fn draws_of(chain: &SlashedChain, height: BlockHeight) -> BlockDraws {
     chain
         .store
         .begin_read()
         .expect("read")
-        .block_draws(BlockHeight::from_raw(height), BlockDrawsFloor::NONE)
+        .block_draws(height, BlockDrawsFloor::NONE)
         .expect("read")
         .expect("the row was written")
 }

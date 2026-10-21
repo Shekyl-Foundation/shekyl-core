@@ -112,7 +112,7 @@ fn record_leaf_count(batch: &WriteBatch<'_, '_>, key: u64) -> Result<(), StoreEr
 
 /// The zero draw row a connect writes, and epoch 0's empty digest. The
 /// count of the next block reads both.
-fn record_draw_row(batch: &WriteBatch<'_, '_>, height: u64) -> Result<(), StoreError> {
+fn record_draw_row(batch: &WriteBatch<'_, '_>, height: BlockHeight) -> Result<(), StoreError> {
     let row = shekyl_types::archival::BlockDraws {
         count: 0,
         carry: 0,
@@ -122,7 +122,7 @@ fn record_draw_row(batch: &WriteBatch<'_, '_>, height: u64) -> Result<(), StoreE
     };
     batch
         .open_insert_table(ARCHIVAL_BLOCK_DRAWS, PROBE_ROW)?
-        .insert(height, row.encoded().as_encoded())
+        .insert(height.to_raw(), row.encoded().as_encoded())
 }
 
 fn record_empty_digest(batch: &WriteBatch<'_, '_>) -> Result<(), StoreError> {
@@ -417,7 +417,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         record_block(batch, 0, &genesis)?;
         record_root(batch, 1, 0xaa)?;
         record_leaf_count(batch, 1)?;
-        record_draw_row(batch, 0)?;
+        record_draw_row(batch, BlockHeight::from_raw(0))?;
         record_empty_digest(batch)?;
         let view = batch.chain_view();
         // A verdict minted against this batch's view, over a view that

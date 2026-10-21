@@ -910,11 +910,11 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
     cleanup(&path);
 }
 
-fn draws_of(store: &ChainStore, height: u64, floor: BlockDrawsFloor) -> Option<BlockDraws> {
+fn draws_of(store: &ChainStore, height: BlockHeight, floor: BlockDrawsFloor) -> Option<BlockDraws> {
     store
         .begin_read()
         .expect("read")
-        .block_draws(BlockHeight::from_raw(height), floor)
+        .block_draws(height, floor)
         .expect("the floor admits the read")
 }
 
@@ -948,21 +948,39 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
     for height in 0u64..=3 {
         let delta = connect_empty(&store, &mut grown, rules);
         assert_eq!(delta.draws(), zero);
-        assert_eq!(draws_of(&store, height, BlockDrawsFloor::NONE), Some(zero));
+        assert_eq!(
+            draws_of(&store, BlockHeight::from_raw(height), BlockDrawsFloor::NONE),
+            Some(zero)
+        );
     }
     pop(&store);
     grown.pop();
-    assert_eq!(draws_of(&store, 3, BlockDrawsFloor::NONE), None);
+    assert_eq!(
+        draws_of(&store, BlockHeight::from_raw(3), BlockDrawsFloor::NONE),
+        None
+    );
     let delta = connect_empty(&store, &mut grown, rules);
     assert_eq!(delta.draws(), zero);
 
     // Height 4 is the boundary of B = 2. Rows strictly below `(2 − 1)·2` go.
     let delta = connect_empty(&store, &mut grown, rules);
     assert_eq!(delta.draws(), zero);
-    assert_eq!(draws_of(&store, 0, BlockDrawsFloor::NONE), None);
-    assert_eq!(draws_of(&store, 1, BlockDrawsFloor::NONE), None);
-    assert_eq!(draws_of(&store, 2, BlockDrawsFloor::NONE), Some(zero));
-    assert_eq!(draws_of(&store, 4, BlockDrawsFloor::NONE), Some(zero));
+    assert_eq!(
+        draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
+        None
+    );
+    assert_eq!(
+        draws_of(&store, BlockHeight::from_raw(1), BlockDrawsFloor::NONE),
+        None
+    );
+    assert_eq!(
+        draws_of(&store, BlockHeight::from_raw(2), BlockDrawsFloor::NONE),
+        Some(zero)
+    );
+    assert_eq!(
+        draws_of(&store, BlockHeight::from_raw(4), BlockDrawsFloor::NONE),
+        Some(zero)
+    );
 
     let floor = BlockDrawsFloor::retired_by(2, rules.settlement_schedule());
     let refused = store
@@ -983,21 +1001,30 @@ fn a_windowless_schedule_writes_a_zero_row_that_the_boundary_retires() {
 
     pop(&store);
     grown.pop();
-    assert_eq!(draws_of(&store, 0, BlockDrawsFloor::NONE), None);
-    assert_eq!(draws_of(&store, 4, BlockDrawsFloor::NONE), None);
+    assert_eq!(
+        draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
+        None
+    );
+    assert_eq!(
+        draws_of(&store, BlockHeight::from_raw(4), BlockDrawsFloor::NONE),
+        None
+    );
     let delta = connect_empty(&store, &mut grown, rules);
     assert_eq!(delta.draws(), zero);
-    assert_eq!(draws_of(&store, 0, BlockDrawsFloor::NONE), None);
+    assert_eq!(
+        draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
+        None
+    );
     cleanup(&path);
 }
 
-fn plant_draws(path: &std::path::Path, height: u64, row: BlockDraws) {
+fn plant_draws(path: &std::path::Path, height: BlockHeight, row: BlockDraws) {
     super::archival_read_tests::plant(path, |txn| {
         let mut table = txn
             .open_table(crate::schema::ARCHIVAL_BLOCK_DRAWS)
             .expect("the draw table");
         table
-            .insert(height, row.encoded().as_encoded())
+            .insert(height.to_raw(), row.encoded().as_encoded())
             .expect("overwrite");
     });
 }
@@ -1029,7 +1056,7 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
         issued_short: 250,
         revealed: false,
     };
-    plant_draws(&path, 0, planted);
+    plant_draws(&path, BlockHeight::from_raw(0), planted);
     let store = ChainStore::with_horizons(&path, ApplyPolicy::Full, horizons).expect("reopen");
     let delta = connect_empty(&store, &mut grown, rules);
     let window = rules
@@ -1044,7 +1071,10 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
     assert_eq!(u64::from(delta.draws().count), count);
     assert_eq!(delta.draws().issued_short, 0);
     assert!(!delta.draws().revealed);
-    assert_eq!(draws_of(&store, 0, BlockDrawsFloor::NONE), Some(planted));
+    assert_eq!(
+        draws_of(&store, BlockHeight::from_raw(0), BlockDrawsFloor::NONE),
+        Some(planted)
+    );
 
     for _ in 2..=19 {
         connect_empty(&store, &mut grown, rules);
@@ -1057,7 +1087,7 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
         issued_short: 0,
         revealed: false,
     };
-    plant_draws(&path, 19, across);
+    plant_draws(&path, BlockHeight::from_raw(19), across);
     let store = ChainStore::with_horizons(&path, ApplyPolicy::Full, horizons).expect("reopen");
     let open = connect_empty(&store, &mut grown, rules);
     assert_eq!(
@@ -1071,7 +1101,10 @@ fn the_count_reads_the_prior_row_and_resets_at_the_opening_block() {
         },
         "an opening block does not inherit the shortfall"
     );
-    assert_eq!(draws_of(&store, 19, BlockDrawsFloor::NONE), Some(across));
+    assert_eq!(
+        draws_of(&store, BlockHeight::from_raw(19), BlockDrawsFloor::NONE),
+        Some(across)
+    );
     cleanup(&path);
 }
 
@@ -1098,7 +1131,7 @@ fn a_count_fault_halts_the_writer_through_refuse_corrupt() {
         drop(store);
         plant_draws(
             &excess,
-            0,
+            BlockHeight::from_raw(0),
             BlockDraws {
                 count: 0,
                 carry: 0,
