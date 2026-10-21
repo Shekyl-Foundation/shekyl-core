@@ -172,6 +172,23 @@ pub enum ClassedError {
     State,
 }
 
+impl std::fmt::Display for ClassedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            // One sentence each: the stream adapter puts this text under
+            // the `io::Error` it returns, and a caller matches the variant.
+            Self::Truncated => "the record is short of its length",
+            Self::Refused => "the record was refused",
+            Self::Poisoned => "the record half is poisoned",
+            Self::UnknownClass => "the class is not in the table",
+            Self::PayloadTooLarge => "the payload does not fit the class",
+            Self::State => "the direction cannot advance",
+        })
+    }
+}
+
+impl std::error::Error for ClassedError {}
+
 /// One opened record.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Opened {
@@ -596,6 +613,23 @@ mod tests {
             .map(|_| send.seal(ClassId(0), b"").unwrap()[0])
             .collect();
         assert!(bytes.len() > 16, "{} distinct header bytes", bytes.len());
+    }
+
+    /// The cause stays a [`ClassedError`] under the `io::Error` a caller
+    /// builds, and its text is the variant's meaning rather than its name.
+    #[test]
+    fn an_error_carries_its_cause() {
+        let error = ClassedError::Refused;
+        let io_error = std::io::Error::new(std::io::ErrorKind::InvalidData, error);
+        let source = io_error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<ClassedError>());
+        assert_eq!(source, Some(&ClassedError::Refused));
+        assert_eq!(source.unwrap().to_string(), "the record was refused");
+        assert_eq!(
+            ClassedError::Truncated.to_string(),
+            "the record is short of its length"
+        );
     }
 
     /// Taking the direction out ends the half. The next half derives its

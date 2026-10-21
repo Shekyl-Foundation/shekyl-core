@@ -5073,6 +5073,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-rpc-stream"
+version = "3.1.0"
+dependencies = [
+ "bytes",
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde_json",
+ "shekyl-noise",
+ "shekyl-rpc-types",
+ "shekyl-wire",
+ "tokio",
+]
+
+[[package]]
 name = "shekyl-rpc-transport"
 version = "0.1.0"
 dependencies = [

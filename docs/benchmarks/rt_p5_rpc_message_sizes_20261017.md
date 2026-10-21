@@ -465,3 +465,21 @@ first, matched in size order within each wallet, method and direction.
   registered here.
 - **Reopen:** the classes are derived again from a registered mainnet
   trace (RT-O21).
+
+### The record boundaries, observed in RT-W9 step 5 (2026-10-20)
+
+The registration's flush policy holds as registered: **hyper flushes once
+per message.** No re-derivation follows.
+- **How it was observed:** `shekyl-rpc-stream`'s test
+  `hyper_flushes_once_per_message` ran hyper's HTTP/1 client and server
+  over the adapter on one kept-alive connection.
+  - Requests of 0, 431, 20,000 and 300,000 bytes of body were sent, each
+    answered with responses of 64, 20,000 and 300,000 bytes.
+  - It counts the flushes that sent records on each side: one per request
+    and one per response, in every combination.
+- **The cut is the registered one:** a message larger than a record is
+  cut into full records of the largest class and a tail in the smallest
+  class that holds it (`a_message_larger_than_a_record_is_cut_and_arrives_whole`).
+- **What this is:** an observation by a test, not a registered
+  measurement. It runs in CI, so a hyper upgrade that changes how a
+  message is flushed fails it.

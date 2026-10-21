@@ -357,8 +357,10 @@ from any other request, and hyper writes the message and flushes once
 - **(a) The RPC client asks the adapter to pad the message it has just
   written.** The client that sends `submit_transaction` knows it is
   submitting. The adapter fills the message out to a fixed number of
-  largest-class records, the last ones carrying occupancy 0, a valid
-  record (§4.4), and the daemon's adapter delivers no bytes for them.
+  largest-class records. Padding records, occupancy 0, are sealed
+  before the payload, so the HTTP bytes are a suffix of those records
+  and the body is not complete until the last one (§4.4). A padding
+  record is valid, and the daemon's adapter delivers no bytes for it.
   The HTTP body is untouched.
 - **(b) Pad the HTTP body itself,** with whitespace in the JSON, or a
   padding member. That puts the rule in each client and makes the
@@ -371,6 +373,13 @@ record count, and it survives the move to a binary body unchanged.
 **RULED: (a), as recommended,** with a test that every
 `submit_transaction` upload is exactly the fixed record count, whatever
 the transaction's size.
+
+**UPDATE 2026-10-21:** the 2026-10-20 wording of (a) put the padding
+records last ("the last ones carrying occupancy 0"). That order lets
+the peer answer once the body is complete, while the padding is still
+unsent, and the wait publishes the submission's size. Padding is sealed
+first. Occupancy 0 is only a padding record; a payload-bearing record's
+occupancy is its payload. The count and option (a) are unchanged.
 
 ### RT-O29 — Which class table does the request direction use?
 
@@ -402,7 +411,7 @@ This document is step 0 and is the only content of the first.
 | 2 | The handshake, red first | RT-O18, RT-O19 | The comparison is an in-crate test, written and observed failing before the implementation. Production construction takes no generator. One generator source, compiled into that test and into the cross-check crate. Then one test per requirement of §4.3. Built in PR #1039 (`rust/shekyl-rpc-channel/src/pinned_handshake.rs`) |
 | 3 | RT-P5 sizes | step 2; RT-O21 | HTTP message sizes per method, on the generated wallet and the generated chain. No adapter. The method, the flush policy and the host claim are registered before it runs. The classes are derived from this trace |
 | 4 | RT-P6: handshake cost on the floor device | step 2; step 3's candidate classes | Registered before it runs; quiet claim |
-| 5 | `ClassedRecord` and `shekyl-rpc-stream` | RT-O20; steps 3 and 4 | The wire format is §4.4 of the parent, already specified. The adapter is written once, against `ClassedRecord`, and observed failing with splitting removed. Record boundaries are observed here, under step 3's flush policy. The header-label registry row lands with the constant. `FixedWindow` is not built. The interim framer is not copied into `shekyl-noise`. **Split 2026-10-20:** **5a** is `ClassedRecord` in `shekyl-noise`, with the registry row, a known answer and a test for each check, seen failing without it. **5b** is `shekyl-rpc-stream`, the submission's fixed size, and the record boundaries, built to RT-O28 and RT-O29 as ruled 2026-10-20 (§4a) |
+| 5 | `ClassedRecord` and `shekyl-rpc-stream` | RT-O20; steps 3 and 4 | The wire format is §4.4 of the parent, already specified. The adapter is written once, against `ClassedRecord`, and observed failing with splitting removed. Record boundaries are observed here, under step 3's flush policy. The header-label registry row lands with the constant. `FixedWindow` is not built. The interim framer is not copied into `shekyl-noise`. **Split 2026-10-20:** **5a** is `ClassedRecord` in `shekyl-noise`, with the registry row, a known answer and a test for each check, seen failing without it. **5b** is `shekyl-rpc-stream`, the submission's fixed size, and the record boundaries, built to RT-O28 and RT-O29 as ruled 2026-10-20 (§4a). Built 2026-10-20: the named edit (splitting removed) fails the block-batch test, and hyper flushes once per message, as RT-P5 registered |
 | 6 | Two registry exclusion rows; the standing-check gate | RT-O22 | One row for each protocol-name literal, one reason, excluded-count pin 8 → 10. Each gate is shown failing under a named edit |
 
 **Named edits, fixed now so they are not improvised later.**

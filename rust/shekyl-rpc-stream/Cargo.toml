@@ -1,0 +1,33 @@
+[package]
+name = "shekyl-rpc-stream"
+description = "The RPC channel's stream adapter: AsyncRead and AsyncWrite over ClassedRecord"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# ClassedRecord, the record framer the adapter writes and reads
+# (RPC_CHANNEL.md section 4.4). The adapter does not depend on the
+# handshake, and the handshake does not depend on it (RT-O19).
+shekyl-noise = { path = "../shekyl-noise" }
+tokio = { version = "1", default-features = false, features = ["io-util"] }
+
+[dev-dependencies]
+# HTTP over the adapter, as the daemon and its clients will run it: the
+# flush-policy observation (RT-P5's registration) and the submission test.
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1", default-features = false, features = ["http1", "client", "server"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+serde_json = "1"
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# The consensus bound the submission's fixed record count is pinned to
+# (TX_WEIGHT_LIMIT, RT-O6 part 2); a test, not a production edge.
+shekyl-wire = { path = "../shekyl-wire" }
+hex = "0.4"
+tokio = { version = "1", default-features = false, features = ["io-util", "macros", "rt"] }
+
+[lints]
+workspace = true

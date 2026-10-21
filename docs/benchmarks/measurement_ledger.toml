@@ -553,6 +553,7 @@ stale_through = [
   { through = "b67b94731", note = "The gap tests' frame that is not the handshake is a timed-sync request in place of the support-flags request (1007), which is deleted with the support-flags word. Only those two tests changed; no code path in these files moved. Dial, handshake, and gap waits are unchanged. Not re-measured." },
   { through = "ea68874a8", note = "RT-W9 step 5a: ClassedRecord, a new framer in shekyl-noise that the P2P transport does not use, and two crate-private reads on Direction (its next nonce and epoch, and the header-protection key). Direction's seal and open are unchanged and the P2P framer calls nothing new. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "37e6ec8ee", note = "The header-protection key is no longer a method of Direction. ClassedRecord passes the record-header label to hkdf_from_record_key and keeps the output. The P2P transport does not call it. Direction's seal and open are unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "6884efdbe", note = "ClassedError implements Display and Error, so a caller can keep the variant as the source of an io::Error. seal and open are unchanged. The P2P transport does not match on the error's text. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -968,7 +969,8 @@ cleared = [
   { through = "54c3aa3dd", reason = "The retry module's end-to-end test matches Message1Admission instead of an error. HandshakeRetry's decisions are the same, and no handshake step RT-P6 or RT-P9 timed changes." },
   { through = "ea68874a8", reason = "ClassedRecord is a new framer in shekyl-noise. The handshake calls Direction's seal and open, which this commit does not change, and it does not call the framer or the two new reads (next, and the header key). The budget still charges 2,163,800 ns. The RT-P9 deadlines are onion round trips and are unchanged." },
   { through = "37e6ec8ee", reason = "The record-header label leaves Direction. HeaderKey::mask passes it to hkdf_from_record_key and keeps the output; the handshake does not derive a header key. Direction's seal and open are unchanged. The budget still charges 2,163,800 ns, and the RT-P9 deadlines are unchanged." },
-  { through = "8c465cff7", reason = "open_first_message now lends the receiving direction, runs the same Direction::open the bench times, and releases on the checks that function already made (this session's handshake hash, one successful open, an accepted message). That step is inside the summed handshake and is moves around the same open. The charge stays 2,163,800 ns. Message 1's deadline is before this function, and the whole-handshake deadline is the onion round trip." }
+  { through = "8c465cff7", reason = "open_first_message now lends the receiving direction, runs the same Direction::open the bench times, and releases on the checks that function already made (this session's handshake hash, one successful open, an accepted message). That step is inside the summed handshake and is moves around the same open. The charge stays 2,163,800 ns. Message 1's deadline is before this function, and the whole-handshake deadline is the onion round trip." },
+  { through = "6884efdbe", reason = "ClassedError implements Display and Error. The handshake matches the variant, and Direction's seal and open are unchanged. The budget still charges 2,163,800 ns. The RT-P9 deadlines are unchanged." }
 ]
 
 [[constant]]
