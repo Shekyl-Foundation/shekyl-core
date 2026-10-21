@@ -205,6 +205,74 @@ fn a_second_start_of_a_connectors_loop_starts_nothing() {
     }
 }
 
+/// A Tor-only start admits the compiled onion seeds and not the clearnet
+/// ones. Admission used to run only inside the clearnet branch, so a node
+/// with clearnet off never received the onion list.
+#[test]
+fn a_tor_only_start_admits_the_compiled_onion_seeds() {
+    let _bind = crate::seam_ffi::seam_bind_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::dialer_ffi::note_network(shekyl_rpc_types::DaemonNetwork::Stagenet);
+        }
+    }
+    let _restore = Restore;
+
+    let mut executor = 0u8;
+    let ceiling = ShekylInboundCeiling {
+        kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
+        ceiling: 0,
+        soft_limit: 0,
+        held: 0,
+    };
+    let bound = unsafe {
+        shekyl_seam_bind(
+            std::ptr::addr_of_mut!(executor).cast::<c_void>(),
+            Some(discard),
+        )
+    };
+    assert_eq!(bound, 0);
+    assert_eq!(unsafe { shekyl_seam_set_ceiling(&raw const ceiling) }, 0);
+    let network_id = [9u8; 16];
+    let host = ensure(network_id).expect("zone host");
+    crate::dialer_ffi::note_network(shekyl_rpc_types::DaemonNetwork::Testnet);
+
+    assert!(
+        crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine),
+        "the Tor loop starts without a clearnet connector"
+    );
+
+    let dialer = crate::dialer_ffi::dialer().expect("the dialer exists");
+    let shared = dialer.shared();
+    let onions: Vec<_> = shekyl_dialer::seeds(shekyl_dialer::SeedNetwork::Testnet)
+        .into_iter()
+        .filter(|address| {
+            shekyl_peerlist::Peerlist::connector_of(address) == Some(ConnectorId::Tor)
+        })
+        .collect();
+    assert_eq!(onions.len(), 6);
+    for onion in &onions {
+        assert!(
+            shared.lists.is_gray(onion),
+            "the onion seed is gray on a Tor-only start: {onion:?}"
+        );
+    }
+    assert_eq!(
+        shared.lists.gray_count(ConnectorId::Clearnet),
+        0,
+        "clearnet seeds are not admitted until that connector starts"
+    );
+    drop(shared);
+
+    shutdown();
+    unsafe {
+        shekyl_seam_bind(std::ptr::null_mut(), None);
+    }
+}
+
 /// Shutdown stops and drops the dialer while the seam stays bound, so
 /// a zone host built after it (a daemon re-initialised in one process,
 /// as the unit tests do) had no dialer: every push was held for a

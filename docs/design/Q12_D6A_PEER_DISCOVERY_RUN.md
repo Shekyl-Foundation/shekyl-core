@@ -180,21 +180,9 @@ mined, `grey_peerlist_size: 0`. §6 depends on this.
 
 ## 3. Decisions
 
-**Q12-R1 — the onions go in the compiled per-zone seed list, not the pushed
-peerlist.** §2.2 forecloses the pushed peerlist; §2.3 names what replaces it.
-The four seeds' onions land in `get_seed_nodes(zone::tor)`, and their
-propagation past hop one is ordinary self-announce gossip — which is *the
-mechanism this run measures*, so seeding it any harder would defeat the run.
+**Q12-R1 — LANDED 2026-10-21, testnet. The onions go in the compiled seed list, not the pushed peerlist.** §2.2 forecloses the pushed peerlist; §2.3 names what replaces it. The six testnet onions are `shekyl-dialer`'s `seeds` (`SeedNetwork::Testnet`, port 12021), beside the six clearnet addresses. Mainnet's `seeds` is the six clearnet addresses and no onion: those hidden services do not exist. Propagation past hop one is ordinary self-announce gossip — which is *the mechanism this run measured*. *Records-was:* the ruling named four seeds and `get_seed_nodes(zone::tor)`; the list is `seeds`, and two seeds were added after the August snapshot.
 
-**Q12-R2 — the run uses a current-`dev` build and bootstraps purely via
-`--add-peer`; the compiled testnet list lands AFTER the runs.** These collide:
-if the four testnet onions are compiled in before the fleet is built, every
-fleet binary carries four anon seeds that **no CLI flag can suppress**
-(`--offline` and exclusive-peers both change semantics too much to serve as a
-suppressor). The late-joiner control in Q12-R5 depends on "exactly one seed"
-meaning exactly one. Current `dev` already returns `{}` for testnet tor, so the
-resolution is free: build from `dev`, control bootstrap entirely with
-`--add-peer`, land the compiled testnet list once the measurements are taken.
+**Q12-R2 — DISCHARGED 2026-10-21. The run used a current-`dev` build and bootstrapped purely via `--add-peer`; the compiled testnet list landed after the runs.** *Records-was, the hold:* these collide if the onions are compiled in before the fleet is built, because every fleet binary would carry anon seeds that no CLI flag can suppress, and the late-joiner control in Q12-R5 depends on "exactly one seed" meaning exactly one. The runs landed 2026-08-14. Q12-R1's compile is the discharge.
 
 The **mainnet** Monero-seed deletion (§2.4) is separable and lands immediately —
 it does not touch the testnet fleet.
@@ -714,9 +702,10 @@ plan against them:
 | *(not covered)* | `skl-seedeu`'s `12021` was **closed during a Frankfurt provider incident on 2026-09-21 and has since recovered** — a transient, not a configuration state |
 
 **What is unchanged and still load-bearing:** the portable-baseline ruling
-(§9.1), the build artifact (§9.2), and the hidden-service key custody
-precondition (§9.3) — the HS secret-key backup being a single copy on one
-machine, which still gates Q12-R1.
+(§9.1) and the build artifact (§9.2). The hidden-service key custody
+precondition (§9.3) is discharged: a second copy of the six seeds' keys
+exists, and the location is in `shekyl-dev`, `docs/Q12_D6A_SEED_ESTATE.md`.
+This document does not name that host. Q12-R1's compile has landed.
 
 **Also measured 2026-09-21, and not previously recorded anywhere:** all six
 seeds run the **identical binary** (`sha256` `8a8b1db0…`) at the **same
@@ -765,15 +754,19 @@ Staged at `~shekyl/shekyld-u2404`. **Not installed** — see §9.4.
 ### 9.3 Hidden services, and where the keys live
 
 One v3 service per seed, generated from the pinned Tor Expert Bundle already
-staged by SP-T3 (`/opt/shekyl/tor-expert-bundle-15.0.17/tor/tor`). All four tor
-processes are running, bootstrapped, SOCKS up on 9050.
+staged by SP-T3 (`/opt/shekyl/tor-expert-bundle-15.0.17/tor/tor`).
+*Records-was, 2026-08-11:* all four tor processes were running, bootstrapped,
+SOCKS up on 9050. The table below is the live set, including the two seeds
+added after that snapshot.
 
-| host | testnet `.onion` |
+| host | testnet `.onion` (live 2026-10-21) |
 | --- | --- |
 | `skl-seedaus` | `aghoxa757l2wqribeto2hv2rk3wjwcwdqzvu5hjkqdjcm24nuhaszjqd.onion` |
 | `skl-seedeu` | `aks2vbpjb5ojfyqcataqedodws7ardjxczy76bqwmlv55mgfunsxoiyd.onion` |
 | `skl-seeduse` | `23dkgevx7qnhrx2wmhmjvhsz2mpp54xomkujcvhuhm3ajgdciwztypad.onion` |
 | `skl-seedusw` | `nqkfnallpz5kaoxkj2y6bmeifk4helrwp5z2fdtayo3rfzbx4q7z2tqd.onion` |
+| `skl-seedjp` | `e2fafquqkf4jodx6rwh2akgyu2gy3spxcyc2ustnuqw46vrk2xe365qd.onion` |
+| `skl-seedbrz` | `mjgznic6uwrccelrq6fqjmmv2f7gaskd3nxcs76hjrrfc4tse7wioqqd.onion` |
 
 **These are testnet services** — `HiddenServiceDir ~/tor-hs-testnet`,
 `HiddenServicePort 12021 127.0.0.1:12023`. Mainnet gets its own directory and
@@ -800,18 +793,18 @@ virtual port and the local port are different kinds of thing.
 Verified on the running estate — every seed shows both `0.0.0.0:12021` and
 `127.0.0.1:12023` listening.
 
-**Keys are backed up off-host**, with every `hs_ed25519_secret_key`
-sha256-verified against its source. That discharges §4's requirement — but
-**the backup is a single copy on one machine**, and wants a second location
-before these addresses are compiled into source.
+**A second copy of the keys exists (2026-10-21),** so the compile is not
+gated on custody. The location is in `shekyl-dev`,
+`docs/Q12_D6A_SEED_ESTATE.md`. This document does not name the host.
+*Records-was:* the backup was a single copy on one machine, and that
+gated compiling the addresses into source.
 
-The location, and what else that machine holds, are in `shekyl-dev`, `docs/Q12_D6A_SEED_ESTATE.md`: naming a host
-that holds both the seed hidden-service secret keys and the genesis wallet
-would publish one target for two unrelated compromises.
-
-They are **not** in `get_seed_nodes` yet, per Q12-R2: compiling the testnet list
-before the runs would give every fleet binary four unsuppressable anon seeds and
-contaminate the late-joiner control.
+The six testnet onions are compiled in `shekyl-dialer`'s `seeds`.
+Mainnet's list is the six clearnet addresses; it has no onion services.
+*Records-was, per Q12-R2:* they were not in `get_seed_nodes` yet, because
+compiling the testnet list before the runs would give every fleet binary
+unsuppressable anon seeds and contaminate the late-joiner control. The
+runs landed 2026-08-14.
 
 ### 9.4 ~~Blocked: privileged install~~ — CLEARED 2026-08-11
 
