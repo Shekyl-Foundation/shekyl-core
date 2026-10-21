@@ -1337,6 +1337,34 @@ between `Stale`/`Fault` and `InvalidBlock`, no arm mapping one onto the other
 `Fault::View(_) => InvalidBlock…` arm so the view's fault cannot be laundered
 through the wrapper).
 
+### 4.7 The header path (`header_facts.rs`, `header_path.rs`, `header_ladder.rs`)
+
+A header chain is judged by the same rules `validate` runs, from the
+header alone. None of these mint a `ChainValid`.
+
+| Entry | Rows | What it does not run |
+| --- | --- | --- |
+| `form_header` | B1, B2, B6, D2, D1, in `form`'s order | every body row |
+| `judge_header_cheap` | `derive` (D3, D4, D1b), then A2, C1, C2, E1 | D1, and F4, F5, F6 |
+| `judge_header` | the cheap rows, over a header D1 has accepted | F4, F5, F6 |
+| `bind_body` | B6, G2, B4's parse-and-root half | B4's countersignatures |
+
+`HeaderFacts<P>` carries the proof as a type: `Unproven` or `Proven`.
+`D1` accepts only `Proven`, so a header without a longhash cannot reach
+it. `judge_header_cheap` returns a `HeaderProspect`; `judge_header`
+returns a `HeaderJudged` (connecting height and cumulative work).
+
+`anchor_and_coinbase` is two calls, `anchor` (E1) then `coinbase_height`
+(F4, F5, F6), still the only membership list, in `header_ladder.rs`.
+`validate` and `judge_header_ladder` call both, in that order. The
+header path calls `anchor` only: F4–F6 read the coinbase, and a header
+has none. `CoinbaseRule::check` takes a `BlockContext`, so a body rule
+cannot be called on the header path.
+
+B4 is split the same way. `B4::bind_root` is the stateless half
+(`bind_body` calls it). `validate` then runs the countersignatures when
+the set is non-empty. The empty set returns after the root check (A3).
+
 ---
 
 ## 5. The registry macro and how the gate reads it
