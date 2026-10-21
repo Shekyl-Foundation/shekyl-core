@@ -1161,11 +1161,11 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-4`, `TB-5`
 
-- **Name the Tor Status and Health fields (the RW round).** Increment 3 exposes one typed read (`TSR-Q12`, including `ManagedTorFix`); this round names the restricted Status fields and Health's one boolean (`TSR-Q4`) as typed values (`TSR-Q13`). The same-user GUI already has Status (`RPC_CHANNEL.md` RT-15). Blocker: the RW naming pass, which Rick assigned to that round. Falsify by `RPC_WIRE.md` naming each field. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) `TSR-Q12`
+- **Name the Tor Status and Health fields (the RW round).** Increment 3 exposes one typed read (`TSR-Q12`, including `ManagedTorFix` and `OwnTx`); this round names the restricted Status fields and Health's one boolean (`TSR-Q4`) as typed values (`TSR-Q13`). The same-user GUI already has Status (`RPC_CHANNEL.md` RT-15). Blocker: the RW naming pass, which Rick assigned to that round. Falsify by `RPC_WIRE.md` naming each field. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) `TSR-Q12`
   - Target: pre-genesis
   - Owner: [`RPC_WIRE.md`](design/RPC_WIRE.md)
 
-- **Show the Tor posture in `shekyl-cli`, and report a held send as held.** `shekyl-cli` renders Status through the one renderer (`TSR-Q13`); the wallet's send flow reads Health and says a transaction the node cannot originate is held. The GUI's display is tracked in `shekyl-gui-wallet`. Blocker: increment 3's typed read, and the field names from the RW row above. Falsify by a test in which a node with no usable address-hiding connector reports the send as held. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
+- **Show the Tor posture in `shekyl-cli`, and report a held send as held.** `shekyl-cli` renders Status through the one renderer (`TSR-Q13`) and the send flow reads `OwnTx`, reporting `Held` as held and a `ClearnetOnly` send as sent, falsified by §11's two cases once increment 3's typed read and the RW field names exist, with the GUI's display tracked in `shekyl-gui-wallet`. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
   - Target: pre-genesis
   - Owner: [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) §11
 
