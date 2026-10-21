@@ -67,7 +67,7 @@ mod hash;
 /// Shared by every count/length read across the crate so the bound has one source.
 pub(crate) const READ_LEN_CAP: usize = 1_000_000;
 
-pub use block::{identity_of_pow_blob, Block, BlockHeader};
+pub use block::{identity_of_pow_blob, Block, BlockHeader, PowBlob};
 pub use transaction::{
     carries_archival_good, empty_region_prunable_hash, is_join_market_post_kind, pqc_auth_hash_of,
     prunable_hash_of, BondPost, BondPostKind, BpPlus, Ct, CtBase, FullTransaction, Holdings, Input,
