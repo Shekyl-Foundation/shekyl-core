@@ -666,8 +666,12 @@ impl Door {
     }
 
     /// Block until a block this node mined can take a seat, or the door closes.
-    pub(crate) fn wait_for_local_seat(&self) {
+    ///
+    /// `false` is a closed door: the wait woke because the service is
+    /// stopping, and a seat will not appear.
+    pub(crate) fn wait_for_local_seat(&self) -> bool {
         self.room.wait_local();
+        !self.is_closed()
     }
 
     /// Close the door and wake a miner waiting for a seat.

@@ -162,8 +162,9 @@ pub(crate) async fn follow<S>(
     }
     door.close();
     if let Some(sink) = sink {
-        // The miner may still hold the sender. Closing the door ends the
-        // sink; joining it drops the door clone that holds the store.
+        // The node's sender is dropped before this stop, and the miner's
+        // before that. `recv` then returns disconnected and this join
+        // finishes. The door clone in the sink is what holds the store.
         if sink.join().is_err() {
             tracing::error!("the found-block sink panicked");
         }
@@ -375,31 +376,17 @@ fn say_mined(reply: &crate::service::Reply) {
     }
 }
 
-/// How often the found-block sink looks at the door while its channel is
-/// quiet. The receive cannot be woken by the door, and a stop joins this
-/// thread, so the wait has to be bounded.
-const SINK_DOOR_POLL: std::time::Duration = std::time::Duration::from_millis(50);
-
-/// The found-block sink. A full window waits for the reserved seat. A
-/// closed door drops the block: the node is stopping.
+/// The found-block sink. It lives as long as a sender does: `recv`
+/// returns disconnected when the last one drops, and this thread ends.
+/// A full window waits for the reserved seat. A closed door drops the
+/// block and the loop goes back to `recv`.
 pub(crate) fn spawn_sink(
     found: mpsc::Receiver<Found>,
     door: Door,
     postings: Postings,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        // `recv` alone would sit until the miner drops its sender, and a
-        // stop joins this thread. The door closing is the stop; the timeout
-        // is how a blocking receive notices it while the sender still lives.
-        loop {
-            if door.is_closed() {
-                break;
-            }
-            let found = match found.recv_timeout(SINK_DOOR_POLL) {
-                Ok(found) => found,
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            };
+        while let Ok(found) = found.recv() {
             let bodies = postings
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -412,19 +399,21 @@ pub(crate) fn spawn_sink(
                 block: found.block.serialize(),
                 bodies: bodies.iter().map(Transaction::serialize).collect(),
             };
-            // A full window waits for the local seat. A closed door is a
-            // stopping service. Anything else is this node's own block not
-            // joining the chain, and it is said once.
+            // A full window waits for the local seat. A closed door wakes
+            // that wait and the offer is refused; the block is dropped.
+            // Anything else is this node's own block not joining the chain,
+            // and it is said once.
             loop {
-                if door.is_closed() {
-                    break;
-                }
                 match door.offer(arrival.clone()) {
                     Ok(ticket) => {
                         say_mined(&ticket.blocking_reply().reply);
                         break;
                     }
-                    Err(crate::service::Refusal::NoRoom) => door.wait_for_local_seat(),
+                    Err(crate::service::Refusal::NoRoom) => {
+                        if !door.wait_for_local_seat() {
+                            break;
+                        }
+                    }
                     Err(refused) => {
                         tracing::error!(
                             "a block this node mined was not accepted at the door: {refused:?}"

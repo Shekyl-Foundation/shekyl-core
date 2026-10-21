@@ -1022,6 +1022,8 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         );
         tokio::task::yield_now().await;
     }
+    // The sink ends when this sender drops. Stop joins it.
+    drop(_sink);
     service.stop().await.expect("stops");
     y.close().await;
     cleanup(&path);
