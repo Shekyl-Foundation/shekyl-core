@@ -346,9 +346,7 @@ mod tests {
 
     #[test]
     fn an_unestablished_outbound_row_survives_the_copy() {
-        let _bind = seam_bind_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _bind = seam_bind_lock().lock();
         let slot = Arc::new(Mutex::new(None::<u64>));
         let stop = Arc::new(AtomicBool::new(false));
         let slot_for_armer = Arc::clone(&slot);
@@ -521,9 +519,7 @@ mod tests {
     /// nobody to talk to.
     #[test]
     fn the_session_counts_of_a_missing_hub_are_a_refusal_not_zeros() {
-        let _bind = seam_bind_lock()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _bind = seam_bind_lock().lock();
         unsafe {
             shekyl_seam_bind(std::ptr::null_mut(), None);
         }

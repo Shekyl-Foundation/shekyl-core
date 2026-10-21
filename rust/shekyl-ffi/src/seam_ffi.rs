@@ -17,7 +17,8 @@
 
 use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::thread::ThreadId;
 
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
@@ -174,15 +175,77 @@ pub(crate) fn hub() -> Option<Hub> {
     STATE.lock().expect("seam state").clone()
 }
 
-/// Tests that bind the process hub take this for the whole test.
+/// The lock around installing the socket table and binding a hub on it.
 ///
-/// The hub is one static. Two tests binding it at once would publish over
-/// each other. A poisoned lock is the previous test's panic; the next test
-/// still needs the gate.
-#[cfg(test)]
-pub(crate) fn seam_bind_lock() -> &'static Mutex<()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    &LOCK
+/// [`install_process_sockets`] and [`shekyl_seam_bind`] both take it, from
+/// the table read through the hub store, so a bind cannot publish a hub
+/// over a table install is replacing. It is re-entrant on the calling
+/// thread: a test that already holds it may bind. A poisoned lock is the
+/// previous holder's panic; the next caller still needs the gate.
+pub(crate) fn seam_bind_lock() -> &'static BindGate {
+    static GATE: BindGate = BindGate::new();
+    &GATE
+}
+
+struct BindState {
+    owner: Option<ThreadId>,
+    depth: u32,
+}
+
+pub(crate) struct BindGate {
+    state: Mutex<BindState>,
+    changed: Condvar,
+}
+
+pub(crate) struct BindGuard {
+    gate: &'static BindGate,
+}
+
+impl BindGate {
+    const fn new() -> Self {
+        Self {
+            state: Mutex::new(BindState {
+                owner: None,
+                depth: 0,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn lock(&'static self) -> BindGuard {
+        let me = std::thread::current().id();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if state.owner == Some(me) {
+                state.depth += 1;
+                return BindGuard { gate: self };
+            }
+            if state.owner.is_none() {
+                state.owner = Some(me);
+                state.depth = 1;
+                return BindGuard { gate: self };
+            }
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    fn unlock(&self) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.depth -= 1;
+        if state.depth == 0 {
+            state.owner = None;
+            self.changed.notify_one();
+        }
+    }
+}
+
+impl Drop for BindGuard {
+    fn drop(&mut self) {
+        self.gate.unlock();
+    }
 }
 
 /// The node's socket table, or the table a reader created before `main`
@@ -199,18 +262,29 @@ static PROCESS_SOCKETS: Mutex<Option<shekyl_seam::Sockets>> = Mutex::new(None);
 /// what a shared test process needs after another test has read the table.
 #[must_use]
 pub fn install_process_sockets(sockets: shekyl_seam::Sockets) -> bool {
+    // The same lock [`shekyl_seam_bind`] holds from its table read through
+    // the hub store. A bind in that window makes this install wait, then
+    // see the hub and refuse: the hub keeps the table it was built with.
+    #[cfg(test)]
+    INSTALL_AT_LOCK.store(1, std::sync::atomic::Ordering::SeqCst);
+    let _bind = seam_bind_lock().lock();
+    #[cfg(test)]
+    INSTALL_AT_LOCK.store(2, std::sync::atomic::Ordering::SeqCst);
     if hub().is_some() {
         return false;
     }
     let mut slot = PROCESS_SOCKETS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if hub().is_some() {
-        return false;
-    }
     *slot = Some(sockets);
     true
 }
+
+/// Set by [`install_process_sockets`] to 1 just before it takes
+/// [`seam_bind_lock`], and to 2 once it holds the lock. The race test
+/// reads it.
+#[cfg(test)]
+static INSTALL_AT_LOCK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// The process's one admission table. A new binding does not mint ids
 /// again: a `reap` that arrives after the swap names an id the new hub
@@ -297,10 +371,12 @@ pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundC
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>) -> i32 {
     let Some(post) = post else {
+        let _bind = seam_bind_lock().lock();
         store(None);
         return 0;
     };
     if ctx.is_null() {
+        let _bind = seam_bind_lock().lock();
         store(None);
         return 0;
     }
@@ -311,14 +387,20 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
         post,
     };
     let clock: Arc<dyn Clock + Send + Sync> = process_clock();
-    let hub = Hub::new(
-        process_sockets(),
-        ceiling,
-        Arc::new(move |item: Post| post_one(&bound, item)),
-        clock,
-    );
-    // `store` stops the previous hub's dialer; this hub's is built after.
-    store(Some(hub.clone()));
+    // The table this hub is built on and the store of the hub are one
+    // critical section with [`install_process_sockets`].
+    let hub = {
+        let _bind = seam_bind_lock().lock();
+        let hub = Hub::new(
+            process_sockets(),
+            ceiling,
+            Arc::new(move |item: Post| post_one(&bound, item)),
+            clock,
+        );
+        // `store` stops the previous hub's dialer; this hub's is built after.
+        store(Some(hub.clone()));
+        hub
+    };
     crate::dialer_ffi::ensure_dialer(&hub);
     0
 }
@@ -816,5 +898,71 @@ fn routing_c(connector: ConnectorId) -> ShekylSeamObserved {
         port: 0,
         len: 0,
         bytes: [0; TOR_HOST_MAX],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
+    use shekyl_seam::{Hub, Post};
+    use shekyl_timing_engine::Clock;
+
+    use super::{install_process_sockets, process_sockets, seam_bind_lock, store, INSTALL_AT_LOCK};
+
+    /// A bind that has read the table and not yet stored the hub holds
+    /// [`seam_bind_lock`]. An install that arrives in that window waits,
+    /// then sees the hub and refuses. Red edit: drop the lock from
+    /// `install_process_sockets`. The install returns before the hub is
+    /// stored, and the hub is left on the table it did not install.
+    #[test]
+    fn a_bind_holding_the_lock_refuses_the_install() {
+        let gate = seam_bind_lock().lock();
+        store(None);
+        INSTALL_AT_LOCK.store(0, Ordering::SeqCst);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let admitted = install_process_sockets(shekyl_seam::Sockets::new());
+            done_tx.send(admitted).expect("the test is listening");
+        });
+        let started = Instant::now();
+        while INSTALL_AT_LOCK.load(Ordering::SeqCst) != 1 {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "install never reached the lock"
+            );
+            std::thread::yield_now();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            INSTALL_AT_LOCK.load(Ordering::SeqCst),
+            1,
+            "install took the lock before the bind stored the hub"
+        );
+        assert!(
+            done_rx.try_recv().is_err(),
+            "install returned while the bind still held the lock"
+        );
+        let clock: Arc<dyn Clock + Send + Sync> = super::process_clock();
+        let hub = Hub::new(
+            process_sockets(),
+            InboundCeiling::Unbounded(UnboundedReason::Unlimited),
+            Arc::new(|_: Post| {}),
+            clock,
+        );
+        store(Some(hub));
+        drop(gate);
+        let admitted = done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("install finished after the bind released the lock");
+        assert!(
+            !admitted,
+            "a bind that stored its hub before releasing the lock refuses the install"
+        );
+        let _gate = seam_bind_lock().lock();
+        store(None);
     }
 }

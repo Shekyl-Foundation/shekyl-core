@@ -203,8 +203,6 @@ mod tests {
     use crate::seam_ffi::shekyl_seam_set_ceiling;
     use std::ffi::c_void;
     use std::net::Ipv4Addr;
-    use std::sync::PoisonError;
-
     use shekyl_peerlist::Tick;
     use shekyl_seam::CloseCause;
 
@@ -292,9 +290,7 @@ mod tests {
     /// Offline is answered by the RPC before these exports are called.
     #[test]
     fn an_online_daemon_with_no_dialer_is_a_fault() {
-        let _bind = seam_bind_lock()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let _bind = seam_bind_lock().lock();
         unbind();
         let mut rows: *const ShekylRpcPeerFacts = std::ptr::null();
         let mut len = 0usize;
@@ -317,9 +313,7 @@ mod tests {
     /// agree with the listing.
     #[test]
     fn the_listing_renders_each_arm_and_public_only_is_clearnet_alone() {
-        let _bind = seam_bind_lock()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let _bind = seam_bind_lock().lock();
         unbind();
         bind();
         let dialer = dialer().expect("built at the bind");
