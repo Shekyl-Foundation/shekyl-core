@@ -162,18 +162,22 @@ pub(crate) fn anchor<'id, C: HeaderSource, H: HeaderView<'id>>(
 
 /// CEN-F4, CEN-F5, CEN-F6. The context is a [`BlockContext`]: these rows
 /// read the coinbase, and a header-only context cannot name this function.
+/// The `Result` is the ladder's shape, shared with [`anchor`] and
+/// [`clock`], so `validate` calls it with `?`. These three rows do not
+/// produce a view fault.
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn coinbase_height<'id, H: HeaderView<'id>>(
     cx: &BlockContext<'_>,
     view: &H,
     coverage: &mut RuleCoverage,
 ) -> Result<Verdict<()>, Fault<H::Fault>> {
-    if let Err(refused) = rules::run_coinbase::<F4, _>(cx, view, coverage).map_err(Fault::from)? {
+    if let Err(refused) = rules::run_coinbase::<F4, _>(cx, view, coverage) {
         return Ok(Err(refused));
     }
-    if let Err(refused) = rules::run_coinbase::<F5, _>(cx, view, coverage).map_err(Fault::from)? {
+    if let Err(refused) = rules::run_coinbase::<F5, _>(cx, view, coverage) {
         return Ok(Err(refused));
     }
-    if let Err(refused) = rules::run_coinbase::<F6, _>(cx, view, coverage).map_err(Fault::from)? {
+    if let Err(refused) = rules::run_coinbase::<F6, _>(cx, view, coverage) {
         return Ok(Err(refused));
     }
     Ok(Ok(()))

@@ -265,16 +265,13 @@ impl Rule for F4 {
 }
 
 impl crate::rules::CoinbaseRule for F4 {
-    fn check<'id, H: HeaderView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &H,
-    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, _view: &H) -> Verdict<()> {
         if cx.connecting.is_zero()
             || cx.candidate().block.miner_transaction.prefix.outputs.len() == 1
         {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            Ok(Err(InvalidBlock::new(Self::ROW, MINER)))
+            Err(InvalidBlock::new(Self::ROW, MINER))
         }
     }
 }
@@ -291,10 +288,7 @@ impl Rule for F5 {
 }
 
 impl crate::rules::CoinbaseRule for F5 {
-    fn check<'id, H: HeaderView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &H,
-    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, _view: &H) -> Verdict<()> {
         match cx
             .candidate()
             .block
@@ -303,8 +297,8 @@ impl crate::rules::CoinbaseRule for F5 {
             .inputs
             .as_slice()
         {
-            [Input::Gen(claimed)] if *claimed == cx.connecting.to_raw() => Ok(Ok(())),
-            _ => Ok(Err(InvalidBlock::new(Self::ROW, MINER))),
+            [Input::Gen(claimed)] if *claimed == cx.connecting.to_raw() => Ok(()),
+            _ => Err(InvalidBlock::new(Self::ROW, MINER)),
         }
     }
 }
@@ -325,7 +319,7 @@ impl BlockRule for F4 {
         cx: &BlockContext<'_>,
         view: &V,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
-        <Self as crate::rules::CoinbaseRule>::check(cx, view)
+        Ok(<Self as crate::rules::CoinbaseRule>::check(cx, view))
     }
 }
 
@@ -334,7 +328,7 @@ impl BlockRule for F5 {
         cx: &BlockContext<'_>,
         view: &V,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
-        <Self as crate::rules::CoinbaseRule>::check(cx, view)
+        Ok(<Self as crate::rules::CoinbaseRule>::check(cx, view))
     }
 }
 
@@ -343,22 +337,19 @@ impl BlockRule for F6 {
         cx: &BlockContext<'_>,
         view: &V,
     ) -> Result<Verdict<()>, ViewRead<V::Fault>> {
-        <Self as crate::rules::CoinbaseRule>::check(cx, view)
+        Ok(<Self as crate::rules::CoinbaseRule>::check(cx, view))
     }
 }
 
 impl crate::rules::CoinbaseRule for F6 {
-    fn check<'id, H: HeaderView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &H,
-    ) -> Result<Verdict<()>, ViewRead<H::Fault>> {
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, _view: &H) -> Verdict<()> {
         let window = cx.formed.rule_set().mined_money_unlock_window().to_raw();
         let expected = cx.connecting.to_raw().checked_add(window);
         let unlock = cx.candidate().block.miner_transaction.prefix.unlock_time;
         if expected == Some(unlock) {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            Ok(Err(InvalidBlock::new(Self::ROW, MINER)))
+            Err(InvalidBlock::new(Self::ROW, MINER))
         }
     }
 }

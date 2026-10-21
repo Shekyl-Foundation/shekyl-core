@@ -417,11 +417,11 @@ pub(crate) trait HeaderRule: Rule {
 /// judges them over a stitched chain of headers, and the body is the
 /// candidate's.
 pub(crate) trait CoinbaseRule: Rule {
-    /// As [`BlockRule::check`], over a [`HeaderView`].
-    fn check<'id, H: HeaderView<'id>>(
-        cx: &BlockContext<'_>,
-        view: &H,
-    ) -> Result<Verdict<()>, ViewRead<H::Fault>>;
+    /// The coinbase predicate. A [`Verdict`], not a [`ViewRead`]: F4, F5
+    /// and F6 never lift a view fault, and a `check` that returns
+    /// `ViewRead` is a block rule to `check_block_rule_corrupt_sites.py`.
+    /// The [`BlockRule`] impls wrap this in `Ok`.
+    fn check<'id, H: HeaderView<'id>>(cx: &BlockContext<'_>, view: &H) -> Verdict<()>;
 }
 
 /// Every header rule is a block rule: a [`ChainView`] is a [`HeaderView`],
@@ -480,12 +480,12 @@ pub(crate) fn run_coinbase<'id, R: CoinbaseRule, H: HeaderView<'id>>(
     cx: &BlockContext<'_>,
     view: &H,
     coverage: &mut RuleCoverage,
-) -> Result<Verdict<()>, ViewRead<H::Fault>> {
-    let verdict = <R as CoinbaseRule>::check(cx, view)?;
+) -> Verdict<()> {
+    let verdict = <R as CoinbaseRule>::check(cx, view);
     if verdict.is_ok() {
         coverage.insert(R::ROW);
     }
-    Ok(verdict)
+    verdict
 }
 
 /// Which position a transaction occupies, for the rules whose statement
