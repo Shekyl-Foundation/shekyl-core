@@ -4,14 +4,17 @@
 // BSD-3-Clause
 
 //! The header tree `T` (CS-Q2). Only headers the proof accepted, keyed
-//! by hash. Children and the tip set are indexes, so a walk is the
-//! branch and not the whole tree. `H*` is a tip: its hash and its
-//! work. A heavier tip displaces the incumbent only when its fork is
-//! within the reorg cap. Equal work leaves the incumbent.
+//! by hash. Children and the tip set are indexes. A height on a branch
+//! is reached by a skip pointer, the way Bitcoin Core's block index
+//! reaches an ancestor (`pskip`, `GetAncestor`): no operation walks a
+//! branch. `H*` is a tip: its hash and its work. A heavier tip displaces
+//! the incumbent only when its fork is within the reorg cap. Equal work
+//! leaves the incumbent.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use shekyl_chain_rules::{AtHeight, HeaderJudged, HeaderView};
+use shekyl_chain_rules::{AtHeight, HeaderJudged, HeaderRecord, HeaderView};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
@@ -20,6 +23,21 @@ const ONE: BlockCount = BlockCount::ONE;
 struct Node {
     judged: HeaderJudged,
     parent: BlockHash,
+    /// Ancestor at [`skip_height`] of this header's height, when that
+    /// header is itself in `T`. `None` when the skip would land on main.
+    skip: Option<BlockHash>,
+    /// Connecting height of the first header of this branch in `T`.
+    /// Copied from the parent at insert, so a later removal of a node
+    /// (when main connects it) is the only thing that has to recompute it.
+    base: BlockHeight,
+    /// Parent of [`Self::base`]. On main, or null at genesis.
+    anchor: BlockHash,
+}
+
+/// Where a header in `T` sits: its own height, and the fork below it.
+pub(crate) struct Placement {
+    pub height: BlockHeight,
+    pub fork: BlockHeight,
 }
 
 /// The chain `H*` names: a hash and the work through it.
@@ -44,16 +62,62 @@ pub(crate) struct HeaderTree {
     /// A header marked invalid, and every header that descends from one.
     /// The hash is remembered so a later child is excluded too.
     invalid: BTreeSet<BlockHash>,
+    /// Node loads. Ancestor lookups and the cap check count; the children
+    /// index does not.
+    visits: Cell<u64>,
 }
 
 impl HeaderTree {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub(crate) fn contains(&self, hash: BlockHash) -> bool {
+        self.nodes.contains_key(&hash)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn visits(&self) -> u64 {
+        self.visits.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reset_visits(&self) {
+        self.visits.set(0);
+    }
+
     pub(crate) fn insert(&mut self, judged: HeaderJudged) {
         let hash = judged.hash();
         let parent = judged.previous();
+        let height = judged.connecting().to_raw();
+        let parent_in_tree = self.nodes.contains_key(&parent);
+        let skip = if parent_in_tree {
+            self.ancestor_at(parent, BlockHeight::from_raw(skip_height(height)))
+        } else {
+            None
+        };
+        let (base, anchor) = if parent_in_tree {
+            let parent_node = self
+                .node(parent)
+                .expect("the parent was present before the skip lookup");
+            (parent_node.base, parent_node.anchor)
+        } else {
+            (judged.connecting(), parent)
+        };
         let excluded = self.invalid.contains(&parent);
-        self.nodes.insert(hash, Node { judged, parent });
+        self.nodes.insert(
+            hash,
+            Node {
+                judged,
+                parent,
+                skip,
+                base,
+                anchor,
+            },
+        );
         self.children.entry(parent).or_default().insert(hash);
-        if self.nodes.contains_key(&parent) {
+        if parent_in_tree {
             self.tips.remove(&parent);
         }
         self.tips.insert(hash);
@@ -76,36 +140,73 @@ impl HeaderTree {
         }
     }
 
+    /// The height of `hash` when it is in `T`, and the fork below its branch.
+    pub(crate) fn placement(&self, hash: BlockHash) -> Option<Placement> {
+        let node = self.node(hash)?;
+        let fork = node
+            .base
+            .checked_sub_count(ONE)
+            .unwrap_or(BlockHeight::ZERO);
+        Some(Placement {
+            height: node.judged.connecting(),
+            fork,
+        })
+    }
+
     /// The height of `hash` when it is in `T`.
     pub(crate) fn connecting(&self, hash: BlockHash) -> Option<BlockHeight> {
         self.nodes.get(&hash).map(|node| node.judged.connecting())
     }
 
-    /// Hashes of `H*`'s branch in `T`, keyed by their connecting height.
-    /// Heights on main, at and below the fork, are absent: the caller
-    /// reads those from the view, and only the ones the locator names.
-    pub(crate) fn above_fork(&self, tip: BlockHash) -> BTreeMap<BlockHeight, BlockHash> {
-        let mut out = BTreeMap::new();
+    /// The header `hash` records, when it is in `T`.
+    pub(crate) fn record(&self, hash: BlockHash) -> Option<HeaderRecord> {
+        let node = self.node(hash)?;
+        Some(HeaderRecord {
+            hash: node.judged.hash(),
+            header: node.judged.header().clone(),
+            cumulative_difficulty: node.judged.cumulative_difficulty(),
+        })
+    }
+
+    /// The ancestor of `tip` at `height`, in O(log n) node loads.
+    /// `None` when `tip` is not in `T`, or `height` is below the branch.
+    pub(crate) fn ancestor_at(&self, tip: BlockHash, height: BlockHeight) -> Option<BlockHash> {
+        let target = height.to_raw();
         let mut hash = tip;
-        let mut guard = 0usize;
-        while let Some(node) = self.nodes.get(&hash) {
-            out.insert(node.judged.connecting(), hash);
-            if !self.nodes.contains_key(&node.parent) {
-                break;
+        let mut walk = self.node(hash)?.judged.connecting().to_raw();
+        if walk < target {
+            return None;
+        }
+        let mut steps = 0u64;
+        let limit = walk - target + 2;
+        while walk > target {
+            steps += 1;
+            if steps > limit {
+                return None;
+            }
+            let node = self.node(hash)?;
+            let skip_h = skip_height(walk);
+            let skip_prev = skip_height(walk - 1);
+            if let Some(skip) = node.skip {
+                if skip_reaches(skip_h, skip_prev, target) {
+                    hash = skip;
+                    walk = skip_h;
+                    continue;
+                }
             }
             hash = node.parent;
-            guard += 1;
-            if guard > self.nodes.len() {
-                break;
+            if walk == 0 || self.node(hash).is_none() {
+                return None;
             }
+            walk -= 1;
         }
-        out
+        Some(hash)
     }
 
     /// `incumbent` stays unless a tip in the tip set is strictly heavier
     /// and its fork is within `cap`. Each such tip costs one
-    /// [`HeaderView::header_at`]: the fork height comes from
-    /// [`HeaderJudged::connecting`], and that one read checks the anchor.
+    /// [`HeaderView::header_at`]: the fork height is stored on the node,
+    /// and that one read checks the anchor.
     pub(crate) fn select<'id, H: HeaderView<'id>>(
         &self,
         main: &H,
@@ -116,7 +217,7 @@ impl HeaderTree {
         let floor = incumbent.work;
         let mut best = incumbent;
         for hash in &self.tips {
-            let Some(node) = self.nodes.get(hash) else {
+            let Some(node) = self.node(*hash) else {
                 continue;
             };
             let work = node.judged.cumulative_difficulty();
@@ -134,30 +235,9 @@ impl HeaderTree {
         Ok(best)
     }
 
-    /// The parent that is not in `T`, and its height: one below the
-    /// first header of the branch. A header connecting at 0 has no
-    /// block below it; the anchor is its parent and the height is 0.
-    fn fork(&self, tip: BlockHash) -> Option<(BlockHash, BlockHeight)> {
-        let mut hash = tip;
-        let mut guard = 0usize;
-        loop {
-            let node = self.nodes.get(&hash)?;
-            if !self.nodes.contains_key(&node.parent) {
-                let height = node.judged.connecting();
-                let fork = match height.checked_sub_count(ONE) {
-                    Some(fork) => fork,
-                    None => BlockHeight::ZERO,
-                };
-                return Some((node.parent, fork));
-            }
-            hash = node.parent;
-            guard += 1;
-            if guard > self.nodes.len() {
-                return None;
-            }
-        }
-    }
-
+    /// The fork is the ancestor at the branch's base. Its parent is the
+    /// anchor, and one `header_at` of the fork height checks that anchor
+    /// against main.
     fn within_cap<'id, H: HeaderView<'id>>(
         &self,
         main: &H,
@@ -165,9 +245,21 @@ impl HeaderTree {
         local_height: Option<BlockHeight>,
         cap: BlockCount,
     ) -> Result<bool, H::Fault> {
-        let Some((anchor, fork)) = self.fork(tip) else {
+        let Some(node) = self.node(tip) else {
             return Ok(false);
         };
+        let base = node.base;
+        let anchor = node.anchor;
+        let Some(at_base) = self.ancestor_at(tip, base) else {
+            return Ok(false);
+        };
+        let Some(base_node) = self.node(at_base) else {
+            return Ok(false);
+        };
+        if base_node.parent != anchor {
+            return Ok(false);
+        }
+        let fork = base.checked_sub_count(ONE).unwrap_or(BlockHeight::ZERO);
         let at = main.header_at(fork)?;
         let Some(local_height) = local_height else {
             return Ok(anchor == BlockHash::NULL && matches!(at, AtHeight::AboveTip));
@@ -180,4 +272,40 @@ impl HeaderTree {
         }
         Ok(local_height - fork <= cap)
     }
+
+    fn node(&self, hash: BlockHash) -> Option<&Node> {
+        self.visits.set(self.visits.get().saturating_add(1));
+        self.nodes.get(&hash)
+    }
+}
+
+/// Bitcoin Core's `GetSkipHeight`: the height a node's skip pointer names.
+fn skip_height(height: u64) -> u64 {
+    if height < 2 {
+        return 0;
+    }
+    if height & 1 == 1 {
+        invert_lowest_one(invert_lowest_one(height - 1)) + 1
+    } else {
+        invert_lowest_one(height)
+    }
+}
+
+fn invert_lowest_one(n: u64) -> u64 {
+    n & n.wrapping_sub(1)
+}
+
+/// Bitcoin Core's `GetAncestor` skip predicate, on signed heights so a
+/// skip of 0 or 1 subtracts the way the C++ `int` does.
+fn skip_reaches(skip_h: u64, skip_prev: u64, target: u64) -> bool {
+    if skip_h == target {
+        return true;
+    }
+    if skip_h <= target {
+        return false;
+    }
+    let skip_h = i128::from(skip_h);
+    let skip_prev = i128::from(skip_prev);
+    let target = i128::from(target);
+    !(skip_prev < skip_h - 2 && skip_prev >= target)
 }

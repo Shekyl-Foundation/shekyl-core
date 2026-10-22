@@ -9,13 +9,15 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use shekyl_chain_rules::{
-    AtHeight, Fault, FormedHeader, HeaderView, InvalidBlock, RuleSet, Tip, Trust,
+    AtHeight, Corrupt, Fault, FormedHeader, HeaderJudged, HeaderView, InvalidBlock, RuleSet, Stale,
+    Tip, Trust,
 };
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::{bounded_uniform, RelayRng};
 use shekyl_levin::{RequestHeaders, HEADERS_RESPONSE_BYTES};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 
+use crate::branch::BranchView;
 use crate::claim::{self, PayloadRefused, PeerClaim};
 use crate::locator::locator;
 use crate::state::SyncState;
@@ -94,6 +96,20 @@ impl Job {
     }
 }
 
+/// A header `adopt` did not add to `T`. The run layer turns a refusal
+/// into a closed supplier and a `Stale` into another plan (§4.8). Until
+/// that layer, the note is what a test reads: a dropped verdict is how a
+/// header judged against the wrong view disappeared.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AdoptNote {
+    /// `judge_header` refused the header.
+    Refused(InvalidBlock),
+    /// A claim `form_header` was given does not hold on the branch.
+    Stale(Stale),
+    /// The branch view answered with data no conforming chain holds.
+    Corrupt(Corrupt),
+}
+
 /// One item of a [`Event::Proven`] batch.
 #[derive(Clone, Debug)]
 pub enum Proved {
@@ -156,6 +172,9 @@ pub struct Sync<K, R> {
     /// The posture `judge_header` is given. The fill's checkpoint does
     /// not read it: until slice 6 every posture is full.
     trust: Trust,
+    /// Refusals and faults `adopt` did not insert. View faults are not
+    /// notes: they are returned to the caller.
+    notes: Vec<AdoptNote>,
 }
 
 impl<K, R> Sync<K, R>
@@ -180,6 +199,7 @@ where
             fill_frontier: BlockHeight::ZERO,
             alarm: false,
             trust,
+            notes: Vec::new(),
         }
     }
 
@@ -246,6 +266,71 @@ where
     #[must_use]
     pub(crate) fn selected(&self) -> Star {
         self.star
+    }
+
+    /// Headers in `T`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn header_count(&self) -> usize {
+        self.tree.len()
+    }
+
+    /// Whether `T` holds `hash`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn contains_header(&self, hash: BlockHash) -> bool {
+        self.tree.contains(hash)
+    }
+
+    /// Node loads since the tree was built, or since [`Self::reset_visits`].
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn tree_visits(&self) -> u64 {
+        self.tree.visits()
+    }
+
+    /// Start the node-load count over.
+    #[cfg(test)]
+    pub(crate) fn reset_visits(&self) {
+        self.tree.reset_visits();
+    }
+
+    /// What `adopt` refused or faulted, in order.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn adopt_notes(&self) -> &[AdoptNote] {
+        &self.notes
+    }
+
+    /// The branch whose tip is `parent`: `T` when the parent is in the
+    /// tree, main when the parent is the local tip. `None` when it is
+    /// neither, and the caller judges against `main` and records the result.
+    pub(crate) fn branch_of<'a, H>(
+        &'a self,
+        main: &'a H,
+        parent: BlockHash,
+    ) -> Option<BranchView<'a, H>> {
+        if let Some(placed) = self.tree.placement(parent) {
+            return Some(BranchView::above(
+                main,
+                &self.tree,
+                parent,
+                placed.height,
+                placed.fork,
+            ));
+        }
+        let local = self.local?;
+        if local.hash == parent {
+            return match local.height {
+                Some(height) => Some(BranchView::on_main(main, parent, height)),
+                None if parent == BlockHash::NULL => Some(BranchView::empty_main(main)),
+                None => None,
+            };
+        }
+        if local.height.is_none() && parent == BlockHash::NULL {
+            return Some(BranchView::empty_main(main));
+        }
+        None
     }
 
     /// The transit the session opened with.
@@ -365,14 +450,33 @@ where
         main: &H,
         formed: &FormedHeader,
     ) -> Result<(), H::Fault> {
-        let judged =
-            match shekyl_chain_rules::judge_header(formed, main, &formed.rule_set(), &self.trust) {
-                Ok(Ok(judged)) => judged,
-                Err(Fault::View(fault)) => return Err(fault),
-                Ok(Err(_)) | Err(_) => return Ok(()),
-            };
-        self.tree.insert(judged);
-        self.reselect(main)
+        let parent = formed.previous();
+        let outcome = if self.tree.contains(parent) || self.parents_local(parent) {
+            let branch = self
+                .branch_of(main, parent)
+                .expect("a parent in T or at the local tip has a branch view");
+            classify(formed, &branch, &self.trust)?
+        } else {
+            classify(formed, main, &self.trust)?
+        };
+        match outcome {
+            Ok(judged) => {
+                self.tree.insert(judged);
+                self.reselect(main)
+            }
+            Err(note) => {
+                self.notes.push(note);
+                Ok(())
+            }
+        }
+    }
+
+    fn parents_local(&self, parent: BlockHash) -> bool {
+        match self.local {
+            Some(local) if local.hash == parent => true,
+            Some(local) if local.height.is_none() && parent == BlockHash::NULL => true,
+            _ => false,
+        }
     }
 
     /// At most one header request extends `H*`. It goes to a session
@@ -421,14 +525,17 @@ where
         Ok(())
     }
 
-    /// The locator of `H*`: `T` from that tip down to its fork, then main
-    /// below. `locator` names the heights; only a height it names that is
-    /// not already in `T` is read from `main`.
+    /// The locator of `H*`. `locator` names the heights. A height on the
+    /// branch is that branch's ancestor; a height at or below the fork is
+    /// read from `main`.
     fn locator_of<'id, H: HeaderView<'id>>(&self, main: &H) -> Result<Vec<[u8; 32]>, H::Fault> {
-        let above = self.tree.above_fork(self.star.hash);
+        let star = self.star.hash;
+        let in_tree = self.tree.contains(star);
         locator(self.star_count(), |height| {
-            if let Some(hash) = above.get(&height) {
-                return Ok(Some(*hash));
+            if in_tree {
+                if let Some(hash) = self.tree.ancestor_at(star, height) {
+                    return Ok(Some(hash));
+                }
             }
             match main.header_at(height)? {
                 AtHeight::Recorded(record) => Ok(Some(record.hash)),
@@ -455,6 +562,20 @@ pub enum ClaimError<E> {
     Refused(PayloadRefused),
     /// The main view could not be read.
     View(E),
+}
+
+fn classify<'id, H: HeaderView<'id>>(
+    formed: &FormedHeader,
+    view: &H,
+    trust: &Trust,
+) -> Result<Result<HeaderJudged, AdoptNote>, H::Fault> {
+    match shekyl_chain_rules::judge_header(formed, view, &formed.rule_set(), trust) {
+        Ok(Ok(judged)) => Ok(Ok(judged)),
+        Err(Fault::View(fault)) => Err(fault),
+        Ok(Err(refused)) => Ok(Err(AdoptNote::Refused(refused))),
+        Err(Fault::Stale(stale)) => Ok(Err(AdoptNote::Stale(stale))),
+        Err(Fault::Corrupt(corrupt)) => Ok(Err(AdoptNote::Corrupt(corrupt))),
+    }
 }
 
 fn header_deadline(now: Instant, transit: Duration) -> Instant {

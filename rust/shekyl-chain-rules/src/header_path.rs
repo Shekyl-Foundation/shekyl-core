@@ -18,7 +18,7 @@
 
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, Timestamp, TxHash};
-use shekyl_wire::{Block, BlockBody, PowBlob, Transaction, TxBody};
+use shekyl_wire::{Block, BlockBody, BlockHeader, PowBlob, Transaction, TxBody};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
@@ -95,6 +95,12 @@ impl HeaderJudged {
     #[must_use]
     pub const fn previous(&self) -> BlockHash {
         self.facts.header().previous
+    }
+
+    /// The header the proof covers. The branch view serves it by height.
+    #[must_use]
+    pub const fn header(&self) -> &BlockHeader {
+        self.facts.header()
     }
 
     /// The rules the header was formed under.

@@ -19,6 +19,7 @@
 #[cfg(test)]
 mod select_tests;
 
+mod branch;
 mod claim;
 mod locator;
 mod model;
