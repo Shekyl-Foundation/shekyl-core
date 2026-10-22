@@ -400,7 +400,11 @@ impl<'id> WriteBatch<'_, 'id> {
         // ---- 9. accrual row, slash, epoch close (`archival_write.rs`) ---
         self.record_archival_epoch(BlockHeight::from_raw(height), &valid)?;
         if let Some((memo, bundles)) = admitted {
-            let chain = self.chain_view();
+            // The connecting height was noted before this block's row
+            // landed. `chain_view` notes `tip + 1`, and the tip is now this
+            // block, so that note would halt a later fault at the next
+            // height. The view is the batch, and it does not re-note.
+            let chain = BatchView::new(self);
             let view = StoreBundleView::new(
                 &chain,
                 memo,

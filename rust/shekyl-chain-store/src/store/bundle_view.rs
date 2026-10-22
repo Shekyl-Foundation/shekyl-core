@@ -14,7 +14,8 @@
 //! Issued draws are read once per epoch and kept as [`IssuedVisibility`]:
 //! each pair's reveal heights, sorted. `revealed_at < h` is one partition
 //! of that list. The count the reduction uses and the flag the verifier
-//! reads are that partition.
+//! reads are that partition. A drawable epoch is resolved once too: the
+//! opening block is parsed and checked, then the set is kept for the view.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -101,6 +102,31 @@ impl IssuedVisibility {
     }
 }
 
+/// Drawable sets this view has already resolved, by epoch.
+///
+/// The opening block is parsed and its hash checked once. A later read of
+/// the epoch returns that set. A miss is SI-35 and is not filed: arming the
+/// row poisons the batch, so the view does not answer it again.
+struct OpenedEpochs<'a> {
+    by_epoch: BTreeMap<SettlementEpoch, &'a DrawableEpoch>,
+}
+
+impl<'a> OpenedEpochs<'a> {
+    fn new() -> Self {
+        Self {
+            by_epoch: BTreeMap::new(),
+        }
+    }
+
+    fn get(&self, epoch: SettlementEpoch) -> Option<&'a DrawableEpoch> {
+        self.by_epoch.get(&epoch).copied()
+    }
+
+    fn insert(&mut self, epoch: SettlementEpoch, drawable: &'a DrawableEpoch) {
+        self.by_epoch.insert(epoch, drawable);
+    }
+}
+
 /// The admission view: one batch and the memo the count phase filled.
 pub struct StoreBundleView<'a, 'b, 'id> {
     view: &'a BatchView<'b, 'id>,
@@ -111,6 +137,9 @@ pub struct StoreBundleView<'a, 'b, 'id> {
     /// Issued draws already read, by epoch. One admission reads an epoch's
     /// index once, then answers every pair from that read.
     visibility: RefCell<IssuedVisibility>,
+    /// Drawable sets already resolved, by epoch. One admission checks an
+    /// epoch's opening hash once, then answers every draw from that set.
+    opened: RefCell<OpenedEpochs<'a>>,
 }
 
 impl<'a, 'b, 'id> StoreBundleView<'a, 'b, 'id> {
@@ -128,6 +157,7 @@ impl<'a, 'b, 'id> StoreBundleView<'a, 'b, 'id> {
             h_incl,
             schedule,
             visibility: RefCell::new(IssuedVisibility::new()),
+            opened: RefCell::new(OpenedEpochs::new()),
         }
     }
 
@@ -249,15 +279,19 @@ impl BundleView for StoreBundleView<'_, '_, '_> {
     }
 
     fn drawable_epoch(&self, epoch: SettlementEpoch) -> Result<Option<&DrawableEpoch>, StoreError> {
+        if let Some(drawable) = self.opened.borrow().get(epoch) {
+            return Ok(Some(drawable));
+        }
         let open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
         let hash = match HeaderView::header_at(self.view, open)? {
             AtHeight::Recorded(header) => header.hash,
             AtHeight::AboveTip => return Err(self.miss(epoch)),
         };
-        match self.memo.get(epoch, &hash) {
-            Some(drawable) => Ok(Some(drawable)),
-            None => Err(self.miss(epoch)),
-        }
+        let Some(drawable) = self.memo.get(epoch, &hash) else {
+            return Err(self.miss(epoch));
+        };
+        self.opened.borrow_mut().insert(epoch, drawable);
+        Ok(Some(drawable))
     }
 }
 
