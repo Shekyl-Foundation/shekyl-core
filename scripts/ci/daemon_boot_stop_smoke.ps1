@@ -23,7 +23,13 @@
 #      directory's access list grants Users write is refused with exit 2,
 #      naming the permissions (§2.4). Windows only: the rule is the
 #      access list's; on another platform the case prints that it did not
-#      run.
+#      run;
+#   6. Ctrl-Break: a daemon started in its own process group
+#      (CREATE_NEW_PROCESS_GROUP, which .NET's Process.Start cannot set, so
+#      a CreateProcess call) is sent CTRL_BREAK_EVENT and takes its one stop
+#      path: exit 0 within the stop timeout, store and marker kept (§5.2).
+#      Windows only, and it needs a console on the runner, which the
+#      pre-flight below reports and the case asserts (rule 47).
 #
 # It replaces the daemonizer-removal smoke test, which re-proved the link,
 # asserted that a deleted code path did nothing, and pinned the
@@ -38,9 +44,6 @@
 # answers is a failure, not a skipped check (and the poll says what the
 # last answer was); a store or a marker that is missing is a failure, not
 # a quiet pass; a refusal is asserted by its exit status and its code.
-#
-# The Ctrl-Break case of §5.2 is not here: it needs a console on the
-# runner, which the pre-flight line below reports (audit §5).
 
 param(
     [Parameter(Mandatory = $true)] [string] $Daemon,
@@ -58,8 +61,8 @@ if (-not (Test-Path -LiteralPath $Daemon -PathType Leaf)) {
 $Daemon = (Resolve-Path -LiteralPath $Daemon).Path
 
 # Pre-flight (DAEMON_CONFIG_CUTOVER_AUDIT.md §5): does the runner's process
-# have a console? Decides where the Ctrl-Break case can run. Reported, not
-# assumed.
+# have a console? Case 6 needs one and asserts it. Reported, not assumed.
+$attached = 0
 if ($IsWindows) {
     Add-Type -Namespace ShekylSmoke -Name Console -MemberDefinition @'
 [DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
@@ -242,6 +245,77 @@ try {
     } else {
         Write-Host 'configuration-file access-list case: not run (Windows access lists only)'
     }
+
+    # 6. Ctrl-Break: the console event the one stop path takes (§5.2)
+    if ($IsWindows) {
+        if ($attached -lt 1) {
+            throw 'the Ctrl-Break case needs a console on the runner, and this process has none attached'
+        }
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace ShekylSmoke {
+    public static class Spawn {
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct STARTUPINFO {
+            public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
+            public int dwX; public int dwY; public int dwXSize; public int dwYSize;
+            public int dwXCountChars; public int dwYCountChars; public int dwFillAttribute;
+            public int dwFlags; public short wShowWindow; public short cbReserved2;
+            public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        public struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern bool CreateProcess(string lpApplicationName, string lpCommandLine, IntPtr lpProcessAttributes,
+            IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags, IntPtr lpEnvironment,
+            string lpCurrentDirectory, ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GenerateConsoleCtrlEvent(uint dwCtrlEvent, uint dwProcessGroupId);
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern bool CloseHandle(IntPtr hObject);
+    }
+}
+'@
+        $brkData = Join-Path $work 'brkdata'
+        New-Item -ItemType Directory -Path $brkData | Out-Null
+        $brkPort = New-FreePort
+        $brkWords = Get-DaemonWords -Network 'regtest' -Data $brkData -Port $brkPort -Log (Join-Path $brkData 'shekyld.log')
+        $quotedWords = $brkWords | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ } }
+        $commandLine = '"' + $Daemon + '" ' + ($quotedWords -join ' ')
+        $startup = New-Object ShekylSmoke.Spawn+STARTUPINFO
+        $startup.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($startup)
+        $procInfo = New-Object ShekylSmoke.Spawn+PROCESS_INFORMATION
+        $CREATE_NEW_PROCESS_GROUP = [uint32] 0x200
+        $created = [ShekylSmoke.Spawn]::CreateProcess($null, $commandLine, [IntPtr]::Zero, [IntPtr]::Zero, $false,
+            $CREATE_NEW_PROCESS_GROUP, [IntPtr]::Zero, $null, [ref] $startup, [ref] $procInfo)
+        if (-not $created) {
+            throw "CreateProcess failed with Win32 error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+        }
+        [void][ShekylSmoke.Spawn]::CloseHandle($procInfo.hThread)
+        [void][ShekylSmoke.Spawn]::CloseHandle($procInfo.hProcess)
+        $brk = [System.Diagnostics.Process]::GetProcessById($procInfo.dwProcessId)
+        $null = $brk.Handle
+        $running.Add($brk)
+        Wait-GetInfo -Proc $brk -Port $brkPort -TimeoutSeconds $StartTimeoutSeconds -Label 'daemon in its own process group'
+        $CTRL_BREAK_EVENT = [uint32] 1
+        if (-not [ShekylSmoke.Spawn]::GenerateConsoleCtrlEvent($CTRL_BREAK_EVENT, [uint32] $procInfo.dwProcessId)) {
+            throw "GenerateConsoleCtrlEvent failed with Win32 error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+        }
+        if (-not $brk.WaitForExit($StopTimeoutSeconds * 1000)) {
+            throw "the daemon did not exit within $StopTimeoutSeconds s of Ctrl-Break"
+        }
+        if ($brk.ExitCode -ne 0) {
+            throw "the daemon exited with status $($brk.ExitCode) after Ctrl-Break"
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $brkData 'lmdb') 'data.mdb') -PathType Leaf)) {
+            throw 'no chain store after the Ctrl-Break stop'
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $brkData 'shekyld.network') -PathType Leaf)) {
+            throw 'no network marker after the Ctrl-Break stop'
+        }
+        Write-Host 'Ctrl-Break: the daemon took its stop path, exit 0, store and marker kept'
+    } else {
+        Write-Host 'Ctrl-Break case: not run (a Windows console event)'
+    }
 } catch {
     $failure = $_
 }
@@ -288,5 +362,5 @@ if ($failure) {
 if ($teardownErrors.Count -gt 0) {
     throw ("teardown: " + ($teardownErrors -join '; '))
 }
-$cases = if ($IsWindows) { 'boot, lock, stop, store, marker, other-network refusal, config-file access list' } else { 'boot, lock, stop, store, marker, other-network refusal' }
+$cases = if ($IsWindows) { 'boot, lock, stop, store, marker, other-network refusal, config-file access list, Ctrl-Break stop' } else { 'boot, lock, stop, store, marker, other-network refusal' }
 Write-Host "daemon smoke: $cases all asserted"

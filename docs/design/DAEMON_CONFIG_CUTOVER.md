@@ -1,6 +1,6 @@
 # Daemon configuration cutover — the option surface moves to Rust
 
-**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §5.1's GUI spawn observation, §5.2's Ctrl-Break case, §9's utilities) and the §10 carries.** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 26 is cited.
+**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §5.1's GUI spawn observation, §9's utilities) and the §10 carries.** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 26 is cited.
 The input grammar is ruled and merged: Part A (#1067, merge `7cf70b7052`)
 and Part B (#1068, merge `cd1d0cc8ed`). Its rules are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc) and the
@@ -656,9 +656,11 @@ directory and a free RPC port, waits for `get_info`, stops it over RPC and
 asserts exit 0 within a timeout and a created store; the cutover extends
 the same job with the Rust `main()` and its one stop path, a second daemon
 on the same data directory refused by the lock, a config directory whose
-access list grants Users write refused with exit 2, and another network's
-data directory refused by the marker; RT-W14 later adds a service-manager
-case (install, start, `SERVICE_RUNNING`, stop).
+access list grants Users write refused with exit 2, another network's
+data directory refused by the marker, and a daemon in its own process
+group sent Ctrl-Break taking its one stop path (Rick, 2026-10-22); RT-W14
+later adds a service-manager case (install, start, `SERVICE_RUNNING`,
+stop).
 
 The cutover's edit of the job's script (`scripts/ci/daemon_boot_stop_smoke.ps1`,
 #1072; Rick, 2026-10-14):
@@ -676,14 +678,14 @@ The cutover's edit of the job's script (`scripts/ci/daemon_boot_stop_smoke.ps1`,
   asserts `shekyld.lock`, present and held while the daemon runs, and the
   `shekyld.network` marker, holding `regtest` and its network id after the
   run (DC-Q15).
-- **A Ctrl-Break case needs its own launch.** `GenerateConsoleCtrlEvent`
+- **The Ctrl-Break case has its own launch.** `GenerateConsoleCtrlEvent`
   delivers Ctrl-Break, not Ctrl-C, to a process started in its own process
   group (`CREATE_NEW_PROCESS_GROUP`). .NET's `Process.Start` cannot set that
-  flag, so the case needs a small `CreateProcess` call or helper, and the
-  runner's process needs a console. Whether the hosted Windows runner has
-  one is a pre-flight check (§9), not an assumption; if it has none, the
-  case belongs in the Windows lane's local run instead of CI. Window close,
-  logoff and shutdown cannot be generated this way at all.
+  flag, so the case starts the daemon through a `CreateProcess` call, and
+  it asserts the runner's console before sending the event: the hosted
+  runner's process has one attached and no window (the pre-flight line,
+  audit §5). Window close, logoff and shutdown cannot be generated this way
+  at all.
 
 New: the
 grammar gate (IG-3, IG-9) over the daemon's table; the snapshot field-count
