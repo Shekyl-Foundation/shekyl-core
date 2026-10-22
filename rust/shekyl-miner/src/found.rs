@@ -9,7 +9,8 @@
 //! ingest service holds [`FoundInbox`]: it receives from it, and it closes
 //! it when the service stops, so the sink ends while a sender still lives.
 //! The last sender dropping ends the receive too, which is a miner stopping
-//! on its own and disconnecting the sink.
+//! on its own and disconnecting the sink. The last inbox dropping closes
+//! the mailbox, so a later deliver refuses and nothing queued is kept.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -44,6 +45,9 @@ struct Mail {
     /// Live [`FoundBlocks`] clones. Zero is the miner disconnecting: the
     /// same end as [`FoundInbox::close`], once the queue is empty.
     senders: usize,
+    /// Live [`FoundInbox`] clones. Zero closes the mailbox. Nothing can
+    /// receive, so the queue is dropped and a later deliver refuses.
+    receivers: usize,
 }
 
 struct Shared {
@@ -95,7 +99,8 @@ impl Drop for FoundBlocks {
 
 impl FoundBlocks {
     /// Deliver `found`. `false` when the inbox is closed: the service has
-    /// stopped, and nothing will connect the block.
+    /// stopped, or the last inbox has been dropped, and nothing will
+    /// connect the block.
     #[must_use]
     pub fn deliver(&self, found: Found) -> bool {
         let mut mail = lock(&self.shared);
@@ -108,11 +113,35 @@ impl FoundBlocks {
     }
 }
 
-/// The receiving end. Cheap to clone: a clone is the same inbox, not
-/// another sender.
-#[derive(Clone)]
+/// The receiving end. Cloning counts a receiver of the same inbox.
+/// Dropping the last one closes the mailbox.
 pub struct FoundInbox {
     shared: Arc<Shared>,
+}
+
+impl Clone for FoundInbox {
+    fn clone(&self) -> Self {
+        lock(&self.shared).receivers += 1;
+        Self {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl Drop for FoundInbox {
+    fn drop(&mut self) {
+        let mut mail = lock(&self.shared);
+        mail.receivers = mail
+            .receivers
+            .checked_sub(1)
+            .expect("each inbox is dropped once");
+        if mail.receivers == 0 {
+            // No receiver remains to drain, unlike [`FoundInbox::close`].
+            mail.closed = true;
+            mail.queue.clear();
+            self.shared.arrived.notify_all();
+        }
+    }
 }
 
 impl fmt::Debug for FoundInbox {
@@ -203,6 +232,7 @@ pub fn found_blocks() -> (FoundBlocks, FoundInbox) {
             queue: VecDeque::new(),
             closed: false,
             senders: 1,
+            receivers: 1,
         }),
         arrived: Condvar::new(),
     });
@@ -216,7 +246,46 @@ pub fn found_blocks() -> (FoundBlocks, FoundInbox) {
 
 #[cfg(test)]
 mod tests {
+    use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash};
+    use shekyl_wire::transaction::{Ct, CtBase, Input, TxPrefix};
+    use shekyl_wire::{Block, BlockHeader, Transaction};
+
     use super::found_blocks;
+    use crate::job::Generation;
+    use crate::Found;
+
+    fn found_at(nonce: u32) -> Found {
+        Found {
+            block: Block {
+                header: BlockHeader {
+                    major_version: 1,
+                    minor_version: 0,
+                    timestamp: 1,
+                    previous: BlockHash::from_bytes([0x11; 32]),
+                    nonce,
+                    curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
+                    attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+                },
+                miner_transaction: Transaction {
+                    prefix: TxPrefix {
+                        unlock_time: 0,
+                        inputs: vec![Input::Gen(7)],
+                        outputs: Vec::new(),
+                        extra: Vec::new(),
+                    },
+                    ct: Ct::Null(CtBase {
+                        enc_amounts: Vec::new(),
+                        enc_labels: Vec::new(),
+                        commitments: Vec::new(),
+                    }),
+                },
+                transaction_hashes: Vec::new(),
+            },
+            height: BlockHeight::from_raw(1),
+            generation: Generation::from_raw(1),
+            pow: PowHash::from_bytes([0x44; 32]),
+        }
+    }
 
     #[test]
     fn close_ends_recv_while_a_sender_lives() {
@@ -233,5 +302,30 @@ mod tests {
         let waiting = std::thread::spawn(move || inbox.recv());
         drop(held);
         assert!(waiting.join().expect("recv").is_none());
+    }
+
+    #[test]
+    fn a_remaining_inbox_receives_and_the_last_drop_refuses_delivery() {
+        let (sender, inbox) = found_blocks();
+        let kept = inbox.clone();
+        drop(inbox);
+        let found = found_at(1);
+        assert!(sender.deliver(found.clone()));
+        assert_eq!(kept.recv(), Some(found));
+        drop(kept);
+        assert!(!sender.deliver(found_at(2)));
+    }
+
+    #[test]
+    fn close_drains_while_an_inbox_still_lives() {
+        let (sender, inbox) = found_blocks();
+        let kept = inbox.clone();
+        let found = found_at(3);
+        assert!(sender.deliver(found.clone()));
+        inbox.close();
+        drop(inbox);
+        assert!(!sender.deliver(found_at(4)));
+        assert_eq!(kept.recv(), Some(found));
+        assert!(kept.recv().is_none());
     }
 }
