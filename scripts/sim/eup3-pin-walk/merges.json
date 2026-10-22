@@ -1,0 +1,261 @@
+[
+  {
+    "merge": "6af76fb3143cf4e98f3258f27bde4f8d284d7c35",
+    "subject": "Merge pull request #962 from Shekyl-Foundation/dev",
+    "parents": [
+      "d8f0f24b03b3a0cb1bf846e7228da20eb2dd6480",
+      "241bc4eb9c27cae3e05ea717a2d840e60a207b0a"
+    ],
+    "differs_from": {}
+  },
+  {
+    "merge": "d8f0f24b03b3a0cb1bf846e7228da20eb2dd6480",
+    "subject": "Merge pull request #685 from Shekyl-Foundation/dev",
+    "parents": [
+      "795ae8c4923a9f824f18e6fabc24e5018df17a29",
+      "79013aff1a85892fa294e9f9c88031f72030031d"
+    ],
+    "differs_from": {}
+  },
+  {
+    "merge": "795ae8c4923a9f824f18e6fabc24e5018df17a29",
+    "subject": "Merge pull request #412 from Shekyl-Foundation/dev",
+    "parents": [
+      "d0b72ca32bd319169ac7d12ba9ea200d5afdf0d0",
+      "6b55649e361036c955a289c801c0eb60382390d1"
+    ],
+    "differs_from": {}
+  },
+  {
+    "merge": "d0b72ca32bd319169ac7d12ba9ea200d5afdf0d0",
+    "subject": "release: merge dev for v3.1.0-alpha.6",
+    "parents": [
+      "34b2b3c051b037165e423e5a1c526987934029b6",
+      "e51d6e4b7c5bd2ed579210f67ed12f9532955704"
+    ],
+    "differs_from": {
+      "34b2b3c051b037165e423e5a1c526987934029b6": {
+        "l11_fill": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 84.94,
+              "cDeepU": 0.056333333333333346,
+              "oUmx": 0.673469387755102,
+              "purse": 100.0
+            }
+          }
+        },
+        "l11_trim": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 82.62,
+              "cDeepU": 0.12283333333333331,
+              "oUmx": 1.0,
+              "purse": 100.0
+            }
+          }
+        },
+        "l11_rho_r000": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 147.42,
+              "cDeepU": 0.0,
+              "oUmx": 0.0,
+              "purse": 100.0
+            }
+          }
+        },
+        "l11_rho_r01": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 104.48,
+              "cDeepU": 0.0095,
+              "oUmx": 0.0,
+              "purse": 100.0
+            }
+          }
+        },
+        "l11_rho_r02": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 84.94,
+              "cDeepU": 0.056333333333333346,
+              "oUmx": 0.673469387755102,
+              "purse": 100.0
+            }
+          }
+        },
+        "l11_rho_r03": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 64.22,
+              "cDeepU": 0.3539999999999999,
+              "oUmx": 0.2653061224489796,
+              "purse": 100.0
+            }
+          }
+        },
+        "l11_rho_r05": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 46.98,
+              "cDeepU": 1.0,
+              "oUmx": 1.0,
+              "purse": 100.0
+            }
+          }
+        },
+        "l11_rho_r10": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 30.86,
+              "cDeepU": 1.0,
+              "oUmx": 1.0,
+              "purse": 100.0
+            }
+          }
+        },
+        "l11_rho_r20": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 21.84,
+              "cDeepU": 1.0,
+              "oUmx": 1.0,
+              "purse": 100.0
+            }
+          }
+        },
+        "l11_bud_b50": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 42.9,
+              "cDeepU": 1.0,
+              "oUmx": 1.0,
+              "purse": 50.0
+            }
+          }
+        },
+        "l11_bud_b100": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 84.94,
+              "cDeepU": 0.056333333333333346,
+              "oUmx": 0.673469387755102,
+              "purse": 100.0
+            }
+          }
+        },
+        "l11_bud_b200": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 155.98,
+              "cDeepU": 0.0,
+              "oUmx": 0.0,
+              "purse": 200.0
+            }
+          }
+        },
+        "l11_hetero": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 70.1,
+              "cDeepU": 0.13583333333333333,
+              "oUmx": 0.08163265306122448,
+              "purse": 100.0
+            }
+          }
+        },
+        "l13_decay_hi": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 81.1,
+              "cDeepU": 0.05159874911548635,
+              "oUmx": 0.5416666666666666,
+              "purse": 103.39085251398319
+            }
+          }
+        },
+        "l13_decay_knee": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 67.95,
+              "cDeepU": 0.1147732328254142,
+              "oUmx": 0.32142857142857145,
+              "purse": 84.06902301677988
+            }
+          }
+        },
+        "l13_decay_mid": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 53.333333333333336,
+              "cDeepU": 0.9896973614559424,
+              "oUmx": 1.0,
+              "purse": 64.74719351957646
+            }
+          }
+        },
+        "l13_decay_lo": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 37.666666666666664,
+              "cDeepU": 1.0,
+              "oUmx": 1.0,
+              "purse": 45.42536402237311
+            }
+          }
+        },
+        "l13_decay_min": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 20.816666666666666,
+              "cDeepU": 1.0,
+              "oUmx": 1.0,
+              "purse": 26.10353452516974
+            }
+          }
+        },
+        "l13_spiral": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 16.583333333333332,
+              "cDeepU": 1.0,
+              "oUmx": 1.0,
+              "purse": 45.42536402237311
+            }
+          }
+        },
+        "l13_servo": {
+          "presence": {
+            "before": null,
+            "after": {
+              "bondA": 62.15,
+              "cDeepU": 0.1874509353416044,
+              "oUmx": 1.0,
+              "purse": 110.39889987300263
+            }
+          }
+        }
+      }
+    }
+  }
+]

@@ -347,6 +347,107 @@ def cmd_noise() -> None:
             have.add((row["commit"], seed))
 
 
+def write_seeds(commit: str, label: str, dest: Path) -> None:
+    """Five seeds at one tree. `measure` checks out `commit` each time,
+    which drops any uncommitted patch, so callers that patched the tree
+    use `write_seeds_here` instead."""
+    full = rev_parse(REPO, commit)
+    have = {
+        (row["commit"], row.get("seed"), row.get("label"))
+        for row in load_jsonl(dest)
+    }
+    for seed in NOISE_SEEDS:
+        if (full, seed, label) in have:
+            print(f"seeds skip {label} {seed}", flush=True)
+            continue
+        print(f"seeds {label} {full[:12]} {seed}", flush=True)
+        row = measure(full, seed)
+        row["label"] = label
+        append_jsonl(dest, row)
+        have.add((row["commit"], seed, label))
+
+
+def write_seeds_here(label: str, dest: Path) -> None:
+    """Five seeds at the worktree as it stands, including an applied patch."""
+    head = rev_parse(WALK, "HEAD")
+    have = {
+        (row.get("label"), row.get("seed"))
+        for row in load_jsonl(dest)
+    }
+    for seed in NOISE_SEEDS:
+        if (label, seed) in have:
+            print(f"seeds skip {label} {seed}", flush=True)
+            continue
+        print(f"seeds {label} {head[:12]} {seed}", flush=True)
+        if seed != PIN_SEED:
+            set_baseline_seed(seed)
+        binary = build()
+        row = {
+            "commit": head,
+            "subject": subject(WALK, "HEAD"),
+            "channel": channel_at(WALK),
+            "channel_override": None,
+            "seed": seed,
+            "label": label,
+            "vector": run_binary(binary),
+        }
+        append_jsonl(dest, row)
+        have.add((label, seed))
+        # The next seed has to start from the patched tree, not a leftover seed.
+        git(
+            ["checkout", "--", "rust/shekyl-staking-sim/src/scenarios.rs"],
+            WALK,
+        )
+
+
+DIST_COMMITS = (
+    ("post-repair", "4071ec03260374b76c83efb32bd0fce43f0ad1ef"),
+    ("post-a04c", "a04c988b1cdc24bd6c4d5d2bf6a1297e0e31c155"),
+)
+A04C = "a04c988b1cdc24bd6c4d5d2bf6a1297e0e31c155"
+A04C_PARENT = "6033beea0908da3ba3624f2fd9c179653a91791d"
+A04C_HALVES = (
+    ("a04c-reward", "rust/shekyl-staking-sim/src/reward.rs"),
+    ("a04c-retention", "rust/shekyl-archival-retention/src/consensus_state.rs"),
+)
+
+
+def cmd_seeds() -> None:
+    """Five-seed distributions at the curve repair and at a04c."""
+    dest = OUT_DIR / "distributions.jsonl"
+    for label, commit in DIST_COMMITS:
+        write_seeds(commit, label, dest)
+
+
+def cmd_halves() -> None:
+    """a04c's reward.rs change and its r_market_count change, separately.
+
+    The other files in that commit (the workflow and the C++ getters) are
+    not in the sim's build. Each half is the parent plus one file from a04c.
+    """
+    dest = OUT_DIR / "distributions.jsonl"
+    for label, path in A04C_HALVES:
+        if any(row.get("label") == label for row in load_jsonl(dest)):
+            # A partial label is resumed seed by seed inside write_seeds_here.
+            pass
+        print(f"half {label} from {A04C_PARENT[:12]} + {path}", flush=True)
+        checkout(A04C_PARENT)
+        diff = git(["diff", A04C_PARENT, A04C, "--", path], REPO)
+        if not diff.strip():
+            raise SystemExit(f"no diff for {path}")
+        proc = subprocess.run(
+            ["git", "apply"],
+            cwd=WALK,
+            input=diff,
+            text=True,
+            capture_output=True,
+        )
+        if proc.returncode != 0:
+            raise SystemExit(f"apply failed for {path}:\n{proc.stderr}")
+        write_seeds_here(label, dest)
+        checkout(A04C_PARENT)
+
+
 def cmd_walk() -> None:
     out = OUT_DIR / "sim-commits.jsonl"
     have = {row["commit"] for row in load_jsonl(out)}
@@ -840,7 +941,17 @@ def main() -> None:
     parser.add_argument("--target-dir", required=True, type=Path)
     parser.add_argument(
         "command",
-        choices=("noise", "walk", "gaps", "tail", "merges", "toolchains", "table"),
+        choices=(
+            "noise",
+            "walk",
+            "gaps",
+            "tail",
+            "merges",
+            "toolchains",
+            "seeds",
+            "halves",
+            "table",
+        ),
     )
     args = parser.parse_args()
     REPO = args.repo
@@ -859,6 +970,8 @@ def main() -> None:
         "tail": cmd_tail,
         "merges": cmd_merges,
         "toolchains": cmd_toolchains,
+        "seeds": cmd_seeds,
+        "halves": cmd_halves,
         "table": cmd_table,
     }[args.command]()
 

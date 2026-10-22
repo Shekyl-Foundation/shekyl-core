@@ -1,0 +1,282 @@
+[
+  {
+    "commit": "6c85e8322a9150e7379efb9df5990fb8dedda7bc",
+    "subject": "sim: model the fee-era end-state (L13) \u2014 shrinking subsidy, death-spiral, adaptive servo",
+    "parent_measured": "3b3d384b8a04a65875d2ec2e864c54ed1c33f46f",
+    "scenarios": {
+      "l11_fill": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l11_trim": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l11_rho_r000": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l11_rho_r01": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l11_rho_r02": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l11_rho_r03": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l11_rho_r05": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l11_rho_r10": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l11_rho_r20": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l11_bud_b50": {
+        "purse": {
+          "before": null,
+          "after": 50.0
+        }
+      },
+      "l11_bud_b100": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l11_bud_b200": {
+        "purse": {
+          "before": null,
+          "after": 200.0
+        }
+      },
+      "l11_hetero": {
+        "purse": {
+          "before": null,
+          "after": 100.0
+        }
+      },
+      "l13_decay_hi": {
+        "presence": {
+          "before": null,
+          "after": {
+            "bondA": 81.33333333333333,
+            "cDeepU": 0.00048543689320388353,
+            "oUmx": 0.0,
+            "purse": 103.39085251398319
+          }
+        }
+      },
+      "l13_decay_knee": {
+        "presence": {
+          "before": null,
+          "after": {
+            "bondA": 67.21666666666667,
+            "cDeepU": 0.056795346063325834,
+            "oUmx": 0.16326530612244897,
+            "purse": 84.06902301677988
+          }
+        }
+      },
+      "l13_decay_mid": {
+        "presence": {
+          "before": null,
+          "after": {
+            "bondA": 53.9,
+            "cDeepU": 0.9857709012552237,
+            "oUmx": 1.0,
+            "purse": 64.74719351957646
+          }
+        }
+      },
+      "l13_decay_lo": {
+        "presence": {
+          "before": null,
+          "after": {
+            "bondA": 39.3,
+            "cDeepU": 1.0,
+            "oUmx": 1.0,
+            "purse": 45.42536402237311
+          }
+        }
+      },
+      "l13_decay_min": {
+        "presence": {
+          "before": null,
+          "after": {
+            "bondA": 20.633333333333333,
+            "cDeepU": 1.0,
+            "oUmx": 1.0,
+            "purse": 26.10353452516974
+          }
+        }
+      },
+      "l13_spiral": {
+        "presence": {
+          "before": null,
+          "after": {
+            "bondA": 17.216666666666665,
+            "cDeepU": 1.0,
+            "oUmx": 1.0,
+            "purse": 45.42536402237311
+          }
+        }
+      },
+      "l13_servo": {
+        "presence": {
+          "before": null,
+          "after": {
+            "bondA": 62.21666666666667,
+            "cDeepU": 0.20877295724066283,
+            "oUmx": 1.0,
+            "purse": 116.35453644507534
+          }
+        }
+      }
+    }
+  },
+  {
+    "commit": "4071ec03260374b76c83efb32bd0fce43f0ad1ef",
+    "subject": "staking-sim: banded PL Curve repair (ARCHIVAL_CONSENSUS_STATE PR 0)",
+    "parent_measured": "759fe1ad48d659c1258f1fc363e454210738e684",
+    "scenarios": {
+      "l11_fill": {
+        "oUmx": {
+          "before": 0.0,
+          "after": 1.0,
+          "delta": 1.0,
+          "band": 0.9215686274509804
+        }
+      },
+      "l11_rho_r02": {
+        "oUmx": {
+          "before": 0.0,
+          "after": 1.0,
+          "delta": 1.0,
+          "band": 0.9215686274509804
+        }
+      },
+      "l11_rho_r05": {
+        "cDeepU": {
+          "before": 1.0,
+          "after": 0.8379999999999999,
+          "delta": -0.16200000000000014,
+          "band": 0.0
+        },
+        "oUmx": {
+          "before": 1.0,
+          "after": 0.7755102040816326,
+          "delta": -0.22448979591836737,
+          "band": 0.0
+        }
+      },
+      "l11_bud_b100": {
+        "oUmx": {
+          "before": 0.0,
+          "after": 1.0,
+          "delta": 1.0,
+          "band": 0.9215686274509804
+        }
+      },
+      "l13_decay_hi": {
+        "oUmx": {
+          "before": 0.0,
+          "after": 0.7391304347826086,
+          "delta": 0.7391304347826086,
+          "band": 0.5272727272727273
+        }
+      },
+      "l13_decay_knee": {
+        "cDeepU": {
+          "before": 0.056795346063325834,
+          "after": 0.2415722518301568,
+          "delta": 0.18477690576683095,
+          "band": 0.08116778380080067
+        },
+        "oUmx": {
+          "before": 0.16326530612244897,
+          "after": 1.0,
+          "delta": 0.8367346938775511,
+          "band": 0.6785714285714286
+        }
+      },
+      "l13_decay_mid": {
+        "cDeepU": {
+          "before": 0.9857709012552237,
+          "after": 0.87335322960747,
+          "delta": -0.11241767164775374,
+          "band": 0.05886348889106696
+        }
+      }
+    }
+  },
+  {
+    "commit": "a04c988b1cdc24bd6c4d5d2bf6a1297e0e31c155",
+    "subject": "archival: address PR 123 Copilot round-2 review",
+    "parent_measured": "6033beea0908da3ba3624f2fd9c179653a91791d",
+    "scenarios": {
+      "l11_rho_r05": {
+        "cDeepU": {
+          "before": 0.8379999999999999,
+          "after": 1.0,
+          "delta": 0.16200000000000014,
+          "band": 0.0
+        },
+        "oUmx": {
+          "before": 0.7755102040816326,
+          "after": 1.0,
+          "delta": 0.22448979591836737,
+          "band": 0.0
+        }
+      },
+      "l13_decay_knee": {
+        "cDeepU": {
+          "before": 0.2415722518301568,
+          "after": 0.109139778223162,
+          "delta": -0.13243247360699478,
+          "band": 0.08116778380080067
+        },
+        "oUmx": {
+          "before": 1.0,
+          "after": 0.17391304347826086,
+          "delta": -0.8260869565217391,
+          "band": 0.6785714285714286
+        }
+      },
+      "l13_decay_mid": {
+        "cDeepU": {
+          "before": 0.87335322960747,
+          "after": 0.9767998079093625,
+          "delta": 0.10344657830189252,
+          "band": 0.05886348889106696
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "commit": "ffc8d0bca38d79c2f0f7770355348bd932bba997",
+    "previous": "e27a738fdbbbb8b0926dcd7b771a0794c2904dbd",
+    "subject": "archival: address Copilot/CodeQL review findings on PR #123",
+    "from_channel": "1.88",
+    "to_channel": "1.94",
+    "old_code_on_new_compiler": {
+      "refused": null,
+      "scenarios": {}
+    },
+    "new_code_on_old_compiler": {
+      "refused": "build failed on 1.88:\nerror: rustc 1.88.0 is not supported by the following packages:\n  shekyl-address@3.1.0 requires rustc 1.94\n  shekyl-archival-retention@3.1.0 requires rustc 1.94\n  shekyl-archival-retention@3.1.0 requires rustc 1.94\n  shekyl-archival-retention@3.1.0 requires rustc 1.94\n  shekyl-crypto-hash@3.1.0 requires rustc 1.94\n  shekyl-crypto-pq@3.1.0 requires rustc 1.94\n  shekyl-encoding@3.1.0 requires rustc 1.94\n  shekyl-fcmp@3.1.0 requires rustc 1.94\n  shekyl-staking-sim@3.1.0 requires rustc 1.94\n\n",
+      "scenarios": {}
+    }
+  }
+]
