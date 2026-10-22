@@ -7,8 +7,8 @@
 //!
 //! A child of `drawable_walk_tests`. Epoch 2 holds four pairs, nothing is
 //! admitted, and the stored rows are the production composition. A warm
-//! memo, a miss, a switch, a drifted journal (SI-30) and a removed digest
-//! (SI-29) run on the chain the drawable-set tests build.
+//! memo, a miss, a switch, an aborted switch, a drifted journal (SI-30)
+//! and a removed digest (SI-29) run on the chain the drawable-set tests build.
 
 use shekyl_archival_retention::{draw_count, draw_horizon};
 use shekyl_chain_rules::{BlockDrawsFloor, ChainView as _, DrawableMemo, ReleaseJournalFloor};
@@ -31,7 +31,10 @@ use super::{h_open, no_draws, BONDED, FIRST};
 /// a fresh replay, the next epoch and an aborted open write the same rows.
 /// A memo that saw the other fork's open, then a switch onto a release at
 /// the open, writes the winning chain's rows. A journal row changed after
-/// the open, and a removed digest, halt the next block.
+/// the open, and a removed digest, halt the next block. An aborted switch
+/// that then continues on the chain that stayed is
+/// [`an_aborted_switch_does_not_change_the_next_row`]: the abort and the
+/// switch here both continue on the set inserted last.
 #[test]
 fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
     let open = h_open(2);
@@ -229,6 +232,77 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         panic!("aborted, not refused");
     };
     assert!(refused.contains("holds no digest"), "{refused}");
+    chain.finish();
+}
+
+/// An aborted switch inserts the other fork's set and does not adopt it.
+///
+/// Chain A is connected through `h_open(2) + 1` with a memo, so the memo
+/// holds A's opening set (`|D| = 4`). One batch then pops below A's open
+/// and connects fork B's open with the release (`|D| = 3`); the batch is
+/// aborted. The store stays on A. The memo keeps B's set under B's opening
+/// hash, because a memo is not undone. A's next block asks for A's hash,
+/// and its row is the reference row for that height.
+///
+/// [`the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo`]'s
+/// abort reconnects A's own open, and its switch continues on the winner.
+/// Both next blocks ask for the set that was inserted last, so both still
+/// pass when [`DrawableMemo::get`] matches the epoch and ignores the hash.
+/// This block asks for the set that was inserted first. Red edit: return
+/// the epoch's latest set from `get`.
+#[test]
+fn an_aborted_switch_does_not_change_the_next_row() {
+    let open = h_open(2);
+    let mut chain =
+        SlashedChain::build_with("count-abort-switch", WITNESS_PERSONAS, open - 1, no_draws);
+    let reference = compose(4, open, open + 2);
+    let mut memo = DrawableMemo::new();
+    let committed = connect_span(&mut chain, open, open + 1, &mut Some(&mut memo));
+    assert_eq!(
+        committed.as_slice(),
+        &reference[..2],
+        "A through h_open + 1 is the reference chain"
+    );
+    let kept_open = chain.grown.block(BlockHeight::from_raw(open)).clone();
+    let kept_next = chain.grown.block(BlockHeight::from_raw(open + 1)).clone();
+
+    let abandoned: Result<(), TestErr> = chain.store.write(|batch| {
+        batch.pop()?;
+        batch.pop()?;
+        chain.grown.pop();
+        chain.grown.pop();
+        let release = [Listed::Release {
+            slot: FIRST,
+            bonded_total: BONDED,
+        }];
+        let txs = chain.grown.realise(&release);
+        let view = batch.chain_view();
+        let judged = chain
+            .grown
+            .judge_listing_with_memo(&view, &RULES, &txs, Some(&mut memo))?;
+        batch.connect(judged, RULES)?;
+        Err(TestErr::Abort)
+    });
+    assert!(
+        matches!(abandoned, Err(TestErr::Abort)),
+        "the switch batch aborted, found {abandoned:?}"
+    );
+    // The store rolled back to A. `grown` followed the batch, so put A's
+    // two blocks back before the next connect.
+    chain.grown.pop();
+    chain.grown.record(&kept_open, &[]);
+    chain.grown.record(&kept_next, &[]);
+    assert_eq!(
+        draws_of(&chain, BlockHeight::from_raw(open + 1)),
+        reference[1],
+        "the aborted batch did not adopt B"
+    );
+
+    let next = connect_listed(&mut chain, &[], Some(&mut memo));
+    assert_eq!(
+        next, reference[2],
+        "A's next block counts A's set, not the set the aborted fork inserted"
+    );
     chain.finish();
 }
 
