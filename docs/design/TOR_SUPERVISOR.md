@@ -4,8 +4,9 @@
 and 3b of §12 are implemented. Increment 1 is the link the dialer reads
 (#1092). Increment 2 is the control client's groundwork (#1091). Increment 3
 is the supervisor: sans-IO core, timing-engine driver, respawn, and the
-managed route published only from `Running`. `TSR-M2` and `TSR-M8` are not
-recorded, so the measured backoff and the suspend check are still open.
+managed route published only from `Running`. `TSR-M2` is recorded
+(2026-10-22, the floor device); the driver's base stays 1 s and its cap
+stays 60 s. `TSR-M8` is not recorded, so the suspend check is still open.
 Increment 3b is the public directory cache (`TSR-Q8`). Increment 5's route
 publishing is absorbed into increment 3 (2026-10-22). Increments 4 and 6 are
 not.** The C++ managed-Tor path and the
@@ -775,7 +776,7 @@ run's conditions are in `shekyl-dev`, `data/tsr-preflight/2026-10-19*/`.
 | Row | Measures | Sets |
 | --- | --- | --- |
 | `TSR-M1` | bootstrap time, cold directory and kept directory. **Measured 2026-10-19.** Cold, n=100: p50 11.3 s, p90 17.0 s, p99 127.1 s, max 380.8 s; 1 run over 300 s. Kept, n=30: p50 3.54 s, max 3.81 s (a respawn into its kept directory, `TSR-Q1`). x86: cold max 42.7 s, kept max 2.36 s. **Where the cold tail comes from** (300 more cold runs with each phase's time, 03:38Z to 06:45Z): of the 31 over 60 s, 26 spent their time loading relay descriptors and 5 loading the consensus; circuits took a median 0.86 s, as in fast runs. A slow run sits at one directory percentage, often for about five minutes, with nothing in Tor's log, and then completes; none reached the 600 s limit. Tor raised a `BOOTSTRAP` problem event in 1 of the 31, a `NOROUTE` at its first relay that it passed within 3 s, long before its stall. In 6 of the 31 Tor re-sent a status event during the stall, so its event loop was running; the other 25 show nothing either way. **The tail is not one machine's, and its size moves over time**: the x86 host on the same office network had no cold run over 43 s in 100 from 03:16Z to 03:35Z on 2026-10-19, but 4 of 10 over 60 s (max 145.1 s) at 14:14Z on 2026-10-20, while 3 % of the floor device's runs were over 60 s in the record and 9 % in the tail run. What holds it, from 150 more cold runs sampling Tor's CPU and sockets: in the 17 clean runs over 60 s Tor used at most 3 s of CPU per stall, and in 16 of them one connection was moving directory data throughout, 0.2 to 8.7 MB at a median 79 KB/s (the percentage holds while a large batch arrives). A slow cold bootstrap is a slow directory source, with Tor waiting on it; one run waited on a connection that moved nothing. | §5's Bootstrapping display, not a bound: no bootstrap is given up (`TSR-F7`), and a stalled one is not a fault in any class (§4.4; Rick, 2026-10-19). A stalled directory fetch usually raises no problem event, so problem events alone cannot carry §5's operator message for it. Because the tail is directory fetching, the kept directory cache (`TSR-Q8`) removes most of it |
-| `TSR-M2` | respawn to outbound usable, and to inbound reachable | the backoff base and cap |
+| `TSR-M2` | respawn to outbound usable, and to inbound reachable. **Measured 2026-10-22** on the floor device (tor 0.4.9.14, n=10; the supervisor's repair — close the owning connection, wait up to 5 s, kill what is still alive — against the pinned Tor; the daemon binary was not in the path). Raw rows in `shekyl-dev`, `data/tsr-m2/2026-10-22-floor/`. Reap on the close: 0.064 s, and the grace kill was 0 of 10. Outbound usable (bootstrap 100 and a SOCKS listener): p50 2.65 s, max 2.93 s. Descriptor upload: p50 4.63 s, max 5.34 s. Inbound reachable (the same onion republished and one probe nonce arrived): 9 of 10, p50 14.86 s, max 26.44 s. The miss was still failing when the 60 s probe bound ended. Guards were the same 20 across the early kill and every respawn. `SETCONF AvoidDiskWrites=1` returned 250 and left the SOCKS listener unchanged. No launch failed, so this run does not size the fresh-directory run length | the backoff base and cap. The base stays 1 s: it is the pause before the next spawn, and the repair above is the spawn itself. The cap stays 60 s: it is the crash-loop ceiling and the announcement gap, and every successful inbound return was inside it |
 | `TSR-M3` | self-probe latency, and that it works at all. **Measured 2026-10-19**: 40 of 40 succeeded, the probe nonce arriving each time; p50 2.35 s, p90 7.39 s, max 12.29 s. x86: 40 of 40, max 46.15 s, with five probes in one cluster at 42.9 to 46.1 s | the probe's delay range and timeout. A timeout below about 46 s would have failed the x86 cluster's probes, each of which succeeded |
 | `TSR-M4` | Tor's resident memory at 12 outbound plus inbound load, default and set `MaxMemInQueues`. **Measured 2026-10-19 at Tor's default**, under a synthetic load (no fleet daemon could supply one; Rick, 2026-10-19): 12 outbound and 12 inbound rendezvous streams, each carrying 512 bytes every 10 s, for an hour. Resident memory **91.0 MiB**, flat once the streams were up; idle baselines 85.7 and 92.3 MiB. x86: 82.5 MiB. A set `MaxMemInQueues` was not measured | `MaxMemInQueues` |
 | `TSR-M5` | Tor's file descriptors at load; the limit the child inherits. **Measured 2026-10-19** under `TSR-M4`'s load: **36 to 38** open; soft limit 524288 as launched; idle 13 to 15 | the descriptor budget |
@@ -813,9 +814,9 @@ stop path, not a bound.
 before increment 3 (§12), the first increment whose code uses a bound they set;
 increment 2 uses none. They were taken on 2026-10-19, after the re-pin, on the Tor that ships
 (0.4.9.14), the Pi 4 setting each value (the table above); `TSR-M11` is measured
-(above). `TSR-M2` and `TSR-M8` need the supervisor
-or the suspend apparatus, and are measured on the implementation branch before
-its PR leaves draft.
+(above). `TSR-M2` is measured (2026-10-22, above). `TSR-M8` needs the
+suspend apparatus, and is measured on the implementation branch before its
+PR leaves draft.
 
 **Seeded start (`TSR-Q8`), measured on an x86 dev box 2026-10-19 and
 2026-10-20** (tor 0.4.9.14; raw rows in `shekyl-dev`,
@@ -883,9 +884,9 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
    (`rust/shekyl-tor-control-client/src/supervisor.rs:219`). The public
    directory cache is increment 3b, not this one. `ManagedTorFix`, `OwnTx`
    and the one typed read and renderer are `shekyl-tor-control-client`'s
-   `supervisor` module. `TSR-M2` (the backoff's base and cap) and `TSR-M8`
-   (the monotonic clock across suspend) are not recorded yet; the driver's
-   waits are provisional until `TSR-M2`.
+   `supervisor` module. `TSR-M2` is recorded (2026-10-22); the driver's base
+   stays 1 s and its cap stays 60 s. `TSR-M8` (the monotonic clock across
+   suspend) is not recorded yet.
 3b. The public directory cache (`TSR-Q8`, §4.7). **Implemented.** At launch
    into a fresh directory the daemon copies `cached-microdesc-consensus`,
    `cached-microdescs`, `cached-microdescs.new` and `cached-certs`, each only

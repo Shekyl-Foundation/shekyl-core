@@ -20,8 +20,12 @@ use crate::control::{
 
 /// How long a respawn waits, and how often a failure is said again.
 ///
-/// The production base and cap are provisional until `TSR-M2` measures a
-/// respawn on the floor device. A test passes the policy it means to pin.
+/// `TSR-M2` (the floor device, 2026-10-22) measured the repair itself:
+/// outbound usable in at most 2.93 s, and inbound reachable within 26.44 s
+/// in 9 of 10 runs. The base stays the 1 s pause before the next spawn, and
+/// the cap stays the 60 s crash-loop ceiling. The run had no launch failure,
+/// so it does not size `fresh_directory_after`. A test passes the policy it
+/// means to pin.
 #[derive(Clone, Copy, Debug)]
 pub struct Policy {
     /// The first process-fault wait.
@@ -31,12 +35,13 @@ pub struct Policy {
     /// How often a bootstrap is sampled while Tor is answering.
     pub sample_every: Duration,
     /// Consecutive failed launches before the next one takes a fresh
-    /// data directory. `TSR-M2` sets the production run length.
+    /// data directory. `TSR-M2`'s 2026-10-22 run had no launch failure, so
+    /// this stays 3.
     pub fresh_directory_after: u32,
 }
 
 impl Policy {
-    /// The waits the driver uses until `TSR-M2` replaces them.
+    /// The waits the driver uses. `TSR-M2` did not move them; see the type doc.
     #[must_use]
     pub const fn provisional() -> Self {
         Self {
