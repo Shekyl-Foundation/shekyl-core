@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Chain sync: the sync model selects by verified work.** `shekyl-chain-sync` is a deterministic state machine. A header is judged on the branch of its parent, a run is cheap-checked before any hash, and proof of work is a command. One header request extends the best chain at a time. A lighter fork is dropped without a hash. The one long-run slot is paid for in proof of work and goes to the most verified work at the same height. Bodies are requested only along that chain, bound to the header before the offer. A session closes only when its input fails a universal rule; a missed deadline is requested again. Nothing here is wired into the daemon.
+
 - **Chain sync: a block proved as a header is not hashed again when its body arrives.** `HeaderJudged` is sealed and carries that proof. `form_judged` checks the candidate's identity against it and runs the same body rows `form` runs, without calling the longhash. `validate` still faults a seed, target or rule set the token does not match.
 
 - **Chain sync: a sync payload's decode limits follow from its smallest element.** The limits landed with CS-1 were the byte cap, and the decoder allocates an array from the count the payload declares once that count is under the limit. A packet-sized body response of one-byte objects asked for about a hundred million sections. A header response's strings are at most its cap divided by the shortest preimage plus its length prefix, and it has no objects. A body response's objects are at most 100 bodies plus its cap divided by the smaller transaction section (`MIN_TX_SECTION_BYTES`). Strings and fields follow those two counts. A payload at the cap that declares more is refused before that allocation.

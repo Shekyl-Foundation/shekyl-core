@@ -10,9 +10,9 @@
 //! main chain as a [`HeaderView`] snapshot with each event, and the
 //! instant. PoW leaves as a command the executor (CS-3) runs.
 //!
-//! This crate grows by the brief's steps. What is here: a hint is
-//! refused only when it is structurally impossible, and the published
-//! state is derived from sessions, the chain, and the fill.
+//! What is here is the CS-2 model: hints, the header tree, runs and the
+//! work test, the long-run slot, bodies along the selected chain, and
+//! the entry's outcomes. Proof of work leaves as a command.
 
 #![deny(unsafe_code)]
 
@@ -23,10 +23,14 @@ mod branch;
 mod claim;
 mod locator;
 mod model;
+mod runs;
 mod state;
 mod tree;
 
 pub use claim::{PayloadRefused, PeerClaim};
-pub use model::{ClaimError, Command, Event, Job, Proved, Sync, HEADERS_RATE_FLOOR};
+pub use model::{
+    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, ProveItem,
+    Proved, Sync, BODY_RATE_FLOOR, BODY_REQUESTS_IN_FLIGHT, HEADERS_RATE_FLOOR,
+};
 pub use shekyl_chain_rules::HeaderView;
 pub use state::SyncState;

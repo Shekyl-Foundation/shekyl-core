@@ -9,17 +9,21 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use shekyl_chain_rules::{
-    AtHeight, Corrupt, Fault, FormedHeader, HeaderJudged, HeaderView, InvalidBlock, RuleSet, Stale,
+    AtHeight, FormAttempt, FormedHeader, HeaderJudged, HeaderView, InvalidBlock, RuleSet, Target,
     Tip, Trust,
 };
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::{bounded_uniform, RelayRng};
-use shekyl_levin::{RequestHeaders, HEADERS_RESPONSE_BYTES};
+use shekyl_levin::{BodiesFormFault, RequestBodies, RequestHeaders, HEADERS_RESPONSE_BYTES};
+use shekyl_peer_policy::SyncReply;
+use shekyl_types::Timestamp;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
+use shekyl_wire::BlockBody;
 
+#[cfg(test)]
 use crate::branch::BranchView;
 use crate::claim::{self, PayloadRefused, PeerClaim};
-use crate::locator::locator;
+use crate::locator::{locator, locator_heights};
 use crate::state::SyncState;
 use crate::tree::{HeaderTree, Star};
 
@@ -34,6 +38,20 @@ use crate::tree::{HeaderTree, Star};
 /// Tor on the floor device (the slow path; the clearnet figure is the
 /// other one).
 pub const HEADERS_RATE_FLOOR: u64 = 8 * 1024;
+
+/// Bytes per second assumed for a body-request deadline.
+///
+/// Assumption, replaced by CS-Q11's measurement of body bytes per second
+/// over Tor on the floor device. The same floor as the header stream: a
+/// stalled peer is not waited on for a clearnet round trip, and an honest
+/// peer on Tor is not declared late.
+pub const BODY_RATE_FLOOR: u64 = 8 * 1024;
+
+/// How many body spans may be outstanding at once.
+///
+/// Assumption, replaced by CS-Q11's measurement of how many spans the
+/// floor device can have in flight before the entry's room is the limit.
+pub const BODY_REQUESTS_IN_FLIGHT: usize = 4;
 
 const _: () = assert!(HEADERS_RESPONSE_BYTES / HEADERS_RATE_FLOOR == 256);
 
@@ -67,10 +85,57 @@ pub enum Event<K> {
         /// The descending frontier.
         frontier: BlockHeight,
     },
+    /// A header response, still encoded.
+    Headers {
+        /// The session.
+        session: K,
+        /// The payload bytes.
+        bytes: Vec<u8>,
+    },
+    /// A body response, still encoded.
+    Bodies {
+        /// The session.
+        session: K,
+        /// The payload bytes.
+        bytes: Vec<u8>,
+    },
+    /// The entry's reply for one offered arrival.
+    Entry {
+        /// The tag `Offer` named.
+        tag: u64,
+        /// The outcome, as [`SyncReply`].
+        reply: SyncReply,
+        /// The block.
+        hash: BlockHash,
+        /// Whether this node requested the body.
+        solicited: bool,
+        /// `Unlinked`'s missing parent. Null otherwise.
+        at: BlockHash,
+        /// `MissingBodies`' indices.
+        indices: Vec<u64>,
+        /// The refusal, when `reply` is a refusal.
+        verdict: Option<InvalidBlock>,
+    },
+    /// How many arrivals the entry can take.
+    Room {
+        /// Seats free.
+        seats: u32,
+    },
     /// The header request's deadline passed.
     Deadline {
         /// The session the request was drawn for.
         session: K,
+        /// The request id.
+        request: u64,
+    },
+    /// An unsolicited block.
+    Announce {
+        /// The session.
+        session: K,
+        /// The block bytes.
+        block: Vec<u8>,
+        /// The listed bodies it carried.
+        bodies: Vec<Vec<u8>>,
     },
     /// The executor's answer to a Prove command this model will issue.
     /// `job` is that command's job (§4.2). Matching it to a run, closing
@@ -94,20 +159,10 @@ impl Job {
     pub const fn from_raw(raw: u64) -> Self {
         Self(raw)
     }
-}
 
-/// A header `adopt` did not add to `T`. The run layer turns a refusal
-/// into a closed supplier and a `Stale` into another plan (§4.8). Until
-/// that layer, the note is what a test reads: a dropped verdict is how a
-/// header judged against the wrong view disappeared.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum AdoptNote {
-    /// `judge_header` refused the header.
-    Refused(InvalidBlock),
-    /// A claim `form_header` was given does not hold on the branch.
-    Stale(Stale),
-    /// The branch view answered with data no conforming chain holds.
-    Corrupt(Corrupt),
+    pub(crate) const fn raw(self) -> u64 {
+        self.0
+    }
 }
 
 /// One item of a [`Event::Proven`] batch.
@@ -120,7 +175,7 @@ pub enum Proved {
 }
 
 /// What the model asks the executor to do.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum Command<K> {
     /// The derived state changed.
     Publish {
@@ -136,45 +191,244 @@ pub enum Command<K> {
         /// When the response is late.
         deadline: Instant,
     },
+    /// Bodies along `H*`.
+    RequestBodies {
+        /// The session.
+        session: K,
+        /// The span.
+        request: RequestBodies,
+        /// When the response is late.
+        deadline: Instant,
+    },
+    /// Run `form_header` on each item, in order, and answer with `Proven`.
+    Prove {
+        /// The job `Proven` must carry.
+        job: Job,
+        /// Which hasher class.
+        class: HashClass,
+        /// Which cache the seed is hashed under.
+        cache: CachePlan,
+        /// The preimages, in chain order.
+        items: Vec<ProveItem>,
+    },
+    /// Bound arrivals for the entry, in chain order.
+    Offer {
+        /// The contiguous run from `L + 1`.
+        arrivals: Vec<BoundArrival<K>>,
+    },
+    /// The session failed a universal rule.
+    Close {
+        /// The session.
+        session: K,
+        /// The rule.
+        cause: CloseCause,
+    },
+    /// A heavier chain forks past the cap. The connector writes the latch.
+    RaiseAlarm {
+        /// The fork point.
+        fork_at: BlockHeight,
+        /// The heavier tip.
+        tip: BlockHash,
+        /// Its work.
+        work: CumulativeDifficulty,
+    },
+    /// The transition into `Synced`.
+    RequestComplement {
+        /// A session drawn uniformly.
+        session: K,
+    },
+    /// An announced block connected.
+    Relay {
+        /// The block.
+        hash: BlockHash,
+    },
+    /// An announce is missing transactions.
+    RequestMissingTxs {
+        /// The session.
+        session: K,
+        /// The block.
+        block: BlockHash,
+        /// The missing indices.
+        indices: Vec<u64>,
+    },
+}
+
+/// Which hasher class a [`Command::Prove`] runs under. The executor maps
+/// these onto the budget. `Evidence` is named here; the class itself is
+/// CS-3's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HashClass {
+    /// A header on a reachable run.
+    HeaderPow,
+    /// An unsolicited block.
+    Unsolicited,
+    /// The past-cap evidence check.
+    Evidence,
+}
+
+/// Which cache one prove item's seed is hashed under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CachePlan {
+    /// On the main chain. The executor looks it up and never derives it.
+    Main(BlockHash),
+    /// Earned on the run's own branch. One branch seed at a time.
+    Branch(BlockHash),
+    /// The evidence check's first seed.
+    Evidence(BlockHash),
+}
+
+/// One preimage the executor proves.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProveItem {
+    /// The PoW preimage.
+    pub pow: Vec<u8>,
+    /// The seed the claim was formed under.
+    pub seed: BlockHash,
+    /// The target the claim was formed under.
+    pub target: Target,
+    /// Which attempt this is.
+    pub attempt: FormAttempt,
+    /// The rule set in force.
+    pub rule_set: RuleSet,
+}
+
+/// One body bound to the header `T` holds, for the entry.
+#[derive(Clone, Debug)]
+pub struct BoundArrival<K> {
+    /// The model's tag. `Entry` carries it back.
+    pub tag: u64,
+    /// The session that served the body.
+    pub session: K,
+    /// The header the proof accepted.
+    pub header: HeaderJudged,
+    /// The body bound to that header.
+    pub body: BlockBody,
+}
+
+impl<K: PartialEq> PartialEq for Command<K> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Publish { state: a }, Self::Publish { state: b }) => a == b,
+            (
+                Self::RequestHeaders {
+                    session: a,
+                    request: b,
+                    deadline: c,
+                },
+                Self::RequestHeaders {
+                    session: d,
+                    request: e,
+                    deadline: f,
+                },
+            ) => a == d && b == e && c == f,
+            (Self::RequestComplement { session: a }, Self::RequestComplement { session: b }) => {
+                a == b
+            }
+            (
+                Self::Close {
+                    session: a,
+                    cause: b,
+                },
+                Self::Close {
+                    session: c,
+                    cause: d,
+                },
+            ) => a == c && b == d,
+            _ => false,
+        }
+    }
+}
+
+impl<K: Eq> Eq for Command<K> {}
+
+/// Why a session is closed. Each variant is a universal rule the input
+/// failed. A missed deadline is not one of them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CloseCause {
+    /// The header payload did not decode.
+    HeadersUndecodable,
+    /// The header payload decoded and failed its form.
+    HeadersForm,
+    /// A cheap check or a proof refused the header.
+    HeaderRefused(shekyl_chain_rules::CenRow),
+    /// The header descends from one already marked invalid.
+    InvalidAncestor,
+    /// The peer said the chain ended below its claim.
+    ClaimUnmet,
+    /// The body payload did not decode.
+    BodiesUndecodable,
+    /// The body payload failed `check_form`.
+    BodiesForm(BodiesFormFault),
+    /// The body does not match the header.
+    Bind(shekyl_chain_rules::CenRow),
+    /// The entry refused the block the header commits to.
+    BlockRefused(InvalidBlock),
+    /// The body is larger than any valid block.
+    Oversize,
 }
 
 /// The chain the model has observed.
 #[derive(Clone, Copy, Debug)]
-struct Local {
-    hash: BlockHash,
-    height: Option<BlockHeight>,
-    work: CumulativeDifficulty,
+pub(crate) struct Local {
+    pub(crate) hash: BlockHash,
+    pub(crate) height: Option<BlockHeight>,
+    pub(crate) work: CumulativeDifficulty,
 }
 
 /// One session. Its claim is a hint and is not read by [`Sync::state`].
-struct Session {
-    transit: Duration,
-    claim: Option<PeerClaim>,
+pub(crate) struct Session<K> {
+    pub transit: Duration,
+    pub claim: Option<PeerClaim>,
+    /// The highest block this session has named.
+    pub frontier: Option<(BlockHeight, BlockHash)>,
+    pub run: Option<crate::runs::Run>,
+    /// Not asked for headers again until its claim changes.
+    pub header_quiet: bool,
+    /// Missed a body deadline. A source again when `H*` changes.
+    pub body_excluded: bool,
+    pub unavailable: std::collections::BTreeSet<BlockHash>,
+    pub past_cap_followed: bool,
+    pub evidence_used: bool,
+    /// A header request for this session's own run, outside the `H*` draw.
+    pub continuation: Option<crate::runs::HeaderRequest<K>>,
 }
 
 /// The sync model.
 pub struct Sync<K, R> {
-    sessions: BTreeMap<K, Session>,
+    pub(crate) sessions: BTreeMap<K, Session<K>>,
     /// A claim that arrived before its session opened.
-    pending: BTreeMap<K, PeerClaim>,
-    local: Option<Local>,
-    tree: HeaderTree,
+    pub(crate) pending: BTreeMap<K, PeerClaim>,
+    pub(crate) local: Option<Local>,
+    pub(crate) tree: HeaderTree,
     /// `H*`: the local tip, or a heavier reachable tip in `T`.
-    star: Star,
-    /// The session a header request extending `H*` is waiting on.
-    frontier: Option<K>,
+    pub(crate) star: Star,
+    /// The header request that extends `H*`, if one is out.
+    pub(crate) header_request: Option<crate::runs::HeaderRequest<K>>,
+    /// Body requests in flight.
+    pub(crate) body_requests: Vec<crate::runs::BodyRequest<K>>,
+    /// The session holding the long-run slot.
+    pub(crate) slot: Option<K>,
+    /// The evidence check in flight.
+    pub(crate) evidence: Option<K>,
+    pub(crate) next_id: u64,
+    pub(crate) next_tag: u64,
+    /// Seats the entry last reported. None until the first `Room`.
+    pub(crate) seats: Option<u32>,
+    /// Bound bodies waiting for a seat.
+    pub(crate) held: Vec<BoundArrival<K>>,
+    /// CEN-C1's wall clock. The model does not read one.
+    pub(crate) wall: Timestamp,
     /// The rule set in force at a height. The reorg cap is that set's.
-    rules: R,
+    pub(crate) rules: R,
     /// The fill's descending frontier. Genesis means the fill is done.
-    fill_frontier: BlockHeight,
+    pub(crate) fill_frontier: BlockHeight,
     /// The store's latch. Read, never published as the state.
-    alarm: bool,
+    pub(crate) alarm: bool,
+    /// Raised from `T` already, so it is not raised again.
+    pub(crate) alarm_sent: bool,
     /// The posture `judge_header` is given. The fill's checkpoint does
     /// not read it: until slice 6 every posture is full.
-    trust: Trust,
-    /// Refusals and faults `adopt` did not insert. View faults are not
-    /// notes: they are returned to the caller.
-    notes: Vec<AdoptNote>,
+    pub(crate) trust: Trust,
 }
 
 impl<K, R> Sync<K, R>
@@ -194,13 +448,26 @@ where
             local: None,
             tree: HeaderTree::default(),
             star: Star::local(BlockHash::NULL, CumulativeDifficulty::ZERO),
-            frontier: None,
+            header_request: None,
+            body_requests: Vec::new(),
+            slot: None,
+            evidence: None,
+            next_id: 1,
+            next_tag: 1,
+            seats: None,
+            held: Vec::new(),
+            wall: Timestamp::from_raw(1_700_000_100),
             rules,
             fill_frontier: BlockHeight::ZERO,
             alarm: false,
+            alarm_sent: false,
             trust,
-            notes: Vec::new(),
         }
+    }
+
+    /// CEN-C1's operand. Deadlines use the monotonic instant instead.
+    pub fn set_wall(&mut self, wall: Timestamp) {
+        self.wall = wall;
     }
 
     /// Record a hint. Refused only when the claim cannot be a chain.
@@ -224,7 +491,12 @@ where
     ) -> Result<(), ClaimError<H::Fault>> {
         let claim = claim::admit(claim).map_err(ClaimError::Refused)?;
         if let Some(open) = self.sessions.get_mut(&session) {
+            let changed = open.claim != Some(claim);
             open.claim = Some(claim);
+            if changed {
+                open.header_quiet = false;
+                open.past_cap_followed = false;
+            }
         } else {
             self.pending.insert(session, claim);
         }
@@ -295,16 +567,10 @@ where
         self.tree.reset_visits();
     }
 
-    /// What `adopt` refused or faulted, in order.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn adopt_notes(&self) -> &[AdoptNote] {
-        &self.notes
-    }
-
     /// The branch whose tip is `parent`: `T` when the parent is in the
     /// tree, main when the parent is the local tip. `None` when it is
     /// neither, and the caller judges against `main` and records the result.
+    #[cfg(test)]
     pub(crate) fn branch_of<'a, H>(
         &'a self,
         main: &'a H,
@@ -357,37 +623,83 @@ where
         match event {
             Event::SessionOpened { session, transit } => {
                 let claim = self.pending.remove(&session);
-                self.sessions.insert(session, Session { transit, claim });
-                self.observe(main, None)?;
+                self.sessions.insert(
+                    session,
+                    Session {
+                        transit,
+                        claim,
+                        frontier: None,
+                        run: None,
+                        header_quiet: false,
+                        body_excluded: false,
+                        unavailable: std::collections::BTreeSet::new(),
+                        past_cap_followed: false,
+                        evidence_used: false,
+                        continuation: None,
+                    },
+                );
+                if self.local.is_none() {
+                    self.observe(main, None)?;
+                }
             }
             Event::SessionClosed { session } => {
                 self.sessions.remove(&session);
                 self.pending.remove(&session);
-                if self.frontier == Some(session) {
-                    self.frontier = None;
+                if self
+                    .header_request
+                    .as_ref()
+                    .is_some_and(|req| req.session == session)
+                {
+                    self.header_request = None;
+                }
+                self.body_requests.retain(|req| req.session != session);
+                if self.slot == Some(session) {
+                    self.slot = None;
+                }
+                if self.evidence == Some(session) {
+                    self.evidence = None;
                 }
             }
-            Event::Tip { tip } => self.observe(main, Some(tip.height))?,
+            Event::Tip { tip } => {
+                self.observe(main, Some(tip.height))?;
+                self.tree.connected(main, tip.height)?;
+            }
             Event::Latch { set } => self.alarm = set,
             Event::Fill { frontier } => self.fill_frontier = frontier,
-            Event::Deadline { session } => {
-                if self.frontier == Some(session) {
-                    self.frontier = None;
-                }
+            Event::Deadline { session, request } => self.on_deadline(session, request),
+            Event::Headers { session, bytes } => {
+                self.on_headers(main, session, &bytes, now, out)?
             }
-            Event::Proven { job: _, results } => {
-                for result in &results {
-                    if let Proved::Formed(formed) = result {
-                        self.adopt(main, formed)?;
-                    }
-                }
-            }
+            Event::Bodies { session, bytes } => self.on_bodies(session, &bytes, out),
+            Event::Proven { job, results } => self.on_proven(main, job, &results, out)?,
+            Event::Entry {
+                tag,
+                reply,
+                hash,
+                solicited,
+                at,
+                indices,
+                verdict,
+            } => self.on_entry(
+                main, tag, reply, hash, solicited, at, &indices, verdict, out,
+            )?,
+            Event::Room { seats } => self.on_room(seats, out),
+            Event::Announce {
+                session,
+                block,
+                bodies,
+            } => self.on_announce(main, session, &block, &bodies, out)?,
         }
         let after = self.state();
         if after != before {
             out.push(Command::Publish { state: after });
         }
+        if after == SyncState::Synced && before != SyncState::Synced {
+            self.complement(rng, out);
+        }
+        self.alarm_from_tree(out);
         self.plan(main, now, rng, out)?;
+        self.plan_bodies(now, out);
         Ok(())
     }
 
@@ -427,7 +739,7 @@ where
         Ok(())
     }
 
-    fn reselect<'id, H: HeaderView<'id>>(&mut self, main: &H) -> Result<(), H::Fault> {
+    pub(crate) fn reselect<'id, H: HeaderView<'id>>(&mut self, main: &H) -> Result<(), H::Fault> {
         let Some(local) = self.local else {
             return Ok(());
         };
@@ -440,43 +752,26 @@ where
             self.tree
                 .select(main, Star::local(local.hash, local.work), local.height, cap)?;
         if self.star.hash != previous {
-            self.frontier = None;
+            self.header_request = None;
+            self.body_requests.clear();
+            for session in self.sessions.values_mut() {
+                session.body_excluded = false;
+            }
         }
         Ok(())
     }
 
-    fn adopt<'id, H: HeaderView<'id>>(
-        &mut self,
-        main: &H,
-        formed: &FormedHeader,
-    ) -> Result<(), H::Fault> {
-        let parent = formed.previous();
-        let outcome = if self.tree.contains(parent) || self.parents_local(parent) {
-            let branch = self
-                .branch_of(main, parent)
-                .expect("a parent in T or at the local tip has a branch view");
-            classify(formed, &branch, &self.trust)?
-        } else {
-            classify(formed, main, &self.trust)?
+    fn complement(&self, rng: &mut impl RelayRng, out: &mut Vec<Command<K>>) {
+        let sessions: Vec<K> = self.sessions.keys().copied().collect();
+        if sessions.is_empty() {
+            return;
+        }
+        let last = u64::try_from(sessions.len() - 1).unwrap_or(u64::MAX);
+        let index = usize::try_from(bounded_uniform(rng, last)).unwrap_or(0);
+        let Some(session) = sessions.get(index).copied() else {
+            return;
         };
-        match outcome {
-            Ok(judged) => {
-                self.tree.insert(judged);
-                self.reselect(main)
-            }
-            Err(note) => {
-                self.notes.push(note);
-                Ok(())
-            }
-        }
-    }
-
-    fn parents_local(&self, parent: BlockHash) -> bool {
-        match self.local {
-            Some(local) if local.hash == parent => true,
-            Some(local) if local.height.is_none() && parent == BlockHash::NULL => true,
-            _ => false,
-        }
+        out.push(Command::RequestComplement { session });
     }
 
     /// At most one header request extends `H*`. It goes to a session
@@ -489,16 +784,17 @@ where
         rng: &mut impl RelayRng,
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
-        if self.frontier.is_some() || self.local.is_none() {
+        if self.header_request.is_some() || self.local.is_none() {
             return Ok(());
         }
         let sources: Vec<K> = self
             .sessions
             .iter()
             .filter(|(_, session)| {
-                session
-                    .claim
-                    .is_some_and(|claim| claim.work > self.star.work)
+                !session.header_quiet
+                    && session
+                        .claim
+                        .is_some_and(|claim| claim.work > self.star.work)
             })
             .map(|(session, _)| *session)
             .collect();
@@ -510,17 +806,31 @@ where
         let Some(session) = sources.get(index).copied() else {
             return Ok(());
         };
-        let ids = self.locator_of(main)?;
+        let points = self.locator_points(main)?;
+        let block_ids = locator(self.star_count(), |height| {
+            Ok::<_, H::Fault>(
+                points
+                    .iter()
+                    .find(|(at, _)| *at == height)
+                    .map(|(_, hash)| *hash),
+            )
+        })?;
         let transit = self
             .sessions
             .get(&session)
             .map(|session| session.transit)
             .unwrap_or_default();
-        self.frontier = Some(session);
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        self.header_request = Some(crate::runs::HeaderRequest {
+            session,
+            id,
+            points,
+        });
         out.push(Command::RequestHeaders {
             session,
             deadline: header_deadline(now, transit),
-            request: RequestHeaders { block_ids: ids },
+            request: RequestHeaders { block_ids },
         });
         Ok(())
     }
@@ -528,20 +838,31 @@ where
     /// The locator of `H*`. `locator` names the heights. A height on the
     /// branch is that branch's ancestor; a height at or below the fork is
     /// read from `main`.
-    fn locator_of<'id, H: HeaderView<'id>>(&self, main: &H) -> Result<Vec<[u8; 32]>, H::Fault> {
+    fn locator_points<'id, H: HeaderView<'id>>(
+        &self,
+        main: &H,
+    ) -> Result<Vec<(BlockHeight, BlockHash)>, H::Fault> {
         let star = self.star.hash;
         let in_tree = self.tree.contains(star);
-        locator(self.star_count(), |height| {
-            if in_tree {
-                if let Some(hash) = self.tree.ancestor_at(star, height) {
-                    return Ok(Some(hash));
-                }
+        let mut points = Vec::new();
+        for height in locator_heights(self.star_count()) {
+            let hash = if in_tree {
+                self.tree.ancestor_at(star, height)
+            } else {
+                None
+            };
+            let hash = match hash {
+                Some(hash) => Some(hash),
+                None => match main.header_at(height)? {
+                    AtHeight::Recorded(record) => Some(record.hash),
+                    AtHeight::AboveTip => None,
+                },
+            };
+            if let Some(hash) = hash {
+                points.push((height, hash));
             }
-            match main.header_at(height)? {
-                AtHeight::Recorded(record) => Ok(Some(record.hash)),
-                AtHeight::AboveTip => Ok(None),
-            }
-        })
+        }
+        Ok(points)
     }
 
     fn star_count(&self) -> ChainCount {
@@ -564,21 +885,7 @@ pub enum ClaimError<E> {
     View(E),
 }
 
-fn classify<'id, H: HeaderView<'id>>(
-    formed: &FormedHeader,
-    view: &H,
-    trust: &Trust,
-) -> Result<Result<HeaderJudged, AdoptNote>, H::Fault> {
-    match shekyl_chain_rules::judge_header(formed, view, &formed.rule_set(), trust) {
-        Ok(Ok(judged)) => Ok(Ok(judged)),
-        Err(Fault::View(fault)) => Err(fault),
-        Ok(Err(refused)) => Ok(Err(AdoptNote::Refused(refused))),
-        Err(Fault::Stale(stale)) => Ok(Err(AdoptNote::Stale(stale))),
-        Err(Fault::Corrupt(corrupt)) => Ok(Err(AdoptNote::Corrupt(corrupt))),
-    }
-}
-
-fn header_deadline(now: Instant, transit: Duration) -> Instant {
+pub(crate) fn header_deadline(now: Instant, transit: Duration) -> Instant {
     let secs = HEADERS_RESPONSE_BYTES / HEADERS_RATE_FLOOR;
     now.checked_add(transit.saturating_add(Duration::from_secs(secs)))
         .unwrap_or(now)
@@ -744,12 +1051,15 @@ mod tests {
     fn a_claim_never_changes_the_state() {
         let mut sync = Sync::new(Trust::UNANCHORED, issued);
         let published = open(&mut sync, 1);
-        assert_eq!(
-            published,
-            vec![Command::Publish {
+        assert!(published.iter().any(|command| matches!(
+            command,
+            Command::Publish {
                 state: SyncState::Synced,
-            }]
-        );
+            }
+        )));
+        assert!(published
+            .iter()
+            .any(|command| matches!(command, Command::RequestComplement { session: 1 })));
         assert_eq!(sync.transit(1), Some(Duration::from_secs(30)));
         hint(&mut sync, claim(9_000, u128::MAX)).unwrap();
         assert_eq!(sync.state(), SyncState::Synced);
@@ -988,7 +1298,7 @@ mod tests {
         out.iter()
             .filter_map(|command| match command {
                 Command::RequestHeaders { session, .. } => Some(*session),
-                Command::Publish { .. } => None,
+                _ => None,
             })
             .collect()
     }

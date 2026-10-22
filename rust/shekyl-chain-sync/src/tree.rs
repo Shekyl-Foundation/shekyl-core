@@ -126,6 +126,98 @@ impl HeaderTree {
         }
     }
 
+    /// A header already marked invalid, so a later child of it is not a
+    /// new chain. The session that serves it is closed.
+    pub(crate) fn remembers(&self, hash: BlockHash) -> bool {
+        self.invalid.contains(&hash)
+    }
+
+    pub(crate) fn tip_hashes(&self) -> Vec<BlockHash> {
+        self.tips.iter().copied().collect()
+    }
+
+    /// Headers at or below `height` whose hash is on `main` have been
+    /// connected. They leave `T`. The first header still in `T` above
+    /// each of them becomes that branch's base.
+    pub(crate) fn connected<'id, H: HeaderView<'id>>(
+        &mut self,
+        main: &H,
+        height: BlockHeight,
+    ) -> Result<(), H::Fault> {
+        let mut leaving = Vec::new();
+        for (hash, node) in &self.nodes {
+            let at = node.judged.connecting();
+            if at.to_raw() > height.to_raw() {
+                continue;
+            }
+            if let AtHeight::Recorded(record) = main.header_at(at)? {
+                if record.hash == *hash {
+                    leaving.push((at.to_raw(), *hash));
+                }
+            }
+        }
+        leaving.sort_by_key(|(at, _)| *at);
+        for (_, hash) in leaving {
+            self.drop_connected(hash);
+        }
+        self.rebuild_skips();
+        Ok(())
+    }
+
+    fn drop_connected(&mut self, hash: BlockHash) {
+        let kids = self
+            .children
+            .get(&hash)
+            .map(|kids| kids.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for kid in kids {
+            let Some(base) = self.nodes.get(&kid).map(|node| node.judged.connecting()) else {
+                continue;
+            };
+            if let Some(node) = self.nodes.get_mut(&kid) {
+                node.base = base;
+                node.anchor = hash;
+            }
+            self.retarget(kid, base, hash);
+        }
+        self.nodes.remove(&hash);
+        self.tips.remove(&hash);
+        self.children.remove(&hash);
+    }
+
+    fn retarget(&mut self, hash: BlockHash, base: BlockHeight, anchor: BlockHash) {
+        let kids = self
+            .children
+            .get(&hash)
+            .map(|kids| kids.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for kid in kids {
+            if let Some(node) = self.nodes.get_mut(&kid) {
+                node.base = base;
+                node.anchor = anchor;
+            }
+            self.retarget(kid, base, anchor);
+        }
+    }
+
+    fn rebuild_skips(&mut self) {
+        let mut rows = Vec::new();
+        for (hash, node) in &self.nodes {
+            rows.push((*hash, node.parent, node.judged.connecting().to_raw()));
+        }
+        rows.sort_by_key(|(_, _, height)| *height);
+        for (hash, parent, height) in rows {
+            let skip = if self.nodes.contains_key(&parent) {
+                self.ancestor_at(parent, BlockHeight::from_raw(skip_height(height)))
+            } else {
+                None
+            };
+            if let Some(node) = self.nodes.get_mut(&hash) {
+                node.skip = skip;
+            }
+        }
+    }
+
     /// The header and its descendants, by the children index.
     pub(crate) fn mark_invalid(&mut self, hash: BlockHash) {
         let mut stack = vec![hash];
@@ -156,6 +248,11 @@ impl HeaderTree {
     /// The height of `hash` when it is in `T`.
     pub(crate) fn connecting(&self, hash: BlockHash) -> Option<BlockHeight> {
         self.nodes.get(&hash).map(|node| node.judged.connecting())
+    }
+
+    /// The judged header, when `T` holds it. Bodies bind against this token.
+    pub(crate) fn judged(&self, hash: BlockHash) -> Option<HeaderJudged> {
+        self.nodes.get(&hash).map(|node| node.judged.clone())
     }
 
     /// The header `hash` records, when it is in `T`.

@@ -4038,6 +4038,7 @@ dependencies = [
  "shekyl-difficulty",
  "shekyl-draw-rng",
  "shekyl-levin",
+ "shekyl-peer-policy",
  "shekyl-types",
  "shekyl-wire",
 ]

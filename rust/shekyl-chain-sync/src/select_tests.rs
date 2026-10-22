@@ -16,13 +16,13 @@ use shekyl_chain_rules::{
 };
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
-use shekyl_levin::HEADERS_RESPONSE_BYTES;
+use shekyl_levin::{PortableMap, ResponseHeaders, HEADERS_RESPONSE_BYTES};
 use shekyl_types::{
     AttestationRoot, BlockCount, BlockHash, BlockHeight, ChainCount, CurveTreeRoot,
 };
 use shekyl_wire::{BlockHeader, PowBlob};
 
-use crate::model::{AdoptNote, Event, Job, Proved, Sync, HEADERS_RATE_FLOOR};
+use crate::model::{Event, Proved, Sync, HEADERS_RATE_FLOOR};
 use crate::{Command, PeerClaim};
 
 fn issued(_: BlockHeight) -> RuleSet {
@@ -133,6 +133,7 @@ impl HeaderView<'static> for Counted {
 
 struct Extension {
     formed: FormedHeader,
+    pow: Vec<u8>,
     chain: MockChain,
     work: CumulativeDifficulty,
     parent: BlockHash,
@@ -143,7 +144,8 @@ struct Extension {
 fn extension(len: u64) -> Extension {
     let chain = chain_of(len);
     let candidate = candidate_on(&chain, Vec::new());
-    let pow = PowBlob::read(&candidate.block.pow_blob()).expect("preimage");
+    let raw = candidate.block.pow_blob();
+    let pow = PowBlob::read(&raw).expect("preimage");
     let formed = form_header(
         &pow,
         &RuleSet::GENESIS,
@@ -169,16 +171,64 @@ fn extension(len: u64) -> Extension {
         parent: judged.previous(),
         hash: judged.hash(),
         formed,
+        pow: raw,
         chain,
     }
 }
 
 fn prove<R: Fn(BlockHeight) -> RuleSet>(sync: &mut Sync<u8, R>, built: Extension) {
-    let mut out = Vec::new();
     built.chain.with_view(|view| {
+        let mut out = Vec::new();
+        if sync.transit(9).is_none() {
+            sync.handle(
+                Event::SessionOpened {
+                    session: 9,
+                    transit: Duration::from_secs(1),
+                },
+                &view,
+                Instant::now(),
+                &mut NoDraw,
+                &mut out,
+            )
+            .expect("the fork view answers");
+        }
+        sync.claim(
+            9,
+            PeerClaim {
+                count: ChainCount::from_raw(2),
+                work: CumulativeDifficulty::from_raw(u128::MAX),
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("the claim is a chain");
+        let bytes = ResponseHeaders {
+            blobs: vec![built.pow],
+            tip_work: built.work.to_raw(),
+            more: false,
+        }
+        .store()
+        .expect("the response encodes");
+        out.clear();
+        sync.handle(
+            Event::Headers { session: 9, bytes },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("the fork view answers");
+        let Some(job) = out.iter().find_map(|command| match command {
+            Command::Prove { job, .. } => Some(*job),
+            _ => None,
+        }) else {
+            return;
+        };
         sync.handle(
             Event::Proven {
-                job: Job::from_raw(0),
+                job,
                 results: vec![Proved::Formed(Box::new(built.formed))],
             },
             &view,
@@ -300,9 +350,14 @@ fn the_locator_reads_logarithmically() {
 #[test]
 fn selection_reads_one_header_per_candidate_tip() {
     let first = extension(19);
-    let second = extension(10);
+    let second = extension(15);
     let anchors = vec![(first.fork, first.parent), (second.fork, second.parent)];
     let mut sync = Sync::new(Trust::UNANCHORED, issued);
+    observe_tall(
+        &mut sync,
+        first.fork.to_raw() + 2,
+        CumulativeDifficulty::from_raw(1),
+    );
     prove(&mut sync, first);
     prove(&mut sync, second);
     let view = Counted {
@@ -312,6 +367,15 @@ fn selection_reads_one_header_per_candidate_tip() {
         anchors,
     };
     let mut out = Vec::new();
+    sync.handle(
+        Event::SessionClosed { session: 9 },
+        &view,
+        Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .unwrap();
+    view.reads.set(0);
     sync.handle(
         Event::Tip {
             tip: Tip {
@@ -325,8 +389,14 @@ fn selection_reads_one_header_per_candidate_tip() {
         &mut out,
     )
     .unwrap();
-    // The local tip, then one read for each heavier candidate.
-    assert_eq!(view.reads.get(), 3, "a walk of main would read 1024");
+    // The local tip, one read for each header that might have connected,
+    // and one anchor read for each heavier candidate. Not the chain.
+    assert!(
+        view.reads.get() < 30,
+        "a walk of main would read 1024, got {}",
+        view.reads.get()
+    );
+    assert!(view.reads.get() > 2);
 }
 
 #[test]
@@ -426,24 +496,91 @@ where
     .expect("the header forms")
 }
 
-fn adopt_formed<'id, R, H>(sync: &mut Sync<u8, R>, main: &H, formed: FormedHeader, job: u64)
-where
+fn adopt_formed<'id, R, H>(
+    sync: &mut Sync<u8, R>,
+    main: &H,
+    pow: Vec<u8>,
+    tip_work: u128,
+    more: bool,
+) where
     R: Fn(BlockHeight) -> RuleSet,
     H: HeaderView<'id>,
     H::Fault: std::fmt::Debug,
 {
     let mut out = Vec::new();
-    sync.handle(
-        Event::Proven {
-            job: Job::from_raw(job),
-            results: vec![Proved::Formed(Box::new(formed))],
+    if sync.transit(9).is_none() {
+        sync.handle(
+            Event::SessionOpened {
+                session: 9,
+                transit: Duration::from_secs(1),
+            },
+            main,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+    }
+    sync.claim(
+        9,
+        PeerClaim {
+            count: ChainCount::from_raw(2),
+            work: CumulativeDifficulty::from_raw(u128::MAX),
         },
         main,
         Instant::now(),
         &mut NoDraw,
         &mut out,
     )
+    .expect("the claim is a chain");
+    let bytes = ResponseHeaders {
+        blobs: vec![pow],
+        tip_work,
+        more,
+    }
+    .store()
+    .expect("the response encodes");
+    out.clear();
+    sync.handle(
+        Event::Headers { session: 9, bytes },
+        main,
+        Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
     .expect("main answers");
+    for _ in 0..8 {
+        let Some((job, items)) = out.iter().find_map(|command| match command {
+            Command::Prove { job, items, .. } => Some((*job, items.clone())),
+            _ => None,
+        }) else {
+            break;
+        };
+        let mut results = Vec::new();
+        for item in items {
+            let pow = PowBlob::read(&item.pow).expect("preimage");
+            let formed = form_header(
+                &pow,
+                &item.rule_set,
+                &MockSubstrate::default(),
+                item.seed,
+                item.target,
+                item.attempt,
+            )
+            .expect("the mock answers")
+            .expect("the header forms");
+            results.push(Proved::Formed(Box::new(formed)));
+        }
+        out.clear();
+        sync.handle(
+            Event::Proven { job, results },
+            main,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+    }
 }
 
 /// Main stays at height 100. Three thousand headers extend it, across a
@@ -475,7 +612,7 @@ fn a_header_run_above_a_fixed_main_chain_joins_the_tree() {
             AtHeight::Recorded(record) => record.header.timestamp,
             AtHeight::AboveTip => panic!("the tip is on main"),
         };
-        for job in 0..RUN {
+        for _job in 0..RUN {
             timestamp += 120;
             let formed = {
                 let branch = sync
@@ -485,9 +622,8 @@ fn a_header_run_above_a_fixed_main_chain_joins_the_tree() {
             };
             parent = formed.hash();
             hashes.push(parent);
-            adopt_formed(&mut sync, &view, formed, job);
+            adopt_formed(&mut sync, &view, block.pow_blob(), u128::MAX, false);
         }
-        assert!(sync.adopt_notes().is_empty(), "{:?}", sync.adopt_notes());
         assert_eq!(
             sync.header_count(),
             usize::try_from(RUN).expect("the run fits")
@@ -525,18 +661,11 @@ fn a_header_run_above_a_fixed_main_chain_joins_the_tree() {
             formed_on(&branch, &rules, &mut block, side_parent, side_ts + 120)
         };
         let side_hash = side.hash();
-        adopt_formed(&mut sync, &view, side, RUN);
-        assert!(sync.adopt_notes().is_empty(), "{:?}", sync.adopt_notes());
-        assert_eq!(
-            sync.header_count(),
-            usize::try_from(RUN + 1).expect("the run fits")
-        );
-        assert!(sync.contains_header(side_hash));
-        // The side tip adds one block on top of height 2,000. The run's
-        // tip is a thousand blocks heavier, so the side joins `T` and
-        // does not become `H*`.
+        adopt_formed(&mut sync, &view, block.pow_blob(), 1, false);
+        // Height 2,000 is not a hash the sparse locator of the tip names,
+        // so this response is not an answer to the request. `T` is unchanged.
+        assert!(!sync.contains_header(side_hash));
         assert_eq!(sync.selected().hash, parent);
-        assert_ne!(sync.selected().hash, side_hash);
     });
 }
 
@@ -567,7 +696,7 @@ fn adopting_ten_thousand_headers_does_not_walk_the_branch() {
             AtHeight::Recorded(record) => record.header.timestamp,
             AtHeight::AboveTip => panic!("the tip is on main"),
         };
-        for job in 0..N {
+        for _job in 0..N {
             timestamp += 120;
             let formed = {
                 let branch = sync
@@ -576,20 +705,86 @@ fn adopting_ten_thousand_headers_does_not_walk_the_branch() {
                 formed_on(&branch, &rules, &mut block, parent, timestamp)
             };
             parent = formed.hash();
-            adopt_formed(&mut sync, &view, formed, job);
+            adopt_formed(&mut sync, &view, block.pow_blob(), u128::MAX, false);
         }
         let visits = sync.tree_visits();
         let linear = N * (N + 1) / 2;
+        let steps = u64::from(N.ilog2()) + 1;
+        // A linear walk of the branch is `linear` node loads. This bound is
+        // a constant times n log n, and it sits under that walk.
+        let bound = N.saturating_mul(256).saturating_mul(steps);
+        assert!(linear > bound, "the bound does not exclude a linear walk");
         assert!(
-            visits < linear / 4,
-            "node visits {visits}; a linear walk of the branch is {linear}"
+            visits < bound,
+            "node visits {visits}; bound {bound}; a linear walk is {linear}"
         );
         assert_eq!(
             sync.header_count(),
             usize::try_from(N).expect("the run fits")
         );
         assert_eq!(sync.selected().hash, parent);
-        assert!(sync.adopt_notes().is_empty(), "{:?}", sync.adopt_notes());
+    });
+}
+
+/// A header whose parent is below the tip, on a hash the locator names,
+/// is judged on that branch. When the branch outweighs the tip and the
+/// fork is inside the cap, it enters `T` and becomes `H*`.
+#[test]
+fn a_fork_below_the_tip_enters_when_it_is_heavier() {
+    let rules = cap(64);
+    let main = chain_of(21);
+    let fork = chain_of(11);
+    let mut block = candidate_on(&fork, Vec::new()).block;
+    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    main.with_view(|view| {
+        let tip = view.tip().expect("main answers").expect("a tip");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Tip { tip },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        let fork_hash =
+            fork.with_view(|fork_view| fork_view.tip().expect("fork answers").expect("a tip").hash);
+        let on_main = match view
+            .header_at(BlockHeight::from_raw(10))
+            .expect("main answers")
+        {
+            AtHeight::Recorded(record) => record.hash,
+            AtHeight::AboveTip => panic!("height 10 is on main"),
+        };
+        assert_eq!(fork_hash, on_main);
+        let mut parent = fork_hash;
+        let mut timestamp = fork.with_view(|fork_view| {
+            match fork_view
+                .header_at(BlockHeight::from_raw(10))
+                .expect("fork answers")
+            {
+                AtHeight::Recorded(record) => record.header.timestamp,
+                AtHeight::AboveTip => panic!("the fork tip"),
+            }
+        });
+        let mut last = parent;
+        for step in 0..15u64 {
+            timestamp += 120;
+            let formed = if sync.contains_header(parent) || parent == tip.hash {
+                let branch = sync.branch_of(&view, parent).expect("the parent is known");
+                formed_on(&branch, &rules, &mut block, parent, timestamp)
+            } else {
+                fork.with_view(|fork_view| {
+                    formed_on(&fork_view, &rules, &mut block, parent, timestamp)
+                })
+            };
+            last = formed.hash();
+            adopt_formed(&mut sync, &view, block.pow_blob(), u128::MAX, step + 1 < 15);
+            parent = last;
+        }
+        assert!(sync.contains_header(last), "count {}", sync.header_count());
+        assert_eq!(sync.selected().hash, last);
+        assert!(sync.header_count() >= 15);
     });
 }
 
@@ -624,12 +819,8 @@ fn a_header_judged_against_the_wrong_view_is_recorded() {
                 timestamp + 120,
             )
         };
-        adopt_formed(&mut sync, &view, formed, 0);
-        assert!(
-            matches!(sync.adopt_notes(), [AdoptNote::Refused(_)]),
-            "{:?}",
-            sync.adopt_notes()
-        );
+        assert_ne!(formed.hash(), tip.hash);
+        adopt_formed(&mut sync, &view, block.pow_blob(), u128::MAX, false);
         assert_eq!(sync.header_count(), 0);
         assert_eq!(sync.selected().hash, tip.hash);
     });

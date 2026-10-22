@@ -17,7 +17,9 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 shekyl-levin = { path = "../shekyl-levin" }
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-types = { path = "../shekyl-types" }
+shekyl-wire = { path = "../shekyl-wire" }
 
 [dev-dependencies]
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }

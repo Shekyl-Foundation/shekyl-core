@@ -9,9 +9,20 @@
 //! judged against that parent and not against the main tip.
 
 use shekyl_chain_rules::{AtHeight, HeaderRecord, HeaderView, Tip};
+use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_wire::BlockHeader;
 
 use crate::tree::HeaderTree;
+
+/// One cheap-checked or proven header that is not in `T` yet. The branch
+/// view serves it by height, above the fork.
+pub(crate) struct Overlay {
+    pub height: BlockHeight,
+    pub hash: BlockHash,
+    pub header: BlockHeader,
+    pub work: CumulativeDifficulty,
+}
 
 pub(crate) struct BranchView<'a, H> {
     main: &'a H,
@@ -21,6 +32,7 @@ pub(crate) struct BranchView<'a, H> {
     /// Heights at and below this are on `main`.
     fork: BlockHeight,
     empty: bool,
+    run: &'a [Overlay],
 }
 
 impl<'a, H> BranchView<'a, H> {
@@ -32,6 +44,7 @@ impl<'a, H> BranchView<'a, H> {
             tip_height,
             fork: tip_height,
             empty: false,
+            run: &[],
         }
     }
 
@@ -43,6 +56,7 @@ impl<'a, H> BranchView<'a, H> {
             tip_height: BlockHeight::ZERO,
             fork: BlockHeight::ZERO,
             empty: true,
+            run: &[],
         }
     }
 
@@ -60,7 +74,17 @@ impl<'a, H> BranchView<'a, H> {
             tip_height,
             fork,
             empty: false,
+            run: &[],
         }
+    }
+
+    pub(crate) fn with_run(mut self, run: &'a [Overlay]) -> Self {
+        if let Some(last) = run.last() {
+            self.tip_hash = last.hash;
+            self.tip_height = last.height;
+        }
+        self.run = run;
+        self
     }
 }
 
@@ -83,6 +107,13 @@ impl<'id, H: HeaderView<'id>> HeaderView<'id> for BranchView<'_, H> {
         }
         if height.to_raw() > self.tip_height.to_raw() {
             return Ok(AtHeight::AboveTip);
+        }
+        if let Some(over) = self.run.iter().find(|over| over.height == height) {
+            return Ok(AtHeight::Recorded(HeaderRecord {
+                hash: over.hash,
+                header: over.header.clone(),
+                cumulative_difficulty: over.work,
+            }));
         }
         let Some(tree) = self.tree else {
             return self.main.header_at(height);

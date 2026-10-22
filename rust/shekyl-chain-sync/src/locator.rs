@@ -20,27 +20,41 @@ pub(crate) fn locator<E>(
     count: ChainCount,
     mut at: impl FnMut(BlockHeight) -> Result<Option<BlockHash>, E>,
 ) -> Result<Vec<[u8; 32]>, E> {
-    let Some(tip) = count.tip() else {
+    if count.tip().is_none() {
         return Ok(vec![bytes(BlockHash::NULL)]);
+    }
+    let mut out = Vec::new();
+    for height in locator_heights(count) {
+        if let Some(hash) = at(height)? {
+            let encoded = bytes(hash);
+            if out.last() != Some(&encoded) {
+                out.push(encoded);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The heights [`locator`] names, newest first, genesis last.
+pub(crate) fn locator_heights(count: ChainCount) -> Vec<BlockHeight> {
+    let Some(tip) = count.tip() else {
+        return vec![BlockHeight::ZERO];
     };
     let cap = usize::try_from(BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT).unwrap_or(usize::MAX);
     let mut out = Vec::new();
     let mut saw_genesis = false;
-    let mut push = |height: BlockHeight, out: &mut Vec<[u8; 32]>| -> Result<(), E> {
+    let mut push = |height: BlockHeight, out: &mut Vec<BlockHeight>| {
         if height.is_zero() {
             saw_genesis = true;
         }
-        if let Some(hash) = at(height)? {
-            out.push(bytes(hash));
-        }
-        Ok(())
+        out.push(height);
     };
     let dense = DENSE.min(count.to_raw());
     for index in 0..dense {
         let Some(height) = tip.checked_sub_count(BlockCount::from_raw(index)) else {
             break;
         };
-        push(height, &mut out)?;
+        push(height, &mut out);
     }
     let mut step = 2u64;
     let mut index = dense;
@@ -49,19 +63,14 @@ pub(crate) fn locator<E>(
         let Some(height) = tip.checked_sub_count(BlockCount::from_raw(index)) else {
             break;
         };
-        push(height, &mut out)?;
+        push(height, &mut out);
         index = index.saturating_add(step);
         step = step.saturating_mul(2);
     }
     if !saw_genesis && out.len() < cap {
-        if let Some(hash) = at(BlockHeight::ZERO)? {
-            let encoded = bytes(hash);
-            if out.last() != Some(&encoded) {
-                out.push(encoded);
-            }
-        }
+        out.push(BlockHeight::ZERO);
     }
-    Ok(out)
+    out
 }
 
 fn bytes(hash: BlockHash) -> [u8; 32] {
