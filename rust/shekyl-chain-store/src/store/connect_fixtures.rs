@@ -21,9 +21,9 @@ use core::convert::Infallible;
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::target_claim;
 use shekyl_chain_rules::{
-    form, validate, AtHeight, Candidate, ChainValid, ChainView, Corrupt, Fault, FormAttempt,
-    HeaderView, PaidEmission, ReferenceClaims, RuleSet, StructurallyValid, Substrate, Target,
-    Trust, ViewRead, Weights,
+    form, validate, validate_with_memo, AtHeight, Candidate, ChainValid, ChainView, Corrupt,
+    DrawableMemo, Fault, FormAttempt, HeaderView, PaidEmission, ReferenceClaims, RuleSet,
+    StructurallyValid, Substrate, Target, Trust, ViewRead, Weights,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 use shekyl_wire::{Block, BlockHeader, Input, Transaction};
@@ -296,6 +296,29 @@ pub(super) fn judge_or_corrupt<'b, 'id>(
         Err(Fault::View(fault)) => Err(fault),
         Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),
         Err(Fault::Corrupt(corrupt)) => Ok(Err(corrupt)),
+    }
+}
+
+/// [`judge_under`] with the connect loop's drawable memo. A [`Corrupt`]
+/// still panics: this door is for a block the rules accept.
+pub(super) fn judge_with_memo<'b, 'id>(
+    view: &BatchView<'b, 'id>,
+    candidate: Candidate,
+    rules: &RuleSet,
+    memo: Option<&mut DrawableMemo>,
+) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
+    let candidate = priced(view, candidate)?;
+    match validate_with_memo(
+        formed_under(view, candidate, rules)?,
+        view,
+        rules,
+        &Trust::UNANCHORED,
+        memo,
+    ) {
+        Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),
+        Err(Fault::View(fault)) => Err(fault),
+        Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),
+        Err(Fault::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt}"),
     }
 }
 

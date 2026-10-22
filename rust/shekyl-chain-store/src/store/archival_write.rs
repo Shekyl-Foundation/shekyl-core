@@ -118,11 +118,11 @@ use crate::ids::{
     IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
 };
 use crate::schema::{
-    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BOND, ARCHIVAL_BUDGET, ARCHIVAL_BUDGET_ACCRUING,
-    ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
-    ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT,
-    ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
-    BLOCK_BURN, BLOCK_INFO,
+    ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
+    ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
+    ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
+    ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
+    ARCHIVAL_SLASH_LOG, BLOCK_BURN, BLOCK_INFO,
 };
 
 use super::archival_reads;
@@ -398,7 +398,8 @@ impl<'id> WriteBatch<'_, 'id> {
                 .insert(epoch.to_raw(), close.budget().encoded().as_encoded())?;
             }
         }
-        self.write_drawable_digest(delta)
+        self.write_drawable_digest(delta)?;
+        self.write_block_draws(connecting, delta)
     }
 
     /// 9c. `archival_drawable_digest[E] = digest` at the block that opens
@@ -422,6 +423,30 @@ impl<'id> WriteBatch<'_, 'id> {
             },
         )?
         .insert(epoch.to_raw(), write.digest().encoded().as_encoded())?;
+        Ok(())
+    }
+
+    /// 9d. `archival_block_draws[h] = row` at every connecting height,
+    /// insert-once: a block records its count once, and a row already
+    /// there is SI-33 ([`DrawRowFault::Rewritten`]) before any journal
+    /// entry. Written after the digest, which the count at later heights
+    /// compares a rebuild against. No archival family governs it: every
+    /// connect writes the row, as every opening block writes the digest.
+    /// `pop` removes it through the journal, and a reconnect writes the
+    /// same row.
+    fn write_block_draws(
+        &self,
+        connecting: BlockHeight,
+        delta: &ArchivalDelta,
+    ) -> Result<(), StoreError> {
+        self.open_insert_table(
+            ARCHIVAL_BLOCK_DRAWS,
+            StoreInvariant::BlockDrawsNotSingular {
+                height: connecting,
+                observed: super::error::DrawRowFault::Rewritten,
+            },
+        )?
+        .insert(connecting.to_raw(), delta.draws().encoded().as_encoded())?;
         Ok(())
     }
 

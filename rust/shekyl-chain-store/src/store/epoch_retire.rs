@@ -12,7 +12,9 @@
 //! because a generic walker would hide which shape a table has.
 
 use redb::WriteTransaction;
-use shekyl_chain_rules::{Claimable, EpochFloor, Pricing, SettlementSchedule, Settling};
+use shekyl_chain_rules::{
+    BlockDrawsFloor, Claimable, EpochFloor, Pricing, SettlementSchedule, Settling,
+};
 use shekyl_types::{BlockHeight, SettlementEpoch};
 
 use crate::apply_policy::ArchivalFamily;
@@ -40,6 +42,9 @@ pub struct EpochFloors {
     pub settling: EpochFloor<Settling>,
     /// `archival_r_market`.
     pub pricing: EpochFloor<Pricing>,
+    /// `archival_block_draws`. The first retained height, beside the
+    /// journal's floor.
+    pub draws: BlockDrawsFloor,
 }
 
 impl EpochFloors {
@@ -53,6 +58,10 @@ impl EpochFloors {
             claimable: EpochFloor::at_boundary(boundary, schedule),
             settling: EpochFloor::at_boundary(boundary, schedule),
             pricing: EpochFloor::at_boundary(boundary, schedule),
+            draws: BlockDrawsFloor::retired_by(
+                schedule.epoch_at_height(boundary.to_raw()),
+                schedule,
+            ),
         }
     }
 }

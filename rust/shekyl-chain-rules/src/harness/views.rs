@@ -32,7 +32,7 @@ use crate::view::{
     AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock, RecordedWeights,
     Tip,
 };
-use crate::{Claimable, EpochFloor, Pricing, Settling};
+use crate::{BlockDrawsFloor, Claimable, EpochFloor, Pricing, Settling};
 
 /// The fault a [`FaultingView`] raises.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -520,8 +520,12 @@ impl<'id> ChainView<'id> for NonCanonicalBondView<'_, 'id> {
         self.inner.served_at(persona, epochs, floor)
     }
 
-    fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, Infallible> {
-        self.inner.block_draws(height)
+    fn block_draws(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, Infallible> {
+        self.inner.block_draws(height, floor)
     }
 
     fn drawable_digest(

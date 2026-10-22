@@ -100,12 +100,17 @@ fn run(bodies: Vec<Transaction>) -> Verdict<ArchivalDelta> {
     let connecting = BlockHeight::from_raw(3);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
+        let mut count_memo = super::count::CountMemo {
+            open_hash: candidate.block.hash(),
+            memo: None,
+        };
         let verdict = transition(
             &view,
             connecting,
             &RuleSet::GENESIS,
             &candidate,
             INFLOW,
+            &mut count_memo,
             &mut coverage,
         )
         .expect("an honest-empty view neither faults nor is corrupt");

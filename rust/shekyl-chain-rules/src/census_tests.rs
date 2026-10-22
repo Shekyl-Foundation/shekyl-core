@@ -242,6 +242,8 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             // DRS-E4 commit 4: the archival transition on the verdict
             // (`DRS_E4_ARCHIVAL_WRITER.md` §6 row 4); L8 and L9 below.
             CenRow::L7,
+            // SO-D12 increment 3: the per-block draw count.
+            CenRow::L17,
         ]
     );
     let by_construction: Vec<CenRow> = CenRow::ALL
@@ -426,7 +428,9 @@ fn registries_are_the_expected_size_at_this_increment() {
     // CEN-A5 (the size bound before parse) went to bucket 3 and its entry
     // was deleted (DRS-X PR 2, PR2-Q2) — the parse-cost bound, not
     // validity, re-homed as the ingest router's admission.
-    assert_eq!(CenRow::ALL.len(), 161);
+    // 161 → 162 on 2026-10-21: CEN-L17 (the per-block draw count) minted
+    // with its implementation, `SO-D12` increment 3.
+    assert_eq!(CenRow::ALL.len(), 162);
     assert_eq!(PolicyRow::ALL.len(), 8);
 }
 

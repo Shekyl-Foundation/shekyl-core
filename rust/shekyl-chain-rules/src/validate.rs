@@ -397,6 +397,22 @@ pub fn validate<'id, V: ChainView<'id>>(
     rule_set: &RuleSet,
     trust: &Trust,
 ) -> Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>> {
+    validate_with_memo(formed, view, rule_set, trust, None)
+}
+
+/// [`validate`], with the connect loop's drawable memo.
+///
+/// `memo` is the set the count has already built, keyed by the epoch and
+/// the opening block's hash (`SO-D12b`). [`None`] rebuilds on every miss
+/// through the same function a hit returns. The memo is not chain state:
+/// a harness with none and a node with one write the same rows.
+pub fn validate_with_memo<'id, V: ChainView<'id>>(
+    formed: StructurallyValid,
+    view: &V,
+    rule_set: &RuleSet,
+    trust: &Trust,
+    memo: Option<&mut archival::DrawableMemo>,
+) -> Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>> {
     // The stateless stage's rule-set claim, checked before any rule reads
     // the wrong parameters. A mismatch is the world having moved, not a
     // verdict — and the retry is bounded by the attempt the token carries.
@@ -537,12 +553,21 @@ pub fn validate<'id, V: ChainView<'id>>(
     // epoch state, derived here and carried to the store, which holds no
     // archival arithmetic. A rule (CEN-L7) — a post the folds cannot apply
     // refuses the block at its input — so it runs before the assembly.
+    // The count keys its memo by this block's hash. Taken before the
+    // transition borrows `cx`, which borrows `formed`: the hash is `Copy`
+    // and the borrow ends with the statement.
+    let hash = formed.hash();
+    let mut count_memo = archival::CountMemo {
+        open_hash: hash,
+        memo,
+    };
     let archival = match archival::transition(
         view,
         connecting,
         rule_set,
         cx.candidate(),
         paid.accrual,
+        &mut count_memo,
         &mut coverage,
     )? {
         Ok(delta) => delta,
@@ -551,7 +576,6 @@ pub fn validate<'id, V: ChainView<'id>>(
 
     // `cx` borrows `formed`. The derived scalars above are `Copy`.
     drop(cx);
-    let hash = formed.hash();
     let pow = ProvenPow::computed(formed.seed(), formed.pow());
     let (candidate, _stateless) = formed.into_parts();
     let block = ValidatedBlock::derive(

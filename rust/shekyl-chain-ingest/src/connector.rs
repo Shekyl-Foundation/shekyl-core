@@ -13,7 +13,9 @@
 //! [`Apply`] is a bounded run of consecutive `Extend`s in one closure (the
 //! write-transaction granularity), a [`Rewind`] is one closure of pops.
 //! Between messages the actor holds the store, the rule set in force, and
-//! nothing mutable. (A facts provider sat beside them until E6 slice 7
+//! the drawable memo. The memo is rules-side state the count reads
+//! (`SO-D12b`): not chain state, not persisted, and not undone. (A facts
+//! provider sat beside them until E6 slice 7
 //! wave B — the E2 trace's `borrow` door or production composition from
 //! the owners — handing `connect` what the validator did not yet derive;
 //! every such value is the verdict's now, and `connect` takes the verdict
@@ -61,9 +63,9 @@ use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    recorded, validate, ArchivalDelta, AtHeight, CenRow, ChainView, Corrupt, EffectiveMedian,
-    Fault, HeaderRecord, HeaderView, InvalidBlock, PaidEmission, PerHeightRecord,
-    StructurallyValid, Verdict, ViewRead, Weights,
+    recorded, validate_with_memo, ArchivalDelta, AtHeight, CenRow, ChainView, Corrupt,
+    DrawableMemo, EffectiveMedian, Fault, HeaderRecord, HeaderView, InvalidBlock, PaidEmission,
+    PerHeightRecord, StructurallyValid, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, WriteBatch};
@@ -514,6 +516,9 @@ pub struct Connector {
     /// checkpoint arm of the fork choice with a fixture table no regtest
     /// run carries ([`AnchorForTests`]).
     trust: shekyl_chain_rules::Trust,
+    /// Drawable sets the count has already built, keyed by the epoch and
+    /// the opening block's hash. Not chain state (`SO-D12b`).
+    memo: DrawableMemo,
 }
 
 impl Actor for Connector {
@@ -527,6 +532,7 @@ impl Actor for Connector {
             writer: Writer::live(args.store),
             rules: args.rules,
             trust: args.rules.trust(),
+            memo: DrawableMemo::new(),
         })
     }
 
@@ -587,6 +593,7 @@ impl Message<Apply> for Connector {
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let rules = self.rules;
         let trust = self.trust;
+        let memo = &mut self.memo;
         let applied = self.writer.write(|batch| {
             let view = batch.chain_view();
             let mut applied = Applied::default();
@@ -622,7 +629,7 @@ impl Message<Apply> for Connector {
                     }
                 };
                 let in_force = rules.in_force(height);
-                match validate(formed, &view, &in_force, &trust) {
+                match validate_with_memo(formed, &view, &in_force, &trust, Some(memo)) {
                     Ok(Ok(valid)) => {
                         let hash = valid.block().hash();
                         let root_after = valid.block().root_after();
