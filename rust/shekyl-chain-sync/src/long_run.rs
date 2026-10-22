@@ -8,6 +8,12 @@
 //! is not derived here; the job's first run on the floor device is the
 //! measurement, and it is recorded after that run.
 
+// Whole-file test module. `lib.rs` gates it with
+// `#[cfg(all(test, feature = "cs2-long-run"))]`, which the debug-macro
+// lint cannot see, so the file declares the test half itself. The
+// timing lines below are a test's output.
+#![cfg(test)]
+
 use std::io::BufReader;
 use std::num::NonZeroU128;
 use std::path::PathBuf;

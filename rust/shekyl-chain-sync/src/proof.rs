@@ -10,6 +10,11 @@
 //! is one hash. A forged header is mined at target 2 and then altered;
 //! the refusal is that hash failing.
 
+// Whole-file test module. `lib.rs` gates it with `#[cfg(test)]`, which
+// the debug-macro lint cannot see, so the file declares itself. The
+// timing line below is a test's output.
+#![cfg(test)]
+
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 

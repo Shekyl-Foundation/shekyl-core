@@ -9,6 +9,11 @@
 //! substrate. The other tests are one or two target-1 headers: a proof
 //! is one hash, and the subject is what the model does with the reply.
 
+// Whole-file test module. `lib.rs` gates it with `#[cfg(test)]`, which
+// the debug-macro lint cannot see, so the file declares itself. The
+// timing line below is a test's output.
+#![cfg(test)]
+
 use std::io::BufReader;
 use std::num::NonZeroU128;
 use std::path::PathBuf;
