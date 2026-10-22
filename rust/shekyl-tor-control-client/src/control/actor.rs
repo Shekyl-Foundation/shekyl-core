@@ -1124,6 +1124,11 @@ async fn spawn_managed_tor(
     // The directory is owner-only on Unix before any file is written, and a symlink
     // at the final component is refused.
     launch::prepare_data_directory(&managed.data_dir).await?;
+    // Test builds only. The live lane points this at the cache the job's cold
+    // boot wrote, so later tests in that job do not bootstrap from nothing.
+    // A production build does not contain the call.
+    #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
+    crate::directory_cache::copy_job_cache_into(&managed.data_dir);
     // The launch names this file as tor's torrc, defaults torrc and both GeoIP files.
     // Tor refuses a named torrc that does not exist. Rewritten on every spawn, and
     // never by following a symlink or truncating a hard link.

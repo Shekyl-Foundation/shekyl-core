@@ -56,6 +56,7 @@ use shekyl_tor_control_client::control::{
     OnionFlags, OnionPort, OnionPow, ServiceId, SocksPort, TorControlClient,
     TorControlClientConfig, TorExit, TorLaunch, WaitReadyError,
 };
+use shekyl_tor_control_client::directory_cache;
 use shekyl_tor_control_client::onion_identity::OnionIdentity;
 
 use crate::data_dir::EphemeralDataDir;
@@ -233,6 +234,12 @@ pub struct DaemonTorControl {
     /// Set when [`Self::shutdown`] begins, so [`Self::death`] can tell that
     /// stop from Tor exiting on its own.
     stopping: Arc<AtomicBool>,
+    /// Names copied from the public directory cache into this boot. Empty
+    /// when that cache was missing or refused.
+    copied: Vec<&'static str>,
+    /// Set once Tor has reported bootstrap complete. Only a clean stop after
+    /// that writes the cache back.
+    bootstrapped: bool,
     /// Declared last so a plain drop wipes the directory after the actor
     /// (and therefore the child) has been dropped.
     data_dir: Option<EphemeralDataDir>,
@@ -252,6 +259,9 @@ impl DaemonTorControl {
         } = config;
 
         let data_dir = EphemeralDataDir::create_under(&data_dir_parent)
+            .map_err(DaemonTorStartError::DataDir)?;
+        let cache_dir = data_dir_parent.join(crate::data_dir::CACHE_DIR_NAME);
+        let copied = directory_cache::copy_into(&cache_dir, data_dir.path())
             .map_err(DaemonTorStartError::DataDir)?;
 
         // Spawn the incarnation with a wired exit observer — teardown awaits it
@@ -275,12 +285,14 @@ impl DaemonTorControl {
             socks_addr: SocketAddr::from(([127, 0, 0, 1], 0)),
             reply_deadline,
             stopping: Arc::new(AtomicBool::new(false)),
+            copied,
+            bootstrapped: false,
             data_dir: Some(data_dir),
         };
 
         let deadline = tokio::time::Instant::now() + bootstrap_deadline;
         match wait_until_ready(&handle.actor, &mut ready_rx, deadline).await {
-            Ok(()) => {}
+            Ok(()) => handle.bootstrapped = true,
             Err(WaitReadyError::Timeout) => {
                 handle.teardown().await;
                 return Err(DaemonTorStartError::BootstrapTimeout);
@@ -446,11 +458,40 @@ impl DaemonTorControl {
                 None
             }
         };
+        // After the reap, before the directory goes away. A crash (Tor died,
+        // or we had to kill it) saves nothing: the previous cache stays.
+        if self.bootstrapped {
+            if let (Some(TorExit::Reaped(_)), Some(dir)) = (&exit, self.data_dir.as_ref()) {
+                save_directory_cache(dir.path());
+            }
+        }
         if let Some(dir) = self.data_dir.take() {
             dir.wipe();
         }
         exit
     }
+
+    /// The cache files copied into this boot's directory. Empty when the
+    /// cache was missing or every file was refused.
+    #[must_use]
+    pub fn directory_cache_copied(&self) -> &[&'static str] {
+        &self.copied
+    }
+}
+
+/// Write the public directory cache back from a boot that reached the
+/// network and was stopped by us. A failure leaves the previous files.
+fn save_directory_cache(data_dir: &std::path::Path) {
+    let Some(parent) = data_dir.parent() else {
+        return;
+    };
+    let cache = parent.join(crate::data_dir::CACHE_DIR_NAME);
+    if directory_cache::ensure_directory(&cache).is_err() {
+        return;
+    }
+    drop(directory_cache::save_from(data_dir, &cache));
+    #[cfg(test)]
+    directory_cache::save_job_cache_from(data_dir);
 }
 
 #[cfg(test)]
@@ -538,16 +579,22 @@ mod tests {
     /// refusals against the live handle: a routable target is refused before
     /// any control traffic (hard invariant: the onion must not forward to a
     /// routable address), and the refusal does not disturb the incarnation.
-    /// After shutdown the DataDirectory is gone — no guard state survives.
+    /// After shutdown the per-boot DataDirectory is gone. The public directory
+    /// cache remains, and the next boot in that parent copies it.
     #[tokio::test]
     #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (bootstraps twice, network)"]
     async fn ephemeral_onion_publishes_and_rotates_across_boots() {
         let binary = VerifiedTorBinary::unchecked_for_test(tor_binary());
 
-        let dir1 = tempfile::tempdir().unwrap();
-        let boot1 = DaemonTorControl::start(config_with(binary.clone(), dir1.path().to_path_buf()))
-            .await
-            .expect("first boot start");
+        let parent = tempfile::tempdir().unwrap();
+        let boot1 =
+            DaemonTorControl::start(config_with(binary.clone(), parent.path().to_path_buf()))
+                .await
+                .expect("first boot start");
+        assert!(
+            boot1.directory_cache_copied().is_empty(),
+            "a fresh parent copies no directory cache"
+        );
         assert!(boot1.is_alive());
         assert!(boot1.socks_addr().ip().is_loopback());
 
@@ -579,19 +626,15 @@ mod tests {
         assert_eq!(first_id.as_str().len(), 56);
         let exit = boot1.shutdown().await;
         assert!(exit.is_some(), "teardown must observe a real reap");
-        let leftovers: Vec<_> = std::fs::read_dir(dir1.path())
-            .unwrap()
-            .filter_map(std::result::Result::ok)
-            .collect();
-        assert!(
-            leftovers.is_empty(),
-            "shutdown must wipe the per-boot DataDirectory, leftover: {leftovers:?}"
-        );
+        assert_only_directory_cache(parent.path());
 
-        let dir2 = tempfile::tempdir().unwrap();
-        let boot2 = DaemonTorControl::start(config_with(binary, dir2.path().to_path_buf()))
+        let boot2 = DaemonTorControl::start(config_with(binary, parent.path().to_path_buf()))
             .await
             .expect("second boot start");
+        assert!(
+            !boot2.directory_cache_copied().is_empty(),
+            "the second boot copies the cache the first stop saved"
+        );
         let second_id = boot2
             .publish(
                 18080,
@@ -607,6 +650,68 @@ mod tests {
             "a new boot mints a new key and therefore a new address"
         );
         boot2.shutdown().await;
+    }
+
+    /// The one cold start. It fails if the job cache already holds a directory
+    /// file, which is how the lane keeps every later live test seeded from
+    /// this run and this run only.
+    #[tokio::test]
+    #[ignore = "requires a Tor binary via SHEKYL_TEST_TOR_BINARY (one cold bootstrap, network)"]
+    async fn a_cold_boot_saves_the_public_directory_cache() {
+        if let Some(cache) = std::env::var_os("SHEKYL_TEST_TOR_DIRECTORY_CACHE") {
+            let cache = std::path::PathBuf::from(&cache);
+            for file in shekyl_tor_control_client::directory_cache::FILES {
+                assert!(
+                    !cache.join(file.name).exists(),
+                    "this boot is the job's cold start; {} is already seeded",
+                    file.name
+                );
+            }
+        }
+        let binary = VerifiedTorBinary::unchecked_for_test(tor_binary());
+        let parent = tempfile::tempdir().unwrap();
+        let boot = DaemonTorControl::start(config_with(binary, parent.path().to_path_buf()))
+            .await
+            .expect("cold start");
+        assert!(
+            boot.directory_cache_copied().is_empty(),
+            "the cold boot has nothing to copy"
+        );
+        assert!(
+            boot.shutdown().await.is_some(),
+            "the stop observes a real reap"
+        );
+        assert_only_directory_cache(parent.path());
+        if let Some(cache) = std::env::var_os("SHEKYL_TEST_TOR_DIRECTORY_CACHE") {
+            let cache = std::path::PathBuf::from(cache);
+            let seeded = shekyl_tor_control_client::directory_cache::FILES
+                .iter()
+                .any(|file| cache.join(file.name).is_file());
+            assert!(seeded, "the cold stop writes the job cache");
+            assert!(!cache.join("state").exists());
+        }
+    }
+
+    fn assert_only_directory_cache(parent: &std::path::Path) {
+        let mut names: Vec<_> = std::fs::read_dir(parent)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![std::ffi::OsString::from(crate::data_dir::CACHE_DIR_NAME)],
+            "shutdown wipes the per-boot directory and leaves the cache"
+        );
+        let cache = parent.join(crate::data_dir::CACHE_DIR_NAME);
+        assert!(!cache.join("state").exists(), "state is not a cache file");
+        let kept = shekyl_tor_control_client::directory_cache::FILES
+            .iter()
+            .any(|file| cache.join(file.name).is_file());
+        assert!(
+            kept,
+            "a bootstrapped stop saves at least one directory file"
+        );
     }
 
     /// The tor process launched with `dir` as its DataDirectory parent.

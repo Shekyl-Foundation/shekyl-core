@@ -14,9 +14,13 @@
 //! proof-of-work enabled (D10.4), uses the
 //! returned `ServiceID` as its overlay inbound address, and tears the service
 //! down with the process. Restarting the daemon yields a **new key and a new
-//! address**. Nothing is persisted; there is no durable name to seize, and no
-//! vanguard state — vanguards defend a *durable* address's guard circuits, and
-//! an address that dies with the boot has nothing durable to defend.
+//! address**. Nothing identity-bearing is persisted. Tor's public directory
+//! files are the exception (`TSR-Q8`): `cached-microdesc-consensus`,
+//! `cached-microdescs`, `cached-microdescs.new` and `cached-certs` live in
+//! `tor-directory-cache`, and guards, keys and the onion do not. There is no
+//! durable name to seize, and no vanguard state — vanguards defend a
+//! *durable* address's guard circuits, and an address that dies with the boot
+//! has nothing durable to defend.
 //!
 //! The Tor process itself is **managed** (PWD-E9, MANAGED ruling): this crate
 //! spawns its own pinned tor via the client crate's launch path rather than
@@ -24,7 +28,8 @@
 //! reaches is not a default. Its `DataDirectory` is a unique 0700 subdirectory
 //! of a caller-named parent, wiped on teardown, so a restart cannot reuse
 //! entry guards (the wallet supervisor keeps a durable directory; this crate
-//! must not). The operator-provisioned stable posture (`--anonymous-inbound`
+//! must not). The directory cache beside it is not that directory, and Tor is
+//! never pointed at it. The operator-provisioned stable posture (`--anonymous-inbound`
 //! with a torrc-configured hidden service) remains available and is untouched
 //! by this crate.
 //!
