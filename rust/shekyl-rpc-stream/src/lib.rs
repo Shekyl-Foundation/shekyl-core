@@ -12,7 +12,7 @@
 //! [`ClassedRecord`] halves and a transport:
 //!
 //! - **Writing combines bytes until a flush** (RT-P5's registered flush
-//!   policy). [`message`] decides the cut. An ordinary record is cut when
+//!   policy). The private `message` module decides the cut. An ordinary record is cut when
 //!   the next byte would start another record, or at the flush. A full
 //!   record is the largest class; the bytes left at a flush go in the
 //!   smallest class that holds them. A flush ends its message: a write
