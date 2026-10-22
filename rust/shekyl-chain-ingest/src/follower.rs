@@ -25,16 +25,17 @@
 //!
 //! **The found-block sink.** A found block enters through the service's
 //! one door as a local arrival. A full window waits for the reserved seat
-//! instead of dropping the block. A closed door drops it: the node is
-//! stopping.
+//! instead of dropping the block. A closed door drops it. The service
+//! closes the inbox on the way out, so the sink ends while a sender still
+//! lives, and the thread is joined only after it has left the door.
 
 use std::collections::BTreeMap;
-use std::sync::{mpsc, Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use shekyl_chain_rules::{Fault, HeaderView, InvalidBlock, StatelessPass, Substrate, Tip};
 use shekyl_chain_store::store::{SnapshotView, StoreError};
 use shekyl_mempool::{stateless, PoolFault};
-use shekyl_miner::{Found, Generation, Job, JobBoard};
+use shekyl_miner::{FoundInbox, Generation, Job, JobBoard};
 use shekyl_types::TxHash;
 use shekyl_wire::{Block, Transaction};
 use tokio::sync::watch;
@@ -54,23 +55,37 @@ pub trait TemplateSource: Send + Sync + 'static {
     fn template(&self, facts: &ChainFacts) -> Option<(Block, Vec<Transaction>)>;
 }
 
-/// The miner, as the attendant feeds it.
+/// The miner, once one exists, and the sync owner it reads.
 pub struct MinerFeed {
-    /// The board the miner's workers read.
-    pub board: Arc<JobBoard>,
     /// What each job's block is.
     pub source: Arc<dyn TemplateSource>,
     /// Whether the node is synced: the sync owner's. While it reads
-    /// `false`, the board is withdrawn.
+    /// `false`, the board is withdrawn on each pass.
     pub synced: watch::Receiver<bool>,
-    /// The miner's found-block channel.
-    pub found: mpsc::Receiver<Found>,
+    /// Where found blocks arrive. Closed when the service stops, which
+    /// ends the sink while a sender still lives. The last sender dropping
+    /// ends it too.
+    pub found: FoundInbox,
+}
+
+/// A board the attendant holds, and the miner when one is seated.
+///
+/// A seat with no miner is the node before a miner exists: the board is
+/// withdrawn when the attendant ends, and nothing is posted in between.
+pub struct JobSeat {
+    /// The board the miner's workers read.
+    pub board: Arc<JobBoard>,
+    /// The miner and its sync owner. `None` until both exist.
+    pub miner: Option<MinerFeed>,
 }
 
 /// Jobs kept for the found-block sink: a found block's generation names
 /// the bodies it was built with. A miner finds for the newest posting, so
 /// only the last few are ever asked for.
 const KEPT_JOBS: usize = 8;
+
+/// The found-block sink's thread. Short enough for a platform thread name.
+const FOUND_SINK_THREAD: &str = "shekyl-found";
 
 /// Each posted generation's listed bodies.
 pub(crate) type Postings = Arc<Mutex<BTreeMap<Generation, Vec<Transaction>>>>;
@@ -92,30 +107,62 @@ impl Drop for BoardGuard {
     }
 }
 
+/// The miner half of a seat, once the inbox has been handed to the sink.
+struct SeatedMiner {
+    source: Arc<dyn TemplateSource>,
+    synced: Option<watch::Receiver<bool>>,
+}
+
+/// The sink thread, the inbox that closes it, and the signal it sends
+/// when it leaves the loop. The await on `done` yields before the join,
+/// so a ticket the sink holds can be answered by the service task.
+struct SinkJoin {
+    thread: std::thread::JoinHandle<()>,
+    inbox: FoundInbox,
+    done: tokio::sync::oneshot::Receiver<()>,
+}
+
 /// Run the attendant until the service stops (module docs).
 pub(crate) async fn follow<S>(
     shared: Arc<Shared<S>>,
     door: Door,
     mut tips: watch::Receiver<TipChanged>,
-    feed: Option<MinerFeed>,
+    job: Option<JobSeat>,
 ) where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
     let postings: Postings = Arc::new(Mutex::new(BTreeMap::new()));
-    let (miner, mut synced, sink) = match feed {
-        Some(MinerFeed {
+    let (board, mut miner, sink) = match job {
+        Some(JobSeat {
             board,
-            source,
-            synced,
-            found,
+            miner:
+                Some(MinerFeed {
+                    source,
+                    synced,
+                    found,
+                }),
         }) => {
-            let sink = spawn_sink(found, door, Arc::clone(&postings));
-            (Some((board, source)), Some(synced), Some(sink))
+            let inbox = found.clone();
+            let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+            let thread = spawn_sink(found, door.clone(), Arc::clone(&postings), done_tx);
+            (
+                Some(board),
+                Some(SeatedMiner {
+                    source,
+                    synced: Some(synced),
+                }),
+                Some(SinkJoin {
+                    thread,
+                    inbox,
+                    done: done_rx,
+                }),
+            )
         }
+        Some(JobSeat { board, miner: None }) => (Some(board), None, None),
         None => (None, None, None),
     };
-    let _board = BoardGuard::hold(miner.as_ref().map(|(board, _)| Arc::clone(board)));
+    let _board = BoardGuard::hold(board.clone());
     let mut stopping = shared.stop_signal();
     loop {
         if shared.stopping() {
@@ -135,18 +182,21 @@ pub(crate) async fn follow<S>(
         if shared.stopping() {
             break;
         }
-        if let Some((board, source)) = &miner {
-            let is_synced = synced.as_mut().is_some_and(|s| *s.borrow_and_update());
+        if let (Some(board), Some(seated)) = (&board, miner.as_mut()) {
+            let is_synced = seated
+                .synced
+                .as_mut()
+                .is_some_and(|s| *s.borrow_and_update());
             if is_synced {
-                post(&shared, board, source.as_ref(), &postings).await;
+                post(&shared, board, seated.source.as_ref(), &postings).await;
             } else {
                 board.withdraw();
             }
         }
         shared.followed(tip.seq);
         let sync_changed = async {
-            match synced.as_mut() {
-                Some(s) => s.changed().await.is_err(),
+            match miner.as_mut().and_then(|seated| seated.synced.as_mut()) {
+                Some(synced) => synced.changed().await.is_err(),
                 None => std::future::pending().await,
             }
         };
@@ -155,12 +205,35 @@ pub(crate) async fn follow<S>(
             // The sync owner is gone: nothing says this node is synced
             // any more. That is "behind" — the job is withdrawn on the
             // next pass — not a reason to stop following the chain.
-            closed = sync_changed => if closed { synced = None },
+            closed = sync_changed => if closed {
+                if let Some(seated) = miner.as_mut() {
+                    seated.synced = None;
+                }
+            },
             () = shared.pending_ready().notified() => {}
             _ = stopping.wait_for(|stop| *stop) => break,
         }
     }
-    drop(sink);
+    door.close();
+    if let Some(SinkJoin {
+        thread,
+        inbox,
+        done,
+    }) = sink
+    {
+        // Close the inbox before waiting, so a sink blocked in `recv`
+        // wakes while a sender still lives. The wait yields this task:
+        // the service task can then drop a queued arrival, which answers
+        // a sink blocked in `blocking_reply`. The join is after that
+        // answer, so it does not occupy the worker the reply needs.
+        inbox.close();
+        if done.await.is_err() {
+            tracing::error!("the found-block sink ended without signalling");
+        }
+        if thread.join().is_err() {
+            tracing::error!("the found-block sink panicked");
+        }
+    }
 }
 
 /// Step 1 for transactions judged outside the pool lock.
@@ -368,48 +441,67 @@ fn say_mined(reply: &crate::service::Reply) {
     }
 }
 
-/// The found-block sink. A full window waits for the reserved seat. A
-/// closed door drops the block: the node is stopping.
+/// Sends when the sink leaves its loop, including by a panic.
+struct SignalDone(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl Drop for SignalDone {
+    fn drop(&mut self) {
+        if let Some(done) = self.0.take() {
+            let _sent = done.send(());
+        }
+    }
+}
+
+/// The found-block sink. It ends when the inbox closes or the last sender
+/// drops, and the queue is empty. A full window waits for the reserved
+/// seat. A closed door drops the block and the loop goes back to `recv`.
 pub(crate) fn spawn_sink(
-    found: mpsc::Receiver<Found>,
+    found: FoundInbox,
     door: Door,
     postings: Postings,
+    done: tokio::sync::oneshot::Sender<()>,
 ) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        while let Ok(found) = found.recv() {
-            let bodies = postings
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(&found.generation)
-                .cloned()
-                .unwrap_or_default();
-            let arrival = Arrival {
-                tag: ArrivalTag(found.generation.to_raw()),
-                origin: Origin::Local,
-                block: found.block.serialize(),
-                bodies: bodies.iter().map(Transaction::serialize).collect(),
-            };
-            // A full window waits for the local seat. A closed door is a
-            // stopping service. Anything else is this node's own block not
-            // joining the chain, and it is said once.
-            loop {
-                if door.is_closed() {
-                    break;
-                }
-                match door.offer(arrival.clone()) {
-                    Ok(ticket) => {
-                        say_mined(&ticket.blocking_reply().reply);
-                        break;
-                    }
-                    Err(crate::service::Refusal::NoRoom) => door.wait_for_local_seat(),
-                    Err(refused) => {
-                        tracing::error!(
-                            "a block this node mined was not accepted at the door: {refused:?}"
-                        );
-                        break;
+    std::thread::Builder::new()
+        .name(FOUND_SINK_THREAD.to_owned())
+        .spawn(move || {
+            let _done = SignalDone(Some(done));
+            while let Some(found) = found.recv() {
+                let bodies = postings
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(&found.generation)
+                    .cloned()
+                    .unwrap_or_default();
+                let arrival = Arrival {
+                    tag: ArrivalTag(found.generation.to_raw()),
+                    origin: Origin::Local,
+                    block: found.block.serialize(),
+                    bodies: bodies.iter().map(Transaction::serialize).collect(),
+                };
+                // A full window waits for the local seat. A closed door wakes
+                // that wait and the offer is refused; the block is dropped.
+                // Anything else is this node's own block not joining the chain,
+                // and it is said once.
+                loop {
+                    match door.offer(arrival.clone()) {
+                        Ok(ticket) => {
+                            say_mined(&ticket.blocking_reply().reply);
+                            break;
+                        }
+                        Err(crate::service::Refusal::NoRoom) => {
+                            if !door.wait_for_local_seat() {
+                                break;
+                            }
+                        }
+                        Err(refused) => {
+                            tracing::error!(
+                                "a block this node mined was not accepted at the door: {refused:?}"
+                            );
+                            break;
+                        }
                     }
                 }
             }
-        }
-    })
+        })
+        .expect("the found-block sink starts")
 }

@@ -136,6 +136,21 @@ pub fn is_banned_permanently(host: IpAddr) -> bool {
     )
 }
 
+/// Whether `host` is banned at the process clock.
+///
+/// A bound hub answers from the table it was built with. With no hub, the
+/// process table answers, and a deadline that has passed is not a ban: the
+/// lookup drops it. A permanent ban is in force at every tick. This is a
+/// read; it closes nothing.
+#[must_use]
+pub fn host_is_banned(host: IpAddr) -> bool {
+    if let Some(hub) = hub() {
+        hub.is_banned(host)
+    } else {
+        process_sockets().is_banned(host, ban_now())
+    }
+}
+
 /// Bans `host` for the life of the process: the ban file's host entries.
 pub fn ban_host_permanent(host: IpAddr) {
     if let Some(hub) = hub() {

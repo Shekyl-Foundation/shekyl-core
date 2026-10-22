@@ -419,8 +419,8 @@ impl HybridEd25519MlDsa {
     }
 
     /// Deterministic nested sign for iai benches / KATs. Same nesting as
-    /// [`SignatureScheme::sign`] via [`Self::sign_nested`]; only the PQ half
-    /// uses a fixed seed (stable instruction counts).
+    /// [`SignatureScheme::sign`]; only the PQ half uses a fixed seed (stable
+    /// instruction counts).
     pub fn sign_with_ml_dsa_seed(
         &self,
         secret_key: &HybridSecretKey,

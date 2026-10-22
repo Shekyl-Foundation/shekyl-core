@@ -12,6 +12,7 @@
 //! starts logging, makes the announcements, installs the one signal owner,
 //! fills the snapshot and calls the remnant's `run` on a thread of its own.
 //! Stop is one path: the dialer and the zone host, then the RPC, then the
+//! node (the connector finishes its message and the store closes), then the
 //! remnant's `stop` (only when `run` has not finished) together with the
 //! managed Tor's teardown. The lock is released last. A refusal exits with
 //! 2, a runtime failure with 1, and `run`'s status becomes the exit status
@@ -154,6 +155,35 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     lines.push(announce::posture(&config));
     announce_all(&config.logging.file, &lines);
 
+    // The node, after the marker and before the remnant's run (DX-Q6).
+    // Its socket table is the process table, installed before `record`
+    // writes the ban file onto it and before the zone server binds.
+    let node = match shekyl_node::Node::open(shekyl_node::OpenArgs {
+        config: &config,
+        version: version_full.clone(),
+        protocol_version: u64::from(entry.protocol_version),
+        // Not the C++ `release_build` flag. This feeds only the staged
+        // identity the handles carry. The flip decides the one definition.
+        release_build: !cfg!(debug_assertions),
+        request_stop: Arc::new(signals::request_stop),
+    }) {
+        Ok(node) => node,
+        Err(error) => {
+            tell(
+                &mut std::io::stderr(),
+                &format!("shekyld: the node did not start: {error}"),
+            );
+            return EXIT_FAILED;
+        }
+    };
+    if !shekyl_ffi::seam_ffi::install_process_sockets(node.sockets()) {
+        tell(
+            &mut std::io::stderr(),
+            "shekyld: a zone hub is already bound, so the node's socket table cannot replace it",
+        );
+        return EXIT_FAILED;
+    }
+
     // Step 6: what the owners read at their build, before the remnant
     // binds the seam. The schedule levers are recorded here, before the
     // core whose first epoch arithmetic would latch them exists; a value
@@ -204,7 +234,7 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     // The options handle: the resolved values, the runtime rows' owners
     // behind the RPC's two methods (§2.7).
     let options: OptionsHandle = Arc::new(DaemonOptions::new(resolved.clone(), network));
-    let status = supervise(entry, &config, &pool, network_id, options);
+    let status = supervise(entry, &config, &pool, network_id, options, node);
     pool.shutdown_background();
     drop(lock);
     // Last: every sink is a queue, and the lines logged up to here (the
@@ -246,7 +276,9 @@ fn supervise(
     pool: &shekyl_runtime::Pool,
     network_id: [u8; 16],
     options: OptionsHandle,
+    node: shekyl_node::Node,
 ) -> i32 {
+    let handles = node.handles();
     let Some(run) = entry.run else {
         tell(&mut std::io::stderr(), "shekyld: the entry has no run");
         return EXIT_FAILED;
@@ -255,8 +287,12 @@ fn supervise(
         tell(&mut std::io::stderr(), "shekyld: the entry has no stop");
         return EXIT_FAILED;
     };
-    let mut constructed =
-        shekyl_daemon_rpc::ffi_exports::configure(config.rpc.clone(), options, config.offline());
+    let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(
+        config.rpc.clone(),
+        options,
+        handles,
+        config.offline(),
+    );
     // Step 6: the notify runner, installed before the core that pushes to
     // it exists; its children run on the signal owner's runtime (§2.10).
     shekyl_ffi::notify_ffi::install(&config.notify, pool.handle().clone());
@@ -328,11 +364,14 @@ fn supervise(
                 return finish(
                     pool,
                     None,
-                    stop,
-                    thread,
-                    done_rx,
-                    run_status,
+                    RemnantJoin {
+                        stop,
+                        thread,
+                        done_rx,
+                        run_status,
+                    },
                     preserve_status,
+                    node,
                 );
             };
             tor_control = control;
@@ -371,28 +410,50 @@ fn supervise(
     finish(
         pool,
         tor_control,
-        stop,
-        thread,
-        done_rx,
-        run_status,
+        RemnantJoin {
+            stop,
+            thread,
+            done_rx,
+            run_status,
+        },
         preserve_status,
+        node,
     )
 }
 
-/// Step 9: the dialer and the zone host, then the RPC. The remnant's
-/// stop, asked only when `run` has not finished, then joins that thread
-/// while the managed Tor is torn down. Returns the exit status.
-fn finish(
-    pool: &shekyl_runtime::Pool,
-    tor_control: Option<shekyl_tor_control_daemon::DaemonTorControl>,
+/// The remnant half of step 9: its stop, the thread `run` is on, and the
+/// status that thread has already produced when it has finished.
+struct RemnantJoin {
     stop: crate::entry::StopFn,
     thread: std::thread::JoinHandle<()>,
     done_rx: Receiver<i32>,
     run_status: Option<i32>,
+}
+
+/// Step 9: the dialer and the zone host, then the RPC, then the node.
+/// The remnant's stop, asked only when `run` has not finished, then joins
+/// that thread while the managed Tor is torn down. The node is dropped
+/// after the dialer and the RPC, and before the remnant is joined: the
+/// connector finishes its message and the store closes before Tor is torn
+/// down (`TOR_SUPERVISOR.md` §1, DX-Q6). Returns the exit status.
+fn finish(
+    pool: &shekyl_runtime::Pool,
+    tor_control: Option<shekyl_tor_control_daemon::DaemonTorControl>,
+    remnant: RemnantJoin,
     preserve_status: bool,
+    node: shekyl_node::Node,
 ) -> i32 {
     network::stop();
     shekyl_daemon_rpc::ffi_exports::stop();
+    // Before the remnant join, not at the end of this function: Tor's
+    // teardown overlaps that join, and the store closes first.
+    drop(node);
+    let RemnantJoin {
+        stop,
+        thread,
+        done_rx,
+        run_status,
+    } = remnant;
     let joiner = std::thread::spawn(move || finish_remnant(stop, thread, done_rx, run_status));
     if let Some(control) = tor_control {
         let exit = pool.block_on(control.shutdown());
@@ -658,6 +719,8 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let d = tempfile::tempdir().unwrap();
+        let data = d.path().join("data");
+        let log = d.path().join("shekyld.log");
         let a = args(&[
             "--network",
             "regtest",
@@ -667,9 +730,21 @@ mod tests {
             "off",
             "--rpc-admin-listen",
             "none",
+            "--data-dir",
+            data.to_str().unwrap(),
+            "--log-file",
+            log.to_str().unwrap(),
         ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
         let config = load(cli, &host(d.path()).platform).unwrap().config;
+        let node = shekyl_node::Node::open(shekyl_node::OpenArgs {
+            config: &config,
+            version: "test".to_owned(),
+            protocol_version: u64::from(entry().protocol_version),
+            release_build: false,
+            request_stop: Arc::new(crate::signals::request_stop),
+        })
+        .expect("the node opens");
         let entry = ShekylDaemonEntry {
             run: Some(blocking_run),
             stop: Some(arming_stop),
@@ -692,6 +767,7 @@ mod tests {
             &pool,
             [3u8; 16],
             Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
+            node,
         );
         requester.join().unwrap();
         assert_eq!(status, 0, "run's status is the exit status");
@@ -704,7 +780,9 @@ mod tests {
     }
 
     /// The one test that starts a daemon: logging installs once per
-    /// process, so this is the only test that reaches it.
+    /// process, so this is the only test that reaches it. Red edit: build
+    /// the node after `network::record`, or return success when the node
+    /// fails to open. The fake remnant does not cover a live `shekyld`.
     #[test]
     fn a_daemon_start_locks_marks_logs_announces_and_runs_the_remnant() {
         let _serial = SERIAL

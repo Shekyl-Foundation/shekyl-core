@@ -475,7 +475,7 @@ impl crate::follower::TemplateSource for ScenarioSource {
 /// arrival and connects.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_block() {
-    use crate::follower::MinerFeed;
+    use crate::follower::{JobSeat, MinerFeed};
     use crate::service::{Arrival, ArrivalTag, Follow, Origin, Service, ServiceConfig};
     let _lane = MINER_LANE.lock().await;
     let caches = Arc::new(CacheStore::new());
@@ -514,11 +514,13 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
         ServiceConfig::default(),
         budget.clone(),
         Follow {
-            miner: Some(MinerFeed {
+            job: Some(JobSeat {
                 board: Arc::clone(&board),
-                source: Arc::new(source),
-                synced,
-                found,
+                miner: Some(MinerFeed {
+                    source: Arc::new(source),
+                    synced,
+                    found,
+                }),
             }),
             pool: None,
         },

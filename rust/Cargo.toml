@@ -424,6 +424,11 @@ members = [
     # shekyl-daemon-image.
     "shekyl-daemon",
 
+    # The daemon's one Node (DRS_X_STORE_FLIP.md DX-Q6, N1): the store, the
+    # ingest service, the pool, the hasher budget, the job board and the
+    # socket table. Nothing is routed from C++ until the store flip.
+    "shekyl-node",
+
     # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,
     # RANDOMX_V2_RUST.md). Consumed by shekyl-ffi (Phase 3); not the miner.
     "shekyl-pow-randomx",
