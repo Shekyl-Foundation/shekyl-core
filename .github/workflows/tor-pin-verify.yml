@@ -201,9 +201,10 @@ jobs:
       # Both point the pinned-tor var (pin-match KAT) and the any-tor var (live
       # lifecycle) at the same verified binary.
       #
-      # The cold boot writes this job's directory cache. Every later live test
-      # copies it in (`SHEKYL_TEST_TOR_DIRECTORY_CACHE`). One cold start stays:
-      # this step. The daemon suite below skips it, so its floor is unchanged.
+      # One cold start writes this job's directory cache, after Tor has been
+      # reaped. Every later live test copies that seed in
+      # (`SHEKYL_TEST_TOR_DIRECTORY_CACHE`). The daemon suite below skips
+      # this test, so its floor is unchanged.
       - name: seed the directory cache from one cold boot
         run: |
           set -o pipefail
@@ -217,7 +218,7 @@ jobs:
           SHEKYL_TEST_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
           SHEKYL_TEST_TOR_DIRECTORY_CACHE="$cache" \
             ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-daemon ignored-cold.out \
-              --exact a_cold_boot_saves_the_public_directory_cache
+              --exact ephemeral::tests::a_cold_boot_saves_the_public_directory_cache
           ../scripts/ci/require_live_tests.sh ignored-cold.out \
             ephemeral::tests::a_cold_boot_saves_the_public_directory_cache
           ../scripts/ci/check_no_orphan_tor.sh "$TOR_DIR/$TOR_EXE"
