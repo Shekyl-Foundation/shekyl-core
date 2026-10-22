@@ -45,8 +45,24 @@ pub enum SyncReply {
     Oversize,
 }
 
+/// Why the entry's refusal invalidates. An oversize announce closes the
+/// session and leaves the header. An oversize solicited body also
+/// invalidates the header it was bound to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Invalidate {
+    /// The body matched its header, and the block was refused.
+    Refused,
+    /// A promotion of an already-stored block was refused.
+    PromotionRefused,
+    /// Larger than any valid block.
+    Oversize {
+        /// Whether the header the body was bound to is invalid.
+        invalidate_header: bool,
+    },
+}
+
 /// What the sync model does. `severs` is true only for a refusal of the
-/// block, or an oversize solicited body.
+/// block, or an oversize body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyncReplyAction {
     /// Advance along the chain. `relay` is an announce that connected.
@@ -54,8 +70,8 @@ pub enum SyncReplyAction {
         /// Whether to relay the block.
         relay: bool,
     },
-    /// Mark the header and its subtree invalid, and close the supplier.
-    Invalidate,
+    /// Close the supplier. The payload says whether the header is invalid.
+    Invalidate(Invalidate),
     /// Ask that session for headers from the missing parent.
     Relocate,
     /// A hint only: request headers. Never the alarm.
@@ -80,15 +96,20 @@ impl SyncReply {
     pub const fn action(self, solicited: bool) -> SyncReplyAction {
         match self {
             Self::Connected => SyncReplyAction::Advance { relay: !solicited },
-            Self::Refused | Self::PromotionRefused | Self::Oversize => SyncReplyAction::Invalidate,
+            Self::Refused => SyncReplyAction::Invalidate(Invalidate::Refused),
+            Self::PromotionRefused => SyncReplyAction::Invalidate(Invalidate::PromotionRefused),
+            Self::Oversize => SyncReplyAction::Invalidate(Invalidate::Oversize {
+                invalidate_header: solicited,
+            }),
             Self::Unlinked => SyncReplyAction::Relocate,
             Self::BeyondCap => SyncReplyAction::RequestHeaders,
             Self::MissingBodies => SyncReplyAction::RequestMissing,
             Self::Cancelled | Self::Stopped => SyncReplyAction::Again,
             Self::NoRoom => SyncReplyAction::Hold,
             Self::Throttled => SyncReplyAction::DropUnverified,
-            // Solicited or announced: the body was bound to the header,
-            // or the announce is the block. Either way the header is invalid.
+            // Already held, stored beside the incumbent, switched, or a
+            // heavier chain this node cannot follow. The header stays.
+            // The new tip, or the latch, arrives on its own.
             Self::AlreadyHeld | Self::Held | Self::Switched | Self::CannotFollow => {
                 SyncReplyAction::None
             }
@@ -142,7 +163,7 @@ mod tests {
 
     impl SyncReplyAction {
         const fn severs_action(self) -> bool {
-            matches!(self, Self::Invalidate)
+            matches!(self, Self::Invalidate(_))
         }
     }
 
@@ -165,6 +186,23 @@ mod tests {
             SyncReplyAction::RequestHeaders
         );
         assert!(!SyncReply::BeyondCap.severs());
+    }
+
+    #[test]
+    fn an_oversize_solicited_body_invalidates_the_header_and_an_announce_does_not() {
+        assert_eq!(
+            SyncReply::Oversize.action(true),
+            SyncReplyAction::Invalidate(Invalidate::Oversize {
+                invalidate_header: true,
+            })
+        );
+        assert_eq!(
+            SyncReply::Oversize.action(false),
+            SyncReplyAction::Invalidate(Invalidate::Oversize {
+                invalidate_header: false,
+            })
+        );
+        assert!(SyncReply::Oversize.severs());
     }
 
     #[test]

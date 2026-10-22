@@ -26,8 +26,7 @@ use shekyl_pow_randomx::CacheStore;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 use shekyl_wire::{Block, BlockBody, PowBlob};
 
-use crate::model::{CloseCause, Event, ProveItem, Proved, Sync};
-use shekyl_peer_policy::SyncReply;
+use crate::model::{CloseCause, Event, Outcome, ProveItem, Proved, Sync};
 
 use crate::{Command, PeerClaim};
 
@@ -518,12 +517,12 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
             &view,
             Event::Entry {
                 tag: 0,
-                reply: SyncReply::Refused,
-                hash: refused_hash,
-                solicited: true,
-                at: BlockHash::NULL,
-                indices: Vec::new(),
-                verdict: None,
+                outcome: Outcome::Refused {
+                    verdict: InvalidBlock::new(
+                        shekyl_chain_rules::CenRow::G2,
+                        shekyl_chain_rules::Locus::Block,
+                    ),
+                },
             },
         );
         assert!(
@@ -537,12 +536,12 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
             &view,
             Event::Entry {
                 tag: second_tag,
-                reply: SyncReply::Refused,
-                hash: refused_hash,
-                solicited: true,
-                at: BlockHash::NULL,
-                indices: Vec::new(),
-                verdict: None,
+                outcome: Outcome::Refused {
+                    verdict: InvalidBlock::new(
+                        shekyl_chain_rules::CenRow::G2,
+                        shekyl_chain_rules::Locus::Block,
+                    ),
+                },
             },
         );
         let closed: Vec<u8> = refused

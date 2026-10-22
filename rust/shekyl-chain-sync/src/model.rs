@@ -3,7 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The machine. One owner, no clock of its own, no store.
+//! The coordinator. One owner, no clock of its own, no store.
+//!
+//! [`Sync`] looks at the set of [`crate::peer::Peer`] machines. It draws
+//! a peer, sizes a request, selects `H*`, and publishes the derived
+//! state. A peer's mode transition lives with the peer.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -14,11 +18,15 @@ use shekyl_chain_rules::{
 };
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::{bounded_uniform, RelayRng};
-use shekyl_levin::{BodiesFormFault, RequestBodies, RequestHeaders, HEADERS_RESPONSE_BYTES};
-use shekyl_peer_policy::SyncReply;
+use shekyl_levin::{
+    BodiesFormFault, RequestBodies, RequestHeaders, BODIES_RESPONSE_BYTES, HEADERS_RESPONSE_BYTES,
+};
+use shekyl_peer_policy::{Invalidate, SyncReply, SyncReplyAction};
 use shekyl_types::Timestamp;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 use shekyl_wire::BlockBody;
+
+use crate::peer::{HeaderRequest, Peer};
 
 #[cfg(test)]
 use crate::branch::BranchView;
@@ -34,7 +42,8 @@ use crate::tree::{HeaderTree, Star};
 /// response takes 256 seconds, which is slow for a single Tor stream and
 /// far below a clearnet rate, so an honest peer on Tor is not declared
 /// late and a stalled peer is not waited on for a LAN round trip. A body
-/// deadline uses the same rate on the bytes the request asked for.
+/// deadline is [`BODIES_RESPONSE_BYTES`] at this same rate. The request
+/// names hashes; the bytes the peer may send are that budget.
 ///
 /// Assumption, replaced by CS-Q11's measurement of bytes per second over
 /// Tor on the floor device. Split it only if that measurement shows the
@@ -48,6 +57,7 @@ pub const SYNC_RATE_FLOOR: u64 = 8 * 1024;
 pub const BODY_REQUESTS_IN_FLIGHT: usize = 4;
 
 const _: () = assert!(HEADERS_RESPONSE_BYTES / SYNC_RATE_FLOOR == 256);
+const _: () = assert!(BODIES_RESPONSE_BYTES / SYNC_RATE_FLOOR == 1024);
 
 /// What the connector hands the model.
 #[derive(Clone, Debug)]
@@ -93,22 +103,13 @@ pub enum Event<K> {
         /// The payload bytes.
         bytes: Vec<u8>,
     },
-    /// The entry's reply for one offered arrival.
+    /// The entry's reply for one offered arrival. The outcome names what
+    /// happened. The arrival's session and hash are the outstanding tag's.
     Entry {
         /// The tag `Offer` named.
         tag: u64,
-        /// The outcome, as [`SyncReply`].
-        reply: SyncReply,
-        /// The block.
-        hash: BlockHash,
-        /// Whether this node requested the body.
-        solicited: bool,
-        /// `Unlinked`'s missing parent. Null otherwise.
-        at: BlockHash,
-        /// `MissingBodies`' indices.
-        indices: Vec<u64>,
-        /// The refusal, when `reply` is a refusal.
-        verdict: Option<InvalidBlock>,
+        /// What the entry reported.
+        outcome: Outcome,
     },
     /// How many arrivals the entry can take.
     Room {
@@ -122,14 +123,13 @@ pub enum Event<K> {
         /// The request id.
         request: u64,
     },
-    /// An unsolicited block.
+    /// An unsolicited block. It proves beside any header run on this
+    /// session; it does not replace that run.
     Announce {
         /// The session.
         session: K,
-        /// The block bytes.
-        block: Vec<u8>,
-        /// The listed bodies it carried.
-        bodies: Vec<Vec<u8>>,
+        /// The block, its transactions, and its attestation witness.
+        body: BlockBody,
     },
     /// The executor's answer to a Prove command this model will issue.
     /// `job` is that command's job (§4.2). Matching it to a run, closing
@@ -299,41 +299,89 @@ pub struct BoundArrival<K> {
     pub body: BlockBody,
 }
 
-impl<K: PartialEq> PartialEq for Command<K> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Publish { state: a }, Self::Publish { state: b }) => a == b,
-            (
-                Self::RequestHeaders {
-                    session: a,
-                    request: b,
-                    deadline: c,
-                },
-                Self::RequestHeaders {
-                    session: d,
-                    request: e,
-                    deadline: f,
-                },
-            ) => a == d && b == e && c == f,
-            (Self::RequestComplement { session: a }, Self::RequestComplement { session: b }) => {
-                a == b
+/// What the entry did with one offered arrival.
+///
+/// A refusal carries the census row the entry named. The model does not
+/// invent one. `Connected.relay` is an announce; a body this node requested
+/// does not relay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The block connected. `relay` asks the coordinator to relay it.
+    Connected {
+        /// Whether to relay the block.
+        relay: bool,
+    },
+    /// The body matched its header, and the block was refused.
+    Refused {
+        /// The row the entry named.
+        verdict: InvalidBlock,
+    },
+    /// A promotion of an already-stored block was refused.
+    PromotionRefused {
+        /// The row the entry named.
+        verdict: InvalidBlock,
+    },
+    /// Larger than any valid block.
+    Oversize {
+        /// A solicited body invalidates its header. An announce does not.
+        invalidate: bool,
+    },
+    /// The parent chain reaches nothing this node holds.
+    Unlinked {
+        /// The missing parent.
+        at: BlockHash,
+    },
+    /// Deeper than the cap. Nothing was stored.
+    BeyondCap,
+    /// An announced block is missing transactions.
+    MissingBodies {
+        /// The missing indices.
+        indices: Vec<u64>,
+    },
+    /// Want the block again. The service cancelled or stopped.
+    Again,
+    /// The door had no room.
+    NoRoom,
+    /// An announce hit the unsolicited share.
+    Throttled,
+    /// Already held, stored beside the incumbent, switched, or unfollowable.
+    Noted,
+}
+
+impl Outcome {
+    /// CS-3's conversion from the entry's reply. A refusal that names no
+    /// verdict is `None`: this model does not invent a census row.
+    #[must_use]
+    pub fn from_reply(
+        reply: SyncReply,
+        solicited: bool,
+        at: BlockHash,
+        indices: Vec<u64>,
+        verdict: Option<InvalidBlock>,
+    ) -> Option<Self> {
+        match reply.action(solicited) {
+            SyncReplyAction::Advance { relay } => Some(Self::Connected { relay }),
+            SyncReplyAction::Invalidate(Invalidate::Refused) => {
+                verdict.map(|verdict| Self::Refused { verdict })
             }
-            (
-                Self::Close {
-                    session: a,
-                    cause: b,
-                },
-                Self::Close {
-                    session: c,
-                    cause: d,
-                },
-            ) => a == c && b == d,
-            _ => false,
+            SyncReplyAction::Invalidate(Invalidate::PromotionRefused) => {
+                verdict.map(|verdict| Self::PromotionRefused { verdict })
+            }
+            SyncReplyAction::Invalidate(Invalidate::Oversize { invalidate_header }) => {
+                Some(Self::Oversize {
+                    invalidate: invalidate_header,
+                })
+            }
+            SyncReplyAction::Relocate => Some(Self::Unlinked { at }),
+            SyncReplyAction::RequestHeaders => Some(Self::BeyondCap),
+            SyncReplyAction::RequestMissing => Some(Self::MissingBodies { indices }),
+            SyncReplyAction::Again => Some(Self::Again),
+            SyncReplyAction::Hold => Some(Self::NoRoom),
+            SyncReplyAction::DropUnverified => Some(Self::Throttled),
+            SyncReplyAction::None => Some(Self::Noted),
         }
     }
 }
-
-impl<K: Eq> Eq for Command<K> {}
 
 /// Why a session is closed. Each variant is a universal rule the input
 /// failed. A missed deadline is not one of them.
@@ -369,47 +417,20 @@ pub(crate) struct Local {
     pub(crate) work: CumulativeDifficulty,
 }
 
-/// One session. Its claim is a hint and is not read by [`Sync::state`].
-pub(crate) struct Session<K> {
-    pub transit: Duration,
-    pub claim: Option<PeerClaim>,
-    /// The highest block this session has named.
-    pub frontier: Option<(BlockHeight, BlockHash)>,
-    pub run: Option<crate::runs::Run>,
-    /// Not asked for headers again until its claim changes.
-    pub header_quiet: bool,
-    /// Missed a body deadline. A source again when `H*` changes.
-    pub body_excluded: bool,
-    pub unavailable: std::collections::BTreeSet<BlockHash>,
-    /// Held by the peer, past the body budget. Wanted again from any
-    /// session that covers the hash.
-    pub deferred: std::collections::BTreeSet<BlockHash>,
-    /// Served as a skeleton while the node keeps the full bytes.
-    /// Wanted again in full from another session. Not a fault.
-    pub skeleton: std::collections::BTreeSet<BlockHash>,
-    pub past_cap_followed: bool,
-    pub evidence_used: bool,
-    /// A header request for this session's own run, outside the `H*` draw.
-    pub continuation: Option<crate::runs::HeaderRequest<K>>,
-}
-
-/// The sync model.
+/// The coordinator. It holds one [`Peer`] per open session and the
+/// chain those peers are building. The long-run slot and the evidence
+/// check are modes of a peer, not fields beside the map.
 pub struct Sync<K, R> {
-    pub(crate) sessions: BTreeMap<K, Session<K>>,
+    pub(crate) peers: BTreeMap<K, Peer<K>>,
     /// A claim that arrived before its session opened.
     pub(crate) pending: BTreeMap<K, PeerClaim>,
     pub(crate) local: Option<Local>,
     pub(crate) tree: HeaderTree,
     /// `H*`: the local tip, or a heavier reachable tip in `T`.
     pub(crate) star: Star,
-    /// The header request that extends `H*`, if one is out.
-    pub(crate) header_request: Option<crate::runs::HeaderRequest<K>>,
-    /// Body requests in flight.
-    pub(crate) body_requests: Vec<crate::runs::BodyRequest<K>>,
-    /// The session holding the long-run slot.
-    pub(crate) slot: Option<K>,
-    /// The evidence check in flight.
-    pub(crate) evidence: Option<K>,
+    /// The one header request that extends `H*`, if one is out.
+    /// A peer's own follow-up lives on that peer.
+    pub(crate) header_request: Option<HeaderRequest<K>>,
     pub(crate) next_id: u64,
     pub(crate) next_tag: u64,
     /// Seats the entry last reported. None until the first `Room`.
@@ -445,15 +466,12 @@ where
     #[must_use]
     pub fn new(trust: Trust, rules: R) -> Self {
         Self {
-            sessions: BTreeMap::new(),
+            peers: BTreeMap::new(),
             pending: BTreeMap::new(),
             local: None,
             tree: HeaderTree::default(),
             star: Star::local(BlockHash::NULL, CumulativeDifficulty::ZERO),
             header_request: None,
-            body_requests: Vec::new(),
-            slot: None,
-            evidence: None,
             next_id: 1,
             next_tag: 1,
             seats: None,
@@ -493,12 +511,12 @@ where
         out: &mut Vec<Command<K>>,
     ) -> Result<(), ClaimError<H::Fault>> {
         let claim = claim::admit(claim).map_err(ClaimError::Refused)?;
-        if let Some(open) = self.sessions.get_mut(&session) {
+        if let Some(open) = self.peers.get_mut(&session) {
             let changed = open.claim != Some(claim);
             open.claim = Some(claim);
             if changed {
-                open.header_quiet = false;
-                open.past_cap_followed = false;
+                open.gates.header_quiet = false;
+                open.gates.past_cap_followed = false;
             }
         } else {
             self.pending.insert(session, claim);
@@ -510,7 +528,7 @@ where
     /// The derived state. A claim's value is not an input.
     #[must_use]
     pub fn state(&self) -> SyncState {
-        if self.sessions.is_empty() {
+        if self.peers.is_empty() {
             return SyncState::NoView;
         }
         let Some(local) = self.local else {
@@ -577,29 +595,57 @@ where
         self.tree.reset_visits();
     }
 
-    /// The session holding the long-run slot.
+    /// The peer whose run holds the long-run slot.
+    pub(crate) fn slot_holder(&self) -> Option<K> {
+        self.peers.iter().find_map(|(key, peer)| {
+            peer.run
+                .as_ref()
+                .is_some_and(crate::peer::Run::is_slot)
+                .then_some(*key)
+        })
+    }
+
+    /// The peer whose evidence check is in flight.
+    pub(crate) fn evidence_holder(&self) -> Option<K> {
+        self.peers.iter().find_map(|(key, peer)| {
+            peer.run
+                .as_ref()
+                .is_some_and(crate::peer::Run::is_evidence)
+                .then_some(*key)
+        })
+    }
+
+    /// Body spans the peers are serving.
+    pub(crate) fn spans_in_flight(&self) -> usize {
+        self.peers
+            .values()
+            .filter(|peer| peer.span.is_some())
+            .count()
+    }
+
+    /// The peer whose run holds the long-run slot.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn slot_session(&self) -> Option<K> {
-        self.slot
+        self.slot_holder()
     }
 
     /// Cheap-checked headers the session's run still holds.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn run_len(&self, session: K) -> usize {
-        self.sessions
+        self.peers
             .get(&session)
-            .and_then(|s| s.run.as_ref())
-            .map(|run| run.checked.len())
+            .and_then(|peer| peer.run.as_ref())
+            .map(|run| run.chain.checked.len())
             .unwrap_or(0)
     }
 
-    /// The session whose evidence check is in flight.
+    /// The peer whose evidence check is in flight.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn evidence_session(&self) -> Option<K> {
-        self.evidence
+        self.evidence_holder()
     }
 
     /// The run's cheap-checked headers, in order. A past-cap run keeps
@@ -607,11 +653,12 @@ where
     #[cfg(test)]
     #[must_use]
     pub(crate) fn run_records(&self, session: K) -> Vec<shekyl_chain_rules::HeaderRecord> {
-        self.sessions
+        self.peers
             .get(&session)
-            .and_then(|s| s.run.as_ref())
+            .and_then(|peer| peer.run.as_ref())
             .map(|run| {
-                run.checked
+                run.chain
+                    .checked
                     .iter()
                     .map(|c| shekyl_chain_rules::HeaderRecord {
                         hash: c.hash,
@@ -658,7 +705,7 @@ where
     /// The transit the session opened with.
     #[must_use]
     pub fn transit(&self, session: K) -> Option<Duration> {
-        self.sessions.get(&session).map(|s| s.transit)
+        self.peers.get(&session).map(|peer| peer.transit)
     }
 
     /// Apply one event. `main` is the chain as of `now`.
@@ -680,48 +727,12 @@ where
         match event {
             Event::SessionOpened { session, transit } => {
                 let claim = self.pending.remove(&session);
-                self.sessions.insert(
-                    session,
-                    Session {
-                        transit,
-                        claim,
-                        frontier: None,
-                        run: None,
-                        header_quiet: false,
-                        body_excluded: false,
-                        unavailable: std::collections::BTreeSet::new(),
-                        deferred: std::collections::BTreeSet::new(),
-                        skeleton: std::collections::BTreeSet::new(),
-                        past_cap_followed: false,
-                        evidence_used: false,
-                        continuation: None,
-                    },
-                );
+                self.peers.insert(session, Peer::open(transit, claim));
                 if self.local.is_none() {
                     self.observe(main, None)?;
                 }
             }
-            Event::SessionClosed { session } => {
-                self.sessions.remove(&session);
-                self.pending.remove(&session);
-                if self
-                    .header_request
-                    .as_ref()
-                    .is_some_and(|req| req.session == session)
-                {
-                    self.header_request = None;
-                }
-                self.body_requests.retain(|req| req.session != session);
-                self.outstanding
-                    .retain(|arrival| arrival.session != session);
-                self.held.retain(|arrival| arrival.session != session);
-                if self.slot == Some(session) {
-                    self.slot = None;
-                }
-                if self.evidence == Some(session) {
-                    self.evidence = None;
-                }
-            }
+            Event::SessionClosed { session } => self.release_session(session),
             Event::Tip { tip } => {
                 self.observe(main, Some(tip.height))?;
                 self.tree.connected(main, tip.height)?;
@@ -734,23 +745,9 @@ where
             }
             Event::Bodies { session, bytes } => self.on_bodies(session, &bytes, out),
             Event::Proven { job, results } => self.on_proven(main, job, &results, out)?,
-            Event::Entry {
-                tag,
-                reply,
-                hash,
-                solicited,
-                at,
-                indices,
-                verdict,
-            } => self.on_entry(
-                main, tag, reply, hash, solicited, at, &indices, verdict, now, out,
-            )?,
+            Event::Entry { tag, outcome } => self.on_entry(main, tag, outcome, now, out)?,
             Event::Room { seats } => self.on_room(seats, out),
-            Event::Announce {
-                session,
-                block,
-                bodies,
-            } => self.on_announce(main, session, &block, &bodies, out)?,
+            Event::Announce { session, body } => self.on_announce(main, session, &body, out)?,
         }
         let after = self.state();
         if after != before {
@@ -821,22 +818,17 @@ where
                 .select(main, Star::local(local.hash, local.work), local.height, cap)?;
         if self.star.hash != previous {
             self.header_request = None;
-            self.body_requests.clear();
-            for session in self.sessions.values_mut() {
-                session.body_excluded = false;
+            for peer in self.peers.values_mut() {
+                peer.span = None;
+                peer.gates.body_excluded = false;
             }
         }
         Ok(())
     }
 
     fn complement(&self, rng: &mut impl RelayRng, out: &mut Vec<Command<K>>) {
-        let sessions: Vec<K> = self.sessions.keys().copied().collect();
-        if sessions.is_empty() {
-            return;
-        }
-        let last = u64::try_from(sessions.len() - 1).unwrap_or(u64::MAX);
-        let index = usize::try_from(bounded_uniform(rng, last)).unwrap_or(0);
-        let Some(session) = sessions.get(index).copied() else {
+        let peers: Vec<K> = self.peers.keys().copied().collect();
+        let Some(session) = draw_one(rng, &peers) else {
             return;
         };
         out.push(Command::RequestComplement { session });
@@ -856,24 +848,17 @@ where
             return Ok(());
         }
         let sources: Vec<K> = self
-            .sessions
+            .peers
             .iter()
-            .filter(|(_, session)| {
-                !session.header_quiet
-                    && !session.past_cap_followed
-                    && session.continuation.is_none()
-                    && session
-                        .claim
-                        .is_some_and(|claim| claim.work > self.star.work)
+            .filter(|(_, peer)| {
+                !peer.gates.header_quiet
+                    && !peer.gates.past_cap_followed
+                    && peer.follow_up.is_none()
+                    && peer.claim.is_some_and(|claim| claim.work > self.star.work)
             })
             .map(|(session, _)| *session)
             .collect();
-        if sources.is_empty() {
-            return Ok(());
-        }
-        let last = u64::try_from(sources.len() - 1).unwrap_or(u64::MAX);
-        let index = usize::try_from(bounded_uniform(rng, last)).unwrap_or(0);
-        let Some(session) = sources.get(index).copied() else {
+        let Some(session) = draw_one(rng, &sources) else {
             return Ok(());
         };
         let points = self.locator_points(main)?;
@@ -886,13 +871,13 @@ where
             )
         })?;
         let transit = self
-            .sessions
+            .peers
             .get(&session)
-            .map(|session| session.transit)
+            .map(|peer| peer.transit)
             .unwrap_or_default();
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        self.header_request = Some(crate::runs::HeaderRequest {
+        self.header_request = Some(HeaderRequest {
             session,
             id,
             points,
@@ -961,426 +946,23 @@ pub(crate) fn header_deadline(now: Instant, transit: Duration) -> Instant {
         .unwrap_or(now)
 }
 
-#[cfg(test)]
-mod tests {
-    use std::convert::Infallible;
-    use std::time::Duration;
-
-    use core::num::NonZeroU128;
-
-    use shekyl_chain_rules::{
-        AtHeight, DifficultyRule, FakechainSchedule, HeaderRecord, HeaderView, RuleSet, Tip, Trust,
-    };
-    use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
-    use shekyl_draw_rng::RelayRng;
-    use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, ChainCount, CurveTreeRoot};
-    use shekyl_wire::BlockHeader;
-
-    use super::{Command, Event, Sync};
-    use crate::{ClaimError, PayloadRefused, PeerClaim, SyncState};
-
-    struct NoDraw;
-
-    impl RelayRng for NoDraw {
-        fn next_u64(&mut self) -> u64 {
-            0
-        }
-    }
-
-    struct Empty;
-
-    impl HeaderView<'static> for Empty {
-        type Fault = Infallible;
-
-        fn tip(&self) -> Result<Option<Tip>, Infallible> {
-            Ok(None)
-        }
-
-        fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
-            Ok(AtHeight::AboveTip)
-        }
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    struct StoreDown;
-
-    struct Faults;
-
-    impl HeaderView<'static> for Faults {
-        type Fault = StoreDown;
-
-        fn tip(&self) -> Result<Option<Tip>, StoreDown> {
-            Err(StoreDown)
-        }
-
-        fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreDown> {
-            Err(StoreDown)
-        }
-    }
-
-    fn issued(_: BlockHeight) -> RuleSet {
-        RuleSet::GENESIS
-    }
-
-    fn open<R: Fn(BlockHeight) -> RuleSet>(
-        sync: &mut Sync<u8, R>,
-        session: u8,
-    ) -> Vec<Command<u8>> {
-        let mut out = Vec::new();
-        sync.handle(
-            Event::SessionOpened {
-                session,
-                transit: Duration::from_secs(30),
-            },
-            &Empty,
-            std::time::Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("the view answers");
-        out
-    }
-
-    fn hint<R: Fn(BlockHeight) -> RuleSet>(
-        sync: &mut Sync<u8, R>,
-        peer: PeerClaim,
-    ) -> Result<(), ClaimError<Infallible>> {
-        let mut out = Vec::new();
-        sync.claim(
-            1,
-            peer,
-            &Empty,
-            std::time::Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-    }
-
-    fn claim(count: u64, work: u128) -> PeerClaim {
-        PeerClaim {
-            count: ChainCount::from_raw(count),
-            work: CumulativeDifficulty::from_raw(work),
-        }
-    }
-
-    #[test]
-    fn a_genesis_only_claim_is_admitted() {
-        let mut sync = Sync::new(Trust::UNANCHORED, issued);
-        // One block, target 1.
-        assert_eq!(hint(&mut sync, claim(1, 1)), Ok(()));
-        assert_eq!(sync.state(), SyncState::NoView);
-    }
-
-    #[test]
-    fn a_block_count_of_zero_is_refused() {
-        let mut sync = Sync::new(Trust::UNANCHORED, issued);
-        assert_eq!(
-            hint(&mut sync, claim(0, 1)),
-            Err(ClaimError::Refused(PayloadRefused::Height))
-        );
-        assert_eq!(
-            hint(&mut sync, claim(0, 0)),
-            Err(ClaimError::Refused(PayloadRefused::Height))
-        );
-    }
-
-    #[test]
-    fn work_below_the_block_count_is_refused() {
-        let mut sync = Sync::new(Trust::UNANCHORED, issued);
-        assert_eq!(
-            hint(&mut sync, claim(3, 2)),
-            Err(ClaimError::Refused(PayloadRefused::Work))
-        );
-        assert_eq!(hint(&mut sync, claim(3, 3)), Ok(()));
-    }
-
-    /// Height 0 is target 1 under a fixed target, and each later block is
-    /// the fixed target. That sum is an honest claim.
-    #[test]
-    fn a_regtest_fixed_target_admits_an_honest_claim() {
-        let fixed = NonZeroU128::new(7).expect("7");
-        let rules = RuleSet::fakechain(Some(fixed), FakechainSchedule::PRODUCTION);
-        let DifficultyRule::Fixed(target) = rules.difficulty() else {
-            panic!("the regtest set names a fixed target");
-        };
-        let per_block = target.difficulty().to_raw();
-        assert_eq!(per_block, 7);
-        let count = 3u64;
-        // Block 0 is `Target::GENESIS_BLOCK` (1) under Fixed, as under
-        // every rule set. The two blocks above it are the fixed target.
-        let work = 1 + u128::from(count - 1) * per_block;
-        assert!(
-            work < GENESIS_DIFFICULTY,
-            "this chain's work is the fixed targets, not the DAA constant"
-        );
-        let mut sync = Sync::new(Trust::UNANCHORED, issued);
-        assert_eq!(hint(&mut sync, claim(count, work)), Ok(()));
-    }
-
-    #[test]
-    fn a_claim_never_changes_the_state() {
-        let mut sync = Sync::new(Trust::UNANCHORED, issued);
-        let published = open(&mut sync, 1);
-        assert!(published.iter().any(|command| matches!(
-            command,
-            Command::Publish {
-                state: SyncState::Synced,
-            }
-        )));
-        assert!(published
-            .iter()
-            .any(|command| matches!(command, Command::RequestComplement { session: 1 })));
-        assert_eq!(sync.transit(1), Some(Duration::from_secs(30)));
-        hint(&mut sync, claim(9_000, u128::MAX)).unwrap();
-        assert_eq!(sync.state(), SyncState::Synced);
-    }
-
-    #[test]
-    fn the_last_session_closing_returns_to_no_view() {
-        let mut sync = Sync::new(Trust::UNANCHORED, issued);
-        open(&mut sync, 1);
-        open(&mut sync, 2);
-        let mut out = Vec::new();
-        sync.handle(
-            Event::SessionClosed { session: 1 },
-            &Empty,
-            std::time::Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("the view answers");
-        assert!(out.is_empty(), "one session still has a view");
-        sync.handle(
-            Event::SessionClosed { session: 2 },
-            &Empty,
-            std::time::Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("the view answers");
-        assert_eq!(
-            out,
-            vec![Command::Publish {
-                state: SyncState::NoView,
-            }]
-        );
-    }
-
-    #[test]
-    fn a_short_fill_is_following_and_the_latch_does_not_withhold_synced() {
-        let mut sync = Sync::new(Trust::UNANCHORED, issued);
-        open(&mut sync, 1);
-        let mut out = Vec::new();
-        sync.handle(
-            Event::Fill {
-                frontier: BlockHeight::from_raw(4),
-            },
-            &Empty,
-            std::time::Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("the view answers");
-        assert_eq!(
-            sync.state(),
-            SyncState::Following {
-                verified_to: BlockHeight::from_raw(4),
-            }
-        );
-        let published = out.len();
-        sync.handle(
-            Event::Latch { set: true },
-            &Empty,
-            std::time::Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("the view answers");
-        assert!(sync.alarm());
-        assert_eq!(out.len(), published, "the latch is not the state");
-        assert_eq!(
-            sync.state(),
-            SyncState::Following {
-                verified_to: BlockHeight::from_raw(4),
-            }
-        );
-        sync.handle(
-            Event::Fill {
-                frontier: BlockHeight::ZERO,
-            },
-            &Empty,
-            std::time::Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("the view answers");
-        assert_eq!(sync.state(), SyncState::Synced);
-    }
-
-    #[test]
-    fn a_store_fault_reaches_the_caller() {
-        let mut sync = Sync::new(Trust::UNANCHORED, issued);
-        let mut out = Vec::new();
-        let fault = sync
-            .handle(
-                Event::SessionOpened {
-                    session: 1,
-                    transit: Duration::from_secs(1),
-                },
-                &Faults,
-                std::time::Instant::now(),
-                &mut NoDraw,
-                &mut out,
-            )
-            .expect_err("tip's fault");
-        assert_eq!(fault, StoreDown);
-        assert!(out.is_empty(), "a failed read publishes nothing");
-
-        struct HeaderFaults;
-        impl HeaderView<'static> for HeaderFaults {
-            type Fault = StoreDown;
-            fn tip(&self) -> Result<Option<Tip>, StoreDown> {
-                Ok(Some(Tip {
-                    height: BlockHeight::from_raw(0),
-                    hash: BlockHash::from_bytes([1; 32]),
-                }))
-            }
-            fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreDown> {
-                Err(StoreDown)
-            }
-        }
-        let fault = sync
-            .handle(
-                Event::Tip {
-                    tip: Tip {
-                        height: BlockHeight::from_raw(0),
-                        hash: BlockHash::from_bytes([1; 32]),
-                    },
-                },
-                &HeaderFaults,
-                std::time::Instant::now(),
-                &mut NoDraw,
-                &mut out,
-            )
-            .expect_err("header_at's fault");
-        assert_eq!(fault, StoreDown);
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn a_tip_is_read_from_the_chain() {
-        struct One {
-            work: CumulativeDifficulty,
-        }
-
-        impl HeaderView<'static> for One {
-            type Fault = Infallible;
-
-            fn tip(&self) -> Result<Option<Tip>, Infallible> {
-                Ok(Some(Tip {
-                    height: BlockHeight::from_raw(3),
-                    hash: BlockHash::from_bytes([1; 32]),
-                }))
-            }
-
-            fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
-                if height != BlockHeight::from_raw(3) {
-                    return Ok(AtHeight::AboveTip);
-                }
-                Ok(AtHeight::Recorded(HeaderRecord {
-                    hash: BlockHash::from_bytes([1; 32]),
-                    header: BlockHeader {
-                        major_version: 1,
-                        minor_version: 0,
-                        timestamp: 1,
-                        previous: BlockHash::from_bytes([0; 32]),
-                        nonce: 0,
-                        curve_tree_root: CurveTreeRoot::from_bytes([0; 32]),
-                        attestation_root: AttestationRoot::from_bytes([0; 32]),
-                    },
-                    cumulative_difficulty: self.work,
-                }))
-            }
-        }
-
-        let mut sync = Sync::new(Trust::UNANCHORED, issued);
-        open(&mut sync, 1);
-        let mut out = Vec::new();
-        sync.handle(
-            Event::Tip {
-                tip: Tip {
-                    height: BlockHeight::from_raw(3),
-                    hash: BlockHash::from_bytes([1; 32]),
-                },
-            },
-            &One {
-                work: CumulativeDifficulty::from_raw(50),
-            },
-            std::time::Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        )
-        .expect("the view answers");
-        // The local chain is the best chain, so the state stays synced.
-        assert!(out.is_empty());
-        assert_eq!(sync.state(), SyncState::Synced);
-    }
-
-    /// One header request extends `H*`. A second source waits until that
-    /// request's session closes, and then it is drawn.
-    #[test]
-    fn one_header_request_extends_the_frontier() {
-        let mut sync = Sync::new(Trust::UNANCHORED, issued);
-        open(&mut sync, 1);
-        open(&mut sync, 2);
-        let mut out = Vec::new();
-        let mut rng = Words(vec![0, 0, 0]);
-        sync.claim(
-            1,
-            claim(2, 2),
-            &Empty,
-            std::time::Instant::now(),
-            &mut rng,
-            &mut out,
-        )
-        .unwrap();
-        assert_eq!(requests(&out), vec![1]);
-        out.clear();
-        sync.claim(
-            2,
-            claim(2, 3),
-            &Empty,
-            std::time::Instant::now(),
-            &mut rng,
-            &mut out,
-        )
-        .unwrap();
-        assert!(requests(&out).is_empty(), "a request is already out");
-        sync.handle(
-            Event::SessionClosed { session: 1 },
-            &Empty,
-            std::time::Instant::now(),
-            &mut rng,
-            &mut out,
-        )
-        .unwrap();
-        assert_eq!(requests(&out), vec![2]);
-    }
-
-    struct Words(Vec<u64>);
-
-    impl RelayRng for Words {
-        fn next_u64(&mut self) -> u64 {
-            self.0.remove(0)
-        }
-    }
-
-    fn requests(out: &[Command<u8>]) -> Vec<u8> {
-        out.iter()
-            .filter_map(|command| match command {
-                Command::RequestHeaders { session, .. } => Some(*session),
-                _ => None,
-            })
-            .collect()
-    }
+/// A body deadline is the body budget at [`SYNC_RATE_FLOOR`].
+pub(crate) fn body_deadline(now: Instant, transit: Duration) -> Instant {
+    let secs = BODIES_RESPONSE_BYTES / SYNC_RATE_FLOOR;
+    now.checked_add(transit.saturating_add(Duration::from_secs(secs)))
+        .unwrap_or(now)
 }
+
+/// One uniform draw. `None` when `items` is empty.
+pub(crate) fn draw_one<T: Copy>(rng: &mut impl RelayRng, items: &[T]) -> Option<T> {
+    if items.is_empty() {
+        return None;
+    }
+    let last = u64::try_from(items.len() - 1).unwrap_or(u64::MAX);
+    let index = usize::try_from(bounded_uniform(rng, last)).unwrap_or(0);
+    items.get(index).copied()
+}
+
+#[cfg(test)]
+#[path = "model_tests.rs"]
+mod tests;

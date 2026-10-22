@@ -23,12 +23,11 @@ use shekyl_chain_rules::{
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::PortableMap;
-use shekyl_peer_policy::SyncReply;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, Timestamp};
 use shekyl_wire::{BlockBody, PowBlob, SkeletonTx, TxBody};
 
 use crate::harness::UnitWork;
-use crate::model::{CloseCause, Event, Proved, Sync};
+use crate::model::{CloseCause, Event, Outcome, Proved, Sync};
 use crate::proof::{drive, fixed, headers_of, open_claim, prove_item, serialized};
 use crate::{Command, PeerClaim};
 
@@ -472,12 +471,7 @@ fn a_solicited_oversize_body_marks_the_header_and_closes() {
             view,
             Event::Entry {
                 tag,
-                reply: SyncReply::Oversize,
-                hash,
-                solicited: true,
-                at: BlockHash::NULL,
-                indices: Vec::new(),
-                verdict: None,
+                outcome: Outcome::Oversize { invalidate: true },
             },
         );
         assert!(
@@ -496,6 +490,35 @@ fn a_solicited_oversize_body_marks_the_header_and_closes() {
 }
 
 #[test]
+fn an_announced_oversize_body_closes_and_leaves_the_header() {
+    with_offer(|sync, view, tag, hash, _raw| {
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::Oversize { invalidate: false },
+            },
+        );
+        assert!(
+            out.iter().any(|command| matches!(
+                command,
+                Command::Close {
+                    cause: CloseCause::Oversize,
+                    ..
+                }
+            )),
+            "an oversize announce did not close: {out:?}"
+        );
+        assert!(
+            !sync.remembers_header(hash),
+            "an oversize announce invalidated the header"
+        );
+        assert!(sync.transit(1).is_none());
+    });
+}
+
+#[test]
 fn cancelled_and_stopped_ask_for_the_block_again() {
     with_offer(|sync, view, tag, hash, raw| {
         let out = drive(
@@ -503,12 +526,7 @@ fn cancelled_and_stopped_ask_for_the_block_again() {
             view,
             Event::Entry {
                 tag,
-                reply: SyncReply::Cancelled,
-                hash,
-                solicited: true,
-                at: BlockHash::NULL,
-                indices: Vec::new(),
-                verdict: None,
+                outcome: Outcome::Again,
             },
         );
         no_close(&out);
@@ -521,12 +539,7 @@ fn cancelled_and_stopped_ask_for_the_block_again() {
             view,
             Event::Entry {
                 tag,
-                reply: SyncReply::Stopped,
-                hash,
-                solicited: true,
-                at: BlockHash::NULL,
-                indices: Vec::new(),
-                verdict: None,
+                outcome: Outcome::Again,
             },
         );
         no_close(&out);
@@ -544,12 +557,7 @@ fn a_connected_announce_is_relayed() {
             view,
             Event::Entry {
                 tag,
-                reply: SyncReply::Connected,
-                hash,
-                solicited: false,
-                at: BlockHash::NULL,
-                indices: Vec::new(),
-                verdict: None,
+                outcome: Outcome::Connected { relay: true },
             },
         );
         assert!(

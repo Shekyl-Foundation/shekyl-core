@@ -67,4 +67,4 @@ pub use block_ingest::BlockIngest;
 pub use block_peer::{BlockAnnounceAction, BlockSyncAction};
 pub use drop_verdict::DropVerdict;
 pub use inbound_ceiling::{DescriptorLimit, DescriptorSnapshot, InboundCeiling, UnboundedReason};
-pub use sync_reply::{SyncReply, SyncReplyAction};
+pub use sync_reply::{Invalidate, SyncReply, SyncReplyAction};

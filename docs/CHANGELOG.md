@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- **Chain sync: the sync model selects by verified work.** `shekyl-chain-sync` judges a header on the branch of its parent, cheap-checks a run before any hash, and emits proof of work as a command. `HeaderJudged` carries that proof; a body bound to it is not hashed again. Nothing here is wired into the daemon.
+- **Chain sync: the sync model selects by verified work.** `shekyl-chain-sync` judges a header on the branch of its parent, cheap-checks a run before any hash, and emits proof of work as a command. `HeaderJudged` carries that proof; a body bound to it is not hashed again. A peer's run mode carries that mode's proof and the headers it withholds. A body span, a follow-up, and an announce sit beside the run. A body deadline is the body budget at the sync rate floor, and a span asks for at most `MAX_OBJECT_REQUEST_COUNT` objects. Nothing here is wired into the daemon.
 
 - **Chain sync: a sync payload's decode limits follow from its smallest element.** The limits landed with CS-1 were the byte cap, and the decoder allocates an array from the count the payload declares once that count is under the limit. A packet-sized body response of one-byte objects asked for about a hundred million sections. A header response's strings are at most its cap divided by the shortest preimage plus its length prefix, and it has no objects. A body response's objects are at most 100 bodies plus its cap divided by the smaller transaction section (`MIN_TX_SECTION_BYTES`). Strings and fields follow those two counts. A payload at the cap that declares more is refused before that allocation.
 
