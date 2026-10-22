@@ -55,6 +55,21 @@ use crate::READ_LEN_CAP;
 /// Genesis transaction version (kept deliberately; `V4` = future lattice-only).
 pub const TX_VERSION: u64 = 3;
 
+/// A canonical varint of a value below 128. Version 3, a zero count and a
+/// zero length are each one byte.
+const VARINT_BELOW_128: usize = 1;
+
+/// The shortest pruned segment [`Transaction::from_pruned_bytes`] accepts,
+/// and the shortest blob [`Transaction::from_bytes`] accepts: version 3, an
+/// empty prefix, and a null confidential section with no outputs. The base
+/// arrays are sized by the output count, so none of them is present.
+pub const MIN_PRUNED_SEGMENT: usize = VARINT_BELOW_128 // version
+    + VARINT_BELOW_128 // unlock time
+    + VARINT_BELOW_128 // input count
+    + VARINT_BELOW_128 // output count
+    + VARINT_BELOW_128 // extra length
+    + 1; // null ct type; the base contributes nothing
+
 // Genesis dense tag scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c)). Tags are
 // numbered dense from 0x00; matches the renumbered C++ oracle VARIANT_TAGs and ct enum.
 /// `txin_gen` tag — coinbase generation input.
@@ -2402,5 +2417,45 @@ impl core::ops::Deref for FullTransaction {
     type Target = Transaction;
     fn deref(&self) -> &Transaction {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod min_segment_tests {
+    use super::*;
+
+    fn empty_null() -> Transaction {
+        Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                extra: Vec::new(),
+            },
+            ct: Ct::Null(CtBase {
+                enc_amounts: Vec::new(),
+                enc_labels: Vec::new(),
+                commitments: Vec::new(),
+            }),
+        }
+    }
+
+    /// The empty null transaction is the shortest blob both entries accept.
+    #[test]
+    fn the_empty_null_transaction_is_the_minimum_segment() {
+        let bytes = empty_null().serialize();
+        assert_eq!(bytes.len(), MIN_PRUNED_SEGMENT);
+        assert_eq!(
+            Transaction::from_bytes(&bytes).expect("full").serialize(),
+            bytes
+        );
+        assert_eq!(
+            Transaction::from_pruned_bytes(&bytes)
+                .expect("pruned")
+                .serialize(),
+            bytes
+        );
+        assert!(Transaction::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+        assert!(Transaction::from_pruned_bytes(&bytes[..bytes.len() - 1]).is_err());
     }
 }
