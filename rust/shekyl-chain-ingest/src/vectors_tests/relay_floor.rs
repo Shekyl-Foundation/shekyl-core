@@ -116,7 +116,10 @@ async fn the_window_off_the_store_is_the_owner_over_its_rows() {
             let median = if height <= tip {
                 infos[at(height)].long_term_effective_median.to_raw()
             } else {
-                medians_over(&weights[..at(height)])
+                medians_over(
+                    &weights[..at(height)],
+                    &shekyl_economics::EconomicParams::default(),
+                )
                     .long_term_effective_median
                     .to_raw()
             };
