@@ -23,8 +23,8 @@ use shekyl_chain_rules::{
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_difficulty::{CumulativeDifficulty, FTL_SECONDS, GENESIS_DIFFICULTY};
 use shekyl_economics::{
-    price_emission, CirculatingSupply, ClosedShardCount, EconomicParams, EmissionInputs, TxVolume,
-    FULL_REWARD_ZONE,
+    price_emission, CirculatingSupply, ClosedShardCount, EconomicParams, EmissionError,
+    EmissionInputs, TxVolume, FULL_REWARD_ZONE,
 };
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, Timestamp};
 use shekyl_units::AtomicUnits;
@@ -974,15 +974,17 @@ fn bodies_at_the_fills_bound_build_a_block_within_the_limit() {
 }
 
 /// A fee that lengthens the coinbase amount's varint by one byte puts a
-/// block that was sized to the limit over it. The builder drops that body
-/// and the block it returns is within the limit.
+/// block sized to the lighter coinbase over the limit. The builder returns
+/// [`TemplateError::Emission`] of [`EmissionError::BlockTooBig`] and keeps
+/// the listing out of the template. A listing at the reserve stays inside
+/// the limit; this body is past that bound.
 ///
 /// At the limit the penalty pays nothing, so the amount is the fee. The
 /// empty block's amount sits in some varint bracket; the fee is the first
 /// value of the next bracket. The body is sized to the empty coinbase, so
 /// one more varint byte does not fit.
 #[test]
-fn a_varint_byte_on_the_last_admission_drops_the_body() {
+fn a_body_sized_to_the_lighter_coinbase_is_refused_once_the_varint_grows() {
     let params = EconomicParams::default();
     let miner = miner();
     let chain = chain_of(2);
@@ -1016,13 +1018,12 @@ fn a_varint_byte_on_the_last_admission_drops_the_body() {
     );
 
     let body = sized_spend(limit - empty_w, boundary);
-    let dropped = build(&context(&chain, &params, &miner, &[body])).expect("drops the body");
+    let err = build(&context(&chain, &params, &miner, &[body]))
+        .expect_err("the grown coinbase leaves the listing over the limit");
     assert!(
-        dropped.transactions.is_empty(),
-        "the body whose fee lengthens the amount varint is dropped"
+        matches!(err, TemplateError::Emission(EmissionError::BlockTooBig)),
+        "{err}"
     );
-    assert!(dropped.block_weight <= limit);
-    assert_eq!(dropped.block_weight, empty_w);
 }
 
 /// A two-output spend of `weight` bytes paying `fee`. Two outputs have no

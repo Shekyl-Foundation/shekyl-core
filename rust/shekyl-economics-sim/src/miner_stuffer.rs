@@ -51,8 +51,8 @@ use std::collections::HashSet;
 
 use shekyl_block_template::Fill;
 use shekyl_economics::{
-    burn::calc_burn_pct_at, penalty_free_weight, price_emission, CirculatingSupply,
-    ClosedShardCount, EconomicParams, EmissionInputs, PaidEmission,
+    burn::calc_burn_pct_at, price_emission, CirculatingSupply, ClosedShardCount, EconomicParams,
+    EmissionInputs, PaidEmission,
 };
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
@@ -349,7 +349,6 @@ fn price_weight(
 /// at.
 struct Block<'a> {
     at: FeePoint<'a>,
-    economic: &'a EconomicParams,
     depth: u8,
     median: u64,
     honest: Fill<'a>,
@@ -393,13 +392,7 @@ impl<'a> Block<'a> {
             last.fees,
         )
         .expect("the fold listed this block");
-        let room = penalty_free_weight(median, economic)
-            .saturating_sub(honest.block_weight())
-            .min(
-                honest
-                    .bodies_weight_bound()
-                    .saturating_sub(honest.bodies_weight()),
-            );
+        let room = honest.penalty_free_body_room();
         let supply = last.supply;
         let closed_shards = ClosedShardCount::new(last.closed_shards);
         let honest_paid = price_weight(
@@ -413,7 +406,6 @@ impl<'a> Block<'a> {
         );
         Self {
             at,
-            economic,
             depth: tree_depth_for_leaves(last.chain_leaves),
             median,
             honest,
@@ -431,17 +423,16 @@ impl<'a> Block<'a> {
     /// prices it: the coinbase weight the honest fill carries is part of
     /// the block.
     fn priced_at(&self, bodies_weight: u64, total_fees: u64) -> PaidEmission {
-        let coinbase = self
-            .honest
-            .block_weight()
-            .saturating_sub(self.honest.bodies_weight());
+        let block_weight = bodies_weight
+            .checked_add(self.honest.coinbase_weight())
+            .expect("a packing's block weight fits");
         price_weight(
             self.height,
             self.median,
             &self.at,
             self.supply,
             self.closed_shards,
-            bodies_weight.saturating_add(coinbase),
+            block_weight,
             total_fees,
         )
     }
@@ -494,19 +485,6 @@ impl<'a> Block<'a> {
         }
     }
 
-    /// Body weight still inside the penalty-free block. The penalty prices
-    /// the block, so the ceiling is that block weight less the coinbase
-    /// this fill carries, and it does not pass the fill's body bound.
-    fn penalty_free_bodies(&self) -> u64 {
-        let coinbase = self
-            .honest
-            .block_weight()
-            .saturating_sub(self.honest.bodies_weight());
-        penalty_free_weight(self.median, self.economic)
-            .saturating_sub(coinbase)
-            .min(self.honest.bodies_weight_bound())
-    }
-
     /// The cheapest integer packing of this block under one miner's terms.
     /// `floor` is what his bodies pay when the approach charges the relay
     /// floor. `recovery` is the pool share those fees return to him.
@@ -536,7 +514,7 @@ impl<'a> Block<'a> {
         recovery: PoolShare,
     ) {
         let bound = self.honest.bodies_weight_bound();
-        let free_ceiling = self.penalty_free_bodies();
+        let free_ceiling = self.honest.penalty_free_bodies();
         for dropped in 0..=honest.count {
             let Some(kept_weight) = honest.kept_weight(dropped) else {
                 continue;
@@ -978,7 +956,7 @@ mod tests {
         let economic = params.economic();
         let block = Block::new(&block_at(5, &params), &economic);
         let chosen = block.cheapest_packing(None, PoolShare::NONE);
-        let free = block.penalty_free_bodies().saturating_sub(
+        let free = block.honest.penalty_free_bodies().saturating_sub(
             block
                 .honest_bodies()
                 .kept_weight(0)

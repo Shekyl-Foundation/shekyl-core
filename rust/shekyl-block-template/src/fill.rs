@@ -30,10 +30,11 @@
 //!   staker split and the fees before the burn. A producer paid net of
 //!   both would weigh a body differently; that is a question for the fee
 //!   design, not something this rule settles.
-//! - The weight priced is the block's: the bodies plus the coinbase
-//!   weight the caller passed. The reserve is not this rule's operand.
-//!   [`crate::build`] passes the coinbase it built; the sim passes the
-//!   reserve, the maximum.
+//! - The weight stored is the block's. It starts at the coinbase weight
+//!   the caller passed and grows by each admitted body. The reserve is not
+//!   this rule's operand. The sim passes the reserve, the maximum. A
+//!   caller who has built the coinbase passes that weight. [`crate::build`]
+//!   prices the listing it is given and does not drop a body from it.
 //! - The comparison is exact. An earlier C++ copy of this rule rounded
 //!   through a float threshold of 1.0; that copy left with the hard-fork
 //!   mechanism and is not what the daemon runs.
@@ -42,16 +43,22 @@ use shekyl_economics::{
     penalty_free_weight, EconomicParams, EmissionError, PrePenaltyEmission, TxVolume,
 };
 
-/// A template's bodies so far, and what admitting one more would do.
+/// A template priced so far, and what admitting one more body would do.
+///
+/// The stored weight is the block's: the coinbase the caller passed, plus
+/// the bodies admitted since. Body weight is that total less the coinbase,
+/// which holds because every constructor and [`Self::admit`] build the
+/// total with a checked add.
 #[derive(Clone, Copy, Debug)]
 pub struct Fill<'a> {
     median_weight: u64,
-    /// The coinbase weight the block is priced and bounded at. The caller
-    /// passes the built coinbase, or the reserve when it prices the maximum.
+    /// The coinbase this block is priced at. Bodies sit on top of it.
     coinbase_weight: u64,
     emission: PrePenaltyEmission,
     params: &'a EconomicParams,
-    bodies_weight: u64,
+    /// Bodies plus [`Self::coinbase_weight`]. The weight [`Self::reward`]
+    /// was penalised at.
+    block_weight: u64,
     fees: u64,
     reward: u64,
 }
@@ -81,7 +88,7 @@ impl<'a> Fill<'a> {
             coinbase_weight,
             emission,
             params,
-            bodies_weight: 0,
+            block_weight: coinbase_weight,
             fees: 0,
             reward,
         })
@@ -119,41 +126,65 @@ impl<'a> Fill<'a> {
             coinbase_weight,
             emission,
             params,
-            bodies_weight,
+            block_weight,
             fees,
             reward,
         })
     }
 
-    /// The most the listed bodies may weigh: twice the median, less the
-    /// coinbase weight this fill was given.
-    #[must_use]
-    pub fn bodies_weight_bound(&self) -> u64 {
-        self.median_weight
-            .saturating_mul(2)
-            .saturating_sub(self.coinbase_weight)
+    /// Twice the median: the block limit this fill admits under.
+    fn block_limit(&self) -> u64 {
+        self.median_weight.saturating_mul(2)
     }
 
-    /// The block weight this fill reports: the bodies plus the coinbase.
+    /// The coinbase weight the block is priced at.
+    #[must_use]
+    pub fn coinbase_weight(&self) -> u64 {
+        self.coinbase_weight
+    }
+
+    /// The most the listed bodies may weigh: the block limit less the coinbase.
+    ///
+    /// Zero when the coinbase alone is at or past the limit.
+    #[must_use]
+    pub fn bodies_weight_bound(&self) -> u64 {
+        self.block_limit().saturating_sub(self.coinbase_weight)
+    }
+
+    /// The most the bodies may weigh while the block stays inside
+    /// [`penalty_free_weight`], and not past [`Self::bodies_weight_bound`].
+    #[must_use]
+    pub fn penalty_free_bodies(&self) -> u64 {
+        let free_block = penalty_free_weight(self.median_weight, self.params);
+        let under_free = free_block.saturating_sub(self.coinbase_weight);
+        under_free.min(self.bodies_weight_bound())
+    }
+
+    /// Body bytes still inside [`Self::penalty_free_bodies`]. Zero once the
+    /// listed bodies are already past that ceiling.
+    #[must_use]
+    pub fn penalty_free_body_room(&self) -> u64 {
+        self.penalty_free_bodies()
+            .saturating_sub(self.bodies_weight())
+    }
+
+    /// The block weight: the bodies plus the coinbase.
     #[must_use]
     pub fn block_weight(&self) -> u64 {
-        self.bodies_weight.saturating_add(self.coinbase_weight)
+        self.block_weight
     }
 
     /// Offer a body of `weight` paying `fee`. Admitted — and counted — when
-    /// it fits under [`Self::bodies_weight_bound`] and does not lower the
-    /// gross coinbase; otherwise refused and nothing changes, so a producer
-    /// goes on to the next body.
+    /// the block stays within [`Self::block_limit`] and the body does not
+    /// lower the gross coinbase; otherwise refused and nothing changes, so
+    /// a producer goes on to the next body.
     pub fn admit(&mut self, weight: u64, fee: u64) -> bool {
-        let Some(bodies_weight) = self.bodies_weight.checked_add(weight) else {
+        let Some(block_weight) = self.block_weight.checked_add(weight) else {
             return false;
         };
-        if bodies_weight > self.bodies_weight_bound() {
+        if block_weight > self.block_limit() {
             return false;
         }
-        let Some(block_weight) = bodies_weight.checked_add(self.coinbase_weight) else {
-            return false;
-        };
         let Ok(reward) = self
             .emission
             .penalised(self.median_weight, block_weight, self.params)
@@ -169,7 +200,7 @@ impl<'a> Fill<'a> {
         if coinbase < self.coinbase() {
             return false;
         }
-        self.bodies_weight = bodies_weight;
+        self.block_weight = block_weight;
         self.fees = fees;
         self.reward = reward;
         true
@@ -187,10 +218,8 @@ impl<'a> Fill<'a> {
     /// past them. A block of millions of transactions below its median costs
     /// one step, not millions.
     pub fn admit_up_to(&mut self, weight: u64, fee: u64, count: u64) -> u64 {
-        let ceiling = penalty_free_weight(self.median_weight, self.params)
-            .saturating_sub(self.coinbase_weight)
-            .min(self.bodies_weight_bound());
-        let free = match ceiling.checked_sub(self.bodies_weight) {
+        let ceiling = self.penalty_free_bodies();
+        let free = match ceiling.checked_sub(self.bodies_weight()) {
             None => 0,
             Some(_) if weight == 0 => count,
             Some(room) => (room / weight).min(count),
@@ -200,10 +229,13 @@ impl<'a> Fill<'a> {
             .checked_mul(fee)
             .and_then(|added| self.fees.checked_add(added))
             .filter(|&fees| self.reward.checked_add(fees).is_some());
-        if let Some(fees) = batch_fees {
-            // Within the full weight the reward is the whole emission, which
-            // is what it already is: `bodies_weight` is at or below it.
-            self.bodies_weight += free * weight;
+        let batch_weight = free
+            .checked_mul(weight)
+            .and_then(|added| self.block_weight.checked_add(added));
+        if let (Some(fees), Some(block_weight)) = (batch_fees, batch_weight) {
+            // Within the penalty-free weight the reward is the whole
+            // emission, which is what it already is.
+            self.block_weight = block_weight;
             self.fees = fees;
             admitted = free;
         }
@@ -213,10 +245,11 @@ impl<'a> Fill<'a> {
         admitted
     }
 
-    /// The admitted bodies' weight.
+    /// The admitted bodies' weight: the block weight less the coinbase.
     #[must_use]
     pub fn bodies_weight(&self) -> u64 {
-        self.bodies_weight
+        debug_assert!(self.block_weight >= self.coinbase_weight);
+        self.block_weight - self.coinbase_weight
     }
 
     /// The admitted bodies' fees.

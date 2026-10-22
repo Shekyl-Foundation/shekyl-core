@@ -2146,17 +2146,19 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
             Err(e) => panic!("the Rust template builds against the C++'s state: {e}"),
         }
     };
-    // `build` drops the last body when the coinbase's amount varint leaves
-    // the block one byte over the limit, and returns that shorter block.
-    // The count the search supplied is not the count the template kept.
-    let kept = at_bound.transactions.len();
     assert!(
-        kept < bodies.len(),
-        "the pool must overfill the bound: the template kept every supplied body"
+        under < bodies.len(),
+        "the pool must overfill the bound: the search priced all {} bodies",
+        bodies.len()
+    );
+    assert_eq!(
+        at_bound.transactions.len(),
+        under,
+        "a priced listing is the listing that was supplied"
     );
     assert!(at_bound.block_weight <= limit);
     assert!(
-        at_bound.block_weight + bodies[kept].weight() as u64 > limit,
+        at_bound.block_weight + bodies[under].weight() as u64 > limit,
         "one more body crosses the bound"
     );
     assert!(
@@ -2167,9 +2169,9 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     // coinbase is the at-bound one — no coinbase is *right* for a block
     // over the bound, which is what the refusal says.
     let mut over = at_bound.block.clone();
-    over.transaction_hashes.push(bodies[kept].hash());
+    over.transaction_hashes.push(bodies[under].hash());
     eprintln!(
-        "Rust-built block at height {height}: {kept} bodies / {} B under 2·M = {limit}; the \
+        "Rust-built block at height {height}: {under} bodies / {} B under 2·M = {limit}; the \
          producer refused the next body (BlockTooBig); penalised reward {}",
         at_bound.block_weight,
         at_bound.block_reward.to_raw()
@@ -2211,7 +2213,7 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
         recorded_weight, at_bound.block_weight,
         "the C++ weighs it as we did"
     );
-    assert_eq!(carried, kept);
+    assert_eq!(carried, under);
     let (median_after, _) = daemon.weight_limit().await;
     eprintln!(
         "C++ accepted the Rust block at {recorded_weight} B carrying {carried} bodies; median \
