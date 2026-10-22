@@ -42,7 +42,7 @@ fn every_refusal_names_its_census_row() {
     assert_eq!(
         SectionRefused::OverBudget {
             charge: SectionCharge::of(std::slice::from_ref(&reference_of(3))),
-            budget: 2
+            budget: shekyl_archival_retention::SectionBudget::from_draws(2)
         }
         .row(),
         CenRow::J30
@@ -141,6 +141,7 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         "open_body",
         "open_reference",
         "BundleView",
+        "judge_bundles",
     ];
 
     // Rule 47: the connect path's files, by name, each with the identifier
@@ -206,6 +207,10 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
             .iter()
             .any(|entry| line.contains(entry))
     };
+    assert!(
+        census.contains("rules::bundle_admission::J29"),
+        "the staged rule types are named on the pending rows"
+    );
     for line in census.lines().filter(binds) {
         assert!(
             !line.contains("bundle"),
@@ -279,4 +284,45 @@ fn without_staged_export(source: &str, names: &[&str]) -> String {
     );
     let (start, end) = spans[0];
     format!("{}{}", &source[..start], &source[end..])
+}
+
+/// Each staged type's row is the verifier's name for that refusal.
+/// Constructing the types is what keeps them live while unbound.
+#[test]
+fn the_staged_rule_types_name_the_verifier_rows() {
+    use crate::census::CenRow;
+    use crate::rules::bundle_admission::{J29, J30, J31, J32, J33, J34, J35, J36, J37};
+    use crate::rules::Rule;
+    use shekyl_archival_retention::SectionBudget;
+
+    let _ = (J29, J30, J31, J32, J33, J34, J35, J36, J37);
+    let charge = SectionCharge::of(&[]);
+    let budget = SectionBudget::from_draws(0);
+    let section = [
+        (SectionRefused::Malformed { position: 0 }.row(), J29::ROW),
+        (
+            SectionRefused::OverBudget { charge, budget }.row(),
+            J30::ROW,
+        ),
+        (
+            SectionRefused::OutsideWindow { position: 0 }.row(),
+            J31::ROW,
+        ),
+    ];
+    for (named, row) in section {
+        assert_eq!(named, row);
+    }
+    let bundles = [
+        (BundleInvalid::Count.row(), J32::ROW),
+        (BundleInvalid::Commitment.row(), J33::ROW),
+        (BundleInvalid::WitnessSignature.row(), J34::ROW),
+        (BundleInvalid::Attempt { draw: 0 }.row(), J35::ROW),
+        (BundleInvalid::Anchor { draw: 0 }.row(), J36::ROW),
+        (BundleInvalid::Receipt { draw: 0 }.row(), J37::ROW),
+    ];
+    for (named, row) in bundles {
+        assert_eq!(named, row);
+    }
+    assert_eq!(J29::ROW, CenRow::J29);
+    assert_eq!(J37::ROW, CenRow::J37);
 }

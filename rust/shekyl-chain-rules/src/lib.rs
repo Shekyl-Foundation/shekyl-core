@@ -174,9 +174,9 @@ pub use archival::{
 // (`SO-D12`'s cutover, DRS-E5's queue); `form` and `validate` do not call
 // them.
 pub use archival::{
-    check_section, check_section_until_switch, open_body, open_reference, verify_bundle, Admitted,
-    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, SectionCharge,
-    SectionCheckFailed, SectionRefused, SectionStanding,
+    check_section, check_section_until_switch, judge_bundles, open_body, open_reference,
+    verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused, BundleUnanswered,
+    BundleView, DerivedDraw, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
 };
 pub use block::{
     Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,
@@ -232,6 +232,7 @@ pub use rules::tx_emission_against::{
     EpochCloseBondFacts,
 };
 pub use rules::{recorded, recorded_header};
+pub use shekyl_archival_retention::settlement_select::issued_draw_term;
 pub use shekyl_archival_retention::{DrawableEpoch, DrawableEpochError};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;

@@ -35,18 +35,19 @@
 //!
 //! Rule `23-disposition-visibility`: staged work is code with a named consumer in a live plan.
 //!
-//! - **What is here:** the three functions, their refusal types, the view
-//!   trait, and their tests against a fixture view (`harness::bundle`).
-//! - **What is not:** `form` and `validate` do not call them; no `Rule`
-//!   type binds them; nothing implements [`BundleView`], on a store or
-//!   over [`crate::ChainView`]. A block that carries a bundle section is
-//!   not judged by this module today.
-//! - **Who calls it, and when:** `SO-D12`'s cutover increment
-//!   (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §16; `SCS-P31`): it implements [`BundleView`] on its store, calls
-//!   [`check_section`] and [`verify_bundle`] at admission from a block
-//!   rule, writes what [`Admitted`] carries, and deletes the attestation
-//!   path (CEN-B4). [`check_section`] takes that view, the block's height
-//!   and its rule set; the cap is the section's. DRS-E5 is transport
+//! - **What is here:** the verifier, [`judge_bundles`], the view trait, the
+//!   fixture, and the unbound rule types `rules::bundle_admission::J29`
+//!   through `J37`. Increment 4a also implements the view on the store
+//!   (`shekyl-chain-store`'s `StoreBundleView`, the batch view plus the
+//!   drawable memo). The census rows stay `pending`.
+//! - **What is not:** `form` and `validate` do not call them. The rule
+//!   types are not bound. A block that carries a bundle section is not
+//!   judged by this module today.
+//! - **Who calls it, and when:** increment 4b, after the DRS-X flip
+//!   (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §16; `SCS-P31`): it calls
+//!   [`judge_bundles`] from `validate`, binds the rows, and deletes the
+//!   attestation path (CEN-B4). [`check_section`] takes that view, the
+//!   block's height and its rule set; the cap is the section's. DRS-E5 is transport
 //!   (`docs/design/DRS_E5_POOL_ALT_PRUNE.md` §2.2, §2.3). Its alternative
 //!   tier has landed ([`crate::alt_against`]) and does not call this
 //!   module: an alternative block's row still carries the attestation
@@ -184,6 +185,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_WITNESS_BUNDLE};
+use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
 
 use crate::census::CenRow;
@@ -216,8 +218,10 @@ pub trait BundleView {
     /// it wider refuses a value that does not fit; it does not truncate.
     fn draw_count(&self, h: BlockHeight) -> Result<Option<u32>, Self::Fault>;
 
-    /// `h`'s `0x0C` commitment (§4.2).
-    fn draw_commitment(&self, h: BlockHeight) -> Result<Option<[u8; 32]>, Self::Fault>;
+    /// `h`'s `0x0C` commitment (§4.2), as a [`DrawCommitment`]. `None` is
+    /// the view failing to answer, not an absent field: CEN-I20 puts one
+    /// on every coinbase, and the all-zero genesis commitment is still one.
+    fn draw_commitment(&self, h: BlockHeight) -> Result<Option<DrawCommitment>, Self::Fault>;
 
     /// The hash of the block at `height` on this chain. Read twice: at
     /// `h`, for the selection and the nonce, and at each record's
@@ -596,7 +600,7 @@ pub fn verify_bundle<V: BundleView>(
             BundleUnanswered::DrawCommitment { height: h },
         ));
     };
-    if draw_commit(body.witness_public_key(), &kept.seed) != committed {
+    if DrawCommitment::from_bytes(draw_commit(body.witness_public_key(), &kept.seed)) != committed {
         return invalid(BundleInvalid::Commitment);
     }
 
@@ -740,6 +744,84 @@ fn derive_draws<V: BundleView>(
         });
     }
     Ok(draws)
+}
+
+/// Why [`judge_bundles`] stopped. A section refusal is J29–J31; a bundle
+/// refusal is the verifier's, at the reference it stopped on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdmissionFault<F> {
+    /// The section check refused the block before any bundle was opened.
+    Section(SectionRefused),
+    /// Some epoch's `D` is not on this view. A connected chain's view does
+    /// not answer that way: a memo miss is [`Self::View`].
+    Awaiting,
+    /// [`BundleView`] faulted. A memo miss on the store view is this.
+    View(F),
+    /// Bundle `at` in section order was refused.
+    Bundle {
+        /// The reference's position.
+        at: usize,
+        /// The verifier's refusal.
+        refused: BundleRefused<F>,
+    },
+}
+
+impl<F> AdmissionFault<F> {
+    /// The census row, when the fault is a verdict. A view fault and a
+    /// body the reference does not name have none.
+    #[must_use]
+    pub fn row(&self) -> Option<CenRow> {
+        match self {
+            Self::Section(refused) => Some(refused.row()),
+            Self::Bundle {
+                refused: BundleRefused::Invalid(invalid),
+                ..
+            } => Some(invalid.row()),
+            Self::Awaiting | Self::View(_) | Self::Bundle { .. } => None,
+        }
+    }
+}
+
+/// Section first, then each body in section order, stopping at the first
+/// refusal (`SO-D12` increment 4a).
+///
+/// The block wire does not carry a section yet (4b), so the staged entry
+/// takes the references and bodies the section will hold. Tests call this.
+/// `form` and `validate` do not.
+///
+/// # Errors
+///
+/// The first section or bundle refusal, or the view's fault.
+pub fn judge_bundles<V: BundleView>(
+    refs: &[BundleRef],
+    bodies: &[BundleBody],
+    header_root: &[u8; 32],
+    h_incl: BlockHeight,
+    view: &V,
+    rule_set: &RuleSet,
+) -> Result<Vec<Admitted>, AdmissionFault<V::Fault>> {
+    match check_section(refs, header_root, h_incl, view, rule_set) {
+        Ok(SectionStanding::Admitted(_)) => {}
+        Ok(SectionStanding::Awaiting(_)) => return Err(AdmissionFault::Awaiting),
+        Err(SectionCheckFailed::Refused(refused)) => {
+            return Err(AdmissionFault::Section(refused));
+        }
+        Err(SectionCheckFailed::View(fault)) => return Err(AdmissionFault::View(fault)),
+    }
+    if bodies.len() != refs.len() {
+        return Err(AdmissionFault::Bundle {
+            at: bodies.len().min(refs.len()),
+            refused: BundleRefused::BodyNotReferenced,
+        });
+    }
+    let mut admitted = Vec::with_capacity(refs.len());
+    for (at, (reference, body)) in refs.iter().zip(bodies.iter()).enumerate() {
+        match verify_bundle(reference, body, h_incl, view, rule_set) {
+            Ok(one) => admitted.push(one),
+            Err(refused) => return Err(AdmissionFault::Bundle { at, refused }),
+        }
+    }
+    Ok(admitted)
 }
 
 #[cfg(test)]

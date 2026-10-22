@@ -122,9 +122,9 @@ mod slash;
 
 pub(crate) use arm::BondArm;
 pub use bundle::{
-    check_section, check_section_until_switch, open_body, open_reference, verify_bundle, Admitted,
-    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, SectionCharge,
-    SectionCheckFailed, SectionRefused, SectionStanding,
+    check_section, check_section_until_switch, judge_bundles, open_body, open_reference,
+    verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused, BundleUnanswered,
+    BundleView, DerivedDraw, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
 };
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
