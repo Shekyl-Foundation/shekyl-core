@@ -137,17 +137,18 @@ impl Rule for G2 {
     const ROW: CenRow = CenRow::G2;
 }
 
-impl FormRule for G2 {
-    fn check(cx: &FormContext<'_>) -> Verdict<()> {
-        let declared = &cx.candidate.block.transaction_hashes;
-        let carried = &cx.candidate.transactions;
+impl G2 {
+    /// The declared list is the carried list. `form` passes the hashes of
+    /// the carried transactions; `bind_body` passes the hashes of full
+    /// bodies and of skeletons. One comparison.
+    pub(crate) fn listed_match(declared: &[TxHash], carried: &[TxHash]) -> Verdict<()> {
         if declared.len() != carried.len() {
             return Err(InvalidBlock::new(Self::ROW, Locus::Block));
         }
         match declared
             .iter()
             .zip(carried)
-            .position(|(hash, body)| Transaction::hash(body) != *hash)
+            .position(|(declared, carried)| declared != carried)
         {
             None => Ok(()),
             Some(first) => Err(InvalidBlock::new(
@@ -157,6 +158,18 @@ impl FormRule for G2 {
                 },
             )),
         }
+    }
+}
+
+impl FormRule for G2 {
+    fn check(cx: &FormContext<'_>) -> Verdict<()> {
+        let carried: Vec<TxHash> = cx
+            .candidate
+            .transactions
+            .iter()
+            .map(Transaction::hash)
+            .collect();
+        Self::listed_match(&cx.candidate.block.transaction_hashes, &carried)
     }
 }
 

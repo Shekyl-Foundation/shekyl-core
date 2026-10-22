@@ -288,7 +288,7 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
 fn cen_b6_identity_is_block_hash_and_records_the_row() {
     let block = candidate(Vec::new()).block;
     let mut coverage = RuleCoverage::EMPTY;
-    let identity = B6::identity(&block, &mut coverage);
+    let identity = B6::identity_of(&block.pow_blob(), &mut coverage);
     assert_eq!(identity, block.hash());
     assert!(coverage.contains(CenRow::B6));
     assert_eq!(coverage.len(), 1, "B6 records exactly its own row");

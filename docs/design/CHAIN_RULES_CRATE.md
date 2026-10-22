@@ -633,8 +633,9 @@ In increment 1, `validate` derives `hash` and every `TxHash` (`Block::hash`,
 against `block.transaction_hashes` — CEN-G2 landed in `form` with slice 7
 commit 6 (§4.6), so the pairing below is judged before any body is read *as*
 its declared hash.
-CEN-B6 is the block-identity **definition**: `ValidatedBlock::derive` obtains
-the hash from `B6::identity`, which records the row in coverage there — not a
+CEN-B6 is the block-identity **definition**: `prove_header` records the row
+through `B6::identity_of`, and `ValidatedBlock::derive` reads the hash the
+token carries — not a
 `BlockRule` with a check that always passes (B7 is the no-op *policy* that
 still runs through `rules::run`).
 
@@ -1055,7 +1056,7 @@ transaction).
 Block-level **predicates** run in census order, each through
 `rules::run_form` (stateless, in `form`) or `rules::run` (view-bound, in
 `validate`), inserting `R::ROW` iff `R` passed. **Definition** rows record at
-their derivation site: CEN-B6 at `B6::identity` (in `form`, carried on `StructurallyValid::hash`);
+their derivation site: CEN-B6 at `B6::identity_of` (in `prove_header`, shared by `form` and `form_header`, carried on `StructurallyValid::hash`);
 CEN-D2 at `D2::longhash` (in `form`); CEN-C3 at `C3::window`, CEN-D4 at
 `D4::target` (D7 consulted inside it, D6 recorded at every `Target`
 production — `D6::mint` for LWMA-1, `D6::record` for genesis-block `1` and
@@ -1336,6 +1337,39 @@ between `Stale`/`Fault` and `InvalidBlock`, no arm mapping one onto the other
 (`check_store_error_conversion_ban.py`, clauses 1 and 3, with the qualified
 `Fault::View(_) => InvalidBlock…` arm so the view's fault cannot be laundered
 through the wrapper).
+
+### 4.7 The header path (`header_facts.rs`, `header_path.rs`, `header_ladder.rs`)
+
+A header chain is judged by the same rules `validate` runs, from the
+header alone. None of these mint a `ChainValid`.
+
+| Entry | Rows | What it does not run |
+| --- | --- | --- |
+| `form_header` | B1, B2, B6, D2, D1, in `form`'s order | every body row |
+| `judge_header_cheap` | `derive` (D3, D4, D1b), then A2, C1, C2, E1 | D1, and F4, F5, F6 |
+| `judge_header` | the cheap rows, over a header D1 has accepted | F4, F5, F6 |
+| `bind_body` | B6, G2, B4's parse-and-root half | B4's countersignatures |
+
+`HeaderFacts<P>` carries the proof as a type: `Unproven` or `Proven`.
+`D1` accepts only `Proven`, so a header without a longhash cannot reach
+it. B6, D2 and D1 are `prove_header`, the tail `form` and `form_header`
+share. `FormedHeader` is a stage token: private fields, constructed only
+by `form_header`. `BlockContext` projects into `HeaderContext`, and the
+header rules read that context; `validate`, `alt_against` and the header
+path build it from `derive`'s `Derived`. `judge_header_cheap` returns a
+`HeaderProspect`; `judge_header` returns a `HeaderJudged` (connecting
+height and cumulative work).
+
+`anchor_and_coinbase` is two calls, `anchor` (E1) then `coinbase_height`
+(F4, F5, F6), still the only membership list, in `header_ladder.rs`.
+`validate` and `judge_header_ladder` call both, in that order. The
+header path calls `anchor` only: F4–F6 read the coinbase, and a header
+has none. `CoinbaseRule::check` takes a `BlockContext`, so a body rule
+cannot be called on the header path.
+
+B4 is split the same way. `B4::bind_root` is the stateless half
+(`bind_body` calls it). `validate` then runs the countersignatures when
+the set is non-empty. The empty set returns after the root check (A3).
 
 ---
 

@@ -144,14 +144,19 @@ pub use ingress::{
 };
 pub use message::{invoke, notify, response};
 pub use payload::Error as PayloadError;
+pub use payload::{body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlan};
 pub use payload::{
     BasicNodeData, BlockCompleteEntry, CoreSyncData, GetTxpoolComplement, HandshakeRequest,
     HandshakeResponse, NetworkAddress, NewCompactBlock, NewTransactions, PeerlistEntry,
-    PortableMap, RequestChain, RequestCompactMissingTx, RequestGetObjects, ResponseChainEntry,
-    ResponseGetObjects, TimedSyncRequest, TimedSyncResponse, TxBlobEntry, ADDR_IPV4, ADDR_IPV6,
-    ADDR_TOR, ATTESTATION_WITNESS_MAX_BYTES, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE,
-    NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
-    NOTIFY_REQUEST_CHAIN, NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS,
-    NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
+    PortableMap, RequestBodies, RequestChain, RequestCompactMissingTx, RequestGetObjects,
+    RequestHeaders, ResponseBodies, ResponseChainEntry, ResponseGetObjects, ResponseHeaders,
+    TimedSyncRequest, TimedSyncResponse, TxBlobEntry, ADDR_IPV4, ADDR_IPV6, ADDR_TOR,
+    ATTESTATION_WITNESS_MAX_BYTES, BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS,
+    CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE,
+    HEADERS_RESPONSE_BYTES, NOTIFY_GET_TXPOOL_COMPLEMENT, NOTIFY_NEW_COMPACT_BLOCK,
+    NOTIFY_NEW_TRANSACTIONS, NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_CHAIN,
+    NOTIFY_REQUEST_COMPACT_MISSING_TX, NOTIFY_REQUEST_GET_OBJECTS, NOTIFY_REQUEST_HEADERS,
+    NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_CHAIN_ENTRY, NOTIFY_RESPONSE_GET_OBJECTS,
+    NOTIFY_RESPONSE_HEADERS,
 };
 pub use reader::{BucketReader, Received};
