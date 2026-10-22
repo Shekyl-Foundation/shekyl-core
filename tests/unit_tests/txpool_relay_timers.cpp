@@ -603,9 +603,16 @@ TEST(listed_weight_cap, is_thirteen_tenths_of_the_median_less_the_reserve)
 TEST(listed_weight_cap, equals_the_inherited_expression_off_the_zone)
 {
   // 13/10 and 130/100 are one rational, so the floors agree at every
-  // median, including those not divisible by 10 or by 100.
+  // median, including those not divisible by 10 or by 100. A floor under
+  // the reserve is cap 0: the inherited subtraction wraps size_t there.
   for (const size_t median : {size_t(463), size_t(1001), size_t(299999), size_t(300001), size_t(300007), size_t(1234567)})
-    EXPECT_EQ(listed_weight_cap(median), (130 * median) / 100 - RESERVE) << "median " << median;
+  {
+    const size_t floor_13 = (13 * median) / 10;
+    const size_t floor_130 = (130 * median) / 100;
+    EXPECT_EQ(floor_13, floor_130) << "median " << median;
+    const size_t expected = floor_130 < RESERVE ? 0 : floor_130 - RESERVE;
+    EXPECT_EQ(listed_weight_cap(median), expected) << "median " << median;
+  }
 }
 
 TEST(listed_weight_cap, is_zero_where_the_inherited_subtraction_wrapped)
