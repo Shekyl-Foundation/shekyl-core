@@ -1269,10 +1269,22 @@ This lane's increments, each its own change:
    from the journals and checked against the recorded digest on a miss
    (SI-30). The boundary retires the rows below `BlockDrawsFloor`
    (`SO-D12o`, SI-34). Layout 30.
-4. **The cutover**, after the Slice C verifier lands:
-   - implement the view trait on this lane's store;
+4. **The cutover**, after the Slice C verifier lands. Split, as ruled
+   2026-10-21 (Q1): 4a is staged and has no consensus effect; 4c is the
+   producer, between 4a and 4b; 4b is the rule-07 switch after the DRS-X
+   flip.
+   - implement the view trait on this lane's store. The view is the
+     batch view plus the drawable memo: `D` is rules-side state, and the
+     store computes none of it;
    - call the verifier at block admission and write its kept projection
-     into this lane's tables;
+     into this lane's tables. `issued_short(h_incl)` is the reduction
+     against `D(epoch(h_incl))` only: the sum over admitted bundles whose
+     `epoch(h)` is `epoch(h_incl)`, from the per-pair counts the view
+     already gathered. A bundle for `h` in the previous epoch contributes
+     zero to it. Its index rows, digest fold, `revealed(h)` and passed
+     bits are written into `epoch(h)`, and the new epoch's shortfall is
+     untouched (the sim pins that opening shortfall at 1536 when `|D|`
+     is 512);
    - flip the switch as one rule-07 cutover. The `passed` bit is set by
      an admitted record and by nothing else, and the Fakechain door is
      deleted;

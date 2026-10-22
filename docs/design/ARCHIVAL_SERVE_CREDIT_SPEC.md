@@ -263,6 +263,15 @@ with the visible shortfall, `issued_short` and whether the seed is
 revealed (§10). The count writer stores `issued_short` as zero;
 admission, increment 4, writes the reduction.
 
+`issued_short(h_incl)` reduces the shortfall of `D(epoch(h_incl))` only.
+It is the sum, over admitted bundles whose `epoch(h)` is `epoch(h_incl)`,
+of `min(3, before + new) − min(3, before)` per pair, from the per-pair
+counts already gathered for the visible shortfall. A bundle for `h` in
+the previous epoch contributes zero: its index rows, digest fold,
+`revealed(h)` and passed bits are written into `epoch(h)`, and the new
+epoch's shortfall is unchanged. The sim pins that opening shortfall at
+1536 when `|D|` is 512.
+
 ### 4.4 Selection
 
 Draw `j` at `h`, for `0 ≤ j < count(h)`, picks one pair **with
@@ -1320,9 +1329,10 @@ with it:
 
 - **Per block `h`:** `count(h)`, `carry(h)`, the visible shortfall at
   `h`, `issued_short(h)` — the shortfall the block's own admissions
-  reduce, zero until admission writes it — and whether `h`'s seed has
-  been revealed. The count of the next block reads
-  `shortfall(h) − issued_short(h)`.
+  reduce, and only the admissions whose draws are of `epoch(h)` (§4.3);
+  a bundle admitted here for the previous epoch contributes none — zero
+  until admission writes it — and whether `h`'s seed has been revealed.
+  The count of the next block reads `shortfall(h) − issued_short(h)`.
 - **Per pair, per epoch:** its issued draws as `(h, j, h_reveal, passed)`,
   where `h_reveal` is the block that admitted `h`'s bundle and `passed`
   is the draw's bit in it. The count visible at any `h′` is the number
