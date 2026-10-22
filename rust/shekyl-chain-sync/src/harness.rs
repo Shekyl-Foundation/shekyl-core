@@ -1054,11 +1054,14 @@ fn a_bind_failure_closes_and_an_unavailable_block_does_not() {
             "an unavailable block closed the session: {out:?}"
         );
         assert_eq!(sync.header_count(), before);
-        // The same session is skipped for that hash, so ask again from nowhere:
-        // a substituted body, were one requested, is the bind path. Feed it
-        // as a response to a fresh request by clearing the exclusion through
-        // a direct bodies payload whose block hash matches and whose
-        // transaction list does not.
+        // The block is wanted again, from the same session once no other
+        // session covers it. A body whose transactions are not the header's
+        // closes that session and leaves the header in `T`.
+        assert!(
+            out.iter()
+                .any(|command| matches!(command, Command::RequestBodies { .. })),
+            "the unavailable block was not wanted again: {out:?}"
+        );
         let body = BlockBody {
             block: raw,
             txs: vec![TxBody::Full(vec![1, 2, 3])],
@@ -1071,15 +1074,24 @@ fn a_bind_failure_closes_and_an_unavailable_block_does_not() {
         }
         .store()
         .unwrap();
-        // Re-request by using a second session that covers the hash.
-        open_and_claim(&mut sync, &view, 2, u128::MAX);
-        // Session 2 has not named the header. The bind path is reached
-        // when a response arrives for an outstanding request. Session 1's
-        // request was consumed. Open a request from session 1 by clearing
-        // its unavailable mark is not available; send the bad body only if
-        // a request is out. Plan again: session 1 is the unavailable source,
-        // so no request. The header is still there.
-        let _ = bad;
+        out.clear();
+        sync.handle(
+            Event::Bodies {
+                session: 1,
+                bytes: bad,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            closes(&out)
+                .iter()
+                .any(|cause| matches!(cause, CloseCause::Bind(_))),
+            "a mismatched body did not close: {out:?}"
+        );
         assert!(sync.contains_header(hash));
         assert_eq!(sync.header_count(), before);
     });
