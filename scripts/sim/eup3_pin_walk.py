@@ -278,6 +278,19 @@ def measure(
     commit: str, seed: str = PIN_SEED, channel_override: str | None = None
 ) -> dict:
     checkout(commit)
+    if not (WALK / "rust/shekyl-staking-sim/Cargo.toml").exists():
+        # A merge parent can predate the crate. That is an absent vector,
+        # not a build of a package the workspace does not contain.
+        return {
+            "commit": rev_parse(WALK, "HEAD"),
+            "subject": subject(WALK, "HEAD"),
+            "channel": None,
+            "channel_override": channel_override,
+            "seed": seed,
+            "deps": [],
+            "absent": "shekyl-staking-sim did not exist",
+            "vector": {name: None for name in VECTOR},
+        }
     if seed != PIN_SEED:
         set_baseline_seed(seed)
     binary = build(channel_override)
