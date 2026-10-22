@@ -844,22 +844,43 @@ drives it):
   against the interim framer. RT-P5 proves it. **Built in RT-W9 step 5b
   (2026-10-20):**
   - **Writes are combined until a flush.** A record is cut at the flush,
-    or when a full record's payload is waiting. A full record is the
-    largest class, and the tail is the smallest class that holds it.
-    A submission is the exception below: its bytes stay buffered until
-    the flush, so the padding can be sealed first.
+    or when a full record's payload is waiting and another byte arrives.
+    A full record is the largest class, and the tail is the smallest class
+    that holds it. A submission is the exception below: its bytes stay
+    buffered until the flush, so the padding can be sealed first.
+  - **A flush ends its message** (close-out F1, 2026-10-22). The first
+    flush call closes the message to further bytes, before anything is
+    sealed or drained. A write that arrives while that flush is still
+    pending finishes sealing the old message's records first, then starts
+    a new message. It never joins the old one, so an armed submission
+    cannot leave inside an ordinary request.
   - **Backpressure.** An ordinary message holds at most one record's
     payload and one sealed record, so a slow reader holds the writer.
     A submission holds its payload until the flush, at most
-    `SUBMISSION_RECORDS` times the largest payload, and then one sealed
-    record at a time.
-  - **Reads.** A record delivers its payload. Occupancy 0 delivers
-    nothing, and only a padding record has occupancy 0. A record that
-    carries payload has that payload's occupancy, including the record
-    a submission's payload ends in.
-  - **Half-close:** an end of the transport at a record boundary is the
-    end of the stream, and an end inside a record is an error.
-  - **One table in both directions** (RT-O29).
+    `SUBMISSION_CAP` (`SUBMISSION_RECORDS` times the largest payload), and
+    then one sealed record at a time.
+  - **Reads.** A record delivers its payload. An empty record is accepted
+    only in the two shapes a sender makes (close-out F6):
+    - **padding:** at most `SUBMISSION_RECORDS - 1` largest-class records,
+      followed by exactly the rest of their submission's
+      `SUBMISSION_RECORDS` records, all largest-class and carrying payload;
+    - **the close record** below, outside any submission.
+
+    Anything else (an empty record in the middle class, a fifth padding
+    record, padding after a frame's payload began, a smaller record where
+    a frame owes payload) is refused. A run of empty records yields after
+    `EMPTY_RECORDS_PER_POLL` = 2 instead of holding the task.
+  - **An authenticated end** (close-out F7). Shutdown flushes, then seals
+    the close record: occupancy 0 in the smallest class, which nothing
+    else sends. The reader ends the stream at that record. A transport
+    that ends without it is a truncation, at a record boundary or inside
+    one. Once the peer's close has been read, a transport that refuses our
+    own close because the peer has gone completes the shutdown.
+  - **One refusal is final** (close-out F5). A refused record, a
+    transport error and a refused submission poison the stream: every
+    later read, write, flush and shutdown returns `StreamPoisoned`.
+  - **One table in both directions** (RT-O29), pinned by a test at 512,
+    16,384 and 65,535.
   - **A submission** (RT-O28): the client arms the stream's
     `SubmissionMark` before the message is classified. Classification is
     when the kind first changes what is sealed: a further byte arrives
@@ -870,21 +891,43 @@ drives it):
     The message goes out as exactly `SUBMISSION_RECORDS` = 5 records of
     the largest class. The padding records, occupancy 0, are sealed
     first and the HTTP bytes are a suffix, so the body is not complete,
-    and a response cannot start, until the last record. Five records
-    hold the largest admissible transaction's request body, 298,814
-    bytes, with 28,851 bytes left for the head; a test pins the count to
-    `TX_WEIGHT_LIMIT`. A message that would need a sixth record is
-    refused before that record is sealed. The first five of it may
-    already be on the wire as payload, since a message that large leaves
-    no room to pad.
+    and a response cannot start, until the last record.
+    - **Why five:** the largest admissible request body is
+      `2 × TX_WEIGHT_LIMIT` plus the JSON envelope (`{"tx_blob":""}`,
+      14 bytes), and it must fit `SUBMISSION_CAP` with room for the request
+      head. A test computes it from `shekyl-wire`'s `TX_WEIGHT_LIMIT`, so
+      the count follows the constant.
+    - **Past the cap:** a submission that would pass `SUBMISSION_CAP` is
+      discarded without a record sealed, and the stream is poisoned.
+      Nothing of a submission is on the wire before its flush.
+  - **The daemon checks the shape it read** (close-out F2). The stream's
+    `InboundShape` reports the shapes of the records it read last.
+    `ends_in_submission` is true when they are one padded submission:
+    `SUBMISSION_RECORDS` largest-class records, the empty ones first, at
+    least one carrying payload. A submission that fills all five records
+    has no padding, so it counts only when the record before it visibly
+    ends a message (a smaller class, an empty record, or the end of a
+    padded frame). RT-W10's `submit_transaction` route refuses any body
+    for which it is false: the daemon fails closed, and a client that did
+    not pad sends again.
   - **Tested through hyper:** every `submit_transaction` upload, for a
-    transaction of 0, 1, 26,599, 97,585 and 149,400 bytes, is exactly
-    five records, and the handler has those five records open before it
-    has the body. hyper flushes once per message in both directions,
-    which is RT-P5's registered flush policy, observed.
-  - **Each check seen failing with it removed:** the splitting (the
-    pre-flight's named edit, which fails the block-batch test), the
-    padding, the count limit, and an end inside a record.
+    transaction of 0, 1, 26,599, 97,585 and `TX_WEIGHT_LIMIT` bytes, is
+    exactly five records, and the handler has those five records open
+    before it has the body. hyper flushes once per message in both
+    directions, which is RT-P5's registered flush policy, observed. Both
+    ends exchange the close record at shutdown.
+  - **Each check seen failing with it removed:**
+    - the splitting (the pre-flight's named edit, which fails the
+      block-batch test), the padding, and an end inside a record;
+    - from the close-out (2026-10-22), each with its own named edit:
+      - a write joining the ending message;
+      - no stream-level poison;
+      - a clean end without the close record;
+      - each of the three read-side padding rules;
+      - no yield on a run of empty records;
+      - a padded frame's end not counted as a boundary;
+      - unbounded ordinary buffering;
+      - a moved middle class.
 - **Length concealment — RULED (RT-O6, 2026-10-09); RE-RULED 2026-10-18
   on RT-P5's evidence.** *Harm:* a remote wallet's `submit_transaction` is
   one upload whose size marks it and identifies the transaction's shape.
@@ -2262,9 +2305,9 @@ rule-26 pre-flight before its first production commit.
 |---|---|---|---|
 | RT-W8 | RT-P7 model on the canonical order; the three anchors of §4.1 — community XK vectors, vectors pinned from clatter 2.3.0 under seeded randomness, which RT-W9 compares our handshake against (RT-O11), each observed changing under a named edit; the gate asserting clatter is in no non-dev dependency graph; registry rows, including `shekyl/rpc-rendezvous-name-v1` with its known-answer vector pinned before the naming function is written (rule 30); RT-P4; creates `shekyl-rpc-channel` with the constants and naming functions (RT-O13); deletes `shekyl-rt-p2-spike` (§11.2) | ratification (given 2026-10-09) | **Authorized 2026-10-09.** Pre-flight: [`RPC_CHANNEL_RT_W8_PREFLIGHT.md`](RPC_CHANNEL_RT_W8_PREFLIGHT.md) |
 | RT-W9 | `shekyl-noise` holds `SymmetricState` and `Direction` (pinned handshake vectors untouched; the interim framer stays in `shekyl-p2p-transport`); the `hybridXK` handshake; `ClassedRecord` and the stream adapter `shekyl-rpc-stream` (RT-P5); padded records in size classes derived from RT-P5 and RT-P6 (RT-O6). `FixedWindow` is the P2P end state and is not built here. Two exclusion rows in the domain registry, one shared reason, for the two Noise protocol-name literals — the RPC channel's and the P2P handshake's — which are mixed into a handshake hash and are standard pattern names, not Shekyl domain strings; the header-protection label `shekyl/noise-record-header-v1` is a separate mechanism-7 row, landed with the constant; the handshake's deadlines from RT-P9 (4 s for message 1, 11 s for the whole handshake, `shekyl_rpc_channel::deadline`). **Standing check, from RT-W9 on (ruled 2026-10-11):** the RT-P4 harness is re-run under the same registered lines whenever the pinned ML-KEM crate or the Rust toolchain changes | RT-W8 | **authorized 2026-10-11, decision-anchored to PR #1034**; pre-flight [`RPC_CHANNEL_RT_W9_PREFLIGHT.md`](RPC_CHANNEL_RT_W9_PREFLIGHT.md); `RT-O16`…`RT-O22` ruled 2026-10-11, and `RT-O16`, `RT-O18`, `RT-O20` and the sequencing of `RT-O21` re-ruled 2026-10-12; step 1 is built (`SymmetricState`, `Direction`, `into_directions`); step 2 is built in PR #1039: the `hybridXK` handshake in `shekyl-rpc-channel`, ending in `into_directions`, compared with the pinned vectors from `rust/shekyl-rpc-channel/src/pinned_handshake.rs` (RT-O18); step 5a builds `ClassedRecord` in `shekyl-noise` (2026-10-20); step 5b builds `shekyl-rpc-stream` (2026-10-20), to RT-O28 and RT-O29 as ruled in the pre-flight's §4a |
-| RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view`. **The listener logs a connection, counts it against a client and records a last-seen time only from the authenticated client `AuthenticatedSession` yields, never from the fingerprint `DaemonReadyForMessage4` exposes for the enrolment lookup (§4.1, ruled 2026-10-12).** A copied fingerprint is still only a claim. Its pre-flight settles what message 4 carries (§6.2) | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
-| RT-W11 | `shekyl-rpc-tunnel`, with session pooling; the pool sized with RT-P6's cost of a session as an input, about 2.16 ms of CPU each side on the floor device (§8, ruled 2026-10-20) | RT-W9 | not authorized |
-| RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-cli`, once it serves the console on the shared client (RT-W15); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9) | RT-W9 | not authorized |
+| RT-W10 | Daemon: same-user socket/pipe and rendezvous, the daemon watching its own rendezvous and shutting down when it goes, the operator-named socket directory, the instance-name rule (§7.1), channel listener, enrolment and revocation, per-connection grants, the host-only class and the armed test-lever switch (§6.1), the resource policy and its floor-device measurement (§6.3); restricted listener and its C++ flags deleted; plaintext loopback re-scoped to `view`. **The listener logs a connection, counts it against a client and records a last-seen time only from the authenticated client `AuthenticatedSession` yields, never from the fingerprint `DaemonReadyForMessage4` exposes for the enrolment lookup (§4.1, ruled 2026-10-12).** A copied fingerprint is still only a claim. Its pre-flight settles what message 4 carries (§6.2). **The `submit_transaction` route fails closed on the record shape (close-out F2, 2026-10-22):** it refuses any body for which the connection's `InboundShape::ends_in_submission` is false when the body has been read, so a client that did not pad, or armed another connection, is refused rather than answered | RT-W9, **RT-O9**, RT-P8, **RK-5c** (`get_info` native, §6.1) | not authorized |
+| RT-W11 | `shekyl-rpc-tunnel`, with session pooling; the pool sized with RT-P6's cost of a session as an input, about 2.16 ms of CPU each side on the floor device (§8, ruled 2026-10-20). **Client contracts for a submission (close-out F2, 2026-10-22):** the tunnel holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one | RT-W9 | not authorized |
+| RT-W12 | Clients on the channel: the engine's daemon client and `shekyl-wallet-rpc` (L1); `shekyl-cli`, once it serves the console on the shared client (RT-W15); `shekyl-gui-wallet`, which dials `HttpRpc::new` directly (open since R0's RT-W7 landing review, `RPC_TRANSPORT_POSTURE.md` §7 RT-O4); `shekyl-mobile-wallet`; **deletes the daemon client's `https://` arm**, `hyper-rustls` and native-roots loading with it (RT-O8); shows the engine pages its requests within §6.3's batch caps (RT-O9). **Client contracts for a submission (close-out F2, 2026-10-22):** each client holds its own connections (hyper's `client::conn::http1`, not the pooled `Client`) and arms `SubmissionMark` on the connection it sends the submission on, and that connection carries nothing else until the response; the submission body is one complete, buffered body (`Full`), never a streaming one | RT-W9 | not authorized |
 | RT-W13 | The check that §11.2 is empty: every row gone, no reader of a deleted flag or field left | lands with RT-W10; re-run after RT-W12 and RT-W14 | not authorized |
 | RT-W14 | Service mode (RT-16): the declared-mode switch; console key and its offline reset; enrol at install; machine-wide rendezvous; Windows service under a virtual account and its installer step (service first, fresh data home never adopted, inheritance broken); Linux unit under a dedicated user; machine-wide data home and ACL; Tor as the service's child; side-by-side refusal | RT-W10, RT-P8, the Rust process entry (the daemon-configuration cutover, PR #1066) | not authorized |
 | RT-W15 | R8: `shekyl-cli` serves the daemon console (`INPUT_GRAMMAR.md` §13), on `shekyl-rpc-client` and `shekyl-rpc-types` (RK-D1, `RPC_WIRE.md`); the Rust console's renderers move into it with their tests; its private HTTP client, its reply types and its free-text status matching go; the C++ console, `shekyld <command>`'s client mode and `rpc_client.h` are deleted | — | authorized 2026-10-17 |
