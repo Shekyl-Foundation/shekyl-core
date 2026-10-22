@@ -815,3 +815,19 @@ jobs:
         # control that must stay green.
         if: '!cancelled()'
         run: python3 scripts/ci/check_clatter_not_in_production.py --selftest
+
+      - name: Run commit-message authorship gate
+        # Rule 90. Every commit in the pull request, not the tree: a trailer
+        # that names an AI coding tool fails here even when the local hook
+        # was skipped. Needs the full history this job already fetches.
+        # Instance of 47-gate-subject-assertion.mdc: an empty range is exit 2.
+        if: '!cancelled()'
+        env:
+          COMMIT_MSG_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          COMMIT_MSG_HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: python3 scripts/ci/check_commit_messages.py --base "$COMMIT_MSG_BASE" --head "$COMMIT_MSG_HEAD"
+
+      - name: Run commit-message authorship gate selftest
+        # A refused trailer must fail, and a human co-author must not.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_commit_messages.py --selftest
