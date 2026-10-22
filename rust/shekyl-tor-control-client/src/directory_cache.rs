@@ -43,7 +43,9 @@
 //! on an async worker moves the call onto a blocking thread. Each file is one
 //! read and one write; the thread is what keeps that off the runtime worker.
 
-use std::fs::{self, File, OpenOptions};
+#[cfg(unix)]
+use std::fs::OpenOptions;
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -274,10 +276,13 @@ pub fn save_from(data_dir: &Path, cache_dir: &Path) -> io::Result<()> {
 
 /// Create `path` as an owner-only directory, or accept it when it already is
 /// a real directory. A symbolic link is an error: the cache is never the
-/// directory a link points at.
+/// directory a link points at. Unix sets the mode on an existing directory.
+/// Windows applies the owner-only access list at create and does not rewrite
+/// an existing directory's access list.
 pub fn ensure_directory(path: &Path) -> io::Result<()> {
     if open_real_dir(path).is_ok() {
-        tighten_existing(path)?;
+        #[cfg(unix)]
+        restrict_existing(path)?;
         return Ok(());
     }
     match create_owner_only(path) {
@@ -286,8 +291,20 @@ pub fn ensure_directory(path: &Path) -> io::Result<()> {
         Err(error) => return Err(error),
     }
     open_real_dir(path)?;
-    tighten_existing(path)?;
+    #[cfg(unix)]
+    restrict_existing(path)?;
     Ok(())
+}
+
+/// Set an existing directory to [`DIR_MODE`].
+///
+/// Windows has no mode bits. The owner-only access list is applied by
+/// `CreateDirectoryW` in [`create_owner_only`], and [`open_real_dir`] has
+/// already refused a reparse point.
+#[cfg(unix)]
+fn restrict_existing(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(DIR_MODE))
 }
 
 /// Fill `data_dir` from the job lane when the lane named a seed and `data_dir`
@@ -409,19 +426,6 @@ fn create_owner_only(path: &Path) -> io::Result<()> {
             other => io::Error::other(other),
         })
     }
-}
-
-fn tighten_existing(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(DIR_MODE))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _path = path;
-    }
-    Ok(())
 }
 
 /// Open `path` and keep it only when the opened object is a real directory.
@@ -601,8 +605,9 @@ fn open_at(dir: &File, name: &str) -> io::Result<File> {
 }
 
 /// What `CreateFileW` is opening. A directory needs backup semantics; a file
-/// does not.
+/// does not. A mode tag: copied, never owned.
 #[cfg(windows)]
+#[derive(Clone, Copy)]
 enum OpenAs {
     File,
     Directory,
@@ -653,8 +658,9 @@ fn file_info(
         GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
     };
     let mut info = BY_HANDLE_FILE_INFORMATION::default();
-    // SAFETY: `file` owns the handle. `info` is a valid out-buffer for the call.
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &mut info) };
+    // SAFETY: `file` owns the handle. `info` is a valid out-buffer for the call
+    // and is not borrowed again until the call returns.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &raw mut info) };
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
