@@ -206,7 +206,7 @@ pub(crate) fn managed_tor_command(
         .arg(tor_end.to_string())
         // Tor writes `state` and its caches less often (TSR §1, Disk).
         .arg("--AvoidDiskWrites")
-        .arg("1")
+        .arg(managed.disk_writes.as_arg())
         .arg("--SocksPort")
         .arg(managed.socks_port.as_arg())
         // A file log in the (owner-only, caller-owned) data directory so a
@@ -1070,6 +1070,7 @@ fn strip_sentence_period(text: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use super::super::actor::DiskWrites;
     use super::*;
     use crate::binary::VerifiedTorBinary;
 
@@ -1096,6 +1097,7 @@ mod tests {
             data_dir: dir.join("data"),
             socks_port: super::super::actor::SocksPort::Auto,
             disable_network,
+            disk_writes: DiskWrites::Deferred,
             exit_observer: None,
             leak: None,
         }
@@ -1422,6 +1424,7 @@ mod tests {
             data_dir: dir.join("data"),
             socks_port: super::super::actor::SocksPort::Auto,
             disable_network: true,
+            disk_writes: DiskWrites::Deferred,
             exit_observer: None,
             leak: None,
         };
@@ -1716,6 +1719,7 @@ fn main() {
             data_dir: dir.path().join("data"),
             socks_port: super::super::actor::SocksPort::Auto,
             disable_network: true,
+            disk_writes: DiskWrites::Deferred,
             exit_observer: None,
             leak: None,
         };

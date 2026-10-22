@@ -81,7 +81,13 @@ pub async fn publish_with_control(
 ) -> InboundPosture {
     let socket = forward.socket();
     publish_forward(forward, virtual_port, |pow| {
-        control.publish(virtual_port, socket, max_streams, pow)
+        let seed = DaemonTorControl::mint_seed();
+        async move {
+            let seed = seed?;
+            control
+                .publish(&seed, virtual_port, socket, max_streams, pow)
+                .await
+        }
     })
     .await
 }

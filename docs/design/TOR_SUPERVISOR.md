@@ -1,10 +1,13 @@
 # The managed Tor supervisor — the link under the Tor connector
 
-**Status: RULED 2026-10-15 — ratified as a whole by Rick. Increments 1, 2 and
-3b of §12 are implemented. Increment 1 is the link the dialer reads (#1092).
-Increment 2 is the control client's groundwork: the bounded sink, the event
-parsers, the `__OwningControllerFD` launch and the two death signals (#1091).
-Increment 3b is the public directory cache (`TSR-Q8`). Increments 3 to 6 are
+**Status: RULED 2026-10-15 — ratified as a whole by Rick. Increments 1, 2, 3
+and 3b of §12 are implemented. Increment 1 is the link the dialer reads
+(#1092). Increment 2 is the control client's groundwork (#1091). Increment 3
+is the supervisor: sans-IO core, timing-engine driver, respawn, and the
+managed route published only from `Running`. `TSR-M2` and `TSR-M8` are not
+recorded, so the measured backoff and the suspend check are still open.
+Increment 3b is the public directory cache (`TSR-Q8`). Increment 5's route
+publishing is absorbed into increment 3 (2026-10-22). Increments 4 and 6 are
 not.** The C++ managed-Tor path and the
 `shekyl_daemon_tor_*` exports are deleted (§9; Rick, 2026-10-17). Increment 6
 is the supervisor's acceptance, and it remains open. Every question is ruled:
@@ -135,15 +138,15 @@ says which and why.
 
 | Fact | Anchor |
 | --- | --- |
-| The daemon's Tor starts once, blocks init up to 300 s, and is never respawned; the crate says so and why (the static C++ proxy) | `src/p2p/net_node.inl` line 757 (at `d26148535e`); `rust/shekyl-tor-control-daemon/src/lib.rs:40-46` |
-| Death is logged once and nothing else happens; the proxy stays installed at the dead port. The one log line is `MERROR` under `net.p2p`, which the default filter sets to `FATAL`, so at the default level it is not shown either (`TSR-F11`) | `src/p2p/net_node.inl:68`, `:1214-1232`; `contrib/epee/src/mlog.cpp:127` |
-| Readiness is a `GETINFO status/bootstrap-phase` poll; no production code issues `SETEVENTS`. The supervisor's one `SETEVENTS`, the parsers for what it subscribes to, and the upload-round policy exist, unused (§4.2, `TSR-Q5`) | `rust/shekyl-tor-control-client/src/control/bootstrap.rs:10-11`; `rust/shekyl-tor-control-client/src/control/events.rs:42`, `:290`; `rust/shekyl-tor-control-client/src/control/upload_rounds.rs:50` |
+| The supervisor starts with the daemon and step 8 does not wait for Tor. A process fault respawns into the kept data directory; the onion seed is held for the boot. There is no bootstrap deadline | `rust/shekyl-daemon/src/run.rs:338`; `rust/shekyl-daemon/src/tor.rs:61`; `rust/shekyl-tor-control-client/src/supervisor.rs:219` |
+| A managed Tor's death takes that incarnation's route down and the supervisor respawns. An operator's Tor is not watched here | `rust/shekyl-ffi/src/zone_ffi.rs` `publish_tor_down`; `rust/shekyl-daemon/src/tor.rs` |
+| The supervisor sends one `SETEVENTS` and reads the parsed events. Bootstrap readiness is still the actor's `GETINFO` poll | `rust/shekyl-tor-control-client/src/control/events.rs:59`; `rust/shekyl-daemon/src/tor.rs` |
 | The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs:273` |
 | Death has two signals: a watcher waits on the child beside the control connection's end, and either stops the actor (`TSR-F16`) | `rust/shekyl-tor-control-client/src/control/actor.rs:823`, `:1384`, `:1432`, `:1447` |
 | Teardown is `DEL_ONION`, `SIGTERM`, 5 s, `SIGKILL`, reap, synchronous wipe | `rust/shekyl-tor-control-client/src/control/actor.rs:102`, `:889`, `:1042`; `rust/shekyl-tor-control-daemon/src/ephemeral.rs:395-415` |
 | The managed tor inherits its owning control connection (`__OwningControllerFD`); it opens no control port and writes no cookie. The launch surface is a closed, tested option list | `rust/shekyl-tor-control-client/src/control/launch.rs:185`, `:393`, `:1126` |
 | `SocksPort` is `auto ExtendedErrors`, so onion failures come back as `0xF0`–`0xF7` | `rust/shekyl-tor-control-client/src/control/actor.rs:614` |
-| The binary witness is taken once, at start | `rust/shekyl-tor-control-daemon/src/ephemeral.rs:75-79` |
+| The pin is checked before every spawn, including a respawn | `rust/shekyl-daemon/src/tor.rs` `pin` |
 | The wallet's supervisor re-verifies the pin at every spawn, never gives up, and publishes the SOCKS route as data on a watch, read at use time | `rust/shekyl-tor-control-wallet/src/service.rs:6-45`, `:289-303` |
 | The dialer draws a gray address, then checks whether it can dial at all; a `DialFailed` of any cause drops the outstanding gray draw | `rust/shekyl-dialer/src/owner/mod.rs:685-686`, then `rust/shekyl-dialer/src/owner/handshake.rs:53-71`; `rust/shekyl-peerlist/src/peerlist.rs:529-531` and `rust/shekyl-peerlist/src/partition.rs:326-331` |
 | The Tor owner loop wakes every 0.5–1.5 s | `rust/shekyl-dialer/src/pace.rs:18-23` |
@@ -869,16 +872,16 @@ before it is the cost of a boot.
    recipe and `AvoidDiskWrites` in the closed list; the process wait as the
    second death signal. **Implemented** (#1091).
 3. The supervisor core (sans-IO) and its timing-engine driver; the pin gate per
-   spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings. It removes the
-   daemon's step-8 Tor wait (`rust/shekyl-daemon/src/run.rs`) and its 300 s
-   bootstrap deadline (`rust/shekyl-daemon/src/tor.rs`): step 8 does not wait
-   for Tor, and no bootstrap is given up (Rick, 2026-10-19; one cold bootstrap
-   in a hundred on the floor device took longer than 300 s, §10). It
-   tests its Tor choices against `TSR-Q9`, settling `TSR-M6`'s open question.
-   The public directory cache is increment 3b, not this one.
-   It defines `ManagedTorFix` and `OwnTx` (§1's posture table) and exposes
-   `TSR-Q12`'s values as one typed read beside those enums. The posture log
-   line renders from the same values through the one renderer.
+   spawn; the respawn routine per the `TSR-Q1`/`TSR-Q2` rulings. **Implemented.**
+   Step 8 does not wait for Tor (`rust/shekyl-daemon/src/run.rs:338`), and the
+   300 s bootstrap deadline is gone. A managed route exists only as
+   `ManagedRunning`, built on the transition into `Running`
+   (`rust/shekyl-tor-control-client/src/supervisor.rs:219`). The public
+   directory cache is increment 3b, not this one. `ManagedTorFix`, `OwnTx`
+   and the one typed read and renderer are `shekyl-tor-control-client`'s
+   `supervisor` module. `TSR-M2` (the backoff's base and cap) and `TSR-M8`
+   (the monotonic clock across suspend) are not recorded yet; the driver's
+   waits are provisional until `TSR-M2`.
 3b. The public directory cache (`TSR-Q8`, §4.7). **Implemented.** At launch
    into a fresh directory the daemon copies `cached-microdesc-consensus`,
    `cached-microdescs`, `cached-microdescs.new` and `cached-certs`, each only
@@ -888,7 +891,9 @@ before it is the cost of a boot.
    The cache directory is `tor-directory-cache`, outside the per-boot sweep.
    `tor-pin-verify` seeds its later live tests from that job's one cold boot.
 4. The probe nonce and the probe.
-5. The supervisor becomes the Tor link's publisher, in place of the zone host.
+5. Absorbed into increment 3 (2026-10-22): the supervisor is the Tor link's
+   publisher. The zone host still publishes an operator Tor from configuration.
+   A managed route is `ManagedRunning` only.
 6. Acceptance of the supervisor. The C++ deletions this increment used to
    sequence after acceptance are already cut (§9; Rick, 2026-10-17): the four
    `shekyl_daemon_tor_*` exports, their `shekyl_ffi.h` declarations,

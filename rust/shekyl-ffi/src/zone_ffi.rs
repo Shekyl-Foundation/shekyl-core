@@ -24,14 +24,14 @@ use shekyl_clearnet::{
 use shekyl_net_address::NetworkAddress;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_runtime::{runtime, RuntimeBudget, ThreadName};
-/// The cause [`watch_managed_tor`] records on the Tor link.
+/// The cause a Tor link is taken down with.
 pub use shekyl_seam::DownCause;
 use shekyl_seam::{
     drive_inbound_async, Channel, CloseCause, CloseKind, ConnectorId, Dial, Direction, Endpoint,
     Hub, Route, RoutePublish, SocketId,
 };
 use shekyl_socks::Proxy;
-use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
+use shekyl_timing_engine::{Clock, Handle, MonotonicClock, Tick};
 use shekyl_tor::{
     accept_inbound as accept_tor_inbound, dial_one as dial_tor, Admitted as TorAdmitted,
     Inbound as TorInbound,
@@ -49,20 +49,14 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(1);
 struct Host {
     pool: Mutex<Option<shekyl_runtime::Pool>>,
     handle: tokio::runtime::Handle,
-    /// The engine thread. Every handle shares its closed flag, and its
-    /// `Drop` sets that flag, so the service lives here for as long as the
-    /// host does and is stopped in [`shutdown`]. Holding only
-    /// the handle closed the engine when `ensure` returned, and every
-    /// transport deadline after that was `Closed`.
-    engine_service: Mutex<Option<EngineService<MonotonicClock>>>,
+    /// A handle on the process engine ([`crate::seam_ffi::process_engine`]).
+    /// The service itself lives for the process, so this handle cannot
+    /// close it.
     engine: Handle<MonotonicClock>,
     sockets: shekyl_seam::Sockets,
     /// The seam's hub. Accept reads its ceiling on every socket, and the
     /// gap sender lives on the connection row there.
     hub: Hub,
-    /// The managed Tor's death watch ([`watch_managed_tor`]). The zone's
-    /// runtime runs it and ends it at shutdown.
-    tor_death: Mutex<Option<tokio::task::JoinHandle<()>>>,
     clearnet: Mutex<Option<ClearnetReady>>,
     /// The Tor proxy this node was configured with, and the RFC 1929 pair it
     /// presents there (DC-Q7). The route itself is the hub's Tor link; a dial
@@ -332,7 +326,6 @@ fn ensure(network_id: [u8; 16]) -> Result<Arc<Host>, ZoneStart> {
     // the clone is the same clock. *Records-was:* the host started its own
     // clock here, one origin per zone host.
     let process = crate::seam_ffi::process_clock();
-    let clock = MonotonicClock::clone(&process);
     node_gate().install_clock(Arc::new(move || process.now().get()));
     if spans::MEASUREMENT_SPANS {
         tracing::warn!(
@@ -341,9 +334,8 @@ fn ensure(network_id: [u8; 16]) -> Result<Arc<Host>, ZoneStart> {
             "measurement build: the Tor gap deadline is lifted to the dial's; not a release"
         );
     }
-    let engine = EngineService::start(clock);
-    let engine_handle = engine.handle();
-    spawn_lateness_report(engine_handle.clone());
+    let engine = crate::seam_ffi::process_engine();
+    spawn_lateness_report(engine.clone());
     let (clearnet_tx, clearnet_rx) = mpsc::unbounded_channel();
     let (tor_tx, tor_rx) = mpsc::unbounded_channel();
     let on_cause: Arc<dyn Fn(CloseCause) + Send + Sync> = Arc::new(|cause| match cause.kind() {
@@ -355,11 +347,9 @@ fn ensure(network_id: [u8; 16]) -> Result<Arc<Host>, ZoneStart> {
     let host = Arc::new(Host {
         pool: Mutex::new(Some(pool)),
         handle: handle.clone(),
-        engine_service: Mutex::new(Some(engine)),
-        engine: engine_handle,
+        engine: engine.clone(),
         sockets: process_sockets(),
         hub: hub.clone(),
-        tor_death: Mutex::new(None),
         tor_proxy: Mutex::new(None),
         clearnet: Mutex::new(None),
         clearnet_tx,
@@ -693,47 +683,64 @@ fn publish_tor_route(host: &Host, socks: SocketAddr, authenticates: bool) {
     }
 }
 
-/// The managed Tor's death takes the Tor link down (`TSR-F1`), so the
-/// dialer draws no onion it cannot reach. `death` is that end as a
-/// [`DownCause`]: an exit and a stop both take the link down, and only an
-/// exit is a fault. The caller maps its own process signal onto that
-/// cause. The down names the incarnation installed now: a route published
-/// later, by another Tor, is not taken down by this one's death. Only the
-/// Tor this daemon manages is watched; an operator's Tor stays usable
-/// until the supervisor brings its outbound evidence. A later call
-/// replaces the watch. Returns false, and watches nothing, when no zone
-/// host is running or no Tor route is installed.
-pub fn watch_managed_tor(
-    death: impl std::future::Future<Output = DownCause> + Send + 'static,
-) -> bool {
+/// The process engine the zone host and the Tor supervisor share.
+#[must_use]
+pub fn process_engine() -> Handle<MonotonicClock> {
+    crate::seam_ffi::process_engine()
+}
+
+/// Starts the managed Tor's listener and connector without a route. The
+/// supervisor publishes the route with [`publish_managed_running`] once Tor
+/// is running.
+///
+/// # Errors
+/// [`ZoneStart`].
+pub fn start_managed_tor(network_id: [u8; 16]) -> Result<SocketAddr, ZoneStart> {
+    let host = ensure(network_id)?;
+    crate::dialer_ffi::start_connector(ConnectorId::Tor, &host.engine);
+    let forward_at = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+    let forward = host.handle.block_on(async {
+        TcpListener::bind(forward_at)
+            .await
+            .map_err(|error| ZoneStart::Bind {
+                addr: forward_at,
+                error,
+            })
+    })?;
+    let local = forward.local_addr().map_err(|error| ZoneStart::Bind {
+        addr: forward_at,
+        error,
+    })?;
+    spawn_tor(&host, forward);
+    Ok(local)
+}
+
+/// Publish the route a [`ManagedRunning`] carries. Returns the incarnation,
+/// or `None` when the zone host is not up yet.
+#[must_use]
+pub fn publish_managed_running(
+    route: &shekyl_tor_control_client::supervisor::ManagedRunning,
+) -> Option<u64> {
+    let host = HOST.lock().expect("zone host").clone()?;
+    let socks = route.socks();
+    *host.tor_proxy.lock().expect("tor proxy") = Some(Proxy::unauthenticated(socks));
+    let published =
+        host.hub
+            .links()
+            .publish_usable(ConnectorId::Tor, Route::Socks(socks), host.hub.now());
+    Some(published.incarnation())
+}
+
+/// Take the Tor route of `incarnation` down. A newer incarnation is left
+/// alone. Returns whether the link changed.
+#[must_use]
+pub fn publish_tor_down(incarnation: u64, cause: DownCause) -> bool {
     let Some(host) = HOST.lock().expect("zone host").clone() else {
         return false;
     };
-    let link = host.hub.links().get(ConnectorId::Tor);
-    if link.route.is_none() {
-        return false;
-    }
-    let incarnation = link.incarnation;
-    let hub = host.hub.clone();
-    let watch = host.handle.spawn(async move {
-        let cause = death.await;
-        let fell = hub
-            .links()
-            .publish_down(ConnectorId::Tor, incarnation, cause, hub.now());
-        tracing::debug!(
-            "the managed Tor ended ({cause:?}); incarnation {incarnation} {}",
-            if fell {
-                "is down"
-            } else {
-                "was already replaced"
-            }
-        );
-    });
-    let replaced = host.tor_death.lock().expect("tor death").replace(watch);
-    if let Some(replaced) = replaced {
-        replaced.abort();
-    }
-    true
+    host.hub
+        .links()
+        .publish_down(ConnectorId::Tor, incarnation, cause, host.hub.now())
 }
 
 /// The handshake finished. The row's gap sender fires, which disarms the
@@ -760,15 +767,11 @@ pub fn shutdown() {
         for connector in ConnectorId::ALL {
             host.hub.links().withdraw(*connector);
         }
-        let engine = host.engine_service.lock().expect("engine").take();
-        if let Some(engine) = engine.as_ref() {
-            engine.close();
-        }
+        crate::seam_ffi::close_process_engine();
         let pool = host.pool.lock().expect("pool").take();
         if let Some(pool) = pool {
             pool.shutdown(host.shutdown_timeout);
         }
-        drop(engine);
     }
     let stall = process_write_stall();
     tracing::info!(
