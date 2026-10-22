@@ -1937,8 +1937,9 @@ abstract-purse control arm reproduces the existing L11 and L13 pins in
 Two consequences are recorded here so they are not discovered later.
 
 - When that PR lands, each L11–L19 section that reports a run reports
-  the new one, and cites the run it replaces by its commit. No test pins
-  a population result today; they are pinned in documents only.
+  the new one, and cites the run it replaces by its commit. Records-was:
+  no test pinned a population result, only the document. `l11_l13_five_seed_pins`
+  now pins the five-seed L11/L13 vector.
 - The consensus constants calibrated from those runs — the bond floor, the
   age weight, the bond duration, the failure window, the release cooldown
   — keep their values and lose their derivation until the runs are
@@ -1947,6 +1948,21 @@ Two consequences are recorded here so they are not discovered later.
 It is a separate PR because it is a separate validation surface (rule 19),
 and it is carried by the `FOLLOWUPS.md` row *Check `shekyl-staking-sim`
 against the staking code built so far*.
+
+**Complete-tree floor, checked 2026-10-22.** `bond_floor_of` posts one
+`ARCHIVAL_BOND_FLOOR_ATOMIC` for `HoldingsKind::CompleteTree`, however
+many shards the tree contains. The reward path does not pay that holding
+per shard. `freeze_complete_trees` (`shekyl-chain-rules`
+`src/archival/close.rs`) marks every credited persona whose record is a
+complete tree, and `market_member_at_epoch` excludes that set, so the
+work is not in `Σwork`. The shape "k complete-tree personas claim k
+copies of the archive at one floor each" is not the code. Wallet
+construction keeps the kind off the ordinary market path. Consensus
+still accepts the kind from any poster, and that poster earns nothing.
+
+The coupling half, still blocked on ESR-10, carries the correlated
+failure-domain arm. The lowest floor that clears its lower bound is
+EUP-5 I, blocked on that half. Both are `FOLLOWUPS.md` rows.
 
 ## 7. What this round does not decide
 
