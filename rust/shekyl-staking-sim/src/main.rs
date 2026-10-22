@@ -51,6 +51,8 @@ mod retrieval;
 mod reward;
 mod riders;
 use reward::CurveImpl;
+#[cfg(test)]
+mod l11_l13_pin;
 mod scenarios;
 mod standoff;
 mod timing_cluster;
