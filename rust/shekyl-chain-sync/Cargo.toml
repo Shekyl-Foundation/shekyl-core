@@ -16,6 +16,7 @@ description = "Chain sync's model: a deterministic state machine, events in and 
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+shekyl-levin = { path = "../shekyl-levin" }
 shekyl-types = { path = "../shekyl-types" }
 
 [dev-dependencies]

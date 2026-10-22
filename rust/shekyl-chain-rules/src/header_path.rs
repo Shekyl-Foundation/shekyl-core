@@ -91,6 +91,12 @@ impl HeaderJudged {
         self.facts.identity()
     }
 
+    /// The parent this header names. The header tree's link.
+    #[must_use]
+    pub const fn previous(&self) -> BlockHash {
+        self.facts.header().previous
+    }
+
     /// The rules the header was formed under.
     #[must_use]
     pub const fn rule_set(&self) -> RuleSet {

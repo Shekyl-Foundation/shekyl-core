@@ -17,10 +17,12 @@
 #![deny(unsafe_code)]
 
 mod claim;
+mod locator;
 mod model;
 mod state;
+mod tree;
 
 pub use claim::{PayloadRefused, PeerClaim};
-pub use model::{Command, Event, Sync};
+pub use model::{ClaimError, Command, Event, Sync};
 pub use shekyl_chain_rules::HeaderView;
 pub use state::SyncState;

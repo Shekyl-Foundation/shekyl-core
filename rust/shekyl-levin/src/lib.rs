@@ -139,8 +139,8 @@ pub use header::{
     INITIAL_MAX_PACKET_SIZE, LEVIN_SIGNATURE, PROTOCOL_VERSION_1,
 };
 pub use ingress::{
-    ingress_payload_cap, DefinedCommand, FLAGS_DEFINED, HANDSHAKE_FIXED_MAX_BYTES,
-    PEERLIST_ENTRY_MAX_ENCODED_BYTES,
+    ingress_payload_cap, DefinedCommand, BLOCKS_IDS_SYNCHRONIZING_MAX_COUNT, FLAGS_DEFINED,
+    HANDSHAKE_FIXED_MAX_BYTES, PEERLIST_ENTRY_MAX_ENCODED_BYTES,
 };
 pub use message::{invoke, notify, response};
 pub use payload::Error as PayloadError;
