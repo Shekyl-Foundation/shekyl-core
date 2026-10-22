@@ -1,0 +1,25 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-chain-sync"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chain sync's model: a deterministic state machine, events in and commands out (CS-2)."
+
+[dependencies]
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+shekyl-types = { path = "../shekyl-types" }
+
+[dev-dependencies]
+shekyl-wire = { path = "../shekyl-wire" }
+
+[lints]
+workspace = true
