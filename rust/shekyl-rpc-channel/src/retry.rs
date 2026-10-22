@@ -259,16 +259,21 @@ mod tests {
         at_cap(&mut exact);
         let deadline = exact.deadline_at();
         assert_eq!(
-            exact.after(AttemptEnd::Busy, deadline - BUSY_BACKOFF_MAX),
+            exact.after(
+                AttemptEnd::Busy,
+                deadline.checked_sub(BUSY_BACKOFF_MAX).unwrap()
+            ),
             Next::Report(HandshakeFailure::Busy),
             "a start exactly at the deadline"
         );
         let mut early = retry(t0, TOP);
         at_cap(&mut early);
-        let now = deadline - BUSY_BACKOFF_MAX - Duration::from_nanos(1);
+        let now = deadline
+            .checked_sub(BUSY_BACKOFF_MAX + Duration::from_nanos(1))
+            .unwrap();
         assert_eq!(
             early.after(AttemptEnd::Busy, now),
-            Next::StartAt(deadline - Duration::from_nanos(1))
+            Next::StartAt(deadline.checked_sub(Duration::from_nanos(1)).unwrap())
         );
     }
 
