@@ -73,6 +73,14 @@ const _: () = assert!(
     HEAVIEST_SHARD_BYTES as u64 == shekyl_types::SHARD_LENGTH.to_raw() + OVERSHOOT_BYTES as u64
 );
 
+/// The heaviest shard §10.6 and §10.8 of `ARCHIVAL_SHARD_T_DERIVATION.md`
+/// were read at: `W` plus the weight limit then in force.
+///
+/// That limit was half the 300_000-byte zone minus the 600-byte reserve the
+/// derivation replaced. [`HEAVIEST_SHARD_BYTES`] follows the live
+/// [`shekyl_wire::transaction::TX_WEIGHT_LIMIT`]; these seconds do not.
+pub const RECORDED_HEAVIEST_SHARD_BYTES: u32 = 3_000_000 + 300_000 / 2 - 600;
+
 /// §4.1a's linearity threshold: the model is rejected when an interior
 /// point's `t₇₀` lies further than this share **of its own value** from the
 /// line through the ladder's two ends. Per cent.
@@ -1125,7 +1133,8 @@ mod tests {
     /// The worse of the two PoW-off days reads as
     /// `ARCHIVAL_SHARD_T_DERIVATION.md` §10.6 records it for `L`: the
     /// per-byte span at the governing percentile and at the p99 of
-    /// completions, and the read of one attempt and one retry.
+    /// completions, at [`RECORDED_HEAVIEST_SHARD_BYTES`], and the read of
+    /// one attempt and one retry.
     #[test]
     fn the_worse_day_reads_as_the_record_says_for_the_span() {
         let file = include_str!("../../../docs/benchmarks/w2_ladder_soak_pow_off_20260930.tsv");
@@ -1145,7 +1154,7 @@ mod tests {
         };
         assert!((line.t_fixed_s - 12.092).abs() < 5e-4, "{line:?}");
         assert!((line.bytes_per_s - 71_606.0).abs() < 0.5, "{line:?}");
-        assert!((line.at(HEAVIEST_SHARD_BYTES) - 56.1).abs() < 0.05);
+        assert!((line.at(RECORDED_HEAVIEST_SHARD_BYTES) - 56.1).abs() < 0.05);
 
         let ladder: Vec<(u32, &[Observation])> = sizes
             .iter()
@@ -1154,7 +1163,7 @@ mod tests {
         let tail = completion_line(&ladder, 99).expect("the p99 line is kept");
         assert!((tail.t_fixed_s - 54.937).abs() < 5e-4, "{tail:?}");
         assert!((tail.bytes_per_s - 47_851.0).abs() < 0.5, "{tail:?}");
-        assert!((tail.at(HEAVIEST_SHARD_BYTES) - 120.8).abs() < 0.05);
+        assert!((tail.at(RECORDED_HEAVIEST_SHARD_BYTES) - 120.8).abs() < 0.05);
 
         let (_, at_largest) = ladder.last().expect("three sizes");
         let read = read_with_retries(at_largest, 1, 99).expect("observations");
