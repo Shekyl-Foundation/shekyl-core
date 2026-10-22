@@ -65,10 +65,12 @@ of its configuration (`shekyld --help`; `docs/EXECUTABLES.md`):
   matching posture when every dial leaves through one.
 - **SOCKS username and password.** A pair is given whole, in the
   configuration file only, and is sent to that proxy and no other. A file
-  that holds one may be read by root, the daemon's account and the daemon's
-  group, and nobody else: a service install keeps it `root:<daemon group>`
-  `0640` under `/etc/shekyl` `root:root` `0755`, a per-account install `0600`.
-  An access-control list that names anyone else refuses. A proxy that refuses
+  that holds one may be read by root and the daemon's account, and by the
+  daemon's group only while that account is the group's only member: a
+  service install keeps it `root:<daemon group>` `0640` under `/etc/shekyl`
+  `root:root` `0755`, a per-account install `0600`. An access-control list
+  that names anyone else refuses, and so does a group that holds anyone
+  else, by its member list or as an account's primary group. A proxy that refuses
   the pair fails each dial through it, and the log names the two options to
   fix once a minute; the daemon keeps running.
 
