@@ -248,7 +248,12 @@ the three operands.
    grammar allows, attestation included, plus a stated margin, with a
    compile-time assertion that the reserve covers it. C2-R2 Q7 is reopened
    on that basis, ruled together with the zone's capacity leg, and lands
-   before the reward-aware fill goes live.
+   before the reward-aware fill goes live. **UPDATE 2026-10-22.** The cover
+   is the codec test `the_maximal_coinbase_weighs_what_the_grammar_sums`
+   (`rust/shekyl-wire/tests/coinbase_reserve.rs`). It builds the maximal
+   coinbase through the codec and weighs it. The reserve is
+   `max_coinbase_weight()` plus `COINBASE_RESERVE_MARGIN` (0), so an assert
+   of the reserve against that function restates the definition.
 3. **Tail.** "A criterion, not a number": at maturity the tail is at least
    `k` times the median per-block fee revenue on the baseline demand
    scenario, `k ≥ 1` ("Carlsten: the fixed reward must dominate fee
@@ -271,7 +276,7 @@ the three operands.
 | --- | --- | --- |
 | a | The version-gate sweep: every version comparison in the C++, classified by operand, with a gate holding the inventory. **Done 2026-10-05** ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md)): the block-version gates are deleted or collapsed, bar the fill (d); the transaction-version collapse is its own PR | before EUP-4 |
 | b | `Fill::admit_up_to` batches the penalty-free part, held to the single-offer walk. **Done 2026-10-22:** the walk still holds with the coinbase operand | EUP-4 prep; the 135-year arms wait on it |
-| c | The coinbase reserve, derived, with its compile-time assertion. **Done 2026-10-22** on the inherited 300,000 B zone (reserve 1,386; `TX_WEIGHT_LIMIT` 148,614). The zone's capacity leg remains EUP-5 G and moves the limit again | with the zone's capacity leg; before (d) |
+| c | The coinbase reserve, derived. **Done 2026-10-22** on the inherited 300,000 B zone (reserve 1,386; `TX_WEIGHT_LIMIT` 148,614). The cover is the codec test `the_maximal_coinbase_weighs_what_the_grammar_sums`. The zone's capacity leg remains EUP-5 G and moves the limit again | with the zone's capacity leg; before (d) |
 | d | The Rust fill prices and bounds the weight the block carries, coinbase included, and the sim records that weight. **Done 2026-10-22.** The C++ fill deletes with `tx_pool.cpp` at the DRS-X flip (DEL-010), not in this change | after (c) |
 | e | Q9, the floor in consensus (D) | after (d): both land in the template and admission path, and the enforced case's arithmetic depends on the fill |
 

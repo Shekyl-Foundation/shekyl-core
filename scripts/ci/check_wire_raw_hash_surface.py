@@ -44,6 +44,13 @@ surface is buffered to its terminator and then searched as a whole:
 
 `pub(crate)` and private items are not surface: the mixers (`hash_concat`,
 `merkle_root`) take raw digests by design and convert at the call.
+
+A const written `const NAME: usize = 32` — public or not — is the same
+32-byte width as the literal. `[u8; NAME]` is reported under the key the
+literal would have had, so naming the length cannot retire an allowlist
+row. A const of any other width is not this gate's subject. Names are
+collected across the crate before the scan, so a length defined in one
+module and used in another is still seen.
 """
 
 from __future__ import annotations
@@ -76,6 +83,16 @@ ALLOWED: dict[str, Allow] = {
     # Curve points and scalars — transform-shaped crypto objects, deferred to
     # the crates that build and verify them (RAW_TYPE_NEWTYPE_MIGRATION.md
     # original PR E). Addressees per RTN-7 §3.2.
+    "transaction.rs::Output.key": Allow(
+        "one-time public key (curve point); #771's OneTimePubkey is minted for "
+        "engine-state persistence, and adopting it at the codec is the "
+        "derivation/match sites' call",
+        "shekyl-tx-builder / shekyl-scanner",
+    ),
+    "transaction.rs::CtBase.commitments": Allow(
+        "Pedersen commitments (curve points); CommitmentBytes, same provenance",
+        "shekyl-tx-builder",
+    ),
     "transaction.rs::BpPlus.a": Allow("Bulletproof+ point", "shekyl-proofs"),
     "transaction.rs::BpPlus.b": Allow("Bulletproof+ point", "shekyl-proofs"),
     "transaction.rs::BpPlus.l": Allow("Bulletproof+ point vector", "shekyl-proofs"),
@@ -96,6 +113,11 @@ ALLOWED: dict[str, Allow] = {
         "consume a newtype for it",
         "shekyl-tx-builder / shekyl-scanner",
     ),
+    "tx_extra/coinbase.rs::build_coinbase_extra()": Allow(
+        "the transaction public key R (curve point) this builder stores in "
+        "TxExtraField::PubKey — the same class, named TX_EXTRA_PUBKEY_LEN",
+        "shekyl-tx-builder / shekyl-scanner",
+    ),
     "tx_extra/mod.rs::TxExtraField::AdditionalPubKeys.0": Allow(
         "additional per-output tx public keys (curve points) in tx_extra 0x04; "
         "one class with PubKey",
@@ -105,6 +127,12 @@ ALLOWED: dict[str, Allow] = {
         "ephemeral X25519 KEM ciphertext — a transform-shaped crypto object, "
         "not a chain identity",
         "shekyl-crypto-pq",
+    ),
+    "transaction.rs::BondPostKind::JoinMarket.endpoint": Allow(
+        "the JoinMarket serving endpoint, a 32-byte v3 onion key; "
+        "shekyl-p-fetch's ServingEndpoint wraps the record, and the bond "
+        "wire stays a bare array",
+        "shekyl-p-fetch",
     ),
     "transaction.rs::Input::ToKey.key_image": Allow(
         "key image — `shekyl_types::KeyImage` exists but is `redact, "
@@ -125,6 +153,14 @@ ALLOWED: dict[str, Allow] = {
 }
 
 RAW = re.compile(r"\[u8;\s*32\]")
+# A const whose initializer is the literal 32. `[u8; NAME]` is then the
+# same raw width as `[u8; 32]`. Uppercase is the family's shape
+# (`OUTPUT_KEY_LEN`, `CT_COMMITMENT_LEN`).
+WIDTH_32 = re.compile(
+    r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?"
+    r"const\s+(?P<name>[A-Z][A-Z0-9_]*)\s*:\s*usize\s*=\s*32\s*;",
+    re.MULTILINE,
+)
 # Declaration *starts*. The type may wrap; the scanner buffers until the
 # type is complete (fields, tuple variants) or the body opens (fns).
 # `pub(crate)` / `pub(super)` fail FIELD_START — `(crate)` is not an ident.
@@ -207,10 +243,28 @@ def pending_complete(lines: list[str], kind: str) -> bool:
     return False
 
 
+def widths_of_32(root: Path) -> frozenset[str]:
+    """Const names under `root` whose initializer is the literal 32."""
+    names: set[str] = set()
+    for path in root.rglob("*.rs"):
+        for match in WIDTH_32.finditer(path.read_text()):
+            names.add(match.group("name"))
+    return frozenset(names)
+
+
+def raw_32(widths: frozenset[str]) -> re.Pattern[str]:
+    """A 32-byte array, written as the literal or as one of `widths`."""
+    if not widths:
+        return RAW
+    named = "|".join(re.escape(name) for name in sorted(widths))
+    return re.compile(rf"\[u8;\s*(?:32|{named})\]")
+
+
 def scan(root: Path) -> tuple[dict[str, str], int]:
     """Return (occurrence → source text, count of `pub` items seen)."""
     found: dict[str, str] = {}
     pub_items = 0
+    raw = raw_32(widths_of_32(root))
     for path in sorted(root.rglob("*.rs")):
         rel = str(path.relative_to(root))
         enclosing = "?"
@@ -226,7 +280,7 @@ def scan(root: Path) -> tuple[dict[str, str], int]:
             if pending is None:
                 return
             joined = _joined(pending)
-            if RAW.search(joined):
+            if raw.search(joined):
                 found[pending_key] = joined
             pending = None
 
@@ -292,7 +346,7 @@ def check(root: Path, allowed: dict[str, Allow]) -> list[str]:
     for item, line in sorted(found.items()):
         if item not in allowed:
             problems.append(
-                f"{item}: raw `[u8; 32]` on the public wire surface with no "
+                f"{item}: raw 32-byte array on the public wire surface with no "
                 f"allowlist entry — use the `shekyl-types` newtype (RTN-7), "
                 f"or add an entry naming the reason and its addressee crate.\n"
                 f"    {line}"
@@ -490,6 +544,41 @@ def selftest() -> int:
         )
         expect("pub(crate) is not surface", check(root, {}), None)
 
+        # Naming a width of 32 is the literal. The allowlist row stays.
+        src.write_text(
+            "pub const OUTPUT_KEY_LEN: usize = 32;\n"
+            "pub struct Output {\n"
+            "    pub key: [u8; OUTPUT_KEY_LEN],\n"
+            "}\n"
+        )
+        expect("named 32-byte length", check(root, {}), "block.rs::Output.key")
+        expect(
+            "named 32-byte length allowlisted",
+            check(root, {"block.rs::Output.key": ok}),
+            None,
+        )
+        other = root / "lengths.rs"
+        other.write_text("const CT_COMMITMENT_LEN: usize = 32;\n")
+        src.write_text(
+            "pub struct CtBase {\n"
+            "    pub commitments: Vec<[u8; CT_COMMITMENT_LEN]>,\n"
+            "}\n"
+        )
+        expect(
+            "named length from another module",
+            check(root, {}),
+            "block.rs::CtBase.commitments",
+        )
+        other.unlink()
+        src.write_text(
+            "pub const NARROW: usize = 31;\n"
+            "pub struct Output {\n"
+            "    pub key: [u8; NARROW],\n"
+            "}\n"
+            "pub fn keep_the_scan_non_empty() {}\n"
+        )
+        expect("a const of another width is not raw", check(root, {}), None)
+
         src.write_text("pub struct Block {\n    pub ok: BlockHash,\n}\n")
         expect(
             "stale allowlist entry",
@@ -523,7 +612,7 @@ def main() -> int:
     found, pub_items = scan(WIRE_SRC)
     print(
         f"OK: {pub_items} public items scanned; "
-        f"{len(found)} raw `[u8; 32]` occurrence(s), all {len(ALLOWED)} allowlisted "
+        f"{len(found)} raw 32-byte occurrence(s), all {len(ALLOWED)} allowlisted "
         f"with a reason and a named addressee (checked)."
     )
     return 0

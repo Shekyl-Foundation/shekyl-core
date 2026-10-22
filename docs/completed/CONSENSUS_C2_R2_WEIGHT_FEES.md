@@ -633,7 +633,13 @@ height 5 weighs 1,364 B; the grammar's narrowest one-output coinbase
 weighs 1,359 B. `TX_WEIGHT_LIMIT` = zone/2 − reserve = **148,614** on the
 inherited 300,000 B zone. The zone is not an input of the derivation; it
 moves again when EUP-5 G rules Q1's capacity leg, and the limit moves
-with it. The compile-time assertion is `COINBASE_RESERVE >= max_coinbase_weight()`.
+with it. The cover is the codec test
+`the_maximal_coinbase_weighs_what_the_grammar_sums`: it builds the
+maximal coinbase through the codec and weighs it against
+`max_coinbase_weight`. The reserve is that function plus
+`COINBASE_RESERVE_MARGIN` (0), so an assert of the reserve against the
+function restates the definition.
+
 The formula and its two-maximal-transactions rationale stand. The 600-byte
 ratification below is the record of what was signed.
 

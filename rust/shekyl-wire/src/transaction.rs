@@ -247,11 +247,6 @@ pub const COINBASE_RESERVE_MARGIN: usize = 0;
 /// literal until the flip deletes that header's readers.
 pub const COINBASE_RESERVE: usize = max_coinbase_weight() + COINBASE_RESERVE_MARGIN;
 
-const _: () = assert!(
-    COINBASE_RESERVE >= max_coinbase_weight(),
-    "the coinbase reserve does not cover the largest coinbase the grammar allows"
-);
-
 /// Per-transaction weight limit (`get_transaction_weight_limit`,
 /// `src/cryptonote_core/tx_verification_utils.cpp`): half the minimum block
 /// weight minus the coinbase reserve. The zone is the inherited
@@ -395,10 +390,10 @@ fn read_len_prefixed_exact<R: Read>(r: &mut R, what: &str, expected: usize) -> i
 /// `<= MAX_BRANCH_SCALARS`, so the clamp right-sizes real inputs while bounding the
 /// reserve; the loop still pushes from a finite reader, so an oversized `count` fails
 /// on the missing bytes rather than on allocation.
-fn read_points<R: Read>(r: &mut R, count: usize) -> io::Result<Vec<[u8; CT_COMMITMENT_LEN]>> {
+fn read_points<R: Read>(r: &mut R, count: usize) -> io::Result<Vec<[u8; 32]>> {
     let mut v = Vec::with_capacity(count.min(MAX_BRANCH_SCALARS));
     for _ in 0..count {
-        v.push(read_array::<CT_COMMITMENT_LEN, _>(r)?);
+        v.push(read_array::<32, _>(r)?);
     }
     Ok(v)
 }

@@ -6,8 +6,9 @@
 //! The coinbase reserve is the grammar's maximum, built through the codec.
 //!
 //! The number is printed, not pinned. A grammar change moves
-//! [`max_coinbase_weight`] and this test still holds; a reserve written a
-//! byte short fails the compile-time assertion in `transaction.rs`.
+//! [`max_coinbase_weight`] and this test still holds. This test is the
+//! cover: a grammar change that moves the codec without the sum fails
+//! [`the_maximal_coinbase_weighs_what_the_grammar_sums`].
 
 use shekyl_wire::transaction::{
     max_coinbase_weight, Ct, CtBase, Input, Output, Transaction, TxPrefix, COINBASE_RESERVE,
