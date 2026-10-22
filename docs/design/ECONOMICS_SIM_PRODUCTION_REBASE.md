@@ -2293,7 +2293,7 @@ No production owner. Line numbers are at this pin; the claims are the 2026-10-02
 - Whether `bond_duration` has a production caller outside the re-export and its KAT was not re-grepped past `prod/lib.rs`.
 - `reseed_rate = 3` and `FOUNDER_COUNT = 5` (`sim/partition_adversary.rs:98`) were not traced to a production owner.
 - Sim figures pinned in `docs/completed/` (`ARCHIVAL_COVER_DRAW.md`, `ARCHIVAL_TM1_CLUSTERING.md`, `ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`, `ARCHIVAL_SIM_ECONOMICS_VERDICT.md`) were not enumerated.
-- The L11 and L13 headline numbers in `DOC` were not re-run. The 2026-06-11 Finding 0 (`DOC` Layer-2 results) already records that the pre-repair `bondA ≈ 79` pin does not reproduce; the section's own table is marked the pre-repair record. That run is the falsifier's first measurement, and it is not this commit.
+- The L11 and L13 headline numbers in `DOC` were re-run after this census (2026-10-22). The June point estimates are one seed. The current five-seed reading, and which commits moved it, are the blocks at the head of `DOC` §L11 and §L13. `l11_l13_five_seed_pins` holds that reading.
 
 ---
 
