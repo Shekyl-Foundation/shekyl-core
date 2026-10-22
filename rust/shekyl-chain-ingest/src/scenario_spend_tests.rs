@@ -361,7 +361,7 @@ async fn bodies_at_the_fills_bound_are_admitted() {
     assert!(bodies <= bound, "the batch fits the fill's bound");
     assert!(
         bodies + unit > bound,
-        "one more spend of this weight still fits the bound"
+        "one more spend of this weight passes the bound"
     );
 
     let block = scenario
