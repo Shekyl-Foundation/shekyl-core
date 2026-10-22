@@ -2184,6 +2184,16 @@ and 20 over the full 720-block window at the year ends — so
 `burn_pct_bp` and `release_multiplier_milli` do not move. The operand
 is the window anyway.
 
+**UPDATE 2026-10-22 (C2-R2).** The fill prices the block with the coinbase
+included, and this vector is regenerated against that weight. The metadata,
+the neutral milestones and every sampled `burn_pct_bp` are unchanged, and
+the year-end listed counts stay 21 and then 20. The first sample lists 23.
+The coinbase occupies its reserve of the penalty-free block, and the
+control fee does not buy the penalty past that, so the one-block window
+before height 1 is that same 23. Later rows move by the emission that
+listing changed. The engine differential still recomputes each row from
+its own operands.
+
 ## Appendix B — census of `shekyl-staking-sim` (as reported, at `bb021f254`)
 
 Read-only pass, 2026-10-02. Row labels are local to these tables (§8).
