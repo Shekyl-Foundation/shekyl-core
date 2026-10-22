@@ -19,6 +19,7 @@ use crate::rule_set::RuleSet;
 use crate::rules::TxKind;
 use crate::validate::tx_form;
 use crate::verdict::{Locus, TxSlot};
+use shekyl_economics::FULL_REWARD_ZONE;
 use shekyl_wire::{Ct, CtBase, Input, Transaction};
 
 #[path = "tx_balance_tests.rs"]
@@ -160,22 +161,23 @@ fn the_limits_are_the_cxx_defines() {
     );
 }
 
-/// H3's limit is derived, never restated: half the zone less the wire
-/// crate's coinbase reserve, the same number `TX_WEIGHT_LIMIT` is.
+/// H3's limit is the wire crate's `TX_WEIGHT_LIMIT`. The formula — half
+/// the zone less the coinbase reserve — is held here so the generated zone
+/// and that constant cannot drift.
 #[test]
-fn the_weight_limit_is_derived_from_the_zone_and_the_reserve() {
+fn the_weight_limit_is_the_wire_constant() {
+    assert_eq!(max_tx_weight(), shekyl_wire::transaction::TX_WEIGHT_LIMIT);
     assert_eq!(
         max_tx_weight(),
         (FULL_REWARD_ZONE / 2) as usize - shekyl_wire::transaction::COINBASE_RESERVE
     );
-    assert_eq!(max_tx_weight(), shekyl_wire::transaction::TX_WEIGHT_LIMIT);
 }
 
 /// The codec's DoS bounds and the consensus limits are the same numbers —
 /// held equal by this test, not by a comment (Q5 as ruled). The size and
 /// the unlock sentinel are the C++ defines (above). The weight limit is
-/// the wire crate's derivation, and `the_weight_limit_is_derived` holds
-/// this crate's copy equal to it.
+/// [`max_tx_weight`], the wire constant, held to the zone formula by
+/// `the_weight_limit_is_the_wire_constant`.
 #[test]
 fn the_limits_equal_the_wire_crates_bounds() {
     assert_eq!(MAX_TX_SIZE, shekyl_wire::transaction::MAX_TX_SIZE);

@@ -47,7 +47,6 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::rules::{Rule, TxContext, TxKind, TxRule, TxScope};
 use crate::verdict::{InvalidBlock, Locus, TxSlot, Verdict};
-use shekyl_economics::FULL_REWARD_ZONE;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
@@ -213,16 +212,13 @@ impl Rule for H6 {
 /// `CRYPTONOTE_MAX_TX_SIZE`.
 pub(crate) const MAX_TX_SIZE: usize = 1_000_000;
 
-/// CEN-H3: the weight a transaction may not exceed — **derived**, never
-/// restated: half the minimum block weight (the full-reward zone,
-/// `shekyl-economics`'s generated constant) less the coinbase reserve.
-/// The reserve is [`shekyl_wire::transaction::COINBASE_RESERVE`], the
-/// grammar's maximum; this crate does not keep a copy. The zone is the
-/// inherited one and moves again when EUP-5 G rules the capacity leg.
+/// CEN-H3: the weight a transaction may not exceed. The wire crate's
+/// [`shekyl_wire::transaction::TX_WEIGHT_LIMIT`]: half the full-reward zone
+/// less the coinbase reserve. This crate does not restate the formula. The
+/// zone is the inherited one and moves again when EUP-5 G rules the
+/// capacity leg.
 pub(crate) const fn max_tx_weight() -> usize {
-    // `FULL_REWARD_ZONE` is a `u64` generated from `config/`; it is a block
-    // weight and fits a `usize` on every target this validator builds for.
-    (FULL_REWARD_ZONE / 2) as usize - shekyl_wire::transaction::COINBASE_RESERVE
+    shekyl_wire::transaction::TX_WEIGHT_LIMIT
 }
 
 // SHT-Q2's static relation (RULED, Rick 2026-09-29): no transaction's
