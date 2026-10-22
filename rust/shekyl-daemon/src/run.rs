@@ -593,6 +593,16 @@ fn announce_all(log_file: &Path, lines: &[String]) {
     }
 }
 
+/// The process socket table, the RPC section and the signal owner are
+/// process-global. A test that reads or replaces any of them holds this
+/// for the whole body, so it cannot interleave with another.
+#[cfg(test)]
+pub(crate) fn hold_process_table() -> std::sync::MutexGuard<'static, ()> {
+    tests::SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn call_run(entry: &ShekylDaemonEntry, config: &DaemonConfig) -> i32 {
     let Some(run) = entry.run else {
         tell(&mut std::io::stderr(), "shekyld: the entry has no run");
@@ -610,9 +620,11 @@ mod tests {
     use std::sync::Mutex;
 
     static RUNS: AtomicUsize = AtomicUsize::new(0);
-    /// The RPC section, the owners' records and the signal owner's request
-    /// are process-global: the tests that drive them run one at a time.
-    static SERIAL: Mutex<()> = Mutex::new(());
+    /// The RPC section, the owners' records, the signal owner's request
+    /// and the process socket table are process-global: the tests that
+    /// drive them run one at a time. [`super::hold_process_table`] is the
+    /// same lock for a test outside this module.
+    pub(super) static SERIAL: Mutex<()> = Mutex::new(());
     static STOPS: AtomicUsize = AtomicUsize::new(0);
     static RUN_RETURNS: Mutex<i32> = Mutex::new(0);
 
