@@ -120,22 +120,29 @@ fn free_bytes(path: &std::path::Path) -> std::io::Result<u64> {
 
 /// Chain reads over the facts slot.
 pub(crate) struct ChainBridge {
-    facts: Arc<Mutex<Option<StoreFacts>>>,
+    facts: Arc<Mutex<Option<Arc<StoreFacts>>>>,
 }
 
 impl ChainBridge {
-    pub(crate) fn new(facts: Arc<Mutex<Option<StoreFacts>>>) -> Self {
+    pub(crate) fn new(facts: Arc<Mutex<Option<Arc<StoreFacts>>>>) -> Self {
         Self { facts }
     }
 
+    /// Clone the facts out of the slot and drop the lock before `read`.
+    /// `pow_hash` waits for a hasher permit and then hashes; the lock must
+    /// not be held across that.
     fn with<T>(
         &self,
         read: impl FnOnce(&StoreFacts) -> Result<T, FactsFault>,
     ) -> Result<T, FactsFault> {
-        match lock(&self.facts).as_ref() {
-            Some(facts) => read(facts),
-            None => Err(FactsFault::NotReady),
-        }
+        let facts = {
+            let slot = lock(&self.facts);
+            match slot.as_ref() {
+                Some(facts) => Arc::clone(facts),
+                None => return Err(FactsFault::NotReady),
+            }
+        };
+        read(&facts)
     }
 }
 

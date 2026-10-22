@@ -62,6 +62,7 @@ use shekyl_chain_ingest::service::{
 use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate};
 use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
+use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, Horizons, SnapshotView};
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
 use shekyl_daemon_rpc::handles::Handles;
@@ -127,7 +128,10 @@ pub struct OpenArgs<'a> {
 }
 
 struct Slots {
-    facts: Arc<Mutex<Option<StoreFacts>>>,
+    /// `Arc` so a read clones the facts out and drops the lock before it
+    /// hashes. `pow_hash` waits for a permit and then hashes; holding this
+    /// lock across that wait would stall every chain read for the hash.
+    facts: Arc<Mutex<Option<Arc<StoreFacts>>>>,
     pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
     door: Arc<Mutex<Option<Door>>>,
 }
@@ -236,7 +240,7 @@ impl Node {
             caches,
             budget,
         );
-        let facts_slot = Arc::new(Mutex::new(Some(facts)));
+        let facts_slot = Arc::new(Mutex::new(Some(Arc::new(facts))));
         let door_slot = Arc::new(Mutex::new(Some(door)));
         let handles = Handles {
             chain: Arc::new(ChainBridge::new(Arc::clone(&facts_slot))),
@@ -284,7 +288,19 @@ impl Node {
     ///
     /// The follower withdraws the job board on the way out. A second call
     /// does nothing. [`Drop`] calls this.
+    ///
+    /// # Panics
+    ///
+    /// When called from a tokio task. [`shekyl_runtime::Pool::block_on`] and
+    /// [`shekyl_runtime::Pool::shutdown`] wait, and a wait inside a task
+    /// panics. [`Drop`] calls this, so the node must not be dropped from a
+    /// task either. Mining control stops the miner; it does not stop or
+    /// drop the node.
     pub fn stop(&self) {
+        debug_assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "Node::stop waits on the runtime; a tokio task cannot call it or drop the node"
+        );
         let Some(runtime) = self
             .runtime
             .lock()
@@ -319,6 +335,20 @@ impl Node {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = None;
         runtime.shutdown(RUNTIME_SHUTDOWN);
+    }
+
+    /// The facts the chain handle reads. The lock test stalls `pow_hash`
+    /// through this and shows a chain read does not wait.
+    #[cfg(test)]
+    fn facts(&self) -> Arc<StoreFacts> {
+        Arc::clone(
+            self.slots
+                .facts
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+                .expect("the facts slot is filled until stop"),
+        )
     }
 }
 
@@ -418,7 +448,7 @@ fn open_pool(
         .unwrap_or(BlockHeight::ZERO);
     let rule_set = rules.in_force(height);
     let view = SnapshotView::new(&snap);
-    let (pool, _, _) = Pool::open(
+    let (pool, opened, _) = Pool::open(
         path,
         wall_now(),
         &view,
@@ -426,6 +456,12 @@ fn open_pool(
         &AdmissionPolicy::GENESIS,
     )
     .map_err(|error| OpenError::Pool(format!("{error:?}")))?;
+    if let PoolOpen::Recreated { from } = opened {
+        tracing::warn!(
+            %from,
+            "the pool file is a layout this release does not speak; it was recreated empty"
+        );
+    }
     Ok(Arc::new(Mutex::new(pool)))
 }
 
@@ -558,6 +594,61 @@ mod tests {
             Err(FactsFault::NotReady),
             "the handle does not answer after the store closes"
         );
+    }
+
+    /// A `pow_hash` in flight does not hold the facts lock: a chain read
+    /// returns while the hash is stalled inside the read.
+    ///
+    /// Red edit: hold the slot mutex across `read`.
+    #[test]
+    fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        use shekyl_daemon_rpc::chain_facts::ChainFacts;
+        use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowSeed};
+
+        struct Release(Arc<StoreFacts>);
+        impl Drop for Release {
+            fn drop(&mut self) {
+                self.0.set_pow_stall_for_test(false);
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_at(dir.path(), Arc::new(|| {}));
+        let facts = node.facts();
+        let _release = Release(Arc::clone(&facts));
+        facts.set_pow_stall_for_test(true);
+        let hashing = {
+            let chain = Arc::clone(&node.handles().chain);
+            std::thread::spawn(move || {
+                let _finished = ChainReadFacts::pow_hash(
+                    &*chain,
+                    &[],
+                    PowSeed::Given(BlockHash::NULL),
+                )
+                .is_ok();
+            })
+        };
+        std::thread::sleep(Duration::from_millis(30));
+        let (done, arrived) = mpsc::channel();
+        let reading = {
+            let chain = Arc::clone(&node.handles().chain);
+            std::thread::spawn(move || {
+                let _read = ChainFacts::chain_tip(&*chain).is_ok();
+                let _sent = done.send(()).is_ok();
+            })
+        };
+        assert!(
+            arrived.recv_timeout(Duration::from_millis(200)).is_ok(),
+            "a chain read waited out the pow stall, so the facts lock is held across the hash"
+        );
+        drop(_release);
+        hashing
+            .join()
+            .expect("the stalled hash finishes once released");
+        reading.join().expect("the chain read");
     }
 
     /// A ban through the node is on the table `process_sockets` reads.

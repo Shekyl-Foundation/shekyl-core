@@ -35,6 +35,7 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 hex = "0.4"
 rustix = { version = "1", features = ["fs"] }
 thiserror = { workspace = true }
+tokio = { version = "1", default-features = false, features = ["rt"] }
 tracing = "0.1"
 
 [dev-dependencies]

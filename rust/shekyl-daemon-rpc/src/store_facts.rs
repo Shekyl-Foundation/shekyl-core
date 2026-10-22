@@ -133,6 +133,10 @@ pub struct StoreFacts {
     caches: Arc<shekyl_pow_randomx::CacheStore>,
     /// The daemon's one hasher budget: `calc_pow` hashes under a permit.
     budget: shekyl_hash_budget::Budget,
+    /// While set, `pow_hash` waits before it reads. The node test sets it
+    /// to show a chain read does not wait out a hash. Production never sets
+    /// it.
+    stall_pow: std::sync::atomic::AtomicBool,
 }
 
 impl StoreFacts {
@@ -157,7 +161,17 @@ impl StoreFacts {
             identity,
             caches,
             budget,
+            stall_pow: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Test hook. While `stall` is set, `pow_hash` waits before it reads,
+    /// so a caller can show its own lock is not held across that wait.
+    /// Production never calls this.
+    #[doc(hidden)]
+    pub fn set_pow_stall_for_test(&self, stall: bool) {
+        self.stall_pow
+            .store(stall, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn snapshot(&self) -> Result<ReadSnapshot<'_>, FactsFault> {
