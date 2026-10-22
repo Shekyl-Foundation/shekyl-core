@@ -16,6 +16,9 @@
 
 #![deny(unsafe_code)]
 
+#[cfg(test)]
+mod select_tests;
+
 mod claim;
 mod locator;
 mod model;
@@ -23,6 +26,6 @@ mod state;
 mod tree;
 
 pub use claim::{PayloadRefused, PeerClaim};
-pub use model::{ClaimError, Command, Event, Sync};
+pub use model::{ClaimError, Command, Event, Job, Proved, Sync, HEADERS_RATE_FLOOR};
 pub use shekyl_chain_rules::HeaderView;
 pub use state::SyncState;

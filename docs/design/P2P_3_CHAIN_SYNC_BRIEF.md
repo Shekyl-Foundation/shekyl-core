@@ -14,6 +14,7 @@ Values this PR introduces that are not derived. Each is an `Assumption`
 | --- | --- | --- | --- |
 | `HEADERS_RESPONSE_BYTES` | 2 MiB | A header response's preimage budget. About ten thousand headers, past the tip case (~144 KiB) and short of a whole initial-sync run. A preimage shorter than a PoW preimage is refused, so the encoded cap's two-byte length-prefix allowance holds. | CS-Q11: headers per second and peak memory on the floor device, after the cutover |
 | `BODIES_RESPONSE_BYTES` | 8 MiB | How much a body response adds after the first held block, which is sent whatever its size. Charged when the response is stored and when it is decoded. Not derived from the block-weight limit. | CS-Q11: bodies per second and peak memory on the floor device, after the cutover |
+| `HEADERS_RATE_FLOOR` | 8 KiB/s | The deadline of a header request is the connector's transit plus `HEADERS_RESPONSE_BYTES` divided by this rate: 256 seconds for a full 2 MiB response. Slow for one Tor stream, and not a clearnet rate, so an honest Tor peer is not declared late. | CS-Q11: headers per second over Tor on the floor device, after the cutover |
 
 **Subject.** Moving chain sync (`cryptonote_protocol_handler`, `block_queue`) from C++ to Rust.
 

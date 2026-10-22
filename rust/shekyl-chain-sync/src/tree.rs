@@ -4,9 +4,10 @@
 // BSD-3-Clause
 
 //! The header tree `T` (CS-Q2). Only headers the proof accepted, keyed
-//! by hash. `H*` is the most work among the local tip and the valid
-//! tips whose fork is within the reorg cap. Equal work leaves the
-//! incumbent.
+//! by hash. Children and the tip set are indexes, so a walk is the
+//! branch and not the whole tree. `H*` is a tip: its hash and its
+//! work. A heavier tip displaces the incumbent only when its fork is
+//! within the reorg cap. Equal work leaves the incumbent.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,17 +15,32 @@ use shekyl_chain_rules::{AtHeight, HeaderJudged, HeaderView};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
-const ONE: BlockCount = BlockCount::from_raw(1);
+const ONE: BlockCount = BlockCount::ONE;
 
 struct Node {
     judged: HeaderJudged,
     parent: BlockHash,
 }
 
+/// The chain `H*` names: a hash and the work through it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Star {
+    pub hash: BlockHash,
+    pub work: CumulativeDifficulty,
+}
+
+impl Star {
+    pub(crate) const fn local(hash: BlockHash, work: CumulativeDifficulty) -> Self {
+        Self { hash, work }
+    }
+}
+
 /// Verified headers above the main chain.
 #[derive(Default)]
 pub(crate) struct HeaderTree {
     nodes: BTreeMap<BlockHash, Node>,
+    children: BTreeMap<BlockHash, BTreeSet<BlockHash>>,
+    tips: BTreeSet<BlockHash>,
     /// A header marked invalid, and every header that descends from one.
     /// The hash is remembered so a later child is excluded too.
     invalid: BTreeSet<BlockHash>,
@@ -36,83 +52,112 @@ impl HeaderTree {
         let parent = judged.previous();
         let excluded = self.invalid.contains(&parent);
         self.nodes.insert(hash, Node { judged, parent });
+        self.children.entry(parent).or_default().insert(hash);
+        if self.nodes.contains_key(&parent) {
+            self.tips.remove(&parent);
+        }
+        self.tips.insert(hash);
         if excluded {
             self.mark_invalid(hash);
         }
     }
 
-    /// The header and every stored descendant. Selection skips them.
+    /// The header and its descendants, by the children index.
     pub(crate) fn mark_invalid(&mut self, hash: BlockHash) {
-        self.invalid.insert(hash);
-        let descendants: Vec<BlockHash> = self
-            .nodes
-            .keys()
-            .copied()
-            .filter(|node| self.reaches(*node, hash))
-            .collect();
-        self.invalid.extend(descendants);
+        let mut stack = vec![hash];
+        while let Some(hash) = stack.pop() {
+            if !self.invalid.insert(hash) {
+                continue;
+            }
+            self.tips.remove(&hash);
+            if let Some(children) = self.children.get(&hash) {
+                stack.extend(children.iter().copied());
+            }
+        }
     }
 
-    fn reaches(&self, mut from: BlockHash, ancestor: BlockHash) -> bool {
-        if from == ancestor {
-            return false;
-        }
+    /// The height of `hash` when it is in `T`.
+    pub(crate) fn connecting(&self, hash: BlockHash) -> Option<BlockHeight> {
+        self.nodes.get(&hash).map(|node| node.judged.connecting())
+    }
+
+    /// Hashes of `H*`'s branch in `T`, keyed by their connecting height.
+    /// Heights on main, at and below the fork, are absent: the caller
+    /// reads those from the view, and only the ones the locator names.
+    pub(crate) fn above_fork(&self, tip: BlockHash) -> BTreeMap<BlockHeight, BlockHash> {
+        let mut out = BTreeMap::new();
+        let mut hash = tip;
         let mut guard = 0usize;
-        while let Some(node) = self.nodes.get(&from) {
-            if node.parent == ancestor {
-                return true;
+        while let Some(node) = self.nodes.get(&hash) {
+            out.insert(node.judged.connecting(), hash);
+            if !self.nodes.contains_key(&node.parent) {
+                break;
             }
-            from = node.parent;
+            hash = node.parent;
             guard += 1;
             if guard > self.nodes.len() {
-                return false;
+                break;
             }
         }
-        false
+        out
     }
 
-    /// Work of `H*`. Starts from the local chain and replaces it only
-    /// with a strictly heavier reachable tip, so an equal-work tip does
-    /// not flap the incumbent.
+    /// `incumbent` stays unless a tip in the tip set is strictly heavier
+    /// and its fork is within `cap`. Each such tip costs one
+    /// [`HeaderView::header_at`]: the fork height comes from
+    /// [`HeaderJudged::connecting`], and that one read checks the anchor.
     pub(crate) fn select<'id, H: HeaderView<'id>>(
         &self,
         main: &H,
+        incumbent: Star,
         local_height: Option<BlockHeight>,
-        local_work: CumulativeDifficulty,
         cap: BlockCount,
-    ) -> Result<CumulativeDifficulty, H::Fault> {
-        let mut best = local_work;
-        for hash in self.tips() {
-            if self.invalid.contains(&hash) {
-                continue;
-            }
-            let Some(node) = self.nodes.get(&hash) else {
+    ) -> Result<Star, H::Fault> {
+        let floor = incumbent.work;
+        let mut best = incumbent;
+        for hash in &self.tips {
+            let Some(node) = self.nodes.get(hash) else {
                 continue;
             };
             let work = node.judged.cumulative_difficulty();
-            if work <= best {
+            // Heavier than the incumbent this call started with. A tip
+            // that only beats a tip we already chose this call is still
+            // a candidate: one read each, then the heaviest within the
+            // cap wins. Equal work is not a candidate.
+            if work <= floor {
                 continue;
             }
-            if self.within_cap(main, hash, local_height, cap)? {
-                best = work;
+            if self.within_cap(main, *hash, local_height, cap)? && work > best.work {
+                best = Star { hash: *hash, work };
             }
         }
         Ok(best)
     }
 
-    fn tips(&self) -> Vec<BlockHash> {
-        self.nodes
-            .keys()
-            .copied()
-            .filter(|hash| !self.nodes.values().any(|node| node.parent == *hash))
-            .collect()
+    /// The parent that is not in `T`, and its height: one below the
+    /// first header of the branch. A header connecting at 0 has no
+    /// block below it; the anchor is its parent and the height is 0.
+    fn fork(&self, tip: BlockHash) -> Option<(BlockHash, BlockHeight)> {
+        let mut hash = tip;
+        let mut guard = 0usize;
+        loop {
+            let node = self.nodes.get(&hash)?;
+            if !self.nodes.contains_key(&node.parent) {
+                let height = node.judged.connecting();
+                let fork = match height.checked_sub_count(ONE) {
+                    Some(fork) => fork,
+                    None => BlockHeight::ZERO,
+                };
+                return Some((node.parent, fork));
+            }
+            hash = node.parent;
+            guard += 1;
+            if guard > self.nodes.len() {
+                return None;
+            }
+        }
     }
 
-    /// The fork anchor is the parent hash that is not itself in `T`.
-    /// It is within the cap when that block is on `main` and
-    /// `L.height − fork.height` does not exceed `cap`. An empty chain's
-    /// anchor is the null hash: the branch is genesis, and the depth is
-    /// the whole local chain.
     fn within_cap<'id, H: HeaderView<'id>>(
         &self,
         main: &H,
@@ -120,56 +165,19 @@ impl HeaderTree {
         local_height: Option<BlockHeight>,
         cap: BlockCount,
     ) -> Result<bool, H::Fault> {
-        let anchor = self.anchor(tip);
-        let Some(local_height) = local_height else {
-            return Ok(anchor == BlockHash::NULL);
-        };
-        let Some(fork) = height_of(main, anchor)? else {
+        let Some((anchor, fork)) = self.fork(tip) else {
             return Ok(false);
         };
-        if fork > local_height {
+        let at = main.header_at(fork)?;
+        let Some(local_height) = local_height else {
+            return Ok(anchor == BlockHash::NULL && matches!(at, AtHeight::AboveTip));
+        };
+        let AtHeight::Recorded(record) = at else {
+            return Ok(false);
+        };
+        if record.hash != anchor || fork > local_height {
             return Ok(false);
         }
         Ok(local_height - fork <= cap)
-    }
-
-    fn anchor(&self, mut hash: BlockHash) -> BlockHash {
-        let mut guard = 0usize;
-        while let Some(node) = self.nodes.get(&hash) {
-            if !self.nodes.contains_key(&node.parent) {
-                return node.parent;
-            }
-            hash = node.parent;
-            guard += 1;
-            if guard > self.nodes.len() {
-                return hash;
-            }
-        }
-        hash
-    }
-}
-
-fn height_of<'id, H: HeaderView<'id>>(
-    main: &H,
-    hash: BlockHash,
-) -> Result<Option<BlockHeight>, H::Fault> {
-    let Some(tip) = main.tip()? else {
-        return Ok((hash == BlockHash::NULL).then_some(BlockHeight::ZERO));
-    };
-    let mut height = tip.height;
-    loop {
-        let AtHeight::Recorded(record) = main.header_at(height)? else {
-            return Ok(None);
-        };
-        if record.hash == hash {
-            return Ok(Some(height));
-        }
-        if record.header.previous == hash {
-            return Ok(height.checked_sub_count(ONE));
-        }
-        let Some(below) = height.checked_sub_count(ONE) else {
-            return Ok(None);
-        };
-        height = below;
     }
 }

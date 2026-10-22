@@ -20,6 +20,7 @@ shekyl-levin = { path = "../shekyl-levin" }
 shekyl-types = { path = "../shekyl-types" }
 
 [dev-dependencies]
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 shekyl-wire = { path = "../shekyl-wire" }
 
 [lints]

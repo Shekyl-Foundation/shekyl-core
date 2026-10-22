@@ -8,22 +8,32 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use shekyl_chain_rules::{AtHeight, Fault, FormedHeader, HeaderView, RuleSet, Tip, Trust};
+use shekyl_chain_rules::{
+    AtHeight, Fault, FormedHeader, HeaderView, InvalidBlock, RuleSet, Tip, Trust,
+};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_draw_rng::{bounded_uniform, RelayRng};
-use shekyl_levin::RequestHeaders;
-use shekyl_types::{BlockCount, BlockHash, BlockHeight};
+use shekyl_levin::{RequestHeaders, HEADERS_RESPONSE_BYTES};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 
 use crate::claim::{self, PayloadRefused, PeerClaim};
 use crate::locator::locator;
 use crate::state::SyncState;
-use crate::tree::HeaderTree;
+use crate::tree::{HeaderTree, Star};
 
-/// Bytes per second assumed when a header request's deadline is set.
+/// Bytes per second assumed for a header-request deadline.
 ///
-/// Assumption (CS-Q11): replaced by a measurement of header delivery on
-/// the floor device. Not derived from the protocol.
-const HEADERS_RATE_FLOOR: u64 = 1_024;
+/// A full header response is [`HEADERS_RESPONSE_BYTES`] (2 MiB). At 8 KiB/s
+/// that response takes 256 seconds, which is slow for a single Tor stream
+/// and far below a clearnet rate, so an honest peer on Tor is not declared
+/// late and a stalled peer is not waited on for a LAN round trip.
+///
+/// Assumption, replaced by CS-Q11's measurement of headers per second over
+/// Tor on the floor device (the slow path; the clearnet figure is the
+/// other one).
+pub const HEADERS_RATE_FLOOR: u64 = 8 * 1024;
+
+const _: () = assert!(HEADERS_RESPONSE_BYTES / HEADERS_RATE_FLOOR == 256);
 
 /// What the connector hands the model.
 #[derive(Clone, Debug)]
@@ -60,13 +70,37 @@ pub enum Event<K> {
         /// The session the request was drawn for.
         session: K,
     },
-    /// A header the executor proved. Judged here and, when it passes,
-    /// recorded in the tree.
+    /// The executor's answer to a Prove command this model will issue.
+    /// `job` is that command's job (§4.2). Matching it to a run, closing
+    /// on [`Proved::Refused`], and re-planning a `Stale` with the fault's
+    /// attempt are the run layer (§4.8).
     Proven {
-        /// The header `form_header` accepted. Boxed: the token is far
-        /// larger than the other events.
-        formed: Box<FormedHeader>,
+        /// The job the `Prove` command named.
+        job: Job,
+        /// One outcome per item, in order.
+        results: Vec<Proved>,
     },
+}
+
+/// The id of one Prove batch. The model mints it; `Proven` carries it back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Job(u64);
+
+impl Job {
+    /// The id as a number. The edge for a test that builds a `Proven`.
+    #[must_use]
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+}
+
+/// One item of a [`Event::Proven`] batch.
+#[derive(Clone, Debug)]
+pub enum Proved {
+    /// `form_header` accepted the header.
+    Formed(Box<FormedHeader>),
+    /// `form_header` refused it. The run layer closes the supplier.
+    Refused(InvalidBlock),
 }
 
 /// What the model asks the executor to do.
@@ -91,6 +125,7 @@ pub enum Command<K> {
 /// The chain the model has observed.
 #[derive(Clone, Copy, Debug)]
 struct Local {
+    hash: BlockHash,
     height: Option<BlockHeight>,
     work: CumulativeDifficulty,
 }
@@ -102,17 +137,18 @@ struct Session {
 }
 
 /// The sync model.
-pub struct Sync<K> {
+pub struct Sync<K, R> {
     sessions: BTreeMap<K, Session>,
     /// A claim that arrived before its session opened.
     pending: BTreeMap<K, PeerClaim>,
     local: Option<Local>,
     tree: HeaderTree,
-    /// The best verified work: the local chain, or a heavier reachable tip.
-    best: CumulativeDifficulty,
+    /// `H*`: the local tip, or a heavier reachable tip in `T`.
+    star: Star,
     /// The session a header request extending `H*` is waiting on.
     frontier: Option<K>,
-    rules: fn(BlockHeight) -> RuleSet,
+    /// The rule set in force at a height. The reorg cap is that set's.
+    rules: R,
     /// The fill's descending frontier. Genesis means the fill is done.
     fill_frontier: BlockHeight,
     /// The store's latch. Read, never published as the state.
@@ -122,23 +158,25 @@ pub struct Sync<K> {
     trust: Trust,
 }
 
-impl<K> Sync<K>
+impl<K, R> Sync<K, R>
 where
     K: Copy + Ord + std::hash::Hash + std::fmt::Debug,
+    R: Fn(BlockHeight) -> RuleSet,
 {
     /// `trust` is the posture [`shekyl_chain_rules::judge_header`] is
     /// given. Until slice 6 every [`Trust`] is the full posture, so
-    /// [`Self::checkpoint`] is genesis.
+    /// [`Self::checkpoint`] is genesis. `rules` is the schedule: the
+    /// reorg cap is the set in force at the connecting height.
     #[must_use]
-    pub fn new(trust: Trust) -> Self {
+    pub fn new(trust: Trust, rules: R) -> Self {
         Self {
             sessions: BTreeMap::new(),
             pending: BTreeMap::new(),
             local: None,
             tree: HeaderTree::default(),
-            best: CumulativeDifficulty::ZERO,
+            star: Star::local(BlockHash::NULL, CumulativeDifficulty::ZERO),
             frontier: None,
-            rules: |_| RuleSet::GENESIS,
+            rules,
             fill_frontier: BlockHeight::ZERO,
             alarm: false,
             trust,
@@ -183,10 +221,10 @@ where
         let Some(local) = self.local else {
             return SyncState::NoView;
         };
-        if self.best > local.work {
+        if self.star.work > local.work {
             return SyncState::Behind {
                 have: local.work,
-                best: self.best,
+                best: self.star.work,
             };
         }
         if self.fill_frontier > Self::checkpoint() {
@@ -201,6 +239,13 @@ where
     #[must_use]
     pub const fn alarm(&self) -> bool {
         self.alarm
+    }
+
+    /// `H*`: the hash and the work selection last chose.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn selected(&self) -> Star {
+        self.star
     }
 
     /// The transit the session opened with.
@@ -245,7 +290,13 @@ where
                     self.frontier = None;
                 }
             }
-            Event::Proven { formed } => self.adopt(main, &formed)?,
+            Event::Proven { job: _, results } => {
+                for result in &results {
+                    if let Proved::Formed(formed) = result {
+                        self.adopt(main, formed)?;
+                    }
+                }
+            }
         }
         let after = self.state();
         if after != before {
@@ -272,6 +323,7 @@ where
     ) -> Result<(), H::Fault> {
         let Some(tip) = main.tip()? else {
             self.local = Some(Local {
+                hash: BlockHash::NULL,
                 height: None,
                 work: CumulativeDifficulty::ZERO,
             });
@@ -281,6 +333,7 @@ where
         let height = at.unwrap_or(tip.height);
         if let AtHeight::Recorded(record) = main.header_at(height)? {
             self.local = Some(Local {
+                hash: record.hash,
                 height: Some(height),
                 work: record.cumulative_difficulty,
             });
@@ -297,7 +350,13 @@ where
             .height
             .map_or(BlockHeight::ZERO, |height| height + BlockCount::ONE);
         let cap = (self.rules)(at).reorg_cap();
-        self.best = self.tree.select(main, local.height, local.work, cap)?;
+        let previous = self.star.hash;
+        self.star =
+            self.tree
+                .select(main, Star::local(local.hash, local.work), local.height, cap)?;
+        if self.star.hash != previous {
+            self.frontier = None;
+        }
         Ok(())
     }
 
@@ -332,7 +391,11 @@ where
         let sources: Vec<K> = self
             .sessions
             .iter()
-            .filter(|(_, session)| session.claim.is_some_and(|claim| claim.work > self.best))
+            .filter(|(_, session)| {
+                session
+                    .claim
+                    .is_some_and(|claim| claim.work > self.star.work)
+            })
             .map(|(session, _)| *session)
             .collect();
         if sources.is_empty() {
@@ -343,7 +406,7 @@ where
         let Some(session) = sources.get(index).copied() else {
             return Ok(());
         };
-        let ids = locator(&main_newest_first(main)?);
+        let ids = self.locator_of(main)?;
         let transit = self
             .sessions
             .get(&session)
@@ -352,10 +415,36 @@ where
         self.frontier = Some(session);
         out.push(Command::RequestHeaders {
             session,
-            deadline: header_deadline(now, transit, ids.len()),
+            deadline: header_deadline(now, transit),
             request: RequestHeaders { block_ids: ids },
         });
         Ok(())
+    }
+
+    /// The locator of `H*`: `T` from that tip down to its fork, then main
+    /// below. `locator` names the heights; only a height it names that is
+    /// not already in `T` is read from `main`.
+    fn locator_of<'id, H: HeaderView<'id>>(&self, main: &H) -> Result<Vec<[u8; 32]>, H::Fault> {
+        let above = self.tree.above_fork(self.star.hash);
+        locator(self.star_count(), |height| {
+            if let Some(hash) = above.get(&height) {
+                return Ok(Some(*hash));
+            }
+            match main.header_at(height)? {
+                AtHeight::Recorded(record) => Ok(Some(record.hash)),
+                AtHeight::AboveTip => Ok(None),
+            }
+        })
+    }
+
+    fn star_count(&self) -> ChainCount {
+        if let Some(height) = self.tree.connecting(self.star.hash) {
+            return ChainCount::with_tip(height).unwrap_or(ChainCount::ZERO);
+        }
+        self.local
+            .and_then(|local| local.height)
+            .and_then(ChainCount::with_tip)
+            .unwrap_or(ChainCount::ZERO)
     }
 }
 
@@ -368,30 +457,10 @@ pub enum ClaimError<E> {
     View(E),
 }
 
-fn header_deadline(now: Instant, transit: Duration, hashes: usize) -> Instant {
-    let bytes = u64::try_from(hashes).unwrap_or(u64::MAX).saturating_mul(32);
-    let secs = (bytes / HEADERS_RATE_FLOOR).max(1);
-    now.checked_add(transit + Duration::from_secs(secs))
+fn header_deadline(now: Instant, transit: Duration) -> Instant {
+    let secs = HEADERS_RESPONSE_BYTES / HEADERS_RATE_FLOOR;
+    now.checked_add(transit.saturating_add(Duration::from_secs(secs)))
         .unwrap_or(now)
-}
-
-fn main_newest_first<'id, H: HeaderView<'id>>(main: &H) -> Result<Vec<BlockHash>, H::Fault> {
-    let Some(tip) = main.tip()? else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::new();
-    let mut height = tip.height;
-    loop {
-        let AtHeight::Recorded(record) = main.header_at(height)? else {
-            break;
-        };
-        out.push(record.hash);
-        let Some(below) = height.checked_sub_count(BlockCount::ONE) else {
-            break;
-        };
-        height = below;
-    }
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -451,7 +520,14 @@ mod tests {
         }
     }
 
-    fn open(sync: &mut Sync<u8>, session: u8) -> Vec<Command<u8>> {
+    fn issued(_: BlockHeight) -> RuleSet {
+        RuleSet::GENESIS
+    }
+
+    fn open<R: Fn(BlockHeight) -> RuleSet>(
+        sync: &mut Sync<u8, R>,
+        session: u8,
+    ) -> Vec<Command<u8>> {
         let mut out = Vec::new();
         sync.handle(
             Event::SessionOpened {
@@ -467,7 +543,10 @@ mod tests {
         out
     }
 
-    fn hint(sync: &mut Sync<u8>, peer: PeerClaim) -> Result<(), ClaimError<Infallible>> {
+    fn hint<R: Fn(BlockHeight) -> RuleSet>(
+        sync: &mut Sync<u8, R>,
+        peer: PeerClaim,
+    ) -> Result<(), ClaimError<Infallible>> {
         let mut out = Vec::new();
         sync.claim(
             1,
@@ -488,7 +567,7 @@ mod tests {
 
     #[test]
     fn a_genesis_only_claim_is_admitted() {
-        let mut sync = Sync::new(Trust::UNANCHORED);
+        let mut sync = Sync::new(Trust::UNANCHORED, issued);
         // One block, target 1.
         assert_eq!(hint(&mut sync, claim(1, 1)), Ok(()));
         assert_eq!(sync.state(), SyncState::NoView);
@@ -496,7 +575,7 @@ mod tests {
 
     #[test]
     fn a_block_count_of_zero_is_refused() {
-        let mut sync = Sync::new(Trust::UNANCHORED);
+        let mut sync = Sync::new(Trust::UNANCHORED, issued);
         assert_eq!(
             hint(&mut sync, claim(0, 1)),
             Err(ClaimError::Refused(PayloadRefused::Height))
@@ -509,7 +588,7 @@ mod tests {
 
     #[test]
     fn work_below_the_block_count_is_refused() {
-        let mut sync = Sync::new(Trust::UNANCHORED);
+        let mut sync = Sync::new(Trust::UNANCHORED, issued);
         assert_eq!(
             hint(&mut sync, claim(3, 2)),
             Err(ClaimError::Refused(PayloadRefused::Work))
@@ -536,13 +615,13 @@ mod tests {
             work < GENESIS_DIFFICULTY,
             "this chain's work is the fixed targets, not the DAA constant"
         );
-        let mut sync = Sync::new(Trust::UNANCHORED);
+        let mut sync = Sync::new(Trust::UNANCHORED, issued);
         assert_eq!(hint(&mut sync, claim(count, work)), Ok(()));
     }
 
     #[test]
     fn a_claim_never_changes_the_state() {
-        let mut sync = Sync::new(Trust::UNANCHORED);
+        let mut sync = Sync::new(Trust::UNANCHORED, issued);
         let published = open(&mut sync, 1);
         assert_eq!(
             published,
@@ -557,7 +636,7 @@ mod tests {
 
     #[test]
     fn the_last_session_closing_returns_to_no_view() {
-        let mut sync = Sync::new(Trust::UNANCHORED);
+        let mut sync = Sync::new(Trust::UNANCHORED, issued);
         open(&mut sync, 1);
         open(&mut sync, 2);
         let mut out = Vec::new();
@@ -588,7 +667,7 @@ mod tests {
 
     #[test]
     fn a_short_fill_is_following_and_the_latch_does_not_withhold_synced() {
-        let mut sync = Sync::new(Trust::UNANCHORED);
+        let mut sync = Sync::new(Trust::UNANCHORED, issued);
         open(&mut sync, 1);
         let mut out = Vec::new();
         sync.handle(
@@ -628,7 +707,7 @@ mod tests {
 
     #[test]
     fn a_store_fault_reaches_the_caller() {
-        let mut sync = Sync::new(Trust::UNANCHORED);
+        let mut sync = Sync::new(Trust::UNANCHORED, issued);
         let mut out = Vec::new();
         let fault = sync
             .handle(
@@ -712,7 +791,7 @@ mod tests {
             }
         }
 
-        let mut sync = Sync::new(Trust::UNANCHORED);
+        let mut sync = Sync::new(Trust::UNANCHORED, issued);
         open(&mut sync, 1);
         let mut out = Vec::new();
         sync.handle(
@@ -739,7 +818,7 @@ mod tests {
     /// request's session closes, and then it is drawn.
     #[test]
     fn one_header_request_extends_the_frontier() {
-        let mut sync = Sync::new(Trust::UNANCHORED);
+        let mut sync = Sync::new(Trust::UNANCHORED, issued);
         open(&mut sync, 1);
         open(&mut sync, 2);
         let mut out = Vec::new();
