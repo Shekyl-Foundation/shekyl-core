@@ -593,7 +593,9 @@ that, because Tor appends every microdescriptor and rebuilds the store only
 every 30 minutes (`CLEAN_CACHES_INTERVAL`), once the journal is at least
 16 KiB and larger than half the store (`should_rebuild_md_cache`). Copy and
 save read the opened file: a symlink, anything that is not a regular file, or
-a file over its limit counts as missing and is not truncated. On Windows the
+a file over its limit counts as missing and is not truncated. The copy into
+the fresh directory is not synced: Tor reads the files at startup, and a
+failed launch wipes the directory. The sync is the save's, before its rename. On Windows the
 cache directory is created with an owner-only access list.
 
 ### 4.8 Identity across a respawn
@@ -817,8 +819,15 @@ its PR leaves draft.
 `data/tsr-q8q9/2026-10-19-x86/`). A seed minutes old, n=20: p50 2.38 s, max
 3.31 s, against a cold arm p50 11.03 s, max 24.94 s. The same seed at about
 3 h (n=10, 2026-10-19 17:06Z): p50 2.38 s, max 2.77 s. At about 24 h (n=10,
-2026-10-20 14:14Z): p50 2.39 s, max 2.87 s. The floor device's seeded start,
-including the time to copy the cache on its storage, is not measured yet.
+2026-10-20 14:14Z): p50 2.39 s, max 2.87 s. **The floor device, 2026-10-22,
+with the copy fsynced** (tor 0.4.9.14, n=10, 35,555,271 bytes on the SD card;
+raw rows in `shekyl-dev`, `data/tsr-q8q9/2026-10-22-floor/`). Copy: p50 2.10 s,
+max 5.18 s. Bootstrap after the copy: p50 3.84 s, max 4.13 s. The start with
+the copy included: p50 6.01 s, max 8.98 s. Against the cold median of 11.3 s
+the gain is in the median and in the tail (`TSR-M1`'s cold p99 was 127 s).
+That copy synced every byte before Tor was spawned. The launch path does not:
+the copy half of this row is the fsync, and it is measured again without one
+before it is the cost of a boot.
 
 ## 11. Interfaces
 
