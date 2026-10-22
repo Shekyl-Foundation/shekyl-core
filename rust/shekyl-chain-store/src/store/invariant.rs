@@ -497,6 +497,10 @@ pub enum AdmissionWriteFault {
     ReductionPastWidth,
     /// The revealed block, or `h_incl`, has no draw row to update.
     RowAbsent,
+    /// `visibly_short` was asked for an index `D` does not contain. The
+    /// verifier derives every index from `D`, so an honest admission does
+    /// not ask this. It is not a memo miss: the set was there.
+    IndexPastSet,
 }
 
 /// What an SI-33 check observed (payload of
@@ -981,6 +985,11 @@ impl core::fmt::Display for StoreInvariant {
                     f,
                     "admission was asked to update the draw row at height {height}, and that \
                      row was never written"
+                ),
+                AdmissionWriteFault::IndexPastSet => write!(
+                    f,
+                    "visibly_short at height {height} was asked for an index the drawable set \
+                     does not contain"
                 ),
             },
             Self::DrawableMemoMiss { epoch } => write!(

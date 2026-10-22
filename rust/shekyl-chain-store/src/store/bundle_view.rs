@@ -146,7 +146,10 @@ impl BundleView for StoreBundleView<'_, '_, '_> {
             return Err(self.miss(epoch));
         };
         let Some(pair) = drawable.pair(index) else {
-            return Err(self.miss(epoch));
+            return Err(self.view.arm_row(StoreInvariant::AdmissionWrite {
+                height: h,
+                observed: super::error::AdmissionWriteFault::IndexPastSet,
+            }));
         };
         self.issued_of(epoch)?;
         let visible = self
