@@ -48,6 +48,7 @@ where
         let hash = arrival.header.hash();
         match outcome {
             Outcome::Connected { relay } => {
+                self.accepted.insert(hash);
                 if relay {
                     out.push(Command::Relay { hash });
                 }
@@ -103,8 +104,15 @@ where
                 self.seats = Some(0);
                 self.held.push(arrival);
             }
-            // `Again` left outstanding above, so the next plan asks again.
-            Outcome::Again | Outcome::Throttled | Outcome::Noted => {}
+            // The entry already holds this body, so the walk treats it as present.
+            Outcome::Noted => {
+                self.accepted.insert(hash);
+            }
+            // The entry handed the arrival back. The seat the offer spent
+            // is free, and the next plan asks for the body again.
+            Outcome::Again | Outcome::Throttled => {
+                self.seats = self.seats.map(|seats| seats.saturating_add(1));
+            }
         }
         Ok(())
     }
@@ -360,8 +368,9 @@ where
     }
 
     pub(crate) fn prune_served(&mut self) {
-        self.served
-            .retain(|hash, _| self.tree.contains(*hash) && !self.tree.remembers(*hash));
+        let live = |hash: &BlockHash| self.tree.contains(*hash) && !self.tree.remembers(*hash);
+        self.served.retain(|hash, _| live(hash));
+        self.accepted.retain(live);
     }
 
     fn judge_standalone<'id, H: HeaderView<'id>>(

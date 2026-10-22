@@ -129,15 +129,7 @@ where
             let Some(hash) = self.tree.ancestor_at(self.star.hash, height) else {
                 break;
             };
-            let reserved = self
-                .held
-                .iter()
-                .any(|arrival| arrival.header.hash() == hash)
-                || self
-                    .outstanding
-                    .iter()
-                    .any(|arrival| arrival.header.hash() == hash)
-                || self.span_has(hash);
+            let reserved = self.body_accounted(hash);
             if !reserved {
                 hashes.push(hash);
             }
@@ -196,6 +188,7 @@ where
                 .outstanding
                 .iter()
                 .any(|arrival| arrival.header.hash() == hash)
+                || self.accepted.contains(&hash)
             {
                 height = height + BlockCount::ONE;
                 continue;
@@ -260,6 +253,20 @@ where
             let blocked = skip_unavailable && state.inventory.unavailable.contains(&end);
             (covers && !blocked).then_some(*key)
         })
+    }
+
+    /// Held, in flight, offered, or already accepted by the entry.
+    fn body_accounted(&self, hash: BlockHash) -> bool {
+        self.accepted.contains(&hash)
+            || self.span_has(hash)
+            || self
+                .held
+                .iter()
+                .any(|arrival| arrival.header.hash() == hash)
+            || self
+                .outstanding
+                .iter()
+                .any(|arrival| arrival.header.hash() == hash)
     }
 
     fn span_has(&self, hash: BlockHash) -> bool {
@@ -360,15 +367,17 @@ where
         if peer.follow_up.is_some() {
             return false;
         }
+        if peer.run.is_some() {
+            // This run has its headers. A later frontier request is a new
+            // draw, not this run still going.
+            return true;
+        }
         if self
             .header_request
             .as_ref()
             .is_some_and(|request| request.session == session)
         {
             return false;
-        }
-        if peer.run.is_some() {
-            return true;
         }
         peer.gates.header_quiet
             || peer.gates.past_cap_followed

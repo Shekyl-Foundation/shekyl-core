@@ -9,7 +9,7 @@
 //! a peer, sizes a request, selects `H*`, and publishes the derived
 //! state. A peer's mode transition lives with the peer.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use shekyl_chain_rules::{
@@ -450,6 +450,8 @@ pub struct Sync<K, R> {
     pub(crate) held: Vec<BoundArrival<K>>,
     /// Offered arrivals waiting for the entry's reply, keyed by tag.
     pub(crate) outstanding: Vec<BoundArrival<K>>,
+    /// Bodies the entry accepted. The walk treats them as present.
+    pub(crate) accepted: BTreeSet<BlockHash>,
     /// Who served a body, from the offer until the header leaves `T` or
     /// is refused. A promotion refusal closes that session.
     pub(crate) served: BTreeMap<BlockHash, K>,
@@ -493,6 +495,7 @@ where
             seats: None,
             held: Vec::new(),
             outstanding: Vec::new(),
+            accepted: BTreeSet::new(),
             served: BTreeMap::new(),
             dispute: None,
             wall: Timestamp::from_raw(1_700_000_100),

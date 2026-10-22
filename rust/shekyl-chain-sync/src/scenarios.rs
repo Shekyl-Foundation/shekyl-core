@@ -399,6 +399,10 @@ fn parted(defer: bool) {
 
 /// `H*` moves while a body request is out. The late response matches no
 /// request, and the session stays.
+///
+/// The body is asked only once that header run has its headers. A second
+/// session then outweighs the chain. Selection drops the span, and the
+/// first session's body is not a fault.
 #[test]
 fn a_late_body_after_the_selected_chain_changes_is_not_a_fault() {
     let main = chain_of(8);
@@ -408,6 +412,7 @@ fn a_late_body_after_the_selected_chain_changes_is_not_a_fault() {
         let tip = view.tip().expect("main answers").expect("a tip");
         drive(&mut sync, &view, Event::Tip { tip });
         open_claim(&mut sync, &view, 1);
+        open_claim(&mut sync, &view, 2);
         let timestamp = match view.header_at(tip.height).expect("main answers") {
             AtHeight::Recorded(record) => record.header.timestamp,
             AtHeight::AboveTip => panic!("the tip"),
@@ -422,39 +427,84 @@ fn a_late_body_after_the_selected_chain_changes_is_not_a_fault() {
             &view,
             Event::Headers {
                 session: 1,
-                bytes: shekyl_levin::ResponseHeaders {
-                    blobs: vec![first_pow],
-                    tip_work: u128::MAX,
-                    more: true,
-                }
-                .store()
-                .expect("the headers encode"),
+                bytes: headers_of(first_pow),
             },
         );
         assert!(
             sync.contains_header(first_hash),
             "the first header did not enter: {out:?}"
         );
+        // The proof moves `H*` and the coordinator asks the frontier
+        // again. That id is the live header request; an earlier one was
+        // dropped when selection changed.
+        let header_request = out.iter().rev().find_map(|command| match command {
+            Command::RequestHeaders { session, id, .. } if *session == 1 => Some(*id),
+            _ => None,
+        });
+        let Some(header_request) = header_request else {
+            panic!("the frontier was not asked again: {out:?}");
+        };
         let out = drive(&mut sync, &view, Event::Room { seats: 1 });
-        assert!(request_for(&out).is_some(), "the body was not requested");
-        drive(&mut sync, &view, Event::Room { seats: 0 });
-        block.header.previous = first_hash;
+        let (who, asked) = request_for(&out).expect("the body was not requested");
+        assert_eq!(who, 1, "the server of the header is asked: {out:?}");
+        assert_eq!(asked, vec![*first_hash.as_bytes()]);
+        // Session 1 leaves the draw. Ending its header request does not
+        // end the body span.
+        let mut low = Vec::new();
+        sync.claim(
+            1,
+            PeerClaim {
+                count: ChainCount::from_raw(1),
+                work: CumulativeDifficulty::from_raw(1),
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut low,
+        )
+        .expect("a one-block claim is a chain");
+        let out = drive(
+            &mut sync,
+            &view,
+            Event::Deadline {
+                session: 1,
+                request: header_request,
+            },
+        );
+        assert!(
+            out.iter()
+                .any(|command| { matches!(command, Command::RequestHeaders { session: 2, .. }) }),
+            "session 2 was not asked: {out:?}"
+        );
+        // A sibling of the first header, then one more block. Two headers
+        // outweigh the one-header chain.
+        block.header.nonce = 1;
+        let fork_pow = block.pow_blob();
+        let fork_hash = PowBlob::read(&fork_pow).expect("preimage").identity();
+        block.header.previous = fork_hash;
         block.header.timestamp = timestamp + 240;
-        let second_pow = block.pow_blob();
-        let second_hash = PowBlob::read(&second_pow).expect("preimage").identity();
+        block.header.nonce = 0;
+        let heavier_pow = block.pow_blob();
+        let heavier_hash = PowBlob::read(&heavier_pow).expect("preimage").identity();
         let out = drive(
             &mut sync,
             &view,
             Event::Headers {
-                session: 1,
-                bytes: headers_of(second_pow),
+                session: 2,
+                bytes: shekyl_levin::ResponseHeaders {
+                    blobs: vec![fork_pow, heavier_pow],
+                    tip_work: u128::MAX,
+                    more: false,
+                }
+                .store()
+                .expect("the headers encode"),
             },
         );
         assert!(
-            sync.contains_header(second_hash),
+            sync.contains_header(heavier_hash),
             "the heavier header did not enter: {out:?}"
         );
-        assert_eq!(sync.selected().hash, second_hash);
+        assert_eq!(sync.selected().hash, heavier_hash);
         let out = drive(
             &mut sync,
             &view,
