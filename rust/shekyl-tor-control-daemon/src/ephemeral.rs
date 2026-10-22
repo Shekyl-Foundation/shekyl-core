@@ -39,8 +39,9 @@
 //! overlay inbound this boot. The handle exposes the SOCKS proxy, aliveness,
 //! and a bounded teardown either way.
 
+use std::io;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -234,8 +235,8 @@ pub struct DaemonTorControl {
     /// Set when [`Self::shutdown`] begins, so [`Self::death`] can tell that
     /// stop from Tor exiting on its own.
     stopping: Arc<AtomicBool>,
-    /// Names copied from the public directory cache into this boot. Empty
-    /// when that cache was missing or refused.
+    /// Names copied into this boot from its one cache source. Empty when that
+    /// source held nothing a boot is allowed to copy.
     copied: Vec<&'static str>,
     /// Set once Tor has reported bootstrap complete. Only a clean stop after
     /// that writes the cache back.
@@ -261,8 +262,17 @@ impl DaemonTorControl {
         let data_dir = EphemeralDataDir::create_under(&data_dir_parent)
             .map_err(DaemonTorStartError::DataDir)?;
         let cache_dir = data_dir_parent.join(crate::data_dir::CACHE_DIR_NAME);
-        let copied = directory_cache::copy_into(&cache_dir, data_dir.path())
-            .map_err(DaemonTorStartError::DataDir)?;
+        let data_path = data_dir.path().to_path_buf();
+        // One source, off this worker. The own cache wins when it holds a
+        // file; a test build may otherwise install the job lane's seed. The
+        // read of a journal is one buffer, and the blocking pool is what
+        // keeps that read off the runtime that is also building the remnant.
+        let copied = tokio::task::spawn_blocking(move || {
+            directory_cache::install_into(&cache_dir, &data_path)
+        })
+        .await
+        .map_err(|join| DaemonTorStartError::DataDir(io::Error::other(join)))?
+        .map_err(DaemonTorStartError::DataDir)?;
 
         // Spawn the incarnation with a wired exit observer — teardown awaits it
         // so no tor lingers holding the DataDirectory lock.
@@ -462,7 +472,7 @@ impl DaemonTorControl {
         // or we had to kill it) saves nothing: the previous cache stays.
         if self.bootstrapped {
             if let (Some(TorExit::Reaped(_)), Some(dir)) = (&exit, self.data_dir.as_ref()) {
-                save_directory_cache(dir.path());
+                save_directory_cache(dir.path()).await;
             }
         }
         if let Some(dir) = self.data_dir.take() {
@@ -480,16 +490,24 @@ impl DaemonTorControl {
 }
 
 /// Write the public directory cache back from a boot that reached the
-/// network and was stopped by us. A failure leaves the previous files.
-fn save_directory_cache(data_dir: &std::path::Path) {
-    let Some(parent) = data_dir.parent() else {
+/// network and was stopped cleanly. The copy runs on the blocking pool.
+/// A failure leaves the previous files.
+async fn save_directory_cache(data_dir: &Path) {
+    let data_dir = data_dir.to_path_buf();
+    let Some(parent) = data_dir.parent().map(Path::to_path_buf) else {
         return;
     };
     let cache = parent.join(crate::data_dir::CACHE_DIR_NAME);
-    if directory_cache::ensure_directory(&cache).is_err() {
-        return;
-    }
-    drop(directory_cache::save_from(data_dir, &cache));
+    drop(
+        tokio::task::spawn_blocking(move || {
+            let cache = directory_cache::DirectoryCache::at(cache);
+            if cache.ensure().is_err() {
+                return;
+            }
+            drop(cache.save_from(&data_dir));
+        })
+        .await,
+    );
 }
 
 #[cfg(test)]
@@ -589,9 +607,10 @@ mod tests {
             DaemonTorControl::start(config_with(binary.clone(), parent.path().to_path_buf()))
                 .await
                 .expect("first boot start");
-        assert!(
+        assert_eq!(
             boot1.directory_cache_copied().is_empty(),
-            "a fresh parent copies no directory cache"
+            !lane_seed_holds_a_file(),
+            "a fresh parent copies the lane seed when that seed holds a file, and nothing otherwise"
         );
         assert!(boot1.is_alive());
         assert!(boot1.socks_addr().ip().is_loopback());
@@ -675,20 +694,15 @@ mod tests {
             boot.directory_cache_copied().is_empty(),
             "the cold boot has nothing to copy"
         );
-        // The lane's seed is the test's, written while the data directory
-        // still exists. The stop path only writes the daemon's own cache.
-        let data_dir = boot
-            .data_dir
-            .as_ref()
-            .expect("the boot holds its directory until stop")
-            .path()
-            .to_path_buf();
-        shekyl_tor_control_client::directory_cache::save_job_cache_from(&data_dir);
         assert!(
             boot.shutdown().await.is_some(),
             "the stop observes a real reap"
         );
         assert_only_directory_cache(parent.path());
+        // The lane's seed is the cache a clean stop wrote. Copying it while
+        // Tor still held the data directory would publish a journal Tor was
+        // still appending.
+        directory_cache::publish_job_seed(&parent.path().join(crate::data_dir::CACHE_DIR_NAME));
         if let Some(cache) = std::env::var_os("SHEKYL_TEST_TOR_DIRECTORY_CACHE") {
             let cache = std::path::PathBuf::from(cache);
             let seeded = shekyl_tor_control_client::directory_cache::FILES
@@ -697,6 +711,12 @@ mod tests {
             assert!(seeded, "the cold stop writes the job cache");
             assert!(!cache.join("state").exists());
         }
+    }
+
+    fn lane_seed_holds_a_file() -> bool {
+        std::env::var_os("SHEKYL_TEST_TOR_DIRECTORY_CACHE").is_some_and(|path| {
+            !path.is_empty() && directory_cache::DirectoryCache::at(path).holds_a_file()
+        })
     }
 
     fn assert_only_directory_cache(parent: &std::path::Path) {

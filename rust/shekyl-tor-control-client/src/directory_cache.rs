@@ -32,10 +32,48 @@
 //! it over the previous file. A save that stops before the rename leaves the
 //! previous file. The temporary name is not one of the four, so a later copy
 //! does not pick it up.
+//!
+//! A boot has one source. The daemon's own cache is that source when it holds
+//! a file a boot may copy. A test build may otherwise install the job lane's
+//! seed. A data directory that already holds such a file is left alone: the
+//! two sources are never mixed, and a respawn into a kept directory does not
+//! replace what this boot already fetched.
+//!
+//! These functions are synchronous so a test can call them directly. A caller
+//! on an async worker moves the call onto a blocking thread. Each file is one
+//! read and one write; the thread is what keeps that off the runtime worker.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+// A third target used to open by path and follow a symlink. Fail the build
+// instead of copying whatever that path names.
+#[cfg(not(any(unix, windows)))]
+compile_error!("the Tor directory cache is implemented for Unix and Windows");
+
+/// Owner-only directory. `mkdir` applies this in the call that creates the
+/// inode. A umask can clear bits and cannot add them, so the directory is
+/// never wider than this.
+#[cfg(unix)]
+const DIR_MODE: u32 = 0o700;
+
+/// Owner-only file, applied when the staged file is created and again on the
+/// descriptor that holds it. The same shape as [`DIR_MODE`].
+#[cfg(unix)]
+const FILE_MODE: u32 = 0o600;
+
+/// `mode_t` is `u16` on some Unix targets and `u32` on others. These bits fit
+/// either width.
+#[cfg(unix)]
+fn posix_mode(bits: u32) -> libc::mode_t {
+    libc::mode_t::try_from(bits).expect("owner-only mode fits mode_t")
+}
+
+/// Staged bytes sit beside the real name. A crash before the rename leaves
+/// the previous file, and this name is not one of [`FILES`].
+const STAGED_PREFIX: &str = ".";
+const STAGED_SUFFIX: &str = ".partial";
 
 /// Largest directory object Tor 0.4.9.14 will download (`MAX_DIR_DL_SIZE`).
 pub const TOR_MAX_DIR_OBJECT: u64 = (1 << 24) - 1;
@@ -86,6 +124,137 @@ pub const FILES: &[CacheFile] = &[
 #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
 const JOB_CACHE_ENV: &str = "SHEKYL_TEST_TOR_DIRECTORY_CACHE";
 
+/// Read one cache name without following a symlink and without blocking when
+/// that name is a fifo. A regular file's reads ignore the non-blocking bit.
+#[cfg(unix)]
+fn read_only_nofollow() -> i32 {
+    libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK
+}
+
+/// Open a directory without following a symlink at the final component.
+#[cfg(unix)]
+fn directory_nofollow() -> i32 {
+    libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC
+}
+
+/// The directory that holds Tor's public directory files.
+///
+/// The daemon's durable cache and a test job's seed are both this type. A
+/// boot copies from one of them into a data directory. The data directory is
+/// not a [`DirectoryCache`]: it also holds guards, keys, and the onion, and
+/// those names never travel through this type.
+#[derive(Clone, Debug)]
+pub struct DirectoryCache {
+    path: PathBuf,
+}
+
+impl DirectoryCache {
+    /// The cache at `path`. The directory need not exist yet.
+    #[must_use]
+    pub fn at(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    /// The directory this cache names.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Create this directory owner-only, or accept it when it already is a
+    /// real directory. A symbolic link is an error.
+    pub fn ensure(&self) -> io::Result<()> {
+        ensure_directory(&self.path)
+    }
+
+    /// Whether any of the four names is a regular file within its limit.
+    ///
+    /// This opens each name and reads its length. It does not read the bytes.
+    /// A missing directory, a symlink, a fifo, and a file over its limit are
+    /// all empty.
+    #[must_use]
+    pub fn holds_a_file(&self) -> bool {
+        holds_a_cache_file(&self.path)
+    }
+
+    /// Copy the four names into `data_dir`. A refused file is skipped.
+    /// `Err` is a failure to write `data_dir`.
+    pub fn copy_into(&self, data_dir: &Path) -> io::Result<Vec<&'static str>> {
+        copy_files(&self.path, data_dir, FILES)
+    }
+
+    /// Write the four names from `data_dir` back here. This directory must
+    /// already be a real directory ([`Self::ensure`]). A refused source leaves
+    /// that name's previous file.
+    pub fn save_from(&self, data_dir: &Path) -> io::Result<()> {
+        save_files(data_dir, &self.path, FILES)
+    }
+}
+
+/// Install one cache into `data_dir`.
+///
+/// The daemon's own cache wins when it holds a copyable file. Otherwise a
+/// test build may install the job lane's seed. A production build with an
+/// empty own cache installs nothing. A data directory that already holds a
+/// copyable file installs nothing either: that is a boot already in progress.
+pub fn install_into(own_cache: &Path, data_dir: &Path) -> io::Result<Vec<&'static str>> {
+    install_from(
+        &DirectoryCache::at(own_cache),
+        job_cache().as_ref(),
+        data_dir,
+    )
+}
+
+fn install_from(
+    own: &DirectoryCache,
+    job: Option<&DirectoryCache>,
+    data_dir: &Path,
+) -> io::Result<Vec<&'static str>> {
+    match source_for(own, job) {
+        Some(source) => copy_into_fresh(source, data_dir),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// The one directory a boot copies from. The own cache wins. The job seed is
+/// the source only when the own cache has nothing a boot may copy.
+fn source_for<'a>(
+    own: &'a DirectoryCache,
+    job: Option<&'a DirectoryCache>,
+) -> Option<&'a DirectoryCache> {
+    if own.holds_a_file() {
+        Some(own)
+    } else {
+        job.filter(|cache| cache.holds_a_file())
+    }
+}
+
+/// Copy `source` when `data_dir` does not already hold a cache file.
+///
+/// The second check is what keeps two sources from mixing: an own cache that
+/// supplied three names cannot be topped up from the job seed's fourth, and a
+/// respawn into a kept directory copies nothing.
+fn copy_into_fresh(source: &DirectoryCache, data_dir: &Path) -> io::Result<Vec<&'static str>> {
+    if holds_a_cache_file(data_dir) {
+        return Ok(Vec::new());
+    }
+    source.copy_into(data_dir)
+}
+
+#[cfg(any(test, feature = "unpinned-tor-for-tests"))]
+fn job_cache() -> Option<DirectoryCache> {
+    let path = std::env::var_os(JOB_CACHE_ENV)?;
+    if path.is_empty() {
+        return None;
+    }
+    Some(DirectoryCache::at(path))
+}
+
+#[cfg(not(any(test, feature = "unpinned-tor-for-tests")))]
+fn job_cache() -> Option<DirectoryCache> {
+    None
+}
+
 /// Copy the cache into `data_dir`.
 ///
 /// A missing cache directory, a directory that is not a real directory, and
@@ -121,34 +290,30 @@ pub fn ensure_directory(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Copy the job's seeded cache into `data_dir` when the live-test lane set
-/// [`JOB_CACHE_ENV`]. A production build does not contain this function.
+/// Fill `data_dir` from the job lane when the lane named a seed and `data_dir`
+/// does not already hold a cache file. A production build does not contain
+/// this function. The daemon installs its one source before spawn, so this
+/// call finds that file and copies nothing.
 #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
 pub fn copy_job_cache_into(data_dir: &Path) {
-    let Some(cache) = std::env::var_os(JOB_CACHE_ENV) else {
+    let Some(job) = job_cache() else {
         return;
     };
-    if cache.is_empty() {
-        return;
-    }
-    drop(copy_into(Path::new(&cache), data_dir));
+    drop(copy_into_fresh(&job, data_dir));
 }
 
-/// Save `data_dir` into the job cache, creating that directory if the lane
-/// named one. Same build gate as [`copy_job_cache_into`].
+/// Publish `saved` as the job lane's seed. `saved` is the cache a clean stop
+/// wrote, not a data directory Tor still has open. Same build gate as
+/// [`copy_job_cache_into`]. A failure leaves whatever the lane already held.
 #[cfg(any(test, feature = "unpinned-tor-for-tests"))]
-pub fn save_job_cache_from(data_dir: &Path) {
-    let Some(cache) = std::env::var_os(JOB_CACHE_ENV) else {
+pub fn publish_job_seed(saved: &Path) {
+    let Some(job) = job_cache() else {
         return;
     };
-    if cache.is_empty() {
+    if job.ensure().is_err() {
         return;
     }
-    let cache = std::path::PathBuf::from(cache);
-    if ensure_directory(&cache).is_err() {
-        return;
-    }
-    drop(save_from(data_dir, &cache));
+    drop(DirectoryCache::at(saved).copy_into(job.path()));
 }
 
 fn copy_files(
@@ -182,7 +347,7 @@ fn save_files(data_dir: &Path, cache_dir: &Path, files: &[CacheFile]) -> io::Res
 }
 
 fn partial_name(name: &str) -> String {
-    format!(".{name}.partial")
+    format!("{STAGED_PREFIX}{name}{STAGED_SUFFIX}")
 }
 
 /// Write `bytes` to `.{name}.partial` and leave the destination alone.
@@ -224,8 +389,17 @@ fn replace(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
 fn create_owner_only(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        fs::create_dir(path)?;
-        tighten_existing(path)?;
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = path.as_os_str().as_bytes();
+        let c_path = std::ffi::CString::new(bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        // SAFETY: `c_path` is NUL-terminated and lives for the call. `mkdir`
+        // reads the path and creates one directory at [`DIR_MODE`]; it does
+        // not retain the pointer. A umask may clear bits and cannot add them.
+        let created = unsafe { libc::mkdir(c_path.as_ptr(), posix_mode(DIR_MODE)) };
+        if created != 0 {
+            return Err(io::Error::last_os_error());
+        }
         Ok(())
     }
     #[cfg(windows)]
@@ -235,17 +409,13 @@ fn create_owner_only(path: &Path) -> io::Result<()> {
             other => io::Error::other(other),
         })
     }
-    #[cfg(not(any(unix, windows)))]
-    {
-        fs::create_dir(path)
-    }
 }
 
 fn tighten_existing(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(DIR_MODE))?;
     }
     #[cfg(not(unix))]
     {
@@ -261,7 +431,7 @@ fn open_real_dir(path: &Path) -> io::Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         let file = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .custom_flags(directory_nofollow())
             .open(path)?;
         let meta = file.metadata()?;
         if !meta.is_dir() {
@@ -295,17 +465,6 @@ fn open_real_dir(path: &Path) -> io::Result<File> {
         }
         Ok(file)
     }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let file = File::open(path)?;
-        if !file.metadata()?.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "cache path is not a directory",
-            ));
-        }
-        Ok(file)
-    }
 }
 
 /// Read `name` inside `dir`, or `None` when the file is missing or refused.
@@ -315,40 +474,52 @@ fn open_real_dir(path: &Path) -> io::Result<File> {
 /// On Windows the directory was already refused when it was a reparse point,
 /// and the file is opened with `FILE_FLAG_OPEN_REPARSE_POINT` and refused
 /// when that handle is one. The bytes come from the handle either way.
-fn read_named(dir: &Path, name: &str, limit: u64) -> Option<Vec<u8>> {
-    if name.contains('/') || name.contains('\\') || name.contains('\0') {
+fn holds_a_cache_file(dir: &Path) -> bool {
+    FILES.iter().any(|file| cache_file_fits(dir, file))
+}
+
+fn cache_file_fits(dir: &Path, file: &CacheFile) -> bool {
+    let Some(opened) = open_named(dir, file.name) else {
+        return false;
+    };
+    regular_len(&opened).is_some_and(|len| len <= file.limit)
+}
+
+fn is_one_component(name: &str) -> bool {
+    !name.contains('/') && !name.contains('\\') && !name.contains('\0')
+}
+
+/// Open `name` inside `dir`, or `None` when it is missing or not one component.
+///
+/// On Unix the directory is opened with `O_NOFOLLOW` and the file with
+/// `openat`, so the component that is opened is the one in that directory.
+/// On Windows the directory was already refused when it was a reparse point,
+/// and the file is opened with `FILE_FLAG_OPEN_REPARSE_POINT`.
+fn open_named(dir: &Path, name: &str) -> Option<File> {
+    if !is_one_component(name) {
         return None;
     }
     #[cfg(unix)]
     {
         let dir = open_real_dir(dir).ok()?;
-        let file = open_at(&dir, name).ok()?;
-        read_regular_file(file, limit)
+        open_at(&dir, name).ok()
     }
     #[cfg(windows)]
     {
-        let file = open_handle(&dir.join(name), OpenAs::File).ok()?;
-        read_regular_file(file, limit)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let file = File::open(dir.join(name)).ok()?;
-        read_regular_file(file, limit)
+        open_handle(&dir.join(name), OpenAs::File).ok()
     }
 }
 
-fn read_regular_file(file: File, limit: u64) -> Option<Vec<u8>> {
+/// Length of `file` when the opened object is a regular file.
+fn regular_len(file: &File) -> Option<u64> {
     #[cfg(unix)]
     {
         let meta = file.metadata().ok()?;
-        if !meta.is_file() {
-            return None;
-        }
-        read_capped(file, meta.len(), limit)
+        meta.is_file().then_some(meta.len())
     }
     #[cfg(windows)]
     {
-        let info = file_info(&file).ok()?;
+        let info = file_info(file).ok()?;
         let attributes = info.dwFileAttributes;
         use windows_sys::Win32::Storage::FileSystem::{
             FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
@@ -358,17 +529,14 @@ fn read_regular_file(file: File, limit: u64) -> Option<Vec<u8>> {
         {
             return None;
         }
-        let len = (u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow);
-        read_capped(file, len, limit)
+        Some((u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow))
     }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let meta = file.metadata().ok()?;
-        if !meta.is_file() {
-            return None;
-        }
-        read_capped(file, meta.len(), limit)
-    }
+}
+
+fn read_named(dir: &Path, name: &str, limit: u64) -> Option<Vec<u8>> {
+    let file = open_named(dir, name)?;
+    let len = regular_len(&file)?;
+    read_capped(file, len, limit)
 }
 
 fn read_capped(file: File, len: u64, limit: u64) -> Option<Vec<u8>> {
@@ -391,12 +559,12 @@ fn is_regular_file(path: &Path) -> bool {
         use std::os::unix::fs::OpenOptionsExt;
         let Ok(file) = OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(read_only_nofollow())
             .open(path)
         else {
             return false;
         };
-        file.metadata().is_ok_and(|meta| meta.is_file())
+        regular_len(&file).is_some()
     }
     #[cfg(windows)]
     {
@@ -412,10 +580,6 @@ fn is_regular_file(path: &Path) -> bool {
         info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0
             && info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
     }
-    #[cfg(not(any(unix, windows)))]
-    {
-        fs::metadata(path).is_ok_and(|meta| meta.is_file())
-    }
 }
 
 #[cfg(unix)]
@@ -425,15 +589,10 @@ fn open_at(dir: &File, name: &str) -> io::Result<File> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
     // SAFETY: `dir` owns a directory descriptor that stays open for the call.
     // `c_name` is one NUL-terminated component, so `openat` cannot leave the
-    // directory. `O_NOFOLLOW` refuses a symlink as that component. On success
-    // the descriptor is new and owned by the `File` below.
-    let fd = unsafe {
-        libc::openat(
-            dir.as_raw_fd(),
-            c_name.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
+    // directory. `O_NOFOLLOW` refuses a symlink as that component.
+    // `O_NONBLOCK` returns instead of waiting when the name is a fifo. On
+    // success the descriptor is new and owned by the `File` below.
+    let fd = unsafe { libc::openat(dir.as_raw_fd(), c_name.as_ptr(), read_only_nofollow()) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -510,9 +669,9 @@ fn create_exclusive(path: &Path) -> io::Result<File> {
             .write(true)
             .create_new(true)
             .custom_flags(libc::O_NOFOLLOW)
-            .mode(0o600)
+            .mode(FILE_MODE)
             .open(path)?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.set_permissions(fs::Permissions::from_mode(FILE_MODE))?;
         Ok(file)
     }
     #[cfg(windows)]
@@ -521,10 +680,6 @@ fn create_exclusive(path: &Path) -> io::Result<File> {
             shekyl_win_sec::FileCreateError::Create(io_error) => io_error,
             other => io::Error::other(other),
         })
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        OpenOptions::new().write(true).create_new(true).open(path)
     }
 }
 
@@ -753,5 +908,135 @@ mod tests {
         let link = parent.path().join("cache");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         assert!(ensure_directory(&link).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_cache_directory_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir().unwrap();
+        let created = parent.path().join("created");
+        create_owner_only(&created).unwrap();
+        let created_mode = fs::metadata(&created).unwrap().permissions().mode() & 0o777;
+        assert_eq!(created_mode, DIR_MODE);
+
+        let ensured = parent.path().join("ensured");
+        ensure_directory(&ensured).unwrap();
+        let ensured_mode = fs::metadata(&ensured).unwrap().permissions().mode() & 0o777;
+        assert_eq!(ensured_mode, DIR_MODE);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_at_a_cache_name_is_refused() {
+        // Fails by hanging if the open blocks, and by copying if a fifo is
+        // accepted as the file. `O_NONBLOCK` is what makes the open return.
+        use std::os::unix::ffi::OsStrExt;
+        let (_parent, cache, data) = dirs();
+        let fifo = cache.join("cached-certs");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `name` is NUL-terminated and outlives the call. `mkfifo`
+        // creates the node and does not retain the pointer.
+        let created = unsafe { libc::mkfifo(name.as_ptr(), posix_mode(FILE_MODE)) };
+        assert_eq!(created, 0, "{}", io::Error::last_os_error());
+        assert!(!is_regular_file(&fifo));
+        let copied = copy_into(&cache, &data).unwrap();
+        assert!(copied.is_empty());
+        assert!(!data.join("cached-certs").exists());
+        assert!(!DirectoryCache::at(&cache).holds_a_file());
+    }
+
+    fn three_dirs() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let parent = tempfile::tempdir().unwrap();
+        let own = parent.path().join("own");
+        let job = parent.path().join("job");
+        let data = parent.path().join("data");
+        fs::create_dir(&own).unwrap();
+        fs::create_dir(&job).unwrap();
+        fs::create_dir(&data).unwrap();
+        (parent, own, job, data)
+    }
+
+    #[test]
+    fn the_own_cache_wins_when_it_holds_a_file() {
+        let (_parent, own, job, data) = three_dirs();
+        fs::write(own.join("cached-certs"), b"own").unwrap();
+        fs::write(job.join("cached-certs"), b"job").unwrap();
+        fs::write(job.join("cached-microdescs"), b"extra").unwrap();
+        let copied = install_from(
+            &DirectoryCache::at(&own),
+            Some(&DirectoryCache::at(&job)),
+            &data,
+        )
+        .unwrap();
+        assert_eq!(copied, vec!["cached-certs"]);
+        assert_eq!(fs::read(data.join("cached-certs")).unwrap(), b"own");
+        assert!(!data.join("cached-microdescs").exists());
+    }
+
+    #[test]
+    fn an_empty_own_cache_installs_the_job_seed() {
+        let (_parent, own, job, data) = three_dirs();
+        fs::write(job.join("cached-certs"), b"job").unwrap();
+        let copied = install_from(
+            &DirectoryCache::at(&own),
+            Some(&DirectoryCache::at(&job)),
+            &data,
+        )
+        .unwrap();
+        assert_eq!(copied, vec!["cached-certs"]);
+        assert_eq!(fs::read(data.join("cached-certs")).unwrap(), b"job");
+    }
+
+    #[test]
+    fn an_empty_own_cache_installs_nothing_without_a_job_seed() {
+        let (_parent, own, _job, data) = three_dirs();
+        let copied = install_from(&DirectoryCache::at(&own), None, &data).unwrap();
+        assert!(copied.is_empty());
+        assert!(!data.join("cached-certs").exists());
+    }
+
+    #[test]
+    fn a_data_directory_that_already_holds_a_file_is_left_alone() {
+        // Fails if a second source can fill a name the first source did not
+        // supply: `cached-microdescs` would appear beside the file already there.
+        let (_parent, own, job, data) = three_dirs();
+        fs::write(own.join("cached-certs"), b"own").unwrap();
+        fs::write(own.join("cached-microdescs"), b"more").unwrap();
+        fs::write(job.join("cached-certs"), b"job").unwrap();
+        fs::write(data.join("cached-certs"), b"kept").unwrap();
+        let copied = install_from(
+            &DirectoryCache::at(&own),
+            Some(&DirectoryCache::at(&job)),
+            &data,
+        )
+        .unwrap();
+        assert!(copied.is_empty());
+        assert_eq!(fs::read(data.join("cached-certs")).unwrap(), b"kept");
+        assert!(!data.join("cached-microdescs").exists());
+    }
+
+    #[test]
+    fn the_job_lane_does_not_replace_an_installed_file() {
+        let (_parent, source, _job, data) = three_dirs();
+        fs::write(source.join("cached-certs"), b"job").unwrap();
+        fs::write(source.join("cached-microdescs"), b"fill").unwrap();
+        fs::write(data.join("cached-certs"), b"own").unwrap();
+        let copied = copy_into_fresh(&DirectoryCache::at(&source), &data).unwrap();
+        assert!(copied.is_empty());
+        assert_eq!(fs::read(data.join("cached-certs")).unwrap(), b"own");
+        assert!(!data.join("cached-microdescs").exists());
+    }
+
+    #[test]
+    fn install_into_copies_nothing_when_the_own_cache_is_absent_and_no_lane_is_set() {
+        if std::env::var_os(JOB_CACHE_ENV).is_some() {
+            return;
+        }
+        let parent = tempfile::tempdir().unwrap();
+        let data = parent.path().join("data");
+        fs::create_dir(&data).unwrap();
+        let copied = install_into(&parent.path().join("absent"), &data).unwrap();
+        assert!(copied.is_empty());
     }
 }
