@@ -25,8 +25,8 @@ use shekyl_tor_control_client::supervisor::{
     input_of, render, Action, Connectors, Core, Input, ManagedRunning, Policy, Step, TorSetting,
 };
 use shekyl_tor_control_daemon::{
-    DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptDataDir, OnionPow, SpawnError,
-    TorBinaryError, TorDeath,
+    DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptDataDir, OnionPow, OnionSeed,
+    SpawnError, TorBinaryError, TorDeath,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -238,7 +238,7 @@ async fn perform(
     binary: &Option<PathBuf>,
     data_dir: &Path,
     events: &EventSink,
-    seed: &[u8; 32],
+    seed: &OnionSeed,
     virtual_port: u16,
     control: &mut Option<DaemonTorControl>,
     kept: &mut Option<KeptDataDir>,
@@ -488,7 +488,7 @@ fn take_down(incarnation: &mut Option<u64>) {
 
 async fn publish_held_onion(
     control: &Option<DaemonTorControl>,
-    seed: &[u8; 32],
+    seed: &OnionSeed,
     virtual_port: u16,
     forward: &watch::Receiver<Option<SocketAddr>>,
 ) -> bool {

@@ -48,13 +48,13 @@ use std::time::Duration;
 
 use kameo::actor::Spawn;
 use tokio::sync::{oneshot, watch};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use shekyl_tor_control_client::binary::VerifiedTorBinary;
 use shekyl_tor_control_client::control::{
-    ask_timed, evaluate_add_onion_reply, parse_socks_listeners, AddOnion, AddOnionReplyError,
-    AskError, BootstrapReadiness, BootstrapState, Command, ControlError, DiskWrites, EventSink,
-    ManagedTor, OnionFlags, OnionPort, OnionPow, ServiceId, SocksPort, TorControlClient,
+    ask_timed, evaluate_add_onion_reply, AddOnion, AddOnionReplyError, AskError,
+    BootstrapReadiness, BootstrapState, Command, ControlError, DiskWrites, EventSink, ManagedTor,
+    OnionFlags, OnionPort, OnionPow, ServiceId, SocksPort, TorControlClient,
     TorControlClientConfig, TorExit, TorLaunch,
 };
 use shekyl_tor_control_client::directory_cache;
@@ -100,16 +100,10 @@ pub enum DaemonTorStartError {
     DataDir(std::io::Error),
     /// Spawning tor or driving the control connection failed.
     Control(ControlError),
-    /// Tor did not reach bootstrap 100% within
-    /// [`DaemonTorConfig::bootstrap_deadline`].
-    BootstrapTimeout,
     /// The incarnation died before reaching `Ready` (control connection lost
     /// or the actor stopped). Carries the reaped exit when teardown observed
     /// it.
     Died(Option<TorExit>),
-    /// Bootstrap reached `Ready` but `GETINFO net/listeners/socks` names no
-    /// TCP listener — a tor the zone could not dial through.
-    NoSocksListener,
 }
 
 impl std::fmt::Display for DaemonTorStartError {
@@ -117,9 +111,7 @@ impl std::fmt::Display for DaemonTorStartError {
         match self {
             Self::DataDir(e) => write!(f, "ephemeral tor data directory: {e}"),
             Self::Control(e) => write!(f, "tor control failure: {e:?}"),
-            Self::BootstrapTimeout => write!(f, "tor did not bootstrap within the deadline"),
             Self::Died(exit) => write!(f, "tor died during start ({exit:?})"),
-            Self::NoSocksListener => write!(f, "bootstrapped tor exposes no TCP SOCKS listener"),
         }
     }
 }
@@ -272,6 +264,31 @@ pub enum SpawnError {
     Launch(LaunchFailure),
 }
 
+/// The hs-id seed for one boot.
+///
+/// The bytes stay inside the `Zeroizing`. There is no `Deref`, so a caller
+/// cannot hold a slice of them in async state. [`DaemonTorControl::publish`]
+/// is the only function that reads them, and it borrows this value.
+pub struct OnionSeed(Zeroizing<[u8; 32]>);
+
+impl OnionSeed {
+    fn bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl Drop for OnionSeed {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl std::fmt::Debug for OnionSeed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OnionSeed")
+    }
+}
+
 impl DaemonTorControl {
     /// Spawn tor and return when `GETINFO version` answers. Bootstrap is
     /// not a gate.
@@ -394,54 +411,6 @@ impl DaemonTorControl {
         Ok(handle)
     }
 
-    /// Wait until bootstrap is ready, for a test that needs a published
-    /// onion. The daemon's boot does not call this: a slow bootstrap is not
-    /// a failed start.
-    pub async fn until_bootstrapped(&mut self, bound: Duration) -> Result<(), DaemonTorStartError> {
-        let deadline = tokio::time::Instant::now() + bound;
-        loop {
-            let state = *self.ready.borrow();
-            match state {
-                BootstrapState::Ready => {
-                    self.bootstrapped = true;
-                    return self.discover_socks().await;
-                }
-                BootstrapState::Failed => {
-                    let exit = self.teardown().await;
-                    return Err(DaemonTorStartError::Died(exit));
-                }
-                BootstrapState::Connecting { .. } => {}
-            }
-            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if left.is_zero() {
-                let _exit = self.teardown().await;
-                return Err(DaemonTorStartError::BootstrapTimeout);
-            }
-            tokio::select! {
-                changed = self.ready.changed() => {
-                    if changed.is_err() {
-                        return Err(DaemonTorStartError::Died(None));
-                    }
-                }
-                () = tokio::time::sleep(left) => {}
-            }
-        }
-    }
-
-    async fn discover_socks(&mut self) -> Result<(), DaemonTorStartError> {
-        let reply = self
-            .ask_bounded(
-                Command::GetInfo(vec!["net/listeners/socks".to_owned()]),
-                self.reply_deadline,
-            )
-            .await?;
-        let Some(socks) = parse_socks_listeners(&reply) else {
-            return Err(DaemonTorStartError::NoSocksListener);
-        };
-        self.socks_addr = socks;
-        Ok(())
-    }
-
     /// The bootstrap watch. A clone, so the supervisor can select on it.
     #[must_use]
     pub fn watch_bootstrap(&self) -> watch::Receiver<BootstrapState> {
@@ -517,14 +486,14 @@ impl DaemonTorControl {
         }
     }
 
-    /// The boot's hs-id seed. The supervisor holds it until the daemon stops
-    /// and passes it to every [`Self::publish`].
-    pub fn mint_seed() -> Result<Zeroizing<[u8; 32]>, DaemonTorPublishError> {
-        let mut seed = Zeroizing::new([0u8; 32]);
-        if getrandom::getrandom(seed.as_mut()).is_err() {
+    /// The boot's hs-id seed. The supervisor holds one until the daemon stops
+    /// and passes that same value to every [`Self::publish`].
+    pub fn mint_seed() -> Result<OnionSeed, DaemonTorPublishError> {
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        if getrandom::getrandom(bytes.as_mut()).is_err() {
             return Err(DaemonTorPublishError::SeedRng);
         }
-        Ok(seed)
+        Ok(OnionSeed(bytes))
     }
 
     /// Publish the onion from `seed`. The seed stays with the caller.
@@ -546,7 +515,7 @@ impl DaemonTorControl {
     /// either one and does not send another `ADD_ONION`.
     pub async fn publish(
         &self,
-        seed: &[u8; 32],
+        seed: &OnionSeed,
         virtual_port: u16,
         local_target: SocketAddr,
         max_streams: u16,
@@ -558,7 +527,7 @@ impl DaemonTorControl {
             },
         )?;
 
-        let identity = OnionIdentity::from_hs_id_seed(seed);
+        let identity = OnionIdentity::from_hs_id_seed(seed.bytes());
         let expected = identity.service_id().clone();
         let request = AddOnion::new(identity.mint_onion_key(), port, max_streams)
             .with_flags(OnionFlags { discard_pk: true })
@@ -742,8 +711,55 @@ mod tests {
         assert!(pow_refusal(OnionPow::Disabled, 512, &["PoWDefensesEnabled".to_owned()]).is_none());
         assert!(pow_refusal(OnionPow::Enabled, 551, &["PoWDefensesEnabled".to_owned()]).is_none());
     }
+
+    /// Debug names the type and not the seed. A derived `Debug` fails this.
+    #[test]
+    fn an_onion_seed_prints_no_bytes() {
+        let seed = OnionSeed(Zeroizing::new([0xab; 32]));
+        assert_eq!(format!("{seed:?}"), "OnionSeed");
+    }
+
     use crate::test_support::tor_binary;
     use shekyl_tor_control_client::binary::VerifiedTorBinary;
+    use shekyl_tor_control_client::control::BootstrapState;
+
+    /// The ignored live tests wait here so a published onion has a network.
+    /// A hang bound in a test is not a daemon deadline: nothing in the
+    /// supervisor gives a bootstrap up.
+    async fn wait_for_the_network(boot: &mut DaemonTorControl) {
+        let hang = tokio::time::Instant::now() + Duration::from_secs(300);
+        let mut watch = boot.watch_bootstrap();
+        loop {
+            match *watch.borrow() {
+                BootstrapState::Ready => {
+                    boot.mark_bootstrapped();
+                    let reply = boot
+                        .ask(shekyl_tor_control_client::control::Command::GetInfo(vec![
+                            "net/listeners/socks".to_owned(),
+                        ]))
+                        .await
+                        .expect("socks");
+                    let socks = shekyl_tor_control_client::control::parse_socks_listeners(&reply)
+                        .expect("a socks listener");
+                    boot.set_socks(socks);
+                    return;
+                }
+                BootstrapState::Failed => panic!("tor died before it reached the network"),
+                BootstrapState::Connecting { .. } => {}
+            }
+            if tokio::time::Instant::now() >= hang {
+                panic!("the live test stopped waiting");
+            }
+            tokio::select! {
+                changed = watch.changed() => {
+                    if changed.is_err() {
+                        panic!("the bootstrap watch closed");
+                    }
+                }
+                () = tokio::time::sleep(hang.saturating_duration_since(tokio::time::Instant::now())) => {}
+            }
+        }
+    }
 
     fn config_with(binary: VerifiedTorBinary, data_dir_parent: PathBuf) -> DaemonTorConfig {
         DaemonTorConfig {
@@ -804,10 +820,7 @@ mod tests {
             DaemonTorControl::launch(config_with(binary.clone(), parent.path().to_path_buf()))
                 .await
                 .expect("first boot start");
-        boot1
-            .until_bootstrapped(Duration::from_secs(300))
-            .await
-            .expect("first boot reaches the network");
+        wait_for_the_network(&mut boot1).await;
         let seed1 = DaemonTorControl::mint_seed().expect("seed");
         assert_eq!(
             boot1.directory_cache_copied().is_empty(),
@@ -852,10 +865,7 @@ mod tests {
         let mut boot2 = DaemonTorControl::launch(config_with(binary, parent.path().to_path_buf()))
             .await
             .expect("second boot start");
-        boot2
-            .until_bootstrapped(Duration::from_secs(300))
-            .await
-            .expect("second boot reaches the network");
+        wait_for_the_network(&mut boot2).await;
         assert!(
             !boot2.directory_cache_copied().is_empty(),
             "the second boot copies the cache the first stop saved"
@@ -904,9 +914,7 @@ mod tests {
             boot.directory_cache_copied().is_empty(),
             "the cold boot has nothing to copy"
         );
-        boot.until_bootstrapped(Duration::from_secs(300))
-            .await
-            .expect("the cold boot reaches the network");
+        wait_for_the_network(&mut boot).await;
         assert!(
             boot.shutdown().await.is_some(),
             "the stop observes a real reap"

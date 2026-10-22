@@ -54,7 +54,7 @@ pub mod ephemeral;
 
 pub use ephemeral::{
     DaemonTorConfig, DaemonTorControl, DaemonTorPublishError, DaemonTorStartError, KeptDataDir,
-    LaunchFailure, SpawnError, TorDeath,
+    LaunchFailure, OnionSeed, SpawnError, TorDeath,
 };
 pub use shekyl_tor_control_client::control::OnionPow;
 // Re-exported so the daemon's start seam (`shekyl-daemon`'s `tor.rs`) names
