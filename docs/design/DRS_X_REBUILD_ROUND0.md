@@ -1,5 +1,7 @@
 # The store rebuild (DRS-D10's machinery) — Round 0
 
+**Status:** OPEN — Round 0, for ruling.
+
 **For:** Rick to rule; then its own brief. **From:** design review, 2026-10-21.
 **Ground:** `dev` at `ba0b28379`. The trigger was #1147's S0 (the node opens `chain.db` at every start, and a layout mismatch refuses).
 
