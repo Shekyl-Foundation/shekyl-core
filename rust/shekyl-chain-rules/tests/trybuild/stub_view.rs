@@ -27,8 +27,9 @@ use core::marker::PhantomData;
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
-    AtHeight, BlockOutputs, ChainValid, ChainView, Claimable, EpochFloor, HeaderRecord, HeaderView,
-    Pricing, RecordedBlock, RecordedWeights, ReleaseJournalFloor, Settling, SlashLogFloor,
+    AtHeight, BlockDrawsFloor, BlockOutputs, ChainValid, ChainView, Claimable, EpochFloor,
+    HeaderRecord, HeaderView, Pricing, RecordedBlock, RecordedWeights, ReleaseJournalFloor,
+    Settling, SlashLogFloor,
     StructurallyValid, Tip,
     TreeFrontier,
 };
@@ -224,7 +225,11 @@ impl<'id, T> ChainView<'id> for Stub<T> {
     ) -> Result<BTreeMap<SettlementEpoch, Vec<ShardId>>, Infallible> {
         Ok(BTreeMap::new())
     }
-    fn block_draws(&self, _: BlockHeight) -> Result<Option<BlockDraws>, Infallible> {
+    fn block_draws(
+        &self,
+        _: BlockHeight,
+        _: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, Infallible> {
         Ok(None)
     }
     fn drawable_digest(

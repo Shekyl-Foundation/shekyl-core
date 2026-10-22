@@ -24,6 +24,11 @@
 //! `slash_scan_bench_tests.rs` builds it — 1 300 connects at `SEB = 100` —
 //! and `slash_writes_land_at_the_m_epoch_deadline` there is the 9b witness
 //! in the unit lane; the `#[ignore]`d B9 bench shares the chain.
+//!
+//! The per-block draw count (`SO-D12` increment 3) is
+//! [`block_draws_write_tests`]: the zero row a windowless schedule writes,
+//! the prior row the next height reads, and the two count faults that halt
+//! the writer.
 
 use std::collections::BTreeSet;
 
@@ -905,3 +910,6 @@ fn the_draw_issue_opens_only_unanchored_for_a_bonded_persona_and_adds_each_draw_
     assert_eq!(read(0), (vec![draw(0, false), draw(1, true)], digest));
     cleanup(&path);
 }
+
+#[path = "block_draws_write_tests.rs"]
+mod block_draws_write_tests;

@@ -200,6 +200,29 @@ jobs:
       #
       # Both point the pinned-tor var (pin-match KAT) and the any-tor var (live
       # lifecycle) at the same verified binary.
+      #
+      # One cold start writes this job's directory cache, after Tor has been
+      # reaped. Every later live test copies that seed in
+      # (`SHEKYL_TEST_TOR_DIRECTORY_CACHE`). The daemon suite below skips
+      # this test, so its floor is unchanged.
+      - name: seed the directory cache from one cold boot
+        run: |
+          set -o pipefail
+          cache="$RUNNER_TEMP/tor-directory-cache"
+          mkdir -p "$cache"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cache="$(cygpath -m "$cache")"
+          fi
+          echo "SHEKYL_TEST_TOR_DIRECTORY_CACHE=$cache" >> "$GITHUB_ENV"
+          cd rust
+          SHEKYL_TEST_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
+          SHEKYL_TEST_TOR_DIRECTORY_CACHE="$cache" \
+            ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-daemon ignored-cold.out \
+              --exact ephemeral::tests::a_cold_boot_saves_the_public_directory_cache
+          ../scripts/ci/require_live_tests.sh ignored-cold.out \
+            ephemeral::tests::a_cold_boot_saves_the_public_directory_cache
+          ../scripts/ci/check_no_orphan_tor.sh "$TOR_DIR/$TOR_EXE"
+
       - name: pin-match + control lifecycle (shekyl-tor-control-client)
         run: |
           set -o pipefail
@@ -246,12 +269,14 @@ jobs:
           set -o pipefail
           cd rust
           SHEKYL_TEST_TOR_BINARY="$TOR_DIR/$TOR_EXE" \
-            ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-daemon ignored-daemon.out
+            ../scripts/ci/run_live_tor_tests.sh shekyl-tor-control-daemon ignored-daemon.out \
+              --skip a_cold_boot_saves_the_public_directory_cache
           # The PWD-E7 posture end-to-end: spawn → bootstrap → ADD_ONION with
           # DiscardPK → ServiceID verified → bounded teardown with a real reap,
           # twice, asserting the two boots publish DIFFERENT addresses (the
-          # ephemeral property observed, not asserted). Floor = this crate's
-          # current ignored count on the entry's platform: Linux 2, the
+          # ephemeral property observed, not asserted). The cold-boot cache
+          # seed is the step above and is skipped here. Floor = this crate's
+          # remaining ignored count on the entry's platform: Linux 2, the
           # rotation test and TSR-F1's death watcher (a killed tor is Exited,
           # a shutdown is Stopped); Windows 1, the rotation test alone, since
           # the death watcher kills tor with `kill -9` and is Linux-only. `-ge` so

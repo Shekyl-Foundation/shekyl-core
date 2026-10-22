@@ -243,8 +243,12 @@ mod digest_vectors {
     /// any change to the label, the epoch word or the empty lists' counts.
     #[test]
     fn the_empty_set_at_epoch_zero() {
-        let empty = DrawableEpoch::new(E0, Vec::<(PCanonicalId, &ReceiptSignPk)>::new(), [])
-            .expect("no pair to key");
+        let empty = DrawableEpoch::empty(E0);
+        assert_eq!(
+            empty,
+            DrawableEpoch::new(E0, Vec::<(PCanonicalId, &ReceiptSignPk)>::new(), [])
+                .expect("no pair to key")
+        );
         assert_eq!(
             hex(empty.digest()),
             "33aeb943e48f57989ecf85df23e4c2c7fae2aa5fa4ab69ad681e351fcc0bb465"

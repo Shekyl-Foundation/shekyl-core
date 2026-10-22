@@ -122,8 +122,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use redb::ReadableTable;
 use shekyl_chain_rules::{
-    AtHeight, Claimable, EpochFamily, EpochFloor, Pricing, ReleaseJournalFloor, Settling,
-    SlashLogFloor,
+    AtHeight, BlockDrawsFloor, Claimable, EpochFamily, EpochFloor, Pricing, ReleaseJournalFloor,
+    Settling, SlashLogFloor,
 };
 use shekyl_store_codec::{BlobKind, CodecError};
 use shekyl_types::archival::SettlementOutcome;
@@ -700,7 +700,18 @@ pub(super) fn served_at<T: ReadTables>(
 pub(super) fn block_draws<T: ReadTables>(
     txn: &T,
     height: BlockHeight,
+    floor: BlockDrawsFloor,
 ) -> Result<Option<BlockDraws>, ReadFault> {
+    if let Some(kept_from) = floor.height() {
+        if height < kept_from {
+            return Err(ReadFault::Invariant(
+                StoreInvariant::BlockDrawsReadBelowFloor {
+                    asked: height,
+                    floor: kept_from,
+                },
+            ));
+        }
+    }
     chain_reads::cell(txn, ARCHIVAL_BLOCK_DRAWS, height.to_raw(), BLOCK_DRAWS)
 }
 

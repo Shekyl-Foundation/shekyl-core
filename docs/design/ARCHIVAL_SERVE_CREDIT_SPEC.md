@@ -258,8 +258,10 @@ count  = acc >> 32
 carry  = acc & (2^32 − 1)
 ```
 
-`count(h)` and `carry(h)` are consensus state, written when `h` connects
-(§10).
+`count(h)` and `carry(h)` are consensus state, written when `h` connects,
+with the visible shortfall, `issued_short` and whether the seed is
+revealed (§10). The count writer stores `issued_short` as zero;
+admission, increment 4, writes the reduction.
 
 ### 4.4 Selection
 
@@ -1317,7 +1319,10 @@ Two tables and one cell, all written in the connect batch and undo-logged
 with it:
 
 - **Per block `h`:** `count(h)`, `carry(h)`, the visible shortfall at
-  `h`, and whether `h`'s seed has been revealed.
+  `h`, `issued_short(h)` — the shortfall the block's own admissions
+  reduce, zero until admission writes it — and whether `h`'s seed has
+  been revealed. The count of the next block reads
+  `shortfall(h) − issued_short(h)`.
 - **Per pair, per epoch:** its issued draws as `(h, j, h_reveal, passed)`,
   where `h_reveal` is the block that admitted `h`'s bundle and `passed`
   is the draw's bit in it. The count visible at any `h′` is the number

@@ -368,6 +368,23 @@ pub fn run_epoch_observed(
     seed: u64,
     observe: &mut dyn FnMut(&BlockTrace<'_>),
 ) -> ProductionRun {
+    run_epochs_observed(1, pairs, dropout_permille, timing, seed, observe)
+}
+
+/// [`run_epoch_observed`] across `epochs` settlement epochs.
+///
+/// At each later epoch's opening block the carry is zero, the visible
+/// shortfall is `COUNTED_DRAWS · |D|` again, and nothing from the epoch
+/// before is in flight. One epoch is [`run_epoch_observed`] unchanged.
+fn run_epochs_observed(
+    epochs: u64,
+    pairs: u32,
+    dropout_permille: u32,
+    timing: Timing,
+    seed: u64,
+    observe: &mut dyn FnMut(&BlockTrace<'_>),
+) -> ProductionRun {
+    assert!(epochs >= 1, "a run covers at least one epoch");
     let seb = SETTLEMENT_EPOCH_BLOCKS;
     let w2 = CHALLENGE_RESPONSE_BLOCKS;
     assert!(pairs > 0, "a settlement epoch needs at least one pair");
@@ -382,12 +399,13 @@ pub fn run_epoch_observed(
         "the latency range is not empty"
     );
 
+    let span = epochs * seb;
     let mut rng = SplitMix64::seeded(seed);
     let mut visible = Visible::new(pairs);
-    let mut draws: Vec<Vec<u32>> = Vec::with_capacity(seb as usize);
-    let mut fates: Vec<Fate> = Vec::with_capacity(seb as usize);
+    let mut draws: Vec<Vec<u32>> = Vec::with_capacity(span as usize);
+    let mut fates: Vec<Fate> = Vec::with_capacity(span as usize);
     // Blocks whose bundle is admitted in block `i`.
-    let mut landing: Vec<Vec<u32>> = vec![Vec::new(); (seb + w2 + 1) as usize];
+    let mut landing: Vec<Vec<u32>> = vec![Vec::new(); (span + w2 + 1) as usize];
 
     let mut in_flight: u64 = 0;
     let mut carry: u32 = 0;
@@ -409,32 +427,58 @@ pub fn run_epoch_observed(
         last_attempt_draws: 0,
     };
 
-    for h in 0..=seb + w2 {
+    for h in 0..=span + w2 {
+        // The opening of the epoch `h` belongs to. The tail after the last
+        // epoch still ages that epoch's window, whose open is one epoch back.
+        let epoch_open = if h >= span {
+            span - seb
+        } else {
+            (h / seb) * seb
+        };
         // Bundles admitted in block `h − 1` are visible from `h`.
         if h > 0 {
             for &block in &std::mem::take(&mut landing[(h - 1) as usize]) {
                 let block_draws = &draws[block as usize];
-                visible.issue(block_draws);
-                // Still inside the recent range when it landed: a bundle is
-                // admitted at most `W₂` above its block.
-                in_flight -= block_draws.len() as u64;
+                if (block as u64) >= epoch_open {
+                    visible.issue(block_draws);
+                    // A bundle is admitted at most `W₂` above its block, so
+                    // one drawn in this epoch is still in this epoch's flight.
+                    in_flight -= block_draws.len() as u64;
+                } else {
+                    // Drawn against the epoch before and admitted after this
+                    // one opened. It does not reduce this epoch's shortfall,
+                    // and it was never in this epoch's flight. It was issued.
+                    run.issued += block_draws.len() as u64;
+                }
             }
         }
         // The block `W₂ + 1` back leaves the range. If no bundle of it is
-        // in the chain, its draws stop counting as in flight.
+        // in the chain, its draws stop counting as in flight. A block of
+        // the epoch before is not in this epoch's flight: the window is
+        // clipped at the epoch's open.
         if h > w2 {
             let old = (h - w2 - 1) as usize;
-            if old < draws.len() && !fates[old].admitted_below(h) {
+            if old < draws.len() && (old as u64) >= epoch_open && !fates[old].admitted_below(h) {
                 in_flight -= draws[old].len() as u64;
             }
         }
-        if h >= seb {
+        // A later epoch starts from a full shortfall, an empty flight and
+        // no carry. The epoch before's admissions have already been folded
+        // into `run.issued`.
+        if h > 0 && h < span && h % seb == 0 {
+            run.issued += visible.issued;
+            visible = Visible::new(pairs);
+            in_flight = 0;
+            carry = 0;
+        }
+        if h >= span {
             continue;
         }
 
+        let rel = h % seb;
         let shortfall = visible.shortfall;
-        let (count, carry_out) = count_at(pairs, shortfall, in_flight, h, carry);
-        run.blocks_at_cap += u64::from(capped_at(pairs, shortfall, in_flight, h));
+        let (count, carry_out) = count_at(pairs, shortfall, in_flight, rel, carry);
+        run.blocks_at_cap += u64::from(capped_at(pairs, shortfall, in_flight, rel));
 
         let block_seed = rng.bytes32();
         let block_hash = rng.bytes32();
@@ -492,7 +536,11 @@ pub fn run_epoch_observed(
         fates.push(block_fate);
     }
 
-    run.issued = visible.issued;
+    if epochs == 1 {
+        run.issued = visible.issued;
+    } else {
+        run.issued += visible.issued;
+    }
     // The bundle is whole: what is issued is exactly the draws of the
     // admitted blocks, and every issued draw is on some pair's count.
     assert_eq!(
@@ -501,19 +549,22 @@ pub fn run_epoch_observed(
         "issued draws are the admitted blocks' draws and no others"
     );
     assert_eq!(
-        visible.count.iter().map(|c| u64::from(*c)).sum::<u64>(),
-        run.issued,
-        "every issued draw is counted on its pair"
-    );
-    assert_eq!(
         in_flight, 0,
         "nothing is in flight once the last window ends"
     );
-
-    for &seen in &visible.count {
-        run.issued_hist[usize::from(seen.min(u16::from(COUNTED_DRAWS)))] += 1;
-        if seen < u16::from(COUNTED_DRAWS) {
-            run.unpaid_reads += u64::from(seen);
+    // One epoch's visible set is the whole run. A later epoch replaces it,
+    // so the per-pair totals are that epoch's, not the run's.
+    if epochs == 1 {
+        assert_eq!(
+            visible.count.iter().map(|c| u64::from(*c)).sum::<u64>(),
+            run.issued,
+            "every issued draw is counted on its pair"
+        );
+        for &seen in &visible.count {
+            run.issued_hist[usize::from(seen.min(u16::from(COUNTED_DRAWS)))] += 1;
+            if seen < u16::from(COUNTED_DRAWS) {
+                run.unpaid_reads += u64::from(seen);
+            }
         }
     }
     run
@@ -989,6 +1040,104 @@ mod tests {
             draw_count(4_096, 9_000 - 1_234, draw_horizon(4_321, SEB, W2), SEB, 77)
                 .expect("H and SEB")
         );
+    }
+
+    /// Two epochs. The first epoch's counts are the one-epoch run's. The
+    /// opening block of the second starts from a full shortfall, an empty
+    /// flight and no carry — a draw of the epoch before does not enter it.
+    /// Red edit: leave the carry or the in-flight total running across
+    /// `h_open`.
+    #[test]
+    fn a_later_epoch_starts_from_a_full_shortfall_and_an_empty_flight() {
+        let timing = Timing::bundle(0, Lag::Honest, 0);
+        let (_one, first) = traced(D, 300, timing, 7);
+        let mut second = Vec::new();
+        run_epochs_observed(2, D, 300, timing, 7, &mut |b| {
+            second.push((b.h, b.shortfall, b.in_flight, b.carry_in, b.draws.len()));
+        });
+        assert_eq!(second.len() as u64, 2 * SEB);
+        for (h, block) in first.iter().enumerate() {
+            assert_eq!(
+                second[h],
+                (
+                    h as u64,
+                    block.shortfall,
+                    block.in_flight,
+                    block.carry_in,
+                    block.draws.len()
+                ),
+                "epoch 0 block {h}"
+            );
+        }
+        let open = SEB as usize;
+        let full = u64::from(D) * u64::from(COUNTED_DRAWS);
+        assert_eq!(second[open].0, SEB);
+        assert_eq!(
+            second[open].1, full,
+            "the visible shortfall is counted afresh"
+        );
+        assert_eq!(
+            second[open].2, 0,
+            "nothing from the epoch before is in flight"
+        );
+        assert_eq!(second[open].3, 0, "the carry resets");
+        let (count, _) = count_at(D, full, 0, 0, 0);
+        assert_eq!(second[open].4 as u64, count);
+    }
+
+    /// A bundle drawn in the epoch before can be admitted on the open or
+    /// after it. That admission does not reduce the new epoch's shortfall:
+    /// the draws were against the epoch that closed. The run still counts
+    /// them as issued (`run_epochs_observed` asserts that). Red edit:
+    /// `visible.issue` on every landing, including one from the epoch before.
+    #[test]
+    fn a_late_admission_from_the_epoch_before_does_not_shrink_the_new_shortfall() {
+        let timing = Timing::bundle(0, Lag::Honest, 0);
+        let mut rows = Vec::new();
+        run_epochs_observed(2, D, 0, timing, 11, &mut |b| {
+            rows.push((b.h, b.shortfall, b.fate, b.draws.to_vec()));
+        });
+        // Only a block within `W₂` of the open can still be admitted after
+        // it, and the base rate still draws there. The last block of the
+        // epoch is not that block for every seed: its carry may be short
+        // of a draw. Any earlier crossing bundle with a draw is the case.
+        let crossing: Vec<_> = rows
+            .iter()
+            .filter(|(h, _, fate, draws)| {
+                *h < SEB && matches!(fate, Fate::Admitted { at } if *at >= SEB) && !draws.is_empty()
+            })
+            .collect();
+        assert!(
+            !crossing.is_empty(),
+            "seed 11 admits a drawn bundle of the epoch before on or after the open"
+        );
+        let see = crossing
+            .iter()
+            .map(|(_, _, fate, _)| match fate {
+                Fate::Admitted { at } => *at + 1,
+                _ => unreachable!("the filter kept admitted fates"),
+            })
+            .max()
+            .expect("the crossing set is not empty");
+        let full = u64::from(D) * u64::from(COUNTED_DRAWS);
+        let mut expected = full;
+        for h in SEB..=see {
+            for (bh, _, bf, draws) in &rows {
+                if let Fate::Admitted { at: admitted } = *bf {
+                    if admitted + 1 == h && *bh >= SEB {
+                        expected -= draws.len() as u64;
+                    }
+                }
+            }
+            let (_, shortfall, _, _) = rows
+                .iter()
+                .find(|(bh, _, _, _)| *bh == h)
+                .expect("the block was traced");
+            assert_eq!(
+                *shortfall, expected,
+                "block {h}: an admission of the epoch before is not in this shortfall"
+            );
+        }
     }
 
     /// Recomputes a whole epoch from outside the run: the visible counts,

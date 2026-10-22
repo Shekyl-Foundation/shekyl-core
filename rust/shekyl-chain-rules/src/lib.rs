@@ -165,8 +165,9 @@ pub use alt::{alt_against, anchor_band, AltChainView, AltValid, AnchorBand, Fork
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
     closed_and_final, drawable_epoch_walked_back, shard_close, shard_close_height, Accrual,
-    ArchivalDelta, ClosedUniverse, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
-    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash, WALK_BACK_EPOCHS,
+    ArchivalDelta, ClosedUniverse, DrawableDigestWrite, DrawableMemo, EpochClose, EpochGather,
+    RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
+    WALK_BACK_EPOCHS,
 };
 // The serve-credit bundle rule (`archival/bundle.rs`): STAGED. The
 // verifier and its view trait are exported for the lanes that wire them
@@ -184,10 +185,12 @@ pub use block::{
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use drain::{tree_after, Drain, DrainedOutput};
-pub use epoch_floor::{Claimable, EpochFamily, EpochFloor, Pricing, ReleaseJournalFloor, Settling};
+pub use epoch_floor::{
+    BlockDrawsFloor, Claimable, EpochFamily, EpochFloor, Pricing, ReleaseJournalFloor, Settling,
+};
 pub use fault::{
-    Corrupt, DrawableEpochFault, Fault, FormAttempt, PerHeightRecord, RecordInvariant,
-    ReferenceMismatch, Retry, SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,
+    Corrupt, DrawCountFault, DrawableEpochFault, Fault, FormAttempt, PerHeightRecord,
+    RecordInvariant, ReferenceMismatch, Retry, SettlementCheck, Stale, ViewRead, MAX_FORM_ATTEMPTS,
 };
 pub use header_facts::{FormedHeader, OpenHeader};
 pub use header_path::{
@@ -239,7 +242,7 @@ pub use tree_growth::{
 pub use trust::Trust;
 pub use validate::{
     form, form_judged, judge_lone_stateless, judge_slot_stateless, tx_against, tx_form, validate,
-    StatelessPass,
+    validate_with_memo, StatelessPass,
 };
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 pub use view::{

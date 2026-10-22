@@ -805,10 +805,13 @@ tables! {
     /// `archival_block_draws` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// height → the [`BlockDraws`] the count rule recorded for that block
     /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10). Written when the block
-    /// connects; its `revealed` flag is set by the block that first admits
-    /// the seed. No block writes it until admission lands (`SO-D12`,
-    /// increment 3), so a height with no row is a block the rule has not
-    /// run for. Appended last but one (ordinal 40).
+    /// connects (`SO-D12` increment 3). `issued_short` is the shortfall
+    /// this block's own admissions reduce: zero in this increment, written
+    /// by admission (increment 4) in this block's batch, and what the next
+    /// block reads off as `shortfall − issued_short`. `revealed` is set by
+    /// a later block, the one that admits this height's seed. A height
+    /// with no row is a block the rule has not run for. Appended last but
+    /// one (ordinal 40).
     pub const ARCHIVAL_BLOCK_DRAWS: TableDefinition<u64, Coded<BlockDraws>> =
         TableDefinition::new("archival_block_draws");
 

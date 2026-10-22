@@ -20,9 +20,11 @@
 //!
 //! # A pair without a key cannot be built
 //!
-//! [`DrawableEpoch::new`] is the only constructor. It fails on a pair
+//! [`DrawableEpoch::new`] builds a set that has pairs. It fails on a pair
 //! whose persona has no receipt key and on a key that does not parse, so
 //! "a pair in `D` lacks a key" is not a state the verifier meets.
+//! [`DrawableEpoch::empty`] is the set with no pairs: an open with no
+//! bonds writes its digest, and that constructor cannot fail.
 //!
 //! # The digest
 //!
@@ -176,6 +178,20 @@ impl DrawableEpoch {
             pairs,
             receipt_keys: parsed,
         })
+    }
+
+    /// An epoch with no drawable pair.
+    ///
+    /// The same value as [`Self::new`] with no keys and no pairs. An open
+    /// with no bonds writes this set's digest. There is no pair that could
+    /// lack a key, so this constructor does not fail.
+    #[must_use]
+    pub const fn empty(epoch: SettlementEpoch) -> Self {
+        Self {
+            epoch,
+            pairs: Vec::new(),
+            receipt_keys: Vec::new(),
+        }
     }
 
     /// The epoch this is the `h_open(E)` state of.

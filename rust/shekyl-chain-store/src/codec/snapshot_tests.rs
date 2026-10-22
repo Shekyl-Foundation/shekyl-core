@@ -822,6 +822,7 @@ impl Fixtures for BlockDraws {
             count: 0x0102_0304,
             carry: 0x1112_1314,
             shortfall: 0x2122_2324_2526_2728,
+            issued_short: 0x3132_3334,
             revealed,
         };
         vec![
@@ -831,6 +832,7 @@ impl Fixtures for BlockDraws {
                     count: 0,
                     carry: 0,
                     shortfall: 0,
+                    issued_short: 0,
                     revealed: false,
                 },
             ),

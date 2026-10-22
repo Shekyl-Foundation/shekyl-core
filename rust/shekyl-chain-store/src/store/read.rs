@@ -40,8 +40,8 @@
 use core::ops::{Range, RangeInclusive};
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{
-    AtHeight, Claimable, EpochFloor, Pricing, RecordedWeights, ReleaseJournalFloor, Settling,
-    SlashLogFloor, Tip,
+    AtHeight, BlockDrawsFloor, Claimable, EpochFloor, Pricing, RecordedWeights,
+    ReleaseJournalFloor, Settling, SlashLogFloor, Tip,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
@@ -1237,8 +1237,13 @@ impl ReadSnapshot<'_> {
 
     /// **A18.** What the draw's count rule recorded for the block at
     /// `height`, or `None` for a block no row was written for.
-    pub fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
-        archival_reads::block_draws(&self.txn, height).map_err(chain_reads::ReadFault::into_plain)
+    pub fn block_draws(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, StoreError> {
+        archival_reads::block_draws(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// **A19.** The digest of `epoch`'s drawable set as written at its

@@ -4231,6 +4231,7 @@ dependencies = [
  "shekyl-daemon-rpc",
  "shekyl-ffi",
  "shekyl-logging",
+ "shekyl-node",
  "shekyl-onion-v3",
  "shekyl-options",
  "shekyl-runtime",
@@ -4793,6 +4794,40 @@ dependencies = [
 [[package]]
 name = "shekyl-net-address"
 version = "3.1.0"
+
+[[package]]
+name = "shekyl-node"
+version = "3.1.0"
+dependencies = [
+ "hex",
+ "redb",
+ "rustix",
+ "shekyl-address",
+ "shekyl-chain-ingest",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-daemon-config",
+ "shekyl-daemon-rpc",
+ "shekyl-difficulty",
+ "shekyl-ffi",
+ "shekyl-genesis-tool",
+ "shekyl-hash-budget",
+ "shekyl-mempool",
+ "shekyl-miner",
+ "shekyl-options",
+ "shekyl-pow-randomx",
+ "shekyl-rpc-types",
+ "shekyl-runtime",
+ "shekyl-store-codec",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
+ "shekyl-types",
+ "shekyl-win-sec",
+ "shekyl-wire",
+ "tempfile",
+ "thiserror",
+ "tracing",
+]
 
 [[package]]
 name = "shekyl-noise"

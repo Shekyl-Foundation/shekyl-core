@@ -1,10 +1,11 @@
 # The managed Tor supervisor — the link under the Tor connector
 
-**Status: RULED 2026-10-15 — ratified as a whole by Rick. Increments 1 and 2
-of §12 are implemented. Increment 1 is the link the dialer reads (#1092).
+**Status: RULED 2026-10-15 — ratified as a whole by Rick. Increments 1, 2 and
+3b of §12 are implemented. Increment 1 is the link the dialer reads (#1092).
 Increment 2 is the control client's groundwork: the bounded sink, the event
 parsers, the `__OwningControllerFD` launch and the two death signals (#1091).
-Increments 3 to 6 are not.** The C++ managed-Tor path and the
+Increment 3b is the public directory cache (`TSR-Q8`). Increments 3 to 6 are
+not.** The C++ managed-Tor path and the
 `shekyl_daemon_tor_*` exports are deleted (§9; Rick, 2026-10-17). Increment 6
 is the supervisor's acceptance, and it remains open. Every question is ruled:
 `TSR-Q1` to `TSR-Q4`
@@ -582,7 +583,18 @@ fetched. At a clean stop, after the reap and before the tombstone rename, the
 same four names are copied back, each written to a temporary name and renamed
 over the old one, so a stop interrupted midway leaves either the old file or
 the new one. A crash copies nothing back, and the previous cache stays. Tor's
-`DataDirectory` is never the cache directory.
+`DataDirectory` is never the cache directory. The directory is
+`tor-directory-cache`, which is not a name the per-boot sweep removes. The
+limits are Tor 0.4.9.14's own, not a multiple of a measured size:
+`MAX_DIR_DL_SIZE` (`(1<<24)-1`, in `src/feature/dirclient/dirclient.c`) is the
+largest directory object Tor will download, and the consensus and certificate
+files are twice that. The microdescriptor store and journal are eight times
+that, because Tor appends every microdescriptor and rebuilds the store only
+every 30 minutes (`CLEAN_CACHES_INTERVAL`), once the journal is at least
+16 KiB and larger than half the store (`should_rebuild_md_cache`). Copy and
+save read the opened file: a symlink, anything that is not a regular file, or
+a file over its limit counts as missing and is not truncated. On Windows the
+cache directory is created with an owner-only access list.
 
 ### 4.8 Identity across a respawn
 
@@ -800,6 +812,14 @@ increment 2 uses none. They were taken on 2026-10-19, after the re-pin, on the T
 or the suspend apparatus, and are measured on the implementation branch before
 its PR leaves draft.
 
+**Seeded start (`TSR-Q8`), measured on an x86 dev box 2026-10-19 and
+2026-10-20** (tor 0.4.9.14; raw rows in `shekyl-dev`,
+`data/tsr-q8q9/2026-10-19-x86/`). A seed minutes old, n=20: p50 2.38 s, max
+3.31 s, against a cold arm p50 11.03 s, max 24.94 s. The same seed at about
+3 h (n=10, 2026-10-19 17:06Z): p50 2.38 s, max 2.77 s. At about 24 h (n=10,
+2026-10-20 14:14Z): p50 2.39 s, max 2.87 s. The floor device's seeded start,
+including the time to copy the cache on its storage, is not measured yet.
+
 ## 11. Interfaces
 
 - **P2P:** `TSR-F1` (plan preconditions, the owner loop parks on the
@@ -844,13 +864,20 @@ its PR leaves draft.
    daemon's step-8 Tor wait (`rust/shekyl-daemon/src/run.rs`) and its 300 s
    bootstrap deadline (`rust/shekyl-daemon/src/tor.rs`): step 8 does not wait
    for Tor, and no bootstrap is given up (Rick, 2026-10-19; one cold bootstrap
-   in a hundred on the floor device took longer than 300 s, §10). It carries the
-   public directory cache across boots (`TSR-Q8`, §4.7), with `tor-pin-verify`'s
-   live tests starting from a seeded cache and one cold-start test kept, and it
+   in a hundred on the floor device took longer than 300 s, §10). It
    tests its Tor choices against `TSR-Q9`, settling `TSR-M6`'s open question.
+   The public directory cache is increment 3b, not this one.
    It defines `ManagedTorFix` and `OwnTx` (§1's posture table) and exposes
    `TSR-Q12`'s values as one typed read beside those enums. The posture log
    line renders from the same values through the one renderer.
+3b. The public directory cache (`TSR-Q8`, §4.7). **Implemented.** At launch
+   into a fresh directory the daemon copies `cached-microdesc-consensus`,
+   `cached-microdescs`, `cached-microdescs.new` and `cached-certs`, each only
+   when the opened file is a regular file under Tor's own size limit, and
+   never by hard link. A clean stop after bootstrap writes them back by
+   renaming a temporary over the previous file. A crash writes nothing back.
+   The cache directory is `tor-directory-cache`, outside the per-boot sweep.
+   `tor-pin-verify` seeds its later live tests from that job's one cold boot.
 4. The probe nonce and the probe.
 5. The supervisor becomes the Tor link's publisher, in place of the zone host.
 6. Acceptance of the supervisor. The C++ deletions this increment used to

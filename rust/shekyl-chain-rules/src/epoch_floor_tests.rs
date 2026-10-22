@@ -167,3 +167,47 @@ fn the_release_journal_starts_one_above_the_oldest_kept_open() {
         "the pass of {epoch} reads from the first retained height"
     );
 }
+
+/// The draw rows retire below the undo floor. With a window the first
+/// retained height is `(B − 1)·SEB + 1 − W₂`; with none it is
+/// `(B − 1)·SEB`. While a boundary block is being validated the floor in
+/// force is the previous boundary's. Red edit: retire at `h_open` of the
+/// oldest kept epoch, or use the boundary's own prune while judging it.
+#[test]
+fn the_draw_rows_retire_below_the_undo_floor() {
+    let windowless = schedule();
+    assert_eq!(windowless.challenge_response_blocks(), None);
+    assert_eq!(BlockDrawsFloor::retired_by(0, windowless).height(), None);
+    assert_eq!(BlockDrawsFloor::retired_by(1, windowless).height(), None);
+    assert_eq!(
+        BlockDrawsFloor::retired_by(2, windowless)
+            .height()
+            .map(BlockHeight::to_raw),
+        Some(SEB),
+        "(B − 1)·SEB with no window"
+    );
+    // At the boundary of B = 2 the previous boundary's floor is still in force.
+    assert_eq!(
+        BlockDrawsFloor::in_force(BlockHeight::from_raw(2 * SEB), windowless).height(),
+        None
+    );
+    assert_eq!(
+        BlockDrawsFloor::in_force(BlockHeight::from_raw(2 * SEB + 1), windowless)
+            .height()
+            .map(BlockHeight::to_raw),
+        Some(SEB)
+    );
+
+    let windowed = SettlementSchedule::new(SettlementEpochBlocks::new(40).expect("non-zero"));
+    let w2 = windowed.challenge_response_blocks().expect("40 / 20").get();
+    assert_eq!(w2, 2);
+    let boundary = 2u64;
+    let kept = BlockDrawsFloor::retired_by(boundary, windowed)
+        .height()
+        .map(BlockHeight::to_raw);
+    let open = (boundary - 1) * 40;
+    assert_eq!(kept, Some(open + 1 - w2));
+    // The undo floor after boundary H = B·SEB is at least H − (SEB − 1).
+    let undo_min = boundary * 40 - (40 - 1);
+    assert!(kept.expect("a floor") < undo_min);
+}

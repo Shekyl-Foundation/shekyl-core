@@ -37,7 +37,7 @@ use crate::schema::{
     ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
     ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
 };
-use shekyl_chain_rules::EpochFloor;
+use shekyl_chain_rules::{BlockDrawsFloor, EpochFloor};
 
 pub(super) fn persona(fill: u8) -> PCanonicalId {
     PCanonicalId::from_bytes([fill; 32])
@@ -1147,7 +1147,8 @@ fn archival_snapshot_refuses_a_second_accruing_row_as_si23() {
 }
 
 // A18, A19 — the draw's per-block state and the drawable set's digest
-// (`SO-D12`). No block writes either yet, so every row here is planted.
+// (`SO-D12`). The count writer fills `archival_block_draws` on connect;
+// these rows are planted so the read is judged apart from that writer.
 
 /// A18 reads a planted row back whole and reads `None` where there is
 /// none. A row with a third value of the revealed flag is SI-7.
@@ -1156,13 +1157,21 @@ fn a18_block_draws_reads_the_row_or_none() {
     let path = tmp("arch-a18");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let at = BlockHeight::from_raw(41);
-    assert_eq!(store.begin_read().unwrap().block_draws(at).unwrap(), None);
+    assert_eq!(
+        store
+            .begin_read()
+            .unwrap()
+            .block_draws(at, BlockDrawsFloor::NONE)
+            .unwrap(),
+        None
+    );
     drop(store);
 
     let row = BlockDraws {
         count: 7,
         carry: 0x8000_0001,
         shortfall: 19,
+        issued_short: 3,
         revealed: true,
     };
     plant(&path, |txn| {
@@ -1172,8 +1181,15 @@ fn a18_block_draws_reads_the_row_or_none() {
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let snap = store.begin_read().unwrap();
-    assert_eq!(snap.block_draws(at).unwrap(), Some(row));
-    assert_eq!(snap.block_draws(BlockHeight::from_raw(42)).unwrap(), None);
+    assert_eq!(
+        snap.block_draws(at, BlockDrawsFloor::NONE).unwrap(),
+        Some(row)
+    );
+    assert_eq!(
+        snap.block_draws(BlockHeight::from_raw(42), BlockDrawsFloor::NONE)
+            .unwrap(),
+        None
+    );
     drop(snap);
     drop(store);
 
@@ -1189,7 +1205,11 @@ fn a18_block_draws_reads_the_row_or_none() {
         .expect("insert");
     });
     let store = ChainStore::create(&path, EPOCH).expect("reopen");
-    let err = store.begin_read().unwrap().block_draws(at).unwrap_err();
+    let err = store
+        .begin_read()
+        .unwrap()
+        .block_draws(at, BlockDrawsFloor::NONE)
+        .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_block_draws"), "{err}");
     cleanup(&path);
 }

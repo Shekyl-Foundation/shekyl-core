@@ -113,6 +113,7 @@ fn height_of(corrupt: &Corrupt) -> BlockHeight {
         | Corrupt::ShardCloseUnplaced { at, .. }
         | Corrupt::HoleBelowTip { at, .. }
         | Corrupt::RelayFloorUnpriceable { at, .. } => *at,
+        Corrupt::DrawCount { height, .. } => *height,
         Corrupt::CumulativeDifficultyOverflow
         | Corrupt::BurnExceedsEmission { .. }
         | Corrupt::LeafNotConstructible { .. }
