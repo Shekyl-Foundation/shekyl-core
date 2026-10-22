@@ -199,6 +199,14 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: EUP-5 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §1)
   - Target: pre-genesis
 
+- **Correlated failure domains in the staking population model.** Failure domains are operators and providers: replicated storage absorbs a disk failure inside the operator. The coupling half sweeps two unobserved shares, personas per operator and operators per provider, and four events with their own durations: a recoverable provider outage (hours to days), a permanent operator exit, one bad upgrade pushed to every persona of an operator, and hardware failure at a low rate for small operators only. It reports coverage (`cDeepU`, `oUmx`), time to re-replicate after a permanent event, and failure-window slashes from recoverable events. R and the re-replication rate are sized for a stated concentration. Provider concentration among distinct operators is the larger term. Blocked on ESR-10. Falsifier: that report exists on the purse ESR-10 feeds.
+  - Owner: EUP-3 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §1)
+  - Target: pre-genesis
+
+- **The lowest bond floor that clears its lower bound.** The floor is the cost of a claimed replica. A Sybil replica pays the same bond as a real one, and a shard's storage is negligible, so splitting is not an advantage on storage. The lower bound is claim spam and squatting, holding without serving until the 11-of-13 window trips net of what the challenge path and credit-onset delay already catch, and the outsourcing attack's residual after response timing. The upper bound is A1's burden and the marginal archiver's yield at L11's knee. "Best" is the lowest floor that clears the lower bound with a stated margin. Criteria are written before the sweep. A complete-tree holding is not this hole: it posts one floor (`bond_floor_of`) and the reward path excludes every credited complete-tree persona from the market (`freeze_complete_trees`, `market_member_at_epoch`), so it earns no per-shard reward. Blocked on EUP-3's coupling half. Falsifier: the sweep names that floor and the four readings (participation, coverage under the failure-domain arm, A1 onset, free-ride and outsourcing return).
+  - Owner: EUP-5 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md) §1)
+  - Target: pre-genesis
+
 - **Whether a complete-tree support role must see a hole the 2-of-3 misses.** The support PR settles the tree through `settle_pair`: three counted draws, Served at two passes, 11 Missed epochs to slash (`ARCHIVAL_SUPPORT_DRAW.md` §3). At a per-draw failure rate of 0.25 the chance of a slash in one window is about `10^{-7}` (§4). Whether that is enough is open. Triggered after EUP-4. Falsifier: the question is ruled, and any new rate is written before the scenario that measures it.
   - Owner: [`ARCHIVAL_SUPPORT_DRAW.md`](design/ARCHIVAL_SUPPORT_DRAW.md)
   - Target: pre-genesis
