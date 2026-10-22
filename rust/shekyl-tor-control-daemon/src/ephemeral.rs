@@ -490,8 +490,6 @@ fn save_directory_cache(data_dir: &std::path::Path) {
         return;
     }
     drop(directory_cache::save_from(data_dir, &cache));
-    #[cfg(test)]
-    directory_cache::save_job_cache_from(data_dir);
 }
 
 #[cfg(test)]
@@ -677,6 +675,15 @@ mod tests {
             boot.directory_cache_copied().is_empty(),
             "the cold boot has nothing to copy"
         );
+        // The lane's seed is the test's, written while the data directory
+        // still exists. The stop path only writes the daemon's own cache.
+        let data_dir = boot
+            .data_dir
+            .as_ref()
+            .expect("the boot holds its directory until stop")
+            .path()
+            .to_path_buf();
+        shekyl_tor_control_client::directory_cache::save_job_cache_from(&data_dir);
         assert!(
             boot.shutdown().await.is_some(),
             "the stop observes a real reap"
