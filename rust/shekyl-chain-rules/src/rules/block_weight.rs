@@ -82,7 +82,7 @@
 //! place the answer lives (§3.6), and the floor said it is not needed.
 
 use shekyl_economics::params::{BLOCK_WEIGHT_LONG_TERM_WINDOW, BLOCK_WEIGHT_SHORT_TERM_WINDOW};
-use shekyl_economics::{effective_median, long_term_weight, FULL_REWARD_ZONE};
+use shekyl_economics::{effective_median, long_term_weight, EconomicParams};
 use shekyl_types::{BlockCount, BlockHeight, BlockWeight, LongTermWeight};
 use shekyl_wire::Transaction;
 
@@ -260,7 +260,7 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
             }))
         }
     };
-    Ok(medians_over(&window))
+    Ok(medians_over(&window, super::miner::economics()))
 }
 
 /// CEN-G6/G6b over one window of recorded weights, in height order. The
@@ -269,7 +269,7 @@ pub fn effective_median_at<'id, V: ChainView<'id>>(
 /// it is shorter. [`medians_from`] composes the two. The arithmetic is
 /// pinned in `block_weight_tests`.
 #[must_use]
-pub fn medians_over(window: &[RecordedWeights]) -> EffectiveMedian {
+pub fn medians_over(window: &[RecordedWeights], params: &EconomicParams) -> EffectiveMedian {
     let mut long_term: Vec<u64> = window.iter().map(|w| w.long_term_weight.to_raw()).collect();
     // Total: a window longer than the address space is the whole slice.
     let short_len = usize::try_from(BLOCK_WEIGHT_SHORT_TERM_WINDOW)
@@ -279,16 +279,26 @@ pub fn medians_over(window: &[RecordedWeights]) -> EffectiveMedian {
         .iter()
         .map(|w| w.weight.to_raw())
         .collect();
-    medians_from(cxx_median(&mut long_term), cxx_median(&mut short_term))
+    medians_from(
+        cxx_median(&mut long_term),
+        cxx_median(&mut short_term),
+        params,
+    )
 }
 
 /// CEN-G6/G6b's composition, from the two raw medians: the long-term
-/// median floored at the zone, and the short-term median clamped to
-/// `[LTEM, S · LTEM]` by [`effective_median`]. [`medians_over`] is this
-/// over medians it selects itself.
+/// median floored at the parameter set's zone, and the short-term median
+/// clamped to `[LTEM, S · LTEM]` by [`effective_median`]. [`medians_over`]
+/// is this over medians it selects itself. At the shipped parameters the
+/// zone is `shekyl_economics::FULL_REWARD_ZONE`; a parameter set with
+/// another zone floors there.
 #[must_use]
-pub fn medians_from(long_term_median: u64, short_term_median: u64) -> EffectiveMedian {
-    let long_term_effective = long_term_median.max(FULL_REWARD_ZONE);
+pub fn medians_from(
+    long_term_median: u64,
+    short_term_median: u64,
+    params: &EconomicParams,
+) -> EffectiveMedian {
+    let long_term_effective = long_term_median.max(params.full_reward_zone);
     let effective = effective_median(long_term_effective, short_term_median);
     EffectiveMedian {
         long_term_effective_median: LongTermWeight::from_raw(long_term_effective),

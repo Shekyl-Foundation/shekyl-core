@@ -169,8 +169,8 @@ impl MedianWindow {
     /// The medians the next block is priced and bounded against. At a
     /// fold's first block both windows are empty and both medians are the
     /// zone, as at the chain's genesis.
-    pub(crate) fn medians(&self) -> EffectiveMedian {
-        medians_from(self.long_term.median(), self.short_term.median())
+    pub(crate) fn medians(&self, params: &shekyl_economics::EconomicParams) -> EffectiveMedian {
+        medians_from(self.long_term.median(), self.short_term.median(), params)
     }
 
     /// Record a block of `weight` bytes judged under `medians` — the value
@@ -250,11 +250,15 @@ mod tests {
         let mut recorded: VecDeque<RecordedWeights> = VecDeque::new();
         let mut checks = 0usize;
         for (step, weight) in weights.into_iter().enumerate() {
-            let medians = rolling.medians();
+            let medians = rolling.medians(&shekyl_economics::EconomicParams::default());
             let checked = step < 3_000 || step % 4_999 == 0 || (step >= long && step % 997 == 0);
             if checked {
                 let window: Vec<_> = recorded.iter().copied().collect();
-                assert_eq!(medians, medians_over(&window), "block {step}");
+                assert_eq!(
+                    medians,
+                    medians_over(&window, &shekyl_economics::EconomicParams::default()),
+                    "block {step}"
+                );
                 checks += 1;
             }
             rolling.push(medians, weight);

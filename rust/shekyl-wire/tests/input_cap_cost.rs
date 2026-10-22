@@ -22,7 +22,7 @@
 //!   the proof's growth, and the prefix (key image + pseudo-out);
 //! - **verifier time per input**, broken the same way;
 //! - the **implied cap** `(TX_WEIGHT_LIMIT − fixed) / weight_per_input` —
-//!   the input count CEN-H3's weight limit (149 400) already refuses past.
+//!   the input count CEN-H3's weight limit already refuses past.
 //!   If it is below 8 the cap is dead weight; if above, the cap is the
 //!   binding constraint and needs a derivation from a stated verifier
 //!   budget, not a number from RingCT's era. The parser's `MAX_TX_SIZE`
@@ -659,7 +659,7 @@ fn the_input_caps_cost_is_measured_not_inherited() {
         / span;
     let fixed_bytes = first.tx_bytes as f64 - bytes_per_input;
     // Two ceilings, one binding. CEN-H3 refuses a transaction whose weight
-    // exceeds `TX_WEIGHT_LIMIT` (149 400) — that is the consensus bound an
+    // exceeds `TX_WEIGHT_LIMIT` — that is the consensus bound an
     // accepted spend actually meets, and the one the input cap is measured
     // against. `MAX_TX_SIZE` (1 MiB) is the parser's refusal, seven times
     // wider; reported beside it so the two are never confused again (#853

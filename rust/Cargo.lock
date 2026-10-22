@@ -4379,6 +4379,7 @@ dependencies = [
  "shekyl-tx-weight",
  "shekyl-types",
  "shekyl-units",
+ "shekyl-wire",
 ]
 
 [[package]]
