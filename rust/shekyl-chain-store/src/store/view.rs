@@ -88,9 +88,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_chain_rules::{
-    AtHeight, BlockOutputs, ChainView, Claimable, EpochFloor, HeaderRecord, HeaderView, Pricing,
-    RecordedBlock, RecordedWeights, ReleaseJournalFloor, Settling, SlashLogFloor, Tip,
-    TreeFrontier,
+    AtHeight, BlockDrawsFloor, BlockOutputs, ChainView, Claimable, EpochFloor, HeaderRecord,
+    HeaderView, Pricing, RecordedBlock, RecordedWeights, ReleaseJournalFloor, Settling,
+    SlashLogFloor, Tip, TreeFrontier,
 };
 use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
@@ -466,8 +466,12 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         archival_reads::served_at(self.batch.txn(), persona, epochs, floor).map_err(|f| self.arm(f))
     }
 
-    fn block_draws(&self, height: BlockHeight) -> Result<Option<BlockDraws>, StoreError> {
-        archival_reads::block_draws(self.batch.txn(), height).map_err(|f| self.arm(f))
+    fn block_draws(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<BlockDraws>, StoreError> {
+        archival_reads::block_draws(self.batch.txn(), height, floor).map_err(|f| self.arm(f))
     }
 
     fn drawable_digest(

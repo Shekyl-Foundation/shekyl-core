@@ -329,7 +329,14 @@ use super::{Canonical, CodecError};
 ///   above `h_open` of the settling family's oldest kept epoch, which
 ///   moves no row's bytes either. Rebuild from the block corpus, as at
 ///   every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(29);
+/// - `30` — the draw count (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.3, §10,
+///   `SO-D12` increment 3). `BlockDraws` gains `issued_short` (a `u32`
+///   before the revealed flag), so a `29` row would decode as a different
+///   count; `block_draws.snap` re-pins. The table itself is unchanged:
+///   every connect now writes the row, and the boundary batch retires
+///   below the draw-rows floor. A `29` file is refused at open. Rebuild
+///   from the block corpus, as at every bump.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(30);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -386,10 +393,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(29));
-        assert_eq!(SCHEMA_VERSION.encode(), [29, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(30));
+        assert_eq!(SCHEMA_VERSION.encode(), [30, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[29, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[30, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

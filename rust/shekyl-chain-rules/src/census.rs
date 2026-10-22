@@ -652,6 +652,11 @@ census_rows! {
         // nothing. The falsifier holds the verdict's logged slash to what
         // the fold reads back.
         L16 by_construction(shekyl_archival_retention::holds_shard_at, "l16_the_slash_the_verdict_logs_is_what_the_held_at_height_fold_reads"),
+        // L17: the draw count. One row per connected height, derived by the
+        // count phase and written by the store (`SO-D12` increment 3). A
+        // windowless schedule records a zero row; every other failure is a
+        // `Corrupt` that halts the writer.
+        L17 implemented(crate::archival::L17),
         // 4.M Mempool admission — consensus-flagged rows. M2: the pool door
         // runs the full NIC set because it *is* the validator's per-slot
         // judgement at `Lone` (DRS-E5 PR-b b2); held by `shekyl-mempool`,

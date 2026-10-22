@@ -156,7 +156,9 @@ pub struct MockChain {
     /// planted price or work total is a row that pass wrote, so planting
     /// either raises this to its epoch. With the prices, budgets, work
     /// totals and complete-tree sets, the archival reads this chain plants;
-    /// every other archival read answers *no bonds*.
+    /// every other archival read answers *no bonds*. The draw row is the
+    /// zero row and the drawable digest is the empty set's: this chain
+    /// has no bond history, and the count treats a missing row as a hole.
     slash_watermark: Option<SettlementEpoch>,
 }
 

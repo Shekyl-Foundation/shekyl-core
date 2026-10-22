@@ -446,6 +446,37 @@ pub enum StoreInvariant {
         /// The lowest retained epoch of the table's family.
         floor: shekyl_types::SettlementEpoch,
     },
+    /// **SI-33** — `archival_block_draws` holds one row per connected
+    /// height (`SO-D12` increment 3). A second insert of the height is a
+    /// rewrite. A count the rules could not record arrives as
+    /// [`DrawRowFault::Count`]. Fatal, never a verdict on the block.
+    BlockDrawsNotSingular {
+        /// The height whose row was being written.
+        height: shekyl_types::BlockHeight,
+        /// Which half failed.
+        observed: DrawRowFault,
+    },
+    /// **SI-34** — `archival_block_draws` is read only where it is kept.
+    /// The floor is [`shekyl_chain_rules::BlockDrawsFloor`], a consensus
+    /// expression the store compares and does not source. Absent is *never
+    /// written*; a row below the floor may have been written and retired.
+    /// Fatal, never a verdict on the block.
+    BlockDrawsReadBelowFloor {
+        /// The height asked for.
+        asked: shekyl_types::BlockHeight,
+        /// The first height still retained.
+        floor: shekyl_types::BlockHeight,
+    },
+}
+
+/// What an SI-33 check observed (payload of
+/// [`StoreInvariant::BlockDrawsNotSingular`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawRowFault {
+    /// A row is already recorded for the height the block connects at.
+    Rewritten,
+    /// The count could not be recorded. The validator names why.
+    Count(shekyl_chain_rules::DrawCountFault),
 }
 
 /// What an SI-29 check observed (payload of
@@ -642,6 +673,8 @@ impl StoreInvariant {
             Self::DrawableSetNotSound { .. } => 30,
             Self::CompleteTreesNotFrozen { .. } => 31,
             Self::EpochReadBelowFloor { .. } => 32,
+            Self::BlockDrawsNotSingular { .. } => 33,
+            Self::BlockDrawsReadBelowFloor { .. } => 34,
         }
     }
 }
@@ -890,6 +923,24 @@ impl core::fmt::Display for StoreInvariant {
                  retired; a reader asked outside the window its own rule set keeps — the \
                  schedule is mis-composed, not the data"
             ),
+            Self::BlockDrawsNotSingular { height, observed } => match observed {
+                DrawRowFault::Rewritten => write!(
+                    f,
+                    "archival_block_draws already holds height {height}; a block records its \
+                     draw count once"
+                ),
+                DrawRowFault::Count(why) => write!(
+                    f,
+                    "the draw count at height {height} cannot be recorded ({why}); rebuild from \
+                     the block corpus"
+                ),
+            },
+            Self::BlockDrawsReadBelowFloor { asked, floor } => write!(
+                f,
+                "archival_block_draws was asked for height {asked} while rows below {floor} may \
+                 be retired; a reader asked outside the window its own rule set keeps — the \
+                 schedule is mis-composed, not the data"
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
@@ -939,6 +990,8 @@ impl core::error::Error for StoreInvariant {
             | Self::DrawableSetNotSound { .. }
             | Self::CompleteTreesNotFrozen { .. }
             | Self::EpochReadBelowFloor { .. }
+            | Self::BlockDrawsNotSingular { .. }
+            | Self::BlockDrawsReadBelowFloor { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

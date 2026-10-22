@@ -51,7 +51,8 @@
 use redb::ReadableTable;
 use shekyl_chain_rules::harness::fixture;
 use shekyl_chain_rules::{
-    Candidate, EpochFloor, FakechainSchedule, ReleaseJournalFloor, RuleSet, SlashLogFloor,
+    BlockDrawsFloor, Candidate, EpochFloor, FakechainSchedule, ReleaseJournalFloor, RuleSet,
+    SlashLogFloor,
 };
 use shekyl_types::{ArchivalLength, BlockCount, BlockHash, BlockHeight, ShardId, SHARD_LENGTH};
 use shekyl_wire::{Ct, Transaction};
@@ -2673,6 +2674,7 @@ fn epoch_floors_at(boundary: u64) -> super::prune::EpochFloors {
         claimable: EpochFloor::at_boundary(at, schedule),
         settling: EpochFloor::at_boundary(at, schedule),
         pricing: EpochFloor::at_boundary(at, schedule),
+        draws: BlockDrawsFloor::retired_by(schedule.epoch_at_height(boundary), schedule),
     }
 }
 

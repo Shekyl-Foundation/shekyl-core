@@ -45,9 +45,11 @@ pub const DRAWABLE_DIGEST_LEN: usize = 32;
 /// Width of a [`DrawCommitment`].
 pub const DRAW_COMMITMENT_LEN: usize = 32;
 
-/// Width of a stored [`BlockDraws`]: the count and the carry at four bytes
-/// each, the shortfall at eight, and the revealed flag.
-pub const BLOCK_DRAWS_LEN: usize = size_of::<u32>() + size_of::<u32>() + size_of::<u64>() + 1;
+/// Width of a stored [`BlockDraws`]: the count, the carry and
+/// `issued_short` at four bytes each, the shortfall at eight, and the
+/// revealed flag.
+pub const BLOCK_DRAWS_LEN: usize =
+    size_of::<u32>() + size_of::<u32>() + size_of::<u64>() + size_of::<u32>() + 1;
 
 /// What one epoch settled for one pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -301,7 +303,7 @@ impl IssuedDigest {
 /// **Every 32-byte value is a commitment. None means "absent" or
 /// "unset".** A commitment nobody can open, such as the all-zero one the
 /// genesis block carries, is still a commitment: its block issues no draw
-/// because no carrier can reveal a seed for it, not because a reader
+/// because no admitted bundle can reveal a seed for it, not because a reader
 /// skipped it. The type has no zero constant, no `Default` and no
 /// emptiness test so that no reader can branch on one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -336,9 +338,10 @@ impl core::fmt::Debug for DrawCommitment {
 ///
 /// `count` and `carry` are the rule's output at this block, and the next
 /// block's rule reads `carry`. `shortfall` is the visible shortfall the
-/// rule saw. `revealed` is whether a carrier has revealed this block's
-/// seed: until one has, the block's draws are in flight and none of them
-/// is issued.
+/// rule saw. `issued_short` is what this block's admissions took off the
+/// shortfall, and `revealed` is whether an admitted bundle has revealed
+/// this block's seed: until one has, the block's draws are in flight and
+/// none of them is issued.
 ///
 /// A row is written when its block connects and `revealed` is set by the
 /// block that first admits the seed. Both are consensus state, undone with
@@ -352,10 +355,34 @@ pub struct BlockDraws {
     pub count: u32,
     /// The 32-bit fraction carried to the next block's count.
     pub carry: u32,
-    /// The visible shortfall the count was computed from.
+    /// The visible shortfall the count was computed from. Zero on a
+    /// schedule with no response window: no count is computed, so there is
+    /// no shortfall to carry. A windowed epoch opens at
+    /// `COUNTED_DRAWS` times the size of `D`.
     pub shortfall: u64,
-    /// Whether this block's seed has been revealed.
+    /// What this block's admissions took off the shortfall. Zero until
+    /// admission lands (`SO-D12` increment 4): this increment's writer
+    /// records the count and does not admit.
+    pub issued_short: u32,
+    /// Whether this block's seed has been revealed by an admitted bundle.
     pub revealed: bool,
+}
+
+impl BlockDraws {
+    /// A block that drew nothing: no count, no carry, no shortfall, nothing
+    /// issued, and the seed unrevealed.
+    ///
+    /// The row a schedule with no response window writes, and the row a
+    /// view with no draw table answers. A store height that was never
+    /// written is `None`, not this value: absence is a hole, and this row
+    /// is a height that drew nothing.
+    pub const ZERO: Self = Self {
+        count: 0,
+        carry: 0,
+        shortfall: 0,
+        issued_short: 0,
+        revealed: false,
+    };
 }
 
 /// The digest of one epoch's drawable set, written when the epoch opens

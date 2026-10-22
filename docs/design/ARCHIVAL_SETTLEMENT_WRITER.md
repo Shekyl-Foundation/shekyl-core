@@ -1257,9 +1257,18 @@ This lane's increments, each its own change:
      digested into the store at every open (`SO-D12m`); the settlement
      pass rebuilds the second and compares (`SO-D10g`'s check, which
      lands here).
-3. **The count writer** (`SO-D12k`), its own change: the per-block count
-   and carry, `issued_short` (`SO-D12l`), and the in-memory `D` cache,
-   whose first reader it is.
+3. **The count writer** (`SO-D12k`), **built 2026-10-21.** Every
+   connecting height writes one `archival_block_draws` row: `count`,
+   `carry`, the visible shortfall, `issued_short` (`SO-D12l`, zero until
+   admission) and `revealed` (false until a bundle is admitted). A
+   schedule with no response window writes a zero row and draws nothing.
+   The count of `h` reads the row at `h − 1`. At `h_open(E)` the shortfall
+   is `COUNTED_DRAWS · |D|` and the carry is zero; `|D|` is the post-state
+   set the transition already built, and later heights read it from an
+   in-memory memo keyed by `(E, hash of the block at h_open(E))`, rebuilt
+   from the journals and checked against the recorded digest on a miss
+   (SI-30). The boundary retires the rows below `BlockDrawsFloor`
+   (`SO-D12o`, SI-34). Layout 30.
 4. **The cutover**, after the Slice C verifier lands:
    - implement the view trait on this lane's store;
    - call the verifier at block admission and write its kept projection
@@ -1319,6 +1328,7 @@ The settlement-timing question `ESR-12`.
 | `SO-D12l` | **`BlockDraws` gains `issued_short: u32`** (2026-10-16), the shortfall reduction a block's admissions cause. Lands with increment 3. *(Relayed as CW-2.)* |
 | `SO-D12m` | **The `D` digest covers the pairs and each persona's receipt key** (2026-10-17): `cSHAKE256_32("shekyl/archival-drawable-epoch-v1", E_le8 ‖ n_pairs_le8 ‖ (p_canonical_id ‖ shard_le8)* ‖ n_personas_le8 ‖ (p_canonical_id ‖ receipt_sign_pk)*)`, pairs in canonical order, personas ascending (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.5 check 2) |
 | `SO-D12n` | **`DrawableSet`'s tip read is replaced** by the builder of increment 2 (2026-10-17): no second drawable-set type remains, and the pair emitter stays inside the builder |
+| `SO-D12o` | **The draw rows retire in increment 3** (Q-D, option 1, Rick, 2026-10-21). At the boundary of `B` the store deletes `archival_block_draws` strictly below `(B − 1)·SEB + 1 − W₂`, or below `(B − 1)·SEB` when the schedule has no window. `BlockDrawsFloor` computes that height beside the Release journal's floor; the store compares and does not source it, and a read below it is SI-34. `CHALLENGE_RESPONSE_BLOCKS` is at least 1 and below `SETTLEMENT_EPOCH_BLOCKS` wherever a window exists, so the floor sits below the undo floor. Admission, increment 4, reads `h_incl − W₂ ≤ h < h_incl` and is not clipped at `h_open` |
 
 What `SO-D12i` touches on the live chain, checked before it was ruled, is §16.7.
 
@@ -1801,10 +1811,12 @@ the diff at each family's horizon or drops these families from it.
 
 ### 17.5 Tables with no derivable horizon (reported, not retired)
 
+`archival_block_draws` left this table on 2026-10-21 (`SO-D12o`, option 1):
+it retires below `BlockDrawsFloor`, and a read below that floor is SI-34.
+
 | Table | Why no horizon is derived here | Blocker |
 | --- | --- | --- |
 | `archival_serve_credit` | A3 and A4 (CEN-J16, the Release cooldown) ask for the latest epoch a pair *ever* served. Retiring a row turns "served 30 epochs ago" into "never served", which changes the cooldown's verdict. The C++ retires it at `tip − W`, which is a horizon for a different read | `SO-D12j`, deferred to the merged increment's design text, which decides what the served anchor reads |
-| `archival_block_draws` | Per height, not per epoch. Its readers, admission's draw-index bound and the next block's count, are not built | Admission (the merged increment) |
 | `archival_budget_accruing` | Holds the open epoch's row and no other (SI-23); the close deletes it | None needed: it retires itself |
 
 ### 17.6 Pruning

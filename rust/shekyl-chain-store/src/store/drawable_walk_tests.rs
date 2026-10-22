@@ -35,6 +35,10 @@
 //! (`settlement_slash_tests.rs`): its chain runs one epoch past the
 //! epoch-`M` slash, whose complete-tree demotions sit above `h_open(M + 1)`,
 //! and the settlement of `M + 1` checks the walk that undoes them.
+//!
+//! The count those rows feed (`SO-D12` increment 3) is
+//! [`block_draws_chain_tests`]: a non-empty set's composition, the memo,
+//! and the faults a drifted journal or a missing digest raises.
 
 use shekyl_chain_rules::{
     drawable_epoch_walked_back, ChainView as _, DrawableEpoch, DrawableEpochFault, EpochFloor,
@@ -633,9 +637,11 @@ fn compact_holdings(shards: &[u64]) -> shekyl_types::archival::Holdings {
     .expect("distinct shards under the cap")
 }
 
-/// A slash of the compact bond's shard 0 at a height above `h_open(2)`, as
-/// the store holds one: the record without the shard and a log row naming
-/// the shard the slash took. `shard` is what the row names.
+/// A slash of the compact bond's shard 0 above `h_open` of the epoch the
+/// settling block connects in, as the store holds one: the record without
+/// the shard and a log row naming the shard the slash took. `shard` is
+/// what the row names. The count of that connecting block walks the same
+/// range, so the row has to sit above that open too.
 fn slash_compact_bond(batch: &WriteBatch<'_, '_>, shard: u64) -> Result<(), StoreError> {
     let persona = Persona::at(COMPACT).id();
     let mut record = batch
@@ -657,7 +663,7 @@ fn slash_compact_bond(batch: &WriteBatch<'_, '_>, shard: u64) -> Result<(), Stor
     batch
         .open_upsert_table(crate::schema::ARCHIVAL_SLASH_LOG)?
         .upsert(
-            crate::ids::SlashLogKey::new(BlockHeight::from_raw(FIRST_RELEASE), 0).key(),
+            crate::ids::SlashLogKey::new(BlockHeight::from_raw(h_open(3) + 1), 0).key(),
             entry.encoded().as_encoded(),
         )?;
     Ok(())
@@ -727,3 +733,6 @@ fn a_slash_row_naming_another_shard_halts_the_settlement_as_drift() {
     );
     chain.finish();
 }
+
+#[path = "block_draws_chain_tests.rs"]
+mod block_draws_chain_tests;
