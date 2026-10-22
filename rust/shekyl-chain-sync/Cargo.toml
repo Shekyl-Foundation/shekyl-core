@@ -29,5 +29,10 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-wire = { path = "../shekyl-wire" }
 
+[features]
+# The floor-device job: captured corpora and 50,000 real hashes.
+# `cargo test --lib` does not build it.
+cs2-long-run = []
+
 [lints]
 workspace = true

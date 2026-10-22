@@ -14,7 +14,7 @@ use shekyl_chain_rules::{
     form_header, judge_header, seed_height, target_claim, AtHeight, FakechainSchedule, FormAttempt,
     FormedHeader, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip, Trust,
 };
-use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_difficulty::{CumulativeDifficulty, N};
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::{PortableMap, ResponseHeaders, HEADERS_RESPONSE_BYTES};
 use shekyl_types::{
@@ -819,4 +819,179 @@ fn a_header_judged_against_the_wrong_view_is_recorded() {
         assert_eq!(sync.header_count(), 0);
         assert_eq!(sync.selected().hash, tip.hash);
     });
+}
+
+/// Two branches from one parent, under LWMA, with timestamps far enough
+/// apart that the second header's target differs. The mock accepts every
+/// nonce: the subject is which verified work takes the slot. Neither
+/// branch outweighs the main tip, so the slot is the only way in.
+#[test]
+fn a_heavier_unverified_branch_takes_the_long_run_slot() {
+    let rules = cap(2);
+    // Below `N` every block has the genesis difficulty, so the two
+    // branches cannot diverge. The fork sits above the window.
+    let main = chain_of(N + 20);
+    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    main.with_view(|view| {
+        let view = HeavyTip(view);
+        let tip = view.tip().expect("main answers").expect("a tip");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Tip { tip },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        for session in [1u8, 2] {
+            sync.handle(
+                Event::SessionOpened {
+                    session,
+                    transit: Duration::from_secs(1),
+                },
+                &view,
+                Instant::now(),
+                &mut NoDraw,
+                &mut out,
+            )
+            .expect("main answers");
+            sync.claim(
+                session,
+                PeerClaim {
+                    count: ChainCount::from_raw(2),
+                    work: CumulativeDifficulty::from_raw(u128::MAX),
+                },
+                &view,
+                Instant::now(),
+                &mut NoDraw,
+                &mut out,
+            )
+            .expect("the claim is a chain");
+        }
+        // Within the cap, and inside the dense locator. The tip's reported
+        // work is inflated, so neither branch outweighs it.
+        let parent_height = BlockHeight::from_raw(tip.height.to_raw() - 2);
+        let parent = match view.header_at(parent_height).expect("main answers") {
+            AtHeight::Recorded(record) => record,
+            AtHeight::AboveTip => panic!("the fork parent is on main"),
+        };
+        let slow = branch_pows(&main, &parent, &[600, 600]);
+        let fast = branch_pows(&main, &parent, &[30, 30]);
+        mock_headers(&mut sync, &view, 1, slow);
+        assert_eq!(
+            sync.slot_session(),
+            Some(1),
+            "the first budget took the slot"
+        );
+        mock_headers(&mut sync, &view, 2, fast);
+        assert_eq!(
+            sync.slot_session(),
+            Some(2),
+            "the heavier unverified branch did not take the slot"
+        );
+    });
+}
+
+/// The tip reports more work than a short fork can reach. Every other
+/// height keeps the chain's own record, so LWMA sees the real timestamps.
+struct HeavyTip<H>(H);
+
+impl<'id, H: HeaderView<'id>> HeaderView<'id> for HeavyTip<H> {
+    type Fault = H::Fault;
+
+    fn tip(&self) -> Result<Option<Tip>, Self::Fault> {
+        self.0.tip()
+    }
+
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Self::Fault> {
+        let tip = self.0.tip()?.map(|tip| tip.height);
+        Ok(match self.0.header_at(height)? {
+            AtHeight::Recorded(mut record) => {
+                if Some(height) == tip {
+                    record.cumulative_difficulty = CumulativeDifficulty::from_raw(u128::MAX / 4);
+                }
+                AtHeight::Recorded(record)
+            }
+            other => other,
+        })
+    }
+}
+
+fn branch_pows(chain: &MockChain, parent: &HeaderRecord, gaps: &[u64]) -> Vec<Vec<u8>> {
+    let mut block = candidate_on(chain, Vec::new()).block;
+    let mut previous = parent.hash;
+    let mut timestamp = parent.header.timestamp;
+    let mut pows = Vec::new();
+    for gap in gaps {
+        block.header.previous = previous;
+        timestamp = timestamp.saturating_add(*gap);
+        block.header.timestamp = timestamp;
+        block.header.nonce = 0;
+        let pow = block.pow_blob();
+        previous = PowBlob::read(&pow).expect("preimage").identity();
+        pows.push(pow);
+    }
+    pows
+}
+
+fn mock_headers<'id, H, R>(sync: &mut Sync<u8, R>, main: &H, session: u8, blobs: Vec<Vec<u8>>)
+where
+    H: HeaderView<'id>,
+    H::Fault: std::fmt::Debug,
+    R: Fn(BlockHeight) -> RuleSet,
+{
+    let bytes = ResponseHeaders {
+        blobs,
+        tip_work: u128::MAX,
+        more: true,
+    }
+    .store()
+    .expect("the response encodes");
+    let mut out = Vec::new();
+    sync.handle(
+        Event::Headers { session, bytes },
+        main,
+        Instant::now(),
+        &mut NoDraw,
+        &mut out,
+    )
+    .expect("main answers");
+    for _ in 0..4 {
+        let Some((job, items)) = out.iter().find_map(|command| match command {
+            Command::Prove { job, items, .. } => Some((*job, items.clone())),
+            _ => None,
+        }) else {
+            break;
+        };
+        let mut results = Vec::new();
+        for item in items {
+            let pow = PowBlob::read(&item.pow).expect("the item is a preimage");
+            let formed = form_header(
+                &pow,
+                &item.rule_set,
+                &MockSubstrate::default(),
+                item.seed,
+                item.target,
+                item.attempt,
+            )
+            .expect("the mock answers")
+            .expect("the mock accepts the nonce");
+            results.push(Proved::Formed(Box::new(formed)));
+        }
+        out.clear();
+        sync.handle(
+            Event::Proven { job, results },
+            main,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+    }
+    assert!(
+        out.iter()
+            .all(|command| !matches!(command, Command::Close { .. })),
+        "an unverified header closed the session: {out:?}"
+    );
 }

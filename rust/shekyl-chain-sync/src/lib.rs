@@ -18,8 +18,12 @@
 
 #[cfg(test)]
 mod harness;
+#[cfg(all(test, feature = "cs2-long-run"))]
+mod long_run;
 #[cfg(test)]
 mod proof;
+#[cfg(test)]
+mod scenarios;
 #[cfg(test)]
 mod select_tests;
 

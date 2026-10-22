@@ -218,7 +218,22 @@ where
         let mut fresh = Vec::new();
         for pow in blobs {
             let hash = pow.identity();
-            if self.tree.contains(hash) || points.iter().any(|(_, known)| *known == hash) {
+            if self.tree.contains(hash) {
+                // The session supplied a header already in `T`. Its
+                // frontier is that header, which is what it can serve.
+                if let Some(height) = self.tree.connecting(hash) {
+                    if let Some(state) = self.sessions.get_mut(&session) {
+                        let higher = state
+                            .frontier
+                            .is_none_or(|(have, _)| height.to_raw() >= have.to_raw());
+                        if higher {
+                            state.frontier = Some((height, hash));
+                        }
+                    }
+                }
+                continue;
+            }
+            if points.iter().any(|(_, known)| *known == hash) {
                 continue;
             }
             fresh.push(pow);
@@ -383,6 +398,9 @@ where
         }
         if budget_full && !beats && !in_slot {
             self.consider_slot(session, out);
+            // The peer said the chain continues. The next response is
+            // hashed because the run is in the slot or challenging it.
+            self.finish_run(session, response.more, now, out);
             return Ok(());
         }
         if beats || in_slot {

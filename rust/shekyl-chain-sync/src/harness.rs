@@ -52,7 +52,7 @@ impl RelayRng for Words {
 /// The chain's headers, with work `height + 1`. A fixed target of 1 adds
 /// 1 per block, so a fork can outweigh a short main chain. The planted
 /// mock work cannot: it is the DAA constant times the height.
-struct UnitWork<H>(H);
+pub(crate) struct UnitWork<H>(pub(crate) H);
 
 impl<'id, H: HeaderView<'id>> HeaderView<'id> for UnitWork<H> {
     type Fault = H::Fault;

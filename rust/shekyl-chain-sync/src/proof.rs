@@ -59,7 +59,7 @@ pub(crate) fn prove_item(
     }
 }
 
-fn fixed(target: u128, blocks: u64) -> RuleSet {
+pub(crate) fn fixed(target: u128, blocks: u64) -> RuleSet {
     let epoch = SettlementEpochBlocks::new(512).expect("512");
     let schedule =
         FakechainSchedule::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
@@ -74,7 +74,11 @@ impl RelayRng for NoDraw {
     }
 }
 
-fn drive<'id, H, R>(sync: &mut Sync<u8, R>, main: &H, event: Event<u8>) -> Vec<Command<u8>>
+pub(crate) fn drive<'id, H, R>(
+    sync: &mut Sync<u8, R>,
+    main: &H,
+    event: Event<u8>,
+) -> Vec<Command<u8>>
 where
     H: HeaderView<'id>,
     H::Fault: std::fmt::Debug,
@@ -189,7 +193,7 @@ where
     panic!("nonce {nonce} passed, and nonce^{nonce}..15 still passed");
 }
 
-fn open_claim<'id, H, R>(sync: &mut Sync<u8, R>, main: &H, session: u8)
+pub(crate) fn open_claim<'id, H, R>(sync: &mut Sync<u8, R>, main: &H, session: u8)
 where
     H: HeaderView<'id>,
     H::Fault: std::fmt::Debug,
@@ -328,13 +332,13 @@ fn an_invalid_proof_closes_the_session() {
     );
 }
 
-fn serialized(block: &Block) -> Vec<u8> {
+pub(crate) fn serialized(block: &Block) -> Vec<u8> {
     let mut bytes = Vec::new();
     block.write(&mut bytes).expect("the block encodes");
     bytes
 }
 
-fn headers_of(pow: Vec<u8>) -> Vec<u8> {
+pub(crate) fn headers_of(pow: Vec<u8>) -> Vec<u8> {
     shekyl_levin::ResponseHeaders {
         blobs: vec![pow],
         tip_work: u128::MAX,

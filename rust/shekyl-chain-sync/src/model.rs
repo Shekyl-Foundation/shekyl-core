@@ -577,6 +577,13 @@ where
         self.tree.reset_visits();
     }
 
+    /// The session holding the long-run slot.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn slot_session(&self) -> Option<K> {
+        self.slot
+    }
+
     /// Cheap-checked headers the session's run still holds.
     #[cfg(test)]
     #[must_use]
