@@ -1275,7 +1275,14 @@ This lane's increments, each its own change:
    flip.
    - implement the view trait on this lane's store. The view is the
      batch view plus the drawable memo: `D` is rules-side state, and the
-     store computes none of it;
+     store computes none of it. A miss is SI-35; the view does not
+     rebuild. The count phase files the previous epoch's set into that
+     memo while the connecting block is still within `W₂` of the open,
+     by the same digest-checked rebuild it uses for its own epoch. The
+     brief's contract covered a memo kept across the epoch boundary. A
+     restart inside the window leaves the memo cold. Before this filing
+     the count rebuilt only the epoch it was counting, and a bundle for
+     the previous epoch faulted SI-35. The filing is that correction;
    - call the verifier at block admission and write its kept projection
      into this lane's tables. `issued_short(h_incl)` is the reduction
      against `D(epoch(h_incl))` only: the sum over admitted bundles whose
