@@ -59,7 +59,7 @@ impl Pooled {
             ServiceConfig::default(),
             Budget::of_host(),
             Follow {
-                miner: None,
+                job: None,
                 pool: Some(PoolWiring {
                     pool: Arc::clone(&pool),
                     policy: AdmissionPolicy::GENESIS,

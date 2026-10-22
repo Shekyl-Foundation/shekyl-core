@@ -1578,9 +1578,13 @@ two. Every route they replace is a REST path today.
 
 **RT-O26 — where the handlers live.** Both handlers are native in
 `shekyl-daemon-rpc` and never cross into C++. They take an options handle
-supplied by the composition root (`shekyl-daemon-image`), in the shape
-`request_archival_shard`'s facts already have (`AppState::shard_view`,
-[`server.rs:59`](../../rust/shekyl-daemon-rpc/src/server.rs)). The RPC
+supplied by the composition root, which is `shekyl-daemon` (N1,
+`DRS_X_PR3B_ROUND0.md`): it builds `shekyl-node`'s `Node` and passes the
+node's handles the same way. The image crate's shard view stays a trait
+object (`AppState::shard_view`,
+[`server.rs:61`](../../rust/shekyl-daemon-rpc/src/server.rs)); it is not
+the server's source until the flip, because the Rust store is not yet the
+chain the RPC describes. The RPC
 crate depends on the options interface, not on the subsystems; the
 composition root wires each runtime row to its owner. No new FFI.
 

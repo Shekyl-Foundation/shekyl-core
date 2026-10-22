@@ -1150,7 +1150,7 @@ increments?
   - (3) the new payload types in `shekyl-levin` with KATs.
 - **The cutover's horizon.** The cutover follows the DRS-X flip, whose
   prerequisites are DRS-X's record (`DRS_X_STORE_FLIP.md` §4, the flip's
-  item): PR-b, PR 2, PR 3, PR 3b and #1088, of which PR-b and #1088 have
+  item): PR-b, PR 2, PR 3, PR 3n, PR 3b and #1088, of which PR-b and #1088 have
   merged. Where DEL-008's gate sits is DRS-X's too; chain sync needs only
   the flip. So the CS cutover is the far end of this work. What starts now
   (above) stands, and the freeze rows (CS-Q9) carry the C++ until then.

@@ -40,6 +40,13 @@ impl Generation {
     pub const fn to_raw(self) -> u64 {
         self.0
     }
+
+    /// `raw` as a generation. The board mints the live ones; tests name one.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
 }
 
 /// A job as the workers read it: the preimage built once, with where its

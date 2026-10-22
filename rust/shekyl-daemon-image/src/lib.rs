@@ -25,14 +25,14 @@
 //! `#[no_mangle]` exports survive into the staticlib (verified by the
 //! same mechanism that puts `shekyl_log_*` into `libshekyl_ffi.a`).
 //!
-//! This crate is also the daemon's **composition root** for the archival
-//! fetch scheduler: `shekyl-archival-fetch-sched` reaches the fetch client,
-//! `shekyl-daemon-rpc` may not (`check_p_fetch_dep_cut.py`), and the one
-//! place both are in scope is here. [`shard_view`] implements
-//! `ShardViewFacts` over a `ViewDesk` whose `ShardFacts` / `HolderSource`
-//! read `shekyl-chain-store` (`SHARD_VIEW_FETCH.md` `SV-D9`). Production
-//! `ServerConfig` still defaults to `SkeletonAbsent` until the daemon
-//! opens that store (`DRS-E3`).
+//! This crate is also where the archival fetch scheduler and the shard-view
+//! implementor meet: `shekyl-archival-fetch-sched` reaches the fetch client,
+//! `shekyl-daemon-rpc` may not (`check_p_fetch_dep_cut.py`). The process
+//! composition root is `shekyl-daemon`, which builds `shekyl-node`'s `Node`
+//! (N1). [`shard_view`] implements `ShardViewFacts` over a `ViewDesk` and is
+//! handed to the RPC as that trait object. Production `ServerConfig` still
+//! defaults to `SkeletonAbsent` until the flip routes the RPC onto the
+//! node's store: until then the Rust store is not the chain the RPC describes.
 
 pub mod shard_view;
 
