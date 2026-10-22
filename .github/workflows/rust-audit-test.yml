@@ -213,6 +213,7 @@ jobs:
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message1.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message2.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_open_one.rs
+            rust/shekyl-noise/fuzz/fuzz_targets/fuzz_classed_opener.rs
           )
           MISSING=0
           for target in "${REQUIRED_TARGETS[@]}"; do
