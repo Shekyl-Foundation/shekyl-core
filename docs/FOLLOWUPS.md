@@ -169,7 +169,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6, Appendix B
   - Target: pre-genesis
 
-- **Stricter miss accounting for a complete-tree support role.** The interim slash is the existing 11-of-13 window over the persona's support draws (`ARCHIVAL_SUPPORT_DRAW.md` §3). The stricter accounting, an epoch observation that catches a tree missing at least 1% of the archive inside one window, is computed there (§4, recommended `c` 413, option (a)) and not ruled. Triggered after EUP-4. Falsifier: that section's option (a) or (b) is ruled, and the scenario test matches the rates written before it runs.
+- **Partial-miss weight for a complete-tree support role.** The slash the support PR builds is 11-of-13 over epoch observations, an epoch missing when any of its `c` draws fails (`ARCHIVAL_SUPPORT_DRAW.md` §3). Still open: weighting how many of those draws failed, and whether a per-draw drop rate is an outage (§4). Triggered after EUP-4. Falsifier: §4's partial-miss weight or drop rate `q` is ruled, and a scenario matches the rates written there before it runs.
   - Owner: [`ARCHIVAL_SUPPORT_DRAW.md`](design/ARCHIVAL_SUPPORT_DRAW.md)
   - Target: pre-genesis
 
