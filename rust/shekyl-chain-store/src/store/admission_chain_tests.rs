@@ -20,7 +20,7 @@ use shekyl_chain_rules::{
 };
 use shekyl_harness_spender::Persona;
 use shekyl_types::archival::{BlockDraws, DrawCommitment, IssuedDigest};
-use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, SettlementEpoch};
 use shekyl_wire::tx_extra::{self, TxExtraField};
 use shekyl_wire::Transaction;
 
@@ -35,8 +35,8 @@ use super::super::{SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
 use super::{h_open, no_draws};
 
 /// Ten blocks after epoch 2 opens: the height whose count is 1.
-fn drawing_height() -> u64 {
-    h_open(2) + 10
+fn drawing_height() -> BlockHeight {
+    BlockHeight::from_raw(h_open(2) + 10)
 }
 
 struct Linked {
@@ -63,19 +63,14 @@ fn prepare(label: &str) -> Prepared {
     let mut memo = DrawableMemo::new();
     let mut open_hash = None;
     let mut anchor_hash = chain.grown.tip();
-    for height in open..drawing_height() {
+    for height in open..drawing_height().to_raw() {
         let linked = connect_plain(&mut chain, Some(&mut memo));
         if height == open {
             open_hash = Some(linked.hash);
         }
         anchor_hash = linked.hash;
     }
-    let world = BundleWorld::with(
-        BlockHeight::from_raw(drawing_height()),
-        BundleWorld::SEED,
-        1,
-        &RULES,
-    );
+    let world = BundleWorld::with(drawing_height(), BundleWorld::SEED, 1, &RULES);
     let commitment =
         DrawCommitment::from_bytes(draw_commit(&world.witness_public_key, &world.seed));
     let linked = connect_committed(&mut chain, &mut memo, commitment);
@@ -155,17 +150,15 @@ fn drawable(prepared: &Prepared) -> &DrawableEpoch {
     prepared
         .memo
         .get(
-            RULES
-                .settlement_schedule()
-                .epoch_at(BlockHeight::from_raw(drawing_height())),
+            RULES.settlement_schedule().epoch_at(drawing_height()),
             &prepared.open_hash,
         )
         .expect("the open filed D")
 }
 
 fn produce(prepared: &Prepared) -> (BundleRef, BundleBody) {
-    let h = BlockHeight::from_raw(drawing_height());
-    let anchor = BlockHeight::from_raw(drawing_height() - 1);
+    let h = drawing_height();
+    let anchor = h - BlockCount::ONE;
     let mut world = BundleWorld::with(h, BundleWorld::SEED, prepared.count, &RULES);
     world.view.hashes.insert(h, prepared.hash);
     world.view.hashes.insert(anchor, prepared.anchor_hash);
@@ -234,12 +227,12 @@ fn admit(prepared: &mut Prepared) -> (Vec<shekyl_chain_rules::Admitted>, BlockDr
     (admitted.expect("the verdict"), counted.expect("the count"))
 }
 
-fn draws_of(chain: &SlashedChain, height: u64) -> BlockDraws {
+fn draws_of(chain: &SlashedChain, height: BlockHeight) -> BlockDraws {
     chain
         .store
         .begin_read()
         .expect("read")
-        .block_draws(BlockHeight::from_raw(height), BlockDrawsFloor::NONE)
+        .block_draws(height, BlockDrawsFloor::NONE)
         .expect("read")
         .expect("the row")
 }
@@ -273,18 +266,16 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
     let (admitted, counted) = admit(&mut prepared);
     let one = &admitted[0];
     assert_eq!(one.draws.len(), 1);
-    let epoch = RULES
-        .settlement_schedule()
-        .epoch_at(BlockHeight::from_raw(h));
+    let epoch = RULES.settlement_schedule().epoch_at(h);
     let rows = index_of(&prepared.chain, epoch);
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
-    assert_eq!(row.issuing_height, BlockHeight::from_raw(h));
+    assert_eq!(row.issuing_height, h);
     assert_eq!(row.draw, u32::try_from(one.draws[0].index).expect("fits"));
     assert_eq!(row.persona, one.draws[0].pair.persona);
     assert_eq!(row.shard, one.draws[0].pair.shard);
     assert_eq!(row.state.passed, one.draws[0].passed);
-    assert_eq!(row.state.revealed_at, BlockHeight::from_raw(h + 1));
+    assert_eq!(row.state.revealed_at, h + BlockCount::ONE);
     let mut digest = IssuedDigest::ZERO;
     digest.fold(&issued_draw_term(
         &row.persona,
@@ -306,7 +297,7 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
         digest
     );
     assert!(draws_of(&prepared.chain, h).revealed);
-    let incl = draws_of(&prepared.chain, h + 1);
+    let incl = draws_of(&prepared.chain, h + BlockCount::ONE);
     assert_eq!(
         incl.count, counted.count,
         "admission does not change the count"
@@ -336,17 +327,12 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
                 StoreInvariant::TipMismatch,
             )?;
             for j in 0..3 {
-                let key = IssuedDrawKey::new(
-                    epoch,
-                    pair.persona,
-                    pair.shard,
-                    BlockHeight::from_raw(h - 1),
-                    j,
-                );
+                let key =
+                    IssuedDrawKey::new(epoch, pair.persona, pair.shard, h - BlockCount::ONE, j);
                 index.insert(
                     key.key(),
                     shekyl_types::archival::IssuedDraw {
-                        revealed_at: BlockHeight::from_raw(h - 1),
+                        revealed_at: h - BlockCount::ONE,
                         passed: true,
                     }
                     .encoded()
@@ -357,13 +343,13 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
                 epoch,
                 one.draws[0].pair.persona,
                 one.draws[0].pair.shard,
-                BlockHeight::from_raw(h),
+                h,
                 7,
             );
             index.insert(
                 key.key(),
                 shekyl_types::archival::IssuedDraw {
-                    revealed_at: BlockHeight::from_raw(h),
+                    revealed_at: h,
                     passed: true,
                 }
                 .encoded()
@@ -374,18 +360,16 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
         let bundle_view = StoreBundleView::new(
             &view,
             &prepared.memo,
-            BlockHeight::from_raw(h + 2),
+            h + BlockCount::ONE + BlockCount::ONE,
             RULES.settlement_schedule(),
         );
         assert!(
-            !bundle_view
-                .visibly_short(BlockHeight::from_raw(h), other)
-                .expect("the read"),
+            !bundle_view.visibly_short(h, other).expect("the read"),
             "three passes below h are not short"
         );
         assert!(
             bundle_view
-                .visibly_short(BlockHeight::from_raw(h), one.draws[0].index)
+                .visibly_short(h, one.draws[0].index)
                 .expect("the read"),
             "a draw revealed at h is still short at h"
         );
@@ -398,9 +382,9 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
     pop_one(&mut prepared.chain);
     let admitted_draw = u32::try_from(one.draws[0].index).expect("fits");
     assert!(
-        !index_of(&prepared.chain, epoch).iter().any(|row| {
-            row.issuing_height == BlockHeight::from_raw(h) && row.draw == admitted_draw
-        }),
+        !index_of(&prepared.chain, epoch)
+            .iter()
+            .any(|row| { row.issuing_height == h && row.draw == admitted_draw }),
         "pop removes the admitted draw"
     );
     assert!(!draws_of(&prepared.chain, h).revealed);
@@ -410,10 +394,10 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
         let bundle_view = StoreBundleView::new(
             &view,
             &prepared.memo,
-            BlockHeight::from_raw(h + 2),
+            h + BlockCount::ONE + BlockCount::ONE,
             RULES.settlement_schedule(),
         );
-        bundle_view.visibly_short(BlockHeight::from_raw(h), past_index)?;
+        bundle_view.visibly_short(h, past_index)?;
         Ok(())
     });
     let past = past.expect_err("an index past D");
@@ -526,9 +510,7 @@ fn the_digest_check_closes_on_an_admitted_bundle() {
     let mut tampered = prepare("admit-digest-tamper");
     let (admitted, _) = admit(&mut tampered);
     let draw = &admitted[0].draws[0];
-    let epoch = RULES
-        .settlement_schedule()
-        .epoch_at(BlockHeight::from_raw(drawing_height()));
+    let epoch = RULES.settlement_schedule().epoch_at(drawing_height());
     let removed: Result<(), TestErr> = tampered.chain.store.write(|batch| {
         batch
             .open_remove_table(
@@ -540,7 +522,7 @@ fn the_digest_check_closes_on_an_admitted_bundle() {
                     epoch,
                     draw.pair.persona,
                     draw.pair.shard,
-                    BlockHeight::from_raw(drawing_height()),
+                    drawing_height(),
                     u32::try_from(draw.index).expect("fits"),
                 )
                 .key(),
