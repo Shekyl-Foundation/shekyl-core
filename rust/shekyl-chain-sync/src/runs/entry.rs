@@ -52,14 +52,29 @@ where
                     out.push(Command::Relay { hash });
                 }
             }
-            Outcome::Refused { verdict } | Outcome::PromotionRefused { verdict } => {
+            Outcome::Refused { verdict } => {
                 self.tree.mark_invalid(hash);
+                self.prune_served();
                 self.reselect(main)?;
                 self.close(session, CloseCause::BlockRefused(verdict), out);
+            }
+            Outcome::PromotionRefused { verdict, block } => {
+                // The switch refused an ancestor. Invalidate that hash.
+                // Close the session that supplied it, when it is still known.
+                self.tree.mark_invalid(block);
+                let supplier = self.served.remove(&block);
+                self.prune_served();
+                self.reselect(main)?;
+                if let Some(supplier) = supplier {
+                    if self.peers.contains_key(&supplier) {
+                        self.close(supplier, CloseCause::BlockRefused(verdict), out);
+                    }
+                }
             }
             Outcome::Oversize { invalidate } => {
                 if invalidate {
                     self.tree.mark_invalid(hash);
+                    self.prune_served();
                     self.reselect(main)?;
                 }
                 self.close(session, CloseCause::Oversize, out);
@@ -82,7 +97,12 @@ where
                     indices,
                 });
             }
-            Outcome::NoRoom => self.held.push(arrival),
+            Outcome::NoRoom => {
+                // The allowance that authorized the offer was already spent.
+                // Freeze it until the entry reports a new one.
+                self.seats = Some(0);
+                self.held.push(arrival);
+            }
             // `Again` left outstanding above, so the next plan asks again.
             Outcome::Again | Outcome::Throttled | Outcome::Noted => {}
         }
@@ -102,6 +122,15 @@ where
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         if !self.peers.contains_key(&session) {
+            return Ok(());
+        }
+        // One unproved announce per session. A second is not stored and
+        // does not close: the peer has not failed a universal rule.
+        if self
+            .peers
+            .get(&session)
+            .is_some_and(|peer| !peer.announced.is_empty())
+        {
             return Ok(());
         }
         let Ok(parsed) = Block::from_bytes(&body.block) else {
@@ -328,6 +357,11 @@ where
             body: body.clone(),
         });
         self.flush_offers(out);
+    }
+
+    pub(crate) fn prune_served(&mut self) {
+        self.served
+            .retain(|hash, _| self.tree.contains(*hash) && !self.tree.remembers(*hash));
     }
 
     fn judge_standalone<'id, H: HeaderView<'id>>(

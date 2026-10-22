@@ -7,13 +7,17 @@
 //! check. Each is a mode of one peer. The coordinator draws the check.
 //! The transition lives here.
 
+use std::time::Instant;
+
 use shekyl_chain_rules::{seed_height, RuleSet};
 use shekyl_difficulty::{CumulativeDifficulty, MTP_WINDOW_USIZE, N_USIZE};
 use shekyl_draw_rng::RelayRng;
+use shekyl_levin::RequestHeaders;
 use shekyl_types::{BlockCount, BlockHeight};
 
 use super::fork_depth;
-use crate::model::{draw_one, Command, HashClass, Sync};
+use crate::model::{draw_one, header_deadline, Command, HashClass, Sync};
+use crate::peer::{HeaderRequest, Run};
 
 impl<K, R> Sync<K, R>
 where
@@ -109,7 +113,12 @@ where
 
     /// One evidence check, drawn uniformly from the waiting candidates.
     /// Nothing is drawn while the latch is set, or while a check runs.
-    pub(crate) fn start_evidence(&mut self, rng: &mut impl RelayRng, out: &mut Vec<Command<K>>) {
+    pub(crate) fn start_evidence(
+        &mut self,
+        rng: &mut impl RelayRng,
+        now: Instant,
+        out: &mut Vec<Command<K>>,
+    ) {
         if self.alarm || self.evidence_holder().is_some() {
             return;
         }
@@ -117,11 +126,7 @@ where
             .peers
             .iter()
             .filter(|(_, state)| {
-                !state.gates.evidence_spent
-                    && state
-                        .run
-                        .as_ref()
-                        .is_some_and(crate::peer::Run::is_candidate)
+                !state.gates.evidence_spent && state.run.as_ref().is_some_and(Run::is_candidate)
             })
             .map(|(session, _)| *session)
             .collect();
@@ -134,7 +139,74 @@ where
                 run.begin_evidence();
             }
         }
+        let omits = self
+            .peers
+            .get(&session)
+            .and_then(|peer| peer.run.as_ref())
+            .is_some_and(Run::omits_fork);
+        let fetching = self
+            .peers
+            .get(&session)
+            .is_some_and(|peer| peer.follow_up.is_some());
+        if omits {
+            // The in-flight response still extends the suffix. That
+            // response discards it and asks from the fork.
+            if !fetching {
+                self.refetch_evidence(session, now, out);
+            }
+            return;
+        }
         self.plan_proof(session, HashClass::Evidence, out);
+    }
+
+    /// The evidence window does not begin at the fork. Drop it and ask
+    /// for the headers from the parent the run extends.
+    pub(super) fn refetch_evidence(&mut self, session: K, now: Instant, out: &mut Vec<Command<K>>) {
+        let Some((parent, parent_height)) = self
+            .peers
+            .get(&session)
+            .and_then(|peer| peer.run.as_ref())
+            .map(|run| (run.chain.parent, run.chain.parent_height))
+        else {
+            return;
+        };
+        if self
+            .peers
+            .get(&session)
+            .is_some_and(|peer| peer.follow_up.is_some())
+        {
+            return;
+        }
+        if let Some(run) = self
+            .peers
+            .get_mut(&session)
+            .and_then(|peer| peer.run.as_mut())
+        {
+            run.chain.checked.clear();
+            run.chain.proven = 0;
+        }
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        if let Some(state) = self.peers.get_mut(&session) {
+            state.follow_up = Some(HeaderRequest {
+                session,
+                id,
+                points: vec![(parent_height, parent)],
+            });
+        }
+        let transit = self
+            .peers
+            .get(&session)
+            .map(|peer| peer.transit)
+            .unwrap_or_default();
+        out.push(Command::RequestHeaders {
+            session,
+            id,
+            deadline: header_deadline(now, transit),
+            request: RequestHeaders {
+                block_ids: vec![*parent.as_bytes()],
+            },
+        });
     }
 
     pub(super) fn past_bound(&self, session: K, cap: BlockCount) -> bool {
@@ -167,7 +239,7 @@ where
         let Some(run) = self.peers.get_mut(&session).and_then(|s| s.run.as_mut()) else {
             return;
         };
-        if !run.past_cap() {
+        if !run.past_cap() || run.is_evidence() {
             return;
         }
         let tail = N_USIZE.max(MTP_WINDOW_USIZE).saturating_add(1);

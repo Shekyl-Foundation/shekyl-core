@@ -444,27 +444,38 @@ fn a_reply_names_its_own_outcome() {
     let at = BlockHash::from_bytes([1; 32]);
     let verdict = InvalidBlock::new(CenRow::G2, Locus::Block);
     assert_eq!(
-        Outcome::from_reply(SyncReply::Refused, true, at, Vec::new(), None),
+        Outcome::from_reply(SyncReply::Refused, true, at, at, Vec::new(), None),
         None
     );
     assert_eq!(
-        Outcome::from_reply(SyncReply::PromotionRefused, true, at, Vec::new(), None),
+        Outcome::from_reply(SyncReply::PromotionRefused, true, at, at, Vec::new(), None),
         None
     );
     assert_eq!(
-        Outcome::from_reply(SyncReply::Refused, true, at, Vec::new(), Some(verdict)),
+        Outcome::from_reply(
+            SyncReply::PromotionRefused,
+            true,
+            at,
+            at,
+            Vec::new(),
+            Some(verdict)
+        ),
+        Some(Outcome::PromotionRefused { verdict, block: at })
+    );
+    assert_eq!(
+        Outcome::from_reply(SyncReply::Refused, true, at, at, Vec::new(), Some(verdict)),
         Some(Outcome::Refused { verdict })
     );
     assert_eq!(
-        Outcome::from_reply(SyncReply::Oversize, true, at, Vec::new(), None),
+        Outcome::from_reply(SyncReply::Oversize, true, at, at, Vec::new(), None),
         Some(Outcome::Oversize { invalidate: true })
     );
     assert_eq!(
-        Outcome::from_reply(SyncReply::Oversize, false, at, Vec::new(), None),
+        Outcome::from_reply(SyncReply::Oversize, false, at, at, Vec::new(), None),
         Some(Outcome::Oversize { invalidate: false })
     );
     assert_eq!(
-        Outcome::from_reply(SyncReply::Connected, true, at, Vec::new(), None),
+        Outcome::from_reply(SyncReply::Connected, true, at, at, Vec::new(), None),
         Some(Outcome::Connected { relay: false })
     );
 }

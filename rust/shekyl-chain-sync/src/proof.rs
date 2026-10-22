@@ -15,6 +15,7 @@
 // timing line below is a test's output.
 #![cfg(test)]
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -95,19 +96,27 @@ where
     out
 }
 
+/// How many distinct `Prove` jobs one drive resolves. A job still waiting
+/// after this many resolutions is not being retired.
+const PROOF_RESOLVE_LIMIT: usize = 64;
+
 fn resolve<'id, H, R>(out: &mut Vec<Command<u8>>, sync: &mut Sync<u8, R>, main: &H)
 where
     H: HeaderView<'id>,
     H::Fault: std::fmt::Debug,
     R: Fn(BlockHeight) -> RuleSet,
 {
-    for _ in 0..8 {
+    let mut resolved = BTreeSet::new();
+    for _ in 0..PROOF_RESOLVE_LIMIT {
         let Some((job, items)) = out.iter().find_map(|command| match command {
-            Command::Prove { job, items, .. } => Some((*job, items.clone())),
+            Command::Prove { job, items, .. } if !resolved.contains(&job.raw()) => {
+                Some((*job, items.clone()))
+            }
             _ => None,
         }) else {
             return;
         };
+        resolved.insert(job.raw());
         let mut results = Vec::new();
         for item in items {
             match prove_item(&item) {
@@ -128,6 +137,12 @@ where
         )
         .expect("the view answers");
         out.append(&mut next);
+    }
+    let pending = out.iter().any(
+        |command| matches!(command, Command::Prove { job, .. } if !resolved.contains(&job.raw())),
+    );
+    if pending {
+        panic!("a Prove job is still outstanding after {PROOF_RESOLVE_LIMIT} resolutions");
     }
 }
 

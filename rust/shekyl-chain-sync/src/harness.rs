@@ -8,6 +8,7 @@
 //! Each test names the property it pins. The captured-chain agreement
 //! between the two `form` entries lives in `shekyl-chain-ingest`.
 
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
@@ -209,22 +210,26 @@ where
     out
 }
 
+/// How many distinct `Prove` jobs one header response resolves.
+const PROOF_RESOLVE_LIMIT: usize = 64;
+
 fn resolve_proves<'id, R, H>(sync: &mut Sync<u8, R>, main: &H, out: &mut Vec<Command<u8>>)
 where
     R: Fn(BlockHeight) -> RuleSet,
     H: HeaderView<'id>,
     H::Fault: std::fmt::Debug,
 {
-    for _ in 0..8 {
-        let Some((job, items, class)) = out.iter().find_map(|command| match command {
-            Command::Prove {
-                job, items, class, ..
-            } => Some((*job, items.clone(), *class)),
+    let mut resolved = BTreeSet::new();
+    for _ in 0..PROOF_RESOLVE_LIMIT {
+        let Some((job, items)) = out.iter().find_map(|command| match command {
+            Command::Prove { job, items, .. } if !resolved.contains(&job.raw()) => {
+                Some((*job, items.clone()))
+            }
             _ => None,
         }) else {
             return;
         };
-        let _ = class;
+        resolved.insert(job.raw());
         let mut results = Vec::new();
         for item in items {
             match crate::proof::prove_item(&item) {
@@ -245,6 +250,12 @@ where
         )
         .expect("main answers");
         out.append(&mut next);
+    }
+    let pending = out.iter().any(
+        |command| matches!(command, Command::Prove { job, .. } if !resolved.contains(&job.raw())),
+    );
+    if pending {
+        panic!("a Prove job is still outstanding after {PROOF_RESOLVE_LIMIT} resolutions");
     }
 }
 

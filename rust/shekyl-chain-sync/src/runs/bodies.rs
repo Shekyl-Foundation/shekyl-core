@@ -6,6 +6,7 @@
 //! Body spans. One peer holds at most one. The coordinator decides how
 //! many are in flight and which headers on `H*` still need a body.
 
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 use shekyl_chain_rules::RuleSet;
@@ -16,7 +17,7 @@ use shekyl_wire::{Block, TxBody};
 use crate::model::{
     body_deadline, BoundArrival, CloseCause, Command, Sync, BODY_REQUESTS_IN_FLIGHT,
 };
-use crate::peer::BodySpan;
+use crate::peer::{BodySpan, Dispute};
 
 impl<K, R> Sync<K, R>
 where
@@ -106,29 +107,38 @@ where
         if seats == 0 || self.spans_in_flight() >= BODY_REQUESTS_IN_FLIGHT {
             return;
         }
-        let Some(local) = self.local else {
+        // A chain with no local observation has nothing to extend. The
+        // cursor is the branch base, which is `L + 1` when `H*` extends
+        // the local tip and the fork's child when `H*` diverges below it.
+        if self.local.is_none() {
             return;
-        };
-        let Some(start) = local.height else {
-            return;
-        };
+        }
         let Some(star_height) = self.tree.connecting(self.star.hash) else {
             return;
         };
-        if star_height.to_raw() <= start.to_raw() {
+        let Some(mut height) = self.tree.branch_base(self.star.hash) else {
             return;
-        }
+        };
         let mut hashes = Vec::new();
-        let mut height = start + BlockCount::ONE;
         let span_cap = usize::try_from(MAX_OBJECT_REQUEST_COUNT).unwrap_or(0);
         let room = usize::try_from(seats).unwrap_or(span_cap);
         while height.to_raw() <= star_height.to_raw() && hashes.len() < span_cap.min(room) {
+            if self.past_dispute(height) {
+                break;
+            }
             let Some(hash) = self.tree.ancestor_at(self.star.hash, height) else {
                 break;
             };
-            let offered = self.held.iter().any(|a| a.header.hash() == hash)
-                || self.outstanding.iter().any(|a| a.header.hash() == hash);
-            if !offered {
+            let reserved = self
+                .held
+                .iter()
+                .any(|arrival| arrival.header.hash() == hash)
+                || self
+                    .outstanding
+                    .iter()
+                    .any(|arrival| arrival.header.hash() == hash)
+                || self.span_has(hash);
+            if !reserved {
                 hashes.push(hash);
             }
             height = height + BlockCount::ONE;
@@ -154,6 +164,7 @@ where
         let deadline = body_deadline(now, transit);
         out.push(Command::RequestBodies {
             session,
+            id,
             deadline,
             request: RequestBodies { hashes: wire },
         });
@@ -166,15 +177,62 @@ where
         if seats == 0 || self.held.is_empty() {
             return;
         }
-        let n = self
-            .held
-            .len()
-            .min(usize::try_from(seats).unwrap_or(self.held.len()));
-        let arrivals: Vec<_> = self.held.drain(..n).collect();
-        if !arrivals.is_empty() {
-            self.outstanding.extend(arrivals.iter().cloned());
-            out.push(Command::Offer { arrivals });
+        let Some(star_height) = self.tree.connecting(self.star.hash) else {
+            return;
+        };
+        let Some(mut height) = self.tree.branch_base(self.star.hash) else {
+            return;
+        };
+        let room = usize::try_from(seats).unwrap_or(0);
+        let mut wanted = Vec::new();
+        while height.to_raw() <= star_height.to_raw() && wanted.len() < room {
+            if self.past_dispute(height) {
+                break;
+            }
+            let Some(hash) = self.tree.ancestor_at(self.star.hash, height) else {
+                break;
+            };
+            if self
+                .outstanding
+                .iter()
+                .any(|arrival| arrival.header.hash() == hash)
+            {
+                height = height + BlockCount::ONE;
+                continue;
+            }
+            if !self
+                .held
+                .iter()
+                .any(|arrival| arrival.header.hash() == hash)
+            {
+                break;
+            }
+            wanted.push(hash);
+            height = height + BlockCount::ONE;
         }
+        if wanted.is_empty() {
+            return;
+        }
+        let mut arrivals = Vec::with_capacity(wanted.len());
+        for hash in wanted {
+            let Some(pos) = self
+                .held
+                .iter()
+                .position(|arrival| arrival.header.hash() == hash)
+            else {
+                break;
+            };
+            let arrival = self.held.remove(pos);
+            self.served.insert(arrival.header.hash(), arrival.session);
+            arrivals.push(arrival);
+        }
+        if arrivals.is_empty() {
+            return;
+        }
+        let spent = u32::try_from(arrivals.len()).unwrap_or(seats);
+        self.seats = Some(seats.saturating_sub(spent));
+        self.outstanding.extend(arrivals.iter().cloned());
+        out.push(Command::Offer { arrivals });
     }
 
     fn body_source(&self, end: BlockHash) -> Option<K> {
@@ -194,11 +252,126 @@ where
             if state.span.is_some() {
                 return None;
             }
-            let covers = state.frontier.is_some_and(|(height, hash)| {
-                height.to_raw() >= end_height.to_raw() || hash == end
+            // A frontier on another fork is not a source, however tall it
+            // is. A frontier that is not in `T` covers only its own hash.
+            let covers = state.frontier.is_some_and(|(_, hash)| {
+                hash == end || self.tree.ancestor_at(hash, end_height) == Some(end)
             });
             let blocked = skip_unavailable && state.inventory.unavailable.contains(&end);
             (covers && !blocked).then_some(*key)
         })
+    }
+
+    fn span_has(&self, hash: BlockHash) -> bool {
+        self.peers.values().any(|peer| {
+            peer.span
+                .as_ref()
+                .is_some_and(|span| span.hashes.contains(&hash))
+        })
+    }
+
+    /// `true` when `height` is past the fork a captured dispute still
+    /// covers. The first such height, with no snapshot yet, captures the
+    /// sessions whose header runs are still open.
+    fn past_dispute(&mut self, height: BlockHeight) -> bool {
+        self.retire_dispute();
+        if let Some(dispute) = self.dispute.as_ref() {
+            return height.to_raw() > dispute.fork.to_raw();
+        }
+        let Some((fork, sessions)) = self.open_dispute() else {
+            return false;
+        };
+        if height.to_raw() <= fork.to_raw() {
+            return false;
+        }
+        self.dispute = Some(Dispute { fork, sessions });
+        true
+    }
+
+    /// Drop captured sessions whose header run has finished. An empty set
+    /// ends the wait. A missed header deadline leaves through
+    /// [`Self::release_dispute`], including when the run object remains.
+    fn retire_dispute(&mut self) {
+        let Some(dispute) = self.dispute.as_ref() else {
+            return;
+        };
+        let finished: Vec<K> = dispute
+            .sessions
+            .iter()
+            .copied()
+            .filter(|session| self.header_run_settled(*session))
+            .collect();
+        let Some(dispute) = self.dispute.as_mut() else {
+            return;
+        };
+        for session in finished {
+            dispute.sessions.remove(&session);
+        }
+        if dispute.sessions.is_empty() {
+            self.dispute = None;
+        }
+    }
+
+    /// The session left the snapshot. Later sessions are not added.
+    pub(super) fn release_dispute(&mut self, session: K) {
+        let Some(dispute) = self.dispute.as_mut() else {
+            return;
+        };
+        dispute.sessions.remove(&session);
+        if dispute.sessions.is_empty() {
+            self.dispute = None;
+        }
+    }
+
+    /// Sessions whose claim exceeds `work(L)` and whose header run has not
+    /// finished, with the shallowest fork those runs have named. A session
+    /// that has not answered yet is in the set and does not move the fork.
+    fn open_dispute(&self) -> Option<(BlockHeight, BTreeSet<K>)> {
+        let local = self.local?.work;
+        let mut fork: Option<BlockHeight> = None;
+        let mut sessions = BTreeSet::new();
+        for (session, peer) in &self.peers {
+            if peer.claim.is_none_or(|claim| claim.work <= local) {
+                continue;
+            }
+            if self.header_run_settled(*session) {
+                continue;
+            }
+            if let Some(run) = peer.run.as_ref() {
+                let at = run.chain.parent_height;
+                fork = Some(match fork {
+                    Some(have) if have.to_raw() <= at.to_raw() => have,
+                    _ => at,
+                });
+            }
+            sessions.insert(*session);
+        }
+        let fork = fork?;
+        Some((fork, sessions))
+    }
+
+    /// Step 3 has finished for this session: nothing is fetching headers,
+    /// or the run that remains is only proving. A heavy claim that has
+    /// never been answered is still open.
+    fn header_run_settled(&self, session: K) -> bool {
+        let Some(peer) = self.peers.get(&session) else {
+            return true;
+        };
+        if peer.follow_up.is_some() {
+            return false;
+        }
+        if self
+            .header_request
+            .as_ref()
+            .is_some_and(|request| request.session == session)
+        {
+            return false;
+        }
+        if peer.run.is_some() {
+            return true;
+        }
+        peer.gates.header_quiet
+            || peer.gates.past_cap_followed
+            || peer.claim.is_none_or(|claim| claim.work <= self.star.work)
     }
 }

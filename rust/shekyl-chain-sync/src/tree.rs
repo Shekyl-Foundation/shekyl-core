@@ -26,9 +26,14 @@ struct Node {
     /// Ancestor at [`skip_height`] of this header's height, when that
     /// header is itself in `T`. `None` when the skip would land on main.
     skip: Option<BlockHash>,
-    /// Connecting height of the first header of this branch in `T`.
-    /// Copied from the parent at insert, so a later removal of a node
-    /// (when main connects it) is the only thing that has to recompute it.
+    /// The branch record. Every header of one branch shares it, so
+    /// connecting the branch root updates the base once.
+    branch: u64,
+}
+
+/// Where a branch meets main. One record per branch, shared by its headers.
+struct Branch {
+    /// Connecting height of the first header of this branch still in `T`.
     base: BlockHeight,
     /// Parent of [`Self::base`]. On main, or null at genesis.
     anchor: BlockHash,
@@ -62,6 +67,11 @@ pub(crate) struct HeaderTree {
     /// A header marked invalid, and every header that descends from one.
     /// The hash is remembered so a later child is excluded too.
     invalid: BTreeSet<BlockHash>,
+    branches: BTreeMap<u64, Branch>,
+    next_branch: u64,
+    /// Headers by connecting height, so a connect reads the prefix it
+    /// removes and not the whole tree.
+    by_height: BTreeMap<u64, BTreeSet<BlockHash>>,
     /// Node loads. Ancestor lookups and the cap check count; the children
     /// index does not.
     visits: Cell<u64>,
@@ -89,6 +99,11 @@ impl HeaderTree {
 
     pub(crate) fn insert(&mut self, judged: HeaderJudged) {
         let hash = judged.hash();
+        // A refused header stays refused. Inserting it again must not
+        // put it back in the tip set.
+        if self.invalid.contains(&hash) {
+            return;
+        }
         let parent = judged.previous();
         let height = judged.connecting().to_raw();
         let parent_in_tree = self.nodes.contains_key(&parent);
@@ -97,13 +112,22 @@ impl HeaderTree {
         } else {
             None
         };
-        let (base, anchor) = if parent_in_tree {
-            let parent_node = self
-                .node(parent)
-                .expect("the parent was present before the skip lookup");
-            (parent_node.base, parent_node.anchor)
+        let branch = if parent_in_tree {
+            self.nodes
+                .get(&parent)
+                .expect("the parent was present before the skip lookup")
+                .branch
         } else {
-            (judged.connecting(), parent)
+            let id = self.next_branch;
+            self.next_branch = self.next_branch.saturating_add(1);
+            self.branches.insert(
+                id,
+                Branch {
+                    base: judged.connecting(),
+                    anchor: parent,
+                },
+            );
+            id
         };
         let excluded = self.invalid.contains(&parent);
         self.nodes.insert(
@@ -112,10 +136,10 @@ impl HeaderTree {
                 judged,
                 parent,
                 skip,
-                base,
-                anchor,
+                branch,
             },
         );
+        self.by_height.entry(height).or_default().insert(hash);
         self.children.entry(parent).or_default().insert(hash);
         if parent_in_tree {
             self.tips.remove(&parent);
@@ -124,6 +148,12 @@ impl HeaderTree {
         if excluded {
             self.mark_invalid(hash);
         }
+    }
+
+    /// Connecting height of the first header of `hash`'s branch still in `T`.
+    pub(crate) fn branch_base(&self, hash: BlockHash) -> Option<BlockHeight> {
+        let branch = self.nodes.get(&hash)?.branch;
+        self.branches.get(&branch).map(|branch| branch.base)
     }
 
     /// A header already marked invalid, so a later child of it is not a
@@ -144,15 +174,25 @@ impl HeaderTree {
         main: &H,
         height: BlockHeight,
     ) -> Result<(), H::Fault> {
+        let heights: Vec<u64> = self
+            .by_height
+            .range(..=height.to_raw())
+            .map(|(at, _)| *at)
+            .collect();
         let mut leaving = Vec::new();
-        for (hash, node) in &self.nodes {
-            let at = node.judged.connecting();
-            if at.to_raw() > height.to_raw() {
+        for at in heights {
+            let Some(hashes) = self.by_height.get(&at).cloned() else {
                 continue;
-            }
-            if let AtHeight::Recorded(record) = main.header_at(at)? {
-                if record.hash == *hash {
-                    leaving.push((at.to_raw(), *hash));
+            };
+            for hash in hashes {
+                let Some(node) = self.nodes.get(&hash) else {
+                    continue;
+                };
+                let connecting = node.judged.connecting();
+                if let AtHeight::Recorded(record) = main.header_at(connecting)? {
+                    if record.hash == hash {
+                        leaving.push((connecting.to_raw(), hash));
+                    }
                 }
             }
         }
@@ -164,39 +204,72 @@ impl HeaderTree {
         Ok(())
     }
 
+    /// The connected header leaves. One child keeps the branch record,
+    /// which now starts at that child. Each other child becomes its own
+    /// branch. A single chain moves the base once and does not walk.
     fn drop_connected(&mut self, hash: BlockHash) {
+        let Some(branch_id) = self.nodes.get(&hash).map(|node| node.branch) else {
+            return;
+        };
+        let connecting = self
+            .nodes
+            .get(&hash)
+            .map(|node| node.judged.connecting())
+            .expect("the node was present");
         let kids = self
             .children
             .get(&hash)
             .map(|kids| kids.iter().copied().collect::<Vec<_>>())
             .unwrap_or_default();
-        for kid in kids {
-            let Some(base) = self.nodes.get(&kid).map(|node| node.judged.connecting()) else {
-                continue;
-            };
-            if let Some(node) = self.nodes.get_mut(&kid) {
-                node.base = base;
-                node.anchor = hash;
+        let is_root = self
+            .branches
+            .get(&branch_id)
+            .is_some_and(|branch| branch.base == connecting);
+        if is_root {
+            if kids.is_empty() {
+                self.branches.remove(&branch_id);
+            } else if let Some((first, rest)) = kids.split_first() {
+                if let Some(child_at) = self.nodes.get(first).map(|node| node.judged.connecting()) {
+                    if let Some(branch) = self.branches.get_mut(&branch_id) {
+                        branch.base = child_at;
+                        branch.anchor = hash;
+                    }
+                }
+                for kid in rest {
+                    self.split_branch(*kid, hash);
+                }
             }
-            self.retarget(kid, base, hash);
         }
         self.nodes.remove(&hash);
         self.tips.remove(&hash);
         self.children.remove(&hash);
+        let at = connecting.to_raw();
+        let empty = self.by_height.get_mut(&at).is_some_and(|hashes| {
+            hashes.remove(&hash);
+            hashes.is_empty()
+        });
+        if empty {
+            self.by_height.remove(&at);
+        }
     }
 
-    fn retarget(&mut self, hash: BlockHash, base: BlockHeight, anchor: BlockHash) {
-        let kids = self
-            .children
-            .get(&hash)
-            .map(|kids| kids.iter().copied().collect::<Vec<_>>())
-            .unwrap_or_default();
-        for kid in kids {
-            if let Some(node) = self.nodes.get_mut(&kid) {
-                node.base = base;
-                node.anchor = anchor;
+    /// `hash` and its descendants become a branch rooted at `hash`,
+    /// anchored at the connected parent.
+    fn split_branch(&mut self, hash: BlockHash, anchor: BlockHash) {
+        let Some(base) = self.nodes.get(&hash).map(|node| node.judged.connecting()) else {
+            return;
+        };
+        let id = self.next_branch;
+        self.next_branch = self.next_branch.saturating_add(1);
+        self.branches.insert(id, Branch { base, anchor });
+        let mut stack = vec![hash];
+        while let Some(hash) = stack.pop() {
+            if let Some(node) = self.nodes.get_mut(&hash) {
+                node.branch = id;
             }
-            self.retarget(kid, base, anchor);
+            if let Some(kids) = self.children.get(&hash) {
+                stack.extend(kids.iter().copied());
+            }
         }
     }
 
@@ -222,27 +295,44 @@ impl HeaderTree {
     pub(crate) fn mark_invalid(&mut self, hash: BlockHash) {
         let mut stack = vec![hash];
         while let Some(hash) = stack.pop() {
+            self.tips.remove(&hash);
             if !self.invalid.insert(hash) {
                 continue;
             }
-            self.tips.remove(&hash);
             if let Some(children) = self.children.get(&hash) {
                 stack.extend(children.iter().copied());
             }
+        }
+        self.expose_parent(hash);
+    }
+
+    /// The last valid header of a branch is a tip once its descendants
+    /// are refused. A parent on main is not in `T`.
+    fn expose_parent(&mut self, hash: BlockHash) {
+        let Some(parent) = self.nodes.get(&hash).map(|node| node.parent) else {
+            return;
+        };
+        if !self.nodes.contains_key(&parent) || self.invalid.contains(&parent) {
+            return;
+        }
+        let live = self.children.get(&parent).is_some_and(|kids| {
+            kids.iter()
+                .any(|kid| self.nodes.contains_key(kid) && !self.invalid.contains(kid))
+        });
+        if !live {
+            self.tips.insert(parent);
         }
     }
 
     /// The height of `hash` when it is in `T`, and the fork below its branch.
     pub(crate) fn placement(&self, hash: BlockHash) -> Option<Placement> {
-        let node = self.node(hash)?;
-        let fork = node
-            .base
-            .checked_sub_count(ONE)
-            .unwrap_or(BlockHeight::ZERO);
-        Some(Placement {
-            height: node.judged.connecting(),
-            fork,
-        })
+        let (branch_id, height) = {
+            let node = self.node(hash)?;
+            (node.branch, node.judged.connecting())
+        };
+        let base = self.branches.get(&branch_id)?.base;
+        let fork = base.checked_sub_count(ONE).unwrap_or(BlockHeight::ZERO);
+        Some(Placement { height, fork })
     }
 
     /// The height of `hash` when it is in `T`.
@@ -302,8 +392,8 @@ impl HeaderTree {
 
     /// `incumbent` stays unless a tip in the tip set is strictly heavier
     /// and its fork is within `cap`. Each such tip costs one
-    /// [`HeaderView::header_at`]: the fork height is stored on the node,
-    /// and that one read checks the anchor.
+    /// [`HeaderView::header_at`]: the fork height is the branch record's
+    /// base, and that one read checks the anchor.
     pub(crate) fn select<'id, H: HeaderView<'id>>(
         &self,
         main: &H,
@@ -342,11 +432,16 @@ impl HeaderTree {
         local_height: Option<BlockHeight>,
         cap: BlockCount,
     ) -> Result<bool, H::Fault> {
-        let Some(node) = self.node(tip) else {
+        let Some(branch_id) = self.node(tip).map(|node| node.branch) else {
             return Ok(false);
         };
-        let base = node.base;
-        let anchor = node.anchor;
+        let Some((base, anchor)) = self
+            .branches
+            .get(&branch_id)
+            .map(|branch| (branch.base, branch.anchor))
+        else {
+            return Ok(false);
+        };
         let Some(at_base) = self.ancestor_at(tip, base) else {
             return Ok(false);
         };

@@ -26,7 +26,7 @@ use shekyl_types::Timestamp;
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 use shekyl_wire::BlockBody;
 
-use crate::peer::{HeaderRequest, Peer};
+use crate::peer::{Dispute, HeaderRequest, Peer};
 
 #[cfg(test)]
 use crate::branch::BranchView;
@@ -180,6 +180,8 @@ pub enum Command<K> {
     RequestHeaders {
         /// The session drawn for this request.
         session: K,
+        /// The id `Deadline` carries back. Minted from the same counter as a proof job.
+        id: u64,
         /// The sparse locator.
         request: RequestHeaders,
         /// When the response is late.
@@ -189,6 +191,8 @@ pub enum Command<K> {
     RequestBodies {
         /// The session.
         session: K,
+        /// The id `Deadline` carries back. Minted from the same counter as a proof job.
+        id: u64,
         /// The span.
         request: RequestBodies,
         /// When the response is late.
@@ -207,7 +211,7 @@ pub enum Command<K> {
     },
     /// Bound arrivals for the entry, in chain order.
     Offer {
-        /// The contiguous run from `L + 1`.
+        /// The contiguous run from the first header of `H*` not on main.
         arrivals: Vec<BoundArrival<K>>,
     },
     /// The session failed a universal rule.
@@ -320,6 +324,8 @@ pub enum Outcome {
     PromotionRefused {
         /// The row the entry named.
         verdict: InvalidBlock,
+        /// The ancestor the switch refused. Not the arrival that triggered it.
+        block: BlockHash,
     },
     /// Larger than any valid block.
     Oversize {
@@ -351,11 +357,15 @@ pub enum Outcome {
 impl Outcome {
     /// CS-3's conversion from the entry's reply. A refusal that names no
     /// verdict is `None`: this model does not invent a census row.
+    ///
+    /// `block` is the hash a promotion refusal names. CS-3 passes the
+    /// entry's refused hash. Other replies do not read it.
     #[must_use]
     pub fn from_reply(
         reply: SyncReply,
         solicited: bool,
         at: BlockHash,
+        block: BlockHash,
         indices: Vec<u64>,
         verdict: Option<InvalidBlock>,
     ) -> Option<Self> {
@@ -365,7 +375,7 @@ impl Outcome {
                 verdict.map(|verdict| Self::Refused { verdict })
             }
             SyncReplyAction::Invalidate(Invalidate::PromotionRefused) => {
-                verdict.map(|verdict| Self::PromotionRefused { verdict })
+                verdict.map(|verdict| Self::PromotionRefused { verdict, block })
             }
             SyncReplyAction::Invalidate(Invalidate::Oversize { invalidate_header }) => {
                 Some(Self::Oversize {
@@ -433,12 +443,18 @@ pub struct Sync<K, R> {
     pub(crate) header_request: Option<HeaderRequest<K>>,
     pub(crate) next_id: u64,
     pub(crate) next_tag: u64,
-    /// Seats the entry last reported. None until the first `Room`.
+    /// Seats still free. `None` until the first `Room`. An offer spends
+    /// one per arrival. `NoRoom` freezes this at zero until the next `Room`.
     pub(crate) seats: Option<u32>,
     /// Bound bodies waiting for a seat.
     pub(crate) held: Vec<BoundArrival<K>>,
     /// Offered arrivals waiting for the entry's reply, keyed by tag.
     pub(crate) outstanding: Vec<BoundArrival<K>>,
+    /// Who served a body, from the offer until the header leaves `T` or
+    /// is refused. A promotion refusal closes that session.
+    pub(crate) served: BTreeMap<BlockHash, K>,
+    /// The CS-Q4(c) snapshot, while a body past its fork is waiting.
+    pub(crate) dispute: Option<Dispute<K>>,
     /// CEN-C1's wall clock. The model does not read one.
     pub(crate) wall: Timestamp,
     /// The rule set in force at a height. The reorg cap is that set's.
@@ -477,6 +493,8 @@ where
             seats: None,
             held: Vec::new(),
             outstanding: Vec::new(),
+            served: BTreeMap::new(),
+            dispute: None,
             wall: Timestamp::from_raw(1_700_000_100),
             rules,
             fill_frontier: BlockHeight::ZERO,
@@ -736,6 +754,7 @@ where
             Event::Tip { tip } => {
                 self.observe(main, Some(tip.height))?;
                 self.tree.connected(main, tip.height)?;
+                self.prune_served();
             }
             Event::Latch { set } => self.alarm = set,
             Event::Fill { frontier } => self.fill_frontier = frontier,
@@ -761,7 +780,7 @@ where
         // waits for the next event, so two responses can both be waiting
         // and the draw is over that set, not over whichever arrived first.
         if !header_response {
-            self.start_evidence(rng, out);
+            self.start_evidence(rng, now, out);
         }
         self.plan(main, now, rng, out)?;
         self.plan_bodies(now, out);
@@ -884,6 +903,7 @@ where
         });
         out.push(Command::RequestHeaders {
             session,
+            id,
             deadline: header_deadline(now, transit),
             request: RequestHeaders { block_ids },
         });

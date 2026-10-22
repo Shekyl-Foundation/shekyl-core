@@ -27,6 +27,9 @@ pub(crate) struct Overlay {
 pub(crate) struct BranchView<'a, H> {
     main: &'a H,
     tree: Option<&'a HeaderTree>,
+    /// In `T`, or on main. Ancestor walks start here. The overlay tip is
+    /// not in `T`, so it cannot be this hash.
+    anchor: BlockHash,
     tip_hash: BlockHash,
     tip_height: BlockHeight,
     /// Heights at and below this are on `main`.
@@ -40,6 +43,7 @@ impl<'a, H> BranchView<'a, H> {
         Self {
             main,
             tree: None,
+            anchor: tip_hash,
             tip_hash,
             tip_height,
             fork: tip_height,
@@ -52,6 +56,7 @@ impl<'a, H> BranchView<'a, H> {
         Self {
             main,
             tree: None,
+            anchor: BlockHash::NULL,
             tip_hash: BlockHash::NULL,
             tip_height: BlockHeight::ZERO,
             fork: BlockHeight::ZERO,
@@ -70,6 +75,7 @@ impl<'a, H> BranchView<'a, H> {
         Self {
             main,
             tree: Some(tree),
+            anchor: tip_hash,
             tip_hash,
             tip_height,
             fork,
@@ -78,6 +84,9 @@ impl<'a, H> BranchView<'a, H> {
         }
     }
 
+    /// The run's headers sit above `anchor`. `tip()` reports the overlay
+    /// tip. Lookups below that tip and above the fork still walk `T`
+    /// from `anchor`.
     pub(crate) fn with_run(mut self, run: &'a [Overlay]) -> Self {
         if let Some(last) = run.last() {
             self.tip_hash = last.hash;
@@ -122,7 +131,7 @@ impl<'id, H: HeaderView<'id>> HeaderView<'id> for BranchView<'_, H> {
             return self.main.header_at(height);
         }
         match tree
-            .ancestor_at(self.tip_hash, height)
+            .ancestor_at(self.anchor, height)
             .and_then(|hash| tree.record(hash))
         {
             Some(record) => Ok(AtHeight::Recorded(record)),

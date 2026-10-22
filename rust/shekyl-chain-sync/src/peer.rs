@@ -79,6 +79,15 @@ pub(crate) struct BodySpan {
     pub hashes: Vec<BlockHash>,
 }
 
+/// One CS-Q4(c) wait. `fork` is the shallowest parent height among the
+/// runs that disputed `work(L)` when the first body past that fork was
+/// about to be committed. `sessions` is that moment's set and does not
+/// gain members later.
+pub(crate) struct Dispute<K> {
+    pub(crate) fork: BlockHeight,
+    pub(crate) sessions: BTreeSet<K>,
+}
+
 /// An announce proving beside the header run. It does not replace the run.
 pub(crate) struct Announced {
     pub job: u64,
@@ -107,6 +116,9 @@ pub(crate) struct Checked {
 /// The chain buffer every run mode shares. Proof and withheld headers
 /// live on the mode, not here.
 pub(crate) struct Chain {
+    /// The header the run extends. Evidence re-requests from here when
+    /// the cheap-check window no longer starts at the fork.
+    pub parent: BlockHash,
     pub parent_height: BlockHeight,
     pub checked: Vec<Checked>,
     pub proven: usize,
@@ -153,9 +165,15 @@ pub(crate) struct Run {
 }
 
 impl Run {
-    pub(crate) fn open(parent_height: BlockHeight, checked: Vec<Checked>, past_cap: bool) -> Self {
+    pub(crate) fn open(
+        parent: BlockHash,
+        parent_height: BlockHeight,
+        checked: Vec<Checked>,
+        past_cap: bool,
+    ) -> Self {
         Self {
             chain: Chain {
+                parent,
                 parent_height,
                 checked,
                 proven: 0,
@@ -190,6 +208,14 @@ impl Run {
 
     pub(crate) fn is_evidence(&self) -> bool {
         matches!(self.mode, Mode::Evidence { .. })
+    }
+
+    /// The cheap-check window no longer starts at the header after the
+    /// fork. An evidence check cannot hash that suffix.
+    pub(crate) fn omits_fork(&self) -> bool {
+        self.chain.checked.first().is_some_and(|first| {
+            first.height.to_raw() > self.chain.parent_height.to_raw().saturating_add(1)
+        })
     }
 
     /// A proved header joins `T`. Slot and challenge headers join only
@@ -303,7 +329,16 @@ impl Run {
 /// `None` is an unearned seed. It is not hashed and not charged to the peer.
 pub(crate) fn cache_for(run: &Run, index: usize) -> Option<CachePlan> {
     let checked = &run.chain.checked[index];
-    if run.is_evidence() && index == 0 {
+    // The evidence check's first seed is unearned: it is a block on our
+    // chain, below the fork. Every header that still names it uses the
+    // evidence cache. A later seed is earned on the branch.
+    if run.is_evidence()
+        && run
+            .chain
+            .checked
+            .first()
+            .is_some_and(|first| first.seed == checked.seed)
+    {
         return Some(CachePlan::Evidence(checked.seed));
     }
     let on_main = match seed_height(checked.height) {

@@ -56,17 +56,24 @@ where
             .header_request
             .as_ref()
             .is_some_and(|req| req.session == session && req.id == request);
-        if header {
-            self.header_request = None;
-        }
-        if let Some(session_state) = self.peers.get_mut(&session) {
-            if session_state
+        let follow = self.peers.get(&session).is_some_and(|state| {
+            state
                 .follow_up
                 .as_ref()
                 .is_some_and(|req| req.id == request)
-            {
-                session_state.follow_up = None;
+        });
+        if header {
+            self.header_request = None;
+        }
+        if follow {
+            if let Some(state) = self.peers.get_mut(&session) {
+                state.follow_up = None;
             }
+        }
+        // A header-request deadline ends this session's part of a CS-Q4(c)
+        // wait even when the run remains. A body span does not.
+        if header || follow {
+            self.release_dispute(session);
         }
         if let Some(peer) = self.peers.get_mut(&session) {
             if peer.span.as_ref().is_some_and(|span| span.id == request) {
@@ -294,7 +301,7 @@ where
             run.adopt_geometry(past_cap);
             run
         } else if let Some(state) = self.peers.get_mut(&session) {
-            state.run = Some(Run::open(parent_height, accepted, past_cap));
+            state.run = Some(Run::open(parent, parent_height, accepted, past_cap));
             state.run.as_mut().expect("just inserted")
         } else {
             return Ok(());
@@ -310,6 +317,27 @@ where
         let beats = work > self.star.work;
         let in_slot = run.is_slot();
         if past_cap {
+            let evidence = self
+                .peers
+                .get(&session)
+                .and_then(|peer| peer.run.as_ref())
+                .is_some_and(Run::is_evidence);
+            if evidence {
+                // The check pays for every header from the fork, in order.
+                // A window that no longer starts there is fetched again.
+                if self
+                    .peers
+                    .get(&session)
+                    .and_then(|peer| peer.run.as_ref())
+                    .is_some_and(Run::omits_fork)
+                {
+                    self.refetch_evidence(session, now, out);
+                    return Ok(());
+                }
+                self.plan_proof(session, HashClass::Evidence, out);
+                self.finish_run(session, response.more, now, out);
+                return Ok(());
+            }
             let over = self.past_bound(session, cap);
             self.trim_window(session);
             self.note_evidence(session);
@@ -416,7 +444,10 @@ where
                                     run.clear_proof();
                                 }
                             } else {
-                                self.tree.insert(header);
+                                // Withheld ancestors join before the header
+                                // that beat `H*`. The winner's parent is
+                                // then in `T`, so its branch base is the
+                                // fork and not the winner itself.
                                 let (held, frontier) = if let Some(run) =
                                     self.peers.get_mut(&session).and_then(|s| s.run.as_mut())
                                 {
@@ -435,6 +466,7 @@ where
                                 for header in held {
                                     self.tree.insert(header);
                                 }
+                                self.tree.insert(header);
                                 if let Some((height, hash)) = frontier {
                                     if let Some(state) = self.peers.get_mut(&session) {
                                         state.frontier = Some((height, hash));
@@ -547,6 +579,7 @@ where
             .unwrap_or_default();
         out.push(Command::RequestHeaders {
             session,
+            id,
             deadline: header_deadline(now, transit),
             request: shekyl_levin::RequestHeaders {
                 block_ids: vec![*hash.as_bytes()],
@@ -555,6 +588,7 @@ where
     }
 
     pub(crate) fn release_session(&mut self, session: K) {
+        self.release_dispute(session);
         self.peers.remove(&session);
         self.pending.remove(&session);
         if self
@@ -567,6 +601,7 @@ where
         self.outstanding
             .retain(|arrival| arrival.session != session);
         self.held.retain(|arrival| arrival.session != session);
+        self.served.retain(|_, who| *who != session);
     }
 
     fn close(&mut self, session: K, cause: CloseCause, out: &mut Vec<Command<K>>) {
@@ -743,6 +778,7 @@ where
             .unwrap_or_default();
         out.push(Command::RequestHeaders {
             session,
+            id,
             deadline: header_deadline(now, transit),
             request: shekyl_levin::RequestHeaders {
                 block_ids: vec![*at.as_bytes()],
