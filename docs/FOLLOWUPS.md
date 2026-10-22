@@ -169,6 +169,10 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6, Appendix B
   - Target: pre-genesis
 
+- **Stricter miss accounting for a complete-tree support role.** The interim slash is the existing 11-of-13 window over the persona's support draws (`ARCHIVAL_SUPPORT_DRAW.md` §3). The stricter accounting, an epoch observation that catches a tree missing at least 1% of the archive inside one window, is computed there (§4, recommended `c` 413, option (a)) and not ruled. Triggered after EUP-4. Falsifier: that section's option (a) or (b) is ruled, and the scenario test matches the rates written before it runs.
+  - Owner: [`ARCHIVAL_SUPPORT_DRAW.md`](design/ARCHIVAL_SUPPORT_DRAW.md)
+  - Target: pre-genesis
+
 - **Move gate-7's locked supply onto the byte fold.** `ArchivalLockModel` counts one shard per `blocks_per_shard` blocks, by default one per settlement epoch; the partition is by archival bytes and the stage-2 baseline closes one about every eleven blocks, so a gate-7 lock figure is low by a factor near 900. Declared in §4 at ESR-8 (Appendix A2, D1) and not changed there: the change moves gate-7's committed figures, and a step that moves figures writes its predictions first. The fix is EUP-4's: the assessment run produces the real figure, and the locked-supply numbers in [`ECONOMY_EXPLAINED.md`](ECONOMY_EXPLAINED.md) (117 coins and those beside it, under a DRIFT banner since 2026-10-02) are replaced then, not patched before.
   - Owner: EUP-4 ([`ECONOMY_UMBRELLA_PLAN.md`](design/ECONOMY_UMBRELLA_PLAN.md)); the row is [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §4, Appendix A2
   - Target: pre-genesis
