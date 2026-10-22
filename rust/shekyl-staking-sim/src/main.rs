@@ -1886,7 +1886,7 @@ fn print_cover_dial_report() {
         "{:>5} | {:>13} {:>9} {:>7}",
         "C", "span(atomic)", "spanSKL", "kEff"
     );
-    let floor_atomic = 750_000_000u64;
+    let floor_atomic = shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
     for c in [0u64, 13, 14, 16, 20, 25, 33, 46, 60, 79, 100, 154] {
         let span = cover::cover_dial_span_atomic(c);
         eprintln!(
@@ -2368,7 +2368,8 @@ mod tests {
             budget: 100.0,
             cap: 8.0,
             pseudonym_cost: 0.05,
-            age_weight: 2.0,
+            age_weight: shekyl_archival_retention::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI as f64
+                / 1_000.0,
             curve_impl: CurveImpl::Integer,
         };
         let float_params = RewardParams {

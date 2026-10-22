@@ -2067,7 +2067,7 @@ pub(crate) fn baseline() -> SimConfig {
         budget: 100.0,
         cap: 8.0,
         pseudonym_cost: 0.05,
-        age_weight: 2.0,
+        age_weight: shekyl_archival_retention::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI as f64 / 1_000.0,
         // Authoritative backend by default (the canonical minting arithmetic);
         // main overrides per `--curve-impl`. Float is opt-in exploration only.
         curve_impl: CurveImpl::Integer,
