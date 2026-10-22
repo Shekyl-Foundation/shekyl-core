@@ -15,18 +15,19 @@
 //!
 //! # Stop
 //!
-//! [`Node::stop`] is one step of the daemon's `finish`, in this order
+//! Dropping the node is one step of the daemon's `finish`, in this order
 //! (`TOR_SUPERVISOR.md` §1; the dialer stops before Tor is torn down):
 //!
 //! 1. `network::stop` — the dialer and the zone host, so nothing new arrives.
 //! 2. The RPC drains. It still reads the C++ core.
-//! 3. [`Node::stop`] — drops the found-block sender, then stops the ingest
-//!    service. The follower withdraws the job board, the connector finishes
-//!    its current message, the sink's `recv` returns disconnected, and the
-//!    store closes. Durability is `Immediate`: there is no flush.
+//! 3. The node is dropped. [`Drop`] calls [`Node::stop`]: the ingest service
+//!    stops, the follower withdraws the job board, the connector finishes
+//!    its current message, and the store closes. Durability is `Immediate`:
+//!    there is no flush.
 //! 4. The remnant's stop and the managed Tor's teardown run together.
 //!
-//! A second [`Node::stop`] is a no-op.
+//! A second [`Node::stop`] is a no-op. [`Drop`] calls it, so every way out
+//! of `main` stops the node, and `finish` drops it before the remnant joins.
 //!
 //! # Blocking threads
 //!
@@ -38,13 +39,12 @@
 //! for a blocking thread has to split them, or a full set of waiters
 //! deadlocks.
 //!
-//! # The template
+//! # The board
 //!
-//! The follower still takes a [`TemplateSource`].
-//! This node gives it one that builds nothing, and holds the sync watch
-//! closed (the node is behind until a sync owner exists), so the board
-//! stays withdrawn. PR 3b deletes that source: the follower builds the one
-//! template itself. The miner is not started here.
+//! The node holds the job board and seats it with no miner. Nothing is
+//! posted: there is no template and no sync owner yet. Stop withdraws the
+//! board. PR 3b seats the miner on this board. The miner is not started
+//! here.
 
 #![deny(unsafe_code)]
 
@@ -55,8 +55,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use shekyl_chain_ingest::connector::ChainFacts as TemplateChainFacts;
-use shekyl_chain_ingest::follower::{MinerFeed, TemplateSource};
+use shekyl_chain_ingest::follower::JobSeat;
 use shekyl_chain_ingest::service::{
     Arrival, ArrivalTag, Door, Follow, Origin, PoolWiring, Reply, Service, ServiceConfig,
 };
@@ -69,13 +68,11 @@ use shekyl_daemon_rpc::handles::Handles;
 use shekyl_daemon_rpc::store_facts::{NodeIdentity, RulesAt, StoreFacts};
 use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
-use shekyl_miner::{found_blocks, FoundBlocks, JobBoard};
+use shekyl_miner::JobBoard;
 use shekyl_pow_randomx::CacheStore;
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
-use shekyl_wire::{Block, Transaction};
-use tokio::sync::watch;
 
 use crate::facts::{
     BansBridge, ChainBridge, DoorBridge, MiningBridge, PoolBridge, StopBridge, Surroundings,
@@ -143,11 +140,6 @@ pub struct Node {
     handles: Handles,
     service: Mutex<Option<Service<ProductionSubstrate>>>,
     runtime: Mutex<Option<shekyl_runtime::Pool>>,
-    /// Kept so the follower's sync watch stays open and reads `false`.
-    _synced: watch::Sender<bool>,
-    /// Kept so the found-block sink's sender outlives the service until
-    /// [`Node::stop`] drops it. PR 3b clones it into the miner.
-    found: Mutex<Option<FoundBlocks>>,
 }
 
 impl Node {
@@ -176,14 +168,10 @@ impl Node {
         let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
         let sockets = Sockets::new();
         let board = Arc::new(JobBoard::new());
-        let (synced, synced_rx) = watch::channel(false);
-        let (found, found_rx) = found_blocks();
         let follow = Follow {
-            miner: Some(MinerFeed {
+            job: Some(JobSeat {
                 board: Arc::clone(&board),
-                source: Arc::new(NoTemplate),
-                synced: synced_rx,
-                found: found_rx,
+                miner: None,
             }),
             pool: Some(PoolWiring {
                 pool,
@@ -255,7 +243,7 @@ impl Node {
             pool: Arc::new(PoolBridge::new(Arc::clone(&pool_slot))),
             door: Arc::new(DoorBridge::new(Arc::clone(&door_slot))),
             mining: Arc::new(MiningBridge),
-            bans: Arc::new(BansBridge::new(sockets.clone())),
+            bans: Arc::new(BansBridge),
             stop: Arc::new(StopBridge::new(Arc::clone(&args.request_stop))),
         };
         let slots = Arc::new(Slots {
@@ -270,8 +258,6 @@ impl Node {
             handles,
             service: Mutex::new(Some(service)),
             runtime: Mutex::new(Some(runtime)),
-            _synced: synced,
-            found: Mutex::new(Some(found)),
         })
     }
 
@@ -288,29 +274,16 @@ impl Node {
         self.sockets.clone()
     }
 
-    /// The job board. Withdrawn while the node is behind, which it is
-    /// until a sync owner exists.
+    /// The job board. Empty until a miner is seated. Stop withdraws it.
     #[must_use]
     pub fn board(&self) -> Arc<JobBoard> {
         Arc::clone(&self.board)
     }
 
-    /// The found-block sender, while the node is running. PR 3b clones it
-    /// into the miner. [`Node::stop`] drops this node's sender first.
-    #[must_use]
-    pub fn found_blocks(&self) -> Option<FoundBlocks> {
-        self.found
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    /// Stop. Drops the found-block sender, then the service, then the runtime.
+    /// Stop the ingest service, clear the handles' slots, and shut the runtime down.
     ///
-    /// The sink lives as long as a sender does. This drop is what makes
-    /// `recv` return disconnected, so the follower's join finishes. A miner
-    /// that cloned the sender must already have dropped its clone. A second
-    /// call does nothing.
+    /// The follower withdraws the job board on the way out. A second call
+    /// does nothing. [`Drop`] calls this.
     pub fn stop(&self) {
         let Some(runtime) = self
             .runtime
@@ -320,12 +293,6 @@ impl Node {
         else {
             return;
         };
-        drop(
-            self.found
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take(),
-        );
         if let Some(service) = self
             .service
             .lock()
@@ -355,20 +322,17 @@ impl Node {
     }
 }
 
+impl Drop for Node {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 struct RulesOf(ChainRules);
 
 impl RulesAt for RulesOf {
     fn in_force(&self, height: BlockHeight) -> RuleSet {
         self.0.in_force(height)
-    }
-}
-
-/// Builds nothing. PR 3b's follower posts the one template and this goes.
-struct NoTemplate;
-
-impl TemplateSource for NoTemplate {
-    fn template(&self, _facts: &TemplateChainFacts) -> Option<(Block, Vec<Transaction>)> {
-        None
     }
 }
 
@@ -392,20 +356,20 @@ fn rules_of(config: &DaemonConfig) -> Result<ChainRules, OpenError> {
 }
 
 fn schedule_of(dev: &Dev) -> Result<FakechainSchedule, OpenError> {
-    match (dev.settlement_epoch_blocks, dev.archival_reorg_depth) {
-        (None, None) => Ok(FakechainSchedule::PRODUCTION),
-        (Some(blocks), Some(cap)) => {
-            let epoch =
-                shekyl_chain_rules::SettlementEpochBlocks::new(blocks).ok_or_else(|| {
-                    OpenError::Rules("the settlement epoch length is zero".to_owned())
-                })?;
-            FakechainSchedule::new(epoch, shekyl_types::BlockCount::from_raw(cap))
-                .map_err(|error| OpenError::Rules(error.to_string()))
-        }
-        _ => Err(OpenError::Rules(
-            "the settlement epoch and the archival reorg depth are set together".to_owned(),
-        )),
-    }
+    // Each omitted lever is the production value. `FakechainSchedule::new`
+    // is the one check, including a single lever against the other side's
+    // production value. `new` of the production pair equals `PRODUCTION`.
+    let production = FakechainSchedule::PRODUCTION;
+    let blocks = dev
+        .settlement_epoch_blocks
+        .unwrap_or_else(|| production.settlement().blocks().get());
+    let cap = dev
+        .archival_reorg_depth
+        .unwrap_or_else(|| production.reorg_cap().to_raw());
+    let epoch = shekyl_chain_rules::SettlementEpochBlocks::new(blocks)
+        .ok_or_else(|| OpenError::Rules("the settlement epoch length is zero".to_owned()))?;
+    FakechainSchedule::new(epoch, shekyl_types::BlockCount::from_raw(cap))
+        .map_err(|error| OpenError::Rules(error.to_string()))
 }
 
 fn open_chain(
@@ -514,29 +478,7 @@ mod tests {
     use super::*;
 
     fn config_at(dir: &Path) -> DaemonConfig {
-        let log = dir.join("shekyld.log");
-        let args = [
-            "--network",
-            "regtest",
-            "--clearnet",
-            "off",
-            "--tor",
-            "off",
-            "--data-dir",
-            dir.to_str().expect("utf8"),
-            "--log-file",
-            log.to_str().expect("utf8"),
-        ];
-        let cli = read_cli(&TABLE, args.into_iter().map(OsString::from)).expect("cli");
-        load(
-            cli,
-            &Platform {
-                home: Some(dir.to_path_buf()),
-                program_data: None,
-            },
-        )
-        .expect("config")
-        .config
+        dev_config(dir, &[])
     }
 
     fn open_at(dir: &Path, stop: Arc<dyn Fn() + Send + Sync>) -> Node {
@@ -770,29 +712,69 @@ mod tests {
         assert_eq!(std::fs::read(&pool).expect("still there"), garbage);
     }
 
-    /// The sink joins because stop drops the sender. A sender kept alive
-    /// across stop holds the join. Red edit: poll the door and return
-    /// while the sender still lives.
+    fn dev_config(dir: &Path, extra: &[&str]) -> DaemonConfig {
+        let log = dir.join("shekyld.log");
+        let mut args = vec![
+            "--network",
+            "regtest",
+            "--clearnet",
+            "off",
+            "--tor",
+            "off",
+            "--data-dir",
+            dir.to_str().expect("utf8"),
+            "--log-file",
+            log.to_str().expect("utf8"),
+        ];
+        args.extend(extra);
+        let cli = read_cli(&TABLE, args.into_iter().map(OsString::from)).expect("cli");
+        load(
+            cli,
+            &Platform {
+                home: Some(dir.to_path_buf()),
+                program_data: None,
+            },
+        )
+        .expect("config")
+        .config
+    }
+
+    /// One regtest lever is filled from production on the other side and
+    /// the node opens. A cap that is not strictly inside the epoch is
+    /// refused. Red edit: require the two levers to be set together, or
+    /// accept a cap outside the epoch.
     #[test]
-    fn stop_hangs_while_a_found_block_sender_lives() {
+    fn one_archival_lever_opens_and_a_cap_outside_the_epoch_does_not() {
         let dir = tempfile::tempdir().expect("temp");
-        let node = Arc::new(open_at(dir.path(), Arc::new(|| {})));
-        let held = node.found_blocks().expect("the sender");
-        let stopping = Arc::clone(&node);
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            stopping.stop();
-            done_tx.send(()).expect("the test is listening");
+        let config = dev_config(dir.path(), &["--dev-archival-reorg-depth", "10"]);
+        let node = Node::open(OpenArgs {
+            config: &config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            request_stop: Arc::new(|| {}),
+        })
+        .expect("one lever, the other side production");
+        node.stop();
+        let refused = dev_config(
+            dir.path(),
+            &[
+                "--dev-settlement-epoch-blocks",
+                "10",
+                "--dev-archival-reorg-depth",
+                "10",
+            ],
+        );
+        let opened = Node::open(OpenArgs {
+            config: &refused,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            request_stop: Arc::new(|| {}),
         });
         assert!(
-            done_rx
-                .recv_timeout(std::time::Duration::from_secs(1))
-                .is_err(),
-            "stop returned while a found-block sender still lived"
+            opened.is_err(),
+            "a reorg cap that is not inside the epoch is refused"
         );
-        drop(held);
-        done_rx
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("stop finishes once the sender is dropped");
     }
 }

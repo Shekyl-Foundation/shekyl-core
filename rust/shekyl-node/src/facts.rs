@@ -26,8 +26,6 @@ use shekyl_daemon_rpc::read_facts::{
 };
 use shekyl_daemon_rpc::store_facts::{NodeFacts, StoreFacts, SyncFacts};
 use shekyl_mempool::Pool;
-use shekyl_timing_engine::Tick;
-use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -281,24 +279,18 @@ impl MiningFacts for MiningBridge {
     }
 }
 
-pub(crate) struct BansBridge {
-    sockets: Sockets,
-}
-
-impl BansBridge {
-    pub(crate) fn new(sockets: Sockets) -> Self {
-        Self { sockets }
-    }
-}
+pub(crate) struct BansBridge;
 
 impl BansFacts for BansBridge {
     fn ban_host(&self, host: IpAddr) -> Result<(), FactsFault> {
-        let _closed = self.sockets.ban_host_permanent(host);
+        // The process table after install is this node's, and a bound hub
+        // finishes the sockets a new ban drops. One function, both states.
+        shekyl_ffi::seam_ffi::bans::ban_host_permanent(host);
         Ok(())
     }
 
     fn banned(&self, host: IpAddr) -> Result<bool, FactsFault> {
-        Ok(self.sockets.is_banned(host, Tick::new(0)))
+        Ok(shekyl_ffi::seam_ffi::bans::host_is_banned(host))
     }
 }
 

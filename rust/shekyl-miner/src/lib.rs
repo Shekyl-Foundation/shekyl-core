@@ -48,8 +48,8 @@
 //! comparison is the validator's (`check_hash`, CEN-D1b).
 //!
 //! **One solution per job.** The first worker to find a nonce claims the
-//! job's generation on the board and sends the block to the
-//! [`FoundBlocks`] sink; every worker then parks until the board posts a
+//! job's generation on the board and sends the block on
+//! [`FoundBlocks`]; every worker then parks until the board posts a
 //! newer job. A second solution for the same height could only become an
 //! alternative block of this node's own making, so none is searched for.
 //! A worker that exhausts its range also parks.
@@ -85,7 +85,7 @@ mod miner;
 mod rate;
 
 pub use address::{MiningAddress, MiningAddressRefused};
-pub use found::{found_blocks, Found, FoundBlocks};
+pub use found::{found_blocks, Found, FoundBlocks, FoundInbox, FoundWait};
 pub use job::{Generation, Job, JobBoard};
 pub use miner::{Miner, MinerConfig, MinerStartRefused, MinerStatus};
 pub use rate::{HashRate, RATE_WINDOW};

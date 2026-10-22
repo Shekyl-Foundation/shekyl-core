@@ -181,7 +181,6 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
             &mut std::io::stderr(),
             "shekyld: a zone hub is already bound, so the node's socket table cannot replace it",
         );
-        node.stop();
         return EXIT_FAILED;
     }
 
@@ -191,7 +190,6 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
     // the owner refuses is the row's refusal (§6).
     if let Err(disagreement) = network::record(&config) {
         tell(&mut std::io::stderr(), &format!("shekyld: {disagreement}"));
-        node.stop();
         return EXIT_FAILED;
     }
     let dev = &config.dev;
@@ -199,14 +197,12 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
         dev.pow_seed_epoch_blocks,
         dev.pow_seed_epoch_lag,
     ) {
-        node.stop();
         return refuse(&[owner_refusal(&resolved, refusal.row(), refusal.rule())]);
     }
     if let Err(refusal) = shekyl_ffi::archival_ffi::arm_settlement_schedule(
         dev.settlement_epoch_blocks,
         dev.archival_reorg_depth,
     ) {
-        node.stop();
         return refuse(&[owner_refusal(&resolved, refusal.row(), refusal.rule())]);
     }
 
@@ -225,7 +221,6 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
                 &mut std::io::stderr(),
                 &format!("shekyld: the signal owner's runtime could not start: {e}"),
             );
-            node.stop();
             return EXIT_FAILED;
         }
     };
@@ -234,13 +229,12 @@ pub fn main(entry: &ShekylDaemonEntry, args: &[OsString], host: &Host) -> i32 {
             &mut std::io::stderr(),
             &format!("shekyld: the stop triggers could not be owned: {e}"),
         );
-        node.stop();
         return EXIT_FAILED;
     }
     // The options handle: the resolved values, the runtime rows' owners
     // behind the RPC's two methods (§2.7).
     let options: OptionsHandle = Arc::new(DaemonOptions::new(resolved.clone(), network));
-    let status = supervise(entry, &config, &pool, network_id, options, Some(node));
+    let status = supervise(entry, &config, &pool, network_id, options, node);
     pool.shutdown_background();
     drop(lock);
     // Last: every sink is a queue, and the lines logged up to here (the
@@ -282,20 +276,15 @@ fn supervise(
     pool: &shekyl_runtime::Pool,
     network_id: [u8; 16],
     options: OptionsHandle,
-    mut node: Option<shekyl_node::Node>,
+    node: shekyl_node::Node,
 ) -> i32 {
-    let handles = node
-        .as_ref()
-        .map(shekyl_node::Node::handles)
-        .unwrap_or_default();
+    let handles = node.handles();
     let Some(run) = entry.run else {
         tell(&mut std::io::stderr(), "shekyld: the entry has no run");
-        stop_node(&mut node);
         return EXIT_FAILED;
     };
     let Some(stop) = entry.stop else {
         tell(&mut std::io::stderr(), "shekyld: the entry has no stop");
-        stop_node(&mut node);
         return EXIT_FAILED;
     };
     let mut constructed = shekyl_daemon_rpc::ffi_exports::configure(
@@ -326,7 +315,6 @@ fn supervise(
                 &mut std::io::stderr(),
                 &format!("shekyld: the run thread could not start: {e}"),
             );
-            stop_node(&mut node);
             return EXIT_FAILED;
         }
     };
@@ -444,22 +432,22 @@ struct RemnantJoin {
 
 /// Step 9: the dialer and the zone host, then the RPC, then the node.
 /// The remnant's stop, asked only when `run` has not finished, then joins
-/// that thread while the managed Tor is torn down. The node stops after
-/// the dialer and the RPC: the connector finishes its message and the
-/// store closes before Tor is torn down (`TOR_SUPERVISOR.md` §1, DX-Q6).
-/// Returns the exit status.
+/// that thread while the managed Tor is torn down. The node is dropped
+/// after the dialer and the RPC, and before the remnant is joined: the
+/// connector finishes its message and the store closes before Tor is torn
+/// down (`TOR_SUPERVISOR.md` §1, DX-Q6). Returns the exit status.
 fn finish(
     pool: &shekyl_runtime::Pool,
     tor_control: Option<shekyl_tor_control_daemon::DaemonTorControl>,
     remnant: RemnantJoin,
     preserve_status: bool,
-    node: Option<shekyl_node::Node>,
+    node: shekyl_node::Node,
 ) -> i32 {
     network::stop();
     shekyl_daemon_rpc::ffi_exports::stop();
-    if let Some(node) = node {
-        node.stop();
-    }
+    // Before the remnant join, not at the end of this function: Tor's
+    // teardown overlaps that join, and the store closes first.
+    drop(node);
     let RemnantJoin {
         stop,
         thread,
@@ -568,12 +556,6 @@ fn owner_refusal(resolved: &resolve::Resolved, row: Option<&str>, rule: &str) ->
         .option(row)
         .param("value", value)
         .param("rule", rule)
-}
-
-fn stop_node(node: &mut Option<shekyl_node::Node>) {
-    if let Some(node) = node.take() {
-        node.stop();
-    }
 }
 
 fn note_stop(by: &'static str) {
@@ -737,6 +719,8 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let d = tempfile::tempdir().unwrap();
+        let data = d.path().join("data");
+        let log = d.path().join("shekyld.log");
         let a = args(&[
             "--network",
             "regtest",
@@ -746,9 +730,21 @@ mod tests {
             "off",
             "--rpc-admin-listen",
             "none",
+            "--data-dir",
+            data.to_str().unwrap(),
+            "--log-file",
+            log.to_str().unwrap(),
         ]);
         let cli = read_cli(&TABLE, a[1..].to_vec()).unwrap();
         let config = load(cli, &host(d.path()).platform).unwrap().config;
+        let node = shekyl_node::Node::open(shekyl_node::OpenArgs {
+            config: &config,
+            version: "test".to_owned(),
+            protocol_version: u64::from(entry().protocol_version),
+            release_build: false,
+            request_stop: Arc::new(crate::signals::request_stop),
+        })
+        .expect("the node opens");
         let entry = ShekylDaemonEntry {
             run: Some(blocking_run),
             stop: Some(arming_stop),
@@ -771,7 +767,7 @@ mod tests {
             &pool,
             [3u8; 16],
             Arc::new(shekyl_daemon_rpc::options::OptionsAbsent),
-            None,
+            node,
         );
         requester.join().unwrap();
         assert_eq!(status, 0, "run's status is the exit status");

@@ -945,7 +945,7 @@ async fn tip_changed_is_published_once_per_commit_and_never_before_it() {
 /// (DX-Q2 item 5); each new tip posts a new job.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
-    use crate::follower::{MinerFeed, TemplateSource};
+    use crate::follower::{JobSeat, MinerFeed, TemplateSource};
     use shekyl_miner::JobBoard;
     /// A source that posts the block a driver mined at the job's height.
     struct Mined(Vec<crate::scenario::Mined>);
@@ -967,7 +967,7 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
     let path = tmp("service-follow");
     let board = Arc::new(JobBoard::new());
     let (synced_tx, synced) = tokio::sync::watch::channel(false);
-    let (_sink, found) = shekyl_miner::found_blocks();
+    let (sender, found) = shekyl_miner::found_blocks();
     let service = Service::start(
         Arc::new(open_store(&path)),
         RULES,
@@ -975,11 +975,13 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         ServiceConfig::default(),
         Budget::of_host(),
         super::Follow {
-            miner: Some(MinerFeed {
+            job: Some(JobSeat {
                 board: Arc::clone(&board),
-                source: Arc::new(Mined(blocks.clone())),
-                synced,
-                found,
+                miner: Some(MinerFeed {
+                    source: Arc::new(Mined(blocks.clone())),
+                    synced,
+                    found,
+                }),
             }),
             pool: None,
         },
@@ -1022,9 +1024,10 @@ async fn the_follower_posts_while_synced_and_withdraws_while_behind() {
         );
         tokio::task::yield_now().await;
     }
-    // The sink ends when this sender drops. Stop joins it.
-    drop(_sink);
+    // The sender is still alive. Stop closes the inbox, so the sink ends
+    // without it being dropped.
     service.stop().await.expect("stops");
+    drop(sender);
     y.close().await;
     cleanup(&path);
 }
@@ -1118,7 +1121,7 @@ fn service_mining(
     synced: tokio::sync::watch::Receiver<bool>,
 ) -> (Service<Gated>, std::path::PathBuf) {
     let path = tmp(name);
-    let (_sink, found) = shekyl_miner::found_blocks();
+    let (_sender, found) = shekyl_miner::found_blocks();
     let service = Service::start(
         Arc::new(open_store(&path)),
         RULES,
@@ -1126,11 +1129,13 @@ fn service_mining(
         ServiceConfig::default(),
         Budget::of_host(),
         super::Follow {
-            miner: Some(crate::follower::MinerFeed {
+            job: Some(crate::follower::JobSeat {
                 board: Arc::clone(board),
-                source,
-                synced,
-                found,
+                miner: Some(crate::follower::MinerFeed {
+                    source,
+                    synced,
+                    found,
+                }),
             }),
             pool: None,
         },
@@ -1228,16 +1233,15 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         .lock()
         .expect("postings")
         .insert(generation, blocks[2].template.transactions.clone());
-    let (found_tx, found_rx) = std::sync::mpsc::channel();
-    let sink = crate::follower::spawn_sink(found_rx, door.clone(), postings);
-    found_tx
-        .send(shekyl_miner::Found {
-            block: blocks[2].template.block.clone(),
-            height: blocks[2].height,
-            generation,
-            pow: PowHash::from_bytes([0; 32]),
-        })
-        .expect("the sink reads");
+    let (sender, inbox) = shekyl_miner::found_blocks();
+    let (done_tx, _done_rx) = tokio::sync::oneshot::channel();
+    let sink = crate::follower::spawn_sink(inbox, door.clone(), postings, done_tx);
+    assert!(sender.deliver(shekyl_miner::Found {
+        block: blocks[2].template.block.clone(),
+        height: blocks[2].height,
+        generation,
+        pow: PowHash::from_bytes([0; 32]),
+    }));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert_eq!(
         homes(&service, blocks[2].hash),
@@ -1257,11 +1261,179 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    drop(found_tx);
+    drop(sender);
     tokio::task::spawn_blocking(move || sink.join().expect("the sink ends"))
         .await
         .expect("joined");
     service.stop().await.expect("stops");
     y.close().await;
     cleanup(&path);
+}
+
+/// How long the follower may take to act on its first tip.
+const FOLLOWER_START_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long the sink may take to hold a seat after a block is delivered.
+const SEAT_TAKEN_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long a stop may take before the test calls it stuck. A stop that
+/// deadlocks the runtime worker cannot poll an async timeout, so the wait
+/// is this thread's, beside the runtime. It covers the follower starting,
+/// the sink taking its seat, and the stop itself.
+const STOP_WITHIN: std::time::Duration = std::time::Duration::from_secs(15);
+
+fn current_thread_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+}
+
+fn coinbase_block() -> shekyl_wire::Block {
+    use shekyl_types::{AttestationRoot, CurveTreeRoot};
+    use shekyl_wire::transaction::{Ct, CtBase, Input, TxPrefix};
+    use shekyl_wire::{Block, BlockHeader, Transaction};
+    Block {
+        header: BlockHeader {
+            major_version: 1,
+            minor_version: 0,
+            timestamp: 1,
+            previous: BlockHash::from_bytes([0x11; 32]),
+            nonce: 1,
+            curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
+            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
+        },
+        miner_transaction: Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: vec![Input::Gen(7)],
+                outputs: Vec::new(),
+                extra: Vec::new(),
+            },
+            ct: Ct::Null(CtBase {
+                enc_amounts: Vec::new(),
+                enc_labels: Vec::new(),
+                commitments: Vec::new(),
+            }),
+        },
+        transaction_hashes: Vec::new(),
+    }
+}
+
+fn miner_follow(
+    path: &std::path::Path,
+    found: shekyl_miner::FoundInbox,
+    synced: tokio::sync::watch::Receiver<bool>,
+) -> Service<Gated> {
+    Service::start(
+        Arc::new(open_store(path)),
+        RULES,
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+        Budget::of_host(),
+        super::Follow {
+            job: Some(crate::follower::JobSeat {
+                board: Arc::new(shekyl_miner::JobBoard::new()),
+                miner: Some(crate::follower::MinerFeed {
+                    source: Arc::new(Nothing),
+                    synced,
+                    found,
+                }),
+            }),
+            pool: None,
+        },
+    )
+}
+
+fn report(done: &std::sync::mpsc::Sender<bool>, stopped: bool) {
+    let _sent = done.send(stopped);
+}
+
+/// Stop returns while a found-block sender still lives. Closing the inbox
+/// ends the sink. Red edit: join the sink on the sender's lifetime.
+#[test]
+fn stop_returns_while_a_found_block_sender_lives() {
+    let (sender_tx, sender_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = current_thread_runtime();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(async move {
+                let path = tmp("service-stop-sender");
+                let (sender, found) = shekyl_miner::found_blocks();
+                sender_tx.send(sender).expect("the test holds the sender");
+                let (_synced_tx, synced) = tokio::sync::watch::channel(false);
+                let service = miner_follow(&path, found, synced);
+                service.stop().await.expect("stops");
+                cleanup(&path);
+            });
+        }));
+        report(&done_tx, outcome.is_ok());
+    });
+    let sender = sender_rx
+        .recv_timeout(STOP_WITHIN)
+        .expect("the service started");
+    match done_rx.recv_timeout(STOP_WITHIN) {
+        Ok(true) => {}
+        Ok(false) => panic!("the stop path panicked"),
+        Err(_) => panic!("stop did not return while a found-block sender lived"),
+    }
+    drop(sender);
+}
+
+/// A found block sitting in `blocking_reply` does not deadlock stop. The
+/// worker is blocked until the seat is taken, so the span stays queued;
+/// stop then has to answer it before the sink can leave. Red edit: join
+/// the sink on the runtime worker before that answer.
+#[test]
+fn stop_answers_a_found_block_waiting_inside_the_door() {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = current_thread_runtime();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(async {
+                let path = tmp("service-stop-inflight");
+                let (sender, found) = shekyl_miner::found_blocks();
+                let (_synced_tx, synced) = tokio::sync::watch::channel(false);
+                let service = miner_follow(&path, found, synced);
+                let mut followed = service.followed();
+                followed.borrow_and_update();
+                tokio::time::timeout(FOLLOWER_START_WITHIN, followed.changed())
+                    .await
+                    .expect("the follower started")
+                    .expect("followed");
+                let before = service.door().room();
+                let block = coinbase_block();
+                let generation = shekyl_miner::JobBoard::new().publish(shekyl_miner::Job {
+                    block: block.clone(),
+                    height: BlockHeight::from_raw(1),
+                    seed: BlockHash::from_bytes([1; 32]),
+                    difficulty: shekyl_difficulty::Difficulty::from_raw(1),
+                });
+                assert!(sender.deliver(shekyl_miner::Found {
+                    block,
+                    height: BlockHeight::from_raw(1),
+                    generation,
+                    pow: PowHash::from_bytes([0; 32]),
+                }));
+                let started = std::time::Instant::now();
+                while service.door().room() >= before {
+                    assert!(
+                        started.elapsed() < SEAT_TAKEN_WITHIN,
+                        "the sink never took a seat"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                service.stop().await.expect("stops");
+                drop(sender);
+                cleanup(&path);
+            });
+        }));
+        report(&done_tx, outcome.is_ok());
+    });
+    match done_rx.recv_timeout(STOP_WITHIN) {
+        Ok(true) => {}
+        Ok(false) => panic!("the stop path panicked"),
+        Err(_) => panic!("stop deadlocked on a found block waiting in the door"),
+    }
 }
