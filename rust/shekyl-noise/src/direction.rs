@@ -418,7 +418,10 @@ mod tests {
         let (mut send, mut recv) = pair();
         send.0.force_nonce(u64::MAX);
         assert_eq!(send.seal(b"a", b"ad").unwrap_err(), DirectionError::State);
-        assert_eq!(send.seal(b"a", b"ad").unwrap_err(), DirectionError::Poisoned);
+        assert_eq!(
+            send.seal(b"a", b"ad").unwrap_err(),
+            DirectionError::Poisoned
+        );
 
         let ct = aead::seal(&Zeroizing::new([0x22; HASH_LEN]), u64::MAX, b"ad", b"a").unwrap();
         recv.0.force_nonce(u64::MAX);

@@ -429,7 +429,12 @@ impl ClassedOpener {
         if self.direction.0.is_dead() {
             return Err(ClassedError::Poisoned);
         }
-        let result = open_next(&mut self.direction.0, &self.table, &mut self.header_key, wire);
+        let result = open_next(
+            &mut self.direction.0,
+            &self.table,
+            &mut self.header_key,
+            wire,
+        );
         self.poison_unless_truncated(result)
     }
 
@@ -724,7 +729,10 @@ mod tests {
         let wire = send.seal(ClassId(0), b"shekyl").unwrap();
         assert_eq!(wire.len(), 1 + 512 + 16);
         assert_eq!(wire[0], 0xc1);
-        assert_eq!(hex(&wire[wire.len() - 16..]), "4f75644ca70c8c4edd6e9fafb11fa94c");
+        assert_eq!(
+            hex(&wire[wire.len() - 16..]),
+            "4f75644ca70c8c4edd6e9fafb11fa94c"
+        );
         let digest = <blake2::Blake2s256 as blake2::Digest>::digest(&wire);
         assert_eq!(
             hex(&digest),
@@ -785,7 +793,10 @@ mod tests {
             consumed: 529,
         };
         let printed = format!("{opened:?}");
-        assert!(!printed.contains("secret") && !printed.contains("115"), "{printed}");
+        assert!(
+            !printed.contains("secret") && !printed.contains("115"),
+            "{printed}"
+        );
         assert!(printed.contains("<6 bytes>"), "{printed}");
     }
 

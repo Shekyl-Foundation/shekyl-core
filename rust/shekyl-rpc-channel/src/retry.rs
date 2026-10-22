@@ -238,7 +238,10 @@ mod tests {
             };
             assert_eq!((at - t0).as_millis(), expected);
         }
-        assert_eq!(jittered(Duration::from_nanos(1), TOP), Duration::from_nanos(1));
+        assert_eq!(
+            jittered(Duration::from_nanos(1), TOP),
+            Duration::from_nanos(1)
+        );
         assert_eq!(jittered(Duration::ZERO, TOP), Duration::ZERO);
     }
 

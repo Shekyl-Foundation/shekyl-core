@@ -108,7 +108,11 @@ impl RecvHalf {
     }
 }
 
-fn seal_chunk(send: &mut SendDirection, chunk: &[u8], out: &mut Vec<u8>) -> Result<(), RecordError> {
+fn seal_chunk(
+    send: &mut SendDirection,
+    chunk: &[u8],
+    out: &mut Vec<u8>,
+) -> Result<(), RecordError> {
     if chunk.is_empty() || chunk.len() > MAX_BODY {
         return Err(RecordError::Oversize);
     }
