@@ -120,8 +120,8 @@ async fn the_window_off_the_store_is_the_owner_over_its_rows() {
                     &weights[..at(height)],
                     &shekyl_economics::EconomicParams::default(),
                 )
-                    .long_term_effective_median
-                    .to_raw()
+                .long_term_effective_median
+                .to_raw()
             };
             relay_floor_from(
                 FeeOperands {
