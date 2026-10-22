@@ -468,9 +468,11 @@ impl<'id> WriteBatch<'_, 'id> {
     ///
     /// # Errors
     ///
-    /// SI-36 when a reveal is repeated, a draw row is missing, or the
-    /// reduction does not fit. SI-25 [`SettlementFault::IndexDrift`] when
-    /// an issued-draw key is already present.
+    /// SI-36 when a reveal is repeated, a draw row is missing, the
+    /// reduction does not fit, or a draw ordinal does not fit the key.
+    /// SI-25 [`SettlementFault::IndexDrift`] when an issued-draw key is
+    /// already present. The key's draw component is the ordinal `j`, not
+    /// the pair's position in `D`.
     pub(super) fn write_admissions(
         &self,
         connecting: BlockHeight,
@@ -510,15 +512,20 @@ impl<'id> WriteBatch<'_, 'id> {
             row.revealed = true;
             revealed.insert(h, row);
             let draw_epoch = schedule.epoch_at(h);
-            for draw in &bundle.draws {
-                let Ok(index) = u32::try_from(draw.index) else {
+            // `j` is the draw's place in `draws`, which is draw order.
+            // `DerivedDraw.index` is the pair's place in `D`. The key is
+            // `(E, P, s, h, j)` (ARCHIVAL_SERVE_CREDIT_SPEC.md §10); two
+            // draws may select one pair, and storing the pair's place
+            // would give them one key.
+            for (ordinal, draw) in bundle.draws.iter().enumerate() {
+                let Ok(j) = u32::try_from(ordinal) else {
                     return Err(self.admission_fault(h, AdmissionWriteFault::ReductionPastWidth));
                 };
                 issued.entry(draw_epoch).or_default().push(IndexedDraw {
                     persona: draw.pair.persona,
                     shard: draw.pair.shard,
                     issuing_height: h,
-                    draw: index,
+                    draw: j,
                     state: IssuedDraw {
                         revealed_at: connecting,
                         passed: draw.passed,

@@ -438,18 +438,28 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
         .expect("read")
         .issued_draws(prior, floor)
         .expect("index");
-    assert_eq!(rows.len(), 1, "the prior epoch's index gains the draw");
-    assert_eq!(rows[0].issuing_height, BlockHeight::from_raw(open - 1));
-    assert_eq!(rows[0].state.revealed_at, BlockHeight::from_raw(open));
-    assert!(rows[0].state.passed);
+    assert_eq!(rows.len(), 2, "the prior epoch's index gains both ordinals");
+    assert_eq!(
+        rows.iter().map(|row| row.draw).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert!(rows
+        .iter()
+        .all(|row| row.issuing_height == BlockHeight::from_raw(open - 1)));
+    assert!(rows
+        .iter()
+        .all(|row| row.state.revealed_at == BlockHeight::from_raw(open)));
+    assert!(rows.iter().all(|row| row.state.passed));
     let mut digest = IssuedDigest::ZERO;
-    digest.fold(&issued_draw_term(
-        &rows[0].persona,
-        rows[0].shard,
-        prior,
-        rows[0].issuing_height,
-        rows[0].draw,
-    ));
+    for row in &rows {
+        digest.fold(&issued_draw_term(
+            &row.persona,
+            row.shard,
+            prior,
+            row.issuing_height,
+            row.draw,
+        ));
+    }
     assert_eq!(
         chain
             .store
@@ -497,20 +507,31 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
 
 fn late_bundle(h: u64) -> Vec<Admitted> {
     let persona = Persona::at(0).id();
+    let pair = DrawablePair {
+        persona,
+        shard: ShardId::from_raw(0),
+    };
+    // Both draws select the same place in `D`. The key is the ordinal,
+    // so the two rows are `j = 0` and `j = 1`. A writer that stored
+    // `index` would insert one key twice.
     vec![Admitted {
         kept: BundleKept {
             h: BlockHeight::from_raw(h),
             seed: [0x11; 32],
-            passes: PassBitmap::from_passes(1, [0]).expect("one pass"),
+            passes: PassBitmap::from_passes(2, [0, 1]).expect("two passes"),
         },
-        draws: vec![DerivedDraw {
-            index: 0,
-            pair: DrawablePair {
-                persona,
-                shard: ShardId::from_raw(0),
+        draws: vec![
+            DerivedDraw {
+                index: 7,
+                pair,
+                passed: true,
             },
-            passed: true,
-        }],
+            DerivedDraw {
+                index: 7,
+                pair,
+                passed: true,
+            },
+        ],
     }]
 }
 

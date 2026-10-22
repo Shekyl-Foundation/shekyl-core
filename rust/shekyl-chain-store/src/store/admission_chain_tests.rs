@@ -271,7 +271,10 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
     assert_eq!(row.issuing_height, h);
-    assert_eq!(row.draw, u32::try_from(one.draws[0].index).expect("fits"));
+    assert_eq!(
+        row.draw, 0,
+        "the key's ordinal is j, not the pair's place in D"
+    );
     assert_eq!(row.persona, one.draws[0].pair.persona);
     assert_eq!(row.shard, one.draws[0].pair.shard);
     assert_eq!(row.state.passed, one.draws[0].passed);
@@ -380,7 +383,7 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
 
     pop_one(&mut prepared.chain);
     pop_one(&mut prepared.chain);
-    let admitted_draw = u32::try_from(one.draws[0].index).expect("fits");
+    let admitted_draw = 0;
     assert!(
         !index_of(&prepared.chain, epoch)
             .iter()
@@ -523,7 +526,7 @@ fn the_digest_check_closes_on_an_admitted_bundle() {
                     draw.pair.persona,
                     draw.pair.shard,
                     drawing_height(),
-                    u32::try_from(draw.index).expect("fits"),
+                    0,
                 )
                 .key(),
             )?;
@@ -551,4 +554,24 @@ fn the_digest_check_closes_on_an_admitted_bundle() {
     });
     out.expect("the refusal");
     tampered.chain.finish();
+}
+
+/// A fresh memo at an epoch's open still answers the previous epoch. The
+/// window reaches it, and the count phase files it before admission reads.
+#[test]
+fn a_cold_memo_at_the_open_holds_the_prior_epoch() {
+    let open = h_open(2);
+    let mut chain = SlashedChain::build_with("cold-memo", WITNESS_PERSONAS, open - 1, no_draws);
+    let mut memo = DrawableMemo::new();
+    connect_plain(&mut chain, Some(&mut memo));
+    let h_incl = chain.grown.height();
+    let out: Result<(), TestErr> = chain.store.write(|batch| {
+        let view = batch.chain_view();
+        let bundle_view = StoreBundleView::new(&view, &memo, h_incl, RULES.settlement_schedule());
+        let drawable = bundle_view.drawable_epoch(SettlementEpoch::from_raw(1))?;
+        assert!(drawable.is_some(), "the prior epoch was filed");
+        Ok(())
+    });
+    out.expect("the prior epoch is in the memo");
+    chain.finish();
 }
