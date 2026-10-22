@@ -558,6 +558,7 @@ stale_through = [
   { through = "969085429", note = "RT-W9 close-out F3/F5: the P2P framer holds a SendDirection and a RecvDirection in place of two Directions, and a direction checks one dead flag per seal and open. RecvHalf already killed itself on any error but truncation, so nothing it can observe changes. The same AEAD calls run on the same bytes. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "5089df9db", note = "RT-W9 close-out F4: poly1305 and the mask cipher wipe their state when dropped, and the HMAC digests land in wiped buffers. Each P2P record seal and open now ends with a wipe of the Poly1305 state (r, h, pad; tens of bytes), and each HKDF writes two digests to wiped stack arrays. Nanoseconds a record against the record path; not re-measured." },
   { through = "5671b3721", note = "rustfmt line breaks in the close-out files; no code changed. Not re-measured." },
+  { through = "3c8ed9e03", note = "Crate documentation and a test helper only; no code the P2P path runs changed. Not re-measured." },
 ]
 
 [[constant]]
@@ -979,6 +980,7 @@ cleared = [
   { through = "5089df9db", reason = "RT-W9 close-out F4: Poly1305 wipes its state when dropped and HMAC-BLAKE2s writes its digests to wiped arrays. The handshake makes a few dozen HMAC and AEAD calls, each now ending in a wipe of tens of bytes: nanoseconds against RT-P6s 2,163.8 us. The constant is not moved." },
   { through = "57969a78c", reason = "RT-W9 close-out D2 and tests: the client retry policy draws its busy waits from a random source, and the budget gains tests only. No step the daemon charges or RT-P9 timed changes." },
   { through = "5671b3721", reason = "rustfmt line breaks in the close-out files; no code changed." },
+  { through = "3c8ed9e03", reason = "Crate documentation and checked instants in a retry test; no code the daemon runs changed." },
 ]
 
 [[constant]]
