@@ -1,8 +1,10 @@
 # C2-R2 — Block-weight / reward-zone / fee constants design round
 
 **Status:** **SIGNED (Rick, 2026-09-06), with amendments recorded per
-ruling:** Q1/Q2/Q4/Q6/Q7/Q8/Q9/Q10/Q11 ratified — **Q9 REOPENED
-2026-10-02, §5 Q9** — (Q1 with the GAP-7
+ruling:** Q1/Q2/Q4/Q6/Q8/Q9/Q10/Q11 ratified — **Q7 is not in that
+list: its reserve was REOPENED 2026-10-05 and CLOSED 2026-10-22 by
+derivation** (§4 Q7) — **Q9 REOPENED 2026-10-02, §5 Q9** — **Q1 leg 1
+REOPENED, EUP-5 G** — (Q1 with the GAP-7
 condition discharged in the passing direction — floor figure in the census
 notes; Q10 with corrected headroom and the 0x0A rule-15 row); **Q3
 amended — the window/hysteresis half ratified, the ×50 surge factor
@@ -223,7 +225,7 @@ change in any one re-derives the others (the census's charge — that they
 "fossilize as Shekyl economics without ever having been derived for Shekyl" —
 is a charge against the *system*, not five separate numbers).
 
-### Q1 — the 300 000-byte penalty-free zone (the "fossil flag" arbitration)
+### Q1 — the 300 000-byte penalty-free zone (the "fossil flag" arbitration) — RULED 2026-09-06; leg 1 REOPENED, EUP-5 G
 
 **The punt, located:** `GENESIS_TX_WIRE_FORMAT.md:806–811` explicitly punted
 the zone's arbitration "to the economics doc"; no economics doc, decision-log
@@ -239,7 +241,7 @@ the arbitration the flag has waited for.
    penalty-free block by construction — the real constraint is the typical
    FCMP++ tx. Bounds at the pin (`GENESIS_TX_WIRE_FORMAT.md` §10: 8 inputs,
    16 outputs): the per-output PQC extra alone is ≈ 1 120 B (0x06 KEM
-   ct) plus 32 B (0x07 leaf hash), so a typical 2-output spend runs **≈ 4–8 kB**
+   ct) plus 64 B (0x07 leaf entry, `PQC_LEAF_ENTRY_LEN`), so a typical 2-output spend runs **≈ 4–8 kB**
    (an estimate — prefix + extra + BP+ + FCMP proof; not a measured
    corpus), putting the zone at roughly **35–75 typical transactions per
    free block** (≈ 17–37 tx/min at T = 120 s). A launch-adequate floor
@@ -613,21 +615,39 @@ falsifies the premise and re-opens the ruling. (Construction verified at
 the pin: `get_transaction_weight` returns `blob_size` or `blob_size +
 bp_clawback`, never less — `cryptonote_format_utils.cpp:321–331`.)
 
-### Q7 — the tx weight cap 149 400 = zone/2 − 600 (CEN-H3) — RULED 2026-09-06; the coinbase reserve REOPENED 2026-10-05
+### Q7 — the tx weight cap is zone/2 − the derived reserve (CEN-H3) — RULED 2026-09-06; reserve REOPENED 2026-10-05, CLOSED 2026-10-22
 
 **REOPENED 2026-10-05 (Rick), the reserve only.** The ruling below ratified
 600 on "a Shekyl coinbase serializes well under 600 bytes". The minimal
-coinbase weighs 1,331 B (measured 2026-10-04;
-[`ECONOMY_UMBRELLA_PLAN.md`](../design/ECONOMY_UMBRELLA_PLAN.md) §3.1). The
-reserve is to be derived, never pinned: the largest coinbase the grammar
-allows, attestation included, plus a stated margin, with a compile-time
-assertion that the reserve covers it. It is ruled together with Q1's
-capacity leg. The formula and its two-maximal-transactions rationale stand.
+coinbase weighed 1,331 B on 2026-10-04, before the `0x0C` commitment
+([`ECONOMY_UMBRELLA_PLAN.md`](../design/ECONOMY_UMBRELLA_PLAN.md) §3.1).
+The reserve is derived, never pinned.
+
+**UPDATE 2026-10-22: the derivation is closed.** `shekyl-wire`'s
+`max_coinbase_weight` sums the grammar: widest varints on the amount, the
+height and the unlock time, one `Input::Gen`, one output, `Ct::Null`, and
+the extra. `COINBASE_RESERVE_MARGIN` is 0 — the varint slack is already
+inside the maximum, and any other growth is a consensus change that
+re-runs the derivation. The reserve is 1,386 B. A template coinbase at
+height 5 weighs 1,364 B; the grammar's narrowest one-output coinbase
+weighs 1,359 B. `TX_WEIGHT_LIMIT` = zone/2 − reserve = **148,614** on the
+inherited 300,000 B zone. The zone is not an input of the derivation; it
+moves again when EUP-5 G rules Q1's capacity leg, and the limit moves
+with it. The cover is the codec test
+`the_maximal_coinbase_weighs_what_the_grammar_sums`: it builds the
+maximal coinbase through the codec and weighs it against
+`max_coinbase_weight`. The reserve is that function plus
+`COINBASE_RESERVE_MARGIN` (0), so an assert of the reserve against the
+function restates the definition.
+
+The formula and its two-maximal-transactions rationale stand. The 600-byte
+ratification below is the record of what was signed.
 
 **Formula, not literal:** `get_transaction_weight_limit` computes
 `get_min_block_weight()/2 − CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE`
 (`tx_verification_utils.cpp:203–210`); shekyl-wire's `TX_WEIGHT_LIMIT`
-re-derives it and compile-asserts 149 400. The value is **downstream of Q1's
+re-derives it. *Records-was (2026-09-06):* a compile-assert pinned 149 400.
+The value is **downstream of Q1's
 zone** — this ruling ratifies the *formula* (the "inherited scaling" the
 census flagged) and inherits the value from Q1.
 
@@ -801,10 +821,12 @@ bound would be a canonical-form rule, and *that* arbitration is the
 credit-wire lane's, per the fence). Headroom, computed rather than
 asserted (`GENESIS_TX_WIRE_FORMAT.md` §9.6a, §10): the largest
 protocol-legitimate extra at the pin is a 16-output tx's PQC fields —
-16 × ≈ 1 120 B (0x06 KEM ciphertexts) + 16 × 32 B (0x07 leaf hashes)
-≈ **18 432 B**, plus the 0x05 ownership entries the first computation
+16 × ≈ 1 120 B (0x06 KEM ciphertexts) + 16 × 64 B (0x07 leaf entries,
+`PQC_LEAF_ENTRY_LEN`; the signed text said 32 B, a doc error found
+2026-10-22)
+≈ **18 944 B**, plus the 0x05 ownership entries the first computation
 omitted (34 B each, ≈ **544 B** at 16 outputs — signing-round
-correction), leaving ≈ **5 600 B (~23 %)** for payment metadata and
+correction), leaving ≈ **5 088 B (~21 %)** for payment metadata and
 future fields — the figure the falsifier is checked against. Adequate,
 **not** generous: any new per-output extra field of ≥ ~350 B exhausts it
 at 16 outputs, which is exactly why the canonical-form arbitration

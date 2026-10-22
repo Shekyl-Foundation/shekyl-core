@@ -195,6 +195,16 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_internal_information.py
 
+      - name: Run weight-limit literal check
+        # CEN-H3's limit is derived. The old 600-byte-reserve literal must
+        # not be restated in source. Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_tx_weight_literals.py
+
+      - name: Run weight-limit literal selftest
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_tx_weight_literals.py --selftest
+
       - name: Run forbidden-fossil check
         # Live RCTType* names, GENESIS_STRATEGY.md, privacy-security.mdc in
         # always-applied rules. Instance of 47-gate-subject-assertion.mdc.

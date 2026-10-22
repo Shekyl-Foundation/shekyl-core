@@ -38,11 +38,11 @@ pub const MAX_PAYLOAD: usize = MAX_RECORD_PLAINTEXT - OCCUPANCY_LEN;
 /// The records every `submit_transaction` upload takes, whatever the
 /// transaction's size (RT-O28).
 ///
-/// The largest admissible transaction is `TX_WEIGHT_LIMIT` = 149,400 bytes
-/// (weight is size plus the Bp+ clawback). Its request body,
-/// `{"tx_blob":"<hex>"}`, is at most 298,814 bytes: 4.56 records. Five
-/// leave 28,851 bytes for the request head. A test pins this against
-/// `shekyl-wire`'s `TX_WEIGHT_LIMIT`.
+/// The largest admissible transaction is [`shekyl_wire::transaction::TX_WEIGHT_LIMIT`]
+/// (weight is size plus the Bp+ clawback). Its request body is that many
+/// bytes, hex-encoded, inside the JSON envelope. Five records of the
+/// largest class hold it and leave room for the request head. A test pins
+/// the count against the wire constant.
 pub const SUBMISSION_RECORDS: usize = 5;
 
 /// The most bytes one submission holds. Five largest-class payloads.
