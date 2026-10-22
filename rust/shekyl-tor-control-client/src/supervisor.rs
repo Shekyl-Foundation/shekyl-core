@@ -22,8 +22,10 @@ use crate::control::{
 ///
 /// `TSR-M2` (the floor device, 2026-10-22) measured the repair itself:
 /// outbound usable in at most 2.93 s, and inbound reachable within 26.44 s
-/// in 9 of 10 runs. The base stays the 1 s pause before the next spawn, and
-/// the cap stays the 60 s crash-loop ceiling. The run had no launch failure,
+/// in 9 of 10 runs. The tenth was a SOCKS CONNECT with no reply at the 60 s
+/// probe bound; the nonce was not sent. The base stays the 1 s pause before
+/// the next spawn, and the cap stays the 60 s crash-loop ceiling. The run had
+/// no launch failure,
 /// so it does not size `fresh_directory_after`. A test passes the policy it
 /// means to pin.
 #[derive(Clone, Copy, Debug)]
