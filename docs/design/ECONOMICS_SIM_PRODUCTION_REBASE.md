@@ -123,8 +123,9 @@ The threshold `θ = w/(4·w_ref)` reads the ordinary transaction's weight,
 so it steps with the tree's depth: 1.188 in year 1, 1.220 from year 2,
 1.274 from year 23. `θ` is that threshold when the medians are equal.
 `ρ` crosses it in year 19, and every constrained scenario grows in the
-year its `ρ` crosses (year 17 on the boom-bust cycle, whose booms raise
-`b` sooner). The report prints `m/M` and the full inequality's verdict
+year its `ρ` crosses (year 15 on the boom-bust cycle, whose booms raise
+`b` sooner; the 2026-10-17 run was year 17, before the recorded weight
+included the coinbase, §5.23). The report prints `m/M` and the full inequality's verdict
 beside `θ`. On this baseline `m/M` stays 1.000 through year 25, so the
 verdict, the zone crossing and block growth are all year 19. A trajectory
 where the effective median pulls ahead of the long-term one admits earlier
@@ -1901,6 +1902,21 @@ ESR-11's loop tests go with their subject: `a_run_is_a_function_of_its_seed`
 `zero_pairs_is_refused` and `more_dropout_leaves_more_pairs_short`, whose
 subjects ESR-13 did not test, are added to ESR-13 at ESR-11's timing.
 
+### 5.23 The coinbase is in the recorded weight (2026-10-22)
+
+The fill prices the block, and the median records that weight. Both
+narrations were regenerated in release
+(`SHEKYL_REGEN_FIXTURES=1 cargo test --release -p shekyl-economics-sim -- --ignored regen_stage2_narration_fixtures`).
+
+On the production baseline, 22 of 50 are still carried through year 18,
+and blocks still grow in year 19 (carried 42.4). Year 1 is unchanged:
+`ρ` 0.879, `θ` 1.188. The printed long-term median rises by 1 KB (year 1:
+314 → 315; years 2–18: 322 → 324; year 19: 732 → 733). The boom-bust
+cycle's gate moves from year 17 to year 15.
+
+On the flat control the same kilobyte step appears, and baseline years 5
+and 20 change from Displacement to Mixed.
+
 ## 6. The staking sim — the plan for staking, checked against what is built (a separate PR)
 
 Under the cycle ruling (§0), staking is being designed now, and the
@@ -2167,6 +2183,16 @@ is the listed count — 24 over the one block before height 1, then 21
 and 20 over the full 720-block window at the year ends — so
 `burn_pct_bp` and `release_multiplier_milli` do not move. The operand
 is the window anyway.
+
+**UPDATE 2026-10-22 (C2-R2).** The fill prices the block with the coinbase
+included, and this vector is regenerated against that weight. The metadata,
+the neutral milestones and every sampled `burn_pct_bp` are unchanged, and
+the year-end listed counts stay 21 and then 20. The first sample lists 23.
+The coinbase occupies its reserve of the penalty-free block, and the
+control fee does not buy the penalty past that, so the one-block window
+before height 1 is that same 23. Later rows move by the emission that
+listing changed. The engine differential still recomputes each row from
+its own operands.
 
 ## Appendix B — census of `shekyl-staking-sim` (as reported, at `bb021f254`)
 

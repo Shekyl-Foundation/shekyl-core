@@ -23,9 +23,19 @@
 //! that mature (a coinbase from block `k` spends at `k +
 //! FIRST_SPEND_HEIGHT`). Default lane, like that file.
 
+// A whole-file test module, gated at `lib.rs` by
+// `#[cfg(all(test, feature = "pipeline"))]`. The inner attribute is the
+// file's own declaration of the same fact, for the debug-macro lint
+// (`build.yml`), which keys on it. The bound-admission line is a test
+// report.
+#![cfg(test)]
+
+use shekyl_block_template::Fill;
 use shekyl_chain_rules::{CenRow, Locus, TxSlot};
+use shekyl_economics::{EconomicParams, TxVolume};
 use shekyl_harness_spender::Spender;
 use shekyl_types::BlockWeight;
+use shekyl_wire::transaction::COINBASE_RESERVE;
 use shekyl_wire::Transaction;
 
 use crate::archival_driver::refused_at;
@@ -260,6 +270,144 @@ async fn h19_names_the_bad_proof_among_good_ones() {
         Locus::Tx {
             slot: TxSlot::Listed(1),
         },
+    );
+    scenario.close().await;
+}
+
+/// Bodies at the fill's bound connect, and the validator admits the block.
+///
+/// The bound is the fill's at the production zone — the median an early
+/// chain floors at — less the derived coinbase reserve. A filler spend
+/// cannot witness it: CEN-I13 refuses one on any mock view, and the
+/// validator prices from the static parameter set, so the zone cannot be
+/// shrunk for the test. The spends are the harness miner's coinbases,
+/// built across the cores the way the shard fill builds them, and the
+/// block enters through the scenario's door.
+#[tokio::test]
+async fn bodies_at_the_fills_bound_are_admitted() {
+    let params = EconomicParams::default();
+    let zone = params.full_reward_zone;
+    let coinbase = u64::try_from(COINBASE_RESERVE).expect("the reserve fits");
+    let bound = Fill::empty(
+        zone,
+        coinbase,
+        0,
+        TxVolume::per_block(params.tx_volume_baseline),
+        &params,
+    )
+    .expect("an empty block at the zone prices")
+    .bodies_weight_bound();
+
+    let mut scenario = Scenario::open("spend-bound");
+    // One matured coinbase sizes the batch. It is not listed: the spends
+    // that connect are built at the later height, against that height's
+    // reference.
+    let mut mined = scenario.mine(FIRST_SPEND_HEIGHT).await;
+    let sample = Spender::over(&mined).spend_coinbase(
+        scenario.wallet(),
+        h(0),
+        h(FIRST_SPEND_HEIGHT),
+        Family::Main.fee(),
+    );
+    let one = u64::try_from(sample.weight()).expect("a spend's weight fits");
+    assert!(one > 0 && one <= bound, "one spend fits under the bound");
+    let count = usize::try_from(bound / one).expect("the count fits");
+
+    // Coinbase `k` is spendable at `k + FIRST_SPEND_HEIGHT`. `count`
+    // coinbases (0..count) are all mature when the next block is
+    // `FIRST_SPEND_HEIGHT + count - 1`, and `mine` has already landed the
+    // first `FIRST_SPEND_HEIGHT` blocks.
+    if count > 1 {
+        mined.extend(
+            scenario
+                .mine(u64::try_from(count - 1).expect("the count fits"))
+                .await,
+        );
+    }
+    let at = FIRST_SPEND_HEIGHT + u64::try_from(count - 1).expect("the count fits");
+    assert_eq!(
+        mined.len(),
+        usize::try_from(at).expect("the height fits"),
+        "the prefix reaches the spending height"
+    );
+
+    let spender = Spender::over(&mined);
+    let wallet = scenario.wallet();
+    let fee = Family::Main.fee();
+    let listed: Vec<Transaction> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..count)
+            .map(|i| {
+                let height = u64::try_from(i).expect("the count fits");
+                let spender = &spender;
+                scope.spawn(move || spender.spend_coinbase(wallet, h(height), h(at), fee))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("a spend builds"))
+            .collect()
+    });
+    let mut listed = listed;
+    let unit = u64::try_from(listed[0].weight()).expect("a spend's weight fits");
+    assert!(
+        listed.iter().all(|tx| tx.weight() == listed[0].weight()),
+        "every spend in the batch has the same weight"
+    );
+    // The sample that sized the batch was built at an earlier height. A
+    // wider varint here makes each spend a byte heavier, and the batch
+    // drops the tail until one more of this weight would pass the bound.
+    while listed.len() > 1 {
+        let bodies: u64 = u64::try_from(listed.len()).expect("fits") * unit;
+        if bodies <= bound {
+            break;
+        }
+        listed.pop();
+    }
+    let count = listed.len();
+    let bodies = u64::try_from(count).expect("fits") * unit;
+    assert!(bodies <= bound, "the batch fits the fill's bound");
+    assert!(
+        bodies + unit > bound,
+        "one more spend of this weight passes the bound"
+    );
+
+    let block = scenario
+        .mine_listing(listed)
+        .await
+        .unwrap_or_else(|outcome| panic!("spends at the fill's bound connect: {outcome}"));
+    assert_eq!(
+        block.template.transactions.len(),
+        count,
+        "the template kept every spend"
+    );
+    let coinbase_weight = block.template.block.miner_transaction.weight();
+    assert!(
+        coinbase_weight <= COINBASE_RESERVE,
+        "the built coinbase is within the derived reserve"
+    );
+    let limit = block.weights.medians.limit().to_raw();
+    assert_eq!(
+        limit,
+        zone.saturating_mul(2),
+        "the early chain floors at the zone"
+    );
+    assert!(
+        block.weights.weight.to_raw() <= limit,
+        "the validator's weight is within twice the median"
+    );
+    let expected = u64::try_from(coinbase_weight).expect("fits") + bodies;
+    assert_eq!(
+        block.weights.weight,
+        BlockWeight::from_raw(expected),
+        "the admitted weight is the coinbase plus the spends"
+    );
+    assert!(
+        block.judged_by.contains(&CenRow::F14),
+        "the weight bound judged the block"
+    );
+    eprintln!(
+        "bound admission: {count} spends of {unit} B, bodies {bodies} B, bound {bound} B, block {} B",
+        block.weights.weight.to_raw()
     );
     scenario.close().await;
 }

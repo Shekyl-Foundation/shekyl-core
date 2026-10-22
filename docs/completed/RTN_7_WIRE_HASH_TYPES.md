@@ -112,6 +112,15 @@ with a reason, unnamed occurrences red.
   returns to zero (completeness is depth, not a trailing comma — the last
   field of a struct has none); signatures are buffered to the body's `{`.
   `pub(crate)` is not surface and is not scanned.
+  **UPDATE 2026-10-22.** A const whose initializer is the literal 32 is
+  the same subject. `[u8; NAME]` is reported under the key the literal
+  would have had, so naming `OUTPUT_KEY_LEN` or `CT_COMMITMENT_LEN` does
+  not retire `Output.key` or `CtBase.commitments`. The same pass names two
+  occurrences a literal scan could not see:
+  `BondPostKind::JoinMarket.endpoint` (the v3 onion key;
+  `shekyl-p-fetch::ServingEndpoint` wraps the record, and the bond wire
+  stays a bare array) and `build_coinbase_extra`'s transaction public key
+  (one class with `TxExtraField::PubKey`).
 - **Allowlist:** `ALLOWED: dict[str, Allow]` of
   `"<file>::<item>": Allow(reason, addressee)` — §3.2's rows, byte-exact.
   The addressee is a **field**, not a phrase inside the reason, so `check`

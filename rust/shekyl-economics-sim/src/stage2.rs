@@ -451,7 +451,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 carried_txs: year_carried,
                 demand_txs: year_demand,
                 expired_txs: year_expired,
-                long_term_median: chain.medians().long_term_effective_median.to_raw(),
+                long_term_median: chain.medians(&economic).long_term_effective_median.to_raw(),
                 last_block,
             });
             year_carried = 0;

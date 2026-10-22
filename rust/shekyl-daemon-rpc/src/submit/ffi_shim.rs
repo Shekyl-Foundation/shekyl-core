@@ -619,7 +619,8 @@ mod tests {
             ref_height: 150,
             root: [0xAA; 32],
             fee_per_byte: 7,
-            weight_limit: 149_400,
+            weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT)
+                .expect("the weight limit fits u64"),
             chain_height: 200,
             in_chain_height: 0,
             bond_record_bonded_total: 0,

@@ -51,8 +51,8 @@ use std::collections::HashSet;
 
 use shekyl_block_template::Fill;
 use shekyl_economics::{
-    burn::calc_burn_pct_at, penalty_free_weight, price_emission, CirculatingSupply,
-    ClosedShardCount, EconomicParams, EmissionInputs, PaidEmission,
+    burn::calc_burn_pct_at, price_emission, CirculatingSupply, ClosedShardCount, EconomicParams,
+    EmissionInputs, PaidEmission,
 };
 use shekyl_tx_weight::predict_weight;
 use shekyl_types::SHARD_LENGTH;
@@ -349,7 +349,6 @@ fn price_weight(
 /// at.
 struct Block<'a> {
     at: FeePoint<'a>,
-    economic: &'a EconomicParams,
     depth: u8,
     median: u64,
     honest: Fill<'a>,
@@ -382,8 +381,10 @@ impl<'a> Block<'a> {
             "the block's burn is production's at its volume and supply"
         );
         let median = last.medians.effective_median.to_raw();
+        let coinbase = u64::try_from(shekyl_wire::transaction::COINBASE_RESERVE).expect("fits");
         let honest = Fill::listed(
             median,
+            coinbase,
             last.already_generated,
             last.volume,
             economic,
@@ -391,9 +392,7 @@ impl<'a> Block<'a> {
             last.fees,
         )
         .expect("the fold listed this block");
-        let room = penalty_free_weight(median, economic)
-            .min(honest.bodies_weight_bound())
-            .saturating_sub(honest.bodies_weight());
+        let room = honest.penalty_free_body_room();
         let supply = last.supply;
         let closed_shards = ClosedShardCount::new(last.closed_shards);
         let honest_paid = price_weight(
@@ -402,12 +401,11 @@ impl<'a> Block<'a> {
             &at,
             supply,
             closed_shards,
-            honest.bodies_weight(),
+            honest.block_weight(),
             honest.fees(),
         );
         Self {
             at,
-            economic,
             depth: tree_depth_for_leaves(last.chain_leaves),
             median,
             honest,
@@ -422,15 +420,19 @@ impl<'a> Block<'a> {
     }
 
     /// The block at `bodies_weight` listing `total_fees`, as production
-    /// prices it.
+    /// prices it: the coinbase weight the honest fill carries is part of
+    /// the block.
     fn priced_at(&self, bodies_weight: u64, total_fees: u64) -> PaidEmission {
+        let block_weight = bodies_weight
+            .checked_add(self.honest.coinbase_weight())
+            .expect("a packing's block weight fits");
         price_weight(
             self.height,
             self.median,
             &self.at,
             self.supply,
             self.closed_shards,
-            bodies_weight,
+            block_weight,
             total_fees,
         )
     }
@@ -512,7 +514,7 @@ impl<'a> Block<'a> {
         recovery: PoolShare,
     ) {
         let bound = self.honest.bodies_weight_bound();
-        let free_ceiling = penalty_free_weight(self.median, self.economic).min(bound);
+        let free_ceiling = self.honest.penalty_free_bodies();
         for dropped in 0..=honest.count {
             let Some(kept_weight) = honest.kept_weight(dropped) else {
                 continue;
@@ -912,9 +914,10 @@ mod tests {
             params: &economic,
         };
         let honest_tx: OrdinaryTx = params.fee.ordinary_tx(&at);
-        let medians = medians_from(zone, zone);
+        let medians = medians_from(zone, zone, &economic);
         let mut fill = Fill::empty(
             medians.effective_median.to_raw(),
+            u64::try_from(shekyl_wire::transaction::COINBASE_RESERVE).expect("fits"),
             at.already_generated,
             volume,
             &economic,
@@ -953,14 +956,12 @@ mod tests {
         let economic = params.economic();
         let block = Block::new(&block_at(5, &params), &economic);
         let chosen = block.cheapest_packing(None, PoolShare::NONE);
-        let free = penalty_free_weight(block.median, block.economic)
-            .min(block.honest.bodies_weight_bound())
-            .saturating_sub(
-                block
-                    .honest_bodies()
-                    .kept_weight(0)
-                    .expect("nothing dropped"),
-            );
+        let free = block.honest.penalty_free_bodies().saturating_sub(
+            block
+                .honest_bodies()
+                .kept_weight(0)
+                .expect("nothing dropped"),
+        );
         assert_eq!(
             chosen.stuffed,
             free / chosen.weight,
@@ -1066,9 +1067,11 @@ mod tests {
             )
             .expect("priced")
         };
-        let before = split_block_emission(owed(block.honest.bodies_weight()), last.sigma_scaled).0;
+        // The penalty reads the block, coinbase included. The body's weight
+        // is added to that block weight; the coinbase's own weight stays.
+        let before = split_block_emission(owed(block.honest.block_weight()), last.sigma_scaled).0;
         let after = split_block_emission(
-            owed(block.honest.bodies_weight() + weight),
+            owed(block.honest.block_weight() + weight),
             last.sigma_scaled,
         )
         .0;
