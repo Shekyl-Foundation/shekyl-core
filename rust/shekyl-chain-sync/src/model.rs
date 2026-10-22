@@ -85,16 +85,18 @@ pub struct Sync<K> {
     fill_frontier: BlockHeight,
     /// The store's latch. Read, never published as the state.
     alarm: bool,
-    trust: Trust,
 }
 
 impl<K> Sync<K>
 where
     K: Copy + Ord + std::hash::Hash + std::fmt::Debug,
 {
-    /// Full verification starts the fill at genesis (`assumevalid = 0`).
+    /// `trust` is the node's verification posture. Until slice 6, [`Trust`]
+    /// has only the full posture, so [`Self::checkpoint`] is genesis and
+    /// this value is not read.
     #[must_use]
     pub fn new(trust: Trust) -> Self {
+        let _ = trust;
         Self {
             sessions: BTreeMap::new(),
             pending: BTreeMap::new(),
@@ -102,7 +104,6 @@ where
             best: CumulativeDifficulty::ZERO,
             fill_frontier: BlockHeight::ZERO,
             alarm: false,
-            trust,
         }
     }
 
@@ -138,7 +139,7 @@ where
                 best: self.best,
             };
         }
-        if self.fill_frontier > self.checkpoint() {
+        if self.fill_frontier > Self::checkpoint() {
             return SyncState::Following {
                 verified_to: self.fill_frontier,
             };
@@ -160,6 +161,11 @@ where
 
     /// Apply one event. `main` is the chain as of `now`. This step does
     /// not draw.
+    ///
+    /// # Errors
+    ///
+    /// The main view's own fault. A store that cannot answer is not a
+    /// chain, and it is not swallowed.
     pub fn handle<'id, H: HeaderView<'id>>(
         &mut self,
         event: Event<K>,
@@ -167,19 +173,19 @@ where
         _now: Instant,
         _rng: &mut impl RelayRng,
         out: &mut Vec<Command>,
-    ) {
+    ) -> Result<(), H::Fault> {
         let before = self.state();
         match event {
             Event::SessionOpened { session, transit } => {
                 let claim = self.pending.remove(&session);
                 self.sessions.insert(session, Session { transit, claim });
-                self.observe(main, None);
+                self.observe(main, None)?;
             }
             Event::SessionClosed { session } => {
                 self.sessions.remove(&session);
                 self.pending.remove(&session);
             }
-            Event::Tip { tip } => self.observe(main, Some(tip.height)),
+            Event::Tip { tip } => self.observe(main, Some(tip.height))?,
             Event::Latch { set } => self.alarm = set,
             Event::Fill { frontier } => self.fill_frontier = frontier,
         }
@@ -187,34 +193,39 @@ where
         if after != before {
             out.push(Command::Publish { state: after });
         }
+        Ok(())
     }
 
-    /// Full verification's checkpoint is genesis. The anchors are the
-    /// validator's; the fill reads this height.
-    fn checkpoint(&self) -> BlockHeight {
-        let _anchors = self.trust.anchors();
+    /// The fill's checkpoint. Genesis, because [`Trust`] has only the full
+    /// posture until slice 6: there is no pinned checkpoint short of
+    /// genesis for the fill to descend to.
+    const fn checkpoint() -> BlockHeight {
         BlockHeight::ZERO
     }
 
-    fn observe<'id, H: HeaderView<'id>>(&mut self, main: &H, at: Option<BlockHeight>) {
-        let Ok(tip) = main.tip() else {
-            return;
-        };
-        let Some(tip) = tip else {
+    /// Read the main chain's work. `Err` is the view's fault and is
+    /// returned. [`AtHeight::AboveTip`] is the view reporting that the
+    /// height is not on the chain, which leaves the last observation.
+    fn observe<'id, H: HeaderView<'id>>(
+        &mut self,
+        main: &H,
+        at: Option<BlockHeight>,
+    ) -> Result<(), H::Fault> {
+        let Some(tip) = main.tip()? else {
             self.local = Some(Local {
                 work: CumulativeDifficulty::ZERO,
             });
             self.best = CumulativeDifficulty::ZERO;
-            return;
+            return Ok(());
         };
         let height = at.unwrap_or(tip.height);
-        let Ok(AtHeight::Recorded(record)) = main.header_at(height) else {
-            return;
-        };
-        self.local = Some(Local {
-            work: record.cumulative_difficulty,
-        });
-        self.best = record.cumulative_difficulty;
+        if let AtHeight::Recorded(record) = main.header_at(height)? {
+            self.local = Some(Local {
+                work: record.cumulative_difficulty,
+            });
+            self.best = record.cumulative_difficulty;
+        }
+        Ok(())
     }
 }
 
@@ -230,7 +241,7 @@ mod tests {
     };
     use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
     use shekyl_draw_rng::RelayRng;
-    use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot};
+    use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, ChainCount, CurveTreeRoot};
     use shekyl_wire::BlockHeader;
 
     use super::{Command, Event, Sync};
@@ -258,17 +269,20 @@ mod tests {
         }
     }
 
+    #[derive(Debug, PartialEq, Eq)]
+    struct StoreDown;
+
     struct Faults;
 
     impl HeaderView<'static> for Faults {
-        type Fault = ();
+        type Fault = StoreDown;
 
-        fn tip(&self) -> Result<Option<Tip>, ()> {
-            Err(())
+        fn tip(&self) -> Result<Option<Tip>, StoreDown> {
+            Err(StoreDown)
         }
 
-        fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, ()> {
-            Err(())
+        fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreDown> {
+            Err(StoreDown)
         }
     }
 
@@ -283,13 +297,14 @@ mod tests {
             std::time::Instant::now(),
             &mut NoDraw,
             &mut out,
-        );
+        )
+        .expect("the view answers");
         out
     }
 
-    fn claim(height: u64, work: u128) -> PeerClaim {
+    fn claim(count: u64, work: u128) -> PeerClaim {
         PeerClaim {
-            height: BlockHeight::from_raw(height),
+            count: ChainCount::from_raw(count),
             work: CumulativeDifficulty::from_raw(work),
         }
     }
@@ -366,7 +381,8 @@ mod tests {
             std::time::Instant::now(),
             &mut NoDraw,
             &mut out,
-        );
+        )
+        .expect("the view answers");
         assert!(out.is_empty(), "one session still has a view");
         sync.handle(
             Event::SessionClosed { session: 2 },
@@ -374,7 +390,8 @@ mod tests {
             std::time::Instant::now(),
             &mut NoDraw,
             &mut out,
-        );
+        )
+        .expect("the view answers");
         assert_eq!(
             out,
             vec![Command::Publish {
@@ -396,7 +413,8 @@ mod tests {
             std::time::Instant::now(),
             &mut NoDraw,
             &mut out,
-        );
+        )
+        .expect("the view answers");
         assert_eq!(
             sync.state(),
             SyncState::Following {
@@ -410,7 +428,8 @@ mod tests {
             std::time::Instant::now(),
             &mut NoDraw,
             &mut out,
-        );
+        )
+        .expect("the view answers");
         assert!(sync.alarm());
         assert_eq!(out.len(), published, "the latch is not the state");
         assert_eq!(
@@ -422,20 +441,52 @@ mod tests {
     }
 
     #[test]
-    fn a_store_fault_is_not_a_view() {
+    fn a_store_fault_reaches_the_caller() {
         let mut sync = Sync::new(Trust::UNANCHORED);
         let mut out = Vec::new();
-        sync.handle(
-            Event::SessionOpened {
-                session: 1,
-                transit: Duration::from_secs(1),
-            },
-            &Faults,
-            std::time::Instant::now(),
-            &mut NoDraw,
-            &mut out,
-        );
-        assert_eq!(sync.state(), SyncState::NoView);
+        let fault = sync
+            .handle(
+                Event::SessionOpened {
+                    session: 1,
+                    transit: Duration::from_secs(1),
+                },
+                &Faults,
+                std::time::Instant::now(),
+                &mut NoDraw,
+                &mut out,
+            )
+            .expect_err("tip's fault");
+        assert_eq!(fault, StoreDown);
+        assert!(out.is_empty(), "a failed read publishes nothing");
+
+        struct HeaderFaults;
+        impl HeaderView<'static> for HeaderFaults {
+            type Fault = StoreDown;
+            fn tip(&self) -> Result<Option<Tip>, StoreDown> {
+                Ok(Some(Tip {
+                    height: BlockHeight::from_raw(0),
+                    hash: BlockHash::from_bytes([1; 32]),
+                }))
+            }
+            fn header_at(&self, _: BlockHeight) -> Result<AtHeight<HeaderRecord>, StoreDown> {
+                Err(StoreDown)
+            }
+        }
+        let fault = sync
+            .handle(
+                Event::Tip {
+                    tip: Tip {
+                        height: BlockHeight::from_raw(0),
+                        hash: BlockHash::from_bytes([1; 32]),
+                    },
+                },
+                &HeaderFaults,
+                std::time::Instant::now(),
+                &mut NoDraw,
+                &mut out,
+            )
+            .expect_err("header_at's fault");
+        assert_eq!(fault, StoreDown);
         assert!(out.is_empty());
     }
 
@@ -491,7 +542,8 @@ mod tests {
             std::time::Instant::now(),
             &mut NoDraw,
             &mut out,
-        );
+        )
+        .expect("the view answers");
         // The local chain is the best chain, so the state stays synced.
         assert!(out.is_empty());
         assert_eq!(sync.state(), SyncState::Synced);

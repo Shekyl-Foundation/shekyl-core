@@ -11,15 +11,16 @@
 //! be a chain.
 
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::BlockHeight;
+use shekyl_types::ChainCount;
 
 /// What a peer says its chain is. The handshake and an announce both
 /// arrive as this, and a headers response's `tip_work` replaces it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PeerClaim {
     /// The peer's block count: the handshake's `current_height`.
-    /// Genesis alone is 1.
-    pub height: BlockHeight,
+    /// Genesis alone is 1. A count, not an ordinal
+    /// (`HEIGHT_SEMANTICS.md` C9).
+    pub count: ChainCount,
     /// The peer's cumulative work through those blocks.
     pub work: CumulativeDifficulty,
 }
@@ -36,7 +37,7 @@ pub enum PayloadRefused {
 }
 
 pub(crate) fn admit(claim: PeerClaim) -> Result<PeerClaim, PayloadRefused> {
-    let count = claim.height.to_raw();
+    let count = claim.count.to_raw();
     if count == 0 {
         return Err(PayloadRefused::Height);
     }
