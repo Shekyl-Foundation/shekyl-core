@@ -96,9 +96,10 @@ const HANDSHAKE_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// Read-chunk size for draining the socket into the framer.
 const READ_CHUNK: usize = 4096;
 
-/// How long a **managed** `tor` gets to exit on `SIGTERM` before the shutdown escalates
-/// to `SIGKILL`. `tor` flushes and exits within ~a second; this is the bound that makes
-/// "SIGTERM + wait" a *bounded* wait, never an unbounded hang if `tor` wedges.
+/// How long a managed `tor` gets to exit after the owning connection is closed
+/// before shutdown escalates to a kill. On Unix the close is followed by
+/// `SIGTERM`. `tor` flushes and exits within about a second; this bound keeps
+/// the wait from hanging if `tor` ignores both.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 /// The read half of a control connection, whatever carries it: a TCP connection to an
@@ -870,14 +871,14 @@ async fn watch_child<N, F>(
     }
 }
 
-/// Shut the child down: **`SIGTERM` → bounded wait → kill → reap**.
+/// Shut the child down after [`TorControlClient::on_stop`] has closed the owning
+/// connection.
 ///
-/// Tolerant of a child that has just exited: the `SIGTERM` is then a harmless `ESRCH`
-/// and the wait reaps at once. The kill escalation is what keeps the wait *bounded*:
-/// "SIGTERM + wait" without it would hang the wallet forever if `tor` ever wedged.
+/// The close is the graceful route: tor's `lost_owning_controller` runs
+/// `tor_cleanup`. On Unix, `SIGTERM` is a second nudge and is harmless if the
+/// child has already exited (`ESRCH`). The wait is bounded by [`SHUTDOWN_GRACE`];
+/// a child still running is killed and reported as [`TorExit::Killed`].
 async fn shut_down(child: &mut Child) -> TorExit {
-    // Ask tor to exit gracefully (SIGTERM on Unix; DQ-T0.1). A no-op off Unix, where the
-    // timeout → `kill()` escalation is the whole shutdown.
     request_graceful_stop(child);
     match timeout(SHUTDOWN_GRACE, child.wait()).await {
         Ok(Ok(status)) => TorExit::Reaped(status),
@@ -891,7 +892,7 @@ async fn shut_down(child: &mut Child) -> TorExit {
     }
 }
 
-/// Request a graceful stop of a managed `tor` — `SIGTERM` on Unix (DQ-T0.1). Harmless if
+/// `SIGTERM`, the Unix nudge after the owning connection is closed. Harmless if
 /// the child already exited (`ESRCH`).
 #[cfg(unix)]
 fn request_graceful_stop(child: &Child) {
@@ -905,12 +906,12 @@ fn request_graceful_stop(child: &Child) {
     }
 }
 
-/// No graceful-stop signal off Unix: the `wait`-timeout → `Child::kill`
-/// (`TerminateProcess`) escalation drives shutdown there instead. Closing the owning
-/// control connection is the ruled graceful route (§4.7) and saves as much: tor logs
-/// the owning controller's close and raises `SIGTERM` itself (`lost_owning_controller`
-/// in `control.c`), so `tor_cleanup` forces the same `state` save on both routes, on
-/// every platform. Increment 3 replaces this `SIGTERM` with that close.
+/// No signal off Unix. [`TorControlClient::on_stop`] has already closed the owning
+/// connection, which is the graceful route on every platform
+/// (`TOR_SUPERVISOR.md` §4.7): tor logs the close and raises `SIGTERM` itself
+/// (`lost_owning_controller` in `control.c`), so `tor_cleanup` runs. A tor that
+/// ignores that close is still killed after [`SHUTDOWN_GRACE`] and reported as
+/// [`TorExit::Killed`]. A kill is not a clean stop.
 #[cfg(not(unix))]
 fn request_graceful_stop(_child: &Child) {}
 
@@ -1008,8 +1009,8 @@ impl Actor for TorControlClient {
         ))
     }
 
-    /// Clean shutdown: withdraw onions this actor published, then kill the
-    /// managed child. `TAKEOWNERSHIP` (landed in PR-2) is the *crash* backstop — a
+    /// Clean shutdown: withdraw onions this actor published, close the owning
+    /// control connection, then reap the managed child. `TAKEOWNERSHIP` (landed in PR-2) is the *crash* backstop — a
     /// panic / SIGKILL sends no `on_stop`, and the control connection dropping then exits
     /// `tor` — but on a clean stop the connection is still open here, so this is the
     /// primary path. Attached mode has no child to kill. (The bootstrap poll task is
@@ -1039,8 +1040,18 @@ impl Actor for TorControlClient {
                 break;
             }
         }
+        // kameo runs `on_stop` after the mailbox loop, so `death` is the signal
+        // the actor already recorded. Copy it before the await and pass that
+        // copy on: the classification is the one decided here. Closing the
+        // write half is §4.7. Tor reads EOF and `lost_owning_controller` runs
+        // `tor_cleanup`. A death already recorded means the connection or the
+        // process ended first, and that stop is not this close.
+        let death = self.death;
+        if death.is_none() {
+            self.writer.as_mut().shutdown().await.ok();
+        }
         if let Some(watch) = self.child.take() {
-            watch.finish(self.death).await;
+            watch.finish(death).await;
         }
         Ok(())
     }
@@ -2618,28 +2629,23 @@ mod live_tests {
             "the managed tor listens on no control port"
         );
 
-        // Shutdown proof: stop → on_stop → SIGTERM + bounded wait → the child is reaped.
+        // Shutdown proof: stop → on_stop closes the owning connection → bounded
+        // wait → the child is reaped. Unix also sends SIGTERM as a nudge.
         actor.stop_gracefully().await.expect("graceful stop");
         actor.wait_for_shutdown().await;
 
         // Truthful reap check: a real `wait()`-yielded exit status delivered through the
-        // observer, not a pid probe (which races PID reuse). The platform-correct outcome:
-        // on Unix a cooperative tor exits on SIGTERM (clean `Reaped`); off Unix there is no
-        // graceful signal, so shutdown escalates to the SIGKILL fallback (`Killed`). Both
-        // are a *reaped* child delivered through the observer — the point of the test.
+        // observer, not a pid probe (which races PID reuse). A cooperative tor exits
+        // because its owning connection closed (`TOR_SUPERVISOR.md` §4.7), on every
+        // platform. A tor that ignores the close is killed, and that outcome is
+        // `TorExit::Killed` — this test is a cooperative stop, so it is `Reaped`.
         let exit = tokio::time::timeout(Duration::from_secs(10), exit_rx)
             .await
             .expect("on_stop reaped the child within the bound")
             .expect("exit observer delivered the outcome");
-        #[cfg(unix)]
         assert!(
             matches!(exit, TorExit::Reaped(_)),
-            "on Unix, SIGTERM reaps with a status, not the SIGKILL fallback: {exit:?}"
-        );
-        #[cfg(not(unix))]
-        assert!(
-            matches!(exit, TorExit::Killed),
-            "off Unix, no graceful signal exists, so shutdown reaps via the SIGKILL fallback: {exit:?}"
+            "closing the owning connection reaps tor with a status: {exit:?}"
         );
     }
 }
