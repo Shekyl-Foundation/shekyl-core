@@ -936,8 +936,9 @@ fn the_fill_and_the_template_price_the_same_block() {
 ///
 /// The bound is `2·median −` the derived reserve, and the reserve covers
 /// the coinbase, so the block the bodies make is one the penalty accepts.
-/// Filler spends are refused at CEN-I13, so this does not call `validate`;
-/// the admission of a real body is the ingest scenario's. Restoring a
+/// Filler spends are refused at CEN-I13, so this does not call `validate`.
+/// The validator's admission of real spends at this bound is
+/// `shekyl-chain-ingest`'s `bodies_at_the_fills_bound_are_admitted`. Restoring a
 /// 600-byte reserve makes `build` return `BlockTooBig` here.
 #[test]
 fn bodies_at_the_fills_bound_build_a_block_within_the_limit() {
