@@ -265,11 +265,14 @@ pub fn install_process_sockets(sockets: shekyl_seam::Sockets) -> bool {
     // The same lock [`shekyl_seam_bind`] holds from its table read through
     // the hub store. A bind in that window makes this install wait, then
     // see the hub and refuse: the hub keeps the table it was built with.
-    #[cfg(test)]
-    INSTALL_AT_LOCK.store(1, std::sync::atomic::Ordering::SeqCst);
     let _bind = seam_bind_lock().lock();
+    if hub().is_some() {
+        return false;
+    }
+    // A test plants a bind here, between the hub check and the table
+    // store. The check below is what makes that bind refuse the install.
     #[cfg(test)]
-    INSTALL_AT_LOCK.store(2, std::sync::atomic::Ordering::SeqCst);
+    run_install_hook();
     if hub().is_some() {
         return false;
     }
@@ -280,11 +283,20 @@ pub fn install_process_sockets(sockets: shekyl_seam::Sockets) -> bool {
     true
 }
 
-/// Set by [`install_process_sockets`] to 1 just before it takes
-/// [`seam_bind_lock`], and to 2 once it holds the lock. The race test
-/// reads it.
+/// Runs once, between install's hub check and its table store.
 #[cfg(test)]
-static INSTALL_AT_LOCK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+fn run_install_hook() {
+    let hook = INSTALL_HOOK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+static INSTALL_HOOK: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
 
 /// The process's one admission table. A new binding does not mint ids
 /// again: a `reap` that arrives after the swap names an id the new hub
@@ -903,66 +915,40 @@ fn routing_c(connector: ConnectorId) -> ShekylSeamObserved {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
-    use std::time::{Duration, Instant};
 
     use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
     use shekyl_seam::{Hub, Post};
     use shekyl_timing_engine::Clock;
 
-    use super::{install_process_sockets, process_sockets, seam_bind_lock, store, INSTALL_AT_LOCK};
+    use super::{install_process_sockets, process_sockets, seam_bind_lock, store, INSTALL_HOOK};
 
-    /// A bind that has read the table and not yet stored the hub holds
-    /// [`seam_bind_lock`]. An install that arrives in that window waits,
-    /// then sees the hub and refuses. Red edit: drop the lock from
-    /// `install_process_sockets`. The install returns before the hub is
-    /// stored, and the hub is left on the table it did not install.
+    /// A bind that lands between install's hub check and its table store
+    /// refuses the install. The hook is that bind: it stores the hub while
+    /// install holds the lock. Red edit: delete the hub check after the
+    /// hook. The install returns true and the hub is left on the table it
+    /// was not built with.
     #[test]
     fn a_bind_holding_the_lock_refuses_the_install() {
-        let gate = seam_bind_lock().lock();
+        let _gate = seam_bind_lock().lock();
         store(None);
-        INSTALL_AT_LOCK.store(0, Ordering::SeqCst);
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let admitted = install_process_sockets(shekyl_seam::Sockets::new());
-            done_tx.send(admitted).expect("the test is listening");
-        });
-        let started = Instant::now();
-        while INSTALL_AT_LOCK.load(Ordering::SeqCst) != 1 {
-            assert!(
-                started.elapsed() < Duration::from_secs(2),
-                "install never reached the lock"
+        *INSTALL_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(|| {
+            let clock: Arc<dyn Clock + Send + Sync> = super::process_clock();
+            let hub = Hub::new(
+                process_sockets(),
+                InboundCeiling::Unbounded(UnboundedReason::Unlimited),
+                Arc::new(|_: Post| {}),
+                clock,
             );
-            std::thread::yield_now();
-        }
-        std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(
-            INSTALL_AT_LOCK.load(Ordering::SeqCst),
-            1,
-            "install took the lock before the bind stored the hub"
-        );
-        assert!(
-            done_rx.try_recv().is_err(),
-            "install returned while the bind still held the lock"
-        );
-        let clock: Arc<dyn Clock + Send + Sync> = super::process_clock();
-        let hub = Hub::new(
-            process_sockets(),
-            InboundCeiling::Unbounded(UnboundedReason::Unlimited),
-            Arc::new(|_: Post| {}),
-            clock,
-        );
-        store(Some(hub));
-        drop(gate);
-        let admitted = done_rx
-            .recv_timeout(Duration::from_secs(2))
-            .expect("install finished after the bind released the lock");
+            store(Some(hub));
+        }));
+        let admitted = install_process_sockets(shekyl_seam::Sockets::new());
         assert!(
             !admitted,
-            "a bind that stored its hub before releasing the lock refuses the install"
+            "a bind stored between the hub check and the table store refuses the install"
         );
-        let _gate = seam_bind_lock().lock();
         store(None);
     }
 }
