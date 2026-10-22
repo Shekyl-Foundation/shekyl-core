@@ -817,8 +817,12 @@ its PR leaves draft.
 `data/tsr-q8q9/2026-10-19-x86/`). A seed minutes old, n=20: p50 2.38 s, max
 3.31 s, against a cold arm p50 11.03 s, max 24.94 s. The same seed at about
 3 h (n=10, 2026-10-19 17:06Z): p50 2.38 s, max 2.77 s. At about 24 h (n=10,
-2026-10-20 14:14Z): p50 2.39 s, max 2.87 s. The floor device's seeded start,
-including the time to copy the cache on its storage, is not measured yet.
+2026-10-20 14:14Z): p50 2.39 s, max 2.87 s. **The floor device, 2026-10-22**
+(tor 0.4.9.14, n=10, the copy on its SD card): the four files were 35,555,271
+bytes (`cached-microdescs` absent; the journal 32,302,187). The copy was p50
+2.10 s, max 5.18 s. Bootstrap after the copy was p50 3.84 s, max 4.13 s. The
+seeded start, copy included, was p50 6.01 s, max 8.98 s. Raw rows are in
+`shekyl-dev`, `data/tsr-q8q9/2026-10-22-floor/`.
 
 ## 11. Interfaces
 
