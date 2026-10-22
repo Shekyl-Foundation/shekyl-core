@@ -378,10 +378,16 @@ def numbers(row: dict | None) -> dict[str, float] | None:
 
 
 def spreads() -> dict[str, dict[str, float]]:
-    """Per scenario, per field: the widest max-min across the three noise
-    points. A point that lacks the scenario does not tighten the band."""
-    grouped: dict[str, dict[str, list[float]]] = {}
+    """Per scenario, per field: the widest within-point seed spread.
+
+    Each noise point (the L11 record, the L13 record, the end pin) has
+    its own five seeds. The band is the max of those spreads. Pooling
+    the points together would put the drift into the band.
+    """
+    points: dict[str, dict[str, dict[str, list[float]]]] = {}
     for row in load_jsonl(OUT_DIR / "noise.jsonl"):
+        point = row.get("label") or row["commit"]
+        grouped = points.setdefault(point, {})
         for name, vector in row["vector"].items():
             nums = numbers(vector)
             if not nums:
@@ -390,13 +396,12 @@ def spreads() -> dict[str, dict[str, float]]:
             for field, value in nums.items():
                 bucket[field].append(value)
     spread: dict[str, dict[str, float]] = {}
-    for name, fields in grouped.items():
-        spread[name] = {}
-        for field, values in fields.items():
-            if len(values) < 2:
-                spread[name][field] = 0.0
-            else:
-                spread[name][field] = max(values) - min(values)
+    for grouped in points.values():
+        for name, fields in grouped.items():
+            dest = spread.setdefault(name, {})
+            for field, values in fields.items():
+                width = 0.0 if len(values) < 2 else max(values) - min(values)
+                dest[field] = max(dest.get(field, 0.0), width)
     return spread
 
 
@@ -770,11 +775,12 @@ def cmd_table() -> None:
     band = spreads()
     (OUT_DIR / "noise-spread.json").write_text(json.dumps(band, indent=2, sort_keys=True) + "\n")
     measured: dict[str, dict] = {}
+    # Merge parents stay in merges.json. Putting them in this chain
+    # turns "the crate did not exist yet" into a population step.
     for name in (
         "sim-commits.jsonl",
         "dep-commits.jsonl",
         "tail.jsonl",
-        "merges.jsonl",
     ):
         for row in load_jsonl(OUT_DIR / name):
             if row.get("seed", PIN_SEED) != PIN_SEED:
