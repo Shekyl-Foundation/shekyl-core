@@ -302,9 +302,10 @@ impl PortableMap for RequestHeaders {
     }
 }
 
-/// `NOTIFY_RESPONSE_HEADERS` (2012). Preimages from the first locator hash
-/// the responder holds, the responder's claimed cumulative work, and
-/// whether another response follows.
+/// `NOTIFY_RESPONSE_HEADERS` (2012). Preimages starting at the child of
+/// the first locator hash the responder holds: the first preimage's
+/// parent is that hash. Then the responder's claimed cumulative work,
+/// and whether another response follows.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResponseHeaders {
     /// Each entry is a [`shekyl_wire::PowBlob`]'s bytes.

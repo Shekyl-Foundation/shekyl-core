@@ -19,6 +19,8 @@
 #[cfg(test)]
 mod harness;
 #[cfg(test)]
+mod proof;
+#[cfg(test)]
 mod select_tests;
 
 mod branch;
@@ -32,7 +34,7 @@ mod tree;
 pub use claim::{PayloadRefused, PeerClaim};
 pub use model::{
     BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, ProveItem,
-    Proved, Sync, BODY_RATE_FLOOR, BODY_REQUESTS_IN_FLIGHT, HEADERS_RATE_FLOOR,
+    Proved, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
 };
 pub use shekyl_chain_rules::HeaderView;
 pub use state::SyncState;

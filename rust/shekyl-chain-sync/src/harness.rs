@@ -4,17 +4,16 @@
 // BSD-3-Clause
 
 //! The CS-2 harness (brief §5). Scripted peers over synthetic forks,
-//! an in-process executor (`MockSubstrate`), and a fake entry. Each
-//! test names the property it pins. The captured-chain agreement
+//! an in-process executor (`ProductionSubstrate`), and a fake entry.
+//! Each test names the property it pins. The captured-chain agreement
 //! between the two `form` entries lives in `shekyl-chain-ingest`.
 
 use std::time::{Duration, Instant};
 
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
-use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
-    form_header, AtHeight, FakechainSchedule, FormAttempt, HeaderRecord, HeaderView, RuleSet,
-    SettlementEpochBlocks, Tip, Trust,
+    AtHeight, FakechainSchedule, HeaderRecord, HeaderView, RuleSet, SettlementEpochBlocks, Tip,
+    Trust,
 };
 use shekyl_difficulty::{CumulativeDifficulty, MTP_WINDOW_USIZE, N_USIZE};
 use shekyl_draw_rng::{RelayRng, SplitMix64};
@@ -29,7 +28,8 @@ fn cap(blocks: u64) -> RuleSet {
     let epoch = SettlementEpochBlocks::new(512).expect("512");
     let schedule =
         FakechainSchedule::new(epoch, BlockCount::from_raw(blocks)).expect("cap inside the epoch");
-    RuleSet::fakechain(None, schedule)
+    // Target 1: every RandomX output satisfies, so a nonce of 0 is a proof.
+    RuleSet::fakechain(core::num::NonZeroU128::new(1), schedule)
 }
 
 struct NoDraw;
@@ -49,6 +49,30 @@ impl RelayRng for Words {
 }
 
 /// Main chain through `fork`, then the run's headers above it.
+/// The chain's headers, with work `height + 1`. A fixed target of 1 adds
+/// 1 per block, so a fork can outweigh a short main chain. The planted
+/// mock work cannot: it is the DAA constant times the height.
+struct UnitWork<H>(H);
+
+impl<'id, H: HeaderView<'id>> HeaderView<'id> for UnitWork<H> {
+    type Fault = H::Fault;
+
+    fn tip(&self) -> Result<Option<Tip>, Self::Fault> {
+        self.0.tip()
+    }
+
+    fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Self::Fault> {
+        Ok(match self.0.header_at(height)? {
+            AtHeight::Recorded(mut record) => {
+                record.cumulative_difficulty =
+                    CumulativeDifficulty::from_raw(u128::from(height.to_raw()) + 1);
+                AtHeight::Recorded(record)
+            }
+            other => other,
+        })
+    }
+}
+
 struct Along<'a> {
     prefix: &'a [HeaderRecord],
     extra: &'a [HeaderRecord],
@@ -115,18 +139,8 @@ fn formed_on<'id, H>(
     let target = shekyl_chain_rules::target_claim(view, connecting, rules)
         .expect("the view answers")
         .expect("the target is claimed");
-    let pow = PowBlob::read(&block.pow_blob()).expect("preimage");
-    let formed = form_header(
-        &pow,
-        rules,
-        &MockSubstrate::default(),
-        seed,
-        target,
-        FormAttempt::FIRST,
-    )
-    .expect("the mock answers")
-    .expect("the header forms");
-    assert_eq!(formed.previous(), parent);
+    // The proof is the executor's one real hash, not a second one here.
+    let _ = (rules, seed, target, parent);
 }
 
 fn open_and_claim<'id, R, H>(sync: &mut Sync<u8, R>, main: &H, session: u8, work: u128)
@@ -213,18 +227,13 @@ where
         let _ = class;
         let mut results = Vec::new();
         for item in items {
-            let pow = PowBlob::read(&item.pow).expect("preimage");
-            let formed = form_header(
-                &pow,
-                &item.rule_set,
-                &MockSubstrate::default(),
-                item.seed,
-                item.target,
-                item.attempt,
-            )
-            .expect("the mock answers")
-            .expect("the header forms");
-            results.push(Proved::Formed(Box::new(formed)));
+            match crate::proof::prove_item(&item) {
+                Ok(formed) => results.push(Proved::Formed(Box::new(formed))),
+                Err(refused) => {
+                    results.push(Proved::Refused(refused));
+                    break;
+                }
+            }
         }
         let mut next = Vec::new();
         sync.handle(
@@ -580,17 +589,9 @@ fn a_proof_refusal_closes_and_a_stale_does_not() {
             })
             .expect("the heavier header is proved");
         // The seed the view would not claim. `judge_header` reports Stale.
-        let pow = PowBlob::read(&item.pow).unwrap();
-        let formed = form_header(
-            &pow,
-            &item.rule_set,
-            &MockSubstrate::default(),
-            BlockHash::from_bytes([9; 32]),
-            item.target,
-            item.attempt,
-        )
-        .expect("the mock answers")
-        .expect("a wrong seed still forms");
+        let mut item = item;
+        item.seed = BlockHash::from_bytes([9; 32]);
+        let formed = crate::proof::prove_item(&item).expect("target 1 accepts the altered seed");
         out.clear();
         sync.handle(
             Event::Proven {
@@ -746,7 +747,8 @@ fn a_past_cap_run_holds_only_its_window() {
     let main = chain_of(400);
     let window = N_USIZE.max(MTP_WINDOW_USIZE).saturating_add(8);
     let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
-    main.with_view(|view| {
+    main.with_view(|raw| {
+        let view = UnitWork(raw);
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
         sync.handle(
@@ -763,6 +765,7 @@ fn a_past_cap_run_holds_only_its_window() {
         let mut parent = prefix[0].hash;
         let mut timestamp = prefix[0].header.timestamp;
         let steps = u64::try_from(window).unwrap() + 20;
+        let mut peak = 0usize;
         for step in 0..steps {
             let extra = sync.run_records(1);
             let along = Along {
@@ -783,16 +786,16 @@ fn a_past_cap_run_holds_only_its_window() {
                 u128::MAX,
                 step + 1 < steps,
             );
+            peak = peak.max(sync.run_len(1));
         }
-        let held = sync.run_len(1);
-        assert!(
-            held <= window,
-            "the run held {held} headers; the window is {window}"
-        );
         let sent = usize::try_from(steps).unwrap();
         assert!(
-            held + 8 < sent,
-            "the run kept every header it was sent ({held} of {sent})"
+            peak <= window,
+            "the run held {peak} headers; the window is {window}"
+        );
+        assert!(
+            peak + 8 < sent,
+            "the run kept every header it was sent ({peak} of {sent})"
         );
     });
 }
@@ -808,7 +811,8 @@ fn the_evidence_draw_is_uniform_over_the_waiting_candidates() {
     let mut parent = prefix[0].hash;
     let mut timestamp = prefix[0].header.timestamp;
     let mut scratch = Sync::new(Trust::UNANCHORED, move |_| rules);
-    main.with_view(|view| {
+    main.with_view(|raw| {
+        let view = UnitWork(raw);
         let tip = view.tip().unwrap().unwrap();
         let mut out = Vec::new();
         scratch
@@ -847,7 +851,8 @@ fn the_evidence_draw_is_uniform_over_the_waiting_candidates() {
     for seed in 0..trials {
         let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
         let mut rng = SplitMix64::new(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-        main.with_view(|view| {
+        main.with_view(|raw| {
+            let view = UnitWork(raw);
             let tip = view.tip().unwrap().unwrap();
             let mut out = Vec::new();
             sync.handle(

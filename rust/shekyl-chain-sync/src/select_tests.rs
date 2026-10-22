@@ -22,7 +22,7 @@ use shekyl_types::{
 };
 use shekyl_wire::{BlockHeader, PowBlob};
 
-use crate::model::{Event, Proved, Sync, HEADERS_RATE_FLOOR};
+use crate::model::{Event, Proved, Sync, SYNC_RATE_FLOOR};
 use crate::{Command, PeerClaim};
 
 fn issued(_: BlockHeight) -> RuleSet {
@@ -437,7 +437,7 @@ fn a_header_deadline_is_transit_plus_the_response_bound() {
         Command::RequestHeaders { deadline, .. } => Some(*deadline),
         _ => None,
     });
-    let secs = 30 + HEADERS_RESPONSE_BYTES / HEADERS_RATE_FLOOR;
+    let secs = 30 + HEADERS_RESPONSE_BYTES / SYNC_RATE_FLOOR;
     assert_eq!(deadline, Some(now + Duration::from_secs(secs)));
 }
 
@@ -579,7 +579,7 @@ fn adopt_formed<'id, R, H>(
 /// difficulty window and a seed point, and a second branch forks off that
 /// run at height 2,000. `handle` is given the fixed main view every time.
 #[test]
-fn a_header_run_above_a_fixed_main_chain_joins_the_tree() {
+fn an_unverified_header_run_above_a_fixed_main_chain_joins_the_tree() {
     const RUN: u64 = 3_000;
     const FORK_AT: u64 = 2_000;
     let rules = cap(64);
@@ -664,8 +664,11 @@ fn a_header_run_above_a_fixed_main_chain_joins_the_tree() {
 /// Adopting `n` headers, reselecting after each, loads each node
 /// O(log n) times. A walk from the tip down to the fork would load
 /// `n(n + 1) / 2` nodes and miss the bound.
+///
+/// These headers are not verified. The longhash is the mock that
+/// accepts every nonce. The subject is the tree, not the proof.
 #[test]
-fn adopting_ten_thousand_headers_does_not_walk_the_branch() {
+fn adopting_ten_thousand_unverified_headers_does_not_walk_the_branch() {
     const N: u64 = 10_000;
     let rules = fixed_rules();
     let main = chain_of(101);

@@ -27,25 +27,19 @@ use crate::locator::{locator, locator_heights};
 use crate::state::SyncState;
 use crate::tree::{HeaderTree, Star};
 
-/// Bytes per second assumed for a header-request deadline.
+/// Bytes per second assumed for a header or body request's deadline.
 ///
-/// A full header response is [`HEADERS_RESPONSE_BYTES`] (2 MiB). At 8 KiB/s
-/// that response takes 256 seconds, which is slow for a single Tor stream
-/// and far below a clearnet rate, so an honest peer on Tor is not declared
-/// late and a stalled peer is not waited on for a LAN round trip.
+/// One rate: the two deadlines are not different measurements. A full
+/// header response is [`HEADERS_RESPONSE_BYTES`] (2 MiB). At 8 KiB/s that
+/// response takes 256 seconds, which is slow for a single Tor stream and
+/// far below a clearnet rate, so an honest peer on Tor is not declared
+/// late and a stalled peer is not waited on for a LAN round trip. A body
+/// deadline uses the same rate on the bytes the request asked for.
 ///
-/// Assumption, replaced by CS-Q11's measurement of headers per second over
-/// Tor on the floor device (the slow path; the clearnet figure is the
-/// other one).
-pub const HEADERS_RATE_FLOOR: u64 = 8 * 1024;
-
-/// Bytes per second assumed for a body-request deadline.
-///
-/// Assumption, replaced by CS-Q11's measurement of body bytes per second
-/// over Tor on the floor device. The same floor as the header stream: a
-/// stalled peer is not waited on for a clearnet round trip, and an honest
-/// peer on Tor is not declared late.
-pub const BODY_RATE_FLOOR: u64 = 8 * 1024;
+/// Assumption, replaced by CS-Q11's measurement of bytes per second over
+/// Tor on the floor device. Split it only if that measurement shows the
+/// header stream and the body stream need different floors.
+pub const SYNC_RATE_FLOOR: u64 = 8 * 1024;
 
 /// How many body spans may be outstanding at once.
 ///
@@ -53,7 +47,7 @@ pub const BODY_RATE_FLOOR: u64 = 8 * 1024;
 /// floor device can have in flight before the entry's room is the limit.
 pub const BODY_REQUESTS_IN_FLIGHT: usize = 4;
 
-const _: () = assert!(HEADERS_RESPONSE_BYTES / HEADERS_RATE_FLOOR == 256);
+const _: () = assert!(HEADERS_RESPONSE_BYTES / SYNC_RATE_FLOOR == 256);
 
 /// What the connector hands the model.
 #[derive(Clone, Debug)]
@@ -422,6 +416,8 @@ pub struct Sync<K, R> {
     pub(crate) seats: Option<u32>,
     /// Bound bodies waiting for a seat.
     pub(crate) held: Vec<BoundArrival<K>>,
+    /// Offered arrivals waiting for the entry's reply, keyed by tag.
+    pub(crate) outstanding: Vec<BoundArrival<K>>,
     /// CEN-C1's wall clock. The model does not read one.
     pub(crate) wall: Timestamp,
     /// The rule set in force at a height. The reorg cap is that set's.
@@ -462,6 +458,7 @@ where
             next_tag: 1,
             seats: None,
             held: Vec::new(),
+            outstanding: Vec::new(),
             wall: Timestamp::from_raw(1_700_000_100),
             rules,
             fill_frontier: BlockHeight::ZERO,
@@ -558,6 +555,13 @@ where
     #[must_use]
     pub(crate) fn contains_header(&self, hash: BlockHash) -> bool {
         self.tree.contains(hash)
+    }
+
+    /// Whether `hash` was marked invalid, with its descendants.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn remembers_header(&self, hash: BlockHash) -> bool {
+        self.tree.remembers(hash)
     }
 
     /// Node loads since the tree was built, or since [`Self::reset_visits`].
@@ -701,6 +705,9 @@ where
                     self.header_request = None;
                 }
                 self.body_requests.retain(|req| req.session != session);
+                self.outstanding
+                    .retain(|arrival| arrival.session != session);
+                self.held.retain(|arrival| arrival.session != session);
                 if self.slot == Some(session) {
                     self.slot = None;
                 }
@@ -942,7 +949,7 @@ pub enum ClaimError<E> {
 }
 
 pub(crate) fn header_deadline(now: Instant, transit: Duration) -> Instant {
-    let secs = HEADERS_RESPONSE_BYTES / HEADERS_RATE_FLOOR;
+    let secs = HEADERS_RESPONSE_BYTES / SYNC_RATE_FLOOR;
     now.checked_add(transit.saturating_add(Duration::from_secs(secs)))
         .unwrap_or(now)
 }
@@ -1190,6 +1197,17 @@ mod tests {
                 verified_to: BlockHeight::from_raw(4),
             }
         );
+        sync.handle(
+            Event::Fill {
+                frontier: BlockHeight::ZERO,
+            },
+            &Empty,
+            std::time::Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("the view answers");
+        assert_eq!(sync.state(), SyncState::Synced);
     }
 
     #[test]

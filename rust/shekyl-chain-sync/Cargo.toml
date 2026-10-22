@@ -24,7 +24,9 @@ shekyl-wire = { path = "../shekyl-wire" }
 [dev-dependencies]
 proptest = "1"
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-wire = { path = "../shekyl-wire" }
 
 [lints]

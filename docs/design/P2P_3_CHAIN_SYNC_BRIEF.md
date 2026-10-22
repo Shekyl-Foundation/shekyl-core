@@ -14,9 +14,14 @@ Values this PR introduces that are not derived. Each is an `Assumption`
 | --- | --- | --- | --- |
 | `HEADERS_RESPONSE_BYTES` | 2 MiB | A header response's preimage budget. About ten thousand headers, past the tip case (~144 KiB) and short of a whole initial-sync run. A preimage shorter than a PoW preimage is refused, so the encoded cap's two-byte length-prefix allowance holds. | CS-Q11: headers per second and peak memory on the floor device, after the cutover |
 | `BODIES_RESPONSE_BYTES` | 8 MiB | How much a body response adds after the first held block, which is sent whatever its size. Charged when the response is stored and when it is decoded. Not derived from the block-weight limit. | CS-Q11: bodies per second and peak memory on the floor device, after the cutover |
-| `HEADERS_RATE_FLOOR` | 8 KiB/s | The deadline of a header request is the connector's transit plus `HEADERS_RESPONSE_BYTES` divided by this rate: 256 seconds for a full 2 MiB response. Slow for one Tor stream, and not a clearnet rate, so an honest Tor peer is not declared late. | CS-Q11: headers per second over Tor on the floor device, after the cutover |
-| `BODY_RATE_FLOOR` | 8 KiB/s | The deadline of a body request is the connector's transit plus the bytes asked, at this rate. The same floor as headers. | CS-Q11: body bytes per second over Tor on the floor device, after the cutover |
+| `SYNC_RATE_FLOOR` | 8 KiB/s | The deadline of a header request and of a body request. A full header response (`HEADERS_RESPONSE_BYTES`, 2 MiB) takes 256 seconds. A body deadline uses the same rate on the bytes the request asked for. One rate: the two streams are not different measurements. Slow for one Tor stream, and not a clearnet rate, so an honest Tor peer is not declared late. | CS-Q11: bytes per second over Tor on the floor device, after the cutover. Split the constant only if that measurement shows the streams need different floors. |
 | `BODY_REQUESTS_IN_FLIGHT` | 4 | How many body spans may be outstanding at once, before the entry's room is the limit. | CS-Q11: how many spans the floor device can have in flight |
+
+## CS-2 rulings (Rick, 2026-10-21)
+
+- **CS2-Q1.** One proof per block. The proof is the value `form_header` produces and `HeaderJudged` carries. `form_judged` consumes it and does not hash.
+- **CS2-Q2.** One header request per frontier, drawn uniformly. A run on its own fork continues with that run's locator, outside the draw.
+- **CS2-Q3.** The executor, the owner task, serving, the reply conversion and the loopback harness against a real store are CS-3. This PR is the model and its tests.
 
 **Subject.** Moving chain sync (`cryptonote_protocol_handler`, `block_queue`) from C++ to Rust.
 
@@ -207,8 +212,8 @@ ingest deciding forks.**
    - A claim is never a target.
 2. **Common ancestor.**
    - Send a sparse locator from our main chain.
-   - The peer answers with headers starting at the first locator hash it
-     holds.
+   - The peer answers with headers starting at the child of the first
+     locator hash it holds. The first preimage's parent is that hash.
    - The first header's parent must be in the store (main or alt) or in
      `T`. If not, the response is a protocol violation.
 3. **Verify headers: cheap checks per response, then the work test on
@@ -222,6 +227,11 @@ ingest deciding forks.**
        chain's timestamps and work.
      - Headers that pass are added to the session's run. So the run's
        cumulative work is exact before any hash.
+     - A past-cap run keeps only the window the branch view reads (the
+       LWMA window, the median, and the seed headers those heights
+       name), not every header it was sent. It ends after
+       `L.height − fork.height + reorg cap` headers, or when the peer
+       says the chain ended.
    - **The work test is on the run, not on one response.** Responses
      are byte-budgeted (CS-Q3.1), so an honest first response is only a
      prefix of the peer's chain.

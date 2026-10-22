@@ -4035,11 +4035,13 @@ name = "shekyl-chain-sync"
 version = "3.1.0"
 dependencies = [
  "proptest",
+ "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-difficulty",
  "shekyl-draw-rng",
  "shekyl-levin",
  "shekyl-peer-policy",
+ "shekyl-pow-randomx",
  "shekyl-types",
  "shekyl-wire",
 ]

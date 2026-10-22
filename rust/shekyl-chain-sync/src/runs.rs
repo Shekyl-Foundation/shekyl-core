@@ -22,7 +22,7 @@ use shekyl_wire::{Block, PowBlob, TxBody};
 use crate::branch::{BranchView, Overlay};
 use crate::model::{
     header_deadline, BoundArrival, CachePlan, CloseCause, Command, HashClass, Job, ProveItem,
-    Proved, Sync, BODY_RATE_FLOOR, BODY_REQUESTS_IN_FLIGHT,
+    Proved, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
 };
 /// A header request, and the heights it named.
 pub(crate) struct HeaderRequest<K> {
@@ -561,10 +561,9 @@ where
                 return;
             };
             let hash = block.hash();
-            let Some(record) = self.tree.record(hash) else {
-                continue;
-            };
-            let _ = record;
+            // A body for a header that is not in `T` — pruned, or never
+            // this chain — is not the peer's fault. The span already
+            // passed `check_form`. Drop that body and keep the session.
             let Some(judged) = self.judged_in_tree(hash) else {
                 continue;
             };
@@ -596,9 +595,9 @@ where
     pub(crate) fn on_entry<'id, H: HeaderView<'id>>(
         &mut self,
         main: &H,
-        _tag: u64,
+        tag: u64,
         reply: SyncReply,
-        hash: BlockHash,
+        _hash: BlockHash,
         solicited: bool,
         at: BlockHash,
         indices: &[u64],
@@ -607,11 +606,18 @@ where
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         let action = reply.action(solicited);
-        let session = self
-            .held
+        // The tag is the arrival. An unknown tag is this node's defect:
+        // the reply names nothing we offered, so it closes no session.
+        let Some(pos) = self
+            .outstanding
             .iter()
-            .find(|a| a.header.hash() == hash)
-            .map(|a| a.session);
+            .position(|arrival| arrival.tag == tag)
+        else {
+            return Ok(());
+        };
+        let arrival = self.outstanding.remove(pos);
+        let session = Some(arrival.session);
+        let hash = arrival.header.hash();
         match action {
             SyncReplyAction::Advance { relay } => {
                 if relay {
@@ -657,10 +663,12 @@ where
                     });
                 }
             }
-            SyncReplyAction::Again
-            | SyncReplyAction::Hold
-            | SyncReplyAction::DropUnverified
-            | SyncReplyAction::None => {}
+            SyncReplyAction::Hold => {
+                self.held.push(arrival);
+            }
+            // `Again` was removed from outstanding above, so the next plan
+            // asks for the block again. Drop and None leave it there.
+            SyncReplyAction::Again | SyncReplyAction::DropUnverified | SyncReplyAction::None => {}
         }
         let _ = solicited;
         Ok(())
@@ -761,7 +769,9 @@ where
             let Some(hash) = self.tree.ancestor_at(self.star.hash, height) else {
                 break;
             };
-            if !self.held.iter().any(|a| a.header.hash() == hash) {
+            let offered = self.held.iter().any(|a| a.header.hash() == hash)
+                || self.outstanding.iter().any(|a| a.header.hash() == hash);
+            if !offered {
                 hashes.push(hash);
             }
             height = height + BlockCount::ONE;
@@ -787,7 +797,7 @@ where
             hashes,
         });
         let bytes = u64::try_from(wire.len()).unwrap_or(1).saturating_mul(1024);
-        let secs = bytes / BODY_RATE_FLOOR.max(1);
+        let secs = bytes / SYNC_RATE_FLOOR.max(1);
         let deadline = now
             .checked_add(transit.saturating_add(std::time::Duration::from_secs(secs)))
             .unwrap_or(now);
@@ -1203,6 +1213,7 @@ where
             .min(usize::try_from(seats).unwrap_or(self.held.len()));
         let arrivals: Vec<_> = self.held.drain(..n).collect();
         if !arrivals.is_empty() {
+            self.outstanding.extend(arrivals.iter().cloned());
             out.push(Command::Offer { arrivals });
         }
     }
@@ -1217,6 +1228,9 @@ where
             self.header_request = None;
         }
         self.body_requests.retain(|req| req.session != session);
+        self.outstanding
+            .retain(|arrival| arrival.session != session);
+        self.held.retain(|arrival| arrival.session != session);
         if self.slot == Some(session) {
             self.slot = None;
         }
