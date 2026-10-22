@@ -115,8 +115,8 @@ impl HeaderJudged {
         self.facts.attempt()
     }
 
-    /// The clock the header was judged at. Later than a fresh reading would
-    /// be, so an FTL check against it is never looser.
+    /// The clock the header was judged at. Earlier than a fresh reading
+    /// would be, so an FTL check against it is never looser.
     #[must_use]
     pub const fn judged_at(&self) -> Timestamp {
         self.facts.judged_at()
@@ -367,8 +367,10 @@ mod tests {
     use crate::block::ReferenceClaims;
     use crate::census::CenRow;
     use crate::fault::Retry;
-    use crate::harness::fixture::candidate;
-    use crate::harness::{expected_target, MockChain, MockSubstrate};
+    use shekyl_difficulty::{CumulativeDifficulty, N};
+
+    use crate::harness::fixture::{candidate, candidate_on, chain_of, recorded_with_work, root};
+    use crate::harness::{expected_seed, expected_target, MockChain, MockSubstrate};
     use crate::trust::Trust;
     use crate::{form, form_judged, validate};
 
@@ -466,10 +468,7 @@ mod tests {
                     Ok(judged) => judged,
                     Err(refused) => panic!("honest header refused: {refused:?}"),
                 };
-            let mut quiet = substrate;
-            quiet.longhash = MockSubstrate::must_not_hash;
-            let from_header = form_judged(input.clone(), &judged, &ReferenceClaims::EMPTY, &quiet)
-                .expect("no fault")
+            let from_header = form_judged(input.clone(), &judged, &ReferenceClaims::EMPTY)
                 .expect("the body forms");
             let from_bytes = form(
                 input.clone(),
@@ -492,7 +491,7 @@ mod tests {
             assert_eq!(from_header.pow(), from_bytes.pow());
             let mut moved = input;
             moved.block.header.nonce = moved.block.header.nonce.wrapping_add(1);
-            match form_judged(moved, &judged, &ReferenceClaims::EMPTY, &quiet).expect("no fault") {
+            match form_judged(moved, &judged, &ReferenceClaims::EMPTY) {
                 Err(refused) => assert_eq!(refused.rule, CenRow::B6),
                 Ok(_) => panic!("a different preimage formed"),
             }
@@ -504,6 +503,107 @@ mod tests {
             )
             .expect_err("a different rule set is a fault");
             assert!(matches!(fault, Fault::Stale(Stale::RuleSet { .. })));
+        });
+    }
+
+    /// `N + 1` blocks, one timestamp series, `per_block` of work each. The
+    /// seed is block 0's hash, which is the timestamp's, so two calls share
+    /// a seed and, once the window is open, not a target.
+    fn worked_chain(per_block: u128) -> MockChain {
+        let mut chain = MockChain::default();
+        let mut ts = 1_000u64;
+        let mut cum = 0u128;
+        for i in 0..=N {
+            ts += 120;
+            cum += per_block + u128::from(i);
+            chain = chain.push(
+                recorded_with_work(ts, CumulativeDifficulty::from_raw(cum)),
+                root(1),
+            );
+        }
+        chain
+    }
+
+    /// `validate` faults a seed the token carries that this view does not,
+    /// and a target likewise. The token was judged where each claim held.
+    #[test]
+    fn validate_faults_a_token_seed_or_target_the_view_does_not_hold() {
+        let deep = chain_of(2113);
+        let deep_seed = expected_seed(&deep);
+        let deep_target = expected_target(&deep, &RuleSet::GENESIS);
+        let deep_candidate = candidate_on(&deep, Vec::new());
+        let pow = PowBlob::read(&deep_candidate.block.pow_blob()).expect("preimage");
+        let formed = form_header(
+            &pow,
+            &RuleSet::GENESIS,
+            &MockSubstrate::default(),
+            deep_seed,
+            deep_target,
+            FormAttempt::FIRST,
+        )
+        .expect("mock")
+        .expect("the header forms");
+        let judged = deep.with_view(|view| {
+            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED).expect("view")
+            {
+                Ok(judged) => judged,
+                Err(refused) => panic!("honest header refused: {refused:?}"),
+            }
+        });
+        let from_header =
+            form_judged(deep_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
+        MockChain::default().with_view(|view| {
+            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+                Err(Fault::Stale(Stale::Seed { claimed, .. })) => {
+                    assert_eq!(claimed, deep_seed);
+                }
+                other => panic!("expected Stale::Seed, got {other:?}"),
+            }
+        });
+
+        // Same timestamps, so the seed block is the same hash. Different
+        // work, so once the window is open the targets diverge.
+        let claimed_on = worked_chain(4_000);
+        let judged_on = worked_chain(400);
+        let long_target = expected_target(&claimed_on, &RuleSet::GENESIS);
+        let short_target = expected_target(&judged_on, &RuleSet::GENESIS);
+        assert_eq!(expected_seed(&claimed_on), expected_seed(&judged_on));
+        assert_ne!(
+            long_target, short_target,
+            "the two chains derive different targets"
+        );
+        let long_candidate = candidate_on(&claimed_on, Vec::new());
+        let long_seed = expected_seed(&claimed_on);
+        let pow = PowBlob::read(&long_candidate.block.pow_blob()).expect("preimage");
+        let formed = form_header(
+            &pow,
+            &RuleSet::GENESIS,
+            &MockSubstrate::default(),
+            long_seed,
+            long_target,
+            FormAttempt::FIRST,
+        )
+        .expect("mock")
+        .expect("the header forms");
+        let judged = claimed_on.with_view(|view| {
+            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED).expect("view")
+            {
+                Ok(judged) => judged,
+                Err(refused) => panic!("honest header refused: {refused:?}"),
+            }
+        });
+        let from_header =
+            form_judged(long_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
+        judged_on.with_view(|view| {
+            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+                Err(Fault::Stale(Stale::Target {
+                    claimed, expected, ..
+                })) => {
+                    assert_eq!(claimed, long_target);
+                    assert_eq!(expected, short_target);
+                }
+                other => panic!("expected Stale::Target, got {other:?}"),
+            }
         });
     }
 }

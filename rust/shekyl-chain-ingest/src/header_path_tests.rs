@@ -1058,12 +1058,7 @@ fn a_judged_header_forms_the_block_without_hashing() {
                     )
                     .expect("mock")
                     .expect("forms from bytes");
-                    let quiet = MockSubstrate {
-                        clock: substrate.clock,
-                        longhash: MockSubstrate::must_not_hash,
-                    };
-                    let from_header = form_judged(candidate.clone(), &judged, &references, &quiet)
-                        .expect("no fault")
+                    let from_header = form_judged(candidate.clone(), &judged, &references)
                         .expect("forms from the header");
                     assert_eq!(from_header.coverage(), from_bytes.coverage());
                     assert_eq!(from_header.rule_set(), from_bytes.rule_set());
