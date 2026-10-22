@@ -117,9 +117,9 @@ impl SplitMix64 {
 // protocol — the injected sensitivity axis.
 // ===========================================================================
 
-/// `g_age = 1 + age_weight·age`; baseline `age_weight = 2` ⇒ the deepest shards
-/// carry a 3× scarcity premium over the hot frontier — the value-curve steepness.
-const AGE_WEIGHT: f64 = 2.0;
+/// `g_age = 1 + age_weight·age`. The weight is production's milli slope.
+const AGE_WEIGHT: f64 =
+    shekyl_archival_retention::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI as f64 / 1_000.0;
 /// `age ≥ deep_threshold` ⇒ deep history ⇒ requires a retention bond.
 const DEEP_THRESHOLD: f64 = 0.5;
 /// Flat per-deep-shard bond (mid rung).

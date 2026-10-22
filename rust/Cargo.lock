@@ -5273,8 +5273,10 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-archival-retention",
+ "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-standoff",
+ "shekyl-units",
 ]
 
 [[package]]

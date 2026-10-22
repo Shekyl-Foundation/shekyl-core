@@ -82,9 +82,8 @@ use serde::Serialize;
 
 use shekyl_archival_retention::ARCHIVAL_BOND_FLOOR_ATOMIC;
 
-/// Atomic units per SKL (`DISPLAY_DECIMAL_POINT = 9`). Local copy keeps this
-/// harness free of a units-crate dependency, like the standoff's block-time.
-const ATOMIC_PER_SKL: f64 = 1_000_000_000.0;
+/// Atomic units per SKL. Owner: `ATOMIC_UNITS_PER_SKL`.
+const ATOMIC_PER_SKL: f64 = shekyl_units::ATOMIC_UNITS_PER_SKL as f64;
 
 /// A candidate set this small or smaller is "thin cover" — the tail an averaged
 /// anonymity-set mean hides (same threshold the standoff uses).
@@ -1059,8 +1058,10 @@ pub struct FnReport {
 pub fn run_cover_fn_report() -> FnReport {
     let hump = hump_robustness();
     let adaptive = adaptive_vs_frozen(hump.robust_k);
-    // 600-block entry-gap window over the 10_000-block settlement epoch.
-    let realistic_drift = 1.0 + 600.0 / 10_000.0;
+    // Entry-gap window over the settlement epoch. Both are production constants.
+    let realistic_drift = 1.0
+        + shekyl_standoff::DEFAULT_ENTRY_GAP_WINDOW as f64
+            / shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS as f64;
     FnReport {
         floor_skl: ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / ATOMIC_PER_SKL,
         realistic_drift,

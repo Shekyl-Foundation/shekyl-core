@@ -29,7 +29,7 @@ pub use shekyl_archival_retention::{
 pub const MAX_SETTLEMENT_EPOCHS_PER_EMISSION: u64 =
     shekyl_archival_retention::MAX_SETTLEMENT_EPOCHS_PER_EMISSION as u64;
 
-pub const BLOCK_TIME_SEC: u64 = 120;
+pub const BLOCK_TIME_SEC: u64 = shekyl_difficulty::T_SECONDS;
 pub const JOIN_LAG_BLOCKS: u64 = SETTLEMENT_EPOCH_BLOCKS;
 pub const EMISSION_BATCH_WINDOW_BLOCKS: u64 =
     MAX_SETTLEMENT_EPOCHS_PER_EMISSION * SETTLEMENT_EPOCH_BLOCKS;
@@ -168,7 +168,7 @@ pub fn verify() -> TimingClusterReport {
     });
 
     let f4_offline_burst = verify_f4_offline_burst();
-    let f4_slow_emitter = verify_f4_slow_emitter(25, 1);
+    let f4_slow_emitter = verify_f4_slow_emitter(MAX_CLAIM_AGE_W - 1, 1);
 
     let all_pass =
         couplings.iter().all(|c| c.pass) && f4_offline_burst.pass && f4_slow_emitter.pass;
