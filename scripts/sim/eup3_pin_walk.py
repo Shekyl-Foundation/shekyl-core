@@ -12,6 +12,19 @@ change.
 The noise band is five seeds at the L11 record, the L13 record, and
 c2dcfe601. A step inside a field's spread is not a step.
 
+Steps compare cDeepU with cDeepU. The published L11/L13 "deep_und"
+figures are that windowed mean. The final-epoch snapshot stays in the
+raw row under deep_und and is not a step field.
+
+After the sim commits, three more passes: dependency commits between
+the last sim commit and c2dcfe601, if that interval moves the vector;
+each first-parent merge that touches the sim, against both parents;
+and, where the pinned toolchain changes, the same commit built with
+both toolchains.
+
+Paths are arguments. This file has no default checkout, worktree, or
+build directory.
+
 The walk checkout is a separate worktree. This script never checks out
 inside the branch that holds its own output.
 """
@@ -20,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -66,7 +80,9 @@ VECTOR = [
     "l13_spiral",
     "l13_servo",
 ]
-FIELDS = ("bondA", "deep_und", "oUmx", "cDeepU", "purse")
+# The published coverage figure is cDeepU, the windowed mean. deep_und in
+# a raw row is the final-epoch snapshot and is not compared.
+COMPARE_FIELDS = ("bondA", "cDeepU", "oUmx", "purse")
 PATH_DEPS = (
     "shekyl-archival-retention",
     "shekyl-economics",
@@ -74,10 +90,10 @@ PATH_DEPS = (
     "shekyl-standoff",
 )
 
-REPO = Path("/home/torvaldsl/shekyl/wt-eup3-staking-sim-check")
-WALK = Path("/home/torvaldsl/shekyl/wt-eup3-pin-walk")
-TARGET_ROOT = Path("/home/torvaldsl/shekyl/eup3-pin-target")
-OUT_DIR = REPO / "scripts/sim/eup3-pin-walk"
+REPO: Path
+WALK: Path
+TARGET_ROOT: Path
+OUT_DIR: Path
 
 
 def git(args: list[str], cwd: Path, check: bool = True) -> str:
@@ -160,15 +176,49 @@ def set_baseline_seed(seed: str) -> None:
     path.write_text(text.replace(needle, f"seed: {seed},", 1))
 
 
-def build() -> str:
-    chan = channel_at(WALK)
+def channel_of(commit: str) -> str:
+    """The toolchain a commit pins, read from the commit, not the worktree."""
+    proc = subprocess.run(
+        ["git", "show", f"{commit}:rust/rust-toolchain.toml"],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+    )
+    if proc.returncode == 0:
+        match = re.search(r'channel\s*=\s*"([^"]+)"', proc.stdout)
+        if not match:
+            raise SystemExit(f"no channel in {commit}'s rust-toolchain.toml")
+        return match.group(1)
+    cargo = git(["show", f"{commit}:rust/Cargo.toml"], REPO)
+    match = re.search(r'^rust-version\s*=\s*"([^"]+)"', cargo, re.M)
+    if not match:
+        raise SystemExit(f"no rust-version at {commit}")
+    return match.group(1)
+
+
+def build(channel_override: str | None = None) -> str:
+    pinned = channel_at(WALK)
+    chan = channel_override or pinned
     target = TARGET_ROOT / chan.replace(".", "_")
     target.mkdir(parents=True, exist_ok=True)
-    env = dict(**{k: v for k, v in __import__("os").environ.items()})
+    env = dict(os.environ)
     env["CARGO_TARGET_DIR"] = str(target)
     env.pop("RUSTUP_TOOLCHAIN", None)
-    cmd = ["cargo", f"+{chan}", "build", "-p", "shekyl-staking-sim", "--release"]
-    proc = subprocess.run(cmd, cwd=WALK / "rust", text=True, capture_output=True, env=env)
+    toolchain = WALK / "rust/rust-toolchain.toml"
+    hidden = None
+    # A toolchain file outranks `cargo +<channel>`. Hide it for the
+    # alternate build so the maths library is actually the other one.
+    if channel_override and channel_override != pinned and toolchain.exists():
+        hidden = toolchain.read_text()
+        toolchain.unlink()
+    try:
+        cmd = ["cargo", f"+{chan}", "build", "-p", "shekyl-staking-sim", "--release"]
+        proc = subprocess.run(
+            cmd, cwd=WALK / "rust", text=True, capture_output=True, env=env
+        )
+    finally:
+        if hidden is not None:
+            toolchain.write_text(hidden)
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout)[-4000:]
         raise SystemExit(f"build failed on {chan}:\n{tail}")
@@ -224,16 +274,19 @@ def run_binary(binary: str) -> dict[str, dict]:
     return {name: found.get(name) for name in VECTOR}
 
 
-def measure(commit: str, seed: str = PIN_SEED) -> dict:
+def measure(
+    commit: str, seed: str = PIN_SEED, channel_override: str | None = None
+) -> dict:
     checkout(commit)
     if seed != PIN_SEED:
         set_baseline_seed(seed)
-    binary = build()
+    binary = build(channel_override)
     vector = run_binary(binary)
     return {
         "commit": rev_parse(WALK, "HEAD"),
         "subject": subject(WALK, "HEAD"),
-        "channel": channel_at(WALK),
+        "channel": channel_override or channel_at(WALK),
+        "channel_override": channel_override,
         "seed": seed,
         "deps": cargo_toml_deps(WALK, "HEAD"),
         "vector": vector,
@@ -304,7 +357,7 @@ def numbers(row: dict | None) -> dict[str, float] | None:
     if row is None:
         return None
     out = {}
-    for field in FIELDS:
+    for field in COMPARE_FIELDS:
         value = row.get(field)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             out[field] = float(value)
@@ -320,7 +373,7 @@ def spreads() -> dict[str, dict[str, float]]:
             nums = numbers(vector)
             if not nums:
                 continue
-            bucket = grouped.setdefault(name, {field: [] for field in FIELDS})
+            bucket = grouped.setdefault(name, {field: [] for field in COMPARE_FIELDS})
             for field, value in nums.items():
                 bucket[field].append(value)
     spread: dict[str, dict[str, float]] = {}
@@ -343,7 +396,7 @@ def moved(before: dict | None, after: dict | None, spread: dict[str, float]) -> 
     if b is None or a is None:
         changes["presence"] = {"before": b, "after": a}
         return changes
-    for field in FIELDS:
+    for field in COMPARE_FIELDS:
         if field not in b or field not in a:
             if field in b or field in a:
                 changes[field] = {"before": b.get(field), "after": a.get(field)}
@@ -431,6 +484,221 @@ def cmd_gaps() -> None:
             have.add(full)
 
 
+def cached_pin(commit: str) -> dict | None:
+    """A pin-seed measurement of commit already on disk, native toolchain."""
+    full = rev_parse(REPO, commit)
+    for name in (
+        "sim-commits.jsonl",
+        "dep-commits.jsonl",
+        "noise.jsonl",
+        "tail.jsonl",
+        "merges.jsonl",
+    ):
+        for row in load_jsonl(OUT_DIR / name):
+            if row.get("commit") != full:
+                continue
+            if row.get("seed", PIN_SEED) != PIN_SEED:
+                continue
+            if row.get("channel_override"):
+                continue
+            if "vector" not in row:
+                continue
+            return row
+    return None
+
+
+def ensure_pin(commit: str, dest: Path) -> dict:
+    found = cached_pin(commit)
+    if found is not None:
+        return found
+    row = measure(commit)
+    append_jsonl(dest, row)
+    return row
+
+
+def any_moved(before: dict, after: dict, band: dict) -> bool:
+    for name in VECTOR:
+        if moved(before.get(name), after.get(name), band.get(name, {})):
+            return True
+    return False
+
+
+def cmd_tail() -> None:
+    """Dependency commits after the last sim commit, up to the end pin.
+
+    The crate can stop changing while the crates it links keep changing.
+    Compare the last sim commit with the end pin; walk that interval only
+    when the vector moved.
+    """
+    commits = [rev_parse(REPO, rev) for rev in sim_commits(REPO)]
+    have = {row["commit"] for row in load_jsonl(OUT_DIR / "sim-commits.jsonl")}
+    if not commits or commits[-1] not in have:
+        raise SystemExit("sim walk is not finished; the tail waits for it")
+    last = commits[-1]
+    end = rev_parse(REPO, END)
+    dest = OUT_DIR / "tail.jsonl"
+    end_row = ensure_pin(end, dest)
+    last_row = cached_pin(last)
+    if last_row is None:
+        raise SystemExit(f"no pin-seed row for the last sim commit {last}")
+    band = spreads()
+    if not any_moved(last_row["vector"], end_row["vector"], band):
+        print(f"tail {last[:12]}..{end[:12]} did not move", flush=True)
+        return
+    interior = dep_commits_between(last, end)
+    print(f"tail {last[:12]}..{end[:12]} dep commits {len(interior)}", flush=True)
+    have_dep = {row["commit"] for row in load_jsonl(dest)}
+    for rev in interior:
+        full = rev_parse(REPO, rev)
+        if cached_pin(full) is not None or full in have_dep:
+            continue
+        print(f"  tail {full[:12]} {subject(REPO, full)}", flush=True)
+        append_jsonl(dest, measure(full))
+        have_dep.add(full)
+
+
+def first_parent_merges() -> list[str]:
+    text = git(
+        [
+            "log",
+            "--first-parent",
+            "--format=%H",
+            f"{START_L11}..{END}",
+            "--",
+            "rust/shekyl-staking-sim",
+        ],
+        REPO,
+    )
+    merges = []
+    for rev in text.splitlines():
+        if not rev:
+            continue
+        parents = git(["rev-parse", f"{rev}^@"], REPO).split()
+        if len(parents) >= 2:
+            merges.append(rev)
+    return merges
+
+
+def cmd_merges() -> None:
+    """Each first-parent merge that touches the sim, against both parents.
+
+    Side-branch commits are measured alone. A step that appears only when
+    two branches are combined is visible here and nowhere in that list.
+    """
+    dest = OUT_DIR / "merges.jsonl"
+    have = {row["commit"] for row in load_jsonl(dest)}
+    band = spreads()
+    report = []
+    for rev in first_parent_merges():
+        parents = git(["rev-parse", f"{rev}^@"], REPO).split()
+        rows = {}
+        for commit in [rev, *parents]:
+            full = rev_parse(REPO, commit)
+            if full not in have and cached_pin(full) is None:
+                print(f"merge measure {full[:12]} {subject(REPO, full)}", flush=True)
+                append_jsonl(dest, measure(full))
+                have.add(full)
+            rows[full] = cached_pin(full)
+        merge = rev_parse(REPO, rev)
+        diffs = {}
+        for parent in parents:
+            full = rev_parse(REPO, parent)
+            changes = {}
+            for name in VECTOR:
+                change = moved(
+                    rows[full]["vector"].get(name),
+                    rows[merge]["vector"].get(name),
+                    band.get(name, {}),
+                )
+                if change:
+                    changes[name] = change
+            if changes:
+                diffs[full] = changes
+        report.append(
+            {
+                "merge": merge,
+                "subject": subject(REPO, merge),
+                "parents": [rev_parse(REPO, parent) for parent in parents],
+                "differs_from": diffs,
+            }
+        )
+        print(
+            f"merge {merge[:12]} differs from {len(diffs)} parent(s): {subject(REPO, merge)}",
+            flush=True,
+        )
+    (OUT_DIR / "merges.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
+def cmd_toolchains() -> None:
+    """Where the pinned toolchain changes, build that commit with both.
+
+    powf, exp and ln come from the toolchain's maths library. A difference
+    here is its own row, not a property of the code commit that arrived
+    with the new pin.
+    """
+    sequence = [rev_parse(REPO, START_L11)]
+    sequence.extend(rev_parse(REPO, rev) for rev in sim_commits(REPO))
+    end = rev_parse(REPO, END)
+    if sequence[-1] != end:
+        sequence.append(end)
+    dest = OUT_DIR / "toolchain-pairs.jsonl"
+    have = {
+        (row["commit"], row.get("channel_override"))
+        for row in load_jsonl(dest)
+    }
+    band = spreads()
+    report = []
+    prev_channel = channel_of(sequence[0])
+    for commit in sequence[1:]:
+        chan = channel_of(commit)
+        if chan != prev_channel:
+            native = cached_pin(commit)
+            if native is None:
+                print(f"toolchain native {commit[:12]} {chan}", flush=True)
+                native = measure(commit)
+                append_jsonl(dest, native)
+            key = (commit, prev_channel)
+            if key in have:
+                alt = next(
+                    row
+                    for row in load_jsonl(dest)
+                    if row["commit"] == commit and row.get("channel_override") == prev_channel
+                )
+            else:
+                print(
+                    f"toolchain alt {commit[:12]} {chan} under {prev_channel}",
+                    flush=True,
+                )
+                alt = measure(commit, channel_override=prev_channel)
+                append_jsonl(dest, alt)
+                have.add(key)
+            changes = {}
+            for name in VECTOR:
+                change = moved(
+                    alt["vector"].get(name),
+                    native["vector"].get(name),
+                    band.get(name, {}),
+                )
+                if change:
+                    changes[name] = change
+            report.append(
+                {
+                    "commit": commit,
+                    "subject": native["subject"],
+                    "from_channel": prev_channel,
+                    "to_channel": chan,
+                    "scenarios": changes,
+                }
+            )
+            print(
+                f"toolchain {prev_channel} -> {chan} at {commit[:12]} "
+                f"scenarios {len(changes)}",
+                flush=True,
+            )
+        prev_channel = chan
+    (OUT_DIR / "toolchain-steps.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
 def fmt_num(value) -> str:
     if value is None:
         return "absent"
@@ -442,11 +710,21 @@ def fmt_num(value) -> str:
 def cmd_table() -> None:
     band = spreads()
     (OUT_DIR / "noise-spread.json").write_text(json.dumps(band, indent=2, sort_keys=True) + "\n")
-    sim_rows = load_jsonl(OUT_DIR / "sim-commits.jsonl")
-    dep_rows = load_jsonl(OUT_DIR / "dep-commits.jsonl")
-    measured = {row["commit"]: row for row in sim_rows}
-    for row in dep_rows:
-        measured[row["commit"]] = row
+    measured: dict[str, dict] = {}
+    for name in (
+        "sim-commits.jsonl",
+        "dep-commits.jsonl",
+        "tail.jsonl",
+        "merges.jsonl",
+    ):
+        for row in load_jsonl(OUT_DIR / name):
+            if row.get("seed", PIN_SEED) != PIN_SEED:
+                continue
+            if row.get("channel_override"):
+                continue
+            if "vector" not in row:
+                continue
+            measured[row["commit"]] = row
     # One linearization: start, then every measured commit in topo order
     # restricted to measured hashes.
     wanted = set(measured)
@@ -490,13 +768,34 @@ def cmd_table() -> None:
 
 
 def main() -> None:
+    global REPO, WALK, TARGET_ROOT, OUT_DIR
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("noise", "walk", "gaps", "table"))
+    parser.add_argument("--repo", required=True, type=Path)
+    parser.add_argument("--walk", required=True, type=Path)
+    parser.add_argument("--target-dir", required=True, type=Path)
+    parser.add_argument(
+        "command",
+        choices=("noise", "walk", "gaps", "tail", "merges", "toolchains", "table"),
+    )
     args = parser.parse_args()
+    REPO = args.repo
+    WALK = args.walk
+    TARGET_ROOT = args.target_dir
+    OUT_DIR = REPO / "scripts/sim/eup3-pin-walk"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    if not WALK.exists():
-        raise SystemExit(f"missing walk worktree {WALK}")
-    {"noise": cmd_noise, "walk": cmd_walk, "gaps": cmd_gaps, "table": cmd_table}[args.command]()
+    if not WALK.is_dir():
+        raise SystemExit(f"walk worktree does not exist: {WALK}")
+    if not (REPO / ".git").exists() and not (REPO / "scripts/sim/eup3_pin_walk.py").exists():
+        raise SystemExit(f"repo does not look like the checkout: {REPO}")
+    {
+        "noise": cmd_noise,
+        "walk": cmd_walk,
+        "gaps": cmd_gaps,
+        "tail": cmd_tail,
+        "merges": cmd_merges,
+        "toolchains": cmd_toolchains,
+        "table": cmd_table,
+    }[args.command]()
 
 
 if __name__ == "__main__":
