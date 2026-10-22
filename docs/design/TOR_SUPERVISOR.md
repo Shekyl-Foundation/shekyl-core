@@ -828,9 +828,13 @@ raw rows in `shekyl-dev`, `data/tsr-q8q9/2026-10-22-floor/`). Copy: p50 2.10 s,
 max 5.18 s. Bootstrap after the copy: p50 3.84 s, max 4.13 s. The start with
 the copy included: p50 6.01 s, max 8.98 s. Against the cold median of 11.3 s
 the gain is in the median and in the tail (`TSR-M1`'s cold p99 was 127 s).
-That copy synced every byte before Tor was spawned. The launch path does not:
-the copy half of this row is the fsync, and it is measured again without one
-before it is the cost of a boot.
+That copy synced every byte before Tor was spawned. The launch path does not.
+**The floor device, 2026-10-22, with the copy not synced** (tor 0.4.9.14,
+n=10, 35,079,292 bytes on the SD card; raw rows in `shekyl-dev`,
+`data/tsr-q8q9/2026-10-22-floor-nosync/`). Copy: p50 0.041 s, max 0.063 s.
+Bootstrap after the copy: p50 3.85 s, max 4.02 s. The start with the copy
+included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
+20.95 s. This is the launch-path cost: the copy is not synced.
 
 ## 11. Interfaces
 
