@@ -86,8 +86,8 @@ impl PricedBlock<'_> {
 impl ChainCursor {
     /// The medians the next block is judged under. After [`Self::price`],
     /// this includes the block just priced.
-    pub(crate) fn medians(&self) -> EffectiveMedian {
-        self.space.medians()
+    pub(crate) fn medians(&self, params: &EconomicParams) -> EffectiveMedian {
+        self.space.medians(params)
     }
 
     /// Price `step` and record the block the fill listed.
@@ -101,7 +101,7 @@ impl ChainCursor {
         economic: &'a EconomicParams,
     ) -> PricedBlock<'a> {
         let volume = self.window.operand();
-        let medians = self.space.medians();
+        let medians = self.space.medians(economic);
         let supply = net_supply(step.already_generated, step.total_burned);
         let share = emission_share_at(step.chain_height);
         let burn_pct = calc_burn_pct_at(volume, supply, economic);
@@ -124,7 +124,7 @@ impl ChainCursor {
         let paid = price_emission(&EmissionInputs {
             height: step.chain_height,
             median_weight: medians.effective_median.to_raw(),
-            block_weight: filled.bodies_weight,
+            block_weight: filled.block_weight,
             already_generated: generated,
             tx_volume: volume,
             total_fees: filled.fees,

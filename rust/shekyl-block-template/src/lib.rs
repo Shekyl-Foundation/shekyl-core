@@ -39,8 +39,8 @@
 //!   [`shekyl_economics::price_emission`] owes the miner — the penalised
 //!   emission's miner leg plus the miner's share of the listed fees
 //!   (CEN-F18), whole at genesis (CEN-G13). The `extra` is
-//!   the coinbase grammar's one layout (CEN-I20): pubkey, nonce, one KEM
-//!   blob, one leaf blob.
+//!   the coinbase grammar's one layout (CEN-I20): pubkey, nonce, the
+//!   `0x0C` draw commitment, one KEM blob, one leaf blob.
 //! - **Body.** `transaction_hashes` are the listed bodies' identities, in
 //!   the order listed (CEN-A3/A4); the weight the reward was penalised at
 //!   is the weight the block carries, coinbase included (CEN-F14's
@@ -352,14 +352,32 @@ pub const MAX_REPRICING_PASSES: usize = REPRICING_PASSES;
 /// Build the template for `cx`. See the crate documentation for what the
 /// result satisfies by construction.
 ///
+/// The repricing fixed point knows the built coinbase's weight after each
+/// pass. A body the fill admitted under the previous weight can leave the
+/// block one varint byte over the limit when that coinbase's amount grows
+/// on the last admission. The builder drops that last body and prices the
+/// block again. A listing heavier than one body past the limit is still
+/// [`TemplateError::Emission`] of [`EmissionError::BlockTooBig`].
+///
 /// # Errors
 ///
 /// A [`TemplateError`] when an operand cannot be priced or a body cannot be
 /// listed; never on a consensus question — those are the validator's.
 pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
-    let total_fees = listed_fees(cx.listed)?;
-    let tx_hashes: Vec<TxHash> = cx.listed.iter().map(Transaction::hash).collect();
-    let bodies_weight = cx.listed.iter().try_fold(0u64, |acc, tx| {
+    match assemble(cx, cx.listed) {
+        Err(TemplateError::Emission(EmissionError::BlockTooBig)) if !cx.listed.is_empty() => {
+            assemble(cx, &cx.listed[..cx.listed.len() - 1])
+        }
+        other => other,
+    }
+}
+
+/// Price `listed` and assemble the block. The fixed point is the coinbase's
+/// amount varint against the weight it is priced at.
+fn assemble(cx: &TemplateContext<'_>, listed: &[Transaction]) -> Result<Template, TemplateError> {
+    let total_fees = listed_fees(listed)?;
+    let tx_hashes: Vec<TxHash> = listed.iter().map(Transaction::hash).collect();
+    let bodies_weight = listed.iter().try_fold(0u64, |acc, tx| {
         acc.checked_add(weight_of(tx)?)
             .ok_or(TemplateError::WeightOverflow)
     })?;
@@ -419,7 +437,7 @@ pub fn build(cx: &TemplateContext<'_>) -> Result<Template, TemplateError> {
 
     Ok(Template {
         block,
-        transactions: cx.listed.to_vec(),
+        transactions: listed.to_vec(),
         block_weight,
         block_reward: paid.block_reward,
         miner_emission: paid.miner_emission,

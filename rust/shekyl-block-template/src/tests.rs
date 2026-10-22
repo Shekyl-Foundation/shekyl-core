@@ -887,92 +887,178 @@ fn bodies_landing_within(window: u64, bound: u64) -> Vec<Transaction> {
     listed
 }
 
-/// The fill weighs the bodies alone; the block weighs its coinbase too.
-/// Bodies that fit the median are penalty-free to [`crate::fill::Fill`],
-/// which prices the whole emission, and the template that lists them is
-/// over the median by its coinbase and pays less.
-///
-/// This pins the difference, not a contract: the owner the pool's fill
-/// moves to prices the weight the block carries (`docs/FOLLOWUPS.md`), and
-/// this test is rewritten to hold the two equal.
+/// The fill and the template price the same block. Just under the
+/// penalty-free weight, just over it, and at the limit, the template's
+/// reward and weight are what [`crate::fill::Fill`] reports for the same
+/// bodies and the coinbase the template built. Pricing the bodies alone
+/// makes the just-over case disagree.
 #[test]
-fn the_fill_prices_bodies_alone_and_the_template_prices_the_block() {
+fn the_fill_and_the_template_price_the_same_block() {
     let params = EconomicParams::default();
     let miner = miner();
     let chain = chain_of(2);
     let empty = build(&context(&chain, &params, &miner, &[])).expect("builds");
     let coinbase = u64::try_from(empty.block.miner_transaction.weight()).expect("fits");
 
-    let listed = bodies_landing_within(coinbase, FULL_REWARD_ZONE);
-    let bodies: u64 = listed
-        .iter()
-        .map(|tx| u64::try_from(tx.weight()).expect("fits"))
-        .sum();
-    assert!(bodies <= FULL_REWARD_ZONE && bodies + coinbase > FULL_REWARD_ZONE);
-
-    let fill = crate::fill::Fill::listed(FULL_REWARD_ZONE, 0, TxVolume::ZERO, &params, bodies, 0)
-        .expect("priced");
-    let template = build(&context(&chain, &params, &miner, &listed)).expect("builds");
-    assert_eq!(fill.reward(), empty.block_reward.to_raw(), "no penalty");
-    assert_eq!(template.block_weight, bodies + coinbase);
-    assert!(
-        template.block_reward.to_raw() < fill.reward(),
-        "the template pays {} where the fill priced {}",
-        template.block_reward.to_raw(),
-        fill.reward()
-    );
+    for (label, target) in [
+        ("under", FULL_REWARD_ZONE - coinbase - 2_000),
+        ("over", FULL_REWARD_ZONE - coinbase + 2_000),
+        ("limit", 2 * FULL_REWARD_ZONE - coinbase),
+    ] {
+        let listed = bodies_landing_within(1_500, target);
+        let template = build(&context(&chain, &params, &miner, &listed)).expect(label);
+        let bodies: u64 = template
+            .transactions
+            .iter()
+            .map(|tx| u64::try_from(tx.weight()).expect("fits"))
+            .sum();
+        let built = u64::try_from(template.block.miner_transaction.weight()).expect("fits");
+        let fill = crate::fill::Fill::listed(
+            FULL_REWARD_ZONE,
+            built,
+            0,
+            TxVolume::ZERO,
+            &params,
+            bodies,
+            template.total_fees.to_raw(),
+        )
+        .unwrap_or_else(|err| panic!("{label}: the fill prices the template's block: {err}"));
+        assert_eq!(template.block_weight, fill.block_weight(), "{label}");
+        assert_eq!(
+            template.block_reward.to_raw(),
+            fill.reward(),
+            "{label}: reward"
+        );
+    }
 }
 
-/// The coinbase reserve is smaller than the coinbase. The fill lets bodies
-/// reach `2·median − COINBASE_BLOB_RESERVED_SIZE` (600); a coinbase weighs
-/// more than twice that, so bodies the fill's bound allows make a block
-/// over the consensus limit and the builder has no template to give. One
-/// body fewer builds, so it is the last 731 bytes of the bound that are
-/// not there.
+/// Bodies at the fill's bound build a block at or under twice the median.
 ///
-/// This pins the defect, not a contract. The reserve is a ruling
-/// (`docs/FOLLOWUPS.md`, C2-R2 Q7 reopened): when it is derived from the
-/// largest coinbase the grammar allows, bodies at the bound build and this
-/// test is rewritten to say so.
+/// The bound is `2·median −` the derived reserve, and the reserve covers
+/// the coinbase, so the block the bodies make is one the penalty accepts.
+/// Filler spends are refused at CEN-I13, so this does not call `validate`;
+/// the admission of a real body is the ingest scenario's. Restoring a
+/// 600-byte reserve makes `build` return `BlockTooBig` here.
 #[test]
-fn bodies_at_the_fills_bound_make_a_block_past_the_limit_while_the_reserve_is_600() {
+fn bodies_at_the_fills_bound_build_a_block_within_the_limit() {
     let params = EconomicParams::default();
     let miner = miner();
     let chain = chain_of(2);
-    let bound = crate::fill::Fill::empty(FULL_REWARD_ZONE, 0, TxVolume::ZERO, &params)
+    let reserve = u64::try_from(shekyl_wire::transaction::COINBASE_RESERVE).expect("fits");
+    let bound = crate::fill::Fill::empty(FULL_REWARD_ZONE, reserve, 0, TxVolume::ZERO, &params)
         .expect("priced")
         .bodies_weight_bound();
-    assert_eq!(bound, 2 * FULL_REWARD_ZONE - 600);
+    assert_eq!(bound, 2 * FULL_REWARD_ZONE - reserve);
 
     let empty = build(&context(&chain, &params, &miner, &[])).expect("builds");
     let coinbase = u64::try_from(empty.block.miner_transaction.weight()).expect("fits");
     assert!(
-        coinbase > 600,
-        "a coinbase of {coinbase} B fits the reserve"
+        coinbase <= reserve,
+        "a coinbase of {coinbase} B exceeds the reserve {reserve}"
     );
-    let shortfall = coinbase - 600;
 
-    let mut listed = bodies_landing_within(shortfall, bound);
+    let listed = bodies_landing_within(coinbase, bound);
     let bodies: u64 = listed
         .iter()
         .map(|tx| u64::try_from(tx.weight()).expect("fits"))
         .sum();
     assert!(bodies <= bound, "the fill's bound allows these bodies");
-    assert!(bodies + coinbase > 2 * FULL_REWARD_ZONE);
 
+    let template = build(&context(&chain, &params, &miner, &listed)).expect("builds");
     assert!(
-        matches!(
-            build(&context(&chain, &params, &miner, &listed)),
-            Err(TemplateError::Emission(
-                shekyl_economics::EmissionError::BlockTooBig
-            ))
-        ),
-        "bodies of {bodies} B under a bound of {bound} B, coinbase {coinbase} B"
+        template.block_weight <= 2 * FULL_REWARD_ZONE,
+        "bodies {bodies} B, coinbase {coinbase} B, block {}",
+        template.block_weight
+    );
+}
+
+/// A fee that lengthens the coinbase amount's varint by one byte puts a
+/// block that was sized to the limit over it. The builder drops that body
+/// and the block it returns is within the limit.
+///
+/// At the limit the penalty pays nothing, so the amount is the fee. The
+/// empty block's amount sits in some varint bracket; the fee is the first
+/// value of the next bracket. The body is sized to the empty coinbase, so
+/// one more varint byte does not fit.
+#[test]
+fn a_varint_byte_on_the_last_admission_drops_the_body() {
+    let params = EconomicParams::default();
+    let miner = miner();
+    let chain = chain_of(2);
+    let limit = 2 * FULL_REWARD_ZONE;
+    let empty = build(&context(&chain, &params, &miner, &[])).expect("empty block");
+    let empty_amount = empty.block.miner_transaction.prefix.outputs[0].amount;
+    let empty_len = varint_len(empty_amount);
+    let empty_w = u64::try_from(empty.block.miner_transaction.weight()).expect("fits");
+    // The first value whose varint is one byte longer than the empty amount.
+    let boundary = 1u64 << (7 * empty_len);
+    assert!(
+        empty_amount < boundary,
+        "the empty amount is inside its bracket"
+    );
+    assert_eq!(varint_len(boundary), empty_len + 1);
+
+    let wide = super::price_and_pay(
+        &context(&chain, &params, &miner, &[]),
+        limit,
+        AtomicUnits::from_raw(boundary),
+    )
+    .expect("the limit prices a fee at the next varint boundary");
+    let wide_amount = wide.coinbase.prefix.outputs[0].amount;
+    let wide_w = u64::try_from(wide.coinbase.weight()).expect("fits");
+    assert_eq!(wide_amount, boundary);
+    assert_eq!(varint_len(wide_amount), empty_len + 1);
+    assert_eq!(
+        wide_w,
+        empty_w + 1,
+        "the varint is the only byte that moved"
     );
 
-    // The control: the same set less one body is a block under the limit.
-    listed.remove(0);
-    build(&context(&chain, &params, &miner, &listed)).expect("one body fewer builds");
+    let body = sized_spend(limit - empty_w, boundary);
+    let dropped = build(&context(&chain, &params, &miner, &[body])).expect("drops the body");
+    assert!(
+        dropped.transactions.is_empty(),
+        "the body whose fee lengthens the amount varint is dropped"
+    );
+    assert!(dropped.block_weight <= limit);
+    assert_eq!(dropped.block_weight, empty_w);
+}
+
+/// A two-output spend of `weight` bytes paying `fee`. Two outputs have no
+/// bulletproof clawback, so the weight is the serialized length; the proof
+/// filler is what the length is solved for.
+fn sized_spend(weight: u64, fee: u64) -> Transaction {
+    use shekyl_chain_rules::harness::fixture::paying_fee;
+    use shekyl_wire::transaction::Ct;
+
+    let weight = usize::try_from(weight).expect("fits");
+    let mut tx = paying_fee(spend(point_at(77), 2), fee);
+    let proof_len = |tx: &Transaction| match &tx.ct {
+        Ct::Fcmp {
+            prunable: Some(p), ..
+        } => p.fcmp_proof.len(),
+        _ => unreachable!("a spend carries a proof"),
+    };
+    let set_proof = |tx: &mut Transaction, len: usize| {
+        if let Ct::Fcmp {
+            prunable: Some(p), ..
+        } = &mut tx.ct
+        {
+            p.fcmp_proof = vec![0xF0; len];
+        }
+    };
+    let base = tx.serialized_len() - proof_len(&tx);
+    assert!(weight > base, "the body is already heavier than {weight}");
+    let mut len = weight - base;
+    loop {
+        set_proof(&mut tx, len);
+        let got = tx.weight();
+        if got == weight {
+            return tx;
+        }
+        assert!(got > weight, "growing the proof never shrinks the weight");
+        len -= got - weight;
+    }
 }
 
 /// A coinbase-shaped body: `Ct::Null`, no fee.

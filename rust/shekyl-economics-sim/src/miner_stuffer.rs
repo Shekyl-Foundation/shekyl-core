@@ -382,8 +382,10 @@ impl<'a> Block<'a> {
             "the block's burn is production's at its volume and supply"
         );
         let median = last.medians.effective_median.to_raw();
+        let coinbase = u64::try_from(shekyl_wire::transaction::COINBASE_RESERVE).expect("fits");
         let honest = Fill::listed(
             median,
+            coinbase,
             last.already_generated,
             last.volume,
             economic,
@@ -392,8 +394,12 @@ impl<'a> Block<'a> {
         )
         .expect("the fold listed this block");
         let room = penalty_free_weight(median, economic)
-            .min(honest.bodies_weight_bound())
-            .saturating_sub(honest.bodies_weight());
+            .saturating_sub(honest.block_weight())
+            .min(
+                honest
+                    .bodies_weight_bound()
+                    .saturating_sub(honest.bodies_weight()),
+            );
         let supply = last.supply;
         let closed_shards = ClosedShardCount::new(last.closed_shards);
         let honest_paid = price_weight(
@@ -402,7 +408,7 @@ impl<'a> Block<'a> {
             &at,
             supply,
             closed_shards,
-            honest.bodies_weight(),
+            honest.block_weight(),
             honest.fees(),
         );
         Self {
@@ -422,15 +428,20 @@ impl<'a> Block<'a> {
     }
 
     /// The block at `bodies_weight` listing `total_fees`, as production
-    /// prices it.
+    /// prices it: the coinbase weight the honest fill carries is part of
+    /// the block.
     fn priced_at(&self, bodies_weight: u64, total_fees: u64) -> PaidEmission {
+        let coinbase = self
+            .honest
+            .block_weight()
+            .saturating_sub(self.honest.bodies_weight());
         price_weight(
             self.height,
             self.median,
             &self.at,
             self.supply,
             self.closed_shards,
-            bodies_weight,
+            bodies_weight.saturating_add(coinbase),
             total_fees,
         )
     }
@@ -912,9 +923,10 @@ mod tests {
             params: &economic,
         };
         let honest_tx: OrdinaryTx = params.fee.ordinary_tx(&at);
-        let medians = medians_from(zone, zone);
+        let medians = medians_from(zone, zone, &economic);
         let mut fill = Fill::empty(
             medians.effective_median.to_raw(),
+            u64::try_from(shekyl_wire::transaction::COINBASE_RESERVE).expect("fits"),
             at.already_generated,
             volume,
             &economic,
