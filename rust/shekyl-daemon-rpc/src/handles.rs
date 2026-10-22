@@ -1,0 +1,323 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The handles the composition root hands the RPC (`DRS_X_STORE_FLIP.md`
+//! DX-Q3, N1). Each is the [`OptionsHandle`](crate::options::OptionsHandle)
+//! shape: a trait object, and an absent value that answers
+//! [`FactsFault::NotReady`].
+//!
+//! **Nothing here is routed.** The live handlers still read the C++ core.
+//! The handles are on [`crate::server::AppState`] so the flip's edit is
+//! which source a handler calls, and a Rust test can already call them
+//! over a real node. An absent handle never answers with a zero or an
+//! empty list (RK-D23): those are what a live, empty node reports.
+
+use std::net::IpAddr;
+use std::sync::Arc;
+
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
+
+use crate::chain_facts::{
+    BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
+    FactsFault, FeeEstimate,
+};
+use crate::info_facts::{
+    InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
+};
+use crate::read_facts::{
+    AltChainFacts, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed,
+    ShardCoverage,
+};
+
+/// The chain reads that replace `FfiChainFacts`, `FfiInfoFacts` and
+/// `ChainReadFacts`' production sources at the flip. One object, the
+/// three traits those handlers already call.
+pub trait ChainRead: ChainFacts + InfoFacts + ChainReadFacts {}
+
+impl<T> ChainRead for T where T: ChainFacts + InfoFacts + ChainReadFacts {}
+
+/// A chain-read handle.
+pub type ChainReadHandle = Arc<dyn ChainRead>;
+
+/// The pool, as the RPC will read it. A live empty pool reports `0`; an
+/// absent handle does not.
+pub trait PoolFacts: Send + Sync {
+    /// How many entries the node shows.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no pool was supplied.
+    fn broadcast_count(&self) -> Result<u64, FactsFault>;
+}
+
+/// A pool handle.
+pub type PoolHandle = Arc<dyn PoolFacts>;
+
+/// The ingest door, as the RPC will offer a local block through it.
+pub trait DoorFacts: Send + Sync {
+    /// Seats the door reports now. This crate does not name the ingest
+    /// door: the composition root's implementor does.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no door was supplied. A closed door
+    /// is `Ok(0)`: the node is up and is not accepting.
+    fn room(&self) -> Result<usize, FactsFault>;
+}
+
+/// A door handle.
+pub type DoorHandle = Arc<dyn DoorFacts>;
+
+/// Mining control. PR 3b starts the miner; until then a live node reports
+/// that it is not mining, and an absent handle is not ready.
+pub trait MiningFacts: Send + Sync {
+    /// Whether this node is mining.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn running(&self) -> Result<bool, FactsFault>;
+}
+
+/// A mining handle.
+pub type MiningHandle = Arc<dyn MiningFacts>;
+
+/// The process ban table.
+pub trait BansFacts: Send + Sync {
+    /// Ban `host` for the life of the process.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no table was supplied.
+    fn ban_host(&self, host: IpAddr) -> Result<(), FactsFault>;
+
+    /// Whether `host` is banned.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no table was supplied. `Ok(false)` is
+    /// a live table that does not ban `host`.
+    fn banned(&self, host: IpAddr) -> Result<bool, FactsFault>;
+}
+
+/// A bans handle.
+pub type BansHandle = Arc<dyn BansFacts>;
+
+/// The one stop latch. The handler asks; it does not stop anything itself.
+pub trait StopFacts: Send + Sync {
+    /// Ask the composition root to stop.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no latch was supplied. The call then
+    /// does not request a stop.
+    fn request_stop(&self) -> Result<(), FactsFault>;
+}
+
+/// A stop handle.
+pub type StopHandle = Arc<dyn StopFacts>;
+
+/// The six handles, absent unless the composition root supplied a node.
+#[derive(Clone)]
+pub struct Handles {
+    /// Chain reads.
+    pub chain: ChainReadHandle,
+    /// The pool.
+    pub pool: PoolHandle,
+    /// The ingest door.
+    pub door: DoorHandle,
+    /// Mining control.
+    pub mining: MiningHandle,
+    /// The ban table.
+    pub bans: BansHandle,
+    /// The stop latch.
+    pub stop: StopHandle,
+}
+
+impl Default for Handles {
+    fn default() -> Self {
+        Self::absent()
+    }
+}
+
+impl Handles {
+    /// Every handle absent: each call is [`FactsFault::NotReady`].
+    #[must_use]
+    pub fn absent() -> Self {
+        Self {
+            chain: Arc::new(ChainReadAbsent),
+            pool: Arc::new(PoolAbsent),
+            door: Arc::new(DoorAbsent),
+            mining: Arc::new(MiningAbsent),
+            bans: Arc::new(BansAbsent),
+            stop: Arc::new(StopAbsent),
+        }
+    }
+}
+
+/// No chain reads were supplied.
+pub struct ChainReadAbsent;
+
+impl ChainFacts for ChainReadAbsent {
+    fn chain_tip(&self) -> Result<ChainTip, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn identity(&self) -> Result<DaemonIdentity, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn block_hash_at(&self, _height: BlockHeight) -> Result<BlockHashAt, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn block_header_at(
+        &self,
+        _at: BlockLookup,
+        _fill_pow_hash: bool,
+    ) -> Result<BlockHeaderAt, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn fee_estimate(&self) -> Result<FeeEstimate, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn block_at(&self, _at: BlockLookup, _fill_pow_hash: bool) -> Result<BlockAt, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+impl InfoFacts for ChainReadAbsent {
+    fn chain(&self) -> Result<InfoChainFacts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn pool_counts(&self, _scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn store_size(&self) -> Result<u64, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn status(&self) -> Result<InfoStatusFacts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn peers(&self) -> Result<PeerFacts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn sessions(&self) -> Result<SessionCounts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+impl ChainReadFacts for ChainReadAbsent {
+    fn alt_block_hashes(&self) -> Result<Vec<BlockHash>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn alternate_chains(&self) -> Result<Vec<AltChainFacts>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn curve_tree(&self) -> Result<CurveTreeFacts, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn curve_tree_after(&self, _height: BlockHeight) -> Result<Option<CurveTreeFacts>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn coinbase_sum(&self, _start: BlockHeight, _count: u64) -> Result<CoinbaseRange, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn pow_hash(&self, _pow_blob: &[u8], _seed: PowSeed) -> Result<PowAt, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn emission_claim_source(&self, _persona: &PCanonicalId) -> Result<ClaimSource, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn shard_coverage(&self) -> Result<ShardCoverage, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+struct PoolAbsent;
+
+impl PoolFacts for PoolAbsent {
+    fn broadcast_count(&self) -> Result<u64, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+struct DoorAbsent;
+
+impl DoorFacts for DoorAbsent {
+    fn room(&self) -> Result<usize, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+struct MiningAbsent;
+
+impl MiningFacts for MiningAbsent {
+    fn running(&self) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+struct BansAbsent;
+
+impl BansFacts for BansAbsent {
+    fn ban_host(&self, _host: IpAddr) -> Result<(), FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn banned(&self, _host: IpAddr) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+struct StopAbsent;
+
+impl StopFacts for StopAbsent {
+    fn request_stop(&self) -> Result<(), FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use super::*;
+
+    #[test]
+    fn an_absent_handle_is_not_ready_and_never_a_zero_or_an_empty_list() {
+        let handles = Handles::absent();
+        assert_eq!(handles.chain.chain_tip(), Err(FactsFault::NotReady));
+        assert_eq!(handles.chain.alt_block_hashes(), Err(FactsFault::NotReady));
+        assert_eq!(
+            handles.chain.store_size(),
+            Err(FactsFault::NotReady),
+            "a missing store is not a size of 0"
+        );
+        assert_eq!(handles.pool.broadcast_count(), Err(FactsFault::NotReady));
+        assert_eq!(handles.door.room(), Err(FactsFault::NotReady));
+        assert_eq!(handles.mining.running(), Err(FactsFault::NotReady));
+        assert_eq!(
+            handles.bans.banned(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            Err(FactsFault::NotReady),
+            "no table is not 'this host is allowed'"
+        );
+        assert_eq!(handles.stop.request_stop(), Err(FactsFault::NotReady));
+    }
+}

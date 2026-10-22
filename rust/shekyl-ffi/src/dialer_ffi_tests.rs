@@ -15,7 +15,7 @@
 use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, PoisonError};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -114,9 +114,7 @@ fn section(peers: &[u8], closed: &[u8], disclose_early: bool) -> P2p {
 /// refusal the caller sees, not a push held for a build.
 #[test]
 fn a_push_before_the_dialer_exists_is_refused_not_held() {
-    let _bind = seam_bind_lock()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _bind = seam_bind_lock().lock();
     unbind();
     let dir = tempfile::tempdir().expect("a directory");
     assert_eq!(
@@ -133,9 +131,7 @@ fn a_push_before_the_dialer_exists_is_refused_not_held() {
 /// white: a named address has not been dialled, and white is disclosed.
 #[test]
 fn the_section_enters_the_file_and_the_operators_peers_as_gray() {
-    let _bind = seam_bind_lock()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _bind = seam_bind_lock().lock();
     unbind();
     let dir = tempfile::tempdir().expect("a directory");
     let file = dir.path().join("p2pstate.bin");
@@ -154,9 +150,7 @@ fn the_section_enters_the_file_and_the_operators_peers_as_gray() {
 
 #[test]
 fn an_own_address_is_never_a_candidate() {
-    let _bind = seam_bind_lock()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _bind = seam_bind_lock().lock();
     unbind();
     bind();
     let dir = tempfile::tempdir().expect("a directory");
@@ -178,9 +172,7 @@ fn an_own_address_is_never_a_candidate() {
 /// population stays open (the §4 run, 2026-10-13).
 #[test]
 fn an_empty_declaration_declares_no_closed_network() {
-    let _bind = seam_bind_lock()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _bind = seam_bind_lock().lock();
     unbind();
     bind();
     let dir = tempfile::tempdir().expect("a directory");
@@ -196,9 +188,7 @@ fn an_empty_declaration_declares_no_closed_network() {
 
 #[test]
 fn disclose_early_runs_from_the_section() {
-    let _bind = seam_bind_lock()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _bind = seam_bind_lock().lock();
     unbind();
     bind();
     let dir = tempfile::tempdir().expect("a directory");
@@ -218,9 +208,7 @@ fn disclose_early_runs_from_the_section() {
 
 #[test]
 fn a_closed_network_is_the_population() {
-    let _bind = seam_bind_lock()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _bind = seam_bind_lock().lock();
     unbind();
     bind();
     let dir = tempfile::tempdir().expect("a directory");
@@ -251,9 +239,7 @@ fn a_noted_network_survives_every_id_derivation() {
     // `NETWORK` is process-wide. The Tor seed test writes it under this
     // same lock; restoration stays inside the lock so a parallel test
     // cannot observe the value mid-restore.
-    let _bind = seam_bind_lock()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _bind = seam_bind_lock().lock();
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -335,9 +321,7 @@ fn a_noted_network_survives_every_id_derivation() {
 /// before the owner loop; this is that order without the thread.
 #[test]
 fn a_closed_tor_network_draws_its_declaration_not_a_compiled_onion() {
-    let _bind = seam_bind_lock()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _bind = seam_bind_lock().lock();
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -509,9 +493,7 @@ impl Drop for UnbindOnDrop {
 /// suite fails instead of waiting.
 #[test]
 fn a_kept_session_closed_from_cxx_returns_and_leaves_the_kept_count() {
-    let _bind = seam_bind_lock()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _bind = seam_bind_lock().lock();
     unbind();
     let _unbind = UnbindOnDrop;
     bind();
@@ -562,9 +544,7 @@ fn a_kept_session_closed_from_cxx_returns_and_leaves_the_kept_count() {
 /// the kept sessions' ids off the hub's board, so it closes what exists.
 #[test]
 fn the_list_paths_and_closes_do_not_deadlock() {
-    let _bind = seam_bind_lock()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let _bind = seam_bind_lock().lock();
     unbind();
     let _unbind = UnbindOnDrop;
     bind();

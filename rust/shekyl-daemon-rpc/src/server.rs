@@ -32,6 +32,7 @@ use crate::bind::BoundListener;
 use crate::conn_limit::{ConnLimits, ConnTracker, LimitedListener};
 use crate::core::CoreRpc;
 use crate::handlers::{binary, json, json_rpc, submit};
+use crate::handles::Handles;
 use crate::middleware::DEFAULT_BODY_LIMIT;
 use crate::options::{OptionsAbsent, OptionsFacts};
 use crate::shard_view::{ShardViewFacts, SkeletonAbsent};
@@ -61,6 +62,9 @@ pub struct AppState {
     /// What `option_set` and `option_show` read and write
     /// (`options::OptionsFacts`, RT-O26); the composition root supplies it.
     pub options: Arc<dyn OptionsFacts>,
+    /// The node's handles (N1). Present, and not yet what the live routes
+    /// read: those keep the C++ `core` until the store flip.
+    pub handles: Handles,
 }
 
 pub struct ServerConfig {
@@ -75,6 +79,8 @@ pub struct ServerConfig {
     pub shard_view: Arc<dyn ShardViewFacts>,
     /// The options handle (RT-O26); the default serves no options.
     pub options: Arc<dyn OptionsFacts>,
+    /// The node's handles. The default is absent: every call is not ready.
+    pub handles: Handles,
 }
 
 impl Default for ServerConfig {
@@ -85,6 +91,7 @@ impl Default for ServerConfig {
             conn_limits: ConnLimits::default(),
             shard_view: Arc::new(SkeletonAbsent),
             options: Arc::new(OptionsAbsent),
+            handles: Handles::absent(),
         }
     }
 }
@@ -464,6 +471,7 @@ pub async fn serve_presets(
             conn_tracker: conn_tracker.clone(),
             shard_view: config.shard_view.clone(),
             options: config.options.clone(),
+            handles: config.handles.clone(),
         });
         build_router(state, &config.cors_origins)
     };

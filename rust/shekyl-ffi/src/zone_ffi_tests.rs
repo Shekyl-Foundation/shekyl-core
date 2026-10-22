@@ -34,9 +34,7 @@ unsafe extern "C" fn discard(
 /// path arms nothing and never saw it.
 #[test]
 fn the_engine_outlives_ensure() {
-    let _bind = crate::seam_ffi::seam_bind_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
     let mut executor = 0u8;
     let ceiling = ShekylInboundCeiling {
         kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
@@ -110,9 +108,7 @@ fn the_engine_outlives_ensure() {
 /// general, since a ban can be written long before the host starts).
 #[test]
 fn the_engine_reads_the_process_clock() {
-    let _bind = crate::seam_ffi::seam_bind_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
     let mut executor = 0u8;
     let ceiling = ShekylInboundCeiling {
         kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
@@ -161,9 +157,7 @@ fn the_engine_reads_the_process_clock() {
 /// 0, since the proxy it writes is the same.
 #[test]
 fn a_second_start_of_a_connectors_loop_starts_nothing() {
-    let _bind = crate::seam_ffi::seam_bind_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
     let mut executor = 0u8;
     let ceiling = ShekylInboundCeiling {
         kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
@@ -210,9 +204,7 @@ fn a_second_start_of_a_connectors_loop_starts_nothing() {
 /// with clearnet off never received the onion list.
 #[test]
 fn a_tor_only_start_admits_the_compiled_onion_seeds() {
-    let _bind = crate::seam_ffi::seam_bind_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -279,9 +271,7 @@ fn a_tor_only_start_admits_the_compiled_onion_seeds() {
 /// build that never came, and the listing export refused.
 #[test]
 fn a_zone_host_built_after_shutdown_has_a_dialer() {
-    let _bind = crate::seam_ffi::seam_bind_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
     let mut executor = 0u8;
     let ceiling = crate::inbound_ceiling_ffi::ShekylInboundCeiling {
         kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
@@ -345,9 +335,7 @@ fn a_closed_admission_keeps_the_dial_cause() {
 /// test's subject, now the zone host's).
 #[test]
 fn a_clearnet_endpoint_already_bound_is_refused_with_its_address() {
-    let _bind = crate::seam_ffi::seam_bind_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
     let mut executor = 0u8;
     let ceiling = ShekylInboundCeiling {
         kind: SHEKYL_INBOUND_CEILING_UNLIMITED,
@@ -403,9 +391,7 @@ fn a_clearnet_endpoint_already_bound_is_refused_with_its_address() {
 /// down without the incarnation check fails the second half.
 #[test]
 fn a_managed_tor_death_takes_its_own_incarnation_down_and_no_later_one() {
-    let _bind = crate::seam_ffi::seam_bind_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _bind = crate::seam_ffi::seam_bind_lock().lock();
     let mut executor = 0u8;
     let ceiling = ShekylInboundCeiling {
         kind: SHEKYL_INBOUND_CEILING_UNLIMITED,

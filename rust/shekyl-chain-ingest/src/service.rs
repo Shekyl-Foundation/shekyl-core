@@ -61,7 +61,7 @@ use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
 use crate::connector::{Connector, ConnectorArgs, PopBeyondReorgCap, RunFault, WatchTip};
-use crate::follower::MinerFeed;
+use crate::follower::JobSeat;
 use crate::schedule::ChainRules;
 
 /// The caller's name for one arrival, carried on its reply.
@@ -666,12 +666,16 @@ impl Door {
     }
 
     /// Block until a block this node mined can take a seat, or the door closes.
-    pub(crate) fn wait_for_local_seat(&self) {
+    ///
+    /// `false` is a closed door: the wait woke because the service is
+    /// stopping, and a seat will not appear.
+    pub(crate) fn wait_for_local_seat(&self) -> bool {
         self.room.wait_local();
+        !self.is_closed()
     }
 
     /// Close the door and wake a miner waiting for a seat.
-    fn close(&self) {
+    pub(crate) fn close(&self) {
         self.room.close();
     }
 
@@ -752,11 +756,12 @@ fn take_unsolicited(
 
 /// What the service's tip follower feeds, beside the store
 /// (`follower` module docs). Each part is optional: a service with
-/// neither still publishes the tip.
+/// neither still publishes the tip. A job seat without a miner holds the
+/// board until the service stops and posts nothing in between.
 #[derive(Default)]
 pub struct Follow {
-    /// The miner's board, template source, sync state and found sink.
-    pub miner: Option<MinerFeed>,
+    /// The board, and the miner when one is seated.
+    pub job: Option<JobSeat>,
     /// The pool.
     pub pool: Option<PoolWiring>,
 }
@@ -883,16 +888,16 @@ where
         let mut stopped = shared.stop.subscribe();
         let attendant_shared = Arc::clone(&shared);
         let attendant_door = door.clone();
-        let feed = follow.miner;
+        let job = follow.job;
         let task = tokio::spawn(async move {
             let attendant = tokio::spawn(async move {
                 let Ok(tips) = attendant_shared.connector.ask(WatchTip).await else {
-                    if let Some(feed) = feed.as_ref() {
-                        feed.board.withdraw();
+                    if let Some(seat) = job.as_ref() {
+                        seat.board.withdraw();
                     }
                     return;
                 };
-                crate::follower::follow(attendant_shared, attendant_door, tips, feed).await;
+                crate::follower::follow(attendant_shared, attendant_door, tips, job).await;
             });
             tokio::pin!(attendant);
             let mut spans: JoinSet<()> = JoinSet::new();
