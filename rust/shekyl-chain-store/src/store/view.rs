@@ -150,6 +150,41 @@ impl<'b, 'id> BatchView<'b, 'id> {
     fn tip_row(&self) -> Result<Option<(u64, BlockInfo)>, StoreError> {
         chain_reads::tip_of(self.batch.txn()).map_err(|f| self.arm(f))
     }
+
+    /// Arm a store invariant on this batch. The admission view uses it for
+    /// a memo miss (SI-35): that fault is not a read of a table.
+    pub(super) fn arm_row(&self, row: StoreInvariant) -> StoreError {
+        self.batch.poison().arm(row)
+    }
+
+    /// The coinbase `0x0C` of the block at `height`, parsed by the wire
+    /// grammar. `None` is this view failing to answer: the block is above
+    /// the tip, or the extra does not carry exactly one commitment.
+    pub(super) fn draw_commitment_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<Option<shekyl_types::archival::DrawCommitment>, StoreError> {
+        use shekyl_wire::tx_extra::TxExtraField;
+        let tip = self.tip_row()?;
+        let body = chain_reads::block_body(self.batch.txn(), tip.as_ref(), height.to_raw())
+            .map_err(|f| self.arm(f))?;
+        let AtHeight::Recorded((_, block)) = body else {
+            return Ok(None);
+        };
+        let Ok(fields) = block.miner_transaction.prefix.parse_extra() else {
+            return Ok(None);
+        };
+        let mut found = None;
+        for field in fields {
+            if let TxExtraField::DrawCommitment(commitment) = field {
+                if found.is_some() {
+                    return Ok(None);
+                }
+                found = Some(commitment);
+            }
+        }
+        Ok(found)
+    }
 }
 
 impl<'id> HeaderView<'id> for BatchView<'_, 'id> {

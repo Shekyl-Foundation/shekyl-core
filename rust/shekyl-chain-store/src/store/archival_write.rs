@@ -102,10 +102,15 @@
 //! leaves the bit — the C++'s behaviour, and the corpus's `Inject` event
 //! (commit 7) is a pipeline barrier for the same reason.
 
+use std::collections::BTreeMap;
+
 use shekyl_chain_rules::{
-    ArchivalDelta, ChainValid, ChainView, RecordWriteKind, ReleaseAnchors, Trust,
+    issued_draw_term, Admitted, ArchivalDelta, BlockDrawsFloor, ChainValid, ChainView, EpochFloor,
+    RecordWriteKind, ReleaseAnchors, Settling, Trust,
 };
-use shekyl_types::archival::{AttestationWitness, IndexedDraw, IssuedDigest};
+use shekyl_types::archival::{
+    AttestationWitness, BlockDraws, IndexedDraw, IssuedDigest, IssuedDraw, COUNTED_DRAWS,
+};
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
 
@@ -126,9 +131,10 @@ use crate::schema::{
 };
 
 use super::archival_reads;
+use super::bundle_view::StoreBundleView;
 use super::error::{
-    AccrualFault, DigestFault, EngineError, FrozenFault, SettlementFault, SlashFault, StoreCannot,
-    StoreError, StoreInvariant,
+    AccrualFault, AdmissionWriteFault, DigestFault, EngineError, FrozenFault, SettlementFault,
+    SlashFault, StoreCannot, StoreError, StoreInvariant,
 };
 use super::write::WriteBatch;
 use super::ChainStore;
@@ -450,6 +456,147 @@ impl<'id> WriteBatch<'_, 'id> {
         Ok(())
     }
 
+    /// The admitted bundles of the block at `connecting`, written after the
+    /// count and in its journal (`SO-D12` increment 4a).
+    ///
+    /// `issued_short` is the reduction against `D(epoch(connecting))` only.
+    /// A bundle whose `h` is in an earlier epoch contributes none of it:
+    /// its index rows, digest fold, `revealed(h)` and passed bits are
+    /// written into `epoch(h)`. The counts are the view's, gathered once
+    /// for [`StoreBundleView::visible_counts`]; this method adds the
+    /// block's own same-epoch draws and derives no selection.
+    ///
+    /// # Errors
+    ///
+    /// SI-36 when a reveal is repeated, a draw row is missing, or the
+    /// reduction does not fit. SI-25 [`SettlementFault::IndexDrift`] when
+    /// an issued-draw key is already present.
+    pub(super) fn write_admissions(
+        &self,
+        connecting: BlockHeight,
+        view: &StoreBundleView<'_, '_, 'id>,
+        admitted: &[Admitted],
+    ) -> Result<(), StoreError> {
+        if admitted.is_empty() {
+            return Ok(());
+        }
+        if view.including() != connecting {
+            return Err(self.admission_fault(connecting, AdmissionWriteFault::RowAbsent));
+        }
+        let schedule = view.schedule();
+        let epoch = schedule.epoch_at(connecting);
+        let before = view.visible_counts(epoch, connecting)?;
+        let issued_short =
+            short_reduction(epoch, schedule, admitted, &before).ok_or_else(|| {
+                self.admission_fault(connecting, AdmissionWriteFault::ReductionPastWidth)
+            })?;
+        let floor = BlockDrawsFloor::in_force(connecting, schedule);
+
+        let mut revealed: BTreeMap<BlockHeight, BlockDraws> = BTreeMap::new();
+        let mut issued: BTreeMap<SettlementEpoch, Vec<IndexedDraw>> = BTreeMap::new();
+        for bundle in admitted {
+            let h = bundle.kept.h;
+            if revealed.contains_key(&h) {
+                return Err(self.admission_fault(h, AdmissionWriteFault::AlreadyRevealed));
+            }
+            let Some(mut row) = archival_reads::block_draws(self.txn(), h, floor)
+                .map_err(|fault| self.arm_read_fault(fault))?
+            else {
+                return Err(self.admission_fault(h, AdmissionWriteFault::RowAbsent));
+            };
+            if row.revealed {
+                return Err(self.admission_fault(h, AdmissionWriteFault::AlreadyRevealed));
+            }
+            row.revealed = true;
+            revealed.insert(h, row);
+            let draw_epoch = schedule.epoch_at(h);
+            for draw in &bundle.draws {
+                let Ok(index) = u32::try_from(draw.index) else {
+                    return Err(self.admission_fault(h, AdmissionWriteFault::ReductionPastWidth));
+                };
+                issued.entry(draw_epoch).or_default().push(IndexedDraw {
+                    persona: draw.pair.persona,
+                    shard: draw.pair.shard,
+                    issuing_height: h,
+                    draw: index,
+                    state: IssuedDraw {
+                        revealed_at: connecting,
+                        passed: draw.passed,
+                    },
+                });
+            }
+        }
+
+        let Some(mut incl) = archival_reads::block_draws(self.txn(), connecting, floor)
+            .map_err(|fault| self.arm_read_fault(fault))?
+        else {
+            return Err(self.admission_fault(connecting, AdmissionWriteFault::RowAbsent));
+        };
+        incl.issued_short = issued_short;
+        if let Some(row) = revealed.get_mut(&connecting) {
+            row.issued_short = issued_short;
+        }
+        for (height, draws) in &revealed {
+            self.open_replace_table(
+                ARCHIVAL_BLOCK_DRAWS,
+                StoreInvariant::AdmissionWrite {
+                    height: *height,
+                    observed: AdmissionWriteFault::RowAbsent,
+                },
+            )?
+            .replace(height.to_raw(), draws.encoded().as_encoded())?;
+        }
+        if !revealed.contains_key(&connecting) {
+            self.open_replace_table(
+                ARCHIVAL_BLOCK_DRAWS,
+                StoreInvariant::AdmissionWrite {
+                    height: connecting,
+                    observed: AdmissionWriteFault::RowAbsent,
+                },
+            )?
+            .replace(connecting.to_raw(), incl.encoded().as_encoded())?;
+        }
+
+        let settle_floor = EpochFloor::<Settling>::under(connecting, schedule);
+        for (draw_epoch, draws) in &issued {
+            let collision = StoreInvariant::SettlementNotSound {
+                epoch: *draw_epoch,
+                observed: SettlementFault::IndexDrift,
+            };
+            let mut index = self.open_insert_table(ARCHIVAL_ISSUED_DRAW, collision)?;
+            for draw in draws {
+                let key = IssuedDrawKey::new(
+                    *draw_epoch,
+                    draw.persona,
+                    draw.shard,
+                    draw.issuing_height,
+                    draw.draw,
+                );
+                index.insert_observing(key.key(), draw.state.encoded().as_encoded(), collision)?;
+            }
+            drop(index);
+            let mut digest = archival_reads::issued_digest(self.txn(), *draw_epoch, settle_floor)
+                .map_err(|fault| self.arm_read_fault(fault))?;
+            for draw in draws {
+                digest.fold(&issued_draw_term(
+                    &draw.persona,
+                    draw.shard,
+                    *draw_epoch,
+                    draw.issuing_height,
+                    draw.draw,
+                ));
+            }
+            self.open_upsert_table(ARCHIVAL_ISSUED_DIGEST)?
+                .upsert(draw_epoch.to_raw(), digest.encoded().as_encoded())?;
+        }
+        Ok(())
+    }
+
+    fn admission_fault(&self, height: BlockHeight, observed: AdmissionWriteFault) -> StoreError {
+        self.poison()
+            .arm(StoreInvariant::AdmissionWrite { height, observed })
+    }
+
     /// 9b, first half. `archival_settlement[(P, shard, E)] = row` for every
     /// pair the slash pass settled, insert-once: an epoch settles once, and
     /// a row already there is SI-25 ([`SettlementFault::AlreadySettled`])
@@ -612,6 +759,37 @@ impl<'id> WriteBatch<'_, 'id> {
         }
         Ok(())
     }
+}
+
+/// `issued_short(h_incl)`: the reduction against `D(epoch(h_incl))` only.
+/// A bundle whose height is in another epoch adds nothing. Each pair
+/// contributes `min(3, before + new) − min(3, before)`.
+fn short_reduction(
+    epoch: SettlementEpoch,
+    schedule: shekyl_chain_rules::SettlementSchedule,
+    admitted: &[Admitted],
+    before: &BTreeMap<(PCanonicalId, ShardId), u32>,
+) -> Option<u32> {
+    let cap = u32::try_from(COUNTED_DRAWS).expect("three draws fit");
+    let mut added: BTreeMap<(PCanonicalId, ShardId), u32> = BTreeMap::new();
+    for bundle in admitted {
+        if schedule.epoch_at(bundle.kept.h) != epoch {
+            continue;
+        }
+        for draw in &bundle.draws {
+            let count = added
+                .entry((draw.pair.persona, draw.pair.shard))
+                .or_insert(0);
+            *count = count.checked_add(1)?;
+        }
+    }
+    let mut total = 0u32;
+    for (pair, new) in added {
+        let prior = before.get(&pair).copied().unwrap_or(0).min(cap);
+        let after = prior.saturating_add(new).min(cap);
+        total = total.checked_add(after - prior)?;
+    }
+    Some(total)
 }
 
 impl ChainStore {

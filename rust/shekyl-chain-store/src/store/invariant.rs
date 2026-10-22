@@ -467,6 +467,36 @@ pub enum StoreInvariant {
         /// The first height still retained.
         floor: shekyl_types::BlockHeight,
     },
+    /// **SI-35** — the admission view reads `D` from the count phase's memo,
+    /// under the opening block's hash. A miss is not a rebuild and not an
+    /// absent set: the count phase of this block already filed every epoch a
+    /// section inside `W₂` can name. Fatal, never a verdict on the block.
+    DrawableMemoMiss {
+        /// The epoch the view was asked for.
+        epoch: shekyl_types::SettlementEpoch,
+    },
+    /// **SI-36** — admission writes each reveal once, and the shortfall
+    /// reduction fits the row. A second reveal of `h`, a missing draw row,
+    /// a draw index the key cannot hold, or a reduction past `u32` is this
+    /// halt. Fatal, never a verdict on the block.
+    AdmissionWrite {
+        /// The height the write was about: the revealed block, or `h_incl`.
+        height: shekyl_types::BlockHeight,
+        /// Which check failed.
+        observed: AdmissionWriteFault,
+    },
+}
+
+/// What an SI-36 check observed (payload of [`StoreInvariant::AdmissionWrite`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdmissionWriteFault {
+    /// `revealed` was already set. A bundle reveals `h` once.
+    AlreadyRevealed,
+    /// The shortfall reduction does not fit in `issued_short`, or a draw
+    /// index does not fit the key.
+    ReductionPastWidth,
+    /// The revealed block, or `h_incl`, has no draw row to update.
+    RowAbsent,
 }
 
 /// What an SI-33 check observed (payload of
@@ -675,6 +705,8 @@ impl StoreInvariant {
             Self::EpochReadBelowFloor { .. } => 32,
             Self::BlockDrawsNotSingular { .. } => 33,
             Self::BlockDrawsReadBelowFloor { .. } => 34,
+            Self::DrawableMemoMiss { .. } => 35,
+            Self::AdmissionWrite { .. } => 36,
         }
     }
 }
@@ -935,6 +967,27 @@ impl core::fmt::Display for StoreInvariant {
                      the block corpus"
                 ),
             },
+            Self::AdmissionWrite { height, observed } => match observed {
+                AdmissionWriteFault::AlreadyRevealed => write!(
+                    f,
+                    "archival_block_draws at height {height} is already revealed; a bundle \
+                     reveals a block's seed once"
+                ),
+                AdmissionWriteFault::ReductionPastWidth => write!(
+                    f,
+                    "the shortfall reduction at height {height} does not fit issued_short"
+                ),
+                AdmissionWriteFault::RowAbsent => write!(
+                    f,
+                    "admission was asked to update the draw row at height {height}, and that \
+                     row was never written"
+                ),
+            },
+            Self::DrawableMemoMiss { epoch } => write!(
+                f,
+                "the admission view has no drawable set for epoch {epoch} under the opening \
+                 block's hash; the count phase files that set before admission reads it"
+            ),
             Self::BlockDrawsReadBelowFloor { asked, floor } => write!(
                 f,
                 "archival_block_draws was asked for height {asked} while rows below {floor} may \
@@ -992,6 +1045,8 @@ impl core::error::Error for StoreInvariant {
             | Self::EpochReadBelowFloor { .. }
             | Self::BlockDrawsNotSingular { .. }
             | Self::BlockDrawsReadBelowFloor { .. }
+            | Self::DrawableMemoMiss { .. }
+            | Self::AdmissionWrite { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }
