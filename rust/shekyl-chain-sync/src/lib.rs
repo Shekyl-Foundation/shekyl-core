@@ -17,6 +17,8 @@
 #![deny(unsafe_code)]
 
 #[cfg(test)]
+mod harness;
+#[cfg(test)]
 mod select_tests;
 
 mod branch;

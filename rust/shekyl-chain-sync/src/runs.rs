@@ -12,11 +12,12 @@ use shekyl_chain_rules::{
     seed_height, target_claim, AtHeight, CenRow, Fault, FormAttempt, FormedHeader, HeaderJudged,
     HeaderView, InvalidBlock, OpenHeader, Retry, RuleSet, Stale, Substrate, Target,
 };
-use shekyl_difficulty::{CumulativeDifficulty, SEEDHASH_EPOCH_LAG};
+use shekyl_difficulty::{CumulativeDifficulty, MTP_WINDOW_USIZE, N_USIZE};
+use shekyl_draw_rng::{bounded_uniform, RelayRng};
 use shekyl_levin::{BodiesFormFault, RequestBodies, ResponseBodies, ResponseHeaders};
 use shekyl_peer_policy::{SyncReply, SyncReplyAction};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight, PowHash, Timestamp};
-use shekyl_wire::{Block, PowBlob};
+use shekyl_wire::{Block, PowBlob, TxBody};
 
 use crate::branch::{BranchView, Overlay};
 use crate::model::{
@@ -37,16 +38,16 @@ pub(crate) struct BodyRequest<K> {
     pub hashes: Vec<BlockHash>,
 }
 
-struct Checked {
+pub(crate) struct Checked {
     pow: PowBlob,
-    hash: BlockHash,
+    pub(crate) hash: BlockHash,
     height: BlockHeight,
     previous: BlockHash,
-    work: CumulativeDifficulty,
+    pub(crate) work: CumulativeDifficulty,
     seed: BlockHash,
     target: Target,
     rule: RuleSet,
-    header: shekyl_wire::BlockHeader,
+    pub(crate) header: shekyl_wire::BlockHeader,
 }
 
 /// Headers received and not yet part of `T`.
@@ -54,10 +55,14 @@ pub(crate) struct Run {
     #[allow(dead_code)]
     parent: BlockHash,
     parent_height: BlockHeight,
-    checked: Vec<Checked>,
+    pub(crate) checked: Vec<Checked>,
     proven: usize,
     held: Vec<HeaderJudged>,
     in_slot: bool,
+    /// Verifying its budget so it can be compared with the slot holder.
+    challenging: bool,
+    /// A past-cap run waiting for the one evidence draw.
+    candidate: bool,
     job: Option<u64>,
     attempt: FormAttempt,
     past_cap: bool,
@@ -225,13 +230,22 @@ where
         let cap = self.cap();
         let local_height = self.local.and_then(|local| local.height);
         let depth = fork_depth(local_height, parent_height);
-        let past_cap = depth > cap;
+        let past_cap = depth > cap
+            || self
+                .sessions
+                .get(&session)
+                .and_then(|state| state.run.as_ref())
+                .is_some_and(|run| run.past_cap);
+        // The latch, or a past-cap run that already ended. A run still
+        // in progress keeps its headers; "followed once" starts when it ends.
+        if past_cap && self.alarm {
+            return Ok(());
+        }
         if past_cap
-            && (self.alarm
-                || self
-                    .sessions
-                    .get(&session)
-                    .is_some_and(|s| s.past_cap_followed))
+            && self
+                .sessions
+                .get(&session)
+                .is_some_and(|s| s.past_cap_followed)
         {
             return Ok(());
         }
@@ -317,6 +331,8 @@ where
                 proven: 0,
                 held: Vec::new(),
                 in_slot: false,
+                challenging: false,
+                candidate: false,
                 job: None,
                 attempt: FormAttempt::FIRST,
                 past_cap,
@@ -334,6 +350,27 @@ where
         let budget_full = run.checked.len() >= usize::try_from(cap.to_raw()).unwrap_or(usize::MAX);
         let beats = work > self.star.work;
         let in_slot = run.in_slot;
+        if past_cap {
+            let over = self.past_bound(session, cap);
+            self.trim_window(session);
+            self.note_evidence(session);
+            let candidate = self
+                .sessions
+                .get(&session)
+                .and_then(|s| s.run.as_ref())
+                .is_some_and(|run| run.candidate);
+            if over || !response.more {
+                if let Some(state) = self.sessions.get_mut(&session) {
+                    state.past_cap_followed = true;
+                }
+                if !candidate {
+                    self.drop_run(session);
+                }
+                return Ok(());
+            }
+            self.finish_run(session, true, now, out);
+            return Ok(());
+        }
         if !response.more {
             if claim.is_some_and(|claim| work < claim) && !beats {
                 self.close(session, CloseCause::ClaimUnmet, out);
@@ -346,11 +383,6 @@ where
         }
         if budget_full && !beats && !in_slot {
             self.consider_slot(session, out);
-            return Ok(());
-        }
-        if past_cap {
-            self.note_evidence(session);
-            self.finish_run(session, response.more, now, out);
             return Ok(());
         }
         if beats || in_slot {
@@ -404,13 +436,13 @@ where
                         }
                         Judged::Ok(header) => {
                             let header = *header;
-                            let in_slot = self
+                            let hold = self
                                 .sessions
                                 .get(&session)
                                 .and_then(|s| s.run.as_ref())
-                                .is_some_and(|run| run.in_slot);
+                                .is_some_and(|run| run.in_slot || run.challenging);
                             let beats = header.cumulative_difficulty() > self.star.work;
-                            if in_slot && !beats {
+                            if hold && !beats {
                                 if let Some(run) =
                                     self.sessions.get_mut(&session).and_then(|s| s.run.as_mut())
                                 {
@@ -471,6 +503,7 @@ where
             }
         }
         self.evidence_alarm(session, out);
+        self.settle_challenge(session);
         if self
             .sessions
             .get(&session)
@@ -510,9 +543,12 @@ where
             }
             return;
         }
-        for hash in &response.missed_ids {
-            if let Some(state) = self.sessions.get_mut(&session) {
+        if let Some(state) = self.sessions.get_mut(&session) {
+            for hash in &response.missed_ids {
                 state.unavailable.insert(BlockHash::from_bytes(*hash));
+            }
+            for hash in &response.deferred {
+                state.deferred.insert(BlockHash::from_bytes(*hash));
             }
         }
         for body in &response.bodies {
@@ -535,6 +571,14 @@ where
             if let Err(refused) = shekyl_chain_rules::bind_body(&judged, body) {
                 self.close(session, CloseCause::Bind(refused.rule), out);
                 return;
+            }
+            // Until the discard rule lands, every byte is kept, so a
+            // skeleton is wanted again in full. It is not a fault.
+            if body.txs.iter().any(|tx| matches!(tx, TxBody::Skeleton(_))) {
+                if let Some(state) = self.sessions.get_mut(&session) {
+                    state.skeleton.insert(hash);
+                }
+                continue;
             }
             let tag = self.next_tag;
             self.next_tag = self.next_tag.saturating_add(1);
@@ -559,6 +603,7 @@ where
         at: BlockHash,
         indices: &[u64],
         verdict: Option<InvalidBlock>,
+        now: Instant,
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         let action = reply.action(solicited);
@@ -593,7 +638,7 @@ where
                     if let Some(state) = self.sessions.get_mut(&session) {
                         state.header_quiet = false;
                     }
-                    let _ = at;
+                    self.locate(session, at, now, out);
                 }
             }
             SyncReplyAction::RequestHeaders => {
@@ -825,57 +870,144 @@ where
         let Some(state) = self.sessions.get_mut(&session) else {
             return;
         };
-        state.past_cap_followed = true;
-        let candidate = state.run.as_ref().is_some_and(|run| {
-            run.checked.last().is_some_and(|c| {
-                c.work
-                    > self
-                        .local
-                        .map(|l| l.work)
-                        .unwrap_or(CumulativeDifficulty::ZERO)
-            })
-        });
-        if !candidate || state.evidence_used || self.alarm || self.evidence.is_some() {
+        if self.alarm || state.evidence_used {
             return;
         }
-        state.evidence_used = true;
-        if let Some(run) = state.run.as_mut() {
-            run.evidence = true;
-            run.in_slot = false;
+        let local = self
+            .local
+            .map(|l| l.work)
+            .unwrap_or(CumulativeDifficulty::ZERO);
+        let heavier = state
+            .run
+            .as_ref()
+            .and_then(|run| run.checked.last())
+            .is_some_and(|c| c.work > local);
+        if heavier {
+            if let Some(run) = state.run.as_mut() {
+                run.candidate = true;
+            }
         }
-        self.evidence = Some(session);
-        // The draw is uniform over one candidate here. A later response
-        // adds candidates only while none is in flight.
     }
 
-    fn consider_slot(&mut self, session: K, out: &mut Vec<Command<K>>) {
-        let holder = self.slot;
-        let waiting_height = self
+    /// One evidence check, drawn uniformly from the waiting candidates.
+    /// Nothing is drawn while the latch is set, or while a check runs.
+    pub(crate) fn start_evidence(&mut self, rng: &mut impl RelayRng, out: &mut Vec<Command<K>>) {
+        if self.alarm || self.evidence.is_some() {
+            return;
+        }
+        let candidates: Vec<K> = self
+            .sessions
+            .iter()
+            .filter(|(_, state)| {
+                !state.evidence_used
+                    && state
+                        .run
+                        .as_ref()
+                        .is_some_and(|run| run.candidate && !run.evidence)
+            })
+            .map(|(session, _)| *session)
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let last = u64::try_from(candidates.len() - 1).unwrap_or(u64::MAX);
+        let index = usize::try_from(bounded_uniform(rng, last)).unwrap_or(0);
+        let Some(session) = candidates.get(index).copied() else {
+            return;
+        };
+        if let Some(state) = self.sessions.get_mut(&session) {
+            state.evidence_used = true;
+            if let Some(run) = state.run.as_mut() {
+                run.evidence = true;
+                run.candidate = false;
+                run.in_slot = false;
+            }
+        }
+        self.evidence = Some(session);
+        self.plan_proof(session, HashClass::Evidence, out);
+    }
+
+    fn past_bound(&self, session: K, cap: BlockCount) -> bool {
+        let Some(run) = self.sessions.get(&session).and_then(|s| s.run.as_ref()) else {
+            return false;
+        };
+        let depth = fork_depth(self.local.and_then(|local| local.height), run.parent_height);
+        let bound = depth.to_raw().saturating_add(cap.to_raw());
+        // Trimmed runs no longer hold every header. The bound is on the
+        // height the run has reached, which the window still names.
+        let reached = run
+            .checked
+            .last()
+            .map(|c| c.height.to_raw().saturating_sub(run.parent_height.to_raw()))
+            .unwrap_or(0);
+        reached > bound
+    }
+
+    /// A past-cap run keeps the window the branch view reads: the LWMA
+    /// window, the median, and the seed headers those heights name.
+    fn trim_window(&mut self, session: K) {
+        let Some(run) = self.sessions.get_mut(&session).and_then(|s| s.run.as_mut()) else {
+            return;
+        };
+        if !run.past_cap {
+            return;
+        }
+        let tail = N_USIZE.max(MTP_WINDOW_USIZE).saturating_add(1);
+        if run.checked.len() <= tail {
+            return;
+        }
+        let mut from = run.checked.len() - tail;
+        let seeds: Vec<BlockHeight> = run.checked[from..]
+            .iter()
+            .filter_map(|c| seed_height(c.height))
+            .collect();
+        for seed in seeds {
+            if let Some(idx) = run.checked.iter().position(|c| c.height == seed) {
+                from = from.min(idx);
+            }
+        }
+        if from == 0 {
+            return;
+        }
+        run.checked.drain(..from);
+        run.proven = run.proven.saturating_sub(from);
+    }
+
+    fn settle_challenge(&mut self, session: K) {
+        let ready = self
             .sessions
             .get(&session)
             .and_then(|s| s.run.as_ref())
-            .and_then(|run| run.checked.first().map(|c| c.height));
-        let waiting_work = self
+            .is_some_and(|run| {
+                run.challenging && run.proven > 0 && run.proven >= run.checked.len()
+            });
+        if !ready {
+            return;
+        }
+        let frontier = self
             .sessions
             .get(&session)
             .and_then(|s| s.run.as_ref())
-            .and_then(|run| run.checked.first().map(|c| c.work));
-        let displace = match (holder, waiting_height, waiting_work) {
-            (Some(holder), Some(height), Some(work)) => self
-                .sessions
+            .and_then(|run| run.checked.get(run.proven - 1))
+            .map(|c| (c.height, c.work));
+        let Some((height, work)) = frontier else {
+            return;
+        };
+        let holder = self.slot.filter(|holder| *holder != session);
+        let holder_work = holder.and_then(|holder| {
+            self.sessions
                 .get(&holder)
                 .and_then(|s| s.run.as_ref())
                 .and_then(|run| {
                     run.checked
                         .iter()
-                        .find(|c| c.height == height)
-                        .map(|c| c.work)
+                        .enumerate()
+                        .find(|(index, c)| c.height == height && *index < run.proven)
+                        .map(|(_, c)| c.work)
                 })
-                .is_some_and(|holder_work| work > holder_work),
-            (None, _, _) => true,
-            _ => false,
-        };
-        if !displace {
+        });
+        let take = holder_work.is_none_or(|held| work > held);
+        if !take {
             if let Some(state) = self.sessions.get_mut(&session) {
                 state.header_quiet = true;
                 state.run = None;
@@ -889,12 +1021,31 @@ where
                     run.in_slot = false;
                     run.checked.truncate(cap_headers);
                     run.held.clear();
+                    run.proven = run.proven.min(run.checked.len());
                 }
             }
         }
         self.slot = Some(session);
         if let Some(run) = self.sessions.get_mut(&session).and_then(|s| s.run.as_mut()) {
             run.in_slot = true;
+            run.challenging = false;
+        }
+    }
+
+    fn consider_slot(&mut self, session: K, out: &mut Vec<Command<K>>) {
+        // The first run to fill its budget takes the slot by verifying
+        // its prefix. A later run verifies its own prefix first; the
+        // comparison is that verified work, at its frontier height.
+        let vacant = self.slot.is_none();
+        if let Some(run) = self.sessions.get_mut(&session).and_then(|s| s.run.as_mut()) {
+            if vacant {
+                run.in_slot = true;
+            } else {
+                run.challenging = true;
+            }
+        }
+        if vacant {
+            self.slot = Some(session);
         }
         self.plan_proof(session, HashClass::HeaderPow, out);
     }
@@ -911,11 +1062,13 @@ where
         } else {
             class
         };
-        let cache = cache_for(run, run.proven);
+        let Some(cache) = cache_for(run, run.proven) else {
+            return;
+        };
         let attempt = run.attempt;
         let mut items = Vec::new();
         for (offset, checked) in run.checked[run.proven..].iter().enumerate() {
-            if cache_for(run, run.proven + offset) != cache {
+            if cache_for(run, run.proven + offset) != Some(cache) {
                 break;
             }
             items.push(ProveItem {
@@ -973,6 +1126,8 @@ where
                 proven: 0,
                 held: Vec::new(),
                 in_slot: false,
+                challenging: false,
+                candidate: false,
                 job: Some(id),
                 attempt: FormAttempt::FIRST,
                 past_cap: false,
@@ -1077,6 +1232,9 @@ where
         }
         if self.slot == Some(session) {
             self.slot = None;
+        }
+        if self.evidence == Some(session) {
+            self.evidence = None;
         }
     }
 
@@ -1204,10 +1362,61 @@ where
         self.tree.judged(hash)
     }
 
+    fn locate(&mut self, session: K, at: BlockHash, now: Instant, out: &mut Vec<Command<K>>) {
+        if at == BlockHash::NULL {
+            return;
+        }
+        if self
+            .sessions
+            .get(&session)
+            .is_some_and(|s| s.continuation.is_some())
+        {
+            return;
+        }
+        let height = self
+            .tree
+            .connecting(at)
+            .or_else(|| {
+                self.local
+                    .filter(|local| local.hash == at)
+                    .and_then(|local| local.height)
+            })
+            .unwrap_or(BlockHeight::ZERO);
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        if let Some(state) = self.sessions.get_mut(&session) {
+            state.continuation = Some(HeaderRequest {
+                session,
+                id,
+                points: vec![(height, at)],
+            });
+        }
+        let transit = self
+            .sessions
+            .get(&session)
+            .map(|s| s.transit)
+            .unwrap_or_default();
+        out.push(Command::RequestHeaders {
+            session,
+            deadline: header_deadline(now, transit),
+            request: shekyl_levin::RequestHeaders {
+                block_ids: vec![*at.as_bytes()],
+            },
+        });
+    }
+
     fn body_source(&self, end: BlockHash) -> Option<K> {
+        // Unavailable is asked of another session first. A deferred block
+        // is asked of any session that covers it, including the one that
+        // deferred it. A skeleton is asked of another session.
+        self.find_source(end, true)
+            .or_else(|| self.find_source(end, false))
+    }
+
+    fn find_source(&self, end: BlockHash, skip_unavailable: bool) -> Option<K> {
         let end_height = self.tree.connecting(end)?;
         self.sessions.iter().find_map(|(key, state)| {
-            if state.body_excluded {
+            if state.body_excluded || state.skeleton.contains(&end) {
                 return None;
             }
             if self.body_requests.iter().any(|req| req.session == *key) {
@@ -1216,7 +1425,7 @@ where
             let covers = state.frontier.is_some_and(|(height, hash)| {
                 height.to_raw() >= end_height.to_raw() || hash == end
             });
-            let blocked = state.unavailable.contains(&end);
+            let blocked = skip_unavailable && state.unavailable.contains(&end);
             (covers && !blocked).then_some(*key)
         })
     }
@@ -1230,20 +1439,29 @@ enum Judged<E> {
     Gone,
 }
 
-fn cache_for(run: &Run, index: usize) -> CachePlan {
+/// `None` is an unearned seed. It is not hashed and not charged to the peer.
+fn cache_for(run: &Run, index: usize) -> Option<CachePlan> {
     let checked = &run.checked[index];
     if run.evidence && index == 0 {
-        return CachePlan::Evidence(checked.seed);
+        return Some(CachePlan::Evidence(checked.seed));
     }
-    if checked.height.to_raw()
-        <= run
-            .parent_height
-            .to_raw()
-            .saturating_add(SEEDHASH_EPOCH_LAG)
-    {
-        CachePlan::Main(checked.seed)
+    let on_main = match seed_height(checked.height) {
+        None => true,
+        Some(seed_at) => seed_at.to_raw() <= run.parent_height.to_raw(),
+    };
+    if on_main {
+        return Some(CachePlan::Main(checked.seed));
+    }
+    let seed_at = seed_height(checked.height)?;
+    let seed_index = run
+        .checked
+        .iter()
+        .position(|c| c.height == seed_at || c.hash == checked.seed)?;
+    // The seed and every header after it, up to this item, are proven.
+    if seed_index < run.proven && index <= run.proven {
+        Some(CachePlan::Branch(checked.seed))
     } else {
-        CachePlan::Branch(checked.seed)
+        None
     }
 }
 

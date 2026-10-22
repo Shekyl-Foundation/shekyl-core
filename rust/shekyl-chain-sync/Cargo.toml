@@ -22,6 +22,8 @@ shekyl-types = { path = "../shekyl-types" }
 shekyl-wire = { path = "../shekyl-wire" }
 
 [dev-dependencies]
+proptest = "1"
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 shekyl-wire = { path = "../shekyl-wire" }
 

@@ -441,14 +441,6 @@ fn a_header_deadline_is_transit_plus_the_response_bound() {
     assert_eq!(deadline, Some(now + Duration::from_secs(secs)));
 }
 
-/// Lands with the run layer (§4.8). A `judge_header` refusal closes the
-/// supplier as `HeaderRefused`. A `Stale` is not the peer's: the run is
-/// planned again with the attempt the fault names. A `Proven` whose job
-/// matches no run is discarded.
-#[test]
-#[ignore = "run layer §4.8: HeaderRefused closes the supplier; Stale re-plans with the fault's attempt"]
-fn a_judge_refusal_closes_and_a_stale_replans() {}
-
 fn fixed_rules() -> RuleSet {
     let epoch = SettlementEpochBlocks::new(512).expect("512");
     let schedule =

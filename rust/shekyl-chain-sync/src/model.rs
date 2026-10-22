@@ -387,6 +387,12 @@ pub(crate) struct Session<K> {
     /// Missed a body deadline. A source again when `H*` changes.
     pub body_excluded: bool,
     pub unavailable: std::collections::BTreeSet<BlockHash>,
+    /// Held by the peer, past the body budget. Wanted again from any
+    /// session that covers the hash.
+    pub deferred: std::collections::BTreeSet<BlockHash>,
+    /// Served as a skeleton while the node keeps the full bytes.
+    /// Wanted again in full from another session. Not a fault.
+    pub skeleton: std::collections::BTreeSet<BlockHash>,
     pub past_cap_followed: bool,
     pub evidence_used: bool,
     /// A header request for this session's own run, outside the `H*` draw.
@@ -567,6 +573,45 @@ where
         self.tree.reset_visits();
     }
 
+    /// Cheap-checked headers the session's run still holds.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn run_len(&self, session: K) -> usize {
+        self.sessions
+            .get(&session)
+            .and_then(|s| s.run.as_ref())
+            .map(|run| run.checked.len())
+            .unwrap_or(0)
+    }
+
+    /// The session whose evidence check is in flight.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn evidence_session(&self) -> Option<K> {
+        self.evidence
+    }
+
+    /// The run's cheap-checked headers, in order. A past-cap run keeps
+    /// only its window, so this is that window.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn run_records(&self, session: K) -> Vec<shekyl_chain_rules::HeaderRecord> {
+        self.sessions
+            .get(&session)
+            .and_then(|s| s.run.as_ref())
+            .map(|run| {
+                run.checked
+                    .iter()
+                    .map(|c| shekyl_chain_rules::HeaderRecord {
+                        hash: c.hash,
+                        header: c.header.clone(),
+                        cumulative_difficulty: c.work,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The branch whose tip is `parent`: `T` when the parent is in the
     /// tree, main when the parent is the local tip. `None` when it is
     /// neither, and the caller judges against `main` and records the result.
@@ -620,6 +665,7 @@ where
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         let before = self.state();
+        let header_response = matches!(event, Event::Headers { .. });
         match event {
             Event::SessionOpened { session, transit } => {
                 let claim = self.pending.remove(&session);
@@ -633,6 +679,8 @@ where
                         header_quiet: false,
                         body_excluded: false,
                         unavailable: std::collections::BTreeSet::new(),
+                        deferred: std::collections::BTreeSet::new(),
+                        skeleton: std::collections::BTreeSet::new(),
                         past_cap_followed: false,
                         evidence_used: false,
                         continuation: None,
@@ -681,7 +729,7 @@ where
                 indices,
                 verdict,
             } => self.on_entry(
-                main, tag, reply, hash, solicited, at, &indices, verdict, out,
+                main, tag, reply, hash, solicited, at, &indices, verdict, now, out,
             )?,
             Event::Room { seats } => self.on_room(seats, out),
             Event::Announce {
@@ -698,6 +746,12 @@ where
             self.complement(rng, out);
         }
         self.alarm_from_tree(out);
+        // A header response only records an evidence candidate. The draw
+        // waits for the next event, so two responses can both be waiting
+        // and the draw is over that set, not over whichever arrived first.
+        if !header_response {
+            self.start_evidence(rng, out);
+        }
         self.plan(main, now, rng, out)?;
         self.plan_bodies(now, out);
         Ok(())
@@ -792,6 +846,8 @@ where
             .iter()
             .filter(|(_, session)| {
                 !session.header_quiet
+                    && !session.past_cap_followed
+                    && session.continuation.is_none()
                     && session
                         .claim
                         .is_some_and(|claim| claim.work > self.star.work)
