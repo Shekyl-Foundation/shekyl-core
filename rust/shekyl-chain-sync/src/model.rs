@@ -111,8 +111,8 @@ where
     ///
     /// # Errors
     ///
-    /// [`PayloadRefused`] when the height is 0 or the work is below
-    /// [`shekyl_difficulty::GENESIS_DIFFICULTY`].
+    /// [`PayloadRefused`] when the block count is 0, or the work is
+    /// below that count.
     pub fn claim(&mut self, session: K, claim: PeerClaim) -> Result<(), PayloadRefused> {
         let claim = claim::admit(claim)?;
         if let Some(open) = self.sessions.get_mut(&session) {
@@ -223,7 +223,11 @@ mod tests {
     use std::convert::Infallible;
     use std::time::Duration;
 
-    use shekyl_chain_rules::{AtHeight, HeaderRecord, HeaderView, Tip, Trust};
+    use core::num::NonZeroU128;
+
+    use shekyl_chain_rules::{
+        AtHeight, DifficultyRule, FakechainSchedule, HeaderRecord, HeaderView, RuleSet, Tip, Trust,
+    };
     use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
     use shekyl_draw_rng::RelayRng;
     use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot};
@@ -291,18 +295,48 @@ mod tests {
     }
 
     #[test]
-    fn a_claim_is_refused_only_when_it_cannot_be_a_chain() {
+    fn a_genesis_only_claim_is_admitted() {
         let mut sync = Sync::new(Trust::UNANCHORED);
-        assert_eq!(
-            sync.claim(1, claim(0, GENESIS_DIFFICULTY)),
-            Err(PayloadRefused::Height)
-        );
-        assert_eq!(
-            sync.claim(1, claim(1, GENESIS_DIFFICULTY - 1)),
-            Err(PayloadRefused::Work)
-        );
-        assert_eq!(sync.claim(1, claim(1, GENESIS_DIFFICULTY)), Ok(()));
+        // One block, target 1.
+        assert_eq!(sync.claim(1, claim(1, 1)), Ok(()));
         assert_eq!(sync.state(), SyncState::NoView);
+    }
+
+    #[test]
+    fn a_block_count_of_zero_is_refused() {
+        let mut sync = Sync::new(Trust::UNANCHORED);
+        assert_eq!(sync.claim(1, claim(0, 1)), Err(PayloadRefused::Height));
+        assert_eq!(sync.claim(1, claim(0, 0)), Err(PayloadRefused::Height));
+    }
+
+    #[test]
+    fn work_below_the_block_count_is_refused() {
+        let mut sync = Sync::new(Trust::UNANCHORED);
+        assert_eq!(sync.claim(1, claim(3, 2)), Err(PayloadRefused::Work));
+        assert_eq!(sync.claim(1, claim(3, 3)), Ok(()));
+    }
+
+    /// Height 0 is target 1 under a fixed target, and each later block is
+    /// the fixed target. That sum is an honest claim.
+    #[test]
+    fn a_regtest_fixed_target_admits_an_honest_claim() {
+        let fixed = NonZeroU128::new(7).expect("7");
+        let rules = RuleSet::fakechain(Some(fixed), FakechainSchedule::PRODUCTION);
+        let DifficultyRule::Fixed(target) = rules.difficulty() else {
+            panic!("the regtest set names a fixed target");
+        };
+        let per_block = target.difficulty().to_raw();
+        assert_eq!(per_block, 7);
+        let count = 3u64;
+        // Block 0 is `Target::GENESIS_BLOCK` (1) under Fixed, as under
+        // every rule set. The two blocks above it are the fixed target.
+        let work = 1 + u128::from(count - 1) * per_block;
+        assert!(
+            work < GENESIS_DIFFICULTY,
+            "this chain's work is the fixed targets, not the DAA constant"
+        );
+        let mut sync = Sync::new(Trust::UNANCHORED);
+        assert_eq!(sync.claim(1, claim(count, work)), Ok(()));
     }
 
     #[test]

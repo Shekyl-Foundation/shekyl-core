@@ -4,38 +4,43 @@
 // BSD-3-Clause
 
 //! A peer's claim of its chain. A hint, never a target (CS-Q2 step 1).
+//!
+//! A chain of `n` blocks has at least `n` work: the genesis block's
+//! target is 1 under every rule set, and every later block's target is
+//! at least 1 (CEN-D6). A count of 0, or work below the count, cannot
+//! be a chain.
 
-use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
+use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::BlockHeight;
 
 /// What a peer says its chain is. The handshake and an announce both
 /// arrive as this, and a headers response's `tip_work` replaces it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PeerClaim {
-    /// The peer's chain height.
+    /// The peer's block count: the handshake's `current_height`.
+    /// Genesis alone is 1.
     pub height: BlockHeight,
-    /// The peer's cumulative work.
+    /// The peer's cumulative work through those blocks.
     pub work: CumulativeDifficulty,
 }
 
 /// The claim cannot be a chain. This is the whole of `PayloadRefused`
-/// (CS-F1): height 0, since every chain has genesis, or work below
-/// [`GENESIS_DIFFICULTY`].
+/// (CS-F1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PayloadRefused {
-    /// Height 0. Every chain has genesis.
+    /// A block count of 0. Every chain has genesis, so the count is at
+    /// least 1.
     Height,
-    /// Cumulative work below [`GENESIS_DIFFICULTY`]. The genesis block's
-    /// own proof is difficulty 1, so a peer that has only genesis is
-    /// refused here.
+    /// Cumulative work below the block count.
     Work,
 }
 
 pub(crate) fn admit(claim: PeerClaim) -> Result<PeerClaim, PayloadRefused> {
-    if claim.height.is_zero() {
+    let count = claim.height.to_raw();
+    if count == 0 {
         return Err(PayloadRefused::Height);
     }
-    if claim.work.to_raw() < GENESIS_DIFFICULTY {
+    if claim.work.to_raw() < u128::from(count) {
         return Err(PayloadRefused::Work);
     }
     Ok(claim)
