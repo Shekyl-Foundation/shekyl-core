@@ -93,7 +93,7 @@ pub mod system_dir;
 #[cfg(windows)]
 pub use disk::free_bytes_available;
 #[cfg(windows)]
-pub use file::{create_owner_only_file, FileCreateError};
+pub use file::{create_owner_only_dir, create_owner_only_file, FileCreateError};
 #[cfg(all(windows, feature = "test-utils"))]
 pub use file::{file_owner_for_testing, file_sddl_for_testing};
 #[cfg(all(windows, feature = "test-utils"))]

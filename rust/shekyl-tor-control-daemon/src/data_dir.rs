@@ -6,10 +6,12 @@
 //! Per-boot tor `DataDirectory` for the daemon overlay (PWD-E7).
 //!
 //! The wallet supervisor keeps a durable data directory — vanguards and a
-//! stable onion need one. The daemon posture is ephemeral: a new onion every
-//! boot, and **nothing on disk that could join this boot to the next** (tor
-//! otherwise persists entry guards in `state`). The type makes that
-//! structural: a unique 0700 subdirectory, removed on drop, never reused.
+//! stable onion need one. The daemon posture is ephemeral for identity: a new
+//! onion every boot, and nothing identity-bearing (guards, keys, the onion)
+//! joins this boot to the next. Tor's public directory cache is the exception
+//! (`TSR-Q8`): it lives in [`CACHE_DIR_NAME`], a sibling this sweep does not
+//! touch. The per-boot directory is a unique 0700 subdirectory, removed on
+//! drop, never reused.
 
 use std::fs;
 use std::io;
@@ -20,6 +22,14 @@ use std::path::{Path, PathBuf};
 const DIR_PREFIX: &str = "ephemeral-tor-";
 /// Exact name used by an earlier durable-path revision of this crate.
 const LEGACY_DIR_NAME: &str = "ephemeral-tor";
+
+/// The public directory cache. Not a sweep target: it does not start with
+/// [`DIR_PREFIX`] and it is not [`LEGACY_DIR_NAME`].
+pub(crate) const CACHE_DIR_NAME: &str = "tor-directory-cache";
+
+fn is_sweep_target(name: &str) -> bool {
+    name == LEGACY_DIR_NAME || name.starts_with(DIR_PREFIX)
+}
 
 /// A unique tor `DataDirectory` that is wiped when dropped.
 pub(crate) struct EphemeralDataDir {
@@ -104,7 +114,7 @@ fn sweep_stale(parent: &Path) {
         let Some(name) = name.to_str() else {
             continue;
         };
-        if name.starts_with(DIR_PREFIX) {
+        if is_sweep_target(name) {
             best_effort_rm(&entry.path());
         }
     }
@@ -151,6 +161,23 @@ mod tests {
         assert!(!stale.exists(), "stale unique sibling must be wiped");
         assert!(dir.path().is_dir());
         assert_ne!(dir.path(), stale);
+    }
+
+    #[test]
+    fn sweep_leaves_the_directory_cache() {
+        // Fails if the cache name matches the sweep: creating a per-boot
+        // directory would delete the cache.
+        assert!(
+            !is_sweep_target(CACHE_DIR_NAME),
+            "{CACHE_DIR_NAME} must not match the ephemeral-tor sweep"
+        );
+        let parent = tempfile::tempdir().unwrap();
+        let cache = parent.path().join(CACHE_DIR_NAME);
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("cached-certs"), b"certs").unwrap();
+        let dir = EphemeralDataDir::create_under(parent.path()).unwrap();
+        assert!(cache.join("cached-certs").is_file());
+        assert_ne!(dir.path(), cache);
     }
 
     #[cfg(unix)]
