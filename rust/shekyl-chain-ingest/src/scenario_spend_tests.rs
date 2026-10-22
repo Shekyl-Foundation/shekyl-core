@@ -23,6 +23,13 @@
 //! that mature (a coinbase from block `k` spends at `k +
 //! FIRST_SPEND_HEIGHT`). Default lane, like that file.
 
+// A whole-file test module, gated at `lib.rs` by
+// `#[cfg(all(test, feature = "pipeline"))]`. The inner attribute is the
+// file's own declaration of the same fact, for the debug-macro lint
+// (`build.yml`), which keys on it. The bound-admission line is a test
+// report.
+#![cfg(test)]
+
 use shekyl_block_template::Fill;
 use shekyl_chain_rules::{CenRow, Locus, TxSlot};
 use shekyl_economics::{EconomicParams, TxVolume};
