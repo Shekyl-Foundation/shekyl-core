@@ -494,6 +494,19 @@ impl<'a> Block<'a> {
         }
     }
 
+    /// Body weight still inside the penalty-free block. The penalty prices
+    /// the block, so the ceiling is that block weight less the coinbase
+    /// this fill carries, and it does not pass the fill's body bound.
+    fn penalty_free_bodies(&self) -> u64 {
+        let coinbase = self
+            .honest
+            .block_weight()
+            .saturating_sub(self.honest.bodies_weight());
+        penalty_free_weight(self.median, self.economic)
+            .saturating_sub(coinbase)
+            .min(self.honest.bodies_weight_bound())
+    }
+
     /// The cheapest integer packing of this block under one miner's terms.
     /// `floor` is what his bodies pay when the approach charges the relay
     /// floor. `recovery` is the pool share those fees return to him.
@@ -523,7 +536,7 @@ impl<'a> Block<'a> {
         recovery: PoolShare,
     ) {
         let bound = self.honest.bodies_weight_bound();
-        let free_ceiling = penalty_free_weight(self.median, self.economic).min(bound);
+        let free_ceiling = self.penalty_free_bodies();
         for dropped in 0..=honest.count {
             let Some(kept_weight) = honest.kept_weight(dropped) else {
                 continue;
@@ -965,14 +978,12 @@ mod tests {
         let economic = params.economic();
         let block = Block::new(&block_at(5, &params), &economic);
         let chosen = block.cheapest_packing(None, PoolShare::NONE);
-        let free = penalty_free_weight(block.median, block.economic)
-            .min(block.honest.bodies_weight_bound())
-            .saturating_sub(
-                block
-                    .honest_bodies()
-                    .kept_weight(0)
-                    .expect("nothing dropped"),
-            );
+        let free = block.penalty_free_bodies().saturating_sub(
+            block
+                .honest_bodies()
+                .kept_weight(0)
+                .expect("nothing dropped"),
+        );
         assert_eq!(
             chosen.stuffed,
             free / chosen.weight,
@@ -1078,9 +1089,11 @@ mod tests {
             )
             .expect("priced")
         };
-        let before = split_block_emission(owed(block.honest.bodies_weight()), last.sigma_scaled).0;
+        // The penalty reads the block, coinbase included. The body's weight
+        // is added to that block weight; the coinbase's own weight stays.
+        let before = split_block_emission(owed(block.honest.block_weight()), last.sigma_scaled).0;
         let after = split_block_emission(
-            owed(block.honest.bodies_weight() + weight),
+            owed(block.honest.block_weight() + weight),
             last.sigma_scaled,
         )
         .0;
