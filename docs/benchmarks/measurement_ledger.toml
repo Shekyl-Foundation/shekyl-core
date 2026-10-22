@@ -120,6 +120,7 @@ stale_through = [
   { through = "0da922834", note = "#1081 review: the batch-weight statement moves from proof.rs into its own module, batch_weights.rs (BatchWeights, BatchKind), with its tests beside it. The preimage, both domains, the seed and the weights the verifiers draw are byte-for-byte unchanged (the pinned seed KATs moved with it and pass); no verify step is added, removed or reordered. Not re-measured." },
   { through = "a6b029e82", note = "DRS-X PR 3 (#1106): the crate-level doc comment in shekyl-pow-randomx's lib.rs names its consumers. Doc text only; no code path changed, and nothing the capture priced has moved." },
   { through = "fe6f6bfa1", note = "DRS-X PR 3 (#1106): the crate doc in shekyl-pow-randomx's lib.rs names that calc_pow and the Rust miner call CacheStore::lookup and never derive, and that pin_canonical is the validator's epoch fill. Doc text only; no hash, derivation or verify function changed, and nothing the block-verify capture priced has moved. The rows stay stale from PL-D3." },
+  { through = "437921d02", note = "Doc comment only in signature.rs: sign_with_ml_dsa_seed stops linking the private nested sign. No byte string, function or code path changed, and the Ed25519 + ML-DSA-65 sign and verify that block verification prices are untouched. Not re-measured; nothing the capture priced has moved. The rows stay stale from PL-D3." },
 ]
 
 [[constant]]
