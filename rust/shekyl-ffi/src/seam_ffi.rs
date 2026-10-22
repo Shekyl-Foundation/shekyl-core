@@ -17,8 +17,7 @@
 
 use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
-use std::thread::ThreadId;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
@@ -175,77 +174,39 @@ pub(crate) fn hub() -> Option<Hub> {
     STATE.lock().expect("seam state").clone()
 }
 
-/// The lock around installing the socket table and binding a hub on it.
+/// Serializes tests that bind a hub or read the process socket table.
 ///
-/// [`install_process_sockets`] and [`shekyl_seam_bind`] both take it, from
-/// the table read through the hub store, so a bind cannot publish a hub
-/// over a table install is replacing. It is re-entrant on the calling
-/// thread: a test that already holds it may bind. A poisoned lock is the
-/// previous holder's panic; the next caller still needs the gate.
-pub(crate) fn seam_bind_lock() -> &'static BindGate {
-    static GATE: BindGate = BindGate::new();
+/// Production [`install_process_sockets`] and [`shekyl_seam_bind`] do not
+/// take it. They take [`hold_table`], from the table read through the hub
+/// store. A test holds this lock and then binds; bind does not take it
+/// again. The guard is a [`MutexGuard`], so it is `!Send`. A poisoned lock
+/// is the previous holder's panic; the next test still needs the gate.
+#[cfg(test)]
+pub(crate) fn seam_bind_lock() -> &'static TestSeam {
+    static GATE: TestSeam = TestSeam(Mutex::new(()));
     &GATE
 }
 
-struct BindState {
-    owner: Option<ThreadId>,
-    depth: u32,
-}
+/// The test serializer. [`TestSeam::lock`] is the only way in, so every
+/// caller holds a real [`MutexGuard`].
+#[cfg(test)]
+pub(crate) struct TestSeam(Mutex<()>);
 
-pub(crate) struct BindGate {
-    state: Mutex<BindState>,
-    changed: Condvar,
-}
-
-pub(crate) struct BindGuard {
-    gate: &'static BindGate,
-}
-
-impl BindGate {
-    const fn new() -> Self {
-        Self {
-            state: Mutex::new(BindState {
-                owner: None,
-                depth: 0,
-            }),
-            changed: Condvar::new(),
-        }
-    }
-
-    pub(crate) fn lock(&'static self) -> BindGuard {
-        let me = std::thread::current().id();
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        loop {
-            if state.owner == Some(me) {
-                state.depth += 1;
-                return BindGuard { gate: self };
-            }
-            if state.owner.is_none() {
-                state.owner = Some(me);
-                state.depth = 1;
-                return BindGuard { gate: self };
-            }
-            state = self
-                .changed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-    }
-
-    fn unlock(&self) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.depth -= 1;
-        if state.depth == 0 {
-            state.owner = None;
-            self.changed.notify_one();
-        }
+#[cfg(test)]
+impl TestSeam {
+    pub(crate) fn lock(&'static self) -> MutexGuard<'static, ()> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-impl Drop for BindGuard {
-    fn drop(&mut self) {
-        self.gate.unlock();
-    }
+/// The table read, the table replace, and the hub store are one section.
+///
+/// Distinct from [`PROCESS_SOCKETS`]: bind calls [`process_sockets`], which
+/// takes that mutex itself, so this one cannot be it. Install and bind both
+/// take this one first, so the two orders cannot deadlock on each other.
+fn hold_table() -> MutexGuard<'static, ()> {
+    static TABLE: Mutex<()> = Mutex::new(());
+    TABLE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The node's socket table, or the table a reader created before `main`
@@ -262,41 +223,20 @@ static PROCESS_SOCKETS: Mutex<Option<shekyl_seam::Sockets>> = Mutex::new(None);
 /// what a shared test process needs after another test has read the table.
 #[must_use]
 pub fn install_process_sockets(sockets: shekyl_seam::Sockets) -> bool {
-    // The same lock [`shekyl_seam_bind`] holds from its table read through
-    // the hub store. A bind in that window makes this install wait, then
-    // see the hub and refuse: the hub keeps the table it was built with.
-    let _bind = seam_bind_lock().lock();
-    if hub().is_some() {
-        return false;
-    }
-    // A test plants a bind here, between the hub check and the table
-    // store. The check below is what makes that bind refuse the install.
-    #[cfg(test)]
-    run_install_hook();
+    // The same section [`shekyl_seam_bind`] holds from its table read
+    // through the hub store. A bind in that window makes this install
+    // wait, then see the hub and refuse: the hub keeps the table it was
+    // built with.
+    let _table = hold_table();
     if hub().is_some() {
         return false;
     }
     let mut slot = PROCESS_SOCKETS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+        .unwrap_or_else(PoisonError::into_inner);
     *slot = Some(sockets);
     true
 }
-
-/// Runs once, between install's hub check and its table store.
-#[cfg(test)]
-fn run_install_hook() {
-    let hook = INSTALL_HOOK
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take();
-    if let Some(hook) = hook {
-        hook();
-    }
-}
-
-#[cfg(test)]
-static INSTALL_HOOK: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
 
 /// The process's one admission table. A new binding does not mint ids
 /// again: a `reap` that arrives after the swap names an id the new hub
@@ -383,12 +323,12 @@ pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundC
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>) -> i32 {
     let Some(post) = post else {
-        let _bind = seam_bind_lock().lock();
+        let _table = hold_table();
         store(None);
         return 0;
     };
     if ctx.is_null() {
-        let _bind = seam_bind_lock().lock();
+        let _table = hold_table();
         store(None);
         return 0;
     }
@@ -402,7 +342,7 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
     // The table this hub is built on and the store of the hub are one
     // critical section with [`install_process_sockets`].
     let hub = {
-        let _bind = seam_bind_lock().lock();
+        let _table = hold_table();
         let hub = Hub::new(
             process_sockets(),
             ceiling,
@@ -915,40 +855,117 @@ fn routing_c(connector: ConnectorId) -> ShekylSeamObserved {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::ffi::c_void;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
 
-    use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
-    use shekyl_seam::{Hub, Post};
-    use shekyl_timing_engine::Clock;
+    use shekyl_seam::CloseCause;
+    use shekyl_timing_engine::Tick;
 
-    use super::{install_process_sockets, process_sockets, seam_bind_lock, store, INSTALL_HOOK};
+    use super::{
+        bans::host_is_banned, install_process_sockets, process_sockets, seam_bind_lock,
+        shekyl_seam_bind, ShekylSeamObserved,
+    };
 
-    /// A bind that lands between install's hub check and its table store
-    /// refuses the install. The hook is that bind: it stores the hub while
-    /// install holds the lock. Red edit: delete the hub check after the
-    /// hook. The install returns true and the hub is left on the table it
-    /// was not built with.
-    #[test]
-    fn a_bind_holding_the_lock_refuses_the_install() {
-        let _gate = seam_bind_lock().lock();
-        store(None);
-        *INSTALL_HOOK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(|| {
-            let clock: Arc<dyn Clock + Send + Sync> = super::process_clock();
-            let hub = Hub::new(
-                process_sockets(),
-                InboundCeiling::Unbounded(UnboundedReason::Unlimited),
-                Arc::new(|_: Post| {}),
-                clock,
-            );
-            store(Some(hub));
-        }));
-        let admitted = install_process_sockets(shekyl_seam::Sockets::new());
-        assert!(
-            !admitted,
-            "a bind stored between the hub check and the table store refuses the install"
+    /// A hub whose posts go nowhere.
+    unsafe extern "C" fn no_post(
+        _ctx: *mut c_void,
+        _id: u64,
+        _kind: u32,
+        _observed: *const ShekylSeamObserved,
+        _bytes: *const u8,
+        _len: usize,
+        _cause: *const CloseCause,
+    ) {
+    }
+
+    fn unbind() {
+        assert_eq!(unsafe { shekyl_seam_bind(std::ptr::null_mut(), None) }, 0);
+        assert!(super::hub().is_none());
+    }
+
+    fn bind() {
+        let mut ctx = 0u8;
+        assert_eq!(
+            unsafe { shekyl_seam_bind((&raw mut ctx).cast::<c_void>(), Some(no_post)) },
+            0
         );
-        store(None);
+    }
+
+    /// Install, then bind: the hub is built on the table that was installed.
+    /// A ban on that table is the hub's ban. Red edit: build the hub on a
+    /// table of its own.
+    #[test]
+    fn an_install_then_a_bind_shares_the_installed_table() {
+        let _gate = seam_bind_lock().lock();
+        unbind();
+        let installed = shekyl_seam::Sockets::new();
+        assert!(install_process_sockets(installed.clone()));
+        bind();
+        let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9));
+        let _closed = installed.ban_host_permanent(host);
+        assert!(
+            super::hub().expect("bound").is_banned(host),
+            "the hub reads the table install published"
+        );
+        installed.lift_host(host);
+        unbind();
+    }
+
+    /// Bind, then install: the install refuses, and the hub keeps the table
+    /// it was built with. A ban on the refused table is not the hub's. Red
+    /// edit: replace the table under a bound hub.
+    #[test]
+    fn a_bind_then_an_install_keeps_the_hubs_table() {
+        let _gate = seam_bind_lock().lock();
+        unbind();
+        bind();
+        let refused = shekyl_seam::Sockets::new();
+        assert!(
+            !install_process_sockets(refused.clone()),
+            "a bound hub refuses the install"
+        );
+        let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+        let _closed = refused.ban_host_permanent(host);
+        assert!(
+            !super::hub().expect("bound").is_banned(host),
+            "the refused table is not the hub's"
+        );
+        let _closed = process_sockets().ban_host_permanent(host);
+        assert!(
+            super::hub().expect("bound").is_banned(host),
+            "the hub still reads the table it was built with"
+        );
+        process_sockets().lift_host(host);
+        unbind();
+    }
+
+    /// One millisecond, then long enough that the process clock is past it.
+    const ONE_MILLISECOND: Duration = Duration::from_millis(1);
+    const PAST_THE_DEADLINE: Duration = Duration::from_millis(20);
+
+    /// A deadline that has passed is not a ban on the process clock. Reading
+    /// it at tick zero still says it is: that tick is before the deadline.
+    /// Red edit: answer `banned` from tick zero.
+    #[test]
+    fn a_passed_deadline_is_not_a_ban_and_tick_zero_still_says_it_is() {
+        let _gate = seam_bind_lock().lock();
+        unbind();
+        let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 11));
+        let now = super::ban_now();
+        let until =
+            Tick::new(now.get().saturating_add(
+                u64::try_from(ONE_MILLISECOND.as_nanos()).expect("one millisecond"),
+            ));
+        let _closed = process_sockets().ban_host(host, until, now);
+        std::thread::sleep(PAST_THE_DEADLINE);
+        assert!(
+            process_sockets().is_banned(host, Tick::new(0)),
+            "tick zero is before the deadline, so the ban still reads as live"
+        );
+        assert!(
+            !host_is_banned(host),
+            "the process clock is past the deadline"
+        );
     }
 }
