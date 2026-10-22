@@ -45,7 +45,7 @@ mod linux {
     use std::time::{Duration, Instant};
 
     use rand_core::{OsRng, RngCore};
-    use shekyl_noise::Direction;
+    use shekyl_noise::{RecvDirection, SendDirection};
     use shekyl_rpc_channel::budget::HandshakeBudget;
     use shekyl_rpc_channel::handshake::{
         Client, Daemon, DaemonReadyForMessage2, HandshakeError, Message1Admission, StaticKeypair,
@@ -409,7 +409,7 @@ mod linux {
             row(HandshakeStep::ClientFirstRecord, sample);
 
             let (sample, opened) = timed(|| {
-                pending.open_first_message(|recv: &mut Direction| {
+                pending.open_first_message(|recv: &mut RecvDirection| {
                     recv.open(&first, TRANSPORT_AD)
                         .map(|(plaintext, _epoch)| plaintext)
                 })
@@ -589,7 +589,7 @@ mod linux {
     fn handshake_directions(
         client_id: &StaticKeypair,
         daemon_id: &StaticKeypair,
-    ) -> (Direction, Direction) {
+    ) -> (SendDirection, RecvDirection) {
         let (client, message1) =
             Client::start(&BENCH_NETWORK_ID, client_id, daemon_id.public()).expect("start");
         let daemon = expect_continue(Daemon::new(&BENCH_NETWORK_ID, daemon_id).read_message1(
@@ -606,7 +606,7 @@ mod linux {
         let (mut send, _client_recv) = client.into_directions();
         let (first, _) = send.seal(&PAYLOAD, TRANSPORT_AD).expect("seal");
         let (session, _) = pending
-            .open_first_message(|recv: &mut Direction| {
+            .open_first_message(|recv: &mut RecvDirection| {
                 recv.open(&first, TRANSPORT_AD)
                     .map(|(plaintext, _epoch)| plaintext)
             })

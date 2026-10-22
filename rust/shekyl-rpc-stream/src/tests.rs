@@ -21,7 +21,10 @@ use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream};
 use super::*;
 
 /// Two ends of one session: the client's (send, receive) and the daemon's.
-fn directions() -> ((Direction, Direction), (Direction, Direction)) {
+fn directions() -> (
+    (SendDirection, RecvDirection),
+    (SendDirection, RecvDirection),
+) {
     let state = || {
         let mut s = SymmetricState::new(b"shekyl-rpc-stream test", b"");
         s.mix_key(&[0x42; 32]);
@@ -404,12 +407,12 @@ async fn the_opened_first_record_is_read_before_the_transport() {
     let ((c_send, _), (d_send, d_recv)) = directions();
     let table = class_table();
     let class = table.smallest_for(b"first".len()).unwrap();
-    let mut send = ClassedRecord::new(c_send, table.clone());
+    let mut send = ClassedSealer::new(c_send, table.clone());
     let first = send.seal(class, b"first").unwrap();
     let second = send.seal(class, b"second").unwrap();
     let third = send.seal(class, b"third").unwrap();
 
-    let mut framed = ClassedRecord::new(d_recv, table);
+    let mut framed = ClassedOpener::new(d_recv, table);
     let opened = framed.open(&first).unwrap();
     assert_eq!(opened.payload, b"first");
     let d_recv = framed.into_direction();
@@ -608,11 +611,11 @@ async fn hyper_flushes_once_per_message() {
 
 /// The client's sealer, for tests that put records on the wire by hand,
 /// and the daemon's reading end of the same session.
-fn sealer_and_reader() -> (ClassedRecord, RecordStream<DuplexStream>, DuplexStream) {
+fn sealer_and_reader() -> (ClassedSealer, RecordStream<DuplexStream>, DuplexStream) {
     let ((c_send, _), (d_send, d_recv)) = directions();
     let (feed, x) = duplex(1 << 20);
     (
-        ClassedRecord::new(c_send, class_table()),
+        ClassedSealer::new(c_send, class_table()),
         RecordStream::new(x, d_send, d_recv),
         feed,
     )
@@ -821,7 +824,7 @@ async fn padding_is_accepted_only_in_the_shape_a_sender_makes() {
 #[test]
 fn a_run_of_padding_yields() {
     let ((c_send, _), (d_send, d_recv)) = directions();
-    let mut sealer = ClassedRecord::new(c_send, class_table());
+    let mut sealer = ClassedSealer::new(c_send, class_table());
     let (mut feed, x) = duplex(1 << 20);
     let mut daemon = RecordStream::new(x, d_send, d_recv);
     let waker = std::task::Waker::noop();

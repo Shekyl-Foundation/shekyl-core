@@ -12,7 +12,7 @@
 //! This framer is the length-prefixed wire the clearnet seam speaks today.
 //! It is not the channel's classed records.
 
-use shekyl_noise::{Direction, DirectionError, TAG_LEN};
+use shekyl_noise::{DirectionError, RecvDirection, SendDirection, TAG_LEN};
 
 const MAX_BODY: usize = u16::MAX as usize; // `usize::from` is not const here (E0658).
 const LENGTH_WIRE: usize = 2 + TAG_LEN;
@@ -32,17 +32,19 @@ impl From<DirectionError> for RecordError {
     fn from(err: DirectionError) -> Self {
         match err {
             DirectionError::Decrypt => Self::Decrypt,
-            DirectionError::State => Self::State,
+            // A dead direction is this half's state, as the half's own
+            // `dead` flag already reports it.
+            DirectionError::State | DirectionError::Poisoned => Self::State,
         }
     }
 }
 
 pub struct SendHalf {
-    dir: Direction,
+    dir: SendDirection,
 }
 
 pub struct RecvHalf {
-    dir: Direction,
+    dir: RecvDirection,
     /// Length already decrypted. Its nonce is spent; the body nonce is not,
     /// until those bytes arrive or the half is poisoned.
     pending_body: Option<usize>,
@@ -51,7 +53,7 @@ pub struct RecvHalf {
 
 /// The two halves of one session. `send` seals what this side sends; `recv`
 /// opens what it receives. Each direction already holds its own chaining key.
-pub(crate) fn session(send: Direction, recv: Direction) -> (SendHalf, RecvHalf) {
+pub(crate) fn session(send: SendDirection, recv: RecvDirection) -> (SendHalf, RecvHalf) {
     (
         SendHalf { dir: send },
         RecvHalf {
@@ -106,7 +108,7 @@ impl RecvHalf {
     }
 }
 
-fn seal_chunk(send: &mut Direction, chunk: &[u8], out: &mut Vec<u8>) -> Result<(), RecordError> {
+fn seal_chunk(send: &mut SendDirection, chunk: &[u8], out: &mut Vec<u8>) -> Result<(), RecordError> {
     if chunk.is_empty() || chunk.len() > MAX_BODY {
         return Err(RecordError::Oversize);
     }
@@ -120,7 +122,7 @@ fn seal_chunk(send: &mut Direction, chunk: &[u8], out: &mut Vec<u8>) -> Result<(
 }
 
 fn open_record(
-    recv: &mut Direction,
+    recv: &mut RecvDirection,
     pending_body: &mut Option<usize>,
     buf: &[u8],
 ) -> Result<(Vec<u8>, usize), RecordError> {
