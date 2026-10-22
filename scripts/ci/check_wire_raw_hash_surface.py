@@ -76,16 +76,6 @@ ALLOWED: dict[str, Allow] = {
     # Curve points and scalars — transform-shaped crypto objects, deferred to
     # the crates that build and verify them (RAW_TYPE_NEWTYPE_MIGRATION.md
     # original PR E). Addressees per RTN-7 §3.2.
-    "transaction.rs::Output.key": Allow(
-        "one-time public key (curve point); #771's OneTimePubkey is minted for "
-        "engine-state persistence, and adopting it at the codec is the "
-        "derivation/match sites' call",
-        "shekyl-tx-builder / shekyl-scanner",
-    ),
-    "transaction.rs::CtBase.commitments": Allow(
-        "Pedersen commitments (curve points); CommitmentBytes, same provenance",
-        "shekyl-tx-builder",
-    ),
     "transaction.rs::BpPlus.a": Allow("Bulletproof+ point", "shekyl-proofs"),
     "transaction.rs::BpPlus.b": Allow("Bulletproof+ point", "shekyl-proofs"),
     "transaction.rs::BpPlus.l": Allow("Bulletproof+ point vector", "shekyl-proofs"),
