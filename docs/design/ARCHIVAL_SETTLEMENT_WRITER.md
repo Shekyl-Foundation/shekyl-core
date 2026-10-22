@@ -1283,16 +1283,22 @@ This lane's increments, each its own change:
      restart inside the window leaves the memo cold. Before this filing
      the count rebuilt only the epoch it was counting, and a bundle for
      the previous epoch faulted SI-35. The filing is that correction;
-   - call the verifier at block admission and write its kept projection
-     into this lane's tables. `issued_short(h_incl)` is the reduction
-     against `D(epoch(h_incl))` only: the sum over admitted bundles whose
-     `epoch(h)` is `epoch(h_incl)`, from the per-pair counts the view
-     already gathered. A bundle for `h` in the previous epoch contributes
-     zero to it. Its index rows, digest fold, `revealed(h)` and passed
-     bits are written into `epoch(h)`, and the new epoch's shortfall is
-     untouched (the sim pins that opening shortfall at 1536 when `|D|`
-     is 512);
-   - flip the switch as one rule-07 cutover. The `passed` bit is set by
+   - `admission_plan` builds the rows a connect journals from `Admitted`:
+     the heights revealed, the issued draws keyed `(E, P, s, h, j)` — `j`
+     the draw's place in its bundle, not its place in `D` — the digest
+     terms, and `issued_short(h_incl)`. The store journals that plan and
+     derives none of it. `issued_short(h_incl)` reduces the shortfall of
+     `D(epoch(h_incl))` only. Each same-epoch pair contributes
+     `min(room, new)`, where `room` is `COUNTED_DRAWS` minus the draws
+     already visible below `h_incl` and `new` is this block's draws of
+     the pair. A bundle for `h` in the previous epoch contributes zero.
+     Its index rows, digest terms, `revealed(h)` and passed bits are
+     issued into `epoch(h)`, and the new epoch's shortfall is untouched
+     (the sim pins that opening shortfall at 1536 when `|D|` is 512).
+     Increment 4a does not call the verifier: a connect writes the plan
+     only when it is handed bundles;
+   - flip the switch as one rule-07 cutover, calling the verifier from
+     `validate`. The `passed` bit is set by
      an admitted record and by nothing else, and the Fakechain door is
      deleted;
    - the attestation-path deletions, with the Rust CEN-B4 rule and the

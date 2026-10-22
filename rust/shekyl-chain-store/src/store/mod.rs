@@ -90,6 +90,7 @@
 //! answer to either is a rebuild from the block corpus
 //! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
+mod admission_write;
 mod alt;
 mod alt_reads;
 mod alt_view;

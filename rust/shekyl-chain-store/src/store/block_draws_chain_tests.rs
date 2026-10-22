@@ -10,9 +10,11 @@
 //! memo, a miss, a switch, an aborted switch, a drifted journal (SI-30)
 //! and a removed digest (SI-29) run on the chain the drawable-set tests build.
 
+use std::collections::BTreeMap;
+
 use shekyl_archival_retention::{draw_count, draw_horizon, BundleKept, DrawablePair, PassBitmap};
 use shekyl_chain_rules::{
-    issued_draw_term, Admitted, BlockDrawsFloor, ChainView as _, DerivedDraw, DrawableMemo,
+    admission_plan, Admitted, BlockDrawsFloor, ChainView as _, DerivedDraw, DrawableMemo,
     EpochFloor, ReleaseJournalFloor, Settling,
 };
 use shekyl_harness_spender::Persona;
@@ -450,15 +452,18 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
         .iter()
         .all(|row| row.state.revealed_at == BlockHeight::from_raw(open)));
     assert!(rows.iter().all(|row| row.state.passed));
+    let plan = admission_plan(
+        BlockHeight::from_raw(open),
+        RULES.settlement_schedule(),
+        &admitted,
+        &BTreeMap::new(),
+    )
+    .expect("the late bundle plans");
     let mut digest = IssuedDigest::ZERO;
-    for row in &rows {
-        digest.fold(&issued_draw_term(
-            &row.persona,
-            row.shard,
-            prior,
-            row.issuing_height,
-            row.draw,
-        ));
+    for issues in plan.epochs() {
+        for term in issues.terms() {
+            digest.fold(&term);
+        }
     }
     assert_eq!(
         chain
@@ -497,11 +502,6 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
         "epoch 2 opens at COUNTED_DRAWS times four pairs"
     );
     assert_eq!(next.shortfall, 12, "E + 1's shortfall is untouched");
-    assert_eq!(
-        u64::try_from(COUNTED_DRAWS).expect("three") * 512,
-        1536,
-        "the sim's |D| = 512 pins this same untouched opening shortfall"
-    );
     chain.finish();
 }
 
@@ -536,16 +536,13 @@ fn late_bundle(h: u64) -> Vec<Admitted> {
 }
 
 fn connect_admitting(chain: &mut SlashedChain, admitted: &[Admitted], memo: &DrawableMemo) {
-    let height = chain.grown.height();
     let txs = chain.grown.realise(&[]);
     let out: Result<(), TestErr> = chain.store.write(|batch| {
         let view = batch.chain_view();
         let judged = chain
             .grown
             .judge_listing_with_memo(&view, &RULES, &txs, None)?;
-        let bundle =
-            super::super::StoreBundleView::new(&view, memo, height, RULES.settlement_schedule());
-        batch.connect_admitting(judged, RULES, Some((&bundle, admitted)))?;
+        batch.connect_admitting(judged, RULES, Some((memo, admitted)))?;
         Ok(())
     });
     out.expect("the block connects");

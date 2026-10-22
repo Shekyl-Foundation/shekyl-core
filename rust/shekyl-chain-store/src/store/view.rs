@@ -152,38 +152,31 @@ impl<'b, 'id> BatchView<'b, 'id> {
     }
 
     /// Arm a store invariant on this batch. The admission view uses it for
-    /// a memo miss (SI-35): that fault is not a read of a table.
+    /// a memo miss (SI-35), an index past `D` (SI-37), a recorded coinbase
+    /// extra that does not yield one draw commitment (SI-38), and a visible
+    /// count past `u32` (SI-39). None of those is a read of a table.
     pub(super) fn arm_row(&self, row: StoreInvariant) -> StoreError {
         self.batch.poison().arm(row)
     }
 
-    /// The coinbase `0x0C` of the block at `height`, parsed by the wire
-    /// grammar. `None` is this view failing to answer: the block is above
-    /// the tip, or the extra does not carry exactly one commitment.
-    pub(super) fn draw_commitment_at(
+    /// The block recorded at `height`, parsed from `blocks` and checked
+    /// against `block_info`. Above the tip is [`AtHeight::AboveTip`]. A
+    /// missing or unreadable row at or below the tip is SI-7.
+    ///
+    /// [`ChainView::block_at`] drops the miner transaction. The admission
+    /// view reads the coinbase extra from this block, and it scans that
+    /// extra itself: one `0x0C` field, not the coinbase grammar.
+    pub(super) fn recorded_block_at(
         &self,
         height: BlockHeight,
-    ) -> Result<Option<shekyl_types::archival::DrawCommitment>, StoreError> {
-        use shekyl_wire::tx_extra::TxExtraField;
+    ) -> Result<AtHeight<shekyl_wire::Block>, StoreError> {
         let tip = self.tip_row()?;
         let body = chain_reads::block_body(self.batch.txn(), tip.as_ref(), height.to_raw())
             .map_err(|f| self.arm(f))?;
-        let AtHeight::Recorded((_, block)) = body else {
-            return Ok(None);
-        };
-        let Ok(fields) = block.miner_transaction.prefix.parse_extra() else {
-            return Ok(None);
-        };
-        let mut found = None;
-        for field in fields {
-            if let TxExtraField::DrawCommitment(commitment) = field {
-                if found.is_some() {
-                    return Ok(None);
-                }
-                found = Some(commitment);
-            }
-        }
-        Ok(found)
+        Ok(match body {
+            AtHeight::AboveTip => AtHeight::AboveTip,
+            AtHeight::Recorded((_, block)) => AtHeight::Recorded(block),
+        })
     }
 }
 

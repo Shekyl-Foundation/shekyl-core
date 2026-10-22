@@ -204,24 +204,14 @@ impl super::Transition {
             return Ok(len);
         }
 
-        let h_open = BlockHeight::from_raw(schedule.open_height(epoch.to_raw()));
-        let recorded = match view.header_at(h_open).map_err(ViewRead::View)? {
-            AtHeight::Recorded(header) => header.hash,
-            AtHeight::AboveTip => return Err(fault(connecting, DrawCountFault::OpenUnrecorded)),
+        let Some(memo) = count_memo.memo.as_mut() else {
+            // A height with no opening block is OpenUnrecorded. The rebuild's
+            // Unopened must not replace it when the memo is cold.
+            self.opening_hash(view, epoch)?;
+            return Ok(self.rebuilt_epoch(view, epoch)?.len());
         };
-        if let Some(memo) = count_memo.memo.as_mut() {
-            memo.evict(connecting, schedule);
-            if let Some(cached) = memo.get(epoch, &recorded) {
-                return Ok(cached.len());
-            }
-        }
-
-        let rebuilt = self.rebuilt_epoch(view, epoch)?;
-        let len = rebuilt.len();
-        if let Some(memo) = count_memo.memo.as_mut() {
-            memo.insert(epoch, recorded, rebuilt);
-        }
-        Ok(len)
+        memo.evict(connecting, schedule);
+        self.remember_epoch(view, epoch, memo)
     }
 
     /// File the previous epoch's set when this block's window reaches it.
@@ -254,32 +244,43 @@ impl super::Transition {
         if !reaches {
             return Ok(());
         }
-        self.remember_epoch(view, SettlementEpoch::from_raw(raw - 1), memo)
+        self.remember_epoch(view, SettlementEpoch::from_raw(raw - 1), memo)?;
+        Ok(())
     }
 
-    /// Remember `epoch` under its opening hash, rebuilding when the memo
-    /// misses. The rebuild is kept only when it matches the recorded
-    /// digest, the same rule [`Self::resolve_len`] uses for the count.
+    /// The hash of the block that opened `epoch`. Above the tip the epoch
+    /// was not opened, which is [`DrawCountFault::OpenUnrecorded`] rather
+    /// than a digest the rebuild can fail as unopened.
+    fn opening_hash<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        epoch: SettlementEpoch,
+    ) -> Result<BlockHash, ViewRead<V::Fault>> {
+        let h_open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
+        match view.header_at(h_open).map_err(ViewRead::View)? {
+            AtHeight::Recorded(header) => Ok(header.hash),
+            AtHeight::AboveTip => Err(fault(self.connecting, DrawCountFault::OpenUnrecorded)),
+        }
+    }
+
+    /// `|D|` of `epoch` under its opening hash. A memo hit is that length.
+    /// A miss rebuilds, keeps the rebuild only when it matches the recorded
+    /// digest, and returns the rebuilt length. The caller evicts; this
+    /// function does not.
     fn remember_epoch<'id, V: ChainView<'id>>(
         &self,
         view: &V,
         epoch: SettlementEpoch,
         memo: &mut DrawableMemo,
-    ) -> Result<(), ViewRead<V::Fault>> {
-        let schedule = self.schedule;
-        let h_open = BlockHeight::from_raw(schedule.open_height(epoch.to_raw()));
-        let recorded = match view.header_at(h_open).map_err(ViewRead::View)? {
-            AtHeight::Recorded(header) => header.hash,
-            AtHeight::AboveTip => {
-                return Err(fault(self.connecting, DrawCountFault::OpenUnrecorded));
-            }
-        };
-        if memo.get(epoch, &recorded).is_some() {
-            return Ok(());
+    ) -> Result<u64, ViewRead<V::Fault>> {
+        let recorded = self.opening_hash(view, epoch)?;
+        if let Some(cached) = memo.get(epoch, &recorded) {
+            return Ok(cached.len());
         }
         let rebuilt = self.rebuilt_epoch(view, epoch)?;
+        let len = rebuilt.len();
         memo.insert(epoch, recorded, rebuilt);
-        Ok(())
+        Ok(len)
     }
 
     /// The drawable set of `epoch` on `view`, kept only when the walk

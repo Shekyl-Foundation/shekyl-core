@@ -14,8 +14,10 @@ use shekyl_archival_retention::{
     PassBitmap,
 };
 use shekyl_chain_rules::harness::bundle::BundleWorld;
+use std::collections::BTreeMap;
+
 use shekyl_chain_rules::{
-    issued_draw_term, judge_bundles, AdmissionFault, BlockDrawsFloor, BundleInvalid, BundleRefused,
+    admission_plan, judge_bundles, AdmissionFault, BlockDrawsFloor, BundleInvalid, BundleRefused,
     BundleView as _, Corrupt, DrawableMemo, EpochFloor, SettlementCheck, Settling,
 };
 use shekyl_harness_spender::Persona;
@@ -30,7 +32,7 @@ use crate::ids::IssuedDrawKey;
 use super::super::super::connect_fixtures::{
     batch_root_going_into, candidate_over, judge_with_memo,
 };
-use super::super::super::{StoreBundleView, StoreInvariant};
+use super::super::super::{SettlementFault, StoreBundleView, StoreInvariant};
 use super::super::{SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
 use super::{h_open, no_draws};
 
@@ -219,7 +221,7 @@ fn admit(prepared: &mut Prepared) -> (Vec<shekyl_chain_rules::Admitted>, BlockDr
             .grown
             .judge_listing_with_memo(&view, &RULES, &txs, None)?;
         counted = Some(judged.block().archival().draws());
-        batch.connect_admitting(judged, RULES, Some((&bundle_view, &verdict)))?;
+        batch.connect_admitting(judged, RULES, Some((&prepared.memo, &verdict)))?;
         admitted = Some(verdict);
         Ok(())
     });
@@ -227,14 +229,17 @@ fn admit(prepared: &mut Prepared) -> (Vec<shekyl_chain_rules::Admitted>, BlockDr
     (admitted.expect("the verdict"), counted.expect("the count"))
 }
 
-fn draws_of(chain: &SlashedChain, height: BlockHeight) -> BlockDraws {
+fn draws_row(chain: &SlashedChain, height: BlockHeight) -> Option<BlockDraws> {
     chain
         .store
         .begin_read()
         .expect("read")
         .block_draws(height, BlockDrawsFloor::NONE)
         .expect("read")
-        .expect("the row")
+}
+
+fn draws_of(chain: &SlashedChain, height: BlockHeight) -> BlockDraws {
+    draws_row(chain, height).expect("the row")
 }
 
 fn index_of(
@@ -256,8 +261,9 @@ fn pop_one(chain: &mut SlashedChain) {
     chain.grown.pop();
 }
 
-/// A real bundle, judged through the store view and written. Pop restores
-/// the index, the digest, the reveal and `issued_short`. The next block's
+/// A real bundle, judged through the store view and written. Pop of the
+/// next block leaves the admission. Pop of the admitting block restores
+/// the index, the digest, the reveal and the draw row. The next block's
 /// count is unchanged at `h_incl` and reduced through `issued_short`.
 #[test]
 fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
@@ -278,15 +284,22 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
     assert_eq!(row.persona, one.draws[0].pair.persona);
     assert_eq!(row.shard, one.draws[0].pair.shard);
     assert_eq!(row.state.passed, one.draws[0].passed);
-    assert_eq!(row.state.revealed_at, h + BlockCount::ONE);
+    let including = h + BlockCount::ONE;
+    assert_eq!(row.state.revealed_at, including);
+    let plan = admission_plan(
+        including,
+        RULES.settlement_schedule(),
+        &admitted,
+        &BTreeMap::new(),
+    )
+    .expect("the fixture's one bundle plans");
+    assert_eq!(plan.issued_short(), 1, "one new draw of this epoch");
     let mut digest = IssuedDigest::ZERO;
-    digest.fold(&issued_draw_term(
-        &row.persona,
-        row.shard,
-        epoch,
-        row.issuing_height,
-        row.draw,
-    ));
+    for issues in plan.epochs() {
+        for term in issues.terms() {
+            digest.fold(&term);
+        }
+    }
     let floor =
         EpochFloor::<Settling>::under(prepared.chain.grown.height(), RULES.settlement_schedule());
     assert_eq!(
@@ -300,13 +313,13 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
         digest
     );
     assert!(draws_of(&prepared.chain, h).revealed);
-    let incl = draws_of(&prepared.chain, h + BlockCount::ONE);
+    let incl = draws_of(&prepared.chain, including);
     assert_eq!(
         incl.count, counted.count,
         "admission does not change the count"
     );
     assert_eq!(incl.shortfall, counted.shortfall);
-    assert_eq!(incl.issued_short, 1, "one new draw of this epoch");
+    assert_eq!(incl.issued_short, plan.issued_short());
 
     let next = connect_plain(&mut prepared.chain, None);
     assert_eq!(
@@ -315,19 +328,65 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
         "the next block's shortfall loses issued_short"
     );
 
+    pop_one(&mut prepared.chain);
+    assert_eq!(draws_of(&prepared.chain, including).issued_short, 1);
+    assert!(draws_of(&prepared.chain, h).revealed);
+    assert_eq!(index_of(&prepared.chain, epoch).len(), 1);
+    assert_eq!(
+        prepared
+            .chain
+            .store
+            .begin_read()
+            .expect("read")
+            .issued_digest(epoch, floor)
+            .expect("digest"),
+        digest,
+        "pop of the next block leaves the admission"
+    );
+
+    pop_one(&mut prepared.chain);
+    assert!(
+        index_of(&prepared.chain, epoch).is_empty(),
+        "pop removes the admitted draw"
+    );
+    assert!(!draws_of(&prepared.chain, h).revealed);
+    assert!(
+        draws_row(&prepared.chain, including).is_none(),
+        "pop removes the admitting block's draw row"
+    );
+    let restored =
+        EpochFloor::<Settling>::under(prepared.chain.grown.height(), RULES.settlement_schedule());
+    assert_eq!(
+        prepared
+            .chain
+            .store
+            .begin_read()
+            .expect("read")
+            .issued_digest(epoch, restored)
+            .expect("digest"),
+        IssuedDigest::ZERO,
+        "pop of the admitting block restores the digest"
+    );
+
     // Three issued draws of another pair, revealed below the drawing
     // block, are not short there. One whose reveal is the drawing block
-    // itself still is.
+    // itself still is. These rows are not part of a connect, so they are
+    // planted after pop has been checked: a connect's pop would not
+    // remove them.
     let drawable = drawable(&prepared);
     let other = (0..drawable.len())
         .find(|index| drawable.pair(*index) != Some(one.draws[0].pair))
         .expect("another pair");
     let pair = drawable.pair(other).expect("the index");
+    let past_index = drawable.len();
     let out: Result<(), TestErr> = prepared.chain.store.write(|batch| {
         {
             let mut index = batch.open_insert_table(
                 crate::schema::ARCHIVAL_ISSUED_DRAW,
-                StoreInvariant::TipMismatch,
+                StoreInvariant::SettlementNotSound {
+                    epoch,
+                    observed: SettlementFault::IndexDrift,
+                },
             )?;
             for j in 0..3 {
                 let key =
@@ -363,7 +422,7 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
         let bundle_view = StoreBundleView::new(
             &view,
             &prepared.memo,
-            h + BlockCount::ONE + BlockCount::ONE,
+            including + BlockCount::ONE,
             RULES.settlement_schedule(),
         );
         assert!(
@@ -379,25 +438,13 @@ fn a_verified_bundle_is_what_the_store_writes_and_pop_restores() {
         Ok(())
     });
     out.expect("the short reads");
-    let past_index = drawable.len();
-
-    pop_one(&mut prepared.chain);
-    pop_one(&mut prepared.chain);
-    let admitted_draw = 0;
-    assert!(
-        !index_of(&prepared.chain, epoch)
-            .iter()
-            .any(|row| { row.issuing_height == h && row.draw == admitted_draw }),
-        "pop removes the admitted draw"
-    );
-    assert!(!draws_of(&prepared.chain, h).revealed);
 
     let past: Result<(), TestErr> = prepared.chain.store.write(|batch| {
         let view = batch.chain_view();
         let bundle_view = StoreBundleView::new(
             &view,
             &prepared.memo,
-            h + BlockCount::ONE + BlockCount::ONE,
+            including + BlockCount::ONE,
             RULES.settlement_schedule(),
         );
         bundle_view.visibly_short(h, past_index)?;
@@ -518,7 +565,10 @@ fn the_digest_check_closes_on_an_admitted_bundle() {
         batch
             .open_remove_table(
                 crate::schema::ARCHIVAL_ISSUED_DRAW,
-                StoreInvariant::TipMismatch,
+                StoreInvariant::SettlementNotSound {
+                    epoch,
+                    observed: SettlementFault::IndexDrift,
+                },
             )?
             .remove(
                 IssuedDrawKey::new(

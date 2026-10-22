@@ -110,6 +110,7 @@
 //! the slash log's per-height sequence and every record's post-image are
 //! functions of the view and the block, not of anything the store chose.
 
+mod admission;
 mod arm;
 mod bundle;
 mod close;
@@ -120,6 +121,7 @@ mod inputs;
 mod memo;
 mod slash;
 
+pub use admission::{admission_plan, AdmissionPlan, AdmissionPlanFault, EpochIssues};
 pub(crate) use arm::BondArm;
 pub use bundle::{
     check_section, check_section_until_switch, judge_bundles, open_body, open_reference,

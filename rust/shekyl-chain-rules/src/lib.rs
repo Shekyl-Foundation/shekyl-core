@@ -164,10 +164,10 @@ pub mod relay_floor;
 pub use alt::{alt_against, anchor_band, AltChainView, AltValid, AnchorBand, Fork, InvertedFork};
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
-    closed_and_final, drawable_epoch_walked_back, shard_close, shard_close_height, Accrual,
-    ArchivalDelta, ClosedUniverse, DrawableDigestWrite, DrawableMemo, EpochClose, EpochGather,
-    RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
-    WALK_BACK_EPOCHS,
+    admission_plan, closed_and_final, drawable_epoch_walked_back, shard_close, shard_close_height,
+    Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta, ClosedUniverse, DrawableDigestWrite,
+    DrawableMemo, EpochClose, EpochGather, EpochIssues, RecordWrite, RecordWriteKind,
+    ReleasePreImage, ServeCreditKey, Settlement, Slash, WALK_BACK_EPOCHS,
 };
 // The serve-credit bundle rule (`archival/bundle.rs`): STAGED. The
 // verifier and its view trait are exported for the lanes that wire them
@@ -232,7 +232,6 @@ pub use rules::tx_emission_against::{
     EpochCloseBondFacts,
 };
 pub use rules::{recorded, recorded_header};
-pub use shekyl_archival_retention::settlement_select::issued_draw_term;
 pub use shekyl_archival_retention::{DrawableEpoch, DrawableEpochError};
 pub use shekyl_fcmp::LeafInput;
 pub use substrate::Substrate;

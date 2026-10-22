@@ -26,8 +26,8 @@
 //!   [`BundleView`]: the window, one bundle per `h`, the bitmap and the
 //!   record count, the `0x0C` opening, the witness signature, every draw's
 //!   pair, and every record's receipt. It returns [`Admitted`]: the kept
-//!   projection and every derived draw, which is all the writer needs
-//!   (`SCS-P37`).
+//!   projection and every derived draw, which is all
+//!   [`admission_plan`](crate::admission_plan) needs (`SCS-P37`).
 //!
 //! All three are pure. None names a store type, and none writes.
 //!
@@ -104,13 +104,13 @@
 //!   so a cutover that left a height without one would otherwise refuse
 //!   honest bundles. `carry` and `shortfall` on the same row are the count
 //!   rule's, and this rule does not read them.
-//! - [`BundleView::draw_commitment`] is the coinbase's `0x0C` field. The
-//!   coinbase grammar (CEN-I20) now requires exactly one, so a block of
-//!   the chain always has it. A `None` for a block whose draw count the
-//!   view just answered is therefore the view failing to answer, and the
-//!   rule returns [`BundleUnanswered::DrawCommitment`], not a verdict:
-//!   calling the block invalid would turn a store's hole into a consensus
-//!   rule. [`BundleInvalid::Commitment`] is the mismatch and nothing else.
+//! - [`BundleView::draw_commitment`] is the coinbase's singular `0x0C`
+//!   field. Above the tip the view answers `None`, and the rule returns
+//!   [`BundleUnanswered::DrawCommitment`]. A recorded block whose extra
+//!   does not yield exactly one commitment is the store's halt (SI-38),
+//!   not a verdict: [`BundleInvalid::Commitment`] is the mismatch and
+//!   nothing else. The coinbase grammar (CEN-I20) is `form`'s, and this
+//!   read does not re-run it.
 //! - `ChainView::drawable_digest(E)` is **not** one of this rule's reads.
 //!   It is the settlement writer's check that `D` did not drift
 //!   (specification §9.5, check 2). What this rule reads of `D` is
@@ -479,12 +479,14 @@ pub struct DerivedDraw {
     pub passed: bool,
 }
 
-/// What the verifier returns on success, and all the writer needs
+/// What the verifier returns on success, and all
+/// [`admission_plan`](crate::admission_plan) needs
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.6, `SCS-P37`).
 ///
-/// The writer turns `draws` into index rows `(E, P, s, h, j) → (h_incl,
-/// passed)`, folds each into the epoch's digest, marks `h` revealed and
-/// updates the visible counts. It derives nothing.
+/// [`admission_plan`](crate::admission_plan) turns `draws` into index rows
+/// `(E, P, s, h, j) → (h_incl, passed)`, the epoch digest's terms, the
+/// heights revealed and `issued_short`. The store journals that plan and
+/// derives none of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Admitted {
     /// The bundle's kept bytes, parsed: the reference's content.
@@ -835,3 +837,7 @@ mod bundle_section_tests;
 #[cfg(test)]
 #[path = "bundle_staging_tests.rs"]
 mod bundle_staging_tests;
+
+#[cfg(test)]
+#[path = "bundle_admission_tests.rs"]
+mod bundle_admission_tests;

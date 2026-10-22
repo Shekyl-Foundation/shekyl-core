@@ -48,6 +48,10 @@ fn every_refusal_names_its_census_row() {
         CenRow::J30
     );
     assert_eq!(
+        SectionRefused::TooManyReferences { found: usize::MAX }.row(),
+        CenRow::J29
+    );
+    assert_eq!(
         SectionRefused::OutsideWindow { position: 0 }.row(),
         CenRow::J31
     );
@@ -300,6 +304,12 @@ fn the_staged_rule_types_name_the_verifier_rows() {
     let budget = SectionBudget::from_draws(0);
     let section = [
         (SectionRefused::Malformed { position: 0 }.row(), J29::ROW),
+        (SectionRefused::OutOfOrder { position: 1 }.row(), J29::ROW),
+        (
+            SectionRefused::TooManyReferences { found: usize::MAX }.row(),
+            J29::ROW,
+        ),
+        (SectionRefused::Root.row(), J29::ROW),
         (
             SectionRefused::OverBudget { charge, budget }.row(),
             J30::ROW,
@@ -313,7 +323,11 @@ fn the_staged_rule_types_name_the_verifier_rows() {
         assert_eq!(named, row);
     }
     let bundles = [
+        (BundleInvalid::OutsideWindow.row(), J31::ROW),
+        (BundleInvalid::AlreadyRevealed.row(), J31::ROW),
+        (BundleInvalid::BodyMalformed.row(), J32::ROW),
         (BundleInvalid::Count.row(), J32::ROW),
+        (BundleInvalid::RecordCount.row(), J32::ROW),
         (BundleInvalid::Commitment.row(), J33::ROW),
         (BundleInvalid::WitnessSignature.row(), J34::ROW),
         (BundleInvalid::Attempt { draw: 0 }.row(), J35::ROW),

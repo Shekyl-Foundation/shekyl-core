@@ -264,11 +264,12 @@ revealed (§10). The count writer stores `issued_short` as zero;
 admission, increment 4, writes the reduction.
 
 `issued_short(h_incl)` reduces the shortfall of `D(epoch(h_incl))` only.
-It is the sum, over admitted bundles whose `epoch(h)` is `epoch(h_incl)`,
-of `min(3, before + new) − min(3, before)` per pair, from the per-pair
-counts already gathered for the visible shortfall. A bundle for `h` in
-the previous epoch contributes zero: its index rows, digest fold,
-`revealed(h)` and passed bits are written into `epoch(h)`, and the new
+`admission_plan` builds it, and the store journals that plan: neither
+re-runs the selection. Each same-epoch pair contributes `min(room, new)`,
+where `room` is `COUNTED_DRAWS` minus the draws already visible below
+`h_incl` and `new` is this block's draws of the pair. A bundle for `h` in
+the previous epoch contributes zero: its index rows, digest terms,
+`revealed(h)` and passed bits are issued into `epoch(h)`, and the new
 epoch's shortfall is unchanged. The sim pins that opening shortfall at
 1536 when `|D|` is 512.
 
@@ -1307,9 +1308,10 @@ pub struct DerivedDraw {
 - `BundleKept` is the kept part of §7.2 and nothing more. It is what the
   header root covers, what a pruned node retains, and what settlement
   reads.
-- The writer turns `draws` into index rows `(E, P, s, h, j) →
-  (h_incl, passed)`, folds each into the epoch's digest, marks `h`
-  revealed, and updates the visible counts (§10). It derives nothing.
+- `admission_plan` turns `draws` into index rows `(E, P, s, h, j) →
+  (h_incl, passed)`, the epoch digest's terms, the heights revealed and
+  `issued_short`. The store journals that plan. Neither re-runs the
+  selection.
 - `draws` is part of the contract (`SCS-P37`, ruled 2026-10-12): without
   it the writer would run the selection a second time for every draw,
   the misses included. One derivation, one KAT.

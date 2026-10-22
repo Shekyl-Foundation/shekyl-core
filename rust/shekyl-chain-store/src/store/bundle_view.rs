@@ -10,6 +10,11 @@
 //! the batch plus the memo, not the batch alone. A memo miss is SI-35: the
 //! count phase of this block has already filed every epoch a section inside
 //! the response window can name, and this path does not rebuild.
+//!
+//! Issued draws are read once per epoch and kept as [`IssuedVisibility`]:
+//! each pair's reveal heights, sorted. `revealed_at < h` is one partition
+//! of that list. The count the reduction uses and the flag the verifier
+//! reads are that partition.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -24,6 +29,78 @@ use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardI
 use super::error::{StoreError, StoreInvariant};
 use super::view::BatchView;
 
+/// Reveal heights of the issued draws of one epoch, by pair.
+///
+/// Filed once from the epoch's index. The heights of a pair are sorted, so
+/// [`Self::before`] is the only definition of `revealed_at < below`.
+struct IssuedVisibility {
+    by_epoch: BTreeMap<SettlementEpoch, BTreeMap<(PCanonicalId, ShardId), Vec<BlockHeight>>>,
+}
+
+impl IssuedVisibility {
+    fn new() -> Self {
+        Self {
+            by_epoch: BTreeMap::new(),
+        }
+    }
+
+    fn contains(&self, epoch: SettlementEpoch) -> bool {
+        self.by_epoch.contains_key(&epoch)
+    }
+
+    /// File `rows` under `epoch`. A pair's heights are sorted so a later
+    /// count is a partition, not a second scan.
+    fn file(&mut self, epoch: SettlementEpoch, rows: Vec<IndexedDraw>) {
+        let mut pairs: BTreeMap<(PCanonicalId, ShardId), Vec<BlockHeight>> = BTreeMap::new();
+        for row in rows {
+            pairs
+                .entry((row.persona, row.shard))
+                .or_default()
+                .push(row.state.revealed_at);
+        }
+        for heights in pairs.values_mut() {
+            heights.sort_unstable();
+        }
+        self.by_epoch.insert(epoch, pairs);
+    }
+
+    /// How many of `pair`'s draws in `epoch` were revealed strictly below
+    /// `below`. The epoch was filed by [`StoreBundleView::issued_of`].
+    fn count_before(
+        &self,
+        epoch: SettlementEpoch,
+        pair: (PCanonicalId, ShardId),
+        below: BlockHeight,
+    ) -> usize {
+        self.by_epoch
+            .get(&epoch)
+            .expect("issued_of inserts the epoch")
+            .get(&pair)
+            .map(|revealed| Self::before(revealed, below))
+            .unwrap_or(0)
+    }
+
+    /// Each pair in `epoch` and how many of its draws were revealed strictly
+    /// below `below`. A pair whose reveals are all at or after `below`
+    /// contributes zero; the caller drops that zero.
+    fn pairs_before(
+        &self,
+        epoch: SettlementEpoch,
+        below: BlockHeight,
+    ) -> impl Iterator<Item = ((PCanonicalId, ShardId), usize)> + '_ {
+        self.by_epoch
+            .get(&epoch)
+            .expect("issued_of inserts the epoch")
+            .iter()
+            .map(move |(pair, revealed)| (*pair, Self::before(revealed, below)))
+    }
+
+    /// The count of `revealed_at < below`. `revealed` is sorted.
+    fn before(revealed: &[BlockHeight], below: BlockHeight) -> usize {
+        revealed.partition_point(|revealed_at| *revealed_at < below)
+    }
+}
+
 /// The admission view: one batch and the memo the count phase filled.
 pub struct StoreBundleView<'a, 'b, 'id> {
     view: &'a BatchView<'b, 'id>,
@@ -31,9 +108,9 @@ pub struct StoreBundleView<'a, 'b, 'id> {
     /// The block being admitted. Floors and the window are read from it.
     h_incl: BlockHeight,
     schedule: SettlementSchedule,
-    /// Issued-draw rows already read, by epoch. One admission reads an
-    /// epoch's index once, then answers every pair from that read.
-    issued: RefCell<BTreeMap<SettlementEpoch, Vec<IndexedDraw>>>,
+    /// Issued draws already read, by epoch. One admission reads an epoch's
+    /// index once, then answers every pair from that read.
+    visibility: RefCell<IssuedVisibility>,
 }
 
 impl<'a, 'b, 'id> StoreBundleView<'a, 'b, 'id> {
@@ -50,7 +127,7 @@ impl<'a, 'b, 'id> StoreBundleView<'a, 'b, 'id> {
             memo,
             h_incl,
             schedule,
-            issued: RefCell::new(BTreeMap::new()),
+            visibility: RefCell::new(IssuedVisibility::new()),
         }
     }
 
@@ -67,13 +144,14 @@ impl<'a, 'b, 'id> StoreBundleView<'a, 'b, 'id> {
         ChainView::block_draws(self.view, h, floor)
     }
 
+    /// Read `epoch`'s issued-draw index into [`IssuedVisibility`], once.
     fn issued_of(&self, epoch: SettlementEpoch) -> Result<(), StoreError> {
-        if self.issued.borrow().contains_key(&epoch) {
+        if self.visibility.borrow().contains(epoch) {
             return Ok(());
         }
         let floor = EpochFloor::<Settling>::under(self.h_incl, self.schedule);
         let rows = ChainView::issued_draws(self.view, epoch, floor)?;
-        self.issued.borrow_mut().insert(epoch, rows);
+        self.visibility.borrow_mut().file(epoch, rows);
         Ok(())
     }
 
@@ -91,32 +169,30 @@ impl<'a, 'b, 'id> StoreBundleView<'a, 'b, 'id> {
 
     /// How many of each pair's draws in `epoch` are visible below `below`:
     /// `revealed_at < below`. One read of the epoch's index, shared with
-    /// [`BundleView::visibly_short`].
+    /// [`BundleView::visibly_short`]. A pair with none is absent.
     ///
     /// # Errors
     ///
-    /// The index read's fault, or a count that does not fit `u32`.
+    /// The index read's fault, or a count that does not fit `u32` (SI-39).
     pub fn visible_counts(
         &self,
         epoch: SettlementEpoch,
         below: BlockHeight,
     ) -> Result<BTreeMap<(PCanonicalId, ShardId), u32>, StoreError> {
         self.issued_of(epoch)?;
+        let visible: Vec<_> = self
+            .visibility
+            .borrow()
+            .pairs_before(epoch, below)
+            .filter(|(_, count)| *count != 0)
+            .collect();
         let mut counts = BTreeMap::new();
-        let rows = self.issued.borrow();
-        let Some(rows) = rows.get(&epoch) else {
-            return Ok(counts);
-        };
-        for row in rows {
-            if row.state.revealed_at < below {
-                let count = counts.entry((row.persona, row.shard)).or_insert(0);
-                *count = count.checked_add(1).ok_or_else(|| {
-                    self.view.arm_row(StoreInvariant::AdmissionWrite {
-                        height: below,
-                        observed: super::error::AdmissionWriteFault::ReductionPastWidth,
-                    })
-                })?;
-            }
+        for (pair, visible) in visible {
+            let count = u32::try_from(visible).map_err(|_| {
+                self.view
+                    .arm_row(StoreInvariant::VisibleDrawCountPastWidth { height: below })
+            })?;
+            counts.insert(pair, count);
         }
         Ok(counts)
     }
@@ -130,7 +206,15 @@ impl BundleView for StoreBundleView<'_, '_, '_> {
     }
 
     fn draw_commitment(&self, h: BlockHeight) -> Result<Option<DrawCommitment>, StoreError> {
-        self.view.draw_commitment_at(h)
+        match self.view.recorded_block_at(h)? {
+            AtHeight::AboveTip => Ok(None),
+            AtHeight::Recorded(block) => {
+                singular_draw_commitment(&block).map(Some).ok_or_else(|| {
+                    self.view
+                        .arm_row(StoreInvariant::DrawCommitmentUnreadable { height: h })
+                })
+            }
+        }
     }
 
     fn block_hash(&self, height: BlockHeight) -> Result<Option<BlockHash>, StoreError> {
@@ -142,30 +226,21 @@ impl BundleView for StoreBundleView<'_, '_, '_> {
 
     fn visibly_short(&self, h: BlockHeight, index: u64) -> Result<bool, StoreError> {
         let epoch = self.schedule.epoch_at(h);
+        // The store view does not answer `Ok(None)`. The `None` is the
+        // trait's absent set, and on this view that absence is SI-35.
         let Some(drawable) = self.drawable_epoch(epoch)? else {
             return Err(self.miss(epoch));
         };
         let Some(pair) = drawable.pair(index) else {
-            return Err(self.view.arm_row(StoreInvariant::AdmissionWrite {
-                height: h,
-                observed: super::error::AdmissionWriteFault::IndexPastSet,
-            }));
+            return Err(self
+                .view
+                .arm_row(StoreInvariant::DrawableIndexPastSet { height: h, index }));
         };
         self.issued_of(epoch)?;
         let visible = self
-            .issued
+            .visibility
             .borrow()
-            .get(&epoch)
-            .map(|rows| {
-                rows.iter()
-                    .filter(|row| {
-                        row.persona == pair.persona
-                            && row.shard == pair.shard
-                            && row.state.revealed_at < h
-                    })
-                    .count()
-            })
-            .unwrap_or(0);
+            .count_before(epoch, (pair.persona, pair.shard), h);
         Ok(visible < COUNTED_DRAWS)
     }
 
@@ -184,4 +259,21 @@ impl BundleView for StoreBundleView<'_, '_, '_> {
             None => Err(self.miss(epoch)),
         }
     }
+}
+
+/// Exactly one `0x0C` in the coinbase extra. A parse that fails, an extra
+/// with no draw commitment, or two of them, is `None`. The all-zero value
+/// is a commitment: genesis publishes it, and "none" means no field.
+fn singular_draw_commitment(block: &shekyl_wire::Block) -> Option<DrawCommitment> {
+    let fields = block.miner_transaction.prefix.parse_extra().ok()?;
+    let mut found = None;
+    for field in fields {
+        if let shekyl_wire::tx_extra::TxExtraField::DrawCommitment(commitment) = field {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(commitment);
+        }
+    }
+    found
 }
