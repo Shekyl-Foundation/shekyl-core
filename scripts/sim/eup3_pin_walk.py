@@ -642,12 +642,49 @@ def cmd_merges() -> None:
     (OUT_DIR / "merges.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
-def cmd_toolchains() -> None:
-    """Where the pinned toolchain changes, build that commit with both.
+def channel_key(chan: str) -> str:
+    """1.94 and 1.94.0 are one pin. The comparison is the minor version."""
+    parts = chan.split(".")
+    return ".".join(parts[:2]) if len(parts) >= 2 else chan
 
-    powf, exp and ln come from the toolchain's maths library. A difference
-    here is its own row, not a property of the code commit that arrived
-    with the new pin.
+
+def measure_or_refuse(
+    commit: str, channel_override: str, dest: Path, have: set
+) -> dict:
+    key = (commit, channel_override)
+    if key in have:
+        return next(
+            row
+            for row in load_jsonl(dest)
+            if row["commit"] == commit and row.get("channel_override") == channel_override
+        )
+    print(f"toolchain {commit[:12]} under {channel_override}", flush=True)
+    try:
+        row = measure(commit, channel_override=channel_override)
+    except SystemExit as err:
+        row = {
+            "commit": rev_parse(REPO, commit),
+            "subject": subject(REPO, commit),
+            "channel": channel_override,
+            "channel_override": channel_override,
+            "seed": PIN_SEED,
+            "refused": str(err),
+            "vector": {name: None for name in VECTOR},
+        }
+        print(f"toolchain refused {commit[:12]} under {channel_override}", flush=True)
+    append_jsonl(dest, row)
+    have.add(key)
+    return row
+
+
+def cmd_toolchains() -> None:
+    """Where the pinned toolchain changes, build under both compilers.
+
+    powf, exp and ln come from the toolchain's maths library. The commit
+    that raises rust-version cannot be built by the old compiler, so that
+    direction is recorded as refused. The last commit that still builds
+    on the old pin is built with the new compiler: that pair is the
+    maths library alone.
     """
     sequence = [rev_parse(REPO, START_L11)]
     sequence.extend(rev_parse(REPO, rev) for rev in sim_commits(REPO))
@@ -658,56 +695,65 @@ def cmd_toolchains() -> None:
     have = {
         (row["commit"], row.get("channel_override"))
         for row in load_jsonl(dest)
+        if row.get("channel_override")
     }
     band = spreads()
     report = []
-    prev_channel = channel_of(sequence[0])
+    prev_commit = sequence[0]
+    prev_channel = channel_of(prev_commit)
     for commit in sequence[1:]:
         chan = channel_of(commit)
-        if chan != prev_channel:
-            native = cached_pin(commit)
-            if native is None:
-                print(f"toolchain native {commit[:12]} {chan}", flush=True)
-                native = measure(commit)
-                append_jsonl(dest, native)
-            key = (commit, prev_channel)
-            if key in have:
-                alt = next(
-                    row
-                    for row in load_jsonl(dest)
-                    if row["commit"] == commit and row.get("channel_override") == prev_channel
-                )
-            else:
-                print(
-                    f"toolchain alt {commit[:12]} {chan} under {prev_channel}",
-                    flush=True,
-                )
-                alt = measure(commit, channel_override=prev_channel)
-                append_jsonl(dest, alt)
-                have.add(key)
-            changes = {}
-            for name in VECTOR:
-                change = moved(
-                    alt["vector"].get(name),
-                    native["vector"].get(name),
-                    band.get(name, {}),
-                )
-                if change:
-                    changes[name] = change
+        if channel_key(chan) != channel_key(prev_channel):
+            # New code on the old compiler. Often refused by rust-version.
+            backward = measure_or_refuse(commit, prev_channel, dest, have)
+            # Old code on the new compiler. This is the one that can run.
+            forward = measure_or_refuse(prev_commit, chan, dest, have)
+            native_old = cached_pin(prev_commit)
+            native_new = cached_pin(commit)
+            forward_changes = {}
+            backward_changes = {}
+            if native_old is not None and not forward.get("refused"):
+                for name in VECTOR:
+                    change = moved(
+                        native_old["vector"].get(name),
+                        forward["vector"].get(name),
+                        band.get(name, {}),
+                    )
+                    if change:
+                        forward_changes[name] = change
+            if native_new is not None and not backward.get("refused"):
+                for name in VECTOR:
+                    change = moved(
+                        backward["vector"].get(name),
+                        native_new["vector"].get(name),
+                        band.get(name, {}),
+                    )
+                    if change:
+                        backward_changes[name] = change
             report.append(
                 {
                     "commit": commit,
-                    "subject": native["subject"],
+                    "previous": prev_commit,
+                    "subject": subject(REPO, commit),
                     "from_channel": prev_channel,
                     "to_channel": chan,
-                    "scenarios": changes,
+                    "old_code_on_new_compiler": {
+                        "refused": forward.get("refused"),
+                        "scenarios": forward_changes,
+                    },
+                    "new_code_on_old_compiler": {
+                        "refused": backward.get("refused"),
+                        "scenarios": backward_changes,
+                    },
                 }
             )
             print(
                 f"toolchain {prev_channel} -> {chan} at {commit[:12]} "
-                f"scenarios {len(changes)}",
+                f"old-code scenarios {len(forward_changes)} "
+                f"new-code refused {bool(backward.get('refused'))}",
                 flush=True,
             )
+        prev_commit = commit
         prev_channel = chan
     (OUT_DIR / "toolchain-steps.json").write_text(json.dumps(report, indent=2) + "\n")
 
