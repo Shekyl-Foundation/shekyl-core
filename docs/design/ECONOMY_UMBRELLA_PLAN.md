@@ -163,7 +163,7 @@ Monero number at 2 or above never ran, and those arms are deleted
 | Fee floor's basis, `F = R·C·w_ref/M²` | Reward | **Not derived.** Reward-proportional, so highest at genesis and decaying 1,707× | FL-V11. **Direction RULED** (§3.2, 4): decoupled from the reward; the basis is FL-R13's round, EUP-5 G |
 | `w_ref` = 3,000 | Transaction weight | **Not derived.** No examination record as a choice | CEN-M3; `FOLLOWUPS.md`; EUP-5 G |
 | Zone, 300,000 B | Transaction weight (capacity leg); verification time (cost leg) | **Split.** The cost leg is measured on the device floor. The capacity leg was ratified on an estimate of 4–8 KB a spend; measured, 13.6 KB, so about 22 spends | C2-R2 Q1; `FOLLOWUPS.md`; EUP-5 G |
-| Coinbase reserve, 600 B | Coinbase weight | **Not derived, and ratified on a statement that is false.** C2-R2 Q7 records that a Shekyl coinbase "serializes well under 600 bytes". The minimal one, a single output with no attestation, weighs 1,331 B, of which 1,232 B is `extra`. Bodies the fill's bound allows then make a block over the limit, and the builder returns no template (`bodies_at_the_fills_bound_make_a_block_past_the_limit_while_the_reserve_is_600`) | **New. RULED** (§3.2, 2): derived, with a compile-time assertion; `FOLLOWUPS.md` |
+| Coinbase reserve | Coinbase weight | **Derived 2026-10-22.** The grammar's maximum is 1,386 B (`max_coinbase_weight`, margin 0). A template coinbase at height 5 weighs 1,364 B. *Records-was:* 600 B, ratified on a false statement; the minimal coinbase measured 1,331 B on 2026-10-04, before `0x0C`. | **Done** (§3.2 c) |
 | Transaction weight cap, 149,400 = zone/2 − reserve | The two rows above | **Formula derived; its stated guarantee is 131 B short.** Two maximal transactions and a coinbase are 300,131 B: a sliver of penalty, not a failure | C2-R2 Q7; rides the two rows above |
 | Tail, 0.6 per block | Reward against supply | **Not derived, and not derivable: its size is a ruling.** The same 0.6 as Monero's, on an asymptote of 2³² SKL: 157,680 SKL a year is 0.0037 % of it, where Monero's is about 0.86 % of its supply. FL-R12′ ruled the tail perpetual; no record sizes it. What a tail buys in hash depends on SKL's price, so no chain-internal quantity sizes it. The governance-free form of the choice is a ratio, the tail as a fraction of the asymptote per year, and Rick chooses it. §4's goal 2 is a share test and cannot | FL-V11 ("inherited-unexamined"). **RULED** (§3.2, 3): a criterion, in §4 |
 | Template fill, `decide_listed_body` | Hard-fork version | **Not derived: the reward-aware fill does not run.** The version test is deleted. The daemon's scan lists bodies in fee order, passes one that would exceed 13/10 of the median minus the 600-byte reserve, and stops once listed weight is past the median. `shekyl_block_template::Fill` is the reward-aware policy and is not that scan | **New. RULED** (§3.2, 1): the reward-aware fill is the design; the fill moves to Rust; `FOLLOWUPS.md` |
@@ -203,7 +203,13 @@ of high-fee bodies fills to it, the block is 731 B over, and an honest miner
 has no block to mine while the pool stays full, at the cost to an attacker
 of fee offers that are never collected.
 
-**The fill weighs bodies alone, at every weight.** The reserve's shortfall
+**UPDATE 2026-10-22.** The reserve is 1,386 B (margin 0) and the Rust fill
+prices `bodies + coinbase`. A listing at the fill's bound builds a block
+within the limit, and the sim records that block weight. The C++ scan is
+unchanged and deletes with `tx_pool.cpp` at the DRS-X flip. The two
+paragraphs above and the one below are the reading that change closed.
+
+**The fill weighs bodies alone, at every weight — CLOSED 2026-10-22.** The reserve's shortfall
 at the limit is the visible end of a wider difference. `Fill::admit` and
 `Fill::reward` price the penalty on the bodies' weight; the template and the
 validator weigh the block, coinbase included. So bodies that fit the median
@@ -264,9 +270,9 @@ the three operands.
 | # | Work | Gate |
 | --- | --- | --- |
 | a | The version-gate sweep: every version comparison in the C++, classified by operand, with a gate holding the inventory. **Done 2026-10-05** ([`CXX_VERSION_GATES.md`](CXX_VERSION_GATES.md)): the block-version gates are deleted or collapsed, bar the fill (d); the transaction-version collapse is its own PR | before EUP-4 |
-| b | `Fill::admit_up_to` batches the penalty zone, held to the single-offer walk | EUP-4 prep; the 135-year arms wait on it |
-| c | The coinbase reserve, derived, with its compile-time assertion | with the zone's capacity leg; before (d) |
-| d | The fill moves to `shekyl-block-template`; the C++ fill and gate are deleted. The owner prices and bounds the weight the block carries, coinbase included, and the sim records that weight; the ESR figures that read the fill are re-run | after (c) |
+| b | `Fill::admit_up_to` batches the penalty-free part, held to the single-offer walk. **Done 2026-10-22:** the walk still holds with the coinbase operand | EUP-4 prep; the 135-year arms wait on it |
+| c | The coinbase reserve, derived, with its compile-time assertion. **Done 2026-10-22** on the inherited 300,000 B zone (reserve 1,386; `TX_WEIGHT_LIMIT` 148,614). The zone's capacity leg remains EUP-5 G and moves the limit again | with the zone's capacity leg; before (d) |
+| d | The Rust fill prices and bounds the weight the block carries, coinbase included, and the sim records that weight. **Done 2026-10-22.** The C++ fill deletes with `tx_pool.cpp` at the DRS-X flip (DEL-010), not in this change | after (c) |
 | e | Q9, the floor in consensus (D) | after (d): both land in the template and admission path, and the enforced case's arithmetic depends on the fill |
 
 Unchanged and stated so they are not re-asked: `total_staked` stays as bonded
