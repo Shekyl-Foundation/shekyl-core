@@ -70,7 +70,10 @@ of its configuration (`shekyld --help`; `docs/EXECUTABLES.md`):
   service install keeps it `root:<daemon group>` `0640` under `/etc/shekyl`
   `root:root` `0755`, a per-account install `0600`. An access-control list
   that names anyone else refuses, and so does a group that holds anyone
-  else, by its member list or as an account's primary group. A proxy that refuses
+  else, by its member list or as an account's primary group. The check
+  reads the accounts the system enumerates, so accounts from a directory
+  service that does not list its accounts are not seen by it: keep the
+  daemon's group a local group. A proxy that refuses
   the pair fails each dial through it, and the log names the two options to
   fix once a minute; the daemon keeps running.
 

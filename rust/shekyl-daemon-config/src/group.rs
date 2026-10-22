@@ -16,10 +16,17 @@
 //! rustix does not wrap; it is the one place after `acl` where the crate's
 //! `unsafe_code` deny is lifted. What the walk sees is what the name
 //! service enumerates: a directory service configured not to enumerate its
-//! accounts reports none and no error, and the walk cannot see past that.
-//! The walk runs at start and from the configuration check, before the
-//! daemon has a second thread, which is the condition `getpwent`'s one
-//! cursor needs.
+//! accounts reports none and no error, and the walk cannot see past that;
+//! the operator docs say the daemon's group must stay a local group.
+//!
+//! `getpwent` walks one process-wide cursor, so two walks at once would
+//! interleave. The walk holds [`WALK`] from `setpwent` to `endpwent`: it is
+//! callable from any number of threads and they take turns. Nothing else in
+//! the tree moves that cursor (`getpwuid_r` and `getpwuid`, the other
+//! password reads, look one entry up and leave it alone), and at start the
+//! check runs from `load`, before the daemon's logging, runtime or any
+//! thread of its own exists (`shekyl-daemon`'s `run`); the lock is what
+//! makes that order a convenience rather than a condition.
 
 /// What the group holds besides the daemon's account.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +70,9 @@ pub(crate) fn judge(
     }
     GroupMembers::Sole
 }
+
+/// The one cursor `getpwent` walks, held for the whole walk.
+static WALK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The live answer for group `gid` and the daemon's account `uid`.
 pub(crate) fn members_besides_me(gid: u32, uid: u32) -> GroupMembers {
@@ -202,13 +212,17 @@ mod sys {
     }
 
     /// Every account the password database enumerates, by the `getpwent`
-    /// walk. The walk ends on a NULL with errno clear; a NULL with errno
-    /// set is a read that did not complete.
+    /// walk, under [`super::WALK`]. The walk ends on a NULL with errno
+    /// clear; a NULL with errno set is a read that did not complete.
     pub(super) fn accounts() -> Result<Vec<Account>, String> {
+        // A poisoned lock is a walk that panicked mid-way; the cursor is
+        // reset by `setpwent` below either way, so the guard is taken.
+        let _walk = super::WALK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut out = Vec::new();
         // SAFETY: `setpwent` and `endpwent` take nothing and touch only the
-        // library's own cursor, which no other thread uses at this point
-        // (module doc).
+        // library's cursor, which `_walk` makes ours for the whole walk.
         unsafe { libc::setpwent() };
         let result = loop {
             clear_errno();
@@ -326,6 +340,25 @@ mod tests {
             GroupMembers::Sole | GroupMembers::Listed(_) | GroupMembers::Primary(_) => {}
             GroupMembers::Unreadable(why) => assert!(!why.is_empty(), "a reason is named"),
         }
+    }
+
+    /// Two threads may ask at once: the walks take turns on [`super::WALK`]
+    /// and both complete with the same answer. The lock is what lets the
+    /// check run from anywhere, not only before the daemon's first thread.
+    #[test]
+    fn concurrent_walks_take_turns_and_agree() {
+        let gid = rustix::process::getegid().as_raw();
+        let uid = rustix::process::geteuid().as_raw();
+        let answers: Vec<GroupMembers> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..4)
+                .map(|_| scope.spawn(move || members_besides_me(gid, uid)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("a walk completes"))
+                .collect()
+        });
+        assert!(answers.windows(2).all(|w| w[0] == w[1]), "{answers:?}");
     }
 
     /// A group the system does not know is an unreadable membership, named.
