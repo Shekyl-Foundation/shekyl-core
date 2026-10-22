@@ -11,7 +11,7 @@
 //!
 //! 1. **Cap saturation** — the constructed worst-case candidates actually
 //!    saturate the caps the census ratifies (CEN-H1's 1 MB, CEN-H3's
-//!    149 400 weight, the 600 000 = 2×zone budget), so the worst case is as
+//!    weight limit, the 600 000 = 2×zone budget), so the worst case is as
 //!    adversarial as the CONSTANTS say, not as the fixture happens to be.
 //! 2. **Positive limbs** — every crypto component the bench times VERIFIES
 //!    (else the bench times a reject path and reports a fiction).
@@ -33,11 +33,10 @@ use fx::{
     bp_verify, build_bp, build_connect_tx, build_pqc_auth, parse_wire, pqc_verify_code,
     pqc_verify_code_against,
 };
+use shekyl_wire::transaction::TX_WEIGHT_LIMIT;
 
 /// CEN-H1: serialized tx size cap.
 const MAX_TX_SIZE: usize = 1_000_000;
-/// CEN-H3: per-tx weight cap = zone/2 − coinbase reserve.
-const TX_WEIGHT_LIMIT: usize = 149_400;
 /// The permanent floor operating point: 2 × the 300 000 penalty-free zone.
 const BUDGET_AT_ZONE: usize = 600_000;
 

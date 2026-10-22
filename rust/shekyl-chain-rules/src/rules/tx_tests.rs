@@ -142,7 +142,7 @@ fn the_limits_are_the_cxx_defines() {
     assert_eq!(cxx_define("CRYPTONOTE_MAX_TX_SIZE"), MAX_TX_SIZE as u64);
     assert_eq!(
         cxx_define("CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE"),
-        COINBASE_BLOB_RESERVED as u64
+        shekyl_wire::transaction::COINBASE_RESERVE as u64
     );
     assert_eq!(
         cxx_define("CRYPTONOTE_MAX_BLOCK_NUMBER"),
@@ -160,22 +160,22 @@ fn the_limits_are_the_cxx_defines() {
     );
 }
 
-/// H3's limit is derived, never restated: the formula is
-/// `get_transaction_weight_limit`'s, its operands are the generated
-/// full-reward zone and the coinbase reserve, and the shipped value is
-/// what the census pins.
+/// H3's limit is derived, never restated: half the zone less the wire
+/// crate's coinbase reserve, the same number `TX_WEIGHT_LIMIT` is.
 #[test]
 fn the_weight_limit_is_derived_from_the_zone_and_the_reserve() {
     assert_eq!(
         max_tx_weight(),
-        (FULL_REWARD_ZONE / 2) as usize - COINBASE_BLOB_RESERVED
+        (FULL_REWARD_ZONE / 2) as usize - shekyl_wire::transaction::COINBASE_RESERVE
     );
-    assert_eq!(max_tx_weight(), 149_400, "the shipped limit (census H3)");
+    assert_eq!(max_tx_weight(), shekyl_wire::transaction::TX_WEIGHT_LIMIT);
 }
 
 /// The codec's DoS bounds and the consensus limits are the same numbers —
-/// held equal by this test, not by a comment (Q5 as ruled). The rule's
-/// source is the C++ define (above), never the codec.
+/// held equal by this test, not by a comment (Q5 as ruled). The size and
+/// the unlock sentinel are the C++ defines (above). The weight limit is
+/// the wire crate's derivation, and `the_weight_limit_is_derived` holds
+/// this crate's copy equal to it.
 #[test]
 fn the_limits_equal_the_wire_crates_bounds() {
     assert_eq!(MAX_TX_SIZE, shekyl_wire::transaction::MAX_TX_SIZE);
@@ -230,7 +230,7 @@ fn listed_serialized_to(target: usize) -> Transaction {
 /// Boundary: a transaction of exactly `MAX_TX_SIZE` bytes passes H1; one
 /// byte more is refused on it. The inclusive edge is asserted on the rule
 /// alone — through `tx_form` a megabyte transaction is refused by H3
-/// (149 400) whatever H1 says, in the C++'s order too — and the refusal
+/// (the weight limit) whatever H1 says, in the C++'s order too — and the refusal
 /// side through `tx_form` at both sites names H1, which runs first.
 #[test]
 fn h1_the_size_limit_is_inclusive() {

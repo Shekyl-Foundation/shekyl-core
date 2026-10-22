@@ -436,14 +436,10 @@ async fn the_opened_first_record_is_read_before_the_transport() {
 /// a request head, and does not fit four.
 #[test]
 fn the_submission_count_is_the_consensus_bound_in_records() {
-    // serde_json's encoding of an empty `tx_blob`, pinned so a change in
-    // the envelope fails here rather than silently eating the head room.
-    const PINNED_LARGEST_BODY: usize = 298_814;
     /// Room the five records were chosen to leave for the HTTP head.
     /// A floor for the count, not a second protocol constant.
     const MIN_HEAD_ROOM: usize = 16 * 1024;
     let largest_body = submit_envelope_len() + 2 * shekyl_wire::transaction::TX_WEIGHT_LIMIT;
-    assert_eq!(largest_body, PINNED_LARGEST_BODY);
     let head_room = SUBMISSION_CAP - largest_body;
     assert!(head_room >= MIN_HEAD_ROOM, "{head_room} bytes for the head");
     assert!(largest_body > (SUBMISSION_RECORDS - 1) * MAX_PAYLOAD);

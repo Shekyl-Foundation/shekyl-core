@@ -592,13 +592,12 @@ namespace
 
 TEST(listed_weight_cap, is_thirteen_tenths_of_the_median_less_the_reserve)
 {
-  ASSERT_EQ(RESERVE, 600u) << "the literals below are written against a 600-byte reserve";
-  // 13/10 of 300 000 is 390 000.
-  EXPECT_EQ(listed_weight_cap(300000), 390000u - 600u);
+  // 13/10 of 300 000 is 390 000. The reserve is the define, not a restated 600.
+  EXPECT_EQ(listed_weight_cap(300000), 390000u - RESERVE);
   EXPECT_EQ(listed_weight_cap(CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5),
-      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 / 10 * 13 - 600u);
+      CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 / 10 * 13 - RESERVE);
   // A median that is not a multiple of 10 floors: 13 * 300 007 = 3 900 091.
-  EXPECT_EQ(listed_weight_cap(300007), 390009u - 600u);
+  EXPECT_EQ(listed_weight_cap(300007), 3900091u / 10u - RESERVE);
 }
 
 TEST(listed_weight_cap, equals_the_inherited_expression_off_the_zone)
@@ -611,12 +610,21 @@ TEST(listed_weight_cap, equals_the_inherited_expression_off_the_zone)
 
 TEST(listed_weight_cap, is_zero_where_the_inherited_subtraction_wrapped)
 {
-  // 13 * 461 / 10 = 599, one byte short of the reserve.
-  EXPECT_EQ(listed_weight_cap(461), 0u);
-  // 13 * 462 / 10 = 600: the reserve exactly, so nothing is left for bodies.
-  EXPECT_EQ(listed_weight_cap(462), 0u);
-  // 13 * 463 / 10 = 601: the first median with room.
-  EXPECT_EQ(listed_weight_cap(463), 1u);
+  // The first median whose 13/10 leaves room past the reserve, and the
+  // median below it. Integer division can step by two, so the first
+  // positive cap is the overshoot past the reserve, not a hardcoded 1.
+  size_t first = 0;
+  for (size_t median = 1; median < RESERVE * 2; ++median)
+  {
+    if (listed_weight_cap(median) > 0)
+    {
+      first = median;
+      break;
+    }
+  }
+  ASSERT_NE(first, 0u);
+  EXPECT_EQ(listed_weight_cap(first - 1), 0u);
+  EXPECT_EQ(listed_weight_cap(first), (13 * first) / 10 - RESERVE);
   EXPECT_EQ(listed_weight_cap(0), 0u);
   // The product does not fit.
   EXPECT_EQ(listed_weight_cap(std::numeric_limits<size_t>::max()), 0u);

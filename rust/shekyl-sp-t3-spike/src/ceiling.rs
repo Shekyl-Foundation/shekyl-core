@@ -50,14 +50,25 @@ pub const TARGET_MISS_PER_CENT: u8 = 30;
 /// for the miss rate to stay at the target: its complement.
 pub const GOVERNING_PERCENTILE: u8 = 100 - TARGET_MISS_PER_CENT;
 
-/// The 5 % overshoot of the heaviest shard over `W` at `W = 3,000,000 B`
-/// (§9.3): the ceiling is judged at `W + overshoot`, so it comes off the
+/// A byte length that fits in `u32`. The transaction cap and the shard
+/// length are far under 4 GiB; a length that does not fit is a consensus
+/// change this ceiling has not met, and the assertion fails the build.
+#[allow(clippy::cast_possible_truncation)]
+const fn u32_len(bytes: u64) -> u32 {
+    assert!(bytes <= u32::MAX as u64);
+    bytes as u32
+}
+
+/// The overshoot of the heaviest shard over `W` (§9.3): one transaction,
+/// which CEN-H3 caps at [`shekyl_wire::transaction::TX_WEIGHT_LIMIT`]. The
+/// ceiling is judged at `W + overshoot`, so the overshoot comes off the
 /// fitted maximum.
-pub const OVERSHOOT_BYTES: u32 = 149_400;
+pub const OVERSHOOT_BYTES: u32 = u32_len(shekyl_wire::transaction::TX_WEIGHT_LIMIT as u64);
 
 /// The heaviest shard at the provisional shard length: `W` plus its
 /// overshoot. The object a witness's read is sized against.
-pub const HEAVIEST_SHARD_BYTES: u32 = 3_149_400;
+pub const HEAVIEST_SHARD_BYTES: u32 =
+    u32_len(shekyl_types::SHARD_LENGTH.to_raw()) + OVERSHOOT_BYTES;
 const _: () = assert!(
     HEAVIEST_SHARD_BYTES as u64 == shekyl_types::SHARD_LENGTH.to_raw() + OVERSHOOT_BYTES as u64
 );
@@ -870,7 +881,7 @@ mod tests {
             (line.at(3_000_000) - 17.0).abs() < 1e-9,
             "5 s + 3 MB / 250 kB/s"
         );
-        assert!((w_max_bytes - (250_000.0 * 115.0 - 149_400.0)).abs() < 1e-3);
+        assert!((w_max_bytes - (250_000.0 * 115.0 - f64::from(OVERSHOOT_BYTES))).abs() < 1e-3);
         assert!(extrapolated, "28.6 MB is past the 4 MB largest size");
     }
 
@@ -921,8 +932,12 @@ mod tests {
         assert!((line.t_fixed_s - 5.899).abs() < 5e-4, "{line:?}");
         assert!((line.bytes_per_s - 400_358.0).abs() < 0.5, "{line:?}");
         assert!((line.off_per_cent - 6.1).abs() < 0.05, "{line:?}");
+        // The 2026-10-01 print was 45_532_062 after subtracting the limit
+        // then in force. The line before that subtraction is what the soak
+        // measured; the live ceiling subtracts [`OVERSHOOT_BYTES`].
+        const LINE_BEFORE_OVERSHOOT: f64 = 45_681_462.0;
         assert!(
-            (w_max_bytes - 45_532_062.0).abs() < 0.5,
+            (w_max_bytes - (LINE_BEFORE_OVERSHOOT - f64::from(OVERSHOOT_BYTES))).abs() < 0.5,
             "W_max {w_max_bytes}"
         );
         assert!(extrapolated);

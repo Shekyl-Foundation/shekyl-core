@@ -284,7 +284,7 @@ pub fn admitting_facts(parsed: &ParsedSubmission) -> SubmitFacts {
         fee_per_byte: 1,
         fee_floor_window: None,
         pool_refuses_for_room: None,
-        weight_limit: 149_400,
+        weight_limit: u64::try_from(shekyl_wire::transaction::TX_WEIGHT_LIMIT).unwrap(),
         chain_height: ChainCount::from_raw(200),
         bond_record_exists: None,
         bond_record_bonded_total: None,
