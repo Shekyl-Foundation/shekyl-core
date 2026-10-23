@@ -44,8 +44,8 @@ use crate::connector::{ChainFacts, TemplateFacts, TipChanged};
 use crate::router::claim_next;
 use crate::schedule::ChainRules;
 use crate::service::{
-    divide_pool_faults, install_window, with_pool, Arrival, ArrivalTag, Door, Origin, PoolDivision,
-    ServiceFault, Shared,
+    divide_pool_faults, install_window, with_pool, ArrivalTag, Door, PoolDivision, ServiceFault,
+    Shared,
 };
 
 /// Where the miner's blocks come from (module docs).
@@ -453,14 +453,16 @@ impl Drop for SignalDone {
 }
 
 /// The found-block sink. It ends when the inbox closes or the last sender
-/// drops, and the queue is empty. A full window waits for the reserved
-/// seat. A closed door drops the block and the loop goes back to `recv`.
+/// drops, and the queue is empty. Each block enters through the door's
+/// local-arrival entry ([`Door::offer_local`]) on the runtime it was
+/// spawned from. Called from inside that runtime.
 pub(crate) fn spawn_sink(
     found: FoundInbox,
     door: Door,
     postings: Postings,
     done: tokio::sync::oneshot::Sender<()>,
 ) -> std::thread::JoinHandle<()> {
+    let runtime = tokio::runtime::Handle::current();
     std::thread::Builder::new()
         .name(FOUND_SINK_THREAD.to_owned())
         .spawn(move || {
@@ -472,34 +474,19 @@ pub(crate) fn spawn_sink(
                     .get(&found.generation)
                     .cloned()
                     .unwrap_or_default();
-                let arrival = Arrival {
-                    tag: ArrivalTag(found.generation.to_raw()),
-                    origin: Origin::Local,
-                    block: found.block.serialize(),
-                    bodies: bodies.iter().map(Transaction::serialize).collect(),
-                };
-                // A full window waits for the local seat. A closed door wakes
-                // that wait and the offer is refused; the block is dropped.
-                // Anything else is this node's own block not joining the chain,
-                // and it is said once.
-                loop {
-                    match door.offer(arrival.clone()) {
-                        Ok(ticket) => {
-                            say_mined(&ticket.blocking_reply().reply);
-                            break;
-                        }
-                        Err(crate::service::Refusal::NoRoom) => {
-                            if !door.wait_for_local_seat() {
-                                break;
-                            }
-                        }
-                        Err(refused) => {
-                            tracing::error!(
-                                "a block this node mined was not accepted at the door: {refused:?}"
-                            );
-                            break;
-                        }
-                    }
+                // The local-arrival entry waits out a full window. A closed
+                // door answers `Stopped`. Anything else is this node's own
+                // block not joining the chain, and it is said once.
+                let offered = runtime.block_on(door.offer_local(
+                    ArrivalTag(found.generation.to_raw()),
+                    found.block.serialize(),
+                    bodies.iter().map(Transaction::serialize).collect(),
+                ));
+                match offered {
+                    Ok(tagged) => say_mined(&tagged.reply),
+                    Err(refused) => tracing::error!(
+                        "a block this node mined was not accepted at the door: {refused:?}"
+                    ),
                 }
             }
         })

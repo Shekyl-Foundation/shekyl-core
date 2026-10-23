@@ -57,7 +57,7 @@ use std::time::Duration;
 
 use shekyl_chain_ingest::follower::JobSeat;
 use shekyl_chain_ingest::service::{
-    Arrival, ArrivalTag, Door, Follow, Origin, PoolWiring, Reply, Service, ServiceConfig,
+    ArrivalTag, Door, Follow, PoolWiring, Reply, Service, ServiceConfig,
 };
 use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate};
 use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, RuleSet};
@@ -474,16 +474,12 @@ async fn connect_genesis(
     // A restart already holds genesis (or a longer chain). `AlreadyHeld` is
     // that case. An empty store connects it.
     let (block, hash) = pinned_genesis(network)?;
-    let ticket = service
+    let tagged = service
         .door()
-        .offer(Arrival {
-            tag: ArrivalTag(0),
-            origin: Origin::Local,
-            block: block.serialize(),
-            bodies: Vec::new(),
-        })
+        .offer_local(ArrivalTag(0), block.serialize(), Vec::new())
+        .await
         .map_err(|error| OpenError::Genesis(format!("the door refused genesis: {error:?}")))?;
-    match ticket.reply().await.reply {
+    match tagged.reply {
         Reply::Connected {
             hash: connected, ..
         } if connected == hash => Ok(()),

@@ -260,15 +260,6 @@ impl Ticket {
             reply: self.reply.await.unwrap_or(Reply::Stopped),
         }
     }
-
-    /// [`reply`](Self::reply) from a thread that is not the runtime's: the
-    /// found-block sink's.
-    pub(crate) fn blocking_reply(self) -> Tagged {
-        Tagged {
-            tag: self.tag,
-            reply: self.reply.blocking_recv().unwrap_or(Reply::Stopped),
-        }
-    }
 }
 
 /// Where an accepted arrival's one reply goes. Dropped without a reply, it
@@ -677,6 +668,52 @@ impl Door {
     /// Close the door and wake a miner waiting for a seat.
     pub(crate) fn close(&self) {
         self.room.close();
+    }
+
+    /// The local-arrival entry (`DRS_X_PR3B_ROUND0.md` Q6): a block this
+    /// node mined, was submitted, or is connecting at genesis. It waits for
+    /// the local seat while the window is full, offers the block as
+    /// [`Origin::Local`], and awaits its one reply. A door that closes while
+    /// it waits answers [`Reply::Stopped`]: the service is stopping, and the
+    /// block was not accepted.
+    ///
+    /// The miner's sink, `submit_block`, `generateblocks` and the node's
+    /// genesis connect all enter here, so a local block has one path in.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::Oversize`]: the block is larger than any valid block near
+    /// the tip. Waiting does not change that, so it is not waited out.
+    pub async fn offer_local(
+        &self,
+        tag: ArrivalTag,
+        block: Vec<u8>,
+        bodies: Vec<Vec<u8>>,
+    ) -> Result<Tagged, Refusal> {
+        let arrival = Arrival {
+            tag,
+            origin: Origin::Local,
+            block,
+            bodies,
+        };
+        loop {
+            match self.offer(arrival.clone()) {
+                Ok(ticket) => return Ok(ticket.reply().await),
+                Err(Refusal::NoRoom) => {
+                    let door = self.clone();
+                    let open = tokio::task::spawn_blocking(move || door.wait_for_local_seat())
+                        .await
+                        .unwrap_or(false);
+                    if !open {
+                        return Ok(Tagged {
+                            tag,
+                            reply: Reply::Stopped,
+                        });
+                    }
+                }
+                Err(refused) => return Err(refused),
+            }
+        }
     }
 
     /// Offer one arrival: a span of one.

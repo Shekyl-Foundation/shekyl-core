@@ -1437,3 +1437,63 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
         Err(_) => panic!("stop deadlocked on a found block waiting in the door"),
     }
 }
+
+/// The local-arrival entry (`DRS_X_PR3B_ROUND0.md` Q6). A local block that
+/// meets a full window waits for its seat and then connects; after a stop,
+/// the closed door answers `Stopped`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_local_entry_waits_for_its_seat_and_a_closed_door_answers_stopped() {
+    let mut y = Scenario::open("service-local-entry-y");
+    let blocks = y.mine(4).await;
+    let substrate = Arc::new(Gated::new());
+    let (service, path) = service(
+        "service-local-entry",
+        Arc::clone(&substrate),
+        ServiceConfig {
+            room: NonZeroUsize::new(2).expect("two"),
+        },
+    );
+    let door = service.door();
+    offer_all(&door, 1, &blocks[..1]).await;
+    let local = |tag: u64, mined: &Mined| {
+        let door = door.clone();
+        let block = mined.template.block.serialize();
+        let bodies = mined
+            .template
+            .transactions
+            .iter()
+            .map(shekyl_wire::Transaction::serialize)
+            .collect();
+        tokio::spawn(async move { door.offer_local(ArrivalTag(tag), block, bodies).await })
+    };
+    // Block 1 is held in form: at a window of two it holds the one seat
+    // local arrivals share, so block 2 must wait for it.
+    substrate.hold(blocks[1].hash);
+    let first = local(501, &blocks[1]);
+    substrate.until_held().await;
+    let second = local(502, &blocks[2]);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Read before the gate opens, asserted after it: a failure must not
+    // leave block 1 held in form for the runtime to wait on.
+    let waited = !second.is_finished();
+    substrate.open(blocks[1].hash);
+    assert!(waited, "the second local block waits for its seat");
+    for (task, mined) in [(first, &blocks[1]), (second, &blocks[2])] {
+        let tagged = task.await.expect("joined").expect("not oversize");
+        assert_eq!(
+            tagged.reply,
+            Reply::Connected {
+                height: mined.height,
+                hash: mined.hash
+            }
+        );
+    }
+    service.stop().await.expect("stops");
+    let after = local(503, &blocks[3])
+        .await
+        .expect("joined")
+        .expect("not oversize");
+    assert_eq!(after.reply, Reply::Stopped, "a closed door answers Stopped");
+    y.close().await;
+    cleanup(&path);
+}
