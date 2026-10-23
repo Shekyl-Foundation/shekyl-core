@@ -285,8 +285,12 @@ namespace ShekylSmoke {
         $startup.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($startup)
         $procInfo = New-Object ShekylSmoke.Spawn+PROCESS_INFORMATION
         $CREATE_NEW_PROCESS_GROUP = [uint32] 0x200
-        $created = [ShekylSmoke.Spawn]::CreateProcess($null, $commandLine, [IntPtr]::Zero, [IntPtr]::Zero, $false,
-            $CREATE_NEW_PROCESS_GROUP, [IntPtr]::Zero, $null, [ref] $startup, [ref] $procInfo)
+        # [NullString]::Value, not $null: PowerShell binds $null to a .NET
+        # string parameter as "", and CreateProcess with an empty application
+        # name fails with ERROR_INVALID_NAME (123). Found by the Windows
+        # agent's run of this case on 2026-10-22.
+        $created = [ShekylSmoke.Spawn]::CreateProcess([NullString]::Value, $commandLine, [IntPtr]::Zero, [IntPtr]::Zero, $false,
+            $CREATE_NEW_PROCESS_GROUP, [IntPtr]::Zero, [NullString]::Value, [ref] $startup, [ref] $procInfo)
         if (-not $created) {
             throw "CreateProcess failed with Win32 error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())"
         }
