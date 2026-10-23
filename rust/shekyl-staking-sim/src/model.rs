@@ -632,12 +632,19 @@ impl World {
     }
 }
 
+/// Production age-weight slope, in the units [`g_age`] takes.
+///
+/// `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI / WORK_MILLI_SCALE`. The milli constant
+/// is the owner. This is that slope as an `f64`.
+pub const AGE_WEIGHT: f64 = shekyl_archival_retention::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI as f64
+    / shekyl_archival_retention::WORK_MILLI_SCALE as f64;
+
 /// Age-weighted scarcity multiplier `g(age)`. `age_weight = 0` gives `g ≡ 1`
 /// (the pure-`1/R` baseline included specifically to *confirm* the predicted
 /// deep-history failure — sim-validating the equilibrium analysis). `age_weight > 0`
 /// gives `g = 1 + age_weight · age`, the privacy-clean premium (age is a public
 /// shard property, carrying no tier oracle) that pays deep shards more to overcome
-/// the bond asymmetry.
+/// the bond asymmetry. The production slope is [`AGE_WEIGHT`].
 pub fn g_age(age: f64, age_weight: f64) -> f64 {
     1.0 + age_weight * age
 }

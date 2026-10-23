@@ -2192,10 +2192,10 @@ Paths: `sim/` = `rust/shekyl-staking-sim/src/`, `prod/` = `rust/shekyl-archival-
 
 ### The four items the 2026-10-02 brief already knew
 
-1. **Still true.** `sim/model.rs:641` `g_age` (f64) and `sim/reward.rs:67` `raw_work` (f64) sit beside the production imports at `sim/reward.rs:25`.
+1. **Still true.** `sim/model.rs:648` `g_age` (f64) and `sim/reward.rs:67` `raw_work` (f64) sit beside the production imports at `sim/reward.rs:25`. `model::AGE_WEIGHT` sits directly above `g_age`.
 2. **Still true.** The purse is `budget: 100.0` at `sim/scenarios.rs:2067`. Only `sim/budget_throttle.rs` reads `EconomicParams`.
 3. **Still true.** `REGISTERED_SHARD_TX_COUNT = 200.0` at `sim/model.rs:221`, declared at `:214`.
-4. **Still true.** `storage_unit_cost: 0.03` at `sim/scenarios.rs:2074` and `age_weight: 2.0` at `:2070`.
+4. **Still true for storage.** `storage_unit_cost: 0.03` at `sim/scenarios.rs:2074`. **Wired for the slope.** `age_weight` at `:2070` is `model::AGE_WEIGHT` (`ARCHIVAL_REWARD_AGE_WEIGHT_MILLI / WORK_MILLI_SCALE`). The value is still 2.0. See R7.
 
 ### Rows this census adds
 
@@ -2231,13 +2231,13 @@ The first three rows are structural: every registered run inherits them from `ba
 
 | # | Sim site | Value | Production owner | Tag | Disposition |
 | --- | --- | --- | --- | --- | --- |
-| R1 | `sim/model.rs:641` `g_age`; use `sim/agent.rs:201` | `1 + age_weight·age` (f64) | `g_age_milli`, `prod/reward_arithmetic.rs:50`: `SCALE + floor(weight·age / SCALE)` | V | Plan ahead. Float g_age is on the pin arm. Predictions before that arm changes. |
+| R1 | `sim/model.rs:648` `g_age`; use `sim/agent.rs:201` | `1 + age_weight·age` (f64) | `g_age_milli`, `prod/reward_arithmetic.rs:50`: `SCALE + floor(weight·age / SCALE)` | V | Plan ahead. Float g_age is on the pin arm. Predictions before that arm changes. |
 | R2 | `sim/reward.rs:67` `raw_work` | `Σ (1/r)·g` over held shards, no floor, no serve gate | `scarcity_micro` `prod/reward_arithmetic.rs:71`; `shard_work_micro` / `shard_contribution_micro` in `prod/consensus_state.rs`; one milli floor at `work_milli_from_micro` (`prod/reward_arithmetic.rs:94`) | V | Plan ahead. raw_work is on the pin arm. Same gate as R1. |
 | R3 | `sim/reward.rs:194` | `price = budget / Σcapped`; `reward = price·capped` | `reward_share_floor` `prod/reward_arithmetic.rs:128`: `floor(budget·credited / σ)`, dust unminted. `sigma_work_milli` in `prod/consensus_state.rs` | V | Plan ahead. The price split is on the pin arm. Same gate as R1. |
 | R4 | `sim/agent.rs:201`; `sim/clustering.rs:251` | `price·(1/r_eff)·g_age`, a second float copy of R1/R2 | same as R1 and R2 | V | Plan ahead. Second copy of R1 and R2. It goes when they go. |
 | R5 | `sim/reward.rs:177` via `sim/model.rs:548` `World::replication` | count of holders, in-flight fetches included | `r_market_count` in `prod/consensus_state.rs`: served market members at epoch close | V | Plan ahead. Holder count including in-flight fetches is on the reward path. r_market_count is not called. Predictions before the count changes. |
 | R6 | `sim/model.rs:670` `bond_duration`; defaults `0/0` at `sim/scenarios.rs:2088`; `4.0` in `dyn_base` | `round(base·(1+scale·age)).max(1)` (f64) | `prod/bond_duration.rs:147`. Genesis base 4 and age scale 4, generated. The module's parity KAT re-types the sim formula | V | Plan ahead. The float duration is the L10 shape. The population default stays until a duration arm is predicted. |
-| R7 | `sim/scenarios.rs:2070`; `sim/clustering.rs:122` | `age_weight = 2.0` | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI = 2000`, generated (`prod/build.rs`), consumed in `prod/consensus_state.rs` | V | Incorporate. Wired: `age_weight` is ARCHIVAL_REWARD_AGE_WEIGHT_MILLI / 1000. The value is unchanged. |
+| R7 | `sim/model.rs` `AGE_WEIGHT`; read by `baseline` (`sim/scenarios.rs:2070`), `sim/clustering.rs`, the gate-4 fine base, the §L19c ladder's middle rung, and `reconciliation_curve_float_vs_integer` | production slope as `f64` | `ARCHIVAL_REWARD_AGE_WEIGHT_MILLI / WORK_MILLI_SCALE` (`WORK_MILLI_SCALE` is 1 000). Generated milli constant, consumed in `prod/consensus_state.rs` | V | Incorporate. One const. The value is 2.0. |
 | R8 | `sim/scenarios.rs:2075` (`2.0`); lean pins `:3435`, `:3532`, `:3553`, `:3583`, `:3612`, `:3760` (`0.75`); `sim/clustering.rs:126` (`2.0`) | `bond_rate` | `ARCHIVAL_BOND_FLOOR_ATOMIC = 750_000_000`, generated and `include!`d at `prod/bond_floor.rs:8`. `bond_floor_of` (`:28`) is that floor times shard count, flat, no age. The population model never imports it. `sim/cover.rs:83` does | V | Plan ahead. bond_rate is a swept lever. The atomic floor is flat per held shard, which is A7, and that measurement is not done. |
 | R9 | `sim/main.rs:1887` | `let floor_atomic = 750_000_000u64` | same as R8 | V | Incorporate. Wired: the cover dial reads ARCHIVAL_BOND_FLOOR_ATOMIC. Not on the pin arm. |
 | R10 | `sim/scenarios.rs:2100` (default 0); grids `:3950`, `:3975`, `:4002`, `:4053`; mechanism `sim/agent.rs:333` | per-shard cooldown, anchored at the drop. Default 0; the grids include 2 | `RELEASE_COOLDOWN_EPOCHS` (generated, genesis 2). Whole-record, anchored at last served: `prod/release_cooldown.rs:51` and `:73`. Imported in the sim only at `sim/timing_cluster.rs:22`. The passed-bit question is N3, and it is not settled | V | Plan ahead. The anchor question is N3, and it is not settled. The pin arm's default stays 0. |

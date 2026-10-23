@@ -13,7 +13,7 @@ use crate::fingerprint::{force_deep_portfolio, Ta1Metrics, Ta1Recorder, SEB_DEFA
 use crate::metrics::{
     churn_rate, coverage, coverage_with_r, size_band_under, CoverageMetrics, TargetParams, N_BANDS,
 };
-use crate::model::{r_target, Actor, CompositionParams, EraShape, Rng, Shard, World};
+use crate::model::{r_target, Actor, CompositionParams, EraShape, Rng, Shard, World, AGE_WEIGHT};
 use crate::participation::{
     admit_entrants, bonded_active_count, foundation_floor_aged, process_exits, ParticipationParams,
 };
@@ -2067,7 +2067,7 @@ pub(crate) fn baseline() -> SimConfig {
         budget: 100.0,
         cap: 8.0,
         pseudonym_cost: 0.05,
-        age_weight: shekyl_archival_retention::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI as f64 / 1_000.0,
+        age_weight: AGE_WEIGHT,
         // Authoritative backend by default (the canonical minting arithmetic);
         // main overrides per `--curve-impl`. Float is opt-in exploration only.
         curve_impl: CurveImpl::Integer,
@@ -3377,8 +3377,9 @@ pub fn build_scenarios() -> Vec<SimConfig> {
 
     // --- Gate 4 iteration-2: fine bond-rate window at the L11 lean equilibrium.
     // Coarse iteration-1 bracketed (0.5, 2.0, 8.0); this sharpens the live band inside
-    // (0.5, 8) under flat magnitude (L4), g=2 (L1), endogenous fill at ρ=0.02. Pass
-    // criteria for the pin: min-form `dS/dN ≥ 1`, deep_history, and (whale cross) spread.
+    // (0.5, 8) under flat magnitude (L4), the production age-weight slope (L1),
+    // and endogenous fill at ρ=0.02. Pass criteria for the pin: min-form
+    // `dS/dN ≥ 1`, deep_history, and (whale cross) spread.
     // A co-location-binding duplicate (P1 polarized endowment, ρ=0.015) verifies the pin
     // is not a loose-pool artifact. ---
     let gate4_fine_base = || {
@@ -3386,7 +3387,7 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.init_active_frac = 0.0;
         c.reservation_lo = 0.02;
         c.reservation_hi = 0.02;
-        c.age_weight = 2.0;
+        c.age_weight = AGE_WEIGHT;
         c.bond_age_scale = 0.0;
         c
     };

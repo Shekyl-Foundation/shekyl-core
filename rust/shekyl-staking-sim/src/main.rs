@@ -2195,7 +2195,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::metrics::gini;
-    use crate::model::{bond_age, bond_duration, g_age, r_target, World};
+    use crate::model::{bond_age, bond_duration, g_age, r_target, World, AGE_WEIGHT};
     use crate::model::{Actor, CompositionParams, EraShape, Shard};
     use crate::participation::{foundation_floor, foundation_floor_aged};
 
@@ -2368,8 +2368,7 @@ mod tests {
             budget: 100.0,
             cap: 8.0,
             pseudonym_cost: 0.05,
-            age_weight: shekyl_archival_retention::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI as f64
-                / 1_000.0,
+            age_weight: AGE_WEIGHT,
             curve_impl: CurveImpl::Integer,
         };
         let float_params = RewardParams {
