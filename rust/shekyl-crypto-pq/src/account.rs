@@ -780,46 +780,11 @@ pub fn check_pqc_public_key_matches_view(
     crate::kem::check_ml_kem_768_ek(&pqc_public_key[32..])
 }
 
-/// Why a coinbase cannot pay an address's keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum RecipientRefused {
-    /// The spend key does not decode to a curve point.
-    #[error("the address's spend key is not a valid curve point")]
-    SpendKeyNotAPoint,
-    /// The view key is not a point the X25519 half of the KEM target can
-    /// be derived from.
-    #[error("the address's view key is not a valid curve point")]
-    ViewKeyNotAPoint,
-    /// The ML-KEM-768 encapsulation key is not well-formed.
-    #[error("the address's ML-KEM-768 key is not a well-formed encapsulation key")]
-    KemKeyMalformed,
-}
+pub use super::coinbase::{coinbase_recipient, RecipientRefused};
 
-/// The X25519 half of a coinbase output's KEM target, after the checks the
-/// C++ address decode makes: the spend key is a curve point, the view key
-/// maps to X25519, and the ML-KEM-768 key is well-formed
-/// ([`crate::kem::check_ml_kem_768_ek`]). The mining address's one
-/// validator: the daemon's `mine-address` row and the miner both call it.
-///
-/// # Errors
-///
-/// [`RecipientRefused`], the first check that fails, in that order.
-pub fn coinbase_recipient(
-    spend_pk: &[u8; 32],
-    view_pk: &[u8; 32],
-    ml_kem_ek: &[u8],
-) -> Result<[u8; 32], RecipientRefused> {
-    if curve25519_dalek::edwards::CompressedEdwardsY(*spend_pk)
-        .decompress()
-        .is_none()
-    {
-        return Err(RecipientRefused::SpendKeyNotAPoint);
-    }
-    let x25519 = montgomery::ed25519_pk_to_x25519_pk(view_pk)
-        .map_err(|_| RecipientRefused::ViewKeyNotAPoint)?;
-    crate::kem::check_ml_kem_768_ek(ml_kem_ek).map_err(|_| RecipientRefused::KemKeyMalformed)?;
-    Ok(x25519)
-}
+#[cfg(test)]
+#[path = "coinbase_recipient_tests.rs"]
+mod coinbase_recipient_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1011,61 +976,6 @@ mod tests {
             blob.view_pk.as_canonical_bytes()
         )
         .is_err());
-    }
-
-    /// The first 32-byte encoding, `[y, 0, ..]`, that is no curve point.
-    fn not_a_point() -> [u8; 32] {
-        (2u8..=255)
-            .map(|y| {
-                let mut bytes = [0u8; 32];
-                bytes[0] = y;
-                bytes
-            })
-            .find(|bytes| {
-                curve25519_dalek::edwards::CompressedEdwardsY(*bytes)
-                    .decompress()
-                    .is_none()
-            })
-            .expect("about half of all encodings are not points")
-    }
-
-    #[test]
-    fn a_coinbase_pays_a_wallets_keys_and_its_x25519_is_the_wallets() {
-        let seed = [0x99u8; MASTER_SEED_BYTES];
-        let blob = rederive_account(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39).unwrap();
-        assert_eq!(
-            coinbase_recipient(
-                blob.spend_pk.as_canonical_bytes(),
-                blob.view_pk.as_canonical_bytes(),
-                &blob.ml_kem_ek,
-            ),
-            Ok(blob.x25519_pk)
-        );
-    }
-
-    /// Each of the C++ decode's checks, one key at a time.
-    #[test]
-    fn a_coinbase_recipient_is_refused_for_each_bad_key() {
-        let seed = [0x99u8; MASTER_SEED_BYTES];
-        let blob = rederive_account(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39).unwrap();
-        let spend = *blob.spend_pk.as_canonical_bytes();
-        let view = *blob.view_pk.as_canonical_bytes();
-        assert_eq!(
-            coinbase_recipient(&not_a_point(), &view, &blob.ml_kem_ek),
-            Err(RecipientRefused::SpendKeyNotAPoint)
-        );
-        assert_eq!(
-            coinbase_recipient(&spend, &not_a_point(), &blob.ml_kem_ek),
-            Err(RecipientRefused::ViewKeyNotAPoint)
-        );
-        assert_eq!(
-            coinbase_recipient(&spend, &view, &[0xff; ML_KEM_768_EK_LEN]),
-            Err(RecipientRefused::KemKeyMalformed)
-        );
-        assert_eq!(
-            coinbase_recipient(&spend, &view, &blob.ml_kem_ek[1..]),
-            Err(RecipientRefused::KemKeyMalformed)
-        );
     }
 
     #[test]
