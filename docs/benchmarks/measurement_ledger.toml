@@ -559,6 +559,7 @@ stale_through = [
   { through = "5089df9db", note = "RT-W9 close-out F4: poly1305 and the mask cipher wipe their state when dropped, and the HMAC digests land in wiped buffers. Each P2P record seal and open now ends with a wipe of the Poly1305 state (r, h, pad; tens of bytes), and each HKDF writes two digests to wiped stack arrays. Nanoseconds a record against the record path; not re-measured." },
   { through = "5671b3721", note = "rustfmt line breaks in the close-out files; no code changed. Not re-measured." },
   { through = "3c8ed9e03", note = "Crate documentation and a test helper only; no code the P2P path runs changed. Not re-measured." },
+  { through = "f7c1a94de7", note = "RT-W9 close-out review: the shared direction state is private to its module, and the P2P record path still seals and opens the same AEAD on the same bytes. A non-truncation refusal sets the RecvDirection's poison flag instead of a flag on RecvHalf. A dead sealer returns Poisoned before its argument checks; the P2P sender does not use that sealer. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -982,6 +983,7 @@ cleared = [
   { through = "57969a78c", reason = "RT-W9 close-out D2 and tests: the client retry policy draws its busy waits from a random source, and the budget gains tests only. No step the daemon charges or RT-P9 timed changes." },
   { through = "5671b3721", reason = "rustfmt line breaks in the close-out files; no code changed." },
   { through = "3c8ed9e03", reason = "Crate documentation and checked instants in a retry test; no code the daemon runs changed." },
+  { through = "f7c1a94de7", reason = "RT-W9 close-out review: the handshake still splits into a SendDirection and a RecvDirection and runs the same AEAD. The direction state is private to its module, and a dead direction refuses before it frames, which seal and open already did once the direction was dead. The budget charge stays 2,163,800 ns. The RT-P9 deadlines are unchanged." },
 ]
 
 [[constant]]
