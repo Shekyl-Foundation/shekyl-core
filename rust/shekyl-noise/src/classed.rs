@@ -36,6 +36,8 @@
 //! table, a failed tag, a malformed plaintext and a direction that cannot
 //! advance. The poison is on the [`RecvDirection`] itself (close-out F5), so
 //! a direction taken out of a refused opener and wrapped again refuses too.
+//! A dead [`SendDirection`] refuses before the class or the length is
+//! considered, the same way.
 //!
 //! What the mask removes is a cleartext class byte a middlebox could match.
 //! It does not hide record sizes: a public set of lengths can still be cut
@@ -46,7 +48,7 @@ use chacha20::ChaCha20;
 use zeroize::Zeroizing;
 
 use crate::aead::{nonce, HASH_LEN, TAG_LEN};
-use crate::direction::{Direction, DirectionError, KeyEpoch, RecvDirection, SendDirection};
+use crate::direction::{DirectionError, FramerReads, KeyEpoch, RecvDirection, SendDirection};
 
 /// The label the header-protection key is derived under. Registered in
 /// `CRYPTO_DOMAIN_REGISTRY.tsv`, mechanism 7. Read only by [`HeaderKey::mask`].
@@ -234,7 +236,7 @@ impl HeaderKey {
 
     /// The mask for `direction`'s next record. Derives the key again only
     /// when the epoch has moved.
-    fn mask(&mut self, direction: &Direction) -> u8 {
+    fn mask(&mut self, direction: &impl FramerReads) -> u8 {
         let (n, epoch) = direction.next();
         if self.epoch != Some(epoch) {
             self.key = direction.hkdf_from_record_key(RECORD_HEADER_DST);
@@ -263,10 +265,20 @@ impl From<DirectionError> for ClassedError {
     }
 }
 
+/// A direction that has already failed frames nothing more. Argument
+/// checks come after this, so a dead half does not answer `UnknownClass`.
+fn refuse_if_dead(dead: bool) -> Result<(), ClassedError> {
+    if dead {
+        Err(ClassedError::Poisoned)
+    } else {
+        Ok(())
+    }
+}
+
 /// The class and the whole record length that `header` announces as the
 /// next record. Spends nothing.
 fn announced(
-    direction: &Direction,
+    direction: &impl FramerReads,
     table: &ClassTable,
     header_key: &mut HeaderKey,
     header: u8,
@@ -279,7 +291,7 @@ fn announced(
 /// Open the next record in `wire`. Every error but `Truncated` is the
 /// caller's to poison.
 fn open_next(
-    direction: &mut Direction,
+    direction: &mut RecvDirection,
     table: &ClassTable,
     header_key: &mut HeaderKey,
     wire: &[u8],
@@ -310,7 +322,7 @@ fn open_next(
 
 /// Seal `payload` as one record of `class` with `direction`.
 fn seal_record(
-    direction: &mut Direction,
+    direction: &mut SendDirection,
     table: &ClassTable,
     header_key: &mut HeaderKey,
     class: ClassId,
@@ -364,12 +376,15 @@ impl ClassedSealer {
     ///
     /// # Errors
     ///
-    /// [`ClassedError::UnknownClass`] or [`ClassedError::PayloadTooLarge`]
-    /// before anything is spent; [`ClassedError::State`] when the direction
-    /// cannot advance, which kills it; [`ClassedError::Poisoned`] after that.
+    /// [`ClassedError::Poisoned`] when the direction is already dead, before
+    /// the class or the length is considered; [`ClassedError::UnknownClass`]
+    /// or [`ClassedError::PayloadTooLarge`] before anything is spent;
+    /// [`ClassedError::State`] when the direction cannot advance, which
+    /// kills it.
     pub fn seal(&mut self, class: ClassId, payload: &[u8]) -> Result<Vec<u8>, ClassedError> {
+        refuse_if_dead(self.direction.is_dead())?;
         seal_record(
-            &mut self.direction.0,
+            &mut self.direction,
             &self.table,
             &mut self.header_key,
             class,
@@ -410,10 +425,8 @@ impl ClassedOpener {
     /// [`ClassedError::Refused`] for a class outside the table, which
     /// poisons the direction; [`ClassedError::Poisoned`] after any failure.
     pub fn record_len(&mut self, header: u8) -> Result<usize, ClassedError> {
-        if self.direction.0.is_dead() {
-            return Err(ClassedError::Poisoned);
-        }
-        let result = announced(&self.direction.0, &self.table, &mut self.header_key, header);
+        refuse_if_dead(self.direction.is_dead())?;
+        let result = announced(&self.direction, &self.table, &mut self.header_key, header);
         self.poison_unless_truncated(result.map(|(_, len)| len))
     }
 
@@ -426,15 +439,8 @@ impl ClassedOpener {
     /// [`ClassedError::Refused`], [`ClassedError::State`], and
     /// [`ClassedError::Poisoned`] after any of them.
     pub fn open(&mut self, wire: &[u8]) -> Result<Opened, ClassedError> {
-        if self.direction.0.is_dead() {
-            return Err(ClassedError::Poisoned);
-        }
-        let result = open_next(
-            &mut self.direction.0,
-            &self.table,
-            &mut self.header_key,
-            wire,
-        );
+        refuse_if_dead(self.direction.is_dead())?;
+        let result = open_next(&mut self.direction, &self.table, &mut self.header_key, wire);
         self.poison_unless_truncated(result)
     }
 
@@ -455,7 +461,7 @@ impl ClassedOpener {
         result: Result<T, ClassedError>,
     ) -> Result<T, ClassedError> {
         if matches!(&result, Err(error) if *error != ClassedError::Truncated) {
-            self.direction.0.poison();
+            self.direction.poison();
         }
         result
     }
@@ -466,8 +472,16 @@ mod tests {
     use super::*;
     use crate::direction::REKEY_NONCES;
 
-    fn keyed() -> Direction {
-        Direction::new(
+    fn keyed_send() -> SendDirection {
+        SendDirection::new(
+            Zeroizing::new([0x11; HASH_LEN]),
+            Zeroizing::new([0x22; HASH_LEN]),
+            [0x33; HASH_LEN],
+        )
+    }
+
+    fn keyed_recv() -> RecvDirection {
+        RecvDirection::new(
             Zeroizing::new([0x11; HASH_LEN]),
             Zeroizing::new([0x22; HASH_LEN]),
             [0x33; HASH_LEN],
@@ -480,11 +494,11 @@ mod tests {
     }
 
     fn sealer() -> ClassedSealer {
-        ClassedSealer::new(SendDirection(keyed()), table())
+        ClassedSealer::new(keyed_send(), table())
     }
 
     fn opener(table: ClassTable) -> ClassedOpener {
-        ClassedOpener::new(RecvDirection(keyed()), table)
+        ClassedOpener::new(keyed_recv(), table)
     }
 
     fn pair() -> (ClassedSealer, ClassedOpener) {
@@ -497,7 +511,7 @@ mod tests {
     /// and the mask at nonces 0, 7 and 999.
     #[test]
     fn known_answer_from_an_independent_implementation() {
-        let direction = keyed();
+        let direction = keyed_send();
         let key = direction.hkdf_from_record_key(RECORD_HEADER_DST);
         assert_eq!(
             hex(&key[..]),
@@ -542,6 +556,37 @@ mod tests {
         assert_eq!(t.smallest_for(65_533), Some(ClassId(2)));
         assert_eq!(t.smallest_for(65_534), None);
         assert_eq!(t.largest(), ClassId(2));
+    }
+
+    /// A direction killed by a nonce that cannot advance answers nothing
+    /// about the next record, not even that the class is unknown or that
+    /// the payload does not fit.
+    #[test]
+    fn a_dead_sealer_refuses_before_it_looks_at_the_class() {
+        let mut send = sealer();
+        let fitting = send.table().smallest_for(1).expect("one byte fits a class");
+        let unknown =
+            ClassId(u8::try_from(send.table().len()).expect("a table's length fits a class byte"));
+        // One byte past the class: a live sealer would say `PayloadTooLarge`.
+        let past_the_class = vec![
+            0u8;
+            send.table()
+                .max_payload(fitting)
+                .expect("the fitting class is in the table")
+                + 1
+        ];
+        send.direction.force_nonce(u64::MAX);
+        assert_eq!(send.seal(fitting, b"a"), Err(ClassedError::State));
+        assert_eq!(
+            send.seal(unknown, b"a"),
+            Err(ClassedError::Poisoned),
+            "an unknown class on a dead direction"
+        );
+        assert_eq!(
+            send.seal(fitting, &past_the_class),
+            Err(ClassedError::Poisoned),
+            "a payload past the class on a dead direction"
+        );
     }
 
     #[test]
@@ -608,7 +653,7 @@ mod tests {
 
     /// Seal a raw plaintext as a record, past the framer's own encoding, so
     /// the receiver's checks on occupancy and pad can be reached.
-    fn raw(direction: &mut Direction, class: ClassId, plaintext: &[u8]) -> Vec<u8> {
+    fn raw(direction: &mut SendDirection, class: ClassId, plaintext: &[u8]) -> Vec<u8> {
         let header = class.0 ^ HeaderKey::new().mask(direction);
         let (ct, _) = direction.seal(plaintext, &[class.0]).unwrap();
         let mut wire = vec![header];
@@ -623,7 +668,7 @@ mod tests {
     #[test]
     fn the_class_byte_is_the_associated_data() {
         for (ad, opens) in [(0u8, true), (1u8, false)] {
-            let mut send = keyed();
+            let mut send = keyed_send();
             let mut recv = opener(table());
             let header = HeaderKey::new().mask(&send);
             let (ct, _) = send.seal(&[0u8; 512], &[ad]).unwrap();
@@ -635,7 +680,7 @@ mod tests {
 
     #[test]
     fn an_occupancy_past_the_class_is_refused() {
-        let mut send = keyed();
+        let mut send = keyed_send();
         let mut recv = opener(table());
         let mut plaintext = vec![0u8; 512];
         plaintext[..2].copy_from_slice(&511u16.to_le_bytes());
@@ -645,7 +690,7 @@ mod tests {
 
     #[test]
     fn a_pad_that_is_not_zero_is_refused() {
-        let mut send = keyed();
+        let mut send = keyed_send();
         let mut recv = opener(table());
         let mut plaintext = vec![0u8; 512];
         plaintext[..2].copy_from_slice(&4u16.to_le_bytes());
@@ -661,12 +706,12 @@ mod tests {
     #[test]
     fn the_header_key_follows_the_rekey() {
         let (mut send, mut recv) = pair();
-        send.direction.0.force_nonce(REKEY_NONCES - 1);
-        recv.direction.0.force_nonce(REKEY_NONCES - 1);
-        let old_key = send.direction.0.hkdf_from_record_key(RECORD_HEADER_DST);
+        send.direction.force_nonce(REKEY_NONCES - 1);
+        recv.direction.force_nonce(REKEY_NONCES - 1);
+        let old_key = send.direction.hkdf_from_record_key(RECORD_HEADER_DST);
         let last = send.seal(ClassId(0), b"last").unwrap();
         assert_eq!(last[0], mask(&old_key, REKEY_NONCES - 1));
-        let new_key = send.direction.0.hkdf_from_record_key(RECORD_HEADER_DST);
+        let new_key = send.direction.hkdf_from_record_key(RECORD_HEADER_DST);
         assert_ne!(*old_key, *new_key, "rekey moved the record key");
         let first = send.seal(ClassId(0), b"first").unwrap();
         assert_eq!(first[0], mask(&new_key, 0));

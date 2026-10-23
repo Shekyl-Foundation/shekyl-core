@@ -10,7 +10,7 @@ use blake2::Blake2s256;
 use zeroize::Zeroizing;
 
 use crate::aead::{self, HASH_LEN};
-use crate::direction::{Direction, RecvDirection, SendDirection};
+use crate::direction::{RecvDirection, SendDirection};
 
 /// What the symmetric state can fail at. A handshake maps these into its own
 /// error type; which of the two it was says nothing a peer may be told.
@@ -148,8 +148,8 @@ impl SymmetricState {
         // tell its own session's direction from another's.
         let h = self.h;
         (
-            SendDirection(Direction::new(self.ck, send_key, h)),
-            RecvDirection(Direction::new(recv_ck, recv_key, h)),
+            SendDirection::new(self.ck, send_key, h),
+            RecvDirection::new(recv_ck, recv_key, h),
         )
     }
 
@@ -229,12 +229,12 @@ mod tests {
         let [first, second] = aead::hkdf(&chaining_key, &[]);
         let (initiator_send, initiator_recv) = initiator.into_directions(SplitRole::Initiator);
         let (responder_send, responder_recv) = responder.into_directions(SplitRole::Responder);
-        assert_eq!(initiator_send.0.ck_and_k().1, *first);
-        assert_eq!(initiator_recv.0.ck_and_k().1, *second);
-        assert_eq!(responder_send.0.ck_and_k().1, *second);
-        assert_eq!(responder_recv.0.ck_and_k().1, *first);
-        assert_eq!(initiator_send.0.ck_and_k().0, chaining_key);
-        assert_eq!(responder_recv.0.ck_and_k().0, chaining_key);
+        assert_eq!(initiator_send.ck_and_k().1, *first);
+        assert_eq!(initiator_recv.ck_and_k().1, *second);
+        assert_eq!(responder_send.ck_and_k().1, *second);
+        assert_eq!(responder_recv.ck_and_k().1, *first);
+        assert_eq!(initiator_send.ck_and_k().0, chaining_key);
+        assert_eq!(responder_recv.ck_and_k().0, chaining_key);
     }
 
     /// Both directions carry the handshake hash of the state they were split
@@ -254,7 +254,7 @@ mod tests {
         let (mut send, recv) = one.into_directions(SplitRole::Initiator);
         assert_eq!(send.handshake_hash(), h1);
         assert_eq!(recv.handshake_hash(), h1);
-        send.0.force_nonce(crate::REKEY_NONCES - 1);
+        send.force_nonce(crate::REKEY_NONCES - 1);
         send.seal(b"the last nonce of the first key", b"").unwrap();
         let (_, epoch) = send.seal(b"under the next key", b"").unwrap();
         assert_ne!(epoch, crate::KeyEpoch::INITIAL, "the direction rekeyed");
@@ -360,19 +360,19 @@ mod tests {
             SymmetricState::with_chaining_key(ck).into_directions(SplitRole::Initiator);
         let (mut other, other_recv) =
             SymmetricState::with_chaining_key(ck).into_directions(SplitRole::Responder);
-        assert_eq!(send.0.ck_and_k().0, ck);
-        assert_eq!(send.0.ck_and_k().1, unhex32(INITIATOR_SEND_KEY));
-        assert_eq!(recv.0.ck_and_k().1, other.0.ck_and_k().1);
-        assert_eq!(other_recv.0.ck_and_k().1, send.0.ck_and_k().1);
+        assert_eq!(send.ck_and_k().0, ck);
+        assert_eq!(send.ck_and_k().1, unhex32(INITIATOR_SEND_KEY));
+        assert_eq!(recv.ck_and_k().1, other.ck_and_k().1);
+        assert_eq!(other_recv.ck_and_k().1, send.ck_and_k().1);
 
         for _ in 0..crate::REKEY_NONCES {
             send.seal(&[0], &[]).unwrap();
             other.seal(&[0], &[]).unwrap();
         }
-        let (ck_after, k_after) = send.0.ck_and_k();
+        let (ck_after, k_after) = send.ck_and_k();
         assert_eq!(ck_after, unhex32(AFTER_REKEY_CK));
         assert_eq!(k_after, unhex32(AFTER_REKEY_K));
-        let (ck_back, k_back) = other.0.ck_and_k();
+        let (ck_back, k_back) = other.ck_and_k();
         assert_eq!(ck_back, unhex32(OTHER_AFTER_REKEY_CK));
         assert_eq!(k_back, unhex32(OTHER_AFTER_REKEY_K));
     }

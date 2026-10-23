@@ -60,8 +60,9 @@ pub enum DirectionError {
     Poisoned,
 }
 
-/// The state both directions share. Not public: the two typed halves are.
-pub(crate) struct Direction {
+/// The state both directions share. Private to this module: a half's
+/// operations are the only way to use it, in this crate and outside it.
+struct Direction {
     ck: Zeroizing<[u8; HASH_LEN]>,
     k: Zeroizing<[u8; HASH_LEN]>,
     n: u64,
@@ -76,7 +77,7 @@ pub(crate) struct Direction {
 }
 
 impl Direction {
-    pub(crate) fn new(
+    fn new(
         ck: Zeroizing<[u8; HASH_LEN]>,
         k: Zeroizing<[u8; HASH_LEN]>,
         handshake_hash: [u8; HASH_LEN],
@@ -92,11 +93,7 @@ impl Direction {
         }
     }
 
-    pub(crate) fn seal(
-        &mut self,
-        plaintext: &[u8],
-        ad: &[u8],
-    ) -> Result<(Vec<u8>, KeyEpoch), DirectionError> {
+    fn seal(&mut self, plaintext: &[u8], ad: &[u8]) -> Result<(Vec<u8>, KeyEpoch), DirectionError> {
         self.alive()?;
         let epoch = self.epoch;
         let Some(ct) = aead::seal(&self.k, self.n, ad, plaintext) else {
@@ -106,7 +103,7 @@ impl Direction {
         Ok((ct, epoch))
     }
 
-    pub(crate) fn open(
+    fn open(
         &mut self,
         ciphertext: &[u8],
         ad: &[u8],
@@ -138,11 +135,11 @@ impl Direction {
 
     /// A framer refused what this direction opened. From now on it opens
     /// and seals nothing.
-    pub(crate) fn poison(&mut self) {
+    fn poison(&mut self) {
         self.dead = true;
     }
 
-    pub(crate) fn is_dead(&self) -> bool {
+    fn is_dead(&self) -> bool {
         self.dead
     }
 
@@ -169,32 +166,47 @@ impl Direction {
 
     /// The nonce and the epoch the next seal or open will use. Reading them
     /// spends neither.
-    pub(crate) fn next(&self) -> (u64, KeyEpoch) {
+    fn next(&self) -> (u64, KeyEpoch) {
         (self.n, self.epoch)
     }
 
     /// The first output of `HKDF(record key, ikm)`.
     ///
-    /// The record key stays in this direction, and it is the HMAC key here
-    /// as it is in rekey, as §4.4 rules. A framer passes its own label and
-    /// keeps the output, deriving again when [`Self::next`]'s epoch has
-    /// moved. The second output is wiped with the temporary that holds it.
-    pub(crate) fn hkdf_from_record_key(&self, ikm: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
+    /// The record key is the HMAC key and `ikm` is the input. Rekey is the
+    /// other assignment, `HKDF(chaining key, record key)`, so there the
+    /// record key is the input. A framer passes its own label and keeps the
+    /// output, deriving again when [`Self::next`]'s epoch has moved. The
+    /// second output is wiped with the temporary that holds it.
+    fn hkdf_from_record_key(&self, ikm: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
         let [key, _] = aead::hkdf(&self.k, ikm);
         key
     }
 
     /// Set the nonce, so a test can stand on the rekey boundary.
     #[cfg(test)]
-    pub(crate) fn force_nonce(&mut self, n: u64) {
+    fn force_nonce(&mut self, n: u64) {
         self.n = n;
     }
 
     /// The chaining key and the record key.
     #[cfg(test)]
-    pub(crate) fn ck_and_k(&self) -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
+    fn ck_and_k(&self) -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
         (*self.ck, *self.k)
     }
+}
+
+/// What a framer reads off either half to mask a record, without sealing or
+/// opening. The half owns the read. This is how one function asks both.
+pub(crate) trait FramerReads {
+    /// The nonce and the epoch the next record will use.
+    fn next(&self) -> (u64, KeyEpoch);
+
+    /// The first output of `HKDF(record key, ikm)`.
+    ///
+    /// The record key is the HMAC key and `ikm` is the input. Rekey is the
+    /// other assignment, `HKDF(chaining key, record key)`, so there the
+    /// record key is the input.
+    fn hkdf_from_record_key(&self, ikm: &[u8]) -> Zeroizing<[u8; HASH_LEN]>;
 }
 
 /// The direction this side seals with.
@@ -217,7 +229,9 @@ impl Direction {
 ///     let _ = ClassedOpener::new(send, ClassTable::new(&[512]).unwrap());
 /// }
 /// ```
-pub struct SendDirection(pub(crate) Direction);
+pub struct SendDirection {
+    state: Direction,
+}
 
 /// The direction this side opens with.
 ///
@@ -239,9 +253,21 @@ pub struct SendDirection(pub(crate) Direction);
 ///     let _ = ClassedSealer::new(recv, ClassTable::new(&[512]).unwrap());
 /// }
 /// ```
-pub struct RecvDirection(pub(crate) Direction);
+pub struct RecvDirection {
+    state: Direction,
+}
 
 impl SendDirection {
+    pub(crate) fn new(
+        ck: Zeroizing<[u8; HASH_LEN]>,
+        k: Zeroizing<[u8; HASH_LEN]>,
+        handshake_hash: [u8; HASH_LEN],
+    ) -> Self {
+        Self {
+            state: Direction::new(ck, k, handshake_hash),
+        }
+    }
+
     /// Seal `plaintext` under this direction's next nonce.
     ///
     /// The epoch is the record key that produced the ciphertext.
@@ -256,18 +282,71 @@ impl SendDirection {
         plaintext: &[u8],
         ad: &[u8],
     ) -> Result<(Vec<u8>, KeyEpoch), DirectionError> {
-        self.0.seal(plaintext, ad)
+        self.state.seal(plaintext, ad)
     }
 
     /// The handshake hash of the session this direction belongs to, stamped
     /// by [`SymmetricState::into_directions`](crate::SymmetricState::into_directions).
     #[must_use]
     pub fn handshake_hash(&self) -> [u8; HASH_LEN] {
-        self.0.handshake_hash
+        self.state.handshake_hash
+    }
+
+    /// Whether a failure has killed this direction. A dead direction seals
+    /// nothing more.
+    #[must_use]
+    pub(crate) fn is_dead(&self) -> bool {
+        self.state.is_dead()
+    }
+
+    /// The nonce and the epoch the next seal will use. Reading them spends
+    /// neither.
+    #[must_use]
+    pub(crate) fn next(&self) -> (u64, KeyEpoch) {
+        self.state.next()
+    }
+
+    /// The first output of `HKDF(record key, ikm)`. The record key is the
+    /// HMAC key. See [`FramerReads::hkdf_from_record_key`].
+    #[must_use]
+    pub(crate) fn hkdf_from_record_key(&self, ikm: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
+        self.state.hkdf_from_record_key(ikm)
+    }
+
+    /// Set the nonce, so a test can stand on the rekey boundary.
+    #[cfg(test)]
+    pub(crate) fn force_nonce(&mut self, n: u64) {
+        self.state.force_nonce(n);
+    }
+
+    /// The chaining key and the record key.
+    #[cfg(test)]
+    pub(crate) fn ck_and_k(&self) -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
+        self.state.ck_and_k()
+    }
+}
+
+impl FramerReads for SendDirection {
+    fn next(&self) -> (u64, KeyEpoch) {
+        Self::next(self)
+    }
+
+    fn hkdf_from_record_key(&self, ikm: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
+        Self::hkdf_from_record_key(self, ikm)
     }
 }
 
 impl RecvDirection {
+    pub(crate) fn new(
+        ck: Zeroizing<[u8; HASH_LEN]>,
+        k: Zeroizing<[u8; HASH_LEN]>,
+        handshake_hash: [u8; HASH_LEN],
+    ) -> Self {
+        Self {
+            state: Direction::new(ck, k, handshake_hash),
+        }
+    }
+
     /// Open `ciphertext` under this direction's next nonce.
     ///
     /// The epoch is the record key that opened it.
@@ -282,7 +361,26 @@ impl RecvDirection {
         ciphertext: &[u8],
         ad: &[u8],
     ) -> Result<(Vec<u8>, KeyEpoch), DirectionError> {
-        self.0.open(ciphertext, ad)
+        self.state.open(ciphertext, ad)
+    }
+
+    /// A framer refused what this direction opened. Later opens return
+    /// [`DirectionError::Poisoned`], including after the direction is taken
+    /// out of that framer and wrapped again. Calling it on a direction that
+    /// is already dead changes nothing.
+    pub fn poison(&mut self) {
+        self.state.poison();
+    }
+
+    /// Whether a failure or a framer's refusal has killed this direction.
+    ///
+    /// A caller that has already refused a record reads this before it looks
+    /// at the next buffer. A short buffer after a refusal is the same death,
+    /// not a truncation it may retry. [`Self::open`] reports that death as
+    /// [`DirectionError::Poisoned`].
+    #[must_use]
+    pub fn is_dead(&self) -> bool {
+        self.state.is_dead()
     }
 
     /// The handshake hash of the session this direction belongs to, stamped
@@ -301,7 +399,7 @@ impl RecvDirection {
     /// hash took nothing secret would make this stamp a public value.
     #[must_use]
     pub fn handshake_hash(&self) -> [u8; HASH_LEN] {
-        self.0.handshake_hash
+        self.state.handshake_hash
     }
 
     /// How many ciphertexts this direction has opened. A failed tag is not
@@ -313,7 +411,43 @@ impl RecvDirection {
     /// direction to.
     #[must_use]
     pub fn opened(&self) -> u64 {
-        self.0.opened
+        self.state.opened
+    }
+
+    /// The nonce and the epoch the next open will use. Reading them spends
+    /// neither.
+    #[must_use]
+    pub(crate) fn next(&self) -> (u64, KeyEpoch) {
+        self.state.next()
+    }
+
+    /// The first output of `HKDF(record key, ikm)`. The record key is the
+    /// HMAC key. See [`FramerReads::hkdf_from_record_key`].
+    #[must_use]
+    pub(crate) fn hkdf_from_record_key(&self, ikm: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
+        self.state.hkdf_from_record_key(ikm)
+    }
+
+    /// Set the nonce, so a test can stand on the rekey boundary.
+    #[cfg(test)]
+    pub(crate) fn force_nonce(&mut self, n: u64) {
+        self.state.force_nonce(n);
+    }
+
+    /// The chaining key and the record key.
+    #[cfg(test)]
+    pub(crate) fn ck_and_k(&self) -> ([u8; HASH_LEN], [u8; HASH_LEN]) {
+        self.state.ck_and_k()
+    }
+}
+
+impl FramerReads for RecvDirection {
+    fn next(&self) -> (u64, KeyEpoch) {
+        Self::next(self)
+    }
+
+    fn hkdf_from_record_key(&self, ikm: &[u8]) -> Zeroizing<[u8; HASH_LEN]> {
+        Self::hkdf_from_record_key(self, ikm)
     }
 }
 
@@ -321,8 +455,16 @@ impl RecvDirection {
 mod tests {
     use super::*;
 
-    fn keyed() -> Direction {
-        Direction::new(
+    fn keyed_send() -> SendDirection {
+        SendDirection::new(
+            Zeroizing::new([0x11; HASH_LEN]),
+            Zeroizing::new([0x22; HASH_LEN]),
+            [0x33; HASH_LEN],
+        )
+    }
+
+    fn keyed_recv() -> RecvDirection {
+        RecvDirection::new(
             Zeroizing::new([0x11; HASH_LEN]),
             Zeroizing::new([0x22; HASH_LEN]),
             [0x33; HASH_LEN],
@@ -330,7 +472,7 @@ mod tests {
     }
 
     fn pair() -> (SendDirection, RecvDirection) {
-        (SendDirection(keyed()), RecvDirection(keyed()))
+        (keyed_send(), keyed_recv())
     }
 
     /// The count the RPC handshake's pending session gates on: an opened
@@ -357,8 +499,8 @@ mod tests {
         let (ct, _) = send.seal(b"body", b"ad").unwrap();
         recv.open(&ct, b"ad").unwrap();
         assert_eq!(recv.opened(), 1);
-        send.0.force_nonce(REKEY_NONCES - 1);
-        recv.0.force_nonce(REKEY_NONCES - 1);
+        send.force_nonce(REKEY_NONCES - 1);
+        recv.force_nonce(REKEY_NONCES - 1);
         let (ct, _) = send.seal(b"boundary", b"ad").unwrap();
         recv.open(&ct, b"ad").unwrap();
         let (ct, _) = send.seal(b"after", b"ad").unwrap();
@@ -375,9 +517,9 @@ mod tests {
         assert_eq!(pt, b"a");
         assert_eq!(opened, KeyEpoch::INITIAL);
 
-        let before = send.0.ck_and_k();
-        send.0.force_nonce(REKEY_NONCES - 1);
-        recv.0.force_nonce(REKEY_NONCES - 1);
+        let before = send.ck_and_k();
+        send.force_nonce(REKEY_NONCES - 1);
+        recv.force_nonce(REKEY_NONCES - 1);
         let (ct, epoch) = send.seal(b"b", b"ad").unwrap();
         assert_eq!(epoch, KeyEpoch::INITIAL);
         let (pt, opened) = recv.open(&ct, b"ad").unwrap();
@@ -390,7 +532,7 @@ mod tests {
         let (pt, opened) = recv.open(&ct, b"ad").unwrap();
         assert_eq!(pt, b"c");
         assert_eq!(opened, next);
-        assert_ne!(send.0.ck_and_k(), before);
+        assert_ne!(send.ck_and_k(), before);
     }
 
     /// A failed tag spends no nonce and kills the direction: the ciphertext
@@ -399,10 +541,10 @@ mod tests {
     fn a_bad_tag_kills_the_direction_without_spending_the_nonce() {
         let (mut send, mut recv) = pair();
         let (mut ct, _) = send.seal(b"a", b"ad").unwrap();
-        let n_before = recv.0.next().0;
+        let n_before = recv.next().0;
         ct[0] ^= 0xff;
         assert_eq!(recv.open(&ct, b"ad").unwrap_err(), DirectionError::Decrypt);
-        assert_eq!(recv.0.next().0, n_before, "the nonce is not spent");
+        assert_eq!(recv.next().0, n_before, "the nonce is not spent");
         ct[0] ^= 0xff;
         assert_eq!(
             recv.open(&ct, b"ad").unwrap_err(),
@@ -416,7 +558,7 @@ mod tests {
     #[test]
     fn a_state_failure_after_the_aead_step_kills_the_direction() {
         let (mut send, mut recv) = pair();
-        send.0.force_nonce(u64::MAX);
+        send.force_nonce(u64::MAX);
         assert_eq!(send.seal(b"a", b"ad").unwrap_err(), DirectionError::State);
         assert_eq!(
             send.seal(b"a", b"ad").unwrap_err(),
@@ -424,7 +566,7 @@ mod tests {
         );
 
         let ct = aead::seal(&Zeroizing::new([0x22; HASH_LEN]), u64::MAX, b"ad", b"a").unwrap();
-        recv.0.force_nonce(u64::MAX);
+        recv.force_nonce(u64::MAX);
         assert_eq!(recv.open(&ct, b"ad").unwrap_err(), DirectionError::State);
         assert_eq!(recv.open(&ct, b"ad").unwrap_err(), DirectionError::Poisoned);
     }
@@ -436,9 +578,9 @@ mod tests {
     #[test]
     fn one_rekey_matches_an_independent_implementation() {
         let (mut send, _) = pair();
-        send.0.force_nonce(REKEY_NONCES - 1);
+        send.force_nonce(REKEY_NONCES - 1);
         send.seal(b"", b"").unwrap();
-        let (ck, k) = send.0.ck_and_k();
+        let (ck, k) = send.ck_and_k();
         assert_eq!(hex(&ck), REKEY_CK);
         assert_eq!(hex(&k), REKEY_K);
     }

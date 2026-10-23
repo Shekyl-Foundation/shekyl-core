@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! The interim record framer. Each record is an encrypted 2-byte length and
-//! an encrypted body, two nonces of a [`Direction`]. A plaintext longer than
+//! an encrypted body, two nonces of a [`SendDirection`] or a
+//! [`RecvDirection`]. A plaintext longer than
 //! [`MAX_BODY`] bytes is several records; the concatenation is the session
 //! byte stream.
 //!
@@ -32,8 +33,8 @@ impl From<DirectionError> for RecordError {
     fn from(err: DirectionError) -> Self {
         match err {
             DirectionError::Decrypt => Self::Decrypt,
-            // A dead direction is this half's state, as the half's own
-            // `dead` flag already reports it.
+            // The direction is dead. A later open is `Poisoned`, and that
+            // is this half's state: it keeps no death of its own.
             DirectionError::State | DirectionError::Poisoned => Self::State,
         }
     }
@@ -46,9 +47,8 @@ pub struct SendHalf {
 pub struct RecvHalf {
     dir: RecvDirection,
     /// Length already decrypted. Its nonce is spent; the body nonce is not,
-    /// until those bytes arrive or the half is poisoned.
+    /// until those bytes arrive or the direction is poisoned.
     pending_body: Option<usize>,
-    dead: bool,
 }
 
 /// The two halves of one session. `send` seals what this side sends; `recv`
@@ -59,7 +59,6 @@ pub(crate) fn session(send: SendDirection, recv: RecvDirection) -> (SendHalf, Re
         RecvHalf {
             dir: recv,
             pending_body: None,
-            dead: false,
         },
     )
 }
@@ -91,16 +90,17 @@ impl SendHalf {
 impl RecvHalf {
     /// Open one record from the front of `buf`.
     ///
-    /// [`RecordError::Truncated`] keeps the half usable: a short read has not
-    /// spent the body nonce. Any other error poisons the half.
+    /// [`RecordError::Truncated`] keeps the direction usable: a short read
+    /// has not spent the body nonce. Any other error poisons the direction,
+    /// and every later open is [`RecordError::State`], a short read included.
     pub fn open_one(&mut self, buf: &[u8]) -> Result<(Vec<u8>, usize), RecordError> {
-        if self.dead {
+        if self.dir.is_dead() {
             return Err(RecordError::State);
         }
         match open_record(&mut self.dir, &mut self.pending_body, buf) {
             Err(RecordError::Truncated) => Err(RecordError::Truncated),
             Err(e) => {
-                self.dead = true;
+                self.dir.poison();
                 Err(e)
             }
             ok => ok,
@@ -202,6 +202,10 @@ mod tests {
         let empty = a_send.seal_empty_body();
         assert!(matches!(b_recv.open_one(&empty), Err(RecordError::Empty)));
         assert!(matches!(b_recv.open_one(&empty), Err(RecordError::State)));
+        assert!(
+            matches!(b_recv.open_one(&[]), Err(RecordError::State)),
+            "a short read after a refusal is not a retry"
+        );
     }
 
     #[test]

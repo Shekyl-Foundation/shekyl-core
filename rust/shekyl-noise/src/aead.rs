@@ -147,8 +147,8 @@ pub(crate) fn open(key: &[u8; HASH_LEN], n: u64, ad: &[u8], ciphertext: &[u8]) -
 
 /// Run one rekey derivation, `HKDF(chaining_key, record_key)`, and discard it.
 ///
-/// [`crate::Direction`] runs that same derivation when its nonce reaches the
-/// rekey boundary. This function exists so the C5 bench can time those three
+/// A transport direction runs that same derivation when its nonce reaches
+/// the rekey boundary. This function exists so the C5 bench can time those three
 /// HMAC-BLAKE2s apart from a session. The derived keys do not leave this crate.
 #[cfg(feature = "rekey-timing")]
 pub fn rekey_hkdf(chaining_key: &[u8; HASH_LEN], record_key: &[u8; HASH_LEN]) {

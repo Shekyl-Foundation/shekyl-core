@@ -1016,7 +1016,8 @@ drives it):
     the key epoch of the direction's next nonce, and derives that key again
     only when the epoch changes. The header key is not a field of either
     direction. It is the first output of `HKDF(record key, label)`: the
-    record key is reused as the HMAC key, as in rekey, as ruled.
+    record key is the HMAC key and the label is the input. Rekey is
+    `HKDF(chaining key, record key)`, so the record key is the input there.
   - **Where the class sizes come from.** They are derived from the HTTP
     message sizes measured in RT-P5 (§9), on generated traffic, by the
     registered rule, then rounded as part 1 above says.
