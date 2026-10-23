@@ -9,9 +9,11 @@
 //! the process uses is present after materialize. Absence of such a row,
 //! and a value of the wrong [`Value`] arm, are faults: the reader records
 //! them and returns [`Read::Unreadable`] so the build can keep collecting.
-//! A row this build does not fill (`tor-file`, `clearnet-listen` while
-//! clearnet is off, an unset development lever) may be absent. A keyword
-//! the row admits (`unlimited`, `auto`) is that keyword, not a missing value.
+//! A row the build derives no default for may be absent: `tor-file`, whose
+//! absence means discovery and whose value, when given, the Tor posture
+//! reads and the daemon's Tor start uses; `clearnet-listen` while clearnet
+//! is off; an unset development lever. A keyword the row admits
+//! (`unlimited`, `auto`) is that keyword, not a missing value.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
