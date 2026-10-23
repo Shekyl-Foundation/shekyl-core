@@ -479,9 +479,18 @@ impl<'id> WriteBatch<'_, 'id> {
         Ok(())
     }
 
-    /// The support rows: `archival_support_settlement[(P, E)] = row`, one
-    /// per tree, insert-once. Governed by the same family as the economy
-    /// rows. A row already there is the epoch settled twice.
+    /// The support settlement rows: `archival_support_settlement[(P, E)]`,
+    /// one per tree, insert-once. Governed by the same family as the
+    /// economy rows. A row already there is the epoch settled twice.
+    ///
+    /// Disposition: STAGED — the issued-draw journal is not this writer.
+    /// [`shekyl_archival_retention::support_slot`] schedules a draw and the
+    /// slash pass settles the issued rows it is shown. The connect journal
+    /// that stores `archival_support_issued`, `archival_support_block` and
+    /// `archival_support_unissued` lands with bundle admission. Admission
+    /// is not on the connect path, so this pass reads an empty index and
+    /// writes no row. Filing unanswered draws before a bundle can mark a
+    /// pass would settle misses the stream has not yet been able to serve.
     fn write_support_settlements(&self, delta: &ArchivalDelta) -> Result<(), StoreError> {
         let rows = delta.support_settlements();
         if rows.is_empty() || !self.apply_policy().applies(ArchivalFamily::Settlement) {
