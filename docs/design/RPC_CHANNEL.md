@@ -928,11 +928,15 @@ drives it):
     is that verdict. It is true in two cases. A padded frame is one, at the
     record that finishes it. Exactly `SUBMISSION_RECORDS` largest-class
     payload records in a row is the other, counted from a message boundary:
-    the start of the stream, a smaller class, or a padded frame that just
-    finished. The next largest-class record clears it, so a longer ordinary
-    message is never a submission. A full-size submission that continues a
-    run which already ended on a largest-class record has no boundary in
-    front of it; the daemon refuses it and the client sends again. An empty
+    the start of the stream, a smaller class, a padded frame that just
+    finished, or a record the daemon sent. A client sends its next request
+    only after the response, and a path observer sees the response between
+    them, so two full-size submissions on one connection are each counted
+    from a boundary. The next largest-class record clears the verdict, so a
+    longer ordinary message is never a submission. A full-size submission
+    sent straight after a message that ended on a largest-class record,
+    with no response between them, has no boundary in front of it, and the
+    daemon refuses it. Only a pipelining client sends that way. An empty
     padding record opens a frame. It does not end the message before it, so
     a later ordinary record cannot borrow that padding and look like a
     shorter frame. RT-W10's `submit_transaction` route refuses any body for
@@ -953,6 +957,7 @@ drives it):
       - each of the three read-side padding rules;
       - no yield on a run of empty records;
       - a padded frame's end not counted as a boundary;
+      - the daemon's response not counted as a boundary;
       - unbounded ordinary buffering;
       - a moved middle class.
 - **Length concealment — RULED (RT-O6, 2026-10-09); RE-RULED 2026-10-18

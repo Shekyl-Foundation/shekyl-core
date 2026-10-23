@@ -372,6 +372,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         );
         self.out = wire;
         self.out_pos = 0;
+        // Whatever this side sends ends the peer's message before it.
+        self.frame.sent();
     }
 
     /// The message's last record has left: count it and go idle.

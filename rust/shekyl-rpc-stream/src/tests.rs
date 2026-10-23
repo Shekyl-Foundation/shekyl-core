@@ -926,6 +926,39 @@ async fn the_inbound_shape_tells_a_submission_from_anything_else() {
     assert!(!shape.ends_in_submission());
 }
 
+/// Two full-size submissions on one connection, each answered. The
+/// response is the boundary the second is counted from, so it is not
+/// refused for following a message that ended on a full record.
+#[tokio::test]
+async fn a_full_size_submission_after_a_response_is_a_submission() {
+    let (mut client, mut daemon) = pair(1 << 20);
+    let shape = daemon.inbound_shape();
+    let mark = client.submission_mark();
+    let mut got = vec![0u8; SUBMISSION_CAP];
+    for attempt in 0..3 {
+        mark.arm();
+        client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
+        client.flush().await.unwrap();
+        daemon.read_exact(&mut got).await.unwrap();
+        assert!(shape.ends_in_submission(), "submission {attempt}");
+        daemon.write_all(b"HTTP/1.1 200 OK").await.unwrap();
+        daemon.flush().await.unwrap();
+        let mut answer = [0u8; 15];
+        client.read_exact(&mut answer).await.unwrap();
+    }
+    // Two in a row with no response between: the second continues the run.
+    mark.arm();
+    client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
+    client.flush().await.unwrap();
+    daemon.read_exact(&mut got).await.unwrap();
+    assert!(shape.ends_in_submission());
+    mark.arm();
+    client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
+    client.flush().await.unwrap();
+    daemon.read_exact(&mut got).await.unwrap();
+    assert!(!shape.ends_in_submission(), "no boundary in front of it");
+}
+
 /// A largest-class ordinary record after a padded frame is not a submission.
 /// The padding belongs to the frame that finished; borrowing it would make
 /// this record look like the end of a shorter frame.
