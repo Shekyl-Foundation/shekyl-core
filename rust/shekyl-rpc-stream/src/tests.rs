@@ -284,8 +284,9 @@ async fn a_submission_is_always_its_fixed_record_count() {
     }
 }
 
-/// A submission that would need a record past its count is refused, and
-/// no record past the count is sealed.
+/// A submission past its cap is refused with nothing of it sealed:
+/// nothing of a submission is on the wire before its flush. The stream is
+/// poisoned, so the next write is refused too.
 #[tokio::test]
 async fn a_submission_past_its_count_is_refused() {
     let (mut client, mut daemon) = pair(1 << 20);
@@ -307,10 +308,11 @@ async fn a_submission_past_its_count_is_refused() {
     assert!(error
         .get_ref()
         .is_some_and(<dyn std::error::Error + Send + Sync>::is::<SubmissionTooLarge>));
-    assert_eq!(
-        counters.lock().unwrap().sent,
-        [0, 0, u64::try_from(SUBMISSION_RECORDS).unwrap()]
-    );
+    assert_eq!(counters.lock().unwrap().sent, [0, 0, 0], "nothing sealed");
+    let again = client.write_all(b"GET /info").await.unwrap_err();
+    assert!(again
+        .get_ref()
+        .is_some_and(<dyn std::error::Error + Send + Sync>::is::<StreamPoisoned>));
     drop(client);
     reader.await.unwrap();
 }
@@ -600,4 +602,388 @@ async fn hyper_flushes_once_per_message() {
         conn.await.unwrap().unwrap();
         server.await.unwrap();
     }
+}
+
+// ------------------------------------------- RT-W9 close-out (2026-10-22)
+
+/// The client's sealer, for tests that put records on the wire by hand,
+/// and the daemon's reading end of the same session.
+fn sealer_and_reader() -> (ClassedRecord, RecordStream<DuplexStream>, DuplexStream) {
+    let ((c_send, _), (d_send, d_recv)) = directions();
+    let (feed, x) = duplex(1 << 20);
+    (
+        ClassedRecord::new(c_send, class_table()),
+        RecordStream::new(x, d_send, d_recv),
+        feed,
+    )
+}
+
+/// Feed `records`, sealed in order, then end the transport, and read to
+/// the end.
+async fn read_records(records: &[(u8, &[u8])]) -> io::Result<Vec<u8>> {
+    let (mut sealer, mut daemon, mut feed) = sealer_and_reader();
+    for (class, payload) in records {
+        let wire = sealer.seal(ClassId(*class), payload).unwrap();
+        feed.write_all(&wire).await.unwrap();
+    }
+    drop(feed);
+    let mut got = Vec::new();
+    daemon.read_to_end(&mut got).await.map(|_| got)
+}
+
+fn is<E: std::error::Error + 'static>(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|source| source.downcast_ref::<E>().is_some())
+}
+
+/// RT-O29: the table both directions pad to is the ruled one.
+#[test]
+fn the_class_lengths_are_the_ruled_ones() {
+    assert_eq!(CLASS_LENGTHS, [512, 16_384, 65_535]);
+    assert_eq!(MAX_PAYLOAD, 65_533);
+}
+
+/// F1. On a transport that holds almost nothing, a flush of an ordinary
+/// request stays pending; the client then arms and writes a submission.
+/// The submission does not join the ordinary request: it is classified on
+/// its own and is exactly SUBMISSION_RECORDS largest-class records.
+#[tokio::test]
+async fn a_write_after_a_pending_flush_starts_a_new_message() {
+    let (mut client, mut daemon) = pair(1);
+    let sent = client.counters();
+    let received = daemon.counters();
+    let waker = std::task::Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    assert!(matches!(
+        Pin::new(&mut client).poll_write(&mut cx, b"GET /info"),
+        Poll::Ready(Ok(9))
+    ));
+    assert!(Pin::new(&mut client).poll_flush(&mut cx).is_pending());
+    client.submission_mark().arm();
+    let submission = bytes(1_000);
+    let expected = submission.clone();
+    let write = async move {
+        client.write_all(&submission).await.unwrap();
+        client.flush().await.unwrap();
+        client
+    };
+    let read = async move {
+        let mut got = vec![0u8; 9 + 1_000];
+        daemon.read_exact(&mut got).await.unwrap();
+        (got, daemon)
+    };
+    let (_client, (got, _daemon)) = tokio::join!(write, read);
+    assert_eq!(&got[..9], b"GET /info");
+    assert_eq!(&got[9..], &expected[..]);
+    let five = u64::try_from(SUBMISSION_RECORDS).unwrap();
+    assert_eq!(sent.lock().unwrap().sent, [1, 0, five]);
+    assert_eq!(received.lock().unwrap().received, [1, 0, five]);
+}
+
+/// F1, the other way round: a submission's flush is pending part-way
+/// through its padding, and the next write finishes its records before an
+/// ordinary request starts.
+#[tokio::test]
+async fn a_write_during_a_pending_submission_flush_finishes_it_first() {
+    let (mut client, mut daemon) = pair(1);
+    let sent = client.counters();
+    let waker = std::task::Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    client.submission_mark().arm();
+    assert!(matches!(
+        Pin::new(&mut client).poll_write(&mut cx, b"submission"),
+        Poll::Ready(Ok(10))
+    ));
+    assert!(Pin::new(&mut client).poll_flush(&mut cx).is_pending());
+    let write = async move {
+        client.write_all(b"GET /info").await.unwrap();
+        client.flush().await.unwrap();
+        client
+    };
+    let read = async move {
+        let mut got = vec![0u8; 10 + 9];
+        daemon.read_exact(&mut got).await.unwrap();
+        (got, daemon)
+    };
+    let (_client, (got, _daemon)) = tokio::join!(write, read);
+    assert_eq!(&got, b"submissionGET /info");
+    let five = u64::try_from(SUBMISSION_RECORDS).unwrap();
+    assert_eq!(sent.lock().unwrap().sent, [1, 0, five]);
+}
+
+/// A submission's buffers stay within the cap and one sealed record.
+#[tokio::test]
+async fn a_submission_buffers_at_most_its_cap_and_one_record() {
+    let (mut client, mut daemon) = pair(1 << 10);
+    let counters = client.counters();
+    client.submission_mark().arm();
+    let message = bytes(SUBMISSION_CAP);
+    let write = async move {
+        client.write_all(&message).await.unwrap();
+        client.flush().await.unwrap();
+        client
+    };
+    let read = async move {
+        let mut got = vec![0u8; SUBMISSION_CAP];
+        daemon.read_exact(&mut got).await.unwrap();
+        daemon
+    };
+    let (_client, _daemon) = tokio::join!(write, read);
+    let c = counters.lock().unwrap();
+    assert!(c.max_pending <= SUBMISSION_CAP, "{}", c.max_pending);
+    let one_record = class_table().wire_len(ClassId(2)).unwrap();
+    assert!(c.max_out <= one_record, "{}", c.max_out);
+}
+
+/// Backpressure with a reader that never reads: what the stream accepts
+/// stays within one payload, one sealed record and the transport's own
+/// capacity.
+#[test]
+fn a_reader_that_never_reads_holds_the_writer() {
+    let capacity = 4096;
+    let (mut client, _daemon) = pair(capacity);
+    let waker = std::task::Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    let chunk = bytes(1000);
+    let mut accepted = 0usize;
+    for _ in 0..10_000 {
+        match Pin::new(&mut client).poll_write(&mut cx, &chunk) {
+            Poll::Ready(Ok(n)) => accepted += n,
+            Poll::Ready(Err(error)) => panic!("{error}"),
+            Poll::Pending => break,
+        }
+    }
+    let one_record = class_table().wire_len(ClassId(2)).unwrap();
+    assert!(
+        accepted <= MAX_PAYLOAD + one_record + capacity,
+        "{accepted} bytes accepted with nothing read"
+    );
+    assert!(
+        accepted >= MAX_PAYLOAD,
+        "it buffers a record before it waits"
+    );
+}
+
+/// The close record ends the stream; a transport that ends without one is
+/// a truncation, even at a record boundary.
+#[tokio::test]
+async fn an_end_without_the_close_record_is_a_truncation() {
+    let error = read_records(&[(0, b"request")]).await.unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    assert_eq!(
+        read_records(&[(0, b"request"), (0, b"")]).await.unwrap(),
+        b"request"
+    );
+}
+
+/// Padding is accepted only as a sender makes it.
+#[tokio::test]
+async fn padding_is_accepted_only_in_the_shape_a_sender_makes() {
+    let full = bytes(MAX_PAYLOAD);
+    // The shapes a sender makes: k padding records, then 5 - k payload.
+    assert!(read_records(&[
+        (2, b""),
+        (2, b""),
+        (2, b"a"),
+        (2, b"b"),
+        (2, b"c"),
+        (0, b"")
+    ])
+    .await
+    .is_ok());
+    assert!(
+        read_records(&[(2, b""), (2, b""), (2, b""), (2, b""), (2, b"x"), (0, b"")])
+            .await
+            .is_ok()
+    );
+    let refused = |result: io::Result<Vec<u8>>| {
+        let error = result.unwrap_err();
+        assert!(is::<RecordShapeRefused>(&error), "{error}");
+    };
+    // Five padding records: a submission has at least one payload record.
+    refused(read_records(&[(2, b""), (2, b""), (2, b""), (2, b""), (2, b"")]).await);
+    // An empty record in the middle class.
+    refused(read_records(&[(1, b"")]).await);
+    // (An empty record in the smallest class is the close record, so the
+    // middle class is the one padding can be wrongly sent in.)
+    // Padding followed by a smaller record.
+    refused(read_records(&[(2, b""), (0, b"x")]).await);
+    // A frame that owes payload records gets a smaller one.
+    refused(read_records(&[(2, b""), (2, b""), (2, &full), (0, b"x")]).await);
+    // Padding after the frame's payload has started.
+    refused(read_records(&[(2, b""), (2, &full), (2, b"")]).await);
+    // The close inside a frame.
+    refused(read_records(&[(2, b""), (0, b"")]).await);
+}
+
+/// A run of empty records yields instead of holding the task.
+#[test]
+fn a_run_of_padding_yields() {
+    let ((c_send, _), (d_send, d_recv)) = directions();
+    let mut sealer = ClassedRecord::new(c_send, class_table());
+    let (mut feed, x) = duplex(1 << 20);
+    let mut daemon = RecordStream::new(x, d_send, d_recv);
+    let waker = std::task::Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    let mut wire = Vec::new();
+    for payload in [&b""[..], b"", b"", b"", b"x"] {
+        wire.extend(sealer.seal(ClassId(2), payload).unwrap());
+    }
+    let mut feed_cx = Context::from_waker(waker);
+    let mut sent = 0;
+    while sent < wire.len() {
+        match Pin::new(&mut feed).poll_write(&mut feed_cx, &wire[sent..]) {
+            Poll::Ready(Ok(n)) => sent += n,
+            other => panic!("{other:?}"),
+        }
+    }
+    let mut out = [0u8; 8];
+    let mut read = ReadBuf::new(&mut out);
+    assert!(
+        Pin::new(&mut daemon)
+            .poll_read(&mut cx, &mut read)
+            .is_pending(),
+        "two empty records, then a yield"
+    );
+    assert!(Pin::new(&mut daemon)
+        .poll_read(&mut cx, &mut read)
+        .is_pending());
+    assert!(matches!(
+        Pin::new(&mut daemon).poll_read(&mut cx, &mut read),
+        Poll::Ready(Ok(()))
+    ));
+    assert_eq!(read.filled(), b"x");
+}
+
+/// A refused record poisons the stream: the next read is refused as
+/// poisoned, and so is a write.
+#[tokio::test]
+async fn a_refused_record_poisons_both_sides() {
+    let mut wire = wire_of(b"request").await;
+    // Change the class byte, as a middlebox would, to a class outside the
+    // table. (A change to another class in the table asks for a longer
+    // record and waits for bytes; that is truncation, tested above.)
+    wire[0] ^= 0x80;
+    let (_, (d_send, d_recv)) = directions();
+    let (mut feed, x) = duplex(1 << 20);
+    let mut daemon = RecordStream::new(x, d_send, d_recv);
+    feed.write_all(&wire).await.unwrap();
+    let mut got = vec![0u8; 7];
+    let first = daemon.read_exact(&mut got).await.unwrap_err();
+    assert_eq!(first.kind(), io::ErrorKind::InvalidData);
+    let second = daemon.read(&mut got).await.unwrap_err();
+    assert!(is::<StreamPoisoned>(&second), "{second}");
+    let write = daemon.write_all(b"answer").await.unwrap_err();
+    assert!(is::<StreamPoisoned>(&write), "{write}");
+}
+
+/// F2: the stream reports the shape of the records it just read, and the
+/// daemon's route can tell a padded submission from anything else.
+#[tokio::test]
+async fn the_inbound_shape_tells_a_submission_from_anything_else() {
+    // One client stream, one daemon stream, several requests in turn.
+    let (mut client, mut daemon) = pair(1 << 20);
+    let shape = daemon.inbound_shape();
+    let mark = client.submission_mark();
+    let mut got = vec![0u8; 1 << 20];
+
+    // An ordinary request.
+    client.write_all(b"GET /info").await.unwrap();
+    client.flush().await.unwrap();
+    daemon.read_exact(&mut got[..9]).await.unwrap();
+    assert!(!shape.ends_in_submission());
+
+    // A padded submission (one payload record, four padding).
+    mark.arm();
+    client.write_all(&bytes(300)).await.unwrap();
+    client.flush().await.unwrap();
+    daemon.read_exact(&mut got[..300]).await.unwrap();
+    assert!(shape.ends_in_submission());
+
+    // A submission that fills all five records carries no padding. The
+    // padded frame that preceded it is the boundary the five are counted from.
+    mark.arm();
+    client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
+    client.flush().await.unwrap();
+    daemon.read_exact(&mut got[..SUBMISSION_CAP]).await.unwrap();
+    assert!(shape.ends_in_submission());
+
+    // The same bytes sent unarmed: five full ordinary records, after a
+    // message that ended on a full record. Not taken for a submission.
+    client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
+    client.flush().await.unwrap();
+    daemon.read_exact(&mut got[..SUBMISSION_CAP]).await.unwrap();
+    assert!(!shape.ends_in_submission());
+
+    // A submission's size sent unarmed: ordinary records, refused.
+    client.write_all(&bytes(1_000)).await.unwrap();
+    client.flush().await.unwrap();
+    daemon.read_exact(&mut got[..1_000]).await.unwrap();
+    assert!(!shape.ends_in_submission());
+}
+
+/// A largest-class ordinary record after a padded frame is not a submission.
+/// The padding belongs to the frame that finished; borrowing it would make
+/// this record look like the end of a shorter frame.
+#[tokio::test]
+async fn an_ordinary_record_after_a_padded_frame_is_not_a_submission() {
+    let (mut client, mut daemon) = pair(1 << 20);
+    let shape = daemon.inbound_shape();
+    client.submission_mark().arm();
+    client.write_all(&bytes(300)).await.unwrap();
+    client.flush().await.unwrap();
+    let mut got = vec![0u8; 300];
+    daemon.read_exact(&mut got).await.unwrap();
+    assert!(shape.ends_in_submission());
+
+    // 20,000 bytes is one record of the largest class: more than the middle
+    // class holds, and at most one largest payload.
+    let medium = 20_000;
+    client.write_all(&bytes(medium)).await.unwrap();
+    client.flush().await.unwrap();
+    let mut got = vec![0u8; medium];
+    daemon.read_exact(&mut got).await.unwrap();
+    assert!(!shape.ends_in_submission());
+
+    // The same bytes with no frame behind them are not a submission either.
+    let (mut client, mut daemon) = pair(1 << 20);
+    let shape = daemon.inbound_shape();
+    client.write_all(&bytes(medium)).await.unwrap();
+    client.flush().await.unwrap();
+    let mut got = vec![0u8; medium];
+    daemon.read_exact(&mut got).await.unwrap();
+    assert!(!shape.ends_in_submission());
+}
+
+/// Shutdown has sealed the close. A later write is a use of a shut side,
+/// and the response on the read side is still delivered.
+#[tokio::test]
+async fn a_write_after_shutdown_leaves_the_read_side_open() {
+    let (mut client, mut daemon) = pair(4096);
+    client.write_all(b"request").await.unwrap();
+    client.shutdown().await.unwrap();
+    let late = client.write_all(b"x").await.unwrap_err();
+    assert_eq!(late.kind(), io::ErrorKind::BrokenPipe);
+    assert!(!is::<StreamPoisoned>(&late), "{late}");
+    daemon.write_all(b"response").await.unwrap();
+    daemon.shutdown().await.unwrap();
+    let mut got = Vec::new();
+    client.read_to_end(&mut got).await.unwrap();
+    assert_eq!(got, b"response");
+}
+
+/// Bytes after the close record are not a clean end.
+#[tokio::test]
+async fn a_record_after_the_close_is_refused() {
+    let (mut sealer, mut daemon, mut feed) = sealer_and_reader();
+    for (class, payload) in [(0u8, &b"request"[..]), (0, b""), (0, b"more")] {
+        feed.write_all(&sealer.seal(ClassId(class), payload).unwrap())
+            .await
+            .unwrap();
+    }
+    drop(feed);
+    let mut got = Vec::new();
+    let error = daemon.read_to_end(&mut got).await.unwrap_err();
+    assert!(is::<RecordShapeRefused>(&error), "{error}");
 }
