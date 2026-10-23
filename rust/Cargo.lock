@@ -4616,6 +4616,7 @@ dependencies = [
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-chain-sync",
  "shekyl-clearnet",
  "shekyl-consensus",
  "shekyl-crypto-hash",
@@ -4991,6 +4992,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-wire",
  "tokio",
+ "tracing",
  "tracing-subscriber",
 ]
 

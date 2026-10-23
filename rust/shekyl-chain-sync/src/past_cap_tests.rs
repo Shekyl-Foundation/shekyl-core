@@ -478,3 +478,118 @@ fn one_header_request_extends_the_frontier() {
         );
     });
 }
+
+/// A past-cap fork longer than its kept window, served whole in one
+/// response, is still checked as evidence. The response ends the run's
+/// following; the evidence check's refetch from the fork is that run
+/// continuing, and it is proven, and the alarm raised.
+#[test]
+fn an_evidence_refetch_after_a_whole_fork_response_is_proven() {
+    let rules = cap(1);
+    let main = chain_of(4);
+    let prefix = prefix_of(&main, 0);
+    let mut block = candidate_on(&main, Vec::new()).block;
+    // Longer than the window a past-cap run keeps.
+    let long = N_USIZE.max(MTP_WINDOW_USIZE) + 10;
+    let mut extra: Vec<HeaderRecord> = Vec::new();
+    let mut blobs = Vec::new();
+    let mut parent = prefix[0].hash;
+    let mut timestamp = prefix[0].header.timestamp;
+    for step in 0..long {
+        let along = Along {
+            prefix: &prefix,
+            extra: &extra,
+            fork: 0,
+        };
+        timestamp += 120;
+        formed_on(&along, &rules, &mut block, parent, timestamp);
+        let pow = block.pow_blob();
+        parent = PowBlob::read(&pow).expect("preimage").identity();
+        extra.push(HeaderRecord {
+            hash: parent,
+            header: block.header.clone(),
+            cumulative_difficulty: CumulativeDifficulty::from_raw(
+                u128::try_from(step).expect("small") + 2,
+            ),
+        });
+        blobs.push(pow);
+    }
+    let whole = ResponseHeaders {
+        blobs: blobs.clone(),
+        tip_work: u128::MAX,
+        more: false,
+    }
+    .store()
+    .expect("the response encodes");
+    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    main.with_view(|raw| {
+        let view = UnitWork(raw);
+        let tip = view.tip().unwrap().unwrap();
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Tip { tip },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        open_and_claim(&mut sync, &view, 1, u128::MAX);
+        sync.handle(
+            Event::Headers {
+                session: 1,
+                bytes: whole.clone(),
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        assert!(
+            sync.run_len(1) > 0 && sync.run_len(1) < long,
+            "a trimmed candidate: {}",
+            sync.run_len(1)
+        );
+        // The draw: the window no longer starts at the fork, so the check
+        // fetches the fork again.
+        out.clear();
+        sync.handle(
+            Event::Room { seats: 0 },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(sync.evidence_session(), Some(1));
+        assert!(
+            out.iter()
+                .any(|command| matches!(command, Command::RequestHeaders { session: 1, .. })),
+            "no refetch: {out:?}"
+        );
+        out.clear();
+        sync.handle(
+            Event::Headers {
+                session: 1,
+                bytes: whole,
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(
+            proves(&out).first(),
+            Some(&HashClass::Evidence),
+            "the refetch was not proven: {out:?}"
+        );
+        super::resolve_proves(&mut sync, &view, &mut out);
+        assert!(
+            out.iter()
+                .any(|command| matches!(command, Command::RaiseAlarm { .. })),
+            "no alarm: {out:?}"
+        );
+    });
+}

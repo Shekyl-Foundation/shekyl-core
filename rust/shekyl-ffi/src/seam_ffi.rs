@@ -6,7 +6,9 @@
 //! FFI for the p2p seam.
 //!
 //! C++ calls `open`, `send`, and `close`. Rust calls the bound post, which
-//! only enqueues onto the connection's strand. The strand calls back when
+//! only enqueues onto the connection's strand. The hub's post sink is the
+//! chain-sync router (`shekyl_chain_sync::router`), pass-through here: no
+//! sync owner is attached, so each post is the bound post's, unchanged. The strand calls back when
 //! the handler is armed, when a delivery returns, when `closed` starts,
 //! and when the executor drops the link.
 //!
@@ -19,6 +21,7 @@ use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
+use shekyl_chain_sync::router::Router;
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
     connector_from_index, direction_from_index, CloseCause, CloseKind, ConnectorId, Direction,
@@ -368,12 +371,11 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
     // critical section with [`install_process_sockets`].
     let hub = {
         let _table = hold_table();
-        let hub = Hub::new(
-            process_sockets(),
-            ceiling,
-            Arc::new(move |item: Post| post_one(&bound, item)),
-            clock,
-        );
+        // The Rust Levin router is the post sink. Until the chain-sync
+        // cutover attaches the sync owner it is pass-through: every post
+        // reaches the C++ handler unchanged.
+        let sink = Router::pass_through(Arc::new(move |item: Post| post_one(&bound, item)));
+        let hub = Hub::new(process_sockets(), ceiling, sink.into_sink(), clock);
         // `store` stops the previous hub's dialer; this hub's is built after.
         store(Some(hub.clone()));
         hub

@@ -49,6 +49,21 @@ pub struct StubLog {
     pub refused: Vec<SocketId>,
     /// Handshake results it was handed.
     pub handshakes: Vec<SocketId>,
+    /// Every delivery's bytes, as forwarded.
+    pub delivered: Vec<(SocketId, Vec<u8>)>,
+    /// Closes, with the cause that won.
+    pub closed: Vec<(SocketId, CloseKind)>,
+}
+
+impl StubLog {
+    /// Whether `id` was closed, and why.
+    #[must_use]
+    pub fn closed(&self, id: SocketId) -> Option<CloseKind> {
+        self.closed
+            .iter()
+            .find(|(closed, _)| *closed == id)
+            .map(|(_, kind)| *kind)
+    }
 }
 
 /// The node (module docs).
@@ -153,7 +168,10 @@ impl Node {
             pool_hashes: Arc::new(Vec::new),
             routed: routed_rx,
         };
-        let running = owner::spawn(parts, stop, NonZeroUsize::new(8).expect("non-zero"))
+        // The owner's log lines carry the node's tag.
+        let span = tracing::info_span!("node", tag);
+        let running = span
+            .in_scope(|| owner::spawn(parts, stop, NonZeroUsize::new(8).expect("non-zero")))
             .expect("the owner row");
         Self {
             chain,
@@ -232,12 +250,11 @@ impl Node {
         self.chain.tip().map_or(0, |(count, _, _)| count)
     }
 
-    /// Whether `id` was closed, and why.
+    /// Whether `id` was closed, and why: the stub's record, which
+    /// outlives the hub's row.
     #[must_use]
-    pub fn cause(&self, id: SocketId) -> Option<CloseKind> {
-        self.hub
-            .cause(id)
-            .map(shekyl_transport_layer::CloseCause::kind)
+    pub fn closed(&self, id: SocketId) -> Option<CloseKind> {
+        self.stub.lock().expect("stub log").closed(id)
     }
 
     /// Move the hand clock by `by`, and have the engine read it.
@@ -258,6 +275,19 @@ impl Node {
             .expect("registered");
         nudge.arm(Tick::new(u64::MAX)).expect("armed");
         let _gone = nudge.deregister();
+    }
+
+    /// Push `frame` into `id`'s channel as its peer, from a blocking
+    /// thread: the channel's send blocks.
+    ///
+    /// # Panics
+    ///
+    /// The blocking task panicked.
+    pub async fn inject(&self, id: SocketId, frame: Vec<u8>) -> bool {
+        let hub = self.hub.clone();
+        tokio::task::spawn_blocking(move || hub.inject(id, frame))
+            .await
+            .expect("the inject returns")
     }
 
     /// The RandomX hashes the node's substrate has run.
@@ -303,6 +333,7 @@ fn run_stub(hub: &Hub, posts: &mpsc::Receiver<Option<Post>>, log: &Mutex<StubLog
                 let commands = buckets.feed(&bytes);
                 let broken = buckets.broken();
                 let mut log = log.lock().expect("stub log");
+                log.delivered.push((id, bytes.clone()));
                 log.commands
                     .extend(commands.into_iter().map(|(command, _)| (id, command)));
                 if broken {
@@ -314,7 +345,11 @@ fn run_stub(hub: &Hub, posts: &mpsc::Receiver<Option<Post>>, log: &Mutex<StubLog
             Post::HandshakeResult { id, .. } => {
                 log.lock().expect("stub log").handshakes.push(id);
             }
-            Post::Closed { id, .. } => {
+            Post::Closed { id, cause, .. } => {
+                log.lock()
+                    .expect("stub log")
+                    .closed
+                    .push((id, cause.kind()));
                 sessions.remove(&id);
                 hub.handler_gone(id);
                 hub.reap(id);

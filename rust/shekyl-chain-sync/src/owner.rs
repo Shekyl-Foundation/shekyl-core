@@ -24,12 +24,12 @@
 //!   that carried only chain-sync messages is finished after the requests
 //!   it carried are answered, so a peer's requests wait in the transport
 //!   and not in this task.
-//! - **Announces** (2006 / 2007) stay with the C++ handler until the
-//!   cutover retires them, so [`Event::Announce`] does not arrive here,
-//!   and the commands only an announce produces ([`Command::Relay`],
-//!   [`Command::RequestMissingTxs`]) are reached by the model's own tests.
-//!   `RequestMissingTxs` is encoded and sent as the brief rules; `Relay`
-//!   has no Rust relay entry to call, and it is logged.
+//! - **Announcements** (2008, `NOTIFY_NEW_COMPACT_BLOCK`) reach the C++
+//!   handler until the cutover routes them here, so [`Event::Announce`]
+//!   does not arrive yet, and the commands only an announcement produces
+//!   ([`Command::Relay`], [`Command::RequestMissingTxs`]) are reached by
+//!   the model's own tests. `RequestMissingTxs` is encoded and sent;
+//!   `Relay` has no Rust relay entry to call, and it is logged.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,6 +58,7 @@ use shekyl_transport_layer::{declaration, Assessment};
 use shekyl_types::{BlockHeight, ChainCount};
 use shekyl_wire::TxBody;
 use tokio::sync::{mpsc, watch};
+use tracing::Instrument;
 
 use crate::executor::Executor;
 use crate::router::Routed;
@@ -130,7 +131,7 @@ impl Running {
     }
 }
 
-/// Start the owner on its own row.
+/// Start the owner on its own row, in the caller's tracing span.
 ///
 /// `stop` is shared with the executor, so a permit wait ends with the
 /// owner. `blocking` is the row's blocking-thread cap: serving and prove
@@ -159,7 +160,8 @@ where
     let (state_tx, state) = watch::channel(SyncState::NoView);
     let (alarm_tx, alarm) = watch::channel(false);
     let (stop_tx, stop_rx) = watch::channel(false);
-    pool.spawn(run(parts, state_tx, alarm_tx, stop_rx));
+    // The owner's log lines carry the span it was started in.
+    pool.spawn(run(parts, state_tx, alarm_tx, stop_rx).instrument(tracing::Span::current()));
     Ok(Running {
         pool,
         stop,
@@ -517,7 +519,10 @@ where
 
     fn input(&mut self, input: Input) {
         match input {
-            Input::Proven { job, results } => self.event(Event::Proven { job, results }),
+            Input::Proven { job, results } => {
+                tracing::trace!(?job, proved = results.len(), last = ?results.last().map(proved_kind), "a prove job answered");
+                self.event(Event::Proven { job, results });
+            }
             Input::Entry { tag, reply } => {
                 let session = self.offered.remove(&tag);
                 match outcome_of(reply) {
@@ -634,6 +639,12 @@ where
                     deadline,
                 } => match request.store() {
                     Ok(payload) => {
+                        tracing::trace!(
+                            session,
+                            id,
+                            locator = request.block_ids.len(),
+                            "a header request"
+                        );
                         self.send(
                             session,
                             notify(SyncCommand::RequestHeaders.wire_id(), &payload),
@@ -663,6 +674,7 @@ where
                     cache,
                     items,
                 } => {
+                    tracing::trace!(?job, ?class, ?cache, items = items.len(), "a prove job");
                     let executor = Arc::clone(&self.executor);
                     let inputs = self.inputs.clone();
                     tokio::task::spawn_blocking(move || {
@@ -794,6 +806,15 @@ where
             }
         }
         self.room();
+    }
+}
+
+/// A prove result's kind, for the trace.
+fn proved_kind(proved: &Proved) -> &'static str {
+    match proved {
+        Proved::Formed(_) => "formed",
+        Proved::Refused(_) => "refused",
+        Proved::NotHeld => "not held",
     }
 }
 

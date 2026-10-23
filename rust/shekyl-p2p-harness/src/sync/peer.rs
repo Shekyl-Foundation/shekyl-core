@@ -62,8 +62,9 @@ pub enum Bodies {
     /// Answered, but held here until the test releases the frames: a peer
     /// slower than the deadline.
     Hold(Arc<Mutex<Vec<Vec<u8>>>>),
-    /// Each block replaced by genesis: a body that is not its header's.
-    SubstituteBlock,
+    /// Each block carrying a transaction it does not list: a body that is
+    /// not its header's (CEN-G2), in a response whose form is sound.
+    SubstituteBody,
     /// Each witness replaced by bytes that are not one.
     SubstituteWitness,
     /// Every listed transaction as its skeleton.
@@ -74,6 +75,7 @@ pub enum Bodies {
 pub struct ServingPeer {
     store: Arc<ChainStore>,
     bodies: Bodies,
+    tip_work: Option<u128>,
     seen: Arc<Seen>,
 }
 
@@ -86,10 +88,19 @@ impl ServingPeer {
             Self {
                 store,
                 bodies,
+                tip_work: None,
                 seen: Arc::clone(&seen),
             },
             seen,
         )
+    }
+
+    /// Every header response states `work` as its tip's: a liar's claim,
+    /// which a response's `tip_work` replaces.
+    #[must_use]
+    pub fn stating(mut self, work: u128) -> Self {
+        self.tip_work = Some(work);
+        self
     }
 
     fn bodies(&self, request: &RequestBodies) -> ResponseBodies {
@@ -103,10 +114,10 @@ impl ServingPeer {
         let mut response = serve_bodies(&self.store, request).expect("the store answers");
         match &self.bodies {
             Bodies::Honest | Bodies::Hold(_) | Bodies::Withhold => {}
-            Bodies::SubstituteBlock => {
-                let genesis = self.block_at(0).serialize();
+            Bodies::SubstituteBody => {
+                let extra = self.listed_tx();
                 for body in &mut response.bodies {
-                    body.block = genesis.clone();
+                    body.txs.push(TxBody::Full(extra.clone()));
                 }
             }
             Bodies::SubstituteWitness => {
@@ -128,11 +139,25 @@ impl ServingPeer {
         response
     }
 
-    fn block_at(&self, height: u64) -> Block {
+    /// The first listed transaction the store holds, whole.
+    fn listed_tx(&self) -> Vec<u8> {
         let snap = self.store.begin_read().expect("a read");
-        match snap.block(BlockHeight::from_raw(height)).expect("a read") {
-            AtHeight::Recorded(body) => body.block,
-            AtHeight::AboveTip => panic!("no block at {height}"),
+        let mut height = 0u64;
+        loop {
+            let block = match snap.block(BlockHeight::from_raw(height)).expect("a read") {
+                AtHeight::Recorded(body) => body.block,
+                AtHeight::AboveTip => panic!("the chain lists no transaction"),
+            };
+            if !block.transaction_hashes.is_empty() {
+                let request = RequestBodies {
+                    hashes: vec![*block.hash().as_bytes()],
+                };
+                let response = serve_bodies(&self.store, &request).expect("the store answers");
+                if let Some(TxBody::Full(bytes)) = response.bodies[0].txs.first() {
+                    return bytes.clone();
+                }
+            }
+            height += 1;
         }
     }
 
@@ -157,7 +182,10 @@ impl SyncPeer for ServingPeer {
             Some(SyncCommand::RequestHeaders) => {
                 self.seen.header_requests.fetch_add(1, Ordering::AcqRel);
                 let request = RequestHeaders::decode(payload).expect("the node's request decodes");
-                let response = serve_headers(&self.store, &request).expect("the store answers");
+                let mut response = serve_headers(&self.store, &request).expect("the store answers");
+                if let Some(work) = self.tip_work {
+                    response.tip_work = work;
+                }
                 vec![frame(SyncCommand::ResponseHeaders, &response)]
             }
             Some(SyncCommand::RequestBodies) => {

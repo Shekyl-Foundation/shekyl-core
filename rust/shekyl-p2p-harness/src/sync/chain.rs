@@ -122,12 +122,29 @@ impl Corpus {
     /// not connected this way.
     #[must_use]
     pub fn steps(&self) -> Vec<Step> {
+        self.steps_through(self.tip_height)
+    }
+
+    /// The steps through the block at `last`. A corpus read past a block
+    /// its reader refuses (a retired transaction kind) is read only this
+    /// far.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::steps`].
+    #[must_use]
+    pub fn steps_through(&self, last: u64) -> Vec<Step> {
         let bytes = std::fs::read(self.dir.join("corpus.e2")).expect("the corpus");
         let mut reader = CorpusReader::open(std::io::Cursor::new(bytes)).expect("a corpus");
         let mut steps = Vec::new();
-        while let Some(event) = reader.next().expect("the corpus reads") {
+        let mut blocks = 0u64;
+        while blocks <= last {
+            let Some(event) = reader.next().expect("the corpus reads") else {
+                break;
+            };
             match event.event {
                 IngestEvent::Extend(candidate) => {
+                    blocks += 1;
                     assert!(
                         candidate.attestation_witness.is_none(),
                         "{}: a block with a witness",

@@ -216,10 +216,18 @@ where
                 .is_some_and(Run::past_cap);
         // The latch, or a past-cap run that already ended. A run still
         // in progress keeps its headers; "followed once" starts when it ends.
+        // The evidence check's refetch from the fork is its run continuing,
+        // not a second following of that branch.
         if past_cap && self.alarm {
             return Ok(());
         }
+        let evidence_run = self
+            .peers
+            .get(&session)
+            .and_then(|state| state.run.as_ref())
+            .is_some_and(Run::is_evidence);
         if past_cap
+            && !evidence_run
             && self
                 .peers
                 .get(&session)

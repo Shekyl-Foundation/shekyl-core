@@ -38,6 +38,7 @@ shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-seam = { path = "../shekyl-seam" }
 shekyl-types = { path = "../shekyl-types" }
 shekyl-wire = { path = "../shekyl-wire" }
+tracing = "0.1"
 
 [dev-dependencies]
 # The loopback tests' logs: the owner's closes and faults, under RUST_LOG.
