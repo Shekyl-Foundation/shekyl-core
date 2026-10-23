@@ -20,7 +20,7 @@ use std::future::Future;
 
 use shekyl_net_address::NetworkAddress;
 use shekyl_tor_control_client::control::onion::ServiceId;
-use shekyl_tor_control_daemon::{DaemonTorControl, DaemonTorPublishError, OnionPow};
+use shekyl_tor_control_daemon::{DaemonTorControl, DaemonTorPublishError, OnionPow, OnionSeed};
 
 use crate::ForwardAddr;
 
@@ -75,13 +75,14 @@ where
 /// The production call. One `ADD_ONION`, proof-of-work on.
 pub async fn publish_with_control(
     control: &DaemonTorControl,
+    seed: &OnionSeed,
     forward: ForwardAddr,
     virtual_port: u16,
     max_streams: u16,
 ) -> InboundPosture {
     let socket = forward.socket();
     publish_forward(forward, virtual_port, |pow| {
-        control.publish(virtual_port, socket, max_streams, pow)
+        control.publish(seed, virtual_port, socket, max_streams, pow)
     })
     .await
 }

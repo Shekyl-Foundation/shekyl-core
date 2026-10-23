@@ -159,6 +159,69 @@ def make_pe(imports, delayed=(), import_rva=None, import_size=None, delay_size=N
     return bytes(image + body)
 
 
+MAC_HOST = "aarch64-apple-darwin11"
+ARM64 = 0x0100000C
+LC_SEGMENT_64, LC_CODE_SIGNATURE = 0x19, 0x1D
+
+
+def segment(name, vmaddr, vmsize, fileoff, filesize):
+    cmd = bytearray(72)
+    cmd[0:4] = LC_SEGMENT_64.to_bytes(4, "little")
+    cmd[4:8] = (72).to_bytes(4, "little")
+    cmd[8:24] = name.encode().ljust(16, b"\0")
+    for i, value in enumerate((vmaddr, vmsize, fileoff, filesize)):
+        cmd[24 + 8 * i : 32 + 8 * i] = value.to_bytes(8, "little")
+    return bytes(cmd)
+
+
+def make_macho(seed, linkedit_size=0x5F3):
+    """An unsigned 64-bit Mach-O as Tor ships it: a header, a `__TEXT` and a
+    `__LINKEDIT` segment, zero slack after the load commands, code bytes, and
+    `__LINKEDIT` ending the file. `seed` makes two files differ."""
+    text_end = 0x1000
+    commands = segment("__TEXT", 0, text_end, 0, text_end) + segment(
+        "__LINKEDIT", text_end, 0x1000, text_end, linkedit_size
+    )
+    image = bytearray(text_end + linkedit_size)
+    image[0:4] = (0xFEEDFACF).to_bytes(4, "little")
+    image[4:8] = ARM64.to_bytes(4, "little")
+    image[12:16] = (2).to_bytes(4, "little")
+    image[16:20] = (2).to_bytes(4, "little")
+    image[20:24] = len(commands).to_bytes(4, "little")
+    image[32 : 32 + len(commands)] = commands
+    for i in range(0x100, len(image)):
+        image[i] = (i * 7 + seed) % 251 + 1
+    return bytes(image)
+
+
+def sign(upstream, blob=b"\xfa\xde\x0c\xc0" * 128, vmsize_round=0x4000):
+    """What codesign does to `upstream` (measured on the macOS build host, 2026-10-22):
+    one LC_CODE_SIGNATURE appended in the zero slack, the header counting it,
+    the blob on the next 16-byte boundary, and `__LINKEDIT` grown to hold it,
+    its vmsize rounded up to 16 KiB."""
+    image = bytearray(upstream)
+    ncmds = int.from_bytes(image[16:20], "little")
+    sizeofcmds = int.from_bytes(image[20:24], "little")
+    at = 32 + sizeofcmds
+    dataoff = -(-len(image) // 16) * 16
+    image += bytes(dataoff - len(image)) + blob
+    image[16:20] = (ncmds + 1).to_bytes(4, "little")
+    image[20:24] = (sizeofcmds + 16).to_bytes(4, "little")
+    image[at : at + 4] = LC_CODE_SIGNATURE.to_bytes(4, "little")
+    image[at + 4 : at + 8] = (16).to_bytes(4, "little")
+    image[at + 8 : at + 12] = dataoff.to_bytes(4, "little")
+    image[at + 12 : at + 16] = len(blob).to_bytes(4, "little")
+    linkedit = 32 + 72
+    fileoff = int.from_bytes(image[linkedit + 40 : linkedit + 48], "little")
+    filesize = len(image) - fileoff
+    image[linkedit + 32 : linkedit + 40] = (-(-filesize // vmsize_round) * vmsize_round).to_bytes(8, "little")
+    image[linkedit + 48 : linkedit + 56] = filesize.to_bytes(8, "little")
+    return bytes(image)
+
+
+MAC_FILES = ["tor", "libevent-2.1.7.dylib"]
+
+
 class Bench:
     """A scratch directory holding a tarball, its pin file, and room to stage."""
 
@@ -190,8 +253,51 @@ class Bench:
             "--dest", str(self.dest), "--licenses", str(self.licenses),
         )
 
-    def verify(self):
-        return self.run("verify", "--host", self.host, "--dir", str(self.dest))
+    def verify(self, *extra):
+        return self.run("verify", "--host", self.host, "--dir", str(self.dest), *extra)
+
+    def macos(self):
+        """Make the pinned row a macOS bundle: Tor's unsigned `tor` and
+        `libevent` in the tarball, their signed copies in `self.signed`, and a
+        row pinning the signed bytes as `files` and Tor's as `upstream`."""
+        self.upstream = {name: make_macho(seed) for seed, name in enumerate(MAC_FILES)}
+        self.shipped = {name: sign(data) for name, data in self.upstream.items()}
+        members = {f"tor/{name}": data for name, data in self.upstream.items()}
+        members["tor/pluggable_transports/lyrebird"] = b"a transport Shekyl does not ship"
+        members["docs/tor.txt"] = b"tor licence"
+        self.tarball = self.sources / "tor-expert-bundle-macos-aarch64-9.9.9.tar.gz"
+        self.signed = self.root / "signed"
+        self.signed.mkdir()
+        for name, data in self.shipped.items():
+            (self.signed / name).write_bytes(data)
+        row = self.pins["targets"][0]
+        row.update(
+            os="macos",
+            arch="aarch64",
+            gitian_host=MAC_HOST,
+            bundle_target="macos-aarch64",
+            tarball_sha256=make_tarball(self.tarball, members),
+            files=[{"name": n, "sha256": sha(d)} for n, d in self.shipped.items()],
+            upstream=[{"name": n, "sha256": sha(d)} for n, d in self.upstream.items()],
+            licenses=["docs/tor.txt"],
+        )
+        self.host = MAC_HOST
+        self.write()
+
+    def stage_signed(self, signed=None):
+        return self.run(
+            "stage", "--host", self.host, "--sources", str(self.sources),
+            "--dest", str(self.dest), "--licenses", str(self.licenses),
+            "--signed", str(signed or self.signed),
+        )
+
+    def tie(self, shipped_tor):
+        """`tie` over a signed directory whose `tor` is `shipped_tor`."""
+        signed = self.root / "tie"
+        shutil.rmtree(signed, ignore_errors=True)
+        signed.mkdir()
+        (signed / "tor").write_bytes(shipped_tor)
+        return self.run("tie", "--tarball", str(self.tarball), "--signed", str(signed))
 
     def windows(self, pe, imports=WIN_IMPORTS):
         """Make the pinned row a Windows bundle whose tor.exe is `pe`, with
@@ -535,6 +641,164 @@ def _(b):
     b.pins["targets"][0]["imports"] = list(WIN_IMPORTS)
     b.write()
     expect(b.stage(), 1, "only a Windows row has one")
+
+
+# --- macOS: signed files tied to Tor's (TB-11) -----------------------------
+
+
+@case("macos: stage --signed stages the signed files, and verify --sources ties them")
+def _(b):
+    b.macos()
+    expect(b.stage_signed(), 0, "staged tor 0.0.0.1")
+    assert sorted(os.listdir(b.dest)) == sorted(MAC_FILES), os.listdir(b.dest)
+    for name, data in b.shipped.items():
+        assert (b.dest / name).read_bytes() == data, name
+    note = (b.licenses / "SOURCE.txt").read_text(encoding="utf-8")
+    assert "signed each with its Developer ID" in note and "unmodified" not in note, note
+    for name, data in b.upstream.items():
+        assert sha(data) in note, f"SOURCE.txt names Tor's digest of {name}"
+    expect(b.verify("--sources", str(b.sources)), 0, "holds exactly the pinned bundle")
+
+
+@case("macos: stage without --signed refuses; it never ships Tor's unsigned files")
+def _(b):
+    b.macos()
+    expect(b.stage(), 1, "name them with --signed")
+    assert not b.dest.exists()
+
+
+@case("macos: a signed file that ties but is not the pinned one refuses")
+def _(b):
+    b.macos()
+    (b.signed / "tor").write_bytes(sign(b.upstream["tor"], blob=b"\x01" * 512))
+    expect(b.stage_signed(), 1, "does not match its pin")
+    assert not b.dest.exists()
+
+
+@case("macos: a signed directory with a file too many refuses")
+def _(b):
+    b.macos()
+    (b.signed / "lyrebird").write_bytes(b"x")
+    expect(b.stage_signed(), 1, "the signed files are exactly")
+
+
+@case("macos: a pinned signed file whose code differs from Tor's refuses the tie")
+def _(b):
+    b.macos()
+    forged = bytearray(b.shipped["tor"])
+    forged[0x800] ^= 1
+    (b.signed / "tor").write_bytes(bytes(forged))
+    row = b.pins["targets"][0]
+    row["files"][0]["sha256"] = sha(bytes(forged))
+    b.write()
+    expect(b.stage_signed(), 1, "differs from the upstream file signed at byte 0x800")
+    assert not b.dest.exists()
+
+
+@case("macos: verify needs --sources, and the tie runs there too")
+def _(b):
+    b.macos()
+    expect(b.stage_signed(), 0)
+    expect(b.verify(), 1, "verify needs --sources")
+    # An upstream pin that is not Tor's file: the tie cannot vouch for it.
+    b.pins["targets"][0]["upstream"][0]["sha256"] = "0" * 64
+    b.write()
+    expect(b.verify("--sources", str(b.sources)), 1, "does not match its upstream pin")
+
+
+@case("--signed and verify --sources belong to a macOS host only")
+def _(b):
+    expect(b.stage_signed(signed=b.root), 1, "--signed is for a macOS host")
+    expect(b.stage(), 0)
+    expect(b.verify("--sources", str(b.sources)), 1, "--sources is for a macOS host")
+
+
+@case("pin file: a macOS row lists upstream, under the names it ships")
+def _(b):
+    b.macos()
+    row = b.pins["targets"][0]
+    upstream = row.pop("upstream")
+    b.write()
+    expect(b.stage_signed(), 1, "lists Tor's own files as \"upstream\"")
+    row["upstream"] = [dict(upstream[0]), dict(upstream[1], name="libevent.dylib")]
+    b.write()
+    expect(b.stage_signed(), 1, "name different files")
+
+
+@case("pin file: only a macOS row carries upstream")
+def _(b):
+    row = b.pins["targets"][0]
+    row["upstream"] = row["files"]
+    b.write()
+    expect(b.stage(), 1, "only a macOS row has it")
+
+
+@case("tie: Tor's file signed as codesign signs it ties, and both digest sets print")
+def _(b):
+    b.macos()
+    proc = b.tie(b.shipped["tor"])
+    expect(proc, 0)
+    report = json.loads(proc.stdout)
+    assert report == {
+        "files": [{"name": "tor", "sha256": sha(b.shipped["tor"])}],
+        "upstream": [{"name": "tor", "sha256": sha(b.upstream["tor"])}],
+    }, report
+
+
+def _mutated(b, edit):
+    image = bytearray(b.shipped["tor"])
+    edit(image)
+    return bytes(image)
+
+
+TIE_BITES = [
+    ("a byte of Tor's code", lambda i: i.__setitem__(0x900, i[0x900] ^ 1),
+     "differs from the upstream file signed"),
+    ("ncmds not counting the signature",
+     lambda i: i.__setitem__(slice(16, 20), (2).to_bytes(4, "little")),
+     "the load commands do not fill sizeofcmds"),
+    ("sizeofcmds not counting the signature",
+     lambda i: i.__setitem__(slice(20, 24), (144).to_bytes(4, "little")),
+     "a load command runs past the header's sizeofcmds"),
+    ("__LINKEDIT vmsize rounded to 4 KiB, not 16 KiB",
+     lambda i: i.__setitem__(slice(104 + 32, 104 + 40), (0x1000).to_bytes(8, "little")),
+     "differs from the upstream file signed"),
+    ("__LINKEDIT filesize short of the blob",
+     lambda i: i.__setitem__(slice(104 + 48, 104 + 56), (0x5F3).to_bytes(8, "little")),
+     "differs from the upstream file signed"),
+    ("a non-zero padding byte before the blob",
+     lambda i: i.__setitem__(0x1000 + 0x5F3, 0xAA),
+     "differs from the upstream file signed"),
+    ("a byte after the blob",
+     lambda i: i.extend(b"\0"),
+     "run to the end of the file"),
+    ("the signature command's type changed",
+     lambda i: i.__setitem__(slice(176, 180), (0x1E).to_bytes(4, "little")),
+     "is not a code signature, or is not last"),
+]
+
+for _label, _edit, _needle in TIE_BITES:
+    def _bite(b, edit=_edit, needle=_needle):
+        b.macos()
+        expect(b.tie(_mutated(b, edit)), 1, needle)
+    case(f"tie: refuses {_label}")(_bite)
+
+
+@case("tie: refuses a signature written over bytes upstream uses")
+def _(b):
+    b.macos()
+    upstream = bytearray(b.upstream["tor"])
+    upstream[176] = 0x5A  # the slack the signature's command would take
+    b.upstream["tor"] = bytes(upstream)
+    members = {f"tor/{n}": d for n, d in b.upstream.items()}
+    make_tarball(b.tarball, members)
+    expect(b.tie(sign(bytes(upstream))), 1, "overwrites bytes upstream uses")
+
+
+@case("tie: refuses Tor's unsigned file offered as the signed one")
+def _(b):
+    b.macos()
+    expect(b.tie(b.upstream["tor"]), 1, "exactly one 16-byte load command")
 
 
 # --- check_tor_pin_targets.py ---------------------------------------------
