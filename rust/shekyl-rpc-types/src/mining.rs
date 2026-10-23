@@ -93,7 +93,7 @@ pub struct GetMinerDataResponse {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum MinerThreads {
-    /// The host's parallelism less one, at least one.
+    /// The host's parallelism, which is also the most a count may ask for.
     #[default]
     #[serde(with = "auto")]
     Auto,

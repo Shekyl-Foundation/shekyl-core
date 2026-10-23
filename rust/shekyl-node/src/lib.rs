@@ -315,6 +315,7 @@ impl Node {
             data_dir: args.config.data_dir.clone(),
             offline: args.config.offline(),
             sync: sync_rx,
+            health: pool_health.clone(),
         });
         let mining = Arc::new(MiningControl::new(
             Arc::clone(&board),
@@ -977,7 +978,10 @@ mod tests {
     /// A flush whose pool-file write faults retires the pool, for the
     /// service too: the flush answers a store fault, the next pool read is
     /// not ready, and mining status reports the pool retired (the review of
-    /// #1165, M5). Red edit: the bridge does not retire the pool.
+    /// #1165, M5). The chain handle's pool reads (`is_key_image_spent`,
+    /// `get_transactions`, `get_info`'s counts) stop reading it too. Red
+    /// edits: the bridge does not retire the pool; the surroundings do not
+    /// read the retirement.
     #[test]
     fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
         use shekyl_chain_store::pool::{PoolRecord, ReceivedHour};
@@ -1010,6 +1014,10 @@ mod tests {
             },
         ));
         let after = get_transaction_pool(&*handles.pool, PoolScope::Broadcast);
+        let spent = shekyl_daemon_rpc::read_facts::ChainReadFacts::key_images_spent(
+            &*handles.chain,
+            &[shekyl_types::KeyImage::from_bytes([7; 32])],
+        );
         let status = handles.mining.status();
         node.stop();
         assert_eq!(
@@ -1017,6 +1025,10 @@ mod tests {
             ErrorClass::StoreFault
         );
         assert_eq!(after.expect_err("retired").class, ErrorClass::NotReady);
+        assert_eq!(
+            spent.expect_err("the chain's pool reads are retired too"),
+            shekyl_daemon_rpc::chain_facts::FactsFault::NotReady
+        );
         assert!(
             status.expect("status").pool_retired,
             "the service's pool is retired"

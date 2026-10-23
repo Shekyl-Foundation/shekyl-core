@@ -889,6 +889,15 @@ pub struct PoolHealth {
 }
 
 impl PoolHealth {
+    /// The health of a node with no pool wired: never retired.
+    #[must_use]
+    pub fn unwired() -> Self {
+        Self {
+            wired: false,
+            live: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
     /// A pool is wired and its file has faulted.
     #[must_use]
     pub fn retired(&self) -> bool {

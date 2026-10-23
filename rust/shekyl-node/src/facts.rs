@@ -52,6 +52,19 @@ pub(crate) struct Surroundings {
     pub(crate) offline: bool,
     /// Chain sync's state: the watch the follower reads.
     pub(crate) sync: tokio::sync::watch::Receiver<SyncState>,
+    /// The service's retirement flag: a pool whose file has faulted is
+    /// not read here, as the pool handle does not read it.
+    pub(crate) health: PoolHealth,
+}
+
+impl Surroundings {
+    /// The pool, while the node holds one and its file has not faulted.
+    fn pool(&self) -> Result<Arc<Mutex<Pool>>, FactsFault> {
+        if self.health.retired() {
+            return Err(FactsFault::NotReady);
+        }
+        lock(&self.pool).clone().ok_or(FactsFault::NotReady)
+    }
 }
 
 impl NodeFacts for Surroundings {
@@ -80,11 +93,8 @@ impl NodeFacts for Surroundings {
     /// Only entries the pool shows: a stem-phase spend is not this node's
     /// to disclose (S6), so it answers unspent here.
     fn pool_spends(&self, key_images: &[shekyl_types::KeyImage]) -> Result<Vec<bool>, FactsFault> {
-        let slot = lock(&self.pool);
-        let Some(pool) = slot.as_ref() else {
-            return Err(FactsFault::NotReady);
-        };
-        let pool = lock(pool);
+        let pool = self.pool()?;
+        let pool = lock(&pool);
         let shown: std::collections::BTreeSet<[u8; 32]> = pool
             .shown_entries()
             .flat_map(|entry| entry.key_images)
@@ -103,11 +113,8 @@ impl NodeFacts for Surroundings {
         ids: &[TxHash],
         scope: PoolScope,
     ) -> Result<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>, FactsFault> {
-        let slot = lock(&self.pool);
-        let Some(pool) = slot.as_ref() else {
-            return Err(FactsFault::NotReady);
-        };
-        let pool = lock(pool);
+        let pool = self.pool()?;
+        let pool = lock(&pool);
         let held: std::collections::BTreeMap<TxHash, shekyl_daemon_rpc::store_facts::PoolBody> =
             match scope {
                 PoolScope::Broadcast => pool
@@ -124,11 +131,8 @@ impl NodeFacts for Surroundings {
     }
 
     fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
-        let slot = lock(&self.pool);
-        let Some(pool) = slot.as_ref() else {
-            return Err(FactsFault::NotReady);
-        };
-        let pool = lock(pool);
+        let pool = self.pool()?;
+        let pool = lock(&pool);
         let broadcast = u64::try_from(pool.listing().count()).unwrap_or(u64::MAX);
         let unbroadcast = match scope {
             PoolScope::Broadcast => None,
@@ -667,6 +671,7 @@ mod tests {
             data_dir: dir.path().to_path_buf(),
             offline: false,
             sync,
+            health: PoolHealth::unwired(),
         };
         assert!(surroundings.sync().expect("open").synchronized);
         drop(sender);
