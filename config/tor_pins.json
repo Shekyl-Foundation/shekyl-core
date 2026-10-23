@@ -9,8 +9,12 @@
     "Every target the release builds has exactly one row, pinned or unavailable",
     "(scripts/ci/check_tor_pin_targets.py). An unavailable row is a ruling unless it",
     "carries \"pending\": the identifier of the work that will pin it. A pending row",
-    "compiles as unavailable, which is what the binary does today, and is counted by",
-    "the gate: the startup refusal (TB-2) may not land while one remains (TB-12)."
+    "compiles as unavailable, which is what the binary does today, and is printed by",
+    "the gate on every run: an unavailable target is a gap to close (TB-4), and a node",
+    "on one announces that it has no managed Tor; it is never refused (TB-2).",
+    "A macOS row carries two digest sets (TB-11): files, the Developer ID-signed bytes",
+    "that ship and that the binary checks, and upstream, Tor's own as extracted from",
+    "the tarball. tor_bundle.py ties them: every byte outside the code signature is Tor's."
   ],
   "signing_key_fingerprint": "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290",
   "bundle_url": "https://archive.torproject.org/tor-package-archive/torbrowser/{bundle_version}/tor-expert-bundle-{bundle_target}-{bundle_version}.tar.gz",
