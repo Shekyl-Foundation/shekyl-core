@@ -24,37 +24,39 @@ Subcommands (a target is named by its gitian host triple, `--host`):
                `/opt/shekyl/<bundle_version>-<bundle_target>`.
   tarball-url  print where the host's pinned tarball is published (its
                detached signature is the same URL with `.asc` appended).
-  fetch        download the host's tarball into `--sources` if it is not
-               there, and check its SHA-256; for a macOS host also its signed
-               files, each checked against its shipped SHA-256. `--all` does
-               every pinned host.
-  stage        check the tarball's SHA-256 BEFORE opening it, extract only the
-               pinned files into `--dest`, check each file's SHA-256, and
-               write the licence texts and the source pointer into
-               `--licenses`. Fetches the tarball first if `--sources` lacks it,
-               unless `--no-fetch` is given: then a cache miss refuses. The
-               release build passes `--no-fetch`.
+  fetch        download every artifact the host stages from into `--sources`,
+               each checked against its pin: the tarball, and, when the row
+               carries `upstream`, the signed files from `signed_url`. `--all`
+               does every pinned host.
+  stage        check the tarball's SHA-256 BEFORE opening it, then write the
+               pinned files into `--dest` and the licence texts and the source
+               pointer into `--licenses`. A row that carries `upstream` packs
+               the signed files from the sources cache, after the signature
+               tie. Fetches first if `--sources` lacks an input, unless
+               `--no-fetch`: then a cache miss refuses. The release build
+               passes `--no-fetch`.
   verify       check that `--dir` holds exactly the pinned files, each a
                regular file with the pinned SHA-256. For a Windows host it also
-               reads the executable's PE import table and refuses a DLL the
-               row's `imports` does not name, and any import its delay-load
-               table records (`check_imports` says what that can and cannot
-               see). For a macOS host it also needs `--sources`, and checks
-               that each file is Tor's upstream file signed (`check_signature_tie`).
-  tie          pin time, macOS: for each file in `--signed`, read Tor's file of
-               the same name from `--tarball` and check the tie; print both
-               digest sets as the row's `files` and `upstream`. The tarball's
-               signature is checked first, as for every pin.
+               reads the executable's PE import table (`tor_pe`) and refuses a
+               DLL the row's `imports` does not name, and any import its
+               delay-load table records (`check_imports` says what that can
+               and cannot see). `--sources` re-checks the cached tarball. A row
+               that carries `upstream` requires it, and ties each staged file to
+               Tor's bytes in that tarball.
+  tie          pin time, before the signed files are a release asset: for each
+               file in `--signed`, read Tor's file of the same name from
+               `--tarball` and check the tie; print both digest sets as the
+               row's `files` and `upstream`. The tarball's signature is
+               checked first, as for every pin.
 
-A macOS row carries two digest sets (TB-11). Shekyl signs Tor's macOS
-binaries with its Developer ID, so what ships is not Tor's release: `files`
-are the shipped bytes, which the daemon checks at every launch, and
+A row that carries `upstream` ships bytes that are not Tor's release (TB-11).
+Today that is a macOS row: Shekyl signs Tor's binaries with its Developer ID.
+`files` are the shipped bytes, which the daemon checks at every launch, and
 `upstream` are Tor's, as extracted from the signed tarball. The signed files
-are a release asset (`signed_url`), fetched into the sources cache beside the
-tarball and checked against the shipped digests: the pin is the integrity
-check, not the hosting. `stage` for a macOS host takes the signed files from
-the cache (or from `--signed`, the signing host's output) and Tor's from the
-tarball, and refuses a pair that is not Tor's file plus a code signature.
+are a release asset (`signed_url`). `fetch` puts them in the sources cache
+beside the tarball and checks each against its shipped digest: the pin is the
+integrity check, not the hosting. `stage` reads that cache and no other
+directory. `tie --signed` is the signing host's check, run before the upload.
 
 An `unavailable` host is not an error: `fetch` and `stage` report it and do
 nothing, and the caller branches on `disposition`. `install-dir`,
@@ -72,6 +74,7 @@ error.
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -82,6 +85,24 @@ import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path
+
+
+def _load_sibling(name):
+    """Load `name`.py from this file's directory.
+
+    The pin gate loads this file by path, and a direct run puts this
+    directory on `sys.path` only for that run. Loading the sibling by its
+    own path works in both cases.
+    """
+    path = Path(__file__).resolve().parent / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+tor_macho = _load_sibling("tor_macho")
+tor_pe = _load_sibling("tor_pe")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PINS = REPO_ROOT / "config" / "tor_pins.json"
@@ -191,14 +212,6 @@ def load_pins(path):
     rows = doc.get("targets")
     if not isinstance(rows, list) or not rows:
         raise Refused(f"{path}: no targets")
-
-    if any(r.get("os") == "macos" and r.get("disposition") == "pinned" for r in rows):
-        url = doc.get("signed_url")
-        if not isinstance(url, str) or not url.startswith("https://") or "{name}" not in url:
-            raise Refused(
-                f"{path}: a pinned macOS row needs \"signed_url\", the https template "
-                "({bundle_version}, {bundle_target}, {name}) its signed files are fetched from"
-            )
 
     seen_targets = set()
     seen_hosts = set()
@@ -324,6 +337,7 @@ def load_pins(path):
                 f"{where}: two licence texts would be staged under one name "
                 "(base names must be unique, and SOURCE.txt is generated)"
             )
+    _require_signed_url(path, doc, rows)
     return doc
 
 
@@ -361,16 +375,75 @@ def check_tarball(path, row):
         )
 
 
-def fetch(doc, row, sources, offline=False):
-    """Make the pinned tarball present in `sources`, digest-checked.
+# The three fields `signed_url` is filled with. A release asset is
+# `{bundle_target}-{name}` under `tor-macos-{bundle_version}-signed`.
+SIGNED_URL_FIELDS = ("bundle_version", "bundle_target", "name")
 
-    With `offline`, a tarball that is not already there is a refusal and
-    nothing is downloaded: a release build takes its inputs from the cache
-    it was given, and a cache miss that quietly became a download is how a
-    build stops being reproducible without anyone deciding it should."""
+
+def carries_upstream(row):
+    """The row ships bytes that are not Tor's release.
+
+    `upstream` is Tor's own files. `files` is what the daemon checks.
+    `load_pins` allows that pair on a macOS row and on no other, so the
+    packager follows the row instead of the operating-system name.
+    """
+    upstream = row.get("upstream")
+    return isinstance(upstream, list) and bool(upstream)
+
+
+def signed_file_url(template, row, name):
+    """Fill `signed_url` for one shipped file. A template that cannot be
+    filled, or that does not stay https, is a refusal."""
+    try:
+        url = template.format(
+            bundle_version=row["bundle_version"],
+            bundle_target=row["bundle_target"],
+            name=name,
+        )
+    except (KeyError, IndexError, ValueError) as exc:
+        raise Refused(
+            f"{row['gitian_host']}: signed_url cannot be filled for {name} ({exc}). "
+            'A pinned macOS row needs "signed_url", an https template of '
+            "{bundle_version}, {bundle_target} and {name}"
+        ) from exc
+    if not url.startswith("https://"):
+        raise Refused(f"refusing to fetch over anything but https: {url}")
+    return url
+
+
+def _require_signed_url(path, doc, rows):
+    """A row that carries upstream names one https template, and that template
+    fills for every file the row ships."""
+    signed_rows = [row for row in rows if row["disposition"] == "pinned" and carries_upstream(row)]
+    if not signed_rows:
+        return
+    template = doc.get("signed_url")
+    intro = (
+        f'{path}: a pinned macOS row needs "signed_url", an https template of '
+        "{bundle_version}, {bundle_target} and {name}"
+    )
+    if not isinstance(template, str) or not template.startswith("https://"):
+        raise Refused(intro)
+    missing = [f"{{{field}}}" for field in SIGNED_URL_FIELDS if f"{{{field}}}" not in template]
+    if missing:
+        raise Refused(f"{intro}; this one does not name {', '.join(missing)}")
+    for row in signed_rows:
+        for entry in row["files"]:
+            signed_file_url(template, row, entry["name"])
+
+
+def fetch(doc, row, sources, offline=False):
+    """Make every artifact `row` stages from present in `sources`.
+
+    Returns `(tarball, signed_dir)`. `signed_dir` is the cache of signed
+    files when the row carries upstream, and None otherwise. With `offline`,
+    an input that is not already there is a refusal and nothing is downloaded:
+    a release build takes its inputs from the cache it was given.
+    """
     dest = sources / tarball_name(row)
     _cached_or_download(tarball_url(doc, row), dest, lambda path: check_tarball(path, row), offline)
-    return dest
+    signed = fetch_signed(doc, row, sources, offline=offline) if carries_upstream(row) else None
+    return dest, signed
 
 
 def _cached_or_download(url, dest, check, offline):
@@ -403,31 +476,28 @@ def _cached_or_download(url, dest, check, offline):
 
 
 def signed_cache_dir(row, sources):
-    """Where a macOS row's signed files sit in the sources cache, beside the
-    tarball they are tied to."""
+    """Where a row's signed files sit in the sources cache, beside the tarball
+    they are tied to. This is the only directory `stage` reads them from."""
     return sources / f"tor-signed-{row['bundle_target']}-{row['bundle_version']}"
 
 
-def signed_url(doc, row, name):
-    return doc["signed_url"].format(
-        bundle_version=row["bundle_version"], bundle_target=row["bundle_target"], name=name
-    )
-
-
 def fetch_signed(doc, row, sources, offline=False):
-    """macOS: make the signed files present in the sources cache, each checked
-    against its shipped digest (TB-11). The digest in the pin file is the
-    integrity check; where the files are hosted vouches for nothing."""
+    """Make the signed files present in the sources cache, each checked against
+    its shipped digest (TB-11). The digest in the pin file is the integrity
+    check; where the files are hosted vouches for nothing."""
     directory = signed_cache_dir(row, sources)
+    template = doc["signed_url"]
     for entry in row["files"]:
-        def check(path, entry=entry):
+        name, digest = entry["name"], entry["sha256"]
+
+        def check(path, name=name, digest=digest):
             actual = sha256_file(path)
-            if actual != entry["sha256"]:
+            if actual != digest:
                 raise Refused(
-                    f"{path} is not the pinned signed {entry['name']}: expected sha256 "
-                    f"{entry['sha256']}, found {actual}"
+                    f"{path} is not the pinned signed {name}: expected sha256 {digest}, found {actual}"
                 )
-        _cached_or_download(signed_url(doc, row, entry["name"]), directory / entry["name"], check, offline)
+
+        _cached_or_download(signed_file_url(template, row, name), directory / name, check, offline)
     return directory
 
 
@@ -487,123 +557,16 @@ def source_note(doc, row):
     )
 
 
-# PE data-directory indices (Microsoft PE format, "Optional Header Data
-# Directories"): the import table, and the delay-load import descriptors.
-_PE_IMPORT_DIRECTORY = 1
-_PE_DELAY_IMPORT_DIRECTORY = 13
-# A bound on descriptors walked, so a malformed table cannot spin the reader.
-_PE_MAX_DESCRIPTORS = 4096
-
-
 def pe_imports(data, where):
-    """The DLL names a PE image imports: `(imports, delay_imports)`, each in
-    table order.
+    """The DLL names a PE image imports (`tor_pe`).
 
-    Only the headers, the section table and the two import directories are
-    read. Anything this reader cannot follow is a refusal, not an empty list:
-    a table it could not parse is not a table that names nothing.
+    `(imports, delay_imports)`, each in table order. A table this reader
+    cannot follow is a refusal, not an empty list.
     """
-
-    def u16(offset):
-        if offset < 0 or offset + 2 > len(data):
-            raise Refused(f"{where}: truncated PE image")
-        return int.from_bytes(data[offset : offset + 2], "little")
-
-    def u32(offset):
-        if offset < 0 or offset + 4 > len(data):
-            raise Refused(f"{where}: truncated PE image")
-        return int.from_bytes(data[offset : offset + 4], "little")
-
-    def u64(offset):
-        if offset < 0 or offset + 8 > len(data):
-            raise Refused(f"{where}: truncated PE image")
-        return int.from_bytes(data[offset : offset + 8], "little")
-
-    if data[:2] != b"MZ":
-        raise Refused(f"{where}: not a PE image (no MZ header)")
-    pe = u32(0x3C)
-    if data[pe : pe + 4] != b"PE\0\0":
-        raise Refused(f"{where}: not a PE image (no PE signature)")
-    coff = pe + 4
-    section_count = u16(coff + 2)
-    optional_size = u16(coff + 16)
-    optional = coff + 20
-    magic = u16(optional)
-    if magic == 0x10B:  # PE32
-        image_base = u32(optional + 28)
-        directory_count, directories = u32(optional + 92), optional + 96
-    elif magic == 0x20B:  # PE32+
-        image_base = u64(optional + 24)
-        directory_count, directories = u32(optional + 108), optional + 112
-    else:
-        raise Refused(f"{where}: unknown PE optional-header magic {magic:#x}")
-
-    sections = []
-    table = optional + optional_size
-    for i in range(section_count):
-        header = table + 40 * i
-        virtual_size, virtual_address = u32(header + 8), u32(header + 12)
-        raw_size, raw_offset = u32(header + 16), u32(header + 20)
-        sections.append((virtual_address, max(virtual_size, raw_size), raw_offset, raw_size))
-
-    def offset_of(rva):
-        for virtual_address, span, raw_offset, raw_size in sections:
-            if virtual_address <= rva < virtual_address + span:
-                delta = rva - virtual_address
-                if delta >= raw_size:
-                    break
-                return raw_offset + delta
-        raise Refused(f"{where}: RVA {rva:#x} is not backed by any section")
-
-    def name_at(rva):
-        start = offset_of(rva)
-        end = data.find(b"\0", start, start + 256)
-        if end < 0:
-            raise Refused(f"{where}: an imported DLL name at RVA {rva:#x} is unterminated")
-        return data[start:end].decode("ascii", errors="strict")
-
-    def directory(index):
-        if index >= directory_count:
-            return 0, 0
-        entry = directories + 8 * index
-        return u32(entry), u32(entry + 4)
-
-    def walk(index, descriptor_size, name_field):
-        rva, size = directory(index)
-        # Absent means both fields zero. The loader walks import descriptors
-        # from the RVA to the null terminator and does not read the size, so
-        # an RVA with a zero size is still a table; a pair with one field set
-        # is refused rather than guessed at either way.
-        if rva == 0 and size == 0:
-            return []
-        if rva == 0 or size == 0:
-            raise Refused(
-                f"{where}: data directory {index} has RVA {rva:#x} and size {size}; "
-                "a table is both or neither"
-            )
-        names = []
-        base = offset_of(rva)
-        for i in range(_PE_MAX_DESCRIPTORS):
-            descriptor = data[base + descriptor_size * i : base + descriptor_size * (i + 1)]
-            if len(descriptor) < descriptor_size:
-                raise Refused(f"{where}: an import table runs past the end of the image")
-            if not any(descriptor):
-                return names
-            name_rva = int.from_bytes(descriptor[name_field : name_field + 4], "little")
-            # A delay-load descriptor whose attributes word is zero is the
-            # pre-VC7 form, whose name field is a virtual address.
-            if index == _PE_DELAY_IMPORT_DIRECTORY and descriptor[0:4] == b"\0\0\0\0":
-                name_rva -= image_base
-            names.append(name_at(name_rva))
-        raise Refused(f"{where}: an import table has no terminating descriptor")
-
     try:
-        return (
-            walk(_PE_IMPORT_DIRECTORY, 20, 12),
-            walk(_PE_DELAY_IMPORT_DIRECTORY, 32, 4),
-        )
-    except UnicodeDecodeError as exc:
-        raise Refused(f"{where}: an imported DLL name is not ASCII") from exc
+        return tor_pe.pe_imports(data, where)
+    except tor_pe.PeFormatError as exc:
+        raise Refused(str(exc)) from exc
 
 
 def check_imports(data, where, row):
@@ -630,147 +593,86 @@ def check_imports(data, where, row):
         )
 
 
-# Mach-O (64-bit, little-endian): the header and the two load commands a
-# code signature touches. Apple's `mach-o/loader.h`.
-_MH_MAGIC_64 = 0xFEEDFACF
-_MH_HEADER_SIZE = 32
-_LC_SEGMENT_64 = 0x19
-_LC_CODE_SIGNATURE = 0x1D
-_LINKEDIT_CMD_SIZE = 16
-# arm64 and x86_64: the two CPU types a macOS bundle carries.
-_MACHO_CPU_TYPES = (0x0100000C, 0x01000007)
-# codesign rounds the grown __LINKEDIT's vmsize up to 16 KiB on both CPU types,
-# though Tor's x86_64 linker rounded to 4 KiB (measured 2026-10-22, seven
-# signed files, Developer ID and ad-hoc).
-_SIGNED_LINKEDIT_ROUND = 0x4000
-# codesign starts the signature blob on a 16-byte boundary.
-_SIGNATURE_ALIGN = 16
-
-
-def _macho_layout(data, where):
-    """`(cputype, ncmds, sizeofcmds, linkedit_offset, commands)` of a 64-bit
-    little-endian Mach-O, where `commands` is `[(offset, cmd, size)]`. Anything
-    this reader cannot follow is a refusal."""
-
-    def u32(offset):
-        if offset < 0 or offset + 4 > len(data):
-            raise Refused(f"{where}: truncated Mach-O image")
-        return int.from_bytes(data[offset : offset + 4], "little")
-
-    if u32(0) != _MH_MAGIC_64:
-        raise Refused(f"{where}: not a 64-bit little-endian Mach-O image")
-    cputype, ncmds, sizeofcmds = u32(4), u32(16), u32(20)
-    commands, linkedit, offset = [], None, _MH_HEADER_SIZE
-    for _ in range(ncmds):
-        cmd, size = u32(offset), u32(offset + 4)
-        if size < 8 or offset + size > _MH_HEADER_SIZE + sizeofcmds:
-            raise Refused(f"{where}: a load command runs past the header's sizeofcmds")
-        if cmd == _LC_SEGMENT_64 and data[offset + 8 : offset + 24].rstrip(b"\0") == b"__LINKEDIT":
-            linkedit = offset
-        commands.append((offset, cmd, size))
-        offset += size
-    if offset != _MH_HEADER_SIZE + sizeofcmds:
-        raise Refused(f"{where}: the load commands do not fill sizeofcmds")
-    if linkedit is None:
-        raise Refused(f"{where}: no __LINKEDIT segment")
-    return cputype, ncmds, sizeofcmds, linkedit, commands
-
-
 def check_signature_tie(upstream, shipped, where):
-    """The shipped file is the upstream file plus a code signature, and
-    nothing else (TB-11, macOS).
+    """The shipped file is `upstream` plus one code signature.
 
-    Shekyl signs Tor's macOS binaries with its Developer ID, so the shipped
-    bytes are not Tor's release. `codesign --remove-signature` does not give
-    them back exactly: it leaves `__LINKEDIT`'s vmsize grown (measured
-    2026-10-22). This check needs no codesign and runs anywhere. It rebuilds
-    the signed file from the upstream bytes with exactly the edits signing
-    makes, taking only the signature's own values from the shipped file, and
-    requires the result to equal the shipped file byte for byte:
-
-    - the header's ncmds +1 and sizeofcmds +16;
-    - one `LC_CODE_SIGNATURE`, the last load command, in space that is zero
-      in upstream;
-    - `__LINKEDIT`, the segment that ends the file, grown to hold the blob:
-      filesize to the blob's end, vmsize that rounded up to 16 KiB;
-    - zero padding to the 16-byte boundary where the blob starts, and the
-      blob running to the end of the file.
-
-    So every byte that is not the signature is Tor's, which is what the
-    upstream digest, checked against Tor's signed tarball, vouches for."""
-    cputype, ncmds, sizeofcmds, linkedit, _ = _macho_layout(upstream, f"{where} (upstream)")
-    if cputype not in _MACHO_CPU_TYPES:
-        raise Refused(f"{where}: CPU type {cputype:#x} is not arm64 or x86_64")
-    s_cputype, s_ncmds, s_sizeofcmds, s_linkedit, s_commands = _macho_layout(shipped, where)
-    if s_cputype != cputype or s_linkedit != linkedit:
-        raise Refused(f"{where}: is not the upstream image signed (CPU type or segment layout differs)")
-    if s_ncmds != ncmds + 1 or s_sizeofcmds != sizeofcmds + _LINKEDIT_CMD_SIZE:
-        raise Refused(f"{where}: signing adds exactly one 16-byte load command")
-    sig_offset, sig_cmd, sig_size = s_commands[-1]
-    if sig_cmd != _LC_CODE_SIGNATURE or sig_size != _LINKEDIT_CMD_SIZE:
-        raise Refused(f"{where}: the added load command is not a code signature, or is not last")
-    if any(upstream[sig_offset : sig_offset + sig_size]):
-        raise Refused(f"{where}: the code signature's load command overwrites bytes upstream uses")
-    dataoff = int.from_bytes(shipped[sig_offset + 8 : sig_offset + 12], "little")
-    datasize = int.from_bytes(shipped[sig_offset + 12 : sig_offset + 16], "little")
-    if (
-        datasize == 0
-        or dataoff % _SIGNATURE_ALIGN
-        or not len(upstream) <= dataoff < len(upstream) + _SIGNATURE_ALIGN
-        or dataoff + datasize != len(shipped)
-    ):
-        raise Refused(
-            f"{where}: the signature blob does not start at the first 16-byte boundary "
-            "after Tor's bytes and run to the end of the file"
-        )
-    fileoff = int.from_bytes(upstream[linkedit + 40 : linkedit + 48], "little")
-    filesize = int.from_bytes(upstream[linkedit + 48 : linkedit + 56], "little")
-    if fileoff + filesize != len(upstream):
-        raise Refused(f"{where}: upstream's __LINKEDIT does not end the file, so it cannot hold the blob")
-
-    expected = bytearray(upstream)
-    expected += bytes(dataoff - len(upstream))
-    expected += shipped[dataoff:]
-    expected[16:20] = (ncmds + 1).to_bytes(4, "little")
-    expected[20:24] = (sizeofcmds + _LINKEDIT_CMD_SIZE).to_bytes(4, "little")
-    expected[sig_offset : sig_offset + sig_size] = shipped[sig_offset : sig_offset + sig_size]
-    new_filesize = len(shipped) - fileoff
-    new_vmsize = -(-new_filesize // _SIGNED_LINKEDIT_ROUND) * _SIGNED_LINKEDIT_ROUND
-    expected[linkedit + 32 : linkedit + 40] = new_vmsize.to_bytes(8, "little")
-    expected[linkedit + 48 : linkedit + 56] = new_filesize.to_bytes(8, "little")
-    if bytes(expected) != shipped:
-        first = next(i for i, (x, y) in enumerate(zip(expected, shipped)) if x != y)
-        raise Refused(
-            f"{where}: differs from the upstream file signed at byte {first:#x}; "
-            "only the code signature's own fields may differ"
-        )
-
-
-def upstream_files(doc, row, sources):
-    """Tor's own bytes for a macOS row: each `upstream` file, read from the
-    digest-checked tarball and checked against its own pin."""
-    tarball = sources / tarball_name(row)
-    if not tarball.exists():
-        raise Refused(
-            f"{tarball} is not in the sources cache; the macOS tie reads Tor's bytes from it"
-        )
-    check_tarball(tarball, row)
-    out = {}
+    The comparison lives in `tor_macho`, which sees only the two byte strings.
+    A difference there is this gate's refusal, in the same words.
+    """
     try:
-        archive = tarfile.open(tarball, "r:gz")
+        tor_macho.check_signature_tie(upstream, shipped, where)
+    except tor_macho.SignatureTieError as exc:
+        raise Refused(str(exc)) from exc
+
+
+def open_tarball(tarball):
+    """The Expert Bundle as a gzip tar, or a refusal that names the file."""
+    try:
+        return tarfile.open(tarball, "r:gz")
     except (tarfile.TarError, OSError) as exc:
         raise Refused(f"{tarball} could not be opened as a tarball: {exc}") from exc
-    with archive as tar:
-        for entry in row["upstream"]:
-            data = read_member(tar, f"{BUNDLE_TOR_DIR}/{entry['name']}")
-            actual = hashlib.sha256(data).hexdigest()
-            if actual != entry["sha256"]:
-                raise Refused(
-                    f"{entry['name']} in {tarball.name} does not match its upstream pin: "
-                    f"expected sha256 {entry['sha256']}, found {actual}"
-                )
-            out[entry["name"]] = data
+
+
+def bundle_members(tar, archive_name, entries, pin_noun):
+    """`entries` from `tor/` of an already-open tarball, each matching its digest.
+
+    `pin_noun` is `pin` for the bytes that ship, and `upstream pin` for Tor's
+    own bytes on a row that carries `upstream`.
+    """
+    out = {}
+    for entry in entries:
+        name = entry["name"]
+        data = read_member(tar, f"{BUNDLE_TOR_DIR}/{name}")
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != entry["sha256"]:
+            raise Refused(
+                f"{name} in {archive_name} does not match its {pin_noun}: "
+                f"expected sha256 {entry['sha256']}, found {actual}"
+            )
+        out[name] = data
     return out
+
+
+def upstream_files(row, sources):
+    """Tor's own bytes for a row that carries `upstream`.
+
+    Each `upstream` file is read from the digest-checked tarball and checked
+    against its own pin.
+    """
+    tarball = sources / tarball_name(row)
+    if not tarball.is_file():
+        raise Refused(
+            f"{tarball} is not in the sources cache; the tie reads Tor's bytes from it"
+        )
+    check_tarball(tarball, row)
+    with open_tarball(tarball) as tar:
+        return bundle_members(tar, tarball.name, row["upstream"], "upstream pin")
+
+
+def read_bundle(tarball, row):
+    """One open of `tarball`. Returns `(shipped, upstream, texts)`.
+
+    `shipped` is the bytes to pack, or None when the row carries `upstream`
+    (those bytes come from the signed cache). `upstream` is Tor's then, and
+    None otherwise. `texts` is the licence texts, each `(file name, bytes)`.
+    A Windows executable is checked against the row's import list on the bytes
+    about to be packed.
+    """
+    with open_tarball(tarball) as tar:
+        texts = [
+            (Path(member).name, read_member(tar, member)) for member in row["licenses"]
+        ]
+        if carries_upstream(row):
+            upstream = bundle_members(tar, tarball.name, row["upstream"], "upstream pin")
+            return None, upstream, texts
+        shipped_map = bundle_members(tar, tarball.name, row["files"], "pin")
+        if row["os"] == "windows":
+            executable = row["executable"]
+            for name, data in shipped_map.items():
+                if file_identity(row["os"], name) == file_identity(row["os"], executable):
+                    check_imports(data, f"{name} in {tarball.name}", row)
+        shipped = [(entry["name"], shipped_map[entry["name"]]) for entry in row["files"]]
+        return shipped, None, texts
 
 
 def check_tie(directory, row, upstream):
@@ -813,8 +715,12 @@ def check_directory(directory, row):
 
 
 def signed_files(row, signed):
-    """macOS: the signed files from `signed`, which holds exactly the pinned
-    names, each checked against its shipped pin."""
+    """The signed files from the sources cache.
+
+    `signed` holds exactly the pinned names, each checked against its shipped
+    pin. An extra name is a refusal: `fetch` checks the names it was asked
+    for, and this is the check that the directory holds nothing else.
+    """
     if not signed.is_dir():
         raise Refused(f"{signed} is not a directory")
     pinned = {entry["name"]: entry["sha256"] for entry in row["files"]}
@@ -834,13 +740,16 @@ def signed_files(row, signed):
     return out
 
 
-def stage(doc, row, sources, dest, licenses, offline=False, signed=None):
-    if signed is not None and row["os"] != "macos":
-        raise Refused(f"--signed is for a macOS host; {row['gitian_host']} ships Tor's files as they are")
-    tarball = fetch(doc, row, sources, offline=offline)
-    # `fetch` checked a tarball it found or downloaded; the digest is read
-    # again from the file this function is about to open, so the check and
-    # the extraction are of one file whatever `fetch` did.
+def stage(doc, row, sources, dest, licenses, offline=False):
+    """Write the pinned files and the licence texts.
+
+    A row that carries `upstream` packs the signed files from the sources
+    cache `fetch` filled, and from nowhere else. The tarball is opened once.
+    """
+    tarball, signed = fetch(doc, row, sources, offline=offline)
+    # `fetch` checked a file it found or downloaded. The digest is read again
+    # from the file this function is about to open, so the check and the
+    # extraction are of one file whatever `fetch` did.
     check_tarball(tarball, row)
 
     for directory in (dest, licenses):
@@ -854,26 +763,16 @@ def stage(doc, row, sources, dest, licenses, offline=False, signed=None):
 
     # Read and check everything first, write second: a file that fails its pin
     # leaves nothing behind for a later step to pack.
-    try:
-        archive = tarfile.open(tarball, "r:gz")
-    except (tarfile.TarError, OSError) as exc:
-        raise Refused(f"{tarball} could not be opened as a tarball: {exc}") from exc
-    with archive as tar:
-        staged = []
-        texts = [(Path(member).name, read_member(tar, member)) for member in row["licenses"]]
-    if row["os"] == "macos":
-        upstream = upstream_files(doc, row, sources)
-        if signed is None:
-            signed = fetch_signed(doc, row, sources, offline=offline)
+    shipped, upstream, texts = read_bundle(tarball, row)
+    if signed is not None:
+        shipped = []
         for name, data in signed_files(row, signed).items():
             check_signature_tie(upstream[name], data, f"{name} in {signed}")
-            staged.append((name, data))
-    else:
-        staged = staged_from_tarball(tarball, row)
+            shipped.append((name, data))
 
     dest.mkdir(parents=True, exist_ok=True)
     licenses.mkdir(parents=True, exist_ok=True)
-    for name, data in staged:
+    for name, data in shipped:
         out = dest / name
         out.write_bytes(data)
         out.chmod(0o755 if name == row["executable"] else 0o644)
@@ -888,28 +787,31 @@ def stage(doc, row, sources, dest, licenses, offline=False, signed=None):
     check_directory(dest, row)
 
 
-def staged_from_tarball(tarball, row):
-    """Linux and Windows: the pinned files, as Tor ships them."""
-    staged = []
-    with tarfile.open(tarball, "r:gz") as tar:
-        for entry in row["files"]:
-            data = read_member(tar, f"{BUNDLE_TOR_DIR}/{entry['name']}")
-            actual = hashlib.sha256(data).hexdigest()
-            if actual != entry["sha256"]:
-                raise Refused(
-                    f"{entry['name']} in {tarball.name} does not match its pin: "
-                    f"expected sha256 {entry['sha256']}, found {actual}"
-                )
-            if row["os"] == "windows" and file_identity(
-                row["os"], entry["name"]
-            ) == file_identity(row["os"], row["executable"]):
-                check_imports(data, f"{entry['name']} in {tarball.name}", row)
-            staged.append((entry["name"], data))
-    return staged
+def verify_bundle(row, directory, sources):
+    """The daemon's directory rule, and the cached tarball when one is given.
+
+    `--sources` re-checks that tarball on every host. A row that carries
+    `upstream` requires the cache, and ties each staged file to Tor's bytes.
+    """
+    check_directory(directory, row)
+    if sources is not None:
+        tarball = sources / tarball_name(row)
+        if not tarball.is_file():
+            raise Refused(
+                f"{tarball} is not in the sources cache; verify was given --sources"
+            )
+        check_tarball(tarball, row)
+    if carries_upstream(row):
+        if sources is None:
+            raise Refused(
+                f"{row['gitian_host']} ships signed files; verify needs --sources "
+                "to tie them to Tor's tarball"
+            )
+        check_tie(directory, row, upstream_files(row, sources))
 
 
 def tie_report(tarball, signed):
-    """Pin time, macOS: tie each signed file to Tor's file of the same name in
+    """Pin time: tie each signed file to Tor's file of the same name in
     `tarball` and return the row's `files` and `upstream` lists."""
     if not signed.is_dir():
         raise Refused(f"{signed} is not a directory")
@@ -917,11 +819,7 @@ def tie_report(tarball, signed):
     if not names:
         raise Refused(f"{signed} is empty")
     files, upstream = [], []
-    try:
-        archive = tarfile.open(tarball, "r:gz")
-    except (tarfile.TarError, OSError) as exc:
-        raise Refused(f"{tarball} could not be opened as a tarball: {exc}") from exc
-    with archive as tar:
+    with open_tarball(tarball) as tar:
         for name in names:
             original = read_member(tar, f"{BUNDLE_TOR_DIR}/{name}")
             data = (signed / name).read_bytes()
@@ -957,12 +855,15 @@ def main(argv=None):
     cmd.add_argument(
         "--no-fetch",
         action="store_true",
-        help="refuse if --sources lacks the tarball instead of downloading it",
+        help="refuse if --sources lacks a pinned input instead of downloading it",
     )
-    cmd.add_argument("--signed", type=Path, help="macOS: the signing step's output")
     cmd = with_host("verify")
     cmd.add_argument("--dir", type=Path, required=True, help="tor's directory")
-    cmd.add_argument("--sources", type=Path, help="macOS: where the pinned tarball is")
+    cmd.add_argument(
+        "--sources",
+        type=Path,
+        help="the sources cache: re-check its tarball, and tie a row that carries upstream",
+    )
     cmd = sub.add_parser("tie")
     cmd.add_argument("--tarball", type=Path, required=True, help="the signature-checked Expert Bundle")
     cmd.add_argument("--signed", type=Path, required=True, help="the signed files")
@@ -1000,34 +901,23 @@ def main(argv=None):
                 if row["disposition"] != "pinned":
                     print(f"{row['gitian_host']}: unavailable ({row['reason']}); nothing to fetch")
                     continue
-                print(f"{row['gitian_host']}: {fetch(doc, row, args.sources)}")
-                if row["os"] == "macos":
-                    print(f"{row['gitian_host']}: {fetch_signed(doc, row, args.sources)}")
+                tarball, signed_dir = fetch(doc, row, args.sources)
+                print(f"{row['gitian_host']}: {tarball}")
+                if signed_dir is not None:
+                    print(f"{row['gitian_host']}: {signed_dir}")
         elif args.command == "stage":
             row = row_for_host(doc, args.host)
             if row["disposition"] != "pinned":
                 print(f"{args.host}: unavailable ({row['reason']}); nothing staged")
                 return 0
-            stage(
-                doc, row, args.sources, args.dest, args.licenses,
-                offline=args.no_fetch, signed=args.signed,
-            )
+            stage(doc, row, args.sources, args.dest, args.licenses, offline=args.no_fetch)
             print(
                 f"{args.host}: staged tor {row['tor_version']} "
                 f"(bundle {row['bundle_version']}) into {args.dest}"
             )
         elif args.command == "verify":
             row = pinned_row(doc, args.host)
-            check_directory(args.dir, row)
-            if row["os"] == "macos":
-                if args.sources is None:
-                    raise Refused(
-                        f"{args.host} ships signed files; verify needs --sources to tie them "
-                        "to Tor's tarball"
-                    )
-                check_tie(args.dir, row, upstream_files(doc, row, args.sources))
-            elif args.sources is not None:
-                raise Refused(f"--sources is for a macOS host; {args.host} ships Tor's files as they are")
+            verify_bundle(row, args.dir, args.sources)
             print(f"{args.host}: {args.dir} holds exactly the pinned bundle")
     except Refused as exc:
         print(f"tor_bundle: REFUSED: {exc}", file=sys.stderr)

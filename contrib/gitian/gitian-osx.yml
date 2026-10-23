@@ -136,7 +136,9 @@ script: |
     # fetched them into the sources cache from the release asset, each checked
     # against its pinned shipped digest. stage takes them from there, and stage
     # and verify both prove every byte outside the signature is Tor's, read
-    # from the digest-checked tarball. Nothing is signed here.
+    # from the digest-checked tarball. verify re-checks the staged directory
+    # and the cached tarball on every host; a row that carries upstream also
+    # ties each staged file to Tor's bytes. Nothing is signed here.
     #
     # Each step's status stops the descriptor on its own (no errexit here), and
     # --no-fetch makes a cache miss a refusal, so this step cannot go online.
