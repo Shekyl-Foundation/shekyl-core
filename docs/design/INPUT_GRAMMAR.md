@@ -165,7 +165,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | mine | — | the daemon's miner and its control | |
 | address | mine, make, — | a Shekyl address (the payment meaning; never a network location); bare, *view* — the wallet's primary address | —:view |
 | threads | mine | a thread count | |
-| rpc | —, wallet | an RPC service's listeners: the daemon's, or the wallet's (`shekyl-wallet-rpc`, and `wallet-rpc-*` in `shekyl-cli`) | |
+| rpc | —, wallet, dev | an RPC service's listeners: the daemon's, or the wallet's (`shekyl-wallet-rpc`, and `wallet-rpc-*` in `shekyl-cli`); under `dev`, the armed test levers it serves (RT-O9.2, IG-Q49) | |
 | view | rpc | the `view` preset, a fixed set of grants (RPC_CHANNEL §6.1) | |
 | admin | rpc | the `admin` preset, every grant (RPC_CHANNEL §6.1) | |
 | cors | rpc | cross-origin resource sharing | |
