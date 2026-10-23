@@ -108,6 +108,23 @@ blockchain from peers. The default locations are:
 - **macOS:** `~/.shekyl/`
 - **Windows:** `%LOCALAPPDATA%\Shekyl\` (the per-account root; a service install uses `%ProgramData%\shekyl\`)
 
+To check a configuration without starting, add `--config-verify` to the
+command you would start with, run as the account that will run the daemon:
+
+```bash
+./shekyld --network testnet --config-verify
+```
+
+It reads the configuration file and every flag exactly as a start would,
+checks that the account could create the data directory and the log file,
+reads the network marker, judges the development levers and the managed
+Tor's pin, and exits: 0 when a start would accept, with the account
+checked and the effective configuration on standard output; 2 when a
+start would refuse, with the same typed refusals on standard error. It
+creates nothing, takes no lock and joins no network, so it can run while
+the daemon is up. A port already in use and Tor's bootstrap are outside
+its verdict.
+
 Initial sync takes several hours depending on your hardware and network. You
 will see log lines showing block height, download rate, and verification
 progress. Let it run until you see "SYNCHRONIZED OK" in the output.
@@ -272,6 +289,7 @@ whether `option_set` changes it while the daemon runs.
 |--------|------|---------|-------|---------|-------------|
 | `help` | switch | — | command line | no | Print the options and exit. |
 | `version` | switch | — | command line | no | Print the version and the operating system, and exit. |
+| `config-verify` | switch | — | command line | no | Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own. |
 | `network` | `mainnet` / `testnet` / `stagenet` / `regtest` | `mainnet` | command line | no | The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file. |
 | `config-file` | absolute path | /etc/shekyl/shekyld-<network>.toml on Linux, FreeBSD and macOS; the daemon's root and shekyld-<network>.toml on Windows | command line | no | The configuration file. A missing file at the default path means the defaults; a missing file at a named path is refused. |
 | `data-dir` | absolute path | the daemon's root and the network's subdirectory | both | no | The data directory. An explicit path is used as given. |

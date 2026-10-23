@@ -144,6 +144,7 @@ const ROWS: &[Row] = &[
     // Network, paths, logging
     public("help", Kind::Switch, Default::Unset, Surface::Cli, "Print the options and exit."),
     public("version", Kind::Switch, Default::Unset, Surface::Cli, "Print the version and the operating system, and exit."),
+    public("config-verify", Kind::Switch, Default::Unset, Surface::Cli, "Check the configuration as a start would and exit without starting: nothing is created, no lock is taken and no network is joined. Prints the account checked and the effective configuration; a refusal is start's own."),
     public("network", Kind::OneOf(NETWORKS), Default::Value("mainnet"), Surface::Cli, "The network to run: mainnet, testnet, stagenet or regtest. Chooses the configuration file."),
     Row {
         name: "service",
@@ -360,12 +361,12 @@ mod tests {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
     }
 
-    /// `INPUT_GRAMMAR.md` §5 counts 48 live names, the four levers among
+    /// `INPUT_GRAMMAR.md` §5 counts 49 live names, the four levers among
     /// them. A row added or removed without the grammar fails here first.
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 48);
+        assert_eq!(live, 49);
         let levers = TABLE
             .rows
             .iter()
@@ -424,7 +425,14 @@ mod tests {
                 assert_eq!(r.surface, Surface::File, "{}", r.name);
             }
         }
-        for name in ["help", "version", "network", "config-file", "console"] {
+        for name in [
+            "help",
+            "version",
+            "config-verify",
+            "network",
+            "config-file",
+            "console",
+        ] {
             assert_eq!(TABLE.row(name).unwrap().surface, Surface::Cli, "{name}");
         }
     }

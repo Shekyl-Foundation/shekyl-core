@@ -303,12 +303,36 @@ pub fn arm_settlement_schedule(
     blocks: Option<u64>,
     reorg_cap: Option<u64>,
 ) -> Result<u64, SettlementScheduleRefusal> {
+    shekyl_archival_retention::arm_settlement_epoch_override(blocks, reorg_cap)
+        .map_err(|e| in_the_rows_terms(&e))
+}
+
+/// The settlement epoch length the daemon's `dev-` rows name, or the
+/// row's refusal, with nothing latched: the configuration check's half
+/// (`INPUT_GRAMMAR.md` IG-Q59). [`arm_settlement_schedule`] judges by the
+/// same check before it latches.
+///
+/// # Errors
+/// [`SettlementScheduleRefusal::Epoch`] and
+/// [`SettlementScheduleRefusal::Reorg`]; never `Latched`.
+pub fn check_settlement_schedule(
+    blocks: Option<u64>,
+    reorg_cap: Option<u64>,
+) -> Result<u64, SettlementScheduleRefusal> {
+    shekyl_archival_retention::check_settlement_epoch_override(blocks, reorg_cap)
+        .map(|(target, _)| target)
+        .map_err(|e| in_the_rows_terms(&e))
+}
+
+/// The rule in the row's terms. The error's own text names the
+/// environment variables the wallet engine still reads; this mapping
+/// does not.
+fn in_the_rows_terms(
+    e: &shekyl_archival_retention::SettlementEpochOverrideError,
+) -> SettlementScheduleRefusal {
     use shekyl_archival_retention::SettlementEpochOverrideError as E;
     use shekyl_archival_retention::{ARCHIVAL_REORG_DEPTH_BLOCKS, SETTLEMENT_EPOCH_BLOCKS};
-    // The rule in the row's terms. The error's own text names the
-    // environment variables the wallet engine still reads; this mapping
-    // does not.
-    shekyl_archival_retention::arm_settlement_epoch_override(blocks, reorg_cap).map_err(|e| match e {
+    match e {
         E::Invalid {
             floor, reorg_cap, ..
         } => SettlementScheduleRefusal::Epoch(format!(
@@ -320,7 +344,7 @@ pub fn arm_settlement_schedule(
         E::ArmedTooLate { latched } => SettlementScheduleRefusal::Latched(format!(
             "the settlement schedule had already latched at {latched} blocks before the daemon recorded the row"
         )),
-    })
+    }
 }
 
 /// Returns `1` and writes the settlement epoch whose close is processed at
@@ -698,7 +722,7 @@ pub struct ShekylArchivalEmissionEpochSnapshot {
 
 #[cfg(test)]
 mod arm_tests {
-    use super::arm_settlement_schedule;
+    use super::{arm_settlement_schedule, check_settlement_schedule};
 
     /// The daemon's refusal names the row's rule, not an environment
     /// variable. The latch is process-wide, so this test arms nothing
@@ -721,6 +745,25 @@ mod arm_tests {
             e.rule().starts_with("an integer from 1 to "),
             "{}",
             e.rule()
+        );
+    }
+
+    /// The configuration check's half: the same refusals in the same
+    /// terms, and a valid pair is a value, never a latch, however many
+    /// times it is asked and whatever this process latched.
+    #[test]
+    fn the_check_refuses_as_the_arm_does_and_latches_nothing() {
+        let a = arm_settlement_schedule(Some(40), None).unwrap_err();
+        let c = check_settlement_schedule(Some(40), None).unwrap_err();
+        assert_eq!(a, c);
+        let a = arm_settlement_schedule(None, Some(0)).unwrap_err();
+        let c = check_settlement_schedule(None, Some(0)).unwrap_err();
+        assert_eq!(a, c);
+        assert_eq!(check_settlement_schedule(Some(800), Some(10)), Ok(800));
+        assert_eq!(check_settlement_schedule(Some(900), Some(10)), Ok(900));
+        assert_eq!(
+            check_settlement_schedule(None, None),
+            Ok(shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS)
         );
     }
 }

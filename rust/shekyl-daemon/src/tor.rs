@@ -63,6 +63,39 @@ impl Supervisor {
     }
 }
 
+/// The pin half of a managed Tor's start, read for the configuration check
+/// (`INPUT_GRAMMAR.md` IG-Q59): the binary is discovered and verified, and
+/// not started. `None` when the pin is accepted. Otherwise the warning, in
+/// the posture table's words (`TOR_SUPERVISOR.md`), because under TB-2 a
+/// pin that fails is announced and the daemon starts all the same; the
+/// supervisor, once it runs, maps the same errors to the same causes.
+#[must_use]
+pub fn pin_warning(binary: Option<&Path>) -> Option<String> {
+    let verified = match binary {
+        Some(path) => discover_and_verify_at(path),
+        None => discover_and_verify(),
+    };
+    let (cause, detail) = match verified {
+        Ok(_) => return None,
+        Err(shekyl_tor_control_daemon::TorBinaryError::NotFound) => {
+            ("No Tor was found beside the daemon.", None)
+        }
+        Err(error @ shekyl_tor_control_daemon::TorBinaryError::Unavailable { .. }) => (
+            "This release has no Tor for this platform yet.",
+            Some(error.to_string()),
+        ),
+        Err(error) => (
+            "The Tor that was found failed its check, so it will not be started.",
+            Some(error.to_string()),
+        ),
+    };
+    let detail = detail.map_or_else(String::new, |d| format!(" ({d})"));
+    Some(format!(
+        "warning: managed Tor: {cause}{detail} The daemon starts without it, syncing over \
+         clearnet when clearnet is on, and holds its own transactions until Tor is usable."
+    ))
+}
+
 /// Start the supervisor when Tor is managed. Any other posture returns `None`.
 #[must_use]
 pub fn begin(

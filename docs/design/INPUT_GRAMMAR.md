@@ -93,7 +93,7 @@ The gate walks every live and reserved name and every command in every binary's 
 
 A row narrows its kind with a constraint stated in the row and enforced by its constructor (a range, "global unicast only", "onion only"). A row may admit named keywords from the closed keyword set alongside its kind (`unlimited`, `auto`, `stdin`); paths are absolute, so a keyword never collides with a file. A row with no default is *unset* when not given, and the row states what unset means; there are no sentinel values. There are no floating-point values anywhere in the grammar.
 
-**IG-7 Surfaces.** Each row says where it may be given. Command-line only: `help`, `version`, `network`, `config-file`, `service` (each selects which file is read, so a key in that file could only restate or contradict it). File only: every secret and every command value. Everything else: both, CLI winning per key.
+**IG-7 Surfaces.** Each row says where it may be given. Command-line only: `help`, `version`, `network`, `config-file`, `service` (each selects which file is read, so a key in that file could only restate or contradict it) and `config-verify` (a key in the file would make every start a check). File only: every secret and every command value. Everything else: both, CLI winning per key.
 
 **IG-8 Development levers.** A `dev-` option is hidden from help and generated docs, names the networks it is accepted on as data in its row (a `dev-` option given on any other network is refused at parse, rule 71), and is announced at every start when set. It follows every other rule. **No `dev-` option is ever accepted on mainnet**: a lever mainnet genuinely needs is not a development lever and gets a public row.
 
@@ -215,6 +215,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 |---|---|---|---|---|---|---|---|
 | `help` | `help` | switch | | CLI |  |  | K |
 | `version` | `version` | switch | | CLI |  |  | K; prints the OS line too |
+| — | `config-verify` | switch | off | CLI |  |  | N (IG-Q58, IG-Q59): the configuration check. `shekyld` runs start's walk (`load`, then every refusal start makes before it creates anything) with nothing created, locked or latched, prints the account checked and the effective configuration, and exits 0, 2 or 1 as start would (IG-Q61, IG-Q62). `rust/shekyl-daemon/src/run.rs`, `walk` |
 | `os-version` | — | | | |  |  | R into `version` |
 | `testnet`, `stagenet`, `regtest` | `network` | one-of | `mainnet` | CLI |  |  | R |
 | — | `service` | switch | off | CLI |  |  | N (IG-Q36, IG-Q37); visibility `reserved` (IG-9, IG-10) until RT-W14 builds the SCM dispatcher: not accepted, and its refusal names RT-W14. Live: `shekyld` answers the platform's service manager ([`RPC_CHANNEL.md`](RPC_CHANNEL.md) RT-16); accepted only where RT-16 defines it (Windows), refused elsewhere with a typed code; selects the daemon's root (IG-13) |
@@ -325,7 +326,7 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
 
-**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`; 48 live names after, the four levers among them (unchanged at RT-W10: `rpc-listen` arrives and `rpc-admin-listen` becomes an X row).
+**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`; 49 live names after (`config-verify` among them, Part D), the four levers among them (unchanged at RT-W10: `rpc-listen` arrives and `rpc-admin-listen` becomes an X row).
 
 ---
 
@@ -442,7 +443,7 @@ Rows below add to §3; a term already in §3 is not repeated (its Part B parents
 | prove | — | make a proof | |
 | check | — | check a proof | |
 | sign | — | *verb* — sign a message with the wallet key | —:verb |
-| verify | —, genesis | *verb* — check a claim against its source: a message signature, or under `genesis` every network rebuilt against the pins | —:verb, genesis:verb |
+| verify | —, genesis, config | *verb* — check a claim against its source: a message signature, under `genesis` every network rebuilt against the pins, or under `config` the configuration against the table and the paths it names (IG-Q58) | —:verb, genesis:verb, config:verb |
 | send | — | *verb* — send money | —:verb |
 | fee | — | *view* — a fee quote | —:view |
 | balance | —, stake | *view* — a balance breakdown | —:view, stake:view |
@@ -1197,7 +1198,7 @@ Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #10
 
 ## 21. Part D — checking a configuration, and the file an install ships
 
-**RULED 2026-10-22 (Rick): IG-Q58…IG-Q65 as recommended, with the IG-Q64 package-header amendment (#1157).** Posed 2026-10-19, amended 2026-10-20 on review of PR #1129. Ground: `dev` `c9eb84017`. Two needs from the alpha.10 fleet, both given to this lane by Rick on 2026-10-19:
+**RULED 2026-10-22 (Rick): IG-Q58…IG-Q65 as recommended, with the IG-Q64 package-header amendment (#1157).** The check (IG-Q58…IG-Q62) is built: `config-verify` and the walk in `rust/shekyl-daemon/src/run.rs`, the creatability and read halves in `shekyl-daemon-config` (`lock.rs`, `marker.rs`, `sections/mod.rs`, `probe.rs`), the pure owner checks in `shekyl-ffi` and `shekyl-archival-retention`; IG-F15 is closed by it. IG-Q63 lands with each wallet binary's file loader (FOLLOWUPS); IG-Q64's packaging is the release lane's. Posed 2026-10-19, amended 2026-10-20 on review of PR #1129. Ground: `dev` `c9eb84017`. Two needs from the alpha.10 fleet, both given to this lane by Rick on 2026-10-19:
 - **Check without starting.** Deploy tooling must validate a configuration without starting the daemon. Starting it joins the network. Running it in an unprivileged network namespace does not help: the config file's permission walk sees the real root as uid 65534 and refuses. Today the fleet validates through a harness outside the tree (`shekyl-dev` `scripts/seed/check_config.rs`), which calls the daemon config crate's `read_cli`, `read_file`, `resolve` and `build`, skips the permission walk, and hardcodes a home directory.
 - **A file on install.** An installation should leave a configuration file with comments, so an operator can see what can be set and change it without reading the source.
 
@@ -1213,7 +1214,7 @@ Three consequences amend RT-O23's wire (`RPC_CHANNEL.md` §6.4), landed with #10
 - **IG-F12 — the shipped unit's account is created by nothing.** `contrib/packaging/linux/shekyld.service` runs as `User=shekyl`; `deb-after-install.sh` only reloads systemd, so on a fresh install the unit cannot start.
 - **IG-F13 — no installer creates the daemon's directories.** `/etc/shekyl/` (R2) and, on Windows, `%ProgramData%\shekyl\` (IG-13, IG-Q36: "only the installer creates" it) are created by no package today.
 - **IG-F14 — the user guide's Windows root — CLOSED in this part.** At the ground, `docs/USER_GUIDE.md` names `C:\ProgramData\shekyl\` for a first run, where a run-as-user daemon uses the per-account `LocalAppData\Shekyl` (IG-13, `paths.rs`). The guide now names that root; a service install uses `%ProgramData%\shekyl\`.
-- **IG-F15 — the path checks create what they test.** `Lock::take` creates the data directory and the lock file. `log_location_writable` creates the log directory and the file. `marker::check_or_write` writes the marker when the directory is fresh. A check that calls them changes the machine.
+- **IG-F15 — the path checks create what they test — CLOSED in this part.** At the ground, `Lock::take` created the data directory and the lock file, `log_location_writable` the log directory and the file, and `marker::check_or_write` wrote the marker when the directory was fresh, so a check that called them changed the machine. Each now asks first and creates after: `Lock::creatable`, `log_location_creatable` and `marker::read` are the questions, asked by the check and by the effect.
 - **IG-F16 — the shipped unit runs mainnet only.** `contrib/packaging/linux/shekyld.service`'s `ExecStart` passes no `--network` (IG-F10 recorded that default). The package runs mainnet and reads `/etc/shekyl/shekyld-mainnet.toml`; testnet, the network every alpha release runs, needs an operator's own unit. The unit does pass `--data-dir /var/lib/shekyl` and `--log-file /var/log/shekyl/shekyld.log`, equal to its `StateDirectory`, `LogsDirectory` and `ReadWritePaths`, with `ProtectHome=true`.
 
 ## 22. Questions for Part D

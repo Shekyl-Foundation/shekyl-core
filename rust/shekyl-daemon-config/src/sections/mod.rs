@@ -281,6 +281,9 @@ pub struct Dev {
 pub struct Session {
     /// Run the interactive console.
     pub console: bool,
+    /// Check the configuration as a start would and exit without starting
+    /// (`config-verify`, IG-Q58).
+    pub verify: bool,
     /// The positional words: a client-mode command, empty for a daemon
     /// start.
     pub command: Vec<String>,
@@ -649,6 +652,7 @@ fn session_section(r: &mut Reader<'_>, admin_listen: &[SocketAddr]) -> Session {
     };
     Session {
         console: r.switch("console"),
+        verify: r.switch("config-verify"),
         command,
         client_endpoint,
     }
@@ -662,25 +666,43 @@ fn notify_section(r: &mut Reader<'_>) -> Notify {
     }
 }
 
-/// Refuses if the log file's directory cannot be created or the file
-/// cannot be opened for appending (`config.log.unwritable`).
+/// Whether the account could create the log file's directory and open the
+/// file for appending, asked without creating or opening (IG-Q59,
+/// IG-F15): the configuration check's half, and the question
+/// [`log_location_writable`] asks before it creates.
 ///
 /// # Errors
-/// The typed refusal, naming the path and the error.
-pub fn log_location_writable(file: &Path) -> Result<(), Diagnostic> {
-    let fail = |error: std::io::Error| {
+/// `config.log.unwritable`, as `log_location_writable` would refuse.
+pub fn log_location_creatable(file: &Path) -> Result<(), Diagnostic> {
+    crate::probe::file_openable(file, crate::probe::Need::Write).map_err(log_unwritable(file))
+}
+
+fn log_unwritable(file: &Path) -> impl Fn(std::io::Error) -> Diagnostic + '_ {
+    move |error: std::io::Error| {
         Diagnostic::new(Code::LogUnwritable, Source::Machine)
             .option("log-file")
             .param("path", file.display().to_string())
             .param("error", error.to_string())
-    };
+    }
+}
+
+/// Refuses if the log file's directory cannot be created or the file
+/// cannot be opened for appending (`config.log.unwritable`).
+/// [`log_location_creatable`] is asked first, so the decision is written
+/// once.
+///
+/// # Errors
+/// The typed refusal, naming the path and the error.
+pub fn log_location_writable(file: &Path) -> Result<(), Diagnostic> {
+    log_location_creatable(file)?;
+    let fail = log_unwritable(file);
     if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir).map_err(fail)?;
+        std::fs::create_dir_all(dir).map_err(&fail)?;
     }
     std::fs::OpenOptions::new()
         .append(true)
         .create(true)
         .open(file)
         .map(|_| ())
-        .map_err(fail)
+        .map_err(&fail)
 }
