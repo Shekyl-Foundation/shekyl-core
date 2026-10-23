@@ -40,7 +40,9 @@
 //!  9. archival     archival_budget_accruing[E] upserted, or removed at E's
 //!                  close (SI-23); slash log + applied + watermark (SI-22);
 //!                  r_market / sigma_work / budget at a close (SI-21) —
-//!                  `archival_write.rs`, DRS-E4
+//!                  `archival_write.rs`, DRS-E4. When this connect was handed
+//!                  bundles, the admission plan is journaled here, before
+//!                  the seal (`admission_write.rs`, SI-36)
 //! 10. journal      undo_log[h] (SI-6)
 //! ```
 //!
@@ -84,7 +86,7 @@
 //! cardinality: a second bucket, or a hole compensated by a foreign row,
 //! is SI-9, never a verdict.
 
-use shekyl_chain_rules::{ChainValid, RuleSet, TxIdentity};
+use shekyl_chain_rules::{Admitted, ChainValid, DrawableMemo, RuleSet, TxIdentity};
 use shekyl_types::{
     ArchivalLength, BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey, OutputIndexInTx,
 };
@@ -104,6 +106,7 @@ use crate::schema::{
     TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
+use super::bundle_view::StoreBundleView;
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::header;
 use super::keyed::KeyedTable;
@@ -170,14 +173,35 @@ impl<'id> WriteBatch<'_, 'id> {
     /// SI-1 (key image), SI-4 (root), SI-8 (`total_burned` overflow) — each
     /// [`StoreError::InvariantViolated`] and each poisoning the batch;
     /// engine errors.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "the verdict is a one-shot token: connect takes it by value so a connected block cannot be connected again from the same ChainValid"
-    )]
     pub fn connect(
         &self,
         valid: ChainValid<'id, BatchView<'_, 'id>>,
         in_force: RuleSet,
+    ) -> Result<Connected, StoreError> {
+        self.connect_admitting(valid, in_force, None)
+    }
+
+    /// [`connect`](Self::connect), then the block's admitted bundles.
+    ///
+    /// `admitted` is the memo the count phase filed and the verifier's
+    /// [`Admitted`] values. This method does not call the verifier. The
+    /// view is built here, at the height being connected, so the plan and
+    /// the journal name one height. The writes land before the journal
+    /// seals, so `pop` of the block removes them with it. `issued_short`
+    /// counts only draws of the epoch of that height.
+    ///
+    /// # Errors
+    ///
+    /// [`connect`](Self::connect)'s, and the admission writer's.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the verdict is a one-shot token: connect takes it by value so a connected block cannot be connected again from the same ChainValid"
+    )]
+    pub fn connect_admitting(
+        &self,
+        valid: ChainValid<'id, BatchView<'_, 'id>>,
+        in_force: RuleSet,
+        admitted: Option<(&DrawableMemo, &[Admitted])>,
     ) -> Result<Connected, StoreError> {
         // ---- 1. belts -------------------------------------------------
         // The connecting height is known from the tip's key alone and is
@@ -375,6 +399,20 @@ impl<'id> WriteBatch<'_, 'id> {
 
         // ---- 9. accrual row, slash, epoch close (`archival_write.rs`) ---
         self.record_archival_epoch(BlockHeight::from_raw(height), &valid)?;
+        if let Some((memo, bundles)) = admitted {
+            // The connecting height was noted before this block's row
+            // landed. `chain_view` notes `tip + 1`, and the tip is now this
+            // block, so that note would halt a later fault at the next
+            // height. The view is the batch, and it does not re-note.
+            let chain = BatchView::new(self);
+            let view = StoreBundleView::new(
+                &chain,
+                memo,
+                BlockHeight::from_raw(height),
+                in_force.settlement_schedule(),
+            );
+            self.write_admissions(&view, bundles)?;
+        }
 
         // ---- 10. journal -----------------------------------------------
         let journaled = recording.seal()?;

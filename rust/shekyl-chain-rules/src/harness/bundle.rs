@@ -89,7 +89,7 @@ pub struct FixtureBundleView {
     /// `count(h)`. A height with no entry has no draw state.
     pub counts: BTreeMap<BlockHeight, u32>,
     /// Each block's `0x0C`.
-    pub commitments: BTreeMap<BlockHeight, [u8; 32]>,
+    pub commitments: BTreeMap<BlockHeight, shekyl_types::archival::DrawCommitment>,
     /// The `(h, index)` at which a pair is visibly short.
     pub short: BTreeSet<(BlockHeight, u64)>,
     /// The blocks whose bundle is already admitted.
@@ -161,7 +161,10 @@ impl BundleView for FixtureBundleView {
         Ok(self.counts.get(&h).copied())
     }
 
-    fn draw_commitment(&self, h: BlockHeight) -> Result<Option<[u8; 32]>, BundleReadFaulted> {
+    fn draw_commitment(
+        &self,
+        h: BlockHeight,
+    ) -> Result<Option<shekyl_types::archival::DrawCommitment>, BundleReadFaulted> {
         self.read(BundleRead::DrawCommitment)?;
         Ok(self.commitments.get(&h).copied())
     }
@@ -299,8 +302,13 @@ impl BundleWorld {
             ..FixtureBundleView::default()
         };
         view.counts.insert(h, count);
-        view.commitments
-            .insert(h, draw_commit(&witness_public_key, &seed));
+        view.commitments.insert(
+            h,
+            shekyl_types::archival::DrawCommitment::from_bytes(draw_commit(
+                &witness_public_key,
+                &seed,
+            )),
+        );
         view.drawable_epochs.insert(epoch, drawable);
 
         Self {

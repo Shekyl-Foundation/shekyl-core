@@ -26,8 +26,8 @@
 //!   [`BundleView`]: the window, one bundle per `h`, the bitmap and the
 //!   record count, the `0x0C` opening, the witness signature, every draw's
 //!   pair, and every record's receipt. It returns [`Admitted`]: the kept
-//!   projection and every derived draw, which is all the writer needs
-//!   (`SCS-P37`).
+//!   projection and every derived draw, which is all
+//!   [`admission_plan`](crate::admission_plan) needs (`SCS-P37`).
 //!
 //! All three are pure. None names a store type, and none writes.
 //!
@@ -35,18 +35,19 @@
 //!
 //! Rule `23-disposition-visibility`: staged work is code with a named consumer in a live plan.
 //!
-//! - **What is here:** the three functions, their refusal types, the view
-//!   trait, and their tests against a fixture view (`harness::bundle`).
-//! - **What is not:** `form` and `validate` do not call them; no `Rule`
-//!   type binds them; nothing implements [`BundleView`], on a store or
-//!   over [`crate::ChainView`]. A block that carries a bundle section is
-//!   not judged by this module today.
-//! - **Who calls it, and when:** `SO-D12`'s cutover increment
-//!   (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §16; `SCS-P31`): it implements [`BundleView`] on its store, calls
-//!   [`check_section`] and [`verify_bundle`] at admission from a block
-//!   rule, writes what [`Admitted`] carries, and deletes the attestation
-//!   path (CEN-B4). [`check_section`] takes that view, the block's height
-//!   and its rule set; the cap is the section's. DRS-E5 is transport
+//! - **What is here:** the verifier, [`judge_bundles`], the view trait, the
+//!   fixture, and the unbound rule types `rules::bundle_admission::J29`
+//!   through `J37`. Increment 4a also implements the view on the store
+//!   (`shekyl-chain-store`'s `StoreBundleView`, the batch view plus the
+//!   drawable memo). The census rows stay `pending`.
+//! - **What is not:** `form` and `validate` do not call them. The rule
+//!   types are not bound. A block that carries a bundle section is not
+//!   judged by this module today.
+//! - **Who calls it, and when:** increment 4b, after the DRS-X flip
+//!   (`docs/design/ARCHIVAL_SETTLEMENT_WRITER.md` §16; `SCS-P31`): it calls
+//!   [`judge_bundles`] from `validate`, binds the rows, and deletes the
+//!   attestation path (CEN-B4). [`check_section`] takes that view, the
+//!   block's height and its rule set; the cap is the section's. DRS-E5 is transport
 //!   (`docs/design/DRS_E5_POOL_ALT_PRUNE.md` §2.2, §2.3). Its alternative
 //!   tier has landed ([`crate::alt_against`]) and does not call this
 //!   module: an alternative block's row still carries the attestation
@@ -103,13 +104,13 @@
 //!   so a cutover that left a height without one would otherwise refuse
 //!   honest bundles. `carry` and `shortfall` on the same row are the count
 //!   rule's, and this rule does not read them.
-//! - [`BundleView::draw_commitment`] is the coinbase's `0x0C` field. The
-//!   coinbase grammar (CEN-I20) now requires exactly one, so a block of
-//!   the chain always has it. A `None` for a block whose draw count the
-//!   view just answered is therefore the view failing to answer, and the
-//!   rule returns [`BundleUnanswered::DrawCommitment`], not a verdict:
-//!   calling the block invalid would turn a store's hole into a consensus
-//!   rule. [`BundleInvalid::Commitment`] is the mismatch and nothing else.
+//! - [`BundleView::draw_commitment`] is the coinbase's singular `0x0C`
+//!   field. Above the tip the view answers `None`, and the rule returns
+//!   [`BundleUnanswered::DrawCommitment`]. A recorded block whose extra
+//!   does not yield exactly one commitment is the store's halt (SI-38),
+//!   not a verdict: [`BundleInvalid::Commitment`] is the mismatch and
+//!   nothing else. The coinbase grammar (CEN-I20) is `form`'s, and this
+//!   read does not re-run it.
 //! - `ChainView::drawable_digest(E)` is **not** one of this rule's reads.
 //!   It is the settlement writer's check that `D` did not drift
 //!   (specification §9.5, check 2). What this rule reads of `D` is
@@ -184,6 +185,7 @@ use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_WITNESS_BUNDLE};
+use shekyl_types::archival::DrawCommitment;
 use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
 
 use crate::census::CenRow;
@@ -216,8 +218,10 @@ pub trait BundleView {
     /// it wider refuses a value that does not fit; it does not truncate.
     fn draw_count(&self, h: BlockHeight) -> Result<Option<u32>, Self::Fault>;
 
-    /// `h`'s `0x0C` commitment (§4.2).
-    fn draw_commitment(&self, h: BlockHeight) -> Result<Option<[u8; 32]>, Self::Fault>;
+    /// `h`'s `0x0C` commitment (§4.2), as a [`DrawCommitment`]. `None` is
+    /// the view failing to answer, not an absent field: CEN-I20 puts one
+    /// on every coinbase, and the all-zero genesis commitment is still one.
+    fn draw_commitment(&self, h: BlockHeight) -> Result<Option<DrawCommitment>, Self::Fault>;
 
     /// The hash of the block at `height` on this chain. Read twice: at
     /// `h`, for the selection and the nonce, and at each record's
@@ -475,12 +479,14 @@ pub struct DerivedDraw {
     pub passed: bool,
 }
 
-/// What the verifier returns on success, and all the writer needs
+/// What the verifier returns on success, and all
+/// [`admission_plan`](crate::admission_plan) needs
 /// (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §9.6, `SCS-P37`).
 ///
-/// The writer turns `draws` into index rows `(E, P, s, h, j) → (h_incl,
-/// passed)`, folds each into the epoch's digest, marks `h` revealed and
-/// updates the visible counts. It derives nothing.
+/// [`admission_plan`](crate::admission_plan) turns `draws` into index rows
+/// `(E, P, s, h, j) → (h_incl, passed)`, the epoch digest's terms, the
+/// heights revealed and `issued_short`. The store journals that plan and
+/// derives none of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Admitted {
     /// The bundle's kept bytes, parsed: the reference's content.
@@ -596,7 +602,7 @@ pub fn verify_bundle<V: BundleView>(
             BundleUnanswered::DrawCommitment { height: h },
         ));
     };
-    if draw_commit(body.witness_public_key(), &kept.seed) != committed {
+    if DrawCommitment::from_bytes(draw_commit(body.witness_public_key(), &kept.seed)) != committed {
         return invalid(BundleInvalid::Commitment);
     }
 
@@ -742,6 +748,84 @@ fn derive_draws<V: BundleView>(
     Ok(draws)
 }
 
+/// Why [`judge_bundles`] stopped. A section refusal is J29–J31; a bundle
+/// refusal is the verifier's, at the reference it stopped on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdmissionFault<F> {
+    /// The section check refused the block before any bundle was opened.
+    Section(SectionRefused),
+    /// Some epoch's `D` is not on this view. A connected chain's view does
+    /// not answer that way: a memo miss is [`Self::View`].
+    Awaiting,
+    /// [`BundleView`] faulted. A memo miss on the store view is this.
+    View(F),
+    /// Bundle `at` in section order was refused.
+    Bundle {
+        /// The reference's position.
+        at: usize,
+        /// The verifier's refusal.
+        refused: BundleRefused<F>,
+    },
+}
+
+impl<F> AdmissionFault<F> {
+    /// The census row, when the fault is a verdict. A view fault and a
+    /// body the reference does not name have none.
+    #[must_use]
+    pub fn row(&self) -> Option<CenRow> {
+        match self {
+            Self::Section(refused) => Some(refused.row()),
+            Self::Bundle {
+                refused: BundleRefused::Invalid(invalid),
+                ..
+            } => Some(invalid.row()),
+            Self::Awaiting | Self::View(_) | Self::Bundle { .. } => None,
+        }
+    }
+}
+
+/// Section first, then each body in section order, stopping at the first
+/// refusal (`SO-D12` increment 4a).
+///
+/// The block wire does not carry a section yet (4b), so the staged entry
+/// takes the references and bodies the section will hold. Tests call this.
+/// `form` and `validate` do not.
+///
+/// # Errors
+///
+/// The first section or bundle refusal, or the view's fault.
+pub fn judge_bundles<V: BundleView>(
+    refs: &[BundleRef],
+    bodies: &[BundleBody],
+    header_root: &[u8; 32],
+    h_incl: BlockHeight,
+    view: &V,
+    rule_set: &RuleSet,
+) -> Result<Vec<Admitted>, AdmissionFault<V::Fault>> {
+    match check_section(refs, header_root, h_incl, view, rule_set) {
+        Ok(SectionStanding::Admitted(_)) => {}
+        Ok(SectionStanding::Awaiting(_)) => return Err(AdmissionFault::Awaiting),
+        Err(SectionCheckFailed::Refused(refused)) => {
+            return Err(AdmissionFault::Section(refused));
+        }
+        Err(SectionCheckFailed::View(fault)) => return Err(AdmissionFault::View(fault)),
+    }
+    if bodies.len() != refs.len() {
+        return Err(AdmissionFault::Bundle {
+            at: bodies.len().min(refs.len()),
+            refused: BundleRefused::BodyNotReferenced,
+        });
+    }
+    let mut admitted = Vec::with_capacity(refs.len());
+    for (at, (reference, body)) in refs.iter().zip(bodies.iter()).enumerate() {
+        match verify_bundle(reference, body, h_incl, view, rule_set) {
+            Ok(one) => admitted.push(one),
+            Err(refused) => return Err(AdmissionFault::Bundle { at, refused }),
+        }
+    }
+    Ok(admitted)
+}
+
 #[cfg(test)]
 #[path = "bundle_tests.rs"]
 mod bundle_tests;
@@ -753,3 +837,7 @@ mod bundle_section_tests;
 #[cfg(test)]
 #[path = "bundle_staging_tests.rs"]
 mod bundle_staging_tests;
+
+#[cfg(test)]
+#[path = "bundle_admission_tests.rs"]
+mod bundle_admission_tests;
