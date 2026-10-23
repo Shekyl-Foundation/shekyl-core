@@ -90,7 +90,7 @@ fn market_posture_has_no_holdings_until_assignment_exists() {
 
 #[test]
 fn foundation_posture_is_complete_tree_with_the_empty_encoding() {
-    let holdings = StakePosture::FoundationCompleteTree
+    let holdings = StakePosture::SupportCompleteTree
         .holdings()
         .expect("foundation posts");
     assert_eq!(
@@ -234,7 +234,7 @@ async fn first_stake_refuses_a_fresh_slot_off_the_cursor() {
     .into_wallet();
     let arc = StdArc::new(TokioRwLock::new(engine));
 
-    let err = Engine::first_stake(arc, 7, StakePosture::FoundationCompleteTree)
+    let err = Engine::first_stake(arc, 7, StakePosture::SupportCompleteTree)
         .await
         .expect_err("off-cursor");
     assert!(
@@ -350,7 +350,7 @@ async fn staker_first_stake_refuses_wrong_slots_and_confirmed_wallets_at_any_slo
         .await
         .expect("bonded persona id");
     let arc = StdArc::new(TokioRwLock::new(opened));
-    let err = Engine::first_stake(arc.clone(), 4, StakePosture::FoundationCompleteTree)
+    let err = Engine::first_stake(arc.clone(), 4, StakePosture::SupportCompleteTree)
         .await
         .expect_err("unrecorded slot on a staker");
     assert!(
@@ -409,7 +409,7 @@ async fn staker_first_stake_refuses_wrong_slots_and_confirmed_wallets_at_any_slo
     .into_wallet();
     let arc = StdArc::new(TokioRwLock::new(opened));
     for slot in [3u32, 4u32] {
-        let err = Engine::first_stake(arc.clone(), slot, StakePosture::FoundationCompleteTree)
+        let err = Engine::first_stake(arc.clone(), slot, StakePosture::SupportCompleteTree)
             .await
             .expect_err("confirmed wallet refuses every slot");
         assert!(
@@ -464,7 +464,7 @@ async fn probe_adopted_slot_refuses_first_stake_before_pscan_corroboration() {
         "the sighting bridge survives the reopen (no seal to refute it)"
     );
     let arc = StdArc::new(TokioRwLock::new(opened));
-    let err = Engine::first_stake(arc, 0, StakePosture::FoundationCompleteTree)
+    let err = Engine::first_stake(arc, 0, StakePosture::SupportCompleteTree)
         .await
         .expect_err("a sighted slot is already staked, never a W2 resume");
     assert!(matches!(err, FirstStakeError::AlreadyStaked), "got {err:?}");
@@ -592,7 +592,7 @@ async fn recovered_mid_session_first_stake_names_the_reopen_remedy() {
     );
 
     let arc = std::sync::Arc::new(tokio::sync::RwLock::new(engine));
-    let err = Engine::first_stake(arc, 0, StakePosture::FoundationCompleteTree)
+    let err = Engine::first_stake(arc, 0, StakePosture::SupportCompleteTree)
         .await
         .expect_err("no actor is resident this session");
     assert!(

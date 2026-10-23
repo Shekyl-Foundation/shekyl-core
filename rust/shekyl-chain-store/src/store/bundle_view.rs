@@ -24,7 +24,7 @@ use shekyl_chain_rules::{
     AtHeight, BlockDrawsFloor, BundleView, ChainView, DrawableEpoch, DrawableMemo, EpochFloor,
     HeaderView, SettlementSchedule, Settling,
 };
-use shekyl_types::archival::{DrawCommitment, IndexedDraw, COUNTED_DRAWS};
+use shekyl_types::archival::{DrawCommitment, IndexedDraw, SupportCount, COUNTED_DRAWS};
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 
 use super::error::{StoreError, StoreInvariant};
@@ -292,6 +292,25 @@ impl BundleView for StoreBundleView<'_, '_, '_> {
         };
         self.opened.borrow_mut().insert(epoch, drawable);
         Ok(Some(drawable))
+    }
+
+    fn support_count(&self, h: BlockHeight) -> Result<Option<u32>, StoreError> {
+        let floor = BlockDrawsFloor::in_force(self.h_incl, self.schedule);
+        Ok(ChainView::support_block_count(self.view, h, floor)?.map(SupportCount::get))
+    }
+
+    fn support_roster(
+        &self,
+        _: BlockHeight,
+    ) -> Result<Option<Vec<shekyl_chain_rules::SupportSeat>>, StoreError> {
+        // The roster is admission's. A written zero never asks. A count
+        // with no roster is the hole: the verifier reports the draw
+        // unanswered rather than an empty seat list.
+        Ok(None)
+    }
+
+    fn archive_width(&self, _: BlockHeight) -> Result<Option<u64>, StoreError> {
+        Ok(None)
     }
 }
 

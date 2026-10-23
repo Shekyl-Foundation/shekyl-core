@@ -28,10 +28,11 @@
 //!
 //! # The filters both apply
 //!
-//! [`emit`] holds the three pins of the proposal's §7.4 for both: a bond
-//! that joined in `E` or later is excluded (pin 1); a complete tree expands
-//! to the shards closed and final at `h_open(E)`, not at tip (pin 2); and
-//! the pairs are in canonical order (pin 3, [`DrawablePair`]'s `Ord`).
+//! [`emit`] holds the three pins of the proposal's §7.4 for both, with pin
+//! 2 restated by `ARCHIVAL_SUPPORT_DRAW.md`: a bond that joined in `E` or
+//! later is excluded (pin 1); a complete tree is a support role and
+//! contributes no pair (pin 2); and the pairs are in canonical order
+//! (pin 3, [`DrawablePair`]'s `Ord`).
 //!
 //! Closed and final at `h_open` is one count for both arms. Shards close
 //! in order, so the shards closed and final at `h_open` are the prefix
@@ -109,8 +110,8 @@ pub const WALK_BACK_EPOCHS: u64 = 1 + SLASH_GRACE_EPOCHS;
 const _: () = assert!(WALK_BACK_EPOCHS <= SLASH_GRACE_EPOCHS + FAILURE_WINDOW_N as u64);
 
 /// The count of shards closed and final at `h_open`: the prefix both
-/// derivations expand a complete tree to and keep a compact shard inside
-/// (module docs, *The filters both apply*).
+/// derivations keep a compact shard inside. A complete tree contributes
+/// no pair (module docs, *The filters both apply*).
 pub(crate) fn final_count_at_open<'id, V: ChainView<'id>>(
     view: &V,
     h_open: BlockHeight,
@@ -343,12 +344,9 @@ fn emit<'r>(
         }
         let held = pairs.len();
         match &record.holdings {
-            Holdings::CompleteTree => {
-                pairs.extend((0..final_count).map(|shard| DrawablePair {
-                    persona,
-                    shard: ShardId::from_raw(shard),
-                }));
-            }
+            // A complete tree is a support role. It is drawn on its own
+            // stream and is not a member of this set.
+            Holdings::CompleteTree => {}
             Holdings::ShardSet(set) => {
                 pairs.extend(
                     set.iter()

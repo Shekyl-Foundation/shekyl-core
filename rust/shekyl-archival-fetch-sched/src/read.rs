@@ -196,8 +196,9 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
 
     /// Read shard `shard_id` from an assigned holder first — a challenge's
     /// named `P` — drawing others only if it fails. The assigned holder is
-    /// not drawn again. An empty drawable set still dials the assigned
-    /// holder: the challenge named it, and the urn being empty is not
+    /// dialled once and is not drawn from the economy urn or the support
+    /// urn again. An empty drawable set still dials the assigned holder:
+    /// the challenge named it, and the urn being empty is not
     /// [`ReadFailure::NoHolders`].
     ///
     /// # Errors
@@ -258,13 +259,21 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         nonce: Option<[u8; 32]>,
     ) -> Result<Read, ReadFailure> {
         let closed = self.closed(shard_id)?;
-        let holders = self.holders.holders_of(shard_id)?;
-        if assigned.is_none() && holders.is_empty() {
+        let drawn = self.holders.holders_of(shard_id)?;
+        let support = self.holders.support_holders_of(shard_id)?;
+        if assigned.is_none() && drawn.is_empty() && support.is_empty() {
             return Err(ReadFailure::NoHolders { shard_id });
         }
-        let mut urn = Urn::new(holders);
+        // A drawn holder is tried before any support holder. Support is
+        // reached only once the drawn urn is empty, so it is never the
+        // only holder tried while a drawn holder of the shard exists.
+        let had_drawn = !drawn.is_empty();
+        let mut urn = Urn::new(drawn);
+        let mut support_urn = Urn::new(support);
         if let Some(assigned) = assigned {
+            // Dialled as `first`. Neither urn may draw this persona again.
             urn.exclude(assigned.id);
+            support_urn.exclude(assigned.id);
         }
         let mut attempts = Vec::new();
         let mut tried = 0usize;
@@ -273,11 +282,15 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         while tried < budget.holders.get() {
             let holder = if let Some(holder) = first.take() {
                 holder
-            } else {
-                match urn.draw()? {
+            } else if let Some(holder) = urn.draw()? {
+                holder
+            } else if support_turn(had_drawn, tried) {
+                match support_urn.draw()? {
                     Some(holder) => holder,
                     None => break,
                 }
+            } else {
+                break;
             };
             tried += 1;
             match self
@@ -453,6 +466,15 @@ pub async fn challenge_read<F: ShardFacts, H: HolderSource>(
         .await?)
 }
 
+/// Whether a support holder may be dialled now. The drawn urn is already
+/// empty. Support is not the opening attempt while a drawn holder of the
+/// shard exists: that holder is tried first, and a refusal costs that one
+/// attempt (`ARCHIVAL_SUPPORT_DRAW.md` §7). Red edit: return true whenever
+/// the drawn urn is empty.
+fn support_turn(had_drawn: bool, tried: usize) -> bool {
+    !had_drawn || tried > 0
+}
+
 /// What one holder's dials came to. Not a [`ReadFailure`]: a spent holder
 /// moves the need on, and a requester fault ends it.
 enum HolderOutcome {
@@ -460,4 +482,16 @@ enum HolderOutcome {
     Served(VerifiedShard<HybridPublicKey>, RequestHeader),
     /// This holder is done with. The attempts are in dial order.
     Spent(Vec<Attempt>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::support_turn;
+
+    #[test]
+    fn a_support_holder_waits_until_a_drawn_holder_has_been_tried() {
+        assert!(!support_turn(true, 0));
+        assert!(support_turn(true, 1));
+        assert!(support_turn(false, 0));
+    }
 }

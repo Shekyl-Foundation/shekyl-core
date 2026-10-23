@@ -561,6 +561,14 @@ pub enum SettlementCheck {
         /// The shard of the pair.
         shard: ShardId,
     },
+    /// The support fold counted more passes for a tree than support draws
+    /// it was issued. One row per tree, so the fault names the tree. The
+    /// same shape as [`Self::PassesExceedCounted`]: a defect of the fold,
+    /// halted on, never clamped.
+    SupportPassesExceedCounted {
+        /// The tree.
+        persona: PCanonicalId,
+    },
     /// The settlement beacon's block is not strictly below the connecting
     /// height. The slash grace is at least the response window on every
     /// schedule that has one, so a passed deadline puts the beacon there.
@@ -848,6 +856,11 @@ impl fmt::Display for Corrupt {
                     f,
                     "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
                      draws selected (SI-25)"
+                ),
+                SettlementCheck::SupportPassesExceedCounted { persona } => write!(
+                    f,
+                    "settling complete tree {persona} for epoch {epoch} counted more passes \
+                     than support draws issued (SI-25)"
                 ),
                 SettlementCheck::BeaconNotRecorded => write!(
                     f,

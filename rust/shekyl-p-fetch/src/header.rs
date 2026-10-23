@@ -82,10 +82,17 @@ impl RequestHeader {
         anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
     ) -> Self {
         Self(PassRequestHeader::from_parts(
+            shekyl_archival_retention::PassStream::Economy,
             nonce,
             anchor_height,
             anchor_hash,
         ))
+    }
+
+    /// The stream this request names.
+    #[must_use]
+    pub const fn stream(&self) -> shekyl_archival_retention::PassStream {
+        self.0.stream()
     }
 
     /// The nonce — what the pass record carries beside `anchor_height`.
@@ -133,7 +140,7 @@ impl RequestHeader {
             .expect("a 64-byte username and a short password are in range")
     }
 
-    /// The decoded 72-byte wire layout.
+    /// The decoded 73-byte wire layout.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; PASS_REQUEST_HEADER_LEN] {
         self.0.to_bytes()
@@ -184,13 +191,14 @@ mod tests {
             [9; 32],
         );
         let bytes = h.to_bytes();
-        assert_eq!(&bytes[..32], &[7; 32]);
-        assert_eq!(&bytes[32..40], &[8, 7, 6, 5, 4, 3, 2, 1]);
-        assert_eq!(&bytes[40..], &[9; 32]);
+        assert_eq!(bytes[0], 0, "an organic read is an economy draw");
+        assert_eq!(&bytes[1..33], &[7; 32]);
+        assert_eq!(&bytes[33..41], &[8, 7, 6, 5, 4, 3, 2, 1]);
+        assert_eq!(&bytes[41..], &[9; 32]);
         assert_eq!(decode_request_header(&h.wire_value()), Some(bytes));
         assert_eq!(
             PassRequestHeader::from_bytes(&bytes),
-            PassRequestHeader::from(h)
+            Some(PassRequestHeader::from(h))
         );
     }
 
@@ -198,9 +206,9 @@ mod tests {
     fn the_transcript_is_the_header_the_shard_id_then_the_delivery_digest() {
         let h = RequestHeader::with_nonce([1; 32], BlockHeight::from_raw(5), [2; 32]);
         let t = h.transcript(0x0a0b, &[3; 32]);
-        assert_eq!(&t[..72], &h.to_bytes());
-        assert_eq!(&t[72..80], &[0x0b, 0x0a, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(&t[80..], &[3; 32]);
+        assert_eq!(&t[..73], &h.to_bytes());
+        assert_eq!(&t[73..81], &[0x0b, 0x0a, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&t[81..], &[3; 32]);
     }
 
     #[test]

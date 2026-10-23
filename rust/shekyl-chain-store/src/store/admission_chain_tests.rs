@@ -11,7 +11,7 @@
 
 use shekyl_archival_retention::{
     bundle_root, challenge_nonce, draw_commit, select_draw, BundleBody, BundleRef, DrawableEpoch,
-    PassBitmap,
+    PassBitmap, PassStream,
 };
 use shekyl_chain_rules::harness::bundle::BundleWorld;
 use std::collections::BTreeMap;
@@ -34,9 +34,10 @@ use super::super::super::connect_fixtures::{
 };
 use super::super::super::{SettlementFault, StoreBundleView, StoreInvariant};
 use super::super::{SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
-use super::{h_open, no_draws};
+use super::{h_open, no_draws, plant_witness_shard_set, witness_shard_slots};
 
-/// Ten blocks after epoch 2 opens: the height whose count is 1.
+/// Ten blocks after epoch 2 opens. With a shard set of the witness width,
+/// this harness's schedule draws once here.
 fn drawing_height() -> BlockHeight {
     BlockHeight::from_raw(h_open(2) + 10)
 }
@@ -62,6 +63,10 @@ struct Prepared {
 fn prepare(label: &str) -> Prepared {
     let open = h_open(2);
     let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, open - 1, no_draws);
+    // The joins are complete trees, so they are not in D. The planted set
+    // has the witness width: the width this schedule draws once from, at
+    // [`drawing_height`].
+    plant_witness_shard_set(&mut chain);
     let mut memo = DrawableMemo::new();
     let mut open_hash = None;
     let mut anchor_hash = chain.grown.tip();
@@ -173,11 +178,9 @@ fn produce(prepared: &Prepared) -> (BundleRef, BundleBody) {
         |_| Ok::<_, core::convert::Infallible>(true),
     )
     .expect("a short read does not fail")
-    .expect("four pairs select");
+    .expect("the planted set selects");
     let pair = drawable.pair(selected.index).expect("the index is in D");
-    let signers: Vec<Persona> = (0..WITNESS_PERSONAS)
-        .map(|slot| Persona::at(u32::try_from(slot).expect("fits")))
-        .collect();
+    let signers: Vec<Persona> = witness_shard_slots().map(Persona::at).collect();
     let signer = signers
         .iter()
         .find(|persona| {
@@ -185,13 +188,14 @@ fn produce(prepared: &Prepared) -> (BundleRef, BundleBody) {
                 .receipt_key(selected.index)
                 .is_some_and(|key| persona.keys().receipt_sign_pk == *key)
         })
-        .expect("D's receipt key is a harness persona");
+        .expect("D's receipt key is one of the planted personas");
     let nonce = challenge_nonce(&world.seed, prepared.hash.as_bytes(), 0, 0);
     let record = world.record_signed_by(
         &signer.keys().receipt_sign_sk,
         pair.shard.to_raw(),
         0,
         anchor,
+        PassStream::Economy,
         &nonce,
     );
     let (reference, body) = world.assemble(
