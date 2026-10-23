@@ -700,6 +700,7 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
         .collect();
     let keys = crate::test_support::harness_keys();
     let params = shekyl_economics::EconomicParams::default();
+    let pool = std::sync::Mutex::new(pool);
     let (produced, facts, target) = scenario
         .with_store(|store, rules| {
             let snap = store.begin_read().expect("a snapshot");
@@ -715,8 +716,7 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
                 params: &params,
                 now,
             };
-            let produced =
-                produce(&snap, &producer, Some(&mut pool), |_| true).expect("a template");
+            let produced = produce(&snap, &producer, Some(&pool), |_| true).expect("a template");
             let (_, _, target) = crate::router::claim_next(&snap, rules).expect("the claim");
             (produced, facts, target)
         })

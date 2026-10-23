@@ -31,6 +31,8 @@
 //! **The extra nonce.** Every coinbase reserves its eight bytes, zeroed;
 //! the job carries their offset and the header nonce's.
 
+use std::sync::{Mutex, PoisonError};
+
 use rand::RngCore;
 use shekyl_archival_retention::{commit_and_discard, empty_attestation_root};
 use shekyl_block_template::{
@@ -111,7 +113,8 @@ pub(crate) struct Producer<'a> {
 /// Build the template for the block after `snap`'s tip (module docs).
 ///
 /// `holds` says whether the seed caches hold a seed. `pool` is the pool,
-/// locked by the caller after `snap` was begun; `None` lists no bodies.
+/// locked only for the selection and the eviction, after `snap` was
+/// begun; `None` lists no bodies.
 ///
 /// # Errors
 ///
@@ -119,7 +122,7 @@ pub(crate) struct Producer<'a> {
 pub(crate) fn produce(
     snap: &ReadSnapshot<'_>,
     producer: &Producer<'_>,
-    pool: Option<&mut Pool>,
+    pool: Option<&Mutex<Pool>>,
     holds: impl FnOnce(&BlockHash) -> bool,
 ) -> Result<Produced, NoTemplate> {
     let facts = chain_facts_on(snap).map_err(NoTemplate::Facts)?;
@@ -192,7 +195,7 @@ fn list(
     facts: &ChainFacts,
     rule_set: &RuleSet,
     coinbase_weight: u64,
-    pool: &mut Pool,
+    pool: &Mutex<Pool>,
 ) -> Result<Listing, NoTemplate> {
     let mut fill = Fill::empty(
         facts.medians.effective_median.to_raw(),
@@ -204,7 +207,8 @@ fn list(
     .map_err(|e| NoTemplate::Build(TemplateError::Emission(e)))?;
     let bound = fill.bodies_weight_bound();
     let view = SnapshotView::new(snap);
-    let selected = select_admitting(pool, &view, rule_set, bound, |weight, fee| {
+    let mut pool = pool.lock().unwrap_or_else(PoisonError::into_inner);
+    let selected = select_admitting(&pool, &view, rule_set, bound, |weight, fee| {
         fill.admit(weight, fee)
     })
     .map_err(NoTemplate::Selection)?;

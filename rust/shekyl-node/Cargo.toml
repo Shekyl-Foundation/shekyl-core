@@ -42,8 +42,8 @@ hex = "0.4"
 rustix = { version = "1", features = ["fs"] }
 thiserror = { workspace = true }
 tracing = "0.1"
-# The sync watch and the posting watch.
-tokio = { version = "1", default-features = false, features = ["sync"] }
+# The sync watch and the posting watch; `stop` checks it is not in a runtime.
+tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 
 [dev-dependencies]
 # A mining address for the template tests, from a fixed seed's keys.

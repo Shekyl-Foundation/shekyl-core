@@ -66,7 +66,7 @@ pub enum NoJob {
     /// template, until it restarts.
     PoolRetired,
     /// The template could not be built, and why.
-    Unbuilt(String),
+    Unbuilt(Unbuilt),
     /// The service stopped.
     Stopped,
 }
@@ -86,6 +86,49 @@ impl core::fmt::Display for NoJob {
             Self::Unbuilt(why) => write!(f, "no template: {why}"),
             Self::Stopped => f.write_str("no template: the node is stopping"),
         }
+    }
+}
+
+/// Why a template could not be built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unbuilt {
+    /// The store faulted; the service is stopping.
+    StoreFault,
+    /// The store is corrupt; the service is stopping.
+    StoreCorrupt,
+    /// The pool's selection could not read the chain; the service is
+    /// stopping.
+    Selection,
+    /// The node's clock could not be read.
+    Clock,
+    /// The OS random source failed.
+    Random,
+    /// The block could not be priced or assembled.
+    Pricing,
+    /// The built coinbase reserves no extra nonce.
+    NoNonceSlot,
+    /// The tip is the last height there is.
+    LastHeight,
+    /// The chain's own headers refuse the next block's target.
+    TargetRefused,
+    /// A seed block is not on the snapshot it was read from.
+    SeedMissing,
+}
+
+impl core::fmt::Display for Unbuilt {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::StoreFault => "the store faulted",
+            Self::StoreCorrupt => "the store is corrupt",
+            Self::Selection => "the pool's selection could not read the chain",
+            Self::Clock => "the clock could not be read",
+            Self::Random => "the OS random source failed",
+            Self::Pricing => "the block could not be priced",
+            Self::NoNonceSlot => "the coinbase reserves no extra nonce",
+            Self::LastHeight => "the tip is the last height there is",
+            Self::TargetRefused => "the chain's own headers refuse its target",
+            Self::SeedMissing => "a seed block is not on the snapshot",
+        })
     }
 }
 
@@ -451,7 +494,10 @@ where
     }
     let now = match shared.substrate().local_clock() {
         Ok(now) => now,
-        Err(fault) => return seat.withdraw(NoJob::Unbuilt(format!("the clock: {fault:?}"))),
+        Err(fault) => {
+            tracing::error!("no template: the clock: {fault:?}");
+            return seat.withdraw(NoJob::Unbuilt(Unbuilt::Clock));
+        }
     };
     let Some(window) = shared.seed_now() else {
         return;
@@ -459,7 +505,6 @@ where
     let reader = Arc::clone(shared);
     let produced = tokio::task::spawn_blocking(move || {
         let snap = reader.store().begin_read().map_err(Unposted::Store)?;
-        let mut pool = reader.pool_guard();
         let params = EconomicParams::default();
         let producer = Producer {
             rules: reader.rules(),
@@ -467,7 +512,7 @@ where
             params: &params,
             now,
         };
-        produce(&snap, &producer, pool.as_deref_mut(), |seed| {
+        produce(&snap, &producer, reader.live_pool(), |seed| {
             window.holds(seed)
         })
         .map_err(Unposted::Template)
@@ -525,7 +570,7 @@ impl Unposted {
         S: Substrate,
         S::Fault: core::fmt::Debug,
     {
-        let why = |what: &str| Some(NoJob::Unbuilt(what.to_owned()));
+        let why = |kind: Unbuilt| Some(NoJob::Unbuilt(kind));
         match self {
             Self::Store(store)
             | Self::Template(
@@ -533,19 +578,19 @@ impl Unposted {
                 | NoTemplate::Claim(ClaimStop::Store(store)),
             ) => {
                 shared.fail(ServiceFault::Store(store));
-                why("the store faulted")
+                why(Unbuilt::StoreFault)
             }
             Self::Template(NoTemplate::Facts(FactsStop::Read(read @ ViewRead::Corrupt(_)))) => {
                 crate::service::record_store_read(shared, read);
-                why("the store is corrupt")
+                why(Unbuilt::StoreCorrupt)
             }
             Self::Template(NoTemplate::Claim(ClaimStop::Corrupt { height, corrupt })) => {
                 shared.fail(ServiceFault::Corrupt { height, corrupt });
-                why("the store is corrupt")
+                why(Unbuilt::StoreCorrupt)
             }
             Self::Template(NoTemplate::Selection(fault)) => {
                 shared.fail(ServiceFault::Pool(PoolFault::Chain(fault)));
-                why("the pool's selection could not read the chain")
+                why(Unbuilt::Selection)
             }
             Self::Template(NoTemplate::PoolFile(store)) => {
                 shared.pool_dead(&store);
@@ -554,31 +599,31 @@ impl Unposted {
             Self::Template(NoTemplate::SeedNotHeld) => None,
             Self::Template(NoTemplate::Facts(FactsStop::NoNextHeight { tip })) => {
                 tracing::error!("no template: the tip {tip:?} is the last height there is");
-                why("the tip is the last height there is")
+                why(Unbuilt::LastHeight)
             }
             Self::Template(NoTemplate::Claim(ClaimStop::Refused { refused, .. })) => {
                 tracing::error!(
                     "no template: the chain's own headers refuse its target: {refused:?}"
                 );
-                why("the chain's own headers refuse its target")
+                why(Unbuilt::TargetRefused)
             }
             Self::Template(NoTemplate::Claim(ClaimStop::Moved)) => {
                 tracing::error!(
                     "no template: a seed block is not on the snapshot it was read from"
                 );
-                why("a seed block is not on the snapshot")
+                why(Unbuilt::SeedMissing)
             }
             Self::Template(NoTemplate::Random(error)) => {
                 tracing::error!("no template: the OS random source failed: {error}");
-                why("the OS random source failed")
+                why(Unbuilt::Random)
             }
             Self::Template(NoTemplate::Build(error)) => {
                 tracing::error!("no template: {error}");
-                Some(NoJob::Unbuilt(error.to_string()))
+                why(Unbuilt::Pricing)
             }
             Self::Template(NoTemplate::NoNonceSlot) => {
                 tracing::error!("no template: the coinbase reserves no extra nonce");
-                why("the coinbase reserves no extra nonce")
+                why(Unbuilt::NoNonceSlot)
             }
         }
     }

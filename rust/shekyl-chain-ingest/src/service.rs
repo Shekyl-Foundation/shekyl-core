@@ -513,9 +513,7 @@ where
     }
 
     /// The pool, locked, for a read that does not wait on anything.
-    /// The pool, locked, when it is wired and live. A caller that also
-    /// reads the chain begins its snapshot first, as [`with_pool`] does.
-    pub(crate) fn pool_guard(&self) -> Option<std::sync::MutexGuard<'_, Pool>> {
+    fn pool_guard(&self) -> Option<std::sync::MutexGuard<'_, Pool>> {
         if !self.pool_is_live() {
             return None;
         }
@@ -535,6 +533,16 @@ where
     /// Whether a pool is wired and its file has not faulted.
     pub(crate) fn pool_is_live(&self) -> bool {
         self.pool.is_some() && self.pool_live.load(Ordering::Acquire)
+    }
+
+    /// The pool, when it is wired and live. A caller that also reads the
+    /// chain begins its snapshot before it locks this, as [`with_pool`]
+    /// does.
+    pub(crate) fn live_pool(&self) -> Option<&Mutex<Pool>> {
+        if !self.pool_is_live() {
+            return None;
+        }
+        self.pool.as_ref().map(|wiring| &*wiring.pool)
     }
 
     /// Whether a pool is wired and its file has faulted.

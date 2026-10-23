@@ -392,7 +392,8 @@ impl Node {
         Arc::clone(&self.mining)
     }
 
-    /// Stop the ingest service, clear the handles' slots, and shut the runtime down.
+    /// Stop the miner and the ingest service, clear the handles' slots, and
+    /// shut the runtime down.
     ///
     /// The follower withdraws the job board on the way out. A second call
     /// does nothing. [`Drop`] calls this.
@@ -407,6 +408,13 @@ impl Node {
     /// either. Mining control stops the miner; it does not stop or drop
     /// the node.
     pub fn stop(&self) {
+        debug_assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "Node::stop waits, and must not run inside a tokio runtime"
+        );
+        // The miner first: its workers hash on the board this stop withdraws,
+        // and a handle may keep mining control alive past the node.
+        self.mining.stop();
         let Some(runtime) = self
             .runtime
             .lock()
@@ -663,6 +671,35 @@ mod tests {
         assert!(!node.handles().mining.running().expect("mining"));
         assert_eq!(node.handles().pool.broadcast_count().expect("pool"), 0);
         node.stop();
+    }
+
+    /// `Node::stop` waits, so it refuses to run inside a tokio runtime
+    /// (`# Panics`); afterwards the node still stops from outside one. Red
+    /// edit: drop the `debug_assert`.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn stopping_the_node_inside_a_runtime_is_refused() {
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_at(dir.path(), Arc::new(|| {}));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime");
+        let inside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(async { node.stop() });
+        }));
+        let refusal = inside.expect_err("stop ran inside a runtime");
+        let said = refusal
+            .downcast_ref::<&str>()
+            .map(|said| (*said).to_owned())
+            .or_else(|| refusal.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(
+            said.contains("Node::stop waits"),
+            "the node's own refusal, not tokio's: {said}"
+        );
+        drop(runtime);
+        node.stop();
+        assert!(node.board().posted().is_none());
     }
 
     /// The blocking pool has a thread for every task that can be
