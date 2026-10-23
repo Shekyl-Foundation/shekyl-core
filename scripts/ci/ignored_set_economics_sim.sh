@@ -39,9 +39,22 @@ secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders'
 helpers='record::tests::regen_baseline_fixture
 stage2::tests::regen_stage2_narration_fixtures'
 
+# Rule 47 for this script's own list: it must name at least one test to
+# run. Counted by awk, which exits 0 on an empty list where `grep -c`
+# would not; the refusal below is then this script's words, not `set -e`'s
+# silence.
+want=$(printf '%s\n' "$run_tests" | awk 'NF { n++ } END { print n + 0 }')
+if [ "$want" -eq 0 ]; then
+  echo "::error::scripts/ci/ignored_set_economics_sim.sh names no test to run"
+  exit 1
+fi
+
 listing=$(cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim -- --list --ignored)
-found=$(printf '%s\n' "$listing" | sed -n 's/: test$//p' | sort)
-expected=$(printf '%s\n%s\n' "$run_tests" "$helpers" | sort)
+# Both sides are sorted in this one environment, so the compare is
+# locale-independent either way; LC_ALL=C makes the printed listing the
+# same on every runner.
+found=$(printf '%s\n' "$listing" | sed -n 's/: test$//p' | LC_ALL=C sort)
+expected=$(printf '%s\n%s\n' "$run_tests" "$helpers" | LC_ALL=C sort)
 if [ "$found" != "$expected" ]; then
   echo "::error::shekyl-economics-sim's ignored set is not the one this lane was written for."
   echo "expected (the tests run, then the helpers that are not):"
@@ -63,7 +76,6 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' sim-ignored.log | tail -1)
-want=$(printf '%s\n' "$run_tests" | grep -c .)
 if [ "$ran" != "$want" ]; then
   echo "::error::${ran:-0} of ${want} named tests ran: a name above no longer matches a test exactly."
   exit 1

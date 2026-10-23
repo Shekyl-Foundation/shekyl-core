@@ -82,13 +82,40 @@ function New-FreePort {
     return $port
 }
 
+# One argument as CreateProcess's command line carries it and
+# CommandLineToArgvW reads it back: an argument with no whitespace or quote
+# passes as is; otherwise it is wrapped in quotes, each quote inside it is
+# escaped, backslashes are literal except where they run up to a quote (or
+# to the closing quote), where each is doubled. The same rules .NET's
+# ProcessStartInfo.ArgumentList applies; PowerShell's -ArgumentList joins
+# with spaces and quotes nothing, so the words are quoted here.
+function ConvertTo-Win32Argument {
+    param([string] $Argument)
+    if ($Argument.Length -gt 0 -and $Argument -notmatch '[\s"]') { return $Argument }
+    $out = [System.Text.StringBuilder]::new('"')
+    $backslashes = 0
+    foreach ($ch in $Argument.ToCharArray()) {
+        if ($ch -eq '\') { $backslashes++; continue }
+        if ($ch -eq '"') {
+            [void] $out.Append('\', 2 * $backslashes + 1)
+        } elseif ($backslashes -gt 0) {
+            [void] $out.Append('\', $backslashes)
+        }
+        [void] $out.Append($ch)
+        $backslashes = 0
+    }
+    if ($backslashes -gt 0) { [void] $out.Append('\', 2 * $backslashes) }
+    [void] $out.Append('"')
+    return $out.ToString()
+}
+
 # Starts the daemon with the given words, stdout and stderr captured to
 # files under $work. Returns the process and the two file paths.
 function Start-Shekyld {
     param([string[]] $Words, [string] $Label)
     $out = Join-Path $work "$Label.out"
     $err = Join-Path $work "$Label.err"
-    $quoted = $Words | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ } }
+    $quoted = $Words | ForEach-Object { ConvertTo-Win32Argument $_ }
     $proc = Start-Process -FilePath $Daemon -ArgumentList $quoted -RedirectStandardOutput $out `
         -RedirectStandardError $err -PassThru -NoNewWindow
     # Cache the handle now: without it, ExitCode is null for a child that
@@ -267,7 +294,7 @@ namespace ShekylSmoke {
         [StructLayout(LayoutKind.Sequential)]
         public struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        public static extern bool CreateProcess(string lpApplicationName, string lpCommandLine, IntPtr lpProcessAttributes,
+        public static extern bool CreateProcess(string lpApplicationName, System.Text.StringBuilder lpCommandLine, IntPtr lpProcessAttributes,
             IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags, IntPtr lpEnvironment,
             string lpCurrentDirectory, ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
         [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GenerateConsoleCtrlEvent(uint dwCtrlEvent, uint dwProcessGroupId);
@@ -279,17 +306,22 @@ namespace ShekylSmoke {
         New-Item -ItemType Directory -Path $brkData | Out-Null
         $brkPort = New-FreePort
         $brkWords = Get-DaemonWords -Network 'regtest' -Data $brkData -Port $brkPort -Log (Join-Path $brkData 'shekyld.log')
-        $quotedWords = $brkWords | ForEach-Object { if ($_ -match '[\s"]') { '"' + $_.Replace('"', '\"') + '"' } else { $_ } }
-        $commandLine = '"' + $Daemon + '" ' + ($quotedWords -join ' ')
+        # The application name is given as itself, so no path search reads
+        # it off the command line; the command line still opens with it, as
+        # argv[0], then the quoted words. CreateProcessW may write into the
+        # command line, so it is a StringBuilder, not a .NET string the
+        # marshaler could pin in place.
+        $commandLineText = (ConvertTo-Win32Argument $Daemon) + ' ' + (($brkWords | ForEach-Object { ConvertTo-Win32Argument $_ }) -join ' ')
+        $commandLine = [System.Text.StringBuilder]::new($commandLineText)
         $startup = New-Object ShekylSmoke.Spawn+STARTUPINFO
         $startup.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($startup)
         $procInfo = New-Object ShekylSmoke.Spawn+PROCESS_INFORMATION
         $CREATE_NEW_PROCESS_GROUP = [uint32] 0x200
-        # [NullString]::Value, not $null: PowerShell binds $null to a .NET
-        # string parameter as "", and CreateProcess with an empty application
-        # name fails with ERROR_INVALID_NAME (123). Found by the Windows
+        # [NullString]::Value for the directory, not $null: PowerShell binds
+        # $null to a .NET string parameter as "", which CreateProcess
+        # refuses with ERROR_INVALID_NAME (123). Found by the Windows
         # agent's run of this case on 2026-10-22.
-        $created = [ShekylSmoke.Spawn]::CreateProcess([NullString]::Value, $commandLine, [IntPtr]::Zero, [IntPtr]::Zero, $false,
+        $created = [ShekylSmoke.Spawn]::CreateProcess($Daemon, $commandLine, [IntPtr]::Zero, [IntPtr]::Zero, $false,
             $CREATE_NEW_PROCESS_GROUP, [IntPtr]::Zero, [NullString]::Value, [ref] $startup, [ref] $procInfo)
         if (-not $created) {
             throw "CreateProcess failed with Win32 error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())"
