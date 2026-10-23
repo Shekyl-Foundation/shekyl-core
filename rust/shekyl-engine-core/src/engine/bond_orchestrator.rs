@@ -277,7 +277,7 @@ pub enum StakePosture {
     /// deleted in the same change that made this arm opt-in, so no code
     /// state ever existed where an ordinary staker silently owed the
     /// corpus.
-    FoundationCompleteTree,
+    SupportCompleteTree,
 }
 
 /// First-stake refusal/failure taxonomy (rule 82;
@@ -394,7 +394,7 @@ pub enum FirstStakeError {
     /// be assembled.
     ///
     /// **Not** an invitation to pass
-    /// [`StakePosture::FoundationCompleteTree`] instead: that posture is a
+    /// [`StakePosture::SupportCompleteTree`] instead: that posture is a
     /// permanent, non-earning, unbounded-storage obligation, and choosing
     /// it to route around this refusal is precisely the mistake D-4's
     /// warning gate exists to prevent.
@@ -416,14 +416,14 @@ impl StakePosture {
     /// (`bond_post.rs`, floor-zero protection) — so the alternative to
     /// this refusal is not a smaller bond, it is an invalid one.
     ///
-    /// [`StakePosture::FoundationCompleteTree`] is the whole-corpus
+    /// [`StakePosture::SupportCompleteTree`] is the whole-corpus
     /// backstop: `CompleteTree` carries no shard list by wire rule
     /// (`BondPostError::CompleteTreeWithShardIds`), so the empty set
     /// here is the obligation's *encoding*, not its size.
     pub(crate) fn holdings(self) -> Result<HoldingsDescriptor, FirstStakeError> {
         match self {
             Self::Market => Err(FirstStakeError::NoShardsAvailable),
-            Self::FoundationCompleteTree => Ok(HoldingsDescriptor {
+            Self::SupportCompleteTree => Ok(HoldingsDescriptor {
                 kind: HoldingsKind::CompleteTree,
                 shard_ids: ShardSet::empty(),
             }),

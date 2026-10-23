@@ -1781,7 +1781,7 @@ std::vector<shekyl_archival_epoch_close_bond>
   {
     shekyl_archival_epoch_close_bond b{};
     b.join_settlement_epoch = row.join_settlement_epoch;
-    b.is_foundation_complete_tree = row.is_foundation_complete_tree ? 1 : 0;
+    b.is_support_complete_tree = row.is_support_complete_tree ? 1 : 0;
     b.bad_intervals_ptr = row.bad_intervals_flat.empty()
       ? nullptr : row.bad_intervals_flat.data();
     b.bad_intervals_len = row.bad_intervals_flat.size() / 2;
