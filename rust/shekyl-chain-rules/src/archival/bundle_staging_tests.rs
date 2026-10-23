@@ -23,6 +23,7 @@ fn reference_of(count: u32) -> BundleRef {
             h: BlockHeight::from_raw(100),
             seed: [0x5E; 32],
             passes: PassBitmap::from_passes(count, []).expect("no passes"),
+            support: PassBitmap::none(),
         },
         [0xAB; 32],
     )
@@ -112,10 +113,11 @@ fn the_bundle_rows_are_pending_until_the_cutover() {
 /// - `harness.rs` and `harness/`: the fixture that implements
 ///   `BundleView` for these tests — `cfg(test)` or the `harness` feature,
 ///   never on the production surface.
-/// - `archival/bundle.rs` and `archival/bundle_section.rs`: the module
-///   under test. The section file is exempt only while it still holds
-///   the section checker; the test asserts that, so deleting the file or
-///   emptying it is red.
+/// - `archival/bundle.rs`, `archival/bundle_records.rs` and
+///   `archival/bundle_section.rs`: the module under test. The section
+///   file is exempt only while it still holds the section checker, and
+///   the record file only while it still holds the shared pass check;
+///   the test asserts both, so deleting a file or emptying it is red.
 /// - `census.rs`: the registry's comment on the nine `pending` rows names
 ///   the functions as the rows' refusals. It is held to a narrower check
 ///   instead: no `implemented`, `enforced_at` or `by_construction` entry
@@ -185,6 +187,12 @@ fn nothing_on_the_connect_path_calls_the_bundle_verifier() {
         section_text.contains("fn inside_window"),
         "archival/bundle_section.rs no longer holds the window the verifier shares"
     );
+    let records = src.join("archival").join("bundle_records.rs");
+    let records_text = std::fs::read_to_string(&records).expect("archival/bundle_records.rs");
+    assert!(
+        records_text.contains("fn judge_passes"),
+        "archival/bundle_records.rs no longer holds the shared pass check"
+    );
 
     let exporting = [src.join("archival").join("mod.rs"), src.join("lib.rs")];
     for file in &files {
@@ -230,6 +238,7 @@ fn connect_path_sources(src: &Path) -> Vec<PathBuf> {
         src.join("harness.rs"),
         src.join("census.rs"),
         src.join("archival").join("bundle.rs"),
+        src.join("archival").join("bundle_records.rs"),
         src.join("archival").join("bundle_section.rs"),
     ];
     let exempt_dir = src.join("harness");

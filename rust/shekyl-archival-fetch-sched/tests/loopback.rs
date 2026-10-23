@@ -135,8 +135,10 @@ impl ShardFacts for Facts {
 }
 
 /// `n` holder ids, all resolving (through the shim) to the one endpoint.
+/// Support holders are a second list, empty unless a test sets one.
 struct Holders {
     holders: Mutex<Vec<Holder>>,
+    support: Mutex<Vec<Holder>>,
     /// How many needs have asked who holds the shard.
     lookups: AtomicUsize,
 }
@@ -151,6 +153,7 @@ impl Holders {
             .collect();
         Self {
             holders: Mutex::new(holders),
+            support: Mutex::new(Vec::new()),
             lookups: AtomicUsize::new(0),
         }
     }
@@ -158,12 +161,20 @@ impl Holders {
     fn clear(&self) {
         self.holders.lock().unwrap().clear();
     }
+
+    fn set_support(&self, support: Vec<Holder>) {
+        *self.support.lock().unwrap() = support;
+    }
 }
 
 impl HolderSource for Holders {
     fn holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
         self.lookups.fetch_add(1, Ordering::SeqCst);
         Ok(self.holders.lock().unwrap().clone())
+    }
+
+    fn support_holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+        Ok(self.support.lock().unwrap().clone())
     }
 }
 
@@ -367,6 +378,40 @@ async fn read_from_dials_its_assigned_holder_even_when_the_urn_is_empty() {
         .expect("an empty urn does not refuse an assigned holder");
     assert_eq!(read.holder, assigned.id);
     assert_eq!(s.endpoint.served_count(), 2);
+}
+
+/// The one drawn holder is the assigned persona, and that persona is also
+/// listed as support beside one other support holder. Every dial misses.
+/// The assigned persona is tried first and is not drawn again; the other
+/// support holder is next. Red edit: leave the assigned id in the support
+/// urn — the tags are then `[1, 1, 9]`.
+#[tokio::test]
+async fn an_assigned_holder_is_dialled_once_then_the_other_support_holder() {
+    let s = stack(FIXTURE_SHARD_ID + 7, 1).await;
+    let assigned = s
+        .holders
+        .holders_of(SHARD)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the one drawn holder");
+    let other = Holder {
+        id: PCanonicalId::from_bytes([9; 32]),
+        target: assigned.target.clone(),
+    };
+    s.holders.set_support(vec![assigned.clone(), other]);
+    let err = s
+        .scheduler
+        .read_from(&assigned, SHARD, Arc::new(DiscardTxs), budget(3, 1))
+        .await
+        .unwrap_err();
+    let ReadFailure::Exhausted { attempts } = err else {
+        panic!("expected exhaustion, got {err:?}");
+    };
+    assert!(attempts
+        .iter()
+        .all(|attempt| matches!(attempt.error, FetchError::Miss)));
+    assert_eq!(holder_tags(&attempts), vec![1, 9], "{attempts:?}");
 }
 
 #[tokio::test]

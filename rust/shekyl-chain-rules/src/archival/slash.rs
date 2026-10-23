@@ -50,8 +50,9 @@ use shekyl_archival_retention::settlement_select::{
     issued_draw_term, settle_pair, SETTLEMENT_BEACON_LEN,
 };
 use shekyl_archival_retention::{
-    good_through, holds_shard_at, settlement_window_slashable, slash_open_interval_to_append,
-    ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_BOND_BAD_INTERVALS,
+    good_through, holds_shard_at, settle_support, settlement_window_slashable,
+    slash_open_interval_to_append, SupportSettlementKey, ARCHIVAL_BOND_FLOOR_ATOMIC,
+    MAX_BOND_BAD_INTERVALS,
 };
 use shekyl_types::archival::{
     BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
@@ -184,8 +185,13 @@ impl super::Transition {
         for (persona, record) in &snapshot {
             match &record.holdings {
                 Holdings::CompleteTree => {
-                    // A complete tree holds every shard, so its candidates
-                    // are the shards it has a row for, in shard order.
+                    // The support row is one per tree. A miss there demotes
+                    // the whole holding. Economy rows, if any remain, are
+                    // the same demotion and stop at the first.
+                    if self.support_failed(view, *persona, record, epoch)? {
+                        self.slash(*persona, ShardId::from_raw(0), epoch)?;
+                        continue;
+                    }
                     let settled: Vec<ShardId> = settled_for(&self.settled, epoch, persona)
                         .map(|(shard, _)| shard)
                         .collect();
@@ -250,43 +256,65 @@ impl super::Transition {
                 check: SettlementCheck::IssuedIndexDigest,
             }));
         }
-        if draws.is_empty() {
+        let support_draws = view
+            .support_issued(epoch, self.floor())
+            .map_err(ViewRead::View)?;
+        if draws.is_empty() && support_draws.is_empty() {
             return Ok(());
         }
         let beacon = self.settlement_beacon(view, epoch)?;
-        let records: BTreeMap<&PCanonicalId, &BondRecord> =
-            snapshot.iter().map(|(p, record)| (p, record)).collect();
-        // The persona's slash log above the epoch's first block, read once
-        // per persona: the index is persona-major, so one persona's pairs
-        // are adjacent.
-        let mut after_open: Option<(PCanonicalId, Vec<SlashLogEntry>)> = None;
-        for pair in draws.chunk_by(|a, b| a.persona == b.persona && a.shard == b.shard) {
-            let (persona, shard) = (pair[0].persona, pair[0].shard);
-            // A draw is issued to a pair of the drawable set, and the set
-            // is of bonded personas; admission is what holds an index row
-            // to that. A row naming no record here has no holding to count
-            // a draw against.
-            let Some(record) = records.get(&persona) else {
-                continue;
-            };
-            if after_open.as_ref().map(|(p, _)| *p) != Some(persona) {
-                let h_open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
-                let log = self.slashed_after(view, persona, h_open)?;
-                after_open = Some((persona, log));
+        if !draws.is_empty() {
+            let records: BTreeMap<&PCanonicalId, &BondRecord> =
+                snapshot.iter().map(|(p, record)| (p, record)).collect();
+            // The persona's slash log above the epoch's first block, read once
+            // per persona: the index is persona-major, so one persona's pairs
+            // are adjacent.
+            let mut after_open: Option<(PCanonicalId, Vec<SlashLogEntry>)> = None;
+            for pair in draws.chunk_by(|a, b| a.persona == b.persona && a.shard == b.shard) {
+                let (persona, shard) = (pair[0].persona, pair[0].shard);
+                // A draw is issued to a pair of the drawable set, and the set
+                // is of bonded personas; admission is what holds an index row
+                // to that. A row naming no record here has no holding to count
+                // a draw against.
+                let Some(record) = records.get(&persona) else {
+                    continue;
+                };
+                if after_open.as_ref().map(|(p, _)| *p) != Some(persona) {
+                    let h_open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
+                    let log = self.slashed_after(view, persona, h_open)?;
+                    after_open = Some((persona, log));
+                }
+                let log = after_open
+                    .as_ref()
+                    .map_or(&[][..], |(_, log)| log.as_slice());
+                let counted = self.counted(view, persona, record, shard, epoch, pair, log)?;
+                match settle_pair(&beacon, &persona, shard, epoch, &counted) {
+                    Ok(Some(row)) => {
+                        self.settled.insert((epoch, persona, shard), row);
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
+                            epoch,
+                            check: SettlementCheck::PassesExceedCounted { persona, shard },
+                        }));
+                    }
+                }
             }
-            let log = after_open
-                .as_ref()
-                .map_or(&[][..], |(_, log)| log.as_slice());
-            let counted = self.counted(view, persona, record, shard, epoch, pair, log)?;
-            match settle_pair(&beacon, &persona, shard, epoch, &counted) {
+        }
+        for tree in support_draws.chunk_by(|a, b| a.persona == b.persona) {
+            let persona = tree[0].persona;
+            let issued: Vec<_> = tree.iter().map(|draw| draw.state).collect();
+            let key = SupportSettlementKey { persona, epoch };
+            match settle_support(&beacon, key, &issued) {
                 Ok(Some(row)) => {
-                    self.settled.insert((epoch, persona, shard), row);
+                    self.support_settled.insert((epoch, persona), row);
                 }
                 Ok(None) => {}
                 Err(_) => {
                     return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
                         epoch,
-                        check: SettlementCheck::PassesExceedCounted { persona, shard },
+                        check: SettlementCheck::SupportPassesExceedCounted { persona },
                     }));
                 }
             }
@@ -459,6 +487,41 @@ impl super::Transition {
             .map(SettlementRow::outcome))
     }
 
+    /// Whether the tree's one support row for `epoch` slashes it. The row
+    /// is keyed by the tree and the epoch, not by a shard.
+    fn support_failed<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        persona: PCanonicalId,
+        record: &BondRecord,
+        epoch: SettlementEpoch,
+    ) -> Result<bool, ViewRead<V::Fault>> {
+        let missed = self
+            .support_settled
+            .get(&(epoch, persona))
+            .is_some_and(|row| row.outcome() == SettlementOutcome::Missed);
+        if !missed || !in_standing(record, epoch) {
+            return Ok(false);
+        }
+        let floor = self
+            .floor::<Claimable>()
+            .kept_from()
+            .unwrap_or(SettlementEpoch::from_raw(0));
+        settlement_window_slashable(
+            epoch,
+            floor,
+            |earlier| in_standing(record, earlier),
+            |earlier| {
+                if let Some(row) = self.support_settled.get(&(earlier, persona)) {
+                    return Ok(Some(row.outcome()));
+                }
+                view.support_settlement(&persona, earlier, self.floor())
+                    .map_err(ViewRead::View)
+                    .map(|row| row.map(SettlementRow::outcome))
+            },
+        )
+    }
+
     /// Whether the pair is slashed for `epoch`: its row is Missed, the
     /// slash is not already applied, the persona was in good standing
     /// through the epoch, and the failure window says slash.
@@ -538,5 +601,268 @@ impl super::Transition {
         post.touch();
         self.slashes.push(slash);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod support_settlement_tests {
+    use core::convert::Infallible;
+
+    use shekyl_archival_retention::{
+        settlement_window_slashable, SettlementEpochBlocks, SettlementSchedule,
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+    };
+    use shekyl_types::archival::{
+        BondRecord, Holdings, IndexedDraw, IssuedDraw, ReceiptSignPk, SettlementOutcome,
+        SlashedHolding, RECEIPT_SIGN_PK_LEN,
+    };
+    use shekyl_types::{
+        BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
+        SettlementEpoch, ShardId, TxHash,
+    };
+    use shekyl_units::AtomicUnits;
+
+    use crate::harness::fixture::{recorded, root};
+    use crate::harness::{MockChain, MockView};
+    use crate::tree_growth::TreeFrontier;
+    use crate::view::{
+        AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock,
+        RecordedWeights, Tip,
+    };
+    use crate::{EpochFloor, Settling};
+
+    use super::super::Transition;
+    use super::apply_slash;
+
+    /// Two shards of one tree. Neither is the selection sentinel.
+    const TREE_SHARDS: [u64; 2] = [0, 1];
+
+    /// The support-draw index for one epoch, over a bondless chain.
+    ///
+    /// The issued-row writer is still staged. This is the read the slash
+    /// pass already makes: every other fact is the inner chain's, and
+    /// [`ChainView::support_issued`] answers `draws` for `epoch` only.
+    /// The floor check stays the store's (SI-32).
+    struct SupportIndex<'a, 'id> {
+        inner: MockView<'a, 'id>,
+        epoch: SettlementEpoch,
+        draws: Vec<IndexedDraw>,
+    }
+
+    impl<'id> HeaderView<'id> for SupportIndex<'_, 'id> {
+        type Fault = Infallible;
+
+        fn tip(&self) -> Result<Option<Tip>, Infallible> {
+            self.inner.tip()
+        }
+
+        fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
+            self.inner.header_at(height)
+        }
+    }
+
+    impl<'id> ChainView<'id> for SupportIndex<'_, 'id> {
+        fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
+            self.inner.has_key_image(key_image)
+        }
+
+        fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
+            self.inner.total_burned()
+        }
+
+        fn long_term_effective_median_at(
+            &self,
+            height: BlockHeight,
+        ) -> Result<AtHeight<LongTermWeight>, Infallible> {
+            self.inner.long_term_effective_median_at(height)
+        }
+
+        fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, Infallible> {
+            self.inner.burned_through(height)
+        }
+
+        fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
+            self.inner.block_at(height)
+        }
+
+        fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+            self.inner.height_of(hash)
+        }
+
+        fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
+            self.inner.root_at(height)
+        }
+
+        fn weights_window(
+            &self,
+            end: BlockHeight,
+            at_most: BlockCount,
+        ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+            self.inner.weights_window(end, at_most)
+        }
+
+        fn has_transaction(&self, hash: &TxHash) -> Result<bool, Infallible> {
+            self.inner.has_transaction(hash)
+        }
+
+        fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+            self.inner.tree_frontier()
+        }
+
+        fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+            self.inner.leaf_count_at(height)
+        }
+
+        fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+            self.inner.outputs_at(height)
+        }
+
+        fn support_issued(
+            &self,
+            epoch: SettlementEpoch,
+            _floor: EpochFloor<Settling>,
+        ) -> Result<Vec<IndexedDraw>, Infallible> {
+            if epoch == self.epoch {
+                Ok(self.draws.clone())
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        crate::archival_reads!(delegate inner);
+    }
+
+    /// The shortest epoch that still has a response window. `W₂` is one
+    /// block, so the beacon is the block after the epoch's last and the
+    /// chain that records it is that tall.
+    fn shortest_windowed_schedule() -> SettlementSchedule {
+        let blocks =
+            SettlementEpochBlocks::new(shekyl_archival_retention::constants::W2_EPOCH_DIVISOR)
+                .expect("the response divisor is a positive schedule");
+        SettlementSchedule::new(blocks)
+    }
+
+    fn tree() -> BondRecord {
+        BondRecord {
+            hybrid_pubkey: vec![1],
+            bond_spend_pk: vec![2],
+            receipt_sign_pk: ReceiptSignPk::from_bytes([3; RECEIPT_SIGN_PK_LEN]),
+            endpoint: [4; 32],
+            join_settlement_epoch: SettlementEpoch::from_raw(0),
+            bonded_total: AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC),
+            holdings: Holdings::CompleteTree,
+            bad_intervals: Vec::new(),
+            claimed_settlement_epochs: Vec::new(),
+            first_paying_emission_height: None,
+        }
+    }
+
+    fn window(missed_through: u64) -> bool {
+        settlement_window_slashable(
+            SettlementEpoch::from_raw(missed_through),
+            SettlementEpoch::from_raw(0),
+            |_| true,
+            |epoch| {
+                Ok::<_, ()>(if epoch.to_raw() <= missed_through {
+                    Some(SettlementOutcome::Missed)
+                } else {
+                    None
+                })
+            },
+        )
+        .expect("the rows answer")
+    }
+
+    /// Eleven missed epochs demote the tree. Ten do not. Red edit: slash
+    /// one shard of the tree and leave the rest a complete tree.
+    #[test]
+    fn eleven_missed_epochs_demote_the_tree() {
+        assert!(!window(9), "ten missed epochs are inside the budget");
+        assert!(window(10), "eleven missed epochs slash");
+        let persona = PCanonicalId::from_bytes([0x3C; 32]);
+        let mut record = tree();
+        let slash = apply_slash(
+            persona,
+            &mut record,
+            ShardId::from_raw(0),
+            SettlementEpoch::from_raw(10),
+        )
+        .expect("a complete tree demotes");
+        assert_eq!(slash.entry.holding, SlashedHolding::CompleteTree);
+        assert!(matches!(record.holdings, Holdings::ShardSet(ref held) if held.is_empty()));
+    }
+
+    /// Two shards of one tree are one support row. The economy index is
+    /// empty, so a fold that dropped the support loop, or that keyed the
+    /// row by shard, leaves this empty or issued at one. Red edit: delete
+    /// the support fold in `settle`.
+    #[test]
+    fn two_shards_of_one_tree_settle_as_one_support_row() {
+        let schedule = shortest_windowed_schedule();
+        let epoch = SettlementEpoch::from_raw(0);
+        let window = schedule
+            .challenge_response_blocks()
+            .expect("this schedule has a window");
+        let beacon_height = schedule
+            .last_block(epoch.to_raw())
+            .checked_add(window.get())
+            .expect("the beacon is one window past the epoch");
+        let connecting = BlockHeight::from_raw(
+            beacon_height
+                .checked_add(1)
+                .expect("the connecting height follows the beacon"),
+        );
+        // The slash-log window is `(k + n)` epochs. This tip is one epoch
+        // and a window, so the floor retires nothing and the empty
+        // drawable digest is the walk's.
+        let chain = (0..=beacon_height).fold(MockChain::default(), |chain, timestamp| {
+            chain.push(recorded(timestamp), root(0x11))
+        });
+        let persona = PCanonicalId::from_bytes([0x3C; 32]);
+        let issuing = BlockHeight::from_raw(
+            schedule
+                .open_height(epoch.to_raw())
+                .checked_add(1)
+                .expect("the epoch opens below its last block"),
+        );
+        let revealed_at = BlockHeight::from_raw(beacon_height);
+        // The later shard passed. Below three issued draws that is not an observation.
+        let draws: Vec<IndexedDraw> = TREE_SHARDS
+            .into_iter()
+            .enumerate()
+            .map(|(index, shard)| IndexedDraw {
+                persona,
+                shard: ShardId::from_raw(shard),
+                issuing_height: issuing,
+                draw: u32::try_from(index).expect("two draws fit a draw index"),
+                state: IssuedDraw {
+                    revealed_at,
+                    passed: index == 1,
+                },
+            })
+            .collect();
+        chain.with_view(|view| {
+            let index = SupportIndex {
+                inner: view,
+                epoch,
+                draws,
+            };
+            let mut transition = Transition::new(connecting, schedule, BlockCount::ONE);
+            transition
+                .settle(&index, epoch, &[])
+                .expect("the empty drawable set matches and the fold is a row");
+            assert!(
+                transition.settled.is_empty(),
+                "a support draw is not an economy row"
+            );
+            assert_eq!(transition.support_settled.len(), 1);
+            let row = transition
+                .support_settled
+                .get(&(epoch, persona))
+                .expect("the tree's row");
+            assert_eq!(row.issued(), 2, "both shards count toward the tree");
+            assert_eq!(row.passes(), 0, "fewer than three draws is not observed");
+            assert_eq!(row.outcome(), SettlementOutcome::NonObservation);
+        });
     }
 }

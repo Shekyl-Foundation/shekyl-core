@@ -320,11 +320,13 @@ pub enum StoreInvariant {
     /// The `archival_issued_draw` rows of an epoch fold to
     /// `archival_issued_digest[E]` ([`SettlementFault::IndexDrift`]); the
     /// fold counts no more passes for a pair than draws it selected
-    /// ([`SettlementFault::PassesExceedCounted`]); the settlement beacon is
-    /// a block strictly below the connecting height
+    /// ([`SettlementFault::PassesExceedCounted`]); the support fold counts
+    /// no more passes for a tree than support draws it was issued
+    /// ([`SettlementFault::SupportPassesExceedCounted`]); the settlement
+    /// beacon is a block strictly below the connecting height
     /// ([`SettlementFault::BeaconNotRecorded`]); and `archival_settlement`
     /// holds one row per `(persona, shard, epoch)`, written once
-    /// ([`SettlementFault::AlreadySettled`]). The first three are observed
+    /// ([`SettlementFault::AlreadySettled`]). The first four are observed
     /// by the validator, which computes the rows, and arrive through
     /// `refuse_corrupt`; the last is the store's own, at the insert. Armed
     /// by the slash pass (`ARCHIVAL_SETTLEMENT_WRITER.md` §14;
@@ -456,11 +458,12 @@ pub enum StoreInvariant {
         /// Which half failed.
         observed: DrawRowFault,
     },
-    /// **SI-34** — `archival_block_draws` is read only where it is kept.
-    /// The floor is [`shekyl_chain_rules::BlockDrawsFloor`], a consensus
-    /// expression the store compares and does not source. Absent is *never
-    /// written*; a row below the floor may have been written and retired.
-    /// Fatal, never a verdict on the block.
+    /// **SI-34** — the draw-family rows are read only where they are kept.
+    /// `archival_block_draws` and `archival_support_block` share
+    /// [`shekyl_chain_rules::BlockDrawsFloor`], a consensus expression the
+    /// store compares and does not source. Absent is *never written*; a
+    /// row below the floor may have been written and retired. Fatal, never
+    /// a verdict on the block.
     BlockDrawsReadBelowFloor {
         /// The height asked for.
         asked: shekyl_types::BlockHeight,
@@ -510,6 +513,17 @@ pub enum StoreInvariant {
     /// SI-36's reduction width. Fatal, never a verdict on the block.
     VisibleDrawCountPastWidth {
         /// The height the reduction was counted below.
+        height: shekyl_types::BlockHeight,
+    },
+    /// **SI-40** — `archival_support_block` holds one row per connected
+    /// height. A second insert is a rewrite. The count is how many support
+    /// draws the block issued. While the support schedule is not on the
+    /// transition the row is [`shekyl_types::archival::SupportCount::NONE`]:
+    /// the block issued none. A missing row is a height the writer did not
+    /// run for, and that absence is not the zero. The row retires with the
+    /// draw rows (SI-34). Fatal, never a verdict on the block.
+    SupportBlockNotSingular {
+        /// The height whose row was being written.
         height: shekyl_types::BlockHeight,
     },
 }
@@ -593,6 +607,13 @@ pub enum SettlementFault {
         /// The shard of the pair.
         shard: shekyl_types::ShardId,
     },
+    /// The support fold counted more passes for the tree than support
+    /// draws it was issued. One row per tree, so the fault names the tree.
+    /// A defect of the fold, not a state a file can hold.
+    SupportPassesExceedCounted {
+        /// The tree.
+        persona: shekyl_types::PCanonicalId,
+    },
     /// The settlement beacon's block is not recorded strictly below the
     /// connecting height. The slash grace puts it there on every schedule
     /// that has a response window; a re-pin that does not is this halt,
@@ -605,6 +626,12 @@ pub enum SettlementFault {
         persona: shekyl_types::PCanonicalId,
         /// The shard of the pair.
         shard: shekyl_types::ShardId,
+    },
+    /// `archival_support_settlement` already holds a row for the tree in
+    /// this epoch.
+    SupportAlreadySettled {
+        /// The tree.
+        persona: shekyl_types::PCanonicalId,
     },
 }
 
@@ -738,6 +765,7 @@ impl StoreInvariant {
             Self::DrawableIndexPastSet { .. } => 37,
             Self::DrawCommitmentUnreadable { .. } => 38,
             Self::VisibleDrawCountPastWidth { .. } => 39,
+            Self::SupportBlockNotSingular { .. } => 40,
         }
     }
 }
@@ -916,6 +944,11 @@ impl core::fmt::Display for StoreInvariant {
                     "settling ({persona}, {shard}) for epoch {epoch} counted more passes than \
                      draws selected; the settlement fold is defective"
                 ),
+                SettlementFault::SupportPassesExceedCounted { persona } => write!(
+                    f,
+                    "settling complete tree {persona} for epoch {epoch} counted more passes \
+                     than support draws issued; the settlement fold is defective"
+                ),
                 SettlementFault::BeaconNotRecorded => write!(
                     f,
                     "the settlement beacon of epoch {epoch} is not recorded strictly below \
@@ -924,6 +957,11 @@ impl core::fmt::Display for StoreInvariant {
                 SettlementFault::AlreadySettled { persona, shard } => write!(
                     f,
                     "archival_settlement already holds ({persona}, {shard}, {epoch}); an epoch \
+                     settles once"
+                ),
+                SettlementFault::SupportAlreadySettled { persona } => write!(
+                    f,
+                    "archival_support_settlement already holds ({persona}, {epoch}); a tree \
                      settles once"
                 ),
             },
@@ -1033,6 +1071,11 @@ impl core::fmt::Display for StoreInvariant {
                 "a pair's visible issued draws at height {height} do not fit the u32 the \
                  reduction counts"
             ),
+            Self::SupportBlockNotSingular { height } => write!(
+                f,
+                "archival_support_block already holds height {height}; a block records its \
+                 support count once"
+            ),
             Self::DrawableMemoMiss { epoch } => write!(
                 f,
                 "the admission view has no drawable set for epoch {epoch} under the opening \
@@ -1040,9 +1083,9 @@ impl core::fmt::Display for StoreInvariant {
             ),
             Self::BlockDrawsReadBelowFloor { asked, floor } => write!(
                 f,
-                "archival_block_draws was asked for height {asked} while rows below {floor} may \
-                 be retired; a reader asked outside the window its own rule set keeps — the \
-                 schedule is mis-composed, not the data"
+                "archival_block_draws and archival_support_block were asked for height {asked} \
+                 while rows below {floor} may be retired; a reader asked outside the window its \
+                 own rule set keeps — the schedule is mis-composed, not the data"
             ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
@@ -1100,6 +1143,7 @@ impl core::error::Error for StoreInvariant {
             | Self::DrawableIndexPastSet { .. }
             | Self::DrawCommitmentUnreadable { .. }
             | Self::VisibleDrawCountPastWidth { .. }
+            | Self::SupportBlockNotSingular { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

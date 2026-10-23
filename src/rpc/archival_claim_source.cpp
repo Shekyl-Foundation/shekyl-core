@@ -141,7 +141,7 @@ void fill_archival_emission_claim_source(const BlockchainDB& db,
     {
       cmd::bond_row_t row{};
       row.join_settlement_epoch = b.join_settlement_epoch;
-      row.is_foundation_complete_tree = b.is_foundation_complete_tree;
+      row.is_support_complete_tree = b.is_support_complete_tree;
       row.bad_intervals_flat = b.bad_intervals_flat;
       out.bonds.push_back(std::move(row));
     }

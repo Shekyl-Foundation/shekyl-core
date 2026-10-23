@@ -123,7 +123,8 @@ use crate::schema::{
     ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
     ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
     ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG, BLOCK_BURN, BLOCK_INFO,
+    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_SETTLEMENT, BLOCK_BURN,
+    BLOCK_INFO,
 };
 
 use super::archival_reads;
@@ -350,6 +351,7 @@ impl<'id> WriteBatch<'_, 'id> {
             self.write_accrual(delta)?;
         }
         self.write_settlements(delta)?;
+        self.write_support_settlements(delta)?;
         self.write_slashes(connecting, delta)?;
         for gather in delta.gathers() {
             let epoch = gather.epoch();
@@ -400,7 +402,8 @@ impl<'id> WriteBatch<'_, 'id> {
             }
         }
         self.write_drawable_digest(delta)?;
-        self.write_block_draws(connecting, delta)
+        self.write_block_draws(connecting, delta)?;
+        self.write_support_block(connecting, delta)
     }
 
     /// 9c. `archival_drawable_digest[E] = digest` at the block that opens
@@ -451,6 +454,31 @@ impl<'id> WriteBatch<'_, 'id> {
         Ok(())
     }
 
+    /// 9e. `archival_support_block[h] = count` at every connecting height,
+    /// insert-once: a block records its support count once, and a row
+    /// already there is SI-40 before any journal entry. The count is the
+    /// transition's. While the support schedule is not on the transition
+    /// the count is [`shekyl_types::archival::SupportCount::NONE`]: the
+    /// block issued none. A missing row is the hole, and this zero is not
+    /// that hole. No archival family governs it, for
+    /// [`Self::write_block_draws`]'s reason. `pop` removes it through the
+    /// journal, and the boundary retires it on the draw rows' floor.
+    fn write_support_block(
+        &self,
+        connecting: BlockHeight,
+        delta: &ArchivalDelta,
+    ) -> Result<(), StoreError> {
+        self.open_insert_table(
+            ARCHIVAL_SUPPORT_BLOCK,
+            StoreInvariant::SupportBlockNotSingular { height: connecting },
+        )?
+        .insert(
+            connecting.to_raw(),
+            delta.support_count().encoded().as_encoded(),
+        )?;
+        Ok(())
+    }
+
     /// 9b, first half. `archival_settlement[(P, shard, E)] = row` for every
     /// pair the slash pass settled, insert-once: an epoch settles once, and
     /// a row already there is SI-25 ([`SettlementFault::AlreadySettled`])
@@ -473,6 +501,40 @@ impl<'id> WriteBatch<'_, 'id> {
                 SettlementKey::new(settlement.persona, settlement.shard, settlement.epoch).key(),
                 settlement.row.encoded().as_encoded(),
                 already(settlement),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The support settlement rows: `archival_support_settlement[(P, E)]`,
+    /// one per tree, insert-once. Governed by the same family as the
+    /// economy rows. A row already there is the epoch settled twice.
+    ///
+    /// The block's support count is [`Self::write_support_block`]: every
+    /// connect records how many support draws the block issued.
+    /// `archival_support_issued` and `archival_support_unissued` still wait
+    /// on admission. [`shekyl_archival_retention::support_slot`] schedules
+    /// a draw, and the slash pass settles the issued rows it is shown.
+    /// Admission is not on the connect path, so this pass reads an empty
+    /// index and writes no settlement row. Filing unanswered draws before
+    /// a bundle can mark a pass would settle misses the stream has not yet
+    /// been able to serve.
+    fn write_support_settlements(&self, delta: &ArchivalDelta) -> Result<(), StoreError> {
+        let rows = delta.support_settlements();
+        if rows.is_empty() || !self.apply_policy().applies(ArchivalFamily::Settlement) {
+            return Ok(());
+        }
+        let already =
+            |s: &shekyl_chain_rules::SupportSettlement| StoreInvariant::SettlementNotSound {
+                epoch: s.epoch,
+                observed: SettlementFault::SupportAlreadySettled { persona: s.persona },
+            };
+        let mut table = self.open_insert_table(ARCHIVAL_SUPPORT_SETTLEMENT, already(&rows[0]))?;
+        for row in rows {
+            table.insert_observing(
+                (row.persona.to_bytes(), row.epoch.to_raw()),
+                row.row.encoded().as_encoded(),
+                already(row),
             )?;
         }
         Ok(())

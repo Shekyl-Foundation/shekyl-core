@@ -164,7 +164,7 @@ pub struct ArchivalEpochCloseBondFfi {
     pub bad_intervals_ptr: *const u64,
     /// Pair count (not u64 count).
     pub bad_intervals_len: usize,
-    pub is_foundation_complete_tree: u8,
+    pub is_support_complete_tree: u8,
 }
 
 /// `shekyl_archival_epoch_close_shard`.

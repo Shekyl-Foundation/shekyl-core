@@ -805,7 +805,7 @@ pub struct StakingInfoResult {
     /// The last ending per kind of staking action (WR-Q2). Empty means none.
     pub outcomes: Vec<StakingOutcomeEntry>,
     /// What the serving host is currently obligated to serve
-    /// (`"market"` / `"foundation_complete_tree"`), or `null` when no host
+    /// (`"market"` / `"support_complete_tree"`), or `null` when no host
     /// is running — see the contract's `StakingInfoResult.posture`.
     /// Required: "no host" is an answer (rule 43).
     ///

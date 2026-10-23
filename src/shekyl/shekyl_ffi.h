@@ -2672,7 +2672,7 @@ struct shekyl_archival_epoch_close_bond
   const uint64_t* bad_intervals_ptr;
   /// Pair count (not u64 count).
   size_t bad_intervals_len;
-  uint8_t is_foundation_complete_tree;
+  uint8_t is_support_complete_tree;
 };
 
 /// One gathered shard-registry row. Layout must match

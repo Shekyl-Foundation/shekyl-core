@@ -6733,3 +6733,17 @@ or a zero-filled key.
 persona slots in parallel.
 
 ---
+
+## 2026-10-22 — A pass transcript names its draw stream
+
+**Decision (Rick, 2026-10-22, `ARCHIVAL_SUPPORT_DRAW.md`).** The request
+header and the transcript `P` signs open with one stream byte: `0` for an
+economy draw, `1` for a complete-tree support draw. The header is 73 bytes
+and the transcript is 113. The pinned attestation vectors move with that
+byte.
+
+**Why.** A support draw and an economy draw sign the same fields. The byte
+is what the request carries, so a receipt from one stream is not a receipt
+for the other.
+
+---

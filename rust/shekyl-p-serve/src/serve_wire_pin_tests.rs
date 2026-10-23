@@ -196,6 +196,7 @@ async fn a_served_response_is_the_pinned_bytes() {
     );
     verify_pass_transcript(
         &pinned_keys().0,
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(IN_GATE_ANCHOR),
         &ANCHOR_HASH,

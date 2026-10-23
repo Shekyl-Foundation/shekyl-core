@@ -167,7 +167,7 @@ pub use archival::{
     admission_plan, closed_and_final, drawable_epoch_walked_back, shard_close, shard_close_height,
     Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta, ClosedUniverse, DrawableDigestWrite,
     DrawableMemo, EpochClose, EpochGather, EpochIssues, RecordWrite, RecordWriteKind,
-    ReleasePreImage, ServeCreditKey, Settlement, Slash, WALK_BACK_EPOCHS,
+    ReleasePreImage, ServeCreditKey, Settlement, Slash, SupportSettlement, WALK_BACK_EPOCHS,
 };
 // The serve-credit bundle rule (`archival/bundle.rs`): STAGED. The
 // verifier and its view trait are exported for the lanes that wire them
@@ -177,6 +177,7 @@ pub use archival::{
     check_section, check_section_until_switch, judge_bundles, open_body, open_reference,
     verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused, BundleUnanswered,
     BundleView, DerivedDraw, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
+    SupportSeat,
 };
 pub use block::{
     Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,
