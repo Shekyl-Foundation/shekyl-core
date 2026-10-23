@@ -96,32 +96,26 @@ fix to its PR 2 (`:330`). §A records the couplings that remain.
     `m_sync_lock`.
   - The executor has 2 workers (`net_node.inl:495-500`), and one of them
     is blocked by `idle_worker`.
-- **CS-F8. A session whose claim only equals `H*` never serves bodies.**
-  Found by CS-3's loopback harness (2026-10-23). **Posed, not ruled.**
-  - A body source is a session whose verified header frontier covers the
-    span (`find_source`). A frontier is learned only from headers that
-    session served.
-  - A session is asked for headers only when its claim exceeds
-    `work(H*)` (CS-Q2 step 1). An honest session holding exactly `H*`
-    never qualifies.
-  - So when the one session that supplied `H*`'s headers is closed (a
-    substituted body or witness) or excluded (a missed body deadline),
-    an honest session holding every body never becomes a source, and the
-    node stays `Behind`. The same holds with both sessions open from the
-    start, whenever the bad one was drawn for the headers.
-  - An empty header response from a session that holds `H*` does not
-    end the request either: the request stays outstanding until its
-    deadline, and the session gains no frontier.
-  - **Proposed:** when no open session's frontier covers the next span
-    along `H*`, draw one header request from the sessions whose claim
-    reaches `work(H*)`; an empty answer with `more = false` to a locator
-    whose first point is `H*` sets that session's frontier to `H*`,
-    and ends the request. A session that then marks every body
-    unavailable is the withholder, which CS-Q4 already handles.
-  - The loopback tests pin what is ruled (the supplier closes, the
-    header survives, the slow peer is excluded and not closed), not a
-    completed sync after it.
-
+- **CS-F8. A session that never served a header never served a body.**
+  Found by CS-3's loopback harness (2026-10-23). **Ruled (Rick,
+  2026-10-23).**
+  - A body source is a session whose frontier covers the span. A session
+    is asked for headers only when its claim exceeds `work(H*)` (CS-Q2
+    step 1). So an honest session holding exactly `H*`, which served no
+    header, was never a source, and once the one session that supplied
+    `H*`'s headers was closed (a substituted body or witness) or excluded
+    (a missed body deadline), the node stayed `Behind`.
+  - **Ruled:** a claim names its tip. `PeerClaim` carries the handshake's
+    `top_id`; when it names a block in `T` or on main, that block is the
+    session's frontier, never lowering one learned from served headers.
+    A response's `tip_work` carries no hash and leaves it. No header
+    request is drawn for an equal-work session: CS-Q2 step 1 stands.
+  - It trusts nothing new: a frontier only decides whom to ask for a
+    body. A false one meets `unavailable` or a missed deadline, both
+    already handled, and a body that arrives is bound to its header
+    before the offer. A session that names our tip and answers every body
+    unavailable is the withholder (CS-Q4).
+  - Inbound sessions post no claim until slice 4 (CS-Q10).
 ---
 
 ## CS-Q1. The boundary
@@ -1133,11 +1127,14 @@ does it meet ingest's backpressure?
     order, on a blocking thread. A delivered chunk that carried only
     chain-sync messages is finished after its requests are answered, so
     a peer's further requests wait in the transport, not in the owner.
-  - The executor is `shekyl_chain_sync::executor`. It runs each `Prove`
-    job as a blocking task, one permit of the job's class per item, in
-    order. `Class::Evidence` is in `shekyl-hash-budget`, above the
-    miner, and needs one free permit. The executor's parallelism is the
-    budget's: no constant of its own.
+  - The executor is `shekyl_chain_sync::executor`. A `Prove` job's items
+    are spread across the hasher budget's permits, each under one permit
+    of the job's class, and answered in item order; the answer ends at
+    the first item not formed, and no later item is hashed once that is
+    known. `Class::Evidence` is in `shekyl-hash-budget`, above the miner,
+    and needs one free permit. The executor's parallelism is the
+    budget's, and so is the owner row's blocking-thread cap: no constant
+    of its own.
   - The router is `shekyl_chain_sync::router`. It reads bucket headers
     only, admits 2011–2014 with their caps, and forwards everything
     else to the C++ handler unchanged (`P2P_TRANSPORT_LAYER.md`, the

@@ -17,7 +17,7 @@
 use std::io::BufReader;
 use std::num::NonZeroU128;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use shekyl_chain_ingest::{CorpusReader, IngestEvent, Source};
 use shekyl_chain_rules::harness::fixture::{candidate_on, chain_of};
@@ -166,6 +166,7 @@ fn a_spend_chain_skeleton_is_bound_and_wanted_in_full_from_another_session() {
         PeerClaim {
             count: ChainCount::from_raw(1),
             work: CumulativeDifficulty::from_raw(1),
+            top: BlockHash::NULL,
         },
         &parent,
         Instant::now(),
@@ -346,6 +347,7 @@ fn parted(defer: bool) {
             PeerClaim {
                 count: ChainCount::from_raw(1),
                 work: CumulativeDifficulty::from_raw(1),
+                top: BlockHash::NULL,
             },
             &view,
             Instant::now(),
@@ -456,6 +458,7 @@ fn a_late_body_after_the_selected_chain_changes_is_not_a_fault() {
             PeerClaim {
                 count: ChainCount::from_raw(1),
                 work: CumulativeDifficulty::from_raw(1),
+                top: BlockHash::NULL,
             },
             &view,
             Instant::now(),
@@ -1038,5 +1041,81 @@ fn a_span_is_offered_only_after_the_span_before_it_connects() {
             _ => None,
         });
         assert_eq!(offered, Some(second), "{out:?}");
+    });
+}
+
+/// A session whose claim names `H*`'s tip is a body source (CS-F8): it
+/// never served a header, and it is not asked for one, since its work does
+/// not exceed `H*`'s (CS-Q2 step 1). A claim naming a block this node does
+/// not hold makes no source.
+#[test]
+fn a_claim_naming_the_selected_tip_makes_a_body_source_without_a_header_request() {
+    let main = chain_of(8);
+    let mut block = candidate_on(&main, Vec::new()).block;
+    let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
+    main.with_view(|view| {
+        let tip = view.tip().expect("main answers").expect("a tip");
+        drive(&mut sync, &view, Event::Tip { tip });
+        open_claim(&mut sync, &view, 1);
+        let timestamp = match view.header_at(tip.height).expect("main answers") {
+            AtHeight::Recorded(record) => record.header.timestamp,
+            AtHeight::AboveTip => panic!("the tip"),
+        };
+        block.header.previous = tip.hash;
+        block.header.timestamp = timestamp + 120;
+        let pow = block.pow_blob();
+        let hash = PowBlob::read(&pow).expect("preimage").identity();
+        drive(
+            &mut sync,
+            &view,
+            Event::Headers {
+                session: 1,
+                bytes: headers_of(pow),
+            },
+        );
+        assert_eq!(sync.selected().hash, hash);
+        // The supplier leaves before serving the body.
+        drive(&mut sync, &view, Event::SessionClosed { session: 1 });
+        drive(&mut sync, &view, Event::Room { seats: 1 });
+        let work = sync.selected().work;
+        let mut asked = None;
+        for (session, top) in [(2u8, BlockHash::from_bytes([9; 32])), (3, hash)] {
+            drive(
+                &mut sync,
+                &view,
+                Event::SessionOpened {
+                    session,
+                    transit: Duration::from_secs(1),
+                },
+            );
+            let mut out = Vec::new();
+            sync.claim(
+                session,
+                PeerClaim {
+                    count: ChainCount::from_raw(tip.height.to_raw() + 2),
+                    work,
+                    top,
+                },
+                &view,
+                Instant::now(),
+                &mut NoDraw,
+                &mut out,
+            )
+            .expect("a chain");
+            assert!(
+                !out.iter()
+                    .any(|command| matches!(command, Command::RequestHeaders { .. })),
+                "an equal-work session was asked for headers: {out:?}"
+            );
+            // The claim itself plans the bodies: an idle node has no
+            // later event to do it.
+            if let Some(request) = request_for(&out) {
+                assert!(asked.is_none(), "{out:?}");
+                asked = Some(request);
+            }
+        }
+        let (who, asked) = asked.expect("the body is wanted on the claim");
+        assert_eq!(who, 3, "the session naming the tip is the source");
+        assert_eq!(asked, vec![*hash.as_bytes()]);
     });
 }

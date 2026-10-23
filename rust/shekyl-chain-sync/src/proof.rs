@@ -232,6 +232,7 @@ where
         PeerClaim {
             count: ChainCount::from_raw(2),
             work: CumulativeDifficulty::from_raw(u128::MAX),
+            top: BlockHash::NULL,
         },
         main,
         Instant::now(),
@@ -410,6 +411,7 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
             PeerClaim {
                 count: ChainCount::from_raw(1),
                 work: CumulativeDifficulty::from_raw(1),
+                top: BlockHash::NULL,
             },
             &view,
             Instant::now(),

@@ -523,7 +523,8 @@ where
     /// Record a hint. Refused only when the claim cannot be a chain.
     /// A recorded claim does not change [`Self::state`]. A claim that
     /// beats `H*` can start the one header request, whose locator is
-    /// read from `main`.
+    /// read from `main`. A claim naming a tip this node holds can make the
+    /// session a body source, and bodies are planned at once.
     ///
     /// # Errors
     ///
@@ -551,6 +552,8 @@ where
             self.pending.insert(session, claim);
         }
         self.plan(main, now, rng, out).map_err(ClaimError::View)?;
+        // The tip a claim names can make the session a body source (CS-F8).
+        self.plan_bodies(now, out);
         Ok(())
     }
 

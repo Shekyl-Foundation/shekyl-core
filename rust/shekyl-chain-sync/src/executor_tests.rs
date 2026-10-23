@@ -16,7 +16,7 @@ use shekyl_hash_budget::{Budget, Class};
 use shekyl_pow_randomx::{CacheStore, Seedhash};
 use shekyl_types::{BlockCount, BlockHash};
 
-use super::Executor;
+use super::{prove, Executor};
 use crate::model::{CachePlan, HashClass, ProveItem, Proved};
 use crate::proof::fixed;
 
@@ -42,7 +42,7 @@ fn item(seed: BlockHash) -> ProveItem {
 }
 
 struct Rig {
-    executor: Executor,
+    executor: Arc<Executor>,
     caches: Arc<CacheStore>,
     metrics: Arc<Metrics>,
 }
@@ -52,7 +52,11 @@ fn rig(budget: Budget) -> Rig {
     let metrics = Arc::new(Metrics::new());
     let substrate = ProductionSubstrate::new(Arc::clone(&caches), Arc::clone(&metrics));
     Rig {
-        executor: Executor::new(budget, substrate, Arc::new(AtomicBool::new(false))),
+        executor: Arc::new(Executor::new(
+            budget,
+            substrate,
+            Arc::new(AtomicBool::new(false)),
+        )),
         caches,
         metrics,
     }
@@ -70,14 +74,16 @@ fn held(caches: &CacheStore, seed: BlockHash) -> bool {
 
 /// A main seed the slots do not hold is `NotHeld`, and nothing is hashed
 /// or derived for it.
-#[test]
-fn a_main_seed_not_held_answers_not_held_and_never_derives() {
+#[tokio::test(flavor = "multi_thread")]
+async fn a_main_seed_not_held_answers_not_held_and_never_derives() {
     let rig = rig(Budget::new(NonZeroUsize::MIN));
-    let results = rig.executor.run(
+    let results = prove(
+        Arc::clone(&rig.executor),
         HashClass::HeaderPow,
         CachePlan::Main(seed(1)),
-        &[item(seed(1)), item(seed(1))],
-    );
+        vec![item(seed(1)), item(seed(1))],
+    )
+    .await;
     assert!(
         matches!(results.as_slice(), [Proved::NotHeld]),
         "{results:?}"
@@ -89,14 +95,16 @@ fn a_main_seed_not_held_answers_not_held_and_never_derives() {
 
 /// A branch seed is derived once and kept for the next job on that seed,
 /// replaced when the seed changes, and never put in the store's slots.
-#[test]
-fn a_branch_cache_is_derived_once_per_seed_and_never_enters_the_store() {
+#[tokio::test(flavor = "multi_thread")]
+async fn a_branch_cache_is_derived_once_per_seed_and_never_enters_the_store() {
     let rig = rig(Budget::new(NonZeroUsize::MIN));
-    let first = rig.executor.run(
+    let first = prove(
+        Arc::clone(&rig.executor),
         HashClass::HeaderPow,
         CachePlan::Branch(seed(2)),
-        &[item(seed(2)), item(seed(2))],
-    );
+        vec![item(seed(2)), item(seed(2))],
+    )
+    .await;
     assert!(
         first
             .iter()
@@ -104,11 +112,13 @@ fn a_branch_cache_is_derived_once_per_seed_and_never_enters_the_store() {
             && first.len() == 2,
         "{first:?}"
     );
-    let again = rig.executor.run(
+    let again = prove(
+        Arc::clone(&rig.executor),
         HashClass::HeaderPow,
         CachePlan::Branch(seed(2)),
-        &[item(seed(2))],
-    );
+        vec![item(seed(2))],
+    )
+    .await;
     assert!(matches!(again.as_slice(), [Proved::Formed(_)]));
     assert_eq!(
         rig.metrics.snapshot().cache_derives,
@@ -116,11 +126,13 @@ fn a_branch_cache_is_derived_once_per_seed_and_never_enters_the_store() {
         "one derive per seed"
     );
     assert_eq!(rig.executor.branch_seed(), Some(seed(2)));
-    let other = rig.executor.run(
+    let other = prove(
+        Arc::clone(&rig.executor),
         HashClass::HeaderPow,
         CachePlan::Branch(seed(3)),
-        &[item(seed(3))],
-    );
+        vec![item(seed(3))],
+    )
+    .await;
     assert!(matches!(other.as_slice(), [Proved::Formed(_)]));
     let metrics = rig.metrics.snapshot();
     assert_eq!((metrics.hashes, metrics.cache_derives), (4, 2));
@@ -131,16 +143,18 @@ fn a_branch_cache_is_derived_once_per_seed_and_never_enters_the_store() {
 /// On a budget of two with a miner holding one permit, the evidence job
 /// takes the other: the class sits above the miner's, and needs one free.
 /// Its cache is the job's own.
-#[test]
-fn an_evidence_job_runs_beside_a_miner_on_a_budget_of_two() {
+#[tokio::test(flavor = "multi_thread")]
+async fn an_evidence_job_runs_beside_a_miner_on_a_budget_of_two() {
     let budget = Budget::new(NonZeroUsize::new(2).expect("two"));
     let mining = budget.acquire(Class::Miner);
     let rig = rig(budget.clone());
-    let results = rig.executor.run(
+    let results = prove(
+        Arc::clone(&rig.executor),
         HashClass::Evidence,
         CachePlan::Evidence(seed(4)),
-        &[item(seed(4)), item(seed(4))],
-    );
+        vec![item(seed(4)), item(seed(4))],
+    )
+    .await;
     assert!(
         results
             .iter()
@@ -156,4 +170,37 @@ fn an_evidence_job_runs_beside_a_miner_on_a_budget_of_two() {
         "evidence is not the branch"
     );
     drop(mining);
+}
+
+/// A job's items are spread across the permits and answered in item order;
+/// the answer ends at the first item that is not formed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_job_answers_in_item_order_and_ends_at_its_first_refusal() {
+    let rig = rig(Budget::new(NonZeroUsize::new(2).expect("two")));
+    let mut broken = item(seed(5));
+    broken.pow = vec![0xFF; 3];
+    let results = prove(
+        Arc::clone(&rig.executor),
+        HashClass::HeaderPow,
+        CachePlan::Branch(seed(5)),
+        vec![
+            item(seed(5)),
+            item(seed(5)),
+            broken,
+            item(seed(5)),
+            item(seed(5)),
+        ],
+    )
+    .await;
+    assert!(
+        matches!(
+            results.as_slice(),
+            [Proved::Formed(_), Proved::Formed(_), Proved::Refused(_)]
+        ),
+        "{results:?}"
+    );
+    assert!(
+        rig.metrics.snapshot().hashes <= 4,
+        "nothing past the refusal is awaited"
+    );
 }

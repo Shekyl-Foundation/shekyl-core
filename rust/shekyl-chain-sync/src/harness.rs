@@ -167,6 +167,7 @@ where
         PeerClaim {
             count: ChainCount::from_raw(2),
             work: CumulativeDifficulty::from_raw(work),
+            top: BlockHash::NULL,
         },
         main,
         Instant::now(),
@@ -401,6 +402,7 @@ fn a_claim_never_changes_the_derived_state() {
                 PeerClaim {
                     count: ChainCount::from_raw(count),
                     work: CumulativeDifficulty::from_raw(work.max(u128::from(count))),
+                    top: BlockHash::NULL,
                 },
                 &view,
                 Instant::now(),
@@ -519,7 +521,7 @@ fn payload_refused_is_only_an_impossible_claim() {
             let work = u128::from(count) + extra;
             sync.claim(
                 1,
-                PeerClaim { count: ChainCount::from_raw(count), work: CumulativeDifficulty::from_raw(work) },
+                PeerClaim { count: ChainCount::from_raw(count), work: CumulativeDifficulty::from_raw(work), top: BlockHash::NULL },
                 &view,
                 Instant::now(),
                 &mut NoDraw,
@@ -528,7 +530,7 @@ fn payload_refused_is_only_an_impossible_claim() {
             .expect("a chain is not refused");
             let zero = sync.claim(
                 1,
-                PeerClaim { count: ChainCount::ZERO, work: CumulativeDifficulty::from_raw(work) },
+                PeerClaim { count: ChainCount::ZERO, work: CumulativeDifficulty::from_raw(work), top: BlockHash::NULL },
                 &view,
                 Instant::now(),
                 &mut NoDraw,
@@ -540,6 +542,7 @@ fn payload_refused_is_only_an_impossible_claim() {
                 PeerClaim {
                     count: ChainCount::from_raw(count),
                     work: CumulativeDifficulty::from_raw(u128::from(count) - 1),
+                    top: BlockHash::NULL,
                 },
                 &view,
                 Instant::now(),
@@ -766,6 +769,7 @@ fn no_header_request_is_drawn_while_a_run_is_being_proven() {
             PeerClaim {
                 count: ChainCount::from_raw(40),
                 work: CumulativeDifficulty::from_raw(u128::MAX),
+                top: BlockHash::NULL,
             },
             &view,
             Instant::now(),

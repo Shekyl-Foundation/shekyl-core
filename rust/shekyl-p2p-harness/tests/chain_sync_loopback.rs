@@ -239,6 +239,10 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
 
 /// A peer whose chain ends below the work it states, and below this
 /// node's, closes at `ClaimUnmet`.
+///
+/// The liar states the inflated work in every response's `tip_work` as well
+/// as in its handshake: a response's `tip_work` replaces the claim (CS-Q2
+/// step 1), so a peer that reports its real tip work there is not lying.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_liar_closes_at_claim_unmet() {
     logs();
@@ -286,12 +290,14 @@ async fn the_withholder_keeps_its_session_and_serves_nothing() {
 }
 
 /// A peer slower than the body deadline is excluded as a body source and
-/// not closed, and its late answer closes nothing.
+/// not closed; its late answer closes nothing; an honest peer that never
+/// served a header, and names our tip, finishes the sync (CS-F8).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_slow_drip_is_excluded_as_a_body_source_and_not_closed() {
     logs();
     let (corpus, steps) = spend();
     let held = source("drip-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
     let mut node = Node::start("drip", corpus.rules(), &steps[..1], 2, rng()).await;
     let late = Arc::new(Mutex::new(Vec::new()));
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Hold(Arc::clone(&late)));
@@ -303,7 +309,9 @@ async fn the_slow_drip_is_excluded_as_a_body_source_and_not_closed() {
     let asked = seen.bodies();
     // Past every body deadline: the budget at the rate floor, plus transit.
     node.advance(Duration::from_secs(4_096));
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    let (honest, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    node.connect(Box::new(honest), Some(claim_of(&held)));
+    wait_synced(&node, count).await;
     assert_eq!(seen.bodies(), asked, "an excluded source was asked again");
     // The late answers arrive now.
     let frames: Vec<Vec<u8>> = late.lock().expect("held").drain(..).collect();
@@ -314,7 +322,6 @@ async fn the_slow_drip_is_excluded_as_a_body_source_and_not_closed() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(node.closed(drip), None);
     assert!(!model_closes("drip").contains_key(&drip.get()));
-    assert_eq!(node.count(), 1, "a late body is not a span's answer");
     node.stop().await;
     held.stop().await;
 }
@@ -346,6 +353,10 @@ async fn a_low_work_fork_is_never_asked_for() {
 
 /// A heavier fork past the reorg cap raises the alarm: the latch is
 /// written by the connector and read back set, with its evidence.
+///
+/// The test supplies one event after the fork's response: the evidence
+/// draw waits for the next event (CS-Q2 step 3), and an idle node's next
+/// event is the answered request's deadline.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_past_cap_heavier_fork_raises_the_alarm_and_the_latch_reads_back() {
     logs();
@@ -487,7 +498,7 @@ async fn substituted(tag: &str, bodies: Bodies, expected: &str) {
     logs();
     let (corpus, steps) = spend();
     let held = source(&format!("{tag}-src"), &corpus, &steps).await;
-    let (count, work, _) = held.tip().expect("a chain");
+    let (count, _, _) = held.tip().expect("a chain");
     let mut node = Node::start(tag, corpus.rules(), &steps[..1], 2, rng()).await;
     let before = node.hashes();
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), bodies);
@@ -500,19 +511,11 @@ async fn substituted(tag: &str, bodies: Bodies, expected: &str) {
         model_closes(tag).get(&bad.get()).map(String::as_str),
         Some(expected)
     );
-    // The headers survive: with a session open again the node is behind
-    // the substituter's verified chain, which nobody re-proves.
+    // The headers survive. An honest peer that names our tip serves the
+    // bodies under them (CS-F8), and nothing is hashed again.
     let (honest, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
     node.connect(Box::new(honest), Some(claim_of(&held)));
-    assert!(
-        node.wait(LIMIT, |node| matches!(
-            node.state(),
-            SyncState::Behind { best, .. } if best.to_raw() == work
-        ))
-        .await,
-        "state {:?}",
-        node.state()
-    );
+    wait_synced(&node, count).await;
     assert_eq!(
         node.hashes() - before,
         count - 1,
@@ -523,10 +526,11 @@ async fn substituted(tag: &str, bodies: Bodies, expected: &str) {
 }
 
 /// A server of skeletons only is not at fault: every block whose bodies
-/// it serves whole connects, the first skeleton stops the span there, and
-/// the session stays open.
+/// it serves whole connects, the first skeleton stops the span there, the
+/// session stays open, and the skeleton's block is wanted whole from a
+/// peer that names our tip (CS-F8).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_skeleton_only_server_is_not_closed() {
+async fn a_skeleton_only_server_is_kept_and_its_skeletons_are_wanted_whole() {
     logs();
     let (corpus, steps) = spend();
     let held = source("skeleton-src", &corpus, &steps).await;
@@ -547,8 +551,49 @@ async fn a_skeleton_only_server_is_not_closed() {
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(stopped, "count {} of {count}", node.count());
     assert!(node.count() < count, "a skeleton connected");
+    let (honest, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    node.connect(Box::new(honest), Some(claim_of(&held)));
+    wait_synced(&node, count).await;
     assert_eq!(node.closed(skeleton), None);
     assert!(!model_closes("skeleton").contains_key(&skeleton.get()));
+    node.stop().await;
+    held.stop().await;
+}
+
+/// A peer that names our tip and answers every body unavailable is the
+/// withholder: kept, asked elsewhere first, and an honest peer finishes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_peer_naming_our_tip_and_withholding_every_body_is_the_withholder() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("named-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
+    let mut node = Node::start("named", corpus.rules(), &steps[..1], 2, rng()).await;
+    // The headers come from a peer whose bodies do not bind: it closes, and
+    // the headers stay.
+    let (bad, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::SubstituteBody);
+    let bad = node.connect(Box::new(bad), Some(claim_of(&held)));
+    assert!(
+        node.wait(LIMIT, |node| node.closed(bad).is_some()).await,
+        "the substituter was not closed"
+    );
+    let (withholder, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Withhold);
+    let withholder = node.connect(Box::new(withholder), Some(claim_of(&held)));
+    assert!(
+        node.wait(LIMIT, |_| asked.bodies() >= 1).await,
+        "the named tip made no body source"
+    );
+    assert_eq!(
+        asked.headers(),
+        0,
+        "an equal-work session is not asked for headers"
+    );
+    assert_eq!(node.count(), 1);
+    let (honest, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    node.connect(Box::new(honest), Some(claim_of(&held)));
+    wait_synced(&node, count).await;
+    assert_eq!(node.closed(withholder), None);
+    assert!(!model_closes("named").contains_key(&withholder.get()));
     node.stop().await;
     held.stop().await;
 }
@@ -556,6 +601,10 @@ async fn a_skeleton_only_server_is_not_closed() {
 /// A flood of unsolicited announcements beside a solicited sync goes to
 /// the C++ handler and does not stall the sync: the flooded sync finishes
 /// within a bound of the unflooded one.
+///
+/// Announcements (2008) are not the router's until the cutover routes them
+/// to the owner, so the flood reaches the C++ handler and never the model.
+/// What this pins is that a forwarded flood does not slow the owner.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_announce_flood_does_not_stall_a_solicited_sync() {
     logs();

@@ -6,7 +6,9 @@ name: cs2-long-run
 # It hashes the captured corpora and a 50,000-header chain at fixed
 # target 1, then syncs a corpus and that chain over loopback through the
 # sync owner (CS-3), recording headers/s, bodies/s, peak memory and the
-# time per request. The runner is the floor device (a Pi 4; rule 76). The
+# time per request. Both steps build `--release`: a test build leaves all
+# but RandomX unoptimised, and the figure would measure the debug model.
+# The runner is the floor device (a Pi 4; rule 76). The
 # figures from this job's first run are what replace `SYNC_RATE_FLOOR`
 # and `BODY_REQUESTS_IN_FLIGHT`. Until that
 # run is recorded, the constant stays the Assumption in
@@ -25,7 +27,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: captured corpora and 50,000 headers
         working-directory: rust
-        run: cargo test -p shekyl-chain-sync --features cs2-long-run --lib long_real_hashes_on_captured_corpora_and_fifty_thousand_headers -- --nocapture
+        run: cargo test --release -p shekyl-chain-sync --features cs2-long-run --lib long_real_hashes_on_captured_corpora_and_fifty_thousand_headers -- --nocapture
       - name: loopback sync of a corpus and 50,000 headers
         working-directory: rust
-        run: cargo test -p shekyl-p2p-harness --features cs2-long-run --test chain_sync_long_run -- --nocapture
+        run: cargo test --release -p shekyl-p2p-harness --features cs2-long-run --test chain_sync_long_run -- --nocapture

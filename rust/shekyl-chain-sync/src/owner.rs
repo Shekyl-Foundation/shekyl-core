@@ -134,21 +134,21 @@ impl Running {
 /// Start the owner on its own row, in the caller's tracing span.
 ///
 /// `stop` is shared with the executor, so a permit wait ends with the
-/// owner. `blocking` is the row's blocking-thread cap: serving and prove
-/// jobs run there. The workers are one: the owner is one task.
+/// owner. The row's blocking-thread cap is derived: the hasher budget's
+/// permits, the most proof items that can hash at once. Serving and the
+/// cache derivations queue on the same threads. The workers are one: the
+/// owner is one task.
 ///
 /// # Errors
 ///
 /// The runtime could not be built.
-pub fn spawn<C, R>(
-    parts: OwnerParts<C, R>,
-    stop: Arc<AtomicBool>,
-    blocking: std::num::NonZeroUsize,
-) -> std::io::Result<Running>
+pub fn spawn<C, R>(parts: OwnerParts<C, R>, stop: Arc<AtomicBool>) -> std::io::Result<Running>
 where
     C: Clock + Clone + Send + Sync + 'static,
     R: RelayRng + Send + 'static,
 {
+    let blocking = std::num::NonZeroUsize::new(parts.executor.permits())
+        .unwrap_or(std::num::NonZeroUsize::MIN);
     let name = ThreadName::new(ROW_NAME).expect("a fixed name");
     let pool = shekyl_runtime::runtime(
         RuntimeBudget {
@@ -375,6 +375,7 @@ where
                 (u128::from(sync.cumulative_difficulty_top64) << 64)
                     | u128::from(sync.cumulative_difficulty),
             ),
+            top: shekyl_types::BlockHash::from_bytes(sync.top_id),
         };
         let mut out = Vec::new();
         let now = self.now();
@@ -681,8 +682,8 @@ where
                     tracing::trace!(?job, ?class, ?cache, items = items.len(), "a prove job");
                     let executor = Arc::clone(&self.executor);
                     let inputs = self.inputs.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let results = executor.run(class, cache, &items);
+                    tokio::spawn(async move {
+                        let results = crate::executor::prove(executor, class, cache, items).await;
                         let _gone = inputs.send(Input::Proven { job, results });
                     });
                 }

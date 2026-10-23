@@ -176,7 +176,7 @@ impl Node {
         // The owner's log lines carry the node's tag.
         let span = tracing::info_span!("node", tag);
         let running = span
-            .in_scope(|| owner::spawn(parts, stop, NonZeroUsize::new(8).expect("non-zero")))
+            .in_scope(|| owner::spawn(parts, stop))
             .expect("the owner row");
         Self {
             chain,

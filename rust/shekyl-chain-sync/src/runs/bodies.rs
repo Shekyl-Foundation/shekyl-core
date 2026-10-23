@@ -252,9 +252,18 @@ where
             }
             // A frontier on another fork is not a source, however tall it
             // is. A frontier that is not in `T` covers only its own hash.
-            let covers = state.frontier.is_some_and(|(_, hash)| {
+            // The tip a session's claim named is a frontier too (CS-F8), as
+            // high as the served one or higher, never lowering it: it is
+            // why a peer that never served headers can serve bodies. A
+            // named tip this node does not hold in `T` covers nothing it
+            // still wants: a block on main is not a body it asks for.
+            let names = |hash: BlockHash| {
                 hash == end || self.tree.ancestor_at(hash, end_height) == Some(end)
-            });
+            };
+            let covers = state.frontier.is_some_and(|(_, hash)| names(hash))
+                || state
+                    .claim
+                    .is_some_and(|claim| self.tree.contains(claim.top) && names(claim.top));
             let blocked = skip_unavailable && state.inventory.unavailable.contains(&end);
             (covers && !blocked).then_some(*key)
         })

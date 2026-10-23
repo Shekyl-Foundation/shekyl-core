@@ -103,6 +103,7 @@ fn claim(count: u64, work: u128) -> PeerClaim {
     PeerClaim {
         count: ChainCount::from_raw(count),
         work: CumulativeDifficulty::from_raw(work),
+        top: BlockHash::NULL,
     }
 }
 

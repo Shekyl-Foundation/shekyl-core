@@ -217,6 +217,7 @@ fn the_evidence_draw_is_uniform_over_the_waiting_candidates() {
                 PeerClaim {
                     count: ChainCount::from_raw(2),
                     work: CumulativeDifficulty::from_raw(u128::MAX),
+                    top: shekyl_types::BlockHash::NULL,
                 },
                 &view,
                 Instant::now(),
@@ -249,6 +250,7 @@ fn the_evidence_draw_is_uniform_over_the_waiting_candidates() {
                 PeerClaim {
                     count: ChainCount::from_raw(2),
                     work: CumulativeDifficulty::from_raw(u128::MAX),
+                    top: shekyl_types::BlockHash::NULL,
                 },
                 &view,
                 Instant::now(),
