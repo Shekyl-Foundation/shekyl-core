@@ -123,9 +123,6 @@ impl EpochMap {
         }
     }
 
-    /// The hidden origin's route. A uniform epoch has none, and answers
-    /// `None`: the caller sends nothing rather than stemming onto a clear
-    /// link.
     /// [`StemMap::local_origin_routable`] on a reserved epoch. A uniform
     /// epoch has no address-hiding class, so a local origin never leaves on
     /// one: `false`.
@@ -137,6 +134,9 @@ impl EpochMap {
         }
     }
 
+    /// The hidden origin's route. A uniform epoch has none, and answers
+    /// `None`: the caller sends nothing rather than stemming onto a clear
+    /// link.
     #[must_use]
     pub(super) fn route_local_origin<R: RelayRng + ?Sized>(
         &mut self,
