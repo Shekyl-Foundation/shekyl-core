@@ -1,9 +1,9 @@
 # CompleteTree support draws — Round 0
 
-**Status: OPEN — Round 0, amended 2026-10-22 after reading `settle_pair`.**
-No code in this round. Ground: `dev` at `11f8fd1f0`. The PR builds §3,
-the settlement every pair already uses. What stays **TABLED** until
-after EUP-4 is §4: whether a hole that 2-of-3 cannot see needs more.
+**Status: RULED 2026-10-22.** Rick ruled §12, all five as recommended.
+Ground: `dev` at `11f8fd1f0`. §4 stays **TABLED** until after EUP-4:
+whether a hole that 2-of-3 cannot see needs more. The row is in
+`docs/FOLLOWUPS.md`.
 
 A complete tree is a support role. It is challenged and slashable. Its
 draws are not the economy's. This round names the stream, the schedule,
@@ -43,7 +43,7 @@ bits (`bundle.rs` `PassBitmap`). The receipt signs
 `PASS_COUNTERSIGNATURE_MESSAGE_LEN`). The request header inside that is
 72 bytes and has no stream tag.
 
-## 2. Schedule — for ruling
+## 2. Schedule — RULED 2026-10-22
 
 **Recommended `c` = 10.** §3 derives it. It is the smallest count that
 keeps the chance of fewer than three issued draws under `10^{-6}` when
@@ -296,7 +296,7 @@ that were credited. Re-using the freeze as the open membership would
 ask the slash pass who was a complete tree before the epoch opened.
 The open walk is the membership. The freeze stays the market exclusion.
 
-## 7. Fetch — proposed, for the ruling
+## 7. Fetch — RULED 2026-10-22
 
 `shekyl-p-fetch` `ServingEndpoint` is minted from the bond record's
 endpoint column (`target.rs`, `EU-D4`). `HolderSource::holders_of`
@@ -420,19 +420,18 @@ question adopts. It is not a second interim rule.
   pre-genesis, so it is a regenesis, and the release note says so.
 - The rename in §8, in that PR, not before.
 
-## 12. Ruling asked
+## 12. Ruling — RULED 2026-10-22
 
-Amended after review of `7632f2e3f`. The round's proposal on each:
+Rick ruled all five as recommended. No new slash rule.
 
-1. **`c` = 10**, from §3: `P(issued < 3) ≤ 10^{-6}` at a non-filing
-   rate of 0.10. At 0.20 the same bound is `c = 14`.
-2. **The schedule in §2.** Spread across `SEB − W₂`, with the per-tree
-   phase offset. Unissued carry capped at `c`. No top-up multiple.
-3. **The deletion list.** Empty. The exclusion flag stays and is
-   renamed.
-4. **§7.** Support membership is a best-effort fetch source beside `D`.
-5. **Release.** A voluntary holder uses the existing `Release` and its
-   cooldown, and stays slashable during the cooldown (§8).
-
-No new slash rule is on this list. §4 asks, after EUP-4, whether a
-hole the 2-of-3 cannot see needs one.
+1. **`c` = 10**, at the stated non-filing rate of one block in ten
+   (`P(issued < 3) ≤ 10^{-6}`).
+2. **Schedule.** Spread across `SEB − W₂` with the per-tree
+   `offset(P)`. Unissued carry capped at `c`. No top-up multiple.
+3. **Deletion list empty.** The exclusion flag stays and is renamed
+   for the support role.
+4. **Fetch.** Support membership is a best-effort source beside `D`:
+   never preferred over a drawn holder, and never the only holder
+   tried while a drawn holder of that shard exists.
+5. **Release.** A voluntary holder releases through the existing
+   `Release` and its cooldown, and stays slashable during the cooldown.
