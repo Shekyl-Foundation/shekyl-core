@@ -311,10 +311,12 @@ pub struct RelayZoneHandle {
     /// path that is almost never read. Off-strand readers clone the `Arc`
     /// (cheap) and copy fixed-size rows; the C++ merge edge emits JSON once.
     stem_tallies: Mutex<Arc<Vec<(ConnectionId, StemTallySnapshot)>>>,
-    /// Whether this zone's publish writes [`crate::origin_verdict`]. Only the
-    /// zone [`shekyl_relay_zone_new`] builds does: it is the process's one
-    /// relay. A zone a test builds stays out of the cell.
-    publishes_origin: bool,
+    /// Where this zone's publish writes the relay's hop-0 verdict. The zone
+    /// [`shekyl_relay_zone_new`] builds, the process's one relay, writes the
+    /// process cell ([`crate::origin_verdict`]); a zone a test builds writes
+    /// a channel of its own, or none. Fixed at construction, so no handle is
+    /// reached into after it is boxed.
+    origin: Option<crate::origin_verdict::OriginPublisher>,
 }
 
 impl RelayZoneHandle {
@@ -339,12 +341,15 @@ impl RelayZoneHandle {
         if let Ok(mut slot) = self.stem_tallies.lock() {
             *slot = snap;
         }
-        if self.publishes_origin {
+        if let Some(publisher) = &self.origin {
             let zone = self.driver.zone();
-            crate::origin_verdict::publish(crate::origin_verdict::OriginVerdict {
-                connected: zone.address_hiding_session(),
-                routable: zone.originates_address_hiding(),
-            });
+            crate::origin_verdict::publish_to(
+                publisher,
+                crate::origin_verdict::OriginVerdict {
+                    connected: zone.address_hiding_session(),
+                    routable: zone.originates_address_hiding(),
+                },
+            );
         }
     }
 }
@@ -619,23 +624,15 @@ pub extern "C" fn shekyl_relay_zone_new(
     } else {
         0
     };
-    let handle = new_zone(
+    new_zone_publishing(
         now_ms,
         stems,
         min_epoch_secs,
         epoch_jitter_secs,
         flags,
         identity.connectors,
-    );
-    if !handle.is_null() {
-        // SAFETY: `new_zone` just allocated the handle with `Box::into_raw`
-        // and nothing else holds it yet.
-        unsafe {
-            (*handle).publishes_origin = true;
-            (*handle).publish();
-        }
-    }
-    handle
+        Some(crate::origin_verdict::process_publisher()),
+    )
 }
 
 /// Open a zone. Release with [`shekyl_relay_zone_free`].
@@ -669,6 +666,8 @@ pub extern "C" fn shekyl_relay_zone_new(
 ///
 /// The production export reads the flags and the mask from the remnant's
 /// preparation. The tests state them.
+/// A zone that publishes its hop-0 verdict nowhere: the test constructor.
+#[cfg(test)]
 pub(crate) fn new_zone(
     now_ms: u64,
     stems: usize,
@@ -676,6 +675,30 @@ pub(crate) fn new_zone(
     epoch_jitter_secs: u32,
     flags: u32,
     configured: u32,
+) -> *mut RelayZoneHandle {
+    new_zone_publishing(
+        now_ms,
+        stems,
+        min_epoch_secs,
+        epoch_jitter_secs,
+        flags,
+        configured,
+        None,
+    )
+}
+
+/// A zone whose publish writes the relay's hop-0 verdict to `origin`, when
+/// one is given. The production zone is built with the process cell's
+/// publisher; a test that reads the verdict is built with a channel of its
+/// own.
+pub(crate) fn new_zone_publishing(
+    now_ms: u64,
+    stems: usize,
+    min_epoch_secs: u32,
+    epoch_jitter_secs: u32,
+    flags: u32,
+    configured: u32,
+    origin: Option<crate::origin_verdict::OriginPublisher>,
 ) -> *mut RelayZoneHandle {
     if stems == usize::MAX || min_epoch_secs == 0 {
         return std::ptr::null_mut();
@@ -744,7 +767,7 @@ pub(crate) fn new_zone(
         live_stems: AtomicUsize::new(0),
         stem_in_flight: AtomicUsize::new(0),
         stem_tallies: Mutex::new(Arc::new(Vec::new())),
-        publishes_origin: false,
+        origin,
     };
     handle.publish();
     Box::into_raw(Box::new(handle))

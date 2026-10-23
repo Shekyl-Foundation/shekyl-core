@@ -811,6 +811,12 @@ impl StemMap<ReservedSlot> {
     /// slot while another class member holds slot 0 reads routable until that
     /// route's walk steps past the alternate. The route's own publish after
     /// the plan corrects the read.
+    ///
+    /// The pinned scan is bounded by the configuration, not the peer set:
+    /// the frozen candidate list is at most `stems` long
+    /// ([`Self::route_local_origin`] pins the primary and `stems - 1`
+    /// alternates), and `class_live` is the outbound address-hiding census,
+    /// the dialer's target wide.
     #[must_use]
     pub fn local_origin_routable(&self, class_live: &[ConnectionId]) -> bool {
         if self.usage.is_empty() {

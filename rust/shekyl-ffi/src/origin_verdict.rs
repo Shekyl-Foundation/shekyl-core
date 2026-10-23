@@ -29,7 +29,7 @@
 //! usable before any address-hiding peer has handshaken, and the relay
 //! holds a local origin until one has (`GS-F3`).
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use tokio::sync::watch;
 
@@ -45,8 +45,13 @@ pub struct OriginVerdict {
     pub routable: bool,
 }
 
-static VERDICT: LazyLock<watch::Sender<OriginVerdict>> =
-    LazyLock::new(|| watch::channel(OriginVerdict::default()).0);
+/// The writing end of a verdict channel. The process has one, held by the
+/// production zone; a test zone holds one of its own, so no test touches
+/// the process cell.
+pub type OriginPublisher = Arc<watch::Sender<OriginVerdict>>;
+
+static VERDICT: LazyLock<OriginPublisher> =
+    LazyLock::new(|| Arc::new(watch::channel(OriginVerdict::default()).0));
 
 /// A receiver of the verdict. `changed()` wakes on a change and `borrow()`
 /// reads the value now. The sender is process-static, so the channel never
@@ -62,9 +67,16 @@ pub fn current() -> OriginVerdict {
     *VERDICT.borrow()
 }
 
-/// Publish the verdict. A repeat of the current value wakes nobody.
-pub(crate) fn publish(verdict: OriginVerdict) {
-    VERDICT.send_if_modified(|held| {
+/// The process cell's publisher, for the one production zone.
+#[must_use]
+pub(crate) fn process_publisher() -> OriginPublisher {
+    Arc::clone(&VERDICT)
+}
+
+/// Publish `verdict` through `publisher`. A repeat of the current value wakes
+/// nobody.
+pub(crate) fn publish_to(publisher: &OriginPublisher, verdict: OriginVerdict) {
+    publisher.send_if_modified(|held| {
         if *held == verdict {
             return false;
         }

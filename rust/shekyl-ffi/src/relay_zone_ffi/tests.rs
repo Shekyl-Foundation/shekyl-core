@@ -1738,17 +1738,15 @@ fn a_queued_message_survives_an_epoch_roll() {
     }
 }
 
-/// The production zone publishes the relay's hop-0 verdict into the one
-/// process cell (`GS-Q3`); a session whose peer does not learn the address
-/// makes both parts, and its close takes them back.
-///
-/// `origin_verdict` is one cell for the whole test binary. This is its only
-/// writer: `new_zone` leaves `publishes_origin` false, and no test calls
-/// `shekyl_relay_zone_new`. A test that builds a production zone, or sets
-/// the flag, races these assertions; keep it the one.
+/// A zone built with a verdict publisher publishes the relay's hop-0 verdict
+/// through it (`GS-Q3`): a session whose peer does not learn the address
+/// makes both parts, and its close takes them back. The production zone is
+/// built the same way with the process cell's publisher; this test's zone
+/// has a channel of its own, so it shares no state with any other test and
+/// reaches into no handle after construction.
 #[test]
-fn the_production_zone_publishes_the_origin_verdict() {
-    use crate::origin_verdict::{current, OriginVerdict};
+fn a_zone_built_with_a_publisher_publishes_the_origin_verdict() {
+    use crate::origin_verdict::OriginVerdict;
     let held = OriginVerdict {
         connected: false,
         routable: false,
@@ -1757,16 +1755,27 @@ fn the_production_zone_publishes_the_origin_verdict() {
         connected: true,
         routable: true,
     };
+    let (publisher, verdict) = tokio::sync::watch::channel(carrying);
+    let h = new_zone_publishing(0, 2, 600, 30, 0, TOR_CONFIGURED, Some(Arc::new(publisher)));
+    assert!(!h.is_null());
+    assert_eq!(
+        *verdict.borrow(),
+        held,
+        "construction publishes: no session hides the address"
+    );
     unsafe {
-        let h = new_zone(0, 2, 600, 30, 0, TOR_CONFIGURED);
-        assert!(!h.is_null());
-        (*h).publishes_origin = true;
-        (*h).publish();
-        assert_eq!(current(), held, "no session hides the address: held");
         shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, TOR_LINK);
-        assert_eq!(current(), carrying, "one address-hiding session: routable");
+    }
+    assert_eq!(
+        *verdict.borrow(),
+        carrying,
+        "one address-hiding session: routable"
+    );
+    unsafe {
         shekyl_relay_zone_on_close(h, id(1).as_ptr());
-        assert_eq!(current(), held, "its close takes the verdict back");
+    }
+    assert_eq!(*verdict.borrow(), held, "its close takes the verdict back");
+    unsafe {
         shekyl_relay_zone_free(h);
     }
 }
