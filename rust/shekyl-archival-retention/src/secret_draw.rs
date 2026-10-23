@@ -169,7 +169,7 @@ pub fn draw_commit(witness_pk: &[u8], seed: &[u8; 32]) -> [u8; 32] {
 /// The seed is wiped when this returns; the secret key wipes itself on
 /// drop. The producer that keeps the pair for `W₂` blocks replaces this at
 /// genesis (SO-D12); until then every template, the Rust producer's and the
-/// FFI's, commits through here (`DRS_X_PR3B_ROUND0.md` Q4).
+/// FFI's, commits through here (`DRS_X_STORE_FLIP.md` DX-Q3, Q4).
 ///
 /// # Errors
 ///

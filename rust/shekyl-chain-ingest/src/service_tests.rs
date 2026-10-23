@@ -1576,7 +1576,7 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
     }
 }
 
-/// The local-arrival entry (`DRS_X_PR3B_ROUND0.md` Q6). A local block that
+/// The local-arrival entry (`DRS_X_STORE_FLIP.md` DX-Q3, Q6). A local block that
 /// meets a full window waits for its seat and then connects; after a stop,
 /// the closed door answers `Stopped`.
 #[tokio::test(flavor = "multi_thread")]

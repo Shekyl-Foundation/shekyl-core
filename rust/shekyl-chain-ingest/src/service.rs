@@ -668,7 +668,7 @@ impl Door {
         self.room.close();
     }
 
-    /// The local-arrival entry (`DRS_X_PR3B_ROUND0.md` Q6): a block this
+    /// The local-arrival entry (`DRS_X_STORE_FLIP.md` DX-Q3, Q6): a block this
     /// node mined, was submitted, or is connecting at genesis. It waits for
     /// the local seat while the window is full, offers the block as
     /// [`Origin::Local`], and awaits its one reply. A door that closes while

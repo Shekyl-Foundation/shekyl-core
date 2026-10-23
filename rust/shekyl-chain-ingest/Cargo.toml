@@ -118,7 +118,7 @@ shekyl-miner = { path = "../shekyl-miner", optional = true }
 # door, a compact block's bodies resolved from what it shows.
 shekyl-mempool = { path = "../shekyl-mempool", optional = true }
 # pipeline: the node's one block template, built by the tip follower on one
-# snapshot (`DRS_X_PR3B_ROUND0.md` N2), and the reward-aware fill it lists
+# snapshot (`DRS_X_STORE_FLIP.md` DX-Q3, N2), and the reward-aware fill it lists
 # bodies under (#1152).
 shekyl-block-template = { path = "../shekyl-block-template", optional = true }
 # pipeline: the template's coinbase secret, drawn from the OS per template
