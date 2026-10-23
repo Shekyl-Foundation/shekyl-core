@@ -4248,6 +4248,7 @@ dependencies = [
 name = "shekyl-daemon-config"
 version = "3.1.0"
 dependencies = [
+ "libc",
  "rustix",
  "shekyl-address",
  "shekyl-logging",

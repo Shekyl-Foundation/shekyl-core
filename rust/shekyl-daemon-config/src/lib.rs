@@ -21,6 +21,8 @@ pub mod announce;
 pub mod docs;
 pub mod exit;
 pub mod file;
+#[cfg(unix)]
+mod group;
 pub mod load;
 pub mod lock;
 pub mod marker;
