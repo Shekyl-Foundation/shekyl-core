@@ -30,7 +30,7 @@
 //! - The `storage_scale`-scaled variant is **diagnostic and ungraded**, same pairing.
 
 use crate::metrics::{BandedVerdict, GRADING_AGE_BANDS, GRADING_COST_BANDS};
-use crate::model::EraShape;
+use crate::model::{EraShape, AGE_WEIGHT};
 use crate::scenarios::{baseline, run_sim, ScenarioResult, SimConfig};
 
 /// `N`, fixed by §L19a item 2 before the first run.
@@ -347,8 +347,9 @@ pub fn heavy_era_report() -> Vec<ArmReport> {
 /// `STAKER_ARCHIVAL_SIM.md` §L19c's headroom ladder, fixed before the run. `1.32` and
 /// `1.34` round to exactly `1.30`'s whole-slot capacities and are omitted.
 pub const HEADROOM_LADDER: [f64; 8] = [1.30, 1.36, 1.40, 1.45, 1.50, 1.60, 1.75, 2.00];
-/// §L19c's `age_weight` ladder, fixed before the run (`2.0` is the baseline).
-pub const AGE_WEIGHT_LADDER: [f64; 7] = [0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0];
+/// §L19c's `age_weight` ladder, fixed before the run. The middle rung is
+/// [`AGE_WEIGHT`], the production slope. The other rungs are the sweep.
+pub const AGE_WEIGHT_LADDER: [f64; 7] = [0.0, 1.0, AGE_WEIGHT, 3.0, 4.0, 6.0, 8.0];
 
 #[derive(serde::Serialize)]
 pub struct LeverRow {

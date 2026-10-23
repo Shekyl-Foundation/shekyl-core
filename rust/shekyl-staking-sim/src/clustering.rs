@@ -75,7 +75,7 @@
 
 use serde::Serialize;
 
-use crate::model::g_age;
+use crate::model::{g_age, AGE_WEIGHT};
 
 // ===========================================================================
 // Deterministic RNG (local, like cover.rs — determinism is load-bearing so the
@@ -111,15 +111,12 @@ impl SplitMix64 {
 }
 
 // ===========================================================================
-// Grounded constants — single-sourced shape from the baseline scenario
-// (`scenarios.rs`) so the harness sits on the same economic substrate the rest of
-// the sim is validated against. Per-shard `phi` is the one term NOT in the
-// protocol — the injected sensitivity axis.
+// Grounded constants. `AGE_WEIGHT` is the production slope (`model::AGE_WEIGHT`).
+// The rest are the baseline scenario's shape (`scenarios.rs`), retyped so this
+// harness sits on the same substrate. Per-shard `phi` is the one term not in
+// the protocol — the injected sensitivity axis.
 // ===========================================================================
 
-/// `g_age = 1 + age_weight·age`. The weight is production's milli slope.
-const AGE_WEIGHT: f64 =
-    shekyl_archival_retention::ARCHIVAL_REWARD_AGE_WEIGHT_MILLI as f64 / 1_000.0;
 /// `age ≥ deep_threshold` ⇒ deep history ⇒ requires a retention bond.
 const DEEP_THRESHOLD: f64 = 0.5;
 /// Flat per-deep-shard bond (mid rung).
