@@ -27,7 +27,7 @@ use std::sync::Arc;
 use tokio::sync::oneshot::{self, Receiver};
 
 use shekyl_daemon_config::announce;
-use shekyl_daemon_config::sections::{log_location_writable, DaemonConfig, Tor};
+use shekyl_daemon_config::sections::{log_location_writable, Clearnet, DaemonConfig, Tor};
 use shekyl_daemon_config::{marker, resolve, Lock, Platform, TABLE};
 use shekyl_options::{read_cli, Code, Diagnostic, Source, Value};
 use shekyl_runtime::{RuntimeBudget, ThreadName};
@@ -296,9 +296,15 @@ fn supervise(
     // Step 6: the notify runner, installed before the core that pushes to
     // it exists; its children run on the signal owner's runtime (§2.10).
     shekyl_ffi::notify_ffi::install(&config.notify, pool.handle().clone());
-    // Step 6: the managed Tor's start, overlapping the core's construction;
-    // awaited at step 8.
-    let tor_start = tor::begin(&config.tor, &config.data_dir, pool.handle());
+    // The managed Tor starts with the core. Step 8 does not wait for it.
+    let clearnet_on = !matches!(config.clearnet, Clearnet::Off);
+    let supervisor = tor::begin(
+        &config.tor,
+        clearnet_on,
+        config.network.p2p_port(),
+        &config.data_dir,
+        pool.handle(),
+    );
     let data = SnapshotData::new(config);
     let (done_tx, mut done_rx) = oneshot::channel::<i32>();
     let thread = std::thread::Builder::new()
@@ -325,78 +331,25 @@ fn supervise(
     let mut run_status = None;
     // A network that cannot start is a failure even when `run` returned 0.
     let mut preserve_status = true;
-    let mut tor_control = None;
     match pool.block_on(await_built(&mut constructed, &mut done_rx)) {
         Built::Ended(wait) => note_run(&mut run_status, wait),
         Built::Refused => note_run(&mut run_status, pool.block_on(run_or_stop(&mut done_rx))),
         Built::Ready => {
-            // Step 8: the managed Tor, awaited (a stop asked meanwhile ends
-            // the wait; §2.2 step 8 and the FOLLOWUPS row on the parked
-            // connector); then the zone host, its listeners and the
-            // dialer, each from its section; then the onion, which forwards
-            // to the zone host's loopback listener.
-            let tor_wait = match tor_start {
-                Some(handle) => pool.block_on(async {
-                    tokio::select! {
-                        started = handle => Some(match started {
-                            Ok(Ok(control)) => Some(control),
-                            Ok(Err(not_running)) => {
-                                tracing::warn!(target: "global", "{not_running}");
-                                None
-                            }
-                            Err(e) => {
-                                tracing::error!(target: "global", "the managed Tor's start task failed: {e}");
-                                None
-                            }
-                        }),
-                        cause = signals::stop_requested() => {
-                            note_stop(cause);
-                            None
-                        }
-                    }
-                }),
-                None => Some(None),
-            };
-            let Some(control) = tor_wait else {
-                // Stopped during the Tor wait: nothing of step 8 starts.
-                // The Tor start task finishes on the pool and is torn down
-                // with it.
-                return finish(
-                    pool,
-                    None,
-                    RemnantJoin {
-                        stop,
-                        thread,
-                        done_rx,
-                        run_status,
-                    },
-                    preserve_status,
-                    node,
-                );
-            };
-            tor_control = control;
-            let tor_socks = match (&config.tor, &tor_control) {
-                (Tor::Managed { .. }, Some(control)) => network::TorSocks::At {
-                    socks: shekyl_socks::Proxy::unauthenticated(control.socks_addr()),
-                    onion_listen: None,
-                    managed: true,
-                },
-                (Tor::Operator { socks, onion }, _) => network::TorSocks::At {
+            // Step 8 does not wait for Tor. Clearnet, the listeners and the
+            // dialer start at once. The managed connector is parked until
+            // the supervisor publishes a route.
+            let tor_socks = match &config.tor {
+                Tor::Managed { .. } => network::TorSocks::Managed,
+                Tor::Operator { socks, onion } => network::TorSocks::Operator {
                     socks: network::proxy_of(socks),
-                    onion_listen: onion.as_ref().map(|o| o.listen),
-                    managed: false,
+                    onion_listen: onion.as_ref().map(|onion| onion.listen),
                 },
-                (Tor::Managed { .. } | Tor::Off, _) => network::TorSocks::None,
+                Tor::Off => network::TorSocks::None,
             };
             match network::start(config, network_id, tor_socks) {
                 Ok(started) => {
-                    if let (Some(control), Some(forward)) = (&tor_control, started.tor_forward) {
-                        let published = pool.block_on(tor::publish(
-                            control,
-                            config.network.p2p_port(),
-                            forward,
-                        ));
-                        tor::watch_death(control, published, pool.handle());
+                    if let (Some(supervisor), Some(forward)) = (&supervisor, started.tor_forward) {
+                        supervisor.note_forward(forward);
                     }
                     note_run(&mut run_status, pool.block_on(run_or_stop(&mut done_rx)));
                 }
@@ -409,7 +362,7 @@ fn supervise(
     }
     finish(
         pool,
-        tor_control,
+        supervisor,
         RemnantJoin {
             stop,
             thread,
@@ -438,7 +391,7 @@ struct RemnantJoin {
 /// down (`TOR_SUPERVISOR.md` §1, DX-Q6). Returns the exit status.
 fn finish(
     pool: &shekyl_runtime::Pool,
-    tor_control: Option<shekyl_tor_control_daemon::DaemonTorControl>,
+    supervisor: Option<tor::Supervisor>,
     remnant: RemnantJoin,
     preserve_status: bool,
     node: shekyl_node::Node,
@@ -455,12 +408,9 @@ fn finish(
         run_status,
     } = remnant;
     let joiner = std::thread::spawn(move || finish_remnant(stop, thread, done_rx, run_status));
-    if let Some(control) = tor_control {
-        let exit = pool.block_on(control.shutdown());
-        tracing::info!(
-            target: "global",
-            "the managed Tor was torn down ({exit:?}); the address is gone, a restart mints a new one"
-        );
+    if let Some(supervisor) = supervisor {
+        pool.block_on(supervisor.shutdown());
+        tracing::info!(target: "global", "the managed Tor was torn down");
     }
     let status = match joiner.join() {
         Ok(status) => status,

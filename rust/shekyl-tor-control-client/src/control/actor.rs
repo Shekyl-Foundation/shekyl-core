@@ -402,6 +402,9 @@ pub enum Command {
     /// which is what makes it safe to add `SETCONF` (the dangerous verb) to
     /// this surface without a validated-string path.
     SetConf(HsLayerPins),
+    /// `SETCONF AvoidDiskWrites=0|1`. This is the only configuration key
+    /// this command can name.
+    SetConfDiskWrites(DiskWrites),
     /// `SIGNAL <name>` — deliver one of tor's control signals. Typed as a
     /// closed enum ([`Signal`]) so, like the onion commands, the arm cannot
     /// render a token that is not a signal name.
@@ -489,6 +492,12 @@ impl Command {
             // Also infallible: every value is a `$hex` specifier that cannot
             // carry a space or control byte (see `vanguards`).
             Self::SetConf(pins) => return Ok(Zeroizing::new(pins.to_wire_line())),
+            Self::SetConfDiskWrites(writes) => {
+                return Ok(Zeroizing::new(format!(
+                    "SETCONF AvoidDiskWrites={}",
+                    writes.as_arg()
+                )))
+            }
             // A closed enum of signal names: nothing to validate.
             Self::Signal(signal) => {
                 return Ok(Zeroizing::new(format!("SIGNAL {}", signal.as_str())))
@@ -652,6 +661,11 @@ pub struct ManagedTor {
     /// is added as further **typed, safe-by-construction** knobs, so the control-plane
     /// invariant stays *structural* rather than validated.
     pub disable_network: bool,
+    /// `AvoidDiskWrites`. [`DiskWrites::Prompt`] is the daemon's launch, so
+    /// the first `state` file holds the guard sample (`TSR-Q9`). The wallet
+    /// keeps [`DiskWrites::Deferred`]. The daemon switches to deferred with
+    /// one `SETCONF` after that file appears.
+    pub disk_writes: DiskWrites,
     /// Optional exit observer — the **production telemetry hook**. Once the child is
     /// reaped, the watcher reports how it ended ([`TorExit`]): a stop the actor asked
     /// for ([`TorExit::Reaped`], or [`TorExit::Killed`] when tor wedged past the grace
@@ -664,6 +678,30 @@ pub struct ManagedTor {
     /// never see this field.
     #[cfg(test)]
     pub(crate) leak: Option<launch::LeakTorEnd>,
+}
+
+/// Whether tor writes `state` promptly.
+///
+/// The launch passes this as `--AvoidDiskWrites`. [`Command::SetConfDiskWrites`]
+/// is the same key on the owning connection, and nothing else: a free
+/// `SETCONF` string is not a command this client will render.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiskWrites {
+    /// `0`. Tor writes `state` as a stock client does.
+    Prompt,
+    /// `1`. Tor defers writes.
+    Deferred,
+}
+
+impl DiskWrites {
+    /// The argument tor takes for `AvoidDiskWrites`.
+    #[must_use]
+    pub const fn as_arg(self) -> &'static str {
+        match self {
+            Self::Prompt => "0",
+            Self::Deferred => "1",
+        }
+    }
 }
 
 /// The control-port actor. Owns the write half and the
@@ -1842,8 +1880,8 @@ mod fake_tor {
 #[cfg(test)]
 mod live_tests {
     use super::{
-        BootstrapReadiness, Command, DeathSignal, EventSink, ManagedTor, TorControlClient,
-        TorControlClientConfig, TorExit, TorLaunch,
+        BootstrapReadiness, Command, DeathSignal, DiskWrites, EventSink, ManagedTor,
+        TorControlClient, TorControlClientConfig, TorExit, TorLaunch,
     };
     use kameo::actor::Spawn;
     use std::net::{SocketAddr, TcpListener};
@@ -2060,6 +2098,7 @@ mod live_tests {
                 socks_port: super::SocksPort::Fixed(free_port()),
                 // The whole point: a service that can reach the network.
                 disable_network: false,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: None,
             }),
@@ -2210,6 +2249,7 @@ mod live_tests {
                 data_dir: data_dir.clone(),
                 socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: true,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: None,
             }),
@@ -2285,6 +2325,7 @@ mod live_tests {
                 data_dir: data_dir.clone(),
                 socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: true,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: None,
             }),
@@ -2361,6 +2402,7 @@ mod live_tests {
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: false,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: None,
             }),
@@ -2486,6 +2528,7 @@ mod live_tests {
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: true,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: Some(super::super::launch::LeakTorEnd {
                     lives: LEAK_LIVES,
@@ -2601,6 +2644,7 @@ mod live_tests {
                 data_dir: dir.path().to_path_buf(),
                 socks_port: super::SocksPort::Fixed(free_port()),
                 disable_network: true,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
                 leak: None,
             }),
