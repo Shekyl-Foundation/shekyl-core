@@ -61,8 +61,10 @@ mod block_ingest;
 mod block_peer;
 mod drop_verdict;
 mod inbound_ceiling;
+mod sync_reply;
 
 pub use block_ingest::BlockIngest;
 pub use block_peer::{BlockAnnounceAction, BlockSyncAction};
 pub use drop_verdict::DropVerdict;
 pub use inbound_ceiling::{DescriptorLimit, DescriptorSnapshot, InboundCeiling, UnboundedReason};
+pub use sync_reply::{Invalidate, SyncReply, SyncReplyAction};

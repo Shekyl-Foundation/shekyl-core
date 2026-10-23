@@ -55,11 +55,13 @@ use crate::block::{
     Candidate, Derived, ProvenPow, ReferenceClaims, StructurallyValid, ValidatedBlock,
     VerifiedReference,
 };
+use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::drain;
 use crate::fault::{Fault, FormAttempt, Stale, ViewRead};
 use crate::header_facts::{prove_header, HeaderProof};
 use crate::header_ladder;
+use crate::header_path::HeaderJudged;
 use crate::rule_set::RuleSet;
 use crate::rules::attestation::B4;
 use crate::rules::block_weight::{Medians, Weights};
@@ -79,7 +81,7 @@ use crate::rules::tx_inputs::{I1, I14, I16, I4, I5, I6, I8, I9, J11, J12, J2, J2
 use crate::rules::{self, FormContext};
 use crate::substrate::Substrate;
 use crate::trust::Trust;
-use crate::verdict::{ChainValid, TxSlot, Verdict};
+use crate::verdict::{ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 use crate::view::ChainView;
 
 /// Run the listed stateless rules in order; the first refusal is the verdict.
@@ -129,10 +131,10 @@ macro_rules! judge_block {
 /// [`FormAttempt::FIRST`] and may only try again with the attempt a `Stale`
 /// hands back (`fault.rs`: the bound is the type).
 ///
-/// Order: the stateless header rows, the identity, the longhash, CEN-D1
-/// against the claimed target — so a block short of its proof-of-work
-/// costs RandomX and no body work — then `tx_form` at every slot, then
-/// CEN-H19's batch.
+/// Order: B1, B2, then G2 and the coinbase shape (F1, F3, F7, F9, F10),
+/// then the identity, the longhash and CEN-D1 against the claimed target,
+/// then `tx_form` at every slot and CEN-H19's batch. A block that fails
+/// one of those body rows does not pay for a longhash.
 ///
 /// Returns `Err(fault)` if the substrate could not answer — the clock, the
 /// verifier — which is not a judgement about the block; `Ok(Err(refused))`
@@ -157,12 +159,18 @@ pub fn form<S: Substrate>(
     // then the coinbase's shape (4.F — one field of the block, judged here
     // because the coinbase never passes the per-transaction path).
     let cx = FormContext::new(&candidate, rule_set);
-    judge_form!(cx, coverage; B1, B2, G2, F1, F3, F7, F9, F10);
+    judge_form!(cx, coverage; B1, B2);
+    // The body's pairing and the coinbase's shape, before the proof: a
+    // block that fails one of these does not pay for a longhash.
+    if let Err(refused) = block_rows(&candidate, rule_set, &mut coverage) {
+        return Ok(Err(refused));
+    }
 
     // The proof tail `form_header` shares: identity (B6), longhash (D2),
-    // CEN-D1 against the claimed target. Before any body work, so a block
-    // short of its proof-of-work costs RandomX and nothing more. The seed
-    // and the target are claims; `validate` and `alt_against` verify them.
+    // CEN-D1 against the claimed target. Before the per-transaction rows,
+    // so a block short of its proof-of-work costs RandomX and nothing of
+    // them. The seed and the target are claims; `validate` and
+    // `alt_against` verify them.
     let pow_blob = candidate.block.pow_blob();
     let facts = match prove_header(
         HeaderProof {
@@ -179,11 +187,69 @@ pub fn form<S: Substrate>(
         Ok(facts) => facts,
         Err(refused) => return Ok(Err(refused)),
     };
+    let verified = match slot_rows(&candidate, rule_set, references, &mut coverage) {
+        Ok(verified) => verified,
+        Err(refused) => return Ok(Err(refused)),
+    };
 
-    // The transactions on their own (census 4.H and the stateless 4.I and
-    // 4.J rows): the miner slot, then every listed slot in order, each
-    // refusal written at its slot. Nothing here reads the chain, so it runs
-    // on the parallel stage, not inside the write transaction.
+    Ok(Ok(StructurallyValid::new(
+        candidate, *rule_set, coverage, facts, verified,
+    )))
+}
+
+/// [`form`] from a header [`crate::judge_header`] has already proved.
+///
+/// The candidate's identity has to be the token's (CEN-B6). The token's
+/// proven facts and its proof coverage (B1, B2, B6, D2, D1) stand in for
+/// [`prove_header`]. [`block_rows`] and [`slot_rows`] are the functions
+/// [`form`] calls, so the two entries cannot drift. There is no substrate:
+/// the longhash inside the token is the proof, and this function cannot
+/// ask for another.
+pub fn form_judged(
+    candidate: Candidate,
+    judged: &HeaderJudged,
+    references: &ReferenceClaims,
+) -> Verdict<StructurallyValid> {
+    if shekyl_wire::identity_of_pow_blob(&candidate.block.pow_blob()) != judged.hash() {
+        return Err(InvalidBlock::new(CenRow::B6, Locus::Block));
+    }
+    let mut coverage = *judged.proof_coverage();
+    block_rows(&candidate, &judged.rule_set(), &mut coverage)?;
+    let verified = slot_rows(&candidate, &judged.rule_set(), references, &mut coverage)?;
+    Ok(StructurallyValid::new(
+        candidate,
+        judged.rule_set(),
+        coverage,
+        judged.facts().clone(),
+        verified,
+    ))
+}
+
+/// G2 and the coinbase shape (F1, F3, F7, F9, F10). Both `form` entries
+/// run these before any per-transaction row; `form` runs them before the
+/// proof.
+fn block_rows(
+    candidate: &Candidate,
+    rule_set: &RuleSet,
+    coverage: &mut RuleCoverage,
+) -> Verdict<()> {
+    let cx = FormContext::new(candidate, rule_set);
+    rules::run_form::<G2>(&cx, coverage)?;
+    rules::run_form::<F1>(&cx, coverage)?;
+    rules::run_form::<F3>(&cx, coverage)?;
+    rules::run_form::<F7>(&cx, coverage)?;
+    rules::run_form::<F9>(&cx, coverage)?;
+    rules::run_form::<F10>(&cx, coverage)?;
+    Ok(())
+}
+
+/// Each transaction's stateless judgement, then CEN-H19's batch.
+fn slot_rows(
+    candidate: &Candidate,
+    rule_set: &RuleSet,
+    references: &ReferenceClaims,
+    coverage: &mut RuleCoverage,
+) -> Verdict<Vec<Option<VerifiedReference>>> {
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);
     let listed = candidate
         .transactions
@@ -192,24 +258,17 @@ pub fn form<S: Substrate>(
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
     let mut verified = Vec::with_capacity(candidate.transactions.len());
     for (slot, tx) in core::iter::once(miner).chain(listed) {
-        match judge_slot_stateless(tx, slot, rule_set, references, &mut coverage) {
+        match judge_slot_stateless(tx, slot, rule_set, references, coverage) {
             Ok(reference) => {
                 if slot != TxSlot::Miner {
                     verified.push(reference);
                 }
             }
-            Err(refused) => return Ok(Err(refused)),
+            Err(refused) => return Err(refused),
         }
     }
-
-    // CEN-H19's verification half: every listed proof in one batch whose
-    // weights are derived from the batch (`rules::range_proof`), after each
-    // transaction's layout and CEN-I4's input cap have bounded the work.
-    judge_form!(FormContext::new(&candidate, rule_set), coverage; H19);
-
-    Ok(Ok(StructurallyValid::new(
-        candidate, *rule_set, coverage, facts, verified,
-    )))
+    rules::run_form::<H19>(&FormContext::new(candidate, rule_set), coverage)?;
+    Ok(verified)
 }
 
 /// One slot's whole stateless judgement — the function `form` runs at every
