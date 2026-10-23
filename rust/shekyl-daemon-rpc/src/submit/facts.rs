@@ -501,7 +501,7 @@ pub enum EpochClaimStanding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmissionCloseBondFacts {
     pub join_settlement_epoch: u64,
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     pub bad_intervals: Vec<BadInterval>,
 }
 

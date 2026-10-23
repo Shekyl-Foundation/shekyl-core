@@ -353,7 +353,14 @@ count_pattern() {
 # (`DrawableEpoch::digest`), the new domain
 # shekyl/archival-drawable-epoch-v1. Its vectors were computed outside the
 # tree and are pinned as hex, so the tests add no site.
-MECH1_EXPECTED=79
+# SO-D12 support draw (2026-10-23): 79 -> 82. Two production sites in
+# rust/shekyl-archival-retention/src/support_draw.rs
+# (`support_challenge_nonce`, `support_word`) under
+# shekyl/archival-support-challenge-nonce-v1 and
+# shekyl/archival-support-draw-v1, both already registered. One
+# #[cfg(test)] site in the same file hashes the economy preimage under
+# the existing draw label to show the support labels are not that label.
+MECH1_EXPECTED=82
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

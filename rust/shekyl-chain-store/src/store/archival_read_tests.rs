@@ -17,7 +17,7 @@ use shekyl_chain_rules::{AtHeight, SlashLogFloor};
 use shekyl_store_codec::Coded;
 use shekyl_types::archival::{
     BlockDraws, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
-    SettlementRow, BLOCK_DRAWS_LEN, MAX_ATTESTATION_WITNESS_BYTES,
+    SettlementRow, SupportIssued, BLOCK_DRAWS_LEN, MAX_ATTESTATION_WITNESS_BYTES,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -30,12 +30,15 @@ use crate::codec::{
     ArchivalLastSlashEpochCell, AttestationWitnessBytes, BondRecord, Canonical, Holdings, Present,
     PropertyCell, RMarket, Raw, SigmaWorkMilli, SlashLogEntry, SlashedHolding,
 };
-use crate::ids::{IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey};
+use crate::ids::{
+    IssuedDrawKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey, SupportIssuedKey,
+};
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
     ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_DRAWABLE_DIGEST, ARCHIVAL_ISSUED_DIGEST,
     ARCHIVAL_ISSUED_DRAW, ARCHIVAL_R_MARKET, ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT,
-    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED, ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_ISSUED,
+    ARCHIVAL_SUPPORT_SETTLEMENT,
 };
 use shekyl_chain_rules::{BlockDrawsFloor, EpochFloor};
 
@@ -857,6 +860,80 @@ fn a15_issued_draws_is_one_epoch_in_pair_then_height_then_draw_order() {
         .issued_draws(epoch(5), EpochFloor::NONE)
         .unwrap_err();
     assert!(is_si7_undecodable(&err, "archival_issued_draw"), "{err}");
+    cleanup(&path);
+}
+
+/// One tree's support draws in an epoch come back in `(h, j)` order, and
+/// the settlement row is the tree's, not a shard's.
+#[test]
+fn support_draws_of_one_tree_are_one_epoch_and_one_row() {
+    let path = tmp("arch-support-issued");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    assert!(store
+        .begin_read()
+        .unwrap()
+        .support_issued(epoch(5), EpochFloor::NONE)
+        .unwrap()
+        .is_empty());
+    drop(store);
+
+    let tree = persona(0x3c);
+    let other = persona(0x11);
+    plant(&path, |txn| {
+        let mut issued = txn.open_table(ARCHIVAL_SUPPORT_ISSUED).expect("t");
+        let mut put = |e, p: PCanonicalId, h, j, shard_n, passed| {
+            let row = SupportIssued {
+                shard: shard(shard_n),
+                passed,
+            };
+            issued
+                .insert(
+                    SupportIssuedKey::new(epoch(e), p, BlockHeight::from_raw(h), j).key(),
+                    row.encoded().as_encoded(),
+                )
+                .expect("insert");
+        };
+        put(5, tree, 100, 1, 9, true);
+        put(5, tree, 100, 0, 4, false);
+        put(5, other, 90, 0, 2, true);
+        put(4, tree, 80, 0, 1, true);
+        drop(issued);
+        let mut settled = txn.open_table(ARCHIVAL_SUPPORT_SETTLEMENT).expect("t");
+        let row = SettlementRow::settle(2, 3).expect("served");
+        settled
+            .insert((tree.to_bytes(), 5u64), row.encoded().as_encoded())
+            .expect("row");
+    });
+
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().unwrap();
+    let draws = snap.support_issued(epoch(5), EpochFloor::NONE).unwrap();
+    assert_eq!(draws.len(), 3);
+    assert_eq!(draws[0].persona, other);
+    assert_eq!(draws[0].shard, shard(2));
+    assert!(draws[0].state.passed);
+    assert_eq!(draws[1].persona, tree);
+    assert_eq!(draws[1].draw, 0);
+    assert_eq!(draws[1].shard, shard(4));
+    assert!(!draws[1].state.passed);
+    assert_eq!(draws[2].draw, 1);
+    assert_eq!(draws[2].shard, shard(9));
+    assert!(draws[2].state.passed);
+    assert_eq!(
+        snap.support_issued(epoch(4), EpochFloor::NONE)
+            .unwrap()
+            .len(),
+        1
+    );
+    let row = snap
+        .support_settlement(&tree, epoch(5), EpochFloor::NONE)
+        .unwrap()
+        .expect("the tree's row");
+    assert_eq!(row.outcome(), SettlementOutcome::Served);
+    assert!(snap
+        .support_settlement(&other, epoch(5), EpochFloor::NONE)
+        .unwrap()
+        .is_none());
     cleanup(&path);
 }
 

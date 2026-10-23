@@ -59,6 +59,7 @@ async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeyS
 async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
     let mut s = TcpStream::connect(addr).await.expect("connect");
     let header = encode_request_header(&pass_request_header_bytes(
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(ANCHOR_HEIGHT),
         &ANCHOR_HASH,
@@ -100,6 +101,7 @@ async fn served_shard_is_the_put_frame() {
 
     verify_pass_transcript(
         signer.public_key(),
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(ANCHOR_HEIGHT),
         &ANCHOR_HASH,

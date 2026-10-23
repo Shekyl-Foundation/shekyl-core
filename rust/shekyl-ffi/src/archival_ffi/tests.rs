@@ -1080,25 +1080,25 @@ fn epoch_close_compute_ffi_full_pipeline() {
             join_settlement_epoch: 0,
             bad_intervals_ptr: ptr::null(),
             bad_intervals_len: 0,
-            is_foundation_complete_tree: 0,
+            is_support_complete_tree: 0,
         },
         ShekylArchivalEpochCloseBond {
             join_settlement_epoch: 0,
             bad_intervals_ptr: ptr::null(),
             bad_intervals_len: 0,
-            is_foundation_complete_tree: 0,
+            is_support_complete_tree: 0,
         },
         ShekylArchivalEpochCloseBond {
             join_settlement_epoch: 0,
             bad_intervals_ptr: slashed.as_ptr(),
             bad_intervals_len: 1,
-            is_foundation_complete_tree: 0,
+            is_support_complete_tree: 0,
         },
         ShekylArchivalEpochCloseBond {
             join_settlement_epoch: 0,
             bad_intervals_ptr: ptr::null(),
             bad_intervals_len: 0,
-            is_foundation_complete_tree: 1,
+            is_support_complete_tree: 1,
         },
     ];
     let shards = [ShekylArchivalEpochCloseShard {
@@ -1151,22 +1151,22 @@ fn epoch_close_compute_ffi_full_pipeline() {
     let rust_bonds = [
         EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         },
         EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &[],
         },
         EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: false,
+            is_support_complete_tree: false,
             bad_intervals: &bad,
         },
         EpochCloseBond {
             join_settlement_epoch: 0,
-            is_foundation_complete_tree: true,
+            is_support_complete_tree: true,
             bad_intervals: &[],
         },
     ];
@@ -1213,25 +1213,25 @@ fn emission_epoch_work_sums_to_persisted_sigma() {
             join_settlement_epoch: 0,
             bad_intervals_ptr: ptr::null(),
             bad_intervals_len: 0,
-            is_foundation_complete_tree: 0,
+            is_support_complete_tree: 0,
         },
         ShekylArchivalEpochCloseBond {
             join_settlement_epoch: 0,
             bad_intervals_ptr: ptr::null(),
             bad_intervals_len: 0,
-            is_foundation_complete_tree: 0,
+            is_support_complete_tree: 0,
         },
         ShekylArchivalEpochCloseBond {
             join_settlement_epoch: 0,
             bad_intervals_ptr: slashed.as_ptr(),
             bad_intervals_len: 1,
-            is_foundation_complete_tree: 0,
+            is_support_complete_tree: 0,
         },
         ShekylArchivalEpochCloseBond {
             join_settlement_epoch: 0,
             bad_intervals_ptr: ptr::null(),
             bad_intervals_len: 0,
-            is_foundation_complete_tree: 1,
+            is_support_complete_tree: 1,
         },
     ];
     let shards = [
@@ -1586,12 +1586,12 @@ impl EmissionFfiFixture {
         let bonds = [
             EpochCloseBond {
                 join_settlement_epoch: 1,
-                is_foundation_complete_tree: false,
+                is_support_complete_tree: false,
                 bad_intervals: &[],
             },
             EpochCloseBond {
                 join_settlement_epoch: 1,
-                is_foundation_complete_tree: false,
+                is_support_complete_tree: false,
                 bad_intervals: &[],
             },
         ];
@@ -1719,7 +1719,7 @@ impl EmissionFfiFixture {
                     join_settlement_epoch: b.join_settlement_epoch,
                     bad_intervals_ptr: ptr::null(),
                     bad_intervals_len: 0,
-                    is_foundation_complete_tree: 0,
+                    is_support_complete_tree: 0,
                 })
                 .collect(),
             ffi_shards: shards

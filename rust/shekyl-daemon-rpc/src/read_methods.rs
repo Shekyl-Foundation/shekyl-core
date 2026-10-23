@@ -303,7 +303,7 @@ fn claim_epoch_row(epoch: EmissionEpochFacts) -> ClaimEpochSnapshot {
                 .into_iter()
                 .map(|bond| ClaimBondRow {
                     join_settlement_epoch: bond.join_settlement_epoch,
-                    is_foundation_complete_tree: bond.is_foundation_complete_tree,
+                    is_support_complete_tree: bond.is_support_complete_tree,
                     bad_intervals_flat: bond
                         .bad_intervals
                         .iter()

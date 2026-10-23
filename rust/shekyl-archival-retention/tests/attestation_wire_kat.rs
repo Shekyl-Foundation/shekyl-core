@@ -36,7 +36,7 @@
 //! `derive_archival_p_keys` over a fixed master seed, and the ML-DSA leg is
 //! signed with a fixed hedging seed, so a rebuild reproduces the pinned
 //! signature byte-for-byte — sign/verify co-drift cannot pass here. The pin is
-//! over the **decoded** 72-byte header in canonical binary (`SF-D8`
+//! over the **decoded** 73-byte header in canonical binary (`SF-D8`
 //! clarification): the textual header encoding `RF-R1` owns never enters the
 //! transcript, so Rust and C++ cannot disagree on a case or padding variant.
 //!
@@ -127,9 +127,10 @@ const FRAMED: [u8; 48] = {
 /// from the independent implementation (module docs).
 const MSG_DIGEST_EXPECT_HEX: &str =
     "0758cedb256259dd3d372560884dcaec515857360ed434155bae0bbb4c85a6bb";
-/// The decoded request header: `[0x03;32]` ‖ anchor height little-endian
-/// (`0807060504030201`) ‖ `[0x04;32]`. Hand-computed.
+/// The decoded request header: stream `00` ‖ `[0x03;32]` ‖ anchor height
+/// little-endian (`0807060504030201`) ‖ `[0x04;32]`. Hand-computed.
 const REQUEST_HEADER_EXPECT_HEX: &str = concat!(
+    "00",
     "0303030303030303030303030303030303030303030303030303030303030303",
     "0807060504030201",
     "0404040404040404040404040404040404040404040404040404040404040404",
@@ -139,6 +140,7 @@ const REQUEST_HEADER_EXPECT_HEX: &str = concat!(
 /// Hand-computed: a plain concatenation of fixed-width fields, **not** a hash
 /// of them — a verifier that hashed it would fail here.
 const MSG_EXPECT_HEX: &str = concat!(
+    "00",
     "0303030303030303030303030303030303030303030303030303030303030303",
     "0807060504030201",
     "0404040404040404040404040404040404040404040404040404040404040404",
@@ -255,13 +257,19 @@ fn header_canonical_bytes_match_pin() {
 
 #[test]
 fn request_header_and_transcript_match_pin() {
-    let hdr = pass_request_header_bytes(&MSG_NONCE, bh(MSG_ANCHOR_HEIGHT), &MSG_ANCHOR_HASH);
+    let hdr = pass_request_header_bytes(
+        shekyl_archival_retention::PassStream::Economy,
+        &MSG_NONCE,
+        bh(MSG_ANCHOR_HEIGHT),
+        &MSG_ANCHOR_HASH,
+    );
     assert_eq!(hdr.len(), PASS_REQUEST_HEADER_LEN);
     assert_eq!(hex::encode(hdr), REQUEST_HEADER_EXPECT_HEX);
 
     let digest = pass_delivery_digest(&MSG_NONCE, &FRAMED);
     assert_eq!(hex::encode(digest), MSG_DIGEST_EXPECT_HEX);
     let msg = pass_countersignature_message(
+        shekyl_archival_retention::PassStream::Economy,
         &MSG_NONCE,
         bh(MSG_ANCHOR_HEIGHT),
         &MSG_ANCHOR_HASH,
@@ -318,9 +326,9 @@ fn attestation_constants_are_pinned() {
     assert_eq!(PASS_NONCE_LEN, 32);
     assert_eq!(PASS_ANCHOR_HEIGHT_LEN, 8);
     assert_eq!(PASS_ANCHOR_HASH_LEN, 32);
-    assert_eq!(PASS_REQUEST_HEADER_LEN, 72);
+    assert_eq!(PASS_REQUEST_HEADER_LEN, 73);
     assert_eq!(PASS_DELIVERY_DIGEST_LEN, 32);
-    assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 112);
+    assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 113);
     // The anchor window: depth from the generated reorg-depth constant, lag
     // PROVISIONAL 4 (the JSON key carries the falsifier), threshold 724.
     assert_eq!(PASS_ANCHOR_DEPTH_BLOCKS, bc(720));
@@ -392,6 +400,7 @@ fn anchor_window_genesis_boundary_is_pinned_at_723_and_724() {
             &sk,
             SCHEME_DOMAIN_ATTESTATION,
             &pass_countersignature_message(
+                shekyl_archival_retention::PassStream::Economy,
                 &[0x09; 32],
                 bh(anchor),
                 &pinned_chain_hash(anchor),
@@ -646,6 +655,7 @@ fn pinned_persona() -> (HybridPublicKey, HybridSecretKey, [u8; 32]) {
 
 fn pinned_signature(sk: &HybridSecretKey) -> HybridSignature {
     let msg = pass_countersignature_message(
+        shekyl_archival_retention::PassStream::Economy,
         &SIG_NONCE,
         bh(SIG_ANCHOR_HEIGHT),
         &pinned_chain_hash(SIG_ANCHOR_HEIGHT),
@@ -690,7 +700,7 @@ fn build_signature_document() -> Value {
         "description": "Deterministic pinned SF-D8 v3 pass countersignature: P's identity \
                         keypair from derive_archival_p_keys(master_seed, Mainnet, Bip39, p_slot), \
                         ML-DSA leg hedged with ml_dsa_hedge_seed, over the DECODED request header \
-                        nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] followed by shard_id_le[8] \
+                        stream[1] ‖ nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] followed by shard_id_le[8] \
                         and delivery_digest[32], under domain_utf8. delivery_digest is \
                         cSHAKE256(delivery_digest_customization_utf8, nonce ‖ framed)[..32], where \
                         framed_hex is the response body P delivered ahead of its signature. anchor_window_hashes_hex[i] is the connecting chain's \
@@ -716,9 +726,12 @@ fn build_signature_document() -> Value {
         "anchor_window_hashes_hex": table,
         "shard_id": SIG_SHARD_ID,
         "settlement_epoch": SIG_EPOCH,
-        "request_header_hex": hex::encode(pass_request_header_bytes(
+        "request_header_hex": hex::encode(pass_request_header_bytes(shekyl_archival_retention::PassStream::Economy,
             &SIG_NONCE, bh(SIG_ANCHOR_HEIGHT), &pinned_chain_hash(SIG_ANCHOR_HEIGHT))),
-        "message_hex": hex::encode(record.countersignature_message(&pinned_chain_hash(SIG_ANCHOR_HEIGHT))),
+        "message_hex": hex::encode(record.countersignature_message(
+            shekyl_archival_retention::PassStream::Economy,
+            &pinned_chain_hash(SIG_ANCHOR_HEIGHT),
+        )),
         "header_hex": hex::encode(record.to_header().to_canonical_bytes()),
         "hybrid_signature_hex": hex::encode(sig.to_canonical_bytes().expect("sig")),
         "witness_hex": hex::encode(witness.to_canonical_bytes().expect("witness")),
@@ -980,6 +993,7 @@ fn regenerate_attestation_wire_vectors() {
     println!(
         "REQUEST_HEADER_EXPECT_HEX = \"{}\"",
         hex::encode(pass_request_header_bytes(
+            shekyl_archival_retention::PassStream::Economy,
             &MSG_NONCE,
             bh(MSG_ANCHOR_HEIGHT),
             &MSG_ANCHOR_HASH
@@ -988,6 +1002,7 @@ fn regenerate_attestation_wire_vectors() {
     println!(
         "MSG_EXPECT_HEX            = \"{}\"",
         hex::encode(pass_countersignature_message(
+            shekyl_archival_retention::PassStream::Economy,
             &MSG_NONCE,
             bh(MSG_ANCHOR_HEIGHT),
             &MSG_ANCHOR_HASH,

@@ -533,7 +533,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
                 .iter()
                 .map(|b| EpochCloseBond {
                     join_settlement_epoch: b.join_settlement_epoch,
-                    is_foundation_complete_tree: b.is_foundation_complete_tree,
+                    is_support_complete_tree: b.is_support_complete_tree,
                     bad_intervals: &b.bad_intervals,
                 })
                 .collect()
