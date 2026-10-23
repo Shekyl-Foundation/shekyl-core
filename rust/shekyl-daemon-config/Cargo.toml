@@ -30,6 +30,10 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Safe wrappers for the data-directory lock (`flock`) and the account's
 # effective uid; the crate shekyl-engine-prefs already pins for `fsync`.
 rustix = { version = "1", features = ["fs", "process"] }
+# The group and account reads the secret-read rule makes (`group.rs`:
+# `getgrgid_r`, `getpwuid_r`, the `getpwent` walk), which rustix does not
+# wrap. The pin shekyl-ffi and shekyl-logging already carry.
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # The Win32 security calls (the DACL allowlist, the file lock) live where
