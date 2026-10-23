@@ -249,13 +249,11 @@ impl DaemonTorControl {
         self.ready.clone()
     }
 
-    /// This incarnation's data directory.
+    /// This incarnation's data directory, while the control still holds it.
+    /// `None` after a stop or a wipe has taken it.
     #[must_use]
-    pub fn data_path(&self) -> &Path {
-        self.data_dir
-            .as_ref()
-            .map(EphemeralDataDir::path)
-            .unwrap_or(Path::new(""))
+    pub fn data_path(&self) -> Option<&Path> {
+        self.data_dir.as_ref().map(EphemeralDataDir::path)
     }
 
     /// Bootstrap reached the ready gate.

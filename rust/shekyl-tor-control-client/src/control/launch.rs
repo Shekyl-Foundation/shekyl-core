@@ -204,7 +204,7 @@ pub(crate) fn managed_tor_command(
         // owning. No control port, port file or cookie exists.
         .arg("--__OwningControllerFD")
         .arg(tor_end.to_string())
-        // Tor writes `state` and its caches less often (TSR §1, Disk).
+        // The caller's disk policy: Prompt is 0, Deferred is 1 (TSR §1, Disk).
         .arg("--AvoidDiskWrites")
         .arg(managed.disk_writes.as_arg())
         .arg("--SocksPort")

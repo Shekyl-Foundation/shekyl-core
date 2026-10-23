@@ -254,7 +254,9 @@ impl Drive {
     /// Fold one observation. A process that ended is reaped here when the
     /// phase does not withdraw a route: there is nothing to take down, and
     /// the directory is still kept. A [`Action::TakeDown`] reaps after it
-    /// withdraws, so the route is gone before the child is.
+    /// withdraws, so the route is gone before the child is. A
+    /// [`Action::StopRoute`] only withdraws: the shutdown wipe still owns
+    /// the child.
     async fn fold(&mut self, input: Input) {
         let ended = ends_incarnation(&input);
         self.step = self.core.on(input, self.now());
@@ -298,8 +300,12 @@ impl Drive {
             Action::Publish(route) => Some(self.publish_route(route)),
             Action::RepublishOnion => Some(self.republish().await),
             Action::TakeDown => {
-                self.withdraw_route();
+                self.withdraw_route(DownCause::ProcessExited);
                 self.reap().await;
+                None
+            }
+            Action::StopRoute => {
+                self.withdraw_route(DownCause::ProcessStopped);
                 None
             }
             Action::StopChild => {
@@ -410,10 +416,8 @@ impl Drive {
     }
 
     fn watch_state(&self) -> Option<Input> {
-        let control = self.control.as_ref()?;
-        control
-            .data_path()
-            .join("state")
+        let path = self.control.as_ref()?.data_path()?;
+        path.join("state")
             .is_file()
             .then_some(Input::StateFileAppeared)
     }
@@ -449,8 +453,9 @@ impl Drive {
                 shekyl_ffi::dialer_ffi::note_own_onion(service.as_str(), self.virtual_port);
                 tracing::info!(
                     target: "global",
-                    "Tor is up: overlay inbound is published at {}.onion",
-                    service.as_str()
+                    "Tor is up: overlay inbound is published at {}.onion:{}, forwarded from {forward}",
+                    service.as_str(),
+                    self.virtual_port,
                 );
                 Input::OnionPublished
             }
@@ -461,9 +466,9 @@ impl Drive {
         }
     }
 
-    fn withdraw_route(&mut self) {
+    fn withdraw_route(&mut self, cause: DownCause) {
         if let Some(id) = self.incarnation.take() {
-            let _fell = shekyl_ffi::zone_ffi::publish_tor_down(id, DownCause::ProcessExited);
+            let _fell = shekyl_ffi::zone_ffi::publish_tor_down(id, cause);
         }
     }
 

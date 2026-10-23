@@ -68,8 +68,12 @@ pub enum Action {
     SetConfAvoidDiskWrites,
     /// Publish the managed route. Only the transition into `Running` builds it.
     Publish(ManagedRunning),
-    /// The installed route is down.
+    /// The installed route is down because the process ended. The driver
+    /// reaps and keeps the directory.
     TakeDown,
+    /// The installed route is down because this node is stopping. The
+    /// driver leaves the child up; [`Self::StopChild`] wipes it.
+    StopRoute,
     /// `ADD_ONION` with the boot's seed.
     RepublishOnion,
     /// Say the posture. At most once per cap interval, except a recovery.
@@ -329,13 +333,7 @@ impl Core {
                 self.say(now, false)
             }
             Input::StateFileAppeared => self.state_file(),
-            Input::Shutdown => {
-                self.phase = Phase::Stopping;
-                self.pin_at = None;
-                self.sample_at = None;
-                self.announce_at = None;
-                vec![Action::StopChild]
-            }
+            Input::Shutdown => self.shutdown(),
         };
         self.step(now, actions)
     }
@@ -436,6 +434,8 @@ impl Core {
         if let Some(socks) = bound {
             self.enter_running(now, socks)
         } else {
+            // One ask for the listener. A reply that still omits it waits
+            // out the sample interval instead of asking again.
             vec![Action::Sample]
         }
     }
@@ -453,7 +453,7 @@ impl Core {
             *link = Link::Open;
             return Vec::new();
         }
-        let outcome = match &mut self.phase {
+        let enter = match &mut self.phase {
             Phase::Bootstrapping {
                 socks: have, ready, ..
             } => {
@@ -461,23 +461,19 @@ impl Core {
                     *have = Some(addr);
                 }
                 match (*ready, *have) {
-                    (true, Some(addr)) => SampleOutcome::Enter(addr),
-                    (true, None) => SampleOutcome::Again,
-                    (false, _) => SampleOutcome::Wait,
+                    (true, Some(addr)) => Some(addr),
+                    // Not ready yet, or ready and still no listener. The
+                    // deadline asks again. An immediate sample here loops.
+                    _ => None,
                 }
             }
             _ => return Vec::new(),
         };
-        match outcome {
-            SampleOutcome::Enter(addr) => self.enter_running(now, addr),
-            SampleOutcome::Again => {
-                self.arm_sample(now);
-                vec![Action::Sample]
-            }
-            SampleOutcome::Wait => {
-                self.arm_sample(now);
-                Vec::new()
-            }
+        if let Some(addr) = enter {
+            self.enter_running(now, addr)
+        } else {
+            self.arm_sample(now);
+            Vec::new()
         }
     }
 
@@ -602,14 +598,22 @@ impl Core {
         self.process_fault(now, Cause::FailedStart, true)
     }
 
+    fn shutdown(&mut self) -> Vec<Action> {
+        let installed = self.route_done();
+        self.phase = Phase::Stopping;
+        self.pin_at = None;
+        self.sample_at = None;
+        self.announce_at = None;
+        let mut actions = Vec::new();
+        if installed {
+            actions.push(Action::StopRoute);
+        }
+        actions.push(Action::StopChild);
+        actions
+    }
+
     fn process_fault(&mut self, now: u64, cause: Cause, launch_failed: bool) -> Vec<Action> {
-        let installed = matches!(
-            self.phase,
-            Phase::Running {
-                route: Duty::Done,
-                ..
-            }
-        );
+        let installed = self.route_done();
         self.phase = Phase::Absent {
             duty: AbsentDuty::Retry,
         };
@@ -632,13 +636,7 @@ impl Core {
     }
 
     fn hold(&mut self, now: u64, cause: Cause, duty: AbsentDuty) -> Vec<Action> {
-        let installed = matches!(
-            self.phase,
-            Phase::Running {
-                route: Duty::Done,
-                ..
-            }
-        );
+        let installed = self.route_done();
         self.phase = Phase::Absent { duty };
         self.sample_at = None;
         self.pin_at = match duty {
@@ -772,6 +770,16 @@ impl Core {
         }
     }
 
+    fn route_done(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Running {
+                route: Duty::Done,
+                ..
+            }
+        )
+    }
+
     fn live(&self) -> bool {
         matches!(
             self.phase,
@@ -821,12 +829,6 @@ impl Core {
     fn sample_ns(&self) -> u64 {
         duration_ns(self.policy.sample_every)
     }
-}
-
-enum SampleOutcome {
-    Enter(SocketAddr),
-    Again,
-    Wait,
 }
 
 fn duration_ns(duration: Duration) -> u64 {

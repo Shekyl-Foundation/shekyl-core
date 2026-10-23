@@ -508,3 +508,58 @@ fn a_state_file_defers_writes_and_ends_the_sample() {
     let again = core.on(Input::StateFileAppeared, 2);
     assert!(again.actions.is_empty());
 }
+
+/// The ready gate with no listener asks once. The reply that still omits
+/// it waits out the sample interval instead of asking again immediately.
+#[test]
+fn a_ready_gate_without_a_listener_waits_for_the_sample() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    core.on(Input::PinAccepted, 0);
+    core.on(Input::Spawned, 0);
+    let asked = core.on(Input::BootstrapComplete, 0);
+    assert_eq!(
+        asked
+            .actions
+            .iter()
+            .filter(|action| matches!(action, Action::Sample))
+            .count(),
+        1
+    );
+    assert!(!publishes(&asked));
+    let waited = core.on(
+        Input::DirectorySample {
+            progress: Some(100),
+            socks: None,
+        },
+        0,
+    );
+    assert!(!waited
+        .actions
+        .iter()
+        .any(|action| matches!(action, Action::Sample)));
+    let due = waited.deadline.expect("the next sample is armed");
+    assert_eq!(due, duration_ns(policy().sample_every));
+    let step = core.on_deadline(due);
+    assert!(step
+        .actions
+        .iter()
+        .any(|action| matches!(action, Action::Sample)));
+}
+
+/// Shutdown takes an installed route down and says nothing. The child is
+/// stopped, not reaped. With no route installed, only the stop is asked.
+#[test]
+fn a_shutdown_stops_an_installed_route_and_says_nothing() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let step = core.on(Input::Shutdown, 1_000);
+    assert_eq!(step.actions, vec![Action::StopRoute, Action::StopChild]);
+    assert!(step.deadline.is_none());
+    assert_eq!(announces(&step), 0);
+
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    bring_up(&mut core);
+    let step = core.on(Input::Shutdown, 1_000);
+    assert_eq!(step.actions, vec![Action::StopChild]);
+    assert_eq!(announces(&step), 0);
+}
