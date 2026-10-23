@@ -130,7 +130,9 @@ pub const METHODS: &[Method] = &[
     json("get_block_template", &["getblocktemplate"], Any),
     json("get_miner_data", &[], Any),
     armed(json("generateblocks", &[], HostOnly)),
-    json("inject_archival_serve_credit", &[], Any),
+    // RT-O9.2 (`RPC_CHANNEL.md`, ruled 2026-10-09): a regtest lever, the
+    // host's and armed. It deletes at the flip (DX-Q3).
+    armed(json("inject_archival_serve_credit", &[], HostOnly)),
     json("set_bans", &[], HostOnly),
     json("get_bans", &[], HostOnly),
     json("banned", &[], HostOnly),
@@ -208,9 +210,9 @@ mod tests {
         }
     }
 
-    /// The armed levers are `generateblocks` and `pop_blocks`, and both are
-    /// the host's: an armed lever is never served to a view connection,
-    /// switch or no switch.
+    /// The armed levers are `generateblocks`, `pop_blocks` and
+    /// `inject_archival_serve_credit`, and each is the host's: an armed lever
+    /// is never served to a view connection, switch or no switch.
     #[test]
     fn the_armed_levers_are_the_hosts() {
         let armed: Vec<&str> = METHODS
@@ -218,7 +220,14 @@ mod tests {
             .filter(|row| row.armed)
             .map(|row| row.name)
             .collect();
-        assert_eq!(armed, ["generateblocks", "/pop_blocks"]);
+        assert_eq!(
+            armed,
+            [
+                "generateblocks",
+                "inject_archival_serve_credit",
+                "/pop_blocks"
+            ]
+        );
         assert!(METHODS
             .iter()
             .filter(|row| row.armed)

@@ -46,7 +46,9 @@ use tracing::warn;
 /// table the gate here cannot be listener selection: it is per-method, inside
 /// the handler, read from the one method table's grant column
 /// (`shekyl_rpc_types::methods`, `RPC_WIRE.md` RW-Q7). A name with no row is
-/// not gated here; whoever serves it answers that it does not exist.
+/// gated as the host's: the REST surface refuses an unrouted path on the view
+/// listener, and this one fails closed the same way. The gate that every
+/// served name is a row makes that arm unreachable for a served method.
 ///
 /// Pure, and the single place the per-method gate is decided, so a test can
 /// call the same function [`handle`] calls, with both arms, without building
@@ -55,7 +57,7 @@ use tracing::warn;
 fn method_is_gated(restricted: bool, method: &str) -> bool {
     restricted
         && shekyl_rpc_types::methods::json_rpc(method)
-            .is_some_and(|row| row.grant == shekyl_rpc_types::methods::Grant::HostOnly)
+            .is_none_or(|row| row.grant == shekyl_rpc_types::methods::Grant::HostOnly)
 }
 
 pub async fn handle(
@@ -554,11 +556,11 @@ mod tests {
         );
     }
 
-    /// The admin JSON-RPC surface, restated independently of
-    /// `RESTRICTED_METHODS`.
+    /// The admin JSON-RPC surface, restated independently of the method
+    /// table's grant column.
     ///
     /// Same discipline as the REST route table's specification: an oracle that
-    /// iterates `RESTRICTED_METHODS` re-states whatever that list says and so
+    /// iterates the table re-states whatever the table says and so
     /// stays green when a method is dropped from it — which is the edit that
     /// exposes `get_connections` (this node's live peer set) and the ban/mining
     /// controls to unauthenticated callers on the public listener.
@@ -577,6 +579,7 @@ mod tests {
         "flush_cache",
         "request_archival_shard",
         "option_set",
+        "inject_archival_serve_credit",
     ];
 
     /// Every name the daemon serves natively, the method each belongs to,
@@ -730,6 +733,16 @@ mod tests {
                  not the restricted flag"
             );
         }
+    }
+
+    /// A name with no row fails closed on the view listener, as an unrouted
+    /// REST path does, and answers as not found on the host's. Red edit:
+    /// gate only names whose row says `HostOnly`.
+    #[test]
+    fn a_name_with_no_row_is_refused_on_the_view_listener() {
+        assert!(shekyl_rpc_types::methods::json_rpc("no_such_method").is_none());
+        assert!(method_is_gated(true, "no_such_method"));
+        assert!(!method_is_gated(false, "no_such_method"));
     }
 
     /// The gate names exactly the specified methods: one dropped from the
