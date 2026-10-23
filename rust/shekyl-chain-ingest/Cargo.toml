@@ -215,6 +215,13 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # answer on (`rpc_store_facts_tests.rs`, `rpc_store_reads_tests.rs`).
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 hex = "0.4"
+# The wallet's block fetch over the store-backed handlers (the review of
+# #1165, ruling 7): the wallet's own client and transport, against a local
+# HTTP stand-in that serves `get_block`, `get_transactions` and
+# `get_o_indexes.bin` from `StoreFacts`.
+shekyl-engine-core = { path = "../shekyl-engine-core" }
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "net", "io-util", "time"] }
 
 [lints]
 workspace = true

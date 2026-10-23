@@ -189,6 +189,21 @@ pub struct BlocksAt {
     pub failed: Option<BlockHeight>,
 }
 
+/// What [`ChainReadFacts::transactions`] gathered for `get_transactions`:
+/// one slot per id asked, and the chain height confirmations count from,
+/// both read off one snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransactionsAt {
+    /// One slot per id, in request order.
+    pub slots: Vec<crate::core::TxSlot>,
+    /// The chain's height: the tip's plus one.
+    pub chain_height: u64,
+    /// The first id whose body this node has pruned — its prunable region
+    /// and `pqc_auths` go together — so the wire cannot recompose it; the
+    /// slots stop before it.
+    pub pruned_here: Option<TxHash>,
+}
+
 /// Where a key image is spent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpentAt {
@@ -212,6 +227,20 @@ pub trait ChainReadFacts: Send + Sync {
     /// [`FactsFault::Inconsistent`] when a listed transaction has no
     /// record.
     fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault>;
+
+    /// Each of `ids` from the chain, or else from the pool as `scope` may
+    /// see it, or missed (`get_transactions`). The pool is read before the
+    /// chain's snapshot is begun, so a transaction mined between the two is
+    /// found in the chain.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] on an empty store; the store's faults.
+    fn transactions(
+        &self,
+        ids: &[TxHash],
+        scope: crate::info_facts::PoolScope,
+    ) -> Result<TransactionsAt, FactsFault>;
 
     /// The global output indices of the transaction `txid`'s outputs, in
     /// `vout` order; `None` when the chain does not hold it

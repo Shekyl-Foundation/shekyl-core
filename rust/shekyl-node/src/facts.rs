@@ -96,6 +96,33 @@ impl NodeFacts for Surroundings {
             .collect())
     }
 
+    /// Read off one lock, in request order: what the pool shows for any
+    /// caller, its stem entries too for the host (S6).
+    fn pool_bodies(
+        &self,
+        ids: &[TxHash],
+        scope: PoolScope,
+    ) -> Result<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>, FactsFault> {
+        let slot = lock(&self.pool);
+        let Some(pool) = slot.as_ref() else {
+            return Err(FactsFault::NotReady);
+        };
+        let pool = lock(pool);
+        let held: std::collections::BTreeMap<TxHash, shekyl_daemon_rpc::store_facts::PoolBody> =
+            match scope {
+                PoolScope::Broadcast => pool
+                    .shown_entries()
+                    .map(|entry| (entry.id, body_of(&entry)))
+                    .collect(),
+                PoolScope::WithUnbroadcast => pool
+                    .relay_view()
+                    .entries()
+                    .map(|entry| (entry.id, body_of(&entry)))
+                    .collect(),
+            };
+        Ok(ids.iter().map(|id| held.get(id).cloned()).collect())
+    }
+
     fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
         let slot = lock(&self.pool);
         let Some(pool) = slot.as_ref() else {
@@ -267,6 +294,14 @@ impl InfoFacts for ChainBridge {
 }
 
 impl ChainReadFacts for ChainBridge {
+    fn transactions(
+        &self,
+        ids: &[TxHash],
+        scope: PoolScope,
+    ) -> Result<shekyl_daemon_rpc::read_facts::TransactionsAt, FactsFault> {
+        self.with(|facts| facts.transactions(ids, scope))
+    }
+
     fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault> {
         self.with(|facts| facts.blocks_by_height(heights))
     }
@@ -335,6 +370,14 @@ impl PoolBridge {
             return Err(FactsFault::NotReady);
         }
         lock(&self.pool).clone().ok_or(FactsFault::NotReady)
+    }
+}
+
+/// An entry's body as `get_transactions` reads it.
+fn body_of(entry: &shekyl_mempool::Entry<'_>) -> shekyl_daemon_rpc::store_facts::PoolBody {
+    shekyl_daemon_rpc::store_facts::PoolBody {
+        tx: entry.tx.serialize(),
+        shown: entry.shown,
     }
 }
 
@@ -554,6 +597,12 @@ impl BansFacts for BansBridge {
             BanSpan::For(std::time::Duration::from_secs(seconds))
         });
         Ok(self.path.ban(ban_target(target)?, span))
+    }
+
+    fn fits(&self, seconds: u64) -> Result<bool, FactsFault> {
+        Ok(BanPath::fits(BanSpan::For(std::time::Duration::from_secs(
+            seconds,
+        ))))
     }
 
     fn lift(&self, target: BanTargetFacts) -> Result<bool, FactsFault> {

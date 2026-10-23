@@ -249,6 +249,14 @@ pub trait BansFacts: Send + Sync {
     /// [`FactsFault::NotReady`] when no table was supplied.
     fn ban(&self, target: BanTargetFacts, seconds: Option<u64>) -> Result<bool, FactsFault>;
 
+    /// Whether a ban of `seconds` fits the clock now: what [`Self::ban`]
+    /// would refuse, asked before any ban of a request is made.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no table was supplied.
+    fn fits(&self, seconds: u64) -> Result<bool, FactsFault>;
+
     /// Lift `target`'s ban; `Ok(false)` when there was none.
     ///
     /// # Errors
@@ -388,6 +396,14 @@ impl InfoFacts for ChainReadAbsent {
 }
 
 impl ChainReadFacts for ChainReadAbsent {
+    fn transactions(
+        &self,
+        _ids: &[TxHash],
+        _scope: crate::info_facts::PoolScope,
+    ) -> Result<crate::read_facts::TransactionsAt, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
     fn blocks_by_height(&self, _heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault> {
         Err(FactsFault::NotReady)
     }
@@ -501,6 +517,10 @@ struct BansAbsent;
 
 impl BansFacts for BansAbsent {
     fn ban(&self, _target: BanTargetFacts, _seconds: Option<u64>) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn fits(&self, _seconds: u64) -> Result<bool, FactsFault> {
         Err(FactsFault::NotReady)
     }
 

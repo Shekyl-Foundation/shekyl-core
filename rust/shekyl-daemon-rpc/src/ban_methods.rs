@@ -70,8 +70,9 @@ const fn seconds_of(left: BanLeftFacts) -> (u64, bool) {
 }
 
 /// `set_bans { bans }`: each entry bans or lifts a host or a subnet, in
-/// order. Every entry is read before any is applied, so a malformed one
-/// changes nothing.
+/// order. Every entry is read, and every deadline checked against the
+/// clock, before any is applied, so a malformed entry or a deadline the
+/// clock cannot hold changes nothing.
 ///
 /// # Errors
 ///
@@ -81,25 +82,35 @@ pub fn set_bans(
     bans: &dyn BansFacts,
     request: &SetBansRequest,
 ) -> Result<StatusOnlyResponse, RpcError> {
+    let too_long = |entry: &shekyl_rpc_types::bans::SetBan| {
+        RpcError::new(
+            ErrorClass::BadParams,
+            Diagnostic::new(
+                codes::TOO_LONG,
+                format!(
+                    "a ban of {:?} seconds does not fit the clock",
+                    entry.seconds
+                ),
+            )
+            .param("host", entry.host.clone()),
+        )
+    };
     let entries = request
         .bans
         .iter()
         .map(|entry| target_of(&entry.host).map(|target| (target, entry)))
         .collect::<Result<Vec<_>, _>>()?;
+    for (_, entry) in &entries {
+        if let (true, Some(seconds)) = (entry.ban, entry.seconds) {
+            if !bans.fits(seconds)? {
+                return Err(too_long(entry));
+            }
+        }
+    }
     for (target, entry) in entries {
         if entry.ban {
             if !bans.ban(target, entry.seconds)? {
-                return Err(RpcError::new(
-                    ErrorClass::BadParams,
-                    Diagnostic::new(
-                        codes::TOO_LONG,
-                        format!(
-                            "a ban of {:?} seconds does not fit the clock",
-                            entry.seconds
-                        ),
-                    )
-                    .param("host", entry.host.clone()),
-                ));
+                return Err(too_long(entry));
             }
         } else {
             let _lifted = bans.lift(target)?;
@@ -151,4 +162,74 @@ pub fn banned(bans: &dyn BansFacts, request: &BannedRequest) -> Result<BannedRes
         seconds,
         permanent,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use shekyl_rpc_types::bans::SetBan;
+
+    use super::*;
+    use crate::chain_facts::FactsFault;
+    use crate::handles::BanRow;
+
+    /// A table whose clock holds a ban of at most a day, recording bans.
+    struct Table {
+        banned: Mutex<Vec<BanTargetFacts>>,
+    }
+
+    impl BansFacts for Table {
+        fn ban(&self, target: BanTargetFacts, seconds: Option<u64>) -> Result<bool, FactsFault> {
+            if seconds.is_some_and(|seconds| seconds > 86_400) {
+                return Ok(false);
+            }
+            self.banned.lock().expect("lock").push(target);
+            Ok(true)
+        }
+
+        fn fits(&self, seconds: u64) -> Result<bool, FactsFault> {
+            Ok(seconds <= 86_400)
+        }
+
+        fn lift(&self, _target: BanTargetFacts) -> Result<bool, FactsFault> {
+            Ok(false)
+        }
+
+        fn remaining(&self, _host: IpAddr) -> Result<Option<BanLeftFacts>, FactsFault> {
+            Ok(None)
+        }
+
+        fn list(&self) -> Result<Vec<BanRow>, FactsFault> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// A request whose second ban the clock cannot hold bans nothing: every
+    /// deadline is checked before any entry is applied (the review of
+    /// #1165). Red edit: check each deadline as its entry is applied.
+    #[test]
+    fn a_ban_the_clock_cannot_hold_leaves_the_whole_request_unapplied() {
+        let table = Table {
+            banned: Mutex::new(Vec::new()),
+        };
+        let entry = |host: &str, seconds: u64| SetBan {
+            host: host.to_owned(),
+            ban: true,
+            seconds: Some(seconds),
+        };
+        let refused = set_bans(
+            &table,
+            &SetBansRequest {
+                bans: vec![entry("203.0.113.1", 60), entry("203.0.113.2", u64::MAX)],
+            },
+        )
+        .expect_err("too long");
+        assert_eq!(refused.class, ErrorClass::BadParams);
+        assert_eq!(refused.diagnostic.code, codes::TOO_LONG);
+        assert!(
+            table.banned.lock().expect("lock").is_empty(),
+            "the first entry was not applied"
+        );
+    }
 }

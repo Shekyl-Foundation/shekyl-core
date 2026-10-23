@@ -27,7 +27,7 @@ use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, TxHash};
 
 use crate::methods::{
     parse_request_hashes, split_128, RpcFault, RpcRefusal, KI_PARSE_FAILED, RESTRICTED_BLOCK_COUNT,
-    RESTRICTED_SPENT_KEY_IMAGES_COUNT,
+    RESTRICTED_SPENT_KEY_IMAGES_COUNT, RESTRICTED_TRANSACTIONS_COUNT, TX_PARSE_FAILED,
 };
 use crate::read_facts::{ChainReadFacts, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed, SpentAt};
 use shekyl_chain_rules::{EmissionEpochFacts, EmissionEpochStanding};
@@ -484,6 +484,96 @@ pub fn get_blocks_by_height(
     })
 }
 
+/// The diagnostic codes of `get_transactions` over the store.
+pub mod tx_codes {
+    /// `decode_as_json` asked for epee's JSON rendering, which retires.
+    pub const AS_JSON_RETIRED: &str = "tx.as_json_retired";
+    /// This node has pruned the body of a transaction asked for.
+    pub const PRUNED_HERE: &str = "tx.pruned_here";
+    /// A body this node read from its own store could not be served.
+    pub const UNSERVABLE: &str = "tx.unservable";
+}
+
+/// `/get_transactions` over the store and the pool (`DRS_X_STORE_FLIP.md`
+/// DX-Q3, Q1; the review of #1165, ruling 7): today's name and request,
+/// the body in the forms `prune` and `split` choose, its height, time and
+/// output indices from the chain, or its pool entry as `grant` may see it
+/// (S6). The wallet's block fetch and its proofs read it.
+///
+/// `as_json` is absent: epee's rendering retires with RK-W (RW-Q4, IG-Q55),
+/// and a request asking for it is refused as bad parameters, naming the
+/// methods that replace this one. A pool entry carries no receive time
+/// (S7).
+///
+/// # Errors
+///
+/// `BadParams` for `decode_as_json`; `RefusedByMethod` for a transaction
+/// whose body this node has pruned; the facts' fault.
+pub fn get_transactions(
+    facts: &dyn ChainReadFacts,
+    request: &shekyl_rpc_types::GetTransactionsRequest,
+    grant: shekyl_rpc_types::methods::Grant,
+) -> Result<shekyl_rpc_types::GetTransactionsResponse, shekyl_rpc_types::errors::RpcError> {
+    use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
+    let status_only = |status: &str| shekyl_rpc_types::GetTransactionsResponse {
+        status: RpcStatus(status.to_owned()),
+        txs: Vec::new(),
+        missed_tx: Vec::new(),
+    };
+    if request.decode_as_json {
+        return Err(RpcError::new(
+            ErrorClass::BadParams,
+            Diagnostic::new(
+                tx_codes::AS_JSON_RETIRED,
+                "decode_as_json asks for epee's JSON rendering, which this daemon does not \
+                 produce; read the body from as_hex or the split form (tx_show and tx_list \
+                 replace this method, IG-Q50)",
+            ),
+        ));
+    }
+    let restricted = grant == shekyl_rpc_types::methods::Grant::Any;
+    if restricted && request.txs_hashes.len() > RESTRICTED_TRANSACTIONS_COUNT {
+        return Ok(status_only(
+            "Too many transactions requested in restricted mode",
+        ));
+    }
+    let ids = match parse_request_hashes(&request.txs_hashes, TX_PARSE_FAILED) {
+        Ok(ids) => ids,
+        Err(status) => return Ok(status_only(&status)),
+    };
+    let hashes: Vec<TxHash> = ids.iter().copied().map(TxHash::from_bytes).collect();
+    let read = facts.transactions(&hashes, crate::pool_methods::scope_for(grant))?;
+    if let Some(pruned) = read.pruned_here {
+        let id = hex::encode(pruned.to_bytes());
+        return Err(RpcError::new(
+            ErrorClass::RefusedByMethod,
+            Diagnostic::new(
+                tx_codes::PRUNED_HERE,
+                format!("this node has pruned the body of {id}; an archival node serves it"),
+            )
+            .param("id", id),
+        ));
+    }
+    // `decode_as_json` was refused above, so nothing is rendered.
+    let unrendered = |_: &[u8], _: bool| Err(0);
+    crate::methods::project_transactions(request, &ids, &read.slots, read.chain_height, unrendered)
+        .map_err(|failed| {
+            let txid = match &failed {
+                crate::methods::ProjectionFailed::Render(failed) => failed.txid.clone(),
+                crate::methods::ProjectionFailed::Length(failed) => failed.txid.clone(),
+            };
+            tracing::error!(%txid, "get_transactions: a stored body could not be served");
+            RpcError::new(
+                ErrorClass::StoreFault,
+                Diagnostic::new(
+                    tx_codes::UNSERVABLE,
+                    format!("the body of {txid} could not be served from this node's store"),
+                )
+                .param("id", txid),
+            )
+        })
+}
+
 /// `/get_o_indexes.bin` over the store (Q1): the transaction's outputs'
 /// global indices, in `vout` order; C++'s `Failed` for one the chain does
 /// not hold.
@@ -545,4 +635,34 @@ pub fn is_key_image_spent(
             })
             .collect(),
     })
+}
+
+#[cfg(test)]
+mod get_transactions_tests {
+    use super::*;
+
+    /// `decode_as_json` is refused as bad parameters before anything is
+    /// read, naming the methods that replace this one (the review of #1165,
+    /// ruling 7). Red edit: serve the request without the check.
+    #[test]
+    fn decode_as_json_is_refused_naming_the_rename() {
+        let handles = crate::handles::Handles::absent();
+        let refused = get_transactions(
+            &*handles.chain,
+            &shekyl_rpc_types::GetTransactionsRequest {
+                txs_hashes: vec![hex::encode([1u8; 32])],
+                decode_as_json: true,
+                prune: false,
+                split: false,
+            },
+            shekyl_rpc_types::methods::Grant::HostOnly,
+        )
+        .expect_err("refused");
+        assert_eq!(
+            refused.class,
+            shekyl_rpc_types::errors::ErrorClass::BadParams
+        );
+        assert_eq!(refused.diagnostic.code, tx_codes::AS_JSON_RETIRED);
+        assert!(refused.diagnostic.message.contains("tx_show"));
+    }
 }

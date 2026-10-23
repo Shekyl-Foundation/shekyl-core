@@ -62,6 +62,19 @@ impl BanPath {
         Self::over(process_sockets())
     }
 
+    /// Whether `span`'s deadline fits the process clock now: what
+    /// [`Self::ban`] would refuse, asked before any ban is made.
+    #[must_use]
+    pub fn fits(span: BanSpan) -> bool {
+        match span {
+            BanSpan::Permanent => true,
+            BanSpan::For(left) => {
+                let nanos = u64::try_from(left.as_nanos()).unwrap_or(u64::MAX);
+                deadline_after(ban_now(), nanos).is_some()
+            }
+        }
+    }
+
     /// Ban `target` for `span`. `false` when the span's deadline does not
     /// fit the clock; nothing is banned then. A deadline already covered
     /// by a later one does not shorten it.
