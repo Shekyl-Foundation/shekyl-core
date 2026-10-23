@@ -10,10 +10,11 @@
 //! ([`codes`]).
 //!
 //! `get_block_template` and `get_miner_data` read the job the node posted;
-//! they build nothing (N2). The methods that wait (`submit_block`,
-//! `generateblocks`) are `async`; every other read is short, and the
-//! dispatcher runs the miner's start and stop, which join threads, on a
-//! blocking thread.
+//! they build nothing (N2). The methods that wait or join are `async`:
+//! `submit_block` and `generateblocks` wait on the node, and `start_mining`,
+//! `stop_mining` and `generateblocks` run the miner's start and stop, which
+//! spawn and join threads, on a blocking thread of their own. Every other
+//! read is short.
 
 use std::num::NonZeroUsize;
 
@@ -28,7 +29,7 @@ use shekyl_rpc_types::{HashHex, RpcStatus};
 use shekyl_types::{BlockHash, BlockHeight};
 
 use crate::chain_facts::{ChainFacts, FactsFault};
-use crate::handles::{DoorFacts, MiningFacts};
+use crate::handles::{DoorFacts, MiningFacts, MiningHandle};
 use crate::methods::split_128;
 use crate::mining_facts::{LocalOutcome, PopOutcome};
 
@@ -60,6 +61,8 @@ pub mod codes {
     pub const ONE_PERMIT: &str = "mine.one_permit";
     /// A miner thread did not start.
     pub const THREAD: &str = "mine.thread";
+    /// More threads than the host runs at once.
+    pub const TOO_MANY_THREADS: &str = "mine.too_many_threads";
     /// The block is not hexadecimal, or does not parse.
     pub const BLOCK_MALFORMED: &str = "block.malformed";
     /// A consensus rule refused the block.
@@ -202,15 +205,29 @@ pub fn get_miner_data(mining: &dyn MiningFacts) -> Result<GetMinerDataResponse, 
     })
 }
 
+/// Run `f` over the mining handle on a blocking thread: the miner's start
+/// spawns threads and its stop joins them, which may be mid-hash.
+async fn on_a_blocking_thread<T: Send + 'static>(
+    mining: &MiningHandle,
+    f: impl FnOnce(&dyn MiningFacts) -> Result<T, FactsFault> + Send + 'static,
+) -> Result<T, RpcError> {
+    let mining = std::sync::Arc::clone(mining);
+    tokio::task::spawn_blocking(move || f(&*mining))
+        .await
+        .map_err(|_| RpcError::from(FactsFault::Internal))?
+        .map_err(RpcError::from)
+}
+
 /// `start_mining { threads }`: start the built-in miner on the node's job
-/// board (`mine start [threads|auto]`).
+/// board (`mine start [threads|auto]`); `auto` is the host's parallelism.
 ///
 /// # Errors
 ///
 /// `RefusedByMethod` with the node's refusal: no address, already
-/// running, a one-permit host, a thread that did not start.
-pub fn start_mining(
-    mining: &dyn MiningFacts,
+/// running, more threads than the host's parallelism, a one-permit host, a
+/// thread that did not start, a stopped node.
+pub async fn start_mining(
+    mining: &MiningHandle,
     request: StartMiningRequest,
 ) -> Result<StatusOnlyResponse, RpcError> {
     let threads = match request.threads {
@@ -219,8 +236,8 @@ pub fn start_mining(
             Some(NonZeroUsize::try_from(count).map_err(|_| RpcError::from(FactsFault::Internal))?)
         }
     };
-    mining
-        .start(threads)?
+    on_a_blocking_thread(mining, move |mining| mining.start(threads))
+        .await?
         .map_err(|refused| RpcError::new(ErrorClass::RefusedByMethod, refused))?;
     Ok(StatusOnlyResponse {
         status: RpcStatus::ok(),
@@ -232,8 +249,8 @@ pub fn start_mining(
 /// # Errors
 ///
 /// `RefusedByMethod` when the miner was not running.
-pub fn stop_mining(mining: &dyn MiningFacts) -> Result<StatusOnlyResponse, RpcError> {
-    if !mining.stop()? {
+pub async fn stop_mining(mining: &MiningHandle) -> Result<StatusOnlyResponse, RpcError> {
+    if !on_a_blocking_thread(mining, |mining| mining.stop()).await? {
         return Err(RpcError::new(
             ErrorClass::RefusedByMethod,
             Diagnostic::new(codes::STOPPED, "the miner is not running"),
@@ -372,17 +389,55 @@ pub async fn submit_block(
     }
 }
 
+/// Stops, on drop, a miner `generateblocks` started: a caller that goes
+/// away mid-wait leaves no miner running. The stop joins the workers, so
+/// on a runtime it runs on a blocking thread.
+struct StartedMiner(Option<MiningHandle>);
+
+impl StartedMiner {
+    /// Stop the miner now, on a blocking thread, and disarm the guard.
+    async fn stop(mut self) -> Result<(), RpcError> {
+        match self.0.take() {
+            Some(mining) => on_a_blocking_thread(&mining, |mining| mining.stop().map(drop)).await,
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for StartedMiner {
+    fn drop(&mut self) {
+        let Some(mining) = self.0.take() else {
+            return;
+        };
+        let stop = move || {
+            if let Err(fault) = mining.stop() {
+                tracing::error!("generateblocks: the miner it started did not stop: {fault:?}");
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => drop(runtime.spawn_blocking(stop)),
+            Err(_) => stop(),
+        }
+    }
+}
+
 /// `generateblocks { count }`, an armed lever (b6): start the built-in
 /// miner if it is stopped, wait until the tip is `count` blocks higher,
-/// and stop the miner if this call started it. The blocks are the node's
-/// own template's, paying its `mine-address` (N2).
+/// and stop the miner if this call started it — on return, and when the
+/// call is dropped mid-wait. The blocks are the node's own template's,
+/// paying its `mine-address` (N2).
+///
+/// It is refused at once while no job is posted (not synced, no address,
+/// the pool retired), and the wait ends when the job is withdrawn for such
+/// a reason: no miner can move the tip without one.
 ///
 /// # Errors
 ///
-/// `BadParams` for a count of zero; the miner's refusal; `NotReady` when
-/// the node stops first.
+/// `BadParams` for a count of zero; `NotReady` with the node's reason when
+/// no job is posted or the job is withdrawn mid-wait; the miner's refusal;
+/// `NotReady` when the node stops first.
 pub async fn generateblocks(
-    mining: &dyn MiningFacts,
+    mining: &MiningHandle,
     door: &dyn DoorFacts,
     chain: &dyn ChainFacts,
     _armed: Armed,
@@ -394,18 +449,25 @@ pub async fn generateblocks(
             Diagnostic::new(codes::COUNT_ZERO, "count must be at least one"),
         ));
     }
+    if let Err(why) = mining.template()? {
+        return Err(RpcError::new(ErrorClass::NotReady, why));
+    }
     let start = chain.chain_tip()?.chain_height.to_raw();
     let tip = start.saturating_sub(1);
     let target = BlockHeight::from_raw(tip.saturating_add(request.count));
-    let started = match mining.start(None)? {
-        Ok(()) => true,
-        Err(running) if running.code == codes::RUNNING => false,
+    let started = match on_a_blocking_thread(mining, |mining| mining.start(None)).await? {
+        Ok(()) => StartedMiner(Some(std::sync::Arc::clone(mining))),
+        Err(running) if running.code == codes::RUNNING => StartedMiner(None),
         Err(refused) => return Err(RpcError::new(ErrorClass::RefusedByMethod, refused)),
     };
-    let reached = door.tip_at_least(target).await;
-    if started {
-        mining.stop()?;
-    }
+    let reached = tokio::select! {
+        reached = door.tip_at_least(target) => reached.map_err(RpcError::from),
+        lost = mining.withdrawn() => Err(match lost {
+            Ok(why) => RpcError::new(ErrorClass::NotReady, why),
+            Err(fault) => RpcError::from(fault),
+        }),
+    };
+    started.stop().await?;
     reached?;
     let end = chain.chain_tip()?.chain_height.to_raw();
     let mut blocks = Vec::new();
@@ -462,8 +524,8 @@ mod tests {
 
     /// An absent node is not ready, never an empty or zero answer
     /// (RK-D23), on every mining method.
-    #[test]
-    fn an_absent_node_is_not_ready_on_every_mining_method() {
+    #[tokio::test]
+    async fn an_absent_node_is_not_ready_on_every_mining_method() {
         let handles = Handles::absent();
         let class = |error: RpcError| error.class;
         assert_eq!(
@@ -479,11 +541,22 @@ mod tests {
             Err(ErrorClass::NotReady)
         );
         assert_eq!(
-            stop_mining(&*handles.mining).map_err(class),
+            stop_mining(&handles.mining).await.map_err(class),
             Err(ErrorClass::NotReady)
         );
         assert_eq!(
-            start_mining(&*handles.mining, StartMiningRequest::default()).map_err(class),
+            start_mining(&handles.mining, StartMiningRequest::default())
+                .await
+                .map_err(class),
+            Err(ErrorClass::NotReady)
+        );
+        assert_eq!(
+            handles
+                .mining
+                .withdrawn()
+                .await
+                .map_err(RpcError::from)
+                .map_err(class),
             Err(ErrorClass::NotReady)
         );
     }

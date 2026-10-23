@@ -30,6 +30,14 @@ shekyl-units = { path = "../shekyl-units" }
 # Transaction parsing and hashing.
 shekyl-wire = { path = "../shekyl-wire" }
 
+[features]
+# A test plants an entry without the door (`Pool::plant`) and refuses the
+# pool file's next commit through the pool (`Pool::refuse_next_commit`,
+# forwarding to `PoolStore`'s): the node's test that a flush fault retires
+# the pool. Enabled from shekyl-node's dev-dependency edge only;
+# check_test_only_features.py holds that.
+pool-commit-fault = ["shekyl-chain-store/pool-commit-fault"]
+
 [dev-dependencies]
 # The harness views and fixtures the door == validator tests run over.
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }

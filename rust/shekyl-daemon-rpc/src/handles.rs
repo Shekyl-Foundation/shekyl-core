@@ -81,13 +81,15 @@ pub trait PoolFacts: Send + Sync {
     fn entries(&self, scope: PoolScope) -> Result<Vec<PoolEntryFacts>, FactsFault>;
 
     /// Remove `ids` from the pool, or every entry when `ids` is empty
-    /// (`flush_txpool`); the removed ids.
+    /// (`flush_txpool`); the removed ids. It writes the pool file, so it
+    /// waits: the node runs it on a blocking thread.
     ///
     /// # Errors
     ///
-    /// [`FactsFault::NotReady`] when no pool was supplied;
-    /// [`FactsFault::StoreUnreadable`] when the pool file faults.
-    fn flush(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault>;
+    /// [`FactsFault::NotReady`] when no pool was supplied, or the pool is
+    /// retired; [`FactsFault::StoreUnreadable`] when the pool file faults,
+    /// which retires the pool.
+    fn flush(&self, ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>>;
 
     /// Offer the node's own `ids` to the relay again (`relay_tx`); the ids
     /// offered. The relay driver is RD's; until it is wired, not ready.
@@ -163,7 +165,9 @@ pub trait MiningFacts: Send + Sync {
     fn template(&self) -> Result<Result<PostedTemplate, Diagnostic>, FactsFault>;
 
     /// Start the built-in miner with `threads` workers, or the host's
-    /// parallelism less one. The inner error is the node's refusal.
+    /// parallelism. The inner error is the node's refusal. Joins nothing,
+    /// but spawns threads: a caller on a runtime calls it from a blocking
+    /// thread.
     ///
     /// # Errors
     ///
@@ -171,7 +175,8 @@ pub trait MiningFacts: Send + Sync {
     fn start(&self, threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault>;
 
     /// Stop the built-in miner; `false` when it was not running. The node
-    /// keeps running.
+    /// keeps running. Joins the workers, which can be mid-hash: a caller on
+    /// a runtime calls it from a blocking thread.
     ///
     /// # Errors
     ///
@@ -184,6 +189,15 @@ pub trait MiningFacts: Send + Sync {
     ///
     /// [`FactsFault::NotReady`] when no mining control was supplied.
     fn status(&self) -> Result<MiningState, FactsFault>;
+
+    /// Resolves, with why, once the job is withdrawn for a reason the next
+    /// tip does not clear (not synced, no address, the pool retired, a
+    /// fault, a stop): after it no miner can move the tip.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn withdrawn(&self) -> Pending<'_, Diagnostic>;
 }
 
 /// A mining handle.
@@ -430,8 +444,8 @@ impl PoolFacts for PoolAbsent {
         Err(FactsFault::NotReady)
     }
 
-    fn flush(&self, _ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
-        Err(FactsFault::NotReady)
+    fn flush(&self, _ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>> {
+        Box::pin(async { Err(FactsFault::NotReady) })
     }
 }
 
@@ -476,6 +490,10 @@ impl MiningFacts for MiningAbsent {
 
     fn status(&self) -> Result<MiningState, FactsFault> {
         Err(FactsFault::NotReady)
+    }
+
+    fn withdrawn(&self) -> Pending<'_, Diagnostic> {
+        Box::pin(async { Err(FactsFault::NotReady) })
     }
 }
 

@@ -323,7 +323,7 @@ impl Node {
             found,
             miner_address,
             posting.clone(),
-            pool_health,
+            pool_health.clone(),
         ));
         let started_at = facts::unix_now();
         #[cfg(test)]
@@ -347,7 +347,7 @@ impl Node {
         let door_slot = Arc::new(Mutex::new(Some(DoorEntry { door, rewinder })));
         let handles = Handles {
             chain: Arc::new(ChainBridge::new(Arc::clone(&facts_slot))),
-            pool: Arc::new(PoolBridge::new(Arc::clone(&pool_slot))),
+            pool: Arc::new(PoolBridge::new(Arc::clone(&pool_slot), pool_health.clone())),
             door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips)),
             mining: Arc::clone(&mining) as _,
             bans: Arc::new(BansBridge::new(BanPath::over(sockets.clone()))),
@@ -447,7 +447,7 @@ impl Node {
         );
         // The miner first: its workers hash on the board this stop withdraws,
         // and a handle may keep mining control alive past the node.
-        self.mining.stop();
+        self.mining.close();
         let Some(runtime) = self
             .runtime
             .lock()
@@ -766,7 +766,7 @@ mod tests {
 
     fn a_runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
-            .enable_time()
+            .enable_all()
             .build()
             .expect("a runtime")
     }
@@ -882,11 +882,12 @@ mod tests {
             status.no_template.map(|why| why.code),
             Some(codes::NO_ADDRESS.to_owned())
         );
-        let refused = start_mining(
-            &*handles.mining,
-            shekyl_rpc_types::mining::StartMiningRequest::default(),
-        )
-        .expect_err("no address");
+        let refused = a_runtime()
+            .block_on(start_mining(
+                &handles.mining,
+                shekyl_rpc_types::mining::StartMiningRequest::default(),
+            ))
+            .expect_err("no address");
         assert_eq!(refused.class, ErrorClass::RefusedByMethod);
         assert_eq!(refused.diagnostic.code, codes::NO_ADDRESS);
         node.stop();
@@ -906,7 +907,7 @@ mod tests {
                 std::num::NonZeroU32::new(1).expect("one"),
             ),
         };
-        match start_mining(&*handles.mining, one) {
+        match a_runtime().block_on(start_mining(&handles.mining, one)) {
             Ok(_) => {}
             Err(refused) if refused.diagnostic.code == codes::ONE_PERMIT => {
                 node.stop();
@@ -919,8 +920,12 @@ mod tests {
         assert_eq!(status.threads_count, 1);
         assert!(status.height >= 1, "a job is posted");
         assert!(status.no_template.is_none());
-        stop_mining(&*handles.mining).expect("it stops");
-        let again = stop_mining(&*handles.mining).expect_err("not running");
+        a_runtime()
+            .block_on(stop_mining(&handles.mining))
+            .expect("it stops");
+        let again = a_runtime()
+            .block_on(stop_mining(&handles.mining))
+            .expect_err("not running");
         assert_eq!(again.diagnostic.code, codes::STOPPED);
         node.stop();
     }
@@ -945,7 +950,7 @@ mod tests {
         let armed = admit_armed(row, node.armed_levers()).expect("armed");
         let handles = node.handles();
         let generated = a_runtime().block_on(generateblocks(
-            &*handles.mining,
+            &handles.mining,
             &*handles.door,
             &*handles.chain,
             armed,
@@ -967,6 +972,223 @@ mod tests {
         assert!(generated.blocks.len() >= 3);
         assert!(!node.mining().running(), "the miner it started is stopped");
         node.stop();
+    }
+
+    /// A flush whose pool-file write faults retires the pool, for the
+    /// service too: the flush answers a store fault, the next pool read is
+    /// not ready, and mining status reports the pool retired (the review of
+    /// #1165, M5). Red edit: the bridge does not retire the pool.
+    #[test]
+    fn a_flush_over_a_faulted_pool_file_retires_the_pool() {
+        use shekyl_chain_store::pool::{PoolRecord, ReceivedHour};
+        use shekyl_daemon_rpc::info_facts::PoolScope;
+        use shekyl_daemon_rpc::pool_methods::{flush_txpool, get_transaction_pool};
+        use shekyl_rpc_types::errors::ErrorClass;
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_posted(dir.path(), &[]);
+        let pool = node.pool().expect("a pool");
+        let planted = {
+            let mut pool = pool.lock().expect("the pool");
+            let txid = pool.plant(
+                shekyl_chain_rules::harness::fixture::paying_fee(
+                    shekyl_chain_rules::harness::fixture::listed([7; 32]),
+                    1,
+                ),
+                PoolRecord {
+                    received: ReceivedHour::from_raw(1),
+                    public: true,
+                },
+            );
+            pool.refuse_next_commit();
+            txid
+        };
+        let handles = node.handles();
+        let flushed = a_runtime().block_on(flush_txpool(
+            &*handles.pool,
+            &shekyl_rpc_types::pool::FlushTxpoolRequest {
+                txids: vec![shekyl_rpc_types::HashHex::from_bytes(planted.to_bytes())],
+            },
+        ));
+        let after = get_transaction_pool(&*handles.pool, PoolScope::Broadcast);
+        let status = handles.mining.status();
+        node.stop();
+        assert_eq!(
+            flushed.expect_err("the file faulted").class,
+            ErrorClass::StoreFault
+        );
+        assert_eq!(after.expect_err("retired").class, ErrorClass::NotReady);
+        assert!(
+            status.expect("status").pool_retired,
+            "the service's pool is retired"
+        );
+    }
+
+    /// A thread count past the host's parallelism is refused by the method,
+    /// naming both numbers, and starts no miner (the review of #1165, M1).
+    /// Red edit: drop the bound.
+    #[test]
+    fn a_thread_count_past_the_hosts_parallelism_starts_nothing() {
+        use shekyl_daemon_rpc::mining_methods::{codes, start_mining};
+        use shekyl_rpc_types::errors::ErrorClass;
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_posted(dir.path(), &[]);
+        let handles = node.handles();
+        let host = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+        let past = shekyl_rpc_types::mining::StartMiningRequest {
+            threads: shekyl_rpc_types::mining::MinerThreads::Count(
+                std::num::NonZeroU32::new(u32::try_from(host + 1).expect("fits"))
+                    .expect("not zero"),
+            ),
+        };
+        let refused = a_runtime().block_on(start_mining(&handles.mining, past));
+        let running = node.mining().running();
+        node.stop();
+        let refused = refused.expect_err("past the parallelism");
+        assert_eq!(refused.class, ErrorClass::RefusedByMethod);
+        assert_eq!(refused.diagnostic.code, codes::TOO_MANY_THREADS);
+        assert!(!running, "no miner started");
+    }
+
+    /// After `Node::stop`, mining control starts no miner (the review of
+    /// #1165). Red edit: start without reading the latch.
+    #[test]
+    fn no_miner_starts_after_the_node_stops() {
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_posted(dir.path(), &[]);
+        let mining = node.mining();
+        node.stop();
+        let refused = mining.start(None);
+        let running = mining.running();
+        let _stopped = mining.stop();
+        assert!(
+            matches!(refused, Err(crate::MiningRefused::NodeStopped)),
+            "{refused:?}"
+        );
+        assert!(!running);
+    }
+
+    /// `generateblocks` on a node chain sync does not call synced is refused
+    /// at once with the reason, and leaves no miner running: nothing could
+    /// move the tip (the review of #1165, M2). Red edit: wait on the tip
+    /// alone, with no check of the posted job before or during the wait.
+    #[test]
+    fn generateblocks_on_a_node_that_is_not_synced_is_refused_at_once() {
+        use shekyl_daemon_rpc::mining_methods::{admit_armed, codes, generateblocks};
+        use shekyl_rpc_types::errors::ErrorClass;
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_mining(dir.path(), "testnet", shekyl_address::Network::Testnet);
+        let mut posting = node.posting();
+        wait_for_posting(
+            &mut posting,
+            &Posting::Withdrawn(NoJob::NotSynced(SyncState::NoView)),
+        );
+        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
+        let handles = node.handles();
+        let answered = a_runtime().block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                generateblocks(
+                    &handles.mining,
+                    &*handles.door,
+                    &*handles.chain,
+                    admit_armed(row, true).expect("armed"),
+                    shekyl_rpc_types::mining::GenerateBlocksRequest { count: 1 },
+                ),
+            )
+            .await
+        });
+        let running = node.mining().running();
+        node.stop();
+        let refused = answered
+            .expect("answered at once, not waited out")
+            .expect_err("not synced");
+        assert_eq!(refused.class, ErrorClass::NotReady);
+        assert_eq!(refused.diagnostic.code, codes::NOT_SYNCED);
+        assert!(!running, "no miner left running");
+    }
+
+    /// The job withdrawn mid-wait ends `generateblocks` with the reason and
+    /// stops the miner it started (the review of #1165, M2). Red edit: wait
+    /// on the tip alone.
+    #[test]
+    fn a_job_withdrawn_mid_wait_ends_generateblocks() {
+        use shekyl_daemon_rpc::mining_methods::{admit_armed, codes, generateblocks};
+        use shekyl_rpc_types::errors::ErrorClass;
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_posted(dir.path(), &[]);
+        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
+        let handles = node.handles();
+        let sync = node.sync().clone();
+        let answered = a_runtime().block_on(async {
+            let withdraw = async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                sync.send_replace(SyncState::NoView);
+                std::future::pending::<()>().await;
+            };
+            tokio::time::timeout(Duration::from_secs(30), async {
+                tokio::select! {
+                    answered = generateblocks(
+                        &handles.mining,
+                        &*handles.door,
+                        &*handles.chain,
+                        admit_armed(row, true).expect("armed"),
+                        shekyl_rpc_types::mining::GenerateBlocksRequest { count: 1_000_000 },
+                    ) => answered,
+                    () = withdraw => unreachable!("pending"),
+                }
+            })
+            .await
+        });
+        let running = node.mining().running();
+        node.stop();
+        let refused = match answered.expect("ended by the withdrawal, not waited out") {
+            Err(refused) if refused.diagnostic.code == codes::ONE_PERMIT => return,
+            other => other.expect_err("withdrawn"),
+        };
+        assert_eq!(refused.class, ErrorClass::NotReady);
+        assert_eq!(refused.diagnostic.code, codes::NOT_SYNCED);
+        assert!(!running, "the miner it started is stopped");
+    }
+
+    /// A `generateblocks` call dropped mid-wait stops the miner it started
+    /// (the review of #1165, M2). Red edit: the guard stops nothing.
+    #[test]
+    fn dropping_generateblocks_stops_the_miner_it_started() {
+        use shekyl_daemon_rpc::mining_methods::{admit_armed, generateblocks};
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_posted(dir.path(), &[]);
+        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
+        let handles = node.handles();
+        let mining = node.mining();
+        let saw_running = a_runtime().block_on(async {
+            let call = generateblocks(
+                &handles.mining,
+                &*handles.door,
+                &*handles.chain,
+                admit_armed(row, true).expect("armed"),
+                shekyl_rpc_types::mining::GenerateBlocksRequest { count: 1_000_000 },
+            );
+            let watch_it = async {
+                while !mining.running() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            };
+            tokio::select! {
+                answered = call => {
+                    assert!(answered.is_err(), "a million blocks do not arrive here");
+                    false
+                }
+                () = watch_it => true,
+            }
+        });
+        // The runtime's drop above waited on the guard's blocking stop.
+        let running = mining.running();
+        node.stop();
+        if !saw_running {
+            return;
+        }
+        assert!(!running, "dropping the call stopped the miner it started");
     }
 
     /// Make the posted template's block, as an outside miner would at

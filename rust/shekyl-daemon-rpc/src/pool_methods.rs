@@ -177,12 +177,13 @@ pub fn get_txpool_backlog(
 ///
 /// # Errors
 ///
-/// The handle's fault.
-pub fn flush_txpool(
+/// The handle's fault: `NotReady` once the pool is retired, a store fault
+/// when the pool file faults (which retires it).
+pub async fn flush_txpool(
     pool: &dyn PoolFacts,
     request: &FlushTxpoolRequest,
 ) -> Result<StatusOnlyResponse, RpcError> {
-    pool.flush(&ids_of(&request.txids))?;
+    pool.flush(ids_of(&request.txids)).await?;
     Ok(StatusOnlyResponse {
         status: RpcStatus::ok(),
     })
@@ -250,9 +251,9 @@ mod tests {
                 .collect())
         }
 
-        fn flush(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
-            self.flushed.lock().expect("lock").extend_from_slice(ids);
-            Ok(ids.to_vec())
+        fn flush(&self, ids: Vec<TxHash>) -> crate::mining_facts::Pending<'_, Vec<TxHash>> {
+            self.flushed.lock().expect("lock").extend_from_slice(&ids);
+            Box::pin(async move { Ok(ids) })
         }
     }
 
@@ -312,8 +313,8 @@ mod tests {
 
     /// `flush_txpool` hands its ids to the pool's remove verb; `relay_tx`
     /// is not ready until a relay driver is supplied.
-    #[test]
-    fn flush_names_its_ids_and_relay_waits_for_a_driver() {
+    #[tokio::test]
+    async fn flush_names_its_ids_and_relay_waits_for_a_driver() {
         let pool = pool();
         flush_txpool(
             &pool,
@@ -321,6 +322,7 @@ mod tests {
                 txids: vec![HashHex::from_bytes([2; 32])],
             },
         )
+        .await
         .expect("flushed");
         assert_eq!(
             *pool.flushed.lock().expect("lock"),

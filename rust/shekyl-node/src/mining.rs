@@ -13,14 +13,15 @@
 //! `# Panics`).
 
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use shekyl_chain_ingest::follower::{NoJob, Posting};
+use shekyl_chain_ingest::follower::{NoJob, Posting, Unbuilt};
 use shekyl_chain_ingest::service::PoolHealth;
 use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_daemon_rpc::handles::MiningFacts;
 use shekyl_daemon_rpc::mining_facts::{
-    BacklogEntry, MinerState, MiningState, PostedSummary, PostedTemplate,
+    BacklogEntry, MinerState, MiningState, Pending, PostedSummary, PostedTemplate,
 };
 use shekyl_daemon_rpc::mining_methods::codes;
 use shekyl_hash_budget::Budget;
@@ -40,6 +41,17 @@ pub enum MiningRefused {
     NoAddress,
     /// The miner is already running.
     Running,
+    /// More threads than the host runs at once: each holds a ring and a
+    /// stack, and a count past the host's parallelism only adds threads
+    /// that wait.
+    TooManyThreads {
+        /// The count asked for.
+        asked: usize,
+        /// The host's parallelism.
+        host: usize,
+    },
+    /// The node has stopped.
+    NodeStopped,
     /// The miner refused to start.
     Start(MinerStartRefused),
 }
@@ -49,6 +61,11 @@ impl core::fmt::Display for MiningRefused {
         match self {
             Self::NoAddress => f.write_str("no mine-address is set; set it and restart the node"),
             Self::Running => f.write_str("the miner is already running"),
+            Self::TooManyThreads { asked, host } => write!(
+                f,
+                "{asked} threads asked for; this host runs {host} at once"
+            ),
+            Self::NodeStopped => f.write_str("the node has stopped"),
             Self::Start(refused) => refused.fmt(f),
         }
     }
@@ -89,6 +106,8 @@ pub struct MiningControl {
     posting: watch::Receiver<Posting>,
     pool: PoolHealth,
     miner: Mutex<Option<Miner>>,
+    /// Set by [`Node::stop`](crate::Node::stop): no miner starts after it.
+    closed: AtomicBool,
 }
 
 impl MiningControl {
@@ -110,6 +129,17 @@ impl MiningControl {
             posting,
             pool,
             miner: Mutex::new(None),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    /// Stop the miner and refuse every later start: the node is stopping.
+    pub(crate) fn close(&self) {
+        let mut running = self.lock();
+        self.closed.store(true, Ordering::Release);
+        if let Some(miner) = running.take() {
+            drop(running);
+            miner.stop();
         }
     }
 
@@ -118,7 +148,7 @@ impl MiningControl {
     }
 
     /// Start the miner with `threads` workers; `None` is the host's
-    /// parallelism less one, at least one.
+    /// parallelism, which is also the most a count may ask for.
     ///
     /// # Errors
     ///
@@ -128,13 +158,20 @@ impl MiningControl {
             return Err(MiningRefused::NoAddress);
         };
         let mut running = self.lock();
+        if self.closed.load(Ordering::Acquire) {
+            return Err(MiningRefused::NodeStopped);
+        }
         if running.is_some() {
             return Err(MiningRefused::Running);
         }
-        let threads = threads.unwrap_or_else(|| {
-            let host = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
-            NonZeroUsize::new(host.saturating_sub(1)).unwrap_or(NonZeroUsize::MIN)
-        });
+        let host = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
+        let threads = threads.unwrap_or(host);
+        if threads > host {
+            return Err(MiningRefused::TooManyThreads {
+                asked: threads.get(),
+                host: host.get(),
+            });
+        }
         let miner = Miner::start(
             &MinerConfig { address, threads },
             Arc::clone(&self.board),
@@ -244,15 +281,44 @@ impl MiningFacts for MiningControl {
             let code = match &refused {
                 MiningRefused::NoAddress => codes::NO_ADDRESS,
                 MiningRefused::Running => codes::RUNNING,
+                MiningRefused::TooManyThreads { .. } => codes::TOO_MANY_THREADS,
+                MiningRefused::NodeStopped => codes::STOPPING,
                 MiningRefused::Start(MinerStartRefused::OnePermit) => codes::ONE_PERMIT,
                 MiningRefused::Start(MinerStartRefused::Thread(_)) => codes::THREAD,
             };
-            Diagnostic::new(code, refused.to_string())
+            let diagnostic = Diagnostic::new(code, refused.to_string());
+            match refused {
+                MiningRefused::TooManyThreads { asked, host } => diagnostic
+                    .param("threads", asked.to_string())
+                    .param("parallelism", host.to_string()),
+                _ => diagnostic,
+            }
         }))
     }
 
     fn stop(&self) -> Result<bool, FactsFault> {
         Ok(Self::stop(self))
+    }
+
+    /// Resolves when the job is withdrawn for a reason the next tip does
+    /// not clear: `generateblocks` waits on the tip only while a miner can
+    /// still make it move.
+    fn withdrawn(&self) -> Pending<'_, Diagnostic> {
+        let mut posting = self.posting.clone();
+        Box::pin(async move {
+            let lost = |now: &Posting| match now {
+                Posting::Posted(_)
+                | Posting::Withdrawn(NoJob::Starting | NoJob::Unbuilt(Unbuilt::PoolOnAnotherTip)) => {
+                    None
+                }
+                Posting::Withdrawn(why) => Some(why.clone()),
+            };
+            let why = match posting.wait_for(|now| lost(now).is_some()).await {
+                Ok(now) => lost(&now).unwrap_or(NoJob::Stopped),
+                Err(_) => NoJob::Stopped,
+            };
+            Ok(no_job_diagnostic(&why))
+        })
     }
 
     fn status(&self) -> Result<MiningState, FactsFault> {

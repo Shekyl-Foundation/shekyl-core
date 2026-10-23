@@ -560,11 +560,7 @@ where
     /// discardable (`SPL-Q8`), but one this process cannot read is refused
     /// at open, never deleted, so the remedy is the operator's restart.
     pub(crate) fn pool_dead(&self, fault: &StoreError) {
-        tracing::error!(
-            "the pool file faulted: the node keeps following the chain without a \
-             transaction pool until it restarts: {fault}"
-        );
-        self.pool_live.store(false, Ordering::Release);
+        retire_pool(&self.pool_live, fault);
     }
 
     /// Park `bodies` for the attendant and wake it.
@@ -874,7 +870,18 @@ where
     }
 }
 
-/// Whether the pool file has faulted ([`Service::pool_health`]).
+/// The pool file faulted: the one retirement, whoever met the fault.
+fn retire_pool(live: &AtomicBool, fault: &StoreError) {
+    tracing::error!(
+        "the pool file faulted: the node keeps following the chain without a \
+         transaction pool until it restarts: {fault}"
+    );
+    live.store(false, Ordering::Release);
+}
+
+/// Whether the pool file has faulted ([`Service::pool_health`]), and the
+/// way to say it has: a writer outside the service that meets a fault on
+/// the pool file retires the service's pool, not a copy.
 #[derive(Clone, Debug)]
 pub struct PoolHealth {
     wired: bool,
@@ -886,6 +893,13 @@ impl PoolHealth {
     #[must_use]
     pub fn retired(&self) -> bool {
         self.wired && !self.live.load(Ordering::Acquire)
+    }
+
+    /// The pool file faulted under a writer outside the service: the
+    /// service reads and writes the pool no more, as when it meets the
+    /// fault itself.
+    pub fn retire(&self, fault: &StoreError) {
+        retire_pool(&self.live, fault);
     }
 }
 

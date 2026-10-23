@@ -492,6 +492,14 @@ impl Pool {
         self.key_images = key_images;
     }
 
+    /// The next write to the pool file whose closure returns `Ok` aborts as
+    /// a commit failure ([`PoolStore::refuse_next_commit`]). Test builds
+    /// only (`pool-commit-fault`).
+    #[cfg(feature = "pool-commit-fault")]
+    pub fn refuse_next_commit(&self) {
+        self.store.refuse_next_commit();
+    }
+
     /// The pool file.
     pub(crate) const fn store(&self) -> &PoolStore {
         &self.store
@@ -548,12 +556,17 @@ impl Pool {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "pool-commit-fault"))]
 impl Pool {
     /// Hold `tx` under `record` without the door — for the tests of what the
-    /// pool does with what it holds (eviction's arithmetic), never of what
-    /// it admits. Written to the file and the index as `admit` would.
-    pub(crate) fn plant(&mut self, tx: Transaction, record: PoolRecord) -> TxHash {
+    /// pool does with what it holds (eviction's arithmetic, a write that
+    /// faults), never of what it admits. Written to the file and the index
+    /// as `admit` would. Test builds only (`pool-commit-fault`).
+    ///
+    /// # Panics
+    ///
+    /// When the pool file refuses the write.
+    pub fn plant(&mut self, tx: Transaction, record: PoolRecord) -> TxHash {
         let txid = tx.txid_parts().hash;
         let blob = tx.serialize();
         self.store

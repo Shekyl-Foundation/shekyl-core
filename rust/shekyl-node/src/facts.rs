@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use shekyl_chain_ingest::service::{ArrivalTag, Door, Refusal, Reply, Rewinder, ServiceFault};
+use shekyl_chain_ingest::service::{
+    ArrivalTag, Door, PoolHealth, Refusal, Reply, Rewinder, ServiceFault,
+};
 use shekyl_chain_ingest::{ProductionSubstrate, Rewound, TipChanged};
 use shekyl_chain_sync::SyncState;
 use shekyl_daemon_rpc::chain_facts::{
@@ -54,9 +56,15 @@ pub(crate) struct Surroundings {
 
 impl NodeFacts for Surroundings {
     fn sync(&self) -> Result<SyncFacts, FactsFault> {
-        // Chain sync's state, the one the follower posts on (DX-Q3, Q13).
+        // Chain sync's state, the one the follower posts on (DX-Q3, Q13),
+        // read by the follower's rule: a closed watch says nothing about
+        // the chain, so it reads `NoView`, not its last value.
         // `following_degraded` is the latch the flip writes into the store.
-        let state = *self.sync.borrow();
+        let state = if self.sync.has_changed().is_err() {
+            SyncState::NoView
+        } else {
+            *self.sync.borrow()
+        };
         Ok(SyncFacts {
             target: None,
             synchronized: state == SyncState::Synced,
@@ -309,17 +317,23 @@ impl ChainReadFacts for ChainBridge {
 
 pub(crate) struct PoolBridge {
     pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
+    /// The service's own retirement flag: a pool it has retired is not
+    /// served here, and a fault met here retires it there.
+    health: PoolHealth,
 }
 
 impl PoolBridge {
-    pub(crate) fn new(pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>) -> Self {
-        Self { pool }
+    pub(crate) fn new(pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>, health: PoolHealth) -> Self {
+        Self { pool, health }
     }
 }
 
 impl PoolBridge {
-    /// The pool, while the node holds one.
+    /// The pool, while the node holds one and its file has not faulted.
     fn pool(&self) -> Result<Arc<Mutex<Pool>>, FactsFault> {
+        if self.health.retired() {
+            return Err(FactsFault::NotReady);
+        }
         lock(&self.pool).clone().ok_or(FactsFault::NotReady)
     }
 }
@@ -352,21 +366,31 @@ impl PoolFacts for PoolBridge {
         })
     }
 
-    fn flush(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
-        let pool = self.pool()?;
-        let mut pool = lock(&pool);
-        let all: Vec<TxHash>;
-        let ids = if ids.is_empty() {
-            all = pool.relay_view().entries().map(|entry| entry.id).collect();
-            &all
-        } else {
-            ids
-        };
-        let flushed = pool.flush(ids).map_err(|error| {
-            tracing::error!("flush_txpool: the pool file: {error}");
-            FactsFault::StoreUnreadable
-        })?;
-        Ok(flushed.into_iter().map(|(id, _)| id).collect())
+    /// On a blocking thread: the flush writes the pool file under the
+    /// pool's lock, which a runtime thread must not wait on.
+    fn flush(&self, ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>> {
+        let pool = self.pool();
+        let health = self.health.clone();
+        Box::pin(async move {
+            let pool = pool?;
+            tokio::task::spawn_blocking(move || {
+                let mut pool = lock(&pool);
+                let ids = if ids.is_empty() {
+                    pool.relay_view().entries().map(|entry| entry.id).collect()
+                } else {
+                    ids
+                };
+                match pool.flush(&ids) {
+                    Ok(flushed) => Ok(flushed.into_iter().map(|(id, _)| id).collect()),
+                    Err(fault) => {
+                        health.retire(&fault);
+                        Err(FactsFault::StoreUnreadable)
+                    }
+                }
+            })
+            .await
+            .map_err(|_| FactsFault::Internal)?
+        })
     }
 }
 
@@ -384,7 +408,9 @@ pub(crate) struct DoorBridge {
     entry: Arc<Mutex<Option<DoorEntry>>>,
     /// The connector's tip publications.
     tips: tokio::sync::watch::Receiver<TipChanged>,
-    /// The tag each local offer carries, one more each time.
+    /// The tag each local offer carries, one more each time. It can repeat
+    /// a tag the miner's sink or genesis gave: a local offer is a span of
+    /// one, and a tag only tells apart the arrivals of one span.
     tags: AtomicU64,
 }
 
@@ -574,5 +600,29 @@ impl StopFacts for StopBridge {
     fn request_stop(&self) -> Result<(), FactsFault> {
         (self.request)();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A closed sync watch reads `NoView`, as the follower reads it, never
+    /// its last value (the review of #1165). Red edit: read the last value.
+    #[test]
+    fn a_closed_sync_watch_reads_as_no_view() {
+        let dir = tempfile::tempdir().expect("temp");
+        let (sender, sync) = tokio::sync::watch::channel(SyncState::Synced);
+        let surroundings = Surroundings {
+            pool: Arc::new(Mutex::new(None)),
+            data_dir: dir.path().to_path_buf(),
+            offline: false,
+            sync,
+        };
+        assert!(surroundings.sync().expect("open").synchronized);
+        drop(sender);
+        let closed = surroundings.sync().expect("closed");
+        assert!(!closed.synchronized, "a closed watch is not Synced");
+        assert!(!closed.busy_syncing);
     }
 }

@@ -46,6 +46,12 @@ tracing = "0.1"
 tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 
 [dev-dependencies]
+# The flush-fault test refuses the pool file's next commit
+# (`pool-commit-fault`). Dev edge only; check_test_only_features.py holds
+# that the normal dependency above leaves it off.
+shekyl-mempool = { path = "../shekyl-mempool", features = ["pool-commit-fault"] }
+# The planted entry's body, a harness spend.
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # A mining address for the template tests, from a fixed seed's keys.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
