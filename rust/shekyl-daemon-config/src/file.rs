@@ -160,7 +160,7 @@ pub(crate) mod unix {
     use std::path::Path;
 
     pub(crate) use crate::acl::AclProbe;
-    pub(crate) use crate::group::GroupMembers;
+    pub(crate) use crate::group::Membership;
 
     /// A probe that could not be read. The same words name an unreadable
     /// directory, a file whose metadata could not be read, and a list that
@@ -238,7 +238,7 @@ pub(crate) mod unix {
         entry: Entry,
         my_group: u32,
         acl: AclProbe,
-        members: &dyn Fn() -> GroupMembers,
+        members: &dyn Fn() -> Result<Membership, String>,
     ) -> Option<String> {
         match acl {
             AclProbe::Named => return Some(ACL_NAMED.to_owned()),
@@ -252,16 +252,16 @@ pub(crate) mod unix {
             return None;
         }
         match members() {
-            GroupMembers::Sole => None,
-            GroupMembers::Listed(name) => Some(format!(
+            Ok(Membership::Sole) => None,
+            Ok(Membership::Listed(name)) => Some(format!(
                 "its group, gid {}, which lists the account {name}",
                 entry.gid
             )),
-            GroupMembers::Primary(name) => Some(format!(
+            Ok(Membership::Primary(name)) => Some(format!(
                 "its group, gid {}, which is the primary group of the account {name}",
                 entry.gid
             )),
-            GroupMembers::Unreadable(why) => Some(format!(
+            Err(why) => Some(format!(
                 "its group, gid {}, whose membership could not be read ({why})",
                 entry.gid
             )),
@@ -369,14 +369,18 @@ fn reader_outside_permitted(_file: &File, path: &Path) -> Option<String> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::unix::{
-        secret_reader, writer_outside_permitted, AclProbe, Entry, GroupMembers, ACL_NAMED,
-        UNREADABLE,
+        secret_reader, writer_outside_permitted, AclProbe, Entry, Membership, ACL_NAMED, UNREADABLE,
     };
     use super::*;
+    use crate::group::AccountName;
     use std::collections::BTreeMap;
     use std::os::unix::fs::PermissionsExt;
 
     const ME: u32 = 1000;
+
+    fn account_name(bytes: &[u8]) -> AccountName {
+        AccountName::new(bytes).expect("a test name is non-empty")
+    }
 
     /// `S_IFREG` and `S_IFDIR`. The rules never read the file type; the
     /// described trees carry it so a mode still looks like a mode.
@@ -508,7 +512,7 @@ mod tests {
         const MINE: u32 = 50;
         let private = entry(ME, ME, reg(0o600));
         let service = entry(0, MINE, reg(0o640));
-        let sole = || GroupMembers::Sole;
+        let sole = || Ok(Membership::Sole);
         assert_eq!(
             secret_reader(private, MINE, AclProbe::ModeOnly, &sole),
             None
@@ -536,20 +540,20 @@ mod tests {
     fn a_group_readable_secret_needs_the_daemon_as_the_groups_only_member() {
         const MINE: u32 = 50;
         let service = entry(0, MINE, reg(0o640));
-        let judge = |members: GroupMembers| {
+        let judge = |members: Result<Membership, String>| {
             secret_reader(service, MINE, AclProbe::ModeOnly, &|| members.clone())
         };
-        assert_eq!(judge(GroupMembers::Sole), None);
+        assert_eq!(judge(Ok(Membership::Sole)), None);
         assert_eq!(
-            judge(GroupMembers::Listed("alice".to_owned())).as_deref(),
+            judge(Ok(Membership::Listed(account_name(b"alice")))).as_deref(),
             Some("its group, gid 50, which lists the account alice")
         );
         assert_eq!(
-            judge(GroupMembers::Primary("backup".to_owned())).as_deref(),
+            judge(Ok(Membership::Primary(account_name(b"backup")))).as_deref(),
             Some("its group, gid 50, which is the primary group of the account backup")
         );
         assert_eq!(
-            judge(GroupMembers::Unreadable(
+            judge(Err(
                 "the system's account list could not be read: boom".to_owned()
             ))
             .as_deref(),
@@ -560,8 +564,9 @@ mod tests {
         );
         // A file the group cannot read never consults the membership, and
         // another group's read is refused as that group before any read.
-        let never =
-            || -> GroupMembers { panic!("a membership was read for a file the group cannot read") };
+        let never = || -> Result<Membership, String> {
+            panic!("a membership was read for a file the group cannot read")
+        };
         assert_eq!(
             secret_reader(entry(ME, ME, reg(0o600)), MINE, AclProbe::ModeOnly, &never),
             None
