@@ -460,6 +460,68 @@ fn a_mining_address_keeps_the_decoded_keys() {
     assert_eq!(mined.spend, [0xaa; 32]);
     assert_eq!(mined.view, [0xbb; 32]);
     assert_eq!(mined.ml_kem, vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN]);
+    assert_eq!(
+        mined.x25519,
+        shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk(&[0xbb; 32]).unwrap(),
+        "the coinbase's X25519 half is the view key's image"
+    );
+}
+
+/// An address whose keys no coinbase can pay is refused at the row, once:
+/// the C++ decode's checks (`coinbase_recipient`), and the full address.
+#[test]
+fn a_mining_address_a_coinbase_cannot_pay_is_refused() {
+    let off_curve = (2u8..=255)
+        .map(|y| {
+            let mut bytes = [0u8; 32];
+            bytes[0] = y;
+            bytes
+        })
+        .find(|bytes| {
+            shekyl_crypto_pq::account::coinbase_recipient(
+                bytes,
+                &[0xbb; 32],
+                &[0xcc; shekyl_address::PQC_PAYLOAD_LEN],
+            ) == Err(shekyl_crypto_pq::account::RecipientRefused::SpendKeyNotAPoint)
+        })
+        .expect("about half of all encodings are not points");
+    let address = |spend: [u8; 32], ml_kem: Vec<u8>| {
+        shekyl_address::ShekylAddress::new(
+            shekyl_address::Network::Mainnet,
+            spend,
+            [0xbb; 32],
+            [0xee; shekyl_address::MSG_SIGN_PK_LEN],
+            ml_kem,
+        )
+    };
+    let full = address(off_curve, vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN])
+        .encode()
+        .unwrap();
+    let malformed = address([0xaa; 32], vec![0xff; shekyl_address::PQC_PAYLOAD_LEN])
+        .encode()
+        .unwrap();
+    let display = address([0xaa; 32], vec![0xcc; shekyl_address::PQC_PAYLOAD_LEN])
+        .encode_classical_display()
+        .unwrap();
+    for (text, reason) in [
+        (full, "spend key is not a valid curve point"),
+        (malformed, "ML-KEM-768 key is not a well-formed"),
+        (display, "mine to the full address"),
+    ] {
+        let refused = build_from(&["--mine-address", &text], "").expect_err("refused");
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert_eq!(refused[0].code, Code::ValueSyntax);
+        assert_eq!(refused[0].option.as_deref(), Some("mine-address"));
+        let expected = refused[0]
+            .params
+            .iter()
+            .find(|(key, _)| *key == "expected")
+            .map(|(_, value)| value.as_str());
+        assert!(
+            expected.is_some_and(|said| said.contains(reason)),
+            "{reason}: {expected:?}"
+        );
+    }
 }
 
 /// A row the table fills is not replaced with a quieter default when it is

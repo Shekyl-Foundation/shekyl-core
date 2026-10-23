@@ -4252,6 +4252,7 @@ version = "3.1.0"
 dependencies = [
  "rustix",
  "shekyl-address",
+ "shekyl-crypto-pq",
  "shekyl-logging",
  "shekyl-onion-v3",
  "shekyl-options",
@@ -4765,6 +4766,7 @@ dependencies = [
 name = "shekyl-miner"
 version = "3.1.0"
 dependencies = [
+ "curve25519-dalek",
  "shekyl-address",
  "shekyl-block-template",
  "shekyl-crypto-pq",

@@ -34,3 +34,8 @@ tracing = "0.1"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The address tests' spend key off the curve: the first encoding that does
+# not decompress. The version `shekyl-crypto-pq` pins.
+curve25519-dalek = "4"

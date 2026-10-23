@@ -23,6 +23,8 @@ shekyl-logging = { path = "../shekyl-logging" }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 # A mining address is checked against the network at construction.
 shekyl-address = { path = "../shekyl-address" }
+# ... and its keys as a coinbase pays them (`coinbase_recipient`).
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 
 [target.'cfg(unix)'.dependencies]
 # Safe wrappers for the data-directory lock (`flock`) and the account's
