@@ -89,7 +89,7 @@ for d in "${PRODUCTION_DIRS[@]}"; do
 done
 
 # -- 1. No test value in production code ------------------------------------
-hits="$(scan -n 'CONFORMING_DRAW_COMMITMENT|scenario::build_template' "${TEST_GLOBS[@]}" "${PRODUCTION_DIRS[@]}" || true)"
+hits="$(scan -n 'CONFORMING_DRAW_COMMITMENT|scenario::build_template' "${TEST_GLOBS[@]}" "${PRODUCTION_DIRS[@]}")"
 if [[ -n "$hits" ]]; then
   echo "FAIL: a test-only template value is named in production code:" >&2
   echo "$hits" >&2
@@ -100,7 +100,7 @@ fi
 
 # -- 2. The producer draws from the OS --------------------------------------
 for needle in 'OsRng' 'commit_and_discard\(\)'; do
-  found="$(scan -c "$needle" "$PRODUCER" || true)"
+  found="$(scan -c "$needle" "$PRODUCER")"
   if [[ -z "$found" ]]; then
     echo "FAIL: ${PRODUCER} no longer names ${needle} — the template's secrets must be the OS's" >&2
     FAIL=1
@@ -109,7 +109,7 @@ done
 
 # -- 3. The subject this gate excludes is where it is expected ---------------
 for needle in 'CONFORMING_DRAW_COMMITMENT' 'counter\.to_le_bytes\(\)'; do
-  found="$(scan -c "$needle" "$SCENARIO" || true)"
+  found="$(scan -c "$needle" "$SCENARIO")"
   if [[ -z "$found" ]]; then
     echo "FAIL: ${SCENARIO} no longer names ${needle} — the test values moved; point this gate at them" >&2
     FAIL=1
@@ -117,20 +117,20 @@ for needle in 'CONFORMING_DRAW_COMMITMENT' 'counter\.to_le_bytes\(\)'; do
 done
 
 # -- 4. shekyl-ffi: the conforming value only in the test-support writer ----
-ffi_hits="$(scan -l 'CONFORMING_DRAW_COMMITMENT' "${TEST_GLOBS[@]}" "$FFI_DIR" || true)"
+ffi_hits="$(scan -l 'CONFORMING_DRAW_COMMITMENT' "${TEST_GLOBS[@]}" "$FFI_DIR")"
 if [[ -n "$ffi_hits" && "$ffi_hits" != "$FFI_EXTRA" ]]; then
   echo "FAIL: shekyl-ffi names CONFORMING_DRAW_COMMITMENT outside ${FFI_EXTRA}:" >&2
   echo "$ffi_hits" >&2
   FAIL=1
 fi
 for needle in 'fn shekyl_test_coinbase_extra' 'commit_and_discard\(\)\.ok\(\)'; do
-  found="$(scan -c "$needle" "$FFI_EXTRA" || true)"
+  found="$(scan -c "$needle" "$FFI_EXTRA")"
   if [[ -z "$found" ]]; then
     echo "FAIL: ${FFI_EXTRA} no longer names ${needle} — the coinbase writers moved; update this gate" >&2
     FAIL=1
   fi
 done
-cpp_callers="$(scan -n 'shekyl_test_coinbase_extra\(' src --glob '!src/shekyl/shekyl_ffi.h' || true)"
+cpp_callers="$(scan -n 'shekyl_test_coinbase_extra\(' src --glob '!src/shekyl/shekyl_ffi.h')"
 if [[ -n "$cpp_callers" ]]; then
   echo "FAIL: production C++ calls the test coinbase writer, whose draw commitment anyone can guess:" >&2
   echo "$cpp_callers" >&2
