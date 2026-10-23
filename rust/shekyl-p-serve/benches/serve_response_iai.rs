@@ -186,11 +186,27 @@ impl PassSigner<IDENTITY_ENVELOPE_LEN> for SeededSigner {
     }
 }
 
-/// The transcript the seeded key signs once, in `setup`: fixed bytes, so
-/// the ML-DSA trajectory it selects is a property of this file and not of
-/// what the serve put on the wire.
-const PINNED_TRANSCRIPT: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] =
-    [0x3c; PASS_COUNTERSIGNATURE_MESSAGE_LEN];
+/// Prefix of the transcript the rolling baseline measured: 112 bytes of
+/// this value, the length before the stream byte.
+const SIGN_TRAJECTORY_PREFIX: u8 = 0x3c;
+/// Last byte of the pinned transcript. Repeating [`SIGN_TRAJECTORY_PREFIX`]
+/// out to 113 bytes drops one ML-DSA rejection round under the bench key
+/// and nonce (7.16 M → 5.43 M instructions). This tail keeps that round count.
+const SIGN_TRAJECTORY_TAIL: u8 = 0x0a;
+/// Length those bytes were chosen for. It is the pass transcript's length;
+/// a longer transcript does not compile until this constant and the tail
+/// are chosen again, instead of a longer fill re-rolling the trajectory.
+const SIGN_TRAJECTORY_LEN: usize = 113;
+
+/// The transcript the seeded key signs once, in `setup`: bytes chosen in
+/// this file, so the ML-DSA trajectory is a property of this file and not
+/// of what the serve put on the wire.
+const PINNED_TRANSCRIPT: [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] = {
+    let mut out = [SIGN_TRAJECTORY_PREFIX; SIGN_TRAJECTORY_LEN];
+    out[SIGN_TRAJECTORY_LEN - 1] = SIGN_TRAJECTORY_TAIL;
+    out
+};
+const _: [(); SIGN_TRAJECTORY_LEN] = [(); PASS_COUNTERSIGNATURE_MESSAGE_LEN];
 
 /// The signer the serve cells are handed: [`SeededSigner`]'s signature
 /// over [`PINNED_TRANSCRIPT`], answered to every `sign_pass`. Constant
