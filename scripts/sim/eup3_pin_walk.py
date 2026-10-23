@@ -247,31 +247,93 @@ def scenario_row(raw: dict) -> dict:
     }
 
 
-def run_binary(binary: str) -> dict[str, dict]:
-    main = (WALK / "rust/shekyl-staking-sim/src/main.rs").read_text()
-    invocations = [[]]
-    if "--axis=" in main:
-        invocations = [["--axis=" + axis] for axis in AXES]
-    found: dict[str, dict] = {}
-    for args in invocations:
-        proc = subprocess.run(
-            [binary, *args],
-            cwd=WALK / "rust",
-            text=True,
-            capture_output=True,
-            timeout=900,
-        )
-        if proc.returncode != 0:
-            if "no scenarios matched" in proc.stderr:
-                continue
-            raise SystemExit(
-                f"run failed {args}:\n{(proc.stderr or '')[-2000:]}"
-            )
-        for raw in extract_json(proc.stdout):
-            name = raw.get("name")
-            if name in VECTOR:
-                found[name] = scenario_row(raw)
+def classify_run(stderr: str) -> str:
+    """`empty` is a filter that matched nothing. `unknown` is a flag the
+    binary does not have. Anything else is a failed run."""
+    text = stderr.lower()
+    if "no scenarios matched" in text:
+        return "empty"
+    if (
+        "unexpected argument" in text
+        or "unrecognized" in text
+        or "unknown argument" in text
+    ):
+        return "unknown"
+    return "failed"
+
+
+def invoke(binary: str, args: list[str]) -> tuple[list[dict], str]:
+    """Rows from one invocation, and `ok` / `empty` / `unknown` / `failed`."""
+    proc = subprocess.run(
+        [binary, *args],
+        cwd=WALK / "rust",
+        text=True,
+        capture_output=True,
+        timeout=900,
+    )
+    if proc.returncode != 0:
+        kind = classify_run(proc.stderr or "")
+        if kind == "failed":
+            raise SystemExit(f"run failed {args}:\n{(proc.stderr or '')[-2000:]}")
+        return [], kind
+    return extract_json(proc.stdout), "ok"
+
+
+def absorb(found: dict[str, dict], rows: list[dict]) -> None:
+    for raw in rows:
+        name = raw.get("name")
+        if name in VECTOR:
+            found[name] = scenario_row(raw)
+
+
+def axis_was_honored(rows: list[dict], axis: str) -> bool:
+    """True when every returned row carries this axis prefix.
+
+    A binary that ignores `--axis` returns the whole population. That
+    output is already the vector, and running the other prefixes would
+    repeat it. A row with no `axis` field is a population dump when the
+    run is larger than the pin vector.
+    """
+    if not rows:
+        return True
+    names = [row.get("axis") for row in rows]
+    if any(name is None for name in names):
+        return len(rows) <= len(VECTOR)
+    return all(str(name).startswith(axis) for name in names)
+
+
+def project(found: dict[str, dict]) -> dict[str, dict]:
     return {name: found.get(name) for name in VECTOR}
+
+
+def run_binary(binary: str) -> dict[str, dict]:
+    """The pin vector, from the axes when the binary honors `--axis`.
+
+    One unscoped run is the whole population. The probe is the first
+    axis. An unknown flag, or a flag the binary ignores, falls back to
+    that single unscoped run. The source text is not consulted.
+    """
+    found: dict[str, dict] = {}
+    rows, kind = invoke(binary, [f"--axis={AXES[0]}"])
+    if kind == "unknown":
+        # `invoke` already exits when the run itself failed.
+        rows, _kind = invoke(binary, [])
+        absorb(found, rows)
+        return project(found)
+    if kind == "ok" and not axis_was_honored(rows, AXES[0]):
+        absorb(found, rows)
+        return project(found)
+    if kind == "ok":
+        absorb(found, rows)
+    for axis in AXES[1:]:
+        if all(name in found for name in VECTOR):
+            break
+        more, axis_kind = invoke(binary, [f"--axis={axis}"])
+        if axis_kind == "unknown":
+            continue
+        if axis_kind == "ok":
+            absorb(found, more)
+    return project(found)
 
 
 def measure(
@@ -348,9 +410,11 @@ def cmd_noise() -> None:
 
 
 def write_seeds(commit: str, label: str, dest: Path) -> None:
-    """Five seeds at one tree. `measure` checks out `commit` each time,
-    which drops any uncommitted patch, so callers that patched the tree
-    use `write_seeds_here` instead."""
+    """Five seeds at one committed tree.
+
+    `measure` checks out `commit` on every seed, which drops an uncommitted
+    patch. A patched tree is measured by `eup3_pin_halves.write_seeds_here`.
+    """
     full = rev_parse(REPO, commit)
     have = {
         (row["commit"], row.get("seed"), row.get("label"))
@@ -367,48 +431,9 @@ def write_seeds(commit: str, label: str, dest: Path) -> None:
         have.add((row["commit"], seed, label))
 
 
-def write_seeds_here(label: str, dest: Path) -> None:
-    """Five seeds at the worktree as it stands, including an applied patch."""
-    head = rev_parse(WALK, "HEAD")
-    have = {
-        (row.get("label"), row.get("seed"))
-        for row in load_jsonl(dest)
-    }
-    for seed in NOISE_SEEDS:
-        if (label, seed) in have:
-            print(f"seeds skip {label} {seed}", flush=True)
-            continue
-        print(f"seeds {label} {head[:12]} {seed}", flush=True)
-        if seed != PIN_SEED:
-            set_baseline_seed(seed)
-        binary = build()
-        row = {
-            "commit": head,
-            "subject": subject(WALK, "HEAD"),
-            "channel": channel_at(WALK),
-            "channel_override": None,
-            "seed": seed,
-            "label": label,
-            "vector": run_binary(binary),
-        }
-        append_jsonl(dest, row)
-        have.add((label, seed))
-        # The next seed has to start from the patched tree, not a leftover seed.
-        git(
-            ["checkout", "--", "rust/shekyl-staking-sim/src/scenarios.rs"],
-            WALK,
-        )
-
-
 DIST_COMMITS = (
     ("post-repair", "4071ec03260374b76c83efb32bd0fce43f0ad1ef"),
     ("post-a04c", "a04c988b1cdc24bd6c4d5d2bf6a1297e0e31c155"),
-)
-A04C = "a04c988b1cdc24bd6c4d5d2bf6a1297e0e31c155"
-A04C_PARENT = "6033beea0908da3ba3624f2fd9c179653a91791d"
-A04C_HALVES = (
-    ("a04c-reward", "rust/shekyl-staking-sim/src/reward.rs"),
-    ("a04c-retention", "rust/shekyl-archival-retention/src/consensus_state.rs"),
 )
 
 
@@ -417,35 +442,6 @@ def cmd_seeds() -> None:
     dest = OUT_DIR / "distributions.jsonl"
     for label, commit in DIST_COMMITS:
         write_seeds(commit, label, dest)
-
-
-def cmd_halves() -> None:
-    """a04c's reward.rs change and its r_market_count change, separately.
-
-    The other files in that commit (the workflow and the C++ getters) are
-    not in the sim's build. Each half is the parent plus one file from a04c.
-    """
-    dest = OUT_DIR / "distributions.jsonl"
-    for label, path in A04C_HALVES:
-        if any(row.get("label") == label for row in load_jsonl(dest)):
-            # A partial label is resumed seed by seed inside write_seeds_here.
-            pass
-        print(f"half {label} from {A04C_PARENT[:12]} + {path}", flush=True)
-        checkout(A04C_PARENT)
-        diff = git(["diff", A04C_PARENT, A04C, "--", path], REPO)
-        if not diff.strip():
-            raise SystemExit(f"no diff for {path}")
-        proc = subprocess.run(
-            ["git", "apply"],
-            cwd=WALK,
-            input=diff,
-            text=True,
-            capture_output=True,
-        )
-        if proc.returncode != 0:
-            raise SystemExit(f"apply failed for {path}:\n{proc.stderr}")
-        write_seeds_here(label, dest)
-        checkout(A04C_PARENT)
 
 
 def cmd_walk() -> None:
@@ -963,6 +959,13 @@ def main() -> None:
         raise SystemExit(f"walk worktree does not exist: {WALK}")
     if not (REPO / ".git").exists() and not (REPO / "scripts/sim/eup3_pin_walk.py").exists():
         raise SystemExit(f"repo does not look like the checkout: {REPO}")
+    if args.command == "halves":
+        # Imported after the globals above are set. The halves module
+        # imports this one, so a top-level import would cycle.
+        from eup3_pin_halves import cmd_halves
+
+        cmd_halves()
+        return
     {
         "noise": cmd_noise,
         "walk": cmd_walk,
@@ -971,7 +974,6 @@ def main() -> None:
         "merges": cmd_merges,
         "toolchains": cmd_toolchains,
         "seeds": cmd_seeds,
-        "halves": cmd_halves,
         "table": cmd_table,
     }[args.command]()
 
