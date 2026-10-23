@@ -548,6 +548,12 @@ pub enum SettlementFault {
         /// The shard of the pair.
         shard: shekyl_types::ShardId,
     },
+    /// `archival_support_settlement` already holds a row for the tree in
+    /// this epoch.
+    SupportAlreadySettled {
+        /// The tree.
+        persona: shekyl_types::PCanonicalId,
+    },
 }
 
 /// What an SI-18 write observed (payload of
@@ -861,6 +867,11 @@ impl core::fmt::Display for StoreInvariant {
                 SettlementFault::AlreadySettled { persona, shard } => write!(
                     f,
                     "archival_settlement already holds ({persona}, {shard}, {epoch}); an epoch \
+                     settles once"
+                ),
+                SettlementFault::SupportAlreadySettled { persona } => write!(
+                    f,
+                    "archival_support_settlement already holds ({persona}, {epoch}); a tree \
                      settles once"
                 ),
             },

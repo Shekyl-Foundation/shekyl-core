@@ -449,6 +449,24 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         archival_reads::issued_draws(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
     }
 
+    fn support_issued(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::support_issued(self.batch.txn(), epoch, floor).map_err(|f| self.arm(f))
+    }
+
+    fn support_settlement(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::support_settlement(self.batch.txn(), persona, epoch, floor)
+            .map_err(|f| self.arm(f))
+    }
+
     fn issued_digest(
         &self,
         epoch: SettlementEpoch,

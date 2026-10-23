@@ -124,7 +124,7 @@ pub(crate) use arm::BondArm;
 pub use bundle::{
     check_section, check_section_until_switch, open_body, open_reference, verify_bundle, Admitted,
     BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, SectionCharge,
-    SectionCheckFailed, SectionRefused, SectionStanding,
+    SectionCheckFailed, SectionRefused, SectionStanding, SupportSeat,
 };
 pub(crate) use close::{accrue, gather_epoch_snapshot, gather_universe, EpochSnapshot, ServedAt};
 pub use close::{closed_and_final, shard_close, shard_close_height, ClosedUniverse};
@@ -132,7 +132,7 @@ pub(crate) use count::CountMemo;
 pub(crate) use count::L17;
 pub use delta::{
     Accrual, ArchivalDelta, DrawableDigestWrite, EpochClose, EpochGather, RecordWrite,
-    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
+    RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash, SupportSettlement,
 };
 pub use drawable::{drawable_epoch_walked_back, WALK_BACK_EPOCHS};
 pub use memo::DrawableMemo;
@@ -278,6 +278,8 @@ struct Transition {
     /// The rows this block's slash pass has settled, keyed in the order
     /// the delta carries them: epoch, then persona, then shard.
     settled: BTreeMap<(SettlementEpoch, PCanonicalId, ShardId), SettlementRow>,
+    /// One support row per tree per epoch. Not keyed by shard.
+    support_settled: BTreeMap<(SettlementEpoch, PCanonicalId), SettlementRow>,
     /// The emission gather of each epoch the pass has settled, in epoch
     /// order.
     gathers: Vec<EpochGather>,
@@ -299,6 +301,7 @@ impl Transition {
             releases: Vec::new(),
             serve_credits: Vec::new(),
             settled: BTreeMap::new(),
+            support_settled: BTreeMap::new(),
             gathers: Vec::new(),
             reorg_cap,
             slashes: Vec::new(),
@@ -443,11 +446,21 @@ impl Transition {
                 row,
             })
             .collect();
+        let support_settlements = self
+            .support_settled
+            .into_iter()
+            .map(|((epoch, persona), row)| SupportSettlement {
+                persona,
+                epoch,
+                row,
+            })
+            .collect();
         ArchivalDelta {
             records,
             releases: self.releases,
             serve_credits: self.serve_credits,
             settlements,
+            support_settlements,
             gathers: self.gathers,
             slashes: self.slashes,
             slash_watermark: self.slash_watermark,

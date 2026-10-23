@@ -392,6 +392,24 @@ impl SupportCount {
     }
 }
 
+/// One issued support draw (`ARCHIVAL_SUPPORT_DRAW.md` §3).
+///
+/// The key names the tree, the epoch, the issuing block and the draw
+/// index. The shard the draw selected is the value: the settlement row is
+/// one per tree, so the shard is not part of the key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SupportIssued {
+    /// The shard this draw selected, inside the archive at its block.
+    pub shard: ShardId,
+    /// Whether a pass record for this draw has been admitted.
+    pub passed: bool,
+}
+
+impl SupportIssued {
+    /// `shard` as `u64` LE, then the pass flag.
+    pub const LEN: usize = 9;
+}
+
 impl BlockDraws {
     /// A block that drew nothing: no count, no carry, no shortfall, nothing
     /// issued, and the seed unrevealed.

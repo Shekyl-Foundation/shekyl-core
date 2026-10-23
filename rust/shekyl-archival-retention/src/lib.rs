@@ -247,9 +247,10 @@ pub use shard_view_hash::{
     shard_view_hash, ArchivalTx, ShardViewHasher, SHARD_VIEW_HASH_CUSTOMIZATION,
 };
 pub use support_draw::{
-    select_support_shard, support_challenge_nonce, support_counted, support_offset, support_slot,
-    support_span, SupportUnissued, SUPPORT_CHALLENGE_NONCE_CUSTOMIZATION, SUPPORT_DRAWS_PER_EPOCH,
-    SUPPORT_DRAW_CUSTOMIZATION, SUPPORT_SELECT_SHARD,
+    select_support_shard, settle_support, support_challenge_nonce, support_counted, support_offset,
+    support_slot, support_span, SupportSettlementKey, SupportUnissued,
+    SUPPORT_CHALLENGE_NONCE_CUSTOMIZATION, SUPPORT_DRAWS_PER_EPOCH, SUPPORT_DRAW_CUSTOMIZATION,
+    SUPPORT_SELECT_SHARD,
 };
 pub use wire::{
     encode_path, hybrid_countersignature, split_countersignature, ArchivalServeCreditPruned,

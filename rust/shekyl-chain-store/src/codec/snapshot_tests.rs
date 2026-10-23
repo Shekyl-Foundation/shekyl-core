@@ -123,8 +123,8 @@ use super::{
     HeldShard, Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord,
     ProbeCell, PropertyCell, RMarket, RecordedPow, RuleSetInForce, SchemaVersion,
     SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding,
-    SupportCount, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS,
-    SCHEMA_VERSION,
+    SupportCount, SupportIssued, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
+    PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::pool::PoolSchemaVersion;
@@ -842,6 +842,27 @@ impl Fixtures for BlockDraws {
         ]
     }
 }
+impl Fixtures for SupportIssued {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "unpassed",
+                SupportIssued {
+                    shard: ShardId::from_raw(7),
+                    passed: false,
+                },
+            ),
+            (
+                "passed",
+                SupportIssued {
+                    shard: ShardId::from_raw(64),
+                    passed: true,
+                },
+            ),
+        ]
+    }
+}
+
 impl Fixtures for SupportCount {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
@@ -1487,6 +1508,7 @@ snapshotted_codecs! {
     IssuedDigest => codec_snapshot_issued_digest in Chain,
     BlockDraws => codec_snapshot_block_draws in Chain,
     SupportCount => codec_snapshot_support_count in Chain,
+    SupportIssued => codec_snapshot_support_issued in Chain,
     DrawableDigest => codec_snapshot_drawable_digest in Chain,
     CompleteTreeSet => codec_snapshot_complete_tree_set in Chain,
     SettlementEpoch => codec_snapshot_settlement_epoch in Chain,

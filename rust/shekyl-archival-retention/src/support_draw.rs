@@ -12,11 +12,11 @@
 //! economy's shortfall is a different value, and this module never reads
 //! or writes it.
 
-use shekyl_types::archival::COUNTED_DRAWS;
+use shekyl_types::archival::{IssuedDraw, SettlementRow, SettlementRowError, COUNTED_DRAWS};
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 
 use crate::hash::cshake256_32;
-use crate::settlement_select::{select_counted, SETTLEMENT_BEACON_LEN};
+use crate::settlement_select::{select_counted, settle_pair, SETTLEMENT_BEACON_LEN};
 
 /// Draws scheduled for one support tree in one epoch. Ruled 2026-10-22:
 /// `c = 10` at a non-filing rate of one block in ten.
@@ -172,6 +172,40 @@ pub fn support_counted(
     )
 }
 
+/// One support tree's settlement for one epoch. The key has no shard:
+/// the tree's draws, whichever shards they named, are one row.
+/// Red edit: key this by `(persona, shard)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SupportSettlementKey {
+    /// The tree.
+    pub persona: PCanonicalId,
+    /// The epoch.
+    pub epoch: SettlementEpoch,
+}
+
+/// Settle one tree's issued support draws through [`settle_pair`].
+///
+/// The sentinel shard keeps the selection beacon off every closed shard.
+/// Fewer than three issued draws is a non-observation. An empty list is
+/// no row.
+///
+/// # Errors
+///
+/// [`SettlementRowError`] when the counted passes cannot be a row.
+pub fn settle_support(
+    beacon: &[u8; SETTLEMENT_BEACON_LEN],
+    key: SupportSettlementKey,
+    draws: &[IssuedDraw],
+) -> Result<Option<SettlementRow>, SettlementRowError> {
+    settle_pair(
+        beacon,
+        &key.persona,
+        ShardId::from_raw(SUPPORT_SELECT_SHARD),
+        key.epoch,
+        draws,
+    )
+}
+
 fn support_word(
     seed: &[u8; 32],
     block_hash: &[u8; 32],
@@ -273,7 +307,7 @@ mod tests {
     #[test]
     fn unissued_carry_stops_at_c() {
         let mut debt = SupportUnissued::zero();
-        for _ in 0..SUPPORT_DRAWS_PER_EPOCH + 1 {
+        for _ in 0..=SUPPORT_DRAWS_PER_EPOCH {
             debt = debt.note_unfiled();
         }
         assert_eq!(debt.get(), SUPPORT_DRAWS_PER_EPOCH);
@@ -313,5 +347,42 @@ mod tests {
         let epoch = SettlementEpoch::from_raw(1);
         assert!(support_counted(&beacon, &persona(0x3C), epoch, 2).is_none());
         assert!(support_counted(&beacon, &persona(0x3C), epoch, 3).is_some());
+    }
+
+    fn draw(passed: bool) -> IssuedDraw {
+        IssuedDraw {
+            revealed_at: shekyl_types::BlockHeight::from_raw(1),
+            passed,
+        }
+    }
+
+    /// One row per tree per epoch. Two issued draws are a non-observation.
+    /// Three misses are Missed. Red edit: key the row by `(persona, shard)`.
+    #[test]
+    fn a_tree_settles_once_per_epoch() {
+        use shekyl_types::archival::SettlementOutcome;
+
+        let beacon = [0x44; SETTLEMENT_BEACON_LEN];
+        let key = SupportSettlementKey {
+            persona: persona(0x3C),
+            epoch: SettlementEpoch::from_raw(4),
+        };
+        let short = settle_support(&beacon, key, &[draw(false), draw(true)]).expect("a row");
+        assert_eq!(
+            short.expect("two draws are a row").outcome(),
+            SettlementOutcome::NonObservation
+        );
+        let missed =
+            settle_support(&beacon, key, &[draw(false), draw(false), draw(true)]).expect("a row");
+        assert_eq!(
+            missed.expect("three draws are a row").outcome(),
+            SettlementOutcome::Missed
+        );
+        let served =
+            settle_support(&beacon, key, &[draw(true), draw(true), draw(false)]).expect("a row");
+        assert_eq!(
+            served.expect("three draws are a row").outcome(),
+            SettlementOutcome::Served
+        );
     }
 }

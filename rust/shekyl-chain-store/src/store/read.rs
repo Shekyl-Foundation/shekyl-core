@@ -1211,6 +1211,27 @@ impl ReadSnapshot<'_> {
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
+    /// Every support draw issued in `epoch`, in `(P, h, j)` order.
+    pub fn support_issued(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::support_issued(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// The support row `(persona, epoch)`. `None` is no row, not a miss.
+    pub fn support_settlement(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::support_settlement(&self.txn, persona, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
     /// **A16.** The running digest of the draws issued in `epoch`;
     /// [`IssuedDigest::ZERO`] when none was.
     pub fn issued_digest(

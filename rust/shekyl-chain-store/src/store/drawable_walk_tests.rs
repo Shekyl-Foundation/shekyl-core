@@ -215,17 +215,16 @@ fn the_two_derivations_agree_at_every_height_across_releases() {
     );
     drop(snap);
 
-    let all: Vec<PCanonicalId> = ids_in_table_order(WITNESS_PERSONAS);
     let epoch_2 = epoch_2_at_pass.expect("epoch 2's pass walked the set");
-    assert_eq!(epoch_2, all, "epoch 2 keeps both releasers");
-    let released = [Persona::at(FIRST).id(), Persona::at(SECOND).id()];
+    assert!(
+        epoch_2.is_empty(),
+        "epoch 2's joins are complete trees, and a complete tree is not in D"
+    );
     let epoch_3 = epoch_3_at_pass.expect("epoch 3's pass walked the set");
-    let kept: Vec<PCanonicalId> = all
-        .iter()
-        .copied()
-        .filter(|p| !released.contains(p))
-        .collect();
-    assert_eq!(epoch_3, kept, "epoch 3 holds neither");
+    assert!(
+        epoch_3.is_empty(),
+        "releasing a complete tree does not put one into D"
+    );
     chain.finish();
 }
 
@@ -398,19 +397,28 @@ fn a_journal_that_changed_after_the_open_halts_the_settlement() {
         epoch,
         check: SettlementCheck::DrawableDrift,
     };
-    let cases: [(&str, Tamper, Corrupt, &str); 5] = [
-        (
-            "holdings",
-            holdings_emptied,
-            drift,
-            "does not digest to archival_drawable_digest",
-        ),
-        (
-            "key",
-            key_changed,
-            drift,
-            "does not digest to archival_drawable_digest",
-        ),
+    // A complete tree is not in `D`, so its release pre-image and its
+    // receipt key are not operands of the digest. Rewriting them lets the
+    // pass settle. The slash row, the replaced digest and the removed
+    // digest are still faults: the first cannot be undone onto a complete
+    // tree, and the other two are the digest cell itself.
+    for (label, tamper) in [
+        ("holdings", holdings_emptied as Tamper),
+        ("key", key_changed),
+    ] {
+        let chain = released_chain(&format!("drawable-tamper-{label}"), settles - 1);
+        let out: Result<(), TestErr> = chain.store.write(|batch| {
+            tamper(batch)?;
+            let view = batch.chain_view();
+            let Ok(_) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
+                panic!("{label}: the pass refused a journal that is not in D");
+            };
+            Ok(())
+        });
+        out.expect("{label}: a complete tree's journal is not an operand of D");
+        chain.finish();
+    }
+    let cases: [(&str, Tamper, Corrupt, &str); 3] = [
         (
             "slash",
             slash_planted,

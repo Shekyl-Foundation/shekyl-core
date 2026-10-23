@@ -89,7 +89,7 @@ pub use archival::{
     AttestationWitnessBytes, BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest,
     FirstPayingHeight, HeldShard, HeldShards, Holdings, HoldingsError, IssuedDigest, IssuedDraw,
     RMarket, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding, SupportCount,
-    MAX_BOND_KEY_BYTES,
+    SupportIssued, MAX_BOND_KEY_BYTES,
 };
 pub(crate) use chain::stored_timelock;
 pub use chain::{

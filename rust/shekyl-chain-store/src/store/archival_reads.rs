@@ -128,8 +128,8 @@ use shekyl_chain_rules::{
 use shekyl_store_codec::{BlobKind, CodecError};
 use shekyl_types::archival::SettlementOutcome;
 pub use shekyl_types::archival::{
-    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, LoggedSlash, PassCount,
-    ReleasedRecord, ServedShard, SettlementRow,
+    BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
+    LoggedSlash, PassCount, ReleasedRecord, ServedShard, SettlementRow, SupportIssued,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -138,13 +138,14 @@ use crate::archival_snapshot::{ArchivalSnapshot, SnapshotFamily, SnapshotFault};
 use crate::codec::{AttestationWitnessBytes, BondRecord, RMarket, SigmaWorkMilli, SlashLogEntry};
 use crate::ids::{
     IssuedDrawKey, ReleaseJournalKey, ServeCreditKey, SettlementKey, SlashAppliedKey, SlashLogKey,
+    SupportIssuedKey,
 };
 use crate::schema::{
     ARCHIVAL_ATTESTATION_WITNESS, ARCHIVAL_BLOCK_DRAWS, ARCHIVAL_BOND, ARCHIVAL_BUDGET,
     ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
     ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
     ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG,
+    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_ISSUED, ARCHIVAL_SUPPORT_SETTLEMENT,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -169,6 +170,10 @@ const SETTLEMENT: &str = "archival_settlement";
 const SLASH_APPLIED: &str = "archival_slash_applied";
 /// The `archival_issued_draw` cell as faults name it.
 const ISSUED_DRAW: &str = "archival_issued_draw";
+/// The `archival_support_issued` cell as faults name it.
+const SUPPORT_ISSUED: &str = "archival_support_issued";
+/// The `archival_support_settlement` cell as faults name it.
+const SUPPORT_SETTLEMENT: &str = "archival_support_settlement";
 /// The `archival_issued_digest` cell as faults name it.
 const ISSUED_DIGEST: &str = "archival_issued_digest";
 /// The `archival_block_draws` cell as faults name it.
@@ -623,6 +628,54 @@ pub(super) fn issued_draws<T: ReadTables>(
         });
     }
     Ok(out)
+}
+
+/// Every support draw issued in `epoch`, in `(P, h, j)` order. Empty when
+/// none was. The shard and the pass bit are the value
+/// (`ARCHIVAL_SUPPORT_DRAW.md` §3).
+pub(super) fn support_issued<T: ReadTables>(
+    txn: &T,
+    epoch: SettlementEpoch,
+    floor: EpochFloor<Settling>,
+) -> Result<Vec<IndexedDraw>, ReadFault> {
+    kept(SUPPORT_ISSUED, epoch, floor)?;
+    let table = txn.table(ARCHIVAL_SUPPORT_ISSUED)?;
+    let mut out = Vec::new();
+    for row in table.range(SupportIssuedKey::epoch(epoch))? {
+        let (key, value) = row?;
+        let key = SupportIssuedKey::from_key(key.value());
+        let issued: SupportIssued = value
+            .value()
+            .decode()
+            .map_err(|cause| undecodable(SUPPORT_ISSUED, cause))?;
+        out.push(IndexedDraw {
+            persona: *key.persona(),
+            shard: issued.shard,
+            issuing_height: key.issuing_height(),
+            draw: key.draw(),
+            state: IssuedDraw {
+                revealed_at: key.issuing_height(),
+                passed: issued.passed,
+            },
+        });
+    }
+    Ok(out)
+}
+
+/// The support row `(persona, epoch)`. `None` is no row, not a miss.
+pub(super) fn support_settlement<T: ReadTables>(
+    txn: &T,
+    persona: &PCanonicalId,
+    epoch: SettlementEpoch,
+    floor: EpochFloor<Claimable>,
+) -> Result<Option<SettlementRow>, ReadFault> {
+    kept(SUPPORT_SETTLEMENT, epoch, floor)?;
+    chain_reads::cell(
+        txn,
+        ARCHIVAL_SUPPORT_SETTLEMENT,
+        (persona.to_bytes(), epoch.to_raw()),
+        SUPPORT_SETTLEMENT,
+    )
 }
 
 /// **A16.** `archival_issued_digest[epoch]` — the running digest of the

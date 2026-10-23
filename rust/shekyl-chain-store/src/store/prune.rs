@@ -16,7 +16,7 @@
 //! | Slash log (`archival_slash_log`) | rows below `tip − ((k + n)·SEB + reorg_cap)` | every boundary whose session applies `SlashLog`; the cap is the in-force rule set's (`SLK-Q1`, `ARW-9`) |
 //! | Release journal (`archival_release_journal`) | rows at or below `h_open` of the settling family's oldest kept epoch | every boundary whose session applies `Bond` ([`ReleaseJournalFloor`], SI-28) |
 //! | Draw rows (`archival_block_draws`) | rows strictly below `(B − 1)·SEB + 1 − W₂`, or `(B − 1)·SEB` when the schedule has no window | every boundary ([`BlockDrawsFloor`], SI-34) |
-//! | Per-epoch tables (`archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement`; `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied`; `archival_r_market`) | rows of epochs below their family's floor, `(B − 1) − LAG` at the boundary of `B` | every boundary; a table whose family the session stubs is not opened (`ARW-9`) (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`) |
+//! | Per-epoch tables (`archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement`, `archival_support_settlement`; `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied`, `archival_support_issued`; `archival_r_market`) | rows of epochs below their family's floor, `(B − 1) − LAG` at the boundary of `B` | every boundary; a table whose family the session stubs is not opened (`ARW-9`) (`ARCHIVAL_SETTLEMENT_WRITER.md` §17, `SO-D12h`) |
 //!
 //! The body horizon is a rule of the epoch calendar — there is no constant
 //! to name and no watermark to store. So are the per-epoch horizons

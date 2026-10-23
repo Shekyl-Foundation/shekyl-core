@@ -50,8 +50,9 @@ use shekyl_archival_retention::settlement_select::{
     issued_draw_term, settle_pair, SETTLEMENT_BEACON_LEN,
 };
 use shekyl_archival_retention::{
-    good_through, holds_shard_at, settlement_window_slashable, slash_open_interval_to_append,
-    ARCHIVAL_BOND_FLOOR_ATOMIC, MAX_BOND_BAD_INTERVALS,
+    good_through, holds_shard_at, settle_support, settlement_window_slashable,
+    slash_open_interval_to_append, SupportSettlementKey, ARCHIVAL_BOND_FLOOR_ATOMIC,
+    MAX_BOND_BAD_INTERVALS, SUPPORT_SELECT_SHARD,
 };
 use shekyl_types::archival::{
     BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
@@ -184,8 +185,13 @@ impl super::Transition {
         for (persona, record) in &snapshot {
             match &record.holdings {
                 Holdings::CompleteTree => {
-                    // A complete tree holds every shard, so its candidates
-                    // are the shards it has a row for, in shard order.
+                    // The support row is one per tree. A miss there demotes
+                    // the whole holding. Economy rows, if any remain, are
+                    // the same demotion and stop at the first.
+                    if self.support_failed(view, *persona, record, epoch)? {
+                        self.slash(*persona, ShardId::from_raw(0), epoch)?;
+                        continue;
+                    }
                     let settled: Vec<ShardId> = settled_for(&self.settled, epoch, persona)
                         .map(|(shard, _)| shard)
                         .collect();
@@ -250,43 +256,68 @@ impl super::Transition {
                 check: SettlementCheck::IssuedIndexDigest,
             }));
         }
-        if draws.is_empty() {
+        let support_draws = view
+            .support_issued(epoch, self.floor())
+            .map_err(ViewRead::View)?;
+        if draws.is_empty() && support_draws.is_empty() {
             return Ok(());
         }
         let beacon = self.settlement_beacon(view, epoch)?;
-        let records: BTreeMap<&PCanonicalId, &BondRecord> =
-            snapshot.iter().map(|(p, record)| (p, record)).collect();
-        // The persona's slash log above the epoch's first block, read once
-        // per persona: the index is persona-major, so one persona's pairs
-        // are adjacent.
-        let mut after_open: Option<(PCanonicalId, Vec<SlashLogEntry>)> = None;
-        for pair in draws.chunk_by(|a, b| a.persona == b.persona && a.shard == b.shard) {
-            let (persona, shard) = (pair[0].persona, pair[0].shard);
-            // A draw is issued to a pair of the drawable set, and the set
-            // is of bonded personas; admission is what holds an index row
-            // to that. A row naming no record here has no holding to count
-            // a draw against.
-            let Some(record) = records.get(&persona) else {
-                continue;
-            };
-            if after_open.as_ref().map(|(p, _)| *p) != Some(persona) {
-                let h_open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
-                let log = self.slashed_after(view, persona, h_open)?;
-                after_open = Some((persona, log));
+        if !draws.is_empty() {
+            let records: BTreeMap<&PCanonicalId, &BondRecord> =
+                snapshot.iter().map(|(p, record)| (p, record)).collect();
+            // The persona's slash log above the epoch's first block, read once
+            // per persona: the index is persona-major, so one persona's pairs
+            // are adjacent.
+            let mut after_open: Option<(PCanonicalId, Vec<SlashLogEntry>)> = None;
+            for pair in draws.chunk_by(|a, b| a.persona == b.persona && a.shard == b.shard) {
+                let (persona, shard) = (pair[0].persona, pair[0].shard);
+                // A draw is issued to a pair of the drawable set, and the set
+                // is of bonded personas; admission is what holds an index row
+                // to that. A row naming no record here has no holding to count
+                // a draw against.
+                let Some(record) = records.get(&persona) else {
+                    continue;
+                };
+                if after_open.as_ref().map(|(p, _)| *p) != Some(persona) {
+                    let h_open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
+                    let log = self.slashed_after(view, persona, h_open)?;
+                    after_open = Some((persona, log));
+                }
+                let log = after_open
+                    .as_ref()
+                    .map_or(&[][..], |(_, log)| log.as_slice());
+                let counted = self.counted(view, persona, record, shard, epoch, pair, log)?;
+                match settle_pair(&beacon, &persona, shard, epoch, &counted) {
+                    Ok(Some(row)) => {
+                        self.settled.insert((epoch, persona, shard), row);
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
+                            epoch,
+                            check: SettlementCheck::PassesExceedCounted { persona, shard },
+                        }));
+                    }
+                }
             }
-            let log = after_open
-                .as_ref()
-                .map_or(&[][..], |(_, log)| log.as_slice());
-            let counted = self.counted(view, persona, record, shard, epoch, pair, log)?;
-            match settle_pair(&beacon, &persona, shard, epoch, &counted) {
+        }
+        for tree in support_draws.chunk_by(|a, b| a.persona == b.persona) {
+            let persona = tree[0].persona;
+            let issued: Vec<_> = tree.iter().map(|draw| draw.state).collect();
+            let key = SupportSettlementKey { persona, epoch };
+            match settle_support(&beacon, key, &issued) {
                 Ok(Some(row)) => {
-                    self.settled.insert((epoch, persona, shard), row);
+                    self.support_settled.insert((epoch, persona), row);
                 }
                 Ok(None) => {}
                 Err(_) => {
                     return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
                         epoch,
-                        check: SettlementCheck::PassesExceedCounted { persona, shard },
+                        check: SettlementCheck::PassesExceedCounted {
+                            persona,
+                            shard: ShardId::from_raw(SUPPORT_SELECT_SHARD),
+                        },
                     }));
                 }
             }
@@ -459,6 +490,41 @@ impl super::Transition {
             .map(SettlementRow::outcome))
     }
 
+    /// Whether the tree's one support row for `epoch` slashes it. The row
+    /// is keyed by the tree and the epoch, not by a shard.
+    fn support_failed<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        persona: PCanonicalId,
+        record: &BondRecord,
+        epoch: SettlementEpoch,
+    ) -> Result<bool, ViewRead<V::Fault>> {
+        let missed = self
+            .support_settled
+            .get(&(epoch, persona))
+            .is_some_and(|row| row.outcome() == SettlementOutcome::Missed);
+        if !missed || !in_standing(record, epoch) {
+            return Ok(false);
+        }
+        let floor = self
+            .floor::<Claimable>()
+            .kept_from()
+            .unwrap_or(SettlementEpoch::from_raw(0));
+        settlement_window_slashable(
+            epoch,
+            floor,
+            |earlier| in_standing(record, earlier),
+            |earlier| {
+                if let Some(row) = self.support_settled.get(&(earlier, persona)) {
+                    return Ok(Some(row.outcome()));
+                }
+                view.support_settlement(&persona, earlier, self.floor())
+                    .map_err(ViewRead::View)
+                    .map(|row| row.map(SettlementRow::outcome))
+            },
+        )
+    }
+
     /// Whether the pair is slashed for `epoch`: its row is Missed, the
     /// slash is not already applied, the persona was in good standing
     /// through the epoch, and the failure window says slash.
@@ -538,5 +604,67 @@ impl super::Transition {
         post.touch();
         self.slashes.push(slash);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod support_settlement_tests {
+    use shekyl_archival_retention::{settlement_window_slashable, ARCHIVAL_BOND_FLOOR_ATOMIC};
+    use shekyl_types::archival::{
+        BondRecord, Holdings, ReceiptSignPk, SettlementOutcome, SlashedHolding, RECEIPT_SIGN_PK_LEN,
+    };
+    use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
+    use shekyl_units::AtomicUnits;
+
+    use super::apply_slash;
+
+    fn tree() -> BondRecord {
+        BondRecord {
+            hybrid_pubkey: vec![1],
+            bond_spend_pk: vec![2],
+            receipt_sign_pk: ReceiptSignPk::from_bytes([3; RECEIPT_SIGN_PK_LEN]),
+            endpoint: [4; 32],
+            join_settlement_epoch: SettlementEpoch::from_raw(0),
+            bonded_total: AtomicUnits::from_raw(ARCHIVAL_BOND_FLOOR_ATOMIC),
+            holdings: Holdings::CompleteTree,
+            bad_intervals: Vec::new(),
+            claimed_settlement_epochs: Vec::new(),
+            first_paying_emission_height: None,
+        }
+    }
+
+    fn window(missed_through: u64) -> bool {
+        settlement_window_slashable(
+            SettlementEpoch::from_raw(missed_through),
+            SettlementEpoch::from_raw(0),
+            |_| true,
+            |epoch| {
+                Ok::<_, ()>(if epoch.to_raw() <= missed_through {
+                    Some(SettlementOutcome::Missed)
+                } else {
+                    None
+                })
+            },
+        )
+        .expect("the rows answer")
+    }
+
+    /// Eleven missed epochs demote the tree. Ten do not. Red edit: slash
+    /// one shard of the tree and leave the rest a complete tree.
+    #[test]
+    fn eleven_missed_epochs_demote_the_tree() {
+        assert!(!window(9), "ten missed epochs are inside the budget");
+        assert!(window(10), "eleven missed epochs slash");
+        let persona = PCanonicalId::from_bytes([0x3C; 32]);
+        let mut record = tree();
+        let slash = apply_slash(
+            persona,
+            &mut record,
+            ShardId::from_raw(0),
+            SettlementEpoch::from_raw(10),
+        )
+        .expect("a complete tree demotes");
+        assert_eq!(slash.entry.holding, SlashedHolding::CompleteTree);
+        assert!(matches!(record.holdings, Holdings::ShardSet(ref held) if held.is_empty()));
     }
 }

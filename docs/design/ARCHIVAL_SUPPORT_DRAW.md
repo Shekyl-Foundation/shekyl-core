@@ -132,8 +132,12 @@ the preimage does not alias an economy pair. The function is otherwise
 unchanged. The three positions it returns are almost always three
 different shards, because the list's members were drawn independently.
 
-**Store layout.** Two new tables. `SCHEMA_VERSION` (30 at this pin)
-bumps because both are stored bytes.
+**Store layout.** Two new tables. `SCHEMA_VERSION` was 30 at the pin
+and is 31 in the implementation: the four support tables
+(`archival_support_unissued`, `archival_support_block`, and the two
+below) are born in that unreleased layout. A later table in this
+stream extends the 31 comment. It does not mint 32 while 31 is
+unreleased.
 
 | Table | Key | Value |
 | --- | --- | --- |

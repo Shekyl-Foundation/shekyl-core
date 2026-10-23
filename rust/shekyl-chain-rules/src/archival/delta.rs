@@ -33,6 +33,7 @@ use shekyl_units::AtomicUnits;
 ///     releases: Vec::new(),
 ///     serve_credits: Vec::new(),
 ///     settlements: Vec::new(),
+///     support_settlements: Vec::new(),
 ///     gathers: Vec::new(),
 ///     slashes: Vec::new(),
 ///     slash_watermark: None,
@@ -51,6 +52,8 @@ pub struct ArchivalDelta {
     pub(super) releases: Vec<ReleasePreImage>,
     pub(super) serve_credits: Vec<ServeCreditKey>,
     pub(super) settlements: Vec<Settlement>,
+    /// One support row per complete tree per epoch. Not keyed by shard.
+    pub(super) support_settlements: Vec<SupportSettlement>,
     pub(super) gathers: Vec<EpochGather>,
     pub(super) slashes: Vec<Slash>,
     pub(super) slash_watermark: Option<SettlementEpoch>,
@@ -96,6 +99,14 @@ impl ArchivalDelta {
     #[must_use]
     pub fn settlements(&self) -> &[Settlement] {
         &self.settlements
+    }
+
+    /// The support rows this block's slash pass derives, by epoch, then
+    /// persona: one per complete tree with a counted draw
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Not keyed by shard.
+    #[must_use]
+    pub fn support_settlements(&self) -> &[SupportSettlement] {
+        &self.support_settlements
     }
 
     /// The emission gather of every epoch this block's slash pass settled,
@@ -254,6 +265,17 @@ pub struct ServeCreditKey {
     pub shard: ShardId,
     /// The settlement epoch credited.
     pub epoch: SettlementEpoch,
+}
+
+/// One complete tree's support settlement for one epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupportSettlement {
+    /// The tree settled.
+    pub persona: PCanonicalId,
+    /// The epoch settled.
+    pub epoch: SettlementEpoch,
+    /// What it settled.
+    pub row: SettlementRow,
 }
 
 /// One pair's settlement for one epoch: the `archival_settlement` key and

@@ -670,6 +670,95 @@ impl IssuedDrawKey {
     }
 }
 
+/// The key of one issued support draw:
+/// `archival_support_issued[(E, P, h, j)]` (`ARCHIVAL_SUPPORT_DRAW.md` §3).
+///
+/// Epoch-major, then persona, then `(h, j)`. One tree's epoch is one
+/// range. The selected shard is the value, not a key component: the
+/// settlement row is one per tree.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct SupportIssuedKey {
+    epoch: SettlementEpoch,
+    persona: PCanonicalId,
+    issuing_height: BlockHeight,
+    draw: u32,
+}
+
+/// The redb tuple a [`SupportIssuedKey`] is stored under.
+pub type SupportIssuedTuple = (u64, [u8; 32], u64, u32);
+
+impl SupportIssuedKey {
+    /// The key of draw `draw` of the block at `issuing_height`, issued to
+    /// `persona` in `epoch`.
+    #[must_use]
+    pub const fn new(
+        epoch: SettlementEpoch,
+        persona: PCanonicalId,
+        issuing_height: BlockHeight,
+        draw: u32,
+    ) -> Self {
+        Self {
+            epoch,
+            persona,
+            issuing_height,
+            draw,
+        }
+    }
+
+    /// Whose draw.
+    #[must_use]
+    pub const fn persona(&self) -> &PCanonicalId {
+        &self.persona
+    }
+
+    /// The block that issued it.
+    #[must_use]
+    pub const fn issuing_height(self) -> BlockHeight {
+        self.issuing_height
+    }
+
+    /// Its index among that block's support draws.
+    #[must_use]
+    pub const fn draw(self) -> u32 {
+        self.draw
+    }
+
+    /// The stored tuple.
+    #[must_use]
+    pub const fn key(self) -> SupportIssuedTuple {
+        (
+            self.epoch.to_raw(),
+            self.persona.to_bytes(),
+            self.issuing_height.to_raw(),
+            self.draw,
+        )
+    }
+
+    /// The key a stored tuple names.
+    #[must_use]
+    pub const fn from_key((epoch, persona, height, draw): SupportIssuedTuple) -> Self {
+        Self {
+            epoch: SettlementEpoch::from_raw(epoch),
+            persona: PCanonicalId::from_bytes(persona),
+            issuing_height: BlockHeight::from_raw(height),
+            draw,
+        }
+    }
+
+    /// Every key of one epoch, in `(P, h, j)` order.
+    #[must_use]
+    pub const fn epoch(epoch: SettlementEpoch) -> core::ops::RangeInclusive<SupportIssuedTuple> {
+        let e = epoch.to_raw();
+        (e, [0; 32], 0, 0)..=(e, [0xff; 32], u64::MAX, u32::MAX)
+    }
+
+    /// Every key of every epoch below `epoch`.
+    #[must_use]
+    pub const fn below(epoch: SettlementEpoch) -> core::ops::Range<SupportIssuedTuple> {
+        (0, [0; 32], 0, 0)..(epoch.to_raw(), [0; 32], 0, 0)
+    }
+}
+
 /// The key of one slash-log row: `archival_slash_log[(height, seq)]` — the
 /// connecting height the scheduler ran at and the row's ordinal within it
 /// (DRS-E4 `ARW-Q2`; dense per height, SI-22).

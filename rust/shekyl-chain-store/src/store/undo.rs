@@ -111,6 +111,9 @@ impl Restorable for (u64, u32) {}
 // `archival_issued_draw`'s `(epoch, persona, shard, issuing height, draw)`
 // (`IssuedDrawKey`): 60 fixed bytes, the tuple's derived width.
 impl Restorable for (u64, [u8; 32], u64, u64, u32) {}
+// `archival_support_issued`'s `(epoch, persona, height, draw)`
+// (`SupportIssuedKey`, `ARCHIVAL_SUPPORT_DRAW.md` §3): 52 fixed bytes.
+impl Restorable for (u64, [u8; 32], u64, u32) {}
 // `archival_release_journal`'s `(height, persona)` (`ReleaseJournalKey`,
 // `SO-D12` increment 2): 40 fixed bytes, the tuple's derived width.
 impl Restorable for (u64, [u8; 32]) {}

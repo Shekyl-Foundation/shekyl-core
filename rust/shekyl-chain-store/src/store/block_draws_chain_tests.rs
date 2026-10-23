@@ -5,9 +5,10 @@
 
 //! The count against the slash harness's chain (`SO-D12` increment 3).
 //!
-//! A child of `drawable_walk_tests`. Epoch 2 holds four pairs, nothing is
-//! admitted, and the stored rows are the production composition. A warm
-//! memo, a miss, a switch, an aborted switch, a drifted journal (SI-30)
+//! A child of `drawable_walk_tests`. The harness joins complete trees, and
+//! a complete tree is not in `D` (`ARCHIVAL_SUPPORT_DRAW.md`), so epoch 2's
+//! set is empty, nothing is admitted, and the stored rows are the empty
+//! set's composition. A warm memo, a miss, a switch, an aborted switch
 //! and a removed digest (SI-29) run on the chain the drawable-set tests build.
 
 use shekyl_archival_retention::{draw_count, draw_horizon};
@@ -22,12 +23,12 @@ use super::super::super::{Popped, StoreError, StoreInvariant, WriteBatch};
 use super::super::{Listed, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
 use super::{h_open, no_draws, BONDED, FIRST};
 
-/// The count against a store chain whose epoch 2 holds four pairs.
+/// The count against a store chain whose joins are complete trees.
 ///
 /// The chain is the harness's through `h_open(2) − 1`, then eleven blocks
-/// into the epoch. `|D|` is 4, nothing is admitted, and the rows are the
-/// production composition (`draw_horizon`, `draw_count`, the in-flight sum)
-/// with three blocks pinned by hand. A warm memo, an empty memo mid-epoch,
+/// into the epoch. `|D|` is 0: a complete tree is not in the economy set.
+/// Nothing is admitted, and the rows are that empty set's composition
+/// (`draw_horizon`, `draw_count`, the in-flight sum). A warm memo, an empty memo mid-epoch,
 /// a fresh replay, the next epoch and an aborted open write the same rows.
 /// A memo that saw the other fork's open, then a switch onto a release at
 /// the open, writes the winning chain's rows. A journal row changed after
@@ -50,43 +51,14 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         let mut cold = None;
         connect_span(&mut chain, open, last, &mut cold)
     };
-    let composed = compose(4, open, last);
+    let composed = compose(0, open, last);
     assert_eq!(
         reference, composed,
         "the stored rows are the production composition"
     );
-    assert_eq!(
-        reference[0],
-        BlockDraws {
-            count: 0,
-            carry: 429_496_729,
-            shortfall: 12,
-            issued_short: 0,
-            revealed: false,
-        },
-        "h_open: H = 200, u = 12, t = 2^32 / 10"
-    );
-    assert_eq!(
-        reference[10],
-        BlockDraws {
-            count: 1,
-            carry: 429_496_723,
-            shortfall: 12,
-            issued_short: 0,
-            revealed: false,
-        },
-        "the eleventh block of the epoch carries the count across 2^32"
-    );
-    assert_eq!(
-        reference[11],
-        BlockDraws {
-            count: 0,
-            carry: 837_518_616,
-            shortfall: 12,
-            issued_short: 0,
-            revealed: false,
-        },
-        "the next block's in-flight sum includes that one draw"
+    assert!(
+        reference.iter().all(|row| *row == BlockDraws::ZERO),
+        "an empty set draws nothing"
     );
 
     pop_back(&mut chain, last - open + 1);
@@ -129,8 +101,8 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         "an aborted open leaves the next committed rows unchanged"
     );
 
-    // The other fork opens the epoch with no release (`|D| = 4`). Pop it,
-    // keeping the memo, and adopt the release (`|D| = 3`).
+    // The other fork opens the epoch with no release, then with one.
+    // Both opens are complete trees, so both sets are empty.
     pop_back(&mut chain, 2);
     let mut switched = DrawableMemo::new();
     connect_listed(&mut chain, &[], Some(&mut switched));
@@ -152,9 +124,9 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         won, cold,
         "a warm memo through the switch matches a cold chain"
     );
-    assert_ne!(
+    assert_eq!(
         won[0].shortfall, reference[0].shortfall,
-        "the release at the open is a different set from the chain the memo saw first"
+        "releasing a complete tree does not change D"
     );
     pop_back(&mut chain, 2);
     let mut fresh = DrawableMemo::new();
@@ -167,38 +139,25 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         "a fresh replay of the winning chain matches"
     );
 
-    // The release sits above the open, so epoch 2's digest does not include
-    // it. Changing the journal is drift (SI-30). A missing digest is the
-    // digest's own row (SI-29), not drift.
+    // The release sits above the open. Its pre-image is a complete tree,
+    // which is not in `D`, so rewriting that pre-image does not move the
+    // digest. A missing digest is still the digest's own row (SI-29).
     pop_back(&mut chain, 2);
     connect_listed(&mut chain, &[], None);
     connect_listed(&mut chain, &release, None);
     let epoch = SettlementEpoch::from_raw(2);
-    let drift: Result<(), TestErr> = chain.store.write(|batch| {
+    let kept: Result<(), TestErr> = chain.store.write(|batch| {
         let mut record = journaled(batch)?;
         record.holdings =
             shekyl_types::archival::Holdings::shard_set(Vec::new()).expect("the empty set");
         rewrite_journal(batch, &record)?;
         let view = batch.chain_view();
-        let Err(corrupt) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
-            panic!("the count rebuilt a set the open did not digest");
+        let Ok(_) = chain.grown.judge_empty_or_corrupt(&view, &RULES)? else {
+            panic!("the pass refused a complete tree's pre-image");
         };
-        assert_eq!(
-            corrupt,
-            shekyl_chain_rules::Corrupt::SettlementIntegrity {
-                epoch,
-                check: shekyl_chain_rules::SettlementCheck::DrawableDrift,
-            }
-        );
-        Err(batch.refuse_corrupt(corrupt).into())
+        Ok(())
     });
-    let TestErr::Store(refused) = drift.expect_err("drift refuses") else {
-        panic!("aborted, not refused");
-    };
-    assert!(
-        refused.contains("does not digest to archival_drawable_digest"),
-        "{refused}"
-    );
+    kept.expect("a complete tree's pre-image is not an operand of D");
 
     let far = h_open(3) + 2;
     assert_eq!(
@@ -237,9 +196,10 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
 
 /// An aborted switch inserts the other fork's set and does not adopt it.
 ///
-/// Chain A is connected through `h_open(2) + 1` with a memo, so the memo
-/// holds A's opening set (`|D| = 4`). One batch then pops below A's open
-/// and connects fork B's open with the release (`|D| = 3`); the batch is
+/// Chain A is connected through `h_open(2) + 1` with a memo. The joins are
+/// complete trees, so the memo holds the empty set. One batch then pops
+/// below A's open and connects fork B's open with a release; that set is
+/// empty too. The batch is
 /// aborted. The store stays on A. The memo keeps B's set under B's opening
 /// hash, because a memo is not undone. A's next block asks for A's hash,
 /// and its row is the reference row for that height.
@@ -255,7 +215,7 @@ fn an_aborted_switch_does_not_change_the_next_row() {
     let open = h_open(2);
     let mut chain =
         SlashedChain::build_with("count-abort-switch", WITNESS_PERSONAS, open - 1, no_draws);
-    let reference = compose(4, open, open + 2);
+    let reference = compose(0, open, open + 2);
     let mut memo = DrawableMemo::new();
     let committed = connect_span(&mut chain, open, open + 1, &mut Some(&mut memo));
     assert_eq!(
