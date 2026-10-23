@@ -24,12 +24,13 @@ use shekyl_daemon_rpc::handles::{
     StopFacts,
 };
 use shekyl_daemon_rpc::info_facts::{
-    InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
+    InfoChainFacts, InfoFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope,
+    SessionCounts,
 };
 use shekyl_daemon_rpc::mining_facts::{LocalOutcome, Pending, PopOutcome};
 use shekyl_daemon_rpc::read_facts::{
-    AltChainFacts, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed,
-    ShardCoverage,
+    AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt,
+    PowSeed, ShardCoverage, SpentAt,
 };
 use shekyl_daemon_rpc::store_facts::{NodeFacts, StoreFacts, SyncFacts};
 use shekyl_ffi::seam_ffi::bans::{BanPath, BanSpan, BanTarget};
@@ -68,6 +69,25 @@ impl NodeFacts for Surroundings {
         })
     }
 
+    /// Only entries the pool shows: a stem-phase spend is not this node's
+    /// to disclose (S6), so it answers unspent here.
+    fn pool_spends(&self, key_images: &[shekyl_types::KeyImage]) -> Result<Vec<bool>, FactsFault> {
+        let slot = lock(&self.pool);
+        let Some(pool) = slot.as_ref() else {
+            return Err(FactsFault::NotReady);
+        };
+        let pool = lock(pool);
+        let shown: std::collections::BTreeSet<[u8; 32]> = pool
+            .shown_entries()
+            .flat_map(|entry| entry.key_images)
+            .map(|image| *image.as_bytes())
+            .collect();
+        Ok(key_images
+            .iter()
+            .map(|image| shown.contains(image.as_bytes()))
+            .collect())
+    }
+
     fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
         let slot = lock(&self.pool);
         let Some(pool) = slot.as_ref() else {
@@ -88,14 +108,33 @@ impl NodeFacts for Surroundings {
         })
     }
 
+    /// The bound hub's sockets and the dialer's lists. An offline node
+    /// has no peers by configuration; before the hub binds, a missing hub
+    /// is not zero peers.
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
-        // The hub is the zone server's. This handle does not read it, and
-        // a missing hub is not zero peers.
-        Err(FactsFault::HubAbsent)
+        if self.offline {
+            return Ok(PeerFacts::Offline);
+        }
+        let counts = shekyl_ffi::rpc_peerlist_ffi::peer_counts().ok_or(FactsFault::HubAbsent)?;
+        Ok(PeerFacts::Running(InfoPeersFacts {
+            public_incoming_sockets: counts.clearnet_in,
+            public_outgoing_sockets: counts.clearnet_out,
+            tor_incoming_sockets: counts.tor_in,
+            tor_outgoing_sockets: counts.tor_out,
+            white_peerlist_size: counts.white,
+            grey_peerlist_size: counts.gray,
+        }))
     }
 
+    /// The bound hub board's handshaken sessions. The per-connection sync
+    /// claims stay C++'s until chain sync's cutover and are not read here.
     fn sessions(&self) -> Result<SessionCounts, FactsFault> {
-        Err(FactsFault::HubAbsent)
+        if self.offline {
+            return Ok(SessionCounts::NONE);
+        }
+        let (outbound, inbound) =
+            shekyl_ffi::rpc_peerlist_ffi::session_counts().ok_or(FactsFault::HubAbsent)?;
+        Ok(SessionCounts { outbound, inbound })
     }
 
     fn free_space(&self) -> Result<u64, FactsFault> {
@@ -220,6 +259,21 @@ impl InfoFacts for ChainBridge {
 }
 
 impl ChainReadFacts for ChainBridge {
+    fn blocks_by_height(&self, heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault> {
+        self.with(|facts| facts.blocks_by_height(heights))
+    }
+
+    fn output_indices(&self, txid: &TxHash) -> Result<Option<Vec<u64>>, FactsFault> {
+        self.with(|facts| facts.output_indices(txid))
+    }
+
+    fn key_images_spent(
+        &self,
+        key_images: &[shekyl_types::KeyImage],
+    ) -> Result<Vec<SpentAt>, FactsFault> {
+        self.with(|facts| facts.key_images_spent(key_images))
+    }
+
     fn alt_block_hashes(&self) -> Result<Vec<BlockHash>, FactsFault> {
         self.with(ChainReadFacts::alt_block_hashes)
     }

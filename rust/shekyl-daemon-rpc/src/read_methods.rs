@@ -23,11 +23,18 @@ use shekyl_rpc_types::{
     GetArchivalEmissionClaimSourceRequest, GetArchivalEmissionClaimSourceResponse,
     GetArchivalShardCoverageResponse, ShardCoverageRow,
 };
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
+use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, TxHash};
 
-use crate::methods::{split_128, RpcFault, RpcRefusal};
-use crate::read_facts::{ChainReadFacts, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed};
+use crate::methods::{
+    parse_request_hashes, split_128, RpcFault, RpcRefusal, KI_PARSE_FAILED, RESTRICTED_BLOCK_COUNT,
+    RESTRICTED_SPENT_KEY_IMAGES_COUNT,
+};
+use crate::read_facts::{ChainReadFacts, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed, SpentAt};
 use shekyl_chain_rules::{EmissionEpochFacts, EmissionEpochStanding};
+use shekyl_rpc_types::{
+    BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, GetOIndexesRequest,
+    GetOIndexesResponse, IsKeyImageSpentRequest, IsKeyImageSpentResponse, KeyImageStatus,
+};
 
 /// The status `get_coinbase_tx_sum` answers a range outside the chain with
 /// — the C++ handler's string, which clients match on.
@@ -429,6 +436,112 @@ pub fn get_archival_shard_coverage(
                 freeze_height: row.freeze_height,
                 join_scarcity_micro: row.join_scarcity_micro,
                 expected_profit_atomic: row.expected_profit_atomic,
+            })
+            .collect(),
+    })
+}
+
+/// `/get_blocks_by_height.bin` over the store (Q1): each height's block
+/// and its listed transactions whole. A height above the tip, or whose
+/// listed bodies this node has pruned, ends the reply with C++'s error
+/// status and the blocks read before it.
+///
+/// # Errors
+///
+/// The facts' fault.
+pub fn get_blocks_by_height(
+    facts: &dyn ChainReadFacts,
+    request: &GetBlocksByHeightRequest,
+    restricted: bool,
+) -> Result<GetBlocksByHeightResponse, RpcFault> {
+    if restricted && request.heights.len() > RESTRICTED_BLOCK_COUNT {
+        return Ok(GetBlocksByHeightResponse {
+            status: RpcStatus("Too many blocks requested in restricted mode".to_owned()),
+            blocks: Vec::new(),
+        });
+    }
+    let heights: Vec<BlockHeight> = request
+        .heights
+        .iter()
+        .map(|height| BlockHeight::from_raw(*height))
+        .collect();
+    let read = facts.blocks_by_height(&heights)?;
+    Ok(GetBlocksByHeightResponse {
+        status: read.failed.map_or_else(RpcStatus::ok, |height| {
+            RpcStatus(format!(
+                "Error retrieving block at height {}",
+                height.to_raw()
+            ))
+        }),
+        blocks: read
+            .blocks
+            .into_iter()
+            .map(|blobs| BlockEntry {
+                block: blobs.block,
+                txs: blobs.txs,
+            })
+            .collect(),
+    })
+}
+
+/// `/get_o_indexes.bin` over the store (Q1): the transaction's outputs'
+/// global indices, in `vout` order; C++'s `Failed` for one the chain does
+/// not hold.
+///
+/// # Errors
+///
+/// The facts' fault.
+pub fn get_o_indexes(
+    facts: &dyn ChainReadFacts,
+    request: &GetOIndexesRequest,
+) -> Result<GetOIndexesResponse, RpcFault> {
+    Ok(
+        match facts.output_indices(&TxHash::from_bytes(request.txid))? {
+            Some(o_indexes) => GetOIndexesResponse {
+                status: RpcStatus::ok(),
+                o_indexes,
+            },
+            None => GetOIndexesResponse {
+                status: RpcStatus("Failed".to_owned()),
+                o_indexes: Vec::new(),
+            },
+        },
+    )
+}
+
+/// `/is_key_image_spent` over the store and the pool (Q1): spent in the
+/// chain, spent by a transaction the pool shows, or unspent. A spend still
+/// in its stem phase answers unspent (S6).
+///
+/// # Errors
+///
+/// The facts' fault.
+pub fn is_key_image_spent(
+    facts: &dyn ChainReadFacts,
+    request: &IsKeyImageSpentRequest,
+    restricted: bool,
+) -> Result<IsKeyImageSpentResponse, RpcFault> {
+    let refused = |status: &str| IsKeyImageSpentResponse {
+        status: RpcStatus(status.to_owned()),
+        spent_status: Vec::new(),
+    };
+    if restricted && request.key_images.len() > RESTRICTED_SPENT_KEY_IMAGES_COUNT {
+        return Ok(refused("Too many key images queried in restricted mode"));
+    }
+    let images = match parse_request_hashes(&request.key_images, KI_PARSE_FAILED) {
+        Ok(images) => images,
+        Err(status) => return Ok(refused(&status)),
+    };
+    let images: Vec<KeyImage> = images.into_iter().map(KeyImage::from_bytes).collect();
+    Ok(IsKeyImageSpentResponse {
+        status: RpcStatus::ok(),
+        spent_status: facts
+            .key_images_spent(&images)?
+            .into_iter()
+            .map(|spent| match spent {
+                SpentAt::Unspent => KeyImageStatus::Unspent,
+                SpentAt::Chain => KeyImageStatus::SpentInBlockchain,
+                SpentAt::Pool => KeyImageStatus::SpentInPool,
             })
             .collect(),
     })

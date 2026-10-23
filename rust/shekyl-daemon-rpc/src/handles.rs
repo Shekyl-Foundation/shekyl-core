@@ -31,8 +31,8 @@ use crate::info_facts::{
 };
 use crate::mining_facts::{LocalOutcome, MiningState, Pending, PopOutcome, PostedTemplate};
 use crate::read_facts::{
-    AltChainFacts, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed,
-    ShardCoverage,
+    AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt,
+    PowSeed, ShardCoverage, SpentAt,
 };
 
 /// The chain reads that replace `FfiChainFacts`, `FfiInfoFacts` and
@@ -374,6 +374,18 @@ impl InfoFacts for ChainReadAbsent {
 }
 
 impl ChainReadFacts for ChainReadAbsent {
+    fn blocks_by_height(&self, _heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn output_indices(&self, _txid: &TxHash) -> Result<Option<Vec<u64>>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn key_images_spent(&self, _key_images: &[KeyImage]) -> Result<Vec<SpentAt>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
     fn alt_block_hashes(&self) -> Result<Vec<BlockHash>, FactsFault> {
         Err(FactsFault::NotReady)
     }

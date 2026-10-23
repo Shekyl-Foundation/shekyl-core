@@ -971,6 +971,45 @@ mod tests {
         unbind();
     }
 
+    /// The peer and session counts get_info reads (DX-Q3, b9) are the
+    /// bound hub's: its sockets by connector and direction and its board's
+    /// handshaken sessions; with no hub bound there are none to report,
+    /// which is not zero. Red edit: count the outbound socket as inbound.
+    #[test]
+    fn the_peer_counts_are_the_bound_hubs() {
+        use shekyl_seam::{Direction, Endpoint};
+        let _gate = seam_bind_lock().lock();
+        unbind();
+        assert_eq!(crate::rpc_peerlist_ffi::peer_counts(), None);
+        assert_eq!(crate::rpc_peerlist_ffi::session_counts(), None);
+        bind();
+        let hub = super::hub().expect("bound");
+        hub.install_loopback(32);
+        let endpoint = Endpoint::Clearnet {
+            ip: IpAddr::V4(Ipv4Addr::new(203, 0, 113, 88)),
+            port: 18080,
+            direction: Direction::Outbound,
+        };
+        let open = hub.connect(&endpoint).expect("open");
+        let counts = crate::rpc_peerlist_ffi::peer_counts().expect("a hub and a dialer");
+        assert_eq!(counts.clearnet_out, 1);
+        assert_eq!(counts.clearnet_in, 0);
+        assert_eq!(
+            counts.clearnet_out,
+            hub.socket_count(shekyl_seam::ConnectorId::Clearnet, Direction::Outbound)
+        );
+        let board = hub.board();
+        assert_eq!(
+            crate::rpc_peerlist_ffi::session_counts(),
+            Some((
+                u64::try_from(board.established_count(Direction::Outbound)).expect("fits"),
+                u64::try_from(board.established_count(Direction::Inbound)).expect("fits"),
+            ))
+        );
+        drop(open);
+        unbind();
+    }
+
     /// Install, then bind: the hub is built on the table that was installed.
     /// A ban on that table is the hub's ban. Red edit: build the hub on a
     /// table of its own.

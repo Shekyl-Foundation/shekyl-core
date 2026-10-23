@@ -62,6 +62,8 @@ use crate::test_support::{cleanup, open_store, open_store_under, tmp};
 struct TestNode {
     sync: SyncFacts,
     pool: PoolCounts,
+    /// The key images the pool's shown entries spend.
+    pool_spends: Vec<shekyl_types::KeyImage>,
     now: u64,
 }
 
@@ -79,6 +81,7 @@ impl TestNode {
                 broadcast: 3,
                 unbroadcast: Some(2),
             },
+            pool_spends: Vec::new(),
             now: 1_800_000_000,
         }
     }
@@ -96,6 +99,12 @@ impl NodeFacts for TestNode {
             },
             PoolScope::WithUnbroadcast => self.pool,
         })
+    }
+    fn pool_spends(&self, key_images: &[shekyl_types::KeyImage]) -> Result<Vec<bool>, FactsFault> {
+        Ok(key_images
+            .iter()
+            .map(|image| self.pool_spends.contains(image))
+            .collect())
     }
     fn peers(&self) -> Result<PeerFacts, FactsFault> {
         // An online node has its peer lists; `Offline` belongs to a node
@@ -943,4 +952,131 @@ async fn an_alt_blocks_work_is_its_own_chains_not_the_main_chains_at_its_height(
     .await;
     x.close().await;
     y.close().await;
+}
+
+/// `facts_over`, with the pool's shown entries spending `pool_spends`.
+fn facts_with_pool_spends(
+    store: Arc<ChainStore>,
+    path: &Path,
+    pool_spends: Vec<shekyl_types::KeyImage>,
+) -> StoreFacts {
+    let mut node = TestNode::synced();
+    node.pool_spends = pool_spends;
+    StoreFacts::new(
+        store,
+        path.to_path_buf(),
+        Arc::new(move |h| RULES.in_force(h)),
+        Arc::new(node),
+        identity(),
+        Arc::new(CacheStore::new()),
+        shekyl_hash_budget::Budget::of_host(),
+    )
+}
+
+/// The first key image `tx` spends.
+fn key_image_of(tx: &shekyl_wire::Transaction) -> [u8; 32] {
+    tx.prefix
+        .inputs
+        .iter()
+        .find_map(|input| match input {
+            shekyl_wire::transaction::Input::ToKey { key_image, .. } => Some(*key_image),
+            _ => None,
+        })
+        .expect("a spend")
+}
+
+/// Q1's reads over the store and the pool (DX-Q3): the blocks by height
+/// with their bodies whole, ending at the first height above the tip with
+/// C++'s error status; a transaction's output indices, and `Failed` for
+/// one the chain does not hold; a key image spent in the chain, one the
+/// pool shows, and one spent nowhere. Red edit: answer the pool before the
+/// chain, so a mined spend reads as a pool spend.
+#[tokio::test]
+async fn the_q1_reads_answer_from_the_store_and_the_pool() {
+    use shekyl_daemon_rpc::read_methods::{
+        get_blocks_by_height, get_o_indexes, is_key_image_spent,
+    };
+    use shekyl_rpc_types::{
+        GetBlocksByHeightRequest, GetOIndexesRequest, IsKeyImageSpentRequest, KeyImageStatus,
+    };
+    let (mut scenario, mined) = crate::pool_door_tests::matured("rpc-q1-reads").await;
+    let spend = crate::pool_door_tests::paying_the_floor(&mut scenario, &mined, 0).await;
+    let landed = scenario
+        .mine_listing(vec![spend.clone()])
+        .await
+        .unwrap_or_else(|o| panic!("the spend lands: {o}"));
+    let pooled = crate::pool_door_tests::paying_the_floor(&mut scenario, &mined, 1).await;
+    let mined_image = key_image_of(&spend);
+    let pooled_image = key_image_of(&pooled);
+    let nowhere = [0x5a; 32];
+    let spend_id = spend.txid_parts().hash;
+    scenario
+        .reopen(|path| {
+            let store = Arc::new(open_store(path));
+            let facts = facts_with_pool_spends(
+                Arc::clone(&store),
+                path,
+                vec![
+                    shekyl_types::KeyImage::from_bytes(mined_image),
+                    shekyl_types::KeyImage::from_bytes(pooled_image),
+                ],
+            );
+            let past = landed.height.to_raw() + 1;
+            let blocks = get_blocks_by_height(
+                &facts,
+                &GetBlocksByHeightRequest {
+                    heights: vec![0, landed.height.to_raw(), past],
+                },
+                false,
+            )
+            .expect("blocks");
+            assert_eq!(
+                blocks.status.0,
+                format!("Error retrieving block at height {past}")
+            );
+            assert_eq!(blocks.blocks.len(), 2, "the two below the tip");
+            assert_eq!(blocks.blocks[0].block, mined[0].template.block.serialize());
+            assert_eq!(blocks.blocks[1].block, landed.template.block.serialize());
+            assert_eq!(
+                blocks.blocks[1].txs,
+                vec![spend.serialize()],
+                "the body, whole"
+            );
+
+            let indices = get_o_indexes(
+                &facts,
+                &GetOIndexesRequest {
+                    txid: spend_id.to_bytes(),
+                },
+            )
+            .expect("indices");
+            assert_eq!(indices.status.0, "OK");
+            assert_eq!(indices.o_indexes.len(), spend.prefix.outputs.len());
+            let unknown =
+                get_o_indexes(&facts, &GetOIndexesRequest { txid: [0x77; 32] }).expect("answered");
+            assert_eq!(unknown.status.0, "Failed");
+
+            let spent = is_key_image_spent(
+                &facts,
+                &IsKeyImageSpentRequest {
+                    key_images: vec![
+                        hex::encode(mined_image),
+                        hex::encode(pooled_image),
+                        hex::encode(nowhere),
+                    ],
+                },
+                false,
+            )
+            .expect("spent");
+            assert_eq!(
+                spent.spent_status,
+                vec![
+                    KeyImageStatus::SpentInBlockchain,
+                    KeyImageStatus::SpentInPool,
+                    KeyImageStatus::Unspent,
+                ]
+            );
+        })
+        .await;
+    scenario.close().await;
 }
