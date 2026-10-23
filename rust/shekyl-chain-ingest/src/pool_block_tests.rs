@@ -772,6 +772,89 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
     scenario.close().await;
 }
 
+/// A template on an older tip than the pool's last judgement posts nothing
+/// and evicts nothing (the review of #1165, M4). The spend references a
+/// block mined after the copy the producer runs over (six blocks on, past
+/// the reference's minimum age), so the older parent refuses it, and
+/// evicting it would drop an entry valid where it was judged. Red edit:
+/// drop the producer's check of the pool's judged tip.
+#[tokio::test]
+async fn a_template_on_an_older_tip_than_the_pools_posts_and_evicts_nothing() {
+    use crate::template::{produce, NoTemplate, Producer};
+    let (mut scenario, mined) = matured("older-tip").await;
+    let copy = tmp("older-tip-copy");
+    scenario
+        .reopen(|path| {
+            std::fs::copy(path, &copy).expect("a copy of the chain");
+        })
+        .await;
+    let newer = scenario.mine(6).await;
+    let connecting = h(newer.last().expect("six").height.to_raw() + 1);
+    let all: Vec<Mined> = mined.iter().chain(&newer).cloned().collect();
+    let paid =
+        crate::pool_door_tests::paying_the_floor_at(&mut scenario, &all, 0, connecting).await;
+    let txid = paid.txid_parts().hash;
+    let path = tmp("older-tip-pool");
+    let mut pool = open_pool(&mut scenario, &path).await;
+    scenario
+        .read_chain(|view, rule_set| {
+            assert_eq!(
+                pool.admit(
+                    paid,
+                    UnixSeconds::from_raw(1),
+                    view,
+                    rule_set,
+                    &AdmissionPolicy::GENESIS,
+                )
+                .expect("no fault"),
+                Admission::Admitted {
+                    evicted: Vec::new()
+                }
+            );
+            assert!(pool.fluffed(&txid).expect("publish"));
+        })
+        .await;
+    let older = crate::test_support::open_store_under(
+        &copy,
+        &crate::scenario::RULES.in_force(h(0)),
+        shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+    );
+    let keys = crate::test_support::harness_keys();
+    let params = shekyl_economics::EconomicParams::default();
+    let pool = std::sync::Mutex::new(pool);
+    let produced = {
+        let snap = older.begin_read().expect("a snapshot");
+        let facts = crate::connector::chain_facts_on(&snap).expect("the facts");
+        let now = facts
+            .median_timestamp
+            .map_or(crate::scenario::CLOCK_START, |median| {
+                shekyl_types::Timestamp::from_raw(median.to_raw() + 1)
+            });
+        let producer = Producer {
+            rules: crate::scenario::RULES,
+            keys: &keys,
+            params: &params,
+            now,
+        };
+        produce(&snap, &producer, Some(&pool), |_| true).map(|produced| produced.evicted)
+    };
+    let held = pool
+        .lock()
+        .expect("the pool")
+        .listing()
+        .any(|(id, _)| id == txid);
+    drop(pool);
+    drop(older);
+    drop(std::fs::remove_file(&path));
+    crate::test_support::cleanup(&copy);
+    scenario.close().await;
+    assert!(
+        matches!(produced, Err(NoTemplate::PoolOnAnotherTip)),
+        "no template on another tip: {produced:?}"
+    );
+    assert!(held, "the entry judged at the newer tip is still held");
+}
+
 /// `pop_blocks` (DX-Q3, Q7) through the service: a count that would pop
 /// genesis is refused before any pop; a count of two pops both blocks and
 /// returns both their transactions to the pool through its door, as a
@@ -1003,7 +1086,7 @@ async fn the_template_rejudges_against_its_parent_and_m10_evicts_what_it_refuses
     );
     let refused: Vec<_> = template.refused.iter().map(|(id, _)| *id).collect();
     assert_eq!(
-        pool.evict(&refused).expect("evict"),
+        pool.evict(&refused, &[]).expect("evict"),
         vec![(id1, Evicted::Refused)]
     );
     assert!(pool.relay_view().record(&id2).is_some() && pool.relay_view().record(&id3).is_some());

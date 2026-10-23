@@ -452,6 +452,7 @@ impl DoorFacts for DoorBridge {
                 // The entry waits out a full window; a closed one is the
                 // service stopping.
                 Err(Refusal::NoRoom | Refusal::Throttled) => Ok(LocalOutcome::Stopped),
+                Err(Refusal::StoreUnreadable) => Err(FactsFault::StoreUnreadable),
             }
         })
     }

@@ -200,6 +200,11 @@ pub struct Pool {
     /// Step 1 already run outside the pool lock, consumed by the next
     /// reconcile. Not durable: the file must not supply a pass.
     prepared: HashMap<TxHash, Result<StatelessPass, InvalidBlock>>,
+    /// The tip the entries were last judged against: the last reconcile's,
+    /// or a later admission's when it judged against a higher tip. A
+    /// template built on another tip would judge them against the wrong
+    /// parent ([`Pool::judged_at`]).
+    pub(crate) judged_at: Option<shekyl_chain_rules::Tip>,
 }
 
 impl core::fmt::Debug for Pool {
@@ -225,6 +230,7 @@ impl Pool {
                 held: BTreeMap::new(),
                 limits,
                 prepared: HashMap::new(),
+                judged_at: None,
             },
             how,
         ))
@@ -374,7 +380,24 @@ impl Pool {
             self.drop_held(gone);
         }
         self.hold(txid, Held::of(tx, record, Some(*pass)));
+        // Judged against a higher tip than the last reconcile's: a template
+        // on the older tip would refuse this entry against its parent.
+        if let Ok(Some(tip)) = chain.tip() {
+            if self.judged_at.is_none_or(|at| tip.height > at.height) {
+                self.judged_at = Some(tip);
+            }
+        }
         Ok(Admission::Admitted { evicted })
+    }
+
+    /// The tip the entries were last judged against: the last reconcile's,
+    /// or an admission's that judged against a higher one. `None` before
+    /// any judgement against a chain with a tip. A template selects only
+    /// when this is its own parent; otherwise it would refuse, and evict,
+    /// entries valid at the tip they were judged at.
+    #[must_use]
+    pub const fn judged_at(&self) -> Option<shekyl_chain_rules::Tip> {
+        self.judged_at
     }
 
     /// Put `held` in the index and its key images in the map (CEN-M7).

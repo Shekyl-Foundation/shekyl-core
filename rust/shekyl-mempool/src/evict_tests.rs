@@ -112,14 +112,39 @@ fn the_cheapest_leave_first_under_weight_pressure() {
     pool.set_limits(Limits {
         max_weight: 2 * weight(),
     });
-    assert_eq!(pool.evict(&[]).unwrap(), vec![(cheap, Evicted::OverWeight)]);
+    assert_eq!(
+        pool.evict(&[], &[]).unwrap(),
+        vec![(cheap, Evicted::OverWeight)]
+    );
     pool.set_limits(Limits {
         max_weight: weight(),
     });
     assert_eq!(
-        pool.evict(&[]).unwrap(),
+        pool.evict(&[], &[]).unwrap(),
         vec![(middle, Evicted::OverWeight)]
     );
+    assert!(pool.record(&dear).is_some());
+    drop(std::fs::remove_file(&path));
+}
+
+/// A body the template lists is never chosen by the over-weight pass: a
+/// posted job must not name a body the pool no longer holds. The next
+/// cheapest leaves in its place (the review of #1165, M4). Red edit: the
+/// pass ignores `listed`.
+#[test]
+fn a_listed_body_survives_the_over_weight_pass() {
+    let (mut pool, path) = pool("listed-kept", ROOMY);
+    let dear = pool.plant(tx(9), RECORD);
+    let cheap = pool.plant(tx(3), RECORD);
+    let middle = pool.plant(tx(7), RECORD);
+    pool.set_limits(Limits {
+        max_weight: 2 * weight(),
+    });
+    assert_eq!(
+        pool.evict(&[], &[cheap]).unwrap(),
+        vec![(middle, Evicted::OverWeight)]
+    );
+    assert!(pool.record(&cheap).is_some(), "the listed body stays");
     assert!(pool.record(&dear).is_some());
     drop(std::fs::remove_file(&path));
 }
@@ -136,7 +161,7 @@ fn the_templates_refusals_evict_their_entries_and_images() {
     let stranger = tx(3).txid_parts().hash;
     assert!(pool.key_images().contains(&image));
     assert_eq!(
-        pool.evict(&[refused, stranger]).unwrap(),
+        pool.evict(&[refused, stranger], &[]).unwrap(),
         vec![(refused, Evicted::Refused)]
     );
     assert!(

@@ -142,6 +142,9 @@ pub enum Refusal {
     /// An arrival is larger than any valid block near this tip can be
     /// (`admission` module docs).
     Oversize,
+    /// The door could not read the store to bound the arrival. The service
+    /// meets the same read and stops on it, so waiting does not help.
+    StoreUnreadable,
 }
 
 /// Why this node cannot follow a heavier chain it stored and judged: the
@@ -631,6 +634,10 @@ struct Admission {
     clock: Clock,
     /// Set once the service exists, so a failed read stops it.
     on_read_fault: Mutex<Option<ReadFault>>,
+    /// A test makes the bound read fail; the chain store has no read
+    /// fault of its own to inject.
+    #[cfg(test)]
+    refuse_reads: std::sync::atomic::AtomicBool,
 }
 
 /// The door: the one way in (module docs). Cheap to clone.
@@ -681,7 +688,8 @@ impl Door {
     /// # Errors
     ///
     /// [`Refusal::Oversize`]: the block is larger than any valid block near
-    /// the tip. Waiting does not change that, so it is not waited out.
+    /// the tip; [`Refusal::StoreUnreadable`]: the door could not read the
+    /// store. Waiting changes neither, so neither is waited out.
     pub async fn offer_local(
         &self,
         tag: ArrivalTag,
@@ -940,6 +948,8 @@ where
             buckets: Buckets::new(Duration::from_secs(shekyl_difficulty::T_SECONDS)),
             clock,
             on_read_fault: Mutex::new(None),
+            #[cfg(test)]
+            refuse_reads: std::sync::atomic::AtomicBool::new(false),
         });
         let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
         let connector = prepared.actor_ref().clone();

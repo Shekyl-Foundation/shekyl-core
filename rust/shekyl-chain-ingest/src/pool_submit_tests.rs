@@ -47,6 +47,56 @@ pub(crate) fn hex(tx: &shekyl_wire::Transaction) -> String {
     tx.serialize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The pool the submit shim shares with the ingest service keeps admitting
+/// after a panic poisoned its lock: the service takes such a lock back, and
+/// a shim that faulted on it would refuse every later submit for good (the
+/// review of #1165, M7). Red edit: the shim maps a poisoned lock to a fault.
+#[tokio::test]
+async fn a_poisoned_pool_still_admits() {
+    let (mut scenario, mined) = matured("pool-poisoned").await;
+    let paid = paying_the_floor(&mut scenario, &mined, 0).await;
+    let path = tmp("pool-poisoned-pool");
+    let verdict = scenario
+        .with_store(|store, rules| {
+            let chain = Store { store, rules };
+            let pool = chain
+                .read(|snapshot, rule_set| {
+                    Pool::open(
+                        &path,
+                        shekyl_types::UnixSeconds::from_raw(1),
+                        &SnapshotView::new(snapshot),
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("open")
+                    .0
+                })
+                .expect("a snapshot");
+            let pool = Arc::new(std::sync::Mutex::new(pool));
+            let poisoner = Arc::clone(&pool);
+            let panicked = std::thread::spawn(move || {
+                let _held = poisoner.lock();
+                panic!("a panic under the pool's lock");
+            })
+            .join();
+            assert!(
+                panicked.is_err() && pool.is_poisoned(),
+                "the lock is poisoned"
+            );
+            let shim = Arc::new(RustPoolShim::new(
+                chain,
+                pool,
+                AdmissionPolicy::GENESIS,
+                || UnixSeconds::from_raw(1),
+            ));
+            SubmitEngine::new(shim, DaemonTxVerifier).submit(&hex(&paid), SubmitCaller::Owner)
+        })
+        .await;
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+    assert_eq!(verdict.expect("no engine fault"), SubmitVerdict::Accepted);
+}
+
 /// A spend paying the floor is accepted and held by the pool, not public
 /// (the engine's own submit is a relay origination); the same bytes again
 /// are `AlreadyInPool`, the identity the shim's facts carry; a spend paying
@@ -89,7 +139,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
             let first = engine.submit(&hex(&paid), SubmitCaller::Owner);
             let again = engine.submit(&hex(&paid), SubmitCaller::Owner);
             let below = engine.submit(&hex(&cheap), SubmitCaller::Owner);
-            let held = shim.with_pool(|pool| pool.record(&txid)).expect("the lock");
+            let held = shim.with_pool(|pool| pool.record(&txid));
             (first, again, below, held)
         })
         .await;
@@ -483,8 +533,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
                 counted(&twin, SubmitCaller::Foreign),
                 counted(&fresh, SubmitCaller::Foreign),
                 counted(&cheap, SubmitCaller::Foreign).0,
-                shim.with_pool(|pool| (pool.len(), pool.record(&twin.txid_parts().hash).is_some()))
-                    .expect("the lock"),
+                shim.with_pool(|pool| (pool.len(), pool.record(&twin.txid_parts().hash).is_some())),
             );
             assert!(shim.fluffed(&paid.txid_parts().hash).expect("fluffed"));
             let after = (
@@ -589,9 +638,8 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
             let owned = submit(&held, SubmitCaller::Owner);
             let duplicate = submit(&held, SubmitCaller::Foreign);
             let fresh = submit(&peer, SubmitCaller::Foreign);
-            let unpublished = shim
-                .with_pool(|pool| pool.record(&held.txid_parts().hash).map(|r| r.public))
-                .expect("the lock");
+            let unpublished =
+                shim.with_pool(|pool| pool.record(&held.txid_parts().hash).map(|r| r.public));
             (owned, duplicate, fresh, unpublished)
         })
         .await;

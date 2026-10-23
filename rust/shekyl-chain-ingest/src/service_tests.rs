@@ -1576,6 +1576,48 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
     }
 }
 
+/// A door that cannot read the store answers a local arrival once, as
+/// `StoreUnreadable`, and returns: no room is waited out, and an unreadable
+/// store is not no room. The entry runs on its own thread and runtime, so a
+/// spin fails this test at the deadline instead of hanging it. Red edit: the
+/// bound read's failure answers `NoRoom`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_door_that_cannot_read_the_store_answers_a_local_arrival_once() {
+    let mut y = Scenario::open("service-unreadable-y");
+    let blocks = y.mine(1).await;
+    let (service, path) = service(
+        "service-unreadable",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let door = service.door();
+    door.admission
+        .refuse_reads
+        .store(true, std::sync::atomic::Ordering::Release);
+    let block = blocks[0].template.block.serialize();
+    let (sent, answered) = std::sync::mpsc::channel();
+    let entry = door.clone();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime");
+        let answer = runtime.block_on(entry.offer_local(ArrivalTag(601), block, Vec::new()));
+        drop(sent.send(answer.map(|tagged| tagged.reply)));
+    });
+    let answer = answered.recv_timeout(std::time::Duration::from_secs(10));
+    door.admission
+        .refuse_reads
+        .store(false, std::sync::atomic::Ordering::Release);
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+    assert_eq!(
+        answer.expect("answered within the deadline, not spun"),
+        Err(Refusal::StoreUnreadable)
+    );
+}
+
 /// The local-arrival entry (`DRS_X_STORE_FLIP.md` DX-Q3, Q6). A local block that
 /// meets a full window waits for its seat and then connects; after a stop,
 /// the closed door answers `Stopped`.

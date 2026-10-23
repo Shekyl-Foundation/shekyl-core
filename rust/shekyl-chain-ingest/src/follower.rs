@@ -115,6 +115,11 @@ pub enum Unbuilt {
     TargetRefused,
     /// A seed block is not on the snapshot it was read from.
     SeedMissing,
+    /// The pool was last judged against another tip; the next tip change
+    /// builds again.
+    PoolOnAnotherTip,
+    /// The template producer panicked; the service is stopping.
+    ProducerPanicked,
 }
 
 impl core::fmt::Display for Unbuilt {
@@ -131,6 +136,8 @@ impl core::fmt::Display for Unbuilt {
             Self::LastHeight => "the tip is the last height there is",
             Self::TargetRefused => "the chain's own headers refuse its target",
             Self::SeedMissing => "a seed block is not on the snapshot",
+            Self::PoolOnAnotherTip => "the pool was judged against another tip",
+            Self::ProducerPanicked => "the template producer panicked",
         })
     }
 }
@@ -520,8 +527,21 @@ where
         })
         .map_err(Unposted::Template)
     })
-    .await
-    .expect("the template producer does not panic");
+    .await;
+    // A panic in the producer is a defect, not a reason to take the
+    // follower down with it: the job goes, and the service stops on it as
+    // it does on any end of the follower. The workspace's dev and release
+    // profiles abort on panic, so this arm is reached only where a panic
+    // unwinds (the test profile).
+    let produced = match produced {
+        Ok(produced) => produced,
+        Err(join) => {
+            tracing::error!("the template producer panicked: {join}");
+            seat.withdraw(NoJob::Unbuilt(Unbuilt::ProducerPanicked));
+            shared.fail(ServiceFault::FollowerEnded);
+            return;
+        }
+    };
     let produced = match produced {
         Ok(produced) => produced,
         Err(unposted) => {
@@ -627,6 +647,10 @@ impl Unposted {
             Self::Template(NoTemplate::Unlisted) => {
                 tracing::error!("no template: the selection listed a body the pool does not show");
                 why(Unbuilt::Unlisted)
+            }
+            Self::Template(NoTemplate::PoolOnAnotherTip) => {
+                tracing::debug!("no template: the pool was judged against another tip");
+                why(Unbuilt::PoolOnAnotherTip)
             }
             Self::Template(NoTemplate::NoNonceSlot) => {
                 tracing::error!("no template: the coinbase reserves no extra nonce");

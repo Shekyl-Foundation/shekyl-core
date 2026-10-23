@@ -129,15 +129,21 @@ impl Pool {
 
     /// Apply CEN-M10, `refused` being the entries the last template
     /// selection refused against its parent: those leave, then the
-    /// cheapest per weight until the pool is within its limit. Writes every
-    /// removal to the file in one batch (P3), then drops the entries and
-    /// their key images from the index.
+    /// cheapest per weight until the pool is within its limit, passing over
+    /// `listed`, the bodies that template lists (a posted job must not name
+    /// a body the pool no longer holds). Writes every removal to the file
+    /// in one batch (P3), then drops the entries and their key images from
+    /// the index.
     ///
     /// # Errors
     ///
     /// The pool file's; nothing is dropped from the index unless the file
     /// dropped it.
-    pub fn evict(&mut self, refused: &[TxHash]) -> Result<Vec<(TxHash, Evicted)>, StoreError> {
+    pub fn evict(
+        &mut self,
+        refused: &[TxHash],
+        listed: &[TxHash],
+    ) -> Result<Vec<(TxHash, Evicted)>, StoreError> {
         let mut evicted: Vec<(TxHash, Evicted)> = Vec::new();
         let mut gone: BTreeSet<TxHash> = BTreeSet::new();
         for txid in refused {
@@ -151,6 +157,7 @@ impl Pool {
             .into_iter()
             .filter(|(txid, _)| !gone.contains(txid))
             .collect();
+        // The listed bodies count toward the weight and are never chosen.
         let mut total: u128 = survivors
             .iter()
             .map(|(_, held)| u128::from(held.weight))
@@ -159,6 +166,9 @@ impl Pool {
         for (txid, held) in survivors {
             if total <= limit {
                 break;
+            }
+            if listed.contains(&txid) {
+                continue;
             }
             total -= u128::from(held.weight);
             over_weight.push(txid);

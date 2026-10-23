@@ -92,6 +92,10 @@ pub(crate) enum NoTemplate {
     /// The selection listed a body the pool does not show: a defect in
     /// `select`, which offers only shown bodies.
     Unlisted,
+    /// The pool's entries were last judged against another tip than this
+    /// template's parent. Selecting would refuse, and evict, entries valid
+    /// at the tip they were judged at; the next tip change builds again.
+    PoolOnAnotherTip,
 }
 
 impl From<TemplateError> for NoTemplate {
@@ -218,6 +222,9 @@ fn list(
     let bound = fill.bodies_weight_bound();
     let view = SnapshotView::new(snap);
     let mut pool = pool.lock().unwrap_or_else(PoisonError::into_inner);
+    if pool.judged_at().map(|tip| tip.hash) != Some(facts.previous) {
+        return Err(NoTemplate::PoolOnAnotherTip);
+    }
     let selected = select_admitting(&pool, &view, rule_set, bound, |weight, fee| {
         fill.admit(weight, fee)
     })
@@ -237,7 +244,10 @@ fn list(
         .collect::<Option<Vec<_>>>()
         .ok_or(NoTemplate::Unlisted)?;
     let refused: Vec<TxHash> = selected.refused.iter().map(|(txid, _)| *txid).collect();
-    let evicted = pool.evict(&refused).map_err(NoTemplate::PoolFile)?;
+    let listed: Vec<TxHash> = summaries.iter().map(|body| body.id).collect();
+    let evicted = pool
+        .evict(&refused, &listed)
+        .map_err(NoTemplate::PoolFile)?;
     let bodies = selected
         .transactions
         .into_iter()
