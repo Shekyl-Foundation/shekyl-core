@@ -459,7 +459,11 @@ info:
   # ending of that kind at or below the height shown. -29521 now means only
   # a refusal before any byte was sent; a daemon's terminal verdict on a
   # sent exit is -29522, held until its end date. api_version stays 1.
-  version: 0.14.0
+  # 0.15.0: the staking posture `foundation_complete_tree` is renamed
+  # `support_complete_tree` on the bond request, the -29506 refusal, and
+  # the serving-posture response. The obligation is unchanged: the
+  # whole-corpus archival backstop. api_version stays 1.
+  version: 0.15.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -1205,7 +1209,7 @@ components:
                                           whose funding is fine
           -29506 STAKE_FOUNDATION_UNACKNOWLEDGED
                                           stake: posture
-                                          "foundation_complete_tree" was
+                                          "support_complete_tree" was
                                           requested without
                                           acknowledge_non_earning_unbounded.
                                           The refusal MESSAGE IS THE WARNING
@@ -1771,12 +1775,12 @@ components:
             open. Crosses a local transport only.
         posture:
           type: string
-          enum: [market, foundation_complete_tree]
+          enum: [market, support_complete_tree]
           default: market
           description: >
             Which archival obligation this bond takes on. `market` is an
             ordinary per-shard staking position inside the reward market.
-            `foundation_complete_tree` is the whole-corpus archival
+            `support_complete_tree` is the whole-corpus archival
             backstop: permanently excluded from the reward market by
             holdings shape, unbounded and monotone in disk, and fully
             inside the penalty economy. Absent means `market`, which is
@@ -1788,7 +1792,7 @@ components:
           default: false
           description: >
             Required to be `true` for posture
-            `foundation_complete_tree`; ignored for `market`. Its absence
+            `support_complete_tree`; ignored for `market`. Its absence
             is not a validation nicety — it is the warning gate (D-4):
             the -29506 refusal body carries the full statement of terms,
             so a client either shows the operator those terms or
@@ -2894,7 +2898,7 @@ components:
             as either posture. Required: "no host" is an answer (rule 43).
 
             Values defined at this contract version: `market`,
-            `foundation_complete_tree`.
+            `support_complete_tree`.
 
             **Deliberately an open string, not a closed enum.** A serving
             posture is added by a later round, and a *response* enum would

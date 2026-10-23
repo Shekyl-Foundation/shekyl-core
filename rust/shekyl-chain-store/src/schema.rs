@@ -169,10 +169,11 @@ use crate::codec::{
     AltBlock, AltBodies, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo,
     BondRecord, Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw,
     LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RecordedPow,
-    RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices,
-    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
+    RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportCount, SupportIssued,
+    TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog,
+    Unshaped,
 };
-use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple};
+use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple, SupportIssuedTuple};
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
 
@@ -483,6 +484,32 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          fact, since a complete tree slashed or released afterwards holds a compact set, so a \
          claim's re-gather reads the flag here. The C++ gathers at the epoch close and reads \
          the records as they are now, so LMDB never holds it",
+    ),
+    (
+        "archival_support_unissued",
+        "one complete tree's unissued support draws in one epoch, capped at c \
+         (ARCHIVAL_SUPPORT_DRAW.md §5): a scheduled block the producer did not file. It is not \
+         the economy's shortfall and it is not issued_short. The C++ draws no support stream, \
+         so LMDB never holds it",
+    ),
+    (
+        "archival_support_block",
+        "how many support draws one block issued (ARCHIVAL_SUPPORT_DRAW.md §5): the width of \
+         that block's support bitmap. An unanswered draw is not in this count. The C++ draws \
+         no support stream, so LMDB never holds it",
+    ),
+    (
+        "archival_support_issued",
+        "one complete tree's issued support draws in one epoch (ARCHIVAL_SUPPORT_DRAW.md §3): \
+         the shard each draw selected and whether a pass was admitted. The settlement row is \
+         one per tree, so the shard is the value. The C++ draws no support stream, so LMDB \
+         never holds it",
+    ),
+    (
+        "archival_support_settlement",
+        "what one complete tree settled for one epoch (ARCHIVAL_SUPPORT_DRAW.md §3): the same \
+         three-byte settlement row the economy writes per pair. Keyed by the tree and the \
+         epoch, not by a shard. The C++ draws no support stream, so LMDB never holds it",
     ),
 ];
 
@@ -866,6 +893,39 @@ tables! {
     /// not settled. Appended last (ordinal 45).
     pub const ARCHIVAL_COMPLETE_TREES: TableDefinition<u64, Coded<CompleteTreeSet>> =
         TableDefinition::new("archival_complete_trees");
+
+    /// `archival_support_unissued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(persona, epoch)` → the [`SupportCount`] of support draws scheduled
+    /// for that tree in that epoch and not filed, capped at `c`
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Not the economy's shortfall.
+    /// Appended last but one (ordinal 46).
+    pub const ARCHIVAL_SUPPORT_UNISSUED: TableDefinition<([u8; 32], u64), Coded<SupportCount>> =
+        TableDefinition::new("archival_support_unissued");
+
+    /// `archival_support_block` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// height → the [`SupportCount`] of support draws that block issued,
+    /// the width of its support bitmap. Written when the block connects,
+    /// insert-once (SI-40), the zero included: a block that issued none
+    /// still has a row. A height with no row was not connected. Retired
+    /// with [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34).
+    /// Ordinal 47.
+    pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportCount>> =
+        TableDefinition::new("archival_support_block");
+
+    /// `archival_support_issued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(epoch, persona, height, draw)` → the [`SupportIssued`] row: the
+    /// shard the draw selected and whether a pass was admitted
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Epoch-major, so one tree's epoch
+    /// is one range in `(height, draw)` order. Appended (ordinal 48).
+    pub const ARCHIVAL_SUPPORT_ISSUED: TableDefinition<SupportIssuedTuple, Coded<SupportIssued>> =
+        TableDefinition::new("archival_support_issued");
+
+    /// `archival_support_settlement` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(persona, epoch)` → the [`SettlementRow`] of that tree in that
+    /// epoch. One row per tree, not per shard. Written by the slash pass
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Appended last (ordinal 49).
+    pub const ARCHIVAL_SUPPORT_SETTLEMENT: TableDefinition<([u8; 32], u64), Coded<SettlementRow>> =
+        TableDefinition::new("archival_support_settlement");
 }
 
 #[cfg(test)]
@@ -951,6 +1011,10 @@ mod tests {
             // Layout 29 (`SO-D12h`): the complete trees a settled epoch's
             // market excluded, frozen at its slash pass.
             ("archival_complete_trees", 45),
+            ("archival_support_unissued", 46),
+            ("archival_support_block", 47),
+            ("archival_support_issued", 48),
+            ("archival_support_settlement", 49),
         ];
         for &(name, index) in pinned {
             assert_eq!(

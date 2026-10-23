@@ -69,9 +69,10 @@
 //!   denominator and no rule type is bound to it. The cutover flips them.
 //! - **The falsifier of "staged":** `nothing_on_the_connect_path_calls_the_bundle_verifier`
 //!   reads every non-test source of this crate but the fixture, the
-//!   registry, `archival/bundle.rs` and `archival/bundle_section.rs`, and
-//!   fails when any other names this module's functions, apart from the
-//!   one `pub use` in `archival/mod.rs` and `lib.rs` that exports them.
+//!   registry, `archival/bundle.rs`, `archival/bundle_records.rs` and
+//!   `archival/bundle_section.rs`, and fails when any other names this
+//!   module's functions, apart from the one `pub use` in `archival/mod.rs`
+//!   and `lib.rs` that exports them.
 //!   The section file stays exempt only while it holds `check_section`.
 //!   It requires `validate.rs`,
 //!   `block.rs`, `alt.rs`, `header_ladder.rs`, `drain.rs`, `archival/mod.rs`
@@ -178,15 +179,15 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use shekyl_archival_retention::{
-    challenge_nonce, draw_commit, select_draw, verify_receipt_transcript, BundleBody, BundleKept,
-    BundleRef, BundleWireError, DrawableEpoch, DrawablePair, CHALLENGE_READS,
+    draw_commit, select_draw, BundleBody, BundleKept, BundleRef, BundleWireError, DrawableEpoch,
+    DrawablePair,
 };
 use shekyl_crypto_pq::fn_dsa_hybrid::{
     FnDsaHybridPublicKey, FnDsaHybridSignature, HybridEd25519FnDsa,
 };
 use shekyl_crypto_pq::signature::{SignatureScheme as _, SCHEME_DOMAIN_WITNESS_BUNDLE};
-use shekyl_types::archival::DrawCommitment;
-use shekyl_types::{BlockHash, BlockHeight, SettlementEpoch};
+use shekyl_types::archival::{DrawCommitment, ReceiptSignPk};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch};
 
 use crate::census::CenRow;
 use crate::rule_set::RuleSet;
@@ -241,6 +242,31 @@ pub trait BundleView {
     /// as one value (`SCS-P19`).
     fn drawable_epoch(&self, epoch: SettlementEpoch)
         -> Result<Option<&DrawableEpoch>, Self::Fault>;
+
+    /// How many support draws `h` issued, as written when `h` connected.
+    /// `None` is the view's hole, the same way a missing economy count is:
+    /// a written zero is a block that issued none, and an absent row is
+    /// not that zero.
+    fn support_count(&self, h: BlockHeight) -> Result<Option<u32>, Self::Fault>;
+
+    /// The complete trees scheduled at `h`, in persona order. Bit `j` of
+    /// the support bitmap is entry `j`. `None` is the view's hole. The
+    /// verifier asks only when [`Self::support_count`] is not zero.
+    fn support_roster(&self, h: BlockHeight) -> Result<Option<Vec<SupportSeat>>, Self::Fault>;
+
+    /// The archive width the support draw selects a shard from. `None` is
+    /// the view's hole. Asked only when the block issued support draws.
+    fn archive_width(&self, h: BlockHeight) -> Result<Option<u64>, Self::Fault>;
+}
+
+/// One complete tree scheduled at a block: the persona and the receipt
+/// key the support bitmap's bit verifies under.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SupportSeat {
+    /// The tree.
+    pub persona: PCanonicalId,
+    /// Its receipt key, as the bond record carries it.
+    pub receipt_key: ReceiptSignPk,
 }
 
 /// The section checker: form, the window, then the budget. The only
@@ -248,6 +274,10 @@ pub trait BundleView {
 /// [`verify_bundle`] asks too.
 #[path = "bundle_section.rs"]
 mod bundle_section;
+
+/// The attempt, anchor and receipt passes both streams share.
+#[path = "bundle_records.rs"]
+mod records;
 
 pub use bundle_section::{
     check_section, check_section_until_switch, open_reference, SectionCharge, SectionCheckFailed,
@@ -491,8 +521,25 @@ pub struct DerivedDraw {
 pub struct Admitted {
     /// The bundle's kept bytes, parsed: the reference's content.
     pub kept: BundleKept,
-    /// One entry per draw `j` of `h`, in order — passes and misses both.
+    /// One entry per economy draw `j` of `h`, in order — passes and misses both.
     pub draws: Vec<DerivedDraw>,
+    /// One entry per support draw of `h`. Not serve credit: the writer
+    /// that turns [`Self::draws`] into credit rows does not read this.
+    pub support: Vec<SupportObservation>,
+}
+
+/// A support draw the verifier accepted. It is not an economy draw and
+/// it writes no serve credit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupportObservation {
+    /// The tree.
+    pub persona: PCanonicalId,
+    /// The shard the draw named.
+    pub shard: shekyl_types::ShardId,
+    /// Its index in the block's support bitmap.
+    pub draw: u32,
+    /// Whether the bitmap says it passed.
+    pub passed: bool,
 }
 
 /// The body a reference names, from bytes a store or a peer returned.
@@ -536,19 +583,23 @@ pub fn open_body<F>(reference: &BundleRef, bytes: &[u8]) -> Result<BundleBody, B
 ///    bits, because [`Admitted::draws`] carries every draw — by
 ///    `select_draw` over the drawable epoch's length and the view's
 ///    `visibly_short`.
-/// 7. **Each record's `attempt`** is below `K`.
-/// 8. **Each record's receipt**, ascending `j`: `anchor_height < h`, then
-///    the 112-byte transcript `nonce ‖ anchor_height_le ‖
+/// 7. **Each record's structure**, on both streams, before any receipt.
+///    `attempt` is below `K`. Then `anchor_height < h`, and the view has
+///    that block's hash. Economy set bits, then support set bits.
+/// 8. **Each record's receipt**, in that same order: the 113-byte
+///    transcript `stream ‖ nonce ‖ anchor_height_le ‖
 ///    block_hash(anchor_height) ‖ shard_id_le ‖ delivery_digest` verifies
-///    under the derived pair's receipt key, scheme 3,
+///    under that stream's receipt key, scheme 3,
 ///    `SCHEME_DOMAIN_RECEIPT`, with the nonce recomputed from `(seed,
 ///    block_hash(h), j, attempt)`. The transcript and the domain are
-///    [`verify_receipt_transcript`]'s, the one body the fetch client's
-///    scheme-3 target also calls; this module builds neither.
+///    [`shekyl_archival_retention::verify_receipt_transcript`]'s, the one
+///    body the fetch client's scheme-3 target also calls; this module
+///    builds neither.
 ///
-/// Step 7 runs over every record before step 8 runs over any: a bundle
-/// with an inadmissible `attempt` is refused for it whatever its receipts
-/// say.
+/// Step 7 runs over every record of both streams before step 8 runs over
+/// any: a bundle with an inadmissible `attempt` or anchor is refused for
+/// it whatever its receipts say. The receipt key is opened in step 8, so
+/// a missing key cannot hide an earlier attempt or anchor.
 ///
 /// # Errors
 ///
@@ -588,7 +639,14 @@ pub fn verify_bundle<V: BundleView>(
         return invalid(BundleInvalid::Count);
     }
     let kept = reference.kept().clone();
-    if usize::try_from(kept.passes.popcount()).ok() != Some(body.record_count()) {
+    // Zero is a count on both streams. An empty support bitmap over a
+    // block that issued support draws is the same refusal as an economy
+    // bitmap that understates `count(h)`, and it is refused here, before
+    // the commitment, rather than accepted as an empty observation list.
+    support_width(view, h, kept.support.count())?;
+    let economy_records = usize::try_from(kept.passes.popcount()).unwrap_or(usize::MAX);
+    let support_records = usize::try_from(kept.support.popcount()).unwrap_or(usize::MAX);
+    if economy_records.saturating_add(support_records) != body.record_count() {
         return invalid(BundleInvalid::RecordCount);
     }
 
@@ -627,78 +685,82 @@ pub fn verify_bundle<V: BundleView>(
         return invalid(BundleInvalid::WitnessSignature);
     }
 
-    // A block with no draws issues nothing: its bundle marks `h` revealed
-    // and that is all (`SCS-P33`). Nothing below has anything to read.
-    if count == 0 {
-        return Ok(Admitted {
-            kept,
-            draws: Vec::new(),
-        });
-    }
-
-    // 6. Every draw's pair, at the issued counts visible at `h`.
-    let epoch = schedule.epoch_at(h);
-    let Some(drawable) = drawable_for(view, epoch)? else {
-        return Err(BundleRefused::Unanswered(BundleUnanswered::DrawableEpoch {
-            epoch,
-        }));
+    // A block with no economy draws issues nothing on that stream
+    // (`SCS-P33`). The support width was matched above, so an empty
+    // support bitmap here is a block that issued none of those either.
+    // Both streams' records are judged together below, so a support
+    // `attempt` is not hidden behind an economy receipt.
+    let (draws, drawable, hash_at_h) = if count == 0 {
+        if kept.support.count() == 0 {
+            return Ok(Admitted {
+                kept,
+                draws: Vec::new(),
+                support: Vec::new(),
+            });
+        }
+        let Some(hash_at_h) = view.block_hash(h)? else {
+            return Err(BundleRefused::Unanswered(BundleUnanswered::BlockHash {
+                height: h,
+            }));
+        };
+        (Vec::new(), None, hash_at_h)
+    } else {
+        // 6. Every draw's pair, at the issued counts visible at `h`.
+        let epoch = schedule.epoch_at(h);
+        let Some(drawable) = drawable_for(view, epoch)? else {
+            return Err(BundleRefused::Unanswered(BundleUnanswered::DrawableEpoch {
+                epoch,
+            }));
+        };
+        let Some(hash_at_h) = view.block_hash(h)? else {
+            return Err(BundleRefused::Unanswered(BundleUnanswered::BlockHash {
+                height: h,
+            }));
+        };
+        let draws = derive_draws(view, drawable, &kept, hash_at_h.as_bytes(), count)?;
+        (draws, Some(drawable), hash_at_h)
     };
-    let Some(hash_at_h) = view.block_hash(h)? else {
-        return Err(BundleRefused::Unanswered(BundleUnanswered::BlockHash {
+
+    let mut passes = Vec::new();
+    records::bind_economy(&mut passes, &kept, body, &draws)?;
+    let support = records::bind_support(
+        view,
+        &kept,
+        body,
+        hash_at_h.as_bytes(),
+        economy_records,
+        &mut passes,
+    )?;
+    // 7 then 8. Both streams: attempts, then anchors, then receipts.
+    records::judge_passes(view, &kept, hash_at_h.as_bytes(), &passes, drawable)?;
+
+    Ok(Admitted {
+        kept,
+        draws,
+        support,
+    })
+}
+
+/// The support bitmap's width against the count the block issued.
+///
+/// Called once, with the economy count already matched, and before the
+/// commitment. A written zero is a block that issued none, so an
+/// economy-only bundle still admits. `None` is the view's hole, the same
+/// way a missing economy count is: it is not a written zero.
+fn support_width<V: BundleView>(
+    view: &V,
+    h: BlockHeight,
+    stated: u32,
+) -> Result<(), BundleRefused<V::Fault>> {
+    let Some(issued) = view.support_count(h)? else {
+        return Err(BundleRefused::Unanswered(BundleUnanswered::DrawCount {
             height: h,
         }));
     };
-    let draws = derive_draws(view, drawable, &kept, hash_at_h.as_bytes(), count)?;
-
-    // 7. `attempt < K`, for every record, before any receipt is verified.
-    for (draw, record) in kept.passes.iter_set().zip(body.records()) {
-        if record.attempt >= CHALLENGE_READS {
-            return invalid(BundleInvalid::Attempt { draw });
-        }
+    if stated != issued {
+        return Err(BundleRefused::Invalid(BundleInvalid::Count));
     }
-
-    // 8. Receipts, ascending `j`.
-    for (draw, record) in kept.passes.iter_set().zip(body.records()) {
-        // `SCS-P32`: what makes "nothing above `h` enters a bundle's
-        // validity" a property of this rule and not of today's constants.
-        if record.anchor_height >= h {
-            return invalid(BundleInvalid::Anchor { draw });
-        }
-        let Some(anchor_hash) = view.block_hash(record.anchor_height)? else {
-            return Err(BundleRefused::Unanswered(BundleUnanswered::BlockHash {
-                height: record.anchor_height,
-            }));
-        };
-        // A `u32` into a `usize` is lossless on every target the workspace
-        // builds for. In range: `draws` has `count` entries (step 6) and a
-        // set bit's index is below `count` by the bitmap's construction.
-        let derived = draws[draw as usize];
-        let Some(receipt_key) = drawable.receipt_key(derived.index) else {
-            return Err(BundleRefused::Unanswered(BundleUnanswered::Draw { draw }));
-        };
-        let nonce = challenge_nonce(&kept.seed, hash_at_h.as_bytes(), draw, record.attempt);
-        let Ok(receipt) = FnDsaHybridSignature::from_canonical_bytes(&record.receipt) else {
-            return invalid(BundleInvalid::Receipt { draw });
-        };
-        // The one construction of the receipt's transcript and domain,
-        // shared with the fetch client's scheme-3 target: admission and
-        // fetch cannot drift from each other because neither has its own.
-        if verify_receipt_transcript(
-            receipt_key,
-            &nonce,
-            record.anchor_height,
-            anchor_hash.as_bytes(),
-            derived.pair.shard.to_raw(),
-            &record.delivery_digest,
-            &receipt,
-        )
-        .is_err()
-        {
-            return invalid(BundleInvalid::Receipt { draw });
-        }
-    }
-
-    Ok(Admitted { kept, draws })
+    Ok(())
 }
 
 /// Step 6: draw `j`'s pair for every `j < count`, by the production

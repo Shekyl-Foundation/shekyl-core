@@ -192,7 +192,7 @@ impl Message<PersonaOnionIdentityOf> for StakeEngine {
 /// A copy of it in the serving role would be restricted at the API, not by the
 /// key — one edit from a serving task that signs a claim. So **the secret does
 /// not cross the actor boundary at all**: the serving role sends the
-/// 112-byte transcript in and receives the signature out, per served shard
+/// 113-byte transcript in and receives the signature out, per served shard
 /// (`SF-D13`, "injection, not custody"; `SH2_RESIDENT_KEY_AUDIT.md` §3 Q1).
 ///
 /// The domain is fixed by [`sign_pass_transcript`] itself, the only signing
@@ -245,7 +245,7 @@ impl Message<SignPassTranscript> for StakeEngine {
 /// in the change that makes a verifier accept scheme-3 receipts.
 ///
 /// The shape is [`SignPassTranscript`]'s for the same reason: the secret
-/// does not cross the actor boundary. The 112-byte transcript goes in, the
+/// does not cross the actor boundary. The 113-byte transcript goes in, the
 /// signature comes out. The domain is fixed by
 /// [`shekyl_p_host::sign_receipt_transcript`], which
 /// [`HeldPersona::sign_receipt_transcript`] calls, so this handler cannot

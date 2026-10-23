@@ -39,7 +39,14 @@ pub(crate) const DIGEST: [u8; 32] = [0x5a; 32];
 
 /// A real transcript, from the consensus builder both ends agree on.
 pub(crate) fn message() -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-    pass_countersignature_message(&NONCE, ANCHOR, &ANCHOR_HASH, SHARD, &DIGEST)
+    pass_countersignature_message(
+        shekyl_archival_retention::PassStream::Economy,
+        &NONCE,
+        ANCHOR,
+        &ANCHOR_HASH,
+        SHARD,
+        &DIGEST,
+    )
 }
 
 /// The persona's public receipt key, from the derivation oracle the
