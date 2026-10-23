@@ -684,8 +684,10 @@ The cutover's edit of the job's script (`scripts/ci/daemon_boot_stop_smoke.ps1`,
   flag, so the case starts the daemon through a `CreateProcess` call, and
   it asserts the runner's console before sending the event: the hosted
   runner's process has one attached and no window (the pre-flight line,
-  audit §5). Window close, logoff and shutdown cannot be generated this way
-  at all.
+  audit §5). The stop asserts the same store and marker as the RPC stop
+  (the marker names regtest and its network id) and the log line
+  `stop requested by Ctrl-Break`. Window close, logoff and shutdown cannot
+  be generated this way at all.
 
 New: the
 grammar gate (IG-3, IG-9) over the daemon's table; the snapshot field-count

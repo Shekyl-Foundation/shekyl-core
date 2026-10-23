@@ -25,11 +25,12 @@
 #      access list's; on another platform the case prints that it did not
 #      run;
 #   6. Ctrl-Break: a daemon started in its own process group
-#      (CREATE_NEW_PROCESS_GROUP, which .NET's Process.Start cannot set, so
-#      a CreateProcess call) is sent CTRL_BREAK_EVENT and takes its one stop
-#      path: exit 0 within the stop timeout, store and marker kept (§5.2).
-#      Windows only, and it needs a console on the runner, which the
-#      pre-flight below reports and the case asserts (rule 47).
+#      (CREATE_NEW_PROCESS_GROUP, which .NET's Process.Start cannot set)
+#      is sent CTRL_BREAK_EVENT and takes its one stop path: exit 0 within
+#      the stop timeout, the store and the marker kept as the RPC stop
+#      keeps them, and the log records `stop requested by Ctrl-Break`
+#      (§5.2). Windows only, and it needs a console on the runner, which
+#      the pre-flight below reports and the case asserts (rule 47).
 #
 # It replaces the daemonizer-removal smoke test, which re-proved the link,
 # asserted that a deleted code path did nothing, and pinned the
@@ -63,13 +64,59 @@ $Daemon = (Resolve-Path -LiteralPath $Daemon).Path
 # Pre-flight (DAEMON_CONFIG_CUTOVER_AUDIT.md §5): does the runner's process
 # have a console? Case 6 needs one and asserts it. Reported, not assumed.
 $attached = 0
+# CREATE_NEW_PROCESS_GROUP (0x00000200): the child is the root of a new
+# process group, and its process id is that group's id. CTRL_BREAK_EVENT
+# (1) can name the group. Ctrl-C is disabled in the group; Ctrl-Break is not.
+$CREATE_NEW_PROCESS_GROUP = [uint32] 0x00000200
+$CTRL_BREAK_EVENT = [uint32] 1
+# Used only when the launcher could not adopt the child and stops it
+# before dropping the last handle. A daemon stop is exit 0.
+$UNADOPTED_PROCESS_EXIT = [uint32] 1
+# signals.rs latches this cause; note_stop logs it at warn.
+$CtrlBreakStopLine = 'stop requested by Ctrl-Break'
 if ($IsWindows) {
-    Add-Type -Namespace ShekylSmoke -Name Console -MemberDefinition @'
-[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
-[DllImport("kernel32.dll", SetLastError = true)] public static extern uint GetConsoleProcessList(uint[] list, uint count);
+    # One interop surface: the console pre-flight and the process-group
+    # launch. Process.Start cannot set CREATE_NEW_PROCESS_GROUP.
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace ShekylSmoke {
+    public static class Console {
+        [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern uint GetConsoleProcessList(uint[] list, uint count);
+    }
+    public static class Spawn {
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct STARTUPINFO {
+            public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
+            public int dwX; public int dwY; public int dwXSize; public int dwYSize;
+            public int dwXCountChars; public int dwYCountChars; public int dwFillAttribute;
+            public int dwFlags; public short wShowWindow; public short cbReserved2;
+            public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        public struct PROCESS_INFORMATION {
+            public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId;
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern bool CreateProcess(string lpApplicationName, System.Text.StringBuilder lpCommandLine,
+            IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags,
+            IntPtr lpEnvironment, string lpCurrentDirectory, ref STARTUPINFO lpStartupInfo,
+            out PROCESS_INFORMATION lpProcessInformation);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GenerateConsoleCtrlEvent(uint dwCtrlEvent, uint dwProcessGroupId);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool CloseHandle(IntPtr hObject);
+    }
+}
 '@
-    $consoleIds = [uint32[]]::new(64)
-    $attached = [ShekylSmoke.Console]::GetConsoleProcessList($consoleIds, 64)
+    # The call reports a count. The slots only have to be large enough to
+    # hold the runner's list; a short buffer still returns the count.
+    $consoleProcessSlots = 64
+    $consoleIds = [uint32[]]::new($consoleProcessSlots)
+    $attached = [ShekylSmoke.Console]::GetConsoleProcessList($consoleIds, [uint32] $consoleProcessSlots)
     $window = if ([ShekylSmoke.Console]::GetConsoleWindow() -eq [IntPtr]::Zero) { 'none' } else { 'present' }
     Write-Host "runner console: $attached process(es) attached, window $window"
 }
@@ -109,6 +156,39 @@ function ConvertTo-Win32Argument {
     return $out.ToString()
 }
 
+# The encoder's own vectors, including the two the join-and-wrap form gets
+# wrong: a backslash run up to a quote, and a trailing backslash inside the
+# closing quote. Runs before any launch, on every platform.
+function Assert-Win32ArgumentEncoding {
+    $vectors = @(
+        @{ Argument = 'plain'; Encoded = 'plain' },
+        @{ Argument = ''; Encoded = '""' },
+        @{ Argument = 'a b'; Encoded = '"a b"' },
+        @{ Argument = 'a"b'; Encoded = '"a\"b"' },
+        @{ Argument = 'a\b'; Encoded = 'a\b' },
+        @{ Argument = 'a\'; Encoded = 'a\' },
+        @{ Argument = 'a \'; Encoded = '"a \\"' },
+        @{ Argument = 'a\"b'; Encoded = '"a\\\"b"' }
+    )
+    foreach ($vector in $vectors) {
+        $encoded = ConvertTo-Win32Argument $vector.Argument
+        if ($encoded -cne $vector.Encoded) {
+            throw "ConvertTo-Win32Argument of '$($vector.Argument)' encoded '$encoded', not '$($vector.Encoded)'"
+        }
+    }
+}
+Assert-Win32ArgumentEncoding
+
+# argv[0] plus the words, quoted the way CommandLineToArgvW reads them.
+function Format-Win32CommandLine {
+    param([string] $Application, [string[]] $Words)
+    $parts = @(ConvertTo-Win32Argument $Application)
+    foreach ($word in $Words) {
+        $parts += ConvertTo-Win32Argument $word
+    }
+    return ($parts -join ' ')
+}
+
 # Starts the daemon with the given words, stdout and stderr captured to
 # files under $work. Returns the process and the two file paths.
 function Start-Shekyld {
@@ -122,6 +202,49 @@ function Start-Shekyld {
     # exits before the first read, and the refusal cases exit at once.
     $null = $proc.Handle
     return @{ Proc = $proc; Out = $out; Err = $err }
+}
+
+# Starts the daemon in its own process group and returns the process.
+# The caller records it before waiting. The process id is the group id.
+# The handle is cached while CreateProcess's handle still holds the
+# process, so an exit in between cannot recycle the id. If the process
+# cannot be adopted, it is stopped before that handle is closed.
+function Start-ShekyldInNewGroup {
+    param([string[]] $Words)
+    # CreateProcessW may write into the command line, so the buffer is a
+    # StringBuilder. A .NET string can be pinned read-only by the marshaler.
+    # lpApplicationName is the executable itself, so the command line's first
+    # word is argv[0] and no path search reads it.
+    $commandLine = [System.Text.StringBuilder]::new((Format-Win32CommandLine -Application $Daemon -Words $Words))
+    $startup = New-Object ShekylSmoke.Spawn+STARTUPINFO
+    $startup.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($startup)
+    $procInfo = New-Object ShekylSmoke.Spawn+PROCESS_INFORMATION
+    # [NullString]::Value is a null LPWSTR. $null becomes "" here, and
+    # CreateProcess rejects an empty lpCurrentDirectory (ERROR_INVALID_NAME).
+    $created = [ShekylSmoke.Spawn]::CreateProcess($Daemon, $commandLine, [IntPtr]::Zero, [IntPtr]::Zero, $false,
+        $CREATE_NEW_PROCESS_GROUP, [IntPtr]::Zero, [NullString]::Value, [ref] $startup, [ref] $procInfo)
+    if (-not $created) {
+        # Captured before any other call: a later Win32 call would replace it.
+        $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "CreateProcess failed with Win32 error $errorCode"
+    }
+    $adopted = $null
+    try {
+        $opened = [System.Diagnostics.Process]::GetProcessById($procInfo.dwProcessId)
+        $null = $opened.Handle
+        $adopted = $opened
+    } finally {
+        if ($null -eq $adopted -and $procInfo.hProcess -ne [IntPtr]::Zero) {
+            [void][ShekylSmoke.Spawn]::TerminateProcess($procInfo.hProcess, $UNADOPTED_PROCESS_EXIT)
+        }
+        if ($procInfo.hThread -ne [IntPtr]::Zero) {
+            [void][ShekylSmoke.Spawn]::CloseHandle($procInfo.hThread)
+        }
+        if ($procInfo.hProcess -ne [IntPtr]::Zero) {
+            [void][ShekylSmoke.Spawn]::CloseHandle($procInfo.hProcess)
+        }
+    }
+    return $adopted
 }
 
 # Polls get_info on the admin listener. Keeps the last error, so a daemon
@@ -187,15 +310,66 @@ function Stop-OverRpc {
     Write-Host "${Label}: stopped over RPC, exit 0"
 }
 
+# The chain store and the network marker a clean stop leaves. Both stop
+# paths assert this, so one of them cannot accept an empty marker.
+function Assert-StoreKept {
+    param([string] $Data, [string] $Network, [string] $Label)
+    $storePath = Join-Path (Join-Path $Data 'lmdb') 'data.mdb'
+    $markerPath = Join-Path $Data 'shekyld.network'
+    if (-not (Test-Path -LiteralPath $storePath -PathType Leaf)) {
+        throw "$Label left no chain store at '$storePath'"
+    }
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+        throw "$Label left no network marker at '$markerPath'"
+    }
+    $marker = Get-Content -LiteralPath $markerPath -Raw
+    $networkLine = '(?m)^network = "' + [regex]::Escape($Network) + '"$'
+    if ($marker -notmatch $networkLine) {
+        throw "$Label marker does not name ${Network}:`n$marker"
+    }
+    if ($marker -notmatch '(?m)^network-id = "[0-9a-f]{32}"$') {
+        throw "$Label marker does not hold a 32-hex network id:`n$marker"
+    }
+    Write-Host "${Label}: store kept, marker names $Network and its network id"
+}
+
+# Sends CTRL_BREAK_EVENT to the process group and asserts the clean stop.
+# The process id is the group id because the launcher passed
+# CREATE_NEW_PROCESS_GROUP. The log must record the Ctrl-Break latch,
+# which is what distinguishes this stop from any other exit 0.
+function Stop-ByCtrlBreak {
+    param(
+        [System.Diagnostics.Process] $Proc,
+        [string] $Data,
+        [string] $Log,
+        [string] $Network,
+        [string] $Label
+    )
+    if (-not [ShekylSmoke.Spawn]::GenerateConsoleCtrlEvent($CTRL_BREAK_EVENT, [uint32] $Proc.Id)) {
+        $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "GenerateConsoleCtrlEvent failed with Win32 error $errorCode"
+    }
+    if (-not $Proc.WaitForExit($StopTimeoutSeconds * 1000)) {
+        throw "$Label did not exit within $StopTimeoutSeconds s of Ctrl-Break"
+    }
+    if ($Proc.ExitCode -ne 0) {
+        throw "$Label exited with status $($Proc.ExitCode) after Ctrl-Break"
+    }
+    Assert-StoreKept -Data $Data -Network $Network -Label $Label
+    $text = if (Test-Path -LiteralPath $Log) { Get-Content -LiteralPath $Log -Raw } else { '' }
+    if ($text -notmatch [regex]::Escape($CtrlBreakStopLine)) {
+        throw "$Label exited 0 without logging '$CtrlBreakStopLine'; log:`n$text"
+    }
+    Write-Host "${Label}: Ctrl-Break logged, exit 0"
+}
+
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("shekyld-smoke-" + [guid]::NewGuid().ToString('N'))
 $dataDir = Join-Path $work 'data'
 $cfgDir = Join-Path $work 'config'
 New-Item -ItemType Directory -Path $dataDir | Out-Null
 New-Item -ItemType Directory -Path $cfgDir | Out-Null
 $logFile = Join-Path $dataDir 'shekyld.log'
-$store = Join-Path (Join-Path $dataDir 'lmdb') 'data.mdb'
 $lockFile = Join-Path $dataDir 'shekyld.lock'
-$markerFile = Join-Path $dataDir 'shekyld.network'
 
 function Get-DaemonWords {
     param([string] $Network, [string] $Data, [int] $Port, [string] $Log, [string[]] $Extra = @())
@@ -231,20 +405,7 @@ try {
 
     # 3. stop, store, marker
     Stop-OverRpc -Proc $first.Proc -Port $rpcPort -Label 'first daemon'
-    if (-not (Test-Path -LiteralPath $store -PathType Leaf)) {
-        throw "no chain store at '$store'"
-    }
-    if (-not (Test-Path -LiteralPath $markerFile -PathType Leaf)) {
-        throw "no network marker at '$markerFile' after the run"
-    }
-    $marker = Get-Content -LiteralPath $markerFile -Raw
-    if ($marker -notmatch '(?m)^network = "regtest"$') {
-        throw "the marker does not name regtest:`n$marker"
-    }
-    if ($marker -notmatch '(?m)^network-id = "[0-9a-f]{32}"$') {
-        throw "the marker does not hold a 32-hex network id:`n$marker"
-    }
-    Write-Host 'marker names regtest and its network id'
+    Assert-StoreKept -Data $dataDir -Network 'regtest' -Label 'first daemon'
 
     # 4. marker: another network on the same data directory
     Assert-Refused -Words (Get-DaemonWords -Network 'testnet' -Data $dataDir -Port (New-FreePort) -Log (Join-Path $work 'testnet.log')) `
@@ -278,77 +439,15 @@ try {
         if ($attached -lt 1) {
             throw 'the Ctrl-Break case needs a console on the runner, and this process has none attached'
         }
-        Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-namespace ShekylSmoke {
-    public static class Spawn {
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        public struct STARTUPINFO {
-            public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
-            public int dwX; public int dwY; public int dwXSize; public int dwYSize;
-            public int dwXCountChars; public int dwYCountChars; public int dwFillAttribute;
-            public int dwFlags; public short wShowWindow; public short cbReserved2;
-            public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError;
-        }
-        [StructLayout(LayoutKind.Sequential)]
-        public struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        public static extern bool CreateProcess(string lpApplicationName, System.Text.StringBuilder lpCommandLine, IntPtr lpProcessAttributes,
-            IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags, IntPtr lpEnvironment,
-            string lpCurrentDirectory, ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
-        [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GenerateConsoleCtrlEvent(uint dwCtrlEvent, uint dwProcessGroupId);
-        [DllImport("kernel32.dll", SetLastError = true)] public static extern bool CloseHandle(IntPtr hObject);
-    }
-}
-'@
         $brkData = Join-Path $work 'brkdata'
         New-Item -ItemType Directory -Path $brkData | Out-Null
         $brkPort = New-FreePort
-        $brkWords = Get-DaemonWords -Network 'regtest' -Data $brkData -Port $brkPort -Log (Join-Path $brkData 'shekyld.log')
-        # The application name is given as itself, so no path search reads
-        # it off the command line; the command line still opens with it, as
-        # argv[0], then the quoted words. CreateProcessW may write into the
-        # command line, so it is a StringBuilder, not a .NET string the
-        # marshaler could pin in place.
-        $commandLineText = (ConvertTo-Win32Argument $Daemon) + ' ' + (($brkWords | ForEach-Object { ConvertTo-Win32Argument $_ }) -join ' ')
-        $commandLine = [System.Text.StringBuilder]::new($commandLineText)
-        $startup = New-Object ShekylSmoke.Spawn+STARTUPINFO
-        $startup.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($startup)
-        $procInfo = New-Object ShekylSmoke.Spawn+PROCESS_INFORMATION
-        $CREATE_NEW_PROCESS_GROUP = [uint32] 0x200
-        # [NullString]::Value for the directory, not $null: PowerShell binds
-        # $null to a .NET string parameter as "", which CreateProcess
-        # refuses with ERROR_INVALID_NAME (123). Found by the Windows
-        # agent's run of this case on 2026-10-22.
-        $created = [ShekylSmoke.Spawn]::CreateProcess($Daemon, $commandLine, [IntPtr]::Zero, [IntPtr]::Zero, $false,
-            $CREATE_NEW_PROCESS_GROUP, [IntPtr]::Zero, [NullString]::Value, [ref] $startup, [ref] $procInfo)
-        if (-not $created) {
-            throw "CreateProcess failed with Win32 error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-        }
-        [void][ShekylSmoke.Spawn]::CloseHandle($procInfo.hThread)
-        [void][ShekylSmoke.Spawn]::CloseHandle($procInfo.hProcess)
-        $brk = [System.Diagnostics.Process]::GetProcessById($procInfo.dwProcessId)
-        $null = $brk.Handle
+        $brkLog = Join-Path $brkData 'shekyld.log'
+        $brkLabel = 'daemon in its own process group'
+        $brk = Start-ShekyldInNewGroup -Words (Get-DaemonWords -Network 'regtest' -Data $brkData -Port $brkPort -Log $brkLog)
         $running.Add($brk)
-        Wait-GetInfo -Proc $brk -Port $brkPort -TimeoutSeconds $StartTimeoutSeconds -Label 'daemon in its own process group'
-        $CTRL_BREAK_EVENT = [uint32] 1
-        if (-not [ShekylSmoke.Spawn]::GenerateConsoleCtrlEvent($CTRL_BREAK_EVENT, [uint32] $procInfo.dwProcessId)) {
-            throw "GenerateConsoleCtrlEvent failed with Win32 error $([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-        }
-        if (-not $brk.WaitForExit($StopTimeoutSeconds * 1000)) {
-            throw "the daemon did not exit within $StopTimeoutSeconds s of Ctrl-Break"
-        }
-        if ($brk.ExitCode -ne 0) {
-            throw "the daemon exited with status $($brk.ExitCode) after Ctrl-Break"
-        }
-        if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $brkData 'lmdb') 'data.mdb') -PathType Leaf)) {
-            throw 'no chain store after the Ctrl-Break stop'
-        }
-        if (-not (Test-Path -LiteralPath (Join-Path $brkData 'shekyld.network') -PathType Leaf)) {
-            throw 'no network marker after the Ctrl-Break stop'
-        }
-        Write-Host 'Ctrl-Break: the daemon took its stop path, exit 0, store and marker kept'
+        Wait-GetInfo -Proc $brk -Port $brkPort -TimeoutSeconds $StartTimeoutSeconds -Label $brkLabel
+        Stop-ByCtrlBreak -Proc $brk -Data $brkData -Log $brkLog -Network 'regtest' -Label $brkLabel
     } else {
         Write-Host 'Ctrl-Break case: not run (a Windows console event)'
     }
