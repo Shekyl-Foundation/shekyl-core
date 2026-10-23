@@ -271,6 +271,10 @@ pub struct Dev {
     pub clearnet_encrypt: bool,
     /// The relay's development cover carrier.
     pub relay_cover: bool,
+    /// Serve the armed test levers (`generateblocks`, `pop_blocks`) to the
+    /// host's administrator (`RPC_CHANNEL.md` RT-O9.2; `DRS_X_STORE_FLIP.md`
+    /// DX-Q3, Q8).
+    pub rpc: bool,
     /// The RandomX seed epoch length.
     pub pow_seed_epoch_blocks: Option<u64>,
     /// The RandomX seed epoch lag.
@@ -629,6 +633,7 @@ fn dev_section(r: &mut Reader<'_>) -> Dev {
         sync,
         clearnet_encrypt: r.switch("dev-clearnet-encrypt"),
         relay_cover: r.switch("dev-relay-cover"),
+        rpc: r.switch("dev-rpc"),
         pow_seed_epoch_blocks: r.dev_integer("dev-pow-seed-epoch-blocks"),
         pow_seed_epoch_lag: r.dev_integer("dev-pow-seed-epoch-lag"),
         settlement_epoch_blocks: r.dev_integer("dev-settlement-epoch-blocks"),

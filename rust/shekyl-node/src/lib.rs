@@ -143,6 +143,9 @@ pub enum OpenError {
     /// The pinned genesis did not connect.
     #[error("genesis did not connect: {0}")]
     Genesis(String),
+    /// The ingest service did not answer at open.
+    #[error("the ingest service did not answer: {0}")]
+    Service(String),
 }
 
 /// What [`Node::open`] needs from the composition root, which holds `main`.
@@ -182,6 +185,8 @@ pub struct Node {
     /// What the board holds, as the follower last left it.
     posting: tokio::sync::watch::Receiver<Posting>,
     mining: Arc<MiningControl>,
+    /// The `dev-rpc` row: whether the armed test levers are served.
+    armed: bool,
     sockets: Sockets,
     handles: Handles,
     service: Mutex<Option<Service<ProductionSubstrate>>>,
@@ -285,6 +290,19 @@ impl Node {
                 return Err(error);
             }
         };
+        let tips = match runtime.block_on(service.watch_tip()) {
+            Ok(tips) => tips,
+            Err(error) => {
+                if let Err(stop) = runtime.block_on(service.stop()) {
+                    tracing::error!(
+                        "the tip watch did not open, and the service stopped on {stop}"
+                    );
+                }
+                runtime.shutdown(RUNTIME_SHUTDOWN);
+                return Err(OpenError::Service(error.to_string()));
+            }
+        };
+        let pool_health = service.pool_health();
         let at_open = sync_at_open(network);
         tracing::info!(
             "chain sync's state at open: {at_open:?}; the node posts a template only while it reads Synced"
@@ -304,6 +322,7 @@ impl Node {
             found,
             miner_address,
             posting.clone(),
+            pool_health,
         ));
         let started_at = facts::unix_now();
         #[cfg(test)]
@@ -328,7 +347,7 @@ impl Node {
         let handles = Handles {
             chain: Arc::new(ChainBridge::new(Arc::clone(&facts_slot))),
             pool: Arc::new(PoolBridge::new(Arc::clone(&pool_slot))),
-            door: Arc::new(DoorBridge::new(Arc::clone(&door_slot))),
+            door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips)),
             mining: Arc::clone(&mining) as _,
             bans: Arc::new(BansBridge),
             stop: Arc::new(StopBridge::new(Arc::clone(&args.request_stop))),
@@ -344,6 +363,7 @@ impl Node {
             sync,
             posting,
             mining,
+            armed: args.config.dev.rpc,
             sockets,
             handles,
             service: Mutex::new(Some(service)),
@@ -390,6 +410,14 @@ impl Node {
     #[must_use]
     pub fn mining(&self) -> Arc<MiningControl> {
         Arc::clone(&self.mining)
+    }
+
+    /// Whether the node was started with `dev-rpc`: the switch the armed
+    /// test levers are admitted under
+    /// (`shekyl_daemon_rpc::mining_methods::admit_armed`).
+    #[must_use]
+    pub const fn armed_levers(&self) -> bool {
+        self.armed
     }
 
     /// Stop the miner and the ingest service, clear the handles' slots, and
@@ -702,6 +730,240 @@ mod tests {
         assert!(node.board().posted().is_none());
     }
 
+    /// A regtest node mining to [`mining_address`] at difficulty one, with
+    /// `extra` options, once its first template is posted.
+    fn open_posted(dir: &Path, extra: &[&str]) -> Node {
+        std::fs::create_dir_all(dir).expect("dir");
+        let address = mining_address(shekyl_address::Network::Mainnet);
+        let mut args = vec!["--mine-address", address.as_str(), "--dev-difficulty", "1"];
+        args.extend(extra);
+        let config = config_on(dir, "regtest", &args);
+        let node = Node::open(OpenArgs {
+            config: &config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            request_stop: Arc::new(|| {}),
+        })
+        .expect("node");
+        let mut posting = node.posting();
+        let started = std::time::Instant::now();
+        while !matches!(*posting.borrow_and_update(), Posting::Posted(_)) {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "nothing posted: {:?}",
+                *posting.borrow()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        node
+    }
+
+    fn a_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("a runtime")
+    }
+
+    /// `get_block_template` reads the posted job (N2): eight zero bytes
+    /// at `reserved_offset`, the hashing blob is the block's, and a block
+    /// an outside miner makes by writing both nonces connects through
+    /// `submit_block`. Red edit: report the header nonce's offset as the
+    /// reserved one.
+    #[test]
+    fn a_block_made_from_the_template_connects_through_submit_block() {
+        use shekyl_daemon_rpc::mining_methods::{get_block_template, submit_block};
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_posted(dir.path(), &[]);
+        let handles = node.handles();
+        let reply = get_block_template(&*handles.mining).expect("a template");
+        assert_eq!(reply.height, 1);
+        let genesis =
+            BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
+        assert_eq!(reply.prev_hash.to_bytes(), genesis.to_bytes());
+        let mut blob = hex::decode(&reply.blocktemplate_blob).expect("hex");
+        let extra = usize::try_from(reply.reserved_offset).expect("fits");
+        assert_eq!(
+            blob[extra..extra + 8],
+            [0; 8],
+            "the extra nonce is reserved, zeroed"
+        );
+        let block = shekyl_wire::Block::from_bytes(&blob).expect("a block");
+        assert_eq!(
+            hex::decode(&reply.blockhashing_blob).expect("hex"),
+            block.pow_blob()
+        );
+        blob[extra..extra + 8].copy_from_slice(&[7; 8]);
+        let nonce = usize::try_from(reply.nonce_offset).expect("fits");
+        blob[nonce..nonce + 4].copy_from_slice(&42_u32.to_le_bytes());
+        let made = shekyl_wire::Block::from_bytes(&blob).expect("still a block");
+        assert_eq!(made.header.nonce, 42);
+        let submitted = a_runtime()
+            .block_on(submit_block(
+                &*handles.door,
+                shekyl_rpc_types::mining::SubmitBlockRequest {
+                    body: hex::encode(&blob),
+                },
+            ))
+            .expect("it connects");
+        assert_eq!(submitted.block_id.to_bytes(), made.hash().to_bytes());
+        let tip = handles.chain.chain_tip().expect("tip");
+        assert_eq!(tip.top_hash, made.hash());
+        node.stop();
+    }
+
+    /// A block listing a body the pool does not hold answers
+    /// `MissingBodies` with its index, as RW-Q3's refused-by-the-method
+    /// class. Red edit: answer every non-connect as `NotReady`.
+    #[test]
+    fn a_submitted_block_with_a_missing_body_names_its_index() {
+        use shekyl_daemon_rpc::mining_methods::{codes, get_block_template, submit_block};
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_posted(dir.path(), &[]);
+        let handles = node.handles();
+        let reply = get_block_template(&*handles.mining).expect("a template");
+        let mut block =
+            shekyl_wire::Block::from_bytes(&hex::decode(&reply.blocktemplate_blob).expect("hex"))
+                .expect("a block");
+        block
+            .transaction_hashes
+            .push(shekyl_types::TxHash::from_bytes([0x5a; 32]));
+        let refused = a_runtime()
+            .block_on(submit_block(
+                &*handles.door,
+                shekyl_rpc_types::mining::SubmitBlockRequest {
+                    body: hex::encode(block.serialize()),
+                },
+            ))
+            .expect_err("a body is missing");
+        assert_eq!(
+            refused.class,
+            shekyl_rpc_types::errors::ErrorClass::RefusedByMethod
+        );
+        assert_eq!(refused.diagnostic.code, codes::BLOCK_MISSING_BODIES);
+        assert_eq!(
+            refused.diagnostic.params,
+            vec![("indices".to_owned(), "0".to_owned())]
+        );
+        node.stop();
+    }
+
+    /// With no job posted, the template reads answer `NotReady` with the
+    /// node's reason, and `mining_status` carries the same diagnostic.
+    /// Red edit: answer a posted-nothing board with an empty template.
+    #[test]
+    fn with_no_address_the_template_reads_say_why() {
+        use shekyl_daemon_rpc::mining_methods::{
+            codes, get_block_template, get_miner_data, mining_status, start_mining,
+        };
+        use shekyl_rpc_types::errors::ErrorClass;
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_at(dir.path(), Arc::new(|| {}));
+        let mut posting = node.posting();
+        wait_for_posting(&mut posting, &Posting::Withdrawn(NoJob::NoAddress));
+        let handles = node.handles();
+        for refused in [
+            get_block_template(&*handles.mining).map(|_| ()),
+            get_miner_data(&*handles.mining).map(|_| ()),
+        ] {
+            let refused = refused.expect_err("no template");
+            assert_eq!(refused.class, ErrorClass::NotReady);
+            assert_eq!(refused.diagnostic.code, codes::NO_ADDRESS);
+        }
+        let status = mining_status(&*handles.mining).expect("status");
+        assert!(!status.active);
+        assert_eq!(
+            status.no_template.map(|why| why.code),
+            Some(codes::NO_ADDRESS.to_owned())
+        );
+        let refused = start_mining(
+            &*handles.mining,
+            shekyl_rpc_types::mining::StartMiningRequest::default(),
+        )
+        .expect_err("no address");
+        assert_eq!(refused.class, ErrorClass::RefusedByMethod);
+        assert_eq!(refused.diagnostic.code, codes::NO_ADDRESS);
+        node.stop();
+    }
+
+    /// `start_mining`, `mining_status` and `stop_mining` over the node's
+    /// mining control; a second stop is refused by the method. Red edit:
+    /// answer `stop_mining` OK whether or not the miner ran.
+    #[test]
+    fn the_miner_starts_reports_and_stops_through_the_handlers() {
+        use shekyl_daemon_rpc::mining_methods::{codes, mining_status, start_mining, stop_mining};
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_posted(dir.path(), &[]);
+        let handles = node.handles();
+        let one = shekyl_rpc_types::mining::StartMiningRequest {
+            threads: shekyl_rpc_types::mining::MinerThreads::Count(
+                std::num::NonZeroU32::new(1).expect("one"),
+            ),
+        };
+        match start_mining(&*handles.mining, one) {
+            Ok(_) => {}
+            Err(refused) if refused.diagnostic.code == codes::ONE_PERMIT => {
+                node.stop();
+                return;
+            }
+            Err(other) => panic!("the miner did not start: {other:?}"),
+        }
+        let status = mining_status(&*handles.mining).expect("status");
+        assert!(status.active);
+        assert_eq!(status.threads_count, 1);
+        assert!(status.height >= 1, "a job is posted");
+        assert!(status.no_template.is_none());
+        stop_mining(&*handles.mining).expect("it stops");
+        let again = stop_mining(&*handles.mining).expect_err("not running");
+        assert_eq!(again.diagnostic.code, codes::STOPPED);
+        node.stop();
+    }
+
+    /// `generateblocks(3)`, armed, reaches the tip plus three and stops the
+    /// miner it started; without `dev-rpc` it is refused outside the
+    /// grant (DX-Q3, Q8). Red edit: leave the miner running.
+    #[test]
+    fn generateblocks_reaches_three_more_and_is_refused_unarmed() {
+        use shekyl_daemon_rpc::mining_methods::{admit_armed, codes, generateblocks};
+        use shekyl_rpc_types::errors::ErrorClass;
+        let row = shekyl_rpc_types::methods::json_rpc("generateblocks").expect("a row");
+        let unarmed_dir = tempfile::tempdir().expect("temp");
+        let unarmed = open_posted(unarmed_dir.path(), &[]);
+        assert!(!unarmed.armed_levers());
+        let refused = admit_armed(row, unarmed.armed_levers()).expect_err("unarmed");
+        assert_eq!(refused.class, ErrorClass::OutsideTheGrant);
+        unarmed.stop();
+
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_posted(dir.path(), &["--dev-rpc"]);
+        let armed = admit_armed(row, node.armed_levers()).expect("armed");
+        let handles = node.handles();
+        let generated = a_runtime().block_on(generateblocks(
+            &*handles.mining,
+            &*handles.door,
+            &*handles.chain,
+            armed,
+            shekyl_rpc_types::mining::GenerateBlocksRequest { count: 3 },
+        ));
+        let generated = match generated {
+            Ok(generated) => generated,
+            Err(refused) if refused.diagnostic.code == codes::ONE_PERMIT => {
+                node.stop();
+                return;
+            }
+            Err(other) => panic!("generateblocks: {other:?}"),
+        };
+        assert!(
+            generated.height >= 4,
+            "genesis and three: {}",
+            generated.height
+        );
+        assert!(generated.blocks.len() >= 3);
+        assert!(!node.mining().running(), "the miner it started is stopped");
+        node.stop();
+    }
+
     /// The blocking pool has a thread for every task that can be
     /// outstanding at once (module docs, "Blocking threads"): more than the
     /// permits and the window together, so permit waiters alone never fill
@@ -876,6 +1138,9 @@ mod tests {
                 .expect("genesis reserves the extra nonce"),
             next_seed: None,
             reward: shekyl_units::AtomicUnits::ZERO,
+            median_weight: 0,
+            already_generated: shekyl_units::AtomicUnits::ZERO,
+            listed: Vec::new(),
             block,
             height: BlockHeight::from_raw(1),
             seed: BlockHash::from_bytes([1; 32]),

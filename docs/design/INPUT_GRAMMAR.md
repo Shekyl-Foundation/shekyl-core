@@ -289,6 +289,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `restricted-rpc`, `rpc-restricted-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | `rpc-view-listen` | list of endpoint, loopback only | `none` | both |  |  | R; survives RT-W10 unchanged (plaintext loopback at view, off by default, ruled 2026-10-08); the GUI sidecar passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` |
 | `rpc-access-control-origins` | `rpc-cors-origin` | list of origin | `none` | both |  |  | R; explicit web origins only, `none` is CORS default-deny; `*` is refused: a wildcard lets any page in the operator's browser read and drive the plaintext admin listener |
 | `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | `25` (inherited; IG-Q12) | both |  |  | R; one option for one value, where today three set it (IG-F1); the cutover ships the inherited 25 with a FOLLOWUPS row for the RPC lane to derive the default under the RT-O9 resource policy, the same shape as `txpool-weight-max` |
+| — | `dev-rpc` | switch | off | both |  |  | N; testnet, stagenet, regtest (IG-8, IG-Q49: never mainnet); serves the armed test levers (`generateblocks`, `pop_blocks`; RT-O9.2) to the host's administrator, refused outside the grant while off (`DRS_X_STORE_FLIP.md` DX-Q3, Q8) |
 | `disable-rpc-ban` | — | | | |  |  | – (R5; the scorer it switches has no caller, IG-F9) |
 | `rpc-response-soft-limit` | — | | | |  |  | – (response limits belong to the RPC resource policy, IG-Q12) |
 
@@ -325,7 +326,7 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
 
-**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`; 48 live names after, the four levers among them (unchanged at RT-W10: `rpc-listen` arrives and `rpc-admin-listen` becomes an X row).
+**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early` and DRS-X's `dev-rpc`; 49 live names after, the four environment levers among them (unchanged at RT-W10: `rpc-listen` arrives and `rpc-admin-listen` becomes an X row).
 
 ---
 

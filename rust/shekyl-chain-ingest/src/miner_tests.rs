@@ -92,6 +92,9 @@ fn job_for(next: &NextBlock) -> Job {
             .expect("a built coinbase reserves the extra nonce"),
         next_seed: None,
         reward: shekyl_units::AtomicUnits::ZERO,
+        median_weight: 0,
+        already_generated: shekyl_units::AtomicUnits::ZERO,
+        listed: Vec::new(),
     }
 }
 
@@ -351,6 +354,9 @@ fn a_form_takes_the_permit_the_miner_left_free() {
             .expect("a built coinbase reserves the extra nonce"),
         next_seed: None,
         reward: shekyl_units::AtomicUnits::ZERO,
+        median_weight: 0,
+        already_generated: shekyl_units::AtomicUnits::ZERO,
+        listed: Vec::new(),
         block: template,
         height: shekyl_types::BlockHeight::from_raw(1),
         seed,
@@ -427,6 +433,9 @@ fn the_miners_rate_per_worker() {
                 .expect("a built coinbase reserves the extra nonce"),
             next_seed: None,
             reward: shekyl_units::AtomicUnits::ZERO,
+            median_weight: 0,
+            already_generated: shekyl_units::AtomicUnits::ZERO,
+            listed: Vec::new(),
         });
         std::thread::sleep(RATE_WINDOW + Duration::from_secs(2));
         let status = miner.status();

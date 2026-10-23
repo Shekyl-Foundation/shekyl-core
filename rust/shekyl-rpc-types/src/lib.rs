@@ -77,6 +77,7 @@ pub mod hex128;
 pub mod identity;
 pub mod info;
 pub mod methods;
+pub mod mining;
 pub mod nullable;
 pub mod p2p;
 pub mod transactions;

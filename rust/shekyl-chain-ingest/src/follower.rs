@@ -107,6 +107,8 @@ pub enum Unbuilt {
     Pricing,
     /// The built coinbase reserves no extra nonce.
     NoNonceSlot,
+    /// The selection listed a body the pool does not show.
+    Unlisted,
     /// The tip is the last height there is.
     LastHeight,
     /// The chain's own headers refuse the next block's target.
@@ -125,6 +127,7 @@ impl core::fmt::Display for Unbuilt {
             Self::Random => "the OS random source failed",
             Self::Pricing => "the block could not be priced",
             Self::NoNonceSlot => "the coinbase reserves no extra nonce",
+            Self::Unlisted => "the selection listed a body the pool does not show",
             Self::LastHeight => "the tip is the last height there is",
             Self::TargetRefused => "the chain's own headers refuse its target",
             Self::SeedMissing => "a seed block is not on the snapshot",
@@ -620,6 +623,10 @@ impl Unposted {
             Self::Template(NoTemplate::Build(error)) => {
                 tracing::error!("no template: {error}");
                 why(Unbuilt::Pricing)
+            }
+            Self::Template(NoTemplate::Unlisted) => {
+                tracing::error!("no template: the selection listed a body the pool does not show");
+                why(Unbuilt::Unlisted)
             }
             Self::Template(NoTemplate::NoNonceSlot) => {
                 tracing::error!("no template: the coinbase reserves no extra nonce");

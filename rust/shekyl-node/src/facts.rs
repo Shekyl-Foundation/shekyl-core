@@ -9,9 +9,11 @@
 
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use shekyl_chain_ingest::service::Door;
+use shekyl_chain_ingest::service::{ArrivalTag, Door, Refusal, Reply};
+use shekyl_chain_ingest::TipChanged;
 use shekyl_chain_sync::SyncState;
 use shekyl_daemon_rpc::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
@@ -21,6 +23,7 @@ use shekyl_daemon_rpc::handles::{BansFacts, DoorFacts, PoolFacts, StopFacts};
 use shekyl_daemon_rpc::info_facts::{
     InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
 };
+use shekyl_daemon_rpc::mining_facts::{LocalOutcome, Pending};
 use shekyl_daemon_rpc::read_facts::{
     AltChainFacts, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed,
     ShardCoverage,
@@ -268,11 +271,52 @@ impl PoolFacts for PoolBridge {
 
 pub(crate) struct DoorBridge {
     door: Arc<Mutex<Option<Door>>>,
+    /// The connector's tip publications.
+    tips: tokio::sync::watch::Receiver<TipChanged>,
+    /// The tag each local offer carries, one more each time.
+    tags: AtomicU64,
 }
 
 impl DoorBridge {
-    pub(crate) fn new(door: Arc<Mutex<Option<Door>>>) -> Self {
-        Self { door }
+    pub(crate) fn new(
+        door: Arc<Mutex<Option<Door>>>,
+        tips: tokio::sync::watch::Receiver<TipChanged>,
+    ) -> Self {
+        Self {
+            door,
+            tips,
+            tags: AtomicU64::new(1),
+        }
+    }
+}
+
+/// The door's reply, as the RPC's outcome.
+fn local_outcome(reply: Reply) -> LocalOutcome {
+    match reply {
+        Reply::Connected { height, hash } => LocalOutcome::Connected { height, hash },
+        Reply::Switched { promoted, .. } => LocalOutcome::Switched {
+            height: promoted
+                .last()
+                .map_or(BlockHeight::ZERO, |(height, _)| *height),
+        },
+        Reply::Refused(verdict)
+        | Reply::PromotionRefused {
+            refused: verdict, ..
+        } => LocalOutcome::Refused {
+            rule: verdict.rule.to_string(),
+        },
+        Reply::MissingBodies { indices } => LocalOutcome::MissingBodies { indices },
+        Reply::Unlinked { .. } => LocalOutcome::Unlinked,
+        Reply::AlreadyHeld => LocalOutcome::AlreadyHeld,
+        Reply::Held { .. } => LocalOutcome::Held,
+        Reply::BeyondCap(_) => LocalOutcome::BeyondCap,
+        Reply::CannotFollow(_) => LocalOutcome::CannotFollow,
+        // A span of one arrival has no earlier block to be cancelled by.
+        Reply::Cancelled { by } => {
+            tracing::error!("a local arrival alone in its span was cancelled by {by:?}");
+            LocalOutcome::Stopped
+        }
+        Reply::Stopped => LocalOutcome::Stopped,
     }
 }
 
@@ -282,6 +326,37 @@ impl DoorFacts for DoorBridge {
             .as_ref()
             .map(Door::room)
             .ok_or(FactsFault::NotReady)
+    }
+
+    fn offer_local(&self, block: Vec<u8>) -> Pending<'_, LocalOutcome> {
+        let door = lock(&self.door).clone();
+        let tag = ArrivalTag(self.tags.fetch_add(1, Ordering::Relaxed));
+        Box::pin(async move {
+            let Some(door) = door else {
+                return Err(FactsFault::NotReady);
+            };
+            match door.offer_local(tag, block, Vec::new()).await {
+                Ok(tagged) => Ok(local_outcome(tagged.reply)),
+                Err(Refusal::Oversize) => Ok(LocalOutcome::Oversize),
+                // The entry waits out a full window; a closed one is the
+                // service stopping.
+                Err(Refusal::NoRoom | Refusal::Throttled) => Ok(LocalOutcome::Stopped),
+            }
+        })
+    }
+
+    fn tip_at_least(&self, height: BlockHeight) -> Pending<'_, ()> {
+        let mut tips = self.tips.clone();
+        Box::pin(async move {
+            tips.wait_for(|published| {
+                published
+                    .tip
+                    .is_some_and(|tip| tip.count.tip() >= Some(height))
+            })
+            .await
+            .map(|_| ())
+            .map_err(|_| FactsFault::NotReady)
+        })
     }
 }
 

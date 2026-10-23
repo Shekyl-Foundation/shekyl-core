@@ -15,7 +15,10 @@
 //! empty list (RK-D23): those are what a live, empty node reports.
 
 use std::net::IpAddr;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+
+use shekyl_rpc_types::errors::Diagnostic;
 
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
 
@@ -26,6 +29,7 @@ use crate::chain_facts::{
 use crate::info_facts::{
     InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
 };
+use crate::mining_facts::{LocalOutcome, MiningState, Pending, PostedTemplate};
 use crate::read_facts::{
     AltChainFacts, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed,
     ShardCoverage,
@@ -65,13 +69,30 @@ pub trait DoorFacts: Send + Sync {
     /// [`FactsFault::NotReady`] when no door was supplied. A closed door
     /// is `Ok(0)`: the node is up and is not accepting.
     fn room(&self) -> Result<usize, FactsFault>;
+
+    /// Offer `block` through the node's local-arrival entry (b4): wait for
+    /// the local seat, offer it, and await its one reply. Its listed
+    /// bodies come from the pool.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no door was supplied.
+    fn offer_local(&self, block: Vec<u8>) -> Pending<'_, LocalOutcome>;
+
+    /// Resolve once the tip is at `height` or above.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no door was supplied, or when the node
+    /// stops first.
+    fn tip_at_least(&self, height: BlockHeight) -> Pending<'_, ()>;
 }
 
 /// A door handle.
 pub type DoorHandle = Arc<dyn DoorFacts>;
 
-/// Mining control. PR 3b starts the miner; until then a live node reports
-/// that it is not mining, and an absent handle is not ready.
+/// Mining control and the node's posted template (N2). An absent handle
+/// is not ready.
 pub trait MiningFacts: Send + Sync {
     /// Whether this node is mining.
     ///
@@ -79,6 +100,36 @@ pub trait MiningFacts: Send + Sync {
     ///
     /// [`FactsFault::NotReady`] when no mining control was supplied.
     fn running(&self) -> Result<bool, FactsFault>;
+
+    /// The posted template, or why none is posted.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn template(&self) -> Result<Result<PostedTemplate, Diagnostic>, FactsFault>;
+
+    /// Start the built-in miner with `threads` workers, or the host's
+    /// parallelism less one. The inner error is the node's refusal.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn start(&self, threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault>;
+
+    /// Stop the built-in miner; `false` when it was not running. The node
+    /// keeps running.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn stop(&self) -> Result<bool, FactsFault>;
+
+    /// The miner, the posted job, and why none is posted.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn status(&self) -> Result<MiningState, FactsFault>;
 }
 
 /// A mining handle.
@@ -264,12 +315,36 @@ impl DoorFacts for DoorAbsent {
     fn room(&self) -> Result<usize, FactsFault> {
         Err(FactsFault::NotReady)
     }
+
+    fn offer_local(&self, _block: Vec<u8>) -> Pending<'_, LocalOutcome> {
+        Box::pin(async { Err(FactsFault::NotReady) })
+    }
+
+    fn tip_at_least(&self, _height: BlockHeight) -> Pending<'_, ()> {
+        Box::pin(async { Err(FactsFault::NotReady) })
+    }
 }
 
 struct MiningAbsent;
 
 impl MiningFacts for MiningAbsent {
     fn running(&self) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn template(&self) -> Result<Result<PostedTemplate, Diagnostic>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn start(&self, _threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn stop(&self) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn status(&self) -> Result<MiningState, FactsFault> {
         Err(FactsFault::NotReady)
     }
 }

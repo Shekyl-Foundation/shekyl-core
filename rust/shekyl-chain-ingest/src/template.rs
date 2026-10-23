@@ -42,7 +42,7 @@ use shekyl_chain_rules::{Fault, RuleSet};
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
 use shekyl_economics::{EconomicParams, EmissionError};
 use shekyl_mempool::{select_admitting, Evicted, Pool};
-use shekyl_miner::Job;
+use shekyl_miner::{Job, ListedBody};
 use shekyl_types::{AttestationRoot, BlockHash, Timestamp, TxHash};
 use shekyl_wire::tx_extra::COINBASE_NONCE_BYTES;
 use shekyl_wire::Transaction;
@@ -89,6 +89,9 @@ pub(crate) enum NoTemplate {
     Build(TemplateError),
     /// The built coinbase reserves no extra nonce: a defect in `build`.
     NoNonceSlot,
+    /// The selection listed a body the pool does not show: a defect in
+    /// `select`, which offers only shown bodies.
+    Unlisted,
 }
 
 impl From<TemplateError> for NoTemplate {
@@ -139,6 +142,7 @@ pub(crate) fn produce(
         .block_weight;
     let Listing {
         bodies: mut listed,
+        mut summaries,
         evicted,
     } = match pool {
         None => Listing::default(),
@@ -148,6 +152,7 @@ pub(crate) fn produce(
         match secrets.build(producer, &facts, &rule_set, &listed) {
             Err(TemplateError::Emission(EmissionError::BlockTooBig)) if !listed.is_empty() => {
                 listed.pop();
+                summaries.pop();
             }
             built => break built?,
         }
@@ -169,6 +174,9 @@ pub(crate) fn produce(
             offsets,
             next_seed,
             reward,
+            median_weight: facts.medians.effective_median.to_raw(),
+            already_generated: facts.parent_coins_generated,
+            listed: summaries,
         },
         transactions: template.transactions,
         block_weight: template.block_weight,
@@ -183,6 +191,8 @@ pub(crate) fn produce(
 struct Listing {
     /// In `select`'s order.
     bodies: Vec<Transaction>,
+    /// Each body's id, weight and fee, in the same order.
+    summaries: Vec<ListedBody>,
     /// After the selection.
     evicted: Vec<(TxHash, Evicted)>,
 }
@@ -212,6 +222,20 @@ fn list(
         fill.admit(weight, fee)
     })
     .map_err(NoTemplate::Selection)?;
+    let shown: std::collections::BTreeMap<TxHash, shekyl_mempool::Listed> =
+        pool.listing().collect();
+    let summaries = selected
+        .transactions
+        .iter()
+        .map(|(id, _)| {
+            shown.get(id).map(|listed| ListedBody {
+                id: *id,
+                weight: listed.weight,
+                fee: listed.fee,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(NoTemplate::Unlisted)?;
     let refused: Vec<TxHash> = selected.refused.iter().map(|(txid, _)| *txid).collect();
     let evicted = pool.evict(&refused).map_err(NoTemplate::PoolFile)?;
     let bodies = selected
@@ -219,7 +243,11 @@ fn list(
         .into_iter()
         .map(|(_, tx)| tx)
         .collect();
-    Ok(Listing { bodies, evicted })
+    Ok(Listing {
+        bodies,
+        summaries,
+        evicted,
+    })
 }
 
 /// One template's secrets: the coinbase's transaction secret and its draw

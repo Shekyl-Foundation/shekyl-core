@@ -95,6 +95,8 @@ pub mod info;
 pub mod info_facts;
 pub mod methods;
 pub mod middleware;
+pub mod mining_facts;
+pub mod mining_methods;
 pub mod options;
 pub mod read_facts;
 pub mod read_methods;

@@ -1341,6 +1341,9 @@ async fn a_block_this_node_mined_waits_for_a_seat_and_then_connects() {
             .expect("a built coinbase reserves the extra nonce"),
         next_seed: None,
         reward: shekyl_units::AtomicUnits::ZERO,
+        median_weight: 0,
+        already_generated: shekyl_units::AtomicUnits::ZERO,
+        listed: Vec::new(),
     });
     let postings = crate::follower::Postings::default();
     postings
@@ -1422,7 +1425,17 @@ fn coinbase_block() -> shekyl_wire::Block {
                 unlock_time: 0,
                 inputs: vec![Input::Gen(7)],
                 outputs: Vec::new(),
-                extra: Vec::new(),
+                // The shape every built coinbase opens with: its pubkey, the
+                // reserved extra nonce, the draw commitment.
+                extra: shekyl_wire::tx_extra::build_coinbase_extra(
+                    [0x44; 32],
+                    &[0; shekyl_wire::tx_extra::COINBASE_NONCE_BYTES],
+                    shekyl_wire::tx_extra::DrawCommitment::from_bytes([0x55; 32]),
+                    0,
+                    &[],
+                    &[],
+                )
+                .expect("a leafless coinbase extra"),
             },
             ct: Ct::Null(CtBase {
                 enc_amounts: Vec::new(),
@@ -1531,6 +1544,9 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
                         .expect("a built coinbase reserves the extra nonce"),
                     next_seed: None,
                     reward: shekyl_units::AtomicUnits::ZERO,
+                    median_weight: 0,
+                    already_generated: shekyl_units::AtomicUnits::ZERO,
+                    listed: Vec::new(),
                 });
                 assert!(sender.deliver(shekyl_miner::Found {
                     block,

@@ -811,6 +811,21 @@ pub struct PoolWiring {
     pub wall: Arc<dyn Fn() -> UnixSeconds + Send + Sync>,
 }
 
+/// Whether the pool file has faulted ([`Service::pool_health`]).
+#[derive(Clone, Debug)]
+pub struct PoolHealth {
+    wired: bool,
+    live: Arc<AtomicBool>,
+}
+
+impl PoolHealth {
+    /// A pool is wired and its file has faulted.
+    #[must_use]
+    pub fn retired(&self) -> bool {
+        self.wired && !self.live.load(Ordering::Acquire)
+    }
+}
+
 /// The running service (module docs).
 pub struct Service<S: Substrate>
 where
@@ -1014,6 +1029,16 @@ where
     #[must_use]
     pub fn pool_retired(&self) -> bool {
         self.shared.pool_retired()
+    }
+
+    /// The same reading, held apart from the service: what the node's
+    /// mining control reports after the service is gone.
+    #[must_use]
+    pub fn pool_health(&self) -> PoolHealth {
+        PoolHealth {
+            wired: self.shared.pool.is_some(),
+            live: Arc::clone(&self.shared.pool_live),
+        }
     }
 
     /// The door.
