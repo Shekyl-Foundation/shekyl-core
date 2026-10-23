@@ -11,8 +11,9 @@
 //! The chain is the slash-scan harness's (the parent module): four
 //! complete-tree personas join in epoch 0 under `SEB 100 / cap 50`, and
 //! the padding credits close shard 0 inside epoch 0. Shard 0 is closed and
-//! final from height `close + 50`, so `D(1)` is empty and `D(2)` holds the
-//! four `(P, 0)` pairs. Two of the personas release:
+//! final from height `close + 50`. A complete tree is not in `D`
+//! (`ARCHIVAL_SUPPORT_DRAW.md`), so `D(1)` and `D(2)` are empty. Two of
+//! the personas release:
 //!
 //! - slot 3 at [`FIRST_RELEASE`], inside epoch 2 — above `h_open(2)`, so the
 //!   walk for epoch 2 undoes it, and below `h_open(3)`, so epoch 3 does not
@@ -27,6 +28,10 @@
 //! One test adds a compact bond, planted before epoch 2 opens
 //! ([`compact_bond_chain`]), for the one tamper only a compact holding can
 //! show: a slash row whose shard is altered to one the walk can restore.
+//! The admission child ([`admission_chain_tests`]) plants a shard set of
+//! the witness width ([`plant_witness_shard_set`]) before the same open:
+//! that width is what this harness's schedule draws once from, at the
+//! tenth block of the epoch, and a complete tree is not in the set.
 //!
 //! The rules-side arms — the undo of each event kind, the order, the
 //! filters, a Reinstate — are `shekyl-chain-rules`' `drawable_tests.rs`, on
@@ -167,14 +172,12 @@ fn personas_of(drawable: &DrawableEpoch) -> Vec<PCanonicalId> {
 /// settled, so the walk is refused (SI-28) and is not a read the chain
 /// makes. The rows remain until the boundary after that.
 ///
-/// The sets are the ones §4.1 defines: epoch 2 holds all four personas,
-/// both releases undone; epoch 3 holds neither releasing persona — one
-/// released before its open, one in it.
+/// Both passes walk an empty set. The joins are complete trees, and a
+/// complete tree is not in `D`. The releases are still journaled, and the
+/// two derivations agree at every height.
 ///
-/// Red edits: write no journal row (the walk for epoch 2 loses slot 3 once
-/// it has released); read the journal for derivation 1 too, or not apply
-/// the open block's own Release (epoch 3 holds slot 2); undo events at
-/// `h_open` itself in the walk (epoch 3's walk restores slot 2).
+/// Red edit: admit a complete tree to `D`. Either pass's set is then the
+/// four joins, and the digests the opens wrote no longer match the walk.
 #[test]
 fn the_two_derivations_agree_at_every_height_across_releases() {
     let schedule = RULES.settlement_schedule();
@@ -591,19 +594,24 @@ fn a_walk_below_the_floor_is_refused_and_so_is_the_read() {
     chain.finish();
 }
 
-/// The persona of the compact bond [`compact_bond_chain`] plants: a slot
-/// none of the harness's joins uses.
+/// The first persona of a planted compact bond: a slot none of the
+/// harness's joins uses. [`plant_witness_shard_set`] continues from here.
 const COMPACT: u32 = 9;
 
-/// The harness chain through `h_open(2) − 1`, with one compact bond
-/// holding shard 0 planted under [`COMPACT`] before epoch 2 opens, then
-/// connected to `through`. The harness's own joins are complete trees, and
-/// a compact join needs a priced, closed and final shard at its parent
-/// (CEN-J15), which this chain has only from height 131; a planted record
-/// is the compact bond the open block then digests like any other.
-fn compact_bond_chain(label: &str, through: u64) -> SlashedChain {
-    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, h_open(2) - 1, no_draws);
-    let persona = Persona::at(COMPACT);
+/// Slots of [`plant_witness_shard_set`]: [`WITNESS_PERSONAS`] of them,
+/// from [`COMPACT`]. The harness joins occupy `0..WITNESS_PERSONAS`.
+fn witness_shard_slots() -> impl Iterator<Item = u32> {
+    let width = u32::try_from(WITNESS_PERSONAS).expect("the witness width fits a slot");
+    (0..width).map(|offset| COMPACT.checked_add(offset).expect("the planted slots fit"))
+}
+
+/// One compact bond holding shard 0, committed under `slot` outside any
+/// block journal. A later pop does not remove it. The harness's joins are
+/// complete trees, and a compact join needs a priced, closed and final
+/// shard (CEN-J15); a planted record is the compact bond an open then
+/// digests like any other.
+fn plant_compact_bond_at(chain: &mut SlashedChain, slot: u32) {
+    let persona = Persona::at(slot);
     let record = BondRecord {
         hybrid_pubkey: persona.identity(),
         bond_spend_pk: persona.bond_spend(),
@@ -626,6 +634,27 @@ fn compact_bond_chain(label: &str, through: u64) -> SlashedChain {
         Ok(())
     });
     planted.expect("planted");
+}
+
+/// The one compact bond [`compact_bond_chain`] and the count tests share.
+fn plant_compact_bond(chain: &mut SlashedChain) {
+    plant_compact_bond_at(chain, COMPACT);
+}
+
+/// [`WITNESS_PERSONAS`] compact bonds, each holding shard 0. That width is
+/// the set this harness's schedule draws once from at the tenth block of
+/// an epoch. The joins are complete trees and contribute no pair.
+fn plant_witness_shard_set(chain: &mut SlashedChain) {
+    for slot in witness_shard_slots() {
+        plant_compact_bond_at(chain, slot);
+    }
+}
+
+/// The harness chain through `h_open(2) − 1`, with [`plant_compact_bond`]
+/// applied before epoch 2 opens, then connected to `through`.
+fn compact_bond_chain(label: &str, through: u64) -> SlashedChain {
+    let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, h_open(2) - 1, no_draws);
+    plant_compact_bond(&mut chain);
     for _ in h_open(2)..=through {
         connect(&mut chain, &[]);
     }
@@ -689,8 +718,8 @@ fn slash_compact_bond(batch: &WriteBatch<'_, '_>, shard: u64) -> Result<(), Stor
 /// never a verdict on the block.
 ///
 /// Red edit: restore the row's shard without the digest comparison
-/// (report `Ok` when the walk completes), or compare only the set's length
-/// — both sets hold `D`'s other four pairs and no fifth.
+/// (report `Ok` when the walk completes). The open digested one pair, and
+/// the altered row restores none, so a length comparison does not hide it.
 #[test]
 fn a_slash_row_naming_another_shard_halts_the_settlement_as_drift() {
     let epoch = SettlementEpoch::from_raw(2);

@@ -6,10 +6,12 @@
 //! The count against the slash harness's chain (`SO-D12` increment 3).
 //!
 //! A child of `drawable_walk_tests`. The harness joins complete trees, and
-//! a complete tree is not in `D` (`ARCHIVAL_SUPPORT_DRAW.md`), so epoch 2's
-//! set is empty, nothing is admitted, and the stored rows are the empty
-//! set's composition. A warm memo, a miss, a switch, an aborted switch
-//! and a removed digest (SI-29) run on the chain the drawable-set tests build.
+//! a complete tree is not in `D` (`ARCHIVAL_SUPPORT_DRAW.md`). Each chain
+//! here plants one compact bond before epoch 2 opens, so `|D|` is 1 and
+//! the stored rows are that set's composition. Releasing the compact bond
+//! at the open changes `D`. Releasing a complete tree does not. A warm
+//! memo, a miss, a switch, an aborted switch and a removed digest (SI-29)
+//! run on that chain.
 
 use std::collections::BTreeMap;
 
@@ -26,21 +28,23 @@ use crate::codec::{BondRecord, Canonical};
 
 use super::super::super::{Popped, StoreError, StoreInvariant, WriteBatch};
 use super::super::{Listed, SlashedChain, TestErr, RULES, WITNESS_PERSONAS};
-use super::{h_open, no_draws, BONDED, FIRST};
+use super::{h_open, no_draws, plant_compact_bond, BONDED, COMPACT, FIRST};
 
-/// The count against a store chain whose joins are complete trees.
+/// The count against a store chain with one compact pair in `D`.
 ///
-/// The chain is the harness's through `h_open(2) − 1`, then eleven blocks
-/// into the epoch. `|D|` is 0: a complete tree is not in the economy set.
-/// Nothing is admitted, and the rows are that empty set's composition
-/// (`draw_horizon`, `draw_count`, the in-flight sum). A warm memo, an empty memo mid-epoch,
+/// The chain is the harness's through `h_open(2) − 1`. Epoch 1's set is
+/// empty, so the block before the open is a zero row. One compact bond is
+/// then planted, and eleven blocks run into the epoch. `|D|` is 1. Nothing
+/// is admitted, and the rows are that set's composition (`draw_horizon`,
+/// `draw_count`, the in-flight sum). A warm memo, an empty memo mid-epoch,
 /// a fresh replay, the next epoch and an aborted open write the same rows.
-/// A memo that saw the other fork's open, then a switch onto a release at
-/// the open, writes the winning chain's rows. A journal row changed after
-/// the open, and a removed digest, halt the next block. An aborted switch
-/// that then continues on the chain that stayed is
-/// [`an_aborted_switch_does_not_change_the_next_row`]: the abort and the
-/// switch here both continue on the set inserted last.
+/// A memo that saw the other fork's open, then a switch onto a release of
+/// a complete tree at the open, keeps the planted pair: a complete tree is
+/// not in `D`. A release of the compact bond at the open removes it. A
+/// journal row of the complete tree changed after the open, and a removed
+/// digest, halt the next block. An aborted switch that then continues on
+/// the chain that stayed is
+/// [`an_aborted_switch_does_not_change_the_next_row`].
 #[test]
 fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
     let open = h_open(2);
@@ -51,19 +55,16 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         BlockDraws::ZERO,
         "epoch 1's set is empty, so the block before the open is a zero row"
     );
+    plant_compact_bond(&mut chain);
 
     let reference = {
         let mut cold = None;
         connect_span(&mut chain, open, last, &mut cold)
     };
-    let composed = compose(0, open, last);
+    let composed = compose(1, open, last);
     assert_eq!(
         reference, composed,
         "the stored rows are the production composition"
-    );
-    assert!(
-        reference.iter().all(|row| *row == BlockDraws::ZERO),
-        "an empty set draws nothing"
     );
 
     pop_back(&mut chain, last - open + 1);
@@ -106,8 +107,9 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
         "an aborted open leaves the next committed rows unchanged"
     );
 
-    // The other fork opens the epoch with no release, then with one.
-    // Both opens are complete trees, so both sets are empty.
+    // The other fork opens the epoch with no release, then releases a
+    // complete tree. That release is not in `D`, so the shortfall stays
+    // the planted pair's.
     pop_back(&mut chain, 2);
     let mut switched = DrawableMemo::new();
     connect_listed(&mut chain, &[], Some(&mut switched));
@@ -142,6 +144,33 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
     assert_eq!(
         replayed, cold,
         "a fresh replay of the winning chain matches"
+    );
+
+    // Releasing the compact bond at the open removes its pair. The warm
+    // memo and a cold chain agree, and the shortfall is no longer the
+    // no-release reference.
+    pop_back(&mut chain, 2);
+    let compact = [Listed::Release {
+        slot: COMPACT,
+        bonded_total: BONDED,
+    }];
+    let mut warm_compact = DrawableMemo::new();
+    let won_compact = [
+        connect_listed(&mut chain, &compact, Some(&mut warm_compact)),
+        connect_listed(&mut chain, &[], Some(&mut warm_compact)),
+    ];
+    pop_back(&mut chain, 2);
+    let cold_compact = [
+        connect_listed(&mut chain, &compact, None),
+        connect_listed(&mut chain, &[], None),
+    ];
+    assert_eq!(
+        won_compact, cold_compact,
+        "a warm memo through the compact release matches a cold chain"
+    );
+    assert_ne!(
+        won_compact[0].shortfall, reference[0].shortfall,
+        "releasing the compact bond removes its pair from D"
     );
 
     // The release sits above the open. Its pre-image is a complete tree,
@@ -201,13 +230,13 @@ fn the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo() {
 
 /// An aborted switch inserts the other fork's set and does not adopt it.
 ///
-/// Chain A is connected through `h_open(2) + 1` with a memo. The joins are
-/// complete trees, so the memo holds the empty set. One batch then pops
-/// below A's open and connects fork B's open with a release; that set is
-/// empty too. The batch is
-/// aborted. The store stays on A. The memo keeps B's set under B's opening
-/// hash, because a memo is not undone. A's next block asks for A's hash,
-/// and its row is the reference row for that height.
+/// Chain A is connected through `h_open(2) + 1` with a memo, over the
+/// planted compact bond, so the memo holds that one pair. One batch then
+/// pops below A's open and connects fork B's open with a release of that
+/// bond, so B's set is empty. The batch is aborted. The store stays on A.
+/// The memo keeps B's set under B's opening hash, because a memo is not
+/// undone. A's next block asks for A's hash, and its row is the reference
+/// row for that height.
 ///
 /// [`the_count_on_a_non_empty_set_matches_the_composition_and_ignores_the_memo`]'s
 /// abort reconnects A's own open, and its switch continues on the winner.
@@ -220,7 +249,8 @@ fn an_aborted_switch_does_not_change_the_next_row() {
     let open = h_open(2);
     let mut chain =
         SlashedChain::build_with("count-abort-switch", WITNESS_PERSONAS, open - 1, no_draws);
-    let reference = compose(0, open, open + 2);
+    plant_compact_bond(&mut chain);
+    let reference = compose(1, open, open + 2);
     let mut memo = DrawableMemo::new();
     let committed = connect_span(&mut chain, open, open + 1, &mut Some(&mut memo));
     assert_eq!(
@@ -237,7 +267,7 @@ fn an_aborted_switch_does_not_change_the_next_row() {
         chain.grown.pop();
         chain.grown.pop();
         let release = [Listed::Release {
-            slot: FIRST,
+            slot: COMPACT,
             bonded_total: BONDED,
         }];
         let txs = chain.grown.realise(&release);
@@ -276,6 +306,7 @@ fn an_aborted_switch_does_not_change_the_next_row() {
 fn rows_from_open(label: &str, through: u64, with_memo: bool) -> Vec<BlockDraws> {
     let open = h_open(2);
     let mut chain = SlashedChain::build_with(label, WITNESS_PERSONAS, open - 1, no_draws);
+    plant_compact_bond(&mut chain);
     let mut memo = DrawableMemo::new();
     let mut slot = if with_memo { Some(&mut memo) } else { None };
     let rows = connect_span(&mut chain, open, through, &mut slot);
@@ -381,13 +412,14 @@ fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
 
 /// A bundle for the last block of epoch 1, admitted at epoch 2's open.
 /// Its index rows land in epoch 1. `issued_short` on the open stays zero,
-/// so the next block keeps epoch 2's opening shortfall, 12 on this chain
-/// (`COUNTED_DRAWS` times four pairs). The sim pins the same untouched
-/// opening shortfall at 1536 when `|D|` is 512.
+/// so the next block keeps epoch 2's opening shortfall: [`COUNTED_DRAWS`]
+/// times the one planted pair. The sim pins the same untouched opening
+/// shortfall at 1536 when `|D|` is 512.
 #[test]
 fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
     let open = h_open(2);
     let mut chain = SlashedChain::build_with("late-admit", WITNESS_PERSONAS, open - 1, no_draws);
+    plant_compact_bond(&mut chain);
     let admitted = late_bundle(open - 1);
     let memo = DrawableMemo::new();
     connect_admitting(&mut chain, &admitted, &memo);
@@ -457,11 +489,15 @@ fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
     connect_admitting(&mut chain, &admitted, &memo);
     let next = connect_listed(&mut chain, &[], None);
     assert_eq!(opened.issued_short, 0);
+    let one_pair = u64::try_from(COUNTED_DRAWS).expect("the counted draws fit");
     assert_eq!(
-        opened.shortfall, 12,
-        "epoch 2 opens at COUNTED_DRAWS times four pairs"
+        opened.shortfall, one_pair,
+        "epoch 2 opens at the planted pair"
     );
-    assert_eq!(next.shortfall, 12, "E + 1's shortfall is untouched");
+    assert_eq!(
+        next.shortfall, opened.shortfall,
+        "E + 1's shortfall is untouched"
+    );
     chain.finish();
 }
 
@@ -479,6 +515,7 @@ fn late_bundle(h: u64) -> Vec<Admitted> {
             h: BlockHeight::from_raw(h),
             seed: [0x11; 32],
             passes: PassBitmap::from_passes(2, [0, 1]).expect("two passes"),
+            support: PassBitmap::none(),
         },
         draws: vec![
             DerivedDraw {
@@ -492,6 +529,7 @@ fn late_bundle(h: u64) -> Vec<Admitted> {
                 passed: true,
             },
         ],
+        support: Vec::new(),
     }]
 }
 

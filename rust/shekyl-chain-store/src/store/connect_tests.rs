@@ -1082,8 +1082,10 @@ fn an_admission_fault_halts_at_the_admitting_block() {
             h: unrecorded,
             seed: [0x11; 32],
             passes: PassBitmap::from_passes(0, []).expect("an empty bitmap"),
+            support: PassBitmap::none(),
         },
         draws: Vec::new(),
+        support: Vec::new(),
     }];
     let memo = DrawableMemo::new();
     let out: Result<Connected, TestErr> = store.write(|batch| {
