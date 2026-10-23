@@ -1287,11 +1287,13 @@ can contain either.
   start switch, logged at every start; when armed, the levers are served to
   the host's administrator only. Never selected by nettype. `/pop_blocks`
   has three users, all served there: the regtest roll-back helper, the
-  Python framework and the CT-2 fixture generator (§6.4). *Today's defect,
-  recorded:* `inject_archival_serve_credit` is absent from
-  `RESTRICTED_METHODS`, so the restricted listener serves it, and its only
-  gate is a `FAKECHAIN` branch (`core_rpc_server.cpp:946`) — the pattern
-  rule 71 forbids.
+  Python framework and the CT-2 fixture generator (§6.4).
+  `inject_archival_serve_credit`'s row in the method table is the host's
+  and armed ([`methods.rs:135`](../../rust/shekyl-rpc-types/src/methods.rs),
+  the review of #1165), so the restricted listener refuses it; until the
+  flip routes the armed handlers, its C++ handler's only other gate is a
+  `FAKECHAIN` branch (`core_rpc_server.cpp:946`), which the flip deletes
+  with the method.
 
 *Why each `status` field is out of view.*
 
@@ -1518,11 +1520,11 @@ two. Every route they replace is a REST path today.
   zeroed or emptied (§6.1, rule 43). A secret's value is never shown, at
   any grant. No row is host-only (RT-O9.3).
 - ***From the tree:* the interim mapping, before RT-W10.** The methods
-  land on today's two listeners, before the channel exists. `option_set`
-  joins `RESTRICTED_METHODS`
-  ([`json_rpc.rs:49`](../../rust/shekyl-daemon-rpc/src/handlers/json_rpc.rs))
-  and the specified list its gate test compares against
-  (`restricted_method_list_matches_the_specification`, `json_rpc.rs:718`),
+  land on today's two listeners, before the channel exists. `option_set`'s
+  row in the method table is the host's
+  ([`methods.rs:124`](../../rust/shekyl-rpc-types/src/methods.rs)), and it
+  is in the specified list the gate test compares against
+  (`restricted_method_list_matches_the_specification`, `json_rpc.rs:751`),
   so the restricted listener refuses it. `option_show` is served on both
   listeners, and its rows are chosen through `Disclosure`
   ([`info.rs:70`](../../rust/shekyl-daemon-rpc/src/info.rs)), which already
