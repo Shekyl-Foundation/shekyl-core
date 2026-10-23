@@ -9,7 +9,7 @@
 
 use shekyl_types::archival::{
     BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, RMarket, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry,
+    SigmaWorkMilli, SlashLogEntry, SupportCount,
 };
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -41,6 +41,7 @@ use shekyl_units::AtomicUnits;
 ///     close: None,
 ///     drawable_digest: None,
 ///     draws: todo!(),
+///     support_count: todo!(),
 /// };
 /// ```
 ///
@@ -63,6 +64,10 @@ pub struct ArchivalDelta {
     /// The draw count of the connecting block. Present at every height,
     /// including a schedule with no response window, which records zeros.
     pub(super) draws: BlockDraws,
+    /// How many support draws the connecting block issued. Present at
+    /// every height. [`SupportCount::NONE`] while the schedule does not
+    /// draw support: the row is that zero, and a missing row is the hole.
+    pub(super) support_count: SupportCount,
 }
 
 impl ArchivalDelta {
@@ -165,6 +170,13 @@ impl ArchivalDelta {
     #[must_use]
     pub const fn draws(&self) -> BlockDraws {
         self.draws
+    }
+
+    /// How many support draws the connecting block issued
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Written at every height.
+    #[must_use]
+    pub const fn support_count(&self) -> SupportCount {
+        self.support_count
     }
 }
 

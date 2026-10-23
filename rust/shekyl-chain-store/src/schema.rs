@@ -904,7 +904,11 @@ tables! {
 
     /// `archival_support_block` — **Rust-only** ([`RUST_ONLY_TABLES`]);
     /// height → the [`SupportCount`] of support draws that block issued,
-    /// the width of its support bitmap. Appended last (ordinal 47).
+    /// the width of its support bitmap. Written when the block connects,
+    /// insert-once (SI-40), the zero included: a block that issued none
+    /// still has a row. A height with no row was not connected. Retired
+    /// with [`ARCHIVAL_BLOCK_DRAWS`] on the draw rows' floor (SI-34).
+    /// Ordinal 47.
     pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportCount>> =
         TableDefinition::new("archival_support_block");
 

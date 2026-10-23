@@ -62,7 +62,7 @@ use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::archival_reads::{
     self, BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
-    ServedShard, SettlementRow,
+    ServedShard, SettlementRow, SupportCount,
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -1264,6 +1264,19 @@ impl ReadSnapshot<'_> {
         floor: BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, StoreError> {
         archival_reads::block_draws(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A23.** How many support draws the block at `height` issued, or
+    /// `None` for a block no row was written for. [`SupportCount::NONE`]
+    /// is a block that issued none. A height below `floor` is SI-34, the
+    /// same window as [`Self::block_draws`].
+    pub fn support_block_count(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportCount>, StoreError> {
+        archival_reads::support_block_count(&self.txn, height, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

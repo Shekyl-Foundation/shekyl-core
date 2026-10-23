@@ -36,7 +36,7 @@ use shekyl_chain_rules::{
 };
 use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow,
+    SettlementRow, SupportCount,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -353,6 +353,15 @@ impl<'id> ChainView<'id> for SnapshotView<'_> {
         floor: BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, StoreError> {
         archival_reads::block_draws(self.snapshot.txn(), height, floor)
+            .map_err(ReadFault::into_plain)
+    }
+
+    fn support_block_count(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportCount>, StoreError> {
+        archival_reads::support_block_count(self.snapshot.txn(), height, floor)
             .map_err(ReadFault::into_plain)
     }
 

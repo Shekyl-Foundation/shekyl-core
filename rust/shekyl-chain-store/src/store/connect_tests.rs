@@ -59,8 +59,9 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     // `archival_budget_accruing` upsert 1 (DRS-E4 commit 5, every connect
     // that is not a close); the recorded PoW 1 (`block_pow`); the drawable
     // digest of epoch 0, which genesis opens, 1 (`SO-D12` increment 2);
-    // the draw row at genesis, 1 (`SO-D12` increment 3).
-    assert_eq!(connected.journaled, 17, "no pqc_auths row, no burn rows");
+    // the draw row at genesis, 1 (`SO-D12` increment 3);
+    // the support count at genesis, 1 (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+    assert_eq!(connected.journaled, 18, "no pqc_auths row, no burn rows");
 
     let miner = &block.miner_transaction;
     let miner_hash = Hash32::from(miner.hash());
@@ -288,7 +289,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .value()
         .decode()
         .expect("decodes");
-    assert_eq!(undo.0.len(), 17);
+    assert_eq!(undo.0.len(), 18);
     // Genesis opens epoch 0 and writes its drawable digest: the empty
     // set's, since no bond joins before epoch 0. A row, not an absence.
     let empty = shekyl_chain_rules::DrawableEpoch::new(
@@ -307,6 +308,12 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         )
         .expect("read"),
         Some(empty.digest())
+    );
+    assert_eq!(
+        snap.support_block_count(BlockHeight::ZERO, shekyl_chain_rules::BlockDrawsFloor::NONE,)
+            .expect("read"),
+        Some(shekyl_types::archival::SupportCount::NONE),
+        "genesis records that it issued no support draws"
     );
     // The recorded PoW (`block_pow`, layout 26): one row at genesis, under
     // the null seed CEN-D3 names below the first epoch.
@@ -384,7 +391,7 @@ fn two_blocks_in_one_batch_with_a_spend() {
     // + member) + tx_outputs) + leaf count 1 + root 1 + block 3 + hf 1 +
     // the open epoch's `archival_budget_accruing` upsert 1 (DRS-E4 commit
     // 5) + the recorded PoW 1 (`block_pow`) + the draw row 1 (`SO-D12`
-    // increment 3) = 29, plus the drain: `s` is past the unlock window, so block
+    // increment 3) + the support count 1 = 30, plus the drain: `s` is past the unlock window, so block
     // `s − W`'s coinbase matures here — one leaf (its leaf row and the two
     // position-map rows, `grow.rs` 3a), the chunk it lands in and the root
     // chunk over it (the tree's `s − W` leaves fit one chunk: two layer
@@ -393,7 +400,7 @@ fn two_blocks_in_one_batch_with_a_spend() {
     assert_eq!(drained_leaves, 1, "block s − W's coinbase alone");
     assert_eq!(layer_writes, 2, "a one-chunk tree: its chunk and the root");
     let drain_rows = 3 * drained_leaves + layer_writes + 1;
-    assert_eq!(c1.journaled, 29 + drain_rows);
+    assert_eq!(c1.journaled, 30 + drain_rows);
     // Dense store ids: one coinbase per block through the spend block
     // (tx_ids `0..=s`, output_ids likewise), then the spend (tx_id `s + 1`,
     // output_ids `s + 1`, `s + 2`); amount_index under 0 equals output_id.

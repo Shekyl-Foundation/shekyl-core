@@ -51,6 +51,9 @@
 //!   (`SO-D11`).
 //! - **A18** [`block_draws`] — what the draw's count rule recorded for one
 //!   block (`SO-D12`). `None` until a block writes it.
+//! - **A23** [`support_block_count`] — how many support draws that block
+//!   issued (`ARCHIVAL_SUPPORT_DRAW.md` §5). `None` until a block writes
+//!   it. [`SupportCount::NONE`] is a block that issued none.
 //! - **A19** [`drawable_digest`] — the digest of an epoch's drawable set as
 //!   written at its open (`SO-D10g`). `None` is no recorded set; an
 //!   all-zero digest is a digest.
@@ -129,7 +132,8 @@ use shekyl_store_codec::{BlobKind, CodecError};
 use shekyl_types::archival::SettlementOutcome;
 pub use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
-    LoggedSlash, PassCount, ReleasedRecord, ServedShard, SettlementRow, SupportIssued,
+    LoggedSlash, PassCount, ReleasedRecord, ServedShard, SettlementRow, SupportCount,
+    SupportIssued,
 };
 use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -145,7 +149,8 @@ use crate::schema::{
     ARCHIVAL_BUDGET_ACCRUING, ARCHIVAL_COMPLETE_TREES, ARCHIVAL_DRAWABLE_DIGEST,
     ARCHIVAL_ISSUED_DIGEST, ARCHIVAL_ISSUED_DRAW, ARCHIVAL_RELEASE_JOURNAL, ARCHIVAL_R_MARKET,
     ARCHIVAL_SERVE_CREDIT, ARCHIVAL_SETTLEMENT, ARCHIVAL_SIGMA_WORK, ARCHIVAL_SLASH_APPLIED,
-    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_ISSUED, ARCHIVAL_SUPPORT_SETTLEMENT,
+    ARCHIVAL_SLASH_LOG, ARCHIVAL_SUPPORT_BLOCK, ARCHIVAL_SUPPORT_ISSUED,
+    ARCHIVAL_SUPPORT_SETTLEMENT,
 };
 
 use super::chain_reads::{self, undecodable, ReadFault, ReadTables};
@@ -178,6 +183,8 @@ const SUPPORT_SETTLEMENT: &str = "archival_support_settlement";
 const ISSUED_DIGEST: &str = "archival_issued_digest";
 /// The `archival_block_draws` cell as faults name it.
 const BLOCK_DRAWS: &str = "archival_block_draws";
+/// The `archival_support_block` cell as faults name it.
+const SUPPORT_BLOCK: &str = "archival_support_block";
 /// The `archival_drawable_digest` cell as faults name it.
 const DRAWABLE_DIGEST: &str = "archival_drawable_digest";
 /// The `archival_complete_trees` cell as faults name it.
@@ -747,14 +754,11 @@ pub(super) fn served_at<T: ReadTables>(
     Ok(out)
 }
 
-/// **A18.** `archival_block_draws[height]` — what the count rule recorded
-/// for the block. `None` is a block no row was written for. A row that
-/// does not decode is SI-7.
-pub(super) fn block_draws<T: ReadTables>(
-    txn: &T,
-    height: BlockHeight,
-    floor: BlockDrawsFloor,
-) -> Result<Option<BlockDraws>, ReadFault> {
+/// SI-34: `height` is at or above the draw rows' floor, or the read is
+/// refused before the table is opened. `archival_block_draws` and
+/// `archival_support_block` share the floor. A row below it may have been
+/// retired, and reading it as absent would answer "never written".
+fn above_draws_floor(height: BlockHeight, floor: BlockDrawsFloor) -> Result<(), ReadFault> {
     if let Some(kept_from) = floor.height() {
         if height < kept_from {
             return Err(ReadFault::Invariant(
@@ -765,7 +769,33 @@ pub(super) fn block_draws<T: ReadTables>(
             ));
         }
     }
+    Ok(())
+}
+
+/// **A18.** `archival_block_draws[height]` — what the count rule recorded
+/// for the block. `None` is a block no row was written for. A row that
+/// does not decode is SI-7. A height below `floor` is SI-34.
+pub(super) fn block_draws<T: ReadTables>(
+    txn: &T,
+    height: BlockHeight,
+    floor: BlockDrawsFloor,
+) -> Result<Option<BlockDraws>, ReadFault> {
+    above_draws_floor(height, floor)?;
     chain_reads::cell(txn, ARCHIVAL_BLOCK_DRAWS, height.to_raw(), BLOCK_DRAWS)
+}
+
+/// **A23.** `archival_support_block[height]` — how many support draws the
+/// block issued. `None` is a block no row was written for.
+/// [`SupportCount::NONE`] is a block that issued none. A row that does not
+/// decode is SI-7. A height below `floor` is SI-34, the same window as
+/// [`block_draws`].
+pub(super) fn support_block_count<T: ReadTables>(
+    txn: &T,
+    height: BlockHeight,
+    floor: BlockDrawsFloor,
+) -> Result<Option<SupportCount>, ReadFault> {
+    above_draws_floor(height, floor)?;
+    chain_reads::cell(txn, ARCHIVAL_SUPPORT_BLOCK, height.to_raw(), SUPPORT_BLOCK)
 }
 
 /// **A19.** `archival_drawable_digest[epoch]` — the digest of the epoch's

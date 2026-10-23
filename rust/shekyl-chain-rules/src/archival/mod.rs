@@ -471,6 +471,9 @@ impl Transition {
             close,
             drawable_digest,
             draws,
+            // The support schedule is not on this transition, so the block
+            // issued none. The row is that zero. A missing row is the hole.
+            support_count: shekyl_types::archival::SupportCount::NONE,
         }
     }
 }

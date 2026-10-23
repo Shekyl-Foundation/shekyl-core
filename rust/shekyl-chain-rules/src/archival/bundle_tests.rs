@@ -1259,14 +1259,14 @@ fn of_two_defects_the_earlier_check_refuses() {
         invalid(BundleInvalid::Attempt { draw: 9 })
     );
 
-    // Within step 8, records in ascending `j`, each anchor before its own
-    // receipt: draw 1's bad receipt before draw 4's anchor at `h`...
+    // Every anchor before any receipt: draw 1's receipt does not verify
+    // and draw 4 is anchored at `h`. The anchor is the refusal.
     let anchored_at_h = world.record_anchored(4, 0, world.h);
     let records = [bad_receipt, anchored_at_h, world.record(9, 0)];
     let (reference, body) = world.assemble(passes.clone(), &records);
     assert_eq!(
         judge(&world, &reference, &body),
-        invalid(BundleInvalid::Receipt { draw: 1 })
+        invalid(BundleInvalid::Anchor { draw: 4 })
     );
     // ...and draw 4's anchor before draw 9's bad receipt, and before its
     // own: a record anchored at `h` whose receipt is also wrong.
@@ -1279,6 +1279,77 @@ fn of_two_defects_the_earlier_check_refuses() {
     assert_eq!(
         judge(&world, &reference, &body),
         invalid(BundleInvalid::Anchor { draw: 4 })
+    );
+}
+
+/// A support `attempt` is step 7 of the same list as the economy records.
+/// An earlier economy receipt that would not verify, and an earlier
+/// support receipt that would not verify, both lose to a later support
+/// `attempt` past `K`. Red edit: judge each support record's receipt
+/// before the next record's attempt — the refusal becomes `Receipt`.
+#[test]
+fn a_later_support_attempt_refuses_before_an_earlier_receipt() {
+    use shekyl_archival_retention::{select_support_shard, support_challenge_nonce, PassStream};
+
+    let mut world = BundleWorld::new(4);
+    let width = 64u64;
+    world.view.archive_width.insert(world.h, width);
+    let hash = fixture_block_hash(world.h);
+    let seat = |world: &BundleWorld, n: usize| SupportSeat {
+        persona: world.personas[n].persona,
+        receipt_key: world.personas[n].receipt_public_key.clone(),
+    };
+    let support_record = |world: &BundleWorld, draw: u32, attempt: u8| {
+        let persona = &world.personas[draw as usize];
+        let shard =
+            select_support_shard(&world.seed, hash.as_bytes(), &persona.persona, draw, width)
+                .expect("a non-zero archive selects");
+        let nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), draw, attempt);
+        let mut record = world.record_signed_by(
+            &persona.receipt_secret_key,
+            shard,
+            attempt,
+            world.honest_anchor(),
+            PassStream::Support,
+            &nonce,
+        );
+        if attempt < CHALLENGE_READS {
+            record.delivery_digest[0] ^= 1;
+        }
+        record
+    };
+
+    // Economy draw 1's receipt is wrong. The one support record claims a fourth read.
+    let one = vec![seat(&world, 0)];
+    world.view.support_roster.insert(world.h, one);
+    let mut economy = world.record(1, 0);
+    economy.delivery_digest[0] ^= 1;
+    let late = support_record(&world, 0, CHALLENGE_READS);
+    let (reference, body) = world.assemble_support(
+        PassBitmap::from_passes(world.count, [1]).expect("in range"),
+        PassBitmap::from_passes(1, [0]).expect("the one support bit"),
+        &[economy, late],
+    );
+    assert_eq!(
+        judge(&world, &reference, &body),
+        invalid(BundleInvalid::Attempt { draw: 0 }),
+        "the support attempt is judged with the economy records, before any receipt"
+    );
+
+    // Two support records: the first receipt is wrong, the second attempt is past K.
+    let two = vec![seat(&world, 0), seat(&world, 1)];
+    world.view.support_roster.insert(world.h, two);
+    let early = support_record(&world, 0, 0);
+    let later = support_record(&world, 1, CHALLENGE_READS);
+    let (reference, body) = world.assemble_support(
+        PassBitmap::from_passes(world.count, []).expect("no economy passes"),
+        PassBitmap::from_passes(2, [0, 1]).expect("two support bits"),
+        &[early, later],
+    );
+    assert_eq!(
+        judge(&world, &reference, &body),
+        invalid(BundleInvalid::Attempt { draw: 1 }),
+        "a later support attempt wins over an earlier support receipt"
     );
 }
 

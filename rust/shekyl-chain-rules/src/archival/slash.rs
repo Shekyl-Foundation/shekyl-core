@@ -52,7 +52,7 @@ use shekyl_archival_retention::settlement_select::{
 use shekyl_archival_retention::{
     good_through, holds_shard_at, settle_support, settlement_window_slashable,
     slash_open_interval_to_append, SupportSettlementKey, ARCHIVAL_BOND_FLOOR_ATOMIC,
-    MAX_BOND_BAD_INTERVALS, SUPPORT_SELECT_SHARD,
+    MAX_BOND_BAD_INTERVALS,
 };
 use shekyl_types::archival::{
     BondRecord, HeldShard, Holdings, IndexedDraw, IssuedDigest, IssuedDraw, SettlementOutcome,
@@ -314,10 +314,7 @@ impl super::Transition {
                 Err(_) => {
                     return Err(ViewRead::Corrupt(Corrupt::SettlementIntegrity {
                         epoch,
-                        check: SettlementCheck::PassesExceedCounted {
-                            persona,
-                            shard: ShardId::from_raw(SUPPORT_SELECT_SHARD),
-                        },
+                        check: SettlementCheck::SupportPassesExceedCounted { persona },
                     }));
                 }
             }
@@ -609,14 +606,141 @@ impl super::Transition {
 
 #[cfg(test)]
 mod support_settlement_tests {
-    use shekyl_archival_retention::{settlement_window_slashable, ARCHIVAL_BOND_FLOOR_ATOMIC};
-    use shekyl_types::archival::{
-        BondRecord, Holdings, ReceiptSignPk, SettlementOutcome, SlashedHolding, RECEIPT_SIGN_PK_LEN,
+    use core::convert::Infallible;
+
+    use shekyl_archival_retention::{
+        settlement_window_slashable, SettlementEpochBlocks, SettlementSchedule,
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
     };
-    use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
+    use shekyl_types::archival::{
+        BondRecord, Holdings, IndexedDraw, IssuedDraw, ReceiptSignPk, SettlementOutcome,
+        SlashedHolding, RECEIPT_SIGN_PK_LEN,
+    };
+    use shekyl_types::{
+        BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
+        SettlementEpoch, ShardId, TxHash,
+    };
     use shekyl_units::AtomicUnits;
 
+    use crate::harness::fixture::{recorded, root};
+    use crate::harness::{MockChain, MockView};
+    use crate::tree_growth::TreeFrontier;
+    use crate::view::{
+        AtHeight, BlockOutputs, ChainView, HeaderRecord, HeaderView, RecordedBlock,
+        RecordedWeights, Tip,
+    };
+    use crate::{EpochFloor, Settling};
+
+    use super::super::Transition;
     use super::apply_slash;
+
+    /// Two shards of one tree. Neither is the selection sentinel.
+    const TREE_SHARDS: [u64; 2] = [0, 1];
+
+    /// The support-draw index for one epoch, over a bondless chain.
+    ///
+    /// The issued-row writer is still staged. This is the read the slash
+    /// pass already makes: every other fact is the inner chain's, and
+    /// [`ChainView::support_issued`] answers `draws` for `epoch` only.
+    /// The floor check stays the store's (SI-32).
+    struct SupportIndex<'a, 'id> {
+        inner: MockView<'a, 'id>,
+        epoch: SettlementEpoch,
+        draws: Vec<IndexedDraw>,
+    }
+
+    impl<'id> HeaderView<'id> for SupportIndex<'_, 'id> {
+        type Fault = Infallible;
+
+        fn tip(&self) -> Result<Option<Tip>, Infallible> {
+            self.inner.tip()
+        }
+
+        fn header_at(&self, height: BlockHeight) -> Result<AtHeight<HeaderRecord>, Infallible> {
+            self.inner.header_at(height)
+        }
+    }
+
+    impl<'id> ChainView<'id> for SupportIndex<'_, 'id> {
+        fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, Infallible> {
+            self.inner.has_key_image(key_image)
+        }
+
+        fn total_burned(&self) -> Result<AtomicUnits, Infallible> {
+            self.inner.total_burned()
+        }
+
+        fn long_term_effective_median_at(
+            &self,
+            height: BlockHeight,
+        ) -> Result<AtHeight<LongTermWeight>, Infallible> {
+            self.inner.long_term_effective_median_at(height)
+        }
+
+        fn burned_through(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, Infallible> {
+            self.inner.burned_through(height)
+        }
+
+        fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
+            self.inner.block_at(height)
+        }
+
+        fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, Infallible> {
+            self.inner.height_of(hash)
+        }
+
+        fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
+            self.inner.root_at(height)
+        }
+
+        fn weights_window(
+            &self,
+            end: BlockHeight,
+            at_most: BlockCount,
+        ) -> Result<AtHeight<Vec<RecordedWeights>>, Infallible> {
+            self.inner.weights_window(end, at_most)
+        }
+
+        fn has_transaction(&self, hash: &TxHash) -> Result<bool, Infallible> {
+            self.inner.has_transaction(hash)
+        }
+
+        fn tree_frontier(&self) -> Result<TreeFrontier, Infallible> {
+            self.inner.tree_frontier()
+        }
+
+        fn leaf_count_at(&self, height: BlockHeight) -> Result<AtHeight<u64>, Infallible> {
+            self.inner.leaf_count_at(height)
+        }
+
+        fn outputs_at(&self, height: BlockHeight) -> Result<AtHeight<BlockOutputs>, Infallible> {
+            self.inner.outputs_at(height)
+        }
+
+        fn support_issued(
+            &self,
+            epoch: SettlementEpoch,
+            _floor: EpochFloor<Settling>,
+        ) -> Result<Vec<IndexedDraw>, Infallible> {
+            if epoch == self.epoch {
+                Ok(self.draws.clone())
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        crate::archival_reads!(delegate inner);
+    }
+
+    /// The shortest epoch that still has a response window. `W₂` is one
+    /// block, so the beacon is the block after the epoch's last and the
+    /// chain that records it is that tall.
+    fn shortest_windowed_schedule() -> SettlementSchedule {
+        let blocks =
+            SettlementEpochBlocks::new(shekyl_archival_retention::constants::W2_EPOCH_DIVISOR)
+                .expect("the response divisor is a positive schedule");
+        SettlementSchedule::new(blocks)
+    }
 
     fn tree() -> BondRecord {
         BondRecord {
@@ -666,5 +790,79 @@ mod support_settlement_tests {
         .expect("a complete tree demotes");
         assert_eq!(slash.entry.holding, SlashedHolding::CompleteTree);
         assert!(matches!(record.holdings, Holdings::ShardSet(ref held) if held.is_empty()));
+    }
+
+    /// Two shards of one tree are one support row. The economy index is
+    /// empty, so a fold that dropped the support loop, or that keyed the
+    /// row by shard, leaves this empty or issued at one. Red edit: delete
+    /// the support fold in `settle`.
+    #[test]
+    fn two_shards_of_one_tree_settle_as_one_support_row() {
+        let schedule = shortest_windowed_schedule();
+        let epoch = SettlementEpoch::from_raw(0);
+        let window = schedule
+            .challenge_response_blocks()
+            .expect("this schedule has a window");
+        let beacon_height = schedule
+            .last_block(epoch.to_raw())
+            .checked_add(window.get())
+            .expect("the beacon is one window past the epoch");
+        let connecting = BlockHeight::from_raw(
+            beacon_height
+                .checked_add(1)
+                .expect("the connecting height follows the beacon"),
+        );
+        // The slash-log window is `(k + n)` epochs. This tip is one epoch
+        // and a window, so the floor retires nothing and the empty
+        // drawable digest is the walk's.
+        let chain = (0..=beacon_height).fold(MockChain::default(), |chain, timestamp| {
+            chain.push(recorded(timestamp), root(0x11))
+        });
+        let persona = PCanonicalId::from_bytes([0x3C; 32]);
+        let issuing = BlockHeight::from_raw(
+            schedule
+                .open_height(epoch.to_raw())
+                .checked_add(1)
+                .expect("the epoch opens below its last block"),
+        );
+        let revealed_at = BlockHeight::from_raw(beacon_height);
+        // The later shard passed. Below three issued draws that is not an observation.
+        let draws: Vec<IndexedDraw> = TREE_SHARDS
+            .into_iter()
+            .enumerate()
+            .map(|(index, shard)| IndexedDraw {
+                persona,
+                shard: ShardId::from_raw(shard),
+                issuing_height: issuing,
+                draw: u32::try_from(index).expect("two draws fit a draw index"),
+                state: IssuedDraw {
+                    revealed_at,
+                    passed: index == 1,
+                },
+            })
+            .collect();
+        chain.with_view(|view| {
+            let index = SupportIndex {
+                inner: view,
+                epoch,
+                draws,
+            };
+            let mut transition = Transition::new(connecting, schedule, BlockCount::ONE);
+            transition
+                .settle(&index, epoch, &[])
+                .expect("the empty drawable set matches and the fold is a row");
+            assert!(
+                transition.settled.is_empty(),
+                "a support draw is not an economy row"
+            );
+            assert_eq!(transition.support_settled.len(), 1);
+            let row = transition
+                .support_settled
+                .get(&(epoch, persona))
+                .expect("the tree's row");
+            assert_eq!(row.issued(), 2, "both shards count toward the tree");
+            assert_eq!(row.passes(), 0, "fewer than three draws is not observed");
+            assert_eq!(row.outcome(), SettlementOutcome::NonObservation);
+        });
     }
 }

@@ -379,6 +379,14 @@ impl SupportCount {
     /// The stored width.
     pub const LEN: usize = 4;
 
+    /// A block, or a tree in an epoch, that issued none.
+    ///
+    /// The row a connect writes while the support schedule is not on the
+    /// transition. A store height that was never written is `None`, not
+    /// this value: absence is a hole, and this count is a height that
+    /// issued none.
+    pub const NONE: Self = Self(0);
+
     /// A count of `n`.
     #[must_use]
     pub const fn new(n: u32) -> Self {

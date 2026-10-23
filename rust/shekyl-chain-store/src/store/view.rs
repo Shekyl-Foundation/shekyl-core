@@ -94,7 +94,7 @@ use shekyl_chain_rules::{
 };
 use shekyl_types::archival::{
     BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount, ServedShard,
-    SettlementRow,
+    SettlementRow, SupportCount,
 };
 use shekyl_types::{
     BlockCount, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, LongTermWeight, PCanonicalId,
@@ -518,6 +518,15 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         floor: BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, StoreError> {
         archival_reads::block_draws(self.batch.txn(), height, floor).map_err(|f| self.arm(f))
+    }
+
+    fn support_block_count(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportCount>, StoreError> {
+        archival_reads::support_block_count(self.batch.txn(), height, floor)
+            .map_err(|f| self.arm(f))
     }
 
     fn drawable_digest(
