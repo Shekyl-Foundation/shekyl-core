@@ -1269,11 +1269,36 @@ This lane's increments, each its own change:
    from the journals and checked against the recorded digest on a miss
    (SI-30). The boundary retires the rows below `BlockDrawsFloor`
    (`SO-D12o`, SI-34). Layout 30.
-4. **The cutover**, after the Slice C verifier lands:
-   - implement the view trait on this lane's store;
-   - call the verifier at block admission and write its kept projection
-     into this lane's tables;
-   - flip the switch as one rule-07 cutover. The `passed` bit is set by
+4. **The cutover**, after the Slice C verifier lands. Split, as ruled
+   2026-10-21 (Q1): 4a is staged and has no consensus effect; 4c is the
+   producer, between 4a and 4b; 4b is the rule-07 switch after the DRS-X
+   flip.
+   - implement the view trait on this lane's store. The view is the
+     batch view plus the drawable memo: `D` is rules-side state, and the
+     store computes none of it. A miss is SI-35; the view does not
+     rebuild. The count phase files the previous epoch's set into that
+     memo while the connecting block is still within `W₂` of the open,
+     by the same digest-checked rebuild it uses for its own epoch. The
+     brief's contract covered a memo kept across the epoch boundary. A
+     restart inside the window leaves the memo cold. Before this filing
+     the count rebuilt only the epoch it was counting, and a bundle for
+     the previous epoch faulted SI-35. The filing is that correction;
+   - `admission_plan` builds the rows a connect journals from `Admitted`:
+     the heights revealed, the issued draws keyed `(E, P, s, h, j)` — `j`
+     the draw's place in its bundle, not its place in `D` — the digest
+     terms, and `issued_short(h_incl)`. The store journals that plan and
+     derives none of it. `issued_short(h_incl)` reduces the shortfall of
+     `D(epoch(h_incl))` only. Each same-epoch pair contributes
+     `min(room, new)`, where `room` is `COUNTED_DRAWS` minus the draws
+     already visible below `h_incl` and `new` is this block's draws of
+     the pair. A bundle for `h` in the previous epoch contributes zero.
+     Its index rows, digest terms, `revealed(h)` and passed bits are
+     issued into `epoch(h)`, and the new epoch's shortfall is untouched
+     (the sim pins that opening shortfall at 1536 when `|D|` is 512).
+     Increment 4a does not call the verifier: a connect writes the plan
+     only when it is handed bundles;
+   - flip the switch as one rule-07 cutover, calling the verifier from
+     `validate`. The `passed` bit is set by
      an admitted record and by nothing else, and the Fakechain door is
      deleted;
    - the attestation-path deletions, with the Rust CEN-B4 rule and the

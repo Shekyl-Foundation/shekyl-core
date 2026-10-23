@@ -164,19 +164,19 @@ pub mod relay_floor;
 pub use alt::{alt_against, anchor_band, AltChainView, AltValid, AnchorBand, Fork, InvertedFork};
 pub use anchors::{Anchor, ReleaseAnchors};
 pub use archival::{
-    closed_and_final, drawable_epoch_walked_back, shard_close, shard_close_height, Accrual,
-    ArchivalDelta, ClosedUniverse, DrawableDigestWrite, DrawableMemo, EpochClose, EpochGather,
-    RecordWrite, RecordWriteKind, ReleasePreImage, ServeCreditKey, Settlement, Slash,
-    WALK_BACK_EPOCHS,
+    admission_plan, closed_and_final, drawable_epoch_walked_back, shard_close, shard_close_height,
+    Accrual, AdmissionPlan, AdmissionPlanFault, ArchivalDelta, ClosedUniverse, DrawableDigestWrite,
+    DrawableMemo, EpochClose, EpochGather, EpochIssues, RecordWrite, RecordWriteKind,
+    ReleasePreImage, ServeCreditKey, Settlement, Slash, WALK_BACK_EPOCHS,
 };
 // The serve-credit bundle rule (`archival/bundle.rs`): STAGED. The
 // verifier and its view trait are exported for the lanes that wire them
 // (`SO-D12`'s cutover, DRS-E5's queue); `form` and `validate` do not call
 // them.
 pub use archival::{
-    check_section, check_section_until_switch, open_body, open_reference, verify_bundle, Admitted,
-    BundleInvalid, BundleRefused, BundleUnanswered, BundleView, DerivedDraw, SectionCharge,
-    SectionCheckFailed, SectionRefused, SectionStanding,
+    check_section, check_section_until_switch, judge_bundles, open_body, open_reference,
+    verify_bundle, AdmissionFault, Admitted, BundleInvalid, BundleRefused, BundleUnanswered,
+    BundleView, DerivedDraw, SectionCharge, SectionCheckFailed, SectionRefused, SectionStanding,
 };
 pub use block::{
     Candidate, ProvenPow, ReferenceClaim, ReferenceClaims, StructurallyValid, TxIdentity,
