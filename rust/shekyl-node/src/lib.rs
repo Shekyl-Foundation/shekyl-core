@@ -301,12 +301,13 @@ impl Node {
     ///
     /// # Panics
     ///
-    /// In an asynchronous context. [`shekyl_runtime::Pool::block_on`] and a
-    /// non-zero [`shekyl_runtime::Pool::shutdown`] wait, and Tokio refuses a
-    /// wait where blocking is not allowed: a task, or any thread that has
-    /// entered a runtime. [`Drop`] calls this, so the node must not be
-    /// dropped from that context either. Mining control stops the miner; it
-    /// does not stop or drop the node.
+    /// In an asynchronous context. Stopping waits: the pool runs the service
+    /// stop with `block_on`, then [`shekyl_runtime::Pool::shutdown`] with a
+    /// non-zero bound. Tokio refuses either wait where blocking is not
+    /// allowed: a task, or any thread that has entered a runtime. [`Drop`]
+    /// calls this, so the node must not be dropped from that context
+    /// either. Mining control stops the miner; it does not stop or drop
+    /// the node.
     pub fn stop(&self) {
         let Some(runtime) = self
             .runtime
