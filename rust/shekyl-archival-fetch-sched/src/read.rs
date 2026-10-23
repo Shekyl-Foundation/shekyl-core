@@ -196,8 +196,9 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
 
     /// Read shard `shard_id` from an assigned holder first — a challenge's
     /// named `P` — drawing others only if it fails. The assigned holder is
-    /// not drawn again. An empty drawable set still dials the assigned
-    /// holder: the challenge named it, and the urn being empty is not
+    /// dialled once and is not drawn from the economy urn or the support
+    /// urn again. An empty drawable set still dials the assigned holder:
+    /// the challenge named it, and the urn being empty is not
     /// [`ReadFailure::NoHolders`].
     ///
     /// # Errors
@@ -270,7 +271,9 @@ impl<F: ShardFacts, H: HolderSource> FetchScheduler<F, H> {
         let mut urn = Urn::new(drawn);
         let mut support_urn = Urn::new(support);
         if let Some(assigned) = assigned {
+            // Dialled as `first`. Neither urn may draw this persona again.
             urn.exclude(assigned.id);
+            support_urn.exclude(assigned.id);
         }
         let mut attempts = Vec::new();
         let mut tried = 0usize;
