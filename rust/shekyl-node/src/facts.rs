@@ -19,7 +19,7 @@ use shekyl_daemon_rpc::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
     FactsFault, FeeEstimate,
 };
-use shekyl_daemon_rpc::handles::{BansFacts, DoorFacts, PoolFacts, StopFacts};
+use shekyl_daemon_rpc::handles::{BansFacts, DoorFacts, PoolEntryFacts, PoolFacts, StopFacts};
 use shekyl_daemon_rpc::info_facts::{
     InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
 };
@@ -30,7 +30,7 @@ use shekyl_daemon_rpc::read_facts::{
 };
 use shekyl_daemon_rpc::store_facts::{NodeFacts, StoreFacts, SyncFacts};
 use shekyl_mempool::Pool;
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -258,14 +258,56 @@ impl PoolBridge {
     }
 }
 
+impl PoolBridge {
+    /// The pool, while the node holds one.
+    fn pool(&self) -> Result<Arc<Mutex<Pool>>, FactsFault> {
+        lock(&self.pool).clone().ok_or(FactsFault::NotReady)
+    }
+}
+
+/// An entry as the RPC reads it.
+fn entry_facts(entry: shekyl_mempool::Entry<'_>) -> PoolEntryFacts {
+    PoolEntryFacts {
+        id: entry.id,
+        blob: entry.tx.serialize(),
+        weight: entry.weight,
+        fee: entry.fee.to_raw(),
+        shown: entry.shown,
+        key_images: entry.key_images,
+    }
+}
+
 impl PoolFacts for PoolBridge {
     fn broadcast_count(&self) -> Result<u64, FactsFault> {
-        let slot = lock(&self.pool);
-        let Some(pool) = slot.as_ref() else {
-            return Err(FactsFault::NotReady);
-        };
-        let pool = lock(pool);
+        let pool = self.pool()?;
+        let pool = lock(&pool);
         u64::try_from(pool.listing().count()).map_err(|_| FactsFault::Internal)
+    }
+
+    fn entries(&self, scope: PoolScope) -> Result<Vec<PoolEntryFacts>, FactsFault> {
+        let pool = self.pool()?;
+        let pool = lock(&pool);
+        Ok(match scope {
+            PoolScope::Broadcast => pool.shown_entries().map(entry_facts).collect(),
+            PoolScope::WithUnbroadcast => pool.relay_view().entries().map(entry_facts).collect(),
+        })
+    }
+
+    fn flush(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
+        let pool = self.pool()?;
+        let mut pool = lock(&pool);
+        let all: Vec<TxHash>;
+        let ids = if ids.is_empty() {
+            all = pool.relay_view().entries().map(|entry| entry.id).collect();
+            &all
+        } else {
+            ids
+        };
+        let flushed = pool.flush(ids).map_err(|error| {
+            tracing::error!("flush_txpool: the pool file: {error}");
+            FactsFault::StoreUnreadable
+        })?;
+        Ok(flushed.into_iter().map(|(id, _)| id).collect())
     }
 }
 

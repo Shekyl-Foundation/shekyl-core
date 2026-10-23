@@ -80,6 +80,7 @@ pub mod methods;
 pub mod mining;
 pub mod nullable;
 pub mod p2p;
+pub mod pool;
 pub mod transactions;
 pub use archival::{
     RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,

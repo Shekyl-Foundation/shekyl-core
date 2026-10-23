@@ -81,7 +81,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
                 .expect("a snapshot");
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
             ));
@@ -148,9 +148,12 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
                 })
                 .expect("a snapshot");
             let engine = SubmitEngine::new(
-                RustPoolShim::new(chain, pool, AdmissionPolicy::GENESIS, || {
-                    UnixSeconds::from_raw(1)
-                }),
+                RustPoolShim::new(
+                    chain,
+                    std::sync::Arc::new(std::sync::Mutex::new(pool)),
+                    AdmissionPolicy::GENESIS,
+                    || UnixSeconds::from_raw(1),
+                ),
                 DaemonTxVerifier,
             );
             (
@@ -292,9 +295,12 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
                 })
                 .expect("a snapshot");
             let engine = SubmitEngine::new(
-                RustPoolShim::new(chain, pool, AdmissionPolicy::GENESIS, || {
-                    UnixSeconds::from_raw(1)
-                }),
+                RustPoolShim::new(
+                    chain,
+                    std::sync::Arc::new(std::sync::Mutex::new(pool)),
+                    AdmissionPolicy::GENESIS,
+                    || UnixSeconds::from_raw(1),
+                ),
                 DaemonTxVerifier,
             );
             listed
@@ -459,7 +465,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
                 .expect("a snapshot");
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
             ));
@@ -572,7 +578,7 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
             });
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
             ));

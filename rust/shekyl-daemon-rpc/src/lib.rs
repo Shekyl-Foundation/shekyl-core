@@ -98,6 +98,7 @@ pub mod middleware;
 pub mod mining_facts;
 pub mod mining_methods;
 pub mod options;
+pub mod pool_methods;
 pub mod read_facts;
 pub mod read_methods;
 pub mod server;

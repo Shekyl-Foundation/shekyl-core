@@ -407,6 +407,18 @@ impl Node {
         &self.sync
     }
 
+    /// The node's one pool, while it runs: what the composition root hands
+    /// the submit engine's shim (`RustPoolShim::new`), so the service and
+    /// the shim share it. `None` after stop.
+    #[must_use]
+    pub fn pool(&self) -> Option<Arc<Mutex<Pool>>> {
+        self.slots
+            .pool
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// The node's miner.
     #[must_use]
     pub fn mining(&self) -> Arc<MiningControl> {

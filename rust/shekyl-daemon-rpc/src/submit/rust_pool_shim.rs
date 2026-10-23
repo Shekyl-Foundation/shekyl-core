@@ -56,7 +56,7 @@
 //! driver takes what the pool holds unpublished, and a nudge from the
 //! engine is that driver's to wire.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use shekyl_archival_retention::{
     cold_authority_pin, BondPostKind as RetentionBondPostKind, HoldingsDescriptor,
@@ -98,7 +98,8 @@ pub trait ChainSource {
 /// The submit engine's seam over the Rust pool (module docs).
 pub struct RustPoolShim<C> {
     chain: C,
-    pool: Mutex<Pool>,
+    /// The node's one pool, shared with the ingest service (N1).
+    pool: Arc<Mutex<Pool>>,
     policy: AdmissionPolicy,
     clock: fn() -> UnixSeconds,
 }
@@ -110,13 +111,20 @@ impl<C> core::fmt::Debug for RustPoolShim<C> {
 }
 
 impl<C: ChainSource> RustPoolShim<C> {
-    /// The shim over `chain` and `pool`, admitting under `policy`, with
-    /// `clock` the wall clock an admission is stamped by.
+    /// The shim over `chain` and the node's `pool`, admitting under
+    /// `policy`, with `clock` the wall clock an admission is stamped by.
+    /// The pool is the one the ingest service holds, not a second one over
+    /// the same file.
     #[must_use]
-    pub fn new(chain: C, pool: Pool, policy: AdmissionPolicy, clock: fn() -> UnixSeconds) -> Self {
+    pub fn new(
+        chain: C,
+        pool: Arc<Mutex<Pool>>,
+        policy: AdmissionPolicy,
+        clock: fn() -> UnixSeconds,
+    ) -> Self {
         Self {
             chain,
-            pool: Mutex::new(pool),
+            pool,
             policy,
             clock,
         }

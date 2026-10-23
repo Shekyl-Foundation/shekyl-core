@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use shekyl_rpc_types::errors::Diagnostic;
 
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
+use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, TxHash};
 
 use crate::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
@@ -45,6 +45,23 @@ impl<T> ChainRead for T where T: ChainFacts + InfoFacts + ChainReadFacts {}
 /// A chain-read handle.
 pub type ChainReadHandle = Arc<dyn ChainRead>;
 
+/// One pool entry, as a listing reads it: never when it arrived (S7).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PoolEntryFacts {
+    /// Its id.
+    pub id: TxHash,
+    /// The transaction, serialized.
+    pub blob: Vec<u8>,
+    /// Its weight.
+    pub weight: u64,
+    /// Its fee, in atomic units.
+    pub fee: u64,
+    /// Whether the node shows it; `false` is its stem phase.
+    pub shown: bool,
+    /// The key images it spends.
+    pub key_images: Vec<KeyImage>,
+}
+
 /// The pool, as the RPC will read it. A live empty pool reports `0`; an
 /// absent handle does not.
 pub trait PoolFacts: Send + Sync {
@@ -54,6 +71,33 @@ pub trait PoolFacts: Send + Sync {
     ///
     /// [`FactsFault::NotReady`] when no pool was supplied.
     fn broadcast_count(&self) -> Result<u64, FactsFault>;
+
+    /// The entries `scope` may see: the shown ones, or every one for the
+    /// host's administrator (`RPC_CHANNEL.md` RT-O9.3).
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no pool was supplied.
+    fn entries(&self, scope: PoolScope) -> Result<Vec<PoolEntryFacts>, FactsFault>;
+
+    /// Remove `ids` from the pool, or every entry when `ids` is empty
+    /// (`flush_txpool`); the removed ids.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no pool was supplied;
+    /// [`FactsFault::StoreUnreadable`] when the pool file faults.
+    fn flush(&self, ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault>;
+
+    /// Offer the node's own `ids` to the relay again (`relay_tx`); the ids
+    /// offered. The relay driver is RD's; until it is wired, not ready.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] until a relay driver is supplied.
+    fn relay(&self, _ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
 }
 
 /// A pool handle.
@@ -315,6 +359,14 @@ struct PoolAbsent;
 
 impl PoolFacts for PoolAbsent {
     fn broadcast_count(&self) -> Result<u64, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn entries(&self, _scope: PoolScope) -> Result<Vec<PoolEntryFacts>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn flush(&self, _ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
         Err(FactsFault::NotReady)
     }
 }
