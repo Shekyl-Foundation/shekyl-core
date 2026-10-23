@@ -1,6 +1,6 @@
 # Daemon configuration cutover — the option surface moves to Rust
 
-**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §5.1's GUI spawn observation, §9's utilities) and the §10 carries.** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 26 is cited.
+**Status: OPEN — implemented and merged (#1088, merge `09402ea19`, 2026-10-17); open residue only: the FOLLOWUPS rows this brief owns (§2.2 step 8's parked Tor connector, §3's SOCKS credentials, §9's utilities) and the §10 carries.** Every DC-Q ruled, the grammar's Part B folded in, PR-3 merged. Rule 26 is cited.
 The input grammar is ruled and merged: Part A (#1067, merge `7cf70b7052`)
 and Part B (#1068, merge `cd1d0cc8ed`). Its rules are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc) and the
@@ -636,7 +636,7 @@ a chain.
 | [`rust/shekyl-cli/src/main.rs:524-532`](../../rust/shekyl-cli/src/main.rs) | its daemon-down message prints the daemon's network spelling | — |
 | `contrib/tor/shekyl-over-tor.sh` at `d26148535e` (deleted by commit (f1)) | passes `--detach`, retired in V3.1, so it is broken today (DC-F8); rewritten or deleted | — |
 | [`Dockerfile`](../../Dockerfile) | spelling; drops `--non-interactive` | — |
-| the GUI sidecar (`shekyl-gui-wallet`, `daemon_manager.rs`) | passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` (`INPUT_GRAMMAR.md` §5); a PR in that repository, merged with the cutover | — |
+| the GUI sidecar (`shekyl-gui-wallet`, `daemon_manager.rs`) | passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` (`INPUT_GRAMMAR.md` §5); a PR in that repository, merged with the cutover | Observed on Windows, 2026-10-22 (the Windows agent; DC-Q8's falsifier run): the GUI at `shekyl-gui-wallet` dev `479fa1e`, built against this repository's dev `11f8fd1f0`, spawned its bundled `shekyld` with exactly `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port> --data-dir <dir>` (`--data-dir` its own word, no `--non-interactive`, no network word), the daemon announced that configuration with `rpc-admin-listen=none (cli)` and `rpc-view-listen` from the command line, listened on the view port and the P2P port only, and `get_info` answered from the view listener 2.6 s after the spawn. What the run surfaced beyond this brief's question is the GUI lane's and the Tor lane's: the GUI bundle carries no Tor, so the sidecar boots clearnet-only with a WARN the GUI discards; the GUI stops the daemon with `taskkill /F`, not the Ctrl-Break stop path; and with no network word the sidecar is a mainnet node with a P2P listener on `0.0.0.0:11021` |
 | `shekyl-dev`: configuration examples, unit files, the stressnet playbook, the Foundation seed recipe (roles only, rule 37) | TOML files at the system path; an explicit `in-peers` goes; a change in that repository under its own authorisation | — |
 
 ### 5.2 Gates
@@ -861,7 +861,6 @@ chain-sync lanes do not touch the option surface.
 | DC-F1, the genesis-at-open check on a store's contents (no longer a blocker) | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) |
 | DC-N2, the console moves to `shekyl-cli` | RT-15, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the blockchain utilities' option sets | IG Part B; this brief §9 |
-| the GUI sidecar's arguments | this brief §5.1; the GUI repository |
 | the inherited default of `txpool-weight-max` (IG-Q11) | [`DRS_E5_POOL_ALT_PRUNE.md`](DRS_E5_POOL_ALT_PRUNE.md), the pool's live document |
 | the inherited default of `rpc-connections-max` (IG-Q12) | RT-O9.4, [`RPC_CHANNEL.md`](RPC_CHANNEL.md) |
 | the `removed_flags` shim sunset | this brief §4; the row leaves with the files |
