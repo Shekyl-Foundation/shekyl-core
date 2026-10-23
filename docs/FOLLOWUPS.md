@@ -169,7 +169,7 @@ Default. Lands before genesis if it should exist at launch.
   - Owner: [`ECONOMICS_SIM_PRODUCTION_REBASE.md`](design/ECONOMICS_SIM_PRODUCTION_REBASE.md) §6, Appendix B
   - Target: pre-genesis
 
-- **Partial-miss weight for a complete-tree support role.** The slash the support PR builds is 11-of-13 over epoch observations, an epoch missing when any of its `c` draws fails (`ARCHIVAL_SUPPORT_DRAW.md` §3). Still open: weighting how many of those draws failed, and whether a per-draw drop rate is an outage (§4). Triggered after EUP-4. Falsifier: §4's partial-miss weight or drop rate `q` is ruled, and a scenario matches the rates written there before it runs.
+- **Whether a complete-tree support role must see a hole the 2-of-3 misses.** The support PR settles the tree through `settle_pair`: three counted draws, Served at two passes, 11 Missed epochs to slash (`ARCHIVAL_SUPPORT_DRAW.md` §3). At a per-draw failure rate of 0.25 the chance of a slash in one window is about `10^{-7}` (§4). Whether that is enough is open. Triggered after EUP-4. Falsifier: the question is ruled, and any new rate is written before the scenario that measures it.
   - Owner: [`ARCHIVAL_SUPPORT_DRAW.md`](design/ARCHIVAL_SUPPORT_DRAW.md)
   - Target: pre-genesis
 

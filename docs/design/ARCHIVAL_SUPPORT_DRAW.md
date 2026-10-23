@@ -1,9 +1,9 @@
 # CompleteTree support draws — Round 0
 
-**Status: OPEN — Round 0, amended 2026-10-22 on review of `7632f2e3f`.**
-No code in this round. Ground: `dev` at `11f8fd1f0`. The PR builds §3.
-What stays **TABLED** until after EUP-4 is §4: weighting a partial miss,
-and the per-draw drop rate `q`.
+**Status: OPEN — Round 0, amended 2026-10-22 after reading `settle_pair`.**
+No code in this round. Ground: `dev` at `11f8fd1f0`. The PR builds §3,
+the settlement every pair already uses. What stays **TABLED** until
+after EUP-4 is §4: whether a hole that 2-of-3 cannot see needs more.
 
 A complete tree is a support role. It is challenged and slashable. Its
 draws are not the economy's. This round names the stream, the schedule,
@@ -45,32 +45,35 @@ bits (`bundle.rs` `PassBitmap`). The receipt signs
 
 ## 2. Schedule — for ruling
 
-**Recommended `c` = 413** support draws per complete-tree persona per
-epoch. §3 is where that number is derived. The PR does not retune
-`FAILURE_WINDOW_M` / `N`.
+**Recommended `c` = 10.** §3 derives it. It is the smallest count that
+keeps the chance of fewer than three issued draws under `10^{-6}` when
+one scheduled block in ten is never revealed. The PR does not retune
+`FAILURE_WINDOW_M` / `N`, `COUNTED_DRAWS`, or `SERVE_THRESHOLD_PASSES`.
 
 Constants at this pin: `SEB = 10_000`, `W₂ = 500`
 (`CHALLENGE_RESPONSE_BLOCKS`). The usable span is `SEB − W₂ = 9_500`,
-the same late bound `draw_horizon` uses after `0.7 · SEB`. Block time
-is `T_SECONDS = 120`.
+the late bound `draw_horizon` already uses. Block time is
+`T_SECONDS = 120`.
 
-**The schedule.** For persona `P` in epoch `E`, draw `i` of the `c`
-(`i` from 0) is issued at epoch-relative height
+**The schedule.** Persona `P` has a phase
 
 ```text
-r_i = floor(i · (SEB − W₂) / c) = floor(i · 9_500 / c)
+offset(P) = LE64(P_id[0..8]) mod (SEB − W₂)
 ```
 
-One draw per tree per chosen block. At `c = 413` the spacing is
-`9_500 / 413 = 23.00` blocks. The last height is
-`floor(412 · 9_500 / 413) = 9_476`. Its response window ends at
-`9_476 + 500 = 9_976`, inside the epoch. Records-was, the first draft:
-all `c` draws sat in `r ∈ [0, 7_000)`, and the last window closed at
-7,483, leaving about 2,517 blocks of every epoch with no support draw
-that could land.
+Draw `i` of the `c` (`i` from 0) is issued at epoch-relative height
 
-The heights are public. The shard a draw selects is not. Spreading
-across `SEB − W₂` is what removes the gap a tree could step around.
+```text
+r_i = (offset(P) + floor(i · (SEB − W₂) / c)) mod (SEB − W₂)
+```
+
+One draw per tree per chosen block. At `c = 10` the spacing is 950
+blocks. Every `r_i` is in `0 .. 9_500`, so the response window ends at
+or before block 9,999, inside the epoch. The phase is what keeps ten
+trees from stacking their records on the same ten blocks: two personas
+share a block only when their offsets land on it.
+
+The heights are public. The shard a draw selects is not.
 
 The cSHAKE input is `seed ‖ block_hash(h) ‖ persona ‖ j_le[4] ‖
 attempt_le[4]`, customization `shekyl/archival-support-draw-v1`.
@@ -91,137 +94,126 @@ keeping up, a skipped block is filled later in the same epoch and the
 tree is issued `c`. An issued draw that goes unanswered does not
 return to this counter. It is one observation in §3.
 
-## 3. Slash — what the PR builds
+## 3. Settlement — what the PR builds
 
-The predicate is the economy's. `failure_window_slashable` is unchanged:
-at least `FAILURE_WINDOW_M = 11` misses in at most
-`FAILURE_WINDOW_N = 13` observations. No new `m` or `n`.
+A complete tree uses the slash mechanics every pair already uses. No
+epoch rule of its own. Read at this pin:
+`settle_pair` (`settlement_select.rs`) and `SettlementRow::settle`
+(`shekyl-types` `settlement.rs`).
 
-The observation is the epoch, not the draw. The epoch is a pass when
-every one of its `c` issued support draws passed. It is a miss when any
-issued draw failed. A slash demotes through the existing
-`SlashedHolding::CompleteTree` path. `drawable.rs` `unslashed` stays
-the undo.
+1. The unit's issued draws in the epoch are taken in `(h, j)` order.
+2. Fewer than `COUNTED_DRAWS` (3) issued: the outcome is
+   NonObservation, which is not a miss. No draws issued: no row, and
+   absence is not a miss.
+3. Otherwise `select_counted` picks three of the issued draws,
+   uniformly without replacement, from the beacon
+   `shekyl/archival-settlement-select-v1`. A pass on a draw that was
+   not selected does not count.
+4. The outcome is Served at `SERVE_THRESHOLD_PASSES` (2) or more passes
+   of those three, and Missed at 1 or 0.
+5. `failure_window_slashable` slashes at 11 Missed observations in a
+   window of 13. It passes over NonObservation and over an absent row.
 
-A draw the producer never revealed is not a miss. The economy's rule is
-the same (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §1.6, `SCS-P15`): a block with
-no bundle by `h + W₂` issues nothing, and nobody asserts a miss. Those
-support draws return to the unissued counter in §2. The failure window
-already passes over a NonObservation (`slash.rs`).
+A slash demotes through `SlashedHolding::CompleteTree`. `unslashed`
+stays the undo.
 
-**Why the observation is the epoch.** A tree missing a fraction `f` of
-the archive fails each draw with probability `f`. At `f = 0.01`, eleven
-failures in thirteen consecutive draws has probability `7.7 × 10⁻²¹`.
-A per-draw 11-of-13 never slashes that tree. It only slashes a total
-outage measured in draw-spacings. Records-was, the first draft of this
-section, which used that unit. The epoch observation is the existing
-predicate applied where the economy already applies it.
+**Each support draw selects its own shard**, uniformly from
+`0..final_count` (Rick, 2026-10-22). The settlement row is **per tree
+per epoch**, not per `(tree, shard)`. It gathers every support draw
+issued to that tree in the epoch, whichever shards they hit, and
+`select_counted` picks three of that list. With draws spread over
+`final_count` shards, a row keyed `(tree, shard)` would almost never
+reach three issued draws, every row would settle NonObservation, and
+the tree could not be slashed. That key is rejected.
 
-**`c` = 413** is the smallest integer at which a tree missing at least
-1% is slashed inside one window of 13 epoch-observations with
-probability at least `0.999`. The table is §4. A live complete tree
-(`f = 0`) fails no draw, so the false-slash rate on it is 0. A total
-outage of `d` epochs is `d` misses and slashes at `d ≥ 11`, which is
-the economy's threshold on epoch-observations.
+`select_counted`'s beacon preimage includes a shard. The support call
+passes `ShardId::from_raw(u64::MAX)`, which is not a closed shard, so
+the preimage does not alias an economy pair. The function is otherwise
+unchanged. The three positions it returns are almost always three
+different shards, because the list's members were drawn independently.
 
-**Retry, so a single draw's window is not the slash threshold.** The
-producer uses the economy's `CHALLENGE_READS = 3` inside `W₂`
-(`secret_draw.rs`). A draw is a miss only when the admitted bundle
-carries no receipt for it after those reads. Covering one draw therefore
-takes the outage across the reads the producer made inside that draw's
-`W₂`, not across the spacing between draws. Under this section that
-duration is not the slash line. Eleven epoch-observations are.
+**Store layout.** Two new tables. `SCHEMA_VERSION` (30 at this pin)
+bumps because both are stored bytes.
+
+| Table | Key | Value |
+| --- | --- | --- |
+| `archival_support_issued` | `(epoch, persona, h, j)`: `BE64(epoch) ‖ P_id ‖ BE64(h) ‖ BE32(j)` | the selected shard, `BE64`, and the pass bit. Epoch-major so one tree's epoch is one range, in `(h, j)` order |
+| `archival_support_settlement` | `(persona, epoch)`: `P_id ‖ BE64(epoch)` | a `SettlementRow`, the same 3 bytes (`outcome`, `passes`, `issued`) |
+
+The economy's `archival_settlement` key stays `(persona, shard, epoch)`.
+Support rows do not go in it.
+
+**`c`.** Only three issued draws are counted. `c` exists so the epoch
+still has three after some producers file nothing. Model, stated
+because it is not a measurement: each scheduled block is revealed
+independently, and the non-filing rate is `α = 0.10` (one block in ten
+has no admitted bundle). Issued count is `Binomial(c, 0.9)`. The bound
+is `P(issued < 3) ≤ 10^{-6}`.
+
+| `c` | `P(issued < 3)` at `α = 0.10` |
+| --- | --- |
+| 8 | `2.3 × 10^{-5}` |
+| 9 | `3.0 × 10^{-6}` |
+| 10 | `3.7 × 10^{-7}` |
+
+**`c` = 10** is the smallest integer under that bound. At `α = 0.20`
+the same bound needs `c = 14`. The 0.10 rate is the one this round
+recommends; the 0.20 row is what a worse filing rate would cost.
+
+A draw the producer never revealed is not a miss (`SCS-P15`). It
+returns to the unissued counter. An admitted bundle with the support
+bit clear is a miss on that draw, and it counts only if `select_counted`
+picks it.
+
+The producer uses `CHALLENGE_READS = 3` inside `W₂`, the same retry as
+an economy draw. A draw is unanswered when the admitted bundle has no
+receipt after those reads.
 
 A passed support draw writes no serve credit, adds nothing to
 `Σwork`, and does not change `R_market`.
 
-## 4. What stays tabled
+## 4. What the 2-of-3 cannot see — TABLED
 
-**TABLED 2026-10-22, narrowed on review.** §3 is the rule the PR
-builds. Still unruled, and not built, until after EUP-4: weighting a
-partial miss inside an epoch, and treating a per-draw drop rate `q` as
-an outage. The row is in `docs/FOLLOWUPS.md`, owned by this document.
-The rates below are the ones §3 is built from. They are not a second
-rule.
+**TABLED 2026-10-22.** Not built. The row is in `docs/FOLLOWUPS.md`,
+owned by this document, triggered after EUP-4.
 
-A complete tree claims every shard, so a draw that fails while the
-tree is answering is evidence it lacks that shard. The model used
-here, stated so the rates can be checked:
+Each issued draw fails independently with probability `x` (a missing
+fraction, or a hostile producer's share of the blocks). `settle_pair`
+then misses the epoch with probability `3x² − 2x³`: zero or one pass
+among the three the beacon selected. Eleven such epochs in a window of
+13 are the slash.
 
-- The tree is up, or it is in a total outage. A total outage of `d`
-  epochs fails every support draw in those epochs and no others.
-- While up, each draw fails independently with probability `f`, the
-  fraction of the archive it does not hold. `f = 0` is a complete
-  tree.
-- "High probability" in the recommendation is `0.999`, on one window
-  of 13 epoch-observations.
-- The economy's false-slash comparison is the same 11-of-13 predicate
-  on epoch-observations: a total outage slashes only when `d ≥ 11`.
-
-**Option (a) — strict, epoch observation.** One epoch-observation is a
-miss when any of the epoch's `c` draws fails, and a pass when all `c`
-pass. The window is the existing 11-of-13 on those epoch-observations.
-Demotion is `SlashedHolding::CompleteTree`.
-
-`P(epoch miss | f) = 1 − (1 − f)^c`.
-`P(slash in one window) = P(Binomial(13, p) ≥ 11)` with that `p`.
-
-At `f = 0.01`:
-
-| `c` | `P(epoch miss)` | `P(slash in the window)` |
+| `x` | `P(epoch Missed)` | `P(slash in one 13-epoch window)` |
 | --- | --- | --- |
-| 400 | 0.982 | 0.9986 |
-| 412 | 0.984 | 0.99898 |
-| 413 | 0.984 | 0.99901 |
-| 459 | 0.990 | 0.99974 |
+| 0.01 | `3.0 × 10^{-4}` | `1.3 × 10^{-37}` |
+| 0.25 | 0.156 | `7.8 × 10^{-8}` |
+| 1/3 | 0.259 | `1.6 × 10^{-5}` |
+| 0.60 | 0.648 | 0.11 |
+| 0.80 | 0.896 | 0.85 |
+| 1 (outage) | 1 | 1, at 11 epochs |
 
-**Recommended `c` for this option: 413**, the smallest integer at
-which a tree missing at least 1% is slashed inside one window with
-probability at least `0.999`.
-
-False slash under the outage model: the epoch is a miss only when its
-draws fail. A total outage of `d` epochs is `d` misses. The window
-slashes at `d ≥ 11` and not before. That is the economy's predicate
-on epoch-observations. An honest tree (`f = 0`) that stays up fails
-no draw, so this arm's false-slash rate on a live tree is 0.
-
-A per-draw loss that is not a missing shard (a drop probability `q`
-while the tree holds everything) is outside that model. At `q = 0.001`
-and `c = 413`, `P(epoch miss) = 0.338` and `P(slash)` on one window is
-`0.00025`. At `q = 0.001` and `c = 688` it rises to about `0.011`.
-The recommendation does not treat that drop rate as the outage.
-
-**Option (b) — tolerant miss rate.** Slash when the miss rate over the
-window's `13 · c` raw draws exceeds a threshold `τ`.
-
-A threshold that sees `f = 0.01` sits at or below `0.01`. A one-epoch
-total outage is a miss rate of `1/13 ≈ 0.077`, which is already above
-any such `τ`, so (b) slashes an outage the economy's 11-of-13 does
-not. A threshold high enough to forgive a 10-epoch outage sits above
-`10/13`, and a 1% hole never reaches it. (b) does not meet both bars
-with one threshold on raw draws.
-
-**(a) is §3.** What stays tabled is option (b), and the per-draw drop
-rate `q` in the paragraph above. Weighting how many of the `c` draws
-failed inside an epoch is the same deferral. Those are not a retune
-of §3.
+A hole small enough that the counted three usually pass is invisible.
+At `x = 0.25`, `P(slash)` is about `10^{-7}`. A dead tree (`x = 1`)
+and a grossly hollow one (`x = 0.80`) are what this window slashes.
+Whether the support role needs to see a smaller hole is the question
+after EUP-4. No new slash rule is in this round.
 
 ## 5. Bundle and verifier — consensus, named
 
 A draw is `(stream, h, j)`. `stream` is economy or support. `j` is the
 index within that stream at `h`.
 
-The request `P` sees stays the 72-byte header. Spec §1.2: `P` cannot
-tell a challenge from any other read, and a visible stream byte would
-mark the support draws. The stream is covered because it is an input to
-the nonce, and the nonce is inside the signed transcript
-(`pass_countersignature_message`). A signature over economy `(h, j)`
-was made under `CHALLENGE_NONCE_CUSTOMIZATION`. Checked as support
-`(h, j)` it is checked under
-`shekyl/archival-support-challenge-nonce-v1`, the nonce bytes differ,
-and the signature fails. The red edit is one customization string for
-both. The bundle's bitmap is what tells the verifier which string to
-recompute.
+The signed transcript gains one stream byte. Today it is
+`nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id ‖ delivery_digest`,
+112 bytes (`pass_countersignature_message`). It becomes
+`stream[1] ‖` those fields, 113 bytes.
+`PASS_COUNTERSIGNATURE_MESSAGE_LEN` moves with it. Both scheme 1 and
+scheme 3 sign that transcript. A signature over economy `(h, j)` does
+not verify as support `(h, j)`: the byte differs, and the nonce was
+derived under a different label. The red edit is dropping the stream
+byte from the transcript. The request carries the byte because `P`
+signs the bytes it sees. The role is identifiable as a full-archive
+server; the byte does not add a second identity.
 
 The selection label is `shekyl/archival-support-draw-v1`, registered in
 `CRYPTO_DOMAIN_REGISTRY.tsv` in the implementation PR, next to the
@@ -256,16 +248,17 @@ is archival content in the shard domain (`SCS-P38`, spec §7.6), and
 
 Each passed support draw is one record, `BUNDLE_RECORD_LEN = 1,397`
 bytes. The schedule puts at most one support draw per tree on a block,
-so one bundle grows by at most `N · 1,397` bytes for `N` complete trees
-that all pass. An unanswered draw sets no bit and adds no record. At
-`c = 413`, a tree that passes every draw adds `413 · 1,397 = 576,961`
-bytes (577 KB) to the epoch's shard domain.
+so one bundle grows by at most `N · 1,397` bytes when `N` trees
+pass a draw on that block. The phase in §2 is what keeps that from
+being every tree on the same blocks. An unanswered draw sets no bit
+and adds no record. At `c = 10`, a tree that passes every draw adds
+`10 · 1,397 = 13,970` bytes to the epoch's shard domain.
 
-| Trees | Added to one bundle, all passing | Added across the epoch |
+| Trees | One bundle if every tree passes on it | Across the epoch, all draws passed |
 | --- | --- | --- |
-| 1 | 1,397 bytes | 577 KB |
-| 10 | 13,970 bytes | 5.77 MB |
-| 100 | 139,700 bytes | 57.7 MB |
+| 1 | 1,397 bytes | 14.0 KB |
+| 10 | 13,970 bytes | 140 KB |
+| 100 | 139,700 bytes | 1.40 MB |
 
 That per-bundle term is the support stream's input to `SCS-P38`'s
 maximum object, beside the economy bundle at the count cap. There is
@@ -371,11 +364,12 @@ is still open.
   `shekyl-staking-sim` does not call `draw_target` or `emit`.
   `proxy.rs` prices a complete tree as one floor at risk, not as
   members of `D`. No economy figure in either sim moves.
-- For `c = 413` and `f = 0.01`, `P(slash in one 13-epoch window) =
-  0.99901` under §3. False slash on a live complete tree is 0. A total
-  outage slashes at `d ≥ 11` epochs and not before. These are computed
-  here, before the scenario test. The scenario test is the
-  implementation PR's.
+- At `c = 10` and non-filing rate `α = 0.10`, `P(issued < 3) =
+  3.7 × 10^{-7}`. A draw that fails with probability `x = 0.01` then
+  misses the epoch with probability `3.0 × 10^{-4}`, and the 11-of-13
+  window slashes with probability `1.3 × 10^{-37}`. At `x = 1` the
+  window slashes at 11 epochs. These are computed here, before any
+  scenario test.
 
 ## 10. Tests the implementation PR owes
 
@@ -398,18 +392,19 @@ Each names the edit that turns it red.
   values of `final_count`.
 - An unanswered support draw leaves economy `u`, the cap, and
   `issued_short` unchanged. Red: add it to `u`.
-- Slash: eleven epoch-observations that each contain a failed issued
-  draw demote through `SlashedHolding::CompleteTree`. Ten do not. A
-  block with no admitted bundle does not add a miss. A tree missing
-  1% of the archive, at `c = 413`, is demoted inside one window at the
-  rate in §3. Red: count one observation per draw instead of per epoch.
+- Slash: the tree's issued support draws settle through `settle_pair`.
+  Fewer than three issued is NonObservation and does not enter the
+  failure window. Two or more passes of the three selected draws is
+  Served. Zero or one is Missed. Eleven Missed epochs demote through
+  `SlashedHolding::CompleteTree`. Red: key the settlement row by
+  `(tree, shard)`.
 - A tree that passes every support draw has no serve credit, and
   `R_market` is unchanged.
 - A complete-tree endpoint that refuses the body costs one timeout,
   and the fetch completes from a drawn holder, once §7 is ruled.
 
-The tabled test, after EUP-4, is a partial-miss weight or a drop rate
-`q`, against the figures in §4. It is not the 1% scenario above.
+The tabled test, after EUP-4, is whatever finer hole detection §4's
+question adopts. It is not a second interim rule.
 
 ## 11. What the implementation PR edits, after the ruling
 
@@ -429,15 +424,15 @@ The tabled test, after EUP-4, is a partial-miss weight or a drop rate
 
 Amended after review of `7632f2e3f`. The round's proposal on each:
 
-1. **`c` = 413**, derived in §3 under the epoch observation. A per-draw
-   11-of-13 does not derive it: at `f = 0.01` that window slashes with
-   probability `7.7 × 10⁻²¹`.
-2. **The schedule in §2.** Spread across `SEB − W₂`. Unissued carry
-   capped at `c`. No top-up multiple.
+1. **`c` = 10**, from §3: `P(issued < 3) ≤ 10^{-6}` at a non-filing
+   rate of 0.10. At 0.20 the same bound is `c = 14`.
+2. **The schedule in §2.** Spread across `SEB − W₂`, with the per-tree
+   phase offset. Unissued carry capped at `c`. No top-up multiple.
 3. **The deletion list.** Empty. The exclusion flag stays and is
    renamed.
 4. **§7.** Support membership is a best-effort fetch source beside `D`.
 5. **Release.** A voluntary holder uses the existing `Release` and its
    cooldown, and stays slashable during the cooldown (§8).
 
-§4's partial-miss weight and the drop rate `q` are not on this list.
+No new slash rule is on this list. §4 asks, after EUP-4, whether a
+hole the 2-of-3 cannot see needs one.
