@@ -204,6 +204,7 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 - deletes every LMDB-bound C++ test, each with a sentence naming the rule it tested and where Rust covers it now;
 - applies the `DAEMON_REDB_STORE.md` §12.1 gate retirements;
 - arms the `dev-rpc` row in the daemon config of every regtest harness that calls `generateblocks` or `pop_blocks` — the engine-core e2e runs, GF-7, the bench scripts and the Python framework — before dispatch reads the `armed` column (the review of #1165, ruling 1);
+- hands the submit engine's shim (`RustPoolShim`) the service's `PoolHealth`, so a pool-file fault met on the submit path retires the pool as one met by the service, the pool handle or the chain handle does (the review of #1165, M5);
 - runs the RPC on a runtime of its own, never the node's: `pop_blocks` returns its bodies through `offer_carried`, which verifies each body's stateless half on the caller's runtime without a hasher permit (`span.rs`), bounded by the operator only because the lever is armed and the host's;
 - restates the two decisions `RPC_WIRE.md` carries that are bound to state the flip ends: RK-D7 (one implementation, `StoreFacts`, once the shims are deleted) and the per-lock-domain rule (over the Rust pool's lock and the store's MVCC snapshot, where today its example is `tx_memory_pool::check_for_key_images`).
 
