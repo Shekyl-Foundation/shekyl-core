@@ -90,15 +90,35 @@ fn bring_up(core: &mut Core) -> Step {
     );
     let step = core.on(Input::BootstrapComplete, 0);
     assert!(publishes(&step), "running publishes the route");
-    assert!(!core.status().health, "the route is not installed yet");
+    assert!(!core.status().health, "no verdict yet: health is false");
     step
 }
 
+/// The link reaches Usable, and then the relay's verdict arrives. Between
+/// the two the send is held (`GS-F3`): the link is not the fact.
 fn reach_usable(core: &mut Core) {
     bring_up(core);
     let step = core.on(Input::RouteInstalled, 0);
     assert_eq!(announces(&step), 1, "recovery is said once the route is in");
     core.on(Input::OnionPublished, 0);
+    let status = core.status();
+    assert_eq!(status.shown, Shown::Usable);
+    assert!(
+        !status.health,
+        "the link is usable; no address-hiding peer yet"
+    );
+    assert_eq!(
+        status.own_tx,
+        OwnTx::Held,
+        "held until the relay can originate"
+    );
+    assert!(status.sync.tor, "the link is what the node syncs over");
+    let step = core.on(Input::AddressHidingOrigin { routable: true }, 0);
+    assert_eq!(
+        announces(&step),
+        1,
+        "the verdict's recovery is said at once"
+    );
     let status = core.status();
     assert!(status.health);
     assert_eq!(status.shown, Shown::Usable);
@@ -232,7 +252,10 @@ fn an_open_file_limit_degrades_without_a_respawn() {
     assert_eq!(announces(&step), 1);
     assert_eq!(core.status().shown, Shown::Degraded);
     assert_eq!(core.status().cause, Cause::TooManyFiles { open: 1024 });
-    assert!(!core.status().health);
+    assert!(
+        core.status().health,
+        "degraded is the link's facet; the relay's verdict still carries"
+    );
     let due = step.deadline.expect("the facet is said again");
     let step = core.on_deadline(due);
     assert_eq!(due, at + duration_ns(policy().cap));
@@ -282,6 +305,12 @@ fn a_pin_failure_does_not_spawn_and_retries_at_the_cap() {
     reach_usable(&mut core);
     let step = core.on(Input::ProcessEnded { exit_code: Some(9) }, 5_000_000_000);
     assert!(takes_down(&step));
+    // The sessions over the dead Tor close, and the relay withdraws its
+    // verdict: that, not the death, is what moves Health and `OwnTx`.
+    core.on(
+        Input::AddressHidingOrigin { routable: false },
+        5_000_000_000,
+    );
     let text = render(&core.status());
     assert!(
         !text.contains("exit code"),
@@ -401,7 +430,8 @@ fn a_route_waits_for_its_host_and_a_fault_withdraws_only_an_installed_one() {
     );
     let installed = core.on(Input::RouteInstalled, 3);
     assert_eq!(announces(&installed), 1);
-    assert!(core.status().health);
+    assert_eq!(core.status().shown, Shown::Usable);
+    assert!(!core.status().health, "usable is not the verdict");
     let again = core.on(Input::EndpointReady, 4);
     assert!(!publishes(&again));
 
@@ -562,4 +592,88 @@ fn a_shutdown_stops_an_installed_route_and_says_nothing() {
     let step = core.on(Input::Shutdown, 1_000);
     assert_eq!(step.actions, vec![Action::StopChild]);
     assert_eq!(announces(&step), 0);
+}
+
+/// `GS-Q3`: `OwnTx` and Health are the relay's verdict. The same value again
+/// changes nothing; a loss is said under the cap, not at once; a recovery is
+/// said at once.
+#[test]
+fn the_relays_verdict_decides_own_tx_and_health_and_is_said_under_the_cap() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let cap = duration_ns(policy().cap);
+    let text = render(&core.status());
+    assert!(
+        text.starts_with("Tor is carrying this node's traffic."),
+        "{text}"
+    );
+
+    let again = core.on(Input::AddressHidingOrigin { routable: true }, 1);
+    assert!(again.actions.is_empty(), "the same verdict is not a change");
+
+    let lost = core.on(Input::AddressHidingOrigin { routable: false }, 2);
+    assert_eq!(
+        announces(&lost),
+        0,
+        "a loss inside the cap is not said at once"
+    );
+    let status = core.status();
+    assert!(!status.health);
+    assert_eq!(status.own_tx, OwnTx::Held);
+    assert_eq!(status.shown, Shown::Usable, "the link did not move");
+    assert!(status.sync.tor, "the node still syncs over the link");
+    let text = render(&status);
+    assert!(
+        text.starts_with("This node is syncing over clearnet and holding its own transactions."),
+        "{text}"
+    );
+    // The running link samples every second, so the step's deadline is the
+    // sample's; the announcement is armed one cap after the recovery at 0.
+    assert!(lost.deadline.is_some_and(|due| due <= cap));
+    let said = core.on_deadline(cap);
+    assert_eq!(announces(&said), 1, "the loss is said at the cap");
+    let later = core.on_deadline(cap * 2);
+    assert_eq!(
+        announces(&later),
+        0,
+        "said once; a lost verdict does not repeat"
+    );
+
+    let flapped = core.on(Input::AddressHidingOrigin { routable: false }, cap * 2 + 1);
+    assert!(flapped.actions.is_empty());
+
+    let back = core.on(Input::AddressHidingOrigin { routable: true }, cap * 2 + 2);
+    assert_eq!(announces(&back), 1, "a recovery is said at once");
+    assert!(core.status().health);
+    assert_eq!(core.status().own_tx, OwnTx::AddressHiding);
+}
+
+/// A loss after the cap has passed is said at once: the warning is not held
+/// for a second cap.
+#[test]
+fn a_lost_verdict_past_the_cap_is_said_at_once() {
+    let (mut core, _) = Core::start(policy(), managed(false), 0);
+    reach_usable(&mut core);
+    let cap = duration_ns(policy().cap);
+    let lost = core.on(Input::AddressHidingOrigin { routable: false }, cap + 1);
+    assert_eq!(announces(&lost), 1);
+    let text = render(&core.status());
+    assert!(
+        text.starts_with("This node is waiting for Tor and holding its own transactions."),
+        "{text}"
+    );
+}
+
+/// Health is the relay's fact alone (`GS-Q3`): a verdict before the link is
+/// usable still makes Health, and `Tor::Off` keeps `ClearnetOnly` whatever
+/// the verdict says.
+#[test]
+fn health_is_the_verdict_whatever_the_link_shows() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    bring_up(&mut core);
+    assert_eq!(core.status().shown, Shown::Bootstrapping);
+    core.on(Input::AddressHidingOrigin { routable: true }, 0);
+    assert!(core.status().health);
+    assert_eq!(core.status().own_tx, OwnTx::AddressHiding);
+    assert!(!core.status().sync.tor, "the link is still bootstrapping");
 }

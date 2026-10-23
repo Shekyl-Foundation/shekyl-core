@@ -468,3 +468,105 @@ fn a_stranded_origin_does_not_backfill_a_dead_clearnet_slot() {
     }
     assert!(found, "a stranded width-3 map did not appear");
 }
+
+/// The read-only verdict is the route's outcome: before any pin it is the
+/// class census; pinned, it is whether a frozen candidate at or past the
+/// cursor is live in the class; an exhausted pin reads `false` while a live
+/// class member that was never a candidate cannot revive it.
+#[test]
+fn local_origin_routable_reads_the_pin_and_the_class() {
+    for seed in 0..64 {
+        let mut rng = SplitMix64::new(900 + seed);
+        let mut m = StemMap::new_with_reserved_slot(ids(&[1, 2]), ids(&[11]), 2, &mut rng);
+        assert!(
+            m.local_origin_routable(&ids(&[1, 2])),
+            "unpinned: the class is non-empty"
+        );
+        assert!(
+            !m.local_origin_routable(&[]),
+            "unpinned: an empty class routes nothing"
+        );
+
+        let primary = route(&mut m, &[1, 2], &[11], &mut rng).expect("two class members pin");
+        assert!(
+            m.local_origin_routable(&ids(&[1, 2])),
+            "pinned on a live head"
+        );
+
+        let alternate = if primary == id(1) { 2 } else { 1 };
+        let live = ids(&[alternate]);
+        assert!(
+            m.local_origin_routable(&live),
+            "the head left; the frozen alternate is live, so the next route walks to it"
+        );
+        assert_eq!(
+            route(&mut m, &[alternate], &[11], &mut rng),
+            Some(id(alternate))
+        );
+
+        // A third class session arrives after the pin: never a candidate.
+        assert!(
+            !m.local_origin_routable(&ids(&[3])),
+            "both frozen candidates gone: exhausted, though a class session is live"
+        );
+        assert_eq!(route(&mut m, &[3], &[11], &mut rng), None);
+        assert!(
+            !m.local_origin_routable(&ids(&[3])),
+            "and it stays exhausted"
+        );
+    }
+}
+
+/// A uniform index below `len`, for a random walk. `len` is a small test
+/// count, so neither conversion can fail.
+fn draw_below(rng: &mut SplitMix64, len: usize) -> usize {
+    let len = u64::try_from(len).expect("a test count fits u64");
+    usize::try_from(rng.next_u64() % len).expect("below a usize count")
+}
+
+/// After every route the verdict and the route agree, over random churn.
+#[test]
+fn local_origin_routable_agrees_with_every_route_it_follows() {
+    for seed in 0..256 {
+        let mut rng = SplitMix64::new(5_000 + seed);
+        let mut m = StemMap::new_with_reserved_slot(Vec::new(), Vec::new(), 3, &mut rng);
+        let mut class: Vec<u8> = Vec::new();
+        let mut rest: Vec<u8> = Vec::new();
+        let mut next: u8 = 1;
+        for _step in 0..40 {
+            match rng.next_u64() % 5 {
+                0 => {
+                    class.push(next);
+                    next = next.wrapping_add(1);
+                }
+                1 => {
+                    rest.push(next.wrapping_add(100));
+                    next = next.wrapping_add(1);
+                }
+                2 if !class.is_empty() => {
+                    let at = draw_below(&mut rng, class.len());
+                    class.remove(at);
+                }
+                3 if !rest.is_empty() => {
+                    let at = draw_below(&mut rng, rest.len());
+                    rest.remove(at);
+                }
+                _ => {}
+            }
+            let routed = route(&mut m, &class, &rest, &mut rng);
+            assert_eq!(
+                m.local_origin_routable(&ids(&class)),
+                routed.is_some(),
+                "seed {seed}: the verdict after a route is that route's outcome"
+            );
+        }
+    }
+}
+
+/// A map with no slots routes nothing and says so.
+#[test]
+fn a_slotless_map_is_never_routable() {
+    let mut rng = SplitMix64::new(7);
+    let m = StemMap::new_with_reserved_slot(ids(&[1]), Vec::new(), 0, &mut rng);
+    assert!(!m.local_origin_routable(&ids(&[1])));
+}

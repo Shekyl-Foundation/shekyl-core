@@ -797,6 +797,33 @@ impl StemMap<ReservedSlot> {
         }
     }
 
+    /// Whether a local origin is routed now, read without routing.
+    ///
+    /// The relay publishes this as its hop-0 verdict (`DAEMON_RELAY_PRIVACY.md`
+    /// §98.12). Pinned: some frozen candidate at or past the cursor is live in
+    /// `class_live`, the hop the next route fills slot 0 with or walks to.
+    /// Not pinned: the class is non-empty, so the next route pins. Nothing is
+    /// merged, pinned or drawn. An exhausted pin reads `false` until the epoch
+    /// rebuilds the map. A map with no slots routes nothing.
+    ///
+    /// It is the outcome of the last [`Self::route_local_origin`], and of the
+    /// next one in every case but one: a pin whose live alternate occupies no
+    /// slot while another class member holds slot 0 reads routable until that
+    /// route's walk steps past the alternate. The route's own publish after
+    /// the plan corrects the read.
+    #[must_use]
+    pub fn local_origin_routable(&self, class_live: &[ConnectionId]) -> bool {
+        if self.usage.is_empty() {
+            return false;
+        }
+        match self.inbound.get(&None) {
+            Some(pin) => pin.candidates[pin.cursor..]
+                .iter()
+                .any(|candidate| class_live.contains(candidate)),
+            None => !class_live.is_empty(),
+        }
+    }
+
     /// Slot 0 needs its fill, or this route is about to walk a hop that has
     /// left the class. Captured `pinned` is the state from before the merge.
     fn origin_merge_due(

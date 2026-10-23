@@ -17752,6 +17752,22 @@ volume cover on the hidden link is unchanged. Not
 examined: `shekyl-tor` and the connector crates, which PR-1 does not
 touch; the dialer's view of the hidden outbound sessions, which is PR-3's.
 
+### 98.12 The class as a published verdict (`GS-Q3`, 2026-10-23)
+
+The hidden class and the origin pin are the fact the posture reads
+(`TOR_SUPERVISOR.md` posture table, `GS-Q3`): whether a transaction this node
+originates leaves on an address-hiding session now.
+`Relay::originates_address_hiding` reads it without routing: a reserved epoch,
+the class non-empty, and when the local origin is pinned, a frozen candidate at
+or past the cursor live in the class (`StemMap::local_origin_routable`). It is
+the outcome of the last local origin's plan and, in every case but the one churn
+case the method's own doc names, of the next. The production zone's publish
+writes it to `shekyl-ffi` `origin_verdict` after every session change, epoch
+rebuild and plan; the managed-Tor supervisor and the RPC Health boolean
+(`TSR-Q4`) read it there. The `HiddenClassWatch` log lines (§98.5) are
+unchanged and are not this read: the watch is silent before the first rebuild
+and reports the class alone, not the pin.
+
 ## 99. ProxyMark reproduction — a progress benchmark, REGISTERED 2026-10-09 (PM-1…PM-3)
 
 **Status: OPEN — registered; PM-2b is closed by construction (#1022,

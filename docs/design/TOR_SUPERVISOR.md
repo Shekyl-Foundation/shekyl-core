@@ -109,7 +109,8 @@ into words (`TSR-Q13`).
 
 `OwnTx` is what happens to the node's own transactions. Increment 3 defines
 that enum next to `ManagedTorFix` and the typed Status read (§12). It
-projects Health and the connector settings. It is not a config key. The
+projects the relay's hop-0 verdict for a local origin, which is Health, and
+the connector settings (`GS-Q3`, Rick 2026-10-22). It is not a config key. The
 wire carries the variant (`TSR-Q13`). The send flow reads it from Status.
 A caller whose preset has no Status does not receive it, and Health false
 is not a hold. `OwnTx::Held` is the transaction. The Tor state Restarting
@@ -117,7 +118,7 @@ is not a hold. `OwnTx::Held` is the transaction. The Tor state Restarting
 
 | `OwnTx` | When | The send |
 | --- | --- | --- |
-| `AddressHiding` | Health is true (`TSR-Q4`): the node can originate over an address-hiding connector now | Broadcasts over that connector |
+| `AddressHiding` | Health is true (`TSR-Q4`): the relay's hop-0 verdict says a transaction this node originates leaves on an address-hiding session now, the class non-empty and the epoch's pin not exhausted (`GS-Q3`) | Broadcasts over that connector |
 | `Held` | Health is false and Tor is `Tor::Managed` or `Tor::Operator` | Reported held, not sent. Stays off clearnet (`TSR-Q11`) |
 | `ClearnetOnly` | `Tor::Off` and `Clearnet::On` | Broadcasts over clearnet. Health stays false |
 | `Offline` | `Tor::Off` and `Clearnet::Off` | Not sent |
@@ -126,6 +127,15 @@ is not a hold. `OwnTx::Held` is the transaction. The Tor state Restarting
 | --- | --- | --- |
 | `Clearnet::On` | Syncs over clearnet. `OwnTx` is `Held`. Health is false. Announces once per backoff cap | `RestoreManaged`, `Operator`, `ClearnetOnly` |
 | `Clearnet::Off` | Waits for Tor. Syncs nothing. `OwnTx` is `Held`. Does not set `Clearnet::On`: whoever can block or break the node's Tor would otherwise choose its transport (`TSR-Q11`). Health is false. Announces once per backoff cap | `RestoreManaged`, `Operator`, `ClearnetOn`, `ClearnetOnly` |
+
+The link being usable is not Health (`GS-Q3`, the GUI sync lane's `GS-F3`):
+after a Tor boot the link is usable before any address-hiding peer has
+handshaken, and the relay holds a local origin until one has. The relay
+publishes its verdict after every session change, epoch rebuild and plan
+(`shekyl-ffi` `origin_verdict`, written by the production zone's publish);
+the supervisor folds it as `Input::AddressHidingOrigin`, projects it as
+Health and `OwnTx`, and says a change: a recovery at once, a loss under the
+announcement cap. The link stays the phase (§4.3) and `Syncing.tor`.
 
 Clearnet-only is the operator's `ClearnetOnly` act, never a default
 (`TSR-Q11`). The node warns on every boot. TB-1 states the consequence,
@@ -858,6 +868,10 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
   fields; the GUI's same-user daemon already grants Status (RT-15).
 - **TB:** §7's macOS rows are TB-11's macOS launch test; the Windows launch
   test is `tor-pin-verify`'s Windows entry (`TSR-F15`).
+- **Relay:** the hop-0 verdict for a local origin (`shekyl-relay`
+  `Relay::originates_address_hiding`, read-only: the address-hiding class and
+  the epoch's origin pin, `DAEMON_RELAY_PRIVACY.md` §98.12) is the
+  supervisor's input for Health and `OwnTx` (`GS-Q3`). The link is not.
 - **Wallet and clients:** the send flow reads `OwnTx` from Status before
   broadcasting (§1). `Held` is reported held, not sent. `ClearnetOnly` is
   sent over clearnet and is not reported held, and Health stays false.
@@ -889,7 +903,9 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
    and the one typed read and renderer are `shekyl-tor-control-client`'s
    `supervisor` module. `TSR-M2` is recorded (2026-10-22); the driver's base
    stays 1 s and its cap stays 60 s. `TSR-M8` (the monotonic clock across
-   suspend) is not recorded yet.
+   suspend) is not recorded yet. Health and `OwnTx` project the relay's
+   hop-0 verdict, folded as `Input::AddressHidingOrigin` (`GS-Q3`, the GUI
+   sync lane's `GS-C1`); the link is the phase and `Syncing.tor`.
 3b. The public directory cache (`TSR-Q8`, §4.7). **Implemented.** At launch
    into a fresh directory the daemon copies `cached-microdesc-consensus`,
    `cached-microdescs`, `cached-microdescs.new` and `cached-certs`, each only

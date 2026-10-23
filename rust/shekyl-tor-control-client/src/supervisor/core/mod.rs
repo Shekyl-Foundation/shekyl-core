@@ -172,6 +172,13 @@ pub enum Input {
     StateFileAppeared,
     /// The daemon is stopping.
     Shutdown,
+    /// The relay's hop-0 verdict for a local origin moved: whether a
+    /// transaction this node originates leaves on an address-hiding
+    /// session now (`GS-Q3`). `OwnTx` and Health project it.
+    AddressHidingOrigin {
+        /// The verdict.
+        routable: bool,
+    },
 }
 
 /// Actions and the next absolute deadline, in the caller's clock units.
@@ -249,6 +256,9 @@ enum Phase {
 pub struct Core {
     policy: Policy,
     connectors: Connectors,
+    /// The relay's hop-0 verdict for a local origin, as last published.
+    /// Health, and the fact `OwnTx` is read from (`GS-Q3`). Not the link.
+    originates: bool,
     phase: Phase,
     cause: Cause,
     /// The [`Shown`] value [`Self::since`] names. `since` moves when the
@@ -276,6 +286,7 @@ impl Core {
         let mut core = Self {
             policy,
             connectors,
+            originates: false,
             phase: Phase::Absent {
                 duty: AbsentDuty::Retry,
             },
@@ -334,6 +345,7 @@ impl Core {
             }
             Input::StateFileAppeared => self.state_file(),
             Input::Shutdown => self.shutdown(),
+            Input::AddressHidingOrigin { routable } => self.origin_verdict(routable, now),
         };
         self.step(now, actions)
     }
@@ -376,7 +388,11 @@ impl Core {
     #[must_use]
     pub fn status(&self) -> Status {
         let shown = self.shown();
-        let health = shown == Shown::Usable;
+        // Health is the relay's verdict, not the link (`GS-Q3`): after a boot
+        // the link is usable before any address-hiding peer has handshaken,
+        // and the relay holds a local origin until one has. The link stays
+        // the phase, and what the node syncs over.
+        let health = self.originates;
         Status {
             health,
             shown,
@@ -385,7 +401,7 @@ impl Core {
             respawn_count: self.respawn_count,
             sync: Syncing {
                 clearnet: self.connectors.clearnet_on,
-                tor: health,
+                tor: shown == Shown::Usable,
             },
             own_tx: own_tx(health, self.connectors),
             fixes: fixes(&self.cause, self.connectors),
@@ -732,6 +748,27 @@ impl Core {
             self.announce_at = None;
         }
         vec![Action::Announce]
+    }
+
+    /// The relay's verdict moved. The posture sentence flips between
+    /// carrying and holding, so a change is said: a recovery at once, a loss
+    /// under the announcement cap, so session churn cannot storm the log.
+    /// The same value again is not a change.
+    fn origin_verdict(&mut self, routable: bool, now: u64) -> Vec<Action> {
+        if self.originates == routable {
+            return Vec::new();
+        }
+        self.originates = routable;
+        if routable {
+            return self.say(now, true);
+        }
+        let said = self.say(now, false);
+        if said.is_empty() {
+            if let Some(last) = self.last_announce {
+                self.announce_at = Some(last.saturating_add(self.cap()));
+            }
+        }
+        said
     }
 
     fn repeats_announcement(&self) -> bool {

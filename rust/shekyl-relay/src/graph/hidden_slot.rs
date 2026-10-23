@@ -26,6 +26,8 @@
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::stem_map::ConnectionId;
+#[allow(unused_imports)]
+use shekyl_relay_privacy::stem_map::StemMap;
 
 use super::epoch_map::EpochMap;
 use super::{hides_address, Relay, RelayPlan};
@@ -314,6 +316,25 @@ impl Relay {
     #[cfg(test)]
     pub(crate) fn reported_hidden_class(&self) -> Option<HiddenClass> {
         self.hidden_class_watch.recorded()
+    }
+
+    /// The relay's hop-0 verdict for a local origin: whether a transaction
+    /// this node originates leaves on an address-hiding session now.
+    ///
+    /// The fact `OwnTx` and Health project (`TOR_SUPERVISOR.md` posture
+    /// table, `GS-Q3`): the class is non-empty and the epoch's origin pin is
+    /// not exhausted. Read-only: nothing is merged, pinned or drawn. The
+    /// link being usable is not this fact; a Tor whose link is up and whose
+    /// first address-hiding peer has not handshaken reads `false`. A node
+    /// with no address-hiding connector reads `false`. Exactness against
+    /// the next plan: [`StemMap::local_origin_routable`].
+    #[must_use]
+    pub fn originates_address_hiding(&self) -> bool {
+        if !self.map.reserves_slot() {
+            return false;
+        }
+        let (hidden, _rest) = self.partitioned_outbound_ids();
+        self.map.local_origin_routable(&hidden)
     }
 
     /// Plan a local origin's first hop over the hidden stem slot.

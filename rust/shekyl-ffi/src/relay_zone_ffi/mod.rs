@@ -311,6 +311,10 @@ pub struct RelayZoneHandle {
     /// path that is almost never read. Off-strand readers clone the `Arc`
     /// (cheap) and copy fixed-size rows; the C++ merge edge emits JSON once.
     stem_tallies: Mutex<Arc<Vec<(ConnectionId, StemTallySnapshot)>>>,
+    /// Whether this zone's publish writes [`crate::origin_verdict`]. Only the
+    /// zone [`shekyl_relay_zone_new`] builds does: it is the process's one
+    /// relay. A zone a test builds stays out of the cell.
+    publishes_origin: bool,
 }
 
 impl RelayZoneHandle {
@@ -334,6 +338,9 @@ impl RelayZoneHandle {
         // holding the lock.
         if let Ok(mut slot) = self.stem_tallies.lock() {
             *slot = snap;
+        }
+        if self.publishes_origin {
+            crate::origin_verdict::publish(self.driver.zone().originates_address_hiding());
         }
     }
 }
@@ -608,14 +615,23 @@ pub extern "C" fn shekyl_relay_zone_new(
     } else {
         0
     };
-    new_zone(
+    let handle = new_zone(
         now_ms,
         stems,
         min_epoch_secs,
         epoch_jitter_secs,
         flags,
         identity.connectors,
-    )
+    );
+    if !handle.is_null() {
+        // SAFETY: `new_zone` just allocated the handle with `Box::into_raw`
+        // and nothing else holds it yet.
+        unsafe {
+            (*handle).publishes_origin = true;
+            (*handle).publish();
+        }
+    }
+    handle
 }
 
 /// Open a zone. Release with [`shekyl_relay_zone_free`].
@@ -724,6 +740,7 @@ pub(crate) fn new_zone(
         live_stems: AtomicUsize::new(0),
         stem_in_flight: AtomicUsize::new(0),
         stem_tallies: Mutex::new(Arc::new(Vec::new())),
+        publishes_origin: false,
     };
     handle.publish();
     Box::into_raw(Box::new(handle))

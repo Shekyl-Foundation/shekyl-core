@@ -1737,3 +1737,31 @@ fn a_queued_message_survives_an_epoch_roll() {
         shekyl_relay_zone_free(h);
     }
 }
+
+/// The production zone publishes the relay's hop-0 verdict into the one
+/// process cell (`GS-Q3`); a session whose peer does not learn the address
+/// makes it, and its close takes it back.
+#[test]
+fn the_production_zone_publishes_the_origin_verdict() {
+    unsafe {
+        let h = new_zone(0, 2, 600, 30, 0, TOR_CONFIGURED);
+        assert!(!h.is_null());
+        (*h).publishes_origin = true;
+        (*h).publish();
+        assert!(
+            !crate::origin_verdict::current(),
+            "no session hides the address: held"
+        );
+        shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, TOR_LINK);
+        assert!(
+            crate::origin_verdict::current(),
+            "one address-hiding session: routable"
+        );
+        shekyl_relay_zone_on_close(h, id(1).as_ptr());
+        assert!(
+            !crate::origin_verdict::current(),
+            "its close takes the verdict back"
+        );
+        shekyl_relay_zone_free(h);
+    }
+}
