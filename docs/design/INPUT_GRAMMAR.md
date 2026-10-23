@@ -2,7 +2,7 @@
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
 2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
-IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, POSED 2026-10-19, amended 2026-10-20 before ruling; Part E (§23–§24, IG-Q66…IG-Q71), the Tor status fields, POSED 2026-10-22.
+IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, POSED 2026-10-19, amended 2026-10-20 before ruling; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, POSED 2026-10-22.
 Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
@@ -1274,6 +1274,7 @@ Each is posed for ruling, with a recommendation. Amended 2026-10-20 before rulin
 | `hiding` (`daemon_status`) | health | switch: this node can originate over an address-hiding connector now | `TSR-Q4` |
 | `posture` (`daemon_status`) | status | object: `tor` (one-of `managed`, `operator`, `off`) and `clearnet` (one-of `on`, `off`), the settings' own names and keywords (§5) | `TSR-Q12` |
 | `origination` (`daemon_status`) | status | one-of `address-hiding`, `held`, `clearnet-only`, `offline` | `OwnTx` |
+| `hold` (`daemon_status`) | status | one-of `connecting`, `rebuilding`: why the node holds its own transactions while Tor is usable; present only when `origination` is `held` and `tor.state` is `usable` (IG-Q72) | the relay's hop-0 verdict |
 | `sync_connector` (`daemon_status`) | status | a list of one-of `clearnet`, `tor`: the connectors the node syncs over now; `[]` when it syncs over none | `TSR-Q12` |
 | `tor` (`daemon_status`) | status | object, below; `null` when `posture.tor` is `off` | `TSR-Q12` |
 | `tor.state` | status | one-of `restarting`, `waiting`, `bootstrapping`, `usable`, `degraded` (§4.3; `waiting` is Restarting (held)) | §4.3 |
@@ -1291,6 +1292,7 @@ Each is posed for ruling, with a recommendation. Amended 2026-10-20 before rulin
 | hiding | daemon | this node can originate over an address-hiding connector now (`TSR-Q4`) |
 | posture | daemon | the connector settings in force: `tor` and `clearnet` |
 | origination | daemon | what happens to the node's own transactions (`OwnTx`) |
+| hold | daemon | why the node holds its own transactions while its Tor is usable: the relay's wait (IG-Q72) |
 | facet | tor | which facet is down: outbound or inbound |
 | detail | tor | the cause's typed detail |
 | since | tor | when the state began, a time |
@@ -1303,7 +1305,7 @@ Each is posed for ruling, with a recommendation. Amended 2026-10-20 before rulin
 
 Existing terms that gain a parent, keeping one meaning: `state` gains `tor` ("the state of what its parent names"); `cause` gains `tor` ("why: under `tx`, why it was refused; under `tor`, why it is in its state"); `connector` gains `sync`; `count` gains `respawn` and `descriptor`; `file` and `data` gain `detail`.
 
-Value keywords added: `restarting`, `waiting`, `bootstrapping`, `usable`, `degraded` (state); `outbound`, `inbound` (facet); the twelve cause keywords; `read-only`, `full` (data); `address-hiding`, `held`, `clearnet-only`, `offline` (origination); `restore-managed`, `clearnet-on` (fix; `operator` and `clearnet-only` are the same keywords as above, with the same meaning).
+Value keywords added: `restarting`, `waiting`, `bootstrapping`, `usable`, `degraded` (state); `outbound`, `inbound` (facet); the twelve cause keywords; `read-only`, `full` (data); `address-hiding`, `held`, `clearnet-only`, `offline` (origination); `connecting`, `rebuilding` (hold); `restore-managed`, `clearnet-on` (fix; `operator` and `clearnet-only` are the same keywords as above, with the same meaning).
 
 ## 24. Questions for Part E
 
@@ -1320,3 +1322,10 @@ Each is posed for ruling, with a recommendation. The implementation is the super
 **IG-Q70 — causes and their detail — POSED 2026-10-22.** *Recommended:* one cause keyword per §5 row, named by what the operator sees and not by Tor's vocabulary (rule 81); the detail fields as the table above, each present only for the causes that carry it. The open-file limit is `descriptor_max` and `descriptor_count`, the platform's term for what the limit counts. "Tor version flagged" is a cause, though §5 shows it as an announcement: it changes no state and carries no fix.
 
 **IG-Q71 — syncing over what — POSED 2026-10-22.** *Recommended:* `sync_connector`, a list of the connectors the node syncs over now. Health's `syncing` already says whether it syncs; the list says over what, and `[]` with `syncing` true is not a state the node can be in.
+
+**IG-Q72 — a hold while Tor is usable — POSED 2026-10-23.** The relay can hold the node's own transactions while nothing about Tor is wrong: `tor.state` is `usable`, `origination` is `held`, and the relay's hop-0 verdict for a local origin (`Relay::originates_address_hiding`, the GUI sync lane's GS-C1, #1161) is false. That happens in exactly two cases, neither a fault, neither respawning anything, neither offering a fix:
+- no outbound session hides this node's address yet: after Tor boots, before the first onion peer completes its handshake;
+- the epoch's origin pin is exhausted (every frozen candidate has left) while address-hiding sessions are live, and the relay holds until the epoch rebuilds its map.
+
+The GUI sync lane's GS-C2 widens the published verdict from a boolean to that three-way read, so the reason has a producer, and names the `TSR-Q12` amendment it needs: today TSR-Q12's cause is a §5 value, and this reason is the relay's. *Recommended:* a field of its own, `hold`, beside `origination`: one-of `connecting` (no address-hiding peer yet) and `rebuilding` (the relay is rebuilding its origin map), present only when `origination` is `held` and `tor.state` is `usable`. `tor.cause` stays Tor's own (§5), `null` while Tor is usable, as IG-Q69 says. The keywords name what the operator sees (rule 81), not the relay's internals. No timing detail: `tor.since` dates the state, and an epoch's end would date the pin. The alternative is a thirteenth cause, `tor.cause` = `relay-waiting` with `tor.detail.relay` one-of `connecting`, `rebuilding`, which puts a reason that is not Tor's under `tor`.
+
