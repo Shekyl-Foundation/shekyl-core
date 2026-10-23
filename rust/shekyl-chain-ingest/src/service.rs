@@ -500,10 +500,6 @@ where
         self.branch_gate.lock().await
     }
 
-    pub(crate) const fn connector(&self) -> &ActorRef<Connector> {
-        &self.connector
-    }
-
     pub(crate) const fn store(&self) -> &Arc<ChainStore> {
         &self.store
     }

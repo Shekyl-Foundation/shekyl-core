@@ -32,7 +32,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use shekyl_chain_rules::{Fault, HeaderView, InvalidBlock, StatelessPass, Substrate, Tip};
+use shekyl_chain_rules::{
+    Fault, HeaderView, InvalidBlock, StatelessPass, Substrate, Tip, ViewRead,
+};
 use shekyl_chain_store::store::{SnapshotView, StoreError};
 use shekyl_mempool::{stateless, PoolFault};
 use shekyl_miner::{FoundInbox, Generation, Job, JobBoard};
@@ -40,8 +42,8 @@ use shekyl_types::TxHash;
 use shekyl_wire::{Block, Transaction};
 use tokio::sync::watch;
 
-use crate::connector::{ChainFacts, TemplateFacts, TipChanged};
-use crate::router::claim_next;
+use crate::connector::{chain_facts_on, ChainFacts, FactsStop, TipChanged};
+use crate::router::{claim_next, ClaimStop};
 use crate::schedule::ChainRules;
 use crate::service::{
     divide_pool_faults, install_window, with_pool, ArrivalTag, Door, PoolDivision, ServiceFault,
@@ -386,22 +388,25 @@ async fn post<S>(
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
-    let Ok(facts) = shared.connector().ask(TemplateFacts).await else {
-        board.withdraw();
-        return;
-    };
     let store = std::sync::Arc::clone(shared.store());
     let rules = shared.rules();
-    let claimed = tokio::task::spawn_blocking(move || claim_next(&store, rules))
-        .await
-        .expect("the claim reader does not panic");
-    let Ok((height, seed, target)) = claimed else {
-        board.withdraw();
-        return;
+    let read = tokio::task::spawn_blocking(move || -> Result<_, ReadStop> {
+        let snap = store.begin_read().map_err(ReadStop::Store)?;
+        let facts = chain_facts_on(&snap).map_err(ReadStop::Facts)?;
+        let claim = claim_next(&snap, rules).map_err(ReadStop::Claim)?;
+        Ok((facts, claim))
+    })
+    .await
+    .expect("the template reader does not panic");
+    let (facts, (height, seed, target)) = match read {
+        Ok(read) => read,
+        Err(stop) => {
+            board.withdraw();
+            stop.apply(shared);
+            return;
+        }
     };
-    if height != facts.connecting {
-        return;
-    }
+    debug_assert_eq!(height, facts.connecting, "one snapshot, one tip");
     let Some(window) = shared.seed_now() else {
         return;
     };
@@ -426,6 +431,49 @@ async fn post<S>(
     kept.insert(generation, transactions);
     while kept.len() > KEPT_JOBS {
         kept.pop_first();
+    }
+}
+
+/// Why the template's chain reads gave nothing.
+enum ReadStop {
+    Store(StoreError),
+    Facts(FactsStop),
+    Claim(ClaimStop),
+}
+
+impl ReadStop {
+    /// A store fault or a corrupt store ends the service, as it does for
+    /// any other reader. The rest leave the board withdrawn until the next
+    /// tip, and say why.
+    fn apply<S>(self, shared: &Shared<S>)
+    where
+        S: Substrate,
+        S::Fault: core::fmt::Debug,
+    {
+        match self {
+            Self::Store(store)
+            | Self::Facts(FactsStop::Read(ViewRead::View(store)))
+            | Self::Claim(ClaimStop::Store(store)) => shared.fail(ServiceFault::Store(store)),
+            Self::Facts(FactsStop::Read(read @ ViewRead::Corrupt(_))) => {
+                crate::service::record_store_read(shared, read);
+            }
+            Self::Claim(ClaimStop::Corrupt { height, corrupt }) => {
+                shared.fail(ServiceFault::Corrupt { height, corrupt });
+            }
+            Self::Facts(FactsStop::NoNextHeight { tip }) => {
+                tracing::error!("no template: the tip {tip:?} is the last height there is");
+            }
+            Self::Claim(ClaimStop::Refused { refused, .. }) => {
+                tracing::error!(
+                    "no template: the chain's own headers refuse its target: {refused:?}"
+                );
+            }
+            Self::Claim(ClaimStop::Moved) => {
+                tracing::error!(
+                    "no template: the seed block is not on the snapshot it was read from"
+                );
+            }
+        }
     }
 }
 

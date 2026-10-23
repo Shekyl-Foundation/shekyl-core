@@ -295,9 +295,10 @@ pub struct BudgetAccruingOf {
 /// candidate, read on the view the validator will judge it against and
 /// through the definitions the validator uses (`tx_volume_window`,
 /// `mtp_median_at`) — so the template is priced at the operands it will be
-/// judged by, never at a second copy of them. The `get_block_template`
-/// read path in the shape the live daemon (DRS-X) will serve it; the slice-6 scenario driver is
-/// its first consumer.
+/// judged by, never at a second copy of them: `chain_facts_on`, asked of
+/// the connector. The scenario driver reads the chain this way; the tip
+/// follower's producer calls `chain_facts_on` on the snapshot it reads
+/// its claims and the pool on.
 #[derive(Clone, Copy, Debug)]
 pub struct TemplateFacts;
 
@@ -419,21 +420,6 @@ impl Writer {
             return Err(RunFault::Over(end));
         }
         let result = self.store.write(f);
-        self.latch(result)
-    }
-
-    /// One read through a write batch that **aborts**. The producer's
-    /// [`TemplateFacts`](crate::TemplateFacts): the validator's view and
-    /// its poison latch, and no commit. A terminal fault arms the same
-    /// latch `write` does.
-    fn inspect<R, F>(&mut self, f: F) -> Result<R, RunFault>
-    where
-        F: for<'id> FnOnce(&mut WriteBatch<'_, 'id>) -> Result<R, RunFault>,
-    {
-        if let Some(end) = self.over {
-            return Err(RunFault::Over(end));
-        }
-        let result = self.store.inspect(f);
         self.latch(result)
     }
 
@@ -774,58 +760,104 @@ impl Message<CheckpointState> for Connector {
 impl Message<TemplateFacts> for Connector {
     type Reply = Result<ChainFacts, RunFault>;
 
-    /// Read on the validator's view, inside a batch that aborts. Every
-    /// operand — `total_burned` included — comes off that one view, and
-    /// `tx_volume_window` / `mtp_median_at` / `effective_median_at` are the
-    /// rules' own definitions.
-    /// A hole or a decreasing prefix sum halts the writer; nothing commits.
+    /// `chain_facts_on` over one committed snapshot. A writer that is
+    /// over answers so, as a write would. A row missing below the tip is
+    /// the store's own error: a snapshot arms nothing (`SnapshotView`'s
+    /// fault policy), and the writer halts when a write meets it. A
+    /// definition that finds the chain corrupt halts the writer here,
+    /// through a batch that commits nothing.
     async fn handle(
         &mut self,
         _: TemplateFacts,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.writer.inspect(|batch| {
-            let total_burned = batch.total_burned()?;
-            let view = batch.chain_view();
-            let tip = view.tip()?;
-            let (connecting, previous) = connecting(tip)?;
-            let curve_tree_root = present(
-                batch,
-                connecting,
-                PerHeightRecord::CurveTreeRoot,
-                view.root_at(connecting),
-            )?;
-            let parent_coins_generated = match tip {
-                None => shekyl_units::AtomicUnits::ZERO,
-                Some(t) => definition(batch, recorded(&view, t.height))?.coins_generated,
-            };
-            let closed_shards = definition(
-                batch,
-                shekyl_chain_rules::closed_shards_before(&view, connecting),
-            )?;
-            let tx_volume = definition(
-                batch,
-                shekyl_chain_rules::tx_volume_window(&view, connecting),
-            )?;
-            let median_timestamp =
-                definition(batch, shekyl_chain_rules::mtp_median_at(&view, connecting))?;
-            let medians = definition(
-                batch,
-                shekyl_chain_rules::effective_median_at(&view, connecting),
-            )?;
-            Ok(ChainFacts {
-                connecting,
-                previous,
-                curve_tree_root,
-                parent_coins_generated,
-                total_burned,
-                closed_shards,
-                tx_volume,
-                median_timestamp,
-                medians,
-            })
-        })
+        if let Some(end) = self.writer.over {
+            return Err(RunFault::Over(end));
+        }
+        let read = chain_facts_on(&self.writer.read()?);
+        match read {
+            Ok(facts) => Ok(facts),
+            Err(FactsStop::NoNextHeight { tip }) => Err(RunFault::NoNextHeight { tip }),
+            Err(FactsStop::Read(ViewRead::View(fault))) => Err(RunFault::Store(fault)),
+            Err(FactsStop::Read(ViewRead::Corrupt(corrupt))) => self
+                .writer
+                .write(|batch| Err::<(), _>(RunFault::Store(batch.refuse_corrupt(corrupt))))
+                .map(|()| unreachable!("the batch was refused")),
+        }
     }
+}
+
+/// Why [`chain_facts_on`] has no facts.
+#[derive(Debug)]
+pub(crate) enum FactsStop {
+    /// A read failed, or found the store corrupt.
+    Read(ViewRead<StoreError>),
+    /// The tip is the last height there is.
+    NoNextHeight {
+        /// The tip.
+        tip: BlockHeight,
+    },
+}
+
+/// The block producer's chain operands, all read on `snap`.
+///
+/// Every operand comes off the one snapshot, `total_burned` included, and
+/// `closed_shards_before`, `tx_volume_window`, `mtp_median_at` and
+/// `effective_median_at` are the rules' own definitions, so a template is
+/// priced at what the validator will judge it by. The tip follower's
+/// producer reads its claims and the pool's selection on the same
+/// snapshot (`DRS_X_STORE_FLIP.md` DX-Q3, Q3).
+///
+/// # Errors
+///
+/// [`FactsStop`]. A curve-tree root the snapshot does not hold at the
+/// connecting height is a hole below the tip.
+pub(crate) fn chain_facts_on(snap: &ReadSnapshot<'_>) -> Result<ChainFacts, FactsStop> {
+    let fault = |store: StoreError| FactsStop::Read(ViewRead::View(store));
+    let view = shekyl_chain_store::store::SnapshotView::new(snap);
+    let total_burned = snap.total_burned().map_err(fault)?;
+    let tip = HeaderView::tip(&view).map_err(fault)?;
+    let (connecting, previous) = match tip {
+        None => (BlockHeight::ZERO, BlockHash::NULL),
+        Some(t) => (
+            t.height
+                .checked_add(BlockCount::ONE)
+                .ok_or(FactsStop::NoNextHeight { tip: t.height })?,
+            t.hash,
+        ),
+    };
+    let curve_tree_root = match view.root_at(connecting).map_err(fault)? {
+        AtHeight::Recorded(root) => root,
+        AtHeight::AboveTip => {
+            return Err(FactsStop::Read(ViewRead::Corrupt(Corrupt::HoleBelowTip {
+                at: connecting,
+                record: PerHeightRecord::CurveTreeRoot,
+            })))
+        }
+    };
+    let parent_coins_generated = match tip {
+        None => AtomicUnits::ZERO,
+        Some(t) => {
+            recorded(&view, t.height)
+                .map_err(FactsStop::Read)?
+                .coins_generated
+        }
+    };
+    Ok(ChainFacts {
+        connecting,
+        previous,
+        curve_tree_root,
+        parent_coins_generated,
+        total_burned,
+        closed_shards: shekyl_chain_rules::closed_shards_before(&view, connecting)
+            .map_err(FactsStop::Read)?,
+        tx_volume: shekyl_chain_rules::tx_volume_window(&view, connecting)
+            .map_err(FactsStop::Read)?,
+        median_timestamp: shekyl_chain_rules::mtp_median_at(&view, connecting)
+            .map_err(FactsStop::Read)?,
+        medians: shekyl_chain_rules::effective_median_at(&view, connecting)
+            .map_err(FactsStop::Read)?,
+    })
 }
 
 /// A `validate` fault on the connect batch, as the connector's reply — one
@@ -856,37 +888,6 @@ fn connecting(tip: Option<shekyl_chain_rules::Tip>) -> Result<(BlockHeight, Bloc
                 .ok_or(RunFault::NoNextHeight { tip: t.height })?,
             t.hash,
         )),
-    }
-}
-
-/// A [`ViewRead`] from a definition, as a connector fault. A hole halts.
-fn definition<T>(
-    batch: &WriteBatch<'_, '_>,
-    read: Result<T, ViewRead<StoreError>>,
-) -> Result<T, RunFault> {
-    match read {
-        Ok(value) => Ok(value),
-        Err(ViewRead::View(fault)) => Err(RunFault::Store(fault)),
-        Err(ViewRead::Corrupt(corrupt)) => Err(RunFault::Store(batch.refuse_corrupt(corrupt))),
-    }
-}
-
-/// A height the producer asked for as recorded. `AboveTip` inside the
-/// range the caller derived (`tip + 1` for the live root) is
-/// [`Corrupt::HoleBelowTip`] for `record` and halts; a store fault passes
-/// through, and an in-range hole is already that fault from the view.
-fn present<T>(
-    batch: &WriteBatch<'_, '_>,
-    height: BlockHeight,
-    record: PerHeightRecord,
-    at: Result<AtHeight<T>, StoreError>,
-) -> Result<T, RunFault> {
-    match at {
-        Ok(AtHeight::Recorded(value)) => Ok(value),
-        Ok(AtHeight::AboveTip) => Err(RunFault::Store(
-            batch.refuse_corrupt(Corrupt::HoleBelowTip { at: height, record }),
-        )),
-        Err(fault) => Err(RunFault::Store(fault)),
     }
 }
 

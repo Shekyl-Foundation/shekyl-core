@@ -345,24 +345,24 @@ pub(crate) fn claim_alt(
     })
 }
 
-/// The claims a producer makes for the block after the recorded tip, on
-/// one snapshot: its height, the seed (CEN-D3) and the target (CEN-D4) —
-/// what the miner's template producer pins and hands the miner.
+/// The claims a producer makes for the block after `snap`'s tip: its
+/// height, the seed (CEN-D3) and the target (CEN-D4) — what the template
+/// producer reads beside the chain facts and the pool's selection, on the
+/// same snapshot, and hands the miner.
 ///
 /// # Errors
 ///
 /// [`ClaimStop`].
-pub fn claim_next(
-    store: &ChainStore,
+pub(crate) fn claim_next(
+    snap: &ReadSnapshot<'_>,
     rules: ChainRules,
 ) -> Result<(BlockHeight, BlockHash, Target), ClaimStop> {
-    let snap = store.begin_read()?;
-    let view = shekyl_chain_store::store::SnapshotView::new(&snap);
+    let view = shekyl_chain_store::store::SnapshotView::new(snap);
     let connecting = shekyl_chain_rules::Tip::connecting_height(view.tip()?.as_ref());
     let rule_set = rules.in_force(connecting);
     let seed = match seed_height(connecting) {
         None => BlockHash::NULL,
-        Some(at) => recorded_hash(&snap, at)?,
+        Some(at) => recorded_hash(snap, at)?,
     };
     match target_claim(&view, connecting, &rule_set) {
         Ok(Ok(target)) => Ok((connecting, seed, target)),
