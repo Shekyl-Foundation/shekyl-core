@@ -467,6 +467,64 @@ pub enum StoreInvariant {
         /// The first height still retained.
         floor: shekyl_types::BlockHeight,
     },
+    /// **SI-35** — the admission view reads `D` from the count phase's memo,
+    /// under the opening block's hash. A miss is not a rebuild and not an
+    /// absent set: the count phase of this block already filed every epoch a
+    /// section inside `W₂` can name. Fatal, never a verdict on the block.
+    DrawableMemoMiss {
+        /// The epoch the view was asked for.
+        epoch: shekyl_types::SettlementEpoch,
+    },
+    /// **SI-36** — admission writes each reveal once, and the shortfall
+    /// reduction and the draw ordinal fit the row. A second reveal of `h`,
+    /// a missing draw row, a reduction past `u32`, or an ordinal the
+    /// issued-draw key cannot hold is this halt. Fatal, never a verdict
+    /// on the block.
+    AdmissionWrite {
+        /// The height the write was about: the revealed block, or `h_incl`.
+        height: shekyl_types::BlockHeight,
+        /// Which check failed.
+        observed: AdmissionWriteFault,
+    },
+    /// **SI-37** — `visibly_short` was asked for an index `D` does not
+    /// contain. The verifier derives every index from `D`, so an honest
+    /// admission does not ask this. It is not a memo miss: the set was
+    /// there. Raised before any write. Fatal, never a verdict on the block.
+    DrawableIndexPastSet {
+        /// The height whose drawable set was indexed.
+        height: shekyl_types::BlockHeight,
+        /// The index the set does not contain.
+        index: u64,
+    },
+    /// **SI-38** — a recorded block's coinbase extra does not yield exactly
+    /// one draw commitment. Above the tip is an unanswered bundle, not this
+    /// row. A parse failure, no `0x0C` field, or two of them is this halt.
+    /// The all-zero commitment is a commitment: genesis publishes it.
+    /// Fatal, never a verdict on the block.
+    DrawCommitmentUnreadable {
+        /// The recorded height whose extra was read.
+        height: shekyl_types::BlockHeight,
+    },
+    /// **SI-39** — a pair's visible issued-draw count does not fit the `u32`
+    /// the reduction counts. The count is not saturated, and it is not
+    /// SI-36's reduction width. Fatal, never a verdict on the block.
+    VisibleDrawCountPastWidth {
+        /// The height the reduction was counted below.
+        height: shekyl_types::BlockHeight,
+    },
+}
+
+/// What an SI-36 check observed (payload of [`StoreInvariant::AdmissionWrite`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdmissionWriteFault {
+    /// `revealed` was already set. A bundle reveals `h` once.
+    AlreadyRevealed,
+    /// The shortfall reduction does not fit in `issued_short`.
+    ReductionPastWidth,
+    /// The revealed block, or `h_incl`, has no draw row to update.
+    RowAbsent,
+    /// A draw's place in its bundle does not fit the issued-draw key.
+    OrdinalPastWidth,
 }
 
 /// What an SI-33 check observed (payload of
@@ -675,6 +733,11 @@ impl StoreInvariant {
             Self::EpochReadBelowFloor { .. } => 32,
             Self::BlockDrawsNotSingular { .. } => 33,
             Self::BlockDrawsReadBelowFloor { .. } => 34,
+            Self::DrawableMemoMiss { .. } => 35,
+            Self::AdmissionWrite { .. } => 36,
+            Self::DrawableIndexPastSet { .. } => 37,
+            Self::DrawCommitmentUnreadable { .. } => 38,
+            Self::VisibleDrawCountPastWidth { .. } => 39,
         }
     }
 }
@@ -935,6 +998,46 @@ impl core::fmt::Display for StoreInvariant {
                      the block corpus"
                 ),
             },
+            Self::AdmissionWrite { height, observed } => match observed {
+                AdmissionWriteFault::AlreadyRevealed => write!(
+                    f,
+                    "archival_block_draws at height {height} is already revealed; a bundle \
+                     reveals a block's seed once"
+                ),
+                AdmissionWriteFault::ReductionPastWidth => write!(
+                    f,
+                    "the shortfall reduction at height {height} does not fit issued_short"
+                ),
+                AdmissionWriteFault::RowAbsent => write!(
+                    f,
+                    "admission was asked to update the draw row at height {height}, and that \
+                     row was never written"
+                ),
+                AdmissionWriteFault::OrdinalPastWidth => write!(
+                    f,
+                    "a draw ordinal at height {height} does not fit the issued-draw key"
+                ),
+            },
+            Self::DrawableIndexPastSet { height, index } => write!(
+                f,
+                "visibly_short at height {height} was asked for index {index}, which the \
+                 drawable set does not contain"
+            ),
+            Self::DrawCommitmentUnreadable { height } => write!(
+                f,
+                "the block at height {height} is recorded and its coinbase extra does not \
+                 yield exactly one draw commitment"
+            ),
+            Self::VisibleDrawCountPastWidth { height } => write!(
+                f,
+                "a pair's visible issued draws at height {height} do not fit the u32 the \
+                 reduction counts"
+            ),
+            Self::DrawableMemoMiss { epoch } => write!(
+                f,
+                "the admission view has no drawable set for epoch {epoch} under the opening \
+                 block's hash; the count phase files that set before admission reads it"
+            ),
             Self::BlockDrawsReadBelowFloor { asked, floor } => write!(
                 f,
                 "archival_block_draws was asked for height {asked} while rows below {floor} may \
@@ -992,6 +1095,11 @@ impl core::error::Error for StoreInvariant {
             | Self::EpochReadBelowFloor { .. }
             | Self::BlockDrawsNotSingular { .. }
             | Self::BlockDrawsReadBelowFloor { .. }
+            | Self::DrawableMemoMiss { .. }
+            | Self::AdmissionWrite { .. }
+            | Self::DrawableIndexPastSet { .. }
+            | Self::DrawCommitmentUnreadable { .. }
+            | Self::VisibleDrawCountPastWidth { .. }
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

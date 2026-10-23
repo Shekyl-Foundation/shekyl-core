@@ -785,9 +785,38 @@ pub const fn bundle_charge(count: u32) -> u64 {
 /// Computed in 128 bits and saturated: a budget above `u64::MAX` binds
 /// nothing a `u64` sum can reach.
 #[must_use]
-pub fn section_budget(c: u64, d_max: u64, seb: SettlementEpochBlocks) -> u64 {
+pub fn section_budget(c: u64, d_max: u64, seb: SettlementEpochBlocks) -> SectionBudget {
     let cap = u128::from(d_max) * u128::from(COUNT_CAP_BASE_MULTIPLE) / u128::from(seb.get()) + 1;
-    u64::try_from(u128::from(c).saturating_mul(cap)).unwrap_or(u64::MAX)
+    SectionBudget(u64::try_from(u128::from(c).saturating_mul(cap)).unwrap_or(u64::MAX))
+}
+
+/// The section budget, in draws: [`section_budget`]'s result.
+///
+/// A charge is compared with one of these and with nothing else, so a raw
+/// count cannot be passed off as the cap (`SO-D12` increment 2, finding 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SectionBudget(u64);
+
+impl core::fmt::Display for SectionBudget {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl SectionBudget {
+    /// A budget of `draws`. [`section_budget`] is how a section obtains one.
+    /// A comparison that names its own cap — a test — goes through this;
+    /// the section check does not.
+    #[must_use]
+    pub const fn from_draws(draws: u64) -> Self {
+        Self(draws)
+    }
+
+    /// The budget, in draws.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
 }
 
 /// The `D` a section's budget is computed from: [`section_budget`]'s

@@ -14,7 +14,10 @@
 //! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{Corrupt, Fault, RowStatus, RuleSet, RuleSetId, Trust};
+use shekyl_archival_retention::{BundleKept, PassBitmap};
+use shekyl_chain_rules::{
+    Admitted, Corrupt, DrawableMemo, Fault, RowStatus, RuleSet, RuleSetId, Trust,
+};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
@@ -1055,3 +1058,50 @@ fn coverage_gaps_widen_in_the_committing_batch_and_never_narrow() {
 // fields still passed through — seven until E6 slice 2, six until DRS-E3,
 // five until E6 slice 7 commit 5, one until wave B. Both left with the
 // types on 2026-09-29: there is no field to count.
+
+/// An admission fault halts at the block being connected.
+///
+/// The block row is already in `BLOCK_INFO` when admission runs. Building
+/// the view through `chain_view` would note `tip + 1` and halt the writer
+/// at the next height. The bundle names the next epoch's open, which this
+/// chain has not recorded, so the journal faults SI-36 `RowAbsent`.
+#[test]
+fn an_admission_fault_halts_at_the_admitting_block() {
+    use super::error::AdmissionWriteFault;
+
+    let path = tmp("connect-admission-halt");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (_, genesis) = connect_genesis(&store);
+    let block = candidate(1, genesis.hash(), Vec::new());
+    let schedule = RuleSet::GENESIS.settlement_schedule();
+    let admitting = BlockHeight::from_raw(1);
+    let unrecorded =
+        BlockHeight::from_raw(schedule.open_height(schedule.epoch_at(admitting).to_raw() + 1));
+    let admitted = [Admitted {
+        kept: BundleKept {
+            h: unrecorded,
+            seed: [0x11; 32],
+            passes: PassBitmap::from_passes(0, []).expect("an empty bitmap"),
+        },
+        draws: Vec::new(),
+    }];
+    let memo = DrawableMemo::new();
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let judged = judge(&view, block)?;
+        Ok(batch.connect_admitting(judged, RuleSet::GENESIS, Some((&memo, &admitted)))?)
+    });
+    let row = StoreInvariant::AdmissionWrite {
+        height: unrecorded,
+        observed: AdmissionWriteFault::RowAbsent,
+    };
+    expect_row(&out, row);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: admitting,
+            row,
+        }
+    );
+    cleanup(&path);
+}
