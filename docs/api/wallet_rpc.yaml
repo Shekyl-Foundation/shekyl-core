@@ -459,7 +459,11 @@ info:
   # ending of that kind at or below the height shown. -29521 now means only
   # a refusal before any byte was sent; a daemon's terminal verdict on a
   # sent exit is -29522, held until its end date. api_version stays 1.
-  version: 0.14.0
+  # 0.15.0: the staking posture `foundation_complete_tree` is renamed
+  # `support_complete_tree` on the bond request, the -29506 refusal, and
+  # the serving-posture response. The obligation is unchanged: the
+  # whole-corpus archival backstop. api_version stays 1.
+  version: 0.15.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
