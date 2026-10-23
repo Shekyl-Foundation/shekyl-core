@@ -16,10 +16,13 @@
 //! were recomputed by that script on 2026-10-12, when the kept part gained
 //! its `count` and the root lost its per-reference frame (`SCS-P39`).
 //! On 2026-10-22 the kept encoding gained the support count and its bitmap
-//! (`ARCHIVAL_SUPPORT_DRAW.md` §5). The lengths and the commitment and root
-//! hashes in this file are this crate's encode of that preimage. The inputs
-//! are built here by the same small formulas that script used ([`record`],
-//! [`witness_key`], [`witness_signature`]).
+//! (`ARCHIVAL_SUPPORT_DRAW.md` §5). On 2026-10-23 the empty-support figures
+//! below, and the nonempty support commitment and root, were produced by
+//! `docs/test_vectors/RPC_CHANNEL_NAMES_V1/generate.py`. Its `cshake256` is
+//! its own Keccak, checked against hashlib's SHAKE256 and NIST SP 800-185
+//! sample #3, and it shares no code with this crate. The inputs are built
+//! here by those formulas ([`record`], [`witness_key`],
+//! [`witness_signature`]).
 //!
 //! Each test names the edit that turns it red (rule 50).
 
@@ -78,13 +81,24 @@ fn witness_signature() -> [u8; BUNDLE_SIGNATURE_LEN] {
 }
 
 /// A kept part at `h` under [`SEED`] with these bitmap bytes read as
-/// `count` bits.
+/// `count` bits, and no support draws.
 fn kept_at(h: BlockHeight, count: u32, bitmap: &[u8]) -> BundleKept {
     BundleKept {
         h,
         seed: SEED,
         passes: PassBitmap::new(count, bitmap).expect("the vector's bitmap"),
         support: PassBitmap::none(),
+    }
+}
+
+/// The twelve-draw vector with support draw 0 also set. The support
+/// bitmap is one byte, bit 0.
+fn twelve_with_one_support() -> BundleKept {
+    BundleKept {
+        h: H,
+        seed: SEED,
+        passes: PassBitmap::new(12, &[0x01, 0x0A]).expect("twelve draws"),
+        support: PassBitmap::from_passes(1, [0]).expect("support draw 0"),
     }
 }
 
@@ -341,8 +355,8 @@ fn the_prunable_part_round_trips_at_its_exact_length() {
 
 /// A reference is its kept part and the prunable hash: it round-trips,
 /// is exactly `80 + ⌈count / 8⌉` bytes when the support bitmap is empty, and its
-/// encoding is pinned. The hex is this crate's encode of the support-bitmap
-/// preimage (module docs, 2026-10-22). Red edits: put
+/// encoding is pinned. The hex is the independent cSHAKE named in the
+/// module docs. Red edits: put
 /// `count` before `h`; drop it; read the hash from the front.
 #[test]
 fn kat_a_reference_is_its_kept_part_then_the_hash() {
@@ -395,6 +409,36 @@ fn kat_a_reference_is_its_kept_part_then_the_hash() {
     );
     assert_eq!(BundleRef::decode(&empty.encode()), Ok(empty.clone()));
     assert_eq!(empty.body_len(), 3_193);
+
+    // The length is the witness plus one record per set bit of either
+    // bitmap. The expected length is a body's own encoding, so it does
+    // not restate [`BundleRef::body_len`]'s popcount sum.
+    let support_only = BundleRef::new(
+        BundleKept {
+            h: H,
+            seed: SEED,
+            passes: PassBitmap::none(),
+            support: PassBitmap::from_passes(1, [0]).expect("support draw 0"),
+        },
+        body(1).prunable_hash(),
+    );
+    assert_eq!(
+        support_only.body_len(),
+        u64::try_from(body(1).as_bytes().len()).expect("a body fits")
+    );
+    let economy_and_support = BundleRef::new(
+        BundleKept {
+            h: H,
+            seed: SEED,
+            passes: PassBitmap::from_passes(3, [0, 1, 2]).expect("three economy draws"),
+            support: PassBitmap::from_passes(1, [0]).expect("support draw 0"),
+        },
+        body(4).prunable_hash(),
+    );
+    assert_eq!(
+        economy_and_support.body_len(),
+        u64::try_from(body(4).as_bytes().len()).expect("a body fits")
+    );
 }
 
 /// A reference is self-delimiting (`SCS-P39`): its stated count fixes its
@@ -445,13 +489,14 @@ fn a_reference_of_any_length_but_its_own_refuses() {
 
 /// The bundle commitment's vectors (§7.3, `SCS-P35`): no draws; eight
 /// draws and no pass; one record; three records with a bitmap that crosses
-/// a byte boundary; that case at `h + 1`; that case with one more bit set
-/// and the same records. **Unchanged by `SCS-P39`**: the preimage was
-/// already `seed ‖ h ‖ count ‖ bitmap ‖ records`, which is now literally
-/// the kept part followed by the records, and the six values are the ones
-/// pinned before the kept part carried its count. Red edits: hash anything
-/// but `BundleKept::encode` in front of the records; write `h` or `count`
-/// big-endian; rename the label; put the records first.
+/// a byte boundary; that case at `h + 1`; that case with one more economy
+/// bit set and the same records; and the twelve-draw case with one support
+/// bit. Every support bitmap is empty except that last one. The preimage
+/// is the kept part followed by the records, support count included. The
+/// hex is the independent cSHAKE named in the module docs. Red edits: hash
+/// anything but `BundleKept::encode` in front of the records; write `h` or
+/// a count big-endian; rename the label; put the records first; leave the
+/// support count out.
 #[test]
 fn the_bundle_commitment_matches_its_vectors() {
     let three = records_bytes(3);
@@ -482,6 +527,10 @@ fn the_bundle_commitment_matches_its_vectors() {
         commit(H, 12, &[0x09, 0x0A], &three),
         "e6c849bf022b175965c02c9f402df9ba2d277d7a0cba457d5efe4b980e4230e0"
     );
+    assert_eq!(
+        hex(&bundle_commitment(&twelve_with_one_support(), &three)),
+        "f626f6c4af284f660f45679bd3c8126f9d3ddc914e80f3649ca9ad020f31a16d"
+    );
 }
 
 /// The commitment is the hash of the kept part's one encoding followed by
@@ -508,8 +557,8 @@ fn the_commitment_is_over_the_kept_parts_encoding_then_the_records() {
     );
 }
 
-/// The commitment covers every byte of the seed, `h`, the count, the
-/// bitmap and each record. Red edit: stop hashing any one of them.
+/// The commitment covers every byte of the seed, `h`, both counts, both
+/// bitmaps and each record. Red edit: stop hashing any one of them.
 #[test]
 fn the_commitment_moves_with_every_field() {
     let three = records_bytes(3);
@@ -533,6 +582,11 @@ fn the_commitment_moves_with_every_field() {
     swapped.extend_from_slice(&record(0).encode());
     swapped.extend_from_slice(&record(2).encode());
     assert_ne!(base, bundle_commitment(&kept, &swapped));
+    assert_ne!(
+        base,
+        bundle_commitment(&twelve_with_one_support(), &three),
+        "a support bit is in the preimage"
+    );
 }
 
 /// The bundle commitment is not the carrier's set commitment over the same
@@ -591,12 +645,14 @@ fn vector_refs() -> (BundleRef, BundleRef) {
 
 /// The header root's vectors: over no reference, one, and two — `n_le[4]`
 /// and then each reference's own bytes, with no frame between them
-/// (`SCS-P39`). The one-reference and two-reference hashes are this
-/// crate's encode on 2026-10-22, when each kept part gained the support
-/// count. The empty root has no reference and is unchanged. Records-was:
-/// the length-framed preimage hashed to `28f79ede…c4b64586` and
-/// `d51fdf58…24a4c85e`. Red edits: drop `n_le[4]`; frame a reference by
-/// its length; leave `count` out of a reference; hash `h` before the seed;
+/// (`SCS-P39`). The one-reference and two-reference hashes, and the
+/// twelve-draw reference with one support bit, were produced by the
+/// independent cSHAKE named in the module docs, over the encoding that
+/// carries the support count. The empty
+/// root has no reference and is unchanged. Records-was: the length-framed
+/// preimage hashed to `28f79ede…c4b64586` and `d51fdf58…24a4c85e`. Red
+/// edits: drop `n_le[4]`; frame a reference by its length; leave `count`
+/// or the support count out of a reference; hash `h` before the seed;
 /// rename the label.
 #[test]
 fn the_root_matches_its_vectors() {
@@ -613,6 +669,11 @@ fn the_root_matches_its_vectors() {
         hex(&root(&[first.clone(), second.clone()])),
         "0c7f9da64f6d3cf7edee74761c6e92cd9099bcdd51e8d9333eb691d1de1af8e5"
     );
+    let supported = BundleRef::new(twelve_with_one_support(), body(3).prunable_hash());
+    assert_eq!(
+        hex(&root(std::slice::from_ref(&supported))),
+        "88824ae7bd5dec403bcfc29f02abf4ecc83358e5b2d20f69051d3aa54736a532"
+    );
     // Order is hashed: the section check refuses the swap, and the root
     // would not agree with it either.
     assert_ne!(
@@ -621,10 +682,11 @@ fn the_root_matches_its_vectors() {
     );
 }
 
-/// Two different sections cannot share a root preimage. Two controls the
-/// encode also produced, each a preimage the root must not be:
-/// the two references' bytes under `n = 1`, and one reference with no
-/// `n`. And the structural reason, checked rather than argued: the
+/// Two different sections cannot share a root preimage. Two controls over
+/// this encoding's references: the two references' bytes under `n = 1`,
+/// and one reference with no `n`. The figures those controls replaced
+/// (`c4e00666…`, `c6bdd61d…`) were the pre-support preimage. And the
+/// structural reason, checked rather than argued: the
 /// concatenation of two references parses back into exactly those two,
 /// because each reference's own count says where it ends — no byte can
 /// move between one reference's bitmap, its hash and the next reference.
@@ -636,12 +698,12 @@ fn two_sections_cannot_share_a_root_preimage() {
     let two = root(&[first.clone(), second.clone()]);
     assert_ne!(
         hex(&two),
-        "c4e0066605daec9bd4a8fac7ad935fb9881cd2ebc95546d2d7cc643dceb3720a",
+        "1db7631e56a63be2081de642b80c1401e19f90f51fcc4f3ab4206e614c4316f4",
         "n counts references, not bytes"
     );
     assert_ne!(
         hex(&root(std::slice::from_ref(&first))),
-        "c6bdd61d22246ea3b1a44fcafb5e28f8cd4259ca675a1db3b37c467cdac2ab6c",
+        "ccceabe7d4795393ca05afc36ca0c35b0dbfac365eff1f47c4c6fcec4edbc04c",
         "n is hashed"
     );
 
@@ -693,8 +755,8 @@ fn two_sections_cannot_share_a_root_preimage() {
     assert_ne!(root(&[wide(97, 5)]), root(&[wide(104, 5)]));
 }
 
-/// The root covers each reference's seed, `h`, count, bitmap and prunable
-/// hash. Red edit: leave any one out of `BundleRef::encode`.
+/// The root covers each reference's seed, `h`, both counts, both bitmaps
+/// and the prunable hash. Red edit: leave any one out of `BundleRef::encode`.
 #[test]
 fn the_root_moves_with_every_field_of_a_reference() {
     let (first, second) = vector_refs();
@@ -722,6 +784,11 @@ fn the_root_moves_with_every_field_of_a_reference() {
     let mut other = ph;
     other[31] ^= 1;
     assert_ne!(base, with(BundleRef::new(first.kept().clone(), other)));
+    assert_ne!(
+        base,
+        with(BundleRef::new(twelve_with_one_support(), ph)),
+        "a support bit is in the preimage"
+    );
 }
 
 /// The root counts its references in four bytes, and a section the count

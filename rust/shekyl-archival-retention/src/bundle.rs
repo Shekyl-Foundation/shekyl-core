@@ -523,14 +523,17 @@ impl BundleRef {
         self.kept.charge()
     }
 
-    /// The length of the body this reference names: the witness key and
-    /// signature, and one record per set bit. The reference fixes it, so a
-    /// longer fetch is refused before it completes (§7.5).
+    /// The length of the body this reference names: the witness, then one
+    /// record per set bit of the economy bitmap and of the support bitmap.
+    /// The reference fixes it, so a longer fetch is refused before it
+    /// completes (§7.5).
     #[must_use]
     pub fn body_len(&self) -> u64 {
-        // At most 2^32 set bits of 1,397 bytes each: no overflow in `u64`.
-        BUNDLE_WITNESS_LEN as u64
-            + u64::from(self.kept.passes.popcount()) * BUNDLE_RECORD_LEN as u64
+        // Each popcount is a `u32`. Their sum times [`BUNDLE_RECORD_LEN`]
+        // fits `u64`: two bitmaps, each with every bit set.
+        let records =
+            u64::from(self.kept.passes.popcount()) + u64::from(self.kept.support.popcount());
+        BUNDLE_WITNESS_LEN as u64 + records * BUNDLE_RECORD_LEN as u64
     }
 }
 
@@ -696,7 +699,8 @@ impl BundleBody {
 ///
 /// ```text
 /// cSHAKE256_32("shekyl/archival-serve-credit-bundle-v1",
-///              seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ r₁ ‖ … ‖ rₙ)
+///              seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap
+///              ‖ support_count_le[4] ‖ support_bitmap ‖ r₁ ‖ … ‖ rₙ)
 /// ```
 ///
 /// That is **the kept part followed by the records**: the preimage opens
@@ -734,7 +738,8 @@ pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
 ///
 /// ```text
 /// cSHAKE256_32("shekyl/archival-bundle-root-v1", n_le[4] ‖ ref₁ ‖ … ‖ refₙ)
-/// refᵢ = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉] ‖ prunable_hash[32]
+/// refᵢ = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉]
+///        ‖ support_count_le[4] ‖ support_bitmap[⌈support / 8⌉] ‖ prunable_hash[32]
 /// ```
 ///
 /// Each bundle contributes its kept bytes and the hash of its prunable
