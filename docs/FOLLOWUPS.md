@@ -1158,7 +1158,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-4`, `TB-5`
 
-- **Name the Tor Status and Health fields (the RW round).** Increment 3 exposes one typed read (`TSR-Q12`, including `ManagedTorFix` and `OwnTx`); this round names the restricted Status fields and Health's one boolean (`TSR-Q4`) as typed values (`TSR-Q13`). The same-user GUI already has Status (`RPC_CHANNEL.md` RT-15). Blocker: the RW naming pass, which Rick assigned to that round. Falsify by `RPC_WIRE.md` naming each field. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) `TSR-Q12`
+- **Name the Tor Status and Health fields (the RW round).** Increment 3 exposes one typed read (`TSR-Q12`, including `ManagedTorFix` and `OwnTx`); this round names the restricted Status fields and Health's one boolean (`TSR-Q4`) as typed values (`TSR-Q13`). No leg carries Status to the GUI yet: the sidecar's view listener has no Status, and RT-15's same-user socket or pipe is RT-W10's to build and is not authorized (`RPC_CHANNEL.md` §13); the sidecar reaches Status over the owning connection the GUI launches it with (`GS-Q1`, Rick 2026-10-22; core increment `GS-C3`). Blocker: the RW naming pass, which Rick assigned to that round. Falsify by `RPC_WIRE.md` naming each field. — [`TOR_SUPERVISOR.md`](design/TOR_SUPERVISOR.md) `TSR-Q12`
   - Target: pre-genesis
   - Owner: [`RPC_WIRE.md`](design/RPC_WIRE.md)
 
