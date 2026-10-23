@@ -189,7 +189,9 @@ fn a_respawn_backs_off_and_announces_once_per_cap() {
     );
     let text = render(&core.status());
     assert!(
-        text.contains("syncing over clearnet and holding its own transactions"),
+        text.contains(
+            "waiting for Tor and holding its own transactions. It is syncing over clearnet."
+        ),
         "{text}"
     );
     assert!(!text.contains("clearnet-only"), "{text}");
@@ -637,7 +639,9 @@ fn the_relays_verdict_decides_own_tx_and_health_and_is_said_under_the_cap() {
     assert!(status.sync.tor, "the node still syncs over the link");
     let text = render(&status);
     assert!(
-        text.starts_with("This node is syncing over clearnet and holding its own transactions."),
+        text.starts_with(
+            "This node is holding its own transactions. It is syncing over Tor and clearnet."
+        ),
         "{text}"
     );
     // The running link samples every second, so the step's deadline is the
@@ -670,9 +674,28 @@ fn a_lost_verdict_past_the_cap_is_said_at_once() {
     let cap = duration_ns(policy().cap);
     let lost = core.on(held(), cap + 1);
     assert_eq!(announces(&lost), 1);
+    // R1: the link is usable, so the node is not waiting for Tor and is
+    // syncing over it; the hold's reason is GS-C2's typed value.
     let text = render(&core.status());
     assert!(
-        text.starts_with("This node is waiting for Tor and holding its own transactions."),
+        text.starts_with("This node is holding its own transactions. It is syncing over Tor."),
+        "{text}"
+    );
+    assert!(!text.contains("waiting for Tor"), "{text}");
+    assert!(!text.contains("not syncing"), "{text}");
+}
+
+/// `Held` while the link is down: waiting for Tor, and syncing over
+/// nothing when clearnet is off.
+#[test]
+fn a_held_origin_under_a_down_link_waits_for_tor() {
+    let (mut core, _) = Core::start(policy(), managed(false), 0);
+    assert_eq!(core.status().own_tx, OwnTx::Held);
+    let text = render(&core.status());
+    assert!(
+        text.starts_with(
+            "This node is waiting for Tor and holding its own transactions. It is not syncing."
+        ),
         "{text}"
     );
 }

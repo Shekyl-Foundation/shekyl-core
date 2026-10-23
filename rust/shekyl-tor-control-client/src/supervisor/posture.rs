@@ -35,7 +35,11 @@ pub enum OwnTx {
     /// leaves on an address-hiding session now (`GS-Q3`): the class is
     /// non-empty (Health) and the epoch's origin pin is not exhausted.
     AddressHiding,
-    /// Health is false and Tor is managed or an operator's Tor.
+    /// The verdict is false and Tor is managed or an operator's Tor. Health
+    /// is false, or true with the epoch's origin pin exhausted while
+    /// address-hiding sessions are live: the pin stays off Health
+    /// (`RPC_CHANNEL.md` §6.1). The transaction is held on this node, not
+    /// sent.
     Held,
     /// The operator set Tor off and clearnet on.
     ClearnetOnly,
@@ -196,12 +200,7 @@ pub fn render(status: &Status) -> String {
     let mut text = String::new();
     match status.own_tx {
         OwnTx::AddressHiding => text.push_str("Tor is carrying this node's traffic."),
-        OwnTx::Held if status.sync.clearnet => text.push_str(
-            "This node is syncing over clearnet and holding its own transactions.",
-        ),
-        OwnTx::Held => text.push_str(
-            "This node is waiting for Tor and holding its own transactions. It is not syncing.",
-        ),
+        OwnTx::Held => text.push_str(&held_sentence(status.sync)),
         OwnTx::ClearnetOnly => text.push_str(
             "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.",
         ),
@@ -216,6 +215,25 @@ pub fn render(status: &Status) -> String {
         text.push_str(&fixes_sentence(&status.fixes));
     }
     text
+}
+
+/// The `Held` sentence. The node is "waiting for Tor" only while the link
+/// is not usable; a held origin beside a usable link (no address-hiding peer
+/// yet, or the epoch's pin exhausted) is holding, not waiting. What the node
+/// syncs over is read from `sync`, never assumed from the hold; the typed
+/// reason for the hold is `GS-C2`'s (IG-Q72).
+fn held_sentence(sync: Syncing) -> String {
+    let syncing = match (sync.tor, sync.clearnet) {
+        (true, true) => "It is syncing over Tor and clearnet.",
+        (true, false) => "It is syncing over Tor.",
+        (false, true) => "It is syncing over clearnet.",
+        (false, false) => "It is not syncing.",
+    };
+    if sync.tor {
+        format!("This node is holding its own transactions. {syncing}")
+    } else {
+        format!("This node is waiting for Tor and holding its own transactions. {syncing}")
+    }
 }
 
 fn cause_sentence(status: &Status) -> Option<String> {
