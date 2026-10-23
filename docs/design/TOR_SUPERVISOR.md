@@ -139,7 +139,7 @@ says which and why.
 
 | Fact | Anchor |
 | --- | --- |
-| The supervisor starts with the daemon and step 8 does not wait for Tor. A process fault respawns into the kept data directory; the onion seed is held for the boot. There is no bootstrap deadline | `rust/shekyl-daemon/src/run.rs:338`; `rust/shekyl-daemon/src/tor.rs:61`; `rust/shekyl-tor-control-client/src/supervisor.rs:219` |
+| The supervisor starts with the daemon and step 8 does not wait for Tor. A process fault respawns into the kept data directory; the onion seed is held for the boot. There is no bootstrap deadline | `rust/shekyl-daemon/src/run.rs:338`; `rust/shekyl-daemon/src/tor.rs:61`; `rust/shekyl-tor-control-client/src/supervisor/core/mod.rs:83` |
 | A managed Tor's death takes that incarnation's route down and the supervisor respawns. An operator's Tor is not watched here | `rust/shekyl-ffi/src/zone_ffi.rs` `publish_tor_down`; `rust/shekyl-daemon/src/tor.rs` |
 | The supervisor sends one `SETEVENTS` and reads the parsed events. Bootstrap readiness is still the actor's `GETINFO` poll | `rust/shekyl-tor-control-client/src/control/events.rs:59`; `rust/shekyl-daemon/src/tor.rs` |
 | The event sink holds `EVENT_QUEUE_EVENTS` (256); an event past it is dropped and counted, and the read loop never waits (`TSR-F2`) | `rust/shekyl-tor-control-client/src/control/actor.rs:273` |
@@ -884,7 +884,7 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
    Step 8 does not wait for Tor (`rust/shekyl-daemon/src/run.rs:338`), and the
    300 s bootstrap deadline is gone. A managed route exists only as
    `ManagedRunning`, built on the transition into `Running`
-   (`rust/shekyl-tor-control-client/src/supervisor.rs:219`). The public
+   (`rust/shekyl-tor-control-client/src/supervisor/core/mod.rs:83`). The public
    directory cache is increment 3b, not this one. `ManagedTorFix`, `OwnTx`
    and the one typed read and renderer are `shekyl-tor-control-client`'s
    `supervisor` module. `TSR-M2` is recorded (2026-10-22); the driver's base
