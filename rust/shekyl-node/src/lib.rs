@@ -128,9 +128,11 @@ pub struct OpenArgs<'a> {
 }
 
 struct Slots {
-    /// `Arc` so a read clones the facts out and drops the lock before it
-    /// hashes. `pow_hash` waits for a permit and then hashes; holding this
-    /// lock across that wait would stall every chain read for the hash.
+    /// The facts, behind `Arc` so a read clones them and drops this lock
+    /// before it runs. The guard covers the swap to absent. A read can
+    /// wait (`pow_hash` takes a hasher permit, then hashes) or just take
+    /// time, and either one stalls every other chain read if the guard
+    /// spans it.
     facts: Arc<Mutex<Option<Arc<StoreFacts>>>>,
     pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
     door: Arc<Mutex<Option<Door>>>,
@@ -299,19 +301,13 @@ impl Node {
     ///
     /// # Panics
     ///
-    /// When called from a tokio task. [`shekyl_runtime::Pool::block_on`] and
-    /// [`shekyl_runtime::Pool::shutdown`] wait, and a wait inside a task
-    /// panics. [`Drop`] calls this, so the node must not be dropped from a
-    /// task either. Mining control stops the miner; it does not stop or
-    /// drop the node.
+    /// In an asynchronous context. [`shekyl_runtime::Pool::block_on`] and a
+    /// non-zero [`shekyl_runtime::Pool::shutdown`] wait, and Tokio refuses a
+    /// wait where blocking is not allowed: a task, or any thread that has
+    /// entered a runtime. [`Drop`] calls this, so the node must not be
+    /// dropped from that context either. Mining control stops the miner; it
+    /// does not stop or drop the node.
     pub fn stop(&self) {
-        // Red edit: delete this assert. It is `debug_assert!` on purpose:
-        // a release build does not carry it, so only a debug build can
-        // fire it. The `# Panics` section is the contract either way.
-        debug_assert!(
-            tokio::runtime::Handle::try_current().is_err(),
-            "Node::stop waits on the runtime; a tokio task cannot call it or drop the node"
-        );
         let Some(runtime) = self
             .runtime
             .lock()
@@ -604,6 +600,14 @@ mod tests {
     /// A `pow_hash` waiting on a hasher permit does not hold the facts
     /// lock: a chain read returns while that wait is in progress.
     ///
+    /// [`shekyl_hash_budget::Budget::waiting`] is the signal. It rises
+    /// inside `acquire`, which runs inside the read, so the chain read
+    /// starts only once the slot guard would already be held. The permits
+    /// stay held until that read returns, so a guard that spanned the wait
+    /// fails `READ_BOUND`. Both bounds are failure limits: the enter loop
+    /// returns when the wait is visible, and a read that finishes returns
+    /// at once.
+    ///
     /// Red edit: hold the slot mutex across `read`.
     #[test]
     fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
@@ -613,6 +617,11 @@ mod tests {
         use shekyl_daemon_rpc::chain_facts::ChainFacts;
         use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowSeed};
         use shekyl_hash_budget::Class;
+
+        /// The hash thread has not reached `acquire`.
+        const ENTER_BOUND: Duration = Duration::from_secs(5);
+        /// The chain read shared the permit wait. The permits are still held.
+        const READ_BOUND: Duration = Duration::from_secs(2);
 
         let dir = tempfile::tempdir().expect("temp");
         let node = open_at(dir.path(), Arc::new(|| {}));
@@ -634,15 +643,15 @@ mod tests {
         };
         let entered = Instant::now();
         while budget.waiting(Class::CalcPow) == 0 {
-            assert!(
-                entered.elapsed() < Duration::from_secs(2),
-                "pow_hash did not wait for a permit"
-            );
             if hashing.is_finished() {
                 let finished = hashing.join().expect("pow thread");
                 panic!("pow_hash finished without waiting for a permit: {finished:?}");
             }
-            std::thread::sleep(Duration::from_millis(1));
+            assert!(
+                entered.elapsed() < ENTER_BOUND,
+                "pow_hash did not wait for a permit"
+            );
+            std::thread::yield_now();
         }
         let (done, arrived) = mpsc::channel();
         let reading = {
@@ -653,7 +662,7 @@ mod tests {
             })
         };
         assert!(
-            arrived.recv_timeout(Duration::from_millis(200)).is_ok(),
+            arrived.recv_timeout(READ_BOUND).is_ok(),
             "a chain read waited on the pow hash, so the facts lock is held across the permit wait"
         );
         drop(held);

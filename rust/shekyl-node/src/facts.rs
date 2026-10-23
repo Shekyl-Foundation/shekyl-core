@@ -129,8 +129,11 @@ impl ChainBridge {
     }
 
     /// Clone the facts out of the slot and drop the lock before `read`.
-    /// `pow_hash` waits for a hasher permit and then hashes; the lock must
-    /// not be held across that.
+    ///
+    /// The guard covers the swap to absent. The read runs after it drops:
+    /// `pow_hash` waits for a hasher permit and then hashes, and a read
+    /// such as `block_at` or `coinbase_sum` takes its own time. A guard
+    /// that spanned any of them would stall every chain read.
     fn with<T>(
         &self,
         read: impl FnOnce(&StoreFacts) -> Result<T, FactsFault>,

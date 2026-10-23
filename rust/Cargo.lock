@@ -4810,7 +4810,6 @@ dependencies = [
  "shekyl-wire",
  "tempfile",
  "thiserror",
- "tokio",
  "tracing",
 ]
 
