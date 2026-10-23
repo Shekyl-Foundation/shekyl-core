@@ -660,6 +660,118 @@ async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
     scenario.close().await;
 }
 
+/// The node's producer (`template`) lists the pool's bodies under the
+/// reward-aware fill priced at the coinbase it built (DX-Q3, N2): the
+/// template's block weight and reward are `Fill`'s for the same bodies at
+/// that coinbase weight, every body the parent admits below the median is
+/// listed, and the block connects.
+#[tokio::test]
+async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_connects() {
+    use crate::template::{produce, Producer};
+    let (mut scenario, mined) = matured("producer-fill").await;
+    let first = paying_the_floor(&mut scenario, &mined, 0).await;
+    let second = paying_the_floor(&mut scenario, &mined, 1).await;
+    let path = tmp("producer-fill-pool");
+    let mut pool = open_pool(&mut scenario, &path).await;
+    scenario
+        .read_chain(|view, rule_set| {
+            for tx in [first.clone(), second.clone()] {
+                let txid = tx.txid_parts().hash;
+                assert_eq!(
+                    pool.admit(
+                        tx,
+                        UnixSeconds::from_raw(1),
+                        view,
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("no fault"),
+                    Admission::Admitted {
+                        evicted: Vec::new()
+                    }
+                );
+                assert!(pool.fluffed(&txid).expect("publish"));
+            }
+        })
+        .await;
+    let listed_weights: std::collections::BTreeMap<_, _> = pool
+        .listing()
+        .map(|(txid, listed)| (txid, listed.weight))
+        .collect();
+    let keys = crate::test_support::harness_keys();
+    let params = shekyl_economics::EconomicParams::default();
+    let (produced, facts, target) = scenario
+        .with_store(|store, rules| {
+            let snap = store.begin_read().expect("a snapshot");
+            let facts = crate::connector::chain_facts_on(&snap).expect("the facts");
+            let now = facts
+                .median_timestamp
+                .map_or(crate::scenario::CLOCK_START, |median| {
+                    shekyl_types::Timestamp::from_raw(median.to_raw() + 1)
+                });
+            let producer = Producer {
+                rules,
+                keys: &keys,
+                params: &params,
+                now,
+            };
+            let produced =
+                produce(&snap, &producer, Some(&mut pool), |_| true).expect("a template");
+            let (_, _, target) = crate::router::claim_next(&snap, rules).expect("the claim");
+            (produced, facts, target)
+        })
+        .await;
+    let listed: Vec<_> = produced
+        .transactions
+        .iter()
+        .map(|tx| tx.txid_parts().hash)
+        .collect();
+    assert_eq!(
+        listed.len(),
+        2,
+        "both bodies, far below the median: {listed:?}"
+    );
+    let bodies_weight: u64 = listed.iter().map(|txid| listed_weights[txid]).sum();
+    let fees: u64 = produced.transactions.iter().map(fee_of).sum();
+    let fill = shekyl_block_template::Fill::listed(
+        facts.medians.effective_median.to_raw(),
+        produced.coinbase_weight,
+        facts.parent_coins_generated.to_raw(),
+        facts.tx_volume,
+        &params,
+        bodies_weight,
+        fees,
+    )
+    .expect("priced");
+    assert_eq!(produced.block_weight, fill.block_weight(), "the weight");
+    assert_eq!(produced.block_reward.to_raw(), fill.reward(), "the reward");
+    assert!(produced.evicted.is_empty(), "nothing the parent refuses");
+    let height = produced.job.height;
+    let next = crate::scenario::NextBlock {
+        height,
+        seed: produced.job.seed,
+        target,
+        template: shekyl_block_template::Template {
+            block: produced.job.block.clone(),
+            transactions: produced.transactions.clone(),
+            block_weight: produced.block_weight,
+            block_reward: produced.block_reward,
+            miner_emission: shekyl_units::AtomicUnits::ZERO,
+            total_fees: shekyl_units::AtomicUnits::ZERO,
+            miner_fee_income: shekyl_units::AtomicUnits::ZERO,
+            fees_burned: shekyl_units::AtomicUnits::ZERO,
+        },
+    };
+    let connected = scenario
+        .connect_template(next)
+        .await
+        .unwrap_or_else(|outcome| panic!("the producer's block connects: {outcome}"));
+    assert_eq!(connected.height, height);
+    drop(pool);
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
 fn fee_of(tx: &shekyl_wire::Transaction) -> u64 {
     match &tx.ct {
         shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,

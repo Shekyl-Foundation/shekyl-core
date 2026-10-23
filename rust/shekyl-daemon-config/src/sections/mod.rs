@@ -233,7 +233,8 @@ pub struct Notify {
 /// coinbase pays, checked once, here, as the C++ address decode checks
 /// them (`shekyl_crypto_pq::account::coinbase_recipient`): the spend key
 /// is a curve point, the view key maps to X25519, and the ML-KEM-768 key
-/// is well-formed. Nothing downstream parses the text again.
+/// is well-formed. The template pays these keys; the miner's status shows
+/// the text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MineAddress {
     /// The address the operator wrote.
@@ -339,16 +340,6 @@ impl DaemonConfig {
     #[must_use]
     pub fn is_client(&self) -> bool {
         !self.session.command.is_empty()
-    }
-}
-
-/// The address network a daemon network's addresses belong to: regtest
-/// runs mainnet's genesis and prefixes.
-fn address_network(network: Network) -> shekyl_address::Network {
-    match network {
-        Network::Mainnet | Network::Regtest => shekyl_address::Network::Mainnet,
-        Network::Testnet => shekyl_address::Network::Testnet,
-        Network::Stagenet => shekyl_address::Network::Stagenet,
     }
 }
 
@@ -575,7 +566,7 @@ fn mine_section(r: &mut Reader<'_>, network: Network) -> Mine {
     let address = match r.address("mine-address") {
         Read::Present(text) => {
             let decoded =
-                shekyl_address::ShekylAddress::decode_for_network(&text, address_network(network))
+                shekyl_address::ShekylAddress::decode_for_network(&text, network.address_network())
                     .map_err(|error| error.to_string())
                     .and_then(|decoded| {
                         if !decoded.has_pqc_segment() {

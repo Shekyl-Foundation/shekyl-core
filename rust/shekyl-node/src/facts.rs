@@ -12,11 +12,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use shekyl_chain_ingest::service::Door;
+use shekyl_chain_sync::SyncState;
 use shekyl_daemon_rpc::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
     FactsFault, FeeEstimate,
 };
-use shekyl_daemon_rpc::handles::{BansFacts, DoorFacts, MiningFacts, PoolFacts, StopFacts};
+use shekyl_daemon_rpc::handles::{BansFacts, DoorFacts, PoolFacts, StopFacts};
 use shekyl_daemon_rpc::info_facts::{
     InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
 };
@@ -38,17 +39,22 @@ pub(crate) struct Surroundings {
     pub(crate) pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
     pub(crate) data_dir: PathBuf,
     pub(crate) offline: bool,
+    /// Chain sync's state: the watch the follower reads.
+    pub(crate) sync: tokio::sync::watch::Receiver<SyncState>,
 }
 
 impl NodeFacts for Surroundings {
     fn sync(&self) -> Result<SyncFacts, FactsFault> {
-        // No sync owner until chain sync's cutover. A closed sync channel
-        // reads as behind (DX-Q2 item 5); this is that fact.
+        // Chain sync's state, the one the follower posts on (DX-Q3, Q13).
         // `following_degraded` is the latch the flip writes into the store.
+        let state = *self.sync.borrow();
         Ok(SyncFacts {
             target: None,
-            synchronized: false,
-            busy_syncing: false,
+            synchronized: state == SyncState::Synced,
+            busy_syncing: matches!(
+                state,
+                SyncState::Behind { .. } | SyncState::Following { .. }
+            ),
             offline: self.offline,
             following_degraded: false,
         })
@@ -276,16 +282,6 @@ impl DoorFacts for DoorBridge {
             .as_ref()
             .map(Door::room)
             .ok_or(FactsFault::NotReady)
-    }
-}
-
-pub(crate) struct MiningBridge;
-
-impl MiningFacts for MiningBridge {
-    fn running(&self) -> Result<bool, FactsFault> {
-        // PR 3b starts the miner on this node's board. Until then the
-        // node is up and is not mining.
-        Ok(false)
     }
 }
 

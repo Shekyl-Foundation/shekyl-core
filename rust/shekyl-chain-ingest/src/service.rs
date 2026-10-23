@@ -513,7 +513,9 @@ where
     }
 
     /// The pool, locked, for a read that does not wait on anything.
-    fn pool_guard(&self) -> Option<std::sync::MutexGuard<'_, Pool>> {
+    /// The pool, locked, when it is wired and live. A caller that also
+    /// reads the chain begins its snapshot first, as [`with_pool`] does.
+    pub(crate) fn pool_guard(&self) -> Option<std::sync::MutexGuard<'_, Pool>> {
         if !self.pool_is_live() {
             return None;
         }
@@ -533,6 +535,11 @@ where
     /// Whether a pool is wired and its file has not faulted.
     pub(crate) fn pool_is_live(&self) -> bool {
         self.pool.is_some() && self.pool_live.load(Ordering::Acquire)
+    }
+
+    /// Whether a pool is wired and its file has faulted.
+    pub(crate) fn pool_retired(&self) -> bool {
+        self.pool.is_some() && !self.pool_live.load(Ordering::Acquire)
     }
 
     /// The pool file faulted. Block ingest continues; the pool is not read
@@ -646,21 +653,6 @@ impl Door {
         self.admission.bound().ok().map(|bound| bound.0)
     }
 
-    /// Whether [`Service::stop`](crate::service::Service::stop) has closed the door.
-    #[must_use]
-    pub(crate) fn is_closed(&self) -> bool {
-        self.room.is_closed()
-    }
-
-    /// Block until a block this node mined can take a seat, or the door closes.
-    ///
-    /// `false` is a closed door: the wait woke because the service is
-    /// stopping, and a seat will not appear.
-    pub(crate) fn wait_for_local_seat(&self) -> bool {
-        self.room.wait_local();
-        !self.is_closed()
-    }
-
     /// Close the door and wake a miner waiting for a seat.
     pub(crate) fn close(&self) {
         self.room.close();
@@ -696,11 +688,7 @@ impl Door {
             match self.offer(arrival.clone()) {
                 Ok(ticket) => return Ok(ticket.reply().await),
                 Err(Refusal::NoRoom) => {
-                    let door = self.clone();
-                    let open = tokio::task::spawn_blocking(move || door.wait_for_local_seat())
-                        .await
-                        .unwrap_or(false);
-                    if !open {
+                    if !self.room.wait_local().await {
                         return Ok(Tagged {
                             tag,
                             reply: Reply::Stopped,
@@ -1017,7 +1005,7 @@ where
     /// a restart. What `get_info` and `mining_status` report (PR 3b).
     #[must_use]
     pub fn pool_retired(&self) -> bool {
-        self.shared.pool.is_some() && !self.shared.pool_live.load(Ordering::Acquire)
+        self.shared.pool_retired()
     }
 
     /// The door.

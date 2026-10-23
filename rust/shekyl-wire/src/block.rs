@@ -144,13 +144,38 @@ pub struct Block {
     pub transaction_hashes: Vec<TxHash>,
 }
 
+/// Where an external miner writes in a block's serialized blob, both
+/// counted from the blob's first byte: the header's 4-byte nonce, and the
+/// coinbase's reserved [`COINBASE_NONCE_BYTES`](crate::tx_extra::COINBASE_NONCE_BYTES).
+/// Only [`Block::blob_offsets`] makes one, so the two always name the
+/// block they came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlobOffsets {
+    header_nonce: usize,
+    extra_nonce: usize,
+}
+
+impl BlobOffsets {
+    /// The header nonce's offset.
+    #[must_use]
+    pub const fn header_nonce(self) -> usize {
+        self.header_nonce
+    }
+
+    /// The coinbase extra nonce's offset.
+    #[must_use]
+    pub const fn extra_nonce(self) -> usize {
+        self.extra_nonce
+    }
+}
+
 impl Block {
     /// Where the coinbase's extra-nonce payload sits in
     /// [`serialize`](Self::serialize)'s output: the header, then the
     /// coinbase up to its extra, then the nonce's place in the extra's fixed
     /// grammar. An external miner writes its
     /// [`COINBASE_NONCE_BYTES`](crate::tx_extra::COINBASE_NONCE_BYTES) there
-    /// (`DRS_X_PR3B_ROUND0.md` N2), then hashes the block it made: the
+    /// (`DRS_X_STORE_FLIP.md` DX-Q3, N2), then hashes the block it made: the
     /// [`pow_blob`](Self::pow_blob) commits to the coinbase through the
     /// transaction tree, so a new extra nonce is a new tree hash.
     ///
@@ -176,6 +201,17 @@ impl Block {
             .write(&mut header)
             .expect("writing to a Vec is infallible");
         Some(header.len() + self.miner_transaction.extra_offset() + COINBASE_NONCE_OFFSET_IN_EXTRA)
+    }
+
+    /// Where an external miner writes in this block's blob: the header
+    /// nonce and the coinbase's reserved extra nonce. `None` when the
+    /// coinbase reserves no extra nonce ([`Self::coinbase_extra_nonce_offset`]).
+    #[must_use]
+    pub fn blob_offsets(&self) -> Option<BlobOffsets> {
+        Some(BlobOffsets {
+            header_nonce: self.header.nonce_offset(),
+            extra_nonce: self.coinbase_extra_nonce_offset()?,
+        })
     }
 
     /// Write the block.
@@ -477,20 +513,24 @@ mod tests {
             },
             transaction_hashes: vec![TxHash::from_bytes([0x55; 32])],
         };
-        let at = block
-            .coinbase_extra_nonce_offset()
+        let offsets = block
+            .blob_offsets()
             .expect("the coinbase opens with the pubkey and the nonce");
+        let at = offsets.extra_nonce();
 
         let mut bytes = block.serialize();
         let written = [0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x07, 0x18];
         bytes[at..at + COINBASE_NONCE_BYTES].copy_from_slice(&written);
+        let nonce = offsets.header_nonce();
+        bytes[nonce..nonce + 4].copy_from_slice(&0x0102_0304_u32.to_le_bytes());
         let parsed = Block::from_bytes(&bytes).expect("the written blob parses");
         let mut expected = block.clone();
         let nonce_in_extra = crate::tx_extra::COINBASE_NONCE_OFFSET_IN_EXTRA;
         expected.miner_transaction.prefix.extra
             [nonce_in_extra..nonce_in_extra + COINBASE_NONCE_BYTES]
             .copy_from_slice(&written);
-        assert_eq!(parsed, expected, "only the nonce changed");
+        expected.header.nonce = 0x0102_0304;
+        assert_eq!(parsed, expected, "only the two nonces changed");
     }
 
     /// The named minimum is the bytes the shortest preimage actually writes.

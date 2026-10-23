@@ -31,31 +31,46 @@
 //!
 //! # Blocking threads
 //!
-//! The runtime's blocking-thread count equals the hasher budget's permits.
-//! [`Budget::acquire`](shekyl_hash_budget::Budget::acquire) waits on the
-//! calling thread, so every permit waiter sits on a blocking thread. A
-//! holder never waits for another thread: it hashes and drops the permit.
-//! The two counts can stay equal. A later sizing that makes a holder wait
-//! for a blocking thread has to split them, or a full set of waiters
-//! deadlocks.
+//! Every blocking task the ingest service runs is one of three kinds, and
+//! the runtime has a thread for each one that can be outstanding at once:
+//!
+//! - **A form**, which hashes holding a hasher permit: at most the
+//!   budget's permits.
+//! - **A span's one other task**: a permit wait
+//!   ([`Budget::acquire_unless`](shekyl_hash_budget::Budget::acquire_unless)
+//!   waits on its thread), a claim, or a pool step. A span runs one at a
+//!   time, and every span holds a seat, so at most the arrival window.
+//! - **The tip follower's one**: its pool step, or the template build,
+//!   which takes no permit.
+//!
+//! A permit holder waits for a thread to form on, so the count must not be
+//! one that permit waiters alone can fill: it is permits + window + 1. A
+//! local arrival waits for its seat without a thread.
 //!
 //! # The board
 //!
-//! The node holds the job board and seats it with no miner. Nothing is
-//! posted: there is no template and no sync owner yet. Stop withdraws the
-//! board. PR 3b seats the miner on this board. The miner is not started
-//! here.
+//! The tip follower posts the node's one template on the board
+//! (`DRS_X_STORE_FLIP.md` DX-Q3, N2), paying the `mine-address` row's
+//! keys, while chain sync's state reads `Synced`: from open on regtest,
+//! and on every other network once chain sync's cutover publishes. With no
+//! address it posts nothing, and [`Node::posting`] says why. The miner
+//! ([`MiningControl`]) hashes what is posted; it is started on request,
+//! never at open. Stop withdraws the board.
 
 #![deny(unsafe_code)]
 
 mod facts;
 mod genesis;
+mod mining;
+
+pub use mining::{MiningControl, MiningRefused, MiningStatus, PostedJob};
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use shekyl_chain_ingest::follower::JobSeat;
+use shekyl_block_template::MinerKeys;
+use shekyl_chain_ingest::follower::{JobSeat, MinerFeed, NoJob, Posting};
 use shekyl_chain_ingest::service::{
     ArrivalTag, Door, Follow, PoolWiring, Reply, Service, ServiceConfig,
 };
@@ -64,21 +79,40 @@ use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, Rul
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, Horizons, SnapshotView};
+use shekyl_chain_sync::SyncState;
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
 use shekyl_daemon_rpc::handles::Handles;
 use shekyl_daemon_rpc::store_facts::{NodeIdentity, RulesAt, StoreFacts};
 use shekyl_hash_budget::Budget;
 use shekyl_mempool::Pool;
-use shekyl_miner::JobBoard;
+use shekyl_miner::{JobBoard, MiningAddress};
 use shekyl_pow_randomx::CacheStore;
 use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
 
-use crate::facts::{
-    BansBridge, ChainBridge, DoorBridge, MiningBridge, PoolBridge, StopBridge, Surroundings,
-};
+use crate::facts::{BansBridge, ChainBridge, DoorBridge, PoolBridge, StopBridge, Surroundings};
 use crate::genesis::{daemon_network, pinned_genesis};
+
+/// The runtime's blocking threads for `permits` hasher permits and an
+/// arrival window of `window` (module docs, "Blocking threads").
+fn blocking_threads(permits: NonZeroUsize, window: NonZeroUsize) -> NonZeroUsize {
+    permits.saturating_add(window.get()).saturating_add(1)
+}
+
+/// Chain sync's state once the node has opened, published after genesis
+/// has connected (`DRS_X_STORE_FLIP.md` DX-Q3, Q13): `Synced` on regtest,
+/// which has no network to be behind, and `NoView` on every other network
+/// until chain sync's cutover publishes. The network selects this value
+/// and nothing else (rule 71).
+const fn sync_at_open(network: shekyl_daemon_config::Network) -> SyncState {
+    match network {
+        shekyl_daemon_config::Network::Regtest => SyncState::Synced,
+        shekyl_daemon_config::Network::Mainnet
+        | shekyl_daemon_config::Network::Testnet
+        | shekyl_daemon_config::Network::Stagenet => SyncState::NoView,
+    }
+}
 
 /// After the service has joined, how long a leftover blocking task may run
 /// before the runtime detaches it. The connector has already finished; this
@@ -142,6 +176,12 @@ struct Slots {
 pub struct Node {
     slots: Arc<Slots>,
     board: Arc<JobBoard>,
+    /// Chain sync's state, as the follower reads it. The node publishes
+    /// the state at open; chain sync's cutover publishes from then on.
+    sync: tokio::sync::watch::Sender<SyncState>,
+    /// What the board holds, as the follower last left it.
+    posting: tokio::sync::watch::Receiver<Posting>,
+    mining: Arc<MiningControl>,
     sockets: Sockets,
     handles: Handles,
     service: Mutex<Option<Service<ProductionSubstrate>>>,
@@ -178,10 +218,33 @@ impl Node {
         let pool_slot = Arc::new(Mutex::new(Some(Arc::clone(&pool))));
         let sockets = Sockets::new();
         let board = Arc::new(JobBoard::new());
+        let network = args.config.network;
+        // No view until genesis has connected, so the follower never builds
+        // a genesis of its own; the network's state at open is published
+        // after (`sync_at_open`).
+        let (sync, sync_rx) = tokio::sync::watch::channel(SyncState::NoView);
+        let (found, found_inbox) = shekyl_miner::found_blocks();
+        let (posting_tx, posting) =
+            tokio::sync::watch::channel(Posting::Withdrawn(NoJob::Starting));
+        let mine_address = args.config.mine.address.as_ref();
+        let keys = mine_address.map(|address| MinerKeys {
+            spend_public: address.spend,
+            x25519_pk: address.x25519,
+            ml_kem_ek: address.ml_kem.clone(),
+        });
+        let miner_address = mine_address
+            .map(|address| MiningAddress::decode(&address.text, network.address_network()))
+            .transpose()
+            .map_err(|refused| OpenError::Rules(format!("the mine-address row: {refused}")))?;
         let follow = Follow {
             job: Some(JobSeat {
                 board: Arc::clone(&board),
-                miner: None,
+                keys,
+                miner: MinerFeed {
+                    found: found_inbox,
+                    sync: sync_rx.clone(),
+                },
+                posting: posting_tx,
             }),
             pool: Some(PoolWiring {
                 pool,
@@ -189,23 +252,21 @@ impl Node {
                 wall: Arc::new(wall_now),
             }),
         };
+        let service_config = ServiceConfig::default();
         let runtime = shekyl_runtime::runtime(
-            // Blocking threads equal permits. See the module docs: a waiter
-            // blocks its thread inside `acquire`, and a holder does not wait
-            // for a thread.
+            // Permits + window + the follower's one (module docs).
             RuntimeBudget {
                 workers: parallelism,
-                blocking: parallelism,
+                blocking: blocking_threads(parallelism, service_config.room),
             },
             &ThreadName::new("shekyl-node").expect("the name is static"),
         )?;
-        let network = args.config.network;
         let started = runtime.block_on(async {
             let service = Service::start(
                 Arc::clone(&store),
                 rules,
                 substrate,
-                ServiceConfig::default(),
+                service_config,
                 budget.clone(),
                 follow,
             );
@@ -224,12 +285,26 @@ impl Node {
                 return Err(error);
             }
         };
+        let at_open = sync_at_open(network);
+        tracing::info!(
+            "chain sync's state at open: {at_open:?}; the node posts a template only while it reads Synced"
+        );
+        sync.send_replace(at_open);
         let door = service.door();
         let surroundings = Arc::new(Surroundings {
             pool: Arc::clone(&pool_slot),
             data_dir: args.config.data_dir.clone(),
             offline: args.config.offline(),
+            sync: sync_rx,
         });
+        let mining = Arc::new(MiningControl::new(
+            Arc::clone(&board),
+            Arc::clone(&caches),
+            budget.clone(),
+            found,
+            miner_address,
+            posting.clone(),
+        ));
         let started_at = facts::unix_now();
         #[cfg(test)]
         let test_budget = budget.clone();
@@ -254,7 +329,7 @@ impl Node {
             chain: Arc::new(ChainBridge::new(Arc::clone(&facts_slot))),
             pool: Arc::new(PoolBridge::new(Arc::clone(&pool_slot))),
             door: Arc::new(DoorBridge::new(Arc::clone(&door_slot))),
-            mining: Arc::new(MiningBridge),
+            mining: Arc::clone(&mining) as _,
             bans: Arc::new(BansBridge),
             stop: Arc::new(StopBridge::new(Arc::clone(&args.request_stop))),
         };
@@ -266,6 +341,9 @@ impl Node {
         Ok(Self {
             slots,
             board,
+            sync,
+            posting,
+            mining,
             sockets,
             handles,
             service: Mutex::new(Some(service)),
@@ -288,10 +366,30 @@ impl Node {
         self.sockets.clone()
     }
 
-    /// The job board. Empty until a miner is seated. Stop withdraws it.
+    /// The job board: the node's one template, while one is posted. Stop
+    /// withdraws it.
     #[must_use]
     pub fn board(&self) -> Arc<JobBoard> {
         Arc::clone(&self.board)
+    }
+
+    /// What the board holds, and why not when it holds nothing.
+    #[must_use]
+    pub fn posting(&self) -> tokio::sync::watch::Receiver<Posting> {
+        self.posting.clone()
+    }
+
+    /// Chain sync's state, which the follower posts a job on only while it
+    /// reads `Synced`. Chain sync's cutover is its publisher.
+    #[must_use]
+    pub const fn sync(&self) -> &tokio::sync::watch::Sender<SyncState> {
+        &self.sync
+    }
+
+    /// The node's miner.
+    #[must_use]
+    pub fn mining(&self) -> Arc<MiningControl> {
+        Arc::clone(&self.mining)
     }
 
     /// Stop the ingest service, clear the handles' slots, and shut the runtime down.
@@ -515,6 +613,19 @@ mod tests {
         dev_config(dir, &[])
     }
 
+    /// Wait until the follower's posting reads `want`.
+    fn wait_for_posting(posting: &mut tokio::sync::watch::Receiver<Posting>, want: &Posting) {
+        let started = std::time::Instant::now();
+        while *posting.borrow_and_update() != *want {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "the posting stayed {:?}",
+                *posting.borrow()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn open_at(dir: &Path, stop: Arc<dyn Fn() + Send + Sync>) -> Node {
         std::fs::create_dir_all(dir).expect("dir");
         let config = config_at(dir);
@@ -554,6 +665,162 @@ mod tests {
         node.stop();
     }
 
+    /// The blocking pool has a thread for every task that can be
+    /// outstanding at once (module docs, "Blocking threads"): more than the
+    /// permits and the window together, so permit waiters alone never fill
+    /// it. Red edit: size it at the permits.
+    #[test]
+    fn the_blocking_pool_exceeds_the_permits_and_the_window() {
+        for permits in [1, 2, 8, 64] {
+            for window in [1, 32] {
+                let threads = blocking_threads(
+                    NonZeroUsize::new(permits).expect("nonzero"),
+                    NonZeroUsize::new(window).expect("nonzero"),
+                );
+                assert!(threads.get() > permits + window, "{permits} + {window}");
+            }
+        }
+    }
+
+    /// A full address on `network`, from a fixed seed's keys.
+    fn mining_address(network: shekyl_address::Network) -> String {
+        use shekyl_crypto_pq::account::{rederive_account, DerivationNetwork, SeedFormat};
+        let blob = rederive_account(&[0x5a; 64], DerivationNetwork::Mainnet, SeedFormat::Bip39)
+            .expect("the keys");
+        shekyl_address::ShekylAddress::new(
+            network,
+            *blob.spend_pk.as_canonical_bytes(),
+            *blob.view_pk.as_canonical_bytes(),
+            [0; shekyl_address::MSG_SIGN_PK_LEN],
+            blob.ml_kem_ek.to_vec(),
+        )
+        .encode()
+        .expect("encodes")
+    }
+
+    /// A node opened on `network` that mines to [`mining_address`].
+    fn open_mining(dir: &Path, network: &str, address: shekyl_address::Network) -> Node {
+        std::fs::create_dir_all(dir).expect("dir");
+        let address = mining_address(address);
+        let config = config_on(dir, network, &["--mine-address", &address]);
+        Node::open(OpenArgs {
+            config: &config,
+            version: "test".to_owned(),
+            protocol_version: 1,
+            release_build: false,
+            request_stop: Arc::new(|| {}),
+        })
+        .expect("node")
+    }
+
+    /// Regtest is synced at open (DX-Q3, Q13), so a node with an address
+    /// posts the template for the block after genesis with no session at
+    /// all, and `mining_status` reports the job. Red edit: open regtest at
+    /// `NoView`.
+    #[test]
+    fn a_regtest_node_with_an_address_posts_its_template_with_no_sessions() {
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_mining(dir.path(), "regtest", shekyl_address::Network::Mainnet);
+        let mut posting = node.posting();
+        let started = std::time::Instant::now();
+        while !matches!(*posting.borrow_and_update(), Posting::Posted(_)) {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "nothing posted: {:?}",
+                *posting.borrow()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let (_, job) = node.board().posted().expect("the job");
+        assert_eq!(job.height, BlockHeight::from_raw(1));
+        let genesis =
+            BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
+        assert_eq!(job.block.header.previous, genesis);
+        let status = node.mining().status();
+        assert_eq!(status.no_job, None);
+        assert_eq!(status.job.map(|posted| posted.height), Some(job.height));
+        assert!(status.miner.is_none(), "the miner starts on request only");
+        assert!(node
+            .handles()
+            .chain
+            .chain_tip()
+            .is_ok_and(|tip| tip.synchronized));
+        node.stop();
+    }
+
+    /// Off regtest, nothing says the node is synced before chain sync's
+    /// cutover: it posts nothing and says why, and publishing `Synced` on
+    /// the node's watch posts (DX-Q3, Q13). Red edit: post without reading
+    /// the watch.
+    #[test]
+    fn a_testnet_node_posts_nothing_until_chain_sync_says_synced() {
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_mining(dir.path(), "testnet", shekyl_address::Network::Testnet);
+        let mut posting = node.posting();
+        wait_for_posting(
+            &mut posting,
+            &Posting::Withdrawn(NoJob::NotSynced(SyncState::NoView)),
+        );
+        assert!(node.board().posted().is_none());
+        let reason = node.mining().status().no_job.expect("a reason");
+        assert_eq!(
+            reason.to_string(),
+            "no template: not synced (no sync owner before chain sync's cutover)"
+        );
+        assert!(node
+            .handles()
+            .chain
+            .chain_tip()
+            .is_ok_and(|tip| !tip.synchronized));
+        node.sync().send_replace(SyncState::Synced);
+        let started = std::time::Instant::now();
+        while !matches!(*posting.borrow_and_update(), Posting::Posted(_)) {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "Synced did not post: {:?}",
+                *posting.borrow()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(node.board().posted().is_some());
+        node.stop();
+    }
+
+    /// Stopping the miner from a tokio task completes, and the node is still
+    /// up after it: mining control never stops or drops the node (`stop`'s
+    /// `# Panics`). Red edit: have `MiningControl::stop` stop the node.
+    #[test]
+    fn stopping_the_miner_from_a_task_leaves_the_node_running() {
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_mining(dir.path(), "regtest", shekyl_address::Network::Mainnet);
+        let mining = node.mining();
+        match mining.start(NonZeroUsize::new(1)) {
+            Ok(()) => {}
+            Err(MiningRefused::Start(shekyl_miner::MinerStartRefused::OnePermit)) => {
+                // A one-permit host never mines; there is nothing to stop.
+                node.stop();
+                return;
+            }
+            Err(other) => panic!("the miner did not start: {other}"),
+        }
+        assert!(mining.running());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime");
+        let stopped = runtime.block_on(async move {
+            tokio::spawn(async move { mining.stop() })
+                .await
+                .expect("the stop task")
+        });
+        assert!(stopped, "it was running");
+        assert!(!node.mining().running());
+        assert!(
+            node.handles().door.room().expect("door") > 0,
+            "the node is still up"
+        );
+        node.stop();
+    }
+
     /// Stop closes the store, withdraws the board, and a second stop is a
     /// no-op. A handle held past stop is not ready. Red edit: leave the
     /// facts slot filled, or skip the second stop.
@@ -562,7 +829,16 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp");
         let node = open_at(dir.path(), Arc::new(|| {}));
         let (block, _) = pinned_genesis(Network::Regtest).expect("genesis");
+        // The follower's first word, so it does not withdraw the job below:
+        // no mine-address, no template.
+        let mut posting = node.posting();
+        wait_for_posting(&mut posting, &Posting::Withdrawn(NoJob::NoAddress));
         node.board().publish(Job {
+            offsets: block
+                .blob_offsets()
+                .expect("genesis reserves the extra nonce"),
+            next_seed: None,
+            reward: shekyl_units::AtomicUnits::ZERO,
             block,
             height: BlockHeight::from_raw(1),
             seed: BlockHash::from_bytes([1; 32]),
@@ -824,10 +1100,14 @@ mod tests {
     }
 
     fn dev_config(dir: &Path, extra: &[&str]) -> DaemonConfig {
+        config_on(dir, "regtest", extra)
+    }
+
+    fn config_on(dir: &Path, network: &str, extra: &[&str]) -> DaemonConfig {
         let log = dir.join("shekyld.log");
         let mut args = vec![
             "--network",
-            "regtest",
+            network,
             "--clearnet",
             "off",
             "--tor",

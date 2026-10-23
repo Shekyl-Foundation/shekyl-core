@@ -12,11 +12,15 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use shekyl_difficulty::Difficulty;
 use shekyl_types::{BlockHash, BlockHeight};
-use shekyl_wire::Block;
+use shekyl_units::AtomicUnits;
+use shekyl_wire::{BlobOffsets, Block};
 
 /// What to mine: a block whose nonce is the search, the height it connects
 /// at, the seed its longhash is computed under (CEN-D3) and the difficulty
-/// its hash must meet (the validator's target, CEN-D4).
+/// its hash must meet (the validator's target, CEN-D4). The rest is what
+/// a miner outside the node reads from the same posting
+/// (`get_block_template`): where to write in the blob, the seed the chain
+/// moves to next, and what the coinbase pays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {
     /// The template. Its nonce is overwritten by the search.
@@ -27,6 +31,15 @@ pub struct Job {
     pub seed: BlockHash,
     /// The difficulty the longhash must satisfy.
     pub difficulty: Difficulty,
+    /// Where the header nonce and the coinbase's reserved extra nonce sit
+    /// in `block`'s blob.
+    pub offsets: BlobOffsets,
+    /// The seed of the next RandomX epoch, once the chain has it and it
+    /// differs from `seed`.
+    pub next_seed: Option<BlockHash>,
+    /// What the coinbase pays the miner: its emission leg and its fee
+    /// income after the burn.
+    pub reward: AtomicUnits,
 }
 
 /// A board's posting number. Every publish and withdrawal takes the next

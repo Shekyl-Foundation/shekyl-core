@@ -376,6 +376,34 @@ pub(crate) fn claim_next(
     }
 }
 
+/// The seed of the next RandomX epoch, for a block connecting at
+/// `connecting`: the block id at `next_seedheight` (the seed height
+/// `SEEDHASH_EPOCH_LAG` blocks on), read on `snap`, or `None` while it is
+/// the current seed's height. At or below the tip whenever it differs, so
+/// recorded.
+///
+/// # Errors
+///
+/// [`ClaimStop`]: the store's fault, or [`ClaimStop::Moved`] when the
+/// height is not recorded on `snap`.
+pub(crate) fn next_seed(
+    snap: &ReadSnapshot<'_>,
+    connecting: BlockHeight,
+) -> Result<Option<BlockHash>, ClaimStop> {
+    let Some(current) = seed_height(connecting) else {
+        return Ok(None);
+    };
+    let next = BlockHeight::from_raw(shekyl_difficulty::next_seedheight(
+        connecting.to_raw(),
+        shekyl_difficulty::SEEDHASH_EPOCH_BLOCKS,
+        shekyl_difficulty::SEEDHASH_EPOCH_LAG,
+    ));
+    if next == current {
+        return Ok(None);
+    }
+    recorded_hash(snap, next).map(Some)
+}
+
 /// Whether `run` still extends this snapshot.
 ///
 /// `first` is the connecting height and the first block names the tip.

@@ -19,9 +19,11 @@
 //!   the window and lock sync out.
 //!
 //! [`Room::solicited_available`] is what a sync caller can send. A local
-//! arrival waits, on the miner's own thread, when its seat is held.
+//! arrival waits for its seat asynchronously ([`Room::wait_local`]): a
+//! waiter holds no thread, so any number of submitters cannot take the
+//! blocking threads the arrival holding the seat needs to finish.
 
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// Where an arrival's seat comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +81,8 @@ pub(crate) struct Room {
     /// Seats the window was opened with. A span longer than this cannot fit.
     capacity: usize,
     seats: Mutex<Seats>,
-    changed: Condvar,
+    /// Woken when a seat is given back or the window closes.
+    changed: tokio::sync::Notify,
 }
 
 /// One held seat. Dropping it gives the seat back and wakes a waiter.
@@ -103,7 +106,7 @@ impl Room {
                 local: 0,
                 closed: false,
             }),
-            changed: Condvar::new(),
+            changed: tokio::sync::Notify::new(),
         })
     }
 
@@ -120,7 +123,7 @@ impl Room {
     /// Close the window and wake every waiter.
     pub(crate) fn close(&self) {
         self.lock().closed = true;
-        self.changed.notify_all();
+        self.changed.notify_waiters();
     }
 
     /// Whether [`close`](Self::close) has run.
@@ -151,14 +154,24 @@ impl Room {
         Some(self.seats_for(kinds))
     }
 
-    /// Block until a local seat is free, or the window is closed.
-    pub(crate) fn wait_local(&self) {
-        let mut seats = self.lock();
-        while !seats.closed && !fits(&seats, &[Kind::Local]) {
-            seats = self
-                .changed
-                .wait(seats)
-                .unwrap_or_else(PoisonError::into_inner);
+    /// Wait until a local seat is free (`true`) or the window is closed
+    /// (`false`). The waiter registers before it looks, so a seat given
+    /// back between the look and the wait still wakes it.
+    pub(crate) async fn wait_local(&self) -> bool {
+        loop {
+            let changed = self.changed.notified();
+            let mut changed = std::pin::pin!(changed);
+            changed.as_mut().enable();
+            {
+                let seats = self.lock();
+                if seats.closed {
+                    return false;
+                }
+                if fits(&seats, &[Kind::Local]) {
+                    return true;
+                }
+            }
+            changed.await;
         }
     }
 
@@ -181,7 +194,7 @@ impl Room {
             Kind::Solicited => {}
         }
         drop(seats);
-        self.changed.notify_all();
+        self.changed.notify_waiters();
     }
 }
 
@@ -293,18 +306,19 @@ mod tests {
         assert!(room.try_take(&[Kind::Local]).is_some());
     }
 
-    #[test]
-    fn closing_wakes_a_local_waiter_with_nothing_to_take() {
+    #[tokio::test]
+    async fn closing_wakes_a_local_waiter_with_nothing_to_take() {
         let room = Room::new(2);
         let held = room
             .try_take(&[Kind::Solicited, Kind::Local])
             .expect("both");
         let waiting = {
             let room = Arc::clone(&room);
-            std::thread::spawn(move || room.wait_local())
+            tokio::spawn(async move { room.wait_local().await })
         };
+        tokio::task::yield_now().await;
         room.close();
-        waiting.join().expect("joins");
+        assert!(!waiting.await.expect("joins"), "closed, not seated");
         assert!(room.try_take(&[Kind::Local]).is_none());
         drop(held);
         assert_eq!(room.solicited_available(), 0);

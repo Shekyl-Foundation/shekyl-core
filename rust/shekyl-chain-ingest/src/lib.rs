@@ -211,6 +211,9 @@ mod switch_timing_tests;
 mod sync_wire_tests;
 #[cfg(feature = "pipeline")]
 pub mod target;
+/// The node's one block template, built by the tip follower on one snapshot.
+#[cfg(feature = "pipeline")]
+mod template;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;

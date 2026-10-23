@@ -29,6 +29,8 @@ shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 # Each worker below the daemon's CPU priority (SH-3).
 shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 shekyl-types = { path = "../shekyl-types" }
+# A job's reward, as the template priced it.
+shekyl-units = { path = "../shekyl-units" }
 shekyl-wire = { path = "../shekyl-wire" }
 tracing = "0.1"
 

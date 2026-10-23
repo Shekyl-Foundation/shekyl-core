@@ -85,6 +85,13 @@ fn job_for(next: &NextBlock) -> Job {
         height: next.height,
         seed: next.seed,
         difficulty: next.target.difficulty(),
+        offsets: next
+            .template
+            .block
+            .blob_offsets()
+            .expect("a built coinbase reserves the extra nonce"),
+        next_seed: None,
+        reward: shekyl_units::AtomicUnits::ZERO,
     }
 }
 
@@ -339,6 +346,11 @@ fn a_form_takes_the_permit_the_miner_left_free() {
     )
     .expect("the worker starts");
     board.publish(Job {
+        offsets: template
+            .blob_offsets()
+            .expect("a built coinbase reserves the extra nonce"),
+        next_seed: None,
+        reward: shekyl_units::AtomicUnits::ZERO,
         block: template,
         height: shekyl_types::BlockHeight::from_raw(1),
         seed,
@@ -410,6 +422,11 @@ fn the_miners_rate_per_worker() {
             height: shekyl_types::BlockHeight::from_raw(1),
             seed,
             difficulty: Difficulty::from_raw(u128::MAX),
+            offsets: template
+                .blob_offsets()
+                .expect("a built coinbase reserves the extra nonce"),
+            next_seed: None,
+            reward: shekyl_units::AtomicUnits::ZERO,
         });
         std::thread::sleep(RATE_WINDOW + Duration::from_secs(2));
         let status = miner.status();
@@ -429,43 +446,6 @@ fn the_miners_rate_per_worker() {
     }
 }
 
-/// The tip follower's template source in tests (`follower` module docs):
-/// the scenario's template over the harness miner, stamped from the
-/// service's own clock, one tick past the chain's median so CEN-C2 holds.
-struct ScenarioSource {
-    clock: Arc<crate::scenario::Clocked<ProductionSubstrate>>,
-    miner: MinerKeys,
-    counter: std::sync::atomic::AtomicU64,
-}
-
-impl crate::follower::TemplateSource for ScenarioSource {
-    fn template(
-        &self,
-        facts: &crate::connector::ChainFacts,
-    ) -> Option<(shekyl_wire::Block, Vec<shekyl_wire::Transaction>)> {
-        let mut now = self.clock.tick();
-        if let Some(median) = facts.median_timestamp {
-            while now <= median {
-                now = self.clock.tick();
-            }
-        }
-        let counter = self
-            .counter
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        let template = crate::scenario::build_template(
-            RULES,
-            &shekyl_economics::EconomicParams::default(),
-            &self.miner,
-            counter,
-            facts,
-            now,
-            &[],
-        )
-        .ok()?;
-        Some((template.block, template.transactions))
-    }
-}
-
 /// The miner across a seed epoch (DX-Q2 item 5): the tip follower pins
 /// `seed(tip + 1)` before it posts the job, so the miner, which hashes only
 /// under a held cache, mines the first block of the new epoch. The first
@@ -475,7 +455,6 @@ impl crate::follower::TemplateSource for ScenarioSource {
 /// arrival and connects.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_block() {
-    use crate::follower::{JobSeat, MinerFeed};
     use crate::service::{Arrival, ArrivalTag, Follow, Origin, Service, ServiceConfig};
     let _lane = MINER_LANE.lock().await;
     let caches = Arc::new(CacheStore::new());
@@ -495,18 +474,11 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
     );
     let budget = shekyl_hash_budget::Budget::of_host();
     let board = Arc::new(JobBoard::new());
-    let (sink, found) = found_blocks();
-    let (_synced_tx, synced) = tokio::sync::watch::channel(true);
-    let recipient = MinerWallet::harness().recipient();
-    let source = ScenarioSource {
-        clock: Arc::clone(&clock),
-        miner: MinerKeys {
-            spend_public: recipient.spend_public,
-            x25519_pk: recipient.x25519_pk,
-            ml_kem_ek: recipient.ml_kem_ek.clone(),
-        },
-        counter: std::sync::atomic::AtomicU64::new(1),
-    };
+    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    // The node's own producer builds every job, paying the harness wallet,
+    // stamped from the service's clock.
+    let (seat, sink, _posting) =
+        crate::test_support::job_seat(&board, Some(crate::test_support::harness_keys()), sync);
     let service = Service::start(
         Arc::new(store),
         RULES,
@@ -514,14 +486,7 @@ async fn the_follower_pins_the_new_epochs_seed_and_the_miner_mines_its_first_blo
         ServiceConfig::default(),
         budget.clone(),
         Follow {
-            job: Some(JobSeat {
-                board: Arc::clone(&board),
-                miner: Some(MinerFeed {
-                    source: Arc::new(source),
-                    synced,
-                    found,
-                }),
-            }),
+            job: Some(seat),
             pool: None,
         },
     );
