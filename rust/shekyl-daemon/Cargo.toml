@@ -30,6 +30,7 @@ shekyl-runtime = { path = "../shekyl-runtime" }
 # The managed Tor's owner (§2.2 steps 6, 8, 9) and its binary discovery.
 shekyl-tor-control-daemon = { path = "../shekyl-tor-control-daemon" }
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+shekyl-timing-engine = { path = "../shekyl-timing-engine" }
 tokio = { version = "1", default-features = false, features = ["signal", "macros", "sync", "rt"] }
 tracing = "0.1"
 
