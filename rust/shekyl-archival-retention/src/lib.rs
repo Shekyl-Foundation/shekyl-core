@@ -142,7 +142,7 @@ pub use bond_wire::{
 pub use bundle::{
     bundle_charge, bundle_commitment, bundle_prunable_hash, bundle_root, section_budget,
     section_d_max, BundleBody, BundleKept, BundleRecord, BundleRef, BundleWireError, PassBitmap,
-    TooManyReferences, BUNDLE_COMMITMENT_CUSTOMIZATION, BUNDLE_KEPT_FIXED_LEN,
+    SectionBudget, TooManyReferences, BUNDLE_COMMITMENT_CUSTOMIZATION, BUNDLE_KEPT_FIXED_LEN,
     BUNDLE_PRUNABLE_CUSTOMIZATION, BUNDLE_RECORD_LEN, BUNDLE_REF_FIXED_LEN,
     BUNDLE_ROOT_CUSTOMIZATION, BUNDLE_SECTION_BUDGET_MULTIPLE, BUNDLE_SEED_LEN,
     BUNDLE_SIGNATURE_LEN, BUNDLE_WITNESS_KEY_LEN, BUNDLE_WITNESS_LEN,

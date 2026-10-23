@@ -1350,6 +1350,14 @@ header alone. None of these mint a `ChainValid`.
 | `judge_header` | the cheap rows, over a header D1 has accepted | F4, F5, F6 |
 | `bind_body` | B6, G2, B4's parse-and-root half | B4's countersignatures |
 
+`HeaderJudged` is sealed: private fields, built only by `judge_header`,
+and it carries the proof. `bind_body` takes that value. `form` and
+`form_header` share `prove_header` (B6, D2, D1, in `form`'s order).
+`form_judged` is the body entry: it checks the candidate's identity
+against the sealed proof and runs the same body rows, and it does not
+hash. `validate` still faults a seed, target or rule set the token does
+not match.
+
 `HeaderFacts<P>` carries the proof as a type: `Unproven` or `Proven`.
 `D1` accepts only `Proven`, so a header without a longhash cannot reach
 it. B6, D2 and D1 are `prove_header`, the tail `form` and `form_header`

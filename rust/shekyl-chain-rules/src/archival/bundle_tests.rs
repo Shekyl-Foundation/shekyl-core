@@ -6,7 +6,8 @@
 //! `verify_bundle` against the fixture view (`harness::bundle`).
 //!
 //! The section check lives in `bundle_section_tests`. The census rows and
-//! the staging falsifier live in `bundle_staging_tests`.
+//! the staging falsifier live in `bundle_staging_tests`. Each admission
+//! row, through `judge_bundles`, lives in `bundle_admission_tests`.
 //!
 //! # What these tests bite against, and what they do not cover
 //!
@@ -572,9 +573,18 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
     let budget_of = |d: u64| section_budget(BUNDLE_SECTION_BUDGET_MULTIPLE, d, seb);
     // `⌊9·4_000 / 10_000⌋ + 1 = 4`, times `c`, is 8. `D = 5_000` is the
     // next count cap, budget 10. `D = 8` is the small network, budget 2.
-    assert_eq!(budget_of(4_000), 8);
-    assert_eq!(budget_of(5_000), 10);
-    assert_eq!(budget_of(8), 2);
+    assert_eq!(
+        budget_of(4_000),
+        shekyl_archival_retention::SectionBudget::from_draws(8)
+    );
+    assert_eq!(
+        budget_of(5_000),
+        shekyl_archival_retention::SectionBudget::from_draws(10)
+    );
+    assert_eq!(
+        budget_of(8),
+        shekyl_archival_retention::SectionBudget::from_draws(2)
+    );
     let at = |reference: &BundleRef, pairs: u64| {
         let view = view_holding(&[(epoch, pairs)]);
         let section = std::slice::from_ref(reference);
@@ -586,7 +596,7 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
             &rules,
         )
     };
-    let over = |reference: &BundleRef, budget: u64| {
+    let over = |reference: &BundleRef, budget: shekyl_archival_retention::SectionBudget| {
         Err(SectionCheckFailed::Refused(SectionRefused::OverBudget {
             charge: SectionCharge::of(std::slice::from_ref(reference)),
             budget,
@@ -597,8 +607,20 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
             std::slice::from_ref(reference),
         )))
     };
-    assert_eq!(at(&nine, 4_000), over(&nine, 8));
-    assert_eq!(at(&honest, 4_000), over(&honest, 8));
+    assert_eq!(
+        at(&nine, 4_000),
+        over(
+            &nine,
+            shekyl_archival_retention::SectionBudget::from_draws(8)
+        )
+    );
+    assert_eq!(
+        at(&honest, 4_000),
+        over(
+            &honest,
+            shekyl_archival_retention::SectionBudget::from_draws(8)
+        )
+    );
     assert_eq!(at(&nine, 5_000), admitted(&nine));
     assert_eq!(at(&honest, 5_000), admitted(&honest));
 
@@ -609,7 +631,13 @@ fn a_reference_that_understates_its_count_is_refused_at_admission() {
     let none = with_passes(&all_miss, PassBitmap::new(0, &[]).expect("no bits"));
     assert_eq!(none.charge(), 1);
     assert_eq!(at(&none, 8), admitted(&none));
-    assert_eq!(at(&all_miss, 8), over(&all_miss, 2));
+    assert_eq!(
+        at(&all_miss, 8),
+        over(
+            &all_miss,
+            shekyl_archival_retention::SectionBudget::from_draws(2)
+        )
+    );
 
     // Admission refuses each restatement, before anything is opened.
     world.view.take_reads();
@@ -724,7 +752,10 @@ fn a_bundle_that_does_not_open_the_commitment_refuses() {
     // the refusal above is the commitment's and nothing else's.
     forger.view.commitments.insert(
         forger.h,
-        shekyl_archival_retention::draw_commit(&forger.witness_public_key, &forger.seed),
+        shekyl_types::archival::DrawCommitment::from_bytes(shekyl_archival_retention::draw_commit(
+            &forger.witness_public_key,
+            &forger.seed,
+        )),
     );
     assert!(judge(&forger, &forged_ref, &forged_body).is_ok());
 
@@ -732,9 +763,12 @@ fn a_bundle_that_does_not_open_the_commitment_refuses() {
     // `0x0C`, and an all-zero one. Each is a commitment, and neither is
     // this bundle's.
     let honest = world.view.commitments[&world.h];
-    let mut one_bit = honest;
+    let mut one_bit = *honest.as_bytes();
     one_bit[19] ^= 0x04;
-    for other in [one_bit, [0u8; 32]] {
+    for other in [
+        shekyl_types::archival::DrawCommitment::from_bytes(one_bit),
+        shekyl_types::archival::DrawCommitment::from_bytes([0; 32]),
+    ] {
         world.view.commitments.insert(world.h, other);
         let refused = judge(&world, &reference, &body).expect_err("another commitment");
         assert_eq!(refused, BundleRefused::Invalid(BundleInvalid::Commitment));
@@ -1137,7 +1171,10 @@ fn of_two_defects_the_earlier_check_refuses() {
     );
     // The record count before the commitment.
     world.view.counts.insert(world.h, 10);
-    world.view.commitments.insert(world.h, [0; 32]);
+    world.view.commitments.insert(
+        world.h,
+        shekyl_types::archival::DrawCommitment::from_bytes([0; 32]),
+    );
     assert_eq!(
         judge(&world, &short_ref, &short_body),
         invalid(BundleInvalid::RecordCount)

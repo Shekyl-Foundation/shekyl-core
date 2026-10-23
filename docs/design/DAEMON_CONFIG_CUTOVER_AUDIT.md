@@ -22,7 +22,7 @@ Rick, 2026-10-15, when the cutover started:
 
 The brief's steps 6 and 9 name the supervisor; until its increment 5 lands,
 the call site they describe drives `DaemonTorControl`
-([`rust/shekyl-tor-control-daemon/src/ephemeral.rs`](../../rust/shekyl-tor-control-daemon/src/ephemeral.rs)).
+([`rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs`](../../rust/shekyl-tor-control-daemon/src/ephemeral/mod.rs)).
 §7 below records how.
 
 ## 1. Re-pin and census (§9 item 1)

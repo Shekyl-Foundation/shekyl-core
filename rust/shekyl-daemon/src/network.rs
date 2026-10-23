@@ -142,17 +142,17 @@ pub fn proxy_of(socks: &Socks) -> Proxy {
 pub enum TorSocks {
     /// No Tor this boot.
     None,
-    /// The proxy, and whether the zone host also listens for an onion
-    /// (the managed one, or the operator's named onion).
-    At {
+    /// The operator's Tor. Its route is published now.
+    Operator {
         /// The SOCKS proxy.
         socks: Proxy,
-        /// The operator's onion listen endpoint, when the operator's Tor
-        /// forwards an onion to this node.
+        /// The operator's onion listen endpoint, when that Tor forwards an
+        /// onion to this node.
         onion_listen: Option<SocketAddr>,
-        /// Whether a forward listener for a managed onion is wanted.
-        managed: bool,
     },
+    /// The managed Tor. The connector starts with no route. The supervisor
+    /// publishes one when Tor is running.
+    Managed,
 }
 
 /// What step 8 started.
@@ -236,12 +236,14 @@ pub fn start(
     }
     match tor {
         TorSocks::None => {}
-        TorSocks::At {
+        TorSocks::Managed => {
+            started.tor_forward = Some(shekyl_ffi::zone_ffi::start_managed_tor(network_id)?);
+        }
+        TorSocks::Operator {
             socks,
             onion_listen,
-            managed,
         } => {
-            if managed || onion_listen.is_some() {
+            if onion_listen.is_some() {
                 let forward = shekyl_ffi::zone_ffi::start_tor(socks, onion_listen, network_id)?;
                 started.tor_forward = Some(forward);
             } else {
@@ -361,6 +363,9 @@ mod tests {
     /// the subnet is not.
     #[test]
     fn the_ban_files_entries_are_permanent_bans() {
+        // `main` replaces the process socket table. This test writes bans
+        // onto it, so it takes the same lock the daemon-start test holds.
+        let _serial = crate::run::hold_process_table();
         let d = tempfile::tempdir().unwrap();
         let file = d.path().join("bans");
         std::fs::write(&file, "203.0.113.9\n198.51.100.0/24\n").unwrap();

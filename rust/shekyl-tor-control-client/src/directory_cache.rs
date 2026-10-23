@@ -28,10 +28,12 @@
 //!   arrived under `MAX_DIR_DL_SIZE`. The store and the journal are eight of
 //!   those objects. The factor is that cap, not a multiple of a measured size.
 //!
-//! A save writes a temporary name in the same directory, syncs it, and renames
-//! it over the previous file. A save that stops before the rename leaves the
-//! previous file. The temporary name is not one of the four, so a later copy
-//! does not pick it up.
+//! A copy into a fresh per-boot directory is not synced. Tor reads the files
+//! when it starts, and a failed launch wipes the directory, so there is
+//! nothing for that copy to protect. A save writes a temporary name in the
+//! cache directory, syncs it, and renames it over the previous file. A save
+//! that stops before the rename leaves the previous file. The temporary name
+//! is not one of the four, so a later copy does not pick it up.
 //!
 //! A boot has one source. The daemon's own cache is that source when it holds
 //! a file a boot may copy. A test build may otherwise install the job lane's
@@ -346,7 +348,7 @@ fn copy_files(
         let Some(bytes) = read_named(cache_dir, file.name, file.limit) else {
             continue;
         };
-        replace(data_dir, file.name, &bytes)?;
+        place(data_dir, file.name, &bytes, Durability::Launch)?;
         copied.push(file.name);
     }
     Ok(copied)
@@ -358,7 +360,7 @@ fn save_files(data_dir: &Path, cache_dir: &Path, files: &[CacheFile]) -> io::Res
         let Some(bytes) = read_named(data_dir, file.name, file.limit) else {
             continue;
         };
-        replace(cache_dir, file.name, &bytes)?;
+        place(cache_dir, file.name, &bytes, Durability::Save)?;
     }
     Ok(())
 }
@@ -367,8 +369,19 @@ fn partial_name(name: &str) -> String {
     format!("{STAGED_PREFIX}{name}{STAGED_SUFFIX}")
 }
 
-/// Write `bytes` to `.{name}.partial` and leave the destination alone.
-fn stage(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+/// Whether the write has to survive a crash.
+///
+/// [`Durability::Launch`] is a copy into a fresh directory that a failed
+/// launch wipes. [`Durability::Save`] replaces a cache file that must still
+/// be the previous bytes if the write stops halfway.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Durability {
+    Launch,
+    Save,
+}
+
+/// Write `bytes` to the temporary name and leave the destination alone.
+fn stage(dir: &Path, name: &str, bytes: &[u8], durability: Durability) -> io::Result<()> {
     let partial = dir.join(partial_name(name));
     // A leftover from a save that did not finish. `remove_file` on a symlink
     // removes the link, not whatever it names.
@@ -379,13 +392,16 @@ fn stage(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     }
     let mut file = create_exclusive(&partial)?;
     file.write_all(bytes)?;
-    file.sync_all()?;
+    if durability == Durability::Save {
+        file.sync_all()?;
+    }
     Ok(())
 }
 
 /// Rename the staged file over `name`. The destination becomes the new bytes
-/// in one replacement, or it is unchanged.
-fn commit(dir: &Path, name: &str) -> io::Result<()> {
+/// in one replacement, or it is unchanged. A save asks the rename to reach
+/// disk; a launch copy does not.
+fn commit(dir: &Path, name: &str, durability: Durability) -> io::Result<()> {
     let partial = dir.join(partial_name(name));
     if !is_regular_file(&partial) {
         drop(fs::remove_file(&partial));
@@ -395,12 +411,12 @@ fn commit(dir: &Path, name: &str) -> io::Result<()> {
         ));
     }
     let dest = dir.join(name);
-    replace_name(&partial, &dest)
+    replace_name(&partial, &dest, durability)
 }
 
-fn replace(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
-    stage(dir, name, bytes)?;
-    commit(dir, name)
+fn place(dir: &Path, name: &str, bytes: &[u8], durability: Durability) -> io::Result<()> {
+    stage(dir, name, bytes, durability)?;
+    commit(dir, name, durability)
 }
 
 fn create_owner_only(path: &Path) -> io::Result<()> {
@@ -689,9 +705,10 @@ fn create_exclusive(path: &Path) -> io::Result<File> {
     }
 }
 
-fn replace_name(from: &Path, to: &Path) -> io::Result<()> {
+fn replace_name(from: &Path, to: &Path, durability: Durability) -> io::Result<()> {
     #[cfg(not(windows))]
     {
+        let _ = durability;
         fs::rename(from, to)
     }
     #[cfg(windows)]
@@ -702,7 +719,7 @@ fn replace_name(from: &Path, to: &Path) -> io::Result<()> {
             // leaves the name absent, which a copy treats as missing.
             fs::remove_file(to)?;
         }
-        move_replace(from, to)
+        move_replace(from, to, durability)
     }
 }
 
@@ -719,21 +736,19 @@ fn path_is_reparse(path: &Path) -> bool {
 }
 
 #[cfg(windows)]
-fn move_replace(from: &Path, to: &Path) -> io::Result<()> {
+fn move_replace(from: &Path, to: &Path, durability: Durability) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
     };
+    let mut flags = MOVEFILE_REPLACE_EXISTING;
+    if durability == Durability::Save {
+        flags |= MOVEFILE_WRITE_THROUGH;
+    }
     let from_w: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
     let to_w: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
     // SAFETY: both buffers are NUL-terminated and outlive the call.
-    let ok = unsafe {
-        MoveFileExW(
-            from_w.as_ptr(),
-            to_w.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
+    let ok = unsafe { MoveFileExW(from_w.as_ptr(), to_w.as_ptr(), flags) };
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
@@ -836,10 +851,10 @@ mod tests {
         let name = "cached-certs";
         let dest = cache.join(name);
         fs::write(&dest, b"old-cache-complete").unwrap();
-        stage(&cache, name, b"new-cache-complete-bytes").unwrap();
+        stage(&cache, name, b"new-cache-complete-bytes", Durability::Save).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"old-cache-complete");
         assert!(cache.join(partial_name(name)).is_file());
-        commit(&cache, name).unwrap();
+        commit(&cache, name, Durability::Save).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"new-cache-complete-bytes");
         assert!(!cache.join(partial_name(name)).exists());
     }

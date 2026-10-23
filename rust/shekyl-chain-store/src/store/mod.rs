@@ -90,12 +90,14 @@
 //! answer to either is a rebuild from the block corpus
 //! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
+mod admission_write;
 mod alt;
 mod alt_reads;
 mod alt_view;
 mod archival_reads;
 mod archival_write;
 mod at_index;
+mod bundle_view;
 mod chain_reads;
 mod connect;
 mod curve_reads;
@@ -124,6 +126,7 @@ pub use alt_reads::AltEntry;
 pub use alt_view::{AltChain, AltView};
 pub use archival_reads::{PassCount, ServedShard};
 pub use at_index::AtIndex;
+pub use bundle_view::StoreBundleView;
 pub use connect::Connected;
 pub use error::{
     AccrualFault, AltCannot, CellFault, DigestFault, DrawRowFault, DrawableFault, EdgeFault,

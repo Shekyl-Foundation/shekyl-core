@@ -86,8 +86,9 @@
 //! two integrity checks that have an operand are the validator's — the
 //! index against its digest, and the fold's own count — and arrive through
 //! `refuse_corrupt` as the same row. The issued-draw index and its digest
-//! have no block writer until admission lands; the regtest door below is
-//! their one producer.
+//! are written by [`WriteBatch::write_admissions`](super::write::WriteBatch::write_admissions) from the
+//! rules' admission plan. The regtest door below plants rows no block
+//! admitted, and folds a digest the caller already computed.
 //!
 //! # The regtest injector (§3.8 item 3)
 //!

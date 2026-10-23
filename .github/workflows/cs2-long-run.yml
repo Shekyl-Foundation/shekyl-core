@@ -1,0 +1,25 @@
+name: cs2-long-run
+
+# The CS-2 floor measurement. Not a pull-request gate: nothing here is
+# required for merge, and it does not run on `merge_group`.
+#
+# It hashes the captured corpora and a 50,000-header chain at fixed
+# target 1. The runner is the floor device (a Pi 4; rule 76). The figure
+# from this job's first run is what replaces `SYNC_RATE_FLOOR`. Until that
+# run is recorded, the constant stays the Assumption in
+# `docs/design/P2P_3_CHAIN_SYNC_BRIEF.md`. This workflow does not write it.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  floor:
+    runs-on: [self-hosted, linux, aarch64]
+    steps:
+      - uses: actions/checkout@v5
+      - name: captured corpora and 50,000 headers
+        working-directory: rust
+        run: cargo test -p shekyl-chain-sync --features cs2-long-run --lib long_real_hashes_on_captured_corpora_and_fifty_thousand_headers -- --nocapture
