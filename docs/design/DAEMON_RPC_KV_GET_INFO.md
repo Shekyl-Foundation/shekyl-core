@@ -132,11 +132,11 @@ its response base (`src/rpc/core_rpc_server_commands_defs.h:270-316`).
 | **Status** → `status` | `start_time`, `free_space`, `database_size`, `version` | node facts / build | `:245-251` |
 | | `outgoing_connections_count`, `incoming_connections_count` | the seam board, per direction (RK-Q3) | epee total − board outgoing, clearnet only |
 | | `alt_blocks_count` | chain facts snapshot (§4.2) | `:213`, `0` when restricted |
-| | `rpc_connections_count` | Rust connection tracker, natively | C++ writes `0` (`:230`); Rust patches the JSON afterwards (`rust/shekyl-daemon-rpc/src/handlers/json.rs:82-100`, `handlers/json_rpc.rs:119-129`) |
-| **Peers** → `peers` | four `*_socket_count` | transport (`shekyl_seam_socket_count`) | `:202-205` |
-| | `white_peerlist_size`, `grey_peerlist_size` | peerlist facts | `:214-215` |
-| **Transitional** | `restricted` | the listener flag | `:241`; retired by RT-W10, not here |
-| **Removed** (RK-D21) | `emission_era` | none — deleted before capture | `:277-285` |
+| | `rpc_connections_count` | Rust connection tracker, natively | C++ writes `0` (`:230`); Rust patches the JSON afterwards (`rust/shekyl-daemon-rpc/src/handlers/json.rs:82-100`, `handlers/json_rpc.rs:121-131`) |
+| **Peers** → `peers` | four `*_socket_count` | transport (`shekyl_seam_socket_count`) | `:204-207` |
+| | `white_peerlist_size`, `grey_peerlist_size` | peerlist facts | `:216-217` |
+| **Transitional** | `restricted` | the listener flag | `:243`; retired by RT-W10, not here |
+| **Removed** (RK-D21) | `emission_era` | none — deleted before capture | `:279-287` |
 
 **A part is a unit of disclosure, not a unit of source.** Every field of a
 part is seen under the same grant, so a grant selects whole parts. That is

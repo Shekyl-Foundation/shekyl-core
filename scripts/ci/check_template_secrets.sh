@@ -16,13 +16,19 @@
 # in a production block is a key anyone can guess.
 #
 # Contract:
-#   1. the production code of the crates that build and serve the template
-#      names neither CONFORMING_DRAW_COMMITMENT nor the scenario's builder;
+#   1. the production code of the crates that build, carry and serve the
+#      template names neither CONFORMING_DRAW_COMMITMENT nor the scenario's
+#      builder;
 #   2. the producer draws from the OS and commits through
 #      commit_and_discard;
 #   3. the scenario's builder still uses both test values where this gate
 #      expects them (rule 47: a moved subject fails loudly, never passes
-#      on zero hits).
+#      on zero hits);
+#   4. shekyl-ffi, which builds the C++ template's coinbase extra, names
+#      the conforming value only in its coinbase-extra module — the
+#      test-support writer `shekyl_test_coinbase_extra` and that module's
+#      tests — its production writer commits through commit_and_discard,
+#      and no C++ under src/ calls the test writer.
 
 set -euo pipefail
 
@@ -55,7 +61,11 @@ PRODUCTION_DIRS=(
   rust/shekyl-node/src
   rust/shekyl-block-template/src
   rust/shekyl-miner/src
+  rust/shekyl-daemon-rpc/src
+  rust/shekyl-daemon/src
 )
+FFI_DIR="rust/shekyl-ffi/src"
+FFI_EXTRA="rust/shekyl-ffi/src/tx_extra_codec_ffi.rs"
 TEST_GLOBS=(
   --glob '!*_tests.rs'
   --glob '!tests.rs'
@@ -65,7 +75,7 @@ TEST_GLOBS=(
 
 FAIL=0
 
-for f in "$PRODUCER" "$SCENARIO"; do
+for f in "$PRODUCER" "$SCENARIO" "$FFI_EXTRA"; do
   if [[ ! -f "$f" ]]; then
     echo "FAIL: $f not found — a pinned file moved; update this gate" >&2
     exit 1
@@ -105,6 +115,27 @@ for needle in 'CONFORMING_DRAW_COMMITMENT' 'counter\.to_le_bytes\(\)'; do
     FAIL=1
   fi
 done
+
+# -- 4. shekyl-ffi: the conforming value only in the test-support writer ----
+ffi_hits="$(scan -l 'CONFORMING_DRAW_COMMITMENT' "${TEST_GLOBS[@]}" "$FFI_DIR" || true)"
+if [[ -n "$ffi_hits" && "$ffi_hits" != "$FFI_EXTRA" ]]; then
+  echo "FAIL: shekyl-ffi names CONFORMING_DRAW_COMMITMENT outside ${FFI_EXTRA}:" >&2
+  echo "$ffi_hits" >&2
+  FAIL=1
+fi
+for needle in 'fn shekyl_test_coinbase_extra' 'commit_and_discard\(\)\.ok\(\)'; do
+  found="$(scan -c "$needle" "$FFI_EXTRA" || true)"
+  if [[ -z "$found" ]]; then
+    echo "FAIL: ${FFI_EXTRA} no longer names ${needle} — the coinbase writers moved; update this gate" >&2
+    FAIL=1
+  fi
+done
+cpp_callers="$(scan -n 'shekyl_test_coinbase_extra\(' src --glob '!src/shekyl/shekyl_ffi.h' || true)"
+if [[ -n "$cpp_callers" ]]; then
+  echo "FAIL: production C++ calls the test coinbase writer, whose draw commitment anyone can guess:" >&2
+  echo "$cpp_callers" >&2
+  FAIL=1
+fi
 
 if (( FAIL )); then
   exit 1

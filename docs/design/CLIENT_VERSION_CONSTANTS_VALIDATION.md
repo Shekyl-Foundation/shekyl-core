@@ -862,7 +862,7 @@ derived explicitly in `DESIGN_CONCEPTS.md` as `(60/2) × 24 × 365`, eight
 code sites. `FA-6_VIEW_TAG_ML_KEM.md` :695 derives its key-rotation horizon
 on 365.25: `N_blocks = ⌊(5 × 365.25 × 86400) / T_block⌋ = 1,314,900`, which
 is 262,980 blocks/year *implied* — that literal appears nowhere in the tree.
-(The other 365.25 sites, `console/mod.rs:837` and `util.cpp:1096`, format
+(The other 365.25 sites, `console/mod.rs:842` and `util.cpp:1096`, format
 human-readable durations and are out of scope.) The gap is 180 blocks a
 year, 900 over FA-6's five-year window. The question is not which constant
 wins but whether a rotation horizon derived on a different year length than

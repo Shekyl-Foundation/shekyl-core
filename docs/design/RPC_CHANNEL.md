@@ -1673,7 +1673,7 @@ router (`:413-432`) and the path list (`:664-688`); the forwarding handlers
 ([`json.rs:293`](../../rust/shekyl-daemon-rpc/src/handlers/json.rs),
 `:389-394`, through the dispatch at `:75-91`). Callers: the Rust console's
 `print_net_stats`, which reads `/get_limit`
-([`console/mod.rs:1121-1164`](../../rust/shekyl-daemon-rpc/src/console/mod.rs))
+([`console/mod.rs:1126-1169`](../../rust/shekyl-daemon-rpc/src/console/mod.rs))
 with its tests (`console/tests.rs:1130-1170`); the Python framework
 ([`daemon.py:360-455`](../../utils/python-rpc/framework/daemon.py)); the
 C++ client test
@@ -1684,7 +1684,7 @@ and the C++ console
 ([`rpc_command_executor.cpp`](../../src/daemon/rpc_command_executor.cpp)),
 which dies with R8 (`INPUT_GRAMMAR.md` IG-Q25). **`/get_limit` is replaced,
 not ported:** it leaves RK-8 (`DAEMON_RPC_KV_CUTOVER.md` §2), and the
-comments at `regtest_e2e.rs:5866` and `console/mod.rs:1123` that say RK-8
+comments at `regtest_e2e.rs:5866` and `console/mod.rs:1128` that say RK-8
 migrates it are corrected by the implementing PR.
 
 **`/pop_blocks` is an armed test lever (ruled 2026-10-14).**
