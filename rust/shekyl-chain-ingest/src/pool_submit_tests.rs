@@ -612,3 +612,136 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
     drop(std::fs::remove_file(&path));
     scenario.close().await;
 }
+
+/// A lone regtest node's own transaction (DX-Q3, Q9; no opt-in, rule 71):
+/// submitted through the node's one pool, it enters in its stem phase and
+/// the node's template does not list it; once the relay's entry marks it
+/// shown (`RustPoolShim::fluffed`, what the relay driver calls at embargo
+/// expiry), the node's next template lists it. The transaction is submitted
+/// before the service starts, so the first job is built over it; every
+/// observation is taken before the service stops and judged after, so a
+/// failure reports instead of hanging the runtime's drop. Red edit: let the
+/// producer list an entry in its stem phase.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lone_nodes_own_transaction_is_listed_once_the_relay_shows_it() {
+    use crate::follower::Posting;
+    use crate::service::{Arrival, ArrivalTag, Follow, Origin, PoolWiring, Reply, Service};
+    let (mut scenario, mined) = matured("lone-own-tx").await;
+    let paid = paying_the_floor(&mut scenario, &mined, 0).await;
+    let txid = paid.txid_parts().hash;
+    let copy = tmp("lone-own-tx-node");
+    scenario
+        .reopen(|path| {
+            std::fs::copy(path, &copy).expect("a copy of the chain");
+        })
+        .await;
+    // The tip the node will meet next: mined after the copy was taken.
+    let next = scenario.mine(1).await;
+    let store = Arc::new(crate::test_support::open_store_under(
+        &copy,
+        &crate::scenario::RULES.in_force(h(0)),
+        shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+    ));
+    let pool_path = tmp("lone-own-tx-pool");
+    let chain = Store {
+        store: &store,
+        rules: crate::scenario::RULES,
+    };
+    let pool = chain
+        .read(|snapshot, rule_set| {
+            Pool::open(
+                &pool_path,
+                UnixSeconds::from_raw(1),
+                &SnapshotView::new(snapshot),
+                rule_set,
+                &AdmissionPolicy::GENESIS,
+            )
+            .expect("open")
+            .0
+        })
+        .expect("a snapshot");
+    let pool = Arc::new(std::sync::Mutex::new(pool));
+    let board = Arc::new(shekyl_miner::JobBoard::new());
+    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    let (seat, _sender, mut posting) =
+        crate::test_support::job_seat(&board, Some(crate::test_support::harness_keys()), sync);
+    let shim = Arc::new(RustPoolShim::new(
+        Store {
+            store: &store,
+            rules: crate::scenario::RULES,
+        },
+        Arc::clone(&pool),
+        AdmissionPolicy::GENESIS,
+        || UnixSeconds::from_raw(1),
+    ));
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    assert_eq!(
+        engine
+            .submit(&hex(&paid), SubmitCaller::Owner)
+            .expect("no engine fault"),
+        SubmitVerdict::Accepted
+    );
+    let service = Service::start(
+        Arc::clone(&store),
+        crate::scenario::RULES,
+        Arc::new(crate::service::service_tests::Gated::new()),
+        crate::service::ServiceConfig::default(),
+        shekyl_hash_budget::Budget::of_host(),
+        Follow {
+            job: Some(seat),
+            pool: Some(PoolWiring {
+                pool: Arc::clone(&pool),
+                policy: AdmissionPolicy::GENESIS,
+                wall: Arc::new(|| UnixSeconds::from_raw(1)),
+            }),
+        },
+    );
+    let listed_now = |board: &shekyl_miner::JobBoard| {
+        board
+            .posted()
+            .map(|(_, job)| job.listed.iter().any(|body| body.id == txid))
+    };
+    let posted = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        posting.wait_for(|now| matches!(now, Posting::Posted(_))),
+    )
+    .await
+    .is_ok_and(|seen| seen.is_ok());
+    let at_wait = posting.borrow().clone();
+    let first = listed_now(&board);
+    let shown = shim.fluffed(&txid).expect("the lock");
+    let connected = service
+        .door()
+        .offer(Arrival {
+            tag: ArrivalTag(1),
+            origin: Origin::Local,
+            block: next[0].template.block.serialize(),
+            bodies: Vec::new(),
+        })
+        .expect("room")
+        .reply()
+        .await
+        .reply;
+    let started = std::time::Instant::now();
+    let mut later = listed_now(&board);
+    while later != Some(true) && started.elapsed() < std::time::Duration::from_secs(60) {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        later = listed_now(&board);
+    }
+    service.stop().await.expect("stops");
+    drop(std::fs::remove_file(&pool_path));
+    crate::test_support::cleanup(&copy);
+    scenario.close().await;
+    assert!(posted, "the node posts a job; the board reads {at_wait:?}");
+    assert_eq!(first, Some(false), "a stem entry is not listed");
+    assert!(shown, "the relay shows it");
+    assert!(
+        matches!(connected, Reply::Connected { .. }),
+        "{connected:?}"
+    );
+    assert_eq!(
+        later,
+        Some(true),
+        "the next template lists the shown transaction"
+    );
+}
