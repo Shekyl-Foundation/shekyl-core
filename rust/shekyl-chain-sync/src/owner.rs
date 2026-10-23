@@ -437,10 +437,13 @@ where
 
     fn message(&mut self, session: u64, command: SyncCommand, payload: Vec<u8>) {
         match command {
-            SyncCommand::ResponseHeaders => self.event(Event::Headers {
-                session,
-                bytes: payload,
-            }),
+            SyncCommand::ResponseHeaders => {
+                tracing::trace!(session, bytes = payload.len(), "a header response");
+                self.event(Event::Headers {
+                    session,
+                    bytes: payload,
+                });
+            }
             SyncCommand::ResponseBodies => self.event(Event::Bodies {
                 session,
                 bytes: payload,
@@ -525,6 +528,7 @@ where
             }
             Input::Entry { tag, reply } => {
                 let session = self.offered.remove(&tag);
+                tracing::trace!(tag, ?session, ?reply, "an entry reply");
                 match outcome_of(reply) {
                     Some(outcome) => self.event(Event::Entry { tag, outcome }),
                     None => tracing::error!(tag, ?session, "an entry reply with no outcome"),
@@ -746,13 +750,6 @@ where
         if arrivals.is_empty() {
             return;
         }
-        let tags: Vec<(u64, u64, usize)> = arrivals
-            .iter()
-            .map(|arrival| {
-                let bytes = shekyl_levin::body_budget_bytes(&arrival.body);
-                (arrival.tag, arrival.session, bytes)
-            })
-            .collect();
         let span: Vec<EntryArrival> = arrivals
             .into_iter()
             .map(|arrival| EntryArrival {
@@ -771,6 +768,12 @@ where
                     .collect(),
                 attestation_witness: arrival.body.attestation_witness,
             })
+            .collect();
+        // The door's own measure, so an arrival it would admit is never
+        // called oversize here.
+        let tags: Vec<(u64, u64, usize)> = span
+            .iter()
+            .map(|arrival| (arrival.tag.0, arrival.session.0, arrival.bytes()))
             .collect();
         match self.door.offer_bound(span) {
             Ok(tickets) => {

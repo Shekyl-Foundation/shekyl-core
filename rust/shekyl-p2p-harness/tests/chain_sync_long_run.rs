@@ -52,6 +52,11 @@ fn peak_kib() -> Option<u64> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn loopback_sync_of_a_corpus_and_fifty_thousand_headers() {
+    // The owner's log lines, under RUST_LOG.
+    let _installed = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_test_writer()
+        .try_init();
     let corpus = Corpus::open("spend-1in-2out");
     let steps = corpus.steps();
     let (substrate, _) = substrate();

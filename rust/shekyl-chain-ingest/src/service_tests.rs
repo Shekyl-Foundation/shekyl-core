@@ -1491,21 +1491,32 @@ async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
             .expect("the header is judged")
     };
     let hashes_before = gate.hashes();
-    let tickets = door
-        .offer_bound(vec![super::BoundArrival {
-            tag: ArrivalTag(99),
-            session: SessionId(1),
-            judged,
-            block: mined.template.block.serialize(),
-            bodies: mined
-                .template
-                .transactions
-                .iter()
-                .map(shekyl_wire::Transaction::serialize)
-                .collect(),
-            attestation_witness: Vec::new(),
-        }])
-        .expect("room");
+    let bound = super::BoundArrival {
+        tag: ArrivalTag(99),
+        session: SessionId(1),
+        judged,
+        block: mined.template.block.serialize(),
+        bodies: mined
+            .template
+            .transactions
+            .iter()
+            .map(shekyl_wire::Transaction::serialize)
+            .collect(),
+        attestation_witness: Vec::new(),
+    };
+    // The door bounds the block and its bodies; the witness is not
+    // counted, and the caller's measure is the door's own.
+    let measured = bound.bytes();
+    let with_witness = super::BoundArrival {
+        attestation_witness: vec![0; 64],
+        ..bound.clone()
+    };
+    assert_eq!(with_witness.bytes(), measured);
+    assert_eq!(
+        measured,
+        bound.block.len() + bound.bodies.iter().map(Vec::len).sum::<usize>()
+    );
+    let tickets = door.offer_bound(vec![bound]).expect("room");
     let reply = tickets
         .into_iter()
         .next()

@@ -126,6 +126,13 @@ pub struct BoundArrival {
 }
 
 impl BoundArrival {
+    /// The bytes the door bounds for this arrival
+    /// ([`ArrivalLengths::bytes`]).
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.lengths().bytes()
+    }
+
     fn lengths(&self) -> ArrivalLengths {
         ArrivalLengths {
             tag: self.tag,
@@ -154,6 +161,15 @@ pub struct ArrivalLengths {
 }
 
 impl ArrivalLengths {
+    /// The bytes the door bounds ([`Door::max_arrival_bytes`]): the block
+    /// and the bodies it carried.
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.body_lens
+            .iter()
+            .fold(self.block_len, |total, len| total.saturating_add(*len))
+    }
+
     fn of(arrival: &Arrival) -> Self {
         Self {
             tag: arrival.tag,

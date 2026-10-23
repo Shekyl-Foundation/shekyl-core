@@ -184,14 +184,19 @@ where
             let Some(hash) = self.tree.ancestor_at(self.star.hash, height) else {
                 break;
             };
+            if self.accepted.contains(&hash) {
+                height = height + BlockCount::ONE;
+                continue;
+            }
+            // An arrival still with the entry ends the walk. The entry works
+            // each offer apart, so a span offered over one still connecting
+            // would find its parent unheld and come back unlinked.
             if self
                 .outstanding
                 .iter()
                 .any(|arrival| arrival.header.hash() == hash)
-                || self.accepted.contains(&hash)
             {
-                height = height + BlockCount::ONE;
-                continue;
+                break;
             }
             if !self
                 .held

@@ -486,6 +486,16 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
         let Some(first_tag) = first_tag else {
             panic!("the first body was not offered");
         };
+        // The first connects before the next span is offered: the entry
+        // works each offer apart.
+        drive(
+            &mut sync,
+            &view,
+            Event::Entry {
+                tag: first_tag,
+                outcome: Outcome::Connected { relay: false },
+            },
+        );
         if !out
             .iter()
             .any(|command| matches!(command, Command::RequestBodies { .. }))

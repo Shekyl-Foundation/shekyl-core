@@ -200,8 +200,10 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
     let (count, _, _) = held.tip().expect("a chain");
     let mut node = Node::start("honest", corpus.rules(), &steps[..1], 2).await;
     let before = node.hashes();
+    let mut seen = Vec::new();
     for _ in 0..2 {
-        let (peer, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+        let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+        seen.push(asked);
         node.connect(Box::new(peer), Some(claim_of(&held)));
     }
     wait_synced(&node, count).await;
@@ -209,6 +211,14 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
         node.hashes() - before,
         count - 1,
         "one hash per header and none in the entry"
+    );
+    // The chain fits one response: one header request, and no span
+    // offered over another and fetched again.
+    assert_eq!(seen.iter().map(|seen| seen.headers()).sum::<usize>(), 1);
+    let bodies: usize = seen.iter().map(|seen| seen.bodies()).sum();
+    assert!(
+        bodies <= usize::try_from(count).expect("small"),
+        "{bodies} body requests for {count} blocks"
     );
     assert!(model_closes("honest").is_empty());
     node.stop().await;

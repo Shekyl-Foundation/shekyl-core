@@ -444,13 +444,9 @@ impl Door {
         let Ok(bound) = self.admission.bound() else {
             return Err(Refusal::NoRoom);
         };
-        let oversize = lengths.iter().any(|arrival| {
-            let bytes = arrival
-                .body_lens
-                .iter()
-                .fold(arrival.block_len, |total, len| total.saturating_add(*len));
-            !bound.admits(u64::try_from(bytes).unwrap_or(u64::MAX))
-        });
+        let oversize = lengths
+            .iter()
+            .any(|arrival| !bound.admits(u64::try_from(arrival.bytes()).unwrap_or(u64::MAX)));
         if oversize {
             return Err(Refusal::Oversize);
         }
