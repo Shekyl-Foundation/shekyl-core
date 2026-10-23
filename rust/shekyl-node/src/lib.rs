@@ -71,9 +71,7 @@ use std::time::Duration;
 
 use shekyl_block_template::MinerKeys;
 use shekyl_chain_ingest::follower::{JobSeat, MinerFeed, NoJob, Posting};
-use shekyl_chain_ingest::service::{
-    ArrivalTag, Door, Follow, PoolWiring, Reply, Service, ServiceConfig,
-};
+use shekyl_chain_ingest::service::{ArrivalTag, Follow, PoolWiring, Reply, Service, ServiceConfig};
 use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate};
 use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
@@ -91,7 +89,9 @@ use shekyl_runtime::{RuntimeBudget, ThreadName};
 use shekyl_transport_layer::Sockets;
 use shekyl_types::{BlockHeight, UnixSeconds};
 
-use crate::facts::{BansBridge, ChainBridge, DoorBridge, PoolBridge, StopBridge, Surroundings};
+use crate::facts::{
+    BansBridge, ChainBridge, DoorBridge, DoorEntry, PoolBridge, StopBridge, Surroundings,
+};
 use crate::genesis::{daemon_network, pinned_genesis};
 use shekyl_ffi::seam_ffi::bans::BanPath;
 
@@ -173,13 +173,12 @@ struct Slots {
     /// spans it.
     facts: Arc<Mutex<Option<Arc<StoreFacts>>>>,
     pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
-    door: Arc<Mutex<Option<Door>>>,
+    door: Arc<Mutex<Option<DoorEntry>>>,
 }
 
 /// The daemon's one node (module docs).
 pub struct Node {
     slots: Arc<Slots>,
-    board: Arc<JobBoard>,
     /// Chain sync's state, as the follower reads it. The node publishes
     /// the state at open; chain sync's cutover publishes from then on.
     sync: tokio::sync::watch::Sender<SyncState>,
@@ -345,11 +344,11 @@ impl Node {
             budget,
         );
         let facts_slot = Arc::new(Mutex::new(Some(Arc::new(facts))));
-        let door_slot = Arc::new(Mutex::new(Some(door)));
+        let door_slot = Arc::new(Mutex::new(Some(DoorEntry { door, rewinder })));
         let handles = Handles {
             chain: Arc::new(ChainBridge::new(Arc::clone(&facts_slot))),
             pool: Arc::new(PoolBridge::new(Arc::clone(&pool_slot))),
-            door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips, rewinder)),
+            door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips)),
             mining: Arc::clone(&mining) as _,
             bans: Arc::new(BansBridge::new(BanPath::over(sockets.clone()))),
             stop: Arc::new(StopBridge::new(Arc::clone(&args.request_stop))),
@@ -361,7 +360,6 @@ impl Node {
         });
         Ok(Self {
             slots,
-            board,
             sync,
             posting,
             mining,
@@ -386,13 +384,6 @@ impl Node {
     #[must_use]
     pub fn sockets(&self) -> Sockets {
         self.sockets.clone()
-    }
-
-    /// The job board: the node's one template, while one is posted. Stop
-    /// withdraws it.
-    #[must_use]
-    pub fn board(&self) -> Arc<JobBoard> {
-        Arc::clone(&self.board)
     }
 
     /// What the board holds, and why not when it holds nothing.
@@ -741,7 +732,7 @@ mod tests {
         );
         drop(runtime);
         node.stop();
-        assert!(node.board().posted().is_none());
+        assert!(node.mining.board.posted().is_none());
     }
 
     /// A regtest node mining to [`mining_address`] at difficulty one, with
@@ -1129,7 +1120,7 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
-        let (_, job) = node.board().posted().expect("the job");
+        let (_, job) = node.mining.board.posted().expect("the job");
         assert_eq!(job.height, BlockHeight::from_raw(1));
         let genesis =
             BlockHash::from_bytes(shekyl_rpc_types::genesis_hash_for(DaemonNetwork::Fakechain));
@@ -1159,7 +1150,7 @@ mod tests {
             &mut posting,
             &Posting::Withdrawn(NoJob::NotSynced(SyncState::NoView)),
         );
-        assert!(node.board().posted().is_none());
+        assert!(node.mining.board.posted().is_none());
         let reason = node.mining().status().no_job.expect("a reason");
         assert_eq!(
             reason.to_string(),
@@ -1180,7 +1171,7 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(node.board().posted().is_some());
+        assert!(node.mining.board.posted().is_some());
         node.stop();
     }
 
@@ -1231,7 +1222,7 @@ mod tests {
         // no mine-address, no template.
         let mut posting = node.posting();
         wait_for_posting(&mut posting, &Posting::Withdrawn(NoJob::NoAddress));
-        node.board().publish(Job {
+        node.mining.board.publish(Job {
             offsets: block
                 .blob_offsets()
                 .expect("genesis reserves the extra nonce"),
@@ -1245,9 +1236,12 @@ mod tests {
             seed: BlockHash::from_bytes([1; 32]),
             difficulty: Difficulty::from_raw(1),
         });
-        assert!(node.board().posted().is_some(), "the job was posted");
+        assert!(node.mining.board.posted().is_some(), "the job was posted");
         node.stop();
-        assert!(node.board().posted().is_none(), "stop withdraws the board");
+        assert!(
+            node.mining.board.posted().is_none(),
+            "stop withdraws the board"
+        );
         node.stop();
         let rules =
             ChainRules::new(Chain::Regtest, None, FakechainSchedule::PRODUCTION).expect("rules");

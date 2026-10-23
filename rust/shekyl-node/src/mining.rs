@@ -80,7 +80,8 @@ pub struct MiningStatus {
 
 /// The node's miner (module docs).
 pub struct MiningControl {
-    board: Arc<JobBoard>,
+    /// The node's one job board; the crate's tests read it here.
+    pub(crate) board: Arc<JobBoard>,
     caches: Arc<CacheStore>,
     budget: Budget,
     found: FoundBlocks,

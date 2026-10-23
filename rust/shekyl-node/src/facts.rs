@@ -370,26 +370,32 @@ impl PoolFacts for PoolBridge {
     }
 }
 
+/// The service's two entries the RPC asks of: the door, and the rewinder
+/// `pop_blocks` pops through. Both hold the service's store and pool, so
+/// they live in the node's slot, which stop empties; a handle that held
+/// either past stop would keep both files open.
+#[derive(Clone)]
+pub(crate) struct DoorEntry {
+    pub(crate) door: Door,
+    pub(crate) rewinder: Rewinder<ProductionSubstrate>,
+}
+
 pub(crate) struct DoorBridge {
-    door: Arc<Mutex<Option<Door>>>,
+    entry: Arc<Mutex<Option<DoorEntry>>>,
     /// The connector's tip publications.
     tips: tokio::sync::watch::Receiver<TipChanged>,
-    /// Pops blocks for `pop_blocks`.
-    rewinder: Rewinder<ProductionSubstrate>,
     /// The tag each local offer carries, one more each time.
     tags: AtomicU64,
 }
 
 impl DoorBridge {
     pub(crate) fn new(
-        door: Arc<Mutex<Option<Door>>>,
+        entry: Arc<Mutex<Option<DoorEntry>>>,
         tips: tokio::sync::watch::Receiver<TipChanged>,
-        rewinder: Rewinder<ProductionSubstrate>,
     ) -> Self {
         Self {
-            door,
+            entry,
             tips,
-            rewinder,
             tags: AtomicU64::new(1),
         }
     }
@@ -427,14 +433,14 @@ fn local_outcome(reply: Reply) -> LocalOutcome {
 
 impl DoorFacts for DoorBridge {
     fn room(&self) -> Result<usize, FactsFault> {
-        lock(&self.door)
+        lock(&self.entry)
             .as_ref()
-            .map(Door::room)
+            .map(|entry| entry.door.room())
             .ok_or(FactsFault::NotReady)
     }
 
     fn offer_local(&self, block: Vec<u8>) -> Pending<'_, LocalOutcome> {
-        let door = lock(&self.door).clone();
+        let door = lock(&self.entry).as_ref().map(|entry| entry.door.clone());
         let tag = ArrivalTag(self.tags.fetch_add(1, Ordering::Relaxed));
         Box::pin(async move {
             let Some(door) = door else {
@@ -451,8 +457,13 @@ impl DoorFacts for DoorBridge {
     }
 
     fn pop(&self, count: u64) -> Pending<'_, PopOutcome> {
-        let rewinder = self.rewinder.clone();
+        let rewinder = lock(&self.entry)
+            .as_ref()
+            .map(|entry| entry.rewinder.clone());
         Box::pin(async move {
+            let Some(rewinder) = rewinder else {
+                return Err(FactsFault::NotReady);
+            };
             match rewinder.pop_blocks(count).await {
                 Ok(Rewound::Popped { tip, .. }) => Ok(PopOutcome::Popped { tip }),
                 Ok(Rewound::Refused { tip, floor }) => Ok(PopOutcome::Refused { tip, floor }),
