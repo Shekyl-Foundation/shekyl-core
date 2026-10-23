@@ -37,7 +37,19 @@ Subcommands (a target is named by its gitian host triple, `--host`):
                reads the executable's PE import table and refuses a DLL the
                row's `imports` does not name, and any import its delay-load
                table records (`check_imports` says what that can and cannot
-               see).
+               see). For a macOS host it also needs `--sources`, and checks
+               that each file is Tor's upstream file signed (`check_signature_tie`).
+  tie          pin time, macOS: for each file in `--signed`, read Tor's file of
+               the same name from `--tarball` and check the tie; print both
+               digest sets as the row's `files` and `upstream`. The tarball's
+               signature is checked first, as for every pin.
+
+A macOS row carries two digest sets (TB-11). Shekyl signs Tor's macOS
+binaries with its Developer ID, so what ships is not Tor's release: `files`
+are the shipped bytes, which the daemon checks at every launch, and
+`upstream` are Tor's, as extracted from the signed tarball. `stage` for a
+macOS host takes the signed files from `--signed` and Tor's from the tarball,
+and refuses a pair that is not Tor's file plus a code signature.
 
 An `unavailable` host is not an error: `fetch` and `stage` report it and do
 nothing, and the caller branches on `disposition`. `install-dir`,
@@ -261,6 +273,28 @@ def load_pins(path):
                 raise Refused(f"{where}: an import is listed twice")
         elif "imports" in row:
             raise Refused(f"{where}: \"imports\" is the PE import list; only a Windows row has one")
+        # Tor's own bytes, which the shipped (signed) files are tied to (TB-11).
+        # Only a macOS row ships files Shekyl has changed.
+        upstream = row.get("upstream")
+        if row["os"] == "macos":
+            if not isinstance(upstream, list) or not upstream:
+                raise Refused(
+                    f"{where}: a pinned macOS target lists Tor's own files as \"upstream\", "
+                    "beside the signed files it ships"
+                )
+            upstream_names = []
+            for entry in upstream:
+                if not is_plain_name(entry.get("name")):
+                    raise Refused(f"{where}: upstream {entry.get('name')!r} is not a plain file name")
+                if not is_digest(entry.get("sha256")):
+                    raise Refused(f"{where}: upstream {entry['name']}: sha256 is 64 lowercase hex characters")
+                upstream_names.append(entry["name"])
+            if sorted(upstream_names) != sorted(names):
+                raise Refused(f"{where}: \"upstream\" and \"files\" name different files")
+        elif upstream is not None:
+            raise Refused(
+                f"{where}: \"upstream\" is for files Shekyl signs; only a macOS row has it"
+            )
         licenses = row.get("licenses")
         if not isinstance(licenses, list) or not licenses:
             raise Refused(f"{where}: a pinned target lists the bundle's licence texts")
@@ -369,15 +403,31 @@ def read_member(tar, name):
 def source_note(doc, row):
     """The text that travels with the binary (TB-13)."""
     tor = row["tor_version"]
+    if row["os"] == "macos":
+        provenance = (
+            "The files in the tor directory of this package are the Tor Project's own\n"
+            "build with one change: Shekyl signed each with its Developer ID, because\n"
+            "macOS will not run an unsigned binary. Every byte outside the code\n"
+            "signature is the Tor Project's; Shekyl checked that when it packaged them,\n"
+            "against the files in the bundle below:\n"
+            + "".join(f"  {e['name']}  SHA-256 {e['sha256']}\n" for e in row["upstream"])
+            + "The daemon checks each signed file against a recorded SHA-256 before every\n"
+            "launch. The licence texts the bundle ships for tor and the libraries beside\n"
+            "it are in this directory.\n"
+        )
+    else:
+        provenance = (
+            "The files in the tor directory of this package are the Tor Project's own\n"
+            "build, unmodified: Shekyl extracts them from the Expert Bundle and checks\n"
+            "each against a recorded SHA-256 before every launch. The licence texts the\n"
+            "bundle ships for tor and the libraries beside it are in this directory.\n"
+        )
     return (
         f"Tor {tor}, from the Tor Expert Bundle {row['bundle_version']} "
         f"({row['bundle_target']}).\n"
         "\n"
-        "The files in the tor directory of this package are the Tor Project's own\n"
-        "build, unmodified: Shekyl extracts them from the Expert Bundle and checks\n"
-        "each against a recorded SHA-256 before every launch. The licence texts the\n"
-        "bundle ships for tor and the libraries beside it are in this directory.\n"
-        "\n"
+        + provenance
+        + "\n"
         "Bundle:\n"
         f"  {tarball_url(doc, row)}\n"
         f"  SHA-256 {row['tarball_sha256']}\n"
@@ -533,6 +583,155 @@ def check_imports(data, where, row):
         )
 
 
+# Mach-O (64-bit, little-endian): the header and the two load commands a
+# code signature touches. Apple's `mach-o/loader.h`.
+_MH_MAGIC_64 = 0xFEEDFACF
+_MH_HEADER_SIZE = 32
+_LC_SEGMENT_64 = 0x19
+_LC_CODE_SIGNATURE = 0x1D
+_LINKEDIT_CMD_SIZE = 16
+# arm64 and x86_64: the two CPU types a macOS bundle carries.
+_MACHO_CPU_TYPES = (0x0100000C, 0x01000007)
+# codesign rounds the grown __LINKEDIT's vmsize up to 16 KiB on both CPU types,
+# though Tor's x86_64 linker rounded to 4 KiB (measured 2026-10-22, seven
+# signed files, Developer ID and ad-hoc).
+_SIGNED_LINKEDIT_ROUND = 0x4000
+# codesign starts the signature blob on a 16-byte boundary.
+_SIGNATURE_ALIGN = 16
+
+
+def _macho_layout(data, where):
+    """`(cputype, ncmds, sizeofcmds, linkedit_offset, commands)` of a 64-bit
+    little-endian Mach-O, where `commands` is `[(offset, cmd, size)]`. Anything
+    this reader cannot follow is a refusal."""
+
+    def u32(offset):
+        if offset < 0 or offset + 4 > len(data):
+            raise Refused(f"{where}: truncated Mach-O image")
+        return int.from_bytes(data[offset : offset + 4], "little")
+
+    if u32(0) != _MH_MAGIC_64:
+        raise Refused(f"{where}: not a 64-bit little-endian Mach-O image")
+    cputype, ncmds, sizeofcmds = u32(4), u32(16), u32(20)
+    commands, linkedit, offset = [], None, _MH_HEADER_SIZE
+    for _ in range(ncmds):
+        cmd, size = u32(offset), u32(offset + 4)
+        if size < 8 or offset + size > _MH_HEADER_SIZE + sizeofcmds:
+            raise Refused(f"{where}: a load command runs past the header's sizeofcmds")
+        if cmd == _LC_SEGMENT_64 and data[offset + 8 : offset + 24].rstrip(b"\0") == b"__LINKEDIT":
+            linkedit = offset
+        commands.append((offset, cmd, size))
+        offset += size
+    if offset != _MH_HEADER_SIZE + sizeofcmds:
+        raise Refused(f"{where}: the load commands do not fill sizeofcmds")
+    if linkedit is None:
+        raise Refused(f"{where}: no __LINKEDIT segment")
+    return cputype, ncmds, sizeofcmds, linkedit, commands
+
+
+def check_signature_tie(upstream, shipped, where):
+    """The shipped file is the upstream file plus a code signature, and
+    nothing else (TB-11, macOS).
+
+    Shekyl signs Tor's macOS binaries with its Developer ID, so the shipped
+    bytes are not Tor's release. `codesign --remove-signature` does not give
+    them back exactly: it leaves `__LINKEDIT`'s vmsize grown (measured
+    2026-10-22). This check needs no codesign and runs anywhere. It rebuilds
+    the signed file from the upstream bytes with exactly the edits signing
+    makes, taking only the signature's own values from the shipped file, and
+    requires the result to equal the shipped file byte for byte:
+
+    - the header's ncmds +1 and sizeofcmds +16;
+    - one `LC_CODE_SIGNATURE`, the last load command, in space that is zero
+      in upstream;
+    - `__LINKEDIT`, the segment that ends the file, grown to hold the blob:
+      filesize to the blob's end, vmsize that rounded up to 16 KiB;
+    - zero padding to the 16-byte boundary where the blob starts, and the
+      blob running to the end of the file.
+
+    So every byte that is not the signature is Tor's, which is what the
+    upstream digest, checked against Tor's signed tarball, vouches for."""
+    cputype, ncmds, sizeofcmds, linkedit, _ = _macho_layout(upstream, f"{where} (upstream)")
+    if cputype not in _MACHO_CPU_TYPES:
+        raise Refused(f"{where}: CPU type {cputype:#x} is not arm64 or x86_64")
+    s_cputype, s_ncmds, s_sizeofcmds, s_linkedit, s_commands = _macho_layout(shipped, where)
+    if s_cputype != cputype or s_linkedit != linkedit:
+        raise Refused(f"{where}: is not the upstream image signed (CPU type or segment layout differs)")
+    if s_ncmds != ncmds + 1 or s_sizeofcmds != sizeofcmds + _LINKEDIT_CMD_SIZE:
+        raise Refused(f"{where}: signing adds exactly one 16-byte load command")
+    sig_offset, sig_cmd, sig_size = s_commands[-1]
+    if sig_cmd != _LC_CODE_SIGNATURE or sig_size != _LINKEDIT_CMD_SIZE:
+        raise Refused(f"{where}: the added load command is not a code signature, or is not last")
+    if any(upstream[sig_offset : sig_offset + sig_size]):
+        raise Refused(f"{where}: the code signature's load command overwrites bytes upstream uses")
+    dataoff = int.from_bytes(shipped[sig_offset + 8 : sig_offset + 12], "little")
+    datasize = int.from_bytes(shipped[sig_offset + 12 : sig_offset + 16], "little")
+    if (
+        datasize == 0
+        or dataoff % _SIGNATURE_ALIGN
+        or not len(upstream) <= dataoff < len(upstream) + _SIGNATURE_ALIGN
+        or dataoff + datasize != len(shipped)
+    ):
+        raise Refused(
+            f"{where}: the signature blob does not start at the first 16-byte boundary "
+            "after Tor's bytes and run to the end of the file"
+        )
+    fileoff = int.from_bytes(upstream[linkedit + 40 : linkedit + 48], "little")
+    filesize = int.from_bytes(upstream[linkedit + 48 : linkedit + 56], "little")
+    if fileoff + filesize != len(upstream):
+        raise Refused(f"{where}: upstream's __LINKEDIT does not end the file, so it cannot hold the blob")
+
+    expected = bytearray(upstream)
+    expected += bytes(dataoff - len(upstream))
+    expected += shipped[dataoff:]
+    expected[16:20] = (ncmds + 1).to_bytes(4, "little")
+    expected[20:24] = (sizeofcmds + _LINKEDIT_CMD_SIZE).to_bytes(4, "little")
+    expected[sig_offset : sig_offset + sig_size] = shipped[sig_offset : sig_offset + sig_size]
+    new_filesize = len(shipped) - fileoff
+    new_vmsize = -(-new_filesize // _SIGNED_LINKEDIT_ROUND) * _SIGNED_LINKEDIT_ROUND
+    expected[linkedit + 32 : linkedit + 40] = new_vmsize.to_bytes(8, "little")
+    expected[linkedit + 48 : linkedit + 56] = new_filesize.to_bytes(8, "little")
+    if bytes(expected) != shipped:
+        first = next(i for i, (x, y) in enumerate(zip(expected, shipped)) if x != y)
+        raise Refused(
+            f"{where}: differs from the upstream file signed at byte {first:#x}; "
+            "only the code signature's own fields may differ"
+        )
+
+
+def upstream_files(doc, row, sources):
+    """Tor's own bytes for a macOS row: each `upstream` file, read from the
+    digest-checked tarball and checked against its own pin."""
+    tarball = sources / tarball_name(row)
+    if not tarball.exists():
+        raise Refused(
+            f"{tarball} is not in the sources cache; the macOS tie reads Tor's bytes from it"
+        )
+    check_tarball(tarball, row)
+    out = {}
+    try:
+        archive = tarfile.open(tarball, "r:gz")
+    except (tarfile.TarError, OSError) as exc:
+        raise Refused(f"{tarball} could not be opened as a tarball: {exc}") from exc
+    with archive as tar:
+        for entry in row["upstream"]:
+            data = read_member(tar, f"{BUNDLE_TOR_DIR}/{entry['name']}")
+            actual = hashlib.sha256(data).hexdigest()
+            if actual != entry["sha256"]:
+                raise Refused(
+                    f"{entry['name']} in {tarball.name} does not match its upstream pin: "
+                    f"expected sha256 {entry['sha256']}, found {actual}"
+                )
+            out[entry["name"]] = data
+    return out
+
+
+def check_tie(directory, row, upstream):
+    """Each shipped file in `directory` is its upstream file signed."""
+    for name, data in upstream.items():
+        check_signature_tie(data, (directory / name).read_bytes(), str(directory / name))
+
+
 def check_directory(directory, row):
     """The daemon's rule, applied before packing: exactly the pinned files,
     each a regular file with the pinned digest. A Windows executable also
@@ -566,7 +765,36 @@ def check_directory(directory, row):
         check_imports(executable.read_bytes(), str(executable), row)
 
 
-def stage(doc, row, sources, dest, licenses, offline=False):
+def signed_files(row, signed):
+    """macOS: the signed files from `signed`, which holds exactly the pinned
+    names, each checked against its shipped pin."""
+    if signed is None:
+        raise Refused(
+            f"{row['gitian_host']} ships files Shekyl signs; name them with --signed "
+            "(the signing step's output)"
+        )
+    if not signed.is_dir():
+        raise Refused(f"{signed} is not a directory")
+    pinned = {entry["name"]: entry["sha256"] for entry in row["files"]}
+    present = sorted(os.listdir(signed))
+    if present != sorted(pinned):
+        raise Refused(f"{signed} holds {present}; the signed files are exactly {sorted(pinned)}")
+    out = {}
+    for name, expected in pinned.items():
+        path = signed / name
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise Refused(f"{path} is not a regular file")
+        data = path.read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != expected:
+            raise Refused(f"{path} does not match its pin: expected sha256 {expected}, found {actual}")
+        out[name] = data
+    return out
+
+
+def stage(doc, row, sources, dest, licenses, offline=False, signed=None):
+    if signed is not None and row["os"] != "macos":
+        raise Refused(f"--signed is for a macOS host; {row['gitian_host']} ships Tor's files as they are")
     tarball = fetch(doc, row, sources, offline=offline)
     # `fetch` checked a tarball it found or downloaded; the digest is read
     # again from the file this function is about to open, so the check and
@@ -590,20 +818,14 @@ def stage(doc, row, sources, dest, licenses, offline=False):
         raise Refused(f"{tarball} could not be opened as a tarball: {exc}") from exc
     with archive as tar:
         staged = []
-        for entry in row["files"]:
-            data = read_member(tar, f"{BUNDLE_TOR_DIR}/{entry['name']}")
-            actual = hashlib.sha256(data).hexdigest()
-            if actual != entry["sha256"]:
-                raise Refused(
-                    f"{entry['name']} in {tarball.name} does not match its pin: "
-                    f"expected sha256 {entry['sha256']}, found {actual}"
-                )
-            if row["os"] == "windows" and file_identity(
-                row["os"], entry["name"]
-            ) == file_identity(row["os"], row["executable"]):
-                check_imports(data, f"{entry['name']} in {tarball.name}", row)
-            staged.append((entry["name"], data))
         texts = [(Path(member).name, read_member(tar, member)) for member in row["licenses"]]
+    if row["os"] == "macos":
+        upstream = upstream_files(doc, row, sources)
+        for name, data in signed_files(row, signed).items():
+            check_signature_tie(upstream[name], data, f"{name} in {signed}")
+            staged.append((name, data))
+    else:
+        staged = staged_from_tarball(tarball, row)
 
     dest.mkdir(parents=True, exist_ok=True)
     licenses.mkdir(parents=True, exist_ok=True)
@@ -620,6 +842,49 @@ def stage(doc, row, sources, dest, licenses, offline=False):
     note.chmod(0o644)
 
     check_directory(dest, row)
+
+
+def staged_from_tarball(tarball, row):
+    """Linux and Windows: the pinned files, as Tor ships them."""
+    staged = []
+    with tarfile.open(tarball, "r:gz") as tar:
+        for entry in row["files"]:
+            data = read_member(tar, f"{BUNDLE_TOR_DIR}/{entry['name']}")
+            actual = hashlib.sha256(data).hexdigest()
+            if actual != entry["sha256"]:
+                raise Refused(
+                    f"{entry['name']} in {tarball.name} does not match its pin: "
+                    f"expected sha256 {entry['sha256']}, found {actual}"
+                )
+            if row["os"] == "windows" and file_identity(
+                row["os"], entry["name"]
+            ) == file_identity(row["os"], row["executable"]):
+                check_imports(data, f"{entry['name']} in {tarball.name}", row)
+            staged.append((entry["name"], data))
+    return staged
+
+
+def tie_report(tarball, signed):
+    """Pin time, macOS: tie each signed file to Tor's file of the same name in
+    `tarball` and return the row's `files` and `upstream` lists."""
+    if not signed.is_dir():
+        raise Refused(f"{signed} is not a directory")
+    names = sorted(os.listdir(signed))
+    if not names:
+        raise Refused(f"{signed} is empty")
+    files, upstream = [], []
+    try:
+        archive = tarfile.open(tarball, "r:gz")
+    except (tarfile.TarError, OSError) as exc:
+        raise Refused(f"{tarball} could not be opened as a tarball: {exc}") from exc
+    with archive as tar:
+        for name in names:
+            original = read_member(tar, f"{BUNDLE_TOR_DIR}/{name}")
+            data = (signed / name).read_bytes()
+            check_signature_tie(original, data, f"{name} in {signed}")
+            files.append({"name": name, "sha256": hashlib.sha256(data).hexdigest()})
+            upstream.append({"name": name, "sha256": hashlib.sha256(original).hexdigest()})
+    return {"files": files, "upstream": upstream}
 
 
 def main(argv=None):
@@ -650,13 +915,25 @@ def main(argv=None):
         action="store_true",
         help="refuse if --sources lacks the tarball instead of downloading it",
     )
+    cmd.add_argument("--signed", type=Path, help="macOS: the signing step's output")
     cmd = with_host("verify")
     cmd.add_argument("--dir", type=Path, required=True, help="tor's directory")
+    cmd.add_argument("--sources", type=Path, help="macOS: where the pinned tarball is")
+    cmd = sub.add_parser("tie")
+    cmd.add_argument("--tarball", type=Path, required=True, help="the signature-checked Expert Bundle")
+    cmd.add_argument("--signed", type=Path, required=True, help="the signed files")
     args = parser.parse_args(argv)
 
     if args.command == "fetch":
         if bool(args.host) == bool(args.all):
             parser.error("fetch takes exactly one of --host and --all")
+    elif args.command == "tie":
+        try:
+            print(json.dumps(tie_report(args.tarball, args.signed), indent=2))
+        except Refused as exc:
+            print(f"tor_bundle: REFUSED: {exc}", file=sys.stderr)
+            return 1
+        return 0
     elif not args.host:
         parser.error(f"{args.command} needs --host")
 
@@ -685,7 +962,10 @@ def main(argv=None):
             if row["disposition"] != "pinned":
                 print(f"{args.host}: unavailable ({row['reason']}); nothing staged")
                 return 0
-            stage(doc, row, args.sources, args.dest, args.licenses, offline=args.no_fetch)
+            stage(
+                doc, row, args.sources, args.dest, args.licenses,
+                offline=args.no_fetch, signed=args.signed,
+            )
             print(
                 f"{args.host}: staged tor {row['tor_version']} "
                 f"(bundle {row['bundle_version']}) into {args.dest}"
@@ -693,6 +973,15 @@ def main(argv=None):
         elif args.command == "verify":
             row = pinned_row(doc, args.host)
             check_directory(args.dir, row)
+            if row["os"] == "macos":
+                if args.sources is None:
+                    raise Refused(
+                        f"{args.host} ships signed files; verify needs --sources to tie them "
+                        "to Tor's tarball"
+                    )
+                check_tie(args.dir, row, upstream_files(doc, row, args.sources))
+            elif args.sources is not None:
+                raise Refused(f"--sources is for a macOS host; {args.host} ships Tor's files as they are")
             print(f"{args.host}: {args.dir} holds exactly the pinned bundle")
     except Refused as exc:
         print(f"tor_bundle: REFUSED: {exc}", file=sys.stderr)

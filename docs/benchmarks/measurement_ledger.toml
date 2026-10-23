@@ -645,6 +645,7 @@ cleared = [
   { through = "21524f1a8", reason = "Link subscriptions are removed when dropped. The dial, the gap and their I/O are unchanged." },
   { through = "7e9ea0f61", reason = "The Tor link's death watch is re-planned on each publish and a stop has its own cause; the dial, the gap and their I/O are unchanged, so the capture still prices this tree." },
   { through = "b67b94731", reason = "The listener test's frame that is not the handshake is a timed-sync request in place of the deleted support-flags request (1007). No code path in these files changes, so the capture still prices this tree." },
+  { through = "7258399ad", reason = "Increment 3's supervisor publishes the managed route when Tor is running and publish takes the boot's onion seed. The dial, the gap and the shutdown wait in these paths do the same I/O, so the 2026-10-14 capture still prices this tree." },
 ]
 
 [[constant]]

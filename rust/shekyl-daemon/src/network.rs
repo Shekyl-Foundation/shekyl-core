@@ -142,17 +142,17 @@ pub fn proxy_of(socks: &Socks) -> Proxy {
 pub enum TorSocks {
     /// No Tor this boot.
     None,
-    /// The proxy, and whether the zone host also listens for an onion
-    /// (the managed one, or the operator's named onion).
-    At {
+    /// The operator's Tor. Its route is published now.
+    Operator {
         /// The SOCKS proxy.
         socks: Proxy,
-        /// The operator's onion listen endpoint, when the operator's Tor
-        /// forwards an onion to this node.
+        /// The operator's onion listen endpoint, when that Tor forwards an
+        /// onion to this node.
         onion_listen: Option<SocketAddr>,
-        /// Whether a forward listener for a managed onion is wanted.
-        managed: bool,
     },
+    /// The managed Tor. The connector starts with no route. The supervisor
+    /// publishes one when Tor is running.
+    Managed,
 }
 
 /// What step 8 started.
@@ -236,12 +236,14 @@ pub fn start(
     }
     match tor {
         TorSocks::None => {}
-        TorSocks::At {
+        TorSocks::Managed => {
+            started.tor_forward = Some(shekyl_ffi::zone_ffi::start_managed_tor(network_id)?);
+        }
+        TorSocks::Operator {
             socks,
             onion_listen,
-            managed,
         } => {
-            if managed || onion_listen.is_some() {
+            if onion_listen.is_some() {
                 let forward = shekyl_ffi::zone_ffi::start_tor(socks, onion_listen, network_id)?;
                 started.tor_forward = Some(forward);
             } else {

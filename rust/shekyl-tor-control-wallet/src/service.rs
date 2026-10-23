@@ -58,8 +58,8 @@ use crate::onion_service::{publish_onion, OnionPublishAbort};
 use crate::vanguard_rotation::{VanguardManager, VanguardsAbort};
 use shekyl_tor_control_client::binary::{self, VerifiedTorBinary};
 use shekyl_tor_control_client::control::{
-    parse_socks_listeners, BootstrapReadiness, BootstrapState, Command, ManagedTor, SocksPort,
-    TorControlClient, TorControlClientConfig, TorLaunch,
+    parse_socks_listeners, BootstrapReadiness, BootstrapState, Command, DiskWrites, ManagedTor,
+    SocksPort, TorControlClient, TorControlClientConfig, TorLaunch,
 };
 
 // Config/error types live next to their owners; re-exported here so a
@@ -597,6 +597,7 @@ async fn supervise(
                 data_dir: config.data_dir.clone(),
                 socks_port: SocksPort::Auto,
                 disable_network: config.disable_network,
+                disk_writes: DiskWrites::Deferred,
                 exit_observer: Some(exit_tx),
             }),
             events: config.events.clone(),
