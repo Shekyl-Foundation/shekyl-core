@@ -892,32 +892,98 @@ async fn the_inbound_shape_tells_a_submission_from_anything_else() {
     client.write_all(b"GET /info").await.unwrap();
     client.flush().await.unwrap();
     daemon.read_exact(&mut got[..9]).await.unwrap();
-    assert!(!shape.ends_in_submission(), "{:?}", shape.last());
+    assert!(!shape.ends_in_submission());
 
     // A padded submission (one payload record, four padding).
     mark.arm();
     client.write_all(&bytes(300)).await.unwrap();
     client.flush().await.unwrap();
     daemon.read_exact(&mut got[..300]).await.unwrap();
-    assert!(shape.ends_in_submission(), "{:?}", shape.last());
+    assert!(shape.ends_in_submission());
 
-    // A submission that fills all five records carries no padding.
+    // A submission that fills all five records carries no padding. The
+    // padded frame that preceded it is the boundary the five are counted from.
     mark.arm();
     client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
     client.flush().await.unwrap();
     daemon.read_exact(&mut got[..SUBMISSION_CAP]).await.unwrap();
-    assert!(shape.ends_in_submission(), "{:?}", shape.last());
+    assert!(shape.ends_in_submission());
 
     // The same bytes sent unarmed: five full ordinary records, after a
     // message that ended on a full record. Not taken for a submission.
     client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
     client.flush().await.unwrap();
     daemon.read_exact(&mut got[..SUBMISSION_CAP]).await.unwrap();
-    assert!(!shape.ends_in_submission(), "{:?}", shape.last());
+    assert!(!shape.ends_in_submission());
 
     // A submission's size sent unarmed: ordinary records, refused.
     client.write_all(&bytes(1_000)).await.unwrap();
     client.flush().await.unwrap();
     daemon.read_exact(&mut got[..1_000]).await.unwrap();
-    assert!(!shape.ends_in_submission(), "{:?}", shape.last());
+    assert!(!shape.ends_in_submission());
+}
+
+/// A largest-class ordinary record after a padded frame is not a submission.
+/// The padding belongs to the frame that finished; borrowing it would make
+/// this record look like the end of a shorter frame.
+#[tokio::test]
+async fn an_ordinary_record_after_a_padded_frame_is_not_a_submission() {
+    let (mut client, mut daemon) = pair(1 << 20);
+    let shape = daemon.inbound_shape();
+    client.submission_mark().arm();
+    client.write_all(&bytes(300)).await.unwrap();
+    client.flush().await.unwrap();
+    let mut got = vec![0u8; 300];
+    daemon.read_exact(&mut got).await.unwrap();
+    assert!(shape.ends_in_submission());
+
+    // 20,000 bytes is one record of the largest class: more than the middle
+    // class holds, and at most one largest payload.
+    let medium = 20_000;
+    client.write_all(&bytes(medium)).await.unwrap();
+    client.flush().await.unwrap();
+    let mut got = vec![0u8; medium];
+    daemon.read_exact(&mut got).await.unwrap();
+    assert!(!shape.ends_in_submission());
+
+    // The same bytes with no frame behind them are not a submission either.
+    let (mut client, mut daemon) = pair(1 << 20);
+    let shape = daemon.inbound_shape();
+    client.write_all(&bytes(medium)).await.unwrap();
+    client.flush().await.unwrap();
+    let mut got = vec![0u8; medium];
+    daemon.read_exact(&mut got).await.unwrap();
+    assert!(!shape.ends_in_submission());
+}
+
+/// Shutdown has sealed the close. A later write is a use of a shut side,
+/// and the response on the read side is still delivered.
+#[tokio::test]
+async fn a_write_after_shutdown_leaves_the_read_side_open() {
+    let (mut client, mut daemon) = pair(4096);
+    client.write_all(b"request").await.unwrap();
+    client.shutdown().await.unwrap();
+    let late = client.write_all(b"x").await.unwrap_err();
+    assert_eq!(late.kind(), io::ErrorKind::BrokenPipe);
+    assert!(!is::<StreamPoisoned>(&late), "{late}");
+    daemon.write_all(b"response").await.unwrap();
+    daemon.shutdown().await.unwrap();
+    let mut got = Vec::new();
+    client.read_to_end(&mut got).await.unwrap();
+    assert_eq!(got, b"response");
+}
+
+/// Bytes after the close record are not a clean end.
+#[tokio::test]
+async fn a_record_after_the_close_is_refused() {
+    let (mut sealer, mut daemon, mut feed) = sealer_and_reader();
+    for (class, payload) in [(0u8, &b"request"[..]), (0, b""), (0, b"more")] {
+        feed.write_all(&sealer.seal(ClassId(class), payload).unwrap())
+            .await
+            .unwrap();
+    }
+    drop(feed);
+    let mut got = Vec::new();
+    let error = daemon.read_to_end(&mut got).await.unwrap_err();
+    assert!(is::<RecordShapeRefused>(&error), "{error}");
 }

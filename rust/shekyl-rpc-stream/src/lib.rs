@@ -33,35 +33,42 @@
 //! - **Reading** delivers each record's payload in order. An empty record
 //!   is accepted only in the shapes a sender makes: padding, at most
 //!   `SUBMISSION_RECORDS - 1` largest-class records followed by the rest of
-//!   their submission, and the close record. Anything else is refused.
-//!   [`InboundShape`] reports the shape of the records just read, for the
-//!   daemon's `submit_transaction` route to check (RT-W10).
+//!   their submission, and the close record. Anything else is refused,
+//!   including a byte after the close. [`InboundShape`] is the verdict at
+//!   the last data record, decided as the record is admitted: a finished
+//!   padded frame, or exactly [`SUBMISSION_RECORDS`] largest-class payload
+//!   records since a message boundary. The daemon's `submit_transaction`
+//!   route checks it (RT-W10).
 //! - **An authenticated end.** Shutting down the write side flushes, seals
 //!   the close record (occupancy 0 in the smallest class, which nothing
 //!   else sends), then shuts the transport's write side. A reader sees the
 //!   end of the stream only at that record; a transport that ends without
-//!   it is a truncation.
+//!   it is a truncation. A later write on that shut side returns
+//!   [`ErrorKind::BrokenPipe`](io::ErrorKind::BrokenPipe) and does not
+//!   poison the read side, so the response can still be read.
 //! - **One refusal is final.** A refused record, a transport error and a
 //!   refused submission poison the stream: every later call returns an
 //!   error, on both sides.
 //! - **One class table in both directions** ([`class_table`], RT-O29):
 //!   512, 16,384 and 65,535.
 
-use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
 use shekyl_noise::{ClassId, ClassedError, ClassedRecord, Direction};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
+mod frame;
 mod message;
 
+use frame::{Admit, Frame, Refused, CLOSE_CLASS};
 use message::{EndPlan, Message, MessageKind, SealPlan, WritePlan};
 
+pub use frame::InboundShape;
 pub use message::{class_table, CLASS_LENGTHS, MAX_PAYLOAD, SUBMISSION_CAP, SUBMISSION_RECORDS};
 
 /// How much the adapter asks of the transport at once when reading.
@@ -70,9 +77,6 @@ const READ_CHUNK: usize = 16 * 1024;
 /// Empty records opened in one read before the read yields, so a run of
 /// them cannot hold the task.
 const EMPTY_RECORDS_PER_POLL: usize = 2;
-
-/// The class of the close record: the smallest.
-const CLOSE_CLASS: ClassId = ClassId(0);
 
 /// The switch a client sets before a submission is classified.
 ///
@@ -175,97 +179,6 @@ fn peer_gone(error: &io::Error) -> bool {
     )
 }
 
-/// One record as the reader saw it: its class, and whether it carried
-/// nothing (padding, or the close).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RecordShape {
-    /// The record's class in [`class_table`].
-    pub class: ClassId,
-    /// The record carried no payload.
-    pub empty: bool,
-    /// The record is the last of a padded submission frame: the frame's
-    /// padding announced how many records it has, and this is the last.
-    pub ends_frame: bool,
-}
-
-/// The shapes of the records a stream has read most recently, shared so the
-/// daemon's request handler can read them while hyper owns the stream.
-///
-/// The `submit_transaction` route (RT-W10) refuses a request unless
-/// [`ends_in_submission`](Self::ends_in_submission) is true when the body
-/// has been read: a client that did not arm its mark, or armed the wrong
-/// connection, sent a size the padding exists to hide, and the daemon fails
-/// closed rather than answer it.
-#[derive(Clone, Debug, Default)]
-pub struct InboundShape(Arc<Mutex<VecDeque<RecordShape>>>);
-
-impl InboundShape {
-    /// The records read most recently, oldest first: at most
-    /// `SUBMISSION_RECORDS + 1`.
-    #[must_use]
-    pub fn last(&self) -> Vec<RecordShape> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .copied()
-            .collect()
-    }
-
-    /// Whether the records read most recently are one submission as a
-    /// sender pads it: [`SUBMISSION_RECORDS`] records of the largest class,
-    /// the empty ones first, at least one carrying payload.
-    ///
-    /// A submission whose request fills all five records carries no
-    /// padding, and nothing on the wire says where it began. It counts only
-    /// when the record before it ends a message the reader can see the end
-    /// of: a smaller class, an empty record, or the last record of a padded
-    /// frame. So a longer ordinary message is never taken for one, and a
-    /// real submission sent right after an ordinary message that ended on a
-    /// full record is refused: the daemon fails closed and the client sends
-    /// again.
-    #[must_use]
-    pub fn ends_in_submission(&self) -> bool {
-        let records = self.last();
-        let Some(start) = records.len().checked_sub(SUBMISSION_RECORDS) else {
-            return false;
-        };
-        let largest = class_table().largest();
-        let frame = &records[start..];
-        if frame.iter().any(|r| r.class != largest) {
-            return false;
-        }
-        let padding = frame.iter().take_while(|r| r.empty).count();
-        if padding == SUBMISSION_RECORDS || frame[padding..].iter().any(|r| r.empty) {
-            return false;
-        }
-        match start.checked_sub(1).map(|i| records[i]) {
-            Some(before) if padding == 0 => {
-                before.class != largest || before.empty || before.ends_frame
-            }
-            _ => true,
-        }
-    }
-
-    fn push(&self, shape: RecordShape) {
-        let mut log = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if log.len() == SUBMISSION_RECORDS + 1 {
-            log.pop_front();
-        }
-        log.push_back(shape);
-    }
-}
-
-/// Where the reader is in a submission frame (`RPC_CHANNEL.md` §4.4): a
-/// run of padding, then the rest of its [`SUBMISSION_RECORDS`] records.
-#[derive(Debug, Default)]
-struct Frame {
-    /// Padding records read in the current run.
-    padding: usize,
-    /// Payload records the open frame still owes.
-    owed: usize,
-}
-
 /// What a test reads off a stream: records cut per class, flushes that
 /// sent something, and the most the buffers ever held.
 #[cfg(test)]
@@ -300,9 +213,9 @@ pub struct RecordStream<T> {
     /// Shutdown has begun: no more writes.
     write_closed: bool,
     close_sealed: bool,
-    /// Wire bytes read and not yet opened are `wire[..wire_len]`. The
-    /// rest is room a read fills directly; it grows only when a read needs
-    /// more, so a read does not zero a buffer each time.
+    /// Wire bytes not yet opened are `wire[..wire_len]`. The spare tail is
+    /// room a later read fills. The buffer grows by [`READ_CHUNK`] when that
+    /// room is short, and only the new tail is zeroed.
     wire: Vec<u8>,
     wire_len: usize,
     /// The length of the record at the front of `wire`, once known.
@@ -365,7 +278,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
             next_len: None,
             plain: Zeroizing::new(first_payload),
             plain_pos: 0,
-            frame: Frame::default(),
+            frame: Frame::new(),
             shape: InboundShape::default(),
             peer_closed: false,
             eof: false,
@@ -432,7 +345,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
     /// returns, so a failure is retried as the same record.
     fn seal(&mut self, plan: SealPlan) -> io::Result<()> {
         debug_assert!(
-            self.out.is_empty(),
+            self.out.is_empty() && self.out_pos == 0,
             "the previous record has not left; two sealed records would wait"
         );
         let wire = {
@@ -443,8 +356,20 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         self.message.commit_seal(plan);
         #[cfg(test)]
         self.note_sent(plan.class, wire.len());
-        self.out = wire;
+        self.install_out(wire);
         Ok(())
+    }
+
+    /// `out` and `out_pos` are one record. A finished drain has already
+    /// cleared both; installing the next record says so again, so a new
+    /// buffer cannot be treated as already written.
+    fn install_out(&mut self, wire: Vec<u8>) {
+        debug_assert!(
+            self.out.is_empty() && self.out_pos == 0,
+            "the previous record has not left; two sealed records would wait"
+        );
+        self.out = wire;
+        self.out_pos = 0;
     }
 
     /// The message's last record has left: count it and go idle.
@@ -480,12 +405,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         if let Some(error) = self.poisoned_error() {
             return Poll::Ready(Err(error));
         }
-        if self.write_closed {
-            return Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
-        }
-        let table = class_table();
         loop {
-            match self.message.plan_write(buf.len(), &table) {
+            // The cut uses the table this half seals with. `class_table()`
+            // would re-check and allocate the same rows on every poll.
+            let write_plan = self.message.plan_write(buf.len(), self.send.table());
+            match write_plan {
                 WritePlan::Accept(n) => {
                     debug_assert!(
                         n > 0 || buf.is_empty(),
@@ -526,9 +450,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         if let Some(error) = self.poisoned_error() {
             return Poll::Ready(Err(error));
         }
-        let table = class_table();
         loop {
-            match self.message.plan_flush(&table) {
+            let end_plan = self.message.plan_flush(self.send.table());
+            match end_plan {
                 EndPlan::Nothing => {
                     ready!(self.poll_drain(cx))?;
                     break;
@@ -557,7 +481,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
             let close = self.send.seal(CLOSE_CLASS, &[]).map_err(seal_error)?;
             #[cfg(test)]
             self.note_sent(CLOSE_CLASS, close.len());
-            self.out = close;
+            self.install_out(close);
             self.close_sealed = true;
         }
         // Once the peer's close has been read the session is over both ways,
@@ -582,47 +506,22 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         Poll::Ready(Ok(()))
     }
 
-    /// Check an opened record's shape against what a sender makes, and log
-    /// it. Returns whether it is the peer's close.
+    /// Check an opened record against what a sender makes, and publish the
+    /// verdict. Returns whether it is the peer's close. The close record
+    /// leaves the verdict as the last data record set it.
     fn admit_shape(&mut self, class: ClassId, empty: bool) -> io::Result<bool> {
         let largest = self.recv.table().largest();
-        let refused = || io::Error::new(io::ErrorKind::InvalidData, RecordShapeRefused);
-        let frame = &mut self.frame;
-        let close = empty && class == CLOSE_CLASS;
-        if close {
-            if frame.padding > 0 || frame.owed > 0 {
-                return Err(refused());
+        match self.frame.admit(class, empty, largest) {
+            Ok(Admit::Close) => Ok(true),
+            Ok(Admit::Data) => {
+                self.shape.set(self.frame.submission());
+                Ok(false)
             }
-            return Ok(true);
+            Err(Refused) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                RecordShapeRefused,
+            )),
         }
-        let mut ends_frame = false;
-        if empty {
-            // Padding: the largest class, before the frame's payload, and
-            // at most SUBMISSION_RECORDS - 1 of it.
-            if class != largest || frame.owed > 0 || frame.padding + 1 >= SUBMISSION_RECORDS {
-                return Err(refused());
-            }
-            frame.padding += 1;
-        } else if frame.padding > 0 {
-            if class != largest {
-                return Err(refused());
-            }
-            frame.owed = SUBMISSION_RECORDS - frame.padding - 1;
-            frame.padding = 0;
-            ends_frame = frame.owed == 0;
-        } else if frame.owed > 0 {
-            if class != largest {
-                return Err(refused());
-            }
-            frame.owed -= 1;
-            ends_frame = frame.owed == 0;
-        }
-        self.shape.push(RecordShape {
-            class,
-            empty,
-            ends_frame,
-        });
-        Ok(false)
     }
 
     fn read_step(&mut self, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
@@ -636,13 +535,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
                 buf.put_slice(&self.plain[self.plain_pos..self.plain_pos + n]);
                 self.plain_pos += n;
                 if self.plain_pos == self.plain.len() {
-                    self.plain.clear();
+                    // `clear` would drop the length and leave the plaintext
+                    // in the spare capacity until this buffer is replaced.
+                    self.plain.zeroize();
                     self.plain_pos = 0;
                 }
                 return Poll::Ready(Ok(()));
             }
             if self.peer_closed {
-                return Poll::Ready(Ok(()));
+                return self.read_after_close(cx);
             }
             if self.next_len.is_none() && self.wire_len > 0 {
                 let header = self.wire[0];
@@ -667,7 +568,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
                     let empty = opened.payload.is_empty();
                     if self.admit_shape(opened.class, empty)? {
                         self.peer_closed = true;
-                        return Poll::Ready(Ok(()));
+                        return self.read_after_close(cx);
                     }
                     self.plain = Zeroizing::new(opened.payload);
                     self.plain_pos = 0;
@@ -701,6 +602,42 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
             }
         }
     }
+
+    /// The peer's close has been read. Bytes already buffered, or readable
+    /// without waiting, are a record after the close. A quiet transport is
+    /// the end: waiting here would stall a half-close that has nothing more
+    /// to send.
+    fn read_after_close(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.wire_len > 0 {
+            return Poll::Ready(Err(shape_refused()));
+        }
+        if self.eof {
+            return Poll::Ready(Ok(()));
+        }
+        if self.wire.len() == self.wire_len {
+            self.wire.resize(self.wire_len + READ_CHUNK, 0);
+        }
+        let mut read = ReadBuf::new(&mut self.wire[self.wire_len..]);
+        match Pin::new(&mut self.io).poll_read(cx, &mut read) {
+            Poll::Pending => Poll::Ready(Ok(())),
+            Poll::Ready(Err(error)) if peer_gone(&error) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Ready(Ok(())) => {
+                let got = read.filled().len();
+                if got == 0 {
+                    self.eof = true;
+                    Poll::Ready(Ok(()))
+                } else {
+                    self.wire_len += got;
+                    Poll::Ready(Err(shape_refused()))
+                }
+            }
+        }
+    }
+}
+
+fn shape_refused() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, RecordShapeRefused)
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RecordStream<T> {
@@ -710,6 +647,12 @@ impl<T: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RecordStream<T> {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
+        // Shutdown already ended this side. A later write is the caller's,
+        // and it must not poison the read side: half-close still delivers
+        // the response. A stream that is already poisoned stays poisoned.
+        if this.write_closed && this.poisoned.is_none() {
+            return Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)));
+        }
         let result = this.write_step(cx, buf);
         this.guard(result)
     }
