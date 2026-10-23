@@ -247,10 +247,16 @@ read:
 
 The permitted principals are root and the daemon's account on Unix, and for
 reading a file that holds a secret also the daemon's group (Rick,
-2026-10-19). A service install keeps one file, `root:<daemon group>` `0640`
-under `/etc/shekyl` `root:root` `0755`: written by root only, read by root,
-the daemon's account and its group. A per-account install keeps it
-owner-only `0600`. There is no separate secrets file.
+2026-10-19), while the daemon's account is that group's only member (Rick,
+2026-10-22). A service install keeps one file, `root:<daemon group>` `0640`
+under `/etc/shekyl` `root:root` `0755`: written by root only, read by root
+and the daemon. A per-account install keeps it owner-only `0600`. There is
+no separate secrets file. The group's members are its member list plus
+every account whose primary group it is; a file readable through a group
+that holds anyone else is refused, naming that account, and a membership
+that cannot be read completely refuses, naming why. The check runs at every
+start and from the configuration check (`config-verify`, IG-Q59). Windows
+is unchanged: its allowlist names principals.
 
 The Unix rules read the mode bits. Those bits are the whole policy only
 when the access-control list names nobody else. A POSIX named user or named
