@@ -19,9 +19,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use shekyl_chain_rules::{AdmissionPolicy, ChainView, Fault, InvalidBlock, RuleSet, StatelessPass};
+use shekyl_chain_rules::{
+    AdmissionPolicy, AtHeight, ChainView, Fault, HeaderView, InvalidBlock, RuleSet, StatelessPass,
+    Tip,
+};
 use shekyl_chain_store::pool::{PoolOpen, PoolRecord, PoolStore, ReceivedHour};
 use shekyl_chain_store::store::StoreError;
+use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHeight, KeyImage, TxHash, UnixSeconds};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{Ct, Input};
@@ -200,11 +204,22 @@ pub struct Pool {
     /// Step 1 already run outside the pool lock, consumed by the next
     /// reconcile. Not durable: the file must not supply a pass.
     prepared: HashMap<TxHash, Result<StatelessPass, InvalidBlock>>,
-    /// The tip the entries were last judged against: the last reconcile's,
-    /// or a later admission's when it judged against a higher tip. A
-    /// template built on another tip would judge them against the wrong
-    /// parent ([`Pool::judged_at`]).
-    pub(crate) judged_at: Option<shekyl_chain_rules::Tip>,
+    /// The tip the entries were last judged against, with the work that
+    /// ordered it. `None` when they were not judged at one tip.
+    /// [`Pool::judged_at`] is the tip a template compares to its parent.
+    judged_at: Option<JudgedTip>,
+}
+
+/// A tip the pool judged against, and the fork-choice work through it.
+///
+/// Work, not height, orders two tips: a reorg can land at the same height
+/// or a shorter one and still be the chain. A stale snapshot of the lighter
+/// tip must not move this, and must not leave it naming the lighter tip
+/// after a heavier one was judged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct JudgedTip {
+    tip: Tip,
+    work: CumulativeDifficulty,
 }
 
 impl core::fmt::Debug for Pool {
@@ -380,24 +395,45 @@ impl Pool {
             self.drop_held(gone);
         }
         self.hold(txid, Held::of(tx, record, Some(*pass)));
-        // Judged against a higher tip than the last reconcile's: a template
-        // on the older tip would refuse this entry against its parent.
         if let Ok(Some(tip)) = chain.tip() {
-            if self.judged_at.is_none_or(|at| tip.height > at.height) {
-                self.judged_at = Some(tip);
-            }
+            self.note_admitted(chain, tip);
         }
         Ok(Admission::Admitted { evicted })
     }
 
-    /// The tip the entries were last judged against: the last reconcile's,
-    /// or an admission's that judged against a higher one. `None` before
-    /// any judgement against a chain with a tip. A template selects only
-    /// when this is its own parent; otherwise it would refuse, and evict,
-    /// entries valid at the tip they were judged at.
+    /// Record that this admission judged at `tip`.
+    ///
+    /// A heavier tip replaces the marker, so a template still holding the
+    /// lighter snapshot sees a different parent and evicts nothing. The same
+    /// tip refreshes it. Equal work under another hash clears it: the two
+    /// chains are not ordered. A lighter tip leaves the marker, so a stale
+    /// snapshot cannot blank a heavier one or restore the old identity.
+    fn note_admitted<'id, V: HeaderView<'id>>(&mut self, chain: &V, tip: Tip) {
+        self.judged_at = match tip_with_work(chain, tip) {
+            Some(admitted) => judged_tip_after(self.judged_at, admitted),
+            None => None,
+        };
+    }
+
+    /// The reconcile re-judged every entry at `tip`. That tip is the marker,
+    /// including when it is lighter than the one an earlier admission saw:
+    /// the entries now agree with it. No readable work means they do not.
+    pub(crate) fn note_reconciled<'id, V: HeaderView<'id>>(&mut self, chain: &V, tip: Option<Tip>) {
+        self.judged_at = tip.and_then(|tip| tip_with_work(chain, tip));
+    }
+
+    /// The tip the entries were last judged against. `None` before any
+    /// judgement against a chain with a tip, when the last judgement was
+    /// against a chain of equal work and a different hash, or when that
+    /// tip's work could not be read. A template selects only when this is
+    /// its own parent; otherwise it would refuse, and evict, entries valid
+    /// at the tip they were judged at.
     #[must_use]
-    pub const fn judged_at(&self) -> Option<shekyl_chain_rules::Tip> {
-        self.judged_at
+    pub const fn judged_at(&self) -> Option<Tip> {
+        match self.judged_at {
+            Some(JudgedTip { tip, .. }) => Some(tip),
+            None => None,
+        }
     }
 
     /// Put `held` in the index and its key images in the map (CEN-M7).
@@ -574,6 +610,32 @@ impl Pool {
             .expect("plant");
         self.hold(txid, Held::of(tx, record, None));
         txid
+    }
+}
+
+/// The admission's tip with the work through its own header, or `None`
+/// when this view does not record that header.
+fn tip_with_work<'id, V: HeaderView<'id>>(chain: &V, tip: Tip) -> Option<JudgedTip> {
+    match chain.header_at(tip.height) {
+        Ok(AtHeight::Recorded(record)) if record.hash == tip.hash => Some(JudgedTip {
+            tip,
+            work: record.cumulative_difficulty,
+        }),
+        _ => None,
+    }
+}
+
+/// The marker after an admission judged at `admitted`.
+///
+/// Heavier work replaces it. The same tip refreshes it. Equal work under
+/// another hash clears it. Lighter work leaves it.
+fn judged_tip_after(recorded: Option<JudgedTip>, admitted: JudgedTip) -> Option<JudgedTip> {
+    match recorded {
+        None => Some(admitted),
+        Some(at) if at.tip == admitted.tip => Some(admitted),
+        Some(at) if admitted.work > at.work => Some(admitted),
+        Some(at) if admitted.work == at.work => None,
+        Some(at) => Some(at),
     }
 }
 

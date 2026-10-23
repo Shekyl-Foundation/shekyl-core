@@ -208,7 +208,7 @@ impl Pool {
                 .write(|batch| removals.iter().try_for_each(|txid| batch.remove(txid)))?;
         }
         self.install(&judged_all, key_images);
-        self.judged_at = tip;
+        self.note_reconciled(chain, tip);
         Ok(reconciled)
     }
 }

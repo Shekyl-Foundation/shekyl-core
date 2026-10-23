@@ -4759,6 +4759,7 @@ dependencies = [
  "redb",
  "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-difficulty",
  "shekyl-store-codec",
  "shekyl-types",
  "shekyl-units",

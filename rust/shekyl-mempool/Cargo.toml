@@ -20,6 +20,8 @@ license.workspace = true
 # judge_slot_stateless / tx_against / policy_form — the door's three calls;
 # ChainView / HeaderView — what the decorator implements; ReferenceClaims.
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# CumulativeDifficulty: fork-choice work, which orders `judged_at` across a reorg.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
 # PoolStore (P1–P7), PoolRecord / Standing / ReceivedHour, the stored
 # AltBodies, and the snapshot view the door judges against.
 shekyl-chain-store = { path = "../shekyl-chain-store" }
