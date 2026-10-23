@@ -363,6 +363,9 @@ mod tests {
     /// the subnet is not.
     #[test]
     fn the_ban_files_entries_are_permanent_bans() {
+        // `main` replaces the process socket table. This test writes bans
+        // onto it, so it takes the same lock the daemon-start test holds.
+        let _serial = crate::run::hold_process_table();
         let d = tempfile::tempdir().unwrap();
         let file = d.path().join("bans");
         std::fs::write(&file, "203.0.113.9\n198.51.100.0/24\n").unwrap();
