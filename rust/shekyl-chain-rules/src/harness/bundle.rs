@@ -71,6 +71,12 @@ pub enum BundleRead {
     Revealed,
     /// [`BundleView::drawable_epoch`].
     DrawableEpoch,
+    /// [`BundleView::support_count`].
+    SupportCount,
+    /// [`BundleView::support_roster`].
+    SupportRoster,
+    /// [`BundleView::archive_width`].
+    ArchiveWidth,
 }
 
 /// The fault a [`FixtureBundleView`] raises, naming the read that failed.
@@ -96,6 +102,10 @@ pub struct FixtureBundleView {
     pub revealed: BTreeSet<BlockHeight>,
     /// The `h_open(E)` drawable epochs, by the epoch asked for.
     pub drawable_epochs: BTreeMap<SettlementEpoch, DrawableEpoch>,
+    /// Complete trees scheduled at a block, in bitmap order.
+    pub support_roster: BTreeMap<BlockHeight, Vec<crate::archival::SupportSeat>>,
+    /// The archive width a support draw selects from.
+    pub archive_width: BTreeMap<BlockHeight, u64>,
     /// The one read that faults, if any.
     pub fault: Option<BundleRead>,
     /// Every read made, in order.
@@ -187,6 +197,29 @@ impl BundleView for FixtureBundleView {
     ) -> Result<Option<&DrawableEpoch>, BundleReadFaulted> {
         self.read(BundleRead::DrawableEpoch)?;
         Ok(self.drawable_epochs.get(&epoch))
+    }
+
+    fn support_count(&self, h: BlockHeight) -> Result<Option<u32>, BundleReadFaulted> {
+        self.read(BundleRead::SupportCount)?;
+        Ok(Some(
+            u32::try_from(self.support_roster.get(&h).map(Vec::len).unwrap_or(0))
+                .unwrap_or(u32::MAX),
+        ))
+    }
+
+    fn support_roster(
+        &self,
+        h: BlockHeight,
+    ) -> Result<Option<Vec<crate::archival::SupportSeat>>, BundleReadFaulted> {
+        self.read(BundleRead::SupportRoster)?;
+        Ok(Some(
+            self.support_roster.get(&h).cloned().unwrap_or_default(),
+        ))
+    }
+
+    fn archive_width(&self, h: BlockHeight) -> Result<Option<u64>, BundleReadFaulted> {
+        self.read(BundleRead::ArchiveWidth)?;
+        Ok(Some(self.archive_width.get(&h).copied().unwrap_or(0)))
     }
 }
 
@@ -409,6 +442,7 @@ impl BundleWorld {
             pair.shard.to_raw(),
             attempt,
             anchor,
+            shekyl_archival_retention::PassStream::Economy,
             nonce,
         )
     }
@@ -428,6 +462,7 @@ impl BundleWorld {
         shard_id: u64,
         attempt: u8,
         anchor: BlockHeight,
+        stream: shekyl_archival_retention::PassStream,
         nonce: &[u8; 32],
     ) -> BundleRecord {
         let delivery_digest = [0xDD; 32];
@@ -436,7 +471,7 @@ impl BundleWorld {
             .chain_block_hash(anchor)
             .expect("anchor is at or below the fixture chain's tip");
         let transcript = pass_countersignature_message(
-            shekyl_archival_retention::PassStream::Economy,
+            stream,
             nonce,
             anchor,
             anchor_hash.as_bytes(),
@@ -486,10 +521,43 @@ impl BundleWorld {
         passes: PassBitmap,
         records: &[BundleRecord],
     ) -> (BundleRef, BundleBody) {
+        self.assemble_support(passes, PassBitmap::none(), records)
+    }
+
+    /// A record signed by persona `index` for `shard` under `stream`.
+    #[must_use]
+    pub fn persona_record(
+        &self,
+        index: usize,
+        shard: u64,
+        stream: shekyl_archival_retention::PassStream,
+        nonce: &[u8; 32],
+    ) -> BundleRecord {
+        let persona = &self.personas[index];
+        self.record_signed_by(
+            &persona.receipt_secret_key,
+            shard,
+            0,
+            self.honest_anchor(),
+            stream,
+            nonce,
+        )
+    }
+
+    /// [`Self::assemble`] with a support bitmap. Economy records come
+    /// first; support records follow, one per set support bit.
+    #[must_use]
+    pub fn assemble_support(
+        &self,
+        passes: PassBitmap,
+        support: PassBitmap,
+        records: &[BundleRecord],
+    ) -> (BundleRef, BundleBody) {
         let kept = BundleKept {
             h: self.h,
             seed: self.seed,
             passes,
+            support,
         };
         let records_bytes: Vec<u8> = records.iter().flat_map(BundleRecord::encode).collect();
         let commitment = kept.commitment(&records_bytes);

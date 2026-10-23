@@ -1037,7 +1037,14 @@ fn a_receipt_under_a_key_the_drawable_epoch_does_not_hold_refuses() {
         draw,
         0,
     );
-    let signed_by_b = world.record_signed_by(&key_b_secret, pair.shard.to_raw(), 0, anchor, &nonce);
+    let signed_by_b = world.record_signed_by(
+        &key_b_secret,
+        pair.shard.to_raw(),
+        0,
+        anchor,
+        shekyl_archival_retention::PassStream::Economy,
+        &nonce,
+    );
     let passes = PassBitmap::from_passes(16, [draw]).expect("in range");
     let (reference, body) = world.assemble(passes, &[signed_by_b]);
 
@@ -1394,4 +1401,57 @@ fn a_view_fault_surfaces_as_itself_from_every_read() {
         );
         assert_eq!(refused.verdict(), None);
     }
+}
+
+/// A support pass sits beside the economy draws and is not one of them:
+/// the economy charge does not grow, and `Admitted::draws` does not gain
+/// the tree. A receipt signed on the economy stream is refused in the
+/// support slot. Red edit: verify the support receipt under
+/// `PassStream::Economy`, or push the observation onto `draws`.
+#[test]
+fn a_support_pass_is_not_serve_credit() {
+    use shekyl_archival_retention::{
+        bundle_charge, select_support_shard, support_challenge_nonce, PassStream,
+    };
+
+    let mut world = BundleWorld::new(4);
+    let persona = world.personas[0].persona;
+    let receipt_key = world.personas[0].receipt_public_key.clone();
+    let width = 64;
+    world.view.archive_width.insert(world.h, width);
+    world.view.support_roster.insert(
+        world.h,
+        vec![SupportSeat {
+            persona,
+            receipt_key,
+        }],
+    );
+    let hash = fixture_block_hash(world.h);
+    let shard = select_support_shard(&world.seed, hash.as_bytes(), &persona, 0, width)
+        .expect("a non-zero archive selects");
+    let support_nonce = support_challenge_nonce(&world.seed, hash.as_bytes(), 0, 0);
+    let economy_nonce =
+        shekyl_archival_retention::challenge_nonce(&world.seed, hash.as_bytes(), 0, 0);
+    let good = world.persona_record(0, shard, PassStream::Support, &support_nonce);
+    let passes = PassBitmap::from_passes(world.count, []).expect("no economy passes");
+    let support = PassBitmap::from_passes(1, [0]).expect("the one support bit");
+    let (reference, body) = world.assemble_support(passes, support, &[good]);
+    let admitted = judge(&world, &reference, &body).expect("the support receipt verifies");
+    assert_eq!(admitted.draws.len(), 4, "the economy draws are unchanged");
+    assert!(admitted.draws.iter().all(|draw| !draw.passed));
+    assert_eq!(admitted.support.len(), 1);
+    assert!(admitted.support[0].passed);
+    assert_eq!(admitted.support[0].persona, persona);
+    assert_eq!(admitted.support[0].shard.to_raw(), shard);
+    assert_eq!(admitted.kept.charge(), bundle_charge(world.count));
+    let wrong = world.persona_record(0, shard, PassStream::Economy, &economy_nonce);
+    let (reference, body) = world.assemble_support(
+        PassBitmap::from_passes(world.count, []).expect("no economy passes"),
+        PassBitmap::from_passes(1, [0]).expect("the one support bit"),
+        &[wrong],
+    );
+    assert_eq!(
+        judge(&world, &reference, &body),
+        invalid(BundleInvalid::Receipt { draw: 0 })
+    );
 }

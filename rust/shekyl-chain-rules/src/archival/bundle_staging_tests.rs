@@ -23,6 +23,7 @@ fn reference_of(count: u32) -> BundleRef {
             h: BlockHeight::from_raw(100),
             seed: [0x5E; 32],
             passes: PassBitmap::from_passes(count, []).expect("no passes"),
+            support: PassBitmap::none(),
         },
         [0xAB; 32],
     )

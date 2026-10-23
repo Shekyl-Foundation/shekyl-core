@@ -34,6 +34,7 @@ fn reference_at(h: u64, count: u32) -> BundleRef {
             h: BlockHeight::from_raw(h),
             seed: [0x5E; 32],
             passes: PassBitmap::from_passes(count, []).expect("no passes"),
+            support: PassBitmap::none(),
         },
         [0xAB; 32],
     )
