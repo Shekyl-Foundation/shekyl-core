@@ -1,0 +1,38 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-chain-sync"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Chain sync's model: a deterministic state machine, events in and commands out (CS-2)."
+
+[dependencies]
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
+shekyl-levin = { path = "../shekyl-levin" }
+shekyl-peer-policy = { path = "../shekyl-peer-policy" }
+shekyl-types = { path = "../shekyl-types" }
+shekyl-wire = { path = "../shekyl-wire" }
+
+[dev-dependencies]
+proptest = "1"
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false }
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+shekyl-wire = { path = "../shekyl-wire" }
+
+[features]
+# The floor-device job: captured corpora and 50,000 real hashes.
+# `cargo test --lib` does not build it.
+cs2-long-run = []
+
+[lints]
+workspace = true

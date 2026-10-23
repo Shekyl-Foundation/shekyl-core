@@ -333,6 +333,18 @@ impl FormedHeader {
         self.facts.identity()
     }
 
+    /// The parent this header names.
+    #[must_use]
+    pub const fn previous(&self) -> BlockHash {
+        self.facts.header().previous
+    }
+
+    /// The header `form_header` proved.
+    #[must_use]
+    pub const fn header(&self) -> &BlockHeader {
+        self.facts.header()
+    }
+
     /// The wall clock `form_header` read, once, before the rules.
     #[must_use]
     pub const fn judged_at(&self) -> Timestamp {

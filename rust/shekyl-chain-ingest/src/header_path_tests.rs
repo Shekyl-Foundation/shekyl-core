@@ -18,9 +18,9 @@ use std::num::NonZeroU128;
 use shekyl_chain_rules::harness::fixture::{coinbase_extra, TWO_G};
 use shekyl_chain_rules::harness::MockSubstrate;
 use shekyl_chain_rules::{
-    bind_body, form, form_header, judge_header, judge_header_cheap, seed_height, target_claim,
-    validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, HeaderView, OpenHeader,
-    ProspectFault, ReferenceClaims, ReleaseAnchors, RuleSet, Stale, Target, Trust,
+    bind_body, form, form_header, form_judged, judge_header, judge_header_cheap, seed_height,
+    target_claim, validate, AtHeight, Candidate, CenRow, ChainView, Fault, FormAttempt, HeaderView,
+    OpenHeader, ProspectFault, ReferenceClaims, ReleaseAnchors, RuleSet, Stale, Target, Trust,
 };
 use shekyl_chain_store::apply_policy::ApplyPolicy;
 use shekyl_chain_store::store::{StoreError, WriteBatch};
@@ -125,7 +125,7 @@ where
         Ok(formed) => match judge_header(&formed, view, rule_set, trust) {
             Err(fault) => stale(&fault),
             Ok(Err(refused)) => Said::Refused(refused.rule),
-            Ok(Ok(judged)) => Said::Accepted(judged.cumulative_difficulty),
+            Ok(Ok(judged)) => Said::Accepted(judged.cumulative_difficulty()),
         },
     }
 }
@@ -541,17 +541,26 @@ fn body_of(candidate: &Candidate) -> BlockBody {
     }
 }
 
-fn formed_header(
+fn judged_header<'id, V: HeaderView<'id>>(
     candidate: &Candidate,
+    view: &V,
     rule_set: &RuleSet,
+    trust: &Trust,
     substrate: &MockSubstrate,
     seed: BlockHash,
     target: Target,
-) -> shekyl_chain_rules::FormedHeader {
+) -> shekyl_chain_rules::HeaderJudged
+where
+    V::Fault: std::fmt::Debug,
+{
     let pow = PowBlob::read(&candidate.block.pow_blob()).expect("preimage");
-    form_header(&pow, rule_set, substrate, seed, target, FormAttempt::FIRST)
+    let formed = form_header(&pow, rule_set, substrate, seed, target, FormAttempt::FIRST)
         .expect("mock")
-        .expect("the header forms")
+        .expect("the header forms");
+    match judge_header(&formed, view, rule_set, trust).expect("the view answers") {
+        Ok(judged) => judged,
+        Err(refused) => panic!("an honest header was refused: {refused:?}"),
+    }
 }
 
 /// A substituted transaction, a reordered pair and a substituted witness
@@ -581,8 +590,15 @@ fn bind_body_agrees_with_validate() {
                     let rule_set = rules.in_force(height);
                     let seed = seed_of(&view, height);
                     let target = target_of(&view, height, &rule_set);
-                    let header =
-                        formed_header(candidate, &rule_set, substrate.as_ref(), seed, target);
+                    let header = judged_header(
+                        candidate,
+                        &view,
+                        &rule_set,
+                        &trust,
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
                     let intact = body_of(candidate);
                     assert_eq!(bind_body(&header, &intact), Ok(()));
 
@@ -766,6 +782,7 @@ fn appended_bytes_are_not_the_transaction() {
         .expect("the spend chain");
     let chain = load(&dir, &manifest.shape);
     let rules = rules_for(&manifest);
+    let trust = rules.trust();
     let path = tmp("header-path-trailing");
     let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
     let mut pinned = false;
@@ -778,8 +795,15 @@ fn appended_bytes_are_not_the_transaction() {
                 let seed = seed_of(&view, height);
                 let target = target_of(&view, height, &rule_set);
                 if let Some(tx) = candidate.transactions.first() {
-                    let header =
-                        formed_header(candidate, &rule_set, substrate.as_ref(), seed, target);
+                    let header = judged_header(
+                        candidate,
+                        &view,
+                        &rule_set,
+                        &trust,
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
                     let mut full = body_of(candidate);
                     let trailing = {
                         let TxBody::Full(bytes) = &mut full.txs[0] else {
@@ -991,4 +1015,68 @@ fn a_longhash_the_target_refuses_is_d1_on_both_paths() {
         })
         .expect("inspect");
     cleanup(&path);
+}
+
+/// Every captured block forms the same way from its judged header as from
+/// its bytes, and the header entry does not hash.
+#[test]
+fn a_judged_header_forms_the_block_without_hashing() {
+    let substrate = mock_with_the_real_clock();
+    for (dir, manifest) in captured_chains() {
+        let chain = load(&dir, &manifest.shape);
+        let rules = rules_for(&manifest);
+        let trust = rules.trust();
+        let path = tmp(&format!("header-path-proof-{}", manifest.shape));
+        let store = open_store_under(&path, &rules.in_force(BlockHeight::ZERO), ApplyPolicy::Full);
+        store
+            .write(|batch| -> Result<(), StoreError> {
+                for candidate in &chain {
+                    let view = batch.chain_view();
+                    let height = connecting(&view);
+                    let rule_set = rules.in_force(height);
+                    let seed = seed_of(&view, height);
+                    let target = target_of(&view, height, &rule_set);
+                    let judged = judged_header(
+                        candidate,
+                        &view,
+                        &rule_set,
+                        &trust,
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                    );
+                    let references = ReferenceClaims::from_headers(&view, height, candidate)
+                        .expect("references");
+                    let from_bytes = form(
+                        candidate.clone(),
+                        &rule_set,
+                        substrate.as_ref(),
+                        seed,
+                        target,
+                        &references,
+                        FormAttempt::FIRST,
+                    )
+                    .expect("mock")
+                    .expect("forms from bytes");
+                    let from_header = form_judged(candidate.clone(), &judged, &references)
+                        .expect("forms from the header");
+                    assert_eq!(from_header.coverage(), from_bytes.coverage());
+                    assert_eq!(from_header.rule_set(), from_bytes.rule_set());
+                    assert_eq!(from_header.seed(), from_bytes.seed());
+                    assert_eq!(from_header.target(), from_bytes.target());
+                    assert_eq!(from_header.attempt(), from_bytes.attempt());
+                    assert_eq!(from_header.judged_at(), from_bytes.judged_at());
+                    assert_eq!(from_header.hash(), from_bytes.hash());
+                    assert_eq!(from_header.pow(), from_bytes.pow());
+                    let valid = validate(from_bytes, &view, &rule_set, &trust)
+                        .expect("mock")
+                        .expect("connects");
+                    drop(view);
+                    batch.connect(valid, rule_set)?;
+                }
+                Ok(())
+            })
+            .unwrap_or_else(|e| panic!("{}: {e}", manifest.shape));
+        cleanup(&path);
+    }
 }

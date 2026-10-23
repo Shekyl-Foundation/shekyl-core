@@ -17,8 +17,8 @@
 //! they record is their own.
 
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{BlockHash, BlockHeight, TxHash};
-use shekyl_wire::{Block, BlockBody, PowBlob, Transaction, TxBody};
+use shekyl_types::{BlockHash, BlockHeight, Timestamp, TxHash};
+use shekyl_wire::{Block, BlockBody, BlockHeader, PowBlob, Transaction, TxBody};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
@@ -37,16 +37,116 @@ use crate::trust::Trust;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::HeaderView;
 
-/// What [`judge_header`] established. This is what a header tree records:
-/// the height the header connects at, and the cumulative work through it.
-#[derive(Clone, Copy, Debug)]
+/// What [`judge_header`] established. This is what a header tree records,
+/// and the proof [`crate::form_judged`] takes instead of hashing again.
+///
+/// Constructed only by `judge_header`. The fields are private:
+///
+/// ```compile_fail
+/// let forged = shekyl_chain_rules::HeaderJudged {
+///     facts: todo!(),
+///     proof_coverage: todo!(),
+///     coverage: todo!(),
+///     rule_set: todo!(),
+///     connecting: todo!(),
+///     cumulative_difficulty: todo!(),
+/// };
+/// ```
+#[must_use = "a HeaderJudged is the proof of a header; dropping it discards that proof"]
+#[derive(Clone, Debug)]
 pub struct HeaderJudged {
+    facts: crate::header_facts::HeaderFacts<crate::header_facts::Proven>,
+    /// B1, B2, B6, D2 and D1, as `form_header` recorded them. [`crate::form_judged`]
+    /// unions this and does not run those rows again.
+    proof_coverage: RuleCoverage,
+    /// The rows this judgement ran and passed, proof and view-bound.
+    coverage: RuleCoverage,
+    rule_set: RuleSet,
+    connecting: BlockHeight,
+    cumulative_difficulty: CumulativeDifficulty,
+}
+
+impl HeaderJudged {
     /// The height the view's tip derives.
-    pub connecting: BlockHeight,
+    #[must_use]
+    pub const fn connecting(&self) -> BlockHeight {
+        self.connecting
+    }
+
     /// The parent's cumulative difficulty plus the target the header met.
-    pub cumulative_difficulty: CumulativeDifficulty,
-    /// The rows this judgement ran and passed. Not a `validate` coverage.
-    pub coverage: RuleCoverage,
+    #[must_use]
+    pub const fn cumulative_difficulty(&self) -> CumulativeDifficulty {
+        self.cumulative_difficulty
+    }
+
+    /// The rows this judgement ran and passed.
+    #[must_use]
+    pub const fn coverage(&self) -> &RuleCoverage {
+        &self.coverage
+    }
+
+    /// The block identity CEN-B6 derived from the PoW preimage.
+    #[must_use]
+    pub const fn hash(&self) -> BlockHash {
+        self.facts.identity()
+    }
+
+    /// The parent this header names. The header tree's link.
+    #[must_use]
+    pub const fn previous(&self) -> BlockHash {
+        self.facts.header().previous
+    }
+
+    /// The header the proof covers. The branch view serves it by height.
+    #[must_use]
+    pub const fn header(&self) -> &BlockHeader {
+        self.facts.header()
+    }
+
+    /// The rules the header was formed under.
+    #[must_use]
+    pub const fn rule_set(&self) -> RuleSet {
+        self.rule_set
+    }
+
+    /// The seed the header was proved under.
+    #[must_use]
+    pub const fn seed(&self) -> BlockHash {
+        self.facts.seed()
+    }
+
+    /// The target CEN-D1 accepted.
+    #[must_use]
+    pub const fn target(&self) -> Target {
+        self.facts.target()
+    }
+
+    /// Which attempt produced the proof.
+    #[must_use]
+    pub const fn attempt(&self) -> FormAttempt {
+        self.facts.attempt()
+    }
+
+    /// The clock the header was judged at. Earlier than a fresh reading
+    /// would be, so an FTL check against it is never looser.
+    #[must_use]
+    pub const fn judged_at(&self) -> Timestamp {
+        self.facts.judged_at()
+    }
+
+    /// The proof rows `form_header` recorded.
+    #[must_use]
+    pub(crate) const fn proof_coverage(&self) -> &RuleCoverage {
+        &self.proof_coverage
+    }
+
+    /// The proven facts, including the longhash.
+    #[must_use]
+    pub(crate) const fn facts(
+        &self,
+    ) -> &crate::header_facts::HeaderFacts<crate::header_facts::Proven> {
+        &self.facts
+    }
 }
 
 /// What [`judge_header_cheap`] established, before the proof. The work is
@@ -188,9 +288,12 @@ pub fn judge_header<'id, H: HeaderView<'id>>(
     };
     coverage.union(header.coverage());
     Ok(Ok(HeaderJudged {
+        facts: header.facts().clone(),
+        proof_coverage: *header.coverage(),
+        coverage,
+        rule_set: header.rule_set(),
         connecting: derived.connecting,
         cumulative_difficulty: derived.cumulative_difficulty,
-        coverage,
     }))
 }
 
@@ -235,11 +338,11 @@ fn judge_rules<'id, P, H: HeaderView<'id>>(
 ///
 /// A mismatch is the row `validate` would name. What a session does with
 /// it is the caller's.
-pub fn bind_body(header: &FormedHeader, body: &BlockBody) -> Verdict<()> {
+pub fn bind_body(header: &HeaderJudged, body: &BlockBody) -> Verdict<()> {
     let Ok(block) = Block::from_bytes(&body.block) else {
         return Err(InvalidBlock::new(CenRow::B6, Locus::Block));
     };
-    if block.hash() != header.facts().identity() {
+    if block.hash() != header.hash() {
         return Err(InvalidBlock::new(CenRow::B6, Locus::Block));
     }
     let mut carried = Vec::with_capacity(body.txs.len());
@@ -273,10 +376,15 @@ mod tests {
     use shekyl_types::BlockHash;
 
     use super::*;
+    use crate::block::ReferenceClaims;
+    use crate::census::CenRow;
     use crate::fault::Retry;
-    use crate::harness::fixture::candidate;
-    use crate::harness::{expected_target, MockChain, MockSubstrate};
+    use shekyl_difficulty::{CumulativeDifficulty, N};
+
+    use crate::harness::fixture::{candidate, candidate_on, chain_of, recorded_with_work, root};
+    use crate::harness::{expected_seed, expected_target, MockChain, MockSubstrate};
     use crate::trust::Trust;
+    use crate::{form, form_judged, validate};
 
     /// `judge_header` faults a rule set other than the one `form_header`
     /// kept, and the retry is the attempt that was formed, not a fresh one.
@@ -341,6 +449,172 @@ mod tests {
                     assert_eq!(retry, Retry::Exhausted);
                 }
                 other => panic!("expected Stale::RuleSet, got {other:?}"),
+            }
+        });
+    }
+
+    /// The judged-header entry does not hash, matches `form` on the claims
+    /// and the coverage, refuses a different identity as B6, and still
+    /// leaves `validate` to fault a rule set the token does not carry.
+    #[test]
+    fn form_judged_reuses_the_proof() {
+        let chain = MockChain::default();
+        let rule_set = RuleSet::GENESIS;
+        let target = expected_target(&chain, &rule_set);
+        let input = candidate(Vec::new());
+        let pow = PowBlob::read(&input.block.pow_blob()).expect("preimage");
+        let substrate = MockSubstrate::default();
+        let formed = form_header(
+            &pow,
+            &rule_set,
+            &substrate,
+            BlockHash::NULL,
+            target,
+            FormAttempt::FIRST,
+        )
+        .expect("mock")
+        .expect("forms");
+        chain.with_view(|view| {
+            let judged =
+                match judge_header(&formed, &view, &rule_set, &Trust::UNANCHORED).expect("view") {
+                    Ok(judged) => judged,
+                    Err(refused) => panic!("honest header refused: {refused:?}"),
+                };
+            let from_header = form_judged(input.clone(), &judged, &ReferenceClaims::EMPTY)
+                .expect("the body forms");
+            let from_bytes = form(
+                input.clone(),
+                &rule_set,
+                &substrate,
+                BlockHash::NULL,
+                target,
+                &ReferenceClaims::EMPTY,
+                FormAttempt::FIRST,
+            )
+            .expect("mock")
+            .expect("forms");
+            assert_eq!(from_header.coverage(), from_bytes.coverage());
+            assert_eq!(from_header.rule_set(), from_bytes.rule_set());
+            assert_eq!(from_header.seed(), from_bytes.seed());
+            assert_eq!(from_header.target(), from_bytes.target());
+            assert_eq!(from_header.attempt(), from_bytes.attempt());
+            assert_eq!(from_header.judged_at(), from_bytes.judged_at());
+            assert_eq!(from_header.hash(), from_bytes.hash());
+            assert_eq!(from_header.pow(), from_bytes.pow());
+            let mut moved = input;
+            moved.block.header.nonce = moved.block.header.nonce.wrapping_add(1);
+            match form_judged(moved, &judged, &ReferenceClaims::EMPTY) {
+                Err(refused) => assert_eq!(refused.rule, CenRow::B6),
+                Ok(_) => panic!("a different preimage formed"),
+            }
+            let fault = validate(
+                from_header,
+                &view,
+                &RuleSet::admitting_for_tests(2),
+                &Trust::UNANCHORED,
+            )
+            .expect_err("a different rule set is a fault");
+            assert!(matches!(fault, Fault::Stale(Stale::RuleSet { .. })));
+        });
+    }
+
+    /// `N + 1` blocks, one timestamp series, `per_block` of work each. The
+    /// seed is block 0's hash, which is the timestamp's, so two calls share
+    /// a seed and, once the window is open, not a target.
+    fn worked_chain(per_block: u128) -> MockChain {
+        let mut chain = MockChain::default();
+        let mut ts = 1_000u64;
+        let mut cum = 0u128;
+        for i in 0..=N {
+            ts += 120;
+            cum += per_block + u128::from(i);
+            chain = chain.push(
+                recorded_with_work(ts, CumulativeDifficulty::from_raw(cum)),
+                root(1),
+            );
+        }
+        chain
+    }
+
+    /// `validate` faults a seed the token carries that this view does not,
+    /// and a target likewise. The token was judged where each claim held.
+    #[test]
+    fn validate_faults_a_token_seed_or_target_the_view_does_not_hold() {
+        let deep = chain_of(2113);
+        let deep_seed = expected_seed(&deep);
+        let deep_target = expected_target(&deep, &RuleSet::GENESIS);
+        let deep_candidate = candidate_on(&deep, Vec::new());
+        let pow = PowBlob::read(&deep_candidate.block.pow_blob()).expect("preimage");
+        let formed = form_header(
+            &pow,
+            &RuleSet::GENESIS,
+            &MockSubstrate::default(),
+            deep_seed,
+            deep_target,
+            FormAttempt::FIRST,
+        )
+        .expect("mock")
+        .expect("the header forms");
+        let judged = deep.with_view(|view| {
+            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED).expect("view")
+            {
+                Ok(judged) => judged,
+                Err(refused) => panic!("honest header refused: {refused:?}"),
+            }
+        });
+        let from_header =
+            form_judged(deep_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
+        MockChain::default().with_view(|view| {
+            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+                Err(Fault::Stale(Stale::Seed { claimed, .. })) => {
+                    assert_eq!(claimed, deep_seed);
+                }
+                other => panic!("expected Stale::Seed, got {other:?}"),
+            }
+        });
+
+        // Same timestamps, so the seed block is the same hash. Different
+        // work, so once the window is open the targets diverge.
+        let claimed_on = worked_chain(4_000);
+        let judged_on = worked_chain(400);
+        let long_target = expected_target(&claimed_on, &RuleSet::GENESIS);
+        let short_target = expected_target(&judged_on, &RuleSet::GENESIS);
+        assert_eq!(expected_seed(&claimed_on), expected_seed(&judged_on));
+        assert_ne!(
+            long_target, short_target,
+            "the two chains derive different targets"
+        );
+        let long_candidate = candidate_on(&claimed_on, Vec::new());
+        let long_seed = expected_seed(&claimed_on);
+        let pow = PowBlob::read(&long_candidate.block.pow_blob()).expect("preimage");
+        let formed = form_header(
+            &pow,
+            &RuleSet::GENESIS,
+            &MockSubstrate::default(),
+            long_seed,
+            long_target,
+            FormAttempt::FIRST,
+        )
+        .expect("mock")
+        .expect("the header forms");
+        let judged = claimed_on.with_view(|view| {
+            match judge_header(&formed, &view, &RuleSet::GENESIS, &Trust::UNANCHORED).expect("view")
+            {
+                Ok(judged) => judged,
+                Err(refused) => panic!("honest header refused: {refused:?}"),
+            }
+        });
+        let from_header =
+            form_judged(long_candidate, &judged, &ReferenceClaims::EMPTY).expect("the body forms");
+        judged_on.with_view(|view| {
+            match validate(from_header, &view, &RuleSet::GENESIS, &Trust::UNANCHORED) {
+                Err(Fault::Stale(Stale::Target {
+                    claimed, expected, ..
+                })) => {
+                    assert_eq!(claimed, long_target);
+                    assert_eq!(expected, short_target);
+                }
+                other => panic!("expected Stale::Target, got {other:?}"),
             }
         });
     }

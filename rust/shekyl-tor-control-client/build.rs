@@ -164,6 +164,40 @@ fn pinned_expr(row: &Value, os: &str, context: &str) -> String {
         None => {}
     }
 
+    // Tor's own bytes, which a macOS row's signed files are tied to (TB-11).
+    // The binary checks the signed files (`files`); the packaging tool checks
+    // the tie. A macOS row without them, or another row with them, does not
+    // compile, so the two readers agree on what a row is.
+    match row.get("upstream") {
+        Some(upstream) if os == "macos" => {
+            let upstream = upstream
+                .as_array()
+                .filter(|list| !list.is_empty())
+                .unwrap_or_else(|| panic!("{context}: \"upstream\" is not a non-empty list"));
+            let mut upstream_names: Vec<String> = Vec::new();
+            for file in upstream {
+                let name = checked_file_name(str_field(file, "name", context), context);
+                let _ = digest_literal(str_field(file, "sha256", context), context);
+                upstream_names.push(name.to_string());
+            }
+            upstream_names.sort();
+            let mut shipped_names = names.clone();
+            shipped_names.sort();
+            assert!(
+                upstream_names == shipped_names,
+                "{context}: \"upstream\" and \"files\" name different files"
+            );
+        }
+        None if os == "macos" => panic!(
+            "{context}: a pinned macOS target lists Tor's own files as \"upstream\", beside \
+             the signed files it ships"
+        ),
+        Some(_) => {
+            panic!("{context}: \"upstream\" is for files Shekyl signs; only a macOS row has it")
+        }
+        None => {}
+    }
+
     format!(
         "TorDisposition::Pinned(TorPin {{ bundle_version: {:?}, bundle_target: {:?}, \
          tor_version: {:?}, executable: {:?}, case_insensitive_names: {}, files: &[{}] }})",

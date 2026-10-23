@@ -241,7 +241,7 @@ pub use tree_growth::{
 };
 pub use trust::Trust;
 pub use validate::{
-    form, judge_lone_stateless, judge_slot_stateless, tx_against, tx_form, validate,
+    form, form_judged, judge_lone_stateless, judge_slot_stateless, tx_against, tx_form, validate,
     validate_with_memo, StatelessPass,
 };
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};

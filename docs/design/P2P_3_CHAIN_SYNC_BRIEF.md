@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** CS-1 implemented (2026-10-21); Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is next. The cutover is not started.
+**Status:** CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22), not wired to the daemon. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. Nothing is wired into the daemon. The cutover is not started.
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 ## Constants (CS-1)
@@ -14,6 +14,14 @@ Values this PR introduces that are not derived. Each is an `Assumption`
 | --- | --- | --- | --- |
 | `HEADERS_RESPONSE_BYTES` | 2 MiB | A header response's preimage budget. About ten thousand headers, past the tip case (~144 KiB) and short of a whole initial-sync run. A preimage shorter than a PoW preimage is refused, so the encoded cap's two-byte length-prefix allowance holds. | CS-Q11: headers per second and peak memory on the floor device, after the cutover |
 | `BODIES_RESPONSE_BYTES` | 8 MiB | How much a body response adds after the first held block, which is sent whatever its size. Charged when the response is stored and when it is decoded. Not derived from the block-weight limit. | CS-Q11: bodies per second and peak memory on the floor device, after the cutover |
+| `SYNC_RATE_FLOOR` | 8 KiB/s | The deadline of a header request and of a body request. A full header response (`HEADERS_RESPONSE_BYTES`, 2 MiB) takes 256 seconds. A body deadline is `BODIES_RESPONSE_BYTES` at this rate, the same construction as the header deadline. The request names hashes; the bytes the peer may send are the body budget, which is known when the request is made. One rate: the two streams are not different measurements. Slow for one Tor stream, and not a clearnet rate, so an honest Tor peer is not declared late. | Assumption until the floor-device job's first run (`.github/workflows/cs2-long-run.yml`, after merge). That run records the figure. CS-Q11 replaces this value from it. Split the constant only if that measurement shows the streams need different floors. |
+| `BODY_REQUESTS_IN_FLIGHT` | 4 | How many body spans may be outstanding at once, before the entry's room is the limit. | CS-Q11: how many spans the floor device can have in flight |
+
+## CS-2 rulings (Rick, 2026-10-21)
+
+- **CS2-Q1.** One proof per block. The proof is the value `form_header` produces and `HeaderJudged` carries. `form_judged` consumes it and does not hash.
+- **CS2-Q2.** One header request per frontier, drawn uniformly. A run on its own fork continues with that run's locator, outside the draw.
+- **CS2-Q3.** The executor, the owner task, serving, the reply conversion and the loopback harness against a real store are CS-3. This PR is the model and its tests.
 
 **Subject.** Moving chain sync (`cryptonote_protocol_handler`, `block_queue`) from C++ to Rust.
 
@@ -186,11 +194,17 @@ ingest deciding forks.**
      an announce is a *claim*.
    - A claim whose work exceeds `work(H*)` makes that session a header
      source.
-   - **Refuse the payload only if it is structurally impossible:**
-     - height 0 (every chain has genesis);
-     - cumulative work below `GENESIS_DIFFICULTY`. Every chain's work
-       includes its genesis block's, and `GENESIS_DIFFICULTY > 1` is
-       const-asserted (`shekyl-difficulty/src/consts.rs:101`).
+   - **Refuse the payload only if it is structurally impossible**
+     (amended Rick, 2026-10-22):
+     - a block count of 0 (`current_height`; every chain has genesis,
+       so the count is at least 1);
+     - cumulative work below the block count. The genesis block's target
+       is 1 under every rule set (`Target::GENESIS_BLOCK`), and every
+       block's target is at least 1 (CEN-D6), so a chain of `n` blocks
+       has at least `n` work. `GENESIS_DIFFICULTY` is the difficulty
+       algorithm's value for heights 1 to `N`, not genesis's
+       (`shekyl-difficulty/src/consts.rs:101` keeps the two apart); a
+       bound of that constant refused every genesis-only node.
    - That is the whole meaning of `PayloadRefused` (CS-F1).
    - There is no height ceiling: no protocol maximum exists, and a bound
      derived from the clock is weak, because the MTP rule lets timestamps
@@ -198,8 +212,8 @@ ingest deciding forks.**
    - A claim is never a target.
 2. **Common ancestor.**
    - Send a sparse locator from our main chain.
-   - The peer answers with headers starting at the first locator hash it
-     holds.
+   - The peer answers with headers starting at the child of the first
+     locator hash it holds. The first preimage's parent is that hash.
    - The first header's parent must be in the store (main or alt) or in
      `T`. If not, the response is a protocol violation.
 3. **Verify headers: cheap checks per response, then the work test on
@@ -213,6 +227,11 @@ ingest deciding forks.**
        chain's timestamps and work.
      - Headers that pass are added to the session's run. So the run's
        cumulative work is exact before any hash.
+     - A past-cap run keeps only the window the branch view reads (the
+       LWMA window, the median, and the seed headers those heights
+       name), not every header it was sent. It ends after
+       `L.height − fork.height + reorg cap` headers, or when the peer
+       says the chain ended.
    - **The work test is on the run, not on one response.** Responses
      are byte-budgeted (CS-Q3.1), so an honest first response is only a
      prefix of the peer's chain.
