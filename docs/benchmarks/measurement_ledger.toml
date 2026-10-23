@@ -296,6 +296,7 @@ stale_through = [
   { through = "be38532e2b", note = "Two unused type aliases (IdentityPassKey, IdentityPassSigner) and their re-export deleted from shekyl-p-serve; shekyl-p-fetch gains PassVerifyingKey::WITHIN_WIDEST, a compile-time assertion that a scheme's envelope is within the widest, evaluated in max_response_len as a unit constant. No read, hash, signature or socket operation on the serve or fetch path is added, removed or reordered, and nothing runs at run time that did not before. Not re-measured." },
   { through = "08af7470a1", note = "The pass transcript opens with a stream byte, so a served response signs 113 bytes where it signed 112, and a header that does not decode is refused before the store. A valid economy header is the previous 72 bytes with a leading zero. The floor verdict prices an abandoned request, which never reaches the signature; the extra byte is on the header check ahead of the body. Not re-measured." },
   { through = "1871825227", note = "The module comment in serve.rs states that 73-byte header and 113-byte transcript. No executable code changed, so a served response costs what it did at 08af7470a1. Not re-measured." },
+  { through = "efa02f64b", note = "The served identity pin is regenerated from the same seeds, so the signature covers the 113-byte transcript 08af7470a1 already signs. Fixture bytes only. No read, hash, sign or socket operation on the serve path changed. Not re-measured." },
 ]
 
 [[path_set]]
@@ -349,6 +350,7 @@ stale_through = [
   { through = "be38532e2b", note = "Two unused type aliases (IdentityPassKey, IdentityPassSigner) and their re-export deleted from shekyl-p-serve; shekyl-p-fetch gains PassVerifyingKey::WITHIN_WIDEST, a compile-time assertion that a scheme's envelope is within the widest, evaluated in max_response_len as a unit constant. No read, hash, signature or socket operation on the serve or fetch path is added, removed or reordered, and nothing runs at run time that did not before. Not re-measured." },
   { through = "08af7470a1", note = "The request header and the transcript open with a stream byte. The client writes one leading zero on an economy read and verifies that byte; the server signs 113 bytes where it signed 112 and refuses a header that does not decode before it opens the store. One extra byte on the wire and in the signed message. The readings these constants rest on predate it. Not re-measured." },
   { through = "1871825227", note = "Comments in serve.rs name the 73-byte header and the 113-byte transcript. No executable serve or fetch code changed. Not re-measured." },
+  { through = "efa02f64b", note = "The identity exchange pins are regenerated from the same seeds. The request carries the 73-byte header with the economy stream byte first, and the signed responses cover the 113-byte transcript. Those are the bytes 08af7470a1 already exchanges. Fixture bytes only; no read, hash, sign or socket operation on the serve or fetch path changed. Not re-measured." },
 ]
 
 [[constant]]
