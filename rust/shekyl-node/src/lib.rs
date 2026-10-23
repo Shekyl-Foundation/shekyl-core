@@ -303,6 +303,7 @@ impl Node {
             }
         };
         let pool_health = service.pool_health();
+        let rewinder = service.rewinder();
         let at_open = sync_at_open(network);
         tracing::info!(
             "chain sync's state at open: {at_open:?}; the node posts a template only while it reads Synced"
@@ -347,7 +348,7 @@ impl Node {
         let handles = Handles {
             chain: Arc::new(ChainBridge::new(Arc::clone(&facts_slot))),
             pool: Arc::new(PoolBridge::new(Arc::clone(&pool_slot))),
-            door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips)),
+            door: Arc::new(DoorBridge::new(Arc::clone(&door_slot), tips, rewinder)),
             mining: Arc::clone(&mining) as _,
             bans: Arc::new(BansBridge),
             stop: Arc::new(StopBridge::new(Arc::clone(&args.request_stop))),
@@ -961,6 +962,91 @@ mod tests {
         );
         assert!(generated.blocks.len() >= 3);
         assert!(!node.mining().running(), "the miner it started is stopped");
+        node.stop();
+    }
+
+    /// Make the posted template's block, as an outside miner would at
+    /// difficulty one, and submit it. Waits for the next template first,
+    /// so the block extends the current tip.
+    fn mine_one(node: &Node, above: u64) -> BlockHash {
+        use shekyl_daemon_rpc::mining_methods::{get_block_template, submit_block};
+        let handles = node.handles();
+        let started = std::time::Instant::now();
+        let reply = loop {
+            match get_block_template(&*handles.mining) {
+                Ok(reply) if reply.height > above => break reply,
+                _ => {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(60),
+                        "no template above {above}"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        };
+        let blob = hex::decode(&reply.blocktemplate_blob).expect("hex");
+        let made = a_runtime()
+            .block_on(submit_block(
+                &*handles.door,
+                shekyl_rpc_types::mining::SubmitBlockRequest {
+                    body: hex::encode(&blob),
+                },
+            ))
+            .expect("it connects");
+        BlockHash::from_bytes(made.block_id.to_bytes())
+    }
+
+    /// `pop_blocks`, armed (DX-Q3, Q7): a count that would pop genesis is
+    /// refused by the method before any pop, the node stays up and takes a
+    /// block, and a count of one pops one. Without `dev-rpc` it is outside
+    /// the grant. Red edit: let the count past the tip clamp to genesis.
+    #[test]
+    fn pop_blocks_refuses_genesis_pops_one_and_the_node_stays_up() {
+        use shekyl_daemon_rpc::mining_methods::{admit_armed, codes, pop_blocks};
+        use shekyl_rpc_types::errors::ErrorClass;
+        let row = shekyl_rpc_types::methods::rest_path("/pop_blocks").expect("a row");
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_posted(dir.path(), &["--dev-rpc"]);
+        assert!(
+            admit_armed(row, false).is_err(),
+            "unarmed, it is outside the grant"
+        );
+        let handles = node.handles();
+        mine_one(&node, 0);
+        mine_one(&node, 1);
+        assert_eq!(
+            handles
+                .chain
+                .chain_tip()
+                .expect("tip")
+                .chain_height
+                .to_raw(),
+            3
+        );
+        let pop = |nblocks| {
+            let armed = admit_armed(row, node.armed_levers()).expect("armed");
+            a_runtime().block_on(pop_blocks(
+                &*handles.door,
+                armed,
+                shekyl_rpc_types::mining::PopBlocksRequest { nblocks },
+            ))
+        };
+        let refused = pop(3).expect_err("genesis is never popped");
+        assert_eq!(refused.class, ErrorClass::RefusedByMethod);
+        assert_eq!(refused.diagnostic.code, codes::POP_BELOW_FLOOR);
+        assert_eq!(
+            handles
+                .chain
+                .chain_tip()
+                .expect("tip")
+                .chain_height
+                .to_raw(),
+            3
+        );
+        let popped = pop(1).expect("one pops");
+        assert_eq!(popped.height, 2);
+        let again = mine_one(&node, 0);
+        assert_eq!(handles.chain.chain_tip().expect("tip").top_hash, again);
         node.stop();
     }
 

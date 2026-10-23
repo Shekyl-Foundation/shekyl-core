@@ -877,6 +877,25 @@ fn discard_range<V: redb::Value + 'static>(
 }
 
 impl super::read::ReadSnapshot<'_> {
+    /// The lowest **poppable** height: the persisted undo floor, or `1`
+    /// while nothing has been retired (genesis is never poppable) — the
+    /// bound [`WriteBatch::pop`] holds, read before a pop is asked for. A
+    /// snapshot returns a fault plain; it does not halt the writer.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 when the floor cell does not decode; engine errors.
+    pub fn undo_floor(&self) -> Result<BlockHeight, StoreError> {
+        let table = self
+            .txn()
+            .open_table(PROPERTIES)
+            .map_err(EngineError::Table)?;
+        Ok(
+            header::get::<UndoLogFloorCell>(&table)?
+                .unwrap_or(BlockHeight::from_raw(GENESIS_FLOOR)),
+        )
+    }
+
     /// `h_scarce` at the recorded tip: the `close_height` of the last shard
     /// the calendar has discarded — `PDM-Q5`'s band-2 edge, the same number
     /// on every node. `None` on an empty chain, in epochs 0–1, and before

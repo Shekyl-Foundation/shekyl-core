@@ -472,6 +472,38 @@ async fn a_pop_below_the_undo_floor_is_a_local_fail_stop_not_a_verdict() {
     y.close().await;
 }
 
+/// `pop_blocks`' bound (DX-Q3, Q7; the landed defect was a store fault
+/// that stopped ingest): a count whose lowest block is below the undo
+/// floor is refused before any pop, as a reply; one whose lowest block is
+/// the floor pops; and the writer stays up either way.
+#[tokio::test]
+async fn pop_blocks_below_the_undo_floor_is_refused_before_any_pop() {
+    use crate::connector::{PopBlocks, Rewound};
+    let mut x = Scenario::open_under("pop-floor-x", FreeHash, levered());
+    x.mine(50).await;
+    let pop = |count| x.connector().ask(PopBlocks { count });
+    let Rewound::Refused { tip, floor } = pop(50).await.expect("a reply") else {
+        panic!("popping genesis is refused");
+    };
+    assert_eq!(tip.to_raw(), 49);
+    assert!(floor.to_raw() > 1, "the prune moved the floor: {floor:?}");
+    let before = x.digest().await.expect("d");
+    let below = tip.to_raw() - (floor.to_raw() - 2);
+    assert_eq!(
+        pop(below).await.expect("a reply, not a fault"),
+        Rewound::Refused { tip, floor },
+        "the lowest block popped would be {}",
+        floor.to_raw() - 1
+    );
+    assert_eq!(x.digest().await.expect("d"), before, "nothing popped");
+    let at = tip.to_raw() - (floor.to_raw() - 1);
+    let popped = pop(at).await.expect("it pops");
+    assert_eq!(popped.popped(), at, "down to the floor's parent");
+    x.idle();
+    assert_eq!(x.mine(1).await.len(), 1, "the writer is up");
+    x.close().await;
+}
+
 /// The spending height: block 0's coinbase has matured for it.
 const AT: u64 = crate::test_support::FIRST_SPEND_HEIGHT + 1;
 

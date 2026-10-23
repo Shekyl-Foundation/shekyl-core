@@ -101,6 +101,24 @@ pub struct MiningState {
     pub absent: Option<Diagnostic>,
 }
 
+/// What became of a `pop_blocks` request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PopOutcome {
+    /// The blocks popped; the tip is now `tip`.
+    Popped {
+        /// The tip afterwards.
+        tip: BlockHeight,
+    },
+    /// Refused before any pop: the lowest block it would pop is below
+    /// `floor`, the lowest poppable height.
+    Refused {
+        /// The tip, unchanged.
+        tip: BlockHeight,
+        /// The lowest poppable height.
+        floor: BlockHeight,
+    },
+}
+
 /// What became of a block offered through the node's local-arrival entry
 /// (b4).
 #[derive(Clone, Debug, PartialEq, Eq)]

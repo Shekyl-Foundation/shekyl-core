@@ -201,6 +201,24 @@ pub struct GenerateBlocksResponse {
     pub blocks: Vec<HashHex>,
 }
 
+/// `/pop_blocks`' request, an armed lever (`DRS_X_STORE_FLIP.md` DX-Q3,
+/// Q7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PopBlocksRequest {
+    /// How many blocks to pop from the tip.
+    pub nblocks: u64,
+}
+
+/// `/pop_blocks`' reply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PopBlocksResponse {
+    pub status: RpcStatus,
+    /// The chain height afterwards: the tip's height plus one.
+    pub height: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -21,8 +21,8 @@ use shekyl_rpc_types::errors::{Diagnostic, ErrorClass, RpcError};
 use shekyl_rpc_types::methods::Method;
 use shekyl_rpc_types::mining::{
     GenerateBlocksRequest, GenerateBlocksResponse, GetBlockTemplateResponse, GetMinerDataResponse,
-    MinerThreads, MiningStatusResponse, StartMiningRequest, StatusOnlyResponse, SubmitBlockRequest,
-    SubmitBlockResponse, TxBacklogEntry,
+    MinerThreads, MiningStatusResponse, PopBlocksRequest, PopBlocksResponse, StartMiningRequest,
+    StatusOnlyResponse, SubmitBlockRequest, SubmitBlockResponse, TxBacklogEntry,
 };
 use shekyl_rpc_types::{HashHex, RpcStatus};
 use shekyl_types::{BlockHash, BlockHeight};
@@ -30,7 +30,7 @@ use shekyl_types::{BlockHash, BlockHeight};
 use crate::chain_facts::{ChainFacts, FactsFault};
 use crate::handles::{DoorFacts, MiningFacts};
 use crate::methods::split_128;
-use crate::mining_facts::LocalOutcome;
+use crate::mining_facts::{LocalOutcome, PopOutcome};
 
 /// The mining methods' diagnostic codes, each stated once.
 pub mod codes {
@@ -82,6 +82,8 @@ pub mod codes {
     pub const COUNT_ZERO: &str = "block.count_zero";
     /// An armed lever, and the node was not started armed.
     pub const UNARMED: &str = "rpc.unarmed";
+    /// A pop would remove genesis or a block the undo journal retired.
+    pub const POP_BELOW_FLOOR: &str = "chain.pop_below_floor";
 }
 
 /// The RandomX algorithm name `mining_status` reports.
@@ -417,6 +419,40 @@ pub async fn generateblocks(
         height: end,
         blocks,
     })
+}
+
+/// `/pop_blocks { nblocks }`, an armed lever (DX-Q3, Q7): pop that many
+/// blocks from the tip; their transactions return to the pool.
+///
+/// # Errors
+///
+/// `RefusedByMethod` when the pop would remove genesis or a block the undo
+/// journal retired; nothing was popped, and the node is up.
+pub async fn pop_blocks(
+    door: &dyn DoorFacts,
+    _armed: Armed,
+    request: PopBlocksRequest,
+) -> Result<PopBlocksResponse, RpcError> {
+    match door.pop(request.nblocks).await? {
+        PopOutcome::Popped { tip } => Ok(PopBlocksResponse {
+            status: RpcStatus::ok(),
+            height: tip.to_raw().saturating_add(1),
+        }),
+        PopOutcome::Refused { tip, floor } => Err(RpcError::new(
+            ErrorClass::RefusedByMethod,
+            Diagnostic::new(
+                codes::POP_BELOW_FLOOR,
+                format!(
+                    "popping {} blocks from tip {} would remove a block below the lowest poppable height, {}",
+                    request.nblocks,
+                    tip.to_raw(),
+                    floor.to_raw()
+                ),
+            )
+            .param("tip", tip.to_raw().to_string())
+            .param("floor", floor.to_raw().to_string()),
+        )),
+    }
 }
 
 #[cfg(test)]

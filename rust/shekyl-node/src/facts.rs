@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use shekyl_chain_ingest::service::{ArrivalTag, Door, Refusal, Reply};
-use shekyl_chain_ingest::TipChanged;
+use shekyl_chain_ingest::service::{ArrivalTag, Door, Refusal, Reply, Rewinder, ServiceFault};
+use shekyl_chain_ingest::{ProductionSubstrate, Rewound, TipChanged};
 use shekyl_chain_sync::SyncState;
 use shekyl_daemon_rpc::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
@@ -23,7 +23,7 @@ use shekyl_daemon_rpc::handles::{BansFacts, DoorFacts, PoolFacts, StopFacts};
 use shekyl_daemon_rpc::info_facts::{
     InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
 };
-use shekyl_daemon_rpc::mining_facts::{LocalOutcome, Pending};
+use shekyl_daemon_rpc::mining_facts::{LocalOutcome, Pending, PopOutcome};
 use shekyl_daemon_rpc::read_facts::{
     AltChainFacts, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed,
     ShardCoverage,
@@ -273,6 +273,8 @@ pub(crate) struct DoorBridge {
     door: Arc<Mutex<Option<Door>>>,
     /// The connector's tip publications.
     tips: tokio::sync::watch::Receiver<TipChanged>,
+    /// Pops blocks for `pop_blocks`.
+    rewinder: Rewinder<ProductionSubstrate>,
     /// The tag each local offer carries, one more each time.
     tags: AtomicU64,
 }
@@ -281,10 +283,12 @@ impl DoorBridge {
     pub(crate) fn new(
         door: Arc<Mutex<Option<Door>>>,
         tips: tokio::sync::watch::Receiver<TipChanged>,
+        rewinder: Rewinder<ProductionSubstrate>,
     ) -> Self {
         Self {
             door,
             tips,
+            rewinder,
             tags: AtomicU64::new(1),
         }
     }
@@ -341,6 +345,21 @@ impl DoorFacts for DoorBridge {
                 // The entry waits out a full window; a closed one is the
                 // service stopping.
                 Err(Refusal::NoRoom | Refusal::Throttled) => Ok(LocalOutcome::Stopped),
+            }
+        })
+    }
+
+    fn pop(&self, count: u64) -> Pending<'_, PopOutcome> {
+        let rewinder = self.rewinder.clone();
+        Box::pin(async move {
+            match rewinder.pop_blocks(count).await {
+                Ok(Rewound::Popped { tip, .. }) => Ok(PopOutcome::Popped { tip }),
+                Ok(Rewound::Refused { tip, floor }) => Ok(PopOutcome::Refused { tip, floor }),
+                Err(ServiceFault::Mailbox) => Err(FactsFault::NotReady),
+                Err(fault) => {
+                    tracing::error!("pop_blocks: {fault}");
+                    Err(FactsFault::Internal)
+                }
             }
         })
     }

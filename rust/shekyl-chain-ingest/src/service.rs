@@ -60,7 +60,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
-use crate::connector::{Connector, ConnectorArgs, PopBeyondReorgCap, RunFault, WatchTip};
+use crate::connector::{
+    Connector, ConnectorArgs, PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip,
+};
 use crate::follower::JobSeat;
 use crate::schedule::ChainRules;
 
@@ -811,6 +813,59 @@ pub struct PoolWiring {
     pub wall: Arc<dyn Fn() -> UnixSeconds + Send + Sync>,
 }
 
+/// Pops blocks for `pop_blocks` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held
+/// apart from the service ([`Service::rewinder`]).
+pub struct Rewinder<S: Substrate>
+where
+    S::Fault: core::fmt::Debug,
+{
+    shared: Arc<Shared<S>>,
+}
+
+impl<S: Substrate> Clone for Rewinder<S>
+where
+    S::Fault: core::fmt::Debug,
+{
+    fn clone(&self) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl<S> Rewinder<S>
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: core::fmt::Debug + Send + 'static,
+{
+    /// Pop `count` blocks from the tip ([`PopBlocks`]). A count that would
+    /// pop genesis or a retired block is refused before any pop, and the
+    /// writer stays up. After a pop, the popped blocks' bodies are offered
+    /// through the pool's door, as a switch's demoted bodies are.
+    ///
+    /// # Errors
+    ///
+    /// [`ServiceFault::Connector`] for a store fault; [`ServiceFault::Mailbox`]
+    /// when the connector is gone.
+    pub async fn pop_blocks(&self, count: u64) -> Result<Rewound, ServiceFault<S::Fault>> {
+        let rewound = self
+            .shared
+            .connector
+            .ask(PopBlocks { count })
+            .await
+            .map_err(|error| match error {
+                kameo::error::SendError::HandlerError(fault) => ServiceFault::Connector(fault),
+                _ => ServiceFault::Mailbox,
+            })?;
+        if let Rewound::Popped { bodies, .. } = &rewound {
+            if !bodies.is_empty() {
+                span::offer_carried(&self.shared, span::Carried::Bodies(bodies.clone())).await;
+            }
+        }
+        Ok(rewound)
+    }
+}
+
 /// Whether the pool file has faulted ([`Service::pool_health`]).
 #[derive(Clone, Debug)]
 pub struct PoolHealth {
@@ -1031,6 +1086,14 @@ where
         self.shared.pool_retired()
     }
 
+    /// What pops blocks for `pop_blocks`, held apart from the service.
+    #[must_use]
+    pub fn rewinder(&self) -> Rewinder<S> {
+        Rewinder {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+
     /// The same reading, held apart from the service: what the node's
     /// mining control reports after the service is gone.
     #[must_use]
@@ -1090,7 +1153,7 @@ pub(crate) use window::{
 
 #[cfg(test)]
 #[path = "service_tests.rs"]
-mod service_tests;
+pub(crate) mod service_tests;
 
 #[cfg(test)]
 #[path = "service_pool_tests.rs"]

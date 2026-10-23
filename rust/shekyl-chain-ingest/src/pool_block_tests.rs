@@ -772,6 +772,129 @@ async fn the_producer_prices_its_listing_at_the_built_coinbase_and_the_block_con
     scenario.close().await;
 }
 
+/// `pop_blocks` (DX-Q3, Q7) through the service: a count that would pop
+/// genesis is refused before any pop; a count of two pops both blocks and
+/// returns both their transactions to the pool through its door, as a
+/// switch's demoted bodies are; and the writer is up after either, so the
+/// same two blocks connect again.
+#[tokio::test(flavor = "multi_thread")]
+async fn pop_blocks_refuses_genesis_and_returns_two_blocks_bodies_to_the_pool() {
+    use crate::connector::Rewound;
+    use crate::service::{Arrival, ArrivalTag, Follow, Origin, PoolWiring, Reply, Service};
+    use shekyl_types::BlockHeight;
+    use std::sync::Arc;
+    let (mut scenario, mined) = matured("pop-blocks").await;
+    let first = paying_the_floor(&mut scenario, &mined, 0).await;
+    let second = paying_the_floor(&mut scenario, &mined, 1).await;
+    let a = scenario
+        .mine_listing(vec![first.clone()])
+        .await
+        .unwrap_or_else(|o| panic!("the first spend lands: {o}"));
+    let b = scenario
+        .mine_listing(vec![second.clone()])
+        .await
+        .unwrap_or_else(|o| panic!("the second spend lands: {o}"));
+    let copy = tmp("pop-blocks-service");
+    scenario
+        .reopen(|path| {
+            std::fs::copy(path, &copy).expect("a copy of the chain");
+        })
+        .await;
+    let store = Arc::new(crate::test_support::open_store_under(
+        &copy,
+        &crate::scenario::RULES.in_force(BlockHeight::ZERO),
+        shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+    ));
+    let pool_path = tmp("pop-blocks-pool");
+    let pool = {
+        let snap = store.begin_read().expect("a snapshot");
+        let view = shekyl_chain_store::store::SnapshotView::new(&snap);
+        let tip = HeaderView::tip(&view).expect("tip");
+        let rule_set = crate::scenario::RULES.in_force(Tip::connecting_height(tip.as_ref()));
+        Pool::open(
+            &pool_path,
+            UnixSeconds::from_raw(1),
+            &view,
+            &rule_set,
+            &AdmissionPolicy::GENESIS,
+        )
+        .expect("open")
+        .0
+    };
+    let pool = Arc::new(std::sync::Mutex::new(pool));
+    let service = Service::start(
+        Arc::clone(&store),
+        crate::scenario::RULES,
+        // A clock ahead of the scenario's blocks, so they connect again.
+        Arc::new(crate::service::service_tests::Gated::new()),
+        crate::service::ServiceConfig::default(),
+        shekyl_hash_budget::Budget::of_host(),
+        Follow {
+            job: None,
+            pool: Some(PoolWiring {
+                pool: Arc::clone(&pool),
+                policy: AdmissionPolicy::GENESIS,
+                wall: Arc::new(|| UnixSeconds::from_raw(1)),
+            }),
+        },
+    );
+    let rewinder = service.rewinder();
+    let tip = b.height;
+    let refused = rewinder
+        .pop_blocks(tip.to_raw() + 1)
+        .await
+        .expect("a reply, not a fault");
+    assert_eq!(
+        refused,
+        Rewound::Refused {
+            tip,
+            floor: BlockHeight::from_raw(1),
+        },
+        "popping genesis is refused before any pop"
+    );
+    let popped = rewinder.pop_blocks(2).await.expect("it pops");
+    let Rewound::Popped { popped, bodies, .. } = popped else {
+        panic!("two blocks pop: {popped:?}");
+    };
+    assert_eq!(popped, 2);
+    let returned: Vec<_> = bodies.iter().map(|tx| tx.txid_parts().hash).collect();
+    let ids = [first.txid_parts().hash, second.txid_parts().hash];
+    assert_eq!(returned, ids, "both bodies, lowest block first");
+    {
+        let pool = pool.lock().expect("the pool");
+        for id in &ids {
+            assert!(
+                pool.relay_view().record(id).is_some(),
+                "{id:?} is back in the pool"
+            );
+        }
+    }
+    for (tag, block) in [(1, &a), (2, &b)] {
+        let reply = service
+            .door()
+            .offer(Arrival {
+                tag: ArrivalTag(tag),
+                origin: Origin::Local,
+                block: block.template.block.serialize(),
+                bodies: block
+                    .template
+                    .transactions
+                    .iter()
+                    .map(shekyl_wire::Transaction::serialize)
+                    .collect(),
+            })
+            .expect("room")
+            .reply()
+            .await
+            .reply;
+        assert!(matches!(reply, Reply::Connected { .. }), "{reply:?}");
+    }
+    service.stop().await.expect("stops");
+    drop(std::fs::remove_file(&pool_path));
+    crate::test_support::cleanup(&copy);
+    scenario.close().await;
+}
+
 fn fee_of(tx: &shekyl_wire::Transaction) -> u64 {
     match &tx.ct {
         shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,

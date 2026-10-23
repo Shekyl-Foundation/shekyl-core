@@ -29,7 +29,7 @@ use crate::chain_facts::{
 use crate::info_facts::{
     InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
 };
-use crate::mining_facts::{LocalOutcome, MiningState, Pending, PostedTemplate};
+use crate::mining_facts::{LocalOutcome, MiningState, Pending, PopOutcome, PostedTemplate};
 use crate::read_facts::{
     AltChainFacts, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed,
     ShardCoverage,
@@ -78,6 +78,16 @@ pub trait DoorFacts: Send + Sync {
     ///
     /// [`FactsFault::NotReady`] when no door was supplied.
     fn offer_local(&self, block: Vec<u8>) -> Pending<'_, LocalOutcome>;
+
+    /// Pop `count` blocks from the tip, returning their bodies to the pool
+    /// (`pop_blocks`, DX-Q3, Q7). A pop below the lowest poppable height is
+    /// refused before any pop.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no door was supplied or the node is
+    /// stopping.
+    fn pop(&self, count: u64) -> Pending<'_, PopOutcome>;
 
     /// Resolve once the tip is at `height` or above.
     ///
@@ -321,6 +331,10 @@ impl DoorFacts for DoorAbsent {
     }
 
     fn tip_at_least(&self, _height: BlockHeight) -> Pending<'_, ()> {
+        Box::pin(async { Err(FactsFault::NotReady) })
+    }
+
+    fn pop(&self, _count: u64) -> Pending<'_, PopOutcome> {
         Box::pin(async { Err(FactsFault::NotReady) })
     }
 }

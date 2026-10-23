@@ -133,12 +133,39 @@ pub struct Applied {
     pub refused: Option<(BlockHeight, InvalidBlock)>,
 }
 
-/// What a [`Rewind`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Rewound {
-    /// Blocks popped. The tip afterwards is the `to` the message named —
-    /// the handler returns only when it is.
-    pub popped: u64,
+/// What a [`Rewind`] or a [`PopBlocks`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Rewound {
+    /// The blocks above `tip` were popped.
+    Popped {
+        /// How many.
+        popped: u64,
+        /// The tip afterwards.
+        tip: BlockHeight,
+        /// Their listed bodies, read before the pop, lowest block first and
+        /// each block's in its list order: the pool's to judge again.
+        bodies: Vec<shekyl_wire::Transaction>,
+    },
+    /// Refused before any pop: the lowest block it would pop is below
+    /// `floor`, the lowest poppable height (genesis is never popped, nor
+    /// anything the undo journal has retired). The writer is unchanged.
+    Refused {
+        /// The tip, unchanged.
+        tip: BlockHeight,
+        /// The lowest poppable height.
+        floor: BlockHeight,
+    },
+}
+
+impl Rewound {
+    /// Blocks popped; zero when refused.
+    #[must_use]
+    pub const fn popped(&self) -> u64 {
+        match self {
+            Self::Popped { popped, .. } => *popped,
+            Self::Refused { .. } => 0,
+        }
+    }
 }
 
 /// Connect a run of consecutive formed blocks in one write closure.
@@ -150,6 +177,15 @@ pub struct Apply(pub Vec<(BlockHeight, Verdict<StructurallyValid>)>);
 pub struct Rewind {
     /// The height that is the tip afterwards.
     pub to: BlockHeight,
+}
+
+/// Pop `count` blocks from the tip, in one write closure: `pop_blocks`
+/// (`DRS_X_STORE_FLIP.md` DX-Q3, Q7). The target is the tip the writer
+/// holds less `count`, read when the message runs.
+#[derive(Clone, Copy, Debug)]
+pub struct PopBlocks {
+    /// How many.
+    pub count: u64,
 }
 
 /// Write the out-of-band serve credit at the tip, in its own store
@@ -654,19 +690,95 @@ impl Message<Rewind> for Connector {
 
     async fn handle(&mut self, msg: Rewind, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         let to = msg.to;
-        let rewound = self.writer.write(|batch| {
-            let tip = batch.chain_view().tip()?.map(|t| t.height);
-            let popped = match tip {
-                Some(tip) if tip >= to => tip.to_raw() - to.to_raw(),
-                other => return Err(RunFault::RewindTarget { to, tip: other }),
+        self.rewind(|tip| match tip {
+            Some(tip) if tip >= to => Ok(Some(to)),
+            other => Err(RunFault::RewindTarget { to, tip: other }),
+        })
+    }
+}
+
+impl Message<PopBlocks> for Connector {
+    type Reply = Result<Rewound, RunFault>;
+
+    /// A count past the tip would pop genesis: the floor refuses it like
+    /// any other pop below the lowest poppable height.
+    async fn handle(
+        &mut self,
+        msg: PopBlocks,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.rewind(|tip| match tip {
+            Some(tip) => Ok(tip
+                .to_raw()
+                .checked_sub(msg.count)
+                .map(BlockHeight::from_raw)),
+            None => Err(RunFault::RewindTarget {
+                to: BlockHeight::ZERO,
+                tip: None,
+            }),
+        })
+    }
+}
+
+impl Connector {
+    /// Pop until the tip is the height `target` names for the tip the
+    /// writer holds; `None` is a target below genesis. Refused, before any
+    /// pop, when the lowest block it would pop is below the lowest poppable
+    /// height; otherwise the popped blocks' bodies are read first and
+    /// returned.
+    ///
+    /// The tip, the floor and the bodies are read on one snapshot, then the
+    /// pop is one write closure. This actor is the store's only writer, so
+    /// the batch's tip is the snapshot's.
+    fn rewind(
+        &mut self,
+        target: impl FnOnce(Option<BlockHeight>) -> Result<Option<BlockHeight>, RunFault>,
+    ) -> Result<Rewound, RunFault> {
+        if let Some(end) = self.writer.over {
+            return Err(RunFault::Over(end));
+        }
+        let (tip, to, bodies) = {
+            let snap = self.writer.read()?;
+            let tip = snap.tip()?.recorded.map(|t| t.height);
+            let to = target(tip)?;
+            let Some(tip) = tip else {
+                return Err(RunFault::RewindTarget {
+                    to: to.unwrap_or(BlockHeight::ZERO),
+                    tip: None,
+                });
             };
+            let floor = snap.undo_floor()?;
+            let Some(to) = to.filter(|to| to.to_raw() + 1 >= floor.to_raw() || *to == tip) else {
+                return Ok(Rewound::Refused { tip, floor });
+            };
+            if to == tip {
+                return Ok(Rewound::Popped {
+                    popped: 0,
+                    tip,
+                    bodies: Vec::new(),
+                });
+            }
+            let mut bodies = Vec::new();
+            for height in to.to_raw() + 1..=tip.to_raw() {
+                match snap.candidate_at(BlockHeight::from_raw(height))? {
+                    AtHeight::Recorded(candidate) => bodies.extend(candidate.transactions),
+                    AtHeight::AboveTip => unreachable!("every height to the tip is recorded"),
+                }
+            }
+            (tip, to, bodies)
+        };
+        let popped = tip.to_raw() - to.to_raw();
+        self.writer.write(|batch| {
+            if batch.chain_view().tip()?.map(|t| t.height) != Some(tip) {
+                return Err(RunFault::RewindTarget { to, tip: Some(tip) });
+            }
             // The popped blocks' identities, read before they go: an alt
             // branch built on one no longer reaches the main chain, and
             // leaves with them (`store/alt.rs`, the invariant). A switch's
             // pops demote what they pop instead, so this is the rewind's.
             let view = batch.chain_view();
             let mut gone = Vec::new();
-            for height in to.to_raw() + 1..=to.to_raw() + popped {
+            for height in to.to_raw() + 1..=tip.to_raw() {
                 match view.header_at(BlockHeight::from_raw(height))? {
                     AtHeight::Recorded(record) => gone.push(record.hash),
                     AtHeight::AboveTip => unreachable!("every height to the tip is recorded"),
@@ -677,12 +789,14 @@ impl Message<Rewind> for Connector {
             // (`pop_many`): the belt is the run's, not each pop's.
             batch.pop_many(popped)?;
             batch.retire_alt_blocks_on(&gone)?;
-            Ok(Rewound { popped })
+            Ok(())
         })?;
-        if rewound.popped > 0 {
-            self.publish_tip();
-        }
-        Ok(rewound)
+        self.publish_tip();
+        Ok(Rewound::Popped {
+            popped,
+            tip: to,
+            bodies,
+        })
     }
 }
 
