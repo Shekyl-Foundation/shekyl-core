@@ -18,6 +18,7 @@ fn policy() -> Policy {
         base: Duration::from_secs(1),
         cap: Duration::from_secs(8),
         sample_every: Duration::from_secs(1),
+        alive_every: Duration::from_secs(4),
         fresh_directory_after: 3,
     }
 }
@@ -222,8 +223,8 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
 fn an_open_file_limit_degrades_without_a_respawn() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     reach_usable(&mut core);
-    // The route is in and the directory is settled, so the only deadline
-    // left is the facet's own announcement.
+    // The route is in and the directory is settled, so the deadlines left
+    // are the liveness sample and the facet's own announcement.
     core.on(Input::StateFileAppeared, 0);
     let at = duration_ns(policy().cap);
     let step = core.on(Input::TooManyFiles { open: 1024 }, at);
@@ -233,8 +234,24 @@ fn an_open_file_limit_degrades_without_a_respawn() {
     assert_eq!(core.status().shown, Shown::Degraded);
     assert_eq!(core.status().cause, Cause::TooManyFiles { open: 1024 });
     assert!(!core.status().health);
-    let due = step.deadline.expect("the facet is said again");
-    let step = core.on_deadline(due);
+    // Answer each liveness sample until the announcement comes due.
+    let mut due = step.deadline.expect("the facet is said again");
+    let step = loop {
+        let step = core.on_deadline(due);
+        if step.actions.contains(&Action::Sample) {
+            core.on(
+                Input::DirectorySample {
+                    progress: Some(100),
+                    socks: None,
+                },
+                due,
+            );
+        }
+        if announces(&step) > 0 {
+            break step;
+        }
+        due = core.deadline().expect("something is waiting");
+    };
     assert_eq!(due, at + duration_ns(policy().cap));
     assert_eq!(announces(&step), 1);
     assert!(!takes_down(&step));
@@ -504,7 +521,11 @@ fn a_state_file_defers_writes_and_ends_the_sample() {
         .actions
         .iter()
         .any(|action| matches!(action, Action::SetConfAvoidDiskWrites)));
-    assert!(core.deadline().is_none(), "nothing else is waiting");
+    assert_eq!(
+        core.deadline(),
+        Some(duration_ns(Duration::from_secs(4))),
+        "only the liveness sample is waiting"
+    );
     let again = core.on(Input::StateFileAppeared, 2);
     assert!(again.actions.is_empty());
 }
@@ -562,4 +583,67 @@ fn a_shutdown_stops_an_installed_route_and_says_nothing() {
     let step = core.on(Input::Shutdown, 1_000);
     assert_eq!(step.actions, vec![Action::StopChild]);
     assert_eq!(announces(&step), 0);
+}
+
+/// A running Tor that nothing else asks is sampled every `alive_every`, so a
+/// wedged Tor meets the reply bound: a late reply is a process fault that
+/// takes the route down. Without the liveness sample a steady Running core
+/// has no deadline, and a stopped Tor is never noticed (Linux acceptance,
+/// 2026-10-23).
+#[test]
+fn a_running_tor_is_sampled_and_a_late_reply_restarts_it() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(Input::StateFileAppeared, 0);
+    let alive = duration_ns(Duration::from_secs(4));
+    assert_eq!(core.deadline(), Some(alive), "the liveness sample is armed");
+
+    // An answer re-arms it.
+    let step = core.on_deadline(alive);
+    assert!(step.actions.contains(&Action::Sample), "{:?}", step.actions);
+    core.on(
+        Input::DirectorySample {
+            progress: Some(100),
+            socks: None,
+        },
+        alive,
+    );
+    assert_eq!(core.deadline(), Some(2 * alive), "the next sample is armed");
+    assert_eq!(
+        core.status().shown,
+        Shown::Usable,
+        "an answer changes nothing"
+    );
+
+    // A wedged Tor: the next sample's reply misses the bound.
+    let step = core.on_deadline(2 * alive);
+    assert!(step.actions.contains(&Action::Sample));
+    let fault = core.on(Input::ReplyLate, 2 * alive);
+    assert!(takes_down(&fault), "a late reply withdraws the route");
+    assert!(!core.status().health);
+    assert_eq!(core.status().shown, Shown::Restarting);
+}
+
+/// The liveness sample belongs to a running Tor only: a fault or a shutdown
+/// clears it, so an absent or stopping Tor is never asked.
+#[test]
+fn the_liveness_sample_ends_with_the_running_phase() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(Input::StateFileAppeared, 0);
+    core.on(Input::ProcessEnded { exit_code: Some(1) }, 1);
+    let step = core.on_deadline(duration_ns(Duration::from_secs(4)));
+    assert!(
+        !step.actions.contains(&Action::Sample),
+        "{:?}",
+        step.actions
+    );
+
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    core.on(Input::Shutdown, 1);
+    assert!(
+        core.deadline().is_none(),
+        "a stopping Tor has nothing waiting"
+    );
 }

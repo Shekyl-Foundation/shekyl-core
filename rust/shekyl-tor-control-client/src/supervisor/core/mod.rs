@@ -30,6 +30,12 @@ pub struct Policy {
     pub cap: Duration,
     /// How often a bootstrap is sampled while Tor is answering.
     pub sample_every: Duration,
+    /// How often a running Tor is sampled when nothing else asks it
+    /// anything. A wedged Tor sends no event and closes nothing, so only
+    /// an outstanding question can meet the driver's reply bound (§4.2: a
+    /// wedged Tor is a dead Tor). Found missing in the Linux acceptance run
+    /// of 2026-10-23: a stopped Tor went unnoticed for five minutes.
+    pub alive_every: Duration,
     /// Consecutive failed launches before the next one takes a fresh
     /// data directory. `TSR-M2` had no launch failure, so this stays 3.
     pub fresh_directory_after: u32,
@@ -43,6 +49,9 @@ impl Policy {
             base: Duration::from_secs(1),
             cap: Duration::from_secs(60),
             sample_every: Duration::from_secs(5),
+            // With the driver's 30 s reply bound, a wedge is a fault within
+            // about a minute: the same order as `TSR-M2`'s 60 s bound.
+            alive_every: Duration::from_secs(30),
             fresh_directory_after: 3,
         }
     }
@@ -267,6 +276,9 @@ pub struct Core {
     sample_at: Option<u64>,
     /// When the posture is said again.
     announce_at: Option<u64>,
+    /// When a running Tor is next asked whether it still answers. Only
+    /// while [`Phase::Running`].
+    alive_at: Option<u64>,
 }
 
 impl Core {
@@ -290,6 +302,7 @@ impl Core {
             pin_at: None,
             sample_at: None,
             announce_at: None,
+            alive_at: None,
         };
         let step = core.step(now, vec![Action::CheckPin]);
         (core, step)
@@ -345,6 +358,7 @@ impl Core {
             self.pin_at = None;
             self.sample_at = None;
             self.announce_at = None;
+            self.alive_at = None;
             return self.step(now, Vec::new());
         }
         if self.deadline().is_none_or(|due| now < due) {
@@ -368,6 +382,15 @@ impl Core {
         if self.sample_at.is_some_and(|at| now >= at) {
             self.sample_at = None;
             actions.extend(self.on_sample_deadline(now));
+        }
+        if self.alive_at.is_some_and(|at| now >= at) {
+            self.alive_at = None;
+            if matches!(self.phase, Phase::Running { .. }) {
+                if !actions.contains(&Action::Sample) {
+                    actions.push(Action::Sample);
+                }
+                self.arm_alive(now);
+            }
         }
         self.step(now, actions)
     }
@@ -396,7 +419,7 @@ impl Core {
     /// The next time [`Self::on_deadline`] has work, in the caller's clock.
     #[must_use]
     fn deadline(&self) -> Option<u64> {
-        [self.pin_at, self.sample_at, self.announce_at]
+        [self.pin_at, self.sample_at, self.announce_at, self.alive_at]
             .into_iter()
             .flatten()
             .min()
@@ -487,6 +510,7 @@ impl Core {
         };
         self.set_cause(Cause::None);
         self.arm_sample(now);
+        self.arm_alive(now);
         vec![
             Action::Publish(ManagedRunning { socks }),
             Action::RepublishOnion,
@@ -604,6 +628,7 @@ impl Core {
         self.pin_at = None;
         self.sample_at = None;
         self.announce_at = None;
+        self.alive_at = None;
         let mut actions = Vec::new();
         if installed {
             actions.push(Action::StopRoute);
@@ -618,6 +643,7 @@ impl Core {
             duty: AbsentDuty::Retry,
         };
         self.sample_at = None;
+        self.alive_at = None;
         if launch_failed {
             self.launch_failures = self.launch_failures.saturating_add(1);
         } else {
@@ -639,6 +665,7 @@ impl Core {
         let installed = self.route_done();
         self.phase = Phase::Absent { duty };
         self.sample_at = None;
+        self.alive_at = None;
         self.pin_at = match duty {
             AbsentDuty::Fixed => None,
             AbsentDuty::Held | AbsentDuty::Retry => Some(now.saturating_add(self.cap())),
@@ -741,6 +768,10 @@ impl Core {
 
     fn arm_sample(&mut self, now: u64) {
         self.sample_at = Some(now.saturating_add(self.sample_ns()));
+    }
+
+    fn arm_alive(&mut self, now: u64) {
+        self.alive_at = Some(now.saturating_add(duration_ns(self.policy.alive_every)));
     }
 
     fn ensure_sample(&mut self, now: u64) {
