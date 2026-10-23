@@ -687,6 +687,16 @@ built. Each carry below is recorded in both documents (rule 26 A5);
 
 ---
 
+## 6.1 Acquisition of a new holding — reported 2026-10-22
+
+`ARCHIVAL_SUPPORT_DRAW.md` §8. Not fixed in that PR. Each read already
+dials its own circuit. Nothing spreads a holding-set's fetches over time
+or across sources, and a complete tree can be the holder a need finishes
+on when no drawn holder of the shard remains. A server asked for many
+shards of one new holding sees that set, and a later bond for the same
+set is the link this delay's jitter is there to break. BD-Q4's window
+width is still open; this is an input to it.
+
 ## 7. What this round does not do
 
 - No code in this PR. The implementation slice (BD-Q2, BD-Q3, the BD-Q5

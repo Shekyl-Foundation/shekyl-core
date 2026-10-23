@@ -283,9 +283,9 @@ empty: every flag below still has a job.
 | --- | --- | --- |
 | `emit` complete-tree arm | support role, leaves `D` | The PR skips `Holdings::CompleteTree`: no pairs, no receipt key. Both derivations share `emit`, so the digest cross-check still compares them. Digest vectors are re-derived. |
 | `freeze_complete_trees`, `archival_complete_trees[E]`, SI-31 `CompleteTreesNotFrozen` | still needed | SO-D12h freezes, at the slash pass, every credited persona whose record is a complete tree (`close.rs` `freeze_complete_trees`). That is the set `market_member_at_epoch` excludes. It is not the epoch-open membership the schedule needs. |
-| `is_foundation_complete_tree` through `market_member_at_epoch`, `close.rs`, `tx_emission_against.rs` | still the §1.4 guard | Serve credit is written from passed draws. After complete trees leave `D`, an economy draw cannot select one. A support pass must not write credit. The exclusion is what still drops the persona from `R_market` and `Σwork` if a credit row is written anyway. The flag is reachable. It is renamed, not deleted. |
+| `is_support_complete_tree` through `market_member_at_epoch`, `close.rs`, `tx_emission_against.rs` | still the §1.4 guard | Serve credit is written from passed draws. After complete trees leave `D`, an economy draw cannot select one. A support pass must not write credit. The exclusion is what still drops the persona from `R_market` and `Σwork` if a credit row is written anyway. The flag is reachable. Renamed from `is_foundation_complete_tree`; not deleted. |
 | `SlashedHolding::CompleteTree`, `unslashed` | stays live | §3 demotes through it. |
-| `ReportedSet::CompleteTreePrefix`, `ServingPosture::FoundationCompleteTree`, `PinCompleteTreePrefix` | support role, stays | The node already serves the prefix. The producer of `h` dials, the same pull as an economy read (`read_from` / `read_from_nonce`), and files the support bitmap in the same bundle (§5). The serve posture does not need a second arm to answer a fetch of a prefix shard. |
+| `ReportedSet::CompleteTreePrefix`, `ServingPosture::SupportCompleteTree`, `PinCompleteTreePrefix` | support role, stays | The node already serves the prefix. The producer of `h` dials, the same pull as an economy read (`read_from` / `read_from_nonce`), and files the support bitmap in the same bundle (§5). The serve posture does not need a second arm to answer a fetch of a prefix shard. Renamed from `FoundationCompleteTree`. |
 | `HolderSource::holders_of` | design question, §7 | The scheduler's holders are the drawable holders. Leaving `D` removes complete trees from that urn. |
 
 **SO-D12h and the schedule's membership are different facts.** The
@@ -317,11 +317,9 @@ body. This round does not patch it.
 Consensus accepts `HoldingsKind::CompleteTree` from any poster
 (`verify_join_market_bond_post` allows the kind with an empty shard
 list). The wallet's ordinary path is `ShardSetCompact`. The names
-that say Foundation are the role's names and are wrong for ruling 2:
-`is_foundation_complete_tree`, `ServingPosture::FoundationCompleteTree`,
-and the docs that define the kind as the Foundation's. The
-implementation PR renames them to the support role. The Foundation
-is one holder.
+that said Foundation were the role's names and were wrong for ruling 2.
+They are now `is_support_complete_tree` and
+`ServingPosture::SupportCompleteTree`. The Foundation is one holder.
 
 `verify_release_bond_post` does not refuse the kind. `Reinstate` does
 (`ReinstateOnCompleteTree`). The proposal for the ruling: a voluntary
