@@ -89,6 +89,7 @@ fn one_pass(
     claimed_pubkey: Vec<u8>,
 ) -> Scenario {
     let msg = pass_countersignature_message(
+        shekyl_archival_retention::PassStream::Economy,
         &NONCE,
         BlockHeight::from_raw(ANCHOR),
         &chain_hash(ANCHOR),

@@ -62,7 +62,7 @@ use crate::schema::{BLOCK_BURN, PROPERTIES, SPENT_KEYS, TX_INDICES};
 
 use super::archival_reads::{
     self, BlockDraws, CompleteTreeSet, DrawableDigest, IndexedDraw, IssuedDigest, PassCount,
-    ServedShard, SettlementRow,
+    ServedShard, SettlementRow, SupportCount,
 };
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -1211,6 +1211,27 @@ impl ReadSnapshot<'_> {
             .map_err(chain_reads::ReadFault::into_plain)
     }
 
+    /// Every support draw issued in `epoch`, in `(P, h, j)` order.
+    pub fn support_issued(
+        &self,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Settling>,
+    ) -> Result<Vec<IndexedDraw>, StoreError> {
+        archival_reads::support_issued(&self.txn, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// The support row `(persona, epoch)`. `None` is no row, not a miss.
+    pub fn support_settlement(
+        &self,
+        persona: &PCanonicalId,
+        epoch: SettlementEpoch,
+        floor: EpochFloor<Claimable>,
+    ) -> Result<Option<SettlementRow>, StoreError> {
+        archival_reads::support_settlement(&self.txn, persona, epoch, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
     /// **A16.** The running digest of the draws issued in `epoch`;
     /// [`IssuedDigest::ZERO`] when none was.
     pub fn issued_digest(
@@ -1243,6 +1264,19 @@ impl ReadSnapshot<'_> {
         floor: BlockDrawsFloor,
     ) -> Result<Option<BlockDraws>, StoreError> {
         archival_reads::block_draws(&self.txn, height, floor)
+            .map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **A23.** How many support draws the block at `height` issued, or
+    /// `None` for a block no row was written for. [`SupportCount::NONE`]
+    /// is a block that issued none. A height below `floor` is SI-34, the
+    /// same window as [`Self::block_draws`].
+    pub fn support_block_count(
+        &self,
+        height: BlockHeight,
+        floor: BlockDrawsFloor,
+    ) -> Result<Option<SupportCount>, StoreError> {
+        archival_reads::support_block_count(&self.txn, height, floor)
             .map_err(chain_reads::ReadFault::into_plain)
     }
 

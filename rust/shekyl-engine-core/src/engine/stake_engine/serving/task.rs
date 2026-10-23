@@ -132,14 +132,14 @@ impl ServingConfig {
 ///
 /// **Do not reconstruct this from the store's prune-disabled flag.** That
 /// flag is one-way and survives Release (Q-5's named residue), so a former
-/// foundation node would report `FoundationCompleteTree` forever — a
+/// foundation node would report `SupportCompleteTree` forever — a
 /// retention fact misread as a posture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServingPosture {
     /// Ordinary market staking: the record's explicit shard list.
     Market,
     /// The Foundation whole-corpus backstop: the frozen prefix.
-    FoundationCompleteTree,
+    SupportCompleteTree,
 }
 
 /// One read of a parked serving lifecycle (`SH-3`).
@@ -558,7 +558,7 @@ fn publish_posture<P>(
     let pinned = host.pinned_serve_set();
     let posture = match pinned.serve_set().obligation() {
         ServeObligation::ShardList(_) => ServingPosture::Market,
-        ServeObligation::CompleteTreePrefix { .. } => ServingPosture::FoundationCompleteTree,
+        ServeObligation::CompleteTreePrefix { .. } => ServingPosture::SupportCompleteTree,
     };
     let _sent = serving_posture.send(Some(posture));
 }

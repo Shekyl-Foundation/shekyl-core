@@ -294,7 +294,7 @@ fn fixture() -> Value {
                 has_budget_row: true,
                 bonds: vec![BondRow {
                     join_settlement_epoch: 0,
-                    is_foundation_complete_tree: false,
+                    is_support_complete_tree: false,
                     bad_intervals: vec![BadInterval {
                         start_epoch: 2,
                         end_exclusive: 3,
@@ -379,7 +379,7 @@ fn the_daemon_wire_type_writes_the_document_the_wallet_decodes() {
                 has_budget_row: true,
                 bonds: vec![ClaimBondRow {
                     join_settlement_epoch: 0,
-                    is_foundation_complete_tree: false,
+                    is_support_complete_tree: false,
                     bad_intervals_flat: vec![2, 3],
                 }],
                 shards: vec![ClaimShardRow {

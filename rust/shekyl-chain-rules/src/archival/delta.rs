@@ -9,7 +9,7 @@
 
 use shekyl_types::archival::{
     BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, RMarket, SettlementRow,
-    SigmaWorkMilli, SlashLogEntry,
+    SigmaWorkMilli, SlashLogEntry, SupportCount,
 };
 use shekyl_types::{PCanonicalId, SettlementEpoch, ShardId};
 use shekyl_units::AtomicUnits;
@@ -33,6 +33,7 @@ use shekyl_units::AtomicUnits;
 ///     releases: Vec::new(),
 ///     serve_credits: Vec::new(),
 ///     settlements: Vec::new(),
+///     support_settlements: Vec::new(),
 ///     gathers: Vec::new(),
 ///     slashes: Vec::new(),
 ///     slash_watermark: None,
@@ -40,6 +41,7 @@ use shekyl_units::AtomicUnits;
 ///     close: None,
 ///     drawable_digest: None,
 ///     draws: todo!(),
+///     support_count: todo!(),
 /// };
 /// ```
 ///
@@ -51,6 +53,8 @@ pub struct ArchivalDelta {
     pub(super) releases: Vec<ReleasePreImage>,
     pub(super) serve_credits: Vec<ServeCreditKey>,
     pub(super) settlements: Vec<Settlement>,
+    /// One support row per complete tree per epoch. Not keyed by shard.
+    pub(super) support_settlements: Vec<SupportSettlement>,
     pub(super) gathers: Vec<EpochGather>,
     pub(super) slashes: Vec<Slash>,
     pub(super) slash_watermark: Option<SettlementEpoch>,
@@ -60,6 +64,10 @@ pub struct ArchivalDelta {
     /// The draw count of the connecting block. Present at every height,
     /// including a schedule with no response window, which records zeros.
     pub(super) draws: BlockDraws,
+    /// How many support draws the connecting block issued. Present at
+    /// every height. [`SupportCount::NONE`] while the schedule does not
+    /// draw support: the row is that zero, and a missing row is the hole.
+    pub(super) support_count: SupportCount,
 }
 
 impl ArchivalDelta {
@@ -96,6 +104,14 @@ impl ArchivalDelta {
     #[must_use]
     pub fn settlements(&self) -> &[Settlement] {
         &self.settlements
+    }
+
+    /// The support rows this block's slash pass derives, by epoch, then
+    /// persona: one per complete tree with a counted draw
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §3). Not keyed by shard.
+    #[must_use]
+    pub fn support_settlements(&self) -> &[SupportSettlement] {
+        &self.support_settlements
     }
 
     /// The emission gather of every epoch this block's slash pass settled,
@@ -154,6 +170,13 @@ impl ArchivalDelta {
     #[must_use]
     pub const fn draws(&self) -> BlockDraws {
         self.draws
+    }
+
+    /// How many support draws the connecting block issued
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Written at every height.
+    #[must_use]
+    pub const fn support_count(&self) -> SupportCount {
+        self.support_count
     }
 }
 
@@ -254,6 +277,17 @@ pub struct ServeCreditKey {
     pub shard: ShardId,
     /// The settlement epoch credited.
     pub epoch: SettlementEpoch,
+}
+
+/// One complete tree's support settlement for one epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SupportSettlement {
+    /// The tree settled.
+    pub persona: PCanonicalId,
+    /// The epoch settled.
+    pub epoch: SettlementEpoch,
+    /// What it settled.
+    pub row: SettlementRow,
 }
 
 /// One pair's settlement for one epoch: the `archival_settlement` key and

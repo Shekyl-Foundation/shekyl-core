@@ -354,7 +354,7 @@ pub struct EpochCloseBondFacts {
     /// The bond's join epoch.
     pub join_settlement_epoch: u64,
     /// The foundation's complete-tree bond.
-    pub is_foundation_complete_tree: bool,
+    pub is_support_complete_tree: bool,
     /// Its bad intervals.
     pub bad_intervals: Vec<shekyl_types::archival::BadInterval>,
 }
@@ -426,7 +426,7 @@ pub fn emission_epoch_facts<'id, V: ChainView<'id>>(
                         .iter()
                         .map(|bond| EpochCloseBondFacts {
                             join_settlement_epoch: bond.join_settlement_epoch,
-                            is_foundation_complete_tree: bond.is_foundation_complete_tree,
+                            is_support_complete_tree: bond.is_support_complete_tree,
                             bad_intervals: bond.bad_intervals.to_vec(),
                         })
                         .collect(),

@@ -270,7 +270,7 @@ unsafe fn emission_facts_from_ffi(view: &ffi::SubmitEmissionFactsFfi) -> Result<
         for b in unsafe { slice(snap.bonds, snap.bonds_len) }? {
             bonds.push(EmissionCloseBondFacts {
                 join_settlement_epoch: b.join_settlement_epoch,
-                is_foundation_complete_tree: b.is_foundation_complete_tree != 0,
+                is_support_complete_tree: b.is_support_complete_tree != 0,
                 bad_intervals: unsafe {
                     // Flattened (start, end_exclusive) pairs: 2 × len u64s;
                     // the pair count is C++-supplied, so the doubling is

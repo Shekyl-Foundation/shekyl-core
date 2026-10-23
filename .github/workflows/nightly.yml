@@ -117,10 +117,10 @@ jobs:
     # is about half an hour in release on a workstation, the boundary test
     # 140 s, the slash bench 25 s, plus the release build.
     #
-    # Same matrix and same caveat as above: the schedule runs main's copy of
-    # this file over both branches, so the `main` leg is red until the
-    # release that carries the test (and threads onto one tracking issue
-    # until then); `workflow_dispatch` with ref=dev runs the newer config.
+    # Same matrix as above. The schedule runs main's copy of this file over
+    # both branches, but the set is read from the checked-out ref's
+    # scripts/ci/ignored_set_chain_store.sh, so each leg is judged by its
+    # own tree; `workflow_dispatch` with `ref` proves one branch's set.
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -150,33 +150,12 @@ jobs:
           restore-keys: nightly-store-ignored-${{ matrix.branch }}-
 
       - name: Run the chain store's ignored set
-        working-directory: rust
-        # Rule 47: the lane asserts every subject it owns is in the set
-        # before running it — a renamed, deleted or un-ignored member fails
-        # here by name, not by passing a run that no longer contains it. The
-        # four names are the lane's charter; a fifth ignored test runs too
-        # and is counted, and joins the list when it is this lane's to own.
-        # The benches run at their defaults: a default that builds a chain
-        # the constants refuse is exactly what this lane exists to see.
+        # The set and its assertions are scripts/ci/ignored_set_chain_store.sh,
+        # in the tree under test: each branch judges itself (the header says
+        # why the list no longer lives here).
         env:
           BRANCH: ${{ matrix.branch }}
-        run: |
-          set -eu
-          list=$(cargo test --locked --release -p shekyl-chain-store --lib -- --list --ignored)
-          for subject in \
-            'store::prune_tests::the_boundary_batch_discards_closed_shards_on_real_spends' \
-            'store::slash_scan_bench_tests::slash_scan_bench' \
-            'store::slash_scan_bench_tests::the_window_stops_at_the_retention_horizon' \
-            'store::weights_read_bench_tests::weights_read_bench'
-          do
-            printf '%s\n' "$list" | grep -qx "${subject}: test" \
-              || { echo "::error::${subject} is not in shekyl-chain-store's ignored set"; exit 1; }
-          done
-          printf '%s\n' "$list" | grep -c ': test$'
-          START=$(date +%s)
-          cargo test --locked --release -p shekyl-chain-store --lib -- --ignored --nocapture 2>&1
-          END=$(date +%s)
-          echo "::notice::Chain store ignored set completed on ${BRANCH} in $((END - START))s (budget 120m)"
+        run: bash scripts/ci/ignored_set_chain_store.sh
 
   economics-sim-ignored:
     if: ${{ !inputs.job || inputs.job == 'all' || inputs.job == 'economics-sim-ignored' }}
@@ -189,17 +168,13 @@ jobs:
     # green until a fresh clone ran the tests by hand two commits later
     # (e3d0931d77).
     #
-    # The crate's other two ignored tests, `regen_baseline_fixture` and
-    # `regen_stage2_narration_fixtures`, WRITE the committed fixtures. They
-    # are named below as helpers and never run here: a lane that
-    # regenerated the fixtures and then compared against them would pass
-    # every night.
+    # The crate's two regeneration helpers WRITE the committed fixtures and
+    # are never run here; the script names them so the set is exact.
     #
-    # Same matrix and same caveat as above: the schedule runs main's copy of
-    # this file over both branches, so the `main` leg is red until the
-    # release that carries the tests it names (and threads onto one tracking
-    # issue until then); `workflow_dispatch` with ref=dev runs the newer
-    # config.
+    # Same matrix as above. The schedule runs main's copy of this file over
+    # both branches, but the set is read from the checked-out ref's
+    # scripts/ci/ignored_set_economics_sim.sh, so each leg is judged by its
+    # own tree; `workflow_dispatch` with `ref` proves one branch's set.
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -229,61 +204,12 @@ jobs:
           restore-keys: nightly-economics-sim-ignored-${{ matrix.branch }}-
 
       - name: Run the economics sim's ignored tests
-        working-directory: rust
-        # Rule 47: the lane asserts its subject before running it. The
-        # crate's ignored set must be EXACTLY the tests run here plus the
-        # two regeneration helpers. A renamed, deleted or un-ignored member
-        # fails by name; a new ignored test fails too, until someone decides
-        # here whether it is run or is a helper. The tests are passed by
-        # exact name, so the helpers cannot be reached by a filter.
-        #
-        # The crate is a binary with no library target: the tests are in
-        # `--bin shekyl-economics-sim`.
+        # The set, the helpers and their assertions are
+        # scripts/ci/ignored_set_economics_sim.sh, in the tree under test:
+        # each branch judges itself.
         env:
           BRANCH: ${{ matrix.branch }}
-        run: |
-          set -eu
-          run_tests='stage2::tests::stage2_narration_matches_the_committed_fixture
-          stage2::tests::stage2_narration_flat_control_matches_the_committed_fixture
-          secret_draw_production::tests::the_esr11_timing_set_runs_and_the_table_renders'
-          helpers='record::tests::regen_baseline_fixture
-          stage2::tests::regen_stage2_narration_fixtures'
-          run_tests=$(printf '%s\n' "$run_tests" | sed 's/^ *//')
-          helpers=$(printf '%s\n' "$helpers" | sed 's/^ *//')
-
-          listing=$(cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim -- --list --ignored)
-          found=$(printf '%s\n' "$listing" | sed -n 's/: test$//p' | sort)
-          expected=$(printf '%s\n%s\n' "$run_tests" "$helpers" | sort)
-          if [ "$found" != "$expected" ]; then
-            echo "::error::shekyl-economics-sim's ignored set is not the one this lane was written for."
-            echo "expected (the tests run, then the helpers that are not):"
-            printf '%s\n' "$expected"
-            echo "found:"
-            printf '%s\n' "$found"
-            echo "Decide in nightly.yml whether each new ignored test is run here or is a regeneration helper."
-            exit 1
-          fi
-
-          START=$(date +%s)
-          # The verdict does not travel through a pipe (rule 46): the log
-          # is written, the exit kept, then the log shown.
-          status=0
-          # shellcheck disable=SC2086 # one test name per word, by design
-          cargo test --locked --release -p shekyl-economics-sim --bin shekyl-economics-sim -- \
-            --ignored --exact --nocapture $run_tests > sim-ignored.log 2>&1 || status=$?
-          cat sim-ignored.log
-          if [ "$status" -ne 0 ]; then
-            echo "::error::economics-sim-ignored: a named test failed. If a narration drifted, regenerate with regen_stage2_narration_fixtures only if the sim change is intended; otherwise the sim drifted from its record."
-            exit "$status"
-          fi
-          ran=$(sed -n 's/^test result: ok\. \([0-9]*\) passed.*/\1/p' sim-ignored.log | tail -1)
-          want=$(printf '%s\n' "$run_tests" | grep -c .)
-          if [ "$ran" != "$want" ]; then
-            echo "::error::${ran:-0} of ${want} named tests ran: a name above no longer matches a test exactly."
-            exit 1
-          fi
-          END=$(date +%s)
-          echo "::notice::Economics sim ignored tests completed on ${BRANCH} in $((END - START))s (budget 180m)"
+        run: bash scripts/ci/ignored_set_economics_sim.sh
 
   report-red:
     # A nightly tier without a route to a human "joins a silence"
@@ -322,7 +248,7 @@ jobs:
                 lines: [
                   'The `economics-sim-ignored` job failed. It runs three `#[ignore]`d tests of `shekyl-economics-sim`: `stage2_narration_matches_the_committed_fixture`, `stage2_narration_flat_control_matches_the_committed_fixture` and `the_esr11_timing_set_runs_and_the_table_renders`.',
                   'If a narration drifted: regenerate with `regen_stage2_narration_fixtures` only if the sim change is intended; otherwise the sim drifted from its record.',
-                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `nightly.yml` whether the new test is run or is a regeneration helper.',
+                  'If the job stopped before running anything, the crate\'s ignored set changed: decide in `scripts/ci/ignored_set_economics_sim.sh` whether the new test is run or is a regeneration helper.',
                 ],
               },
             };
