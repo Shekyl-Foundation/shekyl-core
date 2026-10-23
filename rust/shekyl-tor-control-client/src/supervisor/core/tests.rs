@@ -689,7 +689,7 @@ fn a_lost_verdict_past_the_cap_is_said_at_once() {
 /// nothing when clearnet is off.
 #[test]
 fn a_held_origin_under_a_down_link_waits_for_tor() {
-    let (mut core, _) = Core::start(policy(), managed(false), 0);
+    let (core, _) = Core::start(policy(), managed(false), 0);
     assert_eq!(core.status().own_tx, OwnTx::Held);
     let text = render(&core.status());
     assert!(
