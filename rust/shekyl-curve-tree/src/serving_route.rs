@@ -104,7 +104,7 @@ pub fn is_refusal_trailer(envelope: &[u8]) -> bool {
 /// transcript `P` signs over it are `shekyl-archival-retention`'s
 /// (`pass_anchor::PASS_REQUEST_HEADER_LEN`); the fetch crate const-asserts
 /// the two equal. This crate owns only the textual carrier.
-pub const REQUEST_HEADER_BYTES: usize = 72;
+pub const REQUEST_HEADER_BYTES: usize = 73;
 
 /// Textual length of the request header value: two hex digits per byte.
 pub const REQUEST_HEADER_HEX_LEN: usize = REQUEST_HEADER_BYTES * 2;

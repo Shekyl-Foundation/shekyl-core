@@ -10,7 +10,7 @@
 //! live in [`crate::attestation_wire`].
 //!
 //! Inland clocks are ordinal [`BlockHeight`]; depths and lags are
-//! [`BlockCount`]. The 72-byte header still carries `anchor_height` as
+//! [`BlockCount`]. The 73-byte header still carries `anchor_height` as
 //! eight LE bytes (C1); [`PassRequestHeader::from_bytes`] /
 //! [`pass_request_header_bytes`] are the punch.
 //!
@@ -26,7 +26,12 @@
 //! // HEIGHT_SEMANTICS.md C9: decoded header height is ordinal, not a count.
 //! use shekyl_archival_retention::PassRequestHeader;
 //! use shekyl_types::ChainCount;
-//! let _ = PassRequestHeader::from_parts([0u8; 32], ChainCount::from_raw(1), [0u8; 32]);
+//! let _ = PassRequestHeader::from_parts(PassStream::Economy,
+//!     shekyl_archival_retention::PassStream::Economy,
+//!     [0u8; 32],
+//!     ChainCount::from_raw(1),
+//!     [0u8; 32],
+//! );
 //! ```
 
 use core::num::NonZeroU64;
@@ -49,9 +54,38 @@ pub const PASS_ANCHOR_HEIGHT_LEN: usize = 8;
 /// admission looks it up from the connecting chain.
 pub const PASS_ANCHOR_HASH_LEN: usize = 32;
 
-/// Decoded request header: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`.
+/// Which draw stream a request belongs to. The first byte of the header
+/// and of the transcript `P` signs (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PassStream {
+    /// An economy draw. Byte `0`.
+    Economy = 0,
+    /// A complete-tree support draw. Byte `1`.
+    Support = 1,
+}
+
+impl PassStream {
+    /// The wire byte.
+    #[must_use]
+    pub const fn byte(self) -> u8 {
+        self as u8
+    }
+
+    /// The stream this byte names. `None` for any other byte.
+    #[must_use]
+    pub const fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Economy),
+            1 => Some(Self::Support),
+            _ => None,
+        }
+    }
+}
+
+/// Decoded request header: `stream[1] ‖ nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`.
 pub const PASS_REQUEST_HEADER_LEN: usize =
-    PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN + PASS_ANCHOR_HASH_LEN;
+    1 + PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN + PASS_ANCHOR_HASH_LEN;
 
 /// The delivery digest `P` signs and the pass record carries
 /// ([`pass_delivery_digest`]).
@@ -61,7 +95,7 @@ pub const PASS_DELIVERY_DIGEST_LEN: usize = 32;
 /// one function, versioned).
 pub const PASS_DELIVERY_DIGEST_CUSTOMIZATION: &[u8] = b"shekyl/archival-pass-delivery-digest-v1";
 
-/// Signed transcript: 72-byte header, `shard_id` as 8 LE bytes, then the
+/// Signed transcript: the 73-byte header, `shard_id` as 8 LE bytes, then the
 /// 32-byte delivery digest.
 pub const PASS_COUNTERSIGNATURE_MESSAGE_LEN: usize =
     PASS_REQUEST_HEADER_LEN + 8 + PASS_DELIVERY_DIGEST_LEN;
@@ -236,22 +270,25 @@ impl PassAnchorWindow {
     }
 }
 
-/// Decoded `SF-D5` header: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`.
+/// Decoded header: `stream[1] ‖ nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`.
 #[must_use]
 pub fn pass_request_header_bytes(
+    stream: PassStream,
     nonce: &[u8; PASS_NONCE_LEN],
     anchor_height: BlockHeight,
     anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
 ) -> [u8; PASS_REQUEST_HEADER_LEN] {
-    const HEIGHT_END: usize = PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN;
+    const NONCE_END: usize = 1 + PASS_NONCE_LEN;
+    const HEIGHT_END: usize = NONCE_END + PASS_ANCHOR_HEIGHT_LEN;
     let mut out = [0u8; PASS_REQUEST_HEADER_LEN];
-    out[0..PASS_NONCE_LEN].copy_from_slice(nonce);
-    out[PASS_NONCE_LEN..HEIGHT_END].copy_from_slice(&anchor_height.to_raw().to_le_bytes());
+    out[0] = stream.byte();
+    out[1..NONCE_END].copy_from_slice(nonce);
+    out[NONCE_END..HEIGHT_END].copy_from_slice(&anchor_height.to_raw().to_le_bytes());
     out[HEIGHT_END..].copy_from_slice(anchor_hash);
     out
 }
 
-/// The decoded 72-byte request header.
+/// The decoded 73-byte request header.
 ///
 /// One type for both ends of the route: the fetch client mints one, the
 /// serve loop splits the same bytes, and the transcript both sign and
@@ -259,6 +296,7 @@ pub fn pass_request_header_bytes(
 /// textual carrier (lowercase hex) is `serving_route`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PassRequestHeader {
+    stream: PassStream,
     nonce: [u8; PASS_NONCE_LEN],
     anchor_height: BlockHeight,
     anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
@@ -268,32 +306,44 @@ impl PassRequestHeader {
     /// Assemble from the three fields. Infallible: lengths are in the types.
     #[must_use]
     pub const fn from_parts(
+        stream: PassStream,
         nonce: [u8; PASS_NONCE_LEN],
         anchor_height: BlockHeight,
         anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
     ) -> Self {
         Self {
+            stream,
             nonce,
             anchor_height,
             anchor_hash,
         }
     }
 
-    /// Split a decoded header. Infallible: the length is in the type.
+    /// The stream this request names.
     #[must_use]
-    pub fn from_bytes(header: &[u8; PASS_REQUEST_HEADER_LEN]) -> Self {
-        const HEIGHT_END: usize = PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN;
+    pub const fn stream(&self) -> PassStream {
+        self.stream
+    }
+
+    /// Split a decoded header. `None` when the stream byte is neither
+    /// economy nor support.
+    #[must_use]
+    pub fn from_bytes(header: &[u8; PASS_REQUEST_HEADER_LEN]) -> Option<Self> {
+        const NONCE_END: usize = 1 + PASS_NONCE_LEN;
+        const HEIGHT_END: usize = NONCE_END + PASS_ANCHOR_HEIGHT_LEN;
+        let stream = PassStream::from_byte(header[0])?;
         let mut nonce = [0u8; PASS_NONCE_LEN];
-        nonce.copy_from_slice(&header[..PASS_NONCE_LEN]);
+        nonce.copy_from_slice(&header[1..NONCE_END]);
         let mut height_le = [0u8; PASS_ANCHOR_HEIGHT_LEN];
-        height_le.copy_from_slice(&header[PASS_NONCE_LEN..HEIGHT_END]);
+        height_le.copy_from_slice(&header[NONCE_END..HEIGHT_END]);
         let mut anchor_hash = [0u8; PASS_ANCHOR_HASH_LEN];
         anchor_hash.copy_from_slice(&header[HEIGHT_END..]);
-        Self {
+        Some(Self {
+            stream,
             nonce,
             anchor_height: BlockHeight::from_raw(u64::from_le_bytes(height_le)),
             anchor_hash,
-        }
+        })
     }
 
     /// The nonce — what the pass record carries beside `anchor_height`.
@@ -314,10 +364,15 @@ impl PassRequestHeader {
         &self.anchor_hash
     }
 
-    /// The decoded 72-byte wire layout.
+    /// The decoded 73-byte wire layout.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; PASS_REQUEST_HEADER_LEN] {
-        pass_request_header_bytes(&self.nonce, self.anchor_height, &self.anchor_hash)
+        pass_request_header_bytes(
+            self.stream,
+            &self.nonce,
+            self.anchor_height,
+            &self.anchor_hash,
+        )
     }
 
     /// The SF-D8 transcript for this header, `shard_id`, and the digest of
@@ -329,6 +384,7 @@ impl PassRequestHeader {
         delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
     ) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
         pass_countersignature_message(
+            self.stream,
             &self.nonce,
             self.anchor_height,
             &self.anchor_hash,
@@ -429,6 +485,7 @@ impl PassDeliveryHasher {
 /// A signature under one domain is not a signature under the other.
 #[must_use]
 pub fn pass_countersignature_message(
+    stream: PassStream,
     nonce: &[u8; PASS_NONCE_LEN],
     anchor_height: BlockHeight,
     anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
@@ -438,6 +495,7 @@ pub fn pass_countersignature_message(
     const SHARD_END: usize = PASS_REQUEST_HEADER_LEN + 8;
     let mut out = [0u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN];
     out[..PASS_REQUEST_HEADER_LEN].copy_from_slice(&pass_request_header_bytes(
+        stream,
         nonce,
         anchor_height,
         anchor_hash,
@@ -476,18 +534,28 @@ mod tests {
 
     #[test]
     fn pass_request_header_splits_and_rejoins() {
-        let h = PassRequestHeader::from_parts([0x11; 32], bh(0x0102_0304_0506_0708), [0x22; 32]);
+        let h = PassRequestHeader::from_parts(
+            PassStream::Economy,
+            [0x11; 32],
+            bh(0x0102_0304_0506_0708),
+            [0x22; 32],
+        );
         let bytes = h.to_bytes();
-        assert_eq!(PassRequestHeader::from_bytes(&bytes), h);
-        assert_eq!(&bytes[..32], &[0x11; 32]);
+        assert_eq!(PassRequestHeader::from_bytes(&bytes), Some(h));
+        assert_eq!(bytes[0], PassStream::Economy.byte());
+        assert_eq!(&bytes[1..33], &[0x11; 32]);
         assert_eq!(
-            &bytes[32..40],
+            &bytes[33..41],
             &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
         );
-        assert_eq!(&bytes[40..], &[0x22; 32]);
+        assert_eq!(&bytes[41..], &[0x22; 32]);
+        let mut bad = bytes;
+        bad[0] = 2;
+        assert!(PassRequestHeader::from_bytes(&bad).is_none());
         assert_eq!(
             h.transcript(9, &[0x33; 32]),
             pass_countersignature_message(
+                PassStream::Economy,
                 &[0x11; 32],
                 bh(0x0102_0304_0506_0708),
                 &[0x22; 32],
@@ -568,51 +636,103 @@ mod tests {
     fn request_header_and_message_are_the_pinned_concatenation() {
         let nonce = [0xAAu8; 32];
         let hash = [0xBBu8; 32];
-        let header = pass_request_header_bytes(&nonce, bh(0x0102_0304_0506_0708), &hash);
+        let header = pass_request_header_bytes(
+            PassStream::Economy,
+            &nonce,
+            bh(0x0102_0304_0506_0708),
+            &hash,
+        );
         assert_eq!(header.len(), PASS_REQUEST_HEADER_LEN);
-        assert_eq!(&header[..32], &nonce);
+        assert_eq!(header[0], 0);
+        assert_eq!(&header[1..33], &nonce);
         assert_eq!(
-            &header[32..40],
+            &header[33..41],
             &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
         );
-        assert_eq!(&header[40..72], &hash);
+        assert_eq!(&header[41..73], &hash);
 
         let digest = [0xCCu8; 32];
         let shard = 0x1112_1314_1516_1718;
         let height = bh(0x0102_0304_0506_0708);
-        let msg = pass_countersignature_message(&nonce, height, &hash, shard, &digest);
+        let msg = pass_countersignature_message(
+            PassStream::Economy,
+            &nonce,
+            height,
+            &hash,
+            shard,
+            &digest,
+        );
         assert_eq!(msg.len(), PASS_COUNTERSIGNATURE_MESSAGE_LEN);
-        assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 112);
-        assert_eq!(&msg[..72], &header);
+        assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 113);
+        assert_eq!(&msg[..73], &header);
         assert_eq!(
-            &msg[72..80],
+            &msg[73..81],
             &[0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11]
         );
         assert_eq!(
-            &msg[80..],
+            &msg[81..],
             &digest,
             "the delivery digest closes the transcript"
         );
-        // Every term moves the message.
+        // Every term moves the message. Red edit: drop the stream byte.
         assert_ne!(
             msg,
-            pass_countersignature_message(&[0xABu8; 32], height, &hash, shard, &digest)
+            pass_countersignature_message(
+                PassStream::Support,
+                &nonce,
+                height,
+                &hash,
+                shard,
+                &digest
+            )
         );
         assert_ne!(
             msg,
-            pass_countersignature_message(&nonce, bh(1), &hash, shard, &digest)
+            pass_countersignature_message(
+                PassStream::Economy,
+                &[0xABu8; 32],
+                height,
+                &hash,
+                shard,
+                &digest
+            )
         );
         assert_ne!(
             msg,
-            pass_countersignature_message(&nonce, height, &[0xBCu8; 32], shard, &digest)
+            pass_countersignature_message(
+                PassStream::Economy,
+                &nonce,
+                bh(1),
+                &hash,
+                shard,
+                &digest
+            )
         );
         assert_ne!(
             msg,
-            pass_countersignature_message(&nonce, height, &hash, 1, &digest)
+            pass_countersignature_message(
+                PassStream::Economy,
+                &nonce,
+                height,
+                &[0xBCu8; 32],
+                shard,
+                &digest
+            )
         );
         assert_ne!(
             msg,
-            pass_countersignature_message(&nonce, height, &hash, shard, &[0xCDu8; 32])
+            pass_countersignature_message(PassStream::Economy, &nonce, height, &hash, 1, &digest)
+        );
+        assert_ne!(
+            msg,
+            pass_countersignature_message(
+                PassStream::Economy,
+                &nonce,
+                height,
+                &hash,
+                shard,
+                &[0xCDu8; 32]
+            )
         );
     }
 

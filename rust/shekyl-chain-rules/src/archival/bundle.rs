@@ -532,7 +532,7 @@ pub fn open_body<F>(reference: &BundleRef, bytes: &[u8]) -> Result<BundleBody, B
 ///    `visibly_short`.
 /// 7. **Each record's `attempt`** is below `K`.
 /// 8. **Each record's receipt**, ascending `j`: `anchor_height < h`, then
-///    the 112-byte transcript `nonce ‖ anchor_height_le ‖
+///    the 113-byte transcript `stream ‖ nonce ‖ anchor_height_le ‖
 ///    block_hash(anchor_height) ‖ shard_id_le ‖ delivery_digest` verifies
 ///    under the derived pair's receipt key, scheme 3,
 ///    `SCHEME_DOMAIN_RECEIPT`, with the nonce recomputed from `(seed,
@@ -679,6 +679,7 @@ pub fn verify_bundle<V: BundleView>(
         // fetch cannot drift from each other because neither has its own.
         if verify_receipt_transcript(
             receipt_key,
+            shekyl_archival_retention::PassStream::Economy,
             &nonce,
             record.anchor_height,
             anchor_hash.as_bytes(),

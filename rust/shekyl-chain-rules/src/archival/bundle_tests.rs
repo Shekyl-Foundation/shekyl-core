@@ -407,7 +407,7 @@ fn kat_the_verifier_recomputes_the_specifications_nonces() {
 /// or drop a field of `pass_countersignature_message`.
 #[test]
 fn the_receipts_transcript_is_112_bytes() {
-    assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 112);
+    assert_eq!(PASS_COUNTERSIGNATURE_MESSAGE_LEN, 113);
 }
 
 // ------------------------------------------- step 3: window, one per `h`

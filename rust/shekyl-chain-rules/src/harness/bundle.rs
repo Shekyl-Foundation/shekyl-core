@@ -436,6 +436,7 @@ impl BundleWorld {
             .chain_block_hash(anchor)
             .expect("anchor is at or below the fixture chain's tip");
         let transcript = pass_countersignature_message(
+            shekyl_archival_retention::PassStream::Economy,
             nonce,
             anchor,
             anchor_hash.as_bytes(),

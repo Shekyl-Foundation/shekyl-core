@@ -274,7 +274,12 @@ fn fixture(leaf_count: usize) -> Fixture {
     let signer: Arc<dyn PassSigner<IDENTITY_ENVELOPE_LEN>> =
         Arc::new(PinnedEnvelopeSigner::new(&key));
     let anchor = BlockHeight::from_raw(OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw());
-    let header = pass_request_header_bytes(&NONCE, anchor, &ANCHOR_HASH);
+    let header = pass_request_header_bytes(
+        shekyl_archival_retention::PassStream::Economy,
+        &NONCE,
+        anchor,
+        &ANCHOR_HASH,
+    );
     let head = format!(
         "GET /shard/{SHARD_ID} HTTP/1.1\r\nhost: x\r\n{REQUEST_HEADER_NAME}: {}\r\n\r\n",
         encode_request_header(&header)

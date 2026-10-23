@@ -22,8 +22,9 @@ use crate::attestation::AttestationKind;
 use crate::hash::cshake256_32;
 use crate::id::p_canonical_id_from_hybrid_pubkey;
 use crate::pass_anchor::{
-    pass_countersignature_message, PassAnchorWindow, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN,
-    PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_LEN, PASS_NONCE_LEN,
+    pass_countersignature_message, PassAnchorWindow, PassStream, PASS_ANCHOR_HASH_LEN,
+    PASS_ANCHOR_HEIGHT_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_DELIVERY_DIGEST_LEN,
+    PASS_NONCE_LEN,
 };
 
 /// cSHAKE customization for `attestation_root` over the ordered pass-record set.
@@ -164,9 +165,11 @@ impl PassRecord {
     #[must_use]
     pub fn countersignature_message(
         &self,
+        stream: PassStream,
         anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
     ) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
         pass_countersignature_message(
+            stream,
             &self.nonce,
             self.anchor_height,
             anchor_hash,
@@ -452,6 +455,7 @@ pub fn verify_pass_countersignature(
     )?;
     verify_pass_transcript(
         p_pubkey,
+        crate::pass_anchor::PassStream::Economy,
         &record.nonce,
         record.anchor_height,
         anchor_hash,
@@ -478,6 +482,7 @@ pub fn verify_pass_countersignature(
 /// carried one.
 pub fn verify_pass_transcript(
     p_pubkey: &HybridPublicKey,
+    stream: PassStream,
     nonce: &[u8; PASS_NONCE_LEN],
     anchor_height: BlockHeight,
     anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
@@ -485,8 +490,14 @@ pub fn verify_pass_transcript(
     delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
     signature: &HybridSignature,
 ) -> Result<(), PassCountersignatureError> {
-    let message =
-        pass_countersignature_message(nonce, anchor_height, anchor_hash, shard_id, delivery_digest);
+    let message = pass_countersignature_message(
+        stream,
+        nonce,
+        anchor_height,
+        anchor_hash,
+        shard_id,
+        delivery_digest,
+    );
     HybridEd25519MlDsa
         .verify(
             p_pubkey,
@@ -497,7 +508,7 @@ pub fn verify_pass_transcript(
         .map_err(|_| PassCountersignatureError::InvalidSignature)
 }
 
-/// Verify a **receipt** over the pass transcript: the same 112-byte
+/// Verify a **receipt** over the pass transcript: the same 113-byte
 /// transcript [`verify_pass_transcript`] checks, signed by the persona's
 /// receipt key — Ed25519 + FN-DSA-1024, hybrid scheme 3 — under
 /// [`SCHEME_DOMAIN_RECEIPT`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_RECEIPT)
@@ -528,6 +539,7 @@ pub fn verify_pass_transcript(
 /// verify under `receipt_pubkey`, the receipt domain and this transcript.
 pub fn verify_receipt_transcript(
     receipt_pubkey: &FnDsaHybridPublicKey,
+    stream: PassStream,
     nonce: &[u8; PASS_NONCE_LEN],
     anchor_height: BlockHeight,
     anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
@@ -535,8 +547,14 @@ pub fn verify_receipt_transcript(
     delivery_digest: &[u8; PASS_DELIVERY_DIGEST_LEN],
     signature: &FnDsaHybridSignature,
 ) -> Result<(), PassCountersignatureError> {
-    let message =
-        pass_countersignature_message(nonce, anchor_height, anchor_hash, shard_id, delivery_digest);
+    let message = pass_countersignature_message(
+        stream,
+        nonce,
+        anchor_height,
+        anchor_hash,
+        shard_id,
+        delivery_digest,
+    );
     HybridEd25519FnDsa
         .verify(
             receipt_pubkey,
