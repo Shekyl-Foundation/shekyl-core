@@ -55,6 +55,21 @@ use crate::READ_LEN_CAP;
 /// Genesis transaction version (kept deliberately; `V4` = future lattice-only).
 pub const TX_VERSION: u64 = 3;
 
+/// A canonical varint of a value below 128. Version 3, a zero count and a
+/// zero length are each one byte.
+const VARINT_BELOW_128: usize = 1;
+
+/// The shortest pruned segment [`Transaction::from_pruned_bytes`] accepts,
+/// and the shortest blob [`Transaction::from_bytes`] accepts: version 3, an
+/// empty prefix, and a null confidential section with no outputs. The base
+/// arrays are sized by the output count, so none of them is present.
+pub const MIN_PRUNED_SEGMENT: usize = VARINT_BELOW_128 // version
+    + VARINT_BELOW_128 // unlock time
+    + VARINT_BELOW_128 // input count
+    + VARINT_BELOW_128 // output count
+    + VARINT_BELOW_128 // extra length
+    + 1; // null ct type; the base contributes nothing
+
 // Genesis dense tag scheme (GENESIS_TX_WIRE_FORMAT.md §2.0 / §5 gate-(c)). Tags are
 // numbered dense from 0x00; matches the renumbered C++ oracle VARIANT_TAGs and ct enum.
 /// `txin_gen` tag — coinbase generation input.
@@ -199,23 +214,63 @@ include!(concat!(env!("OUT_DIR"), "/block_weight_generated.rs"));
 /// the JSON because the wire format cannot depend on `shekyl-economics`.
 /// [`TX_WEIGHT_LIMIT`] is half of this minus the coinbase reserve.
 pub const MIN_BLOCK_WEIGHT: usize = GENERATED_FULL_REWARD_ZONE_USIZE;
-/// Coinbase blob reserve (`CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE`)
-/// subtracted from the per-tx weight limit.
-pub const COINBASE_BLOB_RESERVED_SIZE: usize = 600;
+
+/// How many outputs the reserve's coinbase carries.
+///
+/// CEN-F4 admits exactly one above genesis. Genesis is exempt and is not
+/// the largest coinbase: its extra omits the KEM and the leaf when it has
+/// no output. A second output is a consensus change, and it re-runs
+/// [`max_coinbase_weight`].
+const COINBASE_OUTPUTS: usize = 1;
+
+/// Weight of the largest coinbase the grammar allows.
+///
+/// The prefix with every free varint at its widest (`u64` amount, height
+/// and unlock time), one [`Input::Gen`], one [`Output`], [`Ct::Null`], and
+/// the extra at [`crate::tx_extra::coinbase_extra_len`] for [`COINBASE_OUTPUTS`].
+/// Counts and the version are the grammar's, so their varints are the
+/// widths [`crate::varint::varint_len`] gives those values, not ten bytes. The Bp+
+/// clawback is zero on `Ct::Null`, so the weight is the serialized length.
+#[must_use]
+pub const fn max_coinbase_weight() -> usize {
+    let extra = crate::tx_extra::coinbase_extra_len(COINBASE_OUTPUTS);
+    let version = crate::varint::varint_len(TX_VERSION);
+    let unlock = crate::varint::MAX_VARINT_LEN;
+    let n_inputs = crate::varint::varint_len(1);
+    // Tag byte, then the height at its widest.
+    let gen = 1 + crate::varint::MAX_VARINT_LEN;
+    let n_outputs = crate::varint::varint_len(COINBASE_OUTPUTS as u64);
+    let output = crate::varint::MAX_VARINT_LEN + 1 + OUTPUT_KEY_LEN + OUTPUT_VIEW_TAG_LEN;
+    let extra_len = crate::varint::varint_len(extra as u64);
+    // Type byte, then one encrypted amount, one encrypted label, one commitment.
+    let ct = 1 + CT_ENC_FIELD_LEN + CT_ENC_FIELD_LEN + CT_COMMITMENT_LEN;
+    version + unlock + n_inputs + gen + n_outputs + output + extra_len + extra + ct
+}
+
+/// Bytes past [`max_coinbase_weight`] the reserve keeps.
+///
+/// The varint slack is the only thing that separates a real coinbase from
+/// the grammar's maximum, and it is already inside [`max_coinbase_weight`].
+/// Any other growth — a new tag, a second output — is a consensus change
+/// that re-runs this derivation.
+pub const COINBASE_RESERVE_MARGIN: usize = 0;
+
+/// Bytes a block holds for its coinbase when [`TX_WEIGHT_LIMIT`] is derived.
+///
+/// The largest coinbase the grammar allows, plus [`COINBASE_RESERVE_MARGIN`].
+/// The C++ `CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE` is this number as a
+/// literal until the flip deletes that header's readers.
+pub const COINBASE_RESERVE: usize = max_coinbase_weight() + COINBASE_RESERVE_MARGIN;
+
 /// Per-transaction weight limit (`get_transaction_weight_limit`,
 /// `src/cryptonote_core/tx_verification_utils.cpp`): half the minimum block
-/// weight minus the coinbase reserve. A compile-time constant on Shekyl
-/// (the half-weight arm is unconditional from genesis; the daemon-rpc submit
-/// facts pin the same 149 400 value from the C++ side). Tx weight is the serialized size plus the Bp+ verification
-/// clawback ([`bp_plus_weight_clawback`]); the mempool refuses any tx whose
-/// weight exceeds this, so builders must bound against it, never against
-/// [`MAX_TX_SIZE`].
-pub const TX_WEIGHT_LIMIT: usize = MIN_BLOCK_WEIGHT / 2 - COINBASE_BLOB_RESERVED_SIZE;
-const _: () = assert!(
-    TX_WEIGHT_LIMIT == 149_400,
-    "TX_WEIGHT_LIMIT must equal the C++ get_transaction_weight_limit value \
-     pinned by the daemon-rpc submit facts"
-);
+/// weight minus the coinbase reserve. The zone is the inherited
+/// full-reward zone; it moves again when EUP-5 G rules the capacity leg.
+/// The reserve does not read the zone. Tx weight is the serialized size
+/// plus the Bp+ verification clawback ([`bp_plus_weight_clawback`]); the
+/// mempool refuses any tx whose weight exceeds this, so builders must
+/// bound against it, never against [`MAX_TX_SIZE`].
+pub const TX_WEIGHT_LIMIT: usize = MIN_BLOCK_WEIGHT / 2 - COINBASE_RESERVE;
 /// `unlock_time` block-height sentinel: `>=` this is the (rejected) timestamp form.
 pub const UNLOCK_TIME_BLOCK_SENTINEL: u64 = 500_000_000;
 
@@ -839,6 +894,15 @@ impl BondPost {
     }
 }
 
+/// One-time output key on a `tagged_key` (`Output::write`'s key).
+pub const OUTPUT_KEY_LEN: usize = 32;
+/// The view-tag byte `Output::write` emits after the key.
+pub const OUTPUT_VIEW_TAG_LEN: usize = 1;
+/// Encrypted amount or label on a committed base: 8 ciphertext bytes and a tag.
+pub const CT_ENC_FIELD_LEN: usize = 9;
+/// Output commitment (`outPk`) on a committed base.
+pub const CT_COMMITMENT_LEN: usize = 32;
+
 /// A transaction output (`tagged_key`).
 ///
 /// `view_tag` is mandatory — `tagged_key` is the sole genesis output type
@@ -850,7 +914,7 @@ pub struct Output {
     /// Cleartext amount for the coinbase output; `0` for confidential outputs.
     pub amount: u64,
     /// The one-time output key.
-    pub key: [u8; 32],
+    pub key: [u8; OUTPUT_KEY_LEN],
     /// Scan fast-reject prefilter byte.
     pub view_tag: u8,
 }
@@ -889,11 +953,11 @@ impl Output {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CtBase {
     /// Per-output encrypted amounts (8-byte value + 1-byte tag).
-    pub enc_amounts: Vec<[u8; 9]>,
+    pub enc_amounts: Vec<[u8; CT_ENC_FIELD_LEN]>,
     /// Per-output encrypted labels (fixed-size, real-or-zero, never elided; §2.3).
-    pub enc_labels: Vec<[u8; 9]>,
+    pub enc_labels: Vec<[u8; CT_ENC_FIELD_LEN]>,
     /// Per-output commitments.
-    pub commitments: Vec<[u8; 32]>,
+    pub commitments: Vec<[u8; CT_COMMITMENT_LEN]>,
 }
 
 impl CtBase {
@@ -914,10 +978,10 @@ impl CtBase {
         let mut enc_amounts = Vec::new();
         let mut enc_labels = Vec::new();
         for _ in 0..outputs {
-            enc_amounts.push(read_array::<9, _>(r)?);
+            enc_amounts.push(read_array::<CT_ENC_FIELD_LEN, _>(r)?);
         }
         for _ in 0..outputs {
-            enc_labels.push(read_array::<9, _>(r)?);
+            enc_labels.push(read_array::<CT_ENC_FIELD_LEN, _>(r)?);
         }
         Ok(CtBase {
             enc_amounts,
@@ -2402,5 +2466,45 @@ impl core::ops::Deref for FullTransaction {
     type Target = Transaction;
     fn deref(&self) -> &Transaction {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod min_segment_tests {
+    use super::*;
+
+    fn empty_null() -> Transaction {
+        Transaction {
+            prefix: TxPrefix {
+                unlock_time: 0,
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                extra: Vec::new(),
+            },
+            ct: Ct::Null(CtBase {
+                enc_amounts: Vec::new(),
+                enc_labels: Vec::new(),
+                commitments: Vec::new(),
+            }),
+        }
+    }
+
+    /// The empty null transaction is the shortest blob both entries accept.
+    #[test]
+    fn the_empty_null_transaction_is_the_minimum_segment() {
+        let bytes = empty_null().serialize();
+        assert_eq!(bytes.len(), MIN_PRUNED_SEGMENT);
+        assert_eq!(
+            Transaction::from_bytes(&bytes).expect("full").serialize(),
+            bytes
+        );
+        assert_eq!(
+            Transaction::from_pruned_bytes(&bytes)
+                .expect("pruned")
+                .serialize(),
+            bytes
+        );
+        assert!(Transaction::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+        assert!(Transaction::from_pruned_bytes(&bytes[..bytes.len() - 1]).is_err());
     }
 }

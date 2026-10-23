@@ -114,7 +114,7 @@
 //!   [`EmissionClaimError::SizeBoundExceeded`]. The budget is a
 //!   parameter; [`EMISSION_CLAIMS_SIZE_BUDGET`] is the documented
 //!   default, derived from the **binding** relay bound — the per-tx
-//!   weight limit ([`TX_WEIGHT_LIMIT`], 149 400 B) — never
+//!   weight limit ([`TX_WEIGHT_LIMIT`]) — never
 //!   `MAX_TX_SIZE` (the 1 MB parse cap): a batch bounded against the
 //!   parse cap could pass assembly and the step-7 self-check (which
 //!   checks no size) yet be permanently unsubmittable at the mempool,

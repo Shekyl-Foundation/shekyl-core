@@ -799,7 +799,7 @@ fn not(discarded: &[bool]) -> Vec<bool> {
 ///
 /// The a1 arithmetic, asserted rather than restated: a shard closes in at
 /// least `⌈W / max_tx_weight⌉` bodies, since no body is heavier than H3's
-/// bound — **21** at `W = 3 000 000`, `max_tx_weight() = 149 400`, each
+/// bound — **21** at the shipped `W` and `max_tx_weight()`, each
 /// needing its own (P, shard, E) triple under G7. Not 3: the 1 053 185-byte
 /// per-record ceiling is a decode bound, and a body of that size fails H3.
 #[test]

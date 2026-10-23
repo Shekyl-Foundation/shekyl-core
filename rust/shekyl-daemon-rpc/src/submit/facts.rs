@@ -118,7 +118,7 @@ pub struct SubmitFacts {
     /// C++ shim and at Phase B.
     pub pool_refuses_for_room: Option<bool>,
     /// Transaction weight limit (compile-time constant on Shekyl:
-    /// `min_block_weight / 2 − COINBASE_BLOB_RESERVED_SIZE` = 149 400; §3.1).
+    /// `min_block_weight / 2 −` the derived coinbase reserve; §3.1).
     pub weight_limit: u64,
     /// Chain block **count** (`m_db->height()`), the consensus basis for
     /// the ref-age window arithmetic. Typed [`ChainCount`], not

@@ -34,8 +34,9 @@ use crate::READ_LEN_CAP;
 mod coinbase;
 
 pub use coinbase::{
-    build_coinbase_extra, check_coinbase_extra_shape, check_tx_extra_shape, CoinbaseBuildError,
-    CoinbaseGrammarError, ExtraSubject, COINBASE_NONCE_BYTES, COINBASE_NONCE_OFFSET_FROM_PUBKEY,
+    build_coinbase_extra, check_coinbase_extra_shape, check_tx_extra_shape, coinbase_extra_len,
+    CoinbaseBuildError, CoinbaseGrammarError, ExtraSubject, COINBASE_NONCE_BYTES,
+    COINBASE_NONCE_OFFSET_FROM_PUBKEY,
 };
 
 /// `0x00` — padding (a run of zero bytes to the end of `extra`).

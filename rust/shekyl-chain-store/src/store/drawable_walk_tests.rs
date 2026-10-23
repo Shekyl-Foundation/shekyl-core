@@ -736,3 +736,6 @@ fn a_slash_row_naming_another_shard_halts_the_settlement_as_drift() {
 
 #[path = "block_draws_chain_tests.rs"]
 mod block_draws_chain_tests;
+
+#[path = "admission_chain_tests.rs"]
+mod admission_chain_tests;

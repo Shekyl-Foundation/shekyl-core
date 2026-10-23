@@ -2148,8 +2148,13 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     };
     assert!(
         under < bodies.len(),
-        "the pool must overfill the bound: all {} bodies priced",
+        "the pool must overfill the bound: the search priced all {} bodies",
         bodies.len()
+    );
+    assert_eq!(
+        at_bound.transactions.len(),
+        under,
+        "a priced listing is the listing that was supplied"
     );
     assert!(at_bound.block_weight <= limit);
     assert!(
@@ -2167,9 +2172,8 @@ async fn e2e_a_rust_block_at_the_consensus_bound_is_judged_by_the_cxx() {
     over.transaction_hashes.push(bodies[under].hash());
     eprintln!(
         "Rust-built block at height {height}: {under} bodies / {} B under 2·M = {limit}; the \
-         producer refused {} bodies (BlockTooBig); penalised reward {}",
+         producer refused the next body (BlockTooBig); penalised reward {}",
         at_bound.block_weight,
-        under + 1,
         at_bound.block_reward.to_raw()
     );
     eprintln!(

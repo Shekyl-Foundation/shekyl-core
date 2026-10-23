@@ -74,5 +74,5 @@ pub use transaction::{
     carries_archival_good, empty_region_prunable_hash, is_join_market_post_kind, pqc_auth_hash_of,
     prunable_hash_of, BondPost, BondPostKind, BpPlus, Ct, CtBase, FullTransaction, Holdings, Input,
     Output, PqcAuth, PqcSigningPreimage, Prunable, PrunedError, RetiredKeylessJoinMarket,
-    Transaction, TxPrefix, TxSegments, TxidParts, TxidSegments,
+    Transaction, TxPrefix, TxSegments, TxidParts, TxidSegments, MIN_PRUNED_SEGMENT,
 };
