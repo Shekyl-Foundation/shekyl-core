@@ -108,6 +108,8 @@ mod body_pairing_tests;
 #[cfg(feature = "pipeline")]
 mod cache_window;
 #[cfg(feature = "pipeline")]
+mod chain_facts;
+#[cfg(feature = "pipeline")]
 pub mod connector;
 pub mod corpus;
 /// E6 slice 8 PR-b (`CHAIN_RULES_SLICE_8.md` §5 row 7, Q3): the driver's

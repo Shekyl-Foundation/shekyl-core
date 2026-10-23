@@ -63,9 +63,8 @@ use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    recorded, validate_with_memo, ArchivalDelta, AtHeight, CenRow, ChainView, Corrupt,
-    DrawableMemo, EffectiveMedian, Fault, HeaderRecord, HeaderView, InvalidBlock, PaidEmission,
-    PerHeightRecord, StructurallyValid, Verdict, ViewRead, Weights,
+    validate_with_memo, ArchivalDelta, AtHeight, CenRow, DrawableMemo, Fault, HeaderRecord,
+    HeaderView, InvalidBlock, PaidEmission, StructurallyValid, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, WriteBatch};
@@ -78,6 +77,8 @@ use shekyl_units::AtomicUnits;
 use crate::schedule::ChainRules;
 use crate::source::ServeCredit;
 
+#[path = "connector_reads.rs"]
+mod reads;
 #[path = "run_fault.rs"]
 mod run_fault;
 #[path = "switch.rs"]
@@ -338,38 +339,8 @@ pub struct BudgetAccruingOf {
 #[derive(Clone, Copy, Debug)]
 pub struct TemplateFacts;
 
-/// [`TemplateFacts`]' reply.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ChainFacts {
-    /// The height the next block connects at (`tip + 1`; `0` when empty).
-    pub connecting: BlockHeight,
-    /// The tip's identity, [`BlockHash::NULL`] when empty (CEN-A2).
-    pub previous: BlockHash,
-    /// The tree state at `connecting` (CEN-B5).
-    pub curve_tree_root: shekyl_types::CurveTreeRoot,
-    /// The parent's gross emission (CEN-F13's accumulator); zero at genesis.
-    pub parent_coins_generated: shekyl_units::AtomicUnits,
-    /// Everything burned through the tip.
-    pub total_burned: shekyl_units::AtomicUnits,
-    /// CEN-F17's `n` at `connecting`: the archival shards the parent
-    /// chain's fold has closed, read through the validator's own definition
-    /// (`shekyl_chain_rules::closed_shards_before`, `shekyl_types::shard_of`
-    /// the parent's `cumulative_archival_len`), so the producer prices the
-    /// fee split at the operand the validator reads
-    /// (`rules::miner::BurnOperands`; E6 slice 7 wave B, re-keyed from the
-    /// leaf count's frozen-segment count by DRS-E4 commit 4).
-    pub closed_shards: shekyl_economics::ClosedShardCount,
-    /// CEN-F20's window at `connecting`.
-    pub tx_volume: shekyl_economics::TxVolume,
-    /// CEN-C2's median at `connecting`; `None` at genesis.
-    pub median_timestamp: Option<shekyl_types::Timestamp>,
-    /// CEN-G6/G6b's two medians at `connecting` — what the producer's
-    /// coinbase is priced against and its body bounded by, read through
-    /// the validator's own definition (`effective_median_at`, slice 7 Q4:
-    /// one derivation, two consumers) and never from the store's recorded
-    /// `long_term_effective_median(tip)`, which is one block stale.
-    pub medians: EffectiveMedian,
-}
+pub use crate::chain_facts::ChainFacts;
+pub(crate) use crate::chain_facts::{chain_facts_on, FactsStop};
 
 /// The recorded tip, as the dialer's handshake carries it (`SyncPayload`'s
 /// fields): the block count, the tip's cumulative difficulty and its
@@ -708,10 +679,7 @@ impl Message<PopBlocks> for Connector {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.rewind(|tip| match tip {
-            Some(tip) => Ok(tip
-                .to_raw()
-                .checked_sub(msg.count)
-                .map(BlockHeight::from_raw)),
+            Some(tip) => Ok(tip.checked_sub_count(BlockCount::from_raw(msg.count))),
             None => Err(RunFault::RewindTarget {
                 to: BlockHeight::ZERO,
                 tip: None,
@@ -748,26 +716,28 @@ impl Connector {
                 });
             };
             let floor = snap.undo_floor()?;
-            let Some(to) = to.filter(|to| to.to_raw() + 1 >= floor.to_raw() || *to == tip) else {
+            let Some(to) = to.filter(|to| pop_stays_above_floor(*to, tip, floor)) else {
                 return Ok(Rewound::Refused { tip, floor });
             };
             if to == tip {
                 return Ok(Rewound::Popped {
-                    popped: 0,
+                    popped: BlockCount::ZERO.to_raw(),
                     tip,
                     bodies: Vec::new(),
                 });
             }
             let mut bodies = Vec::new();
-            for height in to.to_raw() + 1..=tip.to_raw() {
-                match snap.candidate_at(BlockHeight::from_raw(height))? {
+            for height in heights_popped(to, tip) {
+                match snap.candidate_at(height)? {
                     AtHeight::Recorded(candidate) => bodies.extend(candidate.transactions),
                     AtHeight::AboveTip => unreachable!("every height to the tip is recorded"),
                 }
             }
             (tip, to, bodies)
         };
-        let popped = tip.to_raw() - to.to_raw();
+        let popped = tip
+            .checked_sub(to)
+            .ok_or(RunFault::RewindTarget { to, tip: Some(tip) })?;
         self.writer.write(|batch| {
             if batch.chain_view().tip()?.map(|t| t.height) != Some(tip) {
                 return Err(RunFault::RewindTarget { to, tip: Some(tip) });
@@ -778,8 +748,8 @@ impl Connector {
             // pops demote what they pop instead, so this is the rewind's.
             let view = batch.chain_view();
             let mut gone = Vec::new();
-            for height in to.to_raw() + 1..=tip.to_raw() {
-                match view.header_at(BlockHeight::from_raw(height))? {
+            for height in heights_popped(to, tip) {
+                match view.header_at(height)? {
                     AtHeight::Recorded(record) => gone.push(record.hash),
                     AtHeight::AboveTip => unreachable!("every height to the tip is recorded"),
                 }
@@ -787,17 +757,42 @@ impl Connector {
             drop(view);
             // One run of pops, then SI-5 over the tree they left
             // (`pop_many`): the belt is the run's, not each pop's.
-            batch.pop_many(popped)?;
+            batch.pop_many(popped.to_raw())?;
             batch.retire_alt_blocks_on(&gone)?;
             Ok(())
         })?;
         self.publish_tip();
         Ok(Rewound::Popped {
-            popped,
+            popped: popped.to_raw(),
             tip: to,
             bodies,
         })
     }
+}
+
+/// The first height a pop of everything above `to` would remove is at or
+/// above `floor`, or the pop removes nothing.
+fn pop_stays_above_floor(to: BlockHeight, tip: BlockHeight, floor: BlockHeight) -> bool {
+    to == tip
+        || to
+            .checked_add(BlockCount::ONE)
+            .is_some_and(|first| first >= floor)
+}
+
+/// Heights strictly above `after`, through `tip`.
+///
+/// The successor of the last height is not named, so a tip at the top of
+/// the axis still walks.
+fn heights_popped(after: BlockHeight, tip: BlockHeight) -> impl Iterator<Item = BlockHeight> {
+    let mut next = after.checked_add(BlockCount::ONE);
+    std::iter::from_fn(move || {
+        let height = next?;
+        if height > tip {
+            return None;
+        }
+        next = height.checked_add(BlockCount::ONE);
+        Some(height)
+    })
 }
 
 impl Message<Inject> for Connector {
@@ -901,79 +896,6 @@ impl Message<TemplateFacts> for Connector {
     }
 }
 
-/// Why [`chain_facts_on`] has no facts.
-#[derive(Debug)]
-pub(crate) enum FactsStop {
-    /// A read failed, or found the store corrupt.
-    Read(ViewRead<StoreError>),
-    /// The tip is the last height there is.
-    NoNextHeight {
-        /// The tip.
-        tip: BlockHeight,
-    },
-}
-
-/// The block producer's chain operands, all read on `snap`.
-///
-/// Every operand comes off the one snapshot, `total_burned` included, and
-/// `closed_shards_before`, `tx_volume_window`, `mtp_median_at` and
-/// `effective_median_at` are the rules' own definitions, so a template is
-/// priced at what the validator will judge it by. The tip follower's
-/// producer reads its claims and the pool's selection on the same
-/// snapshot (`DRS_X_STORE_FLIP.md` DX-Q3, Q3).
-///
-/// # Errors
-///
-/// [`FactsStop`]. A curve-tree root the snapshot does not hold at the
-/// connecting height is a hole below the tip.
-pub(crate) fn chain_facts_on(snap: &ReadSnapshot<'_>) -> Result<ChainFacts, FactsStop> {
-    let fault = |store: StoreError| FactsStop::Read(ViewRead::View(store));
-    let view = shekyl_chain_store::store::SnapshotView::new(snap);
-    let total_burned = snap.total_burned().map_err(fault)?;
-    let tip = HeaderView::tip(&view).map_err(fault)?;
-    let (connecting, previous) = match tip {
-        None => (BlockHeight::ZERO, BlockHash::NULL),
-        Some(t) => (
-            t.height
-                .checked_add(BlockCount::ONE)
-                .ok_or(FactsStop::NoNextHeight { tip: t.height })?,
-            t.hash,
-        ),
-    };
-    let curve_tree_root = match view.root_at(connecting).map_err(fault)? {
-        AtHeight::Recorded(root) => root,
-        AtHeight::AboveTip => {
-            return Err(FactsStop::Read(ViewRead::Corrupt(Corrupt::HoleBelowTip {
-                at: connecting,
-                record: PerHeightRecord::CurveTreeRoot,
-            })))
-        }
-    };
-    let parent_coins_generated = match tip {
-        None => AtomicUnits::ZERO,
-        Some(t) => {
-            recorded(&view, t.height)
-                .map_err(FactsStop::Read)?
-                .coins_generated
-        }
-    };
-    Ok(ChainFacts {
-        connecting,
-        previous,
-        curve_tree_root,
-        parent_coins_generated,
-        total_burned,
-        closed_shards: shekyl_chain_rules::closed_shards_before(&view, connecting)
-            .map_err(FactsStop::Read)?,
-        tx_volume: shekyl_chain_rules::tx_volume_window(&view, connecting)
-            .map_err(FactsStop::Read)?,
-        median_timestamp: shekyl_chain_rules::mtp_median_at(&view, connecting)
-            .map_err(FactsStop::Read)?,
-        medians: shekyl_chain_rules::effective_median_at(&view, connecting)
-            .map_err(FactsStop::Read)?,
-    })
-}
-
 /// A `validate` fault on the connect batch, as the connector's reply — one
 /// mapping for `Apply` and the switch's promotion. The corrupt arm arms the
 /// halt on this batch (SI-10); [`fault_reply`] maps the rest.
@@ -1002,111 +924,5 @@ fn connecting(tip: Option<shekyl_chain_rules::Tip>) -> Result<(BlockHeight, Bloc
                 .ok_or(RunFault::NoNextHeight { tip: t.height })?,
             t.hash,
         )),
-    }
-}
-
-impl Message<HashAt> for Connector {
-    type Reply = Result<Option<BlockHash>, RunFault>;
-
-    async fn handle(&mut self, msg: HashAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        Ok(match self.writer.read()?.block_info(msg.height)? {
-            AtHeight::Recorded(info) => Some(info.hash),
-            AtHeight::AboveTip => None,
-        })
-    }
-}
-
-impl Message<ObserveTarget> for Connector {
-    type Reply = Result<(), RunFault>;
-
-    async fn handle(
-        &mut self,
-        msg: ObserveTarget,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let rule_set = self.rules.in_force(msg.height);
-        self.writer.write(|batch| {
-            let view = batch.chain_view();
-            let (height, _) = connecting(view.tip()?)?;
-            if msg.height != height {
-                return Err(RunFault::HeightClaim {
-                    claimed: msg.height,
-                    connecting: height,
-                });
-            }
-            let observed = match shekyl_chain_rules::target_claim(&view, height, &rule_set) {
-                // CEN-D6 is a verdict on a consistent window, not a fault.
-                Ok(Err(_refused)) => return Ok(()),
-                Ok(Ok(target)) => {
-                    shekyl_chain_rules::cumulative_difficulty_after(&view, height, target)
-                        .map(|_work| ())
-                }
-                Err(fault) => Err(fault),
-            };
-            match observed {
-                Ok(()) => Ok(()),
-                Err(Fault::View(e)) => Err(RunFault::Store(e)),
-                Err(Fault::Corrupt(corrupt)) => Err(RunFault::Store(batch.refuse_corrupt(corrupt))),
-                Err(Fault::Stale(stale)) => unreachable!("a derivation is never stale: {stale}"),
-            }
-        })
-    }
-}
-
-impl Message<HeaderAt> for Connector {
-    type Reply = Result<Option<HeaderRecord>, RunFault>;
-
-    async fn handle(
-        &mut self,
-        msg: HeaderAt,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let read = self.writer.read()?;
-        let AtHeight::Recorded(info) = read.block_info(msg.height)? else {
-            return Ok(None);
-        };
-        let AtHeight::Recorded(body) = read.block(msg.height)? else {
-            return Ok(None);
-        };
-        Ok(Some(HeaderRecord {
-            hash: info.hash,
-            header: body.block.header,
-            cumulative_difficulty: info.cumulative_difficulty,
-        }))
-    }
-}
-
-impl Message<RootAt> for Connector {
-    type Reply = Result<Option<CurveTreeRoot>, RunFault>;
-
-    async fn handle(&mut self, msg: RootAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        Ok(match self.writer.read()?.root_at(msg.height)? {
-            AtHeight::Recorded(root) => Some(root),
-            AtHeight::AboveTip => None,
-        })
-    }
-}
-
-impl Message<BondRecordOf> for Connector {
-    type Reply = Result<Option<BondRecord>, RunFault>;
-
-    async fn handle(
-        &mut self,
-        msg: BondRecordOf,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self.writer.read()?.bond_record(&msg.persona)?)
-    }
-}
-
-impl Message<BudgetAccruingOf> for Connector {
-    type Reply = Result<Option<AtomicUnits>, RunFault>;
-
-    async fn handle(
-        &mut self,
-        msg: BudgetAccruingOf,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self.writer.read()?.budget_accruing(msg.epoch)?)
     }
 }
