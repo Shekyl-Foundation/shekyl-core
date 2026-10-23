@@ -410,30 +410,19 @@ fn a_managed_tor_death_takes_its_own_incarnation_down_and_no_later_one() {
     let network_id = [12u8; 16];
     let socks =
         |port| Proxy::unauthenticated(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port));
-    let fell_within = |host: &Host, wanted: bool| {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while std::time::Instant::now() < deadline {
-            if host.hub.links().get(ConnectorId::Tor).is_usable() != wanted {
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        false
-    };
     assert!(
-        !watch_managed_tor(std::future::pending()),
-        "no zone host, no watch"
+        !publish_tor_down(1, DownCause::ProcessExited),
+        "no zone host, no route"
     );
 
     dial_through_tor(socks(9050), network_id).expect("the proxy install");
     let host = ensure(network_id).expect("zone host");
-    let (died, death) = tokio::sync::oneshot::channel();
-    assert!(watch_managed_tor(async move {
-        death.await.unwrap_or(DownCause::ProcessStopped)
-    }));
-    died.send(DownCause::ProcessExited)
-        .expect("the watch waits");
-    assert!(fell_within(&host, true), "the death took the link down");
+    let first = host.hub.links().get(ConnectorId::Tor).incarnation;
+    assert!(publish_tor_down(first, DownCause::ProcessExited));
+    assert!(
+        !host.hub.links().get(ConnectorId::Tor).is_usable(),
+        "the death took the link down"
+    );
     assert!(matches!(
         host.hub.links().get(ConnectorId::Tor).outbound,
         Outbound::Down {
@@ -442,17 +431,12 @@ fn a_managed_tor_death_takes_its_own_incarnation_down_and_no_later_one() {
         }
     ));
 
-    let (died, death) = tokio::sync::oneshot::channel();
-    assert!(watch_managed_tor(async move {
-        death.await.unwrap_or(DownCause::ProcessStopped)
-    }));
     dial_through_tor(socks(9051), network_id).expect("a later route");
-    died.send(DownCause::ProcessExited)
-        .expect("the watch waits");
     assert!(
-        !fell_within(&host, true),
+        !publish_tor_down(first, DownCause::ProcessExited),
         "the later route is not the dead Tor's"
     );
+    assert!(host.hub.links().get(ConnectorId::Tor).is_usable());
 
     shutdown();
     unsafe {

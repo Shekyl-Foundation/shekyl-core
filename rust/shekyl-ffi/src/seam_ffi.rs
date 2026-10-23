@@ -24,7 +24,7 @@ use shekyl_seam::{
     connector_from_index, direction_from_index, CloseCause, CloseKind, ConnectorId, Direction,
     Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
 };
-use shekyl_timing_engine::{Clock, MonotonicClock, Tick};
+use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
 
 use crate::inbound_ceiling_ffi::{
     ShekylInboundCeiling, SHEKYL_INBOUND_CEILING_BOUNDED, SHEKYL_INBOUND_CEILING_COUNT_UNREADABLE,
@@ -262,6 +262,31 @@ pub fn process_sockets() -> shekyl_seam::Sockets {
 pub(crate) fn process_clock() -> Arc<MonotonicClock> {
     static CLOCK: OnceLock<Arc<MonotonicClock>> = OnceLock::new();
     Arc::clone(CLOCK.get_or_init(|| Arc::new(MonotonicClock::new())))
+}
+
+/// The process's one timing engine. The zone host and the Tor supervisor
+/// arm deadlines on it. The service lives here so a handle alone cannot
+/// close it.
+pub(crate) fn process_engine() -> Handle<MonotonicClock> {
+    let mut slot = process_engine_slot().lock().expect("process engine");
+    if slot.is_none() {
+        let clock = MonotonicClock::clone(&process_clock());
+        *slot = Some(EngineService::start(clock));
+    }
+    slot.as_ref().expect("the engine was just started").handle()
+}
+
+/// Stop the process engine. The next [`process_engine`] starts another.
+pub(crate) fn close_process_engine() {
+    let engine = process_engine_slot().lock().expect("process engine").take();
+    if let Some(engine) = engine {
+        engine.close();
+    }
+}
+
+fn process_engine_slot() -> &'static Mutex<Option<EngineService<MonotonicClock>>> {
+    static ENGINE: Mutex<Option<EngineService<MonotonicClock>>> = Mutex::new(None);
+    &ENGINE
 }
 
 fn ban_now() -> Tick {
