@@ -45,10 +45,8 @@ use tracing::warn;
 /// both listeners (it is the wallet's main surface), so unlike the REST route
 /// table the gate here cannot be listener selection: it is per-method, inside
 /// the handler, read from the one method table's grant column
-/// (`shekyl_rpc_types::methods`, `RPC_WIRE.md` RW-Q7). A name with no row is
-/// gated as the host's: the REST surface refuses an unrouted path on the view
-/// listener, and this one fails closed the same way. The gate that every
-/// served name is a row makes that arm unreachable for a served method.
+/// (`shekyl_rpc_types::methods`, `RPC_WIRE.md` RW-Q7). A name with no row
+/// never reaches this gate: [`unrouted`] answers it first.
 ///
 /// Pure, and the single place the per-method gate is decided, so a test can
 /// call the same function [`handle`] calls, with both arms, without building
@@ -57,7 +55,16 @@ use tracing::warn;
 fn method_is_gated(restricted: bool, method: &str) -> bool {
     restricted
         && shekyl_rpc_types::methods::json_rpc(method)
-            .is_none_or(|row| row.grant == shekyl_rpc_types::methods::Grant::HostOnly)
+            .is_some_and(|row| row.grant == shekyl_rpc_types::methods::Grant::HostOnly)
+}
+
+/// Whether `method` has no row in the method table, on either listener. It
+/// is answered as not found and never dispatched: the table is the policy
+/// (RW-Q7), so a name it does not list is not served, as an unrouted REST
+/// path is not. The gate that every served name is a row keeps every
+/// served method off this arm.
+fn unrouted(method: &str) -> bool {
+    shekyl_rpc_types::methods::json_rpc(method).is_none()
 }
 
 pub async fn handle(
@@ -66,6 +73,17 @@ pub async fn handle(
 ) -> (StatusCode, Json<JsonRpcResponse>) {
     let id = request.id.clone();
     let method = request.method.clone();
+
+    if unrouted(&method) {
+        return (
+            StatusCode::OK,
+            Json(JsonRpcResponse::error(
+                id,
+                -32601,
+                format!("Method not found: {method}"),
+            )),
+        );
+    }
 
     if method_is_gated(state.restricted, &method) {
         return (
@@ -735,14 +753,19 @@ mod tests {
         }
     }
 
-    /// A name with no row fails closed on the view listener, as an unrouted
-    /// REST path does, and answers as not found on the host's. Red edit:
-    /// gate only names whose row says `HostOnly`.
+    /// A name with no row is not served on either listener, as an unrouted
+    /// REST path is not: it is answered as not found before any dispatch,
+    /// so a name the table does not list never reaches the C++ table. A
+    /// deleted method stays unrouted (`get_output_histogram`, SOK-Q3). Red
+    /// edit: let a name with no row through to dispatch.
     #[test]
-    fn a_name_with_no_row_is_refused_on_the_view_listener() {
-        assert!(shekyl_rpc_types::methods::json_rpc("no_such_method").is_none());
-        assert!(method_is_gated(true, "no_such_method"));
-        assert!(!method_is_gated(false, "no_such_method"));
+    fn a_name_with_no_row_is_not_served_on_either_listener() {
+        for name in ["no_such_method", "get_output_histogram"] {
+            assert!(shekyl_rpc_types::methods::json_rpc(name).is_none());
+            assert!(unrouted(name), "{name}");
+        }
+        assert!(!unrouted("get_info"));
+        assert!(!unrouted("getblockcount"), "an alias is a row's name");
     }
 
     /// The gate names exactly the specified methods: one dropped from the
