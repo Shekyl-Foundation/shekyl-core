@@ -10,11 +10,16 @@
 //! memo, a miss, a switch, an aborted switch, a drifted journal (SI-30)
 //! and a removed digest (SI-29) run on the chain the drawable-set tests build.
 
-use shekyl_archival_retention::{draw_count, draw_horizon};
-use shekyl_chain_rules::{BlockDrawsFloor, ChainView as _, DrawableMemo, ReleaseJournalFloor};
+use std::collections::BTreeMap;
+
+use shekyl_archival_retention::{draw_count, draw_horizon, BundleKept, DrawablePair, PassBitmap};
+use shekyl_chain_rules::{
+    admission_plan, Admitted, BlockDrawsFloor, ChainView as _, DerivedDraw, DrawableMemo,
+    EpochFloor, ReleaseJournalFloor, Settling,
+};
 use shekyl_harness_spender::Persona;
-use shekyl_types::archival::{BlockDraws, COUNTED_DRAWS};
-use shekyl_types::{BlockHeight, SettlementEpoch};
+use shekyl_types::archival::{BlockDraws, IssuedDigest, COUNTED_DRAWS};
+use shekyl_types::{BlockHeight, SettlementEpoch, ShardId};
 
 use crate::codec::{BondRecord, Canonical};
 
@@ -412,6 +417,135 @@ fn compose(set_size: u64, h_open: u64, through: u64) -> Vec<BlockDraws> {
         });
     }
     rows
+}
+
+/// A bundle for the last block of epoch 1, admitted at epoch 2's open.
+/// Its index rows land in epoch 1. `issued_short` on the open stays zero,
+/// so the next block keeps epoch 2's opening shortfall, 12 on this chain
+/// (`COUNTED_DRAWS` times four pairs). The sim pins the same untouched
+/// opening shortfall at 1536 when `|D|` is 512.
+#[test]
+fn a_late_admission_leaves_the_new_epochs_shortfall_untouched() {
+    let open = h_open(2);
+    let mut chain = SlashedChain::build_with("late-admit", WITNESS_PERSONAS, open - 1, no_draws);
+    let admitted = late_bundle(open - 1);
+    let memo = DrawableMemo::new();
+    connect_admitting(&mut chain, &admitted, &memo);
+    let prior = SettlementEpoch::from_raw(1);
+    let floor =
+        EpochFloor::<Settling>::under(BlockHeight::from_raw(open), RULES.settlement_schedule());
+    let rows = chain
+        .store
+        .begin_read()
+        .expect("read")
+        .issued_draws(prior, floor)
+        .expect("index");
+    assert_eq!(rows.len(), 2, "the prior epoch's index gains both ordinals");
+    assert_eq!(
+        rows.iter().map(|row| row.draw).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert!(rows
+        .iter()
+        .all(|row| row.issuing_height == BlockHeight::from_raw(open - 1)));
+    assert!(rows
+        .iter()
+        .all(|row| row.state.revealed_at == BlockHeight::from_raw(open)));
+    assert!(rows.iter().all(|row| row.state.passed));
+    let plan = admission_plan(
+        BlockHeight::from_raw(open),
+        RULES.settlement_schedule(),
+        &admitted,
+        &BTreeMap::new(),
+    )
+    .expect("the late bundle plans");
+    let mut digest = IssuedDigest::ZERO;
+    for issues in plan.epochs() {
+        for term in issues.terms() {
+            digest.fold(&term);
+        }
+    }
+    assert_eq!(
+        chain
+            .store
+            .begin_read()
+            .expect("read")
+            .issued_digest(prior, floor)
+            .expect("digest"),
+        digest
+    );
+    let opened = draws_of(&chain, BlockHeight::from_raw(open));
+    assert_eq!(
+        opened.issued_short, 0,
+        "a prior-epoch bundle adds no reduction"
+    );
+    assert!(draws_of(&chain, BlockHeight::from_raw(open - 1)).revealed);
+
+    pop_back(&mut chain, 1);
+    assert!(
+        chain
+            .store
+            .begin_read()
+            .expect("read")
+            .issued_draws(prior, floor)
+            .expect("index")
+            .is_empty(),
+        "pop removes the index row with the block"
+    );
+    assert!(!draws_of(&chain, BlockHeight::from_raw(open - 1)).revealed);
+
+    connect_admitting(&mut chain, &admitted, &memo);
+    let next = connect_listed(&mut chain, &[], None);
+    assert_eq!(opened.issued_short, 0);
+    assert_eq!(
+        opened.shortfall, 12,
+        "epoch 2 opens at COUNTED_DRAWS times four pairs"
+    );
+    assert_eq!(next.shortfall, 12, "E + 1's shortfall is untouched");
+    chain.finish();
+}
+
+fn late_bundle(h: u64) -> Vec<Admitted> {
+    let persona = Persona::at(0).id();
+    let pair = DrawablePair {
+        persona,
+        shard: ShardId::from_raw(0),
+    };
+    // Both draws select the same place in `D`. The key is the ordinal,
+    // so the two rows are `j = 0` and `j = 1`. A writer that stored
+    // `index` would insert one key twice.
+    vec![Admitted {
+        kept: BundleKept {
+            h: BlockHeight::from_raw(h),
+            seed: [0x11; 32],
+            passes: PassBitmap::from_passes(2, [0, 1]).expect("two passes"),
+        },
+        draws: vec![
+            DerivedDraw {
+                index: 7,
+                pair,
+                passed: true,
+            },
+            DerivedDraw {
+                index: 7,
+                pair,
+                passed: true,
+            },
+        ],
+    }]
+}
+
+fn connect_admitting(chain: &mut SlashedChain, admitted: &[Admitted], memo: &DrawableMemo) {
+    let txs = chain.grown.realise(&[]);
+    let out: Result<(), TestErr> = chain.store.write(|batch| {
+        let view = batch.chain_view();
+        let judged = chain
+            .grown
+            .judge_listing_with_memo(&view, &RULES, &txs, None)?;
+        batch.connect_admitting(judged, RULES, Some((memo, admitted)))?;
+        Ok(())
+    });
+    out.expect("the block connects");
 }
 
 fn journaled(batch: &WriteBatch<'_, '_>) -> Result<BondRecord, StoreError> {
