@@ -12,7 +12,11 @@ publish = false
 # (RPC_CHANNEL.md section 4.4). The adapter does not depend on the
 # handshake, and the handshake does not depend on it (RT-O19).
 shekyl-noise = { path = "../shekyl-noise" }
-tokio = { version = "1", default-features = false, features = ["io-util"] }
+# AsyncRead and AsyncWrite are tokio's base traits; the adapter uses none of
+# io-util's extensions.
+tokio = { version = "1", default-features = false }
+# Unsealed payload and opened plaintext are wiped when dropped (rule 35).
+zeroize = { workspace = true }
 
 [dev-dependencies]
 # HTTP over the adapter, as the daemon and its clients will run it: the
