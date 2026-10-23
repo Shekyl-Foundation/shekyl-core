@@ -2,7 +2,7 @@
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
 2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
-IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, POSED 2026-10-19, amended 2026-10-20 before ruling.
+IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, POSED 2026-10-19, amended 2026-10-20 before ruling; Part E (§23–§24, IG-Q66…IG-Q71), the Tor status fields, POSED 2026-10-22.
 Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
@@ -1246,3 +1246,77 @@ Each is posed for ruling, with a recommendation. Amended 2026-10-20 before rulin
 - **Purge.** Purge removes the per-network files the post-install copy placed, then removes `/etc/shekyl/` only if it is empty (`rmdir`, never a recursive delete), so an operator's own files there survive and the directory stays with them. The chain data and logs, which systemd created for the service, and the system account follow their own conventions: the data is the operator's to delete, and a system account is kept so that a reused uid never owns another account's files.
 
 **IG-Q65 — the shipped file's comments — POSED 2026-10-19, folded into IG-Q64 on 2026-10-20.** The comments are `example_toml`'s: the row's help, and its default where the row has a derived one. `dev-` rows, REJECTED rows and RESERVED rows are already absent, because the renderer keeps `Visibility::Public` file rows. The package header is the only added text. A second comment contract would be a second renderer.
+
+---
+
+## 23. Part E — the Tor status fields
+
+**POSED 2026-10-22.** Ground: `dev` `1045d90f0`. Rick assigned the naming to the RPC wire round ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) `TSR-Q12`, ruled 2026-10-20; the FOLLOWUPS row "Name the Tor Status and Health fields", owned by [`RPC_WIRE.md`](RPC_WIRE.md)). The supervisor's increment 3 exposes one typed read; this Part names its fields on the wire under RW-Q1, RW-Q10 and Part C's rules (IG-Q42's walk, IG-Q53's replies, IG-Q54's kinds).
+
+**What the supervisor defines** (`TOR_SUPERVISOR.md` §1, §4.3, §5):
+- **Health** (unrestricted) carries one boolean (`TSR-Q4`): this node can originate over an address-hiding connector now. Tor's state and timing stay off the unrestricted reply, because they would tie the RPC endpoint to the onion's lifetime (§8).
+- **Status** (restricted) carries (`TSR-Q12`):
+  - the posture, which is the `tor` and `clearnet` settings;
+  - the Tor state, as §4.3's projection: Restarting, Restarting (held), Bootstrapping, Usable, Degraded with the facet down;
+  - the cause, a typed §5 value, and that cause's typed detail;
+  - since when, and the respawn count;
+  - whether the node is syncing, and over what;
+  - `OwnTx`, what happens to the node's own transactions: `AddressHiding`, `Held`, `ClearnetOnly`, `Offline`;
+  - the fixes that apply, `ManagedTorFix` values: `RestoreManaged`, `Operator`, `ClearnetOn`, `ClearnetOnly`.
+- **Typed values, never sentences, and polling** (`TSR-Q13`). Clients read Status on their normal refresh. One renderer in a shared crate turns the values into words for the daemon's log line, `shekyl-cli` and the GUI.
+
+**The GUI's grant** (`TSR-Q12`'s third ask) is answered by ruled text, not by a question here. `RPC_CHANNEL.md` RT-15 makes a caller running as the daemon's own OS user, over the owner-only socket or pipe, the owner, with every grant, Status included; RT-15 names the GUI running `shekyld` as its child as the case it covers. A GUI pointed at a service-mode daemon, another user's daemon or another machine reaches it over the channel and sees Status only if its enrolment grants it; the plaintext loopback listener carries only the `view` preset, which has no Status.
+
+**The names, as recommended** (§24 poses each):
+
+| Field (holder) | Grant | Kind and values | From |
+|---|---|---|---|
+| `hiding` (`daemon_status`) | health | switch: this node can originate over an address-hiding connector now | `TSR-Q4` |
+| `posture` (`daemon_status`) | status | object: `tor` (one-of `managed`, `operator`, `off`) and `clearnet` (one-of `on`, `off`), the settings' own names and keywords (§5) | `TSR-Q12` |
+| `origination` (`daemon_status`) | status | one-of `address-hiding`, `held`, `clearnet-only`, `offline` | `OwnTx` |
+| `sync_connector` (`daemon_status`) | status | a list of one-of `clearnet`, `tor`: the connectors the node syncs over now; `[]` when it syncs over none | `TSR-Q12` |
+| `tor` (`daemon_status`) | status | object, below; `null` when `posture.tor` is `off` | `TSR-Q12` |
+| `tor.state` | status | one-of `restarting`, `waiting`, `bootstrapping`, `usable`, `degraded` (§4.3; `waiting` is Restarting (held)) | §4.3 |
+| `tor.facet` | status | one-of `outbound`, `inbound`: the facet down, present only when `state` is `degraded` | §4.3 |
+| `tor.cause` | status | one-of, one keyword per §5 row: `outbound-blocked`, `directory-unreachable`, `clock-skew`, `directory-waiting`, `resumed`, `onion-unreachable`, `exited`, `install-defect`, `not-installed`, `data-unusable`, `descriptor-limit`, `version-flagged`; `null` when `state` is `usable` | §5 |
+| `tor.detail` | status | object, the cause's typed detail, each field present only for its cause: `skew` (a signed integer, seconds), `file` (path, the file the pin rejected), `data` (one-of `read-only`, `full`), `descriptor_max` and `descriptor_count` (integers), `termination` (the last exit: an integer status or a signal name), `progress` (micro, the bootstrap's progress) | §5 |
+| `tor.since` | status | time (IG-Q54): when `state` began | `TSR-Q12` |
+| `tor.respawn_count` | status | integer: respawns since the daemon started | `TSR-Q12` |
+| `tor.fix` | status | a list of one-of `restore-managed`, `operator`, `clearnet-on`, `clearnet-only`; `[]` unless the managed Tor is down | `ManagedTorFix` |
+
+**Terms these names need** (for §19, on ruling). Each walks under IG-Q42. `tor`, `clearnet`, `data` and `file` are subjects or existing terms used by reference or under their existing meaning; no term below ends a command, so no Kind cell is set.
+
+| Term | Parents | Meaning |
+|---|---|---|
+| hiding | daemon | this node can originate over an address-hiding connector now (`TSR-Q4`) |
+| posture | daemon | the connector settings in force: `tor` and `clearnet` |
+| origination | daemon | what happens to the node's own transactions (`OwnTx`) |
+| facet | tor | which facet is down: outbound or inbound |
+| detail | tor | the cause's typed detail |
+| since | tor | when the state began, a time |
+| respawn | tor | a restart of the managed Tor; with `count`, how many |
+| fix | tor | a fix the operator may apply (`ManagedTorFix`) |
+| skew | detail | the clock's offset, in seconds, signed |
+| descriptor | detail | open file descriptors; with `max` the limit, with `count` the number open |
+| termination | detail | how the last Tor process ended: its exit status or signal |
+| progress | detail | how far Tor's bootstrap has come (micro) |
+
+Existing terms that gain a parent, keeping one meaning: `state` gains `tor` ("the state of what its parent names"); `cause` gains `tor` ("why: under `tx`, why it was refused; under `tor`, why it is in its state"); `connector` gains `sync`; `count` gains `respawn` and `descriptor`; `file` and `data` gain `detail`.
+
+Value keywords added: `restarting`, `waiting`, `bootstrapping`, `usable`, `degraded` (state); `outbound`, `inbound` (facet); the twelve cause keywords; `read-only`, `full` (data); `address-hiding`, `held`, `clearnet-only`, `offline` (origination); `restore-managed`, `clearnet-on` (fix; `operator` and `clearnet-only` are the same keywords as above, with the same meaning).
+
+## 24. Questions for Part E
+
+Each is posed for ruling, with a recommendation. The implementation is the supervisor's increment 3 (`TOR_SUPERVISOR.md` §12) for the typed values, and the RPC lane for the reply fields.
+
+**IG-Q66 — where the fields live — POSED 2026-10-22.** *Recommended:* in `daemon_status` (today's `get_info`), Health's boolean in its Health part and the rest in its Status part. Clients already poll `daemon_status` on their normal refresh (`TSR-Q13`), and the grant filter already withholds a part the caller may not see (absent, never zeroed; RK-D23). Posture, origination and the sync connectors are not Tor's alone, so a `tor_status` method would split one node's state across two reads. The alternative is a `tor_status` view under the `status` grant, with Health's boolean staying in `daemon_status`.
+
+**IG-Q67 — Health's boolean — POSED 2026-10-22.** *Recommended:* `hiding`, beside `peered`: true exactly when `origination` is `address-hiding`, which is the variant the supervisor already names (`OwnTx::AddressHiding`), so the wire and the type say one word. It claims what the node can do now and nothing about anonymity. The alternatives are `masked`, and a longer `address_hiding`.
+
+**IG-Q68 — the posture and origination — POSED 2026-10-22.** *Recommended:* `posture` carries the two settings under their own option names and keywords (§5's `tor` and `clearnet` rows), so a value shown is valid input to the file. `origination` carries `OwnTx` as `address-hiding`, `held`, `clearnet-only` and `offline`. The send flow reads `origination` before broadcasting, as the posture table says (`TSR-Q12`); Health's `hiding` is not that signal.
+
+**IG-Q69 — the Tor object — POSED 2026-10-22.** *Recommended:* one nested object, `tor`, `null` when the posture's `tor` is `off`, with `state`, `facet`, `cause`, `detail`, `since`, `respawn_count` and `fix`. Restarting (held) is the keyword `waiting`, because `held` is `origination`'s word for a transaction, and one keyword keeps one meaning. `facet` is present only for `degraded`, and `cause` is `null` for `usable` (RK-D23: no answer, not withheld).
+
+**IG-Q70 — causes and their detail — POSED 2026-10-22.** *Recommended:* one cause keyword per §5 row, named by what the operator sees and not by Tor's vocabulary (rule 81); the detail fields as the table above, each present only for the causes that carry it. The open-file limit is `descriptor_max` and `descriptor_count`, the platform's term for what the limit counts. "Tor version flagged" is a cause, though §5 shows it as an announcement: it changes no state and carries no fix.
+
+**IG-Q71 — syncing over what — POSED 2026-10-22.** *Recommended:* `sync_connector`, a list of the connectors the node syncs over now. Health's `syncing` already says whether it syncs; the list says over what, and `[]` with `syncing` true is not a state the node can be in.
