@@ -480,6 +480,7 @@ pub fn verify_pass_countersignature(
 /// ([`pass_delivery_digest`](crate::pass_anchor::pass_delivery_digest)), so a
 /// signature over other bytes fails here; admission passes the record's
 /// carried one.
+#[allow(clippy::too_many_arguments)] // the stream byte is one more field of the existing transcript
 pub fn verify_pass_transcript(
     p_pubkey: &HybridPublicKey,
     stream: PassStream,
@@ -537,6 +538,7 @@ pub fn verify_pass_transcript(
 ///
 /// [`PassCountersignatureError::InvalidSignature`] if the signature does not
 /// verify under `receipt_pubkey`, the receipt domain and this transcript.
+#[allow(clippy::too_many_arguments)] // the stream byte is one more field of the existing transcript
 pub fn verify_receipt_transcript(
     receipt_pubkey: &FnDsaHybridPublicKey,
     stream: PassStream,
