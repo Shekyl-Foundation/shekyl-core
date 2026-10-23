@@ -257,6 +257,10 @@ where
                 self.close(session, CloseCause::HeaderRefused(refused.rule), out);
                 Ok(())
             }
+            // The announce's seed is not in the window. It is dropped, not
+            // held for a retry: the next announce, or a header request,
+            // brings the block again.
+            Proved::NotHeld => Ok(()),
             Proved::Formed(formed) => {
                 let parent = formed.previous();
                 match self.judge_standalone(main, parent, formed) {

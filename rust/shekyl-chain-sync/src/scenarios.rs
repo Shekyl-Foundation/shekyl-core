@@ -32,7 +32,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, Timestamp};
 use shekyl_wire::{BlockBody, PowBlob, SkeletonTx, TxBody};
 
 use crate::harness::UnitWork;
-use crate::model::{CloseCause, Event, Outcome, Proved, Sync};
+use crate::model::{CachePlan, CloseCause, Event, Outcome, Proved, Sync};
 use crate::proof::{drive, fixed, headers_of, open_claim, prove_item, serialized};
 use crate::{Command, PeerClaim};
 
@@ -791,6 +791,73 @@ fn the_slot_holder_is_hashed_on_each_response() {
         );
         hash_proves(&mut sync, &view, &mut out);
         no_close(&out);
+    });
+}
+
+/// A main seed the cache slots do not hold drops the run, keeps the
+/// session, and does not issue the same proof again on the same event.
+#[test]
+fn a_main_seed_not_held_drops_the_run_and_keeps_the_session() {
+    let main = chain_of(8);
+    let mut block = candidate_on(&main, Vec::new()).block;
+    let mut sync = Sync::new(Trust::UNANCHORED, target_one as fn(BlockHeight) -> RuleSet);
+    main.with_view(|view| {
+        let tip = view.tip().expect("main answers").expect("a tip");
+        drive(&mut sync, &view, Event::Tip { tip });
+        open_claim(&mut sync, &view, 1);
+        let timestamp = match view.header_at(tip.height).expect("main answers") {
+            AtHeight::Recorded(record) => record.header.timestamp,
+            AtHeight::AboveTip => panic!("the tip"),
+        };
+        block.header.previous = tip.hash;
+        block.header.timestamp = timestamp + 120;
+        block.header.nonce = 0;
+        let pow = block.pow_blob();
+        let hash = PowBlob::read(&pow).expect("preimage").identity();
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Headers {
+                session: 1,
+                bytes: headers_of(pow),
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        let job = out
+            .iter()
+            .find_map(|command| match command {
+                Command::Prove {
+                    job,
+                    cache: CachePlan::Main(_),
+                    ..
+                } => Some(*job),
+                _ => None,
+            })
+            .expect("a proof under a main seed");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Proven {
+                job,
+                results: vec![Proved::NotHeld],
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        no_close(&out);
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::Prove { .. })),
+            "the same plan was issued again on the same event: {out:?}"
+        );
+        assert_eq!(sync.run_len(1), 0, "the run was dropped");
+        assert!(!sync.contains_header(hash), "an unproven header joined T");
+        assert!(sync.transit(1).is_some(), "the session is kept");
     });
 }
 

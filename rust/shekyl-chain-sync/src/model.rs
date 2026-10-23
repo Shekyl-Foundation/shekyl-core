@@ -166,6 +166,14 @@ pub enum Proved {
     Formed(Box<FormedHeader>),
     /// `form_header` refused it. The run layer closes the supplier.
     Refused(InvalidBlock),
+    /// A [`CachePlan::Main`] seed is not in either cache slot. The executor
+    /// looks a main seed up and never derives it (B2), so the header cannot
+    /// be proven against this window. Not the peer's fault: the run is
+    /// dropped and the session kept. A later header request fetches it
+    /// again, against the window the tip has moved to by then. Dropping the
+    /// run, not only the proof, is what stops the same plan being issued
+    /// again on the same event.
+    NotHeld,
 }
 
 /// What the model asks the executor to do.
@@ -427,7 +435,7 @@ pub(crate) struct Local {
     pub(crate) work: CumulativeDifficulty,
 }
 
-/// The coordinator. It holds one [`Peer`] per open session and the
+/// The coordinator. It holds one peer machine per open session and the
 /// chain those peers are building. The long-run slot and the evidence
 /// check are modes of a peer, not fields beside the map.
 pub struct Sync<K, R> {
@@ -479,7 +487,7 @@ where
 {
     /// `trust` is the posture [`shekyl_chain_rules::judge_header`] is
     /// given. Until slice 6 every [`Trust`] is the full posture, so
-    /// [`Self::checkpoint`] is genesis. `rules` is the schedule: the
+    /// the fill's checkpoint is genesis. `rules` is the schedule: the
     /// reorg cap is the set in force at the connecting height.
     #[must_use]
     pub fn new(trust: Trust, rules: R) -> Self {
@@ -858,7 +866,8 @@ where
 
     /// At most one header request extends `H*`. It goes to a session
     /// whose claim beats `H*`, drawn uniformly, and the next is drawn
-    /// only after this one is answered, late, or its session closes.
+    /// only after this one is answered and its headers are proven, late,
+    /// or its session closes.
     fn plan<'id, H: HeaderView<'id>>(
         &mut self,
         main: &H,
@@ -867,6 +876,16 @@ where
         out: &mut Vec<Command<K>>,
     ) -> Result<(), H::Fault> {
         if self.header_request.is_some() || self.local.is_none() {
+            return Ok(());
+        }
+        // A reachable run still being proven moves `H*` when its proof
+        // lands. A request drawn before then carries the old locator, and
+        // the peer answers with the headers already waiting on that proof.
+        if self.peers.values().any(|peer| {
+            peer.run
+                .as_ref()
+                .is_some_and(crate::peer::Run::proving_toward_star)
+        }) {
             return Ok(());
         }
         let sources: Vec<K> = self

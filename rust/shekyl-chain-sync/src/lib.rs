@@ -5,7 +5,7 @@
 
 //! Chain sync's model (CS-2, `P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2).
 //!
-//! Two machines. A [`peer`] owns one session's conversation: its run
+//! Two machines. A peer machine (`peer`) owns one session's conversation: its run
 //! mode, its follow-up, its body span, and any announce proving beside
 //! the run. [`Sync`] is the coordinator: which peer to ask, how much to
 //! ask for, when the node is synced, and how a heavier fork is selected.
@@ -28,6 +28,15 @@ mod proof;
 mod scenarios;
 #[cfg(test)]
 mod select_tests;
+
+#[cfg(feature = "runtime")]
+pub mod executor;
+#[cfg(feature = "runtime")]
+pub mod owner;
+#[cfg(feature = "runtime")]
+pub mod router;
+#[cfg(feature = "runtime")]
+pub mod serve;
 
 mod branch;
 mod claim;

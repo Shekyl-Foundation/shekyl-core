@@ -401,6 +401,10 @@ where
                     self.close(session, CloseCause::HeaderRefused(refused.rule), out);
                     return Ok(());
                 }
+                Proved::NotHeld => {
+                    self.drop_run(session);
+                    return Ok(());
+                }
                 Proved::Formed(formed) => {
                     let judged = self.judge_formed(main, session, formed);
                     match judged {

@@ -221,9 +221,9 @@ mod vectors_tests;
 pub use connector::{
     AltBlocksHeld, Applied, Apply, ChainFacts, ChainTip, Connector, ConnectorArgs, Digest, HashAt,
     Inject, Injected, IssueDraws, OfferAlt, Offered, PlanMismatchReason, PlannedBlock,
-    PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, RefusePromotion, Reorganize, Rewind,
-    Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts,
-    TipChanged, WatchTip,
+    PlannedDemotion, PlannedPromotion, PopBeyondReorgCap, RaiseAlarm, RefusePromotion, Reorganize,
+    Rewind, Rewound, RunEnd, RunFault, SwitchDone, SwitchPlan, Switched, TableRows, TemplateFacts,
+    TipChanged, WatchLatch, WatchTip,
 };
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]

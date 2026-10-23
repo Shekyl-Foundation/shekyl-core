@@ -772,6 +772,13 @@ async fn an_arrival_forms_in_the_class_its_origin_names() {
         budget.clone(),
     );
     let door = service.door();
+    // An arrival waits for the attendant's first window. Holding the only
+    // permit before that install would starve the install, and the
+    // arrival would wait on the window, never in the budget.
+    assert!(
+        service.shared.seed_pair().await.is_some(),
+        "the window is installed"
+    );
     for (index, (solicited, class)) in [(true, Class::Chain), (false, Class::Unsolicited)]
         .into_iter()
         .enumerate()
@@ -1436,4 +1443,127 @@ fn stop_answers_a_found_block_waiting_inside_the_door() {
         Ok(false) => panic!("the stop path panicked"),
         Err(_) => panic!("stop deadlocked on a found block waiting in the door"),
     }
+}
+
+/// Chain sync's typed entry (`Door::offer_bound`, CS-3 §4.6): a block whose
+/// header was proven elsewhere connects through `form_judged`. The
+/// substrate counts no hash for it, and its reply is the ordinary one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bound_arrival_connects_through_form_judged_without_a_hash() {
+    use shekyl_chain_rules::{
+        form_header, judge_header, seed_height, target_claim, AtHeight, FormAttempt, HeaderView,
+    };
+    use shekyl_chain_store::store::SnapshotView;
+    use shekyl_types::BlockCount;
+
+    let mut y = Scenario::open("service-bound-y");
+    let blocks = y.mine(5).await;
+    let gate = Arc::new(Gated::new());
+    let (service, path) = service("service-bound", Arc::clone(&gate), ServiceConfig::default());
+    let door = service.door();
+    let (prefix, last) = blocks.split_at(blocks.len() - 1);
+    offer_all(&door, 1, prefix).await;
+    let mined = &last[0];
+    let judged = {
+        let store = Arc::clone(&service.shared.store);
+        let snap = store.begin_read().expect("read");
+        let view = SnapshotView::new(&snap);
+        let tip = view.tip().expect("view").expect("a tip");
+        let connecting = tip.height + BlockCount::ONE;
+        assert_eq!(connecting, mined.height, "the bound block extends the tip");
+        let rule_set = RULES.in_force(connecting);
+        let seed = match seed_height(connecting) {
+            None => BlockHash::NULL,
+            Some(height) => match view.header_at(height).expect("view") {
+                AtHeight::Recorded(record) => record.hash,
+                AtHeight::AboveTip => BlockHash::NULL,
+            },
+        };
+        let target = target_claim(&view, connecting, &rule_set)
+            .expect("view")
+            .expect("a target");
+        let pow = shekyl_wire::PowBlob::read(&mined.template.block.pow_blob()).expect("preimage");
+        let formed = form_header(&pow, &rule_set, &*gate, seed, target, FormAttempt::FIRST)
+            .expect("the substrate answers")
+            .expect("the header forms");
+        judge_header(&formed, &view, &rule_set, &RULES.trust())
+            .expect("the view answers")
+            .expect("the header is judged")
+    };
+    let hashes_before = gate.hashes();
+    let tickets = door
+        .offer_bound(vec![super::BoundArrival {
+            tag: ArrivalTag(99),
+            session: SessionId(1),
+            judged,
+            block: mined.template.block.serialize(),
+            bodies: mined
+                .template
+                .transactions
+                .iter()
+                .map(shekyl_wire::Transaction::serialize)
+                .collect(),
+            attestation_witness: Vec::new(),
+        }])
+        .expect("room");
+    let reply = tickets
+        .into_iter()
+        .next()
+        .expect("one ticket")
+        .reply()
+        .await;
+    assert_eq!(reply.tag, ArrivalTag(99));
+    assert_eq!(
+        reply.reply,
+        Reply::Connected {
+            height: mined.height,
+            hash: mined.hash
+        }
+    );
+    assert_eq!(
+        gate.hashes(),
+        hashes_before,
+        "a bound arrival is formed without a longhash"
+    );
+    service.stop().await.expect("stops");
+    y.close().await;
+    cleanup(&path);
+}
+
+/// Chain sync's alarm (`P2P_3_CHAIN_SYNC_BRIEF.md` §A item 7): the
+/// connector writes the latch, the watch publishes it, and a second raise
+/// keeps the first evidence.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_sync_owners_alarm_sets_the_latch_once_and_publishes_it() {
+    use shekyl_chain_store::codec::{FollowingDegraded, FollowingDegradedCell};
+
+    let (service, path) = service(
+        "service-latch",
+        Arc::new(Gated::new()),
+        ServiceConfig::default(),
+    );
+    let mut latch = service.watch_latch().await.expect("the connector answers");
+    assert_eq!(*latch.borrow(), None, "a fresh store's latch is clear");
+    let first = FollowingDegraded {
+        fork_at: BlockHeight::from_raw(3),
+        tip: BlockHash::from_bytes([0x5a; 32]),
+        work: shekyl_difficulty::CumulativeDifficulty::from_raw(77),
+    };
+    let later = FollowingDegraded {
+        fork_at: BlockHeight::from_raw(1),
+        tip: BlockHash::from_bytes([0x5b; 32]),
+        work: shekyl_difficulty::CumulativeDifficulty::from_raw(99),
+    };
+    assert!(service.raise_alarm(first).await.expect("written"));
+    latch.changed().await.expect("published");
+    assert_eq!(*latch.borrow(), Some(first));
+    assert!(!service.raise_alarm(later).await.expect("answered"));
+    let held = Arc::clone(&service.shared.store)
+        .begin_read()
+        .expect("read")
+        .get_property::<FollowingDegradedCell>()
+        .expect("cell");
+    assert_eq!(held, Some(first), "the first evidence stays in the store");
+    service.stop().await.expect("stops");
+    cleanup(&path);
 }

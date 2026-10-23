@@ -876,3 +876,30 @@ fn a_budget_of_minimum_skeletons_decodes() {
     let bytes = msg.store().expect("an honest maximum stores");
     assert_eq!(ResponseBodies::decode(&bytes).expect("and decodes"), msg);
 }
+
+/// The router's admission of 2011–2014 is its own set, beside the C++
+/// ingress's: every id round-trips, each cap is the one its decoder uses,
+/// and no other id is a chain-sync command.
+#[test]
+fn the_router_admits_exactly_the_four_sync_commands_with_their_caps() {
+    use shekyl_levin::{
+        SyncCommand, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
+        CAP_RESPONSE_HEADERS,
+    };
+    for command in SyncCommand::ALL {
+        assert_eq!(SyncCommand::from_wire(command.wire_id()), Some(command));
+        assert_eq!(DefinedCommand::from_wire(command.wire_id()), None);
+    }
+    assert_eq!(
+        SyncCommand::ALL.map(SyncCommand::payload_cap),
+        [
+            CAP_REQUEST_HEADERS,
+            CAP_RESPONSE_HEADERS,
+            CAP_REQUEST_BODIES,
+            CAP_RESPONSE_BODIES
+        ]
+    );
+    for id in [0, 1001, 1002, 2002, 2003, 2004, 2008, 2010, 2015] {
+        assert_eq!(SyncCommand::from_wire(id), None, "{id}");
+    }
+}

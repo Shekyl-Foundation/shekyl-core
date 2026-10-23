@@ -150,7 +150,7 @@ pub use payload::{
     HandshakeResponse, NetworkAddress, NewCompactBlock, NewTransactions, PeerlistEntry,
     PortableMap, RequestBodies, RequestChain, RequestCompactMissingTx, RequestGetObjects,
     RequestHeaders, ResponseBodies, ResponseChainEntry, ResponseGetObjects, ResponseHeaders,
-    TimedSyncRequest, TimedSyncResponse, TxBlobEntry, ADDR_IPV4, ADDR_IPV6, ADDR_TOR,
+    SyncCommand, TimedSyncRequest, TimedSyncResponse, TxBlobEntry, ADDR_IPV4, ADDR_IPV6, ADDR_TOR,
     ATTESTATION_WITNESS_MAX_BYTES, BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS,
     CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS, COMMAND_HANDSHAKE, COMMAND_TIMED_SYNC, HASH_SIZE,
     HEADERS_RESPONSE_BYTES, MIN_TX_SECTION_BYTES, NOTIFY_GET_TXPOOL_COMPLEMENT,

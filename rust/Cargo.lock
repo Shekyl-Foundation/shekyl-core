@@ -4037,13 +4037,21 @@ dependencies = [
  "proptest",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
+ "shekyl-chain-store",
  "shekyl-difficulty",
  "shekyl-draw-rng",
+ "shekyl-hash-budget",
  "shekyl-levin",
  "shekyl-peer-policy",
  "shekyl-pow-randomx",
+ "shekyl-runtime",
+ "shekyl-seam",
+ "shekyl-timing-engine",
+ "shekyl-transport-layer",
  "shekyl-types",
  "shekyl-wire",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4963,13 +4971,27 @@ dependencies = [
 name = "shekyl-p2p-harness"
 version = "3.1.0"
 dependencies = [
+ "serde_json",
+ "shekyl-capped-stream",
+ "shekyl-chain-ingest",
+ "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-chain-sync",
  "shekyl-clearnet",
+ "shekyl-difficulty",
+ "shekyl-draw-rng",
+ "shekyl-hash-budget",
  "shekyl-levin",
  "shekyl-peer-policy",
+ "shekyl-pow-randomx",
  "shekyl-runtime",
+ "shekyl-seam",
  "shekyl-timing-engine",
  "shekyl-transport-layer",
+ "shekyl-types",
+ "shekyl-wire",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]

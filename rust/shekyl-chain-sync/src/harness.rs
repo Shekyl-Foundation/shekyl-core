@@ -698,3 +698,97 @@ fn no_body_is_requested_off_the_selected_chain() {
 
 #[path = "past_cap_tests.rs"]
 mod past_cap;
+
+/// No header request is drawn while a reachable run is still being proven.
+/// The proof moves `H*`; a locator drawn before it asks for the headers
+/// already waiting on that proof, and the answer cannot extend the run.
+#[test]
+fn no_header_request_is_drawn_while_a_run_is_being_proven() {
+    let rules = cap(64);
+    let main = chain_of(21);
+    let mut block = candidate_on(&main, Vec::new()).block;
+    let mut sync = Sync::new(Trust::UNANCHORED, move |_| rules);
+    main.with_view(|view| {
+        let tip = view.tip().expect("main answers").expect("a tip");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Tip { tip },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        open_and_claim(&mut sync, &view, 1, u128::MAX);
+        let timestamp = match view.header_at(tip.height).expect("main answers") {
+            AtHeight::Recorded(record) => record.header.timestamp + 120,
+            AtHeight::AboveTip => panic!("the tip is on main"),
+        };
+        let branch = sync.branch_of(&view, tip.hash).expect("the tip is known");
+        formed_on(&branch, &rules, &mut block, tip.hash, timestamp);
+        let bytes = ResponseHeaders {
+            blobs: vec![block.pow_blob()],
+            tip_work: u128::MAX,
+            more: false,
+        }
+        .store()
+        .expect("the response encodes");
+        let mut out = Vec::new();
+        sync.handle(
+            Event::Headers { session: 1, bytes },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut out,
+        )
+        .expect("main answers");
+        assert_eq!(proves(&out), vec![HashClass::HeaderPow]);
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::RequestHeaders { .. })),
+            "a request was drawn beside the proof: {out:?}"
+        );
+        // A second source opens while the proof is in flight.
+        let mut opened = Vec::new();
+        sync.handle(
+            Event::SessionOpened {
+                session: 2,
+                transit: Duration::from_secs(1),
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut opened,
+        )
+        .expect("main answers");
+        sync.claim(
+            2,
+            PeerClaim {
+                count: ChainCount::from_raw(40),
+                work: CumulativeDifficulty::from_raw(u128::MAX),
+            },
+            &view,
+            Instant::now(),
+            &mut NoDraw,
+            &mut opened,
+        )
+        .expect("the claim is a chain");
+        assert!(
+            !opened
+                .iter()
+                .any(|command| matches!(command, Command::RequestHeaders { .. })),
+            "a request was drawn during the proof: {opened:?}"
+        );
+        resolve_proves(&mut sync, &view, &mut out);
+        assert!(closes(&out).is_empty(), "{out:?}");
+        let identity = PowBlob::read(&block.pow_blob())
+            .expect("preimage")
+            .identity();
+        assert_eq!(sync.selected().hash, identity);
+        assert!(
+            out.iter()
+                .any(|command| matches!(command, Command::RequestHeaders { .. })),
+            "the next request is drawn once the proof lands: {out:?}"
+        );
+    });
+}

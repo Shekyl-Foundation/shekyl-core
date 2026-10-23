@@ -68,6 +68,7 @@ use shekyl_chain_rules::{
     PerHeightRecord, StructurallyValid, Verdict, ViewRead, Weights,
 };
 use shekyl_chain_store::archival_snapshot::ArchivalSnapshot;
+use shekyl_chain_store::codec::{FollowingDegraded, FollowingDegradedCell};
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, WriteBatch};
 use shekyl_types::archival::{BondRecord, IndexedDraw, IssuedDigest};
 use shekyl_types::{
@@ -510,6 +511,10 @@ pub struct Connector {
     writer: Writer,
     /// [`TipChanged`]'s one publisher.
     tip: tokio::sync::watch::Sender<TipChanged>,
+    /// The `following_degraded` latch as the store holds it, published after
+    /// every write that sets it (`DRS_X_STORE_FLIP.md` DX-Q2 item 8). `None`
+    /// is clear.
+    degraded: tokio::sync::watch::Sender<Option<FollowingDegraded>>,
     rules: ChainRules,
     /// What the run takes on the release's word — `rules.trust()`, read
     /// once at start. A field rather than a call so a test can reach the
@@ -527,8 +532,13 @@ impl Actor for Connector {
 
     async fn on_start(args: ConnectorArgs, _actor_ref: ActorRef<Self>) -> Result<Self, RunFault> {
         let tip = chain_tip(&args.store)?;
+        let degraded = args
+            .store
+            .begin_read()?
+            .get_property::<FollowingDegradedCell>()?;
         Ok(Self {
             tip: tokio::sync::watch::Sender::new(TipChanged { seq: 0, tip }),
+            degraded: tokio::sync::watch::Sender::new(degraded),
             writer: Writer::live(args.store),
             rules: args.rules,
             trust: args.rules.trust(),
@@ -559,6 +569,51 @@ impl Connector {
                 now.tip = tip;
             });
         }
+    }
+}
+
+/// Chain sync's evidence of a heavier chain past the cap
+/// (`P2P_3_CHAIN_SYNC_BRIEF.md` §A item 7): write the `following_degraded`
+/// latch in the connector's own transaction. One latch, one writer. The
+/// reply is whether this message set it; a latch already set keeps its
+/// first evidence.
+#[derive(Clone, Copy, Debug)]
+pub struct RaiseAlarm(pub FollowingDegraded);
+
+/// A receiver of the `following_degraded` latch: `None` is clear.
+#[derive(Clone, Copy, Debug)]
+pub struct WatchLatch;
+
+impl Message<RaiseAlarm> for Connector {
+    type Reply = Result<bool, RunFault>;
+
+    async fn handle(
+        &mut self,
+        msg: RaiseAlarm,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let evidence = msg.0;
+        let set = self.writer.write(|batch| {
+            batch
+                .raise_following_degraded(&evidence)
+                .map_err(RunFault::Store)
+        })?;
+        if set {
+            self.degraded.send_replace(Some(evidence));
+        }
+        Ok(set)
+    }
+}
+
+impl Message<WatchLatch> for Connector {
+    type Reply = tokio::sync::watch::Receiver<Option<FollowingDegraded>>;
+
+    async fn handle(
+        &mut self,
+        _: WatchLatch,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.degraded.subscribe()
     }
 }
 

@@ -21,6 +21,19 @@ shekyl-peer-policy = { path = "../shekyl-peer-policy" }
 shekyl-types = { path = "../shekyl-types" }
 shekyl-wire = { path = "../shekyl-wire" }
 
+# The runtime half (CS-3, `runtime` feature): the router, the owner task,
+# the executor and serving. The model above stays free of all of these.
+shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"], optional = true }
+shekyl-chain-store = { path = "../shekyl-chain-store", optional = true }
+shekyl-hash-budget = { path = "../shekyl-hash-budget", optional = true }
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx", optional = true }
+shekyl-runtime = { path = "../shekyl-runtime", optional = true }
+shekyl-seam = { path = "../shekyl-seam", optional = true }
+shekyl-timing-engine = { path = "../shekyl-timing-engine", optional = true }
+shekyl-transport-layer = { path = "../shekyl-transport-layer", optional = true }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "sync", "macros"], optional = true }
+tracing = { version = "0.1", optional = true }
+
 [dev-dependencies]
 proptest = "1"
 shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
@@ -30,6 +43,21 @@ shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-wire = { path = "../shekyl-wire" }
 
 [features]
+# The runtime half: the Levin router, the sync owner task, the executor and
+# serving 2011–2014 from the store (CS-3). Off by default, so the model's
+# own tests build without tokio, the store or RandomX.
+runtime = [
+    "dep:shekyl-chain-ingest",
+    "dep:shekyl-chain-store",
+    "dep:shekyl-hash-budget",
+    "dep:shekyl-pow-randomx",
+    "dep:shekyl-runtime",
+    "dep:shekyl-seam",
+    "dep:shekyl-timing-engine",
+    "dep:shekyl-transport-layer",
+    "dep:tokio",
+    "dep:tracing",
+]
 # The floor-device job: captured corpora and 50,000 real hashes.
 # `cargo test --lib` does not build it.
 cs2-long-run = []
