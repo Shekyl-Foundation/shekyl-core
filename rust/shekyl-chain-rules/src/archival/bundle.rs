@@ -634,6 +634,11 @@ pub fn verify_bundle<V: BundleView>(
         return invalid(BundleInvalid::Count);
     }
     let kept = reference.kept().clone();
+    // Zero is a count on both streams. An empty support bitmap over a
+    // block that issued support draws is the same refusal as an economy
+    // bitmap that understates `count(h)`, and it is refused here, before
+    // the commitment, rather than accepted as an empty observation list.
+    support_width(view, h, kept.support.count())?;
     let economy_records = usize::try_from(kept.passes.popcount()).unwrap_or(usize::MAX);
     let support_records = usize::try_from(kept.support.popcount()).unwrap_or(usize::MAX);
     if economy_records.saturating_add(support_records) != body.record_count() {
@@ -676,7 +681,8 @@ pub fn verify_bundle<V: BundleView>(
     }
 
     // A block with no economy draws issues nothing on that stream
-    // (`SCS-P33`). A support draw on the same block is still read.
+    // (`SCS-P33`). The support width was matched above, so an empty
+    // support bitmap here is a block that issued none of those either.
     if count == 0 {
         if kept.support.count() == 0 {
             return Ok(Admitted {
@@ -770,8 +776,32 @@ pub fn verify_bundle<V: BundleView>(
     })
 }
 
-/// The support bitmap. An empty one reads nothing: a bundle that carries
-/// no support draw does not ask the view about the support stream.
+/// The support bitmap's width against the count the block issued.
+///
+/// Called once, with the economy count already matched, and before the
+/// commitment. A view that has not grown the stream answers zero
+/// ([`BundleView::support_count`]), so an economy-only bundle still
+/// admits. `None` is the view's hole, the same way a missing economy
+/// count is.
+fn support_width<V: BundleView>(
+    view: &V,
+    h: BlockHeight,
+    stated: u32,
+) -> Result<(), BundleRefused<V::Fault>> {
+    let Some(issued) = view.support_count(h)? else {
+        return Err(BundleRefused::Unanswered(BundleUnanswered::DrawCount {
+            height: h,
+        }));
+    };
+    if stated != issued {
+        return Err(BundleRefused::Invalid(BundleInvalid::Count));
+    }
+    Ok(())
+}
+
+/// The support observations, after [`support_width`] has matched the bitmap
+/// to the chain. An empty bitmap is an empty list and reads nothing more:
+/// that check already proved the block issued none.
 fn verify_support<V: BundleView>(
     view: &V,
     kept: &BundleKept,
@@ -779,24 +809,17 @@ fn verify_support<V: BundleView>(
     hash_at_h: &[u8; 32],
     economy_records: usize,
 ) -> Result<Vec<SupportObservation>, BundleRefused<V::Fault>> {
-    if kept.support.count() == 0 {
+    let issued = kept.support.count();
+    if issued == 0 {
         return Ok(Vec::new());
     }
     let h = kept.h;
-    let Some(chain_count) = view.support_count(h)? else {
-        return Err(BundleRefused::Unanswered(BundleUnanswered::DrawCount {
-            height: h,
-        }));
-    };
-    if kept.support.count() != chain_count {
-        return Err(BundleRefused::Invalid(BundleInvalid::Count));
-    }
     let Some(roster) = view.support_roster(h)? else {
         return Err(BundleRefused::Unanswered(BundleUnanswered::Draw {
             draw: 0,
         }));
     };
-    if roster.len() != usize::try_from(chain_count).unwrap_or(usize::MAX) {
+    if roster.len() != usize::try_from(issued).unwrap_or(usize::MAX) {
         return Err(BundleRefused::Invalid(BundleInvalid::Count));
     }
     let Some(width) = view.archive_width(h)? else {
@@ -806,7 +829,7 @@ fn verify_support<V: BundleView>(
     };
     let mut records = body.records().skip(economy_records);
     let mut observations = Vec::with_capacity(roster.len());
-    for draw in 0..chain_count {
+    for draw in 0..issued {
         let seat = &roster[draw as usize];
         let Some(shard) = select_support_shard(&kept.seed, hash_at_h, &seat.persona, draw, width)
         else {

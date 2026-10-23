@@ -154,8 +154,9 @@ fn an_all_miss_bundle_admits_and_issues_every_draw_as_a_miss() {
 
 /// A block with no draws has a bundle with an empty bitmap: valid, issues
 /// nothing (`SCS-P33`), and reads neither a drawable epoch nor a block hash.
-/// Red edit: refuse `count(h) = 0`, or read the drawable epoch before the
-/// early return — the read log then holds `DrawableEpoch`.
+/// The support count is read: zero there is what makes the empty support
+/// bitmap honest. Red edit: refuse `count(h) = 0`, or read the drawable
+/// epoch before the early return — the read log then holds `DrawableEpoch`.
 #[test]
 fn a_bundle_for_a_block_with_no_draws_admits_and_returns_none() {
     let world = BundleWorld::new(0);
@@ -171,15 +172,57 @@ fn a_bundle_for_a_block_with_no_draws_admits_and_returns_none() {
         [
             BundleRead::Revealed,
             BundleRead::DrawCount,
+            BundleRead::SupportCount,
             BundleRead::DrawCommitment
         ]
     );
 }
 
+/// An empty support bitmap is a count refusal when the block issued a
+/// support draw, whether or not the economy stream issued any. The
+/// harness's support count is the roster's length. Red edit: return the
+/// empty observation list from either early path without reading
+/// `support_count` — both cases then admit.
+#[test]
+fn an_empty_support_bitmap_over_an_issued_support_draw_is_a_count_refusal() {
+    let refuse = |count: u32| {
+        let mut world = BundleWorld::new(count);
+        let persona = world.personas[0].persona;
+        let receipt_key = world.personas[0].receipt_public_key.clone();
+        world.view.support_roster.insert(
+            world.h,
+            vec![SupportSeat {
+                persona,
+                receipt_key,
+            }],
+        );
+        let passes: &[u32] = if count == 0 { &[] } else { &[1, 4] };
+        let (reference, body) = world.bundle(passes);
+        assert_eq!(reference.kept().support.count(), 0);
+        world.view.take_reads();
+        assert_eq!(
+            judge(&world, &reference, &body),
+            invalid(BundleInvalid::Count),
+            "economy count {count}"
+        );
+        assert_eq!(
+            world.view.take_reads(),
+            [
+                BundleRead::Revealed,
+                BundleRead::DrawCount,
+                BundleRead::SupportCount
+            ],
+            "refused at the support width, before the commitment"
+        );
+    };
+    refuse(0);
+    refuse(10);
+}
+
 /// The reads of an admitted bundle, in §9.1's order: the one-per-`h` rule
-/// and the count (step 3), the commitment (4), then the drawable epoch, `h`'s
-/// hash and the issued counts (6), then each record's anchor hash (8).
-/// Red edit: hoist any later read above an earlier step.
+/// and the two counts (step 3), the commitment (4), then the drawable
+/// epoch, `h`'s hash and the issued counts (6), then each record's anchor
+/// hash (8). Red edit: hoist any later read above an earlier step.
 #[test]
 fn the_view_is_read_in_the_order_of_the_checks() {
     let world = BundleWorld::new(10);
@@ -188,21 +231,22 @@ fn the_view_is_read_in_the_order_of_the_checks() {
     judge(&world, &reference, &body).expect("admits");
     let reads = world.view.take_reads();
     assert_eq!(
-        reads[..5],
+        reads[..6],
         [
             BundleRead::Revealed,
             BundleRead::DrawCount,
+            BundleRead::SupportCount,
             BundleRead::DrawCommitment,
             BundleRead::DrawableEpoch,
             BundleRead::BlockHash,
         ]
     );
-    let tail: Vec<BundleRead> = reads[5..]
+    let tail: Vec<BundleRead> = reads[6..]
         .iter()
         .copied()
         .skip_while(|r| *r == BundleRead::VisiblyShort)
         .collect();
-    assert!(reads.len() > 5 + tail.len(), "the selection asked the view");
+    assert!(reads.len() > 6 + tail.len(), "the selection asked the view");
     assert_eq!(
         tail,
         [BundleRead::BlockHash, BundleRead::BlockHash],
@@ -812,6 +856,7 @@ fn a_body_the_producer_did_not_sign_refuses_before_any_receipt() {
         [
             BundleRead::Revealed,
             BundleRead::DrawCount,
+            BundleRead::SupportCount,
             BundleRead::DrawCommitment
         ],
         "no drawable epoch, no block hash, no issued count: nothing of steps 6 to 8"
@@ -1335,9 +1380,10 @@ fn a_view_with_a_hole_is_unanswered_and_never_a_verdict() {
         [
             BundleRead::Revealed,
             BundleRead::DrawCount,
+            BundleRead::SupportCount,
             BundleRead::DrawCommitment
         ],
-        "the count was answered, and then the commitment was not"
+        "the economy count and the support count were answered, and then the commitment was not"
     );
 
     let (mut world, bundle) = fresh();
@@ -1421,6 +1467,7 @@ fn a_view_fault_surfaces_as_itself_from_every_read() {
     for read in [
         BundleRead::Revealed,
         BundleRead::DrawCount,
+        BundleRead::SupportCount,
         BundleRead::DrawCommitment,
         BundleRead::DrawableEpoch,
         BundleRead::BlockHash,
