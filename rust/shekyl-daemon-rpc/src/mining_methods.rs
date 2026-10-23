@@ -26,7 +26,7 @@ use shekyl_rpc_types::mining::{
     StatusOnlyResponse, SubmitBlockRequest, SubmitBlockResponse, TxBacklogEntry,
 };
 use shekyl_rpc_types::{HashHex, RpcStatus};
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, ChainCount};
 
 use crate::chain_facts::{ChainFacts, FactsFault};
 use crate::handles::{DoorFacts, MiningFacts, MiningHandle};
@@ -83,6 +83,8 @@ pub mod codes {
     pub const BLOCK_OVERSIZE: &str = "block.oversize";
     /// `generateblocks` was asked for no blocks.
     pub const COUNT_ZERO: &str = "block.count_zero";
+    /// `generateblocks` was asked for more blocks than this chain can grow by.
+    pub const COUNT_OVERFLOW: &str = "block.count_overflow";
     /// An armed lever, and the node was not started armed.
     pub const UNARMED: &str = "rpc.unarmed";
     /// A pop would remove genesis or a block the undo journal retired.
@@ -452,9 +454,16 @@ pub async fn generateblocks(
     if let Err(why) = mining.template()? {
         return Err(RpcError::new(ErrorClass::NotReady, why));
     }
-    let start = chain.chain_tip()?.chain_height.to_raw();
-    let tip = start.saturating_sub(1);
-    let target = BlockHeight::from_raw(tip.saturating_add(request.count));
+    let start = chain.chain_tip()?.chain_height;
+    let wanted = BlockCount::from_raw(request.count);
+    let Some(target) = start.checked_add(wanted).and_then(ChainCount::tip) else {
+        return Err(RpcError::new(
+            ErrorClass::BadParams,
+            Diagnostic::new(codes::COUNT_OVERFLOW, "count does not fit on this chain")
+                .param("count", request.count.to_string())
+                .param("chain_height", start.to_raw().to_string()),
+        ));
+    };
     let started = match on_a_blocking_thread(mining, |mining| mining.start(None)).await? {
         Ok(()) => StartedMiner(Some(std::sync::Arc::clone(mining))),
         Err(running) if running.code == codes::RUNNING => StartedMiner(None),
@@ -469,16 +478,16 @@ pub async fn generateblocks(
     };
     started.stop().await?;
     reached?;
-    let end = chain.chain_tip()?.chain_height.to_raw();
+    let end = chain.chain_tip()?.chain_height;
     let mut blocks = Vec::new();
-    for height in start..end {
-        if let Some(hash) = chain.block_hash_at(BlockHeight::from_raw(height))?.hash {
+    for height in start.next_height().ordinals_until(end.next_height()) {
+        if let Some(hash) = chain.block_hash_at(height)?.hash {
             blocks.push(hash_hex(hash));
         }
     }
     Ok(GenerateBlocksResponse {
         status: RpcStatus::ok(),
-        height: end,
+        height: end.to_raw(),
         blocks,
     })
 }
@@ -496,10 +505,18 @@ pub async fn pop_blocks(
     request: PopBlocksRequest,
 ) -> Result<PopBlocksResponse, RpcError> {
     match door.pop(request.nblocks).await? {
-        PopOutcome::Popped { tip } => Ok(PopBlocksResponse {
-            status: RpcStatus::ok(),
-            height: tip.to_raw().saturating_add(1),
-        }),
+        PopOutcome::Popped { tip } => {
+            let height = ChainCount::with_tip(tip).ok_or_else(|| {
+                RpcError::new(
+                    ErrorClass::Internal,
+                    Diagnostic::new(codes::INTERNAL, "the tip has no chain count"),
+                )
+            })?;
+            Ok(PopBlocksResponse {
+                status: RpcStatus::ok(),
+                height: height.to_raw(),
+            })
+        }
         PopOutcome::Refused { tip, floor } => Err(RpcError::new(
             ErrorClass::RefusedByMethod,
             Diagnostic::new(
