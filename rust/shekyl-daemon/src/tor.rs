@@ -5,10 +5,11 @@
 
 //! The managed Tor supervisor (`TOR_SUPERVISOR.md` §4, increment 3).
 //!
-//! The policy core is sans-IO. This driver performs what it asks, on the
-//! daemon's one timing engine, and publishes the Tor route only from a
-//! [`ManagedRunning`] the core builds when Tor is running.
+//! [`Drive`] is the manager's hands. The [`Core`] decides. This driver
+//! performs each [`Action`] and reports what happened, including a publish
+//! the endpoint was not ready for. It keeps no second schedule.
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,17 +17,19 @@ use std::time::Duration;
 use shekyl_daemon_config::sections::Tor;
 use shekyl_ffi::zone_ffi::DownCause;
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass, OwnerHandle, Tick};
-use shekyl_tor_control_client::binary::{discover_and_verify, discover_and_verify_at};
+use shekyl_tor_control_client::binary::{
+    discover_and_verify, discover_and_verify_at, VerifiedTorBinary,
+};
 use shekyl_tor_control_client::control::{
     parse_bootstrap_progress, parse_event, parse_socks_listeners, BootstrapState, Command,
-    ControlReply, EventSink,
+    ControlError, EventReceiver, EventSink,
 };
 use shekyl_tor_control_client::supervisor::{
     input_of, render, Action, Connectors, Core, Input, ManagedRunning, Policy, Step, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptDataDir, OnionPow, OnionSeed,
-    SpawnError, TorBinaryError, TorDeath,
+    SpawnError, TorDeath,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -35,6 +38,10 @@ use tokio::task::JoinHandle;
 const REPLY_BOUND: Duration = Duration::from_secs(30);
 /// The onion's stream cap.
 const MAX_STREAMS: u16 = 8;
+/// `GETINFO` key for the bootstrap phase. One sample asks this and the listener.
+const BOOTSTRAP_PHASE: &str = "status/bootstrap-phase";
+/// `GETINFO` key for the SOCKS listeners.
+const SOCKS_LISTENERS: &str = "net/listeners/socks";
 
 /// The running supervisor. Dropping it does not stop Tor; [`Self::shutdown`] does.
 pub struct Supervisor {
@@ -95,8 +102,8 @@ async fn drive(
     clearnet_on: bool,
     virtual_port: u16,
     data_dir: PathBuf,
-    mut stop: watch::Receiver<bool>,
-    mut forward: watch::Receiver<Option<SocketAddr>>,
+    stop: watch::Receiver<bool>,
+    forward: watch::Receiver<Option<SocketAddr>>,
 ) {
     let engine = shekyl_ffi::zone_ffi::process_engine();
     let owner = match engine.register(OwnerClass::Housekeeping) {
@@ -113,101 +120,383 @@ async fn drive(
             return;
         }
     };
-    let (events, mut incoming) = EventSink::bounded();
+    let (events, incoming) = EventSink::bounded();
     let connectors = Connectors {
         tor: TorSetting::Managed,
         clearnet_on,
     };
-    let (mut core, mut step) = Core::start(Policy::provisional(), connectors, now(&owner));
-    let mut control: Option<DaemonTorControl> = None;
-    let mut kept: Option<KeptDataDir> = None;
-    let mut pinned = None;
-    let mut incarnation = None;
-    let mut pending_route: Option<ManagedRunning> = None;
-    let mut publish_onion = false;
-    let mut generation = 0u64;
-    let (death_tx, mut death_rx) = mpsc::channel(4);
-    let mut bootstrap: Option<tokio::sync::watch::Receiver<BootstrapState>> = None;
+    let (core, step) = Core::start(Policy::provisional(), connectors, now(&owner));
+    let (death_tx, death_rx) = mpsc::channel(4);
+    Drive {
+        core,
+        step,
+        owner,
+        binary,
+        data_dir,
+        events,
+        incoming,
+        seed,
+        virtual_port,
+        stop,
+        forward,
+        control: None,
+        kept: None,
+        pinned: None,
+        incarnation: None,
+        generation: 0,
+        death_tx,
+        death_rx,
+        bootstrap: None,
+    }
+    .run()
+    .await;
+}
 
-    loop {
-        let mut halt = false;
-        step = perform(
-            &mut core,
-            step,
-            &owner,
-            &binary,
-            &data_dir,
-            &events,
-            &seed,
-            virtual_port,
-            &mut control,
-            &mut kept,
-            &mut pinned,
-            &mut incarnation,
-            &mut pending_route,
-            &mut publish_onion,
-            &forward,
-            &mut generation,
-            &death_tx,
-            &mut bootstrap,
-            &mut halt,
-        )
-        .await;
-        if halt {
-            break;
-        }
-        arm(&owner, step.deadline);
-        tokio::select! {
-            biased;
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow() {
-                    step = core.on(Input::Shutdown, now(&owner));
-                }
+/// The process, the directory, and the route. The phase lives in [`Core`].
+struct Drive {
+    core: Core,
+    step: Step,
+    owner: OwnerHandle<MonotonicClock>,
+    binary: Option<PathBuf>,
+    data_dir: PathBuf,
+    events: EventSink,
+    incoming: EventReceiver,
+    seed: OnionSeed,
+    virtual_port: u16,
+    stop: watch::Receiver<bool>,
+    forward: watch::Receiver<Option<SocketAddr>>,
+    control: Option<DaemonTorControl>,
+    kept: Option<KeptDataDir>,
+    pinned: Option<VerifiedTorBinary>,
+    incarnation: Option<u64>,
+    generation: u64,
+    death_tx: mpsc::Sender<(u64, TorDeath)>,
+    death_rx: mpsc::Receiver<(u64, TorDeath)>,
+    bootstrap: Option<watch::Receiver<BootstrapState>>,
+}
+
+impl Drive {
+    async fn run(mut self) {
+        loop {
+            if self.perform().await {
+                break;
             }
-            _ = forward.changed() => {}
-            wake = owner.wait_wake_async() => {
-                if wake.is_err() {
-                    break;
+            arm(&self.owner, self.step.deadline);
+            tokio::select! {
+                biased;
+                changed = self.stop.changed() => {
+                    if changed.is_err() || *self.stop.borrow() {
+                        self.fold(Input::Shutdown).await;
+                    }
                 }
-                step = core.on_deadline(now(&owner));
-            }
-            event = incoming.recv() => {
-                if let Some(reply) = event {
-                    if let Some(parsed) = parse_event(&reply) {
-                        if let Some(input) = input_of(&parsed) {
-                            step = core.on(input, now(&owner));
+                changed = self.forward.changed() => {
+                    // The first wait also sees a forward bound before the loop:
+                    // the receiver has not marked the current value seen.
+                    if changed.is_ok() && self.forward.borrow().is_some() {
+                        self.fold(Input::EndpointReady).await;
+                    }
+                }
+                wake = self.owner.wait_wake_async() => {
+                    if wake.is_err() {
+                        break;
+                    }
+                    self.step = self.core.on_deadline(self.now());
+                }
+                event = self.incoming.recv() => {
+                    if let Some(reply) = event {
+                        if let Some(parsed) = parse_event(&reply) {
+                            if let Some(input) = input_of(&parsed) {
+                                self.fold(input).await;
+                            }
                         }
                     }
                 }
-            }
-            death = death_rx.recv() => {
-                if let Some((gen, how)) = death {
-                    if gen == generation && how == TorDeath::Exited {
-                        step = core.on(
-                            Input::ProcessEnded { exit_code: None },
-                            now(&owner),
-                        );
+                death = self.death_rx.recv() => {
+                    if let Some((gen, how)) = death {
+                        if gen == self.generation {
+                            if let Some(input) = observed_death(how) {
+                                self.fold(input).await;
+                            }
+                        }
+                    }
+                }
+                () = wait_bootstrap(&mut self.bootstrap) => {
+                    if let Some(input) = self.bootstrap_input() {
+                        self.fold(input).await;
                     }
                 }
             }
-            () = wait_bootstrap(&mut bootstrap) => {
-                if bootstrap.as_ref().is_some_and(|rx| matches!(*rx.borrow(), BootstrapState::Ready))
-                {
-                    if let Some(control) = control.as_mut() {
-                        control.mark_bootstrapped();
+        }
+        if let Some(control) = self.control.take() {
+            let _exit = control.shutdown().await;
+        }
+    }
+
+    /// Perform every action the last fold produced. `true` means the daemon
+    /// is stopping and the child is shut down by the caller.
+    async fn perform(&mut self) -> bool {
+        let mut queue: VecDeque<Action> = self.step.actions.drain(..).collect();
+        let mut halt = false;
+        while let Some(action) = queue.pop_front() {
+            if let Some(input) = self.act(action, &mut halt).await {
+                self.fold(input).await;
+                for action in self.step.actions.drain(..).rev() {
+                    queue.push_front(action);
+                }
+            }
+            if halt {
+                break;
+            }
+        }
+        halt
+    }
+
+    /// Fold one observation. A process that ended is reaped here when the
+    /// phase does not withdraw a route: there is nothing to take down, and
+    /// the directory is still kept. A [`Action::TakeDown`] reaps after it
+    /// withdraws, so the route is gone before the child is.
+    async fn fold(&mut self, input: Input) {
+        let ended = ends_incarnation(&input);
+        self.step = self.core.on(input, self.now());
+        let take_down = self
+            .step
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::TakeDown));
+        if ended && !take_down {
+            self.reap().await;
+        }
+    }
+
+    async fn act(&mut self, action: Action, halt: &mut bool) -> Option<Input> {
+        match action {
+            Action::Announce => {
+                let status = self.core.status();
+                let text = render(&status);
+                if status.health {
+                    tracing::info!(target: "global", "{text}");
+                } else {
+                    tracing::warn!(target: "global", "{text}");
+                }
+                None
+            }
+            Action::CheckPin => Some(self.pin()),
+            Action::Spawn { fresh_directory } => Some(self.spawn(fresh_directory).await),
+            Action::Sample => Some(self.sample().await),
+            Action::WatchState => self.watch_state(),
+            Action::SetConfAvoidDiskWrites => {
+                if let Some(control) = self.control.as_ref() {
+                    if let Err(error) = control.defer_disk_writes().await {
+                        tracing::warn!(
+                            target: "global",
+                            "leaving Tor writing its state ({error})"
+                        );
                     }
-                    step = core.on(Input::BootstrapComplete, now(&owner));
-                } else if bootstrap
-                    .as_ref()
-                    .is_some_and(|rx| matches!(*rx.borrow(), BootstrapState::Failed))
-                {
-                    step = core.on(Input::ControlEnded, now(&owner));
+                }
+                None
+            }
+            Action::Publish(route) => Some(self.publish_route(route)),
+            Action::RepublishOnion => Some(self.republish().await),
+            Action::TakeDown => {
+                self.withdraw_route();
+                self.reap().await;
+                None
+            }
+            Action::StopChild => {
+                *halt = true;
+                None
+            }
+        }
+    }
+
+    fn pin(&mut self) -> Input {
+        let verified = match &self.binary {
+            Some(path) => discover_and_verify_at(path),
+            None => discover_and_verify(),
+        };
+        match verified {
+            Ok(binary) => {
+                self.pinned = Some(binary);
+                Input::PinAccepted
+            }
+            Err(error) => match error {
+                shekyl_tor_control_daemon::TorBinaryError::NotFound => Input::BundleMissing,
+                shekyl_tor_control_daemon::TorBinaryError::Unavailable { .. } => Input::Unavailable,
+                _ => Input::PinRefused,
+            },
+        }
+    }
+
+    async fn spawn(&mut self, fresh_directory: bool) -> Input {
+        // A fault reaps before the next pin. A child still held here is kept,
+        // not dropped: dropping the control wipes the directory.
+        if self.control.is_some() {
+            self.reap().await;
+        }
+        if fresh_directory {
+            self.kept.take();
+        }
+        let Some(binary) = self.pinned.clone() else {
+            return Input::PinRefused;
+        };
+        let spawned = if let Some(directory) = self.kept.take() {
+            DaemonTorControl::spawn_into(directory, binary, self.events.clone(), REPLY_BOUND)
+                .await
+                .map_err(|failure| (failure.error, Some(failure.directory)))
+        } else {
+            match DaemonTorControl::spawn_keeping(DaemonTorConfig {
+                tor_binary: binary,
+                data_dir_parent: self.data_dir.clone(),
+                events: self.events.clone(),
+                reply_deadline: REPLY_BOUND,
+            })
+            .await
+            {
+                Ok(up) => Ok(up),
+                Err(SpawnError::DataDir(error)) => Err((DaemonTorStartError::DataDir(error), None)),
+                Err(SpawnError::Launch(failure)) => Err((failure.error, Some(failure.directory))),
+            }
+        };
+        match spawned {
+            Ok(up) => {
+                self.generation = self.generation.wrapping_add(1);
+                let gen = self.generation;
+                let death = up.death();
+                let tx = self.death_tx.clone();
+                tokio::spawn(async move {
+                    let _sent = tx.send((gen, death.await)).await;
+                });
+                self.bootstrap = Some(up.watch_bootstrap());
+                if let Err(error) = up.ask(Command::supervisor_events()).await {
+                    tracing::warn!(target: "global", "Tor events were not subscribed ({error})");
+                }
+                self.control = Some(up);
+                Input::Spawned
+            }
+            Err((error, directory)) => {
+                if let Some(directory) = directory {
+                    self.kept = Some(directory);
+                }
+                match error {
+                    DaemonTorStartError::DataDir(_) => Input::DirectoryUnusable,
+                    _ => Input::SpawnFailed,
                 }
             }
         }
     }
-    if let Some(control) = control {
-        let _exit = control.shutdown().await;
+
+    async fn sample(&mut self) -> Input {
+        let Some(control) = self.control.as_mut() else {
+            return Input::ControlEnded;
+        };
+        let reply = control
+            .ask(Command::GetInfo(vec![
+                BOOTSTRAP_PHASE.to_owned(),
+                SOCKS_LISTENERS.to_owned(),
+            ]))
+            .await;
+        let reply = match reply {
+            Ok(reply) => reply,
+            Err(error) => return input_of_ask(&error),
+        };
+        let socks = parse_socks_listeners(&reply);
+        if let Some(socks) = socks {
+            control.set_socks(socks);
+        }
+        Input::DirectorySample {
+            progress: parse_bootstrap_progress(&reply),
+            socks,
+        }
+    }
+
+    fn watch_state(&self) -> Option<Input> {
+        let control = self.control.as_ref()?;
+        control
+            .data_path()
+            .join("state")
+            .is_file()
+            .then_some(Input::StateFileAppeared)
+    }
+
+    fn publish_route(&mut self, route: ManagedRunning) -> Input {
+        match shekyl_ffi::zone_ffi::publish_managed_running(&route) {
+            Some(installed) => {
+                self.incarnation = Some(installed);
+                Input::RouteInstalled
+            }
+            None => Input::HostAbsent,
+        }
+    }
+
+    async fn republish(&self) -> Input {
+        let Some(control) = self.control.as_ref() else {
+            return Input::ControlEnded;
+        };
+        let Some(forward) = *self.forward.borrow() else {
+            return Input::ForwardAbsent;
+        };
+        match control
+            .publish(
+                &self.seed,
+                self.virtual_port,
+                forward,
+                MAX_STREAMS,
+                OnionPow::Enabled,
+            )
+            .await
+        {
+            Ok(service) => {
+                shekyl_ffi::dialer_ffi::note_own_onion(service.as_str(), self.virtual_port);
+                tracing::info!(
+                    target: "global",
+                    "Tor is up: overlay inbound is published at {}.onion",
+                    service.as_str()
+                );
+                Input::OnionPublished
+            }
+            Err(error) => {
+                tracing::warn!(target: "global", "the onion was not published ({error})");
+                Input::OnionRejected
+            }
+        }
+    }
+
+    fn withdraw_route(&mut self) {
+        if let Some(id) = self.incarnation.take() {
+            let _fell = shekyl_ffi::zone_ffi::publish_tor_down(id, DownCause::ProcessExited);
+        }
+    }
+
+    /// Stop the child and keep its directory. The generation moves so the
+    /// stop's own death is not a second fault.
+    async fn reap(&mut self) {
+        self.bootstrap = None;
+        let Some(control) = self.control.take() else {
+            return;
+        };
+        self.generation = self.generation.wrapping_add(1);
+        self.kept = Some(control.stop_for_respawn().await);
+    }
+
+    fn bootstrap_input(&mut self) -> Option<Input> {
+        let state = *self.bootstrap.as_ref()?.borrow();
+        match state {
+            BootstrapState::Ready => {
+                if let Some(control) = self.control.as_mut() {
+                    control.mark_bootstrapped();
+                }
+                Some(Input::BootstrapComplete)
+            }
+            BootstrapState::Failed => Some(Input::ControlEnded),
+            BootstrapState::Connecting { progress } => Some(Input::DirectorySample {
+                progress: Some(progress),
+                socks: None,
+            }),
+        }
+    }
+
+    fn now(&self) -> u64 {
+        now(&self.owner)
     }
 }
 
@@ -222,322 +511,53 @@ fn arm(owner: &OwnerHandle<MonotonicClock>, deadline: Option<u64>) {
     }
 }
 
-async fn wait_bootstrap(bootstrap: &mut Option<tokio::sync::watch::Receiver<BootstrapState>>) {
+async fn wait_bootstrap(bootstrap: &mut Option<watch::Receiver<BootstrapState>>) {
     if let Some(bootstrap) = bootstrap {
         let _changed = bootstrap.changed().await;
     } else {
-        std::future::pending::<()>().await
+        std::future::pending::<()>().await;
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn perform(
-    core: &mut Core,
-    mut step: Step,
-    owner: &OwnerHandle<MonotonicClock>,
-    binary: &Option<PathBuf>,
-    data_dir: &Path,
-    events: &EventSink,
-    seed: &OnionSeed,
-    virtual_port: u16,
-    control: &mut Option<DaemonTorControl>,
-    kept: &mut Option<KeptDataDir>,
-    pinned: &mut Option<shekyl_tor_control_client::binary::VerifiedTorBinary>,
-    incarnation: &mut Option<u64>,
-    pending_route: &mut Option<ManagedRunning>,
-    publish_onion: &mut bool,
-    forward: &watch::Receiver<Option<SocketAddr>>,
-    generation: &mut u64,
-    death_tx: &mpsc::Sender<(u64, TorDeath)>,
-    bootstrap: &mut Option<tokio::sync::watch::Receiver<BootstrapState>>,
-    halt: &mut bool,
-) -> Step {
-    try_pending_route(pending_route, incarnation);
-    let mut queue: std::collections::VecDeque<Action> = step.actions.drain(..).collect();
-    while let Some(action) = queue.pop_front() {
-        let input = match action {
-            Action::Announce => {
-                let status = core.status();
-                let text = render(&status);
-                if status.health {
-                    tracing::info!(target: "global", "{text}");
-                } else {
-                    tracing::warn!(target: "global", "{text}");
-                }
-                None
-            }
-            Action::CheckPin => Some(pin(binary, pinned)),
-            Action::Spawn { fresh_directory } => Some(
-                spawn(
-                    fresh_directory,
-                    pinned,
-                    data_dir,
-                    events,
-                    control,
-                    kept,
-                    generation,
-                    death_tx,
-                    bootstrap,
-                )
-                .await,
-            ),
-            Action::Sample => sample(control, owner).await,
-            Action::WatchState => watch_state(control),
-            Action::SetConfAvoidDiskWrites => {
-                if let Some(control) = control.as_ref() {
-                    if let Err(error) = control.defer_disk_writes().await {
-                        tracing::warn!(
-                            target: "global",
-                            "leaving Tor writing its state ({error})"
-                        );
-                    }
-                }
-                None
-            }
-            Action::Publish(route) => {
-                publish_route(route, pending_route, incarnation);
-                None
-            }
-            Action::RepublishOnion => {
-                *publish_onion = true;
-                None
-            }
-            Action::TakeDown => {
-                take_down(incarnation);
-                *generation = generation.wrapping_add(1);
-                if let Some(control) = control.take() {
-                    *kept = Some(control.stop_for_respawn().await);
-                }
-                *bootstrap = None;
-                None
-            }
-            Action::StopChild => {
-                *halt = true;
-                None
-            }
-        };
-        if let Some(input) = input {
-            step = core.on(input, now(owner));
-            for action in step.actions.drain(..).rev() {
-                queue.push_front(action);
-            }
-        }
-        if *publish_onion && publish_held_onion(control, seed, virtual_port, forward).await {
-            *publish_onion = false;
-        }
-    }
-    step
-}
-
-fn pin(
-    binary: &Option<PathBuf>,
-    pinned: &mut Option<shekyl_tor_control_client::binary::VerifiedTorBinary>,
-) -> Input {
-    let verified = match binary {
-        Some(path) => discover_and_verify_at(path),
-        None => discover_and_verify(),
-    };
-    match verified {
-        Ok(binary) => {
-            *pinned = Some(binary);
-            Input::PinAccepted
-        }
-        Err(TorBinaryError::NotFound) => Input::BundleMissing,
-        Err(TorBinaryError::Unavailable { .. }) => Input::Unavailable,
-        Err(_) => Input::PinRefused,
+/// A death the phase treats as the process ending. A stop is not one:
+/// the driver asked for it.
+fn observed_death(death: TorDeath) -> Option<Input> {
+    match death {
+        TorDeath::Stopped => None,
+        TorDeath::Exited { code } => Some(Input::ProcessEnded { exit_code: code }),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn spawn(
-    fresh_directory: bool,
-    pinned: &Option<shekyl_tor_control_client::binary::VerifiedTorBinary>,
-    data_dir: &Path,
-    events: &EventSink,
-    control: &mut Option<DaemonTorControl>,
-    kept: &mut Option<KeptDataDir>,
-    generation: &mut u64,
-    death_tx: &mpsc::Sender<(u64, TorDeath)>,
-    bootstrap: &mut Option<tokio::sync::watch::Receiver<BootstrapState>>,
-) -> Input {
-    if fresh_directory {
-        drop(kept.take());
-    }
-    let Some(binary) = pinned.clone() else {
-        return Input::PinRefused;
-    };
-    let spawned = if let Some(directory) = kept.take() {
-        DaemonTorControl::spawn_into(directory, binary, events.clone(), REPLY_BOUND)
-            .await
-            .map_err(|failure| (failure.error, Some(failure.directory)))
-    } else {
-        match DaemonTorControl::spawn_keeping(DaemonTorConfig {
-            tor_binary: binary,
-            data_dir_parent: data_dir.to_path_buf(),
-            events: events.clone(),
-            reply_deadline: REPLY_BOUND,
-        })
-        .await
-        {
-            Ok(up) => Ok(up),
-            Err(SpawnError::DataDir(error)) => Err((DaemonTorStartError::DataDir(error), None)),
-            Err(SpawnError::Launch(failure)) => Err((failure.error, Some(failure.directory))),
-        }
-    };
-    match spawned {
-        Ok(up) => {
-            *generation = generation.wrapping_add(1);
-            let gen = *generation;
-            let death = up.death();
-            let tx = death_tx.clone();
-            tokio::spawn(async move {
-                let _sent = tx.send((gen, death.await)).await;
-            });
-            *bootstrap = Some(up.watch_bootstrap());
-            if let Err(error) = up.ask(Command::supervisor_events()).await {
-                tracing::warn!(target: "global", "Tor events were not subscribed ({error})");
-            }
-            *control = Some(up);
-            Input::Spawned
-        }
-        Err((error, directory)) => {
-            if let Some(directory) = directory {
-                *kept = Some(directory);
-            }
-            match error {
-                DaemonTorStartError::DataDir(_) => Input::DirectoryUnusable,
-                _ => Input::SpawnFailed,
-            }
-        }
-    }
-}
-
-async fn sample(
-    control: &mut Option<DaemonTorControl>,
-    owner: &OwnerHandle<MonotonicClock>,
-) -> Option<Input> {
-    let Some(control) = control.as_mut() else {
-        return Some(Input::SpawnFailed);
-    };
-    let reply = tokio::time::timeout(
-        REPLY_BOUND,
-        control.ask(Command::GetInfo(vec![
-            "status/bootstrap-phase".to_owned(),
-            "net/listeners/socks".to_owned(),
-            "traffic/read".to_owned(),
-        ])),
+fn ends_incarnation(input: &Input) -> bool {
+    matches!(
+        input,
+        Input::ProcessEnded { .. } | Input::ControlEnded | Input::ReplyLate
     )
-    .await;
-    let reply = match reply {
-        Ok(Ok(reply)) => reply,
-        Ok(Err(DaemonTorStartError::Died(_))) => return Some(Input::ControlEnded),
-        _ => return Some(Input::ReplyLate),
-    };
-    if let Some(socks) = parse_socks_listeners(&reply) {
-        control.set_socks(socks);
-        // The sample input carries the progress. The socks binding is a
-        // second input, applied by the caller through the returned value
-        // only once. Prefer the socks input when the address just appeared;
-        // the following sample carries progress.
-        let _ = owner;
-        return Some(Input::SocksBound(socks));
+}
+
+fn input_of_ask(error: &DaemonTorStartError) -> Input {
+    match error {
+        DaemonTorStartError::Control(ControlError::Timeout) => Input::ReplyLate,
+        _ => Input::ControlEnded,
     }
-    Some(Input::DirectorySample {
-        progress: parse_bootstrap_progress(&reply),
-        traffic_read: traffic_read(&reply),
-    })
-}
-
-fn watch_state(control: &Option<DaemonTorControl>) -> Option<Input> {
-    let Some(control) = control else {
-        return None;
-    };
-    control
-        .data_path()
-        .join("state")
-        .is_file()
-        .then_some(Input::StateFileAppeared)
-}
-
-fn publish_route(
-    route: ManagedRunning,
-    pending: &mut Option<ManagedRunning>,
-    incarnation: &mut Option<u64>,
-) {
-    match shekyl_ffi::zone_ffi::publish_managed_running(&route) {
-        Some(installed) => *incarnation = Some(installed),
-        None => *pending = Some(route),
-    }
-}
-
-fn try_pending_route(pending: &mut Option<ManagedRunning>, incarnation: &mut Option<u64>) {
-    let Some(route) = pending.take() else {
-        return;
-    };
-    match shekyl_ffi::zone_ffi::publish_managed_running(&route) {
-        Some(installed) => *incarnation = Some(installed),
-        None => *pending = Some(route),
-    }
-}
-
-fn take_down(incarnation: &mut Option<u64>) {
-    if let Some(incarnation) = incarnation.take() {
-        let _fell = shekyl_ffi::zone_ffi::publish_tor_down(incarnation, DownCause::ProcessExited);
-    }
-}
-
-async fn publish_held_onion(
-    control: &Option<DaemonTorControl>,
-    seed: &OnionSeed,
-    virtual_port: u16,
-    forward: &watch::Receiver<Option<SocketAddr>>,
-) -> bool {
-    let (Some(control), Some(forward)) = (control, *forward.borrow()) else {
-        return false;
-    };
-    match control
-        .publish(seed, virtual_port, forward, MAX_STREAMS, OnionPow::Enabled)
-        .await
-    {
-        Ok(service) => {
-            shekyl_ffi::dialer_ffi::note_own_onion(service.as_str(), virtual_port);
-            tracing::info!(
-                target: "global",
-                "Tor is up: overlay inbound is published at {}.onion",
-                service.as_str()
-            );
-            true
-        }
-        Err(error) => {
-            tracing::warn!(target: "global", "the onion was not published ({error})");
-            false
-        }
-    }
-}
-
-fn traffic_read(reply: &ControlReply) -> Option<u64> {
-    reply.lines().iter().find_map(|line| {
-        line.strip_prefix("traffic/read=")
-            .and_then(|value| value.parse().ok())
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// An exit and a stop are different link causes. Swapping the arms
-    /// fails this.
-    fn down_cause(death: TorDeath) -> DownCause {
-        match death {
-            TorDeath::Exited => DownCause::ProcessExited,
-            TorDeath::Stopped => DownCause::ProcessStopped,
-        }
-    }
-
+    /// An exit reaches the phase with its code. A stop does not. Swapping
+    /// the arms fails this.
     #[test]
-    fn an_exit_and_a_stop_are_different_link_causes() {
-        assert_eq!(down_cause(TorDeath::Exited), DownCause::ProcessExited);
-        assert_eq!(down_cause(TorDeath::Stopped), DownCause::ProcessStopped);
+    fn an_exit_reaches_the_phase_and_a_stop_does_not() {
+        assert_eq!(
+            observed_death(TorDeath::Exited { code: Some(9) }),
+            Some(Input::ProcessEnded { exit_code: Some(9) })
+        );
+        assert_eq!(
+            observed_death(TorDeath::Exited { code: None }),
+            Some(Input::ProcessEnded { exit_code: None })
+        );
+        assert_eq!(observed_death(TorDeath::Stopped), None);
     }
 }
