@@ -888,14 +888,17 @@ drives it):
 
     Anything else (an empty record in the middle class, a fifth padding
     record, padding after a frame's payload began, a smaller record where
-    a frame owes payload) is refused. A run of empty records yields after
-    `EMPTY_RECORDS_PER_POLL` = 2 instead of holding the task.
+    a frame owes payload, a byte after the close record) is refused. A run
+    of empty records yields after `EMPTY_RECORDS_PER_POLL` = 2 instead of
+    holding the task.
   - **An authenticated end** (close-out F7). Shutdown flushes, then seals
     the close record: occupancy 0 in the smallest class, which nothing
     else sends. The reader ends the stream at that record. A transport
     that ends without it is a truncation, at a record boundary or inside
     one. Once the peer's close has been read, a transport that refuses our
-    own close because the peer has gone completes the shutdown.
+    own close because the peer has gone completes the shutdown. A write
+    after that shutdown returns `BrokenPipe` and does not poison the read
+    side, so the response can still be read.
   - **One refusal is final** (close-out F5). A refused record, a
     transport error and a refused submission poison the stream: every
     later read, write, flush and shutdown returns `StreamPoisoned`.
@@ -920,16 +923,20 @@ drives it):
     - **Past the cap:** a submission that would pass `SUBMISSION_CAP` is
       discarded without a record sealed, and the stream is poisoned.
       Nothing of a submission is on the wire before its flush.
-  - **The daemon checks the shape it read** (close-out F2). The stream's
-    `InboundShape` reports the shapes of the records it read last.
-    `ends_in_submission` is true when they are one padded submission:
-    `SUBMISSION_RECORDS` largest-class records, the empty ones first, at
-    least one carrying payload. A submission that fills all five records
-    has no padding, so it counts only when the record before it visibly
-    ends a message (a smaller class, an empty record, or the end of a
-    padded frame). RT-W10's `submit_transaction` route refuses any body
-    for which it is false: the daemon fails closed, and a client that did
-    not pad sends again.
+  - **The daemon checks the shape it read** (close-out F2). The reader
+    decides as it admits each record, and `InboundShape::ends_in_submission`
+    is that verdict. It is true in two cases. A padded frame is one, at the
+    record that finishes it. Exactly `SUBMISSION_RECORDS` largest-class
+    payload records in a row is the other, counted from a message boundary:
+    the start of the stream, a smaller class, or a padded frame that just
+    finished. The next largest-class record clears it, so a longer ordinary
+    message is never a submission. A full-size submission that continues a
+    run which already ended on a largest-class record has no boundary in
+    front of it; the daemon refuses it and the client sends again. An empty
+    padding record opens a frame. It does not end the message before it, so
+    a later ordinary record cannot borrow that padding and look like a
+    shorter frame. RT-W10's `submit_transaction` route refuses any body for
+    which the verdict is false when the body has been read.
   - **Tested through hyper:** every `submit_transaction` upload, for a
     transaction of 0, 1, 26,599, 97,585 and `TX_WEIGHT_LIMIT` bytes, is
     exactly five records, and the handler has those five records open
