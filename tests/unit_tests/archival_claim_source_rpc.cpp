@@ -202,7 +202,7 @@ TEST(archival_claim_source_rpc, fill_matches_single_gather_field_for_field)
     for (size_t b = 0; b < snap.bonds.size(); ++b)
     {
       EXPECT_EQ(out.bonds[b].join_settlement_epoch, snap.bonds[b].join_settlement_epoch);
-      EXPECT_EQ(out.bonds[b].is_foundation_complete_tree, snap.bonds[b].is_foundation_complete_tree);
+      EXPECT_EQ(out.bonds[b].is_support_complete_tree, snap.bonds[b].is_support_complete_tree);
       EXPECT_EQ(out.bonds[b].bad_intervals_flat, snap.bonds[b].bad_intervals_flat);
     }
     ASSERT_EQ(out.shards.size(), snap.shards.size());

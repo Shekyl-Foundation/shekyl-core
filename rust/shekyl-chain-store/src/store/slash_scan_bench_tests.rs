@@ -817,7 +817,7 @@ impl SlashedChain {
 /// inflow; and every Σwork row is zero and no `R_market` row exists, as
 /// before, because a complete-tree persona is not a market member
 /// (`shekyl_archival_retention::market_member_at_epoch`:
-/// `is_foundation_complete_tree ⇒ false`),
+/// `is_support_complete_tree ⇒ false`),
 /// so its credits earn no work and count in no shard. Re-pinned
 /// 2026-10-08 again at CEN-J27: the joins became real bond posts, so the
 /// four personas are the harness's (`Persona::at(0..4)`, whose keys and

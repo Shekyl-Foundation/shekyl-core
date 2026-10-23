@@ -227,16 +227,13 @@ fn compact_holdings_keep_only_final_shards_and_sort_canonically() {
     assert_eq!(emitted(E1, &records, 2), [pair(P1, 1), pair(P2, 0)]);
 }
 
-/// Pin 2 on a complete tree: it expands to the closed-and-final prefix at
-/// `h_open`, not to every shard and not to tip's registry. Red edit: expand
-/// to a count read anywhere but the open.
+/// A complete tree is a support role and contributes no economy pair, at
+/// any final count. Red edit: expand it over `0..final_count`.
 #[test]
-fn complete_tree_expands_the_closed_and_final_prefix() {
-    assert_eq!(
-        emitted(E1, &[complete(P1, 0)], 2),
-        [pair(P1, 0), pair(P1, 1)]
-    );
+fn a_complete_tree_is_not_in_the_economy_set() {
+    assert!(emitted(E1, &[complete(P1, 0)], 2).is_empty());
     assert!(emitted(E1, &[complete(P1, 0)], 0).is_empty());
+    assert!(emitted(E1, &[complete(P1, 0)], 64).is_empty());
 }
 
 /// A persona with no drawable pair contributes no key: its key is not

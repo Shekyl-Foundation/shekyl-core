@@ -7,7 +7,7 @@
 //! remainder.
 //!
 //! `shekyl-p-serve` needs one thing from the persona: a signature over the
-//! 112-byte pass transcript under `SCHEME_DOMAIN_ATTESTATION`, per served
+//! 113-byte pass transcript under `SCHEME_DOMAIN_ATTESTATION`, per served
 //! shard. The key that produces it is the bond identity key
 //! (`ArchivalPKeys::hybrid_sign_sk`), which under Model D lives inside the
 //! stake actor and is wiped with it. [`ResidentPassKey`] is the serving
@@ -132,7 +132,14 @@ mod tests {
     const DIGEST: [u8; 32] = [0x5a; 32];
 
     fn message() -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-        pass_countersignature_message(&NONCE, ANCHOR, &ANCHOR_HASH, SHARD, &DIGEST)
+        pass_countersignature_message(
+            shekyl_archival_retention::PassStream::Economy,
+            &NONCE,
+            ANCHOR,
+            &ANCHOR_HASH,
+            SHARD,
+            &DIGEST,
+        )
     }
 
     async fn active_staker() -> (
@@ -170,6 +177,7 @@ mod tests {
 
         verify_pass_transcript(
             &active.bond_id,
+            shekyl_archival_retention::PassStream::Economy,
             &NONCE,
             ANCHOR,
             &ANCHOR_HASH,

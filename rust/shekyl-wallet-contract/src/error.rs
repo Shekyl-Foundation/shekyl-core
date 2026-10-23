@@ -817,7 +817,7 @@ pub enum WalletRpcError {
     )]
     StakeNoShardsAvailable,
 
-    /// `stake` (`-29506`): posture `foundation_complete_tree` was requested
+    /// `stake` (`-29506`): posture `support_complete_tree` was requested
     /// without `acknowledge_non_earning_unbounded`.
     ///
     /// **The message is the warning** ([`FOUNDATION_POSTURE_WARNING`]), not

@@ -500,7 +500,7 @@ struct ArchivalEmissionEpochSnapshot
   struct BondRow
   {
     uint64_t join_settlement_epoch = 0;
-    bool is_foundation_complete_tree = false;
+    bool is_support_complete_tree = false;
     /// Flattened (start_epoch, end_exclusive) pairs.
     std::vector<uint64_t> bad_intervals_flat;
   };

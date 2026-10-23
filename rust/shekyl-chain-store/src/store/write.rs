@@ -488,6 +488,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
                     SettlementCheck::PassesExceedCounted { persona, shard } => {
                         settlement(SettlementFault::PassesExceedCounted { persona, shard })
                     }
+                    SettlementCheck::SupportPassesExceedCounted { persona } => {
+                        settlement(SettlementFault::SupportPassesExceedCounted { persona })
+                    }
                     SettlementCheck::BeaconNotRecorded => {
                         settlement(SettlementFault::BeaconNotRecorded)
                     }

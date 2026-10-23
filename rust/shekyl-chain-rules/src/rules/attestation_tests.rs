@@ -100,7 +100,14 @@ fn signed_record(chain: &MockChain, anchor: BlockHeight) -> SignedRecord {
         Ok(AtHeight::AboveTip) => unreachable!("the anchor is on the chain"),
         Err(never) => match never {},
     });
-    let msg = pass_countersignature_message(&NONCE, anchor, &anchor_hash, SHARD, &DIGEST);
+    let msg = pass_countersignature_message(
+        shekyl_archival_retention::PassStream::Economy,
+        &NONCE,
+        anchor,
+        &anchor_hash,
+        SHARD,
+        &DIGEST,
+    );
     let signed = sign_pqc_auth_for_output(&[0xA7; 64], 0, SCHEME_DOMAIN_ATTESTATION, &msg)
         .expect("a fixture seed signs");
     let p_id = *p_canonical_id_from_hybrid_pubkey(&signed.hybrid_public_key).as_bytes();

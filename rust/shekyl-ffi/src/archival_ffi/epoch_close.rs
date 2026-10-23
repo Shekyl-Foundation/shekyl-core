@@ -428,7 +428,7 @@ pub struct ShekylArchivalEpochCloseBond {
     pub bad_intervals_ptr: *const u64,
     /// Pair count (not u64 count).
     pub bad_intervals_len: usize,
-    pub is_foundation_complete_tree: u8,
+    pub is_support_complete_tree: u8,
 }
 
 /// One gathered shard-registry row for `shekyl_archival_epoch_close_compute`.
@@ -478,7 +478,7 @@ impl DecodedEpochRows {
             .zip(&self.bad)
             .map(|((&join, &complete), bad)| EpochCloseBond {
                 join_settlement_epoch: join,
-                is_foundation_complete_tree: complete,
+                is_support_complete_tree: complete,
                 bad_intervals: bad,
             })
             .collect()
@@ -534,7 +534,7 @@ pub(super) unsafe fn decode_epoch_rows(
             });
         };
         joins.push(bond.join_settlement_epoch);
-        completes.push(bond.is_foundation_complete_tree != 0);
+        completes.push(bond.is_support_complete_tree != 0);
         bad.push(intervals);
     }
 
