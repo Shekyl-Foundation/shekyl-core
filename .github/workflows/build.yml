@@ -774,8 +774,9 @@ jobs:
         # and its one stop path; a second daemon on the same data directory
         # refused by the lock; a config directory whose access list grants
         # Users write refused with exit 2; another network's data directory
-        # refused by the marker. RT-W14 later adds a service-manager case
-        # (install, start, SERVICE_RUNNING, stop).
+        # refused by the marker; and a daemon in its own process group sent
+        # Ctrl-Break takes its one stop path (Rick, 2026-10-22). RT-W14 later
+        # adds a service-manager case (install, start, SERVICE_RUNNING, stop).
         run: |
           pwsh -NoProfile -File scripts/ci/daemon_boot_stop_smoke.ps1 -Daemon 'build\bin\Release\shekyld.exe'
       - name: core_tests on MSVC
