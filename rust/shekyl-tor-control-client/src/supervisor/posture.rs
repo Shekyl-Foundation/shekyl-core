@@ -122,6 +122,20 @@ pub struct Syncing {
     pub tor: bool,
 }
 
+/// How a bootstrap is going, as of the last progress line (`TOR_SUPERVISOR.md`
+/// §5, "Waiting on the Tor directory"): how long the percent has held, and
+/// how much Tor read in the window. Bytes moving with the percent held is a
+/// slow directory mirror; nothing moving is one that is not answering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BootstrapLine {
+    /// How long the percent has been unchanged.
+    pub held_for: std::time::Duration,
+    /// Bytes Tor read in the window. `None` when a sample did not say.
+    pub received: Option<u64>,
+    /// The window `received` covers.
+    pub window: std::time::Duration,
+}
+
 /// One typed read of the supervisor (`TSR-Q12`). No message text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
@@ -143,6 +157,9 @@ pub struct Status {
     pub fixes: Vec<ManagedTorFix>,
     /// The last bootstrap percent. Telemetry for the posture line.
     pub progress: u8,
+    /// The bootstrap's progress line. Only while bootstrapping, once the
+    /// first window has passed.
+    pub bootstrap: Option<BootstrapLine>,
 }
 
 /// `OwnTx` from health and the connector settings.
@@ -211,12 +228,53 @@ pub fn render(status: &Status) -> String {
     text
 }
 
+fn bootstrap_sentence(progress: u8, line: Option<BootstrapLine>) -> String {
+    let Some(line) = line else {
+        return format!("Tor is fetching the network directory ({progress}%).");
+    };
+    let mut text = format!(
+        "Tor is fetching the network directory ({progress}%, unchanged for {}).",
+        spoken_duration(line.held_for)
+    );
+    let window = spoken_duration(line.window);
+    match line.received {
+        Some(0) => text.push_str(&format!(" Nothing arrived in the last {window}.")),
+        Some(bytes) => text.push_str(&format!(
+            " {} arrived in the last {window}; a slow directory mirror can hold this for minutes.",
+            spoken_bytes(bytes)
+        )),
+        None => {}
+    }
+    text
+}
+
+fn spoken_duration(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds < 60 {
+        format!("{seconds} s")
+    } else {
+        format!("{} min {} s", seconds / 60, seconds % 60)
+    }
+}
+
+fn spoken_bytes(bytes: u64) -> String {
+    // CLIPPY: a display figure; a byte count below 2^52 is exact in f64.
+    #[allow(clippy::cast_precision_loss)]
+    let value = bytes as f64;
+    if bytes < 1_000 {
+        format!("{bytes} bytes")
+    } else if bytes < 1_000_000 {
+        format!("{:.1} kB", value / 1e3)
+    } else {
+        format!("{:.1} MB", value / 1e6)
+    }
+}
+
 fn cause_sentence(status: &Status) -> Option<String> {
     let sentence = match &status.cause {
-        Cause::None if status.shown == Shown::Bootstrapping => Some(format!(
-            "Tor is fetching the network directory ({progress}%).",
-            progress = status.progress
-        )),
+        Cause::None if status.shown == Shown::Bootstrapping => {
+            Some(bootstrap_sentence(status.progress, status.bootstrap))
+        }
         Cause::None => None,
         Cause::BundleMissing => Some("No Tor was found beside the daemon.".to_owned()),
         Cause::PinRefused => {

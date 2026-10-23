@@ -86,6 +86,7 @@ fn bring_up(core: &mut Core) -> Step {
         Input::DirectorySample {
             progress: Some(10),
             socks: Some(socks()),
+            read: None,
         },
         0,
     );
@@ -174,6 +175,7 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
         Input::DirectorySample {
             progress: Some(10),
             socks: Some(bound),
+            read: None,
         },
         0,
     );
@@ -183,6 +185,7 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
             Input::DirectorySample {
                 progress: Some(10),
                 socks: None,
+                read: None,
             },
             now,
         );
@@ -195,6 +198,7 @@ fn a_sample_keeps_what_the_reply_omits_and_a_late_reply_restarts() {
         Input::DirectorySample {
             progress: Some(40),
             socks: None,
+            read: None,
         },
         90_000 * 1_000_000_000,
     );
@@ -243,6 +247,7 @@ fn an_open_file_limit_degrades_without_a_respawn() {
                 Input::DirectorySample {
                     progress: Some(100),
                     socks: None,
+                    read: None,
                 },
                 due,
             );
@@ -282,6 +287,7 @@ fn a_clock_jump_is_one_sample_and_the_reply_restores_the_line() {
         Input::DirectorySample {
             progress: None,
             socks: None,
+            read: None,
         },
         6_000,
     );
@@ -451,6 +457,7 @@ fn a_repeated_death_names_the_last_exit_code() {
         Input::DirectorySample {
             progress: Some(100),
             socks: Some(socks()),
+            read: None,
         },
         due,
     );
@@ -551,6 +558,7 @@ fn a_ready_gate_without_a_listener_waits_for_the_sample() {
         Input::DirectorySample {
             progress: Some(100),
             socks: None,
+            read: None,
         },
         0,
     );
@@ -605,6 +613,7 @@ fn a_running_tor_is_sampled_and_a_late_reply_restarts_it() {
         Input::DirectorySample {
             progress: Some(100),
             socks: None,
+            read: None,
         },
         alive,
     );
@@ -646,4 +655,64 @@ fn the_liveness_sample_ends_with_the_running_phase() {
         core.deadline().is_none(),
         "a stopping Tor has nothing waiting"
     );
+}
+
+/// A bootstrap says its progress line every `alive_every`: the percent, how
+/// long it has held, and the bytes Tor read in the window, measured from the
+/// first sample that carried a count. Without the line a 314 s cold start
+/// said nothing (Linux acceptance, 2026-10-23).
+#[test]
+fn a_bootstrap_says_its_progress_and_whether_bytes_are_moving() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    core.on(Input::PinAccepted, 0);
+    core.on(Input::Spawned, 0);
+    let sample = |progress, read| Input::DirectorySample {
+        progress: Some(progress),
+        socks: Some(socks()),
+        read: Some(read),
+    };
+    core.on(sample(55, 1_000), 0);
+    core.on(sample(55, 3_201_000), duration_ns(Duration::from_secs(3)));
+
+    let window = duration_ns(Duration::from_secs(4));
+    let step = core.on_deadline(window);
+    assert_eq!(announces(&step), 1, "the progress line is said");
+    let line = core.status().bootstrap.expect("a line while bootstrapping");
+    assert_eq!(line.received, Some(3_200_000));
+    assert_eq!(line.window, Duration::from_secs(4));
+    let text = render(&core.status());
+    assert!(text.contains("55%"), "{text}");
+    assert!(text.contains("3.2 MB arrived in the last 4 s"), "{text}");
+
+    // Nothing moved in the next window: the line says so.
+    let step = core.on_deadline(2 * window);
+    assert_eq!(announces(&step), 1);
+    let text = render(&core.status());
+    assert!(text.contains("Nothing arrived in the last 4 s"), "{text}");
+    assert!(text.contains("unchanged for 8 s"), "{text}");
+
+    // Running ends the line: the deadline is a liveness sample again.
+    core.on(Input::BootstrapComplete, 2 * window);
+    assert_eq!(core.status().bootstrap, None);
+}
+
+/// A sample without a count leaves the window unknown, never zero: the line
+/// does not claim a stall it did not measure.
+#[test]
+fn a_bootstrap_without_a_count_does_not_claim_a_stall() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    core.on(Input::PinAccepted, 0);
+    core.on(Input::Spawned, 0);
+    core.on(
+        Input::DirectorySample {
+            progress: Some(30),
+            socks: None,
+            read: None,
+        },
+        1,
+    );
+    core.on_deadline(duration_ns(Duration::from_secs(4)));
+    let text = render(&core.status());
+    assert!(text.contains("30%"), "{text}");
+    assert!(!text.contains("Nothing arrived"), "{text}");
 }

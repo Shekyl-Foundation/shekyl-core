@@ -21,11 +21,12 @@ use shekyl_tor_control_client::binary::{
     discover_and_verify, discover_and_verify_at, VerifiedTorBinary,
 };
 use shekyl_tor_control_client::control::{
-    parse_bootstrap_progress, parse_event, parse_socks_listeners, BootstrapState, Command,
-    ControlError, EventReceiver, EventSink,
+    parse_bootstrap_progress, parse_event, parse_socks_listeners, parse_traffic_read,
+    BootstrapState, Command, ControlError, EventReceiver, EventSink,
 };
 use shekyl_tor_control_client::supervisor::{
-    input_of, render, Action, Connectors, Core, Input, ManagedRunning, Policy, Step, TorSetting,
+    input_of, render, Action, Cause, Connectors, Core, Input, ManagedRunning, Policy, Shown, Step,
+    TorSetting,
 };
 use shekyl_tor_control_daemon::{
     DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptDataDir, OnionPow, OnionSeed,
@@ -40,6 +41,9 @@ const REPLY_BOUND: Duration = Duration::from_secs(30);
 const MAX_STREAMS: u16 = 8;
 /// `GETINFO` key for the bootstrap phase. One sample asks this and the listener.
 const BOOTSTRAP_PHASE: &str = "status/bootstrap-phase";
+/// `GETINFO` key for the bytes Tor has read: with the bootstrap phase, it
+/// tells a slow directory mirror from one that is not answering (§5).
+const TRAFFIC_READ: &str = "traffic/read";
 /// `GETINFO` key for the SOCKS listeners.
 const SOCKS_LISTENERS: &str = "net/listeners/socks";
 
@@ -275,7 +279,9 @@ impl Drive {
             Action::Announce => {
                 let status = self.core.status();
                 let text = render(&status);
-                if status.health {
+                // A bootstrap's progress line is news, not a fault.
+                let progress = status.shown == Shown::Bootstrapping && status.cause == Cause::None;
+                if status.health || progress {
                     tracing::info!(target: "global", "{text}");
                 } else {
                     tracing::warn!(target: "global", "{text}");
@@ -284,21 +290,45 @@ impl Drive {
             }
             Action::CheckPin => Some(self.pin()),
             Action::Spawn { fresh_directory } => Some(self.spawn(fresh_directory).await),
-            Action::Sample => Some(self.sample().await),
+            // A control ask waits on Tor for up to the reply bound. A stop
+            // that arrives meanwhile drops the ask and stops at once: a
+            // wedged Tor must not hold the daemon's shutdown for the bound,
+            // nor run fault recovery first.
+            Action::Sample => {
+                let mut stop = self.stop.clone();
+                tokio::select! {
+                    biased;
+                    () = stopped(&mut stop) => Some(Input::Shutdown),
+                    input = self.sample() => Some(input),
+                }
+            }
             Action::WatchState => self.watch_state(),
             Action::SetConfAvoidDiskWrites => {
-                if let Some(control) = self.control.as_ref() {
-                    if let Err(error) = control.defer_disk_writes().await {
-                        tracing::warn!(
-                            target: "global",
-                            "leaving Tor writing its state ({error})"
-                        );
+                let mut stop = self.stop.clone();
+                let control = self.control.as_ref()?;
+                tokio::select! {
+                    biased;
+                    () = stopped(&mut stop) => Some(Input::Shutdown),
+                    result = control.defer_disk_writes() => {
+                        if let Err(error) = result {
+                            tracing::warn!(
+                                target: "global",
+                                "leaving Tor writing its state ({error})"
+                            );
+                        }
+                        None
                     }
                 }
-                None
             }
             Action::Publish(route) => Some(self.publish_route(route)),
-            Action::RepublishOnion => Some(self.republish().await),
+            Action::RepublishOnion => {
+                let mut stop = self.stop.clone();
+                tokio::select! {
+                    biased;
+                    () = stopped(&mut stop) => Some(Input::Shutdown),
+                    input = self.republish() => Some(input),
+                }
+            }
             Action::TakeDown => {
                 self.withdraw_route(DownCause::ProcessExited);
                 self.reap().await;
@@ -399,6 +429,7 @@ impl Drive {
             .ask(Command::GetInfo(vec![
                 BOOTSTRAP_PHASE.to_owned(),
                 SOCKS_LISTENERS.to_owned(),
+                TRAFFIC_READ.to_owned(),
             ]))
             .await;
         let reply = match reply {
@@ -412,6 +443,7 @@ impl Drive {
         Input::DirectorySample {
             progress: parse_bootstrap_progress(&reply),
             socks,
+            read: parse_traffic_read(&reply),
         }
     }
 
@@ -496,6 +528,7 @@ impl Drive {
             BootstrapState::Connecting { progress } => Some(Input::DirectorySample {
                 progress: Some(progress),
                 socks: None,
+                read: None,
             }),
         }
     }
@@ -540,6 +573,19 @@ fn ends_incarnation(input: &Input) -> bool {
     )
 }
 
+/// Resolves once the daemon is stopping: the flag is set, or its sender is
+/// gone. A stop already signalled resolves at once.
+async fn stopped(stop: &mut watch::Receiver<bool>) {
+    loop {
+        if *stop.borrow_and_update() {
+            return;
+        }
+        if stop.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
 fn input_of_ask(error: &DaemonTorStartError) -> Input {
     match error {
         DaemonTorStartError::Control(ControlError::Timeout) => Input::ReplyLate,
@@ -550,6 +596,54 @@ fn input_of_ask(error: &DaemonTorStartError) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A control ask that never answers, the wedged-Tor case, does not hold
+    /// a stop: the stop resolves the race and the driver folds `Shutdown`.
+    /// Dropping the `stopped` arm from the select makes this time out.
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_interrupts_an_ask_a_wedged_tor_never_answers() {
+        let (tx, rx) = watch::channel(false);
+        let mut stop = rx.clone();
+        let wedged = std::future::pending::<Input>();
+        let raced = tokio::spawn(async move {
+            tokio::select! {
+                biased;
+                () = stopped(&mut stop) => Some(Input::Shutdown),
+                input = wedged => Some(input),
+            }
+        });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        tx.send(true).expect("the driver still holds the receiver");
+        let outcome = tokio::time::timeout(Duration::from_secs(1), raced)
+            .await
+            .expect("the stop ended the ask within a second, not the 30 s bound")
+            .expect("the race task ran");
+        assert_eq!(outcome, Some(Input::Shutdown));
+    }
+
+    /// An ask that answers is unaffected, and a stop signalled before the
+    /// ask began still wins (the daemon is already stopping).
+    #[tokio::test]
+    async fn an_answer_passes_through_and_an_earlier_stop_wins() {
+        let (_tx, rx) = watch::channel(false);
+        let mut stop = rx.clone();
+        let answered = tokio::select! {
+            biased;
+            () = stopped(&mut stop) => Some(Input::Shutdown),
+            input = async { Input::ReplyLate } => Some(input),
+        };
+        assert_eq!(answered, Some(Input::ReplyLate));
+
+        let (tx, rx) = watch::channel(false);
+        tx.send(true).expect("receiver alive");
+        let mut stop = rx.clone();
+        let raced = tokio::select! {
+            biased;
+            () = stopped(&mut stop) => Some(Input::Shutdown),
+            input = std::future::pending::<Input>() => Some(input),
+        };
+        assert_eq!(raced, Some(Input::Shutdown));
+    }
 
     /// An exit reaches the phase with its code. A stop does not. Swapping
     /// the arms fails this.

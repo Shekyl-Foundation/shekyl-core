@@ -644,12 +644,22 @@ not changed in this round. Where both need the same arithmetic (backoff, the
 failure classes), that code lives in `shekyl-tor-control-client`, which both
 already name; PWD-E9 forbids sharing an instance, not a library.
 
-While Running, a Tor that nothing else is asking gets one `GETINFO` every
-30 s (provisional). With the driver's 30 s reply bound, a wedged Tor is a
-process fault within about a minute; a command already waiting on it, such as
-the `SETCONF AvoidDiskWrites=1`, delays that by its own bound. The ask goes
-over the owning control connection only, so it is invisible to the network
-(`TSR-Q9`).
+One 30 s deadline (provisional, `Policy::alive_every`) does two jobs. While
+Running, a Tor that nothing else is asking gets one `GETINFO`: with the
+driver's 30 s reply bound, a wedged Tor is a process fault within about a
+minute, and a command already waiting on it, such as the `SETCONF
+AvoidDiskWrites=1`, delays that by its own bound. While bootstrapping, the
+deadline says the §5 progress line: the percent, how long it has held, and
+the bytes Tor read in the window (`traffic/read`, asked with every sample). A
+held percent with bytes moving is a slow directory mirror; nothing moving is
+one not answering. Every ask goes over the owning control connection only, so
+it is invisible to the network (`TSR-Q9`).
+
+A stop that arrives while a control ask (a sample, the `SETCONF`, an onion
+republish) waits on Tor drops the ask and stops at once: a wedged Tor never
+holds the daemon's shutdown for the reply bound, and no fault recovery runs
+first. The teardown's own bound (`SHUTDOWN_GRACE`, 5 s, then the kill) still
+applies; the 2026-10-23 run stopped in 5.2 s with Tor frozen.
 
 ### 4.12 C++
 
@@ -744,7 +754,11 @@ exists.
 - **Seeded start:** the next boot had Tor up 4.1 s after start, with a new
   per-boot onion.
 - **Seen, not a case:** during the five-minute cold bootstrap the daemon's
-  log said only that the dialer waits; nothing named Tor's progress.
+  log said only that the dialer waits; nothing named Tor's progress. The
+  progress line (§4.11) fixes it.
+- **Stop while Tor is frozen,** with the fix: `SIGTERM` six seconds into a
+  liveness sample's wait stopped the daemon 5.2 s later (the teardown's
+  grace), with no fault recovery first.
 
 | Case | Expected | Apparatus |
 | --- | --- | --- |

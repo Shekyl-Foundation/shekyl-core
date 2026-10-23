@@ -12,7 +12,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::posture::{fixes, own_tx, Cause, Connectors, Shown, Status, Syncing};
+use super::posture::{fixes, own_tx, BootstrapLine, Cause, Connectors, Shown, Status, Syncing};
 
 /// Shifts past this saturate a doubling backoff for any base of at least one
 /// nanosecond. The cap is what the operator waits.
@@ -30,11 +30,14 @@ pub struct Policy {
     pub cap: Duration,
     /// How often a bootstrap is sampled while Tor is answering.
     pub sample_every: Duration,
-    /// How often a running Tor is sampled when nothing else asks it
-    /// anything. A wedged Tor sends no event and closes nothing, so only
-    /// an outstanding question can meet the driver's reply bound (§4.2: a
-    /// wedged Tor is a dead Tor). Found missing in the Linux acceptance run
-    /// of 2026-10-23: a stopped Tor went unnoticed for five minutes.
+    /// One deadline with two duties. While Running, a Tor that nothing else
+    /// asks gets a sample: a wedged Tor sends no event and closes nothing,
+    /// so only an outstanding question can meet the driver's reply bound
+    /// (§4.2: a wedged Tor is a dead Tor). While bootstrapping, the
+    /// progress line is said: the percent, how long it has held, and the
+    /// bytes Tor read in the window (§5). Both found missing in the Linux
+    /// acceptance run of 2026-10-23: a stopped Tor went unnoticed for five
+    /// minutes, and a 314 s cold start said nothing.
     pub alive_every: Duration,
     /// Consecutive failed launches before the next one takes a fresh
     /// data directory. `TSR-M2` had no launch failure, so this stays 3.
@@ -133,6 +136,9 @@ pub enum Input {
         progress: Option<u8>,
         /// The SOCKS listener, when the reply named one.
         socks: Option<SocketAddr>,
+        /// `traffic/read`, the bytes Tor has read since it started, when the
+        /// reply carried it.
+        read: Option<u64>,
     },
     /// A control reply missed the bound.
     ReplyLate,
@@ -276,9 +282,18 @@ pub struct Core {
     sample_at: Option<u64>,
     /// When the posture is said again.
     announce_at: Option<u64>,
-    /// When a running Tor is next asked whether it still answers. Only
-    /// while [`Phase::Running`].
+    /// When a running Tor is next asked whether it still answers, or a
+    /// bootstrapping one's progress line is said. Only while
+    /// [`Phase::Bootstrapping`] or [`Phase::Running`].
     alive_at: Option<u64>,
+    /// When `progress` last changed, in the caller's clock.
+    progress_at: u64,
+    /// `traffic/read` from the latest sample this incarnation.
+    read: Option<u64>,
+    /// `traffic/read` when the last progress line was said.
+    read_at_line: Option<u64>,
+    /// The last progress line. Only while bootstrapping.
+    line: Option<BootstrapLine>,
 }
 
 impl Core {
@@ -303,6 +318,10 @@ impl Core {
             sample_at: None,
             announce_at: None,
             alive_at: None,
+            progress_at: now,
+            read: None,
+            read_at_line: None,
+            line: None,
         };
         let step = core.step(now, vec![Action::CheckPin]);
         (core, step)
@@ -323,7 +342,11 @@ impl Core {
             Input::Spawned => self.spawned(now),
             Input::SpawnFailed => self.launch_failed(now),
             Input::BootstrapComplete => self.bootstrap_complete(now),
-            Input::DirectorySample { progress, socks } => self.note_sample(now, progress, socks),
+            Input::DirectorySample {
+                progress,
+                socks,
+                read,
+            } => self.note_sample(now, progress, socks, read),
             Input::ReplyLate => self.process_fault(now, Cause::ReplyLate, false),
             Input::ProcessEnded { exit_code } => {
                 self.process_fault(now, Cause::Died { exit_code }, false)
@@ -385,11 +408,19 @@ impl Core {
         }
         if self.alive_at.is_some_and(|at| now >= at) {
             self.alive_at = None;
-            if matches!(self.phase, Phase::Running { .. }) {
-                if !actions.contains(&Action::Sample) {
-                    actions.push(Action::Sample);
+            match self.phase {
+                Phase::Running { .. } => {
+                    if !actions.contains(&Action::Sample) {
+                        actions.push(Action::Sample);
+                    }
+                    self.arm_alive(now);
                 }
-                self.arm_alive(now);
+                Phase::Bootstrapping { .. } => {
+                    self.note_line(now);
+                    actions.push(Action::Announce);
+                    self.arm_alive(now);
+                }
+                _ => {}
             }
         }
         self.step(now, actions)
@@ -413,6 +444,10 @@ impl Core {
             own_tx: own_tx(health, self.connectors),
             fixes: fixes(&self.cause, self.connectors),
             progress: self.progress,
+            bootstrap: match self.phase {
+                Phase::Bootstrapping { .. } => self.line,
+                _ => None,
+            },
         }
     }
 
@@ -441,8 +476,13 @@ impl Core {
         };
         self.launch_failures = 0;
         self.progress = 0;
+        self.progress_at = now;
+        self.read = None;
+        self.read_at_line = None;
+        self.line = None;
         self.set_cause(Cause::None);
         self.arm_sample(now);
+        self.arm_alive(now);
         vec![Action::Sample]
     }
 
@@ -468,9 +508,19 @@ impl Core {
         now: u64,
         progress: Option<u8>,
         socks: Option<SocketAddr>,
+        read: Option<u64>,
     ) -> Vec<Action> {
         if let Some(progress) = progress {
+            if progress != self.progress {
+                self.progress_at = now;
+            }
             self.progress = progress;
+        }
+        if read.is_some() {
+            self.read = read;
+            if self.read_at_line.is_none() {
+                self.read_at_line = read;
+            }
         }
         if let Phase::Running { link, .. } = &mut self.phase {
             *link = Link::Open;
@@ -768,6 +818,22 @@ impl Core {
 
     fn arm_sample(&mut self, now: u64) {
         self.sample_at = Some(now.saturating_add(self.sample_ns()));
+    }
+
+    /// The progress line as of `now`: how long the percent has held, and
+    /// what Tor read since the last line. The first window measures from
+    /// the incarnation's first sample that carried a count.
+    fn note_line(&mut self, now: u64) {
+        let received = match (self.read, self.read_at_line) {
+            (Some(read), Some(then)) => Some(read.saturating_sub(then)),
+            _ => None,
+        };
+        self.read_at_line = self.read;
+        self.line = Some(BootstrapLine {
+            held_for: Duration::from_nanos(now.saturating_sub(self.progress_at)),
+            received,
+            window: self.policy.alive_every,
+        });
     }
 
     fn arm_alive(&mut self, now: u64) {
