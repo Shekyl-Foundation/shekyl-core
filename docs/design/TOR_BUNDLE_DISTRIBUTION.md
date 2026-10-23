@@ -1,8 +1,8 @@
 # Tor bundle distribution — Tor by default, declined only explicitly, and shipped in every artifact
 
 **Status: RULED 2026-10-06 — ratified as a whole by Rick; §5 step 1 (Linux)
-and step 2's Windows half are implemented; step 2's macOS half and step 3
-are not.** He ratified the rows as they stood at
+and step 2's Windows and macOS halves are implemented; step 2's GUI
+installers (TB-12) and step 3 are not.** He ratified the rows as they stood at
 `4ad467800`, with two amendments that are folded in below: TB-7's third part
 became the exact-contents rule, and the system-supplied libraries are recorded
 (§5a). What step 1 landed is listed in §5. A managed Tor that is absent or
@@ -144,7 +144,7 @@ said about a row on its own.
 | **TB-8** | **The `PATH` tier is deleted for a `Pinned` target.** A `tor` found on `PATH` has its libraries elsewhere and cannot pass a four-file pin, and `PATH` is the widest check-to-exec window the resolver has. The override, beside-the-executable and `/opt/shekyl` tiers remain | Rick, 2026-10-06 |
 | **TB-9** | **The pins are one data file.** `build.rs` reads it and emits constants: the pin stays compiled in and is never read at runtime. The file is the only source for what the packaging side needs — tarball digest, per-file digests, bundle and tor versions, target label, the `Unavailable` dispositions — and the build recipe and the packaging check read it, they do not copy it. Two gates: the packaging job hashes the files it is about to pack against the file and fails on a difference (a test edits a digest and sees the build fail), and the file's set of targets equals the set of compiled arms | Rick, 2026-10-06 |
 | **TB-10** | **Re-pin to tor 0.4.9.14** with the digests in §4: the stable Expert Bundle 15.0.25, and on `linux-aarch64` the alpha line's 16.0a14, under DQ-T0.5's existing ruling and reopen criterion | Rick, 2026-10-06; re-pinned from 15.0.24 to 15.0.25 on the stable targets, Rick, 2026-10-16; `linux-aarch64` from 16.0a13 to 16.0a14, Rick, 2026-10-17 |
-| **TB-11** | **Windows and macOS become `Pinned` only with a launch test each.** Their digests are verified (§4); what is missing is evidence that the pinned binary starts under Shekyl's launcher on those platforms. The Windows test also asserts that `tor.exe`'s import table names only operating-system libraries, so that a future bundle which starts shipping its own DLL is noticed. The macOS test establishes what the signature on the pinned binary is and whether it carries the hardened runtime; inside a macOS `.app` the tor binary falls under Shekyl's code signing and notarization. What it established (measured on the macOS build host, 2026-10-22): Tor's macOS `tor` and `libevent` ship unsigned, and an unsigned arm64 binary is killed at exec, so Shekyl signs both with its Developer ID, hardened runtime on. The signed `tor` refuses a `libevent` signed by another team, so the pair is signed together. `codesign --remove-signature` does not give Tor's bytes back (it leaves `__LINKEDIT`'s vmsize grown), so the tie between the two digest sets is structural: `tor_bundle.py` rebuilds the signed file from Tor's with exactly the edits signing makes and requires it to equal the shipped file, so every byte outside the signature is Tor's | Rick, 2026-10-06. **Windows half satisfied 2026-10-17**: the `tor-pin-verify` Windows entry, [run 39006957604](https://github.com/Shekyl-Foundation/shekyl-core/actions/runs/39006957604). **macOS**: pinned at 15.0.25 (Rick, 2026-10-22); the two-set row and the tie are implemented; the row is pinned when its signed digests are recorded |
+| **TB-11** | **Windows and macOS become `Pinned` only with a launch test each.** Their digests are verified (§4); what is missing is evidence that the pinned binary starts under Shekyl's launcher on those platforms. The Windows test also asserts that `tor.exe`'s import table names only operating-system libraries, so that a future bundle which starts shipping its own DLL is noticed. The macOS test establishes what the signature on the pinned binary is and whether it carries the hardened runtime; inside a macOS `.app` the tor binary falls under Shekyl's code signing and notarization. What it established (measured on the macOS build host, 2026-10-22): Tor's macOS `tor` and `libevent` ship unsigned, and an unsigned arm64 binary is killed at exec, so Shekyl signs both with its Developer ID, hardened runtime on. The signed `tor` refuses a `libevent` signed by another team, so the pair is signed together. `codesign --remove-signature` does not give Tor's bytes back (it leaves `__LINKEDIT`'s vmsize grown), so the tie between the two digest sets is structural: `tor_bundle.py` rebuilds the signed file from Tor's with exactly the edits signing makes and requires it to equal the shipped file, so every byte outside the signature is Tor's | Rick, 2026-10-06. **Windows half satisfied 2026-10-17**: the `tor-pin-verify` Windows entry, [run 39006957604](https://github.com/Shekyl-Foundation/shekyl-core/actions/runs/39006957604). **macOS**: pinned at 15.0.26 (Rick, 2026-10-23: the signed pair is a release asset on this repository); its launch test is `tor-pin-verify`'s two macOS entries, run against the signed bytes |
 | **TB-12** | **"Every published target" includes the GUI wallet's installers.** That set is `shekyl-core`'s own artifacts **and** `shekyl-gui-wallet`'s (`.deb`, AppImage, Windows setup, macOS `.dmg`), which carry `shekyld` as a sidecar built from the core tag and therefore inherit its pin and need the bundle beside it. That work is in another repository and is tracked there; until it lands the GUI's daemon follows TB-2 (the posture table) | Rick, 2026-10-06; amended with TB-2, 2026-10-19 |
 | **TB-13** | **Licences travel with the binary.** Every artifact that carries tor carries the bundle's licence texts and the location and signature of the source of the tor version its pin names. Whether a pointer to the signed upstream source meets the GPL's source obligation is to be confirmed before beta, not assumed | Rick, 2026-10-06 |
 
@@ -170,8 +170,12 @@ from the Tor Project's archive on 2026-10-17 and ships tor `0.4.9.14`.
 | `linux-x86_64` | 15.0.25 (stable) | `19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a` |
 | `linux-aarch64` | 16.0a14 (alpha) | `6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2` |
 | `windows-x86_64` | 15.0.25 (stable) | `c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252` |
-| `macos-aarch64` | 15.0.25 (stable) | `a3febb6179152b0b4f56a0f5cc57bf5cc8ecef7db35e7c3e9d5a044c8158c26c` |
-| `macos-x86_64` | 15.0.25 (stable) | `e1ae4d4a734d28bb590839188511deb3cebc26fcbce9df66d01b2c452060fe95` |
+| `macos-aarch64` | 15.0.26 (stable) | `a3febb6179152b0b4f56a0f5cc57bf5cc8ecef7db35e7c3e9d5a044c8158c26c` |
+| `macos-x86_64` | 15.0.26 (stable) | `e1ae4d4a734d28bb590839188511deb3cebc26fcbce9df66d01b2c452060fe95` |
+
+The macOS tarballs of 15.0.26 (published 2026-10-21; its one change is
+browser-side, tor-browser#45397) are byte-identical to 15.0.25's, so the
+digests above are both releases' (VALIDSIG, checked 2026-10-22).
 
 Extracted files, by target:
 
@@ -191,6 +195,19 @@ Extracted files, by target:
 | `macos-x86_64` | `tor` | `e249a521aa5b0ff44a39c1dc4b5707ae8cb109d8a26c637b6acbbf6832bf2f14` |
 | | `libevent-2.1.7.dylib` | `38aea0316e01e1fc52a15941bf523c8bc018ca90655cfa90de568b4a86a82b4b` |
 
+The macOS files above are the rows' `upstream`. What ships is Shekyl's
+Developer ID-signed copy of each (TB-7 part 1, TB-11), signed once on
+2026-10-23, hardened runtime on, and published in the
+`tor-macos-15.0.26-signed` release on this repository. These are the rows'
+`files`, the digests the daemon checks at launch:
+
+| Target | File | Signed SHA-256 |
+| --- | --- | --- |
+| `macos-aarch64` | `tor` | `23829c8c47c8a13a391d7c0870666d571a65ab71167d0de7b9a560b0a5a76838` |
+| | `libevent-2.1.7.dylib` | `cc12c96e43d0806e5c1767f6880c96fac3e6d77e7fbc325e47513a4fe1d2eeb2` |
+| `macos-x86_64` | `tor` | `81c00fb8fa85194ad853a9160d8c57029f01aac5e2cdd741b3a057e988a942b9` |
+| | `libevent-2.1.7.dylib` | `afdbfe863b8dff0d8d23e20073d7f5f1d785fab72df953faa6bc5f2af5933394` |
+
 Every pinned bundle carries OpenSSL **3.5.9** (29 Sep 2026), read on
 2026-10-17 from the version string in the staged files: `libcrypto.so.3` in
 both Linux bundles, and the statically linked copy in `tor.exe` and in both
@@ -208,12 +225,10 @@ table names 21 DLLs and its delay-load table names none: `ADVAPI32.dll`,
 That list is the Windows row's `imports`; it is the same set the 15.0.24
 `tor.exe` imports.
 
-The Linux and Windows rows are the pin of record: they are the `linux` and
-`windows` rows of `config/tor_pins.json`, which `build.rs` compiles and the
-packaging tool reads, recorded through `RELEASE_CHECKLIST.md`'s "Bundled Tor
-pin current" procedure. The macOS rows remain the ruling's evidence until
-TB-11 adopts them; those targets are `unavailable` in the pin file meanwhile,
-with that as the stated reason.
+These rows are the pin of record: they are the `linux`, `windows` and `macos`
+rows of `config/tor_pins.json`, which `build.rs` compiles and the packaging
+tool reads, recorded through `RELEASE_CHECKLIST.md`'s "Bundled Tor pin
+current" procedure.
 
 ## 5. Order of work
 
@@ -283,22 +298,33 @@ with that as the stated reason.
    - TB-1: `tor = off` logs the clearnet-only warning on every boot. A node
      with no tor found, which has not declined, warns too (it was an info
      line); TB-2 says what it then does and says.
-   - macOS, FreeBSD and riscv64 Linux are `Unavailable` rows with
-     their reasons. FreeBSD and riscv64 Linux are rulings. The macOS
-     rows are not: they also carry `"pending": "TB-11"`,
-     which says the target is unavailable only until its pin is adopted. A
-     pending row compiles as `Unavailable`, which is what the binary does
-     today, so TB-4's two states stand at runtime; the marker is for the gate.
-     `check_tor_pin_targets.py` prints every pending row.
+   - FreeBSD and riscv64 Linux are `Unavailable` rows with their reasons,
+     both rulings. A row may carry `"pending"`, the work item that will pin
+     it; it compiles as `Unavailable`, so TB-4's two states stand at runtime,
+     and `check_tor_pin_targets.py` prints every pending row. None is pending
+     now: the macOS rows were, until TB-11 pinned them.
 2. **Windows and macOS:** TB-11, a pin and a launch test for each; and the
    GUI wallet's installers (TB-12), in `shekyl-gui-wallet`. **The Windows
-   half is LANDED**; macOS and the GUI wallet's installers are not. For
-   macOS, the row's two digest sets and their tie are implemented
-   (`tor_bundle.py` `stage --signed`, `verify --sources` and `tie`; `build.rs`
-   and `load_pins` refuse a macOS row without `upstream` and any other row
-   with it). Pending: the signed 15.0.25 pair's digests, where the signed
-   pair is kept for the build to fetch, the `tor-pin-verify` macOS entry, and
-   the macOS gitian descriptor's staging. The Windows half:
+   and macOS halves are LANDED**; the GUI wallet's installers are not. The
+   macOS half:
+   - The pin: both `macos` rows at 15.0.26, each with two digest sets, `files`
+     (the Developer ID-signed bytes the daemon checks) and `upstream` (Tor's).
+     `build.rs` and `load_pins` refuse a macOS row without `upstream` and any
+     other row with it.
+   - The signed pair: signed once per re-pin on the signing host and
+     published as the `tor-macos-<version>-signed` release on this repository
+     (`signed_url`; Rick, 2026-10-23). The digest in the row is the
+     integrity check, not the hosting.
+   - The tie: `tor_bundle.py` proves every byte outside each signature is
+     Tor's (`check_signature_tie`) at pin time (`tie`), when it stages and
+     when it verifies.
+   - The package: `gitian-build.py` fetches the signed files into the sources
+     cache with the tarball; the macOS gitian descriptor stages them into
+     `tor/` with `tor-licenses/` and verifies them, tie included.
+   - The launch test: `tor-pin-verify`'s two macOS entries run the live tests
+     on the exact signed bytes, against the compiled pin.
+
+   The Windows half:
    - The pin: the `windows` row of `config/tor_pins.json`, `tor.exe` only,
      with `imports`, the DLLs it may import (§4). `build.rs` and
      `tor_bundle.py`'s `load_pins` both refuse a Windows row without the list
@@ -363,11 +389,10 @@ that probe as the answer.
   write it can replace `shekyld`; the pin was never a defence against root.
 - **macOS `DYLD_*` variables.** TB-7 part 2 clears them from the child's
   environment, and the library is named by `@executable_path`, which no search
-  path overrides. No reliance is placed on a hardened-runtime signature: a
-  scan of both macOS binaries from Linux found no code signature in them, the
-  Tor Project signs the tarball and not necessarily the binary inside, and if
-  the hardened runtime ever protects this process it will be through Shekyl's
-  own signature once tor sits inside the `.app` (TB-11).
+  path overrides. Tor's macOS binaries ship unsigned; Shekyl's Developer ID
+  signature turns on the hardened runtime, which ignores `DYLD_*` variables,
+  and library validation, which refuses a `libevent` signed by another team
+  (TB-11). These are a second layer, not the one relied on.
 - **A local attacker who can write tor's directory between the check and the
   exec.** DQ-T0.5 already names this window and its reopen criterion (verify
   and exec the same descriptor). TB-7 widens what is checked, not the window.

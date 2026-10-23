@@ -25,7 +25,9 @@ Subcommands (a target is named by its gitian host triple, `--host`):
   tarball-url  print where the host's pinned tarball is published (its
                detached signature is the same URL with `.asc` appended).
   fetch        download the host's tarball into `--sources` if it is not
-               there, and check its SHA-256. `--all` does every pinned host.
+               there, and check its SHA-256; for a macOS host also its signed
+               files, each checked against its shipped SHA-256. `--all` does
+               every pinned host.
   stage        check the tarball's SHA-256 BEFORE opening it, extract only the
                pinned files into `--dest`, check each file's SHA-256, and
                write the licence texts and the source pointer into
@@ -47,9 +49,12 @@ Subcommands (a target is named by its gitian host triple, `--host`):
 A macOS row carries two digest sets (TB-11). Shekyl signs Tor's macOS
 binaries with its Developer ID, so what ships is not Tor's release: `files`
 are the shipped bytes, which the daemon checks at every launch, and
-`upstream` are Tor's, as extracted from the signed tarball. `stage` for a
-macOS host takes the signed files from `--signed` and Tor's from the tarball,
-and refuses a pair that is not Tor's file plus a code signature.
+`upstream` are Tor's, as extracted from the signed tarball. The signed files
+are a release asset (`signed_url`), fetched into the sources cache beside the
+tarball and checked against the shipped digests: the pin is the integrity
+check, not the hosting. `stage` for a macOS host takes the signed files from
+the cache (or from `--signed`, the signing host's output) and Tor's from the
+tarball, and refuses a pair that is not Tor's file plus a code signature.
 
 An `unavailable` host is not an error: `fetch` and `stage` report it and do
 nothing, and the caller branches on `disposition`. `install-dir`,
@@ -186,6 +191,14 @@ def load_pins(path):
     rows = doc.get("targets")
     if not isinstance(rows, list) or not rows:
         raise Refused(f"{path}: no targets")
+
+    if any(r.get("os") == "macos" and r.get("disposition") == "pinned" for r in rows):
+        url = doc.get("signed_url")
+        if not isinstance(url, str) or not url.startswith("https://") or "{name}" not in url:
+            raise Refused(
+                f"{path}: a pinned macOS row needs \"signed_url\", the https template "
+                "({bundle_version}, {bundle_target}, {name}) its signed files are fetched from"
+            )
 
     seen_targets = set()
     seen_hosts = set()
@@ -356,32 +369,66 @@ def fetch(doc, row, sources, offline=False):
     it was given, and a cache miss that quietly became a download is how a
     build stops being reproducible without anyone deciding it should."""
     dest = sources / tarball_name(row)
+    _cached_or_download(tarball_url(doc, row), dest, lambda path: check_tarball(path, row), offline)
+    return dest
+
+
+def _cached_or_download(url, dest, check, offline):
+    """Make `dest` present and passing `check`: a cached copy is checked; a
+    missing one is downloaded (unless `offline`) and checked before it takes
+    the name later runs trust."""
     if dest.exists():
-        check_tarball(dest, row)
-        return dest
+        check(dest)
+        return
     if offline:
         raise Refused(
             f"{dest} is not in the sources cache and --no-fetch forbids downloading it. "
             "Populate the cache first: tor_bundle.py fetch --all --sources <cache>"
         )
-    sources.mkdir(parents=True, exist_ok=True)
-    url = tarball_url(doc, row)
+    dest.parent.mkdir(parents=True, exist_ok=True)
     if not url.startswith("https://"):
         raise Refused(f"refusing to fetch over anything but https: {url}")
     print(f"fetching {url}", file=sys.stderr)
-    fd, tmp_name = tempfile.mkstemp(dir=sources, prefix=dest.name + ".", suffix=".part")
+    fd, tmp_name = tempfile.mkstemp(dir=dest.parent, prefix=dest.name + ".", suffix=".part")
     tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "wb") as out, urllib.request.urlopen(url, timeout=120) as resp:
             shutil.copyfileobj(resp, out)
-        # Checked before it takes the name later runs trust.
-        check_tarball(tmp, row)
+        check(tmp)
         tmp.replace(dest)
     except OSError as exc:
         raise Refused(f"could not fetch {url}: {exc}") from exc
     finally:
         tmp.unlink(missing_ok=True)
-    return dest
+
+
+def signed_cache_dir(row, sources):
+    """Where a macOS row's signed files sit in the sources cache, beside the
+    tarball they are tied to."""
+    return sources / f"tor-signed-{row['bundle_target']}-{row['bundle_version']}"
+
+
+def signed_url(doc, row, name):
+    return doc["signed_url"].format(
+        bundle_version=row["bundle_version"], bundle_target=row["bundle_target"], name=name
+    )
+
+
+def fetch_signed(doc, row, sources, offline=False):
+    """macOS: make the signed files present in the sources cache, each checked
+    against its shipped digest (TB-11). The digest in the pin file is the
+    integrity check; where the files are hosted vouches for nothing."""
+    directory = signed_cache_dir(row, sources)
+    for entry in row["files"]:
+        def check(path, entry=entry):
+            actual = sha256_file(path)
+            if actual != entry["sha256"]:
+                raise Refused(
+                    f"{path} is not the pinned signed {entry['name']}: expected sha256 "
+                    f"{entry['sha256']}, found {actual}"
+                )
+        _cached_or_download(signed_url(doc, row, entry["name"]), directory / entry["name"], check, offline)
+    return directory
 
 
 def read_member(tar, name):
@@ -768,11 +815,6 @@ def check_directory(directory, row):
 def signed_files(row, signed):
     """macOS: the signed files from `signed`, which holds exactly the pinned
     names, each checked against its shipped pin."""
-    if signed is None:
-        raise Refused(
-            f"{row['gitian_host']} ships files Shekyl signs; name them with --signed "
-            "(the signing step's output)"
-        )
     if not signed.is_dir():
         raise Refused(f"{signed} is not a directory")
     pinned = {entry["name"]: entry["sha256"] for entry in row["files"]}
@@ -821,6 +863,8 @@ def stage(doc, row, sources, dest, licenses, offline=False, signed=None):
         texts = [(Path(member).name, read_member(tar, member)) for member in row["licenses"]]
     if row["os"] == "macos":
         upstream = upstream_files(doc, row, sources)
+        if signed is None:
+            signed = fetch_signed(doc, row, sources, offline=offline)
         for name, data in signed_files(row, signed).items():
             check_signature_tie(upstream[name], data, f"{name} in {signed}")
             staged.append((name, data))
@@ -957,6 +1001,8 @@ def main(argv=None):
                     print(f"{row['gitian_host']}: unavailable ({row['reason']}); nothing to fetch")
                     continue
                 print(f"{row['gitian_host']}: {fetch(doc, row, args.sources)}")
+                if row["os"] == "macos":
+                    print(f"{row['gitian_host']}: {fetch_signed(doc, row, args.sources)}")
         elif args.command == "stage":
             row = row_for_host(doc, args.host)
             if row["disposition"] != "pinned":

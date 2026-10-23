@@ -130,6 +130,34 @@ script: |
     chmod 755 bin/*
     cp ../LICENSE ../README.md ../docs/ANONYMITY_NETWORKS.md bin
     chmod 644 bin/LICENSE bin/*.md
+    # The pinned Tor (TOR_BUNDLE_DISTRIBUTION.md TB-6, TB-11), in bin/tor/ with
+    # its licence texts beside it, as the Linux descriptor stages it. macOS
+    # ships Shekyl's Developer ID-signed tor and libevent: gitian-build.py
+    # fetched them into the sources cache from the release asset, each checked
+    # against its pinned shipped digest. stage takes them from there, and stage
+    # and verify both prove every byte outside the signature is Tor's, read
+    # from the digest-checked tarball. Nothing is signed here.
+    #
+    # Each step's status stops the descriptor on its own (no errexit here), and
+    # --no-fetch makes a cache miss a refusal, so this step cannot go online.
+    if [ -z "${SOURCES_PATH:-}" ]; then
+      echo "tor bundle: no sources cache (SOURCES_PATH is unset); the bundle is not downloaded inside the build" >&2
+      exit 1
+    fi
+    if ! python3 ../scripts/release/tor_bundle.py stage --no-fetch --host "${i}" --sources "${SOURCES_PATH}" --dest bin/tor --licenses bin/tor-licenses; then
+      echo "tor bundle: stage failed for ${i}" >&2
+      exit 1
+    fi
+    if ! TOR_DISPOSITION="$(python3 ../scripts/release/tor_bundle.py disposition --host "${i}")"; then
+      echo "tor bundle: disposition failed for ${i}" >&2
+      exit 1
+    fi
+    if [ "${TOR_DISPOSITION}" = "pinned" ]; then
+      if ! python3 ../scripts/release/tor_bundle.py verify --host "${i}" --dir bin/tor --sources "${SOURCES_PATH}"; then
+        echo "tor bundle: verify failed for ${i}" >&2
+        exit 1
+      fi
+    fi
     DISTNAME=shekyl-${i}-${version}
     mv bin ${DISTNAME}
     find ${DISTNAME}/ | sort | tar --no-recursion --owner=0 --group=0 -c -T - | bzip2 -9 > ${OUTDIR}/${DISTNAME}.tar.bz2

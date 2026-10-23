@@ -66,6 +66,7 @@ def base_pins(tarball_digest):
         "bundle_url": "https://invalid.example/{bundle_version}/{bundle_target}.tar.gz",
         "source_url": "https://invalid.example/tor-{tor_version}.tar.gz",
         "source_signature_url": "https://invalid.example/tor-{tor_version}.tar.gz.asc",
+        "signed_url": "https://invalid.example/signed-{bundle_version}/{bundle_target}-{name}",
         "targets": [
             {
                 "os": "linux",
@@ -268,8 +269,12 @@ class Bench:
         self.tarball = self.sources / "tor-expert-bundle-macos-aarch64-9.9.9.tar.gz"
         self.signed = self.root / "signed"
         self.signed.mkdir()
+        # The cache the release build stages from: what `fetch` puts there.
+        self.signed_cache = self.sources / "tor-signed-macos-aarch64-9.9.9"
+        self.signed_cache.mkdir()
         for name, data in self.shipped.items():
             (self.signed / name).write_bytes(data)
+            (self.signed_cache / name).write_bytes(data)
         row = self.pins["targets"][0]
         row.update(
             os="macos",
@@ -660,11 +665,53 @@ def _(b):
     expect(b.verify("--sources", str(b.sources)), 0, "holds exactly the pinned bundle")
 
 
-@case("macos: stage without --signed refuses; it never ships Tor's unsigned files")
+@case("macos: stage takes the signed files from the cache, never Tor's unsigned ones")
 def _(b):
     b.macos()
-    expect(b.stage(), 1, "name them with --signed")
+    proc = b.run(
+        "stage", "--host", b.host, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    expect(proc, 0, "staged tor 0.0.0.1")
+    for name, data in b.shipped.items():
+        assert (b.dest / name).read_bytes() == data, name
+
+
+@case("macos: stage --no-fetch with no signed file in the cache refuses and downloads nothing")
+def _(b):
+    b.macos()
+    (b.signed_cache / "tor").unlink()
+    proc = b.run(
+        "stage", "--host", b.host, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    expect(proc, 1, "--no-fetch forbids downloading it")
+    assert "could not fetch" not in proc.stderr, proc.stderr
     assert not b.dest.exists()
+
+
+@case("macos: a cached signed file that is not the pinned one refuses")
+def _(b):
+    b.macos()
+    (b.signed_cache / "libevent-2.1.7.dylib").write_bytes(sign(b.upstream["libevent-2.1.7.dylib"], blob=b"\x02" * 512))
+    proc = b.run(
+        "stage", "--host", b.host, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    expect(proc, 1, "is not the pinned signed libevent-2.1.7.dylib")
+    assert not b.dest.exists()
+
+
+@case("pin file: a pinned macOS row needs an https signed_url naming the file")
+def _(b):
+    b.macos()
+    for bad in (None, "http://invalid.example/{bundle_target}-{name}", "https://invalid.example/x"):
+        if bad is None:
+            b.pins.pop("signed_url")
+        else:
+            b.pins["signed_url"] = bad
+        b.write()
+        expect(b.stage_signed(), 1, "needs \"signed_url\"")
 
 
 @case("macos: a signed file that ties but is not the pinned one refuses")
