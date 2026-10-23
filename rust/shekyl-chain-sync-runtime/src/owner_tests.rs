@@ -11,7 +11,7 @@ use shekyl_chain_rules::{CenRow, InvalidBlock, Locus};
 use shekyl_types::{BlockHash, BlockHeight};
 
 use super::outcome_of;
-use crate::Outcome;
+use shekyl_chain_sync::Outcome;
 
 #[test]
 fn every_entry_reply_has_an_outcome() {

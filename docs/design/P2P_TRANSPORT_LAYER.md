@@ -570,7 +570,7 @@ Rust posts these onto the connection's strand, and the strand runs them:
   follows as the close rule above says. `cause` is the `repr(C)`
   `CloseCause` already in the FFI header.
 
-**The post sink is the chain-sync router** (`shekyl_chain_sync::router`,
+**The post sink is the chain-sync router** (`shekyl_chain_sync_runtime::router`,
 CS-3, `P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q8). The hub hands every post to it
 under the table lock, and it never calls back into the hub. The daemon
 builds it **pass-through**: every post goes to the bound post above,

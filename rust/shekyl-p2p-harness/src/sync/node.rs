@@ -25,10 +25,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use shekyl_chain_ingest::{Metrics, ProductionSubstrate};
-use shekyl_chain_sync::executor::Executor;
-use shekyl_chain_sync::owner::{self, OwnerParts, Running};
-use shekyl_chain_sync::router::Router;
 use shekyl_chain_sync::SyncState;
+use shekyl_chain_sync_runtime::executor::Executor;
+use shekyl_chain_sync_runtime::owner::{self, OwnerParts, Running};
+use shekyl_chain_sync_runtime::router::Router;
 use shekyl_draw_rng::RelayRng;
 use shekyl_hash_budget::Budget;
 use shekyl_peer_policy::InboundCeiling;
@@ -135,7 +135,7 @@ impl Node {
         let stub = Arc::new(Mutex::new(StubLog::default()));
         let (stub_tx, stub_rx) = mpsc::channel::<Option<Post>>();
         let forward_tx = Mutex::new(stub_tx.clone());
-        let forward: shekyl_chain_sync::router::Forward = Arc::new(move |post| {
+        let forward: shekyl_chain_sync_runtime::router::Forward = Arc::new(move |post| {
             let _gone = forward_tx.lock().expect("stub sender").send(Some(post));
         });
         let (routed_tx, routed_rx) = tokio::sync::mpsc::unbounded_channel();

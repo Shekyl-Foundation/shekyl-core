@@ -4037,7 +4037,23 @@ dependencies = [
  "proptest",
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
+ "shekyl-difficulty",
+ "shekyl-draw-rng",
+ "shekyl-levin",
+ "shekyl-peer-policy",
+ "shekyl-pow-randomx",
+ "shekyl-types",
+ "shekyl-wire",
+]
+
+[[package]]
+name = "shekyl-chain-sync-runtime"
+version = "3.1.0"
+dependencies = [
+ "shekyl-chain-ingest",
+ "shekyl-chain-rules",
  "shekyl-chain-store",
+ "shekyl-chain-sync",
  "shekyl-difficulty",
  "shekyl-draw-rng",
  "shekyl-hash-budget",
@@ -4617,7 +4633,7 @@ dependencies = [
  "shekyl-chain-ingest",
  "shekyl-chain-rules",
  "shekyl-chain-store",
- "shekyl-chain-sync",
+ "shekyl-chain-sync-runtime",
  "shekyl-clearnet",
  "shekyl-consensus",
  "shekyl-crypto-hash",
@@ -4979,6 +4995,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-chain-store",
  "shekyl-chain-sync",
+ "shekyl-chain-sync-runtime",
  "shekyl-clearnet",
  "shekyl-difficulty",
  "shekyl-draw-rng",

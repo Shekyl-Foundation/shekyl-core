@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`CS-Q`** (questions, ruled here) and **`CS-F`** (findings). Grep surface: `rg -n -e '\bCS-[QF]'`, because the serve-credit findings family `SCS-F` contains `CS-F` as a substring. `CSR-` is a separate family.
 **Ground:** `dev` at `24961a9a8` (2026-10-19), after #1101 (DRS-X Round 0), #1088 (the daemon-config cutover) and #1102 (the Rust pool); DRS-X PR 2 (#1123, open) read at `e3180b665` for the door's `BeyondCap`. The handler is 2,669 + 228 lines; `block_queue` is 651 (`.h` 115 + `.cpp` 536); `cryptonote_protocol_defs.h` is 300.
-**Status:** CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound hint, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** behind `shekyl-chain-sync`'s `runtime` feature: the router (the seam's post sink, pass-through in the daemon), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`). The daemon builds the router pass-through, so no live session reaches the owner until the cutover (CS-Q10).
+**Status:** CS-1 implemented (2026-10-21); CS-2 model and its §5 harness are in `shekyl-chain-sync` (2026-10-22); CS-3 implemented (2026-10-23): the runtime half and CS-Q11's loopback harness. CS-4 (pre-cutover, pure Rust): the inbound hint, the relay, the state handle's publisher and the cutover's deletion table. The cutover follows the DRS-X flip. Round 0 RULED, Rick 2026-10-18: CS-Q1…CS-Q12 as recommended, with four amendments: the complement request is chain sync's (CS-Q1, CS-Q10); `Synced` reads verified headers only (CS-Q2 step 8); the long-run slot is paid for in PoW and goes to the most verified work (CS-Q2 step 3); `following_degraded` gets a Rust producer (§A, coupling 4). Three corrections to CS-Q2 and CS-Q3, confirmed 2026-10-19 (Rick): a body, with its attestation witness, is bound to its header before the offer, so a substituted body or witness never invalidates an honest header (CEN-G2, CEN-B4); `Synced` waits for PDM-Q5's backward fill, with `Following` until then; and the body form is per transaction. The objects response follows PWD-B3's continuation (Rick, 2026-10-20): every requested block is sent, deferred by the budget, or marked unavailable, and only an unmarked shortfall closes the session (CS-Q3.2). Ruled 2026-10-19 (Rick), from DRS-X PR 2's design review: `following_degraded` is set by ingest's three refusals and by the sync owner, all through the connector, its one writer (§A items 7 and coupling 4); header PoW follows the earned-seed rule; and a past-cap branch is checked as evidence under `Class::Evidence` (CS-Q2 step 3). **Amended 2026-10-22 (Rick):** CS-Q2 step 1 refuses a block count of 0, or cumulative work below that count. **CS-1 is implemented (2026-10-21):** `form_header`, `judge_header`, `judge_header_cheap` and `bind_body` in `shekyl-chain-rules`; `PowBlob` and `BlockBody` in `shekyl-wire`; commands 2011–2014 in `shekyl-levin`, not admitted at ingress; the handler files are shrink-frozen (CS-Q9). CS-2, the sync model, is in `shekyl-chain-sync` (2026-10-22): the branch view, runs, the long-run slot, bodies, entry outcomes and close causes. **CS-3 is implemented (2026-10-23),** behind `shekyl-chain-sync-runtime`, layered over the pure model in `shekyl-chain-sync` (Rick, 2026-10-23: ingest and the node depend on the model, the runtime on them): the router (the seam's post sink, pass-through in the daemon), the sync owner on its `chain-sync` row, the executor with `Class::Evidence`, serving 2011–2014 from the store, `Door::offer_bound` (formed with `form_judged`), the latch through the connector (`RaiseAlarm`, `WatchLatch`), and CS-Q11's loopback harness in `shekyl-p2p-harness` (`sync`). The daemon builds the router pass-through, so no live session reaches the owner until the cutover (CS-Q10).
 **Parent:** [`P2P_3_IMPLEMENTATION_ROUND.md`](P2P_3_IMPLEMENTATION_ROUND.md) §4.2, row **CS**. [`DRS_X_STORE_FLIP.md`](DRS_X_STORE_FLIP.md) carries §A below as chain sync's Round 0 requirement.
 
 ## Constants (CS-1)
@@ -169,6 +169,20 @@ owner of block propagation.
 | `safesyncmode`, the `pause_mine`/`resume_mine` coupling | — | Delete. `safesyncmode` is an LMDB knob and leaves with DRS-X; the miner reacts to tip changes, not to sync |
 | `dev-sync` (was `--no-sync`; `INPUT_GRAMMAR.md:262`, "the chain-sync lane owns it"; regtest only) | CS (data) | Keep as the grammar has it: with `dev-sync = off` the sync owner is not started. Read from the snapshot (`net_node.inl:429-430`) |
 | `prep-blocks-threads`, `block-sync-size`, `span-limit`, `block-download-max-size` (`INPUT_GRAMMAR.md:272`, **X**), and the hardcoded `m_block_download_max_size = 0`, `m_span_time = 2` (`.inl` `init`) | CS | Per CS-Q12: refused; the constants stand until the cutover |
+| Constructor and `deinit` (found by CS-4's read, as are the rows below) | CS | Shrink: the sync half's members and their initialisers go with it; what RD's routes use stays until the file goes (CS-Q9) |
+| `set_p2p_endpoint` | RD | Stays: the transaction routes send through the endpoint |
+| `drop_connection(context, add_fail, flush)` | RD | Stays as the plain drop RD's routes call; its `add_fail` argument goes with scoring (CS-Q5) |
+| `drop_connection(uuid)` | CS | Delete: its one caller is `try_add_next_blocks` |
+| `stop` | RD | Stays while the handler does (`net_node.inl` calls it at shutdown) |
+| `post_notify` | RD | Stays for 2002; its sync uses (2004, 2006, 2007, 2008, 2009, 2010's request) go with their callers |
+| `describe_peer_blob` | CS | Delete: only the sync and announce paths log with it |
+| `sync_connector_of` | CS | Delete with `sync_ffi.rs` (CS-Q7) |
+| `get_avg_block_size`, `m_avg_buffer` | CS | Delete with the span estimate |
+| `cryptonote_protocol_handler_base` (`-base.cpp`) | CS | Delete whole: block history and span sizing |
+| `get_block_queue` | CS | Delete with `block_queue`; its RPC reader takes the owner's published state |
+| `get_core` | RD | Stays while `net_node.inl` reads the core through it (slice 4) |
+| The sync macros (`.inl` block-queue sizes, `CURRENCY_PROTOCOL_MAX_OBJECT_REQUEST_COUNT`) | CS | Delete with their users |
+| The test-seam friend declarations | CS | Delete with the tests of the sync half |
 
 **Wargame.**
 - **Remote trigger or benefit.** None. This is an ownership question.
@@ -474,6 +488,13 @@ ingest deciding forks.**
      tip" would stop mining during an ordinary equal-work tip race.
      Reading it as "a higher claim means we are behind" would let anyone
      rotating sessions halt mining and transaction intake.
+   - **The first session's flash is accepted** (Rick, 2026-10-23). A node
+     holding only its own chain reads `Synced` the moment a session
+     opens, before that session's claim has started a header request,
+     and `Behind` once the headers it asked for are verified: the
+     published state goes `NoView → Synced → Behind → Synced`. That is
+     the consequence of "a claim never changes the state", and the
+     loopback harness's honest sync records it.
    - **`Diverged { fork_at }`**: an **alarm** carried beside the state,
      not a state of its own.
      - **Primary source:** `T` holds a verified chain that is heavier
@@ -1119,7 +1140,7 @@ does it meet ingest's backpressure?
 - **Backpressure.** Sync requests bodies only when the entry reports
   room. A requested body is never dropped for lack of room.
 - **Built (CS-3).**
-  - The owner is `shekyl_chain_sync::owner`, one task on the `chain-sync`
+  - The owner is `shekyl_chain_sync_runtime::owner`, one task on the `chain-sync`
     runtime row (`owner::ROW_NAME`). Each event reads a fresh store
     snapshot as `main`. Its deadlines are one timing-engine owner of
     class `OwnerClass::Sync`: it arms the earliest and keeps the rest.
@@ -1127,7 +1148,7 @@ does it meet ingest's backpressure?
     order, on a blocking thread. A delivered chunk that carried only
     chain-sync messages is finished after its requests are answered, so
     a peer's further requests wait in the transport, not in the owner.
-  - The executor is `shekyl_chain_sync::executor`. A `Prove` job's items
+  - The executor is `shekyl_chain_sync_runtime::executor`. A `Prove` job's items
     are spread across the hasher budget's permits, each under one permit
     of the job's class, and answered in item order; the answer ends at
     the first item not formed, and no later item is hashed once that is
@@ -1135,7 +1156,7 @@ does it meet ingest's backpressure?
     and needs one free permit. The executor's parallelism is the
     budget's, and so is the owner row's blocking-thread cap: no constant
     of its own.
-  - The router is `shekyl_chain_sync::router`. It reads bucket headers
+  - The router is `shekyl_chain_sync_runtime::router`. It reads bucket headers
     only, admits 2011–2014 and, attached, 2008 with their caps, and
     forwards everything else to the C++ handler unchanged
     (`P2P_TRANSPORT_LAYER.md`, the seam's post sink). It also takes the
@@ -1199,12 +1220,13 @@ PR; the cutover re-reads them, and a row whose subject is gone is
 checked by its name.
 
 **Findings from the read.**
-- CS-Q1's table is not total over the handler: fifteen items have no
-  CS-Q1 row (table 1c). The cutover rules each before it deletes.
-- `on_idle` (1a #24) also runs the core's idle loop
+- Fifteen handler items had no CS-Q1 row (table 1c); CS-Q1's table now
+  carries them with their owners.
+- **`on_idle` (1a #24) also drives the core's idle loop**
   (`return m_core.on_idle();`, `.inl:1665`), registered at
-  `net_node.inl:493`. Deleting it stops the miner's and the pool's idle
-  calls unless they are registered elsewhere.
+  `net_node.inl:493`. Deleting it would stop the miner's and the pool's
+  idle calls, so its deletion is sequenced after the DRS-X flip, which
+  takes the core's idle work to Rust (Rick, 2026-10-23).
 - `needs_new_sync_connections` (1a #27) has no caller: dead code now.
 - The handler map has eight `HANDLE_NOTIFY_T2` routes (`.h:94-101`), not
   nine; `END_INVOKE_MAP2` is `.h:102`.
@@ -1266,7 +1288,7 @@ checked by its name.
 | 2 | `relay_transactions` | `.inl:2508-2514`; `_common.h:45`, stub `:62-65` | `.h:159` | :162 |
 | 3 | `handle_notify_get_txpool_complement` (2010) | `.inl:772-800` | `.h:155` | :164 |
 
-**1c. Handler items CS-Q1 does not name (the cutover rules each).**
+**1c. Handler items CS-4's read added to CS-Q1, with their owners there.**
 
 | # | Item | Location |
 | --- | --- | --- |

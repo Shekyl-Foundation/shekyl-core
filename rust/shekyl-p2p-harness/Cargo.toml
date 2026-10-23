@@ -30,7 +30,8 @@ shekyl-capped-stream = { path = "../shekyl-capped-stream" }
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-chain-store = { path = "../shekyl-chain-store" }
-shekyl-chain-sync = { path = "../shekyl-chain-sync", features = ["runtime"] }
+shekyl-chain-sync = { path = "../shekyl-chain-sync" }
+shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }

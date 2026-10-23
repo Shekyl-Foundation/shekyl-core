@@ -63,7 +63,7 @@ use tracing::Instrument;
 use crate::executor::Executor;
 use crate::router::Routed;
 use crate::serve::{serve_bodies, serve_headers};
-use crate::{
+use shekyl_chain_sync::{
     BoundArrival, ClaimError, Command, Event, Job, Outcome, PeerClaim, Proved, Sync as Model,
     SyncState,
 };
