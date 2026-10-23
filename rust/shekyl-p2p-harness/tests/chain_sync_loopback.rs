@@ -29,8 +29,8 @@ use shekyl_levin::{
     NOTIFY_NEW_COMPACT_BLOCK, NOTIFY_NEW_TRANSACTIONS,
 };
 use shekyl_p2p_harness::sync::{
-    fork_headers, frame, request_headers, substrate, Bodies, Chain, Corpus, HeaderChainPeer, Node,
-    ServingPeer, Step, SyncPeer,
+    announcement, fork_headers, frame, request_headers, substrate, Bodies, Chain, Corpus,
+    HeaderChainPeer, Node, ServingPeer, Step, SyncPeer,
 };
 use shekyl_seam::SyncPayload;
 use shekyl_transport_layer::CloseKind;
@@ -210,6 +210,20 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
     let (count, _, _) = held.tip().expect("a chain");
     let mut node = Node::start("honest", corpus.rules(), &steps[..1], 2, rng()).await;
     let before = node.hashes();
+    // Every state the node's handle publishes, in order. With genesis
+    // alone and no claim yet, the first session is `Synced`; the claim
+    // then makes the node `Behind` until the chain is in.
+    let mut handle = node.state.subscribe();
+    let published = Arc::new(Mutex::new(vec![*handle.borrow_and_update()]));
+    let watcher = {
+        let published = Arc::clone(&published);
+        tokio::spawn(async move {
+            while handle.changed().await.is_ok() {
+                let state = *handle.borrow_and_update();
+                published.lock().expect("states").push(state);
+            }
+        })
+    };
     let mut seen = Vec::new();
     for _ in 0..2 {
         let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
@@ -221,6 +235,26 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
         node.hashes() - before,
         count - 1,
         "one hash per header and none in the entry"
+    );
+    // The handle went NoView, then Behind, then Synced.
+    watcher.abort();
+    let states = published.lock().expect("states").clone();
+    let kinds: Vec<&str> = states
+        .iter()
+        .map(|state| match state {
+            SyncState::NoView => "NoView",
+            SyncState::Behind { .. } => "Behind",
+            SyncState::Following { .. } => "Following",
+            SyncState::Synced => "Synced",
+        })
+        .collect();
+    let behind = kinds.iter().position(|kind| *kind == "Behind");
+    assert!(
+        kinds.first() == Some(&"NoView")
+            && behind.is_some()
+            && kinds.last() == Some(&"Synced")
+            && kinds.iter().rposition(|kind| *kind == "Synced") > behind,
+        "the handle published {kinds:?}"
     );
     // The chain fits one response: one header request, and no span
     // offered over another and fetched again.
@@ -821,4 +855,76 @@ async fn the_node_serves_requests_its_own_form_checks_accept() {
     assert!(bodies.missed_ids.is_empty(), "every block is held");
     assert_eq!(node.closed(id), None);
     node.stop().await;
+}
+
+// --------------------------------------------------------------- CS-4 --
+
+/// An inbound session's claim arrives as a hint (`shekyl_chain_sync_hint`,
+/// CS-Q10): before it the session is no source; after it the session
+/// serves the headers and the bodies, with no outbound dial.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_inbound_session_serves_the_sync_after_its_hint() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("inbound-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
+    let mut node = Node::start("inbound", corpus.rules(), &steps[..1], 2, rng()).await;
+    let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+    let id = node.accept(Box::new(peer));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        seen.headers(),
+        0,
+        "an inbound session with no claim is no source"
+    );
+    assert!(node.hint(id, claim_of(&held)), "the owner took the hint");
+    wait_synced(&node, count).await;
+    assert!(seen.headers() >= 1 && seen.bodies() >= 1);
+    node.stop().await;
+    held.stop().await;
+}
+
+/// A connected announcement is relayed as the C++ `relay_block` does: to
+/// every established session but the one that announced it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connected_announcement_is_relayed_to_every_other_session() {
+    logs();
+    let (corpus, steps) = spend();
+    let held = source("relay-src", &corpus, &steps).await;
+    let (count, _, _) = held.tip().expect("a chain");
+    // The node holds every block but the last.
+    let mut node = Node::start("relay", corpus.rules(), &steps[..steps.len() - 1], 2, rng()).await;
+    let (_, work, top) = node.chain.tip().expect("a chain");
+    let mut seen = Vec::new();
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let (peer, asked) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
+        seen.push(asked);
+        ids.push(node.connect(Box::new(peer), Some(claim(count - 1, work, top))));
+    }
+    assert!(
+        node.wait(LIMIT, |node| node.state() == SyncState::Synced)
+            .await,
+        "state {:?}",
+        node.state()
+    );
+    assert!(
+        node.inject(ids[0], announcement(&held.store, count - 1))
+            .await
+    );
+    assert!(
+        node.wait(LIMIT, |node| node.count() == count).await,
+        "the announcement did not connect"
+    );
+    assert!(
+        node.wait(LIMIT, |_| seen[1].announced() == 1
+            && seen[2].announced() == 1)
+            .await,
+        "relayed {:?}",
+        seen.iter().map(|seen| seen.announced()).collect::<Vec<_>>()
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(seen[0].announced(), 0, "not back to the announcer");
+    node.stop().await;
+    held.stop().await;
 }

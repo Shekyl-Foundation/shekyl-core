@@ -7,11 +7,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use shekyl_levin::{notify, BucketHead, Flags, SyncCommand, HEADER_SIZE};
+use shekyl_levin::{notify, BucketHead, Flags, SyncCommand, HEADER_SIZE, NOTIFY_NEW_COMPACT_BLOCK};
 use shekyl_seam::{Endpoint, Post, SocketId, SyncPayload};
 use tokio::sync::mpsc;
 
-use super::{Fed, Forward, Routed, Router, Split};
+use super::{Admitted, Fed, Forward, Routed, Router, Split};
 
 fn recorder() -> (Forward, Arc<Mutex<Vec<Post>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -55,7 +55,10 @@ fn a_split_routes_sync_whole_and_streams_the_rest() {
         assert_eq!(forward, expected, "cut at {cut}");
         assert_eq!(
             messages,
-            vec![(SyncCommand::RequestHeaders, b"sync-payload".to_vec())],
+            vec![(
+                Admitted::Sync(SyncCommand::RequestHeaders),
+                b"sync-payload".to_vec()
+            )],
             "cut at {cut}"
         );
     }
@@ -136,7 +139,7 @@ fn socket(raw: u64) -> SocketId {
 #[test]
 fn pass_through_forwards_every_post_unchanged() {
     let (forward, seen) = recorder();
-    let router = Router::pass_through(forward);
+    let router = Arc::new(Router::pass_through(forward));
     let id = socket(7);
     let bytes = sync_bucket(SyncCommand::RequestHeaders, b"p");
     router.post(Post::Established {
@@ -242,4 +245,109 @@ fn a_gone_owner_turns_the_router_back_to_pass_through() {
     });
     let seen = seen.lock().expect("unpoisoned");
     assert!(matches!(&seen[1], Post::Deliver { bytes: b, .. } if *b == bytes));
+}
+
+/// The daemon's router before the cutover is pass-through: every post
+/// reaches the C++ handler unchanged, including chain sync's own commands,
+/// and a hint has no owner to reach.
+#[test]
+fn the_daemons_pass_through_router_changes_nothing_live() {
+    let (forward, seen) = recorder();
+    let router = Arc::new(Router::pass_through(forward));
+    let sink = router.sink();
+    let id = socket(11);
+    let connector = endpoint().connector();
+    let sync = SyncPayload {
+        current_height: 3,
+        cumulative_difficulty: 3,
+        cumulative_difficulty_top64: 0,
+        top_id: [1; 32],
+    };
+    let mut posts = vec![
+        Post::Established {
+            id,
+            endpoint: endpoint(),
+        },
+        Post::HandshakeResult {
+            id,
+            connector,
+            sync,
+        },
+    ];
+    for command in SyncCommand::ALL {
+        posts.push(Post::Deliver {
+            id,
+            connector,
+            bytes: sync_bucket(command, b"payload"),
+        });
+    }
+    posts.push(Post::Deliver {
+        id,
+        connector,
+        bytes: other_bucket(b"relay"),
+    });
+    for post in posts.clone() {
+        sink(post);
+    }
+    assert!(!router.hint(id, sync), "no owner takes a hint");
+    assert_eq!(*seen.lock().expect("unpoisoned"), posts);
+}
+
+/// An attached router hands a hint to the owner as the session's claim.
+#[test]
+fn an_attached_router_hands_a_hint_to_the_owner() {
+    let (forward, seen) = recorder();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let router = Router::attached(forward, tx);
+    let id = socket(12);
+    let sync = SyncPayload {
+        current_height: 9,
+        cumulative_difficulty: 9,
+        cumulative_difficulty_top64: 0,
+        top_id: [2; 32],
+    };
+    assert!(router.hint(id, sync));
+    assert_eq!(
+        rx.try_recv().expect("the claim"),
+        Routed::Claim { id, sync }
+    );
+    assert!(
+        seen.lock().expect("unpoisoned").is_empty(),
+        "a hint is not a post"
+    );
+    drop(rx);
+    assert!(!router.hint(id, sync), "a gone owner takes nothing");
+}
+
+/// An attached router keeps an announced block (2008) for the owner; the
+/// transaction relay beside it still reaches the C++ handler.
+#[test]
+fn an_attached_router_hands_an_announcement_to_the_owner() {
+    let (forward, seen) = recorder();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let router = Router::attached(forward, tx);
+    let id = socket(21);
+    router.post(Post::Established {
+        id,
+        endpoint: endpoint(),
+    });
+    let _established = rx.try_recv().expect("established");
+    let mut chunk = notify(NOTIFY_NEW_COMPACT_BLOCK, b"a block");
+    chunk.extend_from_slice(&other_bucket(b"tx"));
+    router.post(Post::Deliver {
+        id,
+        connector: endpoint().connector(),
+        bytes: chunk,
+    });
+    assert_eq!(
+        rx.try_recv().expect("the announcement"),
+        Routed::Announce {
+            id,
+            payload: b"a block".to_vec()
+        }
+    );
+    let forwarded = seen.lock().expect("unpoisoned");
+    assert!(
+        matches!(forwarded.last(), Some(Post::Deliver { bytes, .. }) if *bytes == other_bucket(b"tx"))
+    );
 }

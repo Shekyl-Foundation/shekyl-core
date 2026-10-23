@@ -620,7 +620,7 @@ fn a_connected_announce_is_relayed() {
         );
         assert!(
             out.iter().any(
-                |command| matches!(command, Command::Relay { hash: relayed } if *relayed == hash)
+                |command| matches!(command, Command::Relay { hash: relayed, .. } if *relayed == hash)
             ),
             "a connected announce was not relayed: {out:?}"
         );

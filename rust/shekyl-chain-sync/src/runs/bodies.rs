@@ -95,6 +95,7 @@ where
                 session,
                 header: judged,
                 body: body.clone(),
+                announced: false,
             });
         }
         self.flush_offers(out);

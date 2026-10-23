@@ -243,10 +243,13 @@ pub enum Command<K> {
         /// A session drawn uniformly.
         session: K,
     },
-    /// An announced block connected.
+    /// An announced block connected. It goes to every established
+    /// session but the one it came from.
     Relay {
         /// The block.
         hash: BlockHash,
+        /// The session that announced it.
+        from: K,
     },
     /// An announce is missing transactions.
     RequestMissingTxs {
@@ -309,6 +312,9 @@ pub struct BoundArrival<K> {
     pub header: HeaderJudged,
     /// The body bound to that header.
     pub body: BlockBody,
+    /// The body came unasked, as an announcement: the entry's reply is an
+    /// unsolicited arrival's, and a connected one is relayed.
+    pub announced: bool,
 }
 
 /// What the entry did with one offered arrival.
