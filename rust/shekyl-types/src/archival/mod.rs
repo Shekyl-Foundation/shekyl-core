@@ -643,9 +643,9 @@ pub use release::ReleasedRecord;
 pub use serve::{PassCount, ServedShard};
 pub use settlement::{
     BlockDraws, DrawCommitment, DrawableDigest, IndexedDraw, IssuedDigest, IssuedDraw,
-    SettlementOutcome, SettlementRow, SettlementRowError, BLOCK_DRAWS_LEN, COUNTED_DRAWS,
-    DRAWABLE_DIGEST_LEN, DRAW_COMMITMENT_LEN, ISSUED_DIGEST_LEN, SERVE_THRESHOLD_PASSES,
-    SETTLEMENT_ROW_LEN,
+    SettlementOutcome, SettlementRow, SettlementRowError, SupportCount, BLOCK_DRAWS_LEN,
+    COUNTED_DRAWS, DRAWABLE_DIGEST_LEN, DRAW_COMMITMENT_LEN, ISSUED_DIGEST_LEN,
+    SERVE_THRESHOLD_PASSES, SETTLEMENT_ROW_LEN,
 };
 pub use slash::{LoggedSlash, SlashLogEntry, SlashedHolding};
 pub use view::ShardView;

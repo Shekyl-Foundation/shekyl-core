@@ -336,7 +336,15 @@ use super::{Canonical, CodecError};
 ///   every connect now writes the row, and the boundary batch retires
 ///   below the draw-rows floor. A `29` file is refused at open. Rebuild
 ///   from the block corpus, as at every bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(30);
+/// - `31` — the support stream (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+///   `archival_support_unissued` (`(persona, epoch) → support_count`) and
+///   `archival_support_block` (`height → support_count`) are born
+///   Rust-only, appended at ordinals 46 and 47. A `30` file lacks both,
+///   so a support settlement would read a counter the file cannot hold;
+///   the bump refuses it at open. `support_count.snap` is new and
+///   `tables.snap` gains the two rows. Rebuild from the block corpus, as
+///   at every bump.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(31);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -393,8 +401,8 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(30));
-        assert_eq!(SCHEMA_VERSION.encode(), [30, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(31));
+        assert_eq!(SCHEMA_VERSION.encode(), [31, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
             SchemaVersion::decode(&[30, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)

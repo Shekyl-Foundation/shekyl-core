@@ -65,7 +65,7 @@ use shekyl_types::archival::{
     BadInterval, BlockDraws, BondRecord, CompleteTreeSet, DrawableDigest, FirstPayingHeight,
     HeldShard, Holdings, HoldingsError, HoldingsKind, IssuedDigest, IssuedDraw, RMarket,
     ReceiptSignPk, SettlementRow, SettlementRowError, SigmaWorkMilli, SlashLogEntry,
-    SlashedHolding, BLOCK_DRAWS_LEN, DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN,
+    SlashedHolding, SupportCount, BLOCK_DRAWS_LEN, DRAWABLE_DIGEST_LEN, ISSUED_DIGEST_LEN,
     MAX_BOND_BAD_INTERVALS, MAX_BOND_KEY_BYTES, MAX_CLAIMED_EPOCH_ENTRIES, MAX_CLAIM_AGE_W_EPOCHS,
     MAX_HOLDINGS_SHARDS, RECEIPT_SIGN_PK_LEN, SETTLEMENT_ROW_LEN,
 };
@@ -456,6 +456,27 @@ impl Canonical for IssuedDigest {
 /// ```
 ///
 /// A third value of the flag, or trailing bytes, is refused.
+/// `support_count`: one `u32` LE. The unissued counter of one tree in one
+/// epoch, and the support draws one block issued. The same width, two
+/// tables (`ARCHIVAL_SUPPORT_DRAW.md` §5).
+impl Canonical for SupportCount {
+    const NAME: &'static str = "support_count";
+    const FIXED_WIDTH: Option<usize> = Some(SupportCount::LEN);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.get().to_le_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        let mut r = Reader::new(Self::NAME, bytes);
+        let n = r.u32()?;
+        if !r.is_empty() {
+            return Err(r.invalid("trailing bytes after the support count"));
+        }
+        Ok(Self::new(n))
+    }
+}
+
 impl Canonical for BlockDraws {
     const NAME: &'static str = "block_draws";
     const FIXED_WIDTH: Option<usize> = Some(BLOCK_DRAWS_LEN);

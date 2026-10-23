@@ -169,8 +169,8 @@ use crate::codec::{
     AltBlock, AltBodies, AttestationWitnessBytes, Blob, BlockBody, BlockDraws, BlockInfo,
     BondRecord, Coded, CompleteTreeSet, CurveTreeState, DrawableDigest, IssuedDigest, IssuedDraw,
     LayerHash, LeafCount, OutKey, OutTx, Present, PropertyCellBytes, RMarket, RecordedPow,
-    RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, TxIndex, TxOutputIndices,
-    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
+    RuleSetInForce, SettlementRow, SigmaWorkMilli, SlashLogEntry, SupportCount, TxIndex,
+    TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::ids::{IssuedDrawTuple, ReleaseJournalTuple};
 use crate::lmdb_order::LmdbHashKey;
@@ -483,6 +483,19 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
          fact, since a complete tree slashed or released afterwards holds a compact set, so a \
          claim's re-gather reads the flag here. The C++ gathers at the epoch close and reads \
          the records as they are now, so LMDB never holds it",
+    ),
+    (
+        "archival_support_unissued",
+        "one complete tree's unissued support draws in one epoch, capped at c \
+         (ARCHIVAL_SUPPORT_DRAW.md §5): a scheduled block the producer did not file. It is not \
+         the economy's shortfall and it is not issued_short. The C++ draws no support stream, \
+         so LMDB never holds it",
+    ),
+    (
+        "archival_support_block",
+        "how many support draws one block issued (ARCHIVAL_SUPPORT_DRAW.md §5): the width of \
+         that block's support bitmap. An unanswered draw is not in this count. The C++ draws \
+         no support stream, so LMDB never holds it",
     ),
 ];
 
@@ -866,6 +879,20 @@ tables! {
     /// not settled. Appended last (ordinal 45).
     pub const ARCHIVAL_COMPLETE_TREES: TableDefinition<u64, Coded<CompleteTreeSet>> =
         TableDefinition::new("archival_complete_trees");
+
+    /// `archival_support_unissued` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// `(persona, epoch)` → the [`SupportCount`] of support draws scheduled
+    /// for that tree in that epoch and not filed, capped at `c`
+    /// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Not the economy's shortfall.
+    /// Appended last but one (ordinal 46).
+    pub const ARCHIVAL_SUPPORT_UNISSUED: TableDefinition<([u8; 32], u64), Coded<SupportCount>> =
+        TableDefinition::new("archival_support_unissued");
+
+    /// `archival_support_block` — **Rust-only** ([`RUST_ONLY_TABLES`]);
+    /// height → the [`SupportCount`] of support draws that block issued,
+    /// the width of its support bitmap. Appended last (ordinal 47).
+    pub const ARCHIVAL_SUPPORT_BLOCK: TableDefinition<u64, Coded<SupportCount>> =
+        TableDefinition::new("archival_support_block");
 }
 
 #[cfg(test)]

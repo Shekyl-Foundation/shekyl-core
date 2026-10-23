@@ -104,6 +104,9 @@ impl Restorable for ([u8; 32], u64, u64, u64) {}
 // `archival_slash_log`'s `(height, seq)` (DRS-E4 `SlashAppliedKey`,
 // `SlashLogKey`): 48 and 12 fixed bytes, the tuples' derived widths.
 impl Restorable for ([u8; 32], u64, u64) {}
+// `archival_support_unissued`'s `(persona, epoch)` (`ARCHIVAL_SUPPORT_DRAW.md`
+// §5): 40 fixed bytes, the tuple's derived width.
+impl Restorable for ([u8; 32], u64) {}
 impl Restorable for (u64, u32) {}
 // `archival_issued_draw`'s `(epoch, persona, shard, issuing height, draw)`
 // (`IssuedDrawKey`): 60 fixed bytes, the tuple's derived width.

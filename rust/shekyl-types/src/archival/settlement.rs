@@ -368,6 +368,30 @@ pub struct BlockDraws {
     pub revealed: bool,
 }
 
+/// A support-stream count: one tree's unissued draws in an epoch, or one
+/// block's issued support draws. Four little-endian bytes
+/// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Capped at `c` by the writer; the
+/// codec stores the number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SupportCount(u32);
+
+impl SupportCount {
+    /// The stored width.
+    pub const LEN: usize = 4;
+
+    /// A count of `n`.
+    #[must_use]
+    pub const fn new(n: u32) -> Self {
+        Self(n)
+    }
+
+    /// The count.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
 impl BlockDraws {
     /// A block that drew nothing: no count, no carry, no shortfall, nothing
     /// issued, and the seed unrevealed.
