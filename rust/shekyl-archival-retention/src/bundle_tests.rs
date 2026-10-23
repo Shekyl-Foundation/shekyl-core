@@ -17,8 +17,9 @@
 //! its `count` and the root lost its per-reference frame (`SCS-P39`).
 //! On 2026-10-22 the kept encoding gained the support count and its bitmap
 //! (`ARCHIVAL_SUPPORT_DRAW.md` §5). On 2026-10-23 the empty-support figures
-//! below, and the nonempty support commitment and root, were produced by
-//! `docs/test_vectors/RPC_CHANNEL_NAMES_V1/generate.py`. Its `cshake256` is
+//! below were produced by `docs/test_vectors/RPC_CHANNEL_NAMES_V1/generate.py`.
+//! The nonempty support commitment and root are
+//! [`support_pins`](self::support_pins). Its `cshake256` is
 //! its own Keccak, checked against hashlib's SHAKE256 and NIST SP 800-185
 //! sample #3, and it shares no code with this crate. The inputs are built
 //! here by those formulas ([`record`], [`witness_key`],
@@ -88,17 +89,6 @@ fn kept_at(h: BlockHeight, count: u32, bitmap: &[u8]) -> BundleKept {
         seed: SEED,
         passes: PassBitmap::new(count, bitmap).expect("the vector's bitmap"),
         support: PassBitmap::none(),
-    }
-}
-
-/// The twelve-draw vector with support draw 0 also set. The support
-/// bitmap is one byte, bit 0.
-fn twelve_with_one_support() -> BundleKept {
-    BundleKept {
-        h: H,
-        seed: SEED,
-        passes: PassBitmap::new(12, &[0x01, 0x0A]).expect("twelve draws"),
-        support: PassBitmap::from_passes(1, [0]).expect("support draw 0"),
     }
 }
 
@@ -490,11 +480,11 @@ fn a_reference_of_any_length_but_its_own_refuses() {
 
 /// The bundle commitment's vectors (§7.3, `SCS-P35`): no draws; eight
 /// draws and no pass; one record; three records with a bitmap that crosses
-/// a byte boundary; that case at `h + 1`; that case with one more economy
-/// bit set and the same records; and the twelve-draw case with one support
-/// bit. Every support bitmap is empty except that last one. The preimage
-/// is the kept part followed by the records, support count included. The
-/// hex is the independent cSHAKE named in the module docs. Red edits: hash
+/// a byte boundary; that case at `h + 1`; and that case with one more
+/// economy bit set and the same records. Every support bitmap here is
+/// empty. The support-bit vector is [`support_pins`]. The preimage is the
+/// kept part followed by the records, support count included. The hex is
+/// the independent cSHAKE named in the module docs. Red edits: hash
 /// anything but `BundleKept::encode` in front of the records; write `h` or
 /// a count big-endian; rename the label; put the records first; leave the
 /// support count out.
@@ -527,10 +517,6 @@ fn the_bundle_commitment_matches_its_vectors() {
     assert_eq!(
         commit(H, 12, &[0x09, 0x0A], &three),
         "e6c849bf022b175965c02c9f402df9ba2d277d7a0cba457d5efe4b980e4230e0"
-    );
-    assert_eq!(
-        hex(&bundle_commitment(&twelve_with_one_support(), &three)),
-        "f626f6c4af284f660f45679bd3c8126f9d3ddc914e80f3649ca9ad020f31a16d"
     );
 }
 
@@ -583,11 +569,6 @@ fn the_commitment_moves_with_every_field() {
     swapped.extend_from_slice(&record(0).encode());
     swapped.extend_from_slice(&record(2).encode());
     assert_ne!(base, bundle_commitment(&kept, &swapped));
-    assert_ne!(
-        base,
-        bundle_commitment(&twelve_with_one_support(), &three),
-        "a support bit is in the preimage"
-    );
 }
 
 /// The bundle commitment is not the carrier's set commitment over the same
@@ -646,10 +627,10 @@ fn vector_refs() -> (BundleRef, BundleRef) {
 
 /// The header root's vectors: over no reference, one, and two — `n_le[4]`
 /// and then each reference's own bytes, with no frame between them
-/// (`SCS-P39`). The one-reference and two-reference hashes, and the
-/// twelve-draw reference with one support bit, were produced by the
-/// independent cSHAKE named in the module docs, over the encoding that
-/// carries the support count. The empty
+/// (`SCS-P39`). The one-reference and two-reference hashes were produced
+/// by the independent cSHAKE named in the module docs, over the encoding
+/// that carries the support count. The twelve-draw reference with one
+/// support bit is [`support_pins`]. The empty
 /// root has no reference and is unchanged. Records-was: the length-framed
 /// preimage hashed to `28f79ede…c4b64586` and `d51fdf58…24a4c85e`. Red
 /// edits: drop `n_le[4]`; frame a reference by its length; leave `count`
@@ -670,11 +651,6 @@ fn the_root_matches_its_vectors() {
         hex(&root(&[first.clone(), second.clone()])),
         "0c7f9da64f6d3cf7edee74761c6e92cd9099bcdd51e8d9333eb691d1de1af8e5"
     );
-    let supported = BundleRef::new(twelve_with_one_support(), body(3).prunable_hash());
-    assert_eq!(
-        hex(&root(std::slice::from_ref(&supported))),
-        "88824ae7bd5dec403bcfc29f02abf4ecc83358e5b2d20f69051d3aa54736a532"
-    );
     // Order is hashed: the section check refuses the swap, and the root
     // would not agree with it either.
     assert_ne!(
@@ -683,10 +659,8 @@ fn the_root_matches_its_vectors() {
     );
 }
 
-/// Two different sections cannot share a root preimage. Two controls over
-/// this encoding's references: the two references' bytes under `n = 1`,
-/// and one reference with no `n`. The figures those controls replaced
-/// (`c4e00666…`, `c6bdd61d…`) were the pre-support preimage. And the
+/// Two different sections cannot share a root preimage. The pre-support
+/// figures this encoding must not revive are [`support_pins`]. And the
 /// structural reason, checked rather than argued: the
 /// concatenation of two references parses back into exactly those two,
 /// because each reference's own count says where it ends — no byte can
@@ -696,17 +670,6 @@ fn the_root_matches_its_vectors() {
 #[test]
 fn two_sections_cannot_share_a_root_preimage() {
     let (first, second) = vector_refs();
-    let two = root(&[first.clone(), second.clone()]);
-    assert_ne!(
-        hex(&two),
-        "1db7631e56a63be2081de642b80c1401e19f90f51fcc4f3ab4206e614c4316f4",
-        "n counts references, not bytes"
-    );
-    assert_ne!(
-        hex(&root(std::slice::from_ref(&first))),
-        "ccceabe7d4795393ca05afc36ca0c35b0dbfac365eff1f47c4c6fcec4edbc04c",
-        "n is hashed"
-    );
 
     /// The first reference of a concatenation and what follows it, read
     /// from the bytes alone.
@@ -785,11 +748,6 @@ fn the_root_moves_with_every_field_of_a_reference() {
     let mut other = ph;
     other[31] ^= 1;
     assert_ne!(base, with(BundleRef::new(first.kept().clone(), other)));
-    assert_ne!(
-        base,
-        with(BundleRef::new(twelve_with_one_support(), ph)),
-        "a support bit is in the preimage"
-    );
 }
 
 /// The root counts its references in four bytes, and a section the count
@@ -1013,3 +971,8 @@ fn a_bundle_is_charged_its_draws_and_never_nothing() {
     assert_eq!(BundleRef::new(empty, [0; 32]).charge(), 1);
     assert_eq!(kept_at(H, 12, &[0x01, 0x0A]).charge(), 12);
 }
+
+/// The support-bit preimage pins. A sibling so this module stays the
+/// economy vectors.
+#[path = "bundle_support_pins.rs"]
+mod support_pins;
