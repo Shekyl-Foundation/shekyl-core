@@ -31,8 +31,9 @@ pub struct Connectors {
 /// What the node does with its own transactions (`TSR-Q11`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnTx {
-    /// Health is true: the relay's hop-0 verdict says a transaction this
-    /// node originates leaves on an address-hiding session now (`GS-Q3`).
+    /// The relay's hop-0 verdict says a transaction this node originates
+    /// leaves on an address-hiding session now (`GS-Q3`): the class is
+    /// non-empty (Health) and the epoch's origin pin is not exhausted.
     AddressHiding,
     /// Health is false and Tor is managed or an operator's Tor.
     Held,
@@ -126,9 +127,11 @@ pub struct Syncing {
 /// One typed read of the supervisor (`TSR-Q12`). No message text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
-    /// The relay's hop-0 verdict for a local origin (`TSR-Q4`, `GS-Q3`):
-    /// the address-hiding class is non-empty and the epoch's pin is not
-    /// exhausted. Not the link: [`Self::shown`] is the link.
+    /// The class part of the relay's hop-0 verdict (`TSR-Q4`, `GS-Q3`): an
+    /// outbound session hides this node's address now. The pin part is
+    /// [`Self::own_tx`]'s alone (`RPC_CHANNEL.md` §6.1), so `health` can be
+    /// true while `own_tx` is `Held`. Not the link: [`Self::shown`] is the
+    /// link.
     pub health: bool,
     /// The §4.3 projection.
     pub shown: Shown,
@@ -148,10 +151,11 @@ pub struct Status {
     pub progress: u8,
 }
 
-/// `OwnTx` from the relay's verdict (Health) and the connector settings.
+/// `OwnTx` from the relay's whole verdict (class and pin) and the connector
+/// settings.
 #[must_use]
-pub fn own_tx(health: bool, connectors: Connectors) -> OwnTx {
-    if health {
+pub fn own_tx(routable: bool, connectors: Connectors) -> OwnTx {
+    if routable {
         return OwnTx::AddressHiding;
     }
     match (connectors.tor, connectors.clearnet_on) {

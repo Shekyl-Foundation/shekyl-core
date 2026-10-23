@@ -340,7 +340,11 @@ impl RelayZoneHandle {
             *slot = snap;
         }
         if self.publishes_origin {
-            crate::origin_verdict::publish(self.driver.zone().originates_address_hiding());
+            let zone = self.driver.zone();
+            crate::origin_verdict::publish(crate::origin_verdict::OriginVerdict {
+                connected: zone.address_hiding_session(),
+                routable: zone.originates_address_hiding(),
+            });
         }
     }
 }

@@ -72,7 +72,7 @@ The relay is deliberately absent from that table; see `TSR-F9`.
 | `TSR-Q1`: a respawn is a repair | The `DataDirectory` is kept across respawns within a boot, so guards and the consensus cache survive. The daemon holds the hs-id seed for the boot in secure memory (rules 35, 36) and republishes the **same** onion; `ADD_ONION` still sends `Flags=DiscardPK`, since Tor need not hand back a key we hold. After a run of consecutive launch failures on a kept directory, the next launch uses a fresh one; the run length is set from `TSR-M2`'s failure distribution, not chosen |
 | `TSR-Q2`: guards are per boot | Guards do not persist across boots, as today; the public directory cache does (`TSR-Q8`). Persisting them gains no reduction in expected exposure: a hostile guard exposes *f*·*B* boots in expectation either way, and persistence changes only the spread; the harm is per boot. It costs a guard file on disk and lets one hostile guard link every boot's onion. The one real re-roll attack, forcing respawns, is closed by `TSR-Q1` |
 | `TSR-Q3`: remedy by cause | §4.4, with the SOCKS reply classification of §4.2: only a process fault respawns |
-| `TSR-Q4`: Tor status in RPC | The unrestricted reply carries one boolean in Health, as `has_peers` does: this node can originate over an address-hiding connector now. State, cause, since and the respawn count are restricted Status fields; `TSR-Q12` (2026-10-20) lists every Status field, and the RW round names them. Tor's state and timing stay off the unrestricted reply (§8, "Link the RPC endpoint to the onion") |
+| `TSR-Q4`: Tor status in RPC | The `health` grant (`RPC_CHANNEL.md` §6.1, in the `view` preset) carries one boolean, as `has_peers` does: an outbound session hides this node's address now, the class part of the relay's hop-0 verdict. The pin part, whether this node's own transaction leaves now, is `OwnTx`'s under the `status` grant: it moves when the node's own-edge peers disconnect, which a `health` caller must not be able to watch (`GS-Q3`, review 2026-10-23). State, cause, since and the respawn count are `status` fields; `TSR-Q12` (2026-10-20) lists every one, and the RW round names them. Tor's state and timing stay off `health` (§8, "Link the RPC endpoint to the onion") |
 | `TSR-Q5`: one probe per descriptor upload round (2026-10-15) | The `HS_DESC UPLOADED` events of one upload round are coalesced into one trigger, and after a jittered delay the probe runs once (§4.5). No deadline of our own and no evidence-age bookkeeping |
 | `TSR-Q7`: `__OwningControllerFD` on every platform (2026-10-15) | The launch hands Tor one end of a connected socket pair as its owning control connection; no control port, port file, cookie, `TAKEOWNERSHIP` or `RESETCONF` (§4.7) |
 | `TSR-Q8`: the public directory cache persists across boots (Rick, 2026-10-19) | The daemon keeps Tor's public directory cache across boots; guards, keys and the onion stay per boot. A daemon-owned cache directory (mode 0700) holds `cached-microdesc-consensus`, `cached-microdescs`, `cached-microdescs.new` and `cached-certs`. At launch, only those exact names are copied into the fresh per-boot `DataDirectory`, each a regular file, never reached through a symlink, and under a size limit. At a clean stop the same names are copied back; after a crash the previous cache stays as it was. `state`, keys, `lock` and every other file are never kept, and Tor is never pointed at the cache directory itself. The per-boot rule becomes: nothing identity-bearing (guards, keys, the onion) joins one boot to the next. Why: a node that bootstraps cold at every boot looks to its directory guard like a new install each time, and with a cache it looks like every other Tor client; each restart stops loading the fallback mirrors and directory authorities; and the cold-bootstrap tail, which is directory fetching (§10, `TSR-M1`), goes. What a consensus-diff request reveals, roughly how long the node was offline, adds little to a directory guard that already sees the node's address. Tor verifies the whole cache itself, so a bad cache costs one cold boot and cannot steer path selection. `tor-pin-verify`'s live tests start from a seeded cache, and one cold-start test remains. The step-8 removal (§12, increment 3) stands: a first install, and a boot after a long time offline, are still cold |
@@ -109,8 +109,11 @@ into words (`TSR-Q13`).
 
 `OwnTx` is what happens to the node's own transactions. Increment 3 defines
 that enum next to `ManagedTorFix` and the typed Status read (§12). It
-projects the relay's hop-0 verdict for a local origin, which is Health, and
-the connector settings (`GS-Q3`, Rick 2026-10-22). It is not a config key. The
+projects the relay's hop-0 verdict for a local origin and the connector
+settings (`GS-Q3`, Rick 2026-10-22). Health is that verdict's class part, an
+outbound session hides this node's address now; `OwnTx` adds the pin part,
+so Health can be true while `OwnTx` is `Held` (`RPC_CHANNEL.md` §6.1). It is
+not a config key. The
 wire carries the variant (`TSR-Q13`). The send flow reads it from Status.
 A caller whose preset has no Status does not receive it, and Health false
 is not a hold. `OwnTx::Held` is the transaction. The Tor state Restarting
@@ -118,8 +121,8 @@ is not a hold. `OwnTx::Held` is the transaction. The Tor state Restarting
 
 | `OwnTx` | When | The send |
 | --- | --- | --- |
-| `AddressHiding` | Health is true (`TSR-Q4`): the relay's hop-0 verdict says a transaction this node originates leaves on an address-hiding session now, the class non-empty and the epoch's pin not exhausted (`GS-Q3`) | Broadcasts over that connector |
-| `Held` | Health is false and Tor is `Tor::Managed` or `Tor::Operator` | Reported held, not sent. Stays off clearnet (`TSR-Q11`) |
+| `AddressHiding` | The relay's hop-0 verdict: an outbound session hides this node's address now (Health, `TSR-Q4`) and the epoch's origin pin is not exhausted (`GS-Q3`) | Broadcasts over that connector |
+| `Held` | The verdict is false and Tor is `Tor::Managed` or `Tor::Operator`. Health is false, or true with the epoch's pin exhausted while address-hiding sessions are live: the pin stays off `health` (`RPC_CHANNEL.md` §6.1) | Reported held, not sent. Stays off clearnet (`TSR-Q11`) |
 | `ClearnetOnly` | `Tor::Off` and `Clearnet::On` | Broadcasts over clearnet. Health stays false |
 | `Offline` | `Tor::Off` and `Clearnet::Off` | Not sent |
 
@@ -133,9 +136,10 @@ after a Tor boot the link is usable before any address-hiding peer has
 handshaken, and the relay holds a local origin until one has. The relay
 publishes its verdict after every session change, epoch rebuild and plan
 (`shekyl-ffi` `origin_verdict`, written by the production zone's publish);
-the supervisor folds it as `Input::AddressHidingOrigin`, projects it as
-Health and `OwnTx`, and says a change: a recovery at once, a loss under the
-announcement cap. The link stays the phase (§4.3) and `Syncing.tor`.
+the supervisor folds it as `Input::AddressHidingOrigin` in its two parts,
+projects the class part as Health and the whole as `OwnTx`, and says a change
+of `OwnTx`: a recovery at once, a loss under the announcement cap. The link
+stays the phase (§4.3) and `Syncing.tor`.
 
 Clearnet-only is the operator's `ClearnetOnly` act, never a default
 (`TSR-Q11`). The node warns on every boot. TB-1 states the consequence,
@@ -755,7 +759,7 @@ the record. PR-3's hundred-stop rig is not an acceptance basis.
 | Re-roll our guard on demand | cause respawns from outside (introduction flood, descriptor refusal) so each draws fresh guards | §4.4; `TSR-Q1` (ruled): the directory, and its guards, are kept across a respawn; `TSR-M6` sizes the window before Tor's first `state` write |
 | Exhaust the daemon's memory through Tor | make Tor log in bursts | `TSR-F2`: bounded sink, counted drops |
 | Read the probe as a signature | a hostile HSDir sees an upload followed at once by a fetch of the same descriptor; the guard sees both ends of the self-dial | §4.5: one probe per upload round, after a jittered delay; the guard residual is stated |
-| Link the RPC endpoint to the onion | read respawn timestamps and counts over RPC | `TSR-Q4` (ruled): only a boolean is unrestricted |
+| Link the RPC endpoint to the onion | read respawn timestamps and counts over RPC; or hold `health` while being the node's own edge, and watch the boolean on one's own disconnect | `TSR-Q4` (ruled): the `health` grant carries one boolean, the class part of the relay's verdict; the pin part is `status`'s (`OwnTx`) |
 | Plant in the parent directory | a symlink named under the sweep's prefix | `std::fs::remove_dir_all` does not follow a symlink; the parent is daemon-owned and the `DataDirectory` 0700; a test plants a symlink to an outside directory and asserts the target survives |
 | Outlive the daemon | the daemon dies, including under `panic = "abort"` | parent death closes the owning socket (C5, measured 2026-10-15); §7's `SIGKILL` case |
 | Hide Tor's death | hold a copy of Tor's socket end, so our read never sees EOF | `TSR-F16`: the supervisor also waits on Tor's process; the Windows inheritance window admits no other spawn (§4.7) |

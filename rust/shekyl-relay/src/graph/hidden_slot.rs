@@ -316,6 +316,18 @@ impl Relay {
         self.hidden_class_watch.recorded()
     }
 
+    /// Whether an outbound session hides this node's address now: the class
+    /// part of the verdict, and the `health` grant's boolean (`TSR-Q4`,
+    /// `RPC_CHANNEL.md` §6.1). The pin part stays in `OwnTx`: a peer who
+    /// held `health` and was this node's own edge for the epoch could
+    /// otherwise watch the boolean flip on its own disconnect, which would
+    /// tie the RPC endpoint to this node's transactions. A uniform epoch
+    /// reads `false`.
+    #[must_use]
+    pub fn address_hiding_session(&self) -> bool {
+        self.map.reserves_slot() && self.hidden_session_count() > 0
+    }
+
     /// The relay's hop-0 verdict for a local origin: whether a transaction
     /// this node originates leaves on an address-hiding session now.
     ///

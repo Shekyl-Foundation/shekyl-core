@@ -645,6 +645,7 @@ fn the_origin_verdict_follows_the_class_and_the_pin() {
         )
         .unwrap();
         assert!(!z.originates_address_hiding(), "no session: held");
+        assert!(!z.address_hiding_session(), "no session: not connected");
         z.on_session_established(
             id(11),
             PeerDirection::Outbound,
@@ -667,6 +668,7 @@ fn the_origin_verdict_follows_the_class_and_the_pin() {
             z.originates_address_hiding(),
             "a class session: routable before any plan"
         );
+        assert!(z.address_hiding_session());
         z.rebuild_stems(&mut rng);
         assert!(z.originates_address_hiding());
         let RelayPlan::OwnEdge(primary) = originate(&mut z, &mut rng) else {
@@ -685,6 +687,10 @@ fn the_origin_verdict_follows_the_class_and_the_pin() {
         assert!(
             !z.originates_address_hiding(),
             "the pin is exhausted though a class session is live: held until the epoch"
+        );
+        assert!(
+            z.address_hiding_session(),
+            "the class part stays true: Health does not watch the pin"
         );
         assert_eq!(originate(&mut z, &mut rng), RelayPlan::NoOwnEdge);
         assert!(!z.originates_address_hiding());
@@ -715,6 +721,7 @@ fn the_origin_verdict_is_false_without_an_address_hiding_connector() {
     );
     z.rebuild_stems(&mut rng);
     assert!(!z.originates_address_hiding());
+    assert!(!z.address_hiding_session(), "a uniform epoch has no class");
     assert!(matches!(
         originate(&mut z, &mut rng),
         RelayPlan::Stem(_) | RelayPlan::NoRoute

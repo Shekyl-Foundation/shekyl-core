@@ -1740,28 +1740,33 @@ fn a_queued_message_survives_an_epoch_roll() {
 
 /// The production zone publishes the relay's hop-0 verdict into the one
 /// process cell (`GS-Q3`); a session whose peer does not learn the address
-/// makes it, and its close takes it back.
+/// makes both parts, and its close takes them back.
+///
+/// `origin_verdict` is one cell for the whole test binary. This is its only
+/// writer: `new_zone` leaves `publishes_origin` false, and no test calls
+/// `shekyl_relay_zone_new`. A test that builds a production zone, or sets
+/// the flag, races these assertions; keep it the one.
 #[test]
 fn the_production_zone_publishes_the_origin_verdict() {
+    use crate::origin_verdict::{current, OriginVerdict};
+    let held = OriginVerdict {
+        connected: false,
+        routable: false,
+    };
+    let carrying = OriginVerdict {
+        connected: true,
+        routable: true,
+    };
     unsafe {
         let h = new_zone(0, 2, 600, 30, 0, TOR_CONFIGURED);
         assert!(!h.is_null());
         (*h).publishes_origin = true;
         (*h).publish();
-        assert!(
-            !crate::origin_verdict::current(),
-            "no session hides the address: held"
-        );
+        assert_eq!(current(), held, "no session hides the address: held");
         shekyl_relay_zone_on_session_established(h, id(1).as_ptr(), false, TOR_LINK);
-        assert!(
-            crate::origin_verdict::current(),
-            "one address-hiding session: routable"
-        );
+        assert_eq!(current(), carrying, "one address-hiding session: routable");
         shekyl_relay_zone_on_close(h, id(1).as_ptr());
-        assert!(
-            !crate::origin_verdict::current(),
-            "its close takes the verdict back"
-        );
+        assert_eq!(current(), held, "its close takes the verdict back");
         shekyl_relay_zone_free(h);
     }
 }

@@ -41,6 +41,22 @@ fn socks() -> SocketAddr {
     "127.0.0.1:9150".parse().expect("socks")
 }
 
+/// The relay's whole verdict: a session hides the address and the pin is live.
+fn carrying() -> Input {
+    Input::AddressHidingOrigin {
+        connected: true,
+        routable: true,
+    }
+}
+
+/// The relay's verdict withdrawn: nothing hides the address.
+fn held() -> Input {
+    Input::AddressHidingOrigin {
+        connected: false,
+        routable: false,
+    }
+}
+
 fn announces(step: &Step) -> usize {
     step.actions
         .iter()
@@ -113,7 +129,7 @@ fn reach_usable(core: &mut Core) {
         "held until the relay can originate"
     );
     assert!(status.sync.tor, "the link is what the node syncs over");
-    let step = core.on(Input::AddressHidingOrigin { routable: true }, 0);
+    let step = core.on(carrying(), 0);
     assert_eq!(
         announces(&step),
         1,
@@ -307,10 +323,7 @@ fn a_pin_failure_does_not_spawn_and_retries_at_the_cap() {
     assert!(takes_down(&step));
     // The sessions over the dead Tor close, and the relay withdraws its
     // verdict: that, not the death, is what moves Health and `OwnTx`.
-    core.on(
-        Input::AddressHidingOrigin { routable: false },
-        5_000_000_000,
-    );
+    core.on(held(), 5_000_000_000);
     let text = render(&core.status());
     assert!(
         !text.contains("exit code"),
@@ -608,10 +621,10 @@ fn the_relays_verdict_decides_own_tx_and_health_and_is_said_under_the_cap() {
         "{text}"
     );
 
-    let again = core.on(Input::AddressHidingOrigin { routable: true }, 1);
+    let again = core.on(carrying(), 1);
     assert!(again.actions.is_empty(), "the same verdict is not a change");
 
-    let lost = core.on(Input::AddressHidingOrigin { routable: false }, 2);
+    let lost = core.on(held(), 2);
     assert_eq!(
         announces(&lost),
         0,
@@ -639,10 +652,10 @@ fn the_relays_verdict_decides_own_tx_and_health_and_is_said_under_the_cap() {
         "said once; a lost verdict does not repeat"
     );
 
-    let flapped = core.on(Input::AddressHidingOrigin { routable: false }, cap * 2 + 1);
+    let flapped = core.on(held(), cap * 2 + 1);
     assert!(flapped.actions.is_empty());
 
-    let back = core.on(Input::AddressHidingOrigin { routable: true }, cap * 2 + 2);
+    let back = core.on(carrying(), cap * 2 + 2);
     assert_eq!(announces(&back), 1, "a recovery is said at once");
     assert!(core.status().health);
     assert_eq!(core.status().own_tx, OwnTx::AddressHiding);
@@ -655,7 +668,7 @@ fn a_lost_verdict_past_the_cap_is_said_at_once() {
     let (mut core, _) = Core::start(policy(), managed(false), 0);
     reach_usable(&mut core);
     let cap = duration_ns(policy().cap);
-    let lost = core.on(Input::AddressHidingOrigin { routable: false }, cap + 1);
+    let lost = core.on(held(), cap + 1);
     assert_eq!(announces(&lost), 1);
     let text = render(&core.status());
     assert!(
@@ -672,8 +685,53 @@ fn health_is_the_verdict_whatever_the_link_shows() {
     let (mut core, _) = Core::start(policy(), managed(true), 0);
     bring_up(&mut core);
     assert_eq!(core.status().shown, Shown::Bootstrapping);
-    core.on(Input::AddressHidingOrigin { routable: true }, 0);
+    core.on(carrying(), 0);
     assert!(core.status().health);
     assert_eq!(core.status().own_tx, OwnTx::AddressHiding);
     assert!(!core.status().sync.tor, "the link is still bootstrapping");
+}
+
+/// `RPC_CHANNEL.md` §6.1: Health carries the class part of the verdict only.
+/// An exhausted origin pin with address-hiding sessions live is `Held` with
+/// Health still true, and said as a change of `OwnTx`; the class part moving
+/// alone changes no sentence and says nothing.
+#[test]
+fn an_exhausted_pin_holds_the_origin_while_health_stays_true() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    reach_usable(&mut core);
+    let cap = duration_ns(policy().cap);
+    let exhausted = core.on(
+        Input::AddressHidingOrigin {
+            connected: true,
+            routable: false,
+        },
+        cap + 1,
+    );
+    assert_eq!(announces(&exhausted), 1, "the sentence flipped to holding");
+    let status = core.status();
+    assert!(status.health, "a session still hides the address");
+    assert_eq!(status.own_tx, OwnTx::Held, "but the pin is exhausted: held");
+    assert_eq!(status.shown, Shown::Usable);
+
+    let class_only = core.on(held(), cap + 2);
+    assert!(
+        class_only.actions.is_empty(),
+        "the class emptying changes no sentence: already held"
+    );
+    assert!(!core.status().health);
+    assert_eq!(core.status().own_tx, OwnTx::Held);
+
+    let session = core.on(
+        Input::AddressHidingOrigin {
+            connected: true,
+            routable: false,
+        },
+        cap + 3,
+    );
+    assert!(
+        session.actions.is_empty(),
+        "a session arriving under an exhausted pin: still held"
+    );
+    assert!(core.status().health);
+    assert_eq!(core.status().own_tx, OwnTx::Held);
 }

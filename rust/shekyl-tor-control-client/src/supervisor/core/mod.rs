@@ -172,11 +172,15 @@ pub enum Input {
     StateFileAppeared,
     /// The daemon is stopping.
     Shutdown,
-    /// The relay's hop-0 verdict for a local origin moved: whether a
-    /// transaction this node originates leaves on an address-hiding
-    /// session now (`GS-Q3`). `OwnTx` and Health project it.
+    /// The relay's hop-0 verdict for a local origin moved (`GS-Q3`).
+    /// `connected` is the class part, an outbound session hides this node's
+    /// address now: Health. `routable` adds the pin part, a transaction this
+    /// node originates leaves on such a session now: `OwnTx`. The pin
+    /// stays off Health (`RPC_CHANNEL.md` §6.1).
     AddressHidingOrigin {
-        /// The verdict.
+        /// An outbound session hides this node's address now.
+        connected: bool,
+        /// A local origin leaves on one now. Implies `connected`.
         routable: bool,
     },
 }
@@ -256,8 +260,12 @@ enum Phase {
 pub struct Core {
     policy: Policy,
     connectors: Connectors,
-    /// The relay's hop-0 verdict for a local origin, as last published.
-    /// Health, and the fact `OwnTx` is read from (`GS-Q3`). Not the link.
+    /// The class part of the relay's verdict, as last published: an
+    /// outbound session hides this node's address now. Health (`GS-Q3`,
+    /// `TSR-Q4`). Not the link.
+    connected: bool,
+    /// The whole verdict, as last published: a local origin leaves on an
+    /// address-hiding session now. The fact `OwnTx` is read from.
     originates: bool,
     phase: Phase,
     cause: Cause,
@@ -286,6 +294,7 @@ impl Core {
         let mut core = Self {
             policy,
             connectors,
+            connected: false,
             originates: false,
             phase: Phase::Absent {
                 duty: AbsentDuty::Retry,
@@ -345,7 +354,10 @@ impl Core {
             }
             Input::StateFileAppeared => self.state_file(),
             Input::Shutdown => self.shutdown(),
-            Input::AddressHidingOrigin { routable } => self.origin_verdict(routable, now),
+            Input::AddressHidingOrigin {
+                connected,
+                routable,
+            } => self.origin_verdict(connected, routable, now),
         };
         self.step(now, actions)
     }
@@ -388,13 +400,14 @@ impl Core {
     #[must_use]
     pub fn status(&self) -> Status {
         let shown = self.shown();
-        // Health is the relay's verdict, not the link (`GS-Q3`): after a boot
-        // the link is usable before any address-hiding peer has handshaken,
-        // and the relay holds a local origin until one has. The link stays
-        // the phase, and what the node syncs over.
-        let health = self.originates;
+        // Health is the class part of the relay's verdict, not the link
+        // (`GS-Q3`): after a boot the link is usable before any address-hiding
+        // peer has handshaken. The pin part is `OwnTx`'s alone (`RPC_CHANNEL.md`
+        // §6.1): it moves when this node's own-edge peers disconnect, which a
+        // `health` caller must not be able to watch. The link stays the
+        // phase, and what the node syncs over.
         Status {
-            health,
+            health: self.connected,
             shown,
             cause: self.cause.clone(),
             since: self.since,
@@ -403,7 +416,7 @@ impl Core {
                 clearnet: self.connectors.clearnet_on,
                 tor: shown == Shown::Usable,
             },
-            own_tx: own_tx(health, self.connectors),
+            own_tx: own_tx(self.originates, self.connectors),
             fixes: fixes(&self.cause, self.connectors),
             progress: self.progress,
         }
@@ -750,11 +763,13 @@ impl Core {
         vec![Action::Announce]
     }
 
-    /// The relay's verdict moved. The posture sentence flips between
-    /// carrying and holding, so a change is said: a recovery at once, a loss
+    /// The relay's verdict moved. The posture sentence follows `OwnTx`, so
+    /// a change of the whole verdict is said: a recovery at once, a loss
     /// under the announcement cap, so session churn cannot storm the log.
-    /// The same value again is not a change.
-    fn origin_verdict(&mut self, routable: bool, now: u64) -> Vec<Action> {
+    /// The class part alone moving says nothing: the sentence did not change.
+    /// The same values again are not a change.
+    fn origin_verdict(&mut self, connected: bool, routable: bool, now: u64) -> Vec<Action> {
+        self.connected = connected || routable;
         if self.originates == routable {
             return Vec::new();
         }

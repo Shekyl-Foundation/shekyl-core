@@ -97,6 +97,14 @@ pub fn begin(
     })
 }
 
+/// The relay's published verdict as the core's input.
+fn verdict_input(verdict: shekyl_ffi::origin_verdict::OriginVerdict) -> Input {
+    Input::AddressHidingOrigin {
+        connected: verdict.connected,
+        routable: verdict.routable,
+    }
+}
+
 async fn drive(
     binary: Option<PathBuf>,
     clearnet_on: bool,
@@ -168,7 +176,7 @@ struct Drive {
     forward: watch::Receiver<Option<SocketAddr>>,
     /// The relay's hop-0 verdict for a local origin (`GS-Q3`), from
     /// `shekyl_ffi::origin_verdict`. Health and `OwnTx` project it.
-    origin: watch::Receiver<bool>,
+    origin: watch::Receiver<shekyl_ffi::origin_verdict::OriginVerdict>,
     control: Option<DaemonTorControl>,
     kept: Option<KeptDataDir>,
     pinned: Option<VerifiedTorBinary>,
@@ -183,9 +191,9 @@ impl Drive {
     async fn run(mut self) {
         // A receiver starts with the current value marked seen, so a verdict
         // published before the supervisor started is folded here.
-        let routable = *self.origin.borrow_and_update();
-        if routable {
-            self.fold(Input::AddressHidingOrigin { routable }).await;
+        let verdict = *self.origin.borrow_and_update();
+        if verdict.connected || verdict.routable {
+            self.fold(verdict_input(verdict)).await;
         }
         loop {
             if self.perform().await {
@@ -210,8 +218,8 @@ impl Drive {
                     // The sender is process-static, so `Err` does not happen;
                     // it is not folded so a closed channel cannot spin here.
                     if changed.is_ok() {
-                        let routable = *self.origin.borrow_and_update();
-                        self.fold(Input::AddressHidingOrigin { routable }).await;
+                        let verdict = *self.origin.borrow_and_update();
+                        self.fold(verdict_input(verdict)).await;
                     }
                 }
                 wake = self.owner.wait_wake_async() => {

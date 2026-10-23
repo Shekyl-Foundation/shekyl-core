@@ -17763,8 +17763,13 @@ or past the cursor live in the class (`StemMap::local_origin_routable`). It is
 the outcome of the last local origin's plan and, in every case but the one churn
 case the method's own doc names, of the next. The production zone's publish
 writes it to `shekyl-ffi` `origin_verdict` after every session change, epoch
-rebuild and plan; the managed-Tor supervisor and the RPC Health boolean
-(`TSR-Q4`) read it there. The `HiddenClassWatch` log lines (§98.5) are
+rebuild and plan, in two parts: the class part alone
+(`Relay::address_hiding_session`), which is the RPC `health` boolean
+(`TSR-Q4`), and the whole verdict, which is `OwnTx` under the `status` grant.
+The pin part stays off `health` (`RPC_CHANNEL.md` §6.1): it moves when this
+node's own-edge peers disconnect, and a peer holding `health` while being the
+own edge would otherwise watch the boolean flip on its own disconnect. The
+managed-Tor supervisor reads both there. The `HiddenClassWatch` log lines (§98.5) are
 unchanged and are not this read: the watch is silent before the first rebuild
 and reports the class alone, not the pin.
 
