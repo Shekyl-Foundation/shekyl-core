@@ -80,7 +80,7 @@ pub fn post_foundation_stake(rpc: &RpcSession, password: &str) -> CommandResult 
         "stake",
         params::StakeFoundation {
             password,
-            posture: "foundation_complete_tree",
+            posture: "support_complete_tree",
             acknowledge_non_earning_unbounded: true,
         },
     ) {
@@ -488,7 +488,7 @@ pub(crate) fn show_acknowledged(val: &Value) {
 /// rather than downgraded to "not serving".
 fn serving_posture_display(posture: Option<&str>) -> String {
     match posture {
-        Some("foundation_complete_tree") => "Foundation CompleteTree (non-earning)".to_owned(),
+        Some("support_complete_tree") => "support complete tree (non-earning)".to_owned(),
         Some("market") => "market".to_owned(),
         // An unknown spelling is a newer server talking to an older
         // CLI. Echo it rather than claiming "not serving", which
@@ -808,8 +808,8 @@ mod tests {
         assert_eq!(serving_posture_display(None), "not serving");
         assert_eq!(serving_posture_display(Some("market")), "market");
         assert_eq!(
-            serving_posture_display(Some("foundation_complete_tree")),
-            "Foundation CompleteTree (non-earning)"
+            serving_posture_display(Some("support_complete_tree")),
+            "support complete tree (non-earning)"
         );
         assert_eq!(
             serving_posture_display(Some("future_arm")),

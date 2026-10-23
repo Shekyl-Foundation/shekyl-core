@@ -43,8 +43,8 @@
 //!
 //! | Family | Tables | Last reader | `LAG` |
 //! | --- | --- | --- | --- |
-//! | [`Claimable`] | `archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement` | a claim (CEN-J23 reads `E ≥ epoch(h) − W`, after the expiry check) and the failure window (`settlement_retention_floor`, the same `epoch(h) − W`) | `W` (`MAX_CLAIM_AGE_W`) |
-//! | [`Settling`] | `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied` | `E`'s own slash pass, in epoch `E + k` | `k` (`SLASH_GRACE_EPOCHS`) |
+//! | [`Claimable`] | `archival_sigma_work`, `archival_budget`, `archival_complete_trees`, `archival_settlement`, `archival_support_settlement` | a claim (CEN-J23 reads `E ≥ epoch(h) − W`, after the expiry check) and the failure window (`settlement_retention_floor`, the same `epoch(h) − W`) | `W` (`MAX_CLAIM_AGE_W`) |
+//! | [`Settling`] | `archival_issued_draw`, `archival_issued_digest`, `archival_drawable_digest`, `archival_slash_applied`, `archival_support_issued` | `E`'s own slash pass, in epoch `E + k` | `k` (`SLASH_GRACE_EPOCHS`) |
 //! | [`Pricing`] | `archival_r_market` | CEN-J15, at the slash watermark: at `h` the watermark is at least `epoch(h) − 1 − k` | `k + 1` |
 //!
 //! Each `LAG` is exact: the reader asks for `epoch(h) − LAG` at some `h`

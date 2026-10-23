@@ -327,3 +327,13 @@ Discharged in the 2026-09-12 recording change that landed this document.
   claim, not a new ruling.
 - [`FOLLOWUPS.md`](../FOLLOWUPS.md): one pre-genesis row for the §8 measurement,
   blocker named as the falsifier chain's first link.
+
+## 10. A complete-tree fetch can show a holding set — reported 2026-10-22
+
+`ARCHIVAL_SUPPORT_DRAW.md` §8. Each read builds its own circuit
+(`SF-D3`). Nothing spreads the fetches of one new holding over time or
+across sources, so a complete-tree server asked for many shards of that
+holding sees the set. A later bond for the same set is the link the
+bond-post delay is there to break. Reported to that round
+(`ARCHIVAL_BOND_POST_DELAY.md` §6.1). Not fixed here. BD-Q4's window
+width is still open.

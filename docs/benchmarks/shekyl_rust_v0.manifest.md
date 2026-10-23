@@ -874,7 +874,13 @@ that envelope — the call is still made, the response is still a 200
 closed by a well-formed envelope from the right key, and the serve is
 what the cell counts. `crypto_bench_serve_sign` measures the seeded key
 signing that same fixed transcript, so the hybrid sign's cost is gated
-on a trajectory no wire change can move. The one-time drop in the serve
+on a trajectory no wire change can move. The transcript is not a fill of
+the wire length. When the stream byte made that length 113, filling
+`[0x3c; 113]` took one fewer ML-DSA rejection round than the 112-byte
+fill the rolling baseline holds (7.16 M → 5.43 M instructions). The last
+byte is `0x0a`, which keeps the 113-byte transcript on that round count.
+`SIGN_TRAJECTORY_LEN` is 113, and a longer transcript does not compile
+until that constant and the tail are chosen again. The one-time drop in the serve
 cells at that commit (12.36 M → 35.6 K for one leaf) is the signature
 leaving them, absorbed by the rolling baseline on the next `dev`
 rotation.

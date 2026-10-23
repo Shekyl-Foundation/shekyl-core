@@ -760,7 +760,7 @@ struct StakeParams {
     #[serde(default)]
     posture: StakePostureParam,
     /// D-4's acknowledgment gate: required `true` for
-    /// [`StakePostureParam::FoundationCompleteTree`], ignored for market.
+    /// [`StakePostureParam::SupportCompleteTree`], ignored for market.
     ///
     /// Not a validation nicety — the refusal it guards *is* the warning
     /// (see [`FOUNDATION_POSTURE_WARNING`]), so a client either shows the
@@ -783,7 +783,7 @@ enum StakePostureParam {
     Market,
     /// The Foundation whole-corpus backstop; reachable only with the
     /// acknowledgment.
-    FoundationCompleteTree,
+    SupportCompleteTree,
 }
 
 /// `stake` — make the open wallet a staker (the #332 activation entry).
@@ -826,8 +826,8 @@ pub(crate) async fn stake(
     // about to agree to.
     let posture = match (p.posture, p.acknowledge_non_earning_unbounded) {
         (StakePostureParam::Market, _) => StakePosture::Market,
-        (StakePostureParam::FoundationCompleteTree, true) => StakePosture::FoundationCompleteTree,
-        (StakePostureParam::FoundationCompleteTree, false) => {
+        (StakePostureParam::SupportCompleteTree, true) => StakePosture::SupportCompleteTree,
+        (StakePostureParam::SupportCompleteTree, false) => {
             return Err(WalletRpcError::StakeFoundationUnacknowledged)
         }
     };
@@ -1396,7 +1396,7 @@ mod tests {
     /// exercised here until slice 4 lets a foundation call through. The
     /// fault itself still has coverage one layer down —
     /// `lifecycle_tests::first_stake_refuses_cleanly_before_the_durable_point`
-    /// drives `first_stake` with `FoundationCompleteTree` against the same
+    /// drives `first_stake` with `SupportCompleteTree` against the same
     /// dead daemon and asserts `FirstStakeError::FeeEstimate`.
     #[tokio::test(flavor = "multi_thread")]
     async fn stake_runs_the_intent_dance_and_refuses_w1_clean_without_shard_assignment() {
@@ -1480,7 +1480,7 @@ mod tests {
 
         let err = stake(
             &tenants,
-            &json!({ "password": "pw", "posture": "foundation_complete_tree" }),
+            &json!({ "password": "pw", "posture": "support_complete_tree" }),
         )
         .await
         .expect_err("the foundation posture is unreachable without the acknowledgment");
@@ -1525,7 +1525,7 @@ mod tests {
     ///
     /// This also proves the acknowledgment is *plumbed*, not merely
     /// accepted: reaching a daemon fault at all means `first_stake` ran with
-    /// `FoundationCompleteTree`, since `Market` returns before the daemon is
+    /// `SupportCompleteTree`, since `Market` returns before the daemon is
     /// touched.
     #[tokio::test(flavor = "multi_thread")]
     async fn acknowledged_foundation_posture_reaches_the_engine_and_fails_w1_clean() {
@@ -1543,7 +1543,7 @@ mod tests {
             &tenants,
             &json!({
                 "password": "pw",
-                "posture": "foundation_complete_tree",
+                "posture": "support_complete_tree",
                 "acknowledge_non_earning_unbounded": true
             }),
         )

@@ -178,4 +178,18 @@ pub trait HolderSource: Send + Sync {
     ///
     /// [`FactsFault`]: the store could not answer.
     fn holders_of(&self, shard_id: ShardId) -> Result<Vec<Holder>, FactsFault>;
+
+    /// Complete trees that hold the whole archive, as a best-effort source
+    /// beside [`Self::holders_of`] (`ARCHIVAL_SUPPORT_DRAW.md` §7).
+    ///
+    /// The scheduler tries these only after the drawn holders, and only
+    /// when no drawn holder of the shard is left untried. The default is
+    /// none: a source that has not split the two sets stays drawn-only.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault`]: the store could not answer.
+    fn support_holders_of(&self, _shard_id: ShardId) -> Result<Vec<Holder>, FactsFault> {
+        Ok(Vec::new())
+    }
 }

@@ -8,7 +8,7 @@
 //! [`archival_reads!`] is `#[macro_export]`, so it is named
 //! `shekyl_chain_rules::archival_reads` wherever this module is loaded.
 
-/// Implement every archival [`ChainView`] read (A1–A9, A11–A22) as one policy.
+/// Implement every archival [`ChainView`] read (A1–A9, A11–A23) as one policy.
 ///
 /// Three policies, one method list. A new archival read is added here, once;
 /// every view that expands the macro then implements it. A view that answers
@@ -19,7 +19,9 @@
 ///   `false`. The `Ok` is any `Self::Fault`, including [`Infallible`](core::convert::Infallible).
 ///   Two reads answer the row an open with no bonds records, because the
 ///   count treats absence as a hole. `block_draws` is
-///   `Some(BlockDraws::ZERO)`: a height that drew nothing. `drawable_digest`
+///   `Some(BlockDraws::ZERO)`: a height that drew nothing.
+///   `support_block_count` is `Some(SupportCount::NONE)`: a height that
+///   issued no support draws. `drawable_digest`
 ///   is [`crate::DrawableEpoch::empty`]'s digest for the epoch asked. The store
 ///   answers `None` for a height or an epoch never written, and that
 ///   absence is the hole.
@@ -203,6 +205,11 @@ macro_rules! archival_reads {
             (::core::option::Option<shekyl_types::archival::BlockDraws>);
             (height, floor);
             (::core::option::Option::Some(shekyl_types::archival::BlockDraws::ZERO)));
+        $crate::archival_reads!(@emit $policy; support_block_count;
+            (height: shekyl_types::BlockHeight, floor: $crate::BlockDrawsFloor);
+            (::core::option::Option<shekyl_types::archival::SupportCount>);
+            (height, floor);
+            (::core::option::Option::Some(shekyl_types::archival::SupportCount::NONE)));
         $crate::archival_reads!(@emit $policy; drawable_digest;
             (
                 epoch: shekyl_types::SettlementEpoch,
@@ -231,7 +238,8 @@ macro_rules! archival_reads {
             (::std::vec::Vec::new()));
     };
     // `block_draws` is the method table's `Some(BlockDraws::ZERO)`: the
-    // zero row does not depend on the height. `drawable_digest` does
+    // zero row does not depend on the height. `support_block_count` is
+    // `Some(SupportCount::NONE)` for the same reason. `drawable_digest` does
     // depend on the epoch, so both bondless policies share one body. The
     // store answers `None` for an epoch never written; that absence is
     // the hole.

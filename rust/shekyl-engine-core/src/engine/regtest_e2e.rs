@@ -3306,7 +3306,7 @@ async fn stake_persona_and_submit_bond(
                 match super::Engine::first_stake(
                     arc.clone(),
                     slot_raw,
-                    super::StakePosture::FoundationCompleteTree,
+                    super::StakePosture::SupportCompleteTree,
                 )
                 .await
                 {

@@ -1,7 +1,7 @@
 # shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
 #   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
 # and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
-tables = 46
+tables = 50
 [tables]
 alt_block_bodies = #43 map<shekyl::LmdbHashKey, shekyl::Coded<alt_bodies>>
 alt_blocks = #13 map<shekyl::LmdbHashKey, shekyl::Coded<alt_block>>
@@ -21,6 +21,10 @@ archival_settlement = #19 map<([u8;32],u64,u64), shekyl::Coded<settlement_row>>
 archival_sigma_work = #25 map<u64, shekyl::Coded<sigma_work_milli>>
 archival_slash_applied = #22 map<([u8;32],u64,u64), shekyl::Present>
 archival_slash_log = #23 map<(u64,u32), shekyl::Coded<slash_log_entry>>
+archival_support_block = #47 map<u64, shekyl::Coded<support_count>>
+archival_support_issued = #48 map<(u64,[u8;32],u64,u32), shekyl::Coded<support_issued>>
+archival_support_settlement = #49 map<([u8;32],u64), shekyl::Coded<settlement_row>>
+archival_support_unissued = #46 map<([u8;32],u64), shekyl::Coded<support_count>>
 block_burn = #17 map<u64, shekyl::Coded<atomic_units>>
 block_heights = #1 map<shekyl::LmdbHashKey, shekyl::Coded<block_height>>
 block_info = #2 map<u64, shekyl::Coded<block_info>>

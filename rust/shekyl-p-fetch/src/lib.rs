@@ -25,7 +25,7 @@
 //!    resolves anything (`SF-D2`). The dial presents SOCKS credentials that
 //!    belong to this read alone, so no two reads share a circuit (`SF-D3`).
 //! 3. Write `GET /shard/{id}` with the one required header — the caller's
-//!    72-byte [`RequestHeader`] `nonce ‖ anchor_height ‖ anchor_hash`, hex on
+//!    73-byte [`RequestHeader`] `stream ‖ nonce ‖ anchor_height ‖ anchor_hash`, hex on
 //!    the wire (`SF-D5`).
 //! 4. Read a complete head. `200` → continue; `404` → [`FetchError::Miss`];
 //!    `400` → [`FetchError::Rejected`]; `503` →

@@ -368,6 +368,56 @@ pub struct BlockDraws {
     pub revealed: bool,
 }
 
+/// A support-stream count: one tree's unissued draws in an epoch, or one
+/// block's issued support draws. Four little-endian bytes
+/// (`ARCHIVAL_SUPPORT_DRAW.md` §5). Capped at `c` by the writer; the
+/// codec stores the number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SupportCount(u32);
+
+impl SupportCount {
+    /// The stored width.
+    pub const LEN: usize = 4;
+
+    /// A block, or a tree in an epoch, that issued none.
+    ///
+    /// The row a connect writes while the support schedule is not on the
+    /// transition. A store height that was never written is `None`, not
+    /// this value: absence is a hole, and this count is a height that
+    /// issued none.
+    pub const NONE: Self = Self(0);
+
+    /// A count of `n`.
+    #[must_use]
+    pub const fn new(n: u32) -> Self {
+        Self(n)
+    }
+
+    /// The count.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// One issued support draw (`ARCHIVAL_SUPPORT_DRAW.md` §3).
+///
+/// The key names the tree, the epoch, the issuing block and the draw
+/// index. The shard the draw selected is the value: the settlement row is
+/// one per tree, so the shard is not part of the key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SupportIssued {
+    /// The shard this draw selected, inside the archive at its block.
+    pub shard: ShardId,
+    /// Whether a pass record for this draw has been admitted.
+    pub passed: bool,
+}
+
+impl SupportIssued {
+    /// `shard` as `u64` LE, then the pass flag.
+    pub const LEN: usize = 9;
+}
+
 impl BlockDraws {
     /// A block that drew nothing: no count, no carry, no shortfall, nothing
     /// issued, and the seed unrevealed.
