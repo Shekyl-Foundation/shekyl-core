@@ -144,6 +144,10 @@ pub struct Node {
     handles: Handles,
     service: Mutex<Option<Service<ProductionSubstrate>>>,
     runtime: Mutex<Option<shekyl_runtime::Pool>>,
+    /// The hasher budget `pow_hash` acquires under. The facts-lock test
+    /// holds its permits; production does not keep a second copy.
+    #[cfg(test)]
+    budget: Budget,
 }
 
 impl Node {
@@ -225,6 +229,8 @@ impl Node {
             offline: args.config.offline(),
         });
         let started_at = facts::unix_now();
+        #[cfg(test)]
+        let test_budget = budget.clone();
         let facts = StoreFacts::new(
             store,
             store_path.clone(),
@@ -262,6 +268,8 @@ impl Node {
             handles,
             service: Mutex::new(Some(service)),
             runtime: Mutex::new(Some(runtime)),
+            #[cfg(test)]
+            budget: test_budget,
         })
     }
 
@@ -297,6 +305,9 @@ impl Node {
     /// task either. Mining control stops the miner; it does not stop or
     /// drop the node.
     pub fn stop(&self) {
+        // Red edit: delete this assert. It is `debug_assert!` on purpose:
+        // a release build does not carry it, so only a debug build can
+        // fire it. The `# Panics` section is the contract either way.
         debug_assert!(
             tokio::runtime::Handle::try_current().is_err(),
             "Node::stop waits on the runtime; a tokio task cannot call it or drop the node"
@@ -337,18 +348,12 @@ impl Node {
         runtime.shutdown(RUNTIME_SHUTDOWN);
     }
 
-    /// The facts the chain handle reads. The lock test stalls `pow_hash`
-    /// through this and shows a chain read does not wait.
+    /// The hasher budget the facts hash under. The lock test holds every
+    /// permit, so `pow_hash` waits inside `acquire` with the slot lock
+    /// already dropped.
     #[cfg(test)]
-    fn facts(&self) -> Arc<StoreFacts> {
-        Arc::clone(
-            self.slots
-                .facts
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .as_ref()
-                .expect("the facts slot is filled until stop"),
-        )
+    fn budget(&self) -> Budget {
+        self.budget.clone()
     }
 }
 
@@ -596,42 +601,49 @@ mod tests {
         );
     }
 
-    /// A `pow_hash` in flight does not hold the facts lock: a chain read
-    /// returns while the hash is stalled inside the read.
+    /// A `pow_hash` waiting on a hasher permit does not hold the facts
+    /// lock: a chain read returns while that wait is in progress.
     ///
     /// Red edit: hold the slot mutex across `read`.
     #[test]
     fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
         use std::sync::mpsc;
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
 
         use shekyl_daemon_rpc::chain_facts::ChainFacts;
         use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowSeed};
-
-        struct Release(Arc<StoreFacts>);
-        impl Drop for Release {
-            fn drop(&mut self) {
-                self.0.set_pow_stall_for_test(false);
-            }
-        }
+        use shekyl_hash_budget::Class;
 
         let dir = tempfile::tempdir().expect("temp");
         let node = open_at(dir.path(), Arc::new(|| {}));
-        let facts = node.facts();
-        let _release = Release(Arc::clone(&facts));
-        facts.set_pow_stall_for_test(true);
+        let budget = node.budget();
+        // Every free permit. `pow_hash` then waits in `acquire` instead of
+        // hashing, which is the wait a chain read must not share.
+        let held: Vec<_> = (0..budget.permits())
+            .map_while(|_| budget.try_acquire(Class::Chain))
+            .collect();
+        assert!(
+            budget.try_acquire(Class::CalcPow).is_none(),
+            "a calc_pow permit was still free"
+        );
         let hashing = {
             let chain = Arc::clone(&node.handles().chain);
             std::thread::spawn(move || {
-                let _finished = ChainReadFacts::pow_hash(
-                    &*chain,
-                    &[],
-                    PowSeed::Given(BlockHash::NULL),
-                )
-                .is_ok();
+                ChainReadFacts::pow_hash(&*chain, &[], PowSeed::Given(BlockHash::NULL))
             })
         };
-        std::thread::sleep(Duration::from_millis(30));
+        let entered = Instant::now();
+        while budget.waiting(Class::CalcPow) == 0 {
+            assert!(
+                entered.elapsed() < Duration::from_secs(2),
+                "pow_hash did not wait for a permit"
+            );
+            if hashing.is_finished() {
+                let finished = hashing.join().expect("pow thread");
+                panic!("pow_hash finished without waiting for a permit: {finished:?}");
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
         let (done, arrived) = mpsc::channel();
         let reading = {
             let chain = Arc::clone(&node.handles().chain);
@@ -642,12 +654,14 @@ mod tests {
         };
         assert!(
             arrived.recv_timeout(Duration::from_millis(200)).is_ok(),
-            "a chain read waited out the pow stall, so the facts lock is held across the hash"
+            "a chain read waited on the pow hash, so the facts lock is held across the permit wait"
         );
-        drop(_release);
-        hashing
-            .join()
-            .expect("the stalled hash finishes once released");
+        drop(held);
+        let hashed = hashing.join().expect("pow thread");
+        assert!(
+            hashed.is_ok(),
+            "the hash finishes once a permit is free: {hashed:?}"
+        );
         reading.join().expect("the chain read");
     }
 

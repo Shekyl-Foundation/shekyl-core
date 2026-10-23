@@ -300,12 +300,6 @@ impl ChainReadFacts for StoreFacts {
     }
 
     fn pow_hash(&self, pow_blob: &[u8], seed: PowSeed) -> Result<PowAt, FactsFault> {
-        // The node's chain handle clones the facts out of its slot before
-        // calling this. The stall is how that test shows the slot lock is
-        // not held across the hash: a chain read returns while this waits.
-        while self.stall_pow.load(std::sync::atomic::Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
         let seed = match seed {
             PowSeed::Given(seed) => seed,
             PowSeed::AtHeight(height) => match seed_height(height) {
