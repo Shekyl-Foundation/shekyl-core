@@ -255,19 +255,47 @@ mod sys {
     }
 
     /// Clears the thread's errno, so a NULL from `getpwent` can be told
-    /// apart from an error. `getpwent` is specified to leave errno alone
-    /// at the end of the list.
+    /// apart from an error: `getpwent` is specified to leave errno alone at
+    /// the end of the list, so a stale value would read as a failed walk.
+    /// The accessor is each libc's own, named here as the libc crate
+    /// declares it (read at its source, 0.2.191); a target this does not
+    /// name does not build, rather than skipping the clear and judging a
+    /// stale errno.
     fn clear_errno() {
-        // SAFETY: each call returns the address of this thread's errno,
+        // SAFETY: each accessor returns the address of this thread's errno,
         // which is ours to write.
-        #[cfg(any(target_os = "linux", target_os = "android"))]
         unsafe {
-            *libc::__errno_location() = 0;
+            #[cfg(any(target_os = "linux", target_os = "dragonfly"))]
+            {
+                *libc::__errno_location() = 0;
+            }
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+            {
+                *libc::__error() = 0;
+            }
+            #[cfg(any(target_os = "netbsd", target_os = "openbsd"))]
+            {
+                *libc::__errno() = 0;
+            }
+            #[cfg(any(target_os = "illumos", target_os = "solaris"))]
+            {
+                *libc::___errno() = 0;
+            }
         }
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
-        unsafe {
-            *libc::__error() = 0;
-        }
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "illumos",
+            target_os = "solaris"
+        )))]
+        compile_error!(
+            "group::clear_errno: name this target's errno accessor as the libc crate declares it"
+        );
     }
 }
 
