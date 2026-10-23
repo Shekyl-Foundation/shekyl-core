@@ -232,6 +232,10 @@ members = [
     # where the validator, the store and RandomX meet.
     "shekyl-chain-ingest",
 
+    # Chain sync's model (CS-2, P2P_3_CHAIN_SYNC_BRIEF.md CS-Q2): events
+    # in, commands out. No store, no runtime, no hasher.
+    "shekyl-chain-sync",
+
     # The daemon's transaction pool (DRS-E5 PR-b, DRS_E5_POOL_ALT_PRUNE.md
     # §2.2): admission through the validator's own door, the key-image map,
     # the public bit, eviction, template selection, the reconcile at open.

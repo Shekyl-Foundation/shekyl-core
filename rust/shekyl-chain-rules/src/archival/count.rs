@@ -11,13 +11,18 @@
 //! in this block's batch; the next block reads `shortfall − issued_short`.
 //! `revealed` stays false until a later block admits this height's seed.
 //!
+//! When the response window reaches the previous epoch, that epoch's
+//! drawable set is filed into the memo as well. Admission reads the memo
+//! and does not rebuild, so a cold memo at the start of an epoch still
+//! has to hold every epoch a bundle in the window can name.
+//!
 //! The row is written at every height, including a schedule with no
 //! response window, which draws nothing. A failure here is [`Corrupt`]:
 //! the writer halts, and the block is not refused.
 
 use shekyl_archival_retention::{draw_count, draw_horizon, DrawableEpoch};
 use shekyl_types::archival::{BlockDraws, COUNTED_DRAWS};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, SettlementEpoch};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
@@ -108,6 +113,7 @@ impl super::Transition {
         let at_open = connecting == open;
         let floor = BlockDrawsFloor::in_force(connecting, schedule);
         let set_size = self.resolve_len(view, at_open, opened, count_memo)?;
+        self.file_prior_epoch(view, count_memo)?;
         let (visible, carry_in) = if at_open {
             // The block before a later open wrote a row. Its numbers belong
             // to the epoch that closed; this epoch counts `D` afresh. The
@@ -186,8 +192,6 @@ impl super::Transition {
         let connecting = self.connecting;
         let schedule = self.schedule;
         let epoch = self.epoch;
-        let reorg_cap = self.reorg_cap;
-        let slash_floor = self.slash_floor;
         let open_hash = count_memo.open_hash;
         if at_open {
             let drawable =
@@ -200,43 +204,115 @@ impl super::Transition {
             return Ok(len);
         }
 
-        let h_open = BlockHeight::from_raw(schedule.open_height(epoch.to_raw()));
-        let recorded = match view.header_at(h_open).map_err(ViewRead::View)? {
-            AtHeight::Recorded(header) => header.hash,
-            AtHeight::AboveTip => return Err(fault(connecting, DrawCountFault::OpenUnrecorded)),
+        let Some(memo) = count_memo.memo.as_mut() else {
+            // A height with no opening block is OpenUnrecorded. The rebuild's
+            // Unopened must not replace it when the memo is cold.
+            self.opening_hash(view, epoch)?;
+            return Ok(self.rebuilt_epoch(view, epoch)?.len());
         };
-        if let Some(memo) = count_memo.memo.as_mut() {
-            memo.evict(connecting, schedule);
-            if let Some(cached) = memo.get(epoch, &recorded) {
-                return Ok(cached.len());
-            }
-        }
+        memo.evict(connecting, schedule);
+        self.remember_epoch(view, epoch, memo)
+    }
 
-        let journal = ReleaseJournalFloor::of(EpochFloor::under(connecting, schedule), schedule);
+    /// File the previous epoch's set when this block's window reaches it.
+    ///
+    /// `W₂ < SEB`, so the window names at most the epoch being counted and
+    /// the one before it, and only while `connecting` is still within `W₂`
+    /// of the open. A warm memo already holds that set. A cold one does
+    /// not: the count rebuilds only its own epoch, and admission would
+    /// then fault the miss it was promised would not happen.
+    fn file_prior_epoch<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        count_memo: &mut CountMemo<'_>,
+    ) -> Result<(), ViewRead<V::Fault>> {
+        let Some(memo) = count_memo.memo.as_mut() else {
+            return Ok(());
+        };
+        let Some(window) = self.schedule.challenge_response_blocks() else {
+            return Ok(());
+        };
+        let raw = self.epoch.to_raw();
+        if raw == 0 {
+            return Ok(());
+        }
+        let open = BlockHeight::from_raw(self.schedule.open_height(raw));
+        let reaches = match self.connecting.checked_sub(open) {
+            Some(span) => span.to_raw() < window.get(),
+            None => false,
+        };
+        if !reaches {
+            return Ok(());
+        }
+        self.remember_epoch(view, SettlementEpoch::from_raw(raw - 1), memo)?;
+        Ok(())
+    }
+
+    /// The hash of the block that opened `epoch`. Above the tip the epoch
+    /// was not opened, which is [`DrawCountFault::OpenUnrecorded`] rather
+    /// than a digest the rebuild can fail as unopened.
+    fn opening_hash<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        epoch: SettlementEpoch,
+    ) -> Result<BlockHash, ViewRead<V::Fault>> {
+        let h_open = BlockHeight::from_raw(self.schedule.open_height(epoch.to_raw()));
+        match view.header_at(h_open).map_err(ViewRead::View)? {
+            AtHeight::Recorded(header) => Ok(header.hash),
+            AtHeight::AboveTip => Err(fault(self.connecting, DrawCountFault::OpenUnrecorded)),
+        }
+    }
+
+    /// `|D|` of `epoch` under its opening hash. A memo hit is that length.
+    /// A miss rebuilds, keeps the rebuild only when it matches the recorded
+    /// digest, and returns the rebuilt length. The caller evicts; this
+    /// function does not.
+    fn remember_epoch<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        epoch: SettlementEpoch,
+        memo: &mut DrawableMemo,
+    ) -> Result<u64, ViewRead<V::Fault>> {
+        let recorded = self.opening_hash(view, epoch)?;
+        if let Some(cached) = memo.get(epoch, &recorded) {
+            return Ok(cached.len());
+        }
+        let rebuilt = self.rebuilt_epoch(view, epoch)?;
+        let len = rebuilt.len();
+        memo.insert(epoch, recorded, rebuilt);
+        Ok(len)
+    }
+
+    /// The drawable set of `epoch` on `view`, kept only when the walk
+    /// matches the digest the open recorded.
+    fn rebuilt_epoch<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+        epoch: SettlementEpoch,
+    ) -> Result<DrawableEpoch, ViewRead<V::Fault>> {
+        let schedule = self.schedule;
+        let h_open = BlockHeight::from_raw(schedule.open_height(epoch.to_raw()));
+        let journal =
+            ReleaseJournalFloor::of(EpochFloor::under(self.connecting, schedule), schedule);
         let rebuilt = super::drawable_epoch_walked_back(
             view,
             epoch,
             schedule,
-            reorg_cap,
+            self.reorg_cap,
             journal,
-            slash_floor,
+            self.slash_floor,
         )?;
         let written = view
-            .drawable_digest(epoch, EpochFloor::under(connecting, schedule))
+            .drawable_digest(epoch, EpochFloor::under(self.connecting, schedule))
             .map_err(ViewRead::View)?;
         drawable::compare_recorded_digest(epoch, h_open, written, rebuilt.as_ref())
             .map_err(ViewRead::Corrupt)?;
-        let Some(rebuilt) = rebuilt else {
-            return Err(ViewRead::Corrupt(Corrupt::DrawableEpoch {
+        rebuilt.ok_or_else(|| {
+            ViewRead::Corrupt(Corrupt::DrawableEpoch {
                 epoch,
                 why: DrawableEpochFault::Unopened { h_open },
-            }));
-        };
-        let len = rebuilt.len();
-        if let Some(memo) = count_memo.memo.as_mut() {
-            memo.insert(epoch, recorded, rebuilt);
-        }
-        Ok(len)
+            })
+        })
     }
 }
 

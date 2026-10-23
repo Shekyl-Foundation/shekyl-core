@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use shekyl_crypto_hash::keccak256;
 use shekyl_portable_storage::{load_from_binary, Limits, Section, Value};
 use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash};
-use shekyl_wire::{Block, BlockBody, SkeletonTx, TxBody, MIN_POW_BLOB_SIZE};
+use shekyl_wire::{Block, BlockBody, SkeletonTx, TxBody, MIN_POW_BLOB_SIZE, MIN_PRUNED_SEGMENT};
 
 use super::block::ATTESTATION_WITNESS_MAX_BYTES;
 use super::error::Error;
@@ -100,12 +100,140 @@ const _: () = assert!(HEADERS_RESPONSE_BYTES == 2 * 1024 * 1024);
 const _: () = assert!(BODIES_RESPONSE_BYTES == 8 * 1024 * 1024);
 const _: () = assert!(MIN_POW_BLOB_SIZE as u64 >= TWO_BYTE_LENGTH_FROM);
 const _: () = assert!(MIN_POW_BLOB_SIZE as u64 <= TWO_BYTE_LENGTH_TO);
+/// A cap or a count as `usize`. Each one is at most `u32::MAX`, so the
+/// conversion does not truncate on a 32-bit target.
+#[allow(clippy::cast_possible_truncation)]
+const fn cap_usize(n: u64) -> usize {
+    assert!(n <= 4_294_967_295);
+    n as usize
+}
+
+/// Portable-storage varint width. `0..=63` is one byte, then two, four, eight.
+const fn ps_varint_len(val: usize) -> usize {
+    if val <= 63 {
+        1
+    } else if val <= 16_383 {
+        2
+    } else if val <= 1_073_741_823 {
+        4
+    } else {
+        8
+    }
+}
+
+/// A section key: its length byte and the key.
+const fn key_len(chars: usize) -> usize {
+    1 + chars
+}
+
+/// A `uint8` field: key, type tag, value.
+const fn u8_field(chars: usize) -> usize {
+    key_len(chars) + 1 + 1
+}
+
+/// A `uint64` field: key, type tag, eight value bytes.
+const fn u64_field(chars: usize) -> usize {
+    key_len(chars) + 1 + 8
+}
+
+/// A string field: key, type tag, length varint, bytes.
+const fn bytes_field(chars: usize, n: usize) -> usize {
+    key_len(chars) + 1 + ps_varint_len(n) + n
+}
+
+/// A full transaction section at [`MIN_PRUNED_SEGMENT`]: `form` and `blob`.
+const FULL_TX_SECTION_BYTES: usize =
+    ps_varint_len(2) + bytes_field(4, MIN_PRUNED_SEGMENT) + u8_field(4);
+
+/// A skeleton section at the same segment: `form`, `unprunable`, the two
+/// hashes (`prunable_hash`, `pqc_auth_hash`) and `archival_len`.
+const SKELETON_TX_SECTION_BYTES: usize = ps_varint_len(5)
+    + u8_field(4)
+    + bytes_field(10, MIN_PRUNED_SEGMENT)
+    + bytes_field(13, 32)
+    + bytes_field(13, 32)
+    + u64_field(12);
+
+/// The smaller transaction section an accepted body can contain.
+pub const MIN_TX_SECTION_BYTES: usize = if FULL_TX_SECTION_BYTES < SKELETON_TX_SECTION_BYTES {
+    FULL_TX_SECTION_BYTES
+} else {
+    SKELETON_TX_SECTION_BYTES
+};
+
+/// Header-section fields: `blobs`, `tip_work`, `tip_work_top64`, `more`.
+const RESPONSE_HEADERS_FIELDS: usize = 4;
+/// A header section has no string outside the preimage array.
+const RESPONSE_HEADERS_OWN_STRINGS: usize = 0;
+
+/// Strings a header response may declare. One preimage is at least
+/// [`MIN_POW_BLOB_SIZE`] plus its two-byte length prefix.
+pub const RESPONSE_HEADERS_MAX_STRINGS: usize = (cap_usize(CAP_RESPONSE_HEADERS)
+    / (MIN_POW_BLOB_SIZE + cap_usize(PREIMAGE_LENGTH_PREFIX)))
+    + RESPONSE_HEADERS_OWN_STRINGS;
+
+/// Transactions a body response may declare: the packet divided by the
+/// smaller transaction section.
+pub const RESPONSE_BODIES_MAX_TXS: usize = cap_usize(CAP_RESPONSE_BODIES) / MIN_TX_SECTION_BYTES;
+
+/// Objects: one per body, plus one per transaction.
+pub const RESPONSE_BODIES_MAX_OBJECTS: usize =
+    cap_usize(MAX_OBJECT_REQUEST_COUNT) + RESPONSE_BODIES_MAX_TXS;
+
+/// Strings in the minimum (full) section: the blob. A body adds `block`
+/// and, at most, `attestation_witness`. The root adds `deferred` and
+/// `missed_ids`.
+const FULL_TX_STRINGS: usize = 1;
+const BODY_STRINGS: usize = 2;
+const ROOT_STRINGS: usize = 2;
+
+/// Strings a body response may declare, from the same two counts.
+pub const RESPONSE_BODIES_MAX_STRINGS: usize = ROOT_STRINGS
+    + cap_usize(MAX_OBJECT_REQUEST_COUNT) * BODY_STRINGS
+    + RESPONSE_BODIES_MAX_TXS * FULL_TX_STRINGS;
+
+/// Fields: the root's three, two on a body (`block`, `txs`), two on the
+/// minimum transaction section (`form`, `blob`).
+const ROOT_FIELDS: usize = 3;
+const BODY_FIELDS: usize = 2;
+const FULL_TX_FIELDS: usize = 2;
+
+/// Fields a body response may declare, from the same two counts.
+pub const RESPONSE_BODIES_MAX_FIELDS: usize = ROOT_FIELDS
+    + cap_usize(MAX_OBJECT_REQUEST_COUNT) * BODY_FIELDS
+    + RESPONSE_BODIES_MAX_TXS * FULL_TX_FIELDS;
+
+const RESPONSE_HEADERS_LIMITS: Limits = Limits {
+    objects: 0,
+    fields: RESPONSE_HEADERS_FIELDS,
+    strings: RESPONSE_HEADERS_MAX_STRINGS,
+};
+
+const RESPONSE_BODIES_LIMITS: Limits = Limits {
+    objects: RESPONSE_BODIES_MAX_OBJECTS,
+    fields: RESPONSE_BODIES_MAX_FIELDS,
+    strings: RESPONSE_BODIES_MAX_STRINGS,
+};
+
+/// A request is one hash-list field and no object.
+const REQUEST_LIMITS: Limits = Limits {
+    objects: 0,
+    fields: 1,
+    strings: 1,
+};
+
+const _: () = assert!(FULL_TX_SECTION_BYTES < SKELETON_TX_SECTION_BYTES);
+const _: () = assert!(MIN_TX_SECTION_BYTES == FULL_TX_SECTION_BYTES);
+const _: () = assert!(MIN_TX_SECTION_BYTES == 21);
+const _: () = assert!(SKELETON_TX_SECTION_BYTES == 145);
+const _: () = assert!(RESPONSE_HEADERS_MAX_STRINGS > 0);
+const _: () = assert!(RESPONSE_BODIES_MAX_OBJECTS > cap_usize(MAX_OBJECT_REQUEST_COUNT));
 const _: () = assert!(NOTIFY_REQUEST_HEADERS == 2011);
 const _: () = assert!(NOTIFY_RESPONSE_HEADERS == 2012);
 const _: () = assert!(NOTIFY_REQUEST_BODIES == 2013);
 const _: () = assert!(NOTIFY_RESPONSE_BODIES == 2014);
 
-fn capped<T: PortableMap>(bytes: &[u8], cap: u64) -> Result<T, Error> {
+fn capped<T: PortableMap>(bytes: &[u8], cap: u64, limits: Limits) -> Result<T, Error> {
     let max = usize::try_from(cap).expect("an encoded cap fits usize");
     if bytes.len() > max {
         return Err(Error::OverCap {
@@ -113,15 +241,10 @@ fn capped<T: PortableMap>(bytes: &[u8], cap: u64) -> Result<T, Error> {
             max,
         });
     }
-    // The inherited Levin ceilings (16 384 fields, 8 192 objects) refuse a
-    // response this cap already bounds: a body list of small skeletons
-    // exceeds both while staying inside the byte budget. A field, an object
-    // or a string consumes at least one byte, so the cap ceilings all three.
-    let limits = Limits {
-        objects: max,
-        fields: max,
-        strings: max,
-    };
+    // `limits` is derived from the smallest element this payload accepts,
+    // not from `cap`. The decoder allocates an array from its declared
+    // count once that count is under the limit, so a limit of `cap` lets a
+    // payload of one-byte elements allocate hundreds of millions of sections.
     T::from_section(&load_from_binary(bytes, limits)?)
 }
 
@@ -150,7 +273,7 @@ impl RequestHeaders {
     /// [`Error::OverCap`] over the encoded cap, [`Error::OverCount`] over
     /// the locator count, or a schema error.
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        let value = capped::<Self>(bytes, CAP_REQUEST_HEADERS)?;
+        let value = capped::<Self>(bytes, CAP_REQUEST_HEADERS, REQUEST_LIMITS)?;
         within_count(
             "block_ids",
             value.block_ids.len(),
@@ -179,9 +302,10 @@ impl PortableMap for RequestHeaders {
     }
 }
 
-/// `NOTIFY_RESPONSE_HEADERS` (2012). Preimages from the first locator hash
-/// the responder holds, the responder's claimed cumulative work, and
-/// whether another response follows.
+/// `NOTIFY_RESPONSE_HEADERS` (2012). Preimages starting at the child of
+/// the first locator hash the responder holds: the first preimage's
+/// parent is that hash. Then the responder's claimed cumulative work,
+/// and whether another response follows.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ResponseHeaders {
     /// Each entry is a [`shekyl_wire::PowBlob`]'s bytes.
@@ -202,7 +326,7 @@ impl ResponseHeaders {
     /// [`Error::OverCap`], [`Error::OverBudget`], [`Error::PreimageTooShort`],
     /// or a schema error.
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        let value = capped::<Self>(bytes, CAP_RESPONSE_HEADERS)?;
+        let value = capped::<Self>(bytes, CAP_RESPONSE_HEADERS, RESPONSE_HEADERS_LIMITS)?;
         value.check_budget()?;
         Ok(value)
     }
@@ -309,7 +433,7 @@ impl RequestBodies {
     ///
     /// [`Error::OverCap`], [`Error::OverCount`], or a schema error.
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        let value = capped::<Self>(bytes, CAP_REQUEST_BODIES)?;
+        let value = capped::<Self>(bytes, CAP_REQUEST_BODIES, REQUEST_LIMITS)?;
         within_count("hashes", value.hashes.len(), MAX_OBJECT_REQUEST_COUNT)?;
         Ok(value)
     }
@@ -383,7 +507,7 @@ impl ResponseBodies {
     ///
     /// [`Error::OverCap`], [`Error::OverBudget`], or a schema error.
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        let value = capped::<Self>(bytes, CAP_RESPONSE_BODIES)?;
+        let value = capped::<Self>(bytes, CAP_RESPONSE_BODIES, RESPONSE_BODIES_LIMITS)?;
         value.enforce_budget()?;
         Ok(value)
     }

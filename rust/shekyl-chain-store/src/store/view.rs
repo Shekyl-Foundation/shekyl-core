@@ -150,6 +150,34 @@ impl<'b, 'id> BatchView<'b, 'id> {
     fn tip_row(&self) -> Result<Option<(u64, BlockInfo)>, StoreError> {
         chain_reads::tip_of(self.batch.txn()).map_err(|f| self.arm(f))
     }
+
+    /// Arm a store invariant on this batch. The admission view uses it for
+    /// a memo miss (SI-35), an index past `D` (SI-37), a recorded coinbase
+    /// extra that does not yield one draw commitment (SI-38), and a visible
+    /// count past `u32` (SI-39). None of those is a read of a table.
+    pub(super) fn arm_row(&self, row: StoreInvariant) -> StoreError {
+        self.batch.poison().arm(row)
+    }
+
+    /// The block recorded at `height`, parsed from `blocks` and checked
+    /// against `block_info`. Above the tip is [`AtHeight::AboveTip`]. A
+    /// missing or unreadable row at or below the tip is SI-7.
+    ///
+    /// [`ChainView::block_at`] drops the miner transaction. The admission
+    /// view reads the coinbase extra from this block, and it scans that
+    /// extra itself: one `0x0C` field, not the coinbase grammar.
+    pub(super) fn recorded_block_at(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<shekyl_wire::Block>, StoreError> {
+        let tip = self.tip_row()?;
+        let body = chain_reads::block_body(self.batch.txn(), tip.as_ref(), height.to_raw())
+            .map_err(|f| self.arm(f))?;
+        Ok(match body {
+            AtHeight::AboveTip => AtHeight::AboveTip,
+            AtHeight::Recorded((_, block)) => AtHeight::Recorded(block),
+        })
+    }
 }
 
 impl<'id> HeaderView<'id> for BatchView<'_, 'id> {
