@@ -42,8 +42,12 @@ use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
-const SYNC_LIMIT: Duration = Duration::from_secs(240);
-const SHORT: Duration = Duration::from_secs(60);
+/// The ceiling on every wait for something to happen. Each wait returns
+/// the moment its condition holds, which here takes seconds to a minute:
+/// mostly real RandomX over a corpus's headers. The ceiling is for a
+/// loaded runner, where fourteen of these share the cores, and it measures
+/// nothing.
+const LIMIT: Duration = Duration::from_secs(900);
 
 // ---------------------------------------------------------------- logs --
 
@@ -175,7 +179,7 @@ fn spend() -> (Corpus, Vec<Step>) {
 
 async fn wait_synced(node: &Node, count: u64) {
     let synced = node
-        .wait(SYNC_LIMIT, |node| {
+        .wait(LIMIT, |node| {
             node.state() == SyncState::Synced && node.count() == count
         })
         .await;
@@ -240,7 +244,7 @@ async fn the_liar_closes_at_claim_unmet() {
     let (peer, seen) = ServingPeer::new(Arc::clone(&short.store), Bodies::Honest);
     let id = node.connect(Box::new(peer.stating(400)), Some(claim(400, 400, top)));
     assert!(
-        node.wait(SHORT, |node| node.closed(id).is_some()).await,
+        node.wait(LIMIT, |node| node.closed(id).is_some()).await,
         "the liar was not closed; asked {} times",
         seen.headers()
     );
@@ -263,7 +267,7 @@ async fn the_withholder_keeps_its_session_and_serves_nothing() {
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Withhold);
     let id = node.connect(Box::new(peer), Some(claim_of(&held)));
     assert!(
-        node.wait(SHORT, |_| seen.bodies() >= 1).await,
+        node.wait(LIMIT, |_| seen.bodies() >= 1).await,
         "no body was asked for"
     );
     // A few more rounds: still open, still at genesis.
@@ -287,7 +291,7 @@ async fn the_slow_drip_is_excluded_as_a_body_source_and_not_closed() {
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Hold(Arc::clone(&late)));
     let drip = node.connect(Box::new(peer), Some(claim_of(&held)));
     assert!(
-        node.wait(SHORT, |_| seen.bodies() >= 1).await,
+        node.wait(LIMIT, |_| seen.bodies() >= 1).await,
         "no body was asked for"
     );
     let asked = seen.bodies();
@@ -364,7 +368,7 @@ async fn a_past_cap_heavier_fork_raises_the_alarm_and_the_latch_reads_back() {
         Some(claim(fork_at + 1 + 100, fork_work, top)),
     );
     assert!(
-        node.wait(SHORT, |_| seen.headers() >= 1).await,
+        node.wait(LIMIT, |_| seen.headers() >= 1).await,
         "the fork was not asked for"
     );
     // The response makes the fork a candidate; the one evidence draw waits
@@ -373,7 +377,7 @@ async fn a_past_cap_heavier_fork_raises_the_alarm_and_the_latch_reads_back() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     node.advance(Duration::from_secs(4_096));
     assert!(
-        node.wait(SYNC_LIMIT, Node::alarm).await,
+        node.wait(LIMIT, Node::alarm).await,
         "the alarm was not raised: {} header requests, state {:?}, closed {:?}, model {:?}",
         seen.headers(),
         node.state(),
@@ -444,7 +448,7 @@ async fn a_forged_header_closes_on_its_first_real_hash() {
     let before = node.hashes();
     let id = node.connect(Box::new(peer), Some(claim(2, 1_000, forged.hash())));
     assert!(
-        node.wait(SHORT, |node| node.closed(id).is_some()).await,
+        node.wait(LIMIT, |node| node.closed(id).is_some()).await,
         "the forger was not closed"
     );
     let cause = model_closes("forged").get(&id.get()).cloned();
@@ -483,7 +487,7 @@ async fn substituted(tag: &str, bodies: Bodies, expected: &str) {
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), bodies);
     let bad = node.connect(Box::new(peer), Some(claim_of(&held)));
     assert!(
-        node.wait(SHORT, |node| node.closed(bad).is_some()).await,
+        node.wait(LIMIT, |node| node.closed(bad).is_some()).await,
         "the substituter was not closed"
     );
     assert_eq!(
@@ -495,7 +499,7 @@ async fn substituted(tag: &str, bodies: Bodies, expected: &str) {
     let (honest, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
     node.connect(Box::new(honest), Some(claim_of(&held)));
     assert!(
-        node.wait(SHORT, |node| matches!(
+        node.wait(LIMIT, |node| matches!(
             node.state(),
             SyncState::Behind { best, .. } if best.to_raw() == work
         ))
@@ -525,11 +529,11 @@ async fn a_skeleton_only_server_is_not_closed() {
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Skeleton);
     let skeleton = node.connect(Box::new(peer), Some(claim_of(&held)));
     assert!(
-        node.wait(SHORT, |_| seen.bodies() >= 1).await,
+        node.wait(LIMIT, |_| seen.bodies() >= 1).await,
         "no body was asked for"
     );
     let stopped = node
-        .wait(SHORT, |node| {
+        .wait(LIMIT, |node| {
             let at = node.count();
             at > 1 && at < count
         })
@@ -586,7 +590,7 @@ async fn an_announce_flood_does_not_stall_a_solicited_sync() {
         .count();
     assert_eq!(sent, ANNOUNCES);
     assert!(
-        loud.wait(SHORT, |node| {
+        loud.wait(LIMIT, |node| {
             node.stub
                 .lock()
                 .expect("stub")
@@ -624,7 +628,7 @@ async fn a_malformed_bucket_is_refused_by_the_cpp_ingress() {
     bad[0] ^= 0xFF;
     assert!(node.inject(id, bad).await);
     assert!(
-        node.wait(SHORT, |node| node.closed(id).is_some()).await,
+        node.wait(LIMIT, |node| node.closed(id).is_some()).await,
         "the session stayed open"
     );
     assert_eq!(node.closed(id), Some(CloseKind::SessionRefused));
@@ -649,7 +653,7 @@ async fn the_router_forwards_non_sync_commands_untouched() {
     both.extend_from_slice(&relay);
     assert!(node.inject(id, both).await);
     assert!(
-        node.wait(SHORT, |node| node.stub.lock().expect("stub").commands.len()
+        node.wait(LIMIT, |node| node.stub.lock().expect("stub").commands.len()
             >= 2)
             .await,
         "nothing reached the C++ handler"
@@ -713,7 +717,7 @@ async fn the_node_serves_requests_its_own_form_checks_accept() {
     let id = node.connect(Box::new(Asker(Arc::clone(&answers))), None);
     assert!(node.inject(id, request_headers(vec![[0; 32]])).await);
     assert!(
-        node.wait(SHORT, |_| !answers
+        node.wait(LIMIT, |_| !answers
             .lock()
             .expect("answers")
             .headers
@@ -746,7 +750,7 @@ async fn the_node_serves_requests_its_own_form_checks_accept() {
             .await
     );
     assert!(
-        node.wait(SHORT, |_| !answers
+        node.wait(LIMIT, |_| !answers
             .lock()
             .expect("answers")
             .bodies
