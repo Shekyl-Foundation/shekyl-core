@@ -388,8 +388,8 @@ fn kat_a_reference_is_its_kept_part_then_the_hash() {
         "the reference fixes its body's length"
     );
 
-    // A reference to a bundle of no draws is 76 bytes, and that one is
-    // pinned too.
+    // A reference to a bundle of no draws is 80 bytes: the 44-byte
+    // kept prefix, the support count, and the hash. That one is pinned too.
     let empty = BundleRef::new(
         BundleKept {
             h: BlockHeight::from_raw(1_000_007),
@@ -407,6 +407,7 @@ fn kat_a_reference_is_its_kept_part_then_the_hash() {
          00000000\
          dbe9e9c1bc25076eb62dea786a02651090551b7a918f7338a9e25ddc5fc91e0a"
     );
+    assert_eq!(empty.encode().len(), 80);
     assert_eq!(BundleRef::decode(&empty.encode()), Ok(empty.clone()));
     assert_eq!(empty.body_len(), 3_193);
 

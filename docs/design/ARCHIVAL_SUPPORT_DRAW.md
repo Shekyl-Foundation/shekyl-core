@@ -368,8 +368,8 @@ is still open.
   members of `D`. No economy figure in either sim moves.
 - At `c = 10` and non-filing rate `α = 0.10`, `P(issued < 3) =
   3.7 × 10^{-7}`. A draw that fails with probability `x = 0.01` then
-  misses the epoch with probability `3.0 × 10^{-4}`, and the 11-of-13
-  window slashes with probability `1.3 × 10^{-37}`. At `x = 1` the
+  misses the epoch with probability `3.0 × 10^{-4}`, and eleven misses
+  in a window of thirteen epochs slashes with probability `1.3 × 10^{-37}`. At `x = 1` the
   window slashes at 11 epochs. These are computed here, before any
   scenario test.
 

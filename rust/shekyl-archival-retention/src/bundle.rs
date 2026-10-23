@@ -154,19 +154,20 @@ pub enum BundleWireError {
         /// The block's draw count.
         count: u32,
     },
-    /// The kept part is the seed, `h`, `count`, and a bitmap of exactly
-    /// `count` bits. `expected` is the length the stated count implies, or
-    /// the 44 fixed bytes when there are too few to state one.
+    /// The kept part is the seed, `h`, the economy count and bitmap, and
+    /// the support count and bitmap. `expected` is the length those fields
+    /// imply from what has been read, or the 44 fixed bytes when the input
+    /// is too short to state a count.
     #[error("the kept part is {expected} bytes for the count it states, not {found}")]
     KeptLength {
-        /// `44 + ⌈count / 8⌉`.
+        /// The length the fields read so far imply.
         expected: usize,
         /// The bytes offered.
         found: usize,
     },
-    /// A reference is its kept part and a 32-byte hash: exactly
-    /// `76 + ⌈count / 8⌉` bytes for the count it states.
-    #[error("a reference is 76 bytes and the bitmap its count implies, not {found} bytes")]
+    /// A reference is its kept part and a 32-byte hash. With both bitmaps
+    /// empty that is 80 bytes; each bitmap adds `⌈its count / 8⌉`.
+    #[error("a reference is its kept part and a 32-byte hash, not {found} bytes")]
     ReferenceLength {
         /// The bytes offered.
         found: usize,
@@ -442,9 +443,8 @@ impl BundleRef {
         }
     }
 
-    /// `seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ prunable_hash[32]`: the
-    /// kept part ([`BundleKept::encode`]), then the hash. `76 + ⌈count /
-    /// 8⌉` bytes.
+    /// The kept part ([`BundleKept::encode`]), then the prunable hash.
+    /// `80 + ⌈economy count / 8⌉ + ⌈support count / 8⌉` bytes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.kept.encoded_len() + 32);
@@ -462,7 +462,7 @@ impl BundleRef {
     /// # Errors
     ///
     /// [`BundleWireError::ReferenceLength`] unless `bytes` is exactly
-    /// `76 + ⌈count / 8⌉` long for the count it states;
+    /// the kept part plus 32 bytes for the counts it states;
     /// [`BundleWireError::BitmapPadding`] for a set padding bit.
     pub fn decode(bytes: &[u8]) -> Result<Self, BundleWireError> {
         let length = BundleWireError::ReferenceLength { found: bytes.len() };
