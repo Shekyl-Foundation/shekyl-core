@@ -62,6 +62,7 @@ use shekyl_chain_ingest::service::{
 use shekyl_chain_ingest::{Chain, ChainRules, Metrics, ProductionSubstrate};
 use shekyl_chain_rules::{AdmissionPolicy, FakechainSchedule, ReleaseAnchors, RuleSet};
 use shekyl_chain_store::apply_policy::ApplyPolicy;
+use shekyl_chain_store::pool::PoolOpen;
 use shekyl_chain_store::store::{ChainStore, Horizons, SnapshotView};
 use shekyl_daemon_config::sections::{DaemonConfig, Dev};
 use shekyl_daemon_rpc::handles::Handles;
@@ -127,7 +128,12 @@ pub struct OpenArgs<'a> {
 }
 
 struct Slots {
-    facts: Arc<Mutex<Option<StoreFacts>>>,
+    /// The facts, behind `Arc` so a read clones them and drops this lock
+    /// before it runs. The guard covers the swap to absent. A read can
+    /// wait (`pow_hash` takes a hasher permit, then hashes) or just take
+    /// time, and either one stalls every other chain read if the guard
+    /// spans it.
+    facts: Arc<Mutex<Option<Arc<StoreFacts>>>>,
     pool: Arc<Mutex<Option<Arc<Mutex<Pool>>>>>,
     door: Arc<Mutex<Option<Door>>>,
 }
@@ -140,6 +146,10 @@ pub struct Node {
     handles: Handles,
     service: Mutex<Option<Service<ProductionSubstrate>>>,
     runtime: Mutex<Option<shekyl_runtime::Pool>>,
+    /// The hasher budget `pow_hash` acquires under. The facts-lock test
+    /// holds its permits; production does not keep a second copy.
+    #[cfg(test)]
+    budget: Budget,
 }
 
 impl Node {
@@ -221,6 +231,8 @@ impl Node {
             offline: args.config.offline(),
         });
         let started_at = facts::unix_now();
+        #[cfg(test)]
+        let test_budget = budget.clone();
         let facts = StoreFacts::new(
             store,
             store_path.clone(),
@@ -236,7 +248,7 @@ impl Node {
             caches,
             budget,
         );
-        let facts_slot = Arc::new(Mutex::new(Some(facts)));
+        let facts_slot = Arc::new(Mutex::new(Some(Arc::new(facts))));
         let door_slot = Arc::new(Mutex::new(Some(door)));
         let handles = Handles {
             chain: Arc::new(ChainBridge::new(Arc::clone(&facts_slot))),
@@ -258,6 +270,8 @@ impl Node {
             handles,
             service: Mutex::new(Some(service)),
             runtime: Mutex::new(Some(runtime)),
+            #[cfg(test)]
+            budget: test_budget,
         })
     }
 
@@ -284,6 +298,16 @@ impl Node {
     ///
     /// The follower withdraws the job board on the way out. A second call
     /// does nothing. [`Drop`] calls this.
+    ///
+    /// # Panics
+    ///
+    /// In an asynchronous context. Stopping waits: the pool runs the service
+    /// stop with `block_on`, then [`shekyl_runtime::Pool::shutdown`] with a
+    /// non-zero bound. Tokio refuses either wait where blocking is not
+    /// allowed: a task, or any thread that has entered a runtime. [`Drop`]
+    /// calls this, so the node must not be dropped from that context
+    /// either. Mining control stops the miner; it does not stop or drop
+    /// the node.
     pub fn stop(&self) {
         let Some(runtime) = self
             .runtime
@@ -319,6 +343,14 @@ impl Node {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = None;
         runtime.shutdown(RUNTIME_SHUTDOWN);
+    }
+
+    /// The hasher budget the facts hash under. The lock test holds every
+    /// permit, so `pow_hash` waits inside `acquire` with the slot lock
+    /// already dropped.
+    #[cfg(test)]
+    fn budget(&self) -> Budget {
+        self.budget.clone()
     }
 }
 
@@ -418,7 +450,7 @@ fn open_pool(
         .unwrap_or(BlockHeight::ZERO);
     let rule_set = rules.in_force(height);
     let view = SnapshotView::new(&snap);
-    let (pool, _, _) = Pool::open(
+    let (pool, opened, _) = Pool::open(
         path,
         wall_now(),
         &view,
@@ -426,6 +458,12 @@ fn open_pool(
         &AdmissionPolicy::GENESIS,
     )
     .map_err(|error| OpenError::Pool(format!("{error:?}")))?;
+    if let PoolOpen::Recreated { from } = opened {
+        tracing::warn!(
+            %from,
+            "the pool file is a layout this release does not speak; it was recreated empty"
+        );
+    }
     Ok(Arc::new(Mutex::new(pool)))
 }
 
@@ -558,6 +596,83 @@ mod tests {
             Err(FactsFault::NotReady),
             "the handle does not answer after the store closes"
         );
+    }
+
+    /// A `pow_hash` waiting on a hasher permit does not hold the facts
+    /// lock: a chain read returns while that wait is in progress.
+    ///
+    /// [`shekyl_hash_budget::Budget::waiting`] is the signal. It rises
+    /// inside `acquire`, which runs inside the read, so the chain read
+    /// starts only once the slot guard would already be held. The permits
+    /// stay held until that read returns, so a guard that spanned the wait
+    /// fails `READ_BOUND`. Both bounds are failure limits: the enter loop
+    /// returns when the wait is visible, and a read that finishes returns
+    /// at once.
+    ///
+    /// Red edit: hold the slot mutex across `read`.
+    #[test]
+    fn a_pow_hash_in_flight_does_not_hold_the_facts_lock() {
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        use shekyl_daemon_rpc::chain_facts::ChainFacts;
+        use shekyl_daemon_rpc::read_facts::{ChainReadFacts, PowSeed};
+        use shekyl_hash_budget::Class;
+
+        /// The hash thread has not reached `acquire`.
+        const ENTER_BOUND: Duration = Duration::from_secs(5);
+        /// The chain read shared the permit wait. The permits are still held.
+        const READ_BOUND: Duration = Duration::from_secs(2);
+
+        let dir = tempfile::tempdir().expect("temp");
+        let node = open_at(dir.path(), Arc::new(|| {}));
+        let budget = node.budget();
+        // Every free permit. `pow_hash` then waits in `acquire` instead of
+        // hashing, which is the wait a chain read must not share.
+        let held: Vec<_> = (0..budget.permits())
+            .map_while(|_| budget.try_acquire(Class::Chain))
+            .collect();
+        assert!(
+            budget.try_acquire(Class::CalcPow).is_none(),
+            "a calc_pow permit was still free"
+        );
+        let hashing = {
+            let chain = Arc::clone(&node.handles().chain);
+            std::thread::spawn(move || {
+                ChainReadFacts::pow_hash(&*chain, &[], PowSeed::Given(BlockHash::NULL))
+            })
+        };
+        let entered = Instant::now();
+        while budget.waiting(Class::CalcPow) == 0 {
+            if hashing.is_finished() {
+                let finished = hashing.join().expect("pow thread");
+                panic!("pow_hash finished without waiting for a permit: {finished:?}");
+            }
+            assert!(
+                entered.elapsed() < ENTER_BOUND,
+                "pow_hash did not wait for a permit"
+            );
+            std::thread::yield_now();
+        }
+        let (done, arrived) = mpsc::channel();
+        let reading = {
+            let chain = Arc::clone(&node.handles().chain);
+            std::thread::spawn(move || {
+                let _read = ChainFacts::chain_tip(&*chain).is_ok();
+                let _sent = done.send(()).is_ok();
+            })
+        };
+        assert!(
+            arrived.recv_timeout(READ_BOUND).is_ok(),
+            "a chain read waited on the pow hash, so the facts lock is held across the permit wait"
+        );
+        drop(held);
+        let hashed = hashing.join().expect("pow thread");
+        assert!(
+            hashed.is_ok(),
+            "the hash finishes once a permit is free: {hashed:?}"
+        );
+        reading.join().expect("the chain read");
     }
 
     /// A ban through the node is on the table `process_sockets` reads.
