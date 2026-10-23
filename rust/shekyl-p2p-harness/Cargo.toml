@@ -32,7 +32,7 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-chain-sync = { path = "../shekyl-chain-sync", features = ["runtime"] }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
-shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
+shekyl-draw-rng = { path = "../shekyl-draw-rng" }
 shekyl-hash-budget = { path = "../shekyl-hash-budget" }
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-seam = { path = "../shekyl-seam" }
@@ -41,6 +41,9 @@ shekyl-wire = { path = "../shekyl-wire" }
 tracing = "0.1"
 
 [dev-dependencies]
+# The tests' seeded draw source for the node under test; held to this edge,
+# as the generator is test-only (`check_test_only_features.py`).
+shekyl-draw-rng = { path = "../shekyl-draw-rng", features = ["splitmix"] }
 # The loopback tests' logs: the owner's closes and faults, under RUST_LOG.
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 

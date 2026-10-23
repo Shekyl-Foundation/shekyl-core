@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use shekyl_chain_sync::SyncState;
+use shekyl_draw_rng::SplitMix64;
 use shekyl_hash_budget::Budget;
 use shekyl_p2p_harness::sync::{
     fork_headers, substrate, Bodies, Chain, Corpus, HeaderChainPeer, Node, ServingPeer,
@@ -31,6 +32,11 @@ use shekyl_types::BlockHash;
 
 const HEADERS: u64 = 50_000;
 const LIMIT: Duration = Duration::from_secs(48 * 60 * 60);
+
+/// The node's draw source: seeded, so a run repeats.
+fn rng() -> SplitMix64 {
+    SplitMix64::new(0x5EED)
+}
 
 fn claim(count: u64, work: u128, top: BlockHash) -> SyncPayload {
     SyncPayload {
@@ -70,7 +76,7 @@ async fn loopback_sync_of_a_corpus_and_fifty_thousand_headers() {
     let (count, work, top) = held.tip().expect("a chain");
 
     // Bodies: the corpus, whole.
-    let mut node = Node::start("long-bodies", corpus.rules(), &steps[..1], 4).await;
+    let mut node = Node::start("long-bodies", corpus.rules(), &steps[..1], 4, rng()).await;
     let started = Instant::now();
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
     node.connect(Box::new(peer), Some(claim(count, work, top)));
@@ -94,7 +100,7 @@ async fn loopback_sync_of_a_corpus_and_fifty_thousand_headers() {
     chain.extend(fork_headers(&held, 0, HEADERS));
     let tip = chain.last().expect("headers").0;
     let tip_work = u128::from(HEADERS + 1);
-    let mut node = Node::start("long-headers", corpus.rules(), &steps[..1], 4).await;
+    let mut node = Node::start("long-headers", corpus.rules(), &steps[..1], 4, rng()).await;
     let started = Instant::now();
     let (peer, seen) = HeaderChainPeer::new(chain, tip_work);
     node.connect(Box::new(peer), Some(claim(HEADERS + 1, tip_work, tip)));

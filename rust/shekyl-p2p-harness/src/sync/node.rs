@@ -29,7 +29,7 @@ use shekyl_chain_sync::executor::Executor;
 use shekyl_chain_sync::owner::{self, OwnerParts, Running};
 use shekyl_chain_sync::router::Router;
 use shekyl_chain_sync::SyncState;
-use shekyl_draw_rng::SplitMix64;
+use shekyl_draw_rng::RelayRng;
 use shekyl_hash_budget::Budget;
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_pow_randomx::CacheStore;
@@ -106,18 +106,23 @@ pub fn substrate() -> (ProductionSubstrate, Arc<Metrics>) {
 }
 
 impl Node {
-    /// Start a node over a fresh store under `rules`, holding `genesis`
-    /// steps first. Call from inside a multi-thread runtime.
+    /// Start a node over a fresh store under `rules`, holding the `before`
+    /// steps first, drawing from `rng`. Call from inside a multi-thread
+    /// runtime.
     ///
     /// # Panics
     ///
     /// A part does not start.
-    pub async fn start(
+    pub async fn start<R>(
         tag: &str,
         rules: shekyl_chain_ingest::ChainRules,
         before: &[super::chain::Step],
         permits: usize,
-    ) -> Self {
+        rng: R,
+    ) -> Self
+    where
+        R: RelayRng + Send + 'static,
+    {
         let (substrate, metrics) = substrate();
         let budget = Budget::new(NonZeroUsize::new(permits).expect("non-zero"));
         let chain = Chain::empty(tag, rules, Arc::new(substrate.clone()), budget.clone());
@@ -164,7 +169,7 @@ impl Node {
             executor,
             timer,
             rules,
-            rng: SplitMix64::new(0x5EED),
+            rng,
             pool_hashes: Arc::new(Vec::new),
             routed: routed_rx,
         };

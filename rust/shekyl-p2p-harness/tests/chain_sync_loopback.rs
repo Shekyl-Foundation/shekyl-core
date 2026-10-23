@@ -22,6 +22,7 @@ use shekyl_chain_rules::{form_header, target_claim, FormAttempt, Substrate};
 use shekyl_chain_store::codec::FollowingDegradedCell;
 use shekyl_chain_store::store::SnapshotView;
 use shekyl_chain_sync::SyncState;
+use shekyl_draw_rng::SplitMix64;
 use shekyl_hash_budget::Budget;
 use shekyl_levin::{
     notify, RequestBodies, ResponseBodies, ResponseHeaders, SyncCommand, COMMAND_HANDSHAKE,
@@ -142,6 +143,11 @@ fn model_closes(tag: &str) -> HashMap<u64, String> {
 
 // ------------------------------------------------------------- helpers --
 
+/// The node's draw source: seeded, so a run repeats.
+fn rng() -> SplitMix64 {
+    SplitMix64::new(0x5EED)
+}
+
 /// A peer's handshake claim: its block count and cumulative work.
 fn claim(count: u64, work: u128, top: BlockHash) -> SyncPayload {
     SyncPayload {
@@ -202,7 +208,7 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
     let (corpus, steps) = spend();
     let held = source("honest-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start("honest", corpus.rules(), &steps[..1], 2).await;
+    let mut node = Node::start("honest", corpus.rules(), &steps[..1], 2, rng()).await;
     let before = node.hashes();
     let mut seen = Vec::new();
     for _ in 0..2 {
@@ -238,7 +244,7 @@ async fn the_liar_closes_at_claim_unmet() {
     logs();
     let (corpus, steps) = spend();
     let short = source("liar-src", &corpus, &steps[..41]).await;
-    let node = Node::start("liar", corpus.rules(), &steps, 2).await;
+    let node = Node::start("liar", corpus.rules(), &steps, 2, rng()).await;
     let mut node = node;
     let (_, _, top) = short.tip().expect("a chain");
     let (peer, seen) = ServingPeer::new(Arc::clone(&short.store), Bodies::Honest);
@@ -263,7 +269,7 @@ async fn the_withholder_keeps_its_session_and_serves_nothing() {
     logs();
     let (corpus, steps) = spend();
     let held = source("withhold-src", &corpus, &steps).await;
-    let mut node = Node::start("withhold", corpus.rules(), &steps[..1], 2).await;
+    let mut node = Node::start("withhold", corpus.rules(), &steps[..1], 2, rng()).await;
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Withhold);
     let id = node.connect(Box::new(peer), Some(claim_of(&held)));
     assert!(
@@ -286,7 +292,7 @@ async fn the_slow_drip_is_excluded_as_a_body_source_and_not_closed() {
     logs();
     let (corpus, steps) = spend();
     let held = source("drip-src", &corpus, &steps).await;
-    let mut node = Node::start("drip", corpus.rules(), &steps[..1], 2).await;
+    let mut node = Node::start("drip", corpus.rules(), &steps[..1], 2, rng()).await;
     let late = Arc::new(Mutex::new(Vec::new()));
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Hold(Arc::clone(&late)));
     let drip = node.connect(Box::new(peer), Some(claim_of(&held)));
@@ -318,7 +324,7 @@ async fn the_slow_drip_is_excluded_as_a_body_source_and_not_closed() {
 async fn a_low_work_fork_is_never_asked_for() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("lowwork", corpus.rules(), &steps, 2).await;
+    let mut node = Node::start("lowwork", corpus.rules(), &steps, 2, rng()).await;
     let mut chain: Vec<(BlockHash, Vec<u8>)> = (0..=60)
         .map(|height| {
             let block = node.chain.block(height);
@@ -348,7 +354,7 @@ async fn a_past_cap_heavier_fork_raises_the_alarm_and_the_latch_reads_back() {
     // blocks before it.
     let corpus = Corpus::open("emission-claim");
     let steps = corpus.steps_through(97);
-    let mut node = Node::start("pastcap", corpus.rules(), &steps, 2).await;
+    let mut node = Node::start("pastcap", corpus.rules(), &steps, 2, rng()).await;
     let (count, work, _) = node.chain.tip().expect("a chain");
     let fork_at = count - 1 - 70;
     let mut chain: Vec<(BlockHash, Vec<u8>)> = (0..=fork_at)
@@ -403,7 +409,7 @@ async fn a_forged_header_closes_on_its_first_real_hash() {
     let (corpus, steps) = spend();
     // A target of 2: half of all hashes fail it.
     let rules = corpus.rules_at(2);
-    let mut node = Node::start("forged", rules, &steps[..1], 2).await;
+    let mut node = Node::start("forged", rules, &steps[..1], 2, rng()).await;
     let genesis = node.chain.block(0);
     let Step::Block { block, .. } = &steps[1] else {
         panic!("height 1 is a block");
@@ -482,7 +488,7 @@ async fn substituted(tag: &str, bodies: Bodies, expected: &str) {
     let (corpus, steps) = spend();
     let held = source(&format!("{tag}-src"), &corpus, &steps).await;
     let (count, work, _) = held.tip().expect("a chain");
-    let mut node = Node::start(tag, corpus.rules(), &steps[..1], 2).await;
+    let mut node = Node::start(tag, corpus.rules(), &steps[..1], 2, rng()).await;
     let before = node.hashes();
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), bodies);
     let bad = node.connect(Box::new(peer), Some(claim_of(&held)));
@@ -525,7 +531,7 @@ async fn a_skeleton_only_server_is_not_closed() {
     let (corpus, steps) = spend();
     let held = source("skeleton-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
-    let mut node = Node::start("skeleton", corpus.rules(), &steps[..1], 2).await;
+    let mut node = Node::start("skeleton", corpus.rules(), &steps[..1], 2, rng()).await;
     let (peer, seen) = ServingPeer::new(Arc::clone(&held.store), Bodies::Skeleton);
     let skeleton = node.connect(Box::new(peer), Some(claim_of(&held)));
     assert!(
@@ -557,7 +563,7 @@ async fn an_announce_flood_does_not_stall_a_solicited_sync() {
     let held = source("flood-src", &corpus, &steps).await;
     let (count, _, _) = held.tip().expect("a chain");
 
-    let mut quiet = Node::start("flood-quiet", corpus.rules(), &steps[..1], 2).await;
+    let mut quiet = Node::start("flood-quiet", corpus.rules(), &steps[..1], 2, rng()).await;
     let started = Instant::now();
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
     quiet.connect(Box::new(peer), Some(claim_of(&held)));
@@ -565,7 +571,7 @@ async fn an_announce_flood_does_not_stall_a_solicited_sync() {
     let unflooded = started.elapsed();
     quiet.stop().await;
 
-    let mut loud = Node::start("flood", corpus.rules(), &steps[..1], 2).await;
+    let mut loud = Node::start("flood", corpus.rules(), &steps[..1], 2, rng()).await;
     let started = Instant::now();
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
     let id = loud.connect(Box::new(peer), Some(claim_of(&held)));
@@ -621,7 +627,7 @@ async fn an_announce_flood_does_not_stall_a_solicited_sync() {
 async fn a_malformed_bucket_is_refused_by_the_cpp_ingress() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("malformed", corpus.rules(), &steps[..1], 1).await;
+    let mut node = Node::start("malformed", corpus.rules(), &steps[..1], 1, rng()).await;
     let (peer, _) = HeaderChainPeer::new(Vec::new(), 0);
     let id = node.connect(Box::new(peer), None);
     let mut bad = request_headers(vec![[0; 32]]);
@@ -643,7 +649,7 @@ async fn a_malformed_bucket_is_refused_by_the_cpp_ingress() {
 async fn the_router_forwards_non_sync_commands_untouched() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("forward", corpus.rules(), &steps[..1], 1).await;
+    let mut node = Node::start("forward", corpus.rules(), &steps[..1], 1, rng()).await;
     let (peer, _) = HeaderChainPeer::new(Vec::new(), 0);
     let id = node.connect(Box::new(peer), None);
     let handshake = notify(COMMAND_HANDSHAKE, b"a handshake the stub does not parse");
@@ -711,7 +717,7 @@ impl SyncPeer for Asker {
 async fn the_node_serves_requests_its_own_form_checks_accept() {
     logs();
     let (corpus, steps) = spend();
-    let mut node = Node::start("serve", corpus.rules(), &steps, 1).await;
+    let mut node = Node::start("serve", corpus.rules(), &steps, 1, rng()).await;
     let (count, _, _) = node.chain.tip().expect("a chain");
     let answers = Arc::new(Mutex::new(Answers::default()));
     let id = node.connect(Box::new(Asker(Arc::clone(&answers))), None);

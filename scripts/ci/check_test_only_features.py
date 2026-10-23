@@ -261,6 +261,20 @@ CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {
 # trace writer alone with `default-features = false`).
 PERMANENT: dict[tuple[str, str], str] = {
     (
+        "shekyl-chain-sync",
+        "runtime",
+    ): "chain sync's runtime half (CS-3): the Levin router, the sync owner, "
+    "the executor and serving. shekyl-ffi builds it for the seam's post "
+    "sink; the model's own tests build without it, so the model stays "
+    "free of tokio, the store and RandomX",
+    (
+        "shekyl-chain-sync",
+        "cs2-long-run",
+    ): "the floor-device job's selector: the cs2-long-run workflow passes it "
+    "on the command line, and no crate enables it. It gates one "
+    "cfg(all(test, feature)) module (long_run.rs), so it adds nothing to "
+    "any build but that job's test binary",
+    (
         "shekyl-chain-ingest",
         "pipeline",
     ): "the sequencer, the validate+connect actor and the grader (kameo/tokio) "
@@ -292,6 +306,9 @@ PERMANENT: dict[tuple[str, str], str] = {
 # it: `splitmix` is its only feature and is enabled across a crate boundary
 # from its first day (three dev edges). The name is the generator. It is not
 # the `conformance` grader feature those consumers also carry.
+# `shekyl-chain-sync` joined 2026-10-23 (CS-3), when `runtime` was first
+# enabled across a crate boundary (`shekyl-ffi`, `shekyl-p2p-harness`): one
+# two PERMANENT rows (`runtime`, and the floor job's `cs2-long-run`).
 #
 # This set is opt-in — the crates named below, out of a workspace approaching
 # seventy — so exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -312,6 +329,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-chain-ingest",
         "shekyl-draw-rng",
         "shekyl-noise",
+        "shekyl-chain-sync",
     }
 )
 
