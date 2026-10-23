@@ -26,8 +26,6 @@
 
 use shekyl_draw_rng::RelayRng;
 use shekyl_relay_privacy::stem_map::ConnectionId;
-#[allow(unused_imports)]
-use shekyl_relay_privacy::stem_map::StemMap;
 
 use super::epoch_map::EpochMap;
 use super::{hides_address, Relay, RelayPlan};
@@ -327,7 +325,8 @@ impl Relay {
     /// link being usable is not this fact; a Tor whose link is up and whose
     /// first address-hiding peer has not handshaken reads `false`. A node
     /// with no address-hiding connector reads `false`. Exactness against
-    /// the next plan: [`StemMap::local_origin_routable`].
+    /// the next plan:
+    /// [`shekyl_relay_privacy::stem_map::StemMap::local_origin_routable`].
     #[must_use]
     pub fn originates_address_hiding(&self) -> bool {
         if !self.map.reserves_slot() {
