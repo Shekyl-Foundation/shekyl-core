@@ -439,11 +439,7 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
         .await;
     assert!(selected.refused.is_empty(), "{:?}", selected.refused);
     assert!(selected.stale.is_empty());
-    let chosen: Vec<_> = selected
-        .transactions
-        .iter()
-        .map(|(txid, _)| *txid)
-        .collect();
+    let chosen: Vec<_> = selected.transactions.iter().map(|body| body.id).collect();
     assert_eq!(
         chosen.len(),
         2,
@@ -460,7 +456,7 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
     let bodies = selected
         .transactions
         .into_iter()
-        .map(|(_, tx)| tx)
+        .map(|body| body.tx)
         .collect();
     scenario
         .mine_listing(bodies)

@@ -16,12 +16,12 @@
 //! snapshot's view. A connect that lands while the template is built
 //! changes none of them.
 //!
-//! **The listing.** The coinbase is built once with no bodies, for its
-//! weight. The pool's candidates are then offered in `select`'s order to
-//! the reward-aware [`Fill`] priced at that weight, and listed only if it
-//! admits them; `build` reprices the coinbase over the listing. If the
-//! built block is still over the limit, the last body is dropped and the
-//! block built again. Candidates the parent refuses are evicted (CEN-M10).
+//! **The listing.** The pool's candidates are offered in `select`'s order
+//! to the reward-aware [`Fill`] priced at [`COINBASE_RESERVE`], and listed
+//! only if it admits them. The pool lock covers the snapshot and, later,
+//! the eviction; `tx_against` runs between the two. `build` then prices
+//! the coinbase over that listing, once. Candidates the parent refuses are
+//! evicted (CEN-M10).
 //!
 //! **The secrets.** The coinbase's transaction secret is drawn from the OS
 //! for each template, and the draw commitment is
@@ -40,10 +40,11 @@ use shekyl_block_template::{
 };
 use shekyl_chain_rules::{Fault, RuleSet};
 use shekyl_chain_store::store::{ReadSnapshot, SnapshotView, StoreError};
-use shekyl_economics::{EconomicParams, EmissionError};
-use shekyl_mempool::{select_admitting, Evicted, Pool};
+use shekyl_economics::EconomicParams;
+use shekyl_mempool::{select_shown, Evicted, Pool};
 use shekyl_miner::{Job, ListedBody};
 use shekyl_types::{AttestationRoot, BlockHash, Timestamp, TxHash};
+use shekyl_wire::transaction::COINBASE_RESERVE;
 use shekyl_wire::tx_extra::COINBASE_NONCE_BYTES;
 use shekyl_wire::Transaction;
 use zeroize::Zeroizing;
@@ -63,8 +64,8 @@ pub(crate) struct Produced {
     pub(crate) block_weight: u64,
     /// The penalised gross emission the coinbase was priced at.
     pub(crate) block_reward: shekyl_units::AtomicUnits,
-    /// The coinbase's own weight, with no bodies listed: the weight the
-    /// fill priced the listing at.
+    /// The built coinbase's weight. The fill priced the listing at
+    /// [`COINBASE_RESERVE`], which is at least this.
     pub(crate) coinbase_weight: u64,
     /// What CEN-M10 took from the pool after the selection.
     pub(crate) evicted: Vec<(TxHash, Evicted)>,
@@ -89,9 +90,6 @@ pub(crate) enum NoTemplate {
     Build(TemplateError),
     /// The built coinbase reserves no extra nonce: a defect in `build`.
     NoNonceSlot,
-    /// The selection listed a body the pool does not show: a defect in
-    /// `select`, which offers only shown bodies.
-    Unlisted,
     /// The pool's entries were last judged against another tip than this
     /// template's parent. Selecting would refuse, and evict, entries valid
     /// at the tip they were judged at; the next tip change builds again.
@@ -119,9 +117,10 @@ pub(crate) struct Producer<'a> {
 
 /// Build the template for the block after `snap`'s tip (module docs).
 ///
-/// `holds` says whether the seed caches hold a seed. `pool` is the pool,
-/// locked only for the selection and the eviction, after `snap` was
-/// begun; `None` lists no bodies.
+/// `holds` says whether the seed caches hold a seed. `pool` is the pool.
+/// The snapshot is taken under its lock, the selection runs after the
+/// lock is dropped, and the eviction takes the lock again. `None` lists
+/// no bodies. `snap` is begun before either lock.
 ///
 /// # Errors
 ///
@@ -141,26 +140,15 @@ pub(crate) fn produce(
     let next_seed = next_seed(snap, height).map_err(NoTemplate::Claim)?;
     let rule_set = producer.rules.in_force(height);
     let secrets = Secrets::draw()?;
-    let coinbase_weight = secrets
-        .build(producer, &facts, &rule_set, &[])?
-        .block_weight;
     let Listing {
-        bodies: mut listed,
-        mut summaries,
+        bodies: listed,
+        summaries,
         evicted,
     } = match pool {
         None => Listing::default(),
-        Some(pool) => list(snap, producer, &facts, &rule_set, coinbase_weight, pool)?,
+        Some(pool) => list(snap, producer, &facts, &rule_set, pool)?,
     };
-    let template = loop {
-        match secrets.build(producer, &facts, &rule_set, &listed) {
-            Err(TemplateError::Emission(EmissionError::BlockTooBig)) if !listed.is_empty() => {
-                listed.pop();
-                summaries.pop();
-            }
-            built => break built?,
-        }
-    };
+    let template = secrets.build(producer, &facts, &rule_set, &listed)?;
     let offsets = template
         .block
         .blob_offsets()
@@ -169,6 +157,8 @@ pub(crate) fn produce(
         .miner_emission
         .checked_add(template.miner_fee_income)
         .ok_or(NoTemplate::Build(TemplateError::AmountOverflow))?;
+    let coinbase_weight = u64::try_from(template.block.miner_transaction.weight())
+        .map_err(|_| NoTemplate::Build(TemplateError::WeightOverflow))?;
     Ok(Produced {
         job: Job {
             block: template.block,
@@ -203,55 +193,64 @@ struct Listing {
 
 /// The bodies the fill admits, in `select`'s order, and what CEN-M10
 /// evicted after the selection.
+///
+/// The chain snapshot is already open. The pool lock is taken to copy the
+/// shown entries and to confirm they were judged at this parent, then
+/// dropped for `tx_against`, then taken again for the eviction. A tip move
+/// between the two locks evicts nothing.
 fn list(
     snap: &ReadSnapshot<'_>,
     producer: &Producer<'_>,
     facts: &ChainFacts,
     rule_set: &RuleSet,
-    coinbase_weight: u64,
     pool: &Mutex<Pool>,
 ) -> Result<Listing, NoTemplate> {
+    let reserve = u64::try_from(COINBASE_RESERVE)
+        .map_err(|_| NoTemplate::Build(TemplateError::WeightOverflow))?;
     let mut fill = Fill::empty(
         facts.medians.effective_median.to_raw(),
-        coinbase_weight,
+        reserve,
         facts.parent_coins_generated.to_raw(),
         facts.tx_volume,
         producer.params,
     )
-    .map_err(|e| NoTemplate::Build(TemplateError::Emission(e)))?;
+    .map_err(|error| NoTemplate::Build(TemplateError::Emission(error)))?;
     let bound = fill.bodies_weight_bound();
     let view = SnapshotView::new(snap);
-    let mut pool = pool.lock().unwrap_or_else(PoisonError::into_inner);
-    if pool.judged_at().map(|tip| tip.hash) != Some(facts.previous) {
-        return Err(NoTemplate::PoolOnAnotherTip);
-    }
-    let selected = select_admitting(&pool, &view, rule_set, bound, |weight, fee| {
+    let shown = {
+        let pool = pool.lock().unwrap_or_else(PoisonError::into_inner);
+        if !judged_at_parent(&pool, facts.previous) {
+            return Err(NoTemplate::PoolOnAnotherTip);
+        }
+        pool.shown_bodies()
+    };
+    let selected = select_shown(&shown, &view, rule_set, bound, |weight, fee| {
         fill.admit(weight, fee)
     })
     .map_err(NoTemplate::Selection)?;
-    let shown: std::collections::BTreeMap<TxHash, shekyl_mempool::Listed> =
-        pool.listing().collect();
+    let refused: Vec<TxHash> = selected.refused.iter().map(|(txid, _)| *txid).collect();
+    let listed: Vec<TxHash> = selected.transactions.iter().map(|body| body.id).collect();
+    let evicted = {
+        let mut pool = pool.lock().unwrap_or_else(PoisonError::into_inner);
+        if !judged_at_parent(&pool, facts.previous) {
+            return Err(NoTemplate::PoolOnAnotherTip);
+        }
+        pool.evict(&refused, &listed)
+            .map_err(NoTemplate::PoolFile)?
+    };
     let summaries = selected
         .transactions
         .iter()
-        .map(|(id, _)| {
-            shown.get(id).map(|listed| ListedBody {
-                id: *id,
-                weight: listed.weight,
-                fee: listed.fee,
-            })
+        .map(|body| ListedBody {
+            id: body.id,
+            weight: body.weight,
+            fee: body.fee,
         })
-        .collect::<Option<Vec<_>>>()
-        .ok_or(NoTemplate::Unlisted)?;
-    let refused: Vec<TxHash> = selected.refused.iter().map(|(txid, _)| *txid).collect();
-    let listed: Vec<TxHash> = summaries.iter().map(|body| body.id).collect();
-    let evicted = pool
-        .evict(&refused, &listed)
-        .map_err(NoTemplate::PoolFile)?;
+        .collect();
     let bodies = selected
         .transactions
         .into_iter()
-        .map(|(_, tx)| tx)
+        .map(|body| body.tx)
         .collect();
     Ok(Listing {
         bodies,
@@ -260,9 +259,13 @@ fn list(
     })
 }
 
+/// Whether the pool's last judgement is this template's parent.
+fn judged_at_parent(pool: &Pool, parent: BlockHash) -> bool {
+    pool.judged_at().is_some_and(|tip| tip.hash == parent)
+}
+
 /// One template's secrets: the coinbase's transaction secret and its draw
-/// commitment. Each build of the template gets its own wiped copy of the
-/// secret, so the weight probe and the block pay the same output.
+/// commitment. The build takes a wiped copy of the secret.
 struct Secrets {
     tx_key: Zeroizing<[u8; 32]>,
     draw: shekyl_types::archival::DrawCommitment,

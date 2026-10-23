@@ -423,7 +423,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 (
                     pool.listing().any(|(id, _)| id == txid),
                     pool.peer_sync().any(|(id, _)| id == txid),
-                    template.transactions.iter().any(|(id, _)| *id == txid),
+                    template.transactions.iter().any(|body| body.id == txid),
                     pool.unpublished().any(|(id, _)| id == txid),
                 )
             };

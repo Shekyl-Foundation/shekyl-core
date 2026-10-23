@@ -16,7 +16,7 @@ use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use shekyl_chain_ingest::follower::{NoJob, Posting, Unbuilt};
+use shekyl_chain_ingest::follower::{NoJob, Posting};
 use shekyl_chain_ingest::service::PoolHealth;
 use shekyl_daemon_rpc::chain_facts::FactsFault;
 use shekyl_daemon_rpc::handles::MiningFacts;
@@ -224,8 +224,8 @@ fn no_job_diagnostic(why: &NoJob) -> Diagnostic {
     };
     let diagnostic = Diagnostic::new(code, why.to_string());
     match why {
-        NoJob::NotSynced(state) => diagnostic.param("sync", format!("{state:?}")),
-        NoJob::Unbuilt(kind) => diagnostic.param("kind", format!("{kind:?}")),
+        NoJob::NotSynced(state) => diagnostic.param("sync", state.name()),
+        NoJob::Unbuilt(kind) => diagnostic.param("kind", kind.code()),
         _ => diagnostic,
     }
 }
@@ -307,10 +307,8 @@ impl MiningFacts for MiningControl {
         let mut posting = self.posting.clone();
         Box::pin(async move {
             let lost = |now: &Posting| match now {
-                Posting::Posted(_)
-                | Posting::Withdrawn(NoJob::Starting | NoJob::Unbuilt(Unbuilt::PoolOnAnotherTip)) => {
-                    None
-                }
+                Posting::Posted(_) => None,
+                Posting::Withdrawn(why) if why.transient() => None,
                 Posting::Withdrawn(why) => Some(why.clone()),
             };
             let why = match posting.wait_for(|now| lost(now).is_some()).await {

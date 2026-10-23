@@ -79,13 +79,28 @@ impl core::fmt::Display for NoJob {
             Self::NotSynced(SyncState::NoView) => {
                 f.write_str("no template: not synced (no sync owner before chain sync's cutover)")
             }
-            Self::NotSynced(state) => write!(f, "no template: not synced ({state:?})"),
+            Self::NotSynced(state) => write!(f, "no template: not synced ({})", state.name()),
             Self::PoolRetired => {
                 f.write_str("no template: the pool file faulted; restart the node to reopen it")
             }
             Self::Unbuilt(why) => write!(f, "no template: {why}"),
             Self::Stopped => f.write_str("no template: the node is stopping"),
         }
+    }
+}
+
+impl NoJob {
+    /// Whether the next tip clears this reason.
+    ///
+    /// `generateblocks` keeps waiting while the board is withdrawn for one
+    /// of these: the follower posts again when the tip moves, or when the
+    /// first pass finishes.
+    #[must_use]
+    pub const fn transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Starting | Self::Unbuilt(Unbuilt::PoolOnAnotherTip)
+        )
     }
 }
 
@@ -107,8 +122,6 @@ pub enum Unbuilt {
     Pricing,
     /// The built coinbase reserves no extra nonce.
     NoNonceSlot,
-    /// The selection listed a body the pool does not show.
-    Unlisted,
     /// The tip is the last height there is.
     LastHeight,
     /// The chain's own headers refuse the next block's target.
@@ -132,13 +145,35 @@ impl core::fmt::Display for Unbuilt {
             Self::Random => "the OS random source failed",
             Self::Pricing => "the block could not be priced",
             Self::NoNonceSlot => "the coinbase reserves no extra nonce",
-            Self::Unlisted => "the selection listed a body the pool does not show",
             Self::LastHeight => "the tip is the last height there is",
             Self::TargetRefused => "the chain's own headers refuse its target",
             Self::SeedMissing => "a seed block is not on the snapshot",
             Self::PoolOnAnotherTip => "the pool was judged against another tip",
             Self::ProducerPanicked => "the template producer panicked",
         })
+    }
+}
+
+impl Unbuilt {
+    /// The RPC `kind` parameter under `mine.unbuilt`.
+    ///
+    /// These spellings are the contract. A rename is a wire change.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::StoreFault => "store_fault",
+            Self::StoreCorrupt => "store_corrupt",
+            Self::Selection => "selection",
+            Self::Clock => "clock",
+            Self::Random => "random",
+            Self::Pricing => "pricing",
+            Self::NoNonceSlot => "no_nonce_slot",
+            Self::LastHeight => "last_height",
+            Self::TargetRefused => "target_refused",
+            Self::SeedMissing => "seed_missing",
+            Self::PoolOnAnotherTip => "pool_on_another_tip",
+            Self::ProducerPanicked => "producer_panicked",
+        }
     }
 }
 
@@ -643,10 +678,6 @@ impl Unposted {
             Self::Template(NoTemplate::Build(error)) => {
                 tracing::error!("no template: {error}");
                 why(Unbuilt::Pricing)
-            }
-            Self::Template(NoTemplate::Unlisted) => {
-                tracing::error!("no template: the selection listed a body the pool does not show");
-                why(Unbuilt::Unlisted)
             }
             Self::Template(NoTemplate::PoolOnAnotherTip) => {
                 tracing::debug!("no template: the pool was judged against another tip");
