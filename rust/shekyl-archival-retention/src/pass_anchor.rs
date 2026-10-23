@@ -24,10 +24,10 @@
 //!
 //! ```compile_fail
 //! // HEIGHT_SEMANTICS.md C9: decoded header height is ordinal, not a count.
-//! use shekyl_archival_retention::PassRequestHeader;
+//! use shekyl_archival_retention::{PassRequestHeader, PassStream};
 //! use shekyl_types::ChainCount;
-//! let _ = PassRequestHeader::from_parts(PassStream::Economy,
-//!     shekyl_archival_retention::PassStream::Economy,
+//! let _ = PassRequestHeader::from_parts(
+//!     PassStream::Economy,
 //!     [0u8; 32],
 //!     ChainCount::from_raw(1),
 //!     [0u8; 32],
@@ -303,7 +303,8 @@ pub struct PassRequestHeader {
 }
 
 impl PassRequestHeader {
-    /// Assemble from the three fields. Infallible: lengths are in the types.
+    /// Assemble from the stream, the nonce, the anchor height and the anchor
+    /// hash. Infallible: lengths are in the types.
     #[must_use]
     pub const fn from_parts(
         stream: PassStream,
