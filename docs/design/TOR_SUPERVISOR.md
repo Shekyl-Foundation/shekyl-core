@@ -715,8 +715,8 @@ asserts the announced transitions, the recovery, the RPC fields, **and that the
 gray list is unchanged by the outage**. TB-11's launch test is
 `tor-pin-verify`'s Windows and macOS entries; on both platforms these cases
 are the supervisor's acceptance tests (`TSR-F15`). The respawn case runs in
-the Windows CI job beside the boot-and-stop smoke test (#1072), and in a
-macOS job once one exists.
+the Windows CI job beside the boot-and-stop smoke test (#1072), and in
+`tor-pin-verify`'s macOS entries.
 
 | Case | Expected | Apparatus |
 | --- | --- | --- |

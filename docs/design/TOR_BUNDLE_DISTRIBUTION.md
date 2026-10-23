@@ -315,12 +315,13 @@ current" procedure.
      published as the `tor-macos-<version>-signed` release on this repository
      (`signed_url`; Rick, 2026-10-23). The digest in the row is the
      integrity check, not the hosting.
-   - The tie: `tor_bundle.py` proves every byte outside each signature is
-     Tor's (`check_signature_tie`) at pin time (`tie`), when it stages and
-     when it verifies.
-   - The package: `gitian-build.py` fetches the signed files into the sources
-     cache with the tarball; the macOS gitian descriptor stages them into
-     `tor/` with `tor-licenses/` and verifies them, tie included.
+   - The tie: `scripts/release/tor_macho.py` proves every byte outside each
+     signature is Tor's (`check_signature_tie`). `tor_bundle.py` runs that
+     check at pin time (`tie`), when it stages, and when it verifies.
+   - The package: `tor_bundle.py fetch` (which `gitian-build.py` runs) puts
+     the tarball and the signed files in one sources cache. `stage` reads
+     that cache and no other directory. The macOS gitian descriptor stages
+     into `tor/` with `tor-licenses/` and verifies, tie included.
    - The launch test: `tor-pin-verify`'s two macOS entries run the live tests
      on the exact signed bytes, against the compiled pin.
 
