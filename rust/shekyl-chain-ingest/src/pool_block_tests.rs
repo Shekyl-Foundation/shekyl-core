@@ -603,6 +603,63 @@ async fn the_door_verifies_exactly_what_the_shared_function_verifies() {
     scenario.close().await;
 }
 
+/// The producer's admission (`select_admitting`, the fill's `admit`) is
+/// asked of each candidate the parent admits, in selection order. One it
+/// declines is named in `declined`, is not listed, and the next candidate
+/// is still offered: the fill passes over a body, it does not stop.
+#[tokio::test]
+async fn a_body_the_admission_declines_is_passed_over_and_the_next_is_listed() {
+    let (mut scenario, mined) = matured("pool-template-declined").await;
+    let first = paying_the_floor(&mut scenario, &mined, 0).await;
+    let second = paying_the_floor(&mut scenario, &mined, 1).await;
+    let dear = {
+        let floor = fee_of(&second);
+        Spender::over(&mined).spend_coinbase(scenario.wallet(), h(2), h(AT), floor * 10)
+    };
+    let dear_id = dear.txid_parts().hash;
+    let path = tmp("pool-template-declined-pool");
+    let mut pool = open_pool(&mut scenario, &path).await;
+    let (selected, offered) = scenario
+        .read_chain(|view, rule_set| {
+            for tx in [first.clone(), second.clone(), dear.clone()] {
+                let txid = tx.txid_parts().hash;
+                assert_eq!(
+                    pool.admit(
+                        tx,
+                        UnixSeconds::from_raw(1),
+                        view,
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("no fault"),
+                    Admission::Admitted {
+                        evicted: Vec::new()
+                    }
+                );
+                assert!(pool.fluffed(&txid).expect("publish"));
+            }
+            let dear_fee = fee_of(&dear);
+            let mut offered = 0;
+            let selected =
+                shekyl_mempool::select_admitting(&pool, view, rule_set, u64::MAX, |_, fee| {
+                    offered += 1;
+                    fee != dear_fee
+                })
+                .expect("template");
+            (selected, offered)
+        })
+        .await;
+    assert_eq!(offered, 3, "every candidate the parent admits is offered");
+    assert_eq!(selected.declined, vec![dear_id]);
+    let listed: Vec<_> = selected.transactions.iter().map(|(id, _)| *id).collect();
+    assert_eq!(listed.len(), 2, "the two after it are listed: {listed:?}");
+    assert!(!listed.contains(&dear_id));
+    assert!(selected.refused.is_empty() && selected.conflicted.is_empty());
+    drop(pool);
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+}
+
 fn fee_of(tx: &shekyl_wire::Transaction) -> u64 {
     match &tx.ct {
         shekyl_wire::transaction::Ct::Fcmp { fee, .. } => *fee,

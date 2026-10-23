@@ -145,6 +145,39 @@ pub struct Block {
 }
 
 impl Block {
+    /// Where the coinbase's extra-nonce payload sits in
+    /// [`serialize`](Self::serialize)'s output: the header, then the
+    /// coinbase up to its extra, then the nonce's place in the extra's fixed
+    /// grammar. An external miner writes its
+    /// [`COINBASE_NONCE_BYTES`](crate::tx_extra::COINBASE_NONCE_BYTES) there
+    /// (`DRS_X_PR3B_ROUND0.md` N2), then hashes the block it made: the
+    /// [`pow_blob`](Self::pow_blob) commits to the coinbase through the
+    /// transaction tree, so a new extra nonce is a new tree hash.
+    ///
+    /// `None` when the coinbase's extra does not open with the pubkey and
+    /// an eight-byte nonce, as every coinbase this node builds does.
+    #[must_use]
+    pub fn coinbase_extra_nonce_offset(&self) -> Option<usize> {
+        use crate::tx_extra::{
+            COINBASE_NONCE_BYTES, COINBASE_NONCE_OFFSET_IN_EXTRA, TX_EXTRA_TAG_NONCE,
+            TX_EXTRA_TAG_PUBKEY,
+        };
+        let extra = &self.miner_transaction.prefix.extra;
+        let nonce_tag = COINBASE_NONCE_OFFSET_IN_EXTRA.checked_sub(2)?;
+        let opens_right = extra.first() == Some(&TX_EXTRA_TAG_PUBKEY)
+            && extra.get(nonce_tag) == Some(&TX_EXTRA_TAG_NONCE)
+            && extra.get(nonce_tag + 1).map(|len| usize::from(*len)) == Some(COINBASE_NONCE_BYTES)
+            && extra.len() >= COINBASE_NONCE_OFFSET_IN_EXTRA + COINBASE_NONCE_BYTES;
+        if !opens_right {
+            return None;
+        }
+        let mut header = Vec::new();
+        self.header
+            .write(&mut header)
+            .expect("writing to a Vec is infallible");
+        Some(header.len() + self.miner_transaction.extra_offset() + COINBASE_NONCE_OFFSET_IN_EXTRA)
+    }
+
     /// Write the block.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         self.header.write(w)?;
@@ -409,6 +442,55 @@ mod tests {
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
             attestation_root: AttestationRoot::from_bytes(attestation_root),
         }
+    }
+
+    /// The extra-nonce offset is where the coinbase's nonce payload is in
+    /// the serialized block: eight bytes written there parse back as the
+    /// coinbase's nonce, and nothing else in the block moves.
+    #[test]
+    fn eight_bytes_at_the_extra_nonce_offset_are_the_coinbases_nonce() {
+        use crate::transaction::{Ct, CtBase, Input, Transaction, TxPrefix};
+        use crate::tx_extra::{build_coinbase_extra, COINBASE_NONCE_BYTES};
+        let extra = build_coinbase_extra(
+            [0x33; 32],
+            &[0; COINBASE_NONCE_BYTES],
+            shekyl_types::archival::DrawCommitment::from_bytes([0x44; 32]),
+            0,
+            &[],
+            &[],
+        )
+        .expect("a leafless coinbase extra");
+        let block = Block {
+            header: header(empty_attestation_root()),
+            miner_transaction: Transaction {
+                prefix: TxPrefix {
+                    unlock_time: 300,
+                    inputs: vec![Input::Gen(7)],
+                    outputs: Vec::new(),
+                    extra,
+                },
+                ct: Ct::Null(CtBase {
+                    enc_amounts: Vec::new(),
+                    enc_labels: Vec::new(),
+                    commitments: Vec::new(),
+                }),
+            },
+            transaction_hashes: vec![TxHash::from_bytes([0x55; 32])],
+        };
+        let at = block
+            .coinbase_extra_nonce_offset()
+            .expect("the coinbase opens with the pubkey and the nonce");
+
+        let mut bytes = block.serialize();
+        let written = [0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x07, 0x18];
+        bytes[at..at + COINBASE_NONCE_BYTES].copy_from_slice(&written);
+        let parsed = Block::from_bytes(&bytes).expect("the written blob parses");
+        let mut expected = block.clone();
+        let nonce_in_extra = crate::tx_extra::COINBASE_NONCE_OFFSET_IN_EXTRA;
+        expected.miner_transaction.prefix.extra
+            [nonce_in_extra..nonce_in_extra + COINBASE_NONCE_BYTES]
+            .copy_from_slice(&written);
+        assert_eq!(parsed, expected, "only the nonce changed");
     }
 
     /// The named minimum is the bytes the shortest preimage actually writes.

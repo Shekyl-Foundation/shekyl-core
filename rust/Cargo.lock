@@ -3869,6 +3869,7 @@ version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
  "hex",
+ "rand 0.8.6",
  "serde_json",
  "sha3",
  "shekyl-archival-retention",
@@ -3881,6 +3882,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]

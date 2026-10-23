@@ -162,6 +162,33 @@ pub fn draw_commit(witness_pk: &[u8], seed: &[u8; 32]) -> [u8; 32] {
     cshake256_32(DRAW_COMMIT_CUSTOMIZATION, &input)
 }
 
+/// Commit to a fresh witness key and a fresh seed, independent of each
+/// other and of everything else, and keep neither: the `0x0C` field of a
+/// coinbase that issues no draw (`ARCHIVAL_SERVE_CREDIT_SPEC.md` §4.2).
+///
+/// The seed is wiped when this returns; the secret key wipes itself on
+/// drop. The producer that keeps the pair for `W₂` blocks replaces this at
+/// genesis (SO-D12); until then every template, the Rust producer's and the
+/// FFI's, commits through here (`DRS_X_PR3B_ROUND0.md` Q4).
+///
+/// # Errors
+///
+/// If the OS random source or key generation fails. There is no fallback
+/// commitment.
+pub fn commit_and_discard(
+) -> Result<shekyl_types::archival::DrawCommitment, shekyl_crypto_pq::CryptoError> {
+    use rand::RngCore;
+    let (witness_pk, _witness_sk) =
+        shekyl_crypto_pq::fn_dsa_hybrid::HybridEd25519FnDsa::generate_keypair()?;
+    let mut seed = zeroize::Zeroizing::new([0u8; 32]);
+    rand::rngs::OsRng
+        .try_fill_bytes(seed.as_mut())
+        .map_err(|e| shekyl_crypto_pq::CryptoError::KeyGenerationFailed(format!("OS RNG: {e}")))?;
+    Ok(shekyl_types::archival::DrawCommitment::from_bytes(
+        draw_commit(&witness_pk.to_canonical_bytes(), &seed),
+    ))
+}
+
 /// A challenge read's nonce, bound to `(seed, block_hash(h), j, attempt)`.
 ///
 /// `attempt` is the read's index, from 0. Admission refuses
@@ -342,6 +369,16 @@ fn stream(seed: &[u8; 32], block_hash: &[u8; 32], draw: u32, attempt: u32) -> [u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two coinbases never share a commitment: each commits to its own
+    /// key and seed (the specification's §4.2, "neither is derived from
+    /// anything two blocks share").
+    #[test]
+    fn two_draws_commit_to_different_secrets() {
+        let a = commit_and_discard().expect("first");
+        let b = commit_and_discard().expect("second");
+        assert_ne!(a, b);
+    }
 
     const SEED: [u8; 32] = [0x11; 32];
     const HASH: [u8; 32] = [0x22; 32];

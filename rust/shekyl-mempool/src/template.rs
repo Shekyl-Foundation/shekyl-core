@@ -62,6 +62,10 @@ pub struct Selected {
     /// the selected ones is refused on, with the row (G7, G9 or G10): not
     /// selected, and not evicted.
     pub conflicted: Vec<(TxHash, CenRow)>,
+    /// Candidates valid against the parent that the producer's admission
+    /// declined ([`select_admitting`]): not listed, not evicted, and the
+    /// next candidate is tried.
+    pub declined: Vec<TxHash>,
 }
 
 /// Select from `pool` the bodies a block on `parent` lists under
@@ -77,6 +81,26 @@ pub fn select<'id, V: ChainView<'id>>(
     parent: &V,
     rule_set: &RuleSet,
     budget: u64,
+) -> Result<Selected, Fault<V::Fault>> {
+    select_admitting(pool, parent, rule_set, budget, |_, _| true)
+}
+
+/// [`select`], with the producer's admission asked of each candidate the
+/// parent admits, in this order: `admit(weight, fee)` is the reward-aware
+/// fill (`shekyl_block_template::Fill::admit`, DRS-X PR 3b). A candidate
+/// it declines is not listed, its key images do not enter the block's
+/// spent set, and the next candidate is tried. `budget` still bounds the
+/// listing's weight.
+///
+/// # Errors
+///
+/// As [`select`].
+pub fn select_admitting<'id, V: ChainView<'id>>(
+    pool: &Pool,
+    parent: &V,
+    rule_set: &RuleSet,
+    budget: u64,
+    mut admit: impl FnMut(u64, u64) -> bool,
 ) -> Result<Selected, Fault<V::Fault>> {
     let mut candidates: Vec<(&TxHash, &crate::pool::Held)> = pool
         .held()
@@ -106,10 +130,18 @@ pub fn select<'id, V: ChainView<'id>>(
             FormAttempt::FIRST,
         ) {
             Ok(Ok(_)) => {
-                if let Err(row) = archival.add(&held.tx) {
+                // Added to a copy first: a body the admission declines must
+                // leave the block's archival keys as they were.
+                let mut listed = archival.clone();
+                if let Err(row) = listed.add(&held.tx) {
                     selected.conflicted.push((*txid, row));
                     continue;
                 }
+                if !admit(weight, held.fee.to_raw()) {
+                    selected.declined.push(*txid);
+                    continue;
+                }
+                archival = listed;
                 spent.insert(*txid, key_images_of(&held.tx));
                 selected.weight += weight;
                 selected.fees = selected.fees.saturating_add(held.fee.to_raw());

@@ -60,6 +60,10 @@ const TAG_LEN: usize = 1;
 pub const COINBASE_NONCE_OFFSET_FROM_PUBKEY: usize =
     TX_EXTRA_PUBKEY_LEN + TAG_LEN + COINBASE_NONCE_LENGTH_WIDTH;
 
+/// Bytes from the first byte of a coinbase's extra to the first nonce
+/// payload byte: the `0x01` tag, then [`COINBASE_NONCE_OFFSET_FROM_PUBKEY`].
+pub const COINBASE_NONCE_OFFSET_IN_EXTRA: usize = TAG_LEN + COINBASE_NONCE_OFFSET_FROM_PUBKEY;
+
 /// Tags the grammar admits, in canonical order. The leafless layout is the
 /// prefix (pubkey, nonce, draw commitment); an output-bearing coinbase is
 /// the whole array.
