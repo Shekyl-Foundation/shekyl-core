@@ -66,6 +66,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod archival;
 pub mod archival_reads;
+pub mod bans;
 pub mod bin_commands;
 pub mod chain;
 pub mod chain_reads;

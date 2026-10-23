@@ -19,7 +19,10 @@ use shekyl_daemon_rpc::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
     FactsFault, FeeEstimate,
 };
-use shekyl_daemon_rpc::handles::{BansFacts, DoorFacts, PoolEntryFacts, PoolFacts, StopFacts};
+use shekyl_daemon_rpc::handles::{
+    BanLeftFacts, BanRow, BanTargetFacts, BansFacts, DoorFacts, PoolEntryFacts, PoolFacts,
+    StopFacts,
+};
 use shekyl_daemon_rpc::info_facts::{
     InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
 };
@@ -29,7 +32,9 @@ use shekyl_daemon_rpc::read_facts::{
     ShardCoverage,
 };
 use shekyl_daemon_rpc::store_facts::{NodeFacts, StoreFacts, SyncFacts};
+use shekyl_ffi::seam_ffi::bans::{BanPath, BanSpan, BanTarget};
 use shekyl_mempool::Pool;
+use shekyl_transport_layer::{BanLeft, Ipv4Subnet, ListedBan};
 use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, TxHash};
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -421,18 +426,71 @@ impl DoorFacts for DoorBridge {
     }
 }
 
-pub(crate) struct BansBridge;
+/// The node's ban table through the one ban path: the bound hub while
+/// there is one, otherwise the node's own socket table (DX-Q3, Q11).
+pub(crate) struct BansBridge {
+    path: BanPath,
+}
+
+impl BansBridge {
+    pub(crate) const fn new(path: BanPath) -> Self {
+        Self { path }
+    }
+}
+
+/// A target as the ban path names it.
+fn ban_target(target: BanTargetFacts) -> Result<BanTarget, FactsFault> {
+    match target {
+        BanTargetFacts::Host(host) => Ok(BanTarget::Host(host)),
+        BanTargetFacts::Subnet { network, prefix } => Ipv4Subnet::new(network, prefix)
+            .map(BanTarget::Subnet)
+            .ok_or(FactsFault::Internal),
+    }
+}
+
+/// Time left, as the RPC reads it: whole seconds, rounded up.
+fn ban_left(left: BanLeft) -> BanLeftFacts {
+    match left {
+        BanLeft::Permanent => BanLeftFacts::Permanent,
+        BanLeft::Remaining { nanos } => BanLeftFacts::Seconds(nanos.div_ceil(1_000_000_000)),
+    }
+}
 
 impl BansFacts for BansBridge {
-    fn ban_host(&self, host: IpAddr) -> Result<(), FactsFault> {
-        // The process table after install is this node's, and a bound hub
-        // finishes the sockets a new ban drops. One function, both states.
-        shekyl_ffi::seam_ffi::bans::ban_host_permanent(host);
-        Ok(())
+    fn ban(&self, target: BanTargetFacts, seconds: Option<u64>) -> Result<bool, FactsFault> {
+        let span = seconds.map_or(BanSpan::Permanent, |seconds| {
+            BanSpan::For(std::time::Duration::from_secs(seconds))
+        });
+        Ok(self.path.ban(ban_target(target)?, span))
     }
 
-    fn banned(&self, host: IpAddr) -> Result<bool, FactsFault> {
-        Ok(shekyl_ffi::seam_ffi::bans::host_is_banned(host))
+    fn lift(&self, target: BanTargetFacts) -> Result<bool, FactsFault> {
+        Ok(self.path.lift(ban_target(target)?))
+    }
+
+    fn remaining(&self, host: IpAddr) -> Result<Option<BanLeftFacts>, FactsFault> {
+        Ok(self.path.remaining(host).map(ban_left))
+    }
+
+    fn list(&self) -> Result<Vec<BanRow>, FactsFault> {
+        Ok(self
+            .path
+            .listed()
+            .into_iter()
+            .map(|row| match row {
+                ListedBan::Host { host, left } => BanRow {
+                    target: BanTargetFacts::Host(host),
+                    left: ban_left(left),
+                },
+                ListedBan::Subnet { subnet, left } => BanRow {
+                    target: BanTargetFacts::Subnet {
+                        network: subnet.network(),
+                        prefix: subnet.prefix_len(),
+                    },
+                    left: ban_left(left),
+                },
+            })
+            .collect())
     }
 }
 

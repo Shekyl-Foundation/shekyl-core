@@ -917,6 +917,60 @@ mod tests {
         );
     }
 
+    /// The ban path (DX-Q3, Q11) under a bound hub: a ban closes a live
+    /// session and refuses the next dial; `remaining`, the listing and
+    /// `lift` read and change the hub's table; a subnet ban covers a host
+    /// inside it; a timed ban expires at the process clock. Red edit: lift
+    /// through the path's own table while a hub is bound.
+    #[test]
+    fn the_ban_path_goes_through_a_bound_hub() {
+        use std::time::Duration;
+
+        use shekyl_seam::{BanLeft, CloseKind, Direction, Endpoint, Ipv4Subnet, ListedBan};
+
+        use super::bans::{BanPath, BanSpan, BanTarget};
+        let _gate = seam_bind_lock().lock();
+        unbind();
+        bind();
+        let hub = super::hub().expect("bound");
+        hub.install_loopback(32);
+        let host = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 77));
+        let endpoint = Endpoint::Clearnet {
+            ip: host,
+            port: 18080,
+            direction: Direction::Outbound,
+        };
+        let live = hub.connect(&endpoint).expect("open");
+        // A path over a table of its own: under a bound hub it is the hub's
+        // table the verbs change.
+        let path = BanPath::over(shekyl_seam::Sockets::new());
+        assert!(path.ban(BanTarget::Host(host), BanSpan::Permanent));
+        assert!(hub.cause(live.id).is_some(), "the live session was closed");
+        drop(live);
+        let Err(refused) = hub.connect(&endpoint) else {
+            panic!("a banned host was dialled");
+        };
+        assert_eq!(refused.kind(), CloseKind::AdmissionRefused);
+        assert_eq!(path.remaining(host), Some(BanLeft::Permanent));
+        assert!(path
+            .listed()
+            .iter()
+            .any(|row| matches!(row, ListedBan::Host { host: listed, .. } if *listed == host)));
+        assert!(path.lift(BanTarget::Host(host)));
+        assert_eq!(path.remaining(host), None);
+        drop(hub.connect(&endpoint).expect("lifted, dialled"));
+        let subnet = Ipv4Subnet::new(Ipv4Addr::new(203, 0, 113, 0), 24).expect("a /24");
+        assert!(path.ban(
+            BanTarget::Subnet(subnet),
+            BanSpan::For(Duration::from_millis(1))
+        ));
+        assert!(path.is_banned(host), "a host inside the subnet");
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(!path.is_banned(host), "expired at the process clock");
+        let _lifted = path.lift(BanTarget::Subnet(subnet));
+        unbind();
+    }
+
     /// Install, then bind: the hub is built on the table that was installed.
     /// A ban on that table is the hub's ban. Red edit: build the hub on a
     /// table of its own.

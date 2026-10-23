@@ -14,7 +14,7 @@
 //! over a real node. An absent handle never answers with a zero or an
 //! empty list (RK-D23): those are what a live, empty node reports.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -189,22 +189,74 @@ pub trait MiningFacts: Send + Sync {
 /// A mining handle.
 pub type MiningHandle = Arc<dyn MiningFacts>;
 
-/// The process ban table.
+/// What a ban names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BanTargetFacts {
+    /// One host.
+    Host(IpAddr),
+    /// An IPv4 subnet: its network address and prefix length.
+    Subnet {
+        /// The network address.
+        network: Ipv4Addr,
+        /// The prefix length, 0 to 32.
+        prefix: u8,
+    },
+}
+
+/// How long a ban has left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BanLeftFacts {
+    /// Until it is lifted.
+    Permanent,
+    /// Whole seconds until its deadline, rounded up.
+    Seconds(u64),
+}
+
+/// One ban in force.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BanRow {
+    /// What it names.
+    pub target: BanTargetFacts,
+    /// How long it has left.
+    pub left: BanLeftFacts,
+}
+
+/// The node's ban table: through the bound hub while there is one, which
+/// closes the sockets a new ban drops; otherwise the node's socket table
+/// (`DRS_X_STORE_FLIP.md` DX-Q3, Q11). Tor inbound is never banned: it has
+/// no address to ban (`shekyl-transport-layer`'s admission).
 pub trait BansFacts: Send + Sync {
-    /// Ban `host` for the life of the process.
+    /// Ban `target` for `seconds`, or until it is lifted when `None`.
+    /// `Ok(false)` when the deadline does not fit the clock; nothing is
+    /// banned then.
     ///
     /// # Errors
     ///
     /// [`FactsFault::NotReady`] when no table was supplied.
-    fn ban_host(&self, host: IpAddr) -> Result<(), FactsFault>;
+    fn ban(&self, target: BanTargetFacts, seconds: Option<u64>) -> Result<bool, FactsFault>;
 
-    /// Whether `host` is banned.
+    /// Lift `target`'s ban; `Ok(false)` when there was none.
     ///
     /// # Errors
     ///
-    /// [`FactsFault::NotReady`] when no table was supplied. `Ok(false)` is
-    /// a live table that does not ban `host`.
-    fn banned(&self, host: IpAddr) -> Result<bool, FactsFault>;
+    /// [`FactsFault::NotReady`] when no table was supplied.
+    fn lift(&self, target: BanTargetFacts) -> Result<bool, FactsFault>;
+
+    /// How long `host`'s longest ban has left; `None` when it is not
+    /// banned.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no table was supplied: no table is not
+    /// "this host is allowed".
+    fn remaining(&self, host: IpAddr) -> Result<Option<BanLeftFacts>, FactsFault>;
+
+    /// Every ban in force.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no table was supplied.
+    fn list(&self) -> Result<Vec<BanRow>, FactsFault>;
 }
 
 /// A bans handle.
@@ -418,11 +470,19 @@ impl MiningFacts for MiningAbsent {
 struct BansAbsent;
 
 impl BansFacts for BansAbsent {
-    fn ban_host(&self, _host: IpAddr) -> Result<(), FactsFault> {
+    fn ban(&self, _target: BanTargetFacts, _seconds: Option<u64>) -> Result<bool, FactsFault> {
         Err(FactsFault::NotReady)
     }
 
-    fn banned(&self, _host: IpAddr) -> Result<bool, FactsFault> {
+    fn lift(&self, _target: BanTargetFacts) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn remaining(&self, _host: IpAddr) -> Result<Option<BanLeftFacts>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn list(&self) -> Result<Vec<BanRow>, FactsFault> {
         Err(FactsFault::NotReady)
     }
 }
@@ -437,8 +497,6 @@ impl StopFacts for StopAbsent {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
-
     use super::*;
 
     #[test]
@@ -455,10 +513,11 @@ mod tests {
         assert_eq!(handles.door.room(), Err(FactsFault::NotReady));
         assert_eq!(handles.mining.running(), Err(FactsFault::NotReady));
         assert_eq!(
-            handles.bans.banned(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            handles.bans.remaining(IpAddr::V4(Ipv4Addr::LOCALHOST)),
             Err(FactsFault::NotReady),
             "no table is not 'this host is allowed'"
         );
+        assert_eq!(handles.bans.list(), Err(FactsFault::NotReady));
         assert_eq!(handles.stop.request_stop(), Err(FactsFault::NotReady));
     }
 }
