@@ -72,7 +72,7 @@ grep -rn "CORE_RPC_VERSION" rust/ src/ tests/ utils/ \
 | 4 | The constant's definition: `rust/shekyl-rpc-types/src/chain.rs:44`, `:80`, `:81`, `:82` (major, minor, the packing formula). |
 | 4 | The constant's pins: `chain.rs:383–386` (packed value, packing expression, major, minor — the 2026-09-04 merge-safety fix). |
 | 11 | The oracle-vector parity and chain-delta tests in `rust/shekyl-rpc-types/tests/rpc_parity.rs`. |
-| 2 | The re-export, `rust/shekyl-rpc-types/src/lib.rs:82–83`. |
+| 2 | The re-export, `rust/shekyl-rpc-types/src/lib.rs:87–88`. |
 | 7 | Comments and doc comments (`chain.rs:41`, `:45`, `:338`, `:367`; `headers.rs:16`; `src/rpc/core_rpc_server_commands_defs.h:84`, `:89`). |
 
 **Zero hits compare the constant to a value that came off the wire.** Not
