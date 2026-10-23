@@ -30,7 +30,7 @@ use shekyl_levin::{
 };
 use shekyl_p2p_harness::sync::{
     announcement, fork_headers, frame, request_headers, substrate, Bodies, Chain, Corpus,
-    HeaderChainPeer, Node, ServingPeer, Step, SyncPeer,
+    HeaderChainPeer, Node, ServingPeer, Silent, Step, SyncPeer,
 };
 use shekyl_seam::SyncPayload;
 use shekyl_transport_layer::CloseKind;
@@ -632,13 +632,15 @@ async fn a_peer_naming_our_tip_and_withholding_every_body_is_the_withholder() {
     held.stop().await;
 }
 
-/// A flood of unsolicited announcements beside a solicited sync goes to
-/// the C++ handler and does not stall the sync: the flooded sync finishes
-/// within a bound of the unflooded one.
+/// A flood of unsolicited announcements beside a solicited sync does not
+/// stall it: the flooded sync finishes within a bound of the unflooded
+/// one, and the flooder is not closed.
 ///
-/// Announcements (2008) are not the router's until the cutover routes them
-/// to the owner, so the flood reaches the C++ handler and never the model.
-/// What this pins is that a forwarded flood does not slow the owner.
+/// Announcements (2008) are the owner's once the router is attached
+/// (CS-4), so the flood reaches the model. It is a separate peer sending
+/// a well-formed announcement of the chain's last block, which the node
+/// cannot place until its parent is in; each costs the owner a decode
+/// and the model's parent check, and at most one is proven per session.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_announce_flood_does_not_stall_a_solicited_sync() {
     logs();
@@ -657,40 +659,34 @@ async fn an_announce_flood_does_not_stall_a_solicited_sync() {
     let mut loud = Node::start("flood", corpus.rules(), &steps[..1], 2, rng()).await;
     let started = Instant::now();
     let (peer, _) = ServingPeer::new(Arc::clone(&held.store), Bodies::Honest);
-    let id = loud.connect(Box::new(peer), Some(claim_of(&held)));
+    loud.connect(Box::new(peer), Some(claim_of(&held)));
+    let flooder = loud.connect(Box::new(Silent), None);
     let hub = loud.hub.clone();
+    let announce = announcement(&held.store, count - 1);
     const ANNOUNCES: usize = 2_000;
     let flood = tokio::task::spawn_blocking(move || {
-        let announce = notify(NOTIFY_NEW_COMPACT_BLOCK, &[0u8; 512]);
         (0..ANNOUNCES)
-            .filter(|_| hub.inject(id, announce.clone()))
+            .filter(|_| hub.inject(flooder, announce.clone()))
             .count()
     });
     wait_synced(&loud, count).await;
     let flooded = started.elapsed();
     let sent = flood.await.expect("the flood ends");
-    let forwarded = loud
-        .stub
-        .lock()
-        .expect("stub")
-        .commands
-        .iter()
-        .filter(|(session, command)| *session == id && *command == NOTIFY_NEW_COMPACT_BLOCK)
-        .count();
     assert_eq!(sent, ANNOUNCES);
+    assert_eq!(
+        loud.closed(flooder),
+        None,
+        "an unplaceable announcement is no fault"
+    );
     assert!(
-        loud.wait(LIMIT, |node| {
-            node.stub
-                .lock()
-                .expect("stub")
-                .commands
-                .iter()
-                .filter(|(session, command)| *session == id && *command == NOTIFY_NEW_COMPACT_BLOCK)
-                .count()
-                == ANNOUNCES
-        })
-        .await,
-        "{forwarded} of {ANNOUNCES} announcements reached the C++ handler"
+        !loud
+            .stub
+            .lock()
+            .expect("stub")
+            .commands
+            .iter()
+            .any(|(session, command)| *session == flooder && *command == NOTIFY_NEW_COMPACT_BLOCK),
+        "an announcement reached the C++ handler"
     );
     assert!(
         flooded <= unflooded * 3 + Duration::from_secs(10),
