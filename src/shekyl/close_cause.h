@@ -14,22 +14,29 @@
 #include <stdint.h>
 
 /* One close cause. reply_code is the overlay reply for
-   SHEKYL_CLOSE_PROXY_REFUSED and zero for every other kind.
+   SHEKYL_CLOSE_PROXY_REFUSED and zero for every other kind. marks is
+   the layers' judgement of the cause: SHEKYL_CLOSE_MARK_* bits.
    The size and offsets below are CloseCause's. */
 typedef struct shekyl_close_cause {
     uint8_t kind;
+    uint8_t marks;
     uint16_t reply_code;
 } shekyl_close_cause;
 
 #if defined(__cplusplus)
 static_assert(sizeof(shekyl_close_cause) == 4, "close cause size");
 static_assert(offsetof(shekyl_close_cause, kind) == 0, "close cause kind");
+static_assert(offsetof(shekyl_close_cause, marks) == 1, "close cause marks");
 static_assert(offsetof(shekyl_close_cause, reply_code) == 2, "close cause reply_code");
 #else
 _Static_assert(sizeof(shekyl_close_cause) == 4, "close cause size");
 _Static_assert(offsetof(shekyl_close_cause, kind) == 0, "close cause kind");
+_Static_assert(offsetof(shekyl_close_cause, marks) == 1, "close cause marks");
 _Static_assert(offsetof(shekyl_close_cause, reply_code) == 2, "close cause reply_code");
 #endif
+#define SHEKYL_CLOSE_MARK_RETRY 1
+#define SHEKYL_CLOSE_MARK_NAMES_DESTINATION 2
+#define SHEKYL_CLOSE_MARK_PROVES_MISBEHAVIOUR 4
 
 #define SHEKYL_CLOSE_PREFIX_MISMATCH 1
 #define SHEKYL_CLOSE_TRANSPORT_HANDSHAKE_FAILED 2

@@ -32,7 +32,7 @@ enum PhaseClass {
 }
 
 macro_rules! close_kinds {
-    ($(($disc:literal, $name:ident, $phase:ident, $c_name:literal),)*) => {
+    ($(($disc:literal, $name:ident, $phase:ident, $marks:expr, $c_name:literal),)*) => {
         /// The D12 discriminant. Fieldless so the header can name each one.
         #[repr(u8)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +79,15 @@ macro_rules! close_kinds {
                 }
             }
 
+            /// The transport layer's judgement of this kind, as the marks
+            /// a cause of it carries by default. A `ProxyRefused` is judged
+            /// by its reply instead ([`CloseCause::proxy_refused`]).
+            const fn default_marks(self) -> u8 {
+                match self {
+                    $(Self::$name => $marks,)*
+                }
+            }
+
             /// Whether this cause is in that row of the D12 table.
             #[must_use]
             pub const fn applies_in(self, phase: Phase) -> bool {
@@ -95,27 +104,56 @@ macro_rules! close_kinds {
     };
 }
 
+// The marks column is the transport layer's judgement of each kind (the
+// gray lifecycle, Rick 2026-10-24): a connection problem is worth a retry;
+// a cause that is the far side answering about this destination names it;
+// nothing here proves misbehaviour, because this layer cannot tell a peer
+// from an on-path party. The Levin layer adds that mark where its
+// connector authenticates the destination.
 close_kinds! {
-    (1, PrefixMismatch, BeforeChannel, "SHEKYL_CLOSE_PREFIX_MISMATCH"),
-    (2, TransportHandshakeFailed, BeforeChannel, "SHEKYL_CLOSE_TRANSPORT_HANDSHAKE_FAILED"),
-    (3, TransportTimeout, BeforeChannel, "SHEKYL_CLOSE_TRANSPORT_TIMEOUT"),
-    (4, AdmissionRefused, BeforeChannel, "SHEKYL_CLOSE_ADMISSION_REFUSED"),
-    (5, DialFailed, BeforeChannel, "SHEKYL_CLOSE_DIAL_FAILED"),
-    (6, ProxyRefused, BeforeChannel, "SHEKYL_CLOSE_PROXY_REFUSED"),
-    (7, LevinHandshakeTimeout, Gap, "SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT"),
-    (8, LevinHandshakeRejected, Gap, "SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED"),
-    (9, PeerClosed, ChannelExists, "SHEKYL_CLOSE_PEER_CLOSED"),
-    (10, RecordRejected, ChannelExists, "SHEKYL_CLOSE_RECORD_REJECTED"),
-    (11, SessionRefused, ChannelExists, "SHEKYL_CLOSE_SESSION_REFUSED"),
-    (12, IoError, ChannelExists, "SHEKYL_CLOSE_IO_ERROR"),
-    (13, SendQueueFull, ChannelExists, "SHEKYL_CLOSE_SEND_QUEUE_FULL"),
-    (14, LocalClose, Every, "SHEKYL_CLOSE_LOCAL_CLOSE"),
-    (15, InboundNotAccepted, BeforeChannel, "SHEKYL_CLOSE_INBOUND_NOT_ACCEPTED"),
-    (16, ProxyUnavailable, BeforeChannel, "SHEKYL_CLOSE_PROXY_UNAVAILABLE"),
+    (1, PrefixMismatch, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_PREFIX_MISMATCH"),
+    (2, TransportHandshakeFailed, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_TRANSPORT_HANDSHAKE_FAILED"),
+    (3, TransportTimeout, BeforeChannel, Marks::RETRY, "SHEKYL_CLOSE_TRANSPORT_TIMEOUT"),
+    (4, AdmissionRefused, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_ADMISSION_REFUSED"),
+    (5, DialFailed, BeforeChannel, Marks::RETRY, "SHEKYL_CLOSE_DIAL_FAILED"),
+    (6, ProxyRefused, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_PROXY_REFUSED"),
+    (7, LevinHandshakeTimeout, Gap, Marks::RETRY, "SHEKYL_CLOSE_LEVIN_HANDSHAKE_TIMEOUT"),
+    (8, LevinHandshakeRejected, Gap, Marks::NAMES_DESTINATION, "SHEKYL_CLOSE_LEVIN_HANDSHAKE_REJECTED"),
+    (9, PeerClosed, ChannelExists, Marks::RETRY, "SHEKYL_CLOSE_PEER_CLOSED"),
+    (10, RecordRejected, ChannelExists, Marks::NONE, "SHEKYL_CLOSE_RECORD_REJECTED"),
+    (11, SessionRefused, ChannelExists, Marks::NONE, "SHEKYL_CLOSE_SESSION_REFUSED"),
+    (12, IoError, ChannelExists, Marks::RETRY, "SHEKYL_CLOSE_IO_ERROR"),
+    (13, SendQueueFull, ChannelExists, Marks::NONE, "SHEKYL_CLOSE_SEND_QUEUE_FULL"),
+    (14, LocalClose, Every, Marks::NONE, "SHEKYL_CLOSE_LOCAL_CLOSE"),
+    (15, InboundNotAccepted, BeforeChannel, Marks::NONE, "SHEKYL_CLOSE_INBOUND_NOT_ACCEPTED"),
+    (16, ProxyUnavailable, BeforeChannel, Marks::RETRY, "SHEKYL_CLOSE_PROXY_UNAVAILABLE"),
+}
+
+/// The three marks a layer stamps on its own causes (the gray lifecycle,
+/// Rick 2026-10-24). The redialer and the peer lists read only these.
+/// They sit in the byte at offset 1 of [`CloseCause`], which the C header
+/// projects as `marks`, and nowhere else.
+pub struct Marks;
+
+impl Marks {
+    /// No mark: final, names nothing, proves nothing.
+    pub const NONE: u8 = 0;
+    /// A connection problem: the same destination is worth another attempt
+    /// within the test.
+    pub const RETRY: u8 = 1;
+    /// The far side answered about this destination: the cause is evidence
+    /// about the address that was dialed, not about the path to it.
+    pub const NAMES_DESTINATION: u8 = 2;
+    /// Authenticated proof that the peer misbehaved. Only a layer whose
+    /// connector authenticates the destination may set it.
+    pub const PROVES_MISBEHAVIOUR: u8 = 4;
+    /// Every bit a cause may carry.
+    pub const ALL: u8 = Self::RETRY | Self::NAMES_DESTINATION | Self::PROVES_MISBEHAVIOUR;
 }
 
 /// One close cause. `reply_code` is the overlay reply for
-/// [`CloseKind::ProxyRefused`] and zero for every other kind.
+/// [`CloseKind::ProxyRefused`] and zero for every other kind. `marks` is
+/// the layers' judgement of it ([`Marks`]).
 ///
 /// `repr(C)` is the layout `shekyl_close_cause` projects. The header's
 /// size and field offsets are these constants, so a Rust layout change
@@ -124,18 +162,21 @@ close_kinds! {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CloseCause {
     kind: CloseKind,
+    marks: u8,
     reply_code: u16,
 }
 
 const CLOSE_CAUSE_SIZE: usize = 4;
 const CLOSE_CAUSE_ALIGN: usize = 2;
 const CLOSE_CAUSE_KIND_OFFSET: usize = 0;
+const CLOSE_CAUSE_MARKS_OFFSET: usize = 1;
 const CLOSE_CAUSE_REPLY_OFFSET: usize = 2;
 
 const _: () = {
     assert!(std::mem::size_of::<CloseCause>() == CLOSE_CAUSE_SIZE);
     assert!(std::mem::align_of::<CloseCause>() == CLOSE_CAUSE_ALIGN);
     assert!(std::mem::offset_of!(CloseCause, kind) == CLOSE_CAUSE_KIND_OFFSET);
+    assert!(std::mem::offset_of!(CloseCause, marks) == CLOSE_CAUSE_MARKS_OFFSET);
     assert!(std::mem::offset_of!(CloseCause, reply_code) == CLOSE_CAUSE_REPLY_OFFSET);
 };
 
@@ -152,18 +193,61 @@ impl CloseCause {
         );
         Self {
             kind,
+            marks: kind.default_marks(),
             reply_code: 0,
         }
     }
 
-    /// `ProxyRefused` with the overlay's reply code. An unreachable onion
+    /// `ProxyRefused` with the overlay's reply code, judged by the SOCKS
+    /// layer's reply table ([`proxy_reply_marks`]). An unreachable onion
     /// is this cause.
     #[must_use]
     pub const fn proxy_refused(reply_code: u16) -> Self {
         Self {
             kind: CloseKind::ProxyRefused,
+            marks: proxy_reply_marks(reply_code),
             reply_code,
         }
+    }
+
+    /// The Levin layer's stamp: this cause names the destination, and
+    /// `connector` authenticates the destination, so what it names is the
+    /// peer itself and the cause proves its misbehaviour. On a connector
+    /// that does not authenticate, or a cause that names nothing, the
+    /// cause is returned unchanged: an on-path party could have answered.
+    ///
+    /// [`Declaration::destination_authenticated`]: crate::Declaration::destination_authenticated
+    #[must_use]
+    pub const fn proving_misbehaviour_on(mut self, connector: ConnectorId) -> Self {
+        let authenticated = match declaration(connector.column()).destination_authenticated() {
+            Assessment::Assessed(DestinationAuth::OneWay) => true,
+            Assessment::Assessed(DestinationAuth::No) | Assessment::NotAssessed => false,
+        };
+        if authenticated && self.names_the_destination() {
+            self.marks |= Marks::PROVES_MISBEHAVIOUR;
+        }
+        self
+    }
+
+    /// The marks this cause carries ([`Marks`]).
+    #[must_use]
+    pub const fn marks(self) -> u8 {
+        self.marks
+    }
+
+    /// Whether the layer that closed judged the destination worth another
+    /// attempt within the same test: a connection problem, not an answer.
+    #[must_use]
+    pub const fn retry_worthy(self) -> bool {
+        self.marks & Marks::RETRY != 0
+    }
+
+    /// Whether the layer that closed proved the peer misbehaved. Only an
+    /// authenticated destination can be proven; the peer lists drop an
+    /// address on this mark and on nothing else.
+    #[must_use]
+    pub const fn proves_misbehaviour(self) -> bool {
+        self.marks & Marks::PROVES_MISBEHAVIOUR != 0
     }
 
     #[must_use]
@@ -238,11 +322,7 @@ impl CloseCause {
     /// reports an introduction timeout as reply 4.
     #[must_use]
     pub const fn names_the_destination(self) -> bool {
-        match self.kind {
-            CloseKind::LevinHandshakeRejected => true,
-            CloseKind::ProxyRefused => proxy_reply_names_the_destination(self.reply_code),
-            _ => false,
-        }
+        self.marks & Marks::NAMES_DESTINATION != 0
     }
 }
 
@@ -267,19 +347,52 @@ const TOR_CLIENT_AUTH_REJECTED: u16 = 0xF5;
 /// Tor extended error. Tor rejected the onion address. Validated before dial.
 const TOR_ONION_ADDRESS_REJECTED: u16 = 0xF6;
 
-/// Onion SOCKS replies that name the destination.
+/// RFC 1928 §6. General SOCKS server failure.
+const SOCKS_GENERAL_FAILURE: u16 = 0x01;
+/// RFC 1928 §6. Network unreachable.
+const SOCKS_NETWORK_UNREACHABLE: u16 = 0x03;
+/// RFC 1928 §6. TTL expired.
+const SOCKS_TTL_EXPIRED: u16 = 0x06;
+/// Tor extended error. The rendezvous timed out.
+const TOR_RENDEZVOUS_TIMEOUT: u16 = 0xF3;
+/// Tor extended error. The introduction timed out.
+const TOR_INTRODUCTION_TIMEOUT: u16 = 0xF7;
+
+/// The SOCKS layer's judgement of an onion reply, as marks (the Tor
+/// connector's table, Rick 2026-10-24).
 ///
-/// RFC 1928 §6 host unreachable and connection refused. Tor's extended
-/// codes for a missing or unusable descriptor, and a failed introduction.
-const fn proxy_reply_names_the_destination(reply: u16) -> bool {
-    matches!(
+/// Worth a retry: a missing descriptor (`0xF0`), a failed introduction
+/// (`0xF2`), the two timeouts (`0xF3`, `0xF7`), general failure (`0x01`),
+/// network unreachable (`0x03`), host unreachable (`0x04`) and TTL expired
+/// (`0x06`): each can be the network or the directory on this try. Final:
+/// connection refused (`0x05`) and an unusable descriptor (`0xF1`), which
+/// the destination answered; the client-authorization errors (`0xF4`,
+/// `0xF5`), the rejected onion address (`0xF6`), and a command or address
+/// type this node sent (`0x07`, `0x08`), which are this node's request.
+/// Names the destination: host unreachable, connection refused, the
+/// missing or unusable descriptor, the failed introduction. Nothing here
+/// proves misbehaviour: a SOCKS reply is the proxy's word.
+pub const fn proxy_reply_marks(reply: u16) -> u8 {
+    let retry = matches!(
+        reply,
+        TOR_DESCRIPTOR_MISSING
+            | TOR_INTRODUCTION_FAILED
+            | TOR_RENDEZVOUS_TIMEOUT
+            | TOR_INTRODUCTION_TIMEOUT
+            | SOCKS_GENERAL_FAILURE
+            | SOCKS_NETWORK_UNREACHABLE
+            | SOCKS_HOST_UNREACHABLE
+            | SOCKS_TTL_EXPIRED
+    );
+    let names = matches!(
         reply,
         SOCKS_HOST_UNREACHABLE
             | SOCKS_CONNECTION_REFUSED
             | TOR_DESCRIPTOR_MISSING
             | TOR_DESCRIPTOR_UNUSABLE
             | TOR_INTRODUCTION_FAILED
-    )
+    );
+    (if retry { Marks::RETRY } else { 0 }) | (if names { Marks::NAMES_DESTINATION } else { 0 })
 }
 
 /// Replies that mean the request this node sent, not the onion.
@@ -314,10 +427,12 @@ const HEADER_PREAMBLE: &str = "\
 #include <stdint.h>
 
 /* One close cause. reply_code is the overlay reply for
-   SHEKYL_CLOSE_PROXY_REFUSED and zero for every other kind.
+   SHEKYL_CLOSE_PROXY_REFUSED and zero for every other kind. marks is
+   the layers' judgement of the cause: SHEKYL_CLOSE_MARK_* bits.
    The size and offsets below are CloseCause's. */
 typedef struct shekyl_close_cause {
     uint8_t kind;
+    uint8_t marks;
     uint16_t reply_code;
 } shekyl_close_cause;
 
@@ -335,13 +450,21 @@ pub fn c_header() -> String {
 #if defined(__cplusplus)
 static_assert(sizeof(shekyl_close_cause) == {CLOSE_CAUSE_SIZE}, \"close cause size\");
 static_assert(offsetof(shekyl_close_cause, kind) == {CLOSE_CAUSE_KIND_OFFSET}, \"close cause kind\");
+static_assert(offsetof(shekyl_close_cause, marks) == {CLOSE_CAUSE_MARKS_OFFSET}, \"close cause marks\");
 static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OFFSET}, \"close cause reply_code\");
 #else
 _Static_assert(sizeof(shekyl_close_cause) == {CLOSE_CAUSE_SIZE}, \"close cause size\");
 _Static_assert(offsetof(shekyl_close_cause, kind) == {CLOSE_CAUSE_KIND_OFFSET}, \"close cause kind\");
+_Static_assert(offsetof(shekyl_close_cause, marks) == {CLOSE_CAUSE_MARKS_OFFSET}, \"close cause marks\");
 _Static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OFFSET}, \"close cause reply_code\");
 #endif
+#define SHEKYL_CLOSE_MARK_RETRY {retry}
+#define SHEKYL_CLOSE_MARK_NAMES_DESTINATION {names}
+#define SHEKYL_CLOSE_MARK_PROVES_MISBEHAVIOUR {proves}
 ",
+        retry = Marks::RETRY,
+        names = Marks::NAMES_DESTINATION,
+        proves = Marks::PROVES_MISBEHAVIOUR,
     )
     .expect("header write");
     for kind in CloseKind::ALL {
@@ -353,7 +476,7 @@ _Static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OF
 
 #[cfg(test)]
 mod tests {
-    use super::{c_header, CloseCause, CloseKind, Phase};
+    use super::{c_header, CloseCause, CloseKind, Marks, Phase};
     use crate::declaration::{declaration, Assessment, DestinationAuth};
     use crate::ConnectorId;
 
@@ -433,32 +556,105 @@ mod tests {
         assert!(!naming.implicates_address(ConnectorId::Clearnet));
     }
 
-    /// R2: no cause writes the failed-address memory on clearnet. That
-    /// covers every kind, the two that wrote it before
-    /// (`DialFailed`, `LevinHandshakeRejected`) by name, and every proxy
-    /// reply.
+    /// Every cause's marks are in [`Marks::ALL`], and nothing the transport
+    /// layer constructs proves misbehaviour: that mark is the Levin
+    /// layer's, on an authenticating connector.
     #[test]
-    fn no_clearnet_cause_implicates_the_address() {
+    fn no_constructed_cause_proves_misbehaviour() {
         for kind in CloseKind::ALL {
             // `ProxyRefused` carries a reply; every reply is the loop below.
             if *kind == CloseKind::ProxyRefused {
                 continue;
             }
-            assert!(
-                !CloseCause::new(*kind).implicates_address(ConnectorId::Clearnet),
-                "{kind:?} on clearnet must leave the address dialable"
+            let cause = CloseCause::new(*kind);
+            assert_eq!(
+                cause.marks() & !Marks::ALL,
+                0,
+                "{kind:?} carries unknown bits"
             );
-        }
-        for kind in [CloseKind::DialFailed, CloseKind::LevinHandshakeRejected] {
-            assert!(CloseKind::ALL.contains(&kind), "{kind:?} is in ALL");
-            assert!(!CloseCause::new(kind).implicates_address(ConnectorId::Clearnet));
+            assert!(
+                !cause.proves_misbehaviour(),
+                "{kind:?} proves nothing by itself"
+            );
         }
         for reply in 0u16..=0x0100 {
+            let cause = CloseCause::proxy_refused(reply);
+            assert_eq!(cause.marks() & !Marks::ALL, 0);
             assert!(
-                !CloseCause::proxy_refused(reply).implicates_address(ConnectorId::Clearnet),
-                "clearnet reply {reply:#x} must stay dialable"
+                !cause.proves_misbehaviour(),
+                "reply {reply:#x} proves nothing"
             );
         }
+    }
+
+    /// The transport layer's own table: connection problems are worth a
+    /// retry, answers are not, and only a rejection names the destination.
+    #[test]
+    fn a_connection_problem_is_worth_a_retry_and_an_answer_is_not() {
+        let retry = [
+            CloseKind::TransportTimeout,
+            CloseKind::DialFailed,
+            CloseKind::LevinHandshakeTimeout,
+            CloseKind::PeerClosed,
+            CloseKind::IoError,
+            CloseKind::ProxyUnavailable,
+        ];
+        for kind in CloseKind::ALL {
+            if *kind == CloseKind::ProxyRefused {
+                continue;
+            }
+            let cause = CloseCause::new(*kind);
+            assert_eq!(cause.retry_worthy(), retry.contains(kind), "{kind:?}");
+            assert_eq!(
+                cause.names_the_destination(),
+                *kind == CloseKind::LevinHandshakeRejected,
+                "{kind:?}"
+            );
+        }
+    }
+
+    /// The Tor connector's reply table (Rick, 2026-10-24): the retry set,
+    /// the final set, and the five destination-naming replies.
+    #[test]
+    fn the_onion_reply_table_marks_retries_finals_and_destination_naming() {
+        let retry = [0xF0, 0xF2, 0xF3, 0xF7, 0x01, 0x03, 0x04, 0x06];
+        let final_ = [0x05, 0xF1, 0xF4, 0xF5, 0xF6, 0x07, 0x08];
+        let naming = [0x04, 0x05, 0xF0, 0xF1, 0xF2];
+        for reply in 0u16..=0x0100 {
+            let cause = CloseCause::proxy_refused(reply);
+            assert_eq!(
+                cause.retry_worthy(),
+                retry.contains(&reply),
+                "reply {reply:#x}"
+            );
+            if final_.contains(&reply) {
+                assert!(!cause.retry_worthy(), "reply {reply:#x} is final");
+            }
+            assert_eq!(
+                cause.names_the_destination(),
+                naming.contains(&reply),
+                "reply {reply:#x}"
+            );
+        }
+    }
+
+    /// The Levin layer's stamp follows the connector's authentication: a
+    /// rejection proves misbehaviour on Tor and not on clearnet, and a cause
+    /// that names nothing is never stamped.
+    #[test]
+    fn proof_of_misbehaviour_follows_destination_authentication() {
+        let rejected = CloseCause::new(CloseKind::LevinHandshakeRejected);
+        assert!(rejected
+            .proving_misbehaviour_on(ConnectorId::Tor)
+            .proves_misbehaviour());
+        assert!(!rejected
+            .proving_misbehaviour_on(ConnectorId::Clearnet)
+            .proves_misbehaviour());
+        let timeout = CloseCause::new(CloseKind::TransportTimeout);
+        assert!(!timeout
+            .proving_misbehaviour_on(ConnectorId::Tor)
+            .proves_misbehaviour());
+        assert_eq!(timeout.proving_misbehaviour_on(ConnectorId::Tor), timeout);
     }
 
     /// On Tor exactly six causes write the memory: a rejected handshake,
