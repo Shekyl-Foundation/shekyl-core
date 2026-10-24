@@ -3,11 +3,15 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Recovery (Rick, 2026-10-14): a connector whose wake finds no kept
-//! session, nothing in flight and no drawable white or gray candidate
-//! re-admits its configured addresses to gray as operator-named: the
+//! Recovery (Rick, 2026-10-14; amended 2026-10-24): a connector whose wake
+//! finds it under its target, nothing in flight and no drawable white or
+//! gray candidate re-admits its configured addresses to gray as
+//! operator-named: the
 //! compiled seeds and `--add-peer`, or, when a closed network is declared,
 //! that list alone. The wake that re-admits dials nothing; the next draws.
+//!
+//! The cases here have no kept session. The one-kept-session case needs a
+//! connector that keeps a dial, and lives in `tests/owner.rs`.
 //!
 //! The hub here has no connector installed, so every dial fails at once
 //! as a local close: the failed draw leaves gray, as a real failure does,
