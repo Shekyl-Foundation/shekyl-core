@@ -13,6 +13,12 @@
 //! asked what it reports without a handle: existence, kind and the
 //! read-only attribute. A DACL that denies the account is not seen here and
 //! is found by start's own create or open.
+//!
+//! A refusal the kernel made is returned as the kernel made it, in the
+//! kernel's words. When the path exists and is the wrong kind, or no
+//! directory above it exists, the kernel answered and the sentence is this
+//! crate's: `not a directory`, `not a regular file`, `{path} is not a
+//! directory`, or `no directory above it exists`.
 
 use std::io::{Error, ErrorKind};
 use std::path::Path;
@@ -30,7 +36,9 @@ pub(crate) enum Need {
 /// component above it.
 ///
 /// # Errors
-/// The reason, in the operating system's words where it has them.
+/// The kernel's words when the kernel refused. This crate's sentence
+/// `not a directory` when the path exists and is not one, and the
+/// ancestor sentences documented on this module when the path is missing.
 pub(crate) fn directory_creatable(dir: &Path) -> std::io::Result<()> {
     match std::fs::metadata(dir) {
         Ok(meta) if meta.is_dir() => Ok(()),
@@ -44,7 +52,9 @@ pub(crate) fn directory_creatable(dir: &Path) -> std::io::Result<()> {
 /// asks, or could be created in its directory.
 ///
 /// # Errors
-/// The reason, in the operating system's words where it has them.
+/// The kernel's words when the kernel refused. This crate's sentence
+/// `not a regular file` when the path exists and is not one, and the
+/// ancestor sentences documented on this module when the path is missing.
 pub(crate) fn file_openable(file: &Path, need: Need) -> std::io::Result<()> {
     match std::fs::metadata(file) {
         Ok(meta) if meta.is_file() => may_open(file, &meta, need),
@@ -57,6 +67,10 @@ pub(crate) fn file_openable(file: &Path, need: Need) -> std::io::Result<()> {
 /// Whether a missing `path` could be created: the first existing ancestor
 /// is a directory the account may write and search. Everything between is
 /// created by the account and so is the account's.
+///
+/// A kernel refusal is returned unchanged. An existing ancestor that is
+/// not a directory yields `{path} is not a directory`. No ancestor yields
+/// `no directory above it exists`.
 fn creatable_below(path: &Path) -> std::io::Result<()> {
     let mut above = path.parent();
     while let Some(dir) = above {
