@@ -1,8 +1,10 @@
 # Cross-build from the dev box: `cargo build --release --target aarch64-unknown-linux-gnu`.
-# A static x86_64 build too, so the same binary runs on any fleet host
-# (`cargo build --release --target x86_64-unknown-linux-gnu`).
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-feature=+crt-static"]
+# For a static x86_64 binary (any fleet host), pass the flag on the command
+# line with an explicit --target, so proc-macros (host) are not built static:
+#   cargo build --release --target x86_64-unknown-linux-gnu \
+#     --config 'target.x86_64-unknown-linux-gnu.rustflags=["-C","target-feature=+crt-static"]'
+# A [target.x86_64-unknown-linux-gnu] section here would also apply to plain
+# host builds and break `cargo clippy` on them.
 
 [target.aarch64-unknown-linux-gnu]
 linker = "aarch64-linux-gnu-gcc"

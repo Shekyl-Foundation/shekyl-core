@@ -170,7 +170,10 @@ device itself:
 ```bash
 cd docs/formal/checkct/dynamic
 cargo build --release --target aarch64-unknown-linux-gnu   # linker in .cargo/config.toml
-# copy target/aarch64-unknown-linux-gnu/release/ct-dynamic to the device and run it;
+# static x86_64 for a fleet host (the flag only on the --target build, see .cargo/config.toml):
+cargo build --release --target x86_64-unknown-linux-gnu \
+  --config 'target.x86_64-unknown-linux-gnu.rustflags=["-C","target-feature=+crt-static"]'
+# copy target/<triple>/release/ct-dynamic to the device and run it;
 # paste its table into results/<date>/dynamic-<device>.txt
 ```
 
