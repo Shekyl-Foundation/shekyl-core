@@ -3315,20 +3315,30 @@ ESR-15 ([`ECONOMICS_SIM_PRODUCTION_REBASE.md`](ECONOMICS_SIM_PRODUCTION_REBASE.m
 §2) replaces the sim's unrounded fixed point with one fee loop over a pricing
 function, the loop the wallet and relay admission share. The loop is judged
 against seven properties, written before it is built (the ESR-15 brief's
-§A.2a, ruled 2026-10-24). The names are the brief's; the one-line glosses
-are this document's reading of them, checked against the brief's text when
-ESR-15 is built:
+§A.2a, ruled 2026-10-24; the brief's terms, relayed 2026-10-24):
 
 1. **Never under-pays.** The fee it returns clears admission at the rate it
    was priced at.
-2. **Least.** No smaller fee on the lattice clears.
-3. **Bounded over-payment.** The fee exceeds the exact product by less than
-   one lattice step plus the varint growth that step causes.
+2. **Least.** No lattice value below the returned `f` satisfies
+   `f ≥ rate × weight(f)`. Iterating from a seed at or below the least fixed
+   point converges to it, because `predict_weight` and the pricer are both
+   non-decreasing in the fee. The seed must never exceed the least fixed
+   point, and that is asserted; the with-change variant seeds from the
+   no-change fee, which is at or below its own fixed point. A high seed would
+   silently over-pay.
+3. **Bounded over-payment.** `f − rate × weight(f) < MASK` at the returned
+   `f`, taken at the final weight, including any varint byte the rounding
+   forced.
 4. **Exact.** Integer arithmetic throughout; no float reaches the fee.
-5. **Fails closed.** An operand outside the arithmetic's domain refuses a
-   fee rather than returning a smaller one.
-6. **Terminates by agreement.** The iteration stops when payer and admission
-   compute the same fee for the same weight, in a bounded number of passes.
+5. **Fails closed.** If `weight × rate` or the rounding leaves `u64`, the
+   loop returns `None` and each caller decides explicitly. A saturated result
+   is a violation too: the landed `converge_weight_fee` saturates to a
+   `u64::MAX` fee, which no payer should see and which is not a refusal.
+6. **Terminates by agreement.** The loop exits when two successive passes
+   return the same fee (`next == fee`), never by hitting its pass limit. The
+   limit of 11 follows from the varint argument and stays as a
+   `debug_assert!` that running out is unreachable. The agreement is the
+   fixed point's with itself; payer and admission are item 7.
 7. **One lattice on both sides.** The payer rounds to the lattice admission
    checks against, `shekyl_economics::quantized_fee` and
    `FEE_QUANTIZATION_MASK`, read from one owner.
