@@ -305,7 +305,8 @@ pub struct Core {
     last_announce: Option<u64>,
     /// What the last announcement said: the projection and the cause's kind.
     /// A different one is a state change and is said at once (`TSR-F11`);
-    /// only a repeat of the same waits for the cap.
+    /// only a repeat of the same waits for the cap. A change of detail
+    /// within one kind is a repeat (§4.4).
     said: Option<(Shown, std::mem::Discriminant<Cause>)>,
     /// A [`Cadence::Once`] say was suppressed under the cap and is owed at
     /// the announce deadline. It is not a repeat of the phase's state, so a

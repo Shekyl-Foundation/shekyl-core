@@ -471,7 +471,10 @@ gives up and reaches its cap with a loud announcement, repeated once per cap
 interval and never more often (ruled). The once-per-cap limit is on repeats
 of one announcement: a state change (a death, a refused binary, a recovery)
 is a new fact and is said at once (`TSR-F11`); only its repeats wait for the
-cap. The backoff starts again from its base after the outbound facet has
+cap. The announcement key is the shown state and the cause's kind; a change
+of detail within a kind is a repeat (Rick, 2026-10-24). A detail that would
+change the operator's fix is a different kind, so such a cause splits its
+variant rather than keying on the payload. The backoff starts again from its base after the outbound facet has
 been usable for one full cap (Rick, 2026-10-24): tied to the cap rather than a
 new constant, so a crash rate that keeps the backoff pinned without the reset
 still keeps it pinned, and an adversary who can crash Tor gains no faster

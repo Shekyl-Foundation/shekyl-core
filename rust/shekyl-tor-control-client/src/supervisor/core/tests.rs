@@ -842,6 +842,41 @@ fn a_new_cause_is_said_at_once_and_a_repeat_waits_for_the_cap() {
     );
 }
 
+/// The key is the cause's kind, not its detail (Rick, 2026-10-24): the
+/// directory found short of space after it was found unusable is still "fix
+/// the directory", so it waits for the cap; the repeat carries the new
+/// detail. Keying on the payload fails this.
+#[test]
+fn a_new_detail_of_the_same_cause_is_a_repeat() {
+    let (mut core, _) = Core::start(policy(), managed(true), 0);
+    let path = std::path::PathBuf::from("/var/lib/shekyl");
+    let unusable = Input::DirectoryUnusable {
+        path: path.clone(),
+        space: None,
+    };
+    assert_eq!(announces(&core.on(unusable, 0)), 1);
+    let short = Input::DirectoryUnusable {
+        path,
+        space: Some(super::Space {
+            available: 0,
+            needed: 35_000_000,
+        }),
+    };
+    let second = duration_ns(Duration::from_secs(1));
+    assert_eq!(
+        announces(&core.on(short, second)),
+        0,
+        "the same kind with new detail waits for the cap"
+    );
+    assert!(
+        matches!(
+            core.status().cause,
+            Cause::DirectoryUnusable { space: Some(_), .. }
+        ),
+        "the status carries the new detail at once"
+    );
+}
+
 /// The held state's repeat belongs to the held state. When the pin check is
 /// due in the same tick, the check speaks, not a repeat of the old cause
 /// (case E); and once Tor has spawned no repeat is left armed to fire into
