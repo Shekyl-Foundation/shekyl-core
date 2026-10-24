@@ -8,15 +8,18 @@
 # `rust/audit.toml`.
 
 [advisories]
-# Every entry below is an "unmaintained" INFO notice (not a vulnerability)
-# on a transitive, non-consensus, non-secret dependency that cannot be
-# dropped without an upstream crate moving first. `cargo audit` reports
+# Every entry below except RUSTSEC-2026-0387 is an "unmaintained" INFO
+# notice (not a vulnerability) on a transitive, non-consensus, non-secret
+# dependency that cannot be dropped without an upstream crate moving
+# first. `cargo audit` reports
 # unmaintained as a warning; we ignore these documented cases so the audit
 # signal stays actionable -- a real vulnerability or a newly-fixable notice
 # stands out instead of being buried under perennial notices. Each carries
 # an explicit reopen criterion per
 # .cursor/rules/21-reversion-clause-discipline.mdc: when the named upstream
-# change lands, drop the ignore and let the dep fall out.
+# change lands, drop the ignore and let the dep fall out. RUSTSEC-2026-0387
+# is a vulnerability ignored by explicit ruling; its block, after the
+# notices, carries the exposure and the reopen criteria.
 #
 # paste 1.0.15 -- RUSTSEC-2024-0436: unmaintained. Compile-time-only
 # proc-macro for token concatenation; emits no runtime code and never
@@ -49,4 +52,34 @@
 # Crate-level advisory (every version is "unmaintained"), so bumping cannot
 # clear it -- only dropping it can. Reopen when `ab_glyph`/`imageproc` move
 # off `ttf-parser`, or when `shekyl-shard-visual` replaces `imageproc`.
-ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2023-0089", "RUSTSEC-2026-0192"]
+#
+# --- Vulnerability ignored by ruling (not an unmaintained notice) ---
+#
+# crypto-bigint 0.5.5 -- RUSTSEC-2026-0387 (crypto-failure, 2026-10-23):
+# timing variability in operations meant to be constant-time (subtraction,
+# zero counting, division, Montgomery multiplication). Patched only in
+# 0.7.6; the advisory lists no affected functions, so it covers every 0.5.x.
+# Lockfile consumers:
+#   dalek-ff-group 0.4.6 and 0.5.0 (crates.io, serai)
+#   elliptic-curve 0.13.8 and minimal-ed448 0.4.2 (via ciphersuite 0.4.2)
+#   helioselene, ec-divisors (vendored shekyl-oxide), shekyl-curve-generators
+# Where it matters: `helioselene::Field25519` IS
+# `dalek_ff_group::FieldElement`, whose arithmetic is crypto-bigint's
+# `Residue` (Montgomery mul/sub). That field carries the FCMP++ prover's
+# secret witness on the wallet side, so the exposure is a co-located
+# timing/microarchitectural observer of the proving machine. Verification
+# (daemon) handles public data only. Whether 0.5.5 actually compiles to
+# the leaking branches is unmeasured: upstream's fixes (crypto-bigint
+# #1358, #1360) target 0.7's code, and #1358's leak came from a 2025
+# workaround that 0.5.5 predates; no `cargo checkct` run exists for 0.5.5.
+# Why it cannot be bumped: no released dalek-ff-group or ciphersuite uses
+# crypto-bigint 0.7 (latest 0.5.0 / 0.4.2; serai `develop` is still on
+# 0.5), and the vendored crates sit on top of that stack, so clearing it
+# means owning a fork of the serai curve stack ported to 0.7, with every
+# pinned FCMP++/curve-tree vector held byte-identical.
+# Reopen when ANY of: (a) serai publishes dalek-ff-group/ciphersuite on
+# crypto-bigint >= 0.7.6 -- bump and drop this; (b) the fork-and-port is
+# scheduled -- drop this in that PR; (c) a `cargo checkct` run shows
+# 0.5.5's Residue mul/sub/invert branching on x86_64 or aarch64 -- the
+# fork becomes blocking for the next release, not optional.
+ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2023-0089", "RUSTSEC-2026-0192", "RUSTSEC-2026-0387"]
