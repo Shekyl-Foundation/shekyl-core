@@ -30,7 +30,7 @@ use shekyl_types::SHARD_LENGTH;
 
 use crate::burden::honest_leaves_at_closed_shards;
 use crate::calibration::{self, stuffer_campaign, tree_depth_for_leaves, PerByteRate};
-use crate::escalation::{family, EscalationCurve, SHARE_SCALE};
+use crate::escalation::{EscalationCurve, SHARE_SCALE};
 use crate::stage2::AdmissionAtShards;
 
 /// Long-term block-weight median floor — the penalty-free zone.
@@ -152,11 +152,7 @@ pub fn a6_report(
     forfeit_per_block_atomic: u64,
     admission: &AdmissionAtShards,
 ) -> fmt::Result {
-    let curve = family()
-        .iter()
-        .max_by_key(|c| c.asymptote)
-        .copied()
-        .unwrap_or_else(crate::escalation::flat_25);
+    let curve = crate::escalation::steepest();
     let surge = block_weight_penalty_free();
     writeln!(
         out,
@@ -272,6 +268,7 @@ pub fn a6_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::escalation::family;
 
     /// The flood's rate reaches the ceiling only through the fee's varint, so
     /// these structural tests take one representative rate: the control arm's.

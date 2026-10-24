@@ -35,7 +35,9 @@ use crate::calibration::{
 };
 use crate::chain_cursor::{ChainCursor, ChainStep};
 use crate::engine::{emitted_at_start, ScenarioConfig, SimParams};
-use crate::escalation::{family, flat_25, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND};
+use crate::escalation::{
+    family, flat_25, floor_share, steepest, EscalationCurve, KNEE_ARCHIVAL_LEN_BYTES, KNEE_BAND,
+};
 use crate::fee_model::OrdinaryTx;
 use crate::population::{
     attacker_capped_work_milli, honest_sigma_work_milli, honest_sigma_work_milli_deleted, DQ2H_TAIL,
@@ -185,6 +187,11 @@ fn trajectory_from(
 /// can follow if a verdict sits on the margin.
 #[derive(Debug, Clone, Serialize)]
 pub struct A1YearAgg {
+    /// The smallest closed-shard count at or above `MAX_HOLDINGS_SHARDS` seen
+    /// at any block of the year, `None` while the cap has never bound: the
+    /// count a per-shard maximum divides by, where the year-end count passes
+    /// over the crossing inside the year (step 0b-2).
+    pub n_at_cap: Option<u64>,
     pub year: u64,
     /// The chain height of the year's first block: the scenario's genesis
     /// offset plus the years before it.
@@ -375,6 +382,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
     let mut year_carried: u128 = 0;
     let mut year_demand: u128 = 0;
     let mut year_expired: u128 = 0;
+    let mut year_n_at_cap: Option<u64> = None;
     let mut aggs = Vec::with_capacity(config.sim_years as usize);
     let mut chain = ChainCursor::default();
 
@@ -415,6 +423,10 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
         };
         let total_fees = priced.filled.fees;
         fold.add_block(priced.filled.included);
+        let n_now = fold.closed_shard_count();
+        if n_now >= MAX_HOLDINGS_SHARDS as u64 {
+            year_n_at_cap = Some(year_n_at_cap.map_or(n_now, |m| m.min(n_now)));
+        }
         let paid_reward = priced.paid_reward();
         let staker_emission = priced.paid.split.staker_emission;
         // The whole burn, before its split: the candidate re-splits it. The
@@ -441,6 +453,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
                 year,
                 start_height: config.genesis_height_offset + (year - 1) * params.blocks_per_year,
                 n: fold.closed_shard_count(),
+                n_at_cap: year_n_at_cap,
                 cumulative_outputs: fold.leaves(),
                 cumulative_archival_bytes: fold.archival_bytes(),
                 emission_leg_atomic: year_emission_atomic,
@@ -457,6 +470,7 @@ pub fn a1_year_aggs(params: &SimParams, config: &ScenarioConfig) -> Vec<A1YearAg
             year_carried = 0;
             year_demand = 0;
             year_expired = 0;
+            year_n_at_cap = None;
             year_emission_atomic = 0;
             year_burn_atomic = 0;
             year_fees_atomic = 0;
@@ -632,7 +646,7 @@ fn a1_clearance_report(
     writeln!(out,
         "\nA1 — burden clearance (§12.2, F-G): min budget / (bond-opp-cost + storage) ratio.\n\
          budget = emission_leg + fee_burn x share(n) [SKL]; binding burden = bond_floor {BOND} x R{R} x n x rate.\n\
-         >=1.0 keeps the staker whole every sustained year. Columns = opp-cost rate {RATES:?} (10% binding).\n\
+         >=1.0 keeps the staker whole every sustained year. Columns = opp-cost rate {RATES:?} ({B}% binding).\n\
          Storage is a minor add-on (F-G: ~100x smaller); the binding term is PRICE-INDEPENDENT (SKL vs SKL).\n\
          Knee band {BAND:?} closed shards; the shipped middle is {KNEE_TB:.2} TB of archival at W = {W} B/shard.",
         BOND = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
@@ -641,11 +655,16 @@ fn a1_clearance_report(
         BAND = KNEE_BAND,
         KNEE_TB = KNEE_ARCHIVAL_LEN_BYTES as f64 / 1e12,
         W = shekyl_types::SHARD_LENGTH.to_raw(),
+        B = crate::onset::binding_rate_pct(),
     )?;
     writeln!(
         out,
         "{:<20} {:>12}   {:>24}   {:>24}   {:>17}",
-        "scenario", "best-cand", "flat-25 ratio @rate", "best-cand ratio @rate", "R sustained @10%"
+        "scenario",
+        "best-cand",
+        "flat-25 ratio @rate",
+        "best-cand ratio @rate",
+        format!("R sustained @{}%", crate::onset::binding_rate_pct())
     )?;
     writeln!(
         out,
@@ -701,8 +720,8 @@ fn a1_clearance_report(
     }
     writeln!(
         out,
-        "  -> rate cols each = {:?} (10% binding, last). The D2 case is where the\n\
-         best candidate clears (>=1.0) at 10% while flat-25 does NOT — escalation\n\
+        "  -> rate cols each = {:?} ({B}% binding, last). The D2 case is where the\n\
+         best candidate clears (>=1.0) at {B}% while flat-25 does NOT — escalation\n\
          earning its keep. A4/A5 then drop any winner that fails W9/W10.\n\
          'R sustained' = R{R} x ratio: the replica count the budget would carry at\n\
          10% (both burden terms are linear in R), so a fail reads as a number.\n\
@@ -712,6 +731,7 @@ fn a1_clearance_report(
         OPP_COST_RATE_BAND,
         R = REPLICAS_PER_SHARD,
         tx = crate::scenarios::SCENARIO_9_TAIL_TX_PER_BLOCK,
+        B = crate::onset::binding_rate_pct(),
     )?;
     // Verdict, computed: which scenarios no candidate clears at the binding
     // rate, and which are the D2 case proper (best clears, flat does not).
@@ -737,8 +757,8 @@ fn a1_clearance_report(
         .collect();
     writeln!(
         out,
-        "  -> VERDICT @10%: D2 case (best clears, flat does not): {d2}; cleared by NO\n\
-         candidate in the band: {un}. Byte-keyed, n counts ~10 KB of archival per\n\
+        "  -> VERDICT @{B}%: D2 case (best clears, flat does not): {d2}; cleared by NO\n\
+         candidate in the band: {un}. Byte-keyed, n counts ~{KB:.0} KB of archival per\n\
          transaction, not one 128-B leaf per output, so the §6.2 coupled bond per unit\n\
          of traffic is ~40x the leaf-era figure — a scenario the leaf-era sweep cleared\n\
          can fail here on the bond term alone, with no change to the escalation.",
@@ -752,6 +772,15 @@ fn a1_clearance_report(
         } else {
             uncleared.join(", ")
         },
+        B = crate::onset::binding_rate_pct(),
+        KB = crate::burden::normal_tx_archival_bytes(
+            folded
+                .iter()
+                .find(|s| s.name == crate::scenarios::BASELINE_STEADY_STATE)
+                .and_then(|s| s.aggs.first())
+                .map_or(0, |a| a.cumulative_outputs)
+        ) as f64
+            / 1_000.0,
     )?;
     if d2_case.is_empty() {
         writeln!(
@@ -760,9 +789,10 @@ fn a1_clearance_report(
              scenario either clears flat or clears for no candidate — within its own\n\
              sim_years the escalation does no work the flat share does not. That is a\n\
              statement about the horizon, not the lever: A1-T below runs the same\n\
-             scenarios to 60 y, where the staker emission leg has decayed under the bond\n\
+             scenarios to {H} y, where the staker emission leg has decayed under the bond\n\
              burden and the region (flat fails, best clears) opens at the low rates\n\
-             (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.13–§12.14)."
+             (ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md §12.13–§12.14).",
+            H = crate::onset::ONSET_HORIZON_YEARS,
         )?;
     }
     Ok(results)
@@ -784,7 +814,8 @@ fn print_escalation_family(out: &mut impl fmt::Write) -> fmt::Result {
     writeln!(
         out,
         "\nEscalation candidate family (§6.1 / DQ-2D) — staker share % vs n = closed shards:\n\
-         (floor 25% at n=0, saturates to asymptote at the knee; all asymptotes < 100%)"
+         (floor {FLOOR}% at n=0, saturates to asymptote at the knee; all asymptotes < 100%)",
+        FLOOR = floor_share() / (SCALE / 100),
     )?;
     write!(out, "{:>8} {:>9}", "asympt%", "knee")?;
     for n in ESCALATION_PREVIEW_N {
@@ -1253,19 +1284,25 @@ fn a4_stuffing_report(
          stuffed shards at r=1 and captures reward_share_floor(pool(n+Δn), their work,\n\
          Σwork) each year; cost = stuffing fees + the §6.2 coupled bond ({BOND} SKL/shard\n\
          held forever). Best over [years x Δn{DELTAS:?} x horizon{H:?}yr], shown at BOTH\n\
-         honest-holdings ends: hHold=4 (rational small bonds — the gate) and hHold=512\n\
+         honest-holdings ends: hHold={H0} (rational small bonds — the gate) and hHold={H2}\n\
          (pathological fully-capped — a curve-cap concern, not the escalation's).\n\
          Flat-25 has no share lever ⇒ 0. Attacker-favouring: min opp-rate {RATE}, storage\n\
-         omitted, age-0. PASS iff realistic-end (hHold=4) ROI < 1 everywhere.",
+         omitted, age-0. PASS iff realistic-end (hHold={H0}) ROI < 1 everywhere.",
         BOND = ARCHIVAL_BOND_FLOOR_ATOMIC as f64 / COIN,
         DELTAS = A4_DELTA_SWEEP,
         H = A4_HORIZON_BAND,
         RATE = A4_OPP_RATE,
+        H0 = A4_HONEST_HOLDINGS_BAND[0],
+        H2 = A4_HONEST_HOLDINGS_BAND[2],
     )?;
     writeln!(
         out,
         "{:<20} {:>10} {:>14} {:>14} {:>18}",
-        "scenario", "flat-25", "best@hHold4", "best@hHold512", "worst (n/Δn/H)"
+        "scenario",
+        "flat-25",
+        format!("best@hHold{}", A4_HONEST_HOLDINGS_BAND[0]),
+        format!("best@hHold{}", A4_HONEST_HOLDINGS_BAND[2]),
+        "worst (n/Δn/H)"
     )?;
 
     let mut results = Vec::new();
@@ -1319,17 +1356,19 @@ fn a4_stuffing_report(
         .any(|r| !r.flat25.passes || r.candidates.iter().any(|c| !c.passes));
     writeln!(
         out,
-        "  -> W9 gate (realistic hHold=4 end): {}. Flat-25 = 0 (no share lever): the\n\
+        "  -> W9 gate (realistic hHold={H0} end): {}. Flat-25 = 0 (no share lever): the\n\
          premium is purely the escalation's. A steeper share (higher asymptote /\n\
          tighter knee) lets the marginal stuffed shard's Δpool slice out-earn its\n\
          coupled bond — so the gate, not just A1, bounds escalation aggressiveness.\n\
-         The hHold=512 column is far worse but reflects a SEPARATE curve-cap\n\
+         The hHold={H2} column is far worse but reflects a SEPARATE curve-cap\n\
          dodgeability concern (naive big-bond archivers self-capped), not D2.",
         if any_fail {
             "FAIL — rule-21 per-output fee-floor reopen (§11.3), NOT a D2 redesign (§8)"
         } else {
             "PASS"
-        }
+        },
+        H0 = A4_HONEST_HOLDINGS_BAND[0],
+        H2 = A4_HONEST_HOLDINGS_BAND[2],
     )?;
     a4_print_decomposition(out, &decomp_rows)?;
     Ok(results)
@@ -1392,7 +1431,7 @@ fn a4_print_decomposition(out: &mut impl fmt::Write, rows: &[(String, A4Decomp)]
         });
     writeln!(
         out,
-        "  -> Read: prem≈1.0 at the realistic end ⇒ NO concentration premium — the attack is\n\
+        "  -> Read: prem≈{PREM:.1} at the realistic end ⇒ NO concentration premium — the attack is\n\
          pure fee-flow-volume leverage (cheap stuffing unlocks a large Δpool; the attacker\n\
          takes only their proportional slice, but the pool dwarfs the stuffing cost). The\n\
          fee-RATE cancels in fee×→1, so its {mult_lo:.1}→{mult_hi:.1}x spread is volume/share-slope\n\
@@ -1404,6 +1443,7 @@ fn a4_print_decomposition(out: &mut impl fmt::Write, rows: &[(String, A4Decomp)]
          prices concentration in bonded capital THERE. So the pair: fee-floor for the\n\
          fee-flow regime, D3 for the capped one.",
         OVER = mult_hi / mult_lo,
+        PREM = rows.iter().map(|(_, d)| d.premium).fold(0.0_f64, f64::max),
     )?;
 
     Ok(())
@@ -1450,12 +1490,13 @@ fn a3_stranding_report(
          covers one claim tx ({CC0:.6}..{CC1:.6} SKL early..late @ the {FLOOR}\n\
          floor, via the production predictor at each year's tree depth). PRE-D1 vs\n\
          POST-D1 scoring = the §1 Stage-0 coupling claim, measured: pre-D1 zeroes bulk\n\
-         holders past the co-holder cliff (r_market > g_milli ≈ 1000), and a\n\
+         holders past the co-holder cliff (r_market > g_milli = {G}), and a\n\
          structural-zero cohort's slice never mints.",
         CC0 = claim_skl(first),
         CLAIM_AGE = shekyl_archival_retention::MAX_CLAIM_AGE_W,
         CC1 = claim_skl(last),
         FLOOR = params.fee.admission_floor_label(first.admission_rate),
+        G = crate::stranding::cliff_g_milli(),
     )?;
     writeln!(
         out,
@@ -1470,6 +1511,7 @@ fn a3_stranding_report(
         "post noclm%"
     )?;
     let picks = [0usize, years.len() / 2, years.len() - 1];
+    let (mut max_mean_r, mut max_pre_stranded, mut max_post_noclaim) = (0u64, 0.0_f64, 0.0_f64);
     for (label, &yi) in ["early", "mid", "late"].iter().zip(picks.iter()) {
         let a = years[yi];
         let budget_per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25()));
@@ -1491,6 +1533,9 @@ fn a3_stranding_report(
                 crate::stranding::RATIONAL_CLAIM_CADENCE_EPOCHS,
                 crate::stranding::Scoring::PostD1,
             );
+            max_mean_r = max_mean_r.max(pre.mean_r);
+            max_pre_stranded = max_pre_stranded.max(pre.stranded_fraction);
+            max_post_noclaim = max_post_noclaim.max(post.non_claiming_fraction);
             writeln!(
                 out,
                 "{:<10} {:>8} {:>8}  {:>9.2}% {:>8.1}%  {:>10.2}% {:>8.1}% {:>9.1}%  {label}",
@@ -1505,27 +1550,67 @@ fn a3_stranding_report(
             )?;
         }
     }
+    // The Stage-0 claim, shown rather than asserted: the smallest multiple of the
+    // band's top at which the early corpus is replicated past the cliff.
+    let g = crate::stranding::cliff_g_milli();
+    let early = years[0];
+    let top = *A3_ARCHIVER_BAND.iter().max().expect("the band has members");
+    let cliff_archivers = (1..=1_000u64)
+        .map(|k| k * top)
+        .find(|&a| crate::stranding::mean_replication(a, early.n) > g)
+        .expect("the band's top scales past the cliff");
+    let early_budget = per_epoch_atomic(a1_shipped_budget_atomic(early, &flat_25()));
+    let early_claim = ordinary_tx_fee(early.cumulative_outputs, early.admission_rate);
+    let cliff_pre = crate::stranding::measure(
+        early_budget,
+        early.n,
+        cliff_archivers,
+        early_claim,
+        crate::stranding::RATIONAL_CLAIM_CADENCE_EPOCHS,
+        crate::stranding::Scoring::PreD1,
+    );
+    let cliff_post = crate::stranding::measure(
+        early_budget,
+        early.n,
+        cliff_archivers,
+        early_claim,
+        crate::stranding::RATIONAL_CLAIM_CADENCE_EPOCHS,
+        crate::stranding::Scoring::PostD1,
+    );
     writeln!(
         out,
-        "  -> Read: the §1 Stage-0 claim is CONFIRMED, and stronger than stated — where\n\
-         mean_r crosses the co-holder cliff (~1000) pre-D1 strands 100% of budget,\n\
-         not 'partly': EVERY class floors to zero, so the whole epoch's entitlement is\n\
-         supply-never-created. Replication = archivers x holdings / n, so this is an\n\
+        "  -> Read: on this corpus no row reaches the co-holder cliff (g_milli = {G}): the\n\
+         largest mean_r in the table is {MAXR}, the largest pre-D1 stranded fraction {MAXS:.2}%.\n\
+         The §1 Stage-0 claim, shown rather than asserted at {CA} archivers (mean_r {CR}, past\n\
+         the cliff) on the early corpus: pre-D1 zero-work {PZ:.0}% and stranded {PS:.0}% —\n\
+         EVERY class floors to zero, so the whole epoch's entitlement is supply-never-created;\n\
+         post-D1 zero-work {QZ:.0}%. Replication = archivers x holdings / n, so this is an\n\
          EARLY-CHAIN regime (few shards, many holders) the corpus grows out of — and one a\n\
          large archiver population re-enters at any n. D2-without-D1 would have escalated\n\
          a pool that evaporates ENTIRELY in exactly the bootstrap window that most needs\n\
          archivers paid.\n\
          RESIDUAL = a QUANTIZATION FLOOR, not a remaining defect: D1 does not abolish\n\
-         structural zeros, it SCALES the cliff with holdings to r > ~1000 x shards_held\n\
+         structural zeros, it SCALES the cliff with holdings to r > ~{G} x shards_held\n\
          (the micro sum must reach one milli). Unreachable for a bulk holder ({CAP} shards\n\
-         ⇒ r > {CLIFF_M:.0}M); a 16-shard hobbyist still zeroes at r > ~16k — the 70% column above.\n\
+         ⇒ r > {CLIFF_M:.0}M); a 16-shard hobbyist still zeroes at r > ~{HOB}k — the post noclm%\n\
+         column's largest value in this table is {NC:.1}%.\n\
          Sub-milli work is UNREPRESENTABLE under the frozen WORK_MILLI_SCALE, so the\n\
          honest name is a MINIMUM VIABLE HOLDING THRESHOLD, not a bug: eliminating it\n\
          would mean changing a frozen constant. The archiver's levers are holdings size\n\
          and replication depth. It is the third force in D3's holdings-size triangle.\n\
          Joint with A1: stranded budget is not burden-clearing.",
+        G = g,
+        MAXR = max_mean_r,
+        MAXS = max_pre_stranded * 100.0,
+        CA = cliff_archivers,
+        CR = cliff_pre.mean_r,
+        PZ = cliff_pre.zero_work_fraction * 100.0,
+        PS = cliff_pre.stranded_fraction * 100.0,
+        QZ = cliff_post.zero_work_fraction * 100.0,
         CAP = MAX_HOLDINGS_SHARDS,
-        CLIFF_M = MAX_HOLDINGS_SHARDS as f64 * 1_000.0 / 1.0e6,
+        CLIFF_M = MAX_HOLDINGS_SHARDS as f64 * g as f64 / 1.0e6,
+        HOB = 16 * g / 1_000,
+        NC = max_post_noclaim * 100.0,
     )?;
 
     Ok(())
@@ -1540,11 +1625,7 @@ fn oq4_deletion_recheck(out: &mut impl fmt::Write, baseline: &FoldedScenario) ->
     let Some(a) = aggs.iter().rfind(|a| a.n > 0) else {
         return Ok(());
     };
-    let curve = family()
-        .iter()
-        .max_by_key(|c| c.asymptote)
-        .copied()
-        .unwrap_or_else(flat_25);
+    let curve = steepest();
     let (delta, horizon) = (10_000u64, 10u64);
     writeln!(
         out,
@@ -1628,17 +1709,16 @@ fn shard_reward_operands(folded: &[FoldedScenario]) -> ShardRewardOperands {
     let mut rewards: Vec<f64> = Vec::new();
     let mut max_per_epoch_skl = 0.0_f64;
     for scenario in folded {
-        for a in scenario
-            .native()
-            .iter()
-            .filter(|a| a.n >= MAX_HOLDINGS_SHARDS as u64)
-        {
+        for a in scenario.native().iter().filter(|a| a.n_at_cap.is_some()) {
             // The epoch's pool in atomic units; SKL is the report's unit.
             let pool_per_epoch_skl =
                 per_epoch_atomic(a1_shipped_budget_atomic(a, &flat_25())) as f64 / COIN;
-            let per_shard = pool_per_epoch_skl / a.n as f64;
-            rewards.push(per_shard);
-            max_per_epoch_skl = max_per_epoch_skl.max(per_shard);
+            // The median reads the year-end count. The maximum divides by the
+            // smallest count at which the cap bound during the year, which the
+            // year-end count passes over (step 0b-2).
+            rewards.push(pool_per_epoch_skl / a.n as f64);
+            let n_at_cap = a.n_at_cap.unwrap_or(a.n);
+            max_per_epoch_skl = max_per_epoch_skl.max(pool_per_epoch_skl / n_at_cap as f64);
         }
     }
     rewards.sort_by(|a, b| a.partial_cmp(b).expect("finite rewards"));
@@ -1660,13 +1740,20 @@ fn statistical_median(sorted: &[f64]) -> f64 {
     }
 }
 
-/// A trajectory's `n` at its first, middle and last sampled year — the
-/// early / mid / late corpus the OQ-2 admission probe is run against.
+/// The corpora the OQ-2 admission probe is run against: the smallest at
+/// which the holdings cap binds, where replication is deepest and the
+/// year-end samples pass over it (step 0b-2), then a trajectory's `n` at its
+/// first, middle and last sampled year.
 #[must_use]
-fn oq2_corpus_samples(traj: &BurdenTrajectory) -> [u64; 3] {
+fn oq2_corpus_samples(traj: &BurdenTrajectory) -> Vec<u64> {
     let n_at = |i: usize| traj.years.get(i).map_or(0, |y| y.closed_shards);
     let last = traj.years.len().saturating_sub(1);
-    [n_at(0), n_at(last / 2), n_at(last)]
+    vec![
+        MAX_HOLDINGS_SHARDS as u64,
+        n_at(0),
+        n_at(last / 2),
+        n_at(last),
+    ]
 }
 
 /// `--stage2` entry: the burden trajectory across the scenario set. JSON to
@@ -1768,11 +1855,7 @@ pub fn run_stage2(out: &mut impl fmt::Write, params: &SimParams) -> fmt::Result 
     // envelope: the strongest surviving candidate's pool at the scenario's n.
     {
         if let Some(a) = baseline.native().iter().rfind(|a| a.n > 0) {
-            let best = family()
-                .iter()
-                .max_by_key(|c| c.asymptote)
-                .copied()
-                .unwrap_or_else(flat_25);
+            let best = steepest();
             let per_epoch = per_epoch_atomic(a1_shipped_budget_atomic(a, &best));
             crate::redistribution::a2_report(
                 out,

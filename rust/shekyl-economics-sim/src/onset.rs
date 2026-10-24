@@ -93,6 +93,27 @@ const DECADES: [u64; 6] = [10, 20, 30, 40, 50, 60];
 /// Index of the binding opportunity-cost rate (10 %/yr) in the band.
 const BINDING: usize = OPP_COST_RATE_BAND.len() - 1;
 
+/// The binding rate as a whole percentage, for the reports that name it.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(crate) fn binding_rate_pct() -> u64 {
+    (OPP_COST_RATE_BAND[BINDING] * 100.0).round() as u64
+}
+
+/// A rate of the band as a whole percentage.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn rate_pct(i: usize) -> u64 {
+    (OPP_COST_RATE_BAND[i] * 100.0).round() as u64
+}
+
+/// The decades the per-scenario series prints, as the header spells them.
+pub(crate) fn decades_label() -> String {
+    DECADES
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Non-decaying staker floor percentages priced in A1-L, fixed-point `SCALE`.
 /// The last is the **whole** perpetual tail — the absolute ceiling of any
 /// lever on emission. The tail is a constant flow; against a bond stock that
@@ -421,13 +442,14 @@ pub fn onset_report(
     writeln!(
         out,
         "\nA1-T — ONSET of A1 failure (§12.14): every scenario run to {H} y; the min hides WHEN.\n\
-         'xover' = first year the staker EMISSION leg alone < bond opp cost @10% (end of the\n\
+         'xover' = first year the staker EMISSION leg alone < bond opp cost @{B}% (end of the\n\
          era emission carries). 'onset' = first sustained year budget/burden < 1 (shipped burn\n\
          x share; '*' = a later year clears again; 'never' = clears to {H} y). Schedules are\n\
          the scenarios' own closures past their horizons: constant, cyclic, or growing —\n\
          {GROWTH}",
         H = ONSET_HORIZON_YEARS,
         GROWTH = params.fee.growth_schedule_caveat(),
+        B = binding_rate_pct(),
     )?;
     let rate_cols: Vec<String> = OPP_COST_RATE_BAND
         .iter()
@@ -438,11 +460,13 @@ pub fn onset_report(
         .collect();
     writeln!(
         out,
-        "{:<20} {:>10} {:>6}   {}   flat-25 ratio @10% at y10/20/30/40/50/60",
+        "{:<20} {:>10} {:>6}   {}   flat-25 ratio @{B}% at y{DEC}",
         "scenario",
         "final_n",
         "xover",
         rate_cols.join("   "),
+        B = binding_rate_pct(),
+        DEC = decades_label(),
     )?;
     let mid_price = SKL_FIAT_PRICE_BAND[1];
     let binding = OPP_COST_RATE_BAND[BINDING];
@@ -583,13 +607,14 @@ pub fn lever_report(
     writeln!(
         out,
         "\nA1-L — LEVERS priced (§12.14), min budget/burden over sustained years to {H} y, plus\n\
-         R sustained @10% and the onset year @10%. PRICED, NOT PROPOSED: every row is a\n\
+         R sustained @{B}% and the onset year @{B}%. PRICED, NOT PROPOSED: every row is a\n\
          genesis-frozen or ceremony-gated number. 'ALL fees' reaches into the miner's income —\n\
          the fee-era PoW security budget; that trade needs its own wargame, not a parameter.\n\
          'tail floor p%' = staker leg floored at p% of ALL block emission, non-decaying (at the\n\
          tail: p% of {tail_skl:.0} SKL/yr). 'decay' re-pins shekyl_staker_emission_decay.",
         H = ONSET_HORIZON_YEARS,
         tail_skl = tail_skl_per_year(params),
+        B = binding_rate_pct(),
     )?;
     let binding = OPP_COST_RATE_BAND[BINDING];
     let mut results = Vec::new();
@@ -613,7 +638,12 @@ pub fn lever_report(
         writeln!(
             out,
             "  {:<26} {:>7} {:>7} {:>7}   {:>9} {:>7}",
-            "lever", "@2%", "@5%", "@10%", "R@10%", "onset"
+            "lever",
+            format!("@{}%", rate_pct(0)),
+            format!("@{}%", rate_pct(1)),
+            format!("@{}%", rate_pct(2)),
+            format!("R@{}%", binding_rate_pct()),
+            "onset"
         )?;
         for lever in lever_set(best) {
             let min_ratio_by_rate: Vec<f64> = OPP_COST_RATE_BAND
