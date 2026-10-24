@@ -1512,6 +1512,14 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`Q12_D6A_PEER_DISCOVERY_RUN.md`](design/Q12_D6A_PEER_DISCOVERY_RUN.md) — owns the failed-address window family (it ruled `P2P_ANON_FAILED_ADDR_FORGET_SECONDS = 240` from measured p90 recovery); the public-zone counterpart is the same mechanism and the same instrument
 
+- **`HelioseleneField` mul, square and sqrt take operand-dependent time on x86_64 (`CA-2`, found 2026-10-24), outside BINSEC's model; the mechanism is open.** Two x86_64 hosts reproduce it, the floor device does not; the discriminators are the disassembly diff against `Field25519::square`, a `-C no-vectorize-slp` rebuild, and the no-turbo / performance-governor run on the workstation (root). The monero-oxide notice waits for the answer, because platform (frequency) and code (SLP-vectorised limb loops) have different owners and fixes.
+  - Owner: `CA-2` — [`CRYPTO_AUDIT.md`](design/CRYPTO_AUDIT.md) §2
+  - Target: pre-genesis
+
+- **The Ed25519 field arithmetic under FCMP++ runs on crypto-bigint 0.5.5, which RUSTSEC-2026-0387 flags for timing variability; `cargo audit` ignores it by ruling (`CA-1`).** `helioselene::Field25519` is `dalek_ff_group::FieldElement` (crypto-bigint `Residue` Montgomery arithmetic), and it carries the wallet-side prover's secret witness. The fix is crypto-bigint >= 0.7.6, which no released `dalek-ff-group`/`ciphersuite` uses; serai's `next` branch (2026-09-22) already has `dalek-ff-group` on a `prime-field` crate over crypto-bigint 0.7, unreleased, so clearing it means pinning that branch by git rev with every pinned FCMP++/curve-tree vector held byte-identical. `HelioseleneField` is not part of it: it takes only U256 limb plumbing from crypto-bigint and stays on 0.5.5 with upstream monero-oxide. Measured 2026-10-24 (`docs/formal/checkct`): every operation we reach with a secret is branchless on x86_64 under both toolchains run; aarch64's dynamic row and riscv64 are the open cells. Blocked on serai releasing that branch, or on scheduling the pin; the pin's acceptance is the same harness green against `prime-field`'s field.
+  - Owner: `CA-1` — [`CRYPTO_AUDIT.md`](design/CRYPTO_AUDIT.md) §1 (exposure, consumers, reopen criteria; the ignore is in `rust/.cargo/audit.toml`)
+  - Target: pre-genesis
+
 ## Post-genesis
 
 Exceptional deferral with a named blocker. This list stays tiny.
