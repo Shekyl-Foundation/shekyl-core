@@ -127,9 +127,12 @@ enum Mode<I> {
     Null,
     FixedPair,
     Constant(I),
+    /// Class 0 is built by `gen` (a structured generator, fresh per element);
+    /// class 1 by the plain random generator the harness keeps per field.
+    Structured,
 }
 
-fn measure<I: Clone, F: FnMut(&I) -> u64>(
+fn measure<I: Clone + RandomInput, F: FnMut(&I) -> u64>(
     run: &Run,
     name: &str,
     mode: Mode<I>,
@@ -164,6 +167,8 @@ fn measure<I: Clone, F: FnMut(&I) -> u64>(
         .iter()
         .map(|&class| match (&mode, class) {
             (Mode::Null, _) => (0..BATCH).map(|_| gen(&mut rng)).collect(),
+            (Mode::Structured, 0) => (0..BATCH).map(|_| gen(&mut rng)).collect(),
+            (Mode::Structured, _) => (0..BATCH).map(|_| I::random(&mut rng)).collect(),
             (Mode::Constant(v), 0) => vec![v.clone(); BATCH],
             (_, 0) => regen(fixed_seed, &mut gen),
             (Mode::FixedPair, _) => regen(other_seed, &mut gen),
@@ -174,6 +179,9 @@ fn measure<I: Clone, F: FnMut(&I) -> u64>(
     let mut t1 = Vec::with_capacity(samples);
     let mut sink = 0u64;
     for (class, batch) in order.iter().zip(&inputs) {
+        if run.only.is_some_and(|c| c != *class) {
+            continue;
+        }
         let start = Instant::now();
         for i in batch {
             sink = sink.wrapping_add(op(black_box(i)));
@@ -186,6 +194,13 @@ fn measure<I: Clone, F: FnMut(&I) -> u64>(
         }
     }
     black_box(sink);
+    if run.only.is_some() {
+        println!(
+            "{name:<34} only one class run; batches {}",
+            t0.len() + t1.len()
+        );
+        return;
+    }
     let t_all = welch_t(&t0, &t1);
     let t_crop = welch_t(&cropped(&t0, 0.99), &cropped(&t1, 0.99));
     let verdict = if t_all.abs() > 4.5 || t_crop.abs() > 4.5 {
@@ -200,10 +215,57 @@ fn measure<I: Clone, F: FnMut(&I) -> u64>(
     );
 }
 
+/// A fresh uniformly random value of the type, for the random class of a
+/// `Structured` row (the structured generator builds class 0).
+trait RandomInput: Sized {
+    fn random(r: &mut Rng) -> Self;
+}
+impl RandomInput for HelioseleneField {
+    fn random(r: &mut Rng) -> Self {
+        fehelio(r.bytes32())
+    }
+}
+impl RandomInput for Field25519 {
+    fn random(r: &mut Rng) -> Self {
+        fe25519(r.bytes32())
+    }
+}
+impl RandomInput for u8 {
+    fn random(r: &mut Rng) -> Self {
+        (r.next() & 0xff) as u8
+    }
+}
+impl RandomInput for [u8; 32] {
+    fn random(r: &mut Rng) -> Self {
+        r.bytes32()
+    }
+}
+impl RandomInput for [u8; 64] {
+    fn random(r: &mut Rng) -> Self {
+        r.bytes64()
+    }
+}
+impl<A: RandomInput, B: RandomInput> RandomInput for (A, B) {
+    fn random(r: &mut Rng) -> Self {
+        (A::random(r), B::random(r))
+    }
+}
+impl RandomInput for (R, U256) {
+    fn random(r: &mut Rng) -> Self {
+        (
+            R::new(&U256::from_be_slice(&r.bytes32())),
+            U256::from_be_slice(&r.bytes32()),
+        )
+    }
+}
+
 /// Samples per class and an optional entrypoint-name filter, from argv.
 struct Run {
     samples: usize,
     filter: Option<String>,
+    /// `Some(0)` / `Some(1)`: run only that class's batches (for `perf stat`
+    /// over one class at a time); the t statistics are then meaningless.
+    only: Option<usize>,
 }
 
 fn fe25519(b: [u8; 32]) -> Field25519 {
@@ -239,6 +301,11 @@ fn main() {
             .and_then(|a| a.parse().ok())
             .unwrap_or(DEFAULT_SAMPLES),
         filter: std::env::args().nth(2),
+        only: match std::env::args().nth(3).as_deref() {
+            Some("only-fixed") => Some(0),
+            Some("only-random") => Some(1),
+            _ => None,
+        },
     };
     println!(
         "ct-dynamic: {} samples/class x {BATCH} ops; dudect threshold |t| > 4.5; target {}",
@@ -347,6 +414,75 @@ fn main() {
         Mode::Constant((fc, fc2)),
         |r| (fe25519(r.bytes32()), fe25519(r.bytes32())),
         |(a, b)| low64(&(*a * *b)),
+    );
+
+    println!("-- operand property (class 0: structured values, regenerated per batch; class 1: random) — which property moves the time?");
+    // Low Hamming weight: one random byte set per limb.
+    let sparse_h = |r: &mut Rng| {
+        let mut b = [0u8; 32];
+        for l in 0..4 {
+            b[l * 8 + (r.next() % 8) as usize] = (r.next() & 0xff) as u8;
+        }
+        b[31] &= 0x3f;
+        fehelio(b)
+    };
+    // High limbs zero: a value below 2^64.
+    let small_h = |r: &mut Rng| {
+        let mut b = [0u8; 32];
+        b[..8].copy_from_slice(&r.next().to_le_bytes());
+        fehelio(b)
+    };
+    // Dense: all bytes 0xff except the top bits (near the modulus).
+    let dense_h = |_r: &mut Rng| {
+        let mut b = [0xffu8; 32];
+        b[31] = 0x3f;
+        fehelio(b)
+    };
+    measure(
+        &run,
+        "property: helio square sparse",
+        Mode::Structured,
+        sparse_h,
+        |a| low64(&a.square()),
+    );
+    measure(
+        &run,
+        "property: helio square small",
+        Mode::Structured,
+        small_h,
+        |a| low64(&a.square()),
+    );
+    measure(
+        &run,
+        "property: helio square dense",
+        Mode::Structured,
+        dense_h,
+        |a| low64(&a.square()),
+    );
+    measure(
+        &run,
+        "property: fe25519 square sparse",
+        Mode::Structured,
+        |r| {
+            let mut b = [0u8; 32];
+            for l in 0..4 {
+                b[l * 8 + (r.next() % 8) as usize] = (r.next() & 0xff) as u8;
+            }
+            b[31] &= 0x3f;
+            fe25519(b)
+        },
+        |a| low64(&a.square()),
+    );
+    measure(
+        &run,
+        "property: fe25519 square small",
+        Mode::Structured,
+        |r| {
+            let mut b = [0u8; 32];
+            b[..8].copy_from_slice(&r.next().to_le_bytes());
+            fe25519(b)
+        },
+        |a| low64(&a.square()),
     );
 
     println!("-- crypto-bigint 0.5.5 Residue::pow with a secret exponent (BINSEC found a branch; unreached by our code)");
