@@ -1158,7 +1158,7 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-12`
 
-- **Ship a Tor on FreeBSD and riscv64 Linux: their `unavailable` rows are gaps to close (`TB-4`, Rick 2026-10-19).** Every OS ships its Tor. No Expert Bundle exists for either, so they wait on building tor from the signed source inside gitian (`TOR_BUNDLE_DISTRIBUTION.md` §3), and meanwhile an operator attaches a Tor of their own with `tor = operator` (`TB-5`'s guide). Blocker: the source-build round. Falsify by each row of `config/tor_pins.json` reading `pinned`. — [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) §5 step 4
+- **Ship a Tor on FreeBSD: its `unavailable` row is a gap to close (`TB-4`, Rick 2026-10-19; riscv64 Linux left the shipped matrix 2026-10-24).** Every OS ships its Tor. No Expert Bundle exists for FreeBSD, so it waits on building tor from the signed source inside gitian (`TOR_BUNDLE_DISTRIBUTION.md` §3), and meanwhile an operator attaches a Tor of their own with `tor = operator` (`TB-5`'s guide). Blocker: the source-build round. Falsify by each row of `config/tor_pins.json` reading `pinned`. — [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) §5 step 4
   - Target: pre-genesis
   - Owner: [`TOR_BUNDLE_DISTRIBUTION.md`](design/TOR_BUNDLE_DISTRIBUTION.md) `TB-4`, `TB-5`
 
