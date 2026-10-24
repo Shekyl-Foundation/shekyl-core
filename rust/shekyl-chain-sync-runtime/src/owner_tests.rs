@@ -75,6 +75,19 @@ fn every_entry_reply_has_an_outcome() {
             Outcome::Noted,
         ),
         (
+            Reply::Switched {
+                demoted: vec![(BlockHeight::from_raw(7), BlockHash::from_bytes([8; 32]))],
+                promoted: vec![
+                    (BlockHeight::from_raw(7), BlockHash::from_bytes([9; 32])),
+                    (BlockHeight::from_raw(8), hash),
+                ],
+            },
+            Outcome::Switched {
+                tip: hash,
+                height: BlockHeight::from_raw(8),
+            },
+        ),
+        (
             Reply::CannotFollow(CannotFollow::BelowFloor {
                 tip: BlockHeight::ZERO,
                 floor: BlockHeight::ZERO,

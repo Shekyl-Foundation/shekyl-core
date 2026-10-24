@@ -1094,11 +1094,13 @@ fn outcome_of(reply: Reply, solicited: bool) -> Outcome {
         (SyncReplyAction::Again, Reply::Cancelled { .. } | Reply::Stopped) => Outcome::Again,
         (
             SyncReplyAction::None,
-            Reply::AlreadyHeld
-            | Reply::Held { .. }
-            | Reply::Switched { .. }
-            | Reply::CannotFollow(_),
+            Reply::AlreadyHeld | Reply::Held { .. } | Reply::CannotFollow(_),
         ) => Outcome::Noted,
+        // The promoted blocks ascend, so the last is main's new tip.
+        (SyncReplyAction::None, Reply::Switched { promoted, .. }) => match promoted.last() {
+            Some(&(height, tip)) => Outcome::Switched { tip, height },
+            None => Outcome::Noted,
+        },
         (action, reply) => {
             tracing::error!(?action, ?reply, "an entry reply and its action disagree");
             Outcome::Noted

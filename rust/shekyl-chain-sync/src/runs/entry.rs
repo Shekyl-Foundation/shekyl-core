@@ -114,6 +114,19 @@ where
             Outcome::Noted => {
                 self.accepted.insert(hash);
             }
+            // A switch left the arrival as main's new tip: relayed under the
+            // connect's rule (CS-Q2 step 7). A switch that ended elsewhere
+            // relays nothing of this arrival's.
+            Outcome::Switched { tip, height } => {
+                self.accepted.insert(hash);
+                if tip == hash && self.relays(hash, height, arrival.header.cumulative_difficulty())
+                {
+                    out.push(Command::Relay {
+                        hash,
+                        from: session,
+                    });
+                }
+            }
             // The entry handed the arrival back. The seat the offer spent
             // is free, and the next plan asks for the body again.
             Outcome::Again | Outcome::Throttled => {

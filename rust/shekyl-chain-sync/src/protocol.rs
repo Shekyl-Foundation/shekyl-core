@@ -363,7 +363,16 @@ pub enum Outcome {
     StoreUnreadable,
     /// An announce hit the unsolicited share.
     Throttled,
-    /// Already held, stored beside the incumbent, switched, or unfollowable.
+    /// The arrival moved main to its branch. `tip` is main's new tip, at
+    /// `height`. The model relays it when it is the arrival, under the
+    /// same rule as a connect: the rule is path-independent.
+    Switched {
+        /// Main's new tip.
+        tip: BlockHash,
+        /// Its height.
+        height: BlockHeight,
+    },
+    /// Already held, stored beside the incumbent, or unfollowable.
     Noted,
 }
 

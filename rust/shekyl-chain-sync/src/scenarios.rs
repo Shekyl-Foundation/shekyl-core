@@ -677,6 +677,53 @@ fn a_synced_node_relays_a_tip_block_it_fetched_by_sync() {
     });
 }
 
+/// A switch that leaves the arrival as main's new tip relays it, as a
+/// connect does (CS-Q2 step 7, ruled 2026-10-24: the rule is
+/// path-independent). A switch whose new tip is another block relays
+/// nothing of this arrival's.
+#[test]
+fn a_switch_that_leaves_the_arrival_as_the_tip_relays_it() {
+    with_offer(|sync, view, tag, hash, _raw| {
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::Switched {
+                    tip: hash,
+                    height: BlockHeight::from_raw(8),
+                },
+            },
+        );
+        let relays: Vec<(BlockHash, u8)> = out
+            .iter()
+            .filter_map(|command| match command {
+                Command::Relay { hash, from } => Some((*hash, *from)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(relays, vec![(hash, 1)], "{out:?}");
+    });
+    with_offer(|sync, view, tag, _hash, _raw| {
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::Switched {
+                    tip: BlockHash::from_bytes([0x77; 32]),
+                    height: BlockHeight::from_raw(9),
+                },
+            },
+        );
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::Relay { .. })),
+            "a switch that ended elsewhere relayed the arrival: {out:?}"
+        );
+    });
+}
+
 /// The header left `T` while its body request was still out. The body
 /// passes the form check and is dropped. The session stays.
 #[test]
