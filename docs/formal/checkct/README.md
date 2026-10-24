@@ -86,8 +86,9 @@ secret bytes (the full field, no secret-dependent rejection), the `U256`
 mod rows from a 512-bit remainder, the `Residue` rows from an unrestricted
 `U256` (the Montgomery conversion reduces it), and the `from_repr` rows
 from unrestricted bytes, invalid encodings included. Records made before
-this carry the earlier sampler; the static ones are regenerated with the
-new one, and the device rows were re-run with the corrected binary
+this carry the earlier sampler; the static ones were regenerated with the
+new one on both toolchains (2026-10-24 19:48Z-21:25Z, every verdict as
+before, and BINSEC's division checks added on helioselene: clean), and the device rows were re-run with the corrected binary
 (`dynamic-*-rerun.txt`) with the same outcome: the x86_64 host crosses on
 `HelioseleneField`, the floor device is flat on every row.
 Upstream's calibration driver is pinned by revision in `setup.sh`
@@ -258,12 +259,18 @@ regenerate it after any run.
 | `ctlpre.nightly-2026-10-06.txt` | ctlpre | nightly-2026-10-06 | `--timeout 900` | thumbv6m-none-eabi | 0 / 8 / 0 | insecure: div_exact_u64, div_rem_u64, leading_zeros_u512, montgomery_form_p384, pow_amm_u128, rem_wide_u64, sub_mod_u256, trailing_zeros_u512 |
 | `ctlpre.nightly-2026-10-06.txt` | ctlpre | nightly-2026-10-06 | `--timeout 900` | thumbv7em-none-eabihf | 4 / 0 / 4 | unknown: div_rem_u64, montgomery_form_p384, pow_amm_u128, rem_wide_u64 |
 | `ctlpre.nightly-2026-10-06.txt` | ctlpre | nightly-2026-10-06 | `--timeout 900` | x86_64-unknown-linux-gnu | 4 / 0 / 4 | unknown: div_rem_u64, montgomery_form_p384, pow_amm_u128, rem_wide_u64 |
-| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 3600` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
-| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 3600` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
-| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 3600` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
-| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 3600` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
-| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 3600` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
-| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 3600` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
+| `helio.nightly-2025-12-04.division.txt` | helio | nightly-2025-12-04 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
+| `helio.nightly-2025-12-04.division.txt` | helio | nightly-2025-12-04 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
+| `helio.nightly-2025-12-04.division.txt` | helio | nightly-2025-12-04 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
+| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 900` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
+| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 900` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
+| `helio.nightly-2025-12-04.txt` | helio | nightly-2025-12-04 | `--timeout 900` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
+| `helio.nightly-2026-10-06.division.txt` | helio | nightly-2026-10-06 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
+| `helio.nightly-2026-10-06.division.txt` | helio | nightly-2026-10-06 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
+| `helio.nightly-2026-10-06.division.txt` | helio | nightly-2026-10-06 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
+| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 900` | riscv32imac-unknown-none-elf | 12 / 0 / 0 | — |
+| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 900` | thumbv7em-none-eabihf | 12 / 0 / 0 | — |
+| `helio.nightly-2026-10-06.txt` | helio | nightly-2026-10-06 | `--timeout 900` | x86_64-unknown-linux-gnu | 10 / 0 / 2 | unknown: helio_pow_secret_exp, helio_sqrt |
 | `subject-noslp.nightly-2025-12-04.division.txt` | subject-noslp | nightly-2025-12-04 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | x86_64-unknown-linux-gnu | 25 / 1 / 0 | insecure: cb055_residue_pow_secret_exp |
 | `subject-noslp.nightly-2025-12-04.txt` | subject-noslp | nightly-2025-12-04 | `--timeout 900` | x86_64-unknown-linux-gnu | 25 / 1 / 0 | insecure: cb055_residue_pow_secret_exp |
 | `subject-noslp.nightly-2026-10-06.division.txt` | subject-noslp | nightly-2026-10-06 | `--checks control-flow,memory-access,dividend,divisor --timeout 900` | x86_64-unknown-linux-gnu | 26 / 0 / 0 | — |

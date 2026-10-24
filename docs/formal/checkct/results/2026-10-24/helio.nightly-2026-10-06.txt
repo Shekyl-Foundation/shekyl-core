@@ -1,9 +1,9 @@
 workspace: helio
-cargo-checkct: shekyl-checkct:85271e5   options: --timeout 3600
+cargo-checkct: shekyl-checkct:85271e5   options: --timeout 900
 toolchain: nightly-2026-10-06
 profile.release: panic = "abort" overflow-checks = true 
 targets + rustflags: target = ["x86_64-unknown-linux-gnu", "riscv32imac-unknown-none-elf", "thumbv7em-none-eabihf"] rustflags = ["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld", "-C", "relocation-model=static"] 
-run window (UTC): Sat Oct 24 03:33:30 PM UTC 2026 -> Sat Oct 24 04:34:13 PM UTC 2026
+run window (UTC): Sat Oct 24 08:05:32 PM UTC 2026 -> Sat Oct 24 08:21:06 PM UTC 2026
 
 Summary:
   driver  target                        entrypoint                           status
@@ -45,6 +45,6 @@ Summary:
   helio   x86_64-unknown-linux-gnu      helio::driver::helio_wide_reduce     secure
 UNKNOWN
 Error: Unknown status!
-Sat Oct 24 04:34:13 PM UTC 2026
-  [checkct:result] Program status is : unknown (3600.101)
-  [checkct:result] Program status is : unknown (3600.060)
+Sat Oct 24 08:21:06 PM UTC 2026
+  [checkct:result] Program status is : unknown (900.064)
+  [checkct:result] Program status is : unknown (900.063)
