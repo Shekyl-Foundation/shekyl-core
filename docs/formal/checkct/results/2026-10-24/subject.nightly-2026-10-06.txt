@@ -1,0 +1,94 @@
+workspace: subject
+cargo-checkct: shekyl-checkct:85271e5   options: --timeout 900
+toolchain: nightly-2026-10-06
+profile.release: panic = "abort" overflow-checks = true 
+targets + rustflags: target = ["x86_64-unknown-linux-gnu", "riscv32imac-unknown-none-elf", "thumbv7em-none-eabihf"] rustflags = ["-C", "linker=rust-lld", "-C", "linker-flavor=ld.lld", "-C", "relocation-model=static"] 
+run window (UTC): Sat Oct 24 01:58:32 PM UTC 2026 -> Sat Oct 24 01:59:21 PM UTC 2026
+
+Summary:
+  driver  target                        entrypoint                                    status
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_add_mod_u256             secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_ct_lt_modulus            secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_rem_u512_public_modulus  secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_residue_add              secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_residue_invert           secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_residue_mul              secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_residue_neg              secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_residue_new              secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_residue_pow_secret_exp   insecure
+      0x01331e has control flow leak (0.330s)
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_residue_retrieve         secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_residue_square           secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_residue_sub              secure
+  cb055   riscv32imac-unknown-none-elf  cb055::driver::cb055_sub_mod_u256             secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_add_mod_u256             secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_ct_lt_modulus            secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_rem_u512_public_modulus  secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_residue_add              secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_residue_invert           secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_residue_mul              secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_residue_neg              secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_residue_new              secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_residue_pow_secret_exp   secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_residue_retrieve         secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_residue_square           secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_residue_sub              secure
+  cb055   thumbv7em-none-eabihf         cb055::driver::cb055_sub_mod_u256             secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_add_mod_u256             secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_ct_lt_modulus            secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_rem_u512_public_modulus  secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_residue_add              secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_residue_invert           secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_residue_mul              secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_residue_neg              secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_residue_new              secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_residue_pow_secret_exp   secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_residue_retrieve         secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_residue_square           secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_residue_sub              secure
+  cb055   x86_64-unknown-linux-gnu      cb055::driver::cb055_sub_mod_u256             secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_add                       secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_from_repr                 secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_invert                    secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_is_odd                    secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_mul                       secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_neg                       secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_pow_secret_exp            secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_sqrt                      secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_sqrt_ratio_i              secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_square                    secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_sub                       secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_to_repr                   secure
+  dfg050  riscv32imac-unknown-none-elf  dfg050::driver::dfg_wide_reduce               secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_add                       secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_from_repr                 secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_invert                    secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_is_odd                    secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_mul                       secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_neg                       secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_pow_secret_exp            secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_sqrt                      secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_sqrt_ratio_i              secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_square                    secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_sub                       secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_to_repr                   secure
+  dfg050  thumbv7em-none-eabihf         dfg050::driver::dfg_wide_reduce               secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_add                       secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_from_repr                 secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_invert                    unknown
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_is_odd                    secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_mul                       secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_neg                       secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_pow_secret_exp            secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_sqrt                      secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_sqrt_ratio_i              secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_square                    secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_sub                       secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_to_repr                   secure
+  dfg050  x86_64-unknown-linux-gnu      dfg050::driver::dfg_wide_reduce               secure
+INSECURE
+Error: Insecure code!
+Sat Oct 24 01:59:21 PM UTC 2026
+  [checkct:result] Instruction 0x01331e has control flow leak (0.330s)
+  [checkct:result] Program status is : unknown (1.859)
+      0x01331e has control flow leak (0.330s)
