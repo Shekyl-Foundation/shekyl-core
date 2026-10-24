@@ -1221,10 +1221,7 @@ fn a_tor_address_failing_twice_with_a_missing_descriptor_then_succeeding_ends_wh
     let clock = ManualClock::new(Tick::new(1));
     let hub = hub_with_arming_on(&posts, &clock);
     let dial = Arc::new(GapDial::refusing_then_answering(
-        vec![
-            CloseCause::proxy_refused(0xF0),
-            CloseCause::proxy_refused(0xF0),
-        ],
+        vec![shekyl_tor::refused(0xF0), shekyl_tor::refused(0xF0)],
         vec![reply(NETWORK, vec![])],
     ));
     hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);

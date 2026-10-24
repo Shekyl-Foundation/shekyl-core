@@ -406,8 +406,9 @@ here.
 
 Each SOCKS reply answers two questions, not one: is it about the destination,
 and is it about our link. One table drives both the marks on the cause
-(`proxy_reply_marks`, which the lists read; *records-was* the address memory,
-`implicates_address`) and the supervisor:
+(`proxy_reply_marks` in `shekyl-tor/src/replies.rs`, this connector's; the
+lists read the marks; *records-was* the address memory, `implicates_address`
+in the transport layer) and the supervisor:
 
 | Reply | About | Goes to |
 | --- | --- | --- |

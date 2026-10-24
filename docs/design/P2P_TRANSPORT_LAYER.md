@@ -419,8 +419,10 @@ holds a count, so the destroy post has not run.
   nothing else. A silent acceptor is `LevinHandshakeTimeout`. A peer
   that sends FIN is `PeerClosed`. The cause carries three marks in
   its spare byte, worth a retry, names the destination, proves
-  misbehaviour (2026-10-24): per kind by default, per reply for a proxy
-  refusal, and the dialer stamps proof on a Levin rejection or a refused
+  misbehaviour (2026-10-24): per kind by default, handed in by the
+  connector for a proxy refusal (the Tor connector's reply table,
+  `shekyl-tor/src/replies.rs`; this crate keeps no SOCKS knowledge), and
+  the dialer stamps proof on a Levin rejection or a refused
   list only where the connector's declaration says the destination is
   authenticated. The lists read only the marks: proof drops the address,
   anything else cools it. *Records-was: forgetting the address was

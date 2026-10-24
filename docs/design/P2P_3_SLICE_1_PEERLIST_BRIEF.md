@@ -440,6 +440,20 @@ The peerlist offers uniform draws and no ordered walk:
 dropped an outstanding gray draw. A refused payload shared that failure
 path. The spellings are not in Rust.*
 
+**Cooling seats are evictable (Rick, 2026-10-24).** Over `GRAY_CAP`,
+eviction picks uniformly over every gray seat that is not an outstanding
+draw and not the seat just admitted: drawable and cooling alike. A
+cooldown is a delay, not protection. Gray is bounded by `GRAY_CAP` plus
+the outstanding draws. *Wargame:* a peer feeding dead addresses within
+D-S1's per-session cap, were cooling seats immune, would fill gray with
+seats that fail, cool, thaw and fail again, each immune for most of an
+hour, until eviction fell only on the drawable honest ones and pushed
+them out; with cooling seats evictable the feed buys nothing a feed of
+live-looking dead addresses did not already buy, and the cap holds.
+Tests: `shekyl-peerlist/tests/lifecycle.rs` (gray full of cooling seats
+takes a hundred more admissions and stays at the cap; with half the
+seats cooling and half drawable, evictions hit both in proportion).
+
 C++ disclosure walks white newest-first and then shuffles
 (`net_peerlist.h:302`, `:312`). Both callers pass the anonymize flag
 (`get_peerlist_head` at `net_node.inl:2721` and `:2843`), so the
@@ -701,18 +715,23 @@ the range table.
 
 **Every restart is a fresh look (Rick, 2026-10-24; the gray-lifecycle
 PR).** No trust state is saved: no cooldown, no ban, no white. The file
-carries addresses, never judgements about them. A banned address is
-therefore written like any other, and the ban is not; at the next start
-the address is gray and is tested again. The reason: an address leaves
-gray only on authenticated proof of misbehaviour, and a clearnet ban is
-not that. Until the clearnet handshake authenticates the peer, an
-on-path attacker can provoke a ban against an honest address; a ban that
-lasted past the restart would turn that timed loss into a permanent one,
-by the attacker's hand. On Tor, where misbehaviour is proven, the
-proving test drops the address from the lists, so it is not in the
-file either; nothing changes there. `persistable` already filters by
-range alone, so this names the rule the code has; it is not a change to
-`persistable`.
+carries addresses, never judgements. A banned address is left out, and
+the ban is not saved (Rick ruled this, option (ii), 2026-10-24).
+`persistable` takes the dialer's ban snapshot and the clock, the same
+way `expire` takes `has_live_session`, and leaves out every address
+whose host is under an active ban at the moment the file is written; the
+lists still read no transport state of their own. At the next start the
+ban is gone, as before, and so is the address: it comes back only when a
+peer sends it again. On Tor nothing can be banned (D7), so nothing
+changes there. The cost, stated and accepted: on clearnet, until the
+handshake authenticates the peer, an on-path party who provokes a ban
+costs the honest address its place across a restart, and it can be
+relearned from any peer's sample. *Records-was (5e3f8f238, the same
+day, by mistake): the unruled option (i), "a banned address is written
+like any other"; the ruling was (ii).* Tests:
+`shekyl-peerlist/tests/lifecycle.rs` (a clearnet address under an active
+ban is absent from the file; one whose ban has expired is written; a Tor
+address is unaffected).
 
 ---
 

@@ -198,14 +198,17 @@ impl CloseCause {
         }
     }
 
-    /// `ProxyRefused` with the overlay's reply code, judged by the SOCKS
-    /// layer's reply table ([`proxy_reply_marks`]). An unreachable onion
-    /// is this cause.
+    /// `ProxyRefused` with the overlay's reply code and the connector's
+    /// judgement of it as `marks`. The reply table is the connector's (the
+    /// Tor connector's `proxy_reply_marks`, Rick 2026-10-24); this crate
+    /// holds no SOCKS knowledge. A proxy reply is the proxy's word, so it
+    /// never proves misbehaviour: that mark, and any bit outside
+    /// [`Marks::ALL`], is dropped here. An unreachable onion is this cause.
     #[must_use]
-    pub const fn proxy_refused(reply_code: u16) -> Self {
+    pub const fn proxy_refused(reply_code: u16, marks: u8) -> Self {
         Self {
             kind: CloseKind::ProxyRefused,
-            marks: proxy_reply_marks(reply_code),
+            marks: marks & (Marks::RETRY | Marks::NAMES_DESTINATION),
             reply_code,
         }
     }
@@ -263,17 +266,10 @@ impl CloseCause {
     /// Whether this cause is evidence about the address that was dialed.
     ///
     /// [`CloseKind::LevinHandshakeRejected`] is the Levin layer judging
-    /// the peer that answered. [`CloseKind::ProxyRefused`] counts for the
-    /// replies that name the destination: RFC 1928 host unreachable
-    /// (`0x04`) and connection refused (`0x05`), and the Tor SOCKS
-    /// extended codes for a descriptor that is missing (`0xF0`) or
-    /// unusable (`0xF1`) and an introduction that failed (`0xF2`).
-    /// Introduction and rendezvous timeouts (`0xF7`, `0xF3`), general
-    /// failure, a ruleset, network unreachable, and TTL expired do not.
-    /// A command or address type this node sent (`0x07`, `0x08`), an onion
-    /// address Tor rejected (`0xF6`; we validate it before dialing), and
-    /// client-authorization errors (`0xF4`, `0xF5`) do not either. Any
-    /// other reply does not.
+    /// the peer that answered. [`CloseKind::ProxyRefused`] names the
+    /// destination when the connector's reply table says the reply does:
+    /// the Tor connector's `proxy_reply_marks` holds that table, and the
+    /// mark arrives with [`Self::proxy_refused`].
     ///
     /// [`CloseKind::DialFailed`] does not. It is a direct connect that was
     /// refused, and on a proxied dial that connect is to this node's own
@@ -284,99 +280,10 @@ impl CloseCause {
     /// never the onion. Every other
     /// kind is a timeout, this node's own close, or the peer's ordinary
     /// end of file.
-    ///
-    /// The extended codes arrive only when the managed `SocksPort` asks
-    /// for them (`auto ExtendedErrors`). Tor 0.4.9.11 leaves that off
-    /// (`port_cfg_new`), and without it `stream_end_reason_to_socks5_response`
-    /// reports an introduction timeout as reply 4.
     #[must_use]
     pub const fn names_the_destination(self) -> bool {
         self.marks & Marks::NAMES_DESTINATION != 0
     }
-}
-
-/// RFC 1928 §6. The destination host was not reached.
-const SOCKS_HOST_UNREACHABLE: u16 = 0x04;
-/// RFC 1928 §6. The destination refused the connection.
-const SOCKS_CONNECTION_REFUSED: u16 = 0x05;
-/// RFC 1928 §6. The command this node sent is not supported.
-const SOCKS_COMMAND_NOT_SUPPORTED: u16 = 0x07;
-/// RFC 1928 §6. The address type this node sent is not supported.
-const SOCKS_ADDRESS_TYPE_NOT_SUPPORTED: u16 = 0x08;
-/// Tor extended error (`socks-extensions`, proposal 304). Descriptor missing.
-const TOR_DESCRIPTOR_MISSING: u16 = 0xF0;
-/// Tor extended error. The descriptor is unusable.
-const TOR_DESCRIPTOR_UNUSABLE: u16 = 0xF1;
-/// Tor extended error. The introduction failed.
-const TOR_INTRODUCTION_FAILED: u16 = 0xF2;
-/// Tor extended error. Client authorization is missing. This node's request.
-const TOR_CLIENT_AUTH_MISSING: u16 = 0xF4;
-/// Tor extended error. Client authorization was rejected. This node's request.
-const TOR_CLIENT_AUTH_REJECTED: u16 = 0xF5;
-/// Tor extended error. Tor rejected the onion address. Validated before dial.
-const TOR_ONION_ADDRESS_REJECTED: u16 = 0xF6;
-
-/// RFC 1928 §6. General SOCKS server failure.
-const SOCKS_GENERAL_FAILURE: u16 = 0x01;
-/// RFC 1928 §6. Network unreachable.
-const SOCKS_NETWORK_UNREACHABLE: u16 = 0x03;
-/// RFC 1928 §6. TTL expired.
-const SOCKS_TTL_EXPIRED: u16 = 0x06;
-/// Tor extended error. The rendezvous timed out.
-const TOR_RENDEZVOUS_TIMEOUT: u16 = 0xF3;
-/// Tor extended error. The introduction timed out.
-const TOR_INTRODUCTION_TIMEOUT: u16 = 0xF7;
-
-/// The SOCKS layer's judgement of an onion reply, as marks (the Tor
-/// connector's table, Rick 2026-10-24).
-///
-/// Worth a retry: a missing descriptor (`0xF0`), a failed introduction
-/// (`0xF2`), the two timeouts (`0xF3`, `0xF7`), general failure (`0x01`),
-/// network unreachable (`0x03`), host unreachable (`0x04`) and TTL expired
-/// (`0x06`): each can be the network or the directory on this try. Final:
-/// connection refused (`0x05`) and an unusable descriptor (`0xF1`), which
-/// the destination answered; the client-authorization errors (`0xF4`,
-/// `0xF5`), the rejected onion address (`0xF6`), and a command or address
-/// type this node sent (`0x07`, `0x08`), which are this node's request.
-/// Names the destination: host unreachable, connection refused, the
-/// missing or unusable descriptor, the failed introduction. Nothing here
-/// proves misbehaviour: a SOCKS reply is the proxy's word.
-pub const fn proxy_reply_marks(reply: u16) -> u8 {
-    let retry = matches!(
-        reply,
-        TOR_DESCRIPTOR_MISSING
-            | TOR_INTRODUCTION_FAILED
-            | TOR_RENDEZVOUS_TIMEOUT
-            | TOR_INTRODUCTION_TIMEOUT
-            | SOCKS_GENERAL_FAILURE
-            | SOCKS_NETWORK_UNREACHABLE
-            | SOCKS_HOST_UNREACHABLE
-            | SOCKS_TTL_EXPIRED
-    );
-    let names = matches!(
-        reply,
-        SOCKS_HOST_UNREACHABLE
-            | SOCKS_CONNECTION_REFUSED
-            | TOR_DESCRIPTOR_MISSING
-            | TOR_DESCRIPTOR_UNUSABLE
-            | TOR_INTRODUCTION_FAILED
-    );
-    (if retry { Marks::RETRY } else { 0 }) | (if names { Marks::NAMES_DESTINATION } else { 0 })
-}
-
-/// Replies that mean the request this node sent, not the onion.
-///
-/// The dial path logs these at error. They do not forget the address.
-/// `0xF4` and `0xF5` are both client-authorization errors.
-pub const fn socks_reply_is_our_request(reply: u16) -> bool {
-    matches!(
-        reply,
-        SOCKS_COMMAND_NOT_SUPPORTED
-            | SOCKS_ADDRESS_TYPE_NOT_SUPPORTED
-            | TOR_CLIENT_AUTH_MISSING
-            | TOR_CLIENT_AUTH_REJECTED
-            | TOR_ONION_ADDRESS_REJECTED
-    )
 }
 
 const HEADER_PREAMBLE: &str = "\
@@ -523,12 +430,25 @@ mod tests {
                 "{kind:?} proves nothing by itself"
             );
         }
-        for reply in 0u16..=0x0100 {
-            let cause = CloseCause::proxy_refused(reply);
-            assert_eq!(cause.marks() & !Marks::ALL, 0);
+        // A proxy reply carries the connector's marks, less proof: whatever
+        // the connector hands in, the cause proves nothing and carries no
+        // unknown bit.
+        for marks in 0u8..=0xFF {
+            let cause = CloseCause::proxy_refused(0x01, marks);
+            assert_eq!(cause.marks() & !Marks::ALL, 0, "marks {marks:#x}");
             assert!(
                 !cause.proves_misbehaviour(),
-                "reply {reply:#x} proves nothing"
+                "marks {marks:#x} prove nothing on a proxy reply"
+            );
+            assert_eq!(
+                cause.retry_worthy(),
+                marks & Marks::RETRY != 0,
+                "marks {marks:#x}"
+            );
+            assert_eq!(
+                cause.names_the_destination(),
+                marks & Marks::NAMES_DESTINATION != 0,
+                "marks {marks:#x}"
             );
         }
     }
@@ -559,31 +479,6 @@ mod tests {
         }
     }
 
-    /// The Tor connector's reply table (Rick, 2026-10-24): the retry set,
-    /// the final set, and the five destination-naming replies.
-    #[test]
-    fn the_onion_reply_table_marks_retries_finals_and_destination_naming() {
-        let retry = [0xF0, 0xF2, 0xF3, 0xF7, 0x01, 0x03, 0x04, 0x06];
-        let final_ = [0x05, 0xF1, 0xF4, 0xF5, 0xF6, 0x07, 0x08];
-        let naming = [0x04, 0x05, 0xF0, 0xF1, 0xF2];
-        for reply in 0u16..=0x0100 {
-            let cause = CloseCause::proxy_refused(reply);
-            assert_eq!(
-                cause.retry_worthy(),
-                retry.contains(&reply),
-                "reply {reply:#x}"
-            );
-            if final_.contains(&reply) {
-                assert!(!cause.retry_worthy(), "reply {reply:#x} is final");
-            }
-            assert_eq!(
-                cause.names_the_destination(),
-                naming.contains(&reply),
-                "reply {reply:#x}"
-            );
-        }
-    }
-
     /// The Levin layer's stamp follows the connector's authentication: a
     /// rejection proves misbehaviour on Tor and not on clearnet, and a cause
     /// that names nothing is never stamped.
@@ -605,7 +500,7 @@ mod tests {
 
     #[test]
     fn proxy_refused_carries_the_reply_code_and_other_causes_do_not() {
-        let proxy = CloseCause::proxy_refused(0x501);
+        let proxy = CloseCause::proxy_refused(0x501, Marks::NONE);
         assert_eq!(proxy.kind(), CloseKind::ProxyRefused);
         assert_eq!(proxy.reply_code(), 0x501);
         for kind in CloseKind::ALL {

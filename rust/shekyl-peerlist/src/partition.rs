@@ -176,11 +176,11 @@ impl Partition {
     /// Seat `address` on gray when it sits nowhere.
     ///
     /// Already gray, outstanding, or white: left where it is, and `false`.
-    /// Over [`GRAY_CAP`], a uniformly random *other drawable* gray seat is
-    /// dropped, so the address just admitted stays (brief §2) and an
-    /// outstanding draw is not a candidate (brief §5). When the only
-    /// drawable seat is the one just admitted, gray sits over the cap by
-    /// the outstanding draws rather than cancelling one.
+    /// Over [`GRAY_CAP`], a uniformly random *other* gray seat, drawable or
+    /// cooling alike, is dropped, so the address just admitted stays (brief
+    /// §2) and an outstanding draw is not a candidate (brief §5). When the
+    /// only evictable seat is the one just admitted, gray sits over the cap
+    /// by the outstanding draws rather than cancelling one.
     pub(crate) fn insert_gray<R: RelayRng + ?Sized>(
         &mut self,
         address: &NetworkAddress,
@@ -731,17 +731,22 @@ impl Partition {
         }
     }
 
-    /// Drop drawable gray until the gray population is within [`GRAY_CAP`],
-    /// never `keep` and never an outstanding draw. Stops when the only
-    /// drawable seat left is `keep`: gray may then sit over the cap.
+    /// Drop gray seats until the gray population is within [`GRAY_CAP`]: a
+    /// uniform pick over the drawable and the cooling seats alike, never
+    /// `keep` and never an outstanding draw. A cooldown is a delay, not
+    /// protection (Rick, 2026-10-24): dead addresses fed within D-S1 would
+    /// otherwise accumulate immune to eviction and push the honest ones
+    /// out. Stops when the only evictable seat left is `keep`: gray may
+    /// then sit over the cap by the outstanding draws.
     fn evict_gray_over_cap<R: RelayRng + ?Sized>(&mut self, keep: &NetworkAddress, rng: &mut R) {
         while self.occupied_gray() > GRAY_CAP {
-            let keep_is_drawable = matches!(self.seat_of(keep), Some(Seat::Gray));
-            if !another(self.drawable_gray, keep_is_drawable) {
+            let keep_is_evictable =
+                matches!(self.seat_of(keep), Some(Seat::Gray | Seat::Cooling(_)));
+            if !another(self.drawable_gray + self.cooling, keep_is_evictable) {
                 break;
             }
             let victim = self.pick_accepted(rng, |address, seat| {
-                matches!(seat, Seat::Gray) && address != keep
+                matches!(seat, Seat::Gray | Seat::Cooling(_)) && address != keep
             });
             self.leave(&victim);
         }

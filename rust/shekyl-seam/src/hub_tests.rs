@@ -13,7 +13,7 @@ use shekyl_capped_stream::{InboundEnd, StreamEnds};
 use shekyl_peer_policy::InboundCeiling;
 use shekyl_timing_engine::{Clock, ManualClock, Tick};
 use shekyl_transport_layer::{
-    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, SocketId, Sockets,
+    CloseCause, CloseKind, CloseResult, ConnectorId, Direction, Marks, SocketId, Sockets,
 };
 
 use super::{Hub, Phase, Post};
@@ -449,7 +449,7 @@ fn a_transport_close_does_not_ban_the_host() {
         let rig = rig();
         let opened = adopt(&rig, Direction::Outbound, 32);
         let cause = if *kind == CloseKind::ProxyRefused {
-            CloseCause::proxy_refused(1)
+            CloseCause::proxy_refused(1, Marks::NONE)
         } else {
             CloseCause::new(*kind)
         };

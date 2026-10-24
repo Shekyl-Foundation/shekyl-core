@@ -800,20 +800,27 @@ is the inbound self-connection check.
 **The gray lifecycle (Rick, 2026-10-24; its own PR, after #1174).** An
 address leaves gray only on authenticated proof of misbehaviour, never
 for a connection problem. Every restart is a fresh look: no trust state
-(cooldowns, bans, white) is saved (slice 1 brief §7). Where each item
+(cooldowns, bans, white) is saved; the file carries addresses, never
+judgements, a banned address is left out, and the ban is not saved
+(slice 1 brief §7; Rick ruled (ii), 2026-10-24, and the earlier text
+here recorded the unruled option). Where each item
 landed: white expiry follows the connection (slice 1 brief §5, the
 `SessionAccepted` row and the expiry row: the clock moves at the kept
 session's close, and `expire` skips an address with a live kept session,
 which the dialer answers from the seam's board through
 `BanQuery::has_live_session`); per-layer judgement as three marks on
 the close cause (`P2P_TRANSPORT_LAYER.md`, "The cause travels with the
-close"; the Tor reply table in `TOR_SUPERVISOR.md`); retries within a
+close"; the Tor reply table is the Tor connector's,
+`shekyl-tor/src/replies.rs`, and `TOR_SUPERVISOR.md` reads it; the
+transport layer takes the marks as an argument and keeps no SOCKS
+knowledge); retries within a
 test (`shekyl-dialer/src/pace.rs`, `attempts_per_test` and
 `retry_wait_nanos`: Tor three attempts, clearnet one, the address drawn
 throughout and no in-flight slot held while waiting, one `DialOutcome`
 per test, the last attempt's); a cooldown in place of the drop ("The
-fill" above; the `DialOutcome` table; slice 1 brief §5); the file rule
-(slice 1 brief §7). The values are Assumptions in
+fill" above; the `DialOutcome` table; slice 1 brief §5, where cooling
+seats are evictable like drawable ones); the file rule (slice 1 brief
+§7). The values are Assumptions in
 `DAEMON_RELAY_PRIVACY.md` §97. The failed-address memory is deleted
 into this (below).
 

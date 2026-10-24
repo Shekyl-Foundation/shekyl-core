@@ -506,16 +506,18 @@ impl Dialer {
         Ok(shared.lists.restore(addresses, rng))
     }
 
-    /// Write the address file now: every list address, by range only.
-    /// `Ok(false)` when no file was named.
+    /// Write the address file now: every list address, by range only,
+    /// less those under an active ban at this moment (the hub's bans, the
+    /// snapshot the draws read). `Ok(false)` when no file was named.
     pub fn store_addresses(&self) -> io::Result<bool> {
         let store = self.store.lock().expect("address store");
         let Some(store) = store.as_ref() else {
             return Ok(false);
         };
-        let addresses = self.shared().lists.persistable();
-        store.write(&addresses)?;
+        let mut bans = BanSnapshot::take(&self.hub);
         let now = self.hub.now();
+        let addresses = self.shared().lists.persistable(&mut bans, now);
+        store.write(&addresses)?;
         self.shared().last_store = Some(now);
         Ok(true)
     }
