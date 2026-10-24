@@ -919,3 +919,79 @@ fn every_dial_the_dialer_does_not_adopt_is_retired() {
         "a kept dial's row is live, so it is not retired"
     );
 }
+
+/// The clearnet gray list, as addresses.
+fn gray_of(dialer: &Dialer) -> Vec<NetworkAddress> {
+    dialer
+        .shared()
+        .lists
+        .snapshot()
+        .into_iter()
+        .filter(|(address, list)| {
+            *list == shekyl_peerlist::ListName::Gray
+                && shekyl_peerlist::Peerlist::connector_of(address) == Some(ConnectorId::Clearnet)
+        })
+        .map(|(address, _)| address)
+        .collect()
+}
+
+/// **Recovery runs under the target, not only at zero kept sessions**
+/// (the alpha.10 fleet report's problem 11; the 2026-10-14 recovery ruling
+/// as amended 2026-10-24). A connector with one kept session under a target
+/// of two, whose other configured address failed and was dropped, holds
+/// nothing drawable: its one white address is a session, gray is empty. The
+/// next wake re-admits the configured addresses, and the wake after draws
+/// the one that failed. Red with the old condition (`kept == 0`): the first
+/// wake dials nothing and re-admits nothing, so gray stays empty.
+#[test]
+fn a_connector_under_target_with_nothing_drawable_re_admits_its_configured_addresses() {
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let hub = hub_with_arming(&posts);
+    // The first dial is kept; the second is another network's handshake,
+    // which the dialer refuses and drops.
+    let dial = Arc::new(GapDial::answering(vec![
+        reply(NETWORK, vec![]),
+        reply([9; 16], vec![]),
+    ]));
+    hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);
+    let dialer = dialer_for(&hub);
+    let mut rng = SplitMix64::new(5);
+    dialer.set_target(ConnectorId::Clearnet, 2, &mut rng);
+    for n in [1, 2] {
+        dialer
+            .admit_operator(&peer(n), Tick::new(1), &mut rng)
+            .expect("admitted");
+    }
+
+    let kept = dialer
+        .dial(ConnectorId::Clearnet, &peer(1), DialAim::Keep, &mut rng)
+        .expect("the first dial is kept");
+    assert_eq!(dialer.kept_sessions(ConnectorId::Clearnet), 1);
+    assert_eq!(
+        dialer.dial(ConnectorId::Clearnet, &peer(2), DialAim::Keep, &mut rng),
+        None,
+        "the second dial is refused"
+    );
+    assert!(gray_of(&dialer).is_empty(), "the failed draw left gray");
+
+    // Under the target with nothing drawable: this wake re-admits and
+    // dials nothing.
+    assert!(dialer.choose(ConnectorId::Clearnet, &mut rng).is_none());
+    assert_eq!(
+        gray_of(&dialer),
+        vec![peer(2)],
+        "the dropped configured address is re-admitted; the kept one stays white"
+    );
+
+    // The next wake draws it.
+    let (drawn, _aim, _nonce) = dialer
+        .choose(ConnectorId::Clearnet, &mut rng)
+        .expect("the connector draws what it re-admitted");
+    assert_eq!(drawn, peer(2));
+    assert_eq!(
+        dialer.kept_sessions(ConnectorId::Clearnet),
+        1,
+        "the kept session is untouched"
+    );
+    let _ = kept;
+}

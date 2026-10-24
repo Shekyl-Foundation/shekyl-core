@@ -116,8 +116,8 @@ pub struct Shared {
     /// seeds, `--add-peer`), in the order given: what a stranded connector
     /// re-admits when no closed network is declared.
     configured: Vec<NetworkAddress>,
-    /// Which connectors are stranded: no kept session, nothing in flight,
-    /// and no drawable candidate at their last wake.
+    /// Which connectors are stranded: under their target, nothing in
+    /// flight, and no drawable candidate at their last wake.
     stranded: [bool; ConnectorId::COUNT],
     /// When the address file was last written or read; `None` until
     /// then, so the first due store is one interval after the open.
@@ -748,7 +748,7 @@ impl Dialer {
 
 /// What one settled wake decided.
 enum Wake {
-    /// No kept session, nothing in flight, and no drawable candidate.
+    /// Under the target, nothing in flight, and no drawable candidate.
     /// The caller re-admits the configured population and dials nothing.
     Recover,
     /// This wake dials nothing.
@@ -834,11 +834,16 @@ fn plan_wake<R: RelayRng + ?Sized>(
             gray_candidates: seats.gray_candidates,
         };
         let undrawn = idle_if_undrawn(&census);
-        // A connector with a target, no kept session, nothing in flight and
-        // no drawable candidate cannot get itself a peer. Recovery re-admits
-        // after this borrow ends; this wake dials nothing.
-        let stranded = target > 0
-            && kept == 0
+        // A connector under its target, with nothing in flight and no
+        // drawable candidate, cannot get itself another peer: every address
+        // it holds is a session or was dropped by a failed draw. Recovery
+        // re-admits after this borrow ends; this wake dials nothing. One
+        // kept session does not make the connector healthy (Rick's recovery
+        // ruling of 2026-10-14, as amended 2026-10-24: a healthy connector
+        // is one with something left to draw). Before the amendment the
+        // condition was no kept session, and a connector with one live peer
+        // under a target of twelve stayed there for good.
+        let stranded = kept < target
             && in_flight == 0
             && census.white_candidates == 0
             && census.gray_candidates == 0;
@@ -931,7 +936,7 @@ fn re_admit<R: RelayRng + ?Sized>(
     if !shared.stranded[index] {
         shared.stranded[index] = true;
         tracing::info!(
-            "{connector:?}: no kept session, nothing in flight and no drawable candidate; re-admitted {admitted} configured address(es) to gray"
+            "{connector:?}: under its target with nothing in flight and no drawable candidate; re-admitted {admitted} configured address(es) to gray"
         );
     }
 }
