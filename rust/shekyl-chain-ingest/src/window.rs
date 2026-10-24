@@ -89,7 +89,8 @@ where
 }
 
 /// Record a door-side store read that failed, and stop. The door still
-/// answers [`super::Refusal::NoRoom`]: the span was not accepted.
+/// answers [`super::Refusal::StoreUnreadable`]: the span was not accepted,
+/// and the caller does not wait it out.
 pub(crate) fn record_store_read<S>(shared: &Shared<S>, read: ViewRead<StoreError>)
 where
     S: Substrate,

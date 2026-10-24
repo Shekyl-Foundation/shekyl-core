@@ -925,12 +925,12 @@ where
                     .and_then(|max| usize::try_from(max).ok());
                 for (tag, _, _, bytes) in tags {
                     let outcome = match refusal {
-                        // An unreadable store stops the service on the same
-                        // read, so the arrival is held, not asked for again:
-                        // no room report follows, and nothing is re-offered.
-                        Refusal::NoRoom | Refusal::Throttled | Refusal::StoreUnreadable => {
-                            Outcome::NoRoom
-                        }
+                        // No room and a dry bucket wait for a seat. An
+                        // unreadable store does not: the service stops on
+                        // that read, and a later seat report must not
+                        // offer the body again.
+                        Refusal::NoRoom | Refusal::Throttled => Outcome::NoRoom,
+                        Refusal::StoreUnreadable => Outcome::StoreUnreadable,
                         Refusal::Oversize if max.is_some_and(|max| bytes > max) => {
                             Outcome::Oversize { invalidate: true }
                         }

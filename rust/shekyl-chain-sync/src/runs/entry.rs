@@ -105,6 +105,12 @@ where
                 self.seats = Some(0);
                 self.held.push(arrival);
             }
+            Outcome::StoreUnreadable => {
+                // The seat comes back. Nothing is held, and planning
+                // stays stopped, so this body is not asked for again.
+                self.seats = self.seats.map(|seats| seats.saturating_add(1));
+                self.unreadable = true;
+            }
             // The entry already holds this body, so the walk treats it as present.
             Outcome::Noted => {
                 self.accepted.insert(hash);

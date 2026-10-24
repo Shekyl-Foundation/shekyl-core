@@ -576,6 +576,52 @@ fn an_announced_oversize_body_closes_and_leaves_the_header() {
     });
 }
 
+/// The entry could not read the store. The body is dropped, the peer
+/// stays, and a later seat report does not ask for it or offer it.
+#[test]
+fn an_unreadable_store_does_not_ask_for_the_body_again() {
+    with_offer(|sync, view, tag, hash, _raw| {
+        let out = drive(
+            sync,
+            view,
+            Event::Entry {
+                tag,
+                outcome: Outcome::StoreUnreadable,
+            },
+        );
+        no_close(&out);
+        assert!(
+            request_for(&out).is_none(),
+            "an unreadable store asked again: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::Offer { .. })),
+            "an unreadable store offered: {out:?}"
+        );
+        assert!(
+            sync.held
+                .iter()
+                .all(|arrival| arrival.header.hash() != hash),
+            "the body was held for a seat"
+        );
+        assert!(
+            sync.outstanding.is_empty(),
+            "the entry still holds the body"
+        );
+        let out = drive(sync, view, Event::Room { seats: 4 });
+        assert!(
+            request_for(&out).is_none(),
+            "a later seat report asked again: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|command| matches!(command, Command::Offer { .. })),
+            "a later seat report offered: {out:?}"
+        );
+    });
+}
+
 #[test]
 fn cancelled_and_stopped_ask_for_the_block_again() {
     with_offer(|sync, view, tag, hash, raw| {

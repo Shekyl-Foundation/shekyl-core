@@ -354,6 +354,9 @@ pub enum Outcome {
     Again,
     /// The door had no room.
     NoRoom,
+    /// The entry could not read the store that bounds an arrival. The
+    /// body is not held and not asked for again. The peer did not fail.
+    StoreUnreadable,
     /// An announce hit the unsolicited share.
     Throttled,
     /// Already held, stored beside the incumbent, switched, or unfollowable.

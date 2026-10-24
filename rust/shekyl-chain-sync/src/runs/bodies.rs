@@ -103,6 +103,9 @@ where
     }
 
     pub(crate) fn plan_bodies(&mut self, now: Instant, out: &mut Vec<Command<K>>) {
+        if self.unreadable {
+            return;
+        }
         let Some(seats) = self.seats else {
             return;
         };
@@ -165,6 +168,9 @@ where
     }
 
     pub(in crate::runs) fn flush_offers(&mut self, out: &mut Vec<Command<K>>) {
+        if self.unreadable {
+            return;
+        }
         let Some(seats) = self.seats else {
             return;
         };

@@ -84,6 +84,9 @@ pub struct Sync<K, R> {
     /// Seats still free. `None` until the first `Room`. An offer spends
     /// one per arrival. `NoRoom` freezes this at zero until the next `Room`.
     pub(crate) seats: Option<u32>,
+    /// The entry could not read the store. Body planning stays stopped:
+    /// a later seat report does not ask for the body or offer it again.
+    pub(crate) unreadable: bool,
     /// Bound bodies waiting for a seat.
     pub(crate) held: Vec<BoundArrival<K>>,
     /// Offered arrivals waiting for the entry's reply, keyed by tag.
@@ -131,6 +134,7 @@ where
             next_id: 1,
             next_tag: 1,
             seats: None,
+            unreadable: false,
             held: Vec::new(),
             outstanding: Vec::new(),
             accepted: BTreeSet::new(),
