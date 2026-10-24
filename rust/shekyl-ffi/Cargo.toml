@@ -52,6 +52,9 @@ shekyl-chain-store = { path = "../shekyl-chain-store" }
 # `kameo` and `tokio` were already in this crate's graph. Not the RPC
 # fetcher or clap: the default features stay off.
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest", default-features = false, features = ["pipeline"] }
+# The chain-sync router is the seam's post sink (`seam_ffi.rs`):
+# pass-through until the cutover attaches the sync owner.
+shekyl-chain-sync-runtime = { path = "../shekyl-chain-sync-runtime" }
 # RandomX v2 light-cache PoW verifier. Consumed by `pow_randomx_ffi.rs`
 # (the `shekyl_pow_randomx_v2_*` exports) which is the consensus PoW
 # verification boundary per `RANDOMX_V2_PHASE3_PLAN.md` §6. Default

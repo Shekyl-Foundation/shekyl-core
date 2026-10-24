@@ -9,12 +9,12 @@
 //! body-response partition. The ids are not [`DefinedCommand`] arms.
 
 use shekyl_levin::{
-    body_budget_bytes, plan_bodies, BodiesFormFault, DefinedCommand, PayloadError, PortableMap,
-    RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders, BODIES_RESPONSE_BYTES,
-    CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES, CAP_RESPONSE_HEADERS, HASH_SIZE,
-    HEADERS_RESPONSE_BYTES, MIN_TX_SECTION_BYTES, NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_HEADERS,
-    NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_HEADERS, RESPONSE_BODIES_MAX_OBJECTS,
-    RESPONSE_BODIES_MAX_STRINGS, RESPONSE_HEADERS_MAX_STRINGS,
+    body_budget_bytes, plan_bodies, BodiesFormFault, BodyPlanner, DefinedCommand, PayloadError,
+    PortableMap, RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders,
+    BODIES_RESPONSE_BYTES, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
+    CAP_RESPONSE_HEADERS, HASH_SIZE, HEADERS_RESPONSE_BYTES, MIN_TX_SECTION_BYTES,
+    NOTIFY_REQUEST_BODIES, NOTIFY_REQUEST_HEADERS, NOTIFY_RESPONSE_BODIES, NOTIFY_RESPONSE_HEADERS,
+    RESPONSE_BODIES_MAX_OBJECTS, RESPONSE_BODIES_MAX_STRINGS, RESPONSE_HEADERS_MAX_STRINGS,
 };
 use shekyl_portable_storage::{store_to_binary, Array, Section, Value};
 use shekyl_types::{ArchivalLength, PqcAuthHash, PrunableHash};
@@ -493,6 +493,26 @@ fn the_planner_sends_the_first_held_block_then_fits_the_budget() {
     assert!(plan.deferred.is_empty());
 }
 
+/// The incremental planner: a held hash deferred by the responder without
+/// charging it defers every later held hash, however small, and a missed
+/// hash after it is still missed. `deferring` says when bodies stop being
+/// needed.
+#[test]
+fn a_planner_that_defers_once_defers_every_later_held_hash() {
+    let have = ids(4);
+    let mut planner = BodyPlanner::new();
+    assert!(planner.charge(have[0], 10));
+    assert!(!planner.deferring());
+    planner.defer(have[1]);
+    assert!(planner.deferring());
+    assert!(!planner.charge(have[2], 1), "a small body after a deferral");
+    planner.miss(have[3]);
+    let plan = planner.finish();
+    assert_eq!(plan.send, vec![have[0]]);
+    assert_eq!(plan.deferred, vec![have[1], have[2]]);
+    assert_eq!(plan.missed, vec![have[3]]);
+}
+
 fn sized_body(block_len: usize) -> BlockBody {
     BlockBody {
         block: vec![0; block_len],
@@ -875,4 +895,31 @@ fn a_budget_of_minimum_skeletons_decodes() {
     };
     let bytes = msg.store().expect("an honest maximum stores");
     assert_eq!(ResponseBodies::decode(&bytes).expect("and decodes"), msg);
+}
+
+/// The router's admission of 2011–2014 is its own set, beside the C++
+/// ingress's: every id round-trips, each cap is the one its decoder uses,
+/// and no other id is a chain-sync command.
+#[test]
+fn the_router_admits_exactly_the_four_sync_commands_with_their_caps() {
+    use shekyl_levin::{
+        SyncCommand, CAP_REQUEST_BODIES, CAP_REQUEST_HEADERS, CAP_RESPONSE_BODIES,
+        CAP_RESPONSE_HEADERS,
+    };
+    for command in SyncCommand::ALL {
+        assert_eq!(SyncCommand::from_wire(command.wire_id()), Some(command));
+        assert_eq!(DefinedCommand::from_wire(command.wire_id()), None);
+    }
+    assert_eq!(
+        SyncCommand::ALL.map(SyncCommand::payload_cap),
+        [
+            CAP_REQUEST_HEADERS,
+            CAP_RESPONSE_HEADERS,
+            CAP_REQUEST_BODIES,
+            CAP_RESPONSE_BODIES
+        ]
+    );
+    for id in [0, 1001, 1002, 2002, 2003, 2004, 2008, 2010, 2015] {
+        assert_eq!(SyncCommand::from_wire(id), None, "{id}");
+    }
 }

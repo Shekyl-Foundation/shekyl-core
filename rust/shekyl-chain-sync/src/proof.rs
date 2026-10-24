@@ -232,6 +232,7 @@ where
         PeerClaim {
             count: ChainCount::from_raw(2),
             work: CumulativeDifficulty::from_raw(u128::MAX),
+            top: BlockHash::NULL,
         },
         main,
         Instant::now(),
@@ -410,6 +411,7 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
             PeerClaim {
                 count: ChainCount::from_raw(1),
                 work: CumulativeDifficulty::from_raw(1),
+                top: BlockHash::NULL,
             },
             &view,
             Instant::now(),
@@ -486,6 +488,16 @@ fn a_reply_is_the_arrival_it_was_tagged_with() {
         let Some(first_tag) = first_tag else {
             panic!("the first body was not offered");
         };
+        // The first connects before the next span is offered: the entry
+        // works each offer apart.
+        drive(
+            &mut sync,
+            &view,
+            Event::Entry {
+                tag: first_tag,
+                outcome: Outcome::Connected { relay: false },
+            },
+        );
         if !out
             .iter()
             .any(|command| matches!(command, Command::RequestBodies { .. }))
