@@ -39,7 +39,7 @@ retired in alpha.5. BINSEC decodes x86_64, 32-bit RISC-V and Thumb, so:
 
 | Shipped target | Static (BINSEC) | What stands in | Dynamic |
 | --- | --- | --- | --- |
-| x86_64 | **verdict**, both toolchains | — | — |
+| x86_64 | **verdict**, both toolchains | — | *dynamic* on two hosts: `CA-2` (operand-dependent timing in `HelioseleneField`, mechanism open) |
 | aarch64 | no decoder | `thumbv7em` (conditional execution, like `csel`): ISA proxy only, not the Cortex-A LLVM backend | *dynamic* row on the Pi floor device 2026-10-24 (`results/2026-10-24/dynamic-aarch64-floor-device.txt`): every field row flat at 20k and 200k, controls detected; bounds, does not clear, while the method check is open |
 | riscv64 (switched off 2026-10-24, #1184) | no decoder | `riscv32imac`: same ISA family, no conditional move; the `pow` select became a branch there under **both** toolchains, so riscv64 was the shipped target most likely to inherit it | no board; **not assessed**; no longer shipped until a user asks and it can be measured |
 
@@ -181,29 +181,31 @@ A dynamic row is evidence of another kind: it sees this device, this
 binary and this run, and can only fail to observe a difference. It never
 turns a static gap into a pass; it is recorded as *dynamic*.
 
-**Method check on x86_64: OPEN.** (`results/2026-10-24/dynamic-x86_64-method-check.txt`
-and `dynamic-x86_64-diagnostics.txt`, a development workstation, Tiger Lake,
-the shipped 1.94.0 / LLVM 21.1.8.) Null controls flat, both positive controls
-far over the threshold, every `Field25519` row flat, the `Residue::pow` branch
-BINSEC found under LLVM 21 invisible to timing. But `HelioseleneField` mul,
-square and sqrt show a fixed-against-fresh difference that BINSEC's model
-(branches, addresses, division) does not predict, on the same toolchain: it
-grows with the sample as a real difference does (mul −7 → −19 → −45, square
-−11 → −32 → −66 for 20k → 200k → 1M), it is proportional (0.9–2.2 % of the
-operation, present on the 220 µs `sqrt` as on the 0.6 µs `square`, which
-rules out a cache miss on the operand load), and it is absent from all nine
-`Field25519` rows under the identical protocol, which rules out a property of
-the measurement as such. The equal-familiarity `[fixed-pair]` companion is
-flat except one `square` run at 1M (+8.4 against −3.2 in its sibling), which
-is the ambiguity, not a footnote: a genuine operand-dependent path whose
-fixed set happens to be timing-typical would look exactly like this. Two
-harness lessons are settled and built in (generate every input before the
-timing loop; never repeat a value inside a timed batch). What is not settled
-is whether the remaining difference is the harness (the two classes' memory
-construction) or operand-dependent timing of the vendored crate on this CPU
-that BINSEC cannot see. The discriminating tests are in the record's next
-revision; until one of them settles it, no dynamic row is a verdict and the
-`dynamic/` crate is not offered upstream.
+**Method check on x86_64: PASSED — and `CA-2` opened.** The method is
+validated in the only way that counts: it found something the static tool
+cannot see, on code the static tool cleared, reproducibly. Records
+`results/2026-10-24/dynamic-x86_64-method-check.txt` (a Tiger Lake
+workstation, the shipped 1.94.0 / LLVM 21.1.8) and
+`dynamic-x86_64-fleet-measurement-host.txt` (an idle fleet VM on different
+silicon; partial, the default suite follows). Null controls flat, both
+positive controls far over the threshold, every `Field25519` row flat, the
+`Residue::pow` branch BINSEC found under LLVM 21 invisible to timing, and
+`HelioseleneField` mul, square and sqrt showing a fixed-against-fresh
+difference that grows with the sample (square −7 → −35 → −106 for 20k → 200k
+→ 1M on the fleet host), appears with a single constant operand too, and
+whose equal-familiarity `[fixed-pair]` companion itself crossed at 200k:
+two different fixed operand sets time differently. That is operand
+dependence, outside BINSEC's model, and it is
+[`CA-2`](../../design/CRYPTO_AUDIT.md) §2 (mechanism open: power → frequency,
+or data-dependent latency in the SLP-vectorised limb loops). The floor
+device shows nothing on any row.
+
+The `[fixed-pair]` companion stays: the crossing is what made this a
+finding rather than a label. Two harness lessons are settled and built in
+(generate every input before the timing loop; never repeat a value inside a
+timed batch; a borderline `t` is settled by growing the sample). Until
+CA-2's mechanism is named, no dynamic row is a verdict about the code's
+security and the `dynamic/` crate is not offered upstream.
 
 ## Record table 2026-10-24
 

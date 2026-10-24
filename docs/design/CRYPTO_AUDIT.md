@@ -3,7 +3,9 @@
 **Status:** OPEN — register opened 2026-10-24 (family `CA-`, registered at
 birth in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2). `CA-1` is
 ignored in `cargo audit` by ruling (Rick, 2026-10-24); its long-term fix is
-not yet designed.
+not yet designed. `CA-2` opened 2026-10-24 from CA-1's dynamic measurement:
+operand-dependent timing in the vendored `HelioseleneField` on x86_64,
+mechanism open (§2).
 
 One row per advisory or audit finding that touches a cryptographic
 dependency or primitive and cannot be closed by a routine lockfile bump. A
@@ -16,6 +18,7 @@ bump's commit is its record.
 | Id | Finding | Status |
 | --- | --- | --- |
 | `CA-1` | `crypto-bigint` 0.5.5, RUSTSEC-2026-0387 (timing variability) | **IGNORED BY RULING 2026-10-24** — fix undesigned (§1) |
+| `CA-2` | Operand-dependent timing in the vendored `HelioseleneField` on x86_64, outside BINSEC's model | **OPEN 2026-10-24** — mechanism open (§2) |
 
 ## 1. `CA-1` — crypto-bigint 0.5.5, RUSTSEC-2026-0387
 
@@ -82,17 +85,15 @@ calibration and the full verdict tables are
   64-bit ARM or RISC-V decoder; `thumbv7em` and `riscv32imac` stand in,
   for the ISA only). aarch64 gets a *dynamic* row (dudect-style, the
   harness's `dynamic/` crate on the Pi floor device; method-checked on
-  x86_64 against the static verdicts: **method check OPEN.** `Field25519` is
-  flat on every row and the `Residue::pow` branch is invisible to timing, but
-  `HelioseleneField` mul, square and sqrt show a fixed-against-fresh
-  difference BINSEC's model does not predict, proportional to the operation
-  and growing with the sample; whether it is the harness or operand-dependent
-  timing of the vendored crate on that CPU is not yet settled, so no dynamic
-  row is a verdict and the crate goes nowhere upstream until it is). The
-  floor-device run (Rick's go 2026-10-24; Cortex-A72, idle, the daemon
-  inactive): every field row flat at 20k and at 200k samples, both positive
-  controls detected; the workstation's `HelioseleneField` difference does
-  not appear on aarch64. Recorded as *dynamic*, under the open method check.
+  x86_64 against the static verdicts: **method check passed** — it found,
+  reproducibly on two x86_64 hosts, operand-dependent timing in
+  `HelioseleneField` that the static tool cannot see, on code the static
+  tool cleared; `Field25519` is flat on every row and the `Residue::pow`
+  branch is invisible to timing. That finding is **`CA-2`** (§2), not part of
+  CA-1: the 0.7 bump does not touch it. The floor-device run (Rick's go
+  2026-10-24; Cortex-A72, idle, the daemon inactive): every field row flat
+  at 20k and at 200k samples, both positive controls detected; the x86_64
+  difference does not appear on aarch64.
   riscv64 is **not assessed**: no board, and the `pow` select became a
   branch on riscv32 under both toolchains, so it was the shipped target most
   likely to inherit that rewrite. **Ruled 2026-10-24 (Rick): riscv64 is
@@ -167,3 +168,68 @@ row in [`FOLLOWUPS.md`](../FOLLOWUPS.md).
    graph reaches with a secret (the `FieldElement` entrypoints of
    `drivers/dfg050.rs`, or a new secret-exponent path into `Residue::pow`) —
    the pin becomes blocking for the next release.
+
+## 2. `CA-2` — operand-dependent timing in the vendored `HelioseleneField` on x86_64
+
+**Finding (2026-10-24).** CA-1's dynamic test (dudect's method, the
+harness's `dynamic/` crate) shows that `HelioseleneField` mul, square and
+sqrt take measurably different time for different operands on x86_64, while
+BINSEC rules the same code free of secret-dependent branches, addresses and
+division under the same toolchain. The evidence, all in
+[`docs/formal/checkct/results/2026-10-24/`](../formal/checkct/results/2026-10-24/):
+
+- two x86_64 hosts (`dynamic-x86_64-method-check.txt`, a Tiger Lake
+  workstation; `dynamic-x86_64-fleet-measurement-host.txt`, an idle fleet
+  VM on different silicon): the fixed-against-fresh difference grows with
+  the sample as a real difference does (square −7 → −35 → −106 for 20k →
+  200k → 1M on the fleet host), and a single constant operand against fresh
+  ones shows it too;
+- the null controls (both classes fresh) are flat, and every `Field25519`
+  row is flat under the identical protocol, so it is not the measurement;
+- at 200k samples the equal-familiarity `[fixed-pair]` row for square
+  crossed on the fleet host (−14): two different fixed operand sets time
+  differently, which is the signature of operand dependence rather than of
+  any harness asymmetry;
+- the floor device (`dynamic-aarch64-floor-device.txt`, Cortex-A72) shows
+  nothing on any row, so it is x86_64-specific as far as measured.
+
+**Mechanism: open.** Two remain once BINSEC's model is exhausted, with
+different owners and fixes: (a) power → frequency (the Hertzbleed class:
+operand Hamming weight or toggle count changes core power, the P-state
+controller turns it into frequency, the wall-clock timer sees time; a
+platform property that would follow the field onto crypto-bigint 0.7
+unchanged; consistent with the aarch64 null, a fixed-governor board); (b)
+instruction-level data-dependent latency in the compiled code (rare for
+integer code on Tiger Lake; BINSEC already showed LLVM SLP-vectorises the
+four-limb loops of this stack, the `movmskps` gap, and the Veridise
+`red512` loops are what SLP picks up while Montgomery's dependent chain is
+not). Discriminators, in order, in the follow-up PR: the disassembly diff of
+`HelioseleneField::square` against `Field25519::square` from the same
+binary; a `-C no-vectorize-slp` rebuild of the dynamic crate; the run with
+`intel_pstate/no_turbo = 1` and the `performance` governor on the
+workstation (root), and APERF/MPERF against wall time if the msr module
+is available. The fleet host is a VM and cannot carry the frequency
+discriminator; the operand-property sweep (sparse, small, dense operands)
+says which property moves the time but not why.
+
+**Threat frame.** `HelioseleneField` is the Helios/Selene base field, the
+curve-tree layers of the FCMP++ prover where it touches the blinded
+membership path. A ~1–2 % per-operation dependence on an operand property
+leaks that property (a few bits per operation) to a co-resident observer
+of the proving machine, accumulating over the thousands of operations in
+one proof; harm if exploitable is deanonymisation of that spend, the CA-1
+envelope. Not remote.
+
+**Disposition.** Open; no waiver is involved (nothing in `cargo audit`
+covers it). Owner: this row. The monero-oxide notice waits for the
+mechanism, or at least for the no-turbo result and the disassembly diff:
+"two fixed operand sets time differently on two x86_64 hosts" is not
+actionable upstream; "the SLP-vectorised limb loops in `red512` show
+operand-dependent time with turbo on / off" is. The RustCrypto and serai
+notices are independent of CA-2.
+
+**Reopen / close.** Closes when the mechanism is named and either (a) it is
+the platform, recorded with the mitigation the platform offers (fixed
+frequency on the proving machine) and a note in the wallet's threat model,
+or (b) it is the code, fixed in the vendored crate or upstream and
+re-measured flat with this harness on both x86_64 hosts.
