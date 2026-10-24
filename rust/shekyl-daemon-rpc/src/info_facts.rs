@@ -162,6 +162,23 @@ pub struct PoolCounts {
     pub unbroadcast: Option<u64>,
 }
 
+/// A pool read's answer, or the state in which the pool has none.
+///
+/// Only the Rust node retires its pool: when the pool's file faults, the
+/// node stops reading the pool until it restarts, while it goes on
+/// following the chain. A read that would need the pool answers
+/// [`PoolState::Retired`] where a reply can carry "no answer" for the pool
+/// alone (`get_info`'s counts, `get_transactions`' pool lookups), and
+/// faults where it cannot (`is_key_image_spent`: an unknown pool spend
+/// must not read as unspent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PoolState<T> {
+    /// The pool answered.
+    Live(T),
+    /// The node has retired its pool.
+    Retired,
+}
+
 /// The reads behind `get_info`.
 pub trait InfoFacts: Send + Sync {
     /// The chain at its tip. One chain state: see the module docs.
@@ -169,7 +186,8 @@ pub trait InfoFacts: Send + Sync {
     /// The pool's population. With [`PoolScope::WithUnbroadcast`] both
     /// counts are of one pool state, read under one hold of the pool's lock;
     /// with [`PoolScope::Broadcast`] the second is not counted at all.
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault>;
+    /// [`PoolState::Retired`] when the node has retired its pool.
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault>;
     /// The chain store's size on disk, in bytes.
     ///
     /// # Errors
@@ -330,15 +348,16 @@ impl InfoFacts for FfiInfoFacts {
         })
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         let (broadcast, unbroadcast) = self
             .core
             .info_pool_counts(scope == PoolScope::WithUnbroadcast)
             .map_err(FactsFault::from_code)?;
-        Ok(PoolCounts {
+        // The C++ pool is never retired.
+        Ok(PoolState::Live(PoolCounts {
             broadcast,
             unbroadcast,
-        })
+        }))
     }
 
     fn store_size(&self) -> Result<u64, FactsFault> {

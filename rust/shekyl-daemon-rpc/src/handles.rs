@@ -27,7 +27,8 @@ use crate::chain_facts::{
     FactsFault, FeeEstimate,
 };
 use crate::info_facts::{
-    InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
+    InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, PoolState,
+    SessionCounts,
 };
 use crate::mining_facts::{LocalOutcome, MiningState, Pending, PopOutcome, PostedTemplate};
 use crate::read_facts::{
@@ -374,7 +375,7 @@ impl InfoFacts for ChainReadAbsent {
         Err(FactsFault::NotReady)
     }
 
-    fn pool_counts(&self, _scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, _scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         Err(FactsFault::NotReady)
     }
 

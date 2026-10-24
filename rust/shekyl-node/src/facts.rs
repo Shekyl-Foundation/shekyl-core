@@ -27,7 +27,7 @@ use shekyl_daemon_rpc::handles::{
 };
 use shekyl_daemon_rpc::info_facts::{
     InfoChainFacts, InfoFacts, InfoPeersFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope,
-    SessionCounts,
+    PoolState, SessionCounts,
 };
 use shekyl_daemon_rpc::mining_facts::{LocalOutcome, Pending, PopOutcome};
 use shekyl_daemon_rpc::read_facts::{
@@ -59,11 +59,21 @@ pub(crate) struct Surroundings {
 
 impl Surroundings {
     /// The pool, while the node holds one and its file has not faulted.
+    ///
+    /// A retired pool is `NotReady` here, so every read that goes through
+    /// this fails closed. The reads whose reply can say "the pool has no
+    /// answer" ([`NodeFacts::pool_counts`], [`NodeFacts::pool_bodies`]) ask
+    /// [`Self::retired`] first and answer [`PoolState::Retired`].
     fn pool(&self) -> Result<Arc<Mutex<Pool>>, FactsFault> {
-        if self.health.retired() {
+        if self.retired() {
             return Err(FactsFault::NotReady);
         }
         lock(&self.pool).clone().ok_or(FactsFault::NotReady)
+    }
+
+    /// Whether the node has retired its pool. Final until restart.
+    fn retired(&self) -> bool {
+        self.health.retired()
     }
 }
 
@@ -112,7 +122,10 @@ impl NodeFacts for Surroundings {
         &self,
         ids: &[TxHash],
         scope: PoolScope,
-    ) -> Result<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>, FactsFault> {
+    ) -> Result<PoolState<Vec<Option<shekyl_daemon_rpc::store_facts::PoolBody>>>, FactsFault> {
+        if self.retired() {
+            return Ok(PoolState::Retired);
+        }
         let pool = self.pool()?;
         let pool = lock(&pool);
         let held: std::collections::BTreeMap<TxHash, shekyl_daemon_rpc::store_facts::PoolBody> =
@@ -127,10 +140,15 @@ impl NodeFacts for Surroundings {
                     .map(|entry| (entry.id, body_of(&entry)))
                     .collect(),
             };
-        Ok(ids.iter().map(|id| held.get(id).cloned()).collect())
+        Ok(PoolState::Live(
+            ids.iter().map(|id| held.get(id).cloned()).collect(),
+        ))
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
+        if self.retired() {
+            return Ok(PoolState::Retired);
+        }
         let pool = self.pool()?;
         let pool = lock(&pool);
         let broadcast = u64::try_from(pool.listing().count()).unwrap_or(u64::MAX);
@@ -141,10 +159,10 @@ impl NodeFacts for Surroundings {
                 Some(held.saturating_sub(broadcast))
             }
         };
-        Ok(PoolCounts {
+        Ok(PoolState::Live(PoolCounts {
             broadcast,
             unbroadcast,
-        })
+        }))
     }
 
     /// The bound hub's sockets and the dialer's lists. An offline node
@@ -276,7 +294,7 @@ impl InfoFacts for ChainBridge {
         self.with(InfoFacts::chain)
     }
 
-    fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault> {
+    fn pool_counts(&self, scope: PoolScope) -> Result<PoolState<PoolCounts>, FactsFault> {
         self.with(|facts| facts.pool_counts(scope))
     }
 
