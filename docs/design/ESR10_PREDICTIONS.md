@@ -9,11 +9,7 @@ Design-owner predictions for ESR-10 (`ECONOMICS_SIM_PRODUCTION_REBASE.md`, §3 r
 ## 0. What has to be built before anything can be run
 
 1. **A pool that holds more than one fee class.** `BlockSpace` (`block_space.rs`) models identical transactions: one weight, one fee, oldest first, and `admit_up_to` stops at the first refusal. A rung mix needs one waiting queue per rung, offered **by fee rung first, then by age**, which is the daemon's own order (`fill.rs:20`, "by fee, then by receive time"). Walk the classes from Priority down. A refusal inside a class ends that class and every class below it, because the weight is the same and the fee is lower. A tie-break on age inside a class keeps the livetime-expiry model as it is. This is the instrument's change, not production's: `Fill` already takes any order.
-2. **The re-derived arm's zone needs a single source of truth for the zone.** The zone has two readers on `dev`:
-   - `shekyl_economics::penalty_free_weight` reads `params.full_reward_zone` (`emission.rs:100`);
-   - `shekyl_chain_rules::medians_from` floors at the constant `FULL_REWARD_ZONE` (`block_weight.rs:291`).
-
-   They agree only because the two are generated from the same config value. That's a rule-05 defect on the consensus surface whether or not ESR-10 exists: a parameter set that moves one moves half the rule. **Recommendation (Rick's ruling, since it touches `shekyl-chain-rules`):** `medians_from` takes the zone from `EconomicParams`, in its own commit. At shipped parameters the behaviour is identical, which a test pins. The re-derived arm is then expressible through parameters alone, with no declared divergence. Rejected alternative: a sim-local median floor, which would restate a consensus rule in the sim (the thing ESR-8 just finished removing).
+2. **The zone has one reader — landed.** `shekyl_chain_rules::medians_from` floors at `params.full_reward_zone` (`55d5266a7`, #1152, 2026-10-22), so a parameter set that moves the zone moves the whole rule. The re-derived arm needs only `w_ref` as a parameter, which ESR-16 provides.
 3. **The re-derived constants, derived and not typed.**
    - `w_ref′` is the ordinary 1-in/2-out weight from `shekyl-tx-weight` at **genesis tree depth**, because the constant is fixed at genesis.
    - `zone′ = 100 · w_ref′` keeps the inherited ratio of 100 reference transactions to the zone. That ratio is itself inherited and is declared as such; the zone's capacity leg remains its owner's ruling (`FOLLOWUPS.md`).
@@ -42,7 +38,7 @@ Operands, from code (`config/economics_params.json`, `fee_correction`, `calc_bur
 - `σ = 0.15·0.9^t`, starting at block 1.
 - `M_r = clamp(V/50, 0.8, 1.3)`.
 - `b = 0.5·√(V/50)·s`, clamped at 0.9, where `s` is net supply / curve total.
-- `ρ = (1−σ)/(1−b)`; ESR-9's growth-gate table (#1104) measures `ρ = 0.879` and `θ = 1.188` in year 1 on the baseline, and the crossing in year 19 in every constrained scenario except boom-bust (year 17), each growing in its crossing year. That is M1/M2's premise, measured.
+- `ρ = (1−σ)/(1−b)`; ESR-9's growth-gate table (#1104) measures `ρ = 0.879` and `θ = 1.188` in year 1 on the baseline, and the crossing in year 19 in every constrained scenario except boom-bust (year 15), each growing in its crossing year. That is M1/M2's premise, measured.
 - Fee level only: on the inherited arm while 22 of 50 are carried, `M_r = 0.8` and `C₀ ≈ 0.70`; on the re-derived arm, where 50 of 50 are carried, `M_r = 1.0` and `C₀ ≈ 0.87`.
 
 Inherited `θ = w/(4·w_ref)`: 1.188 in year 1, 1.220 from year 2, 1.274 from year 23 (it steps with tree depth). On the re-derived arm `w/w_ref′ = 1`, which puts `θ′ = 0.25`.
