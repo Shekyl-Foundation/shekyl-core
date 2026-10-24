@@ -16,6 +16,7 @@ use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 use shekyl_wire::{Block, BlockBody, PowBlob, TxBody};
 
 use super::{retry_of, Judged, WallClock};
+use crate::branch::Pending;
 use crate::model::{
     BoundArrival, CachePlan, CloseCause, Command, HashClass, Job, Outcome, ProveItem, Proved, Sync,
 };
@@ -36,14 +37,9 @@ where
     ) -> Result<(), H::Fault> {
         // The tag is the arrival. An unknown tag names nothing we offered,
         // so it closes no session.
-        let Some(pos) = self
-            .outstanding
-            .iter()
-            .position(|arrival| arrival.tag == tag)
-        else {
+        let Some(arrival) = self.outstanding.answered(tag) else {
             return Ok(());
         };
-        let arrival = self.outstanding.remove(pos);
         let session = arrival.session;
         let hash = arrival.header.hash();
         match outcome {
@@ -105,7 +101,7 @@ where
                 // The allowance that authorized the offer was already spent.
                 // Freeze it until the entry reports a new one.
                 self.seats = Some(0);
-                self.held.push(arrival);
+                self.held.insert(arrival);
             }
             // The entry already holds this body, so the walk treats it as present.
             Outcome::Noted => {
@@ -160,7 +156,7 @@ where
             .map(|placed| placed.height)
             .or_else(|| self.local.and_then(|local| local.height))
             .unwrap_or(BlockHeight::ZERO);
-        let view = self.view_for(main, parent, parent_height, &[]);
+        let view = self.view_for(main, parent, parent_height, Pending::NONE);
         let connecting = view
             .tip()?
             .map(|tip| tip.height + BlockCount::ONE)
@@ -365,7 +361,7 @@ where
         }
         let tag = self.next_tag;
         self.next_tag = self.next_tag.saturating_add(1);
-        self.held.push(BoundArrival {
+        self.held.insert(BoundArrival {
             tag,
             session,
             header: judged,
@@ -397,7 +393,7 @@ where
                     .and_then(|local| local.height)
             })
             .unwrap_or(BlockHeight::ZERO);
-        let view = self.view_for(main, parent, parent_height, &[]);
+        let view = self.view_for(main, parent, parent_height, Pending::NONE);
         match shekyl_chain_rules::judge_header(formed, &view, &formed.rule_set(), &self.trust) {
             Ok(Ok(judged)) => Judged::Ok(Box::new(judged)),
             Ok(Err(refused)) => Judged::Refused(refused.rule),

@@ -26,10 +26,13 @@ mod long_run;
 #[cfg(test)]
 mod proof;
 #[cfg(test)]
+mod scaling_tests;
+#[cfg(test)]
 mod scenarios;
 #[cfg(test)]
 mod select_tests;
 
+mod arrivals;
 mod branch;
 mod claim;
 mod locator;

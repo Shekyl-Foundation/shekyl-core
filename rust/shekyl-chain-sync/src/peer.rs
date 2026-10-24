@@ -125,6 +125,18 @@ pub(crate) struct Chain {
     pub attempt: FormAttempt,
 }
 
+impl Chain {
+    /// The index of the header at `height`, in O(1): `checked` is one
+    /// chain, contiguous by height, so a height is its offset from the
+    /// first header. `None` when the run does not hold that height.
+    pub(crate) fn index_at(&self, height: BlockHeight) -> Option<usize> {
+        crate::branch::count_pending_read();
+        let first = self.checked.first()?.height.to_raw();
+        let index = usize::try_from(height.to_raw().checked_sub(first)?).ok()?;
+        (self.checked.get(index)?.height == height).then_some(index)
+    }
+}
+
 /// The run's mode. The variants that hash carry the proof job. The
 /// variants that withhold headers carry those headers.
 pub(crate) enum Mode {
@@ -362,11 +374,7 @@ pub(crate) fn cache_for(run: &Run, index: usize) -> Option<CachePlan> {
         return Some(CachePlan::Main(checked.seed));
     }
     let seed_at = seed_height(checked.height)?;
-    let seed_index = run
-        .chain
-        .checked
-        .iter()
-        .position(|c| c.height == seed_at || c.hash == checked.seed)?;
+    let seed_index = run.chain.index_at(seed_at)?;
     if seed_index < run.chain.proven && index <= run.chain.proven {
         Some(CachePlan::Branch(checked.seed))
     } else {

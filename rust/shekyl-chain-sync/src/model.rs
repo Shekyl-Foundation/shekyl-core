@@ -461,9 +461,9 @@ pub struct Sync<K, R> {
     /// one per arrival. `NoRoom` freezes this at zero until the next `Room`.
     pub(crate) seats: Option<u32>,
     /// Bound bodies waiting for a seat.
-    pub(crate) held: Vec<BoundArrival<K>>,
+    pub(crate) held: crate::arrivals::Held<K>,
     /// Offered arrivals waiting for the entry's reply, keyed by tag.
-    pub(crate) outstanding: Vec<BoundArrival<K>>,
+    pub(crate) outstanding: crate::arrivals::Offered<K>,
     /// Bodies the entry accepted. The walk treats them as present.
     pub(crate) accepted: BTreeSet<BlockHash>,
     /// Who served a body, from the offer until the header leaves `T` or
@@ -507,8 +507,8 @@ where
             next_id: 1,
             next_tag: 1,
             seats: None,
-            held: Vec::new(),
-            outstanding: Vec::new(),
+            held: crate::arrivals::Held::new(),
+            outstanding: crate::arrivals::Offered::new(),
             accepted: BTreeSet::new(),
             served: BTreeMap::new(),
             dispute: None,
@@ -684,6 +684,15 @@ where
     #[must_use]
     pub(crate) fn evidence_session(&self) -> Option<K> {
         self.evidence_holder()
+    }
+
+    /// The record `T` holds for `hash`.
+    #[cfg(test)]
+    pub(crate) fn header_record(
+        &self,
+        hash: BlockHash,
+    ) -> Option<shekyl_chain_rules::HeaderRecord> {
+        self.tree.record(hash)
     }
 
     /// The run's cheap-checked headers, in order. A past-cap run keeps
