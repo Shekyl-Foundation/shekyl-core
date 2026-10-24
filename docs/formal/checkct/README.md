@@ -278,3 +278,4 @@ regenerate it after any run.
 | `dynamic-x86_64-fleet-measurement-host-slp-ab.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-fleet-measurement-host.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-method-check.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-workstation-pinned-clock.txt` | dynamic | see file | — | — | — | not a checkct record |

@@ -255,8 +255,23 @@ representation), with a code-side mitigation available in principle
 (Montgomery or blinded representation) besides the platform one (fixed
 frequency).
 
-**Mechanism: open.** Two remain once BINSEC's model is exhausted, with
-different owners and fixes: (a) power → frequency (the Hertzbleed class:
+**Pinned clock (workstation, `dynamic-x86_64-workstation-pinned-clock.txt`;
+Rick ran the root steps 2026-10-24).** With `intel_pstate/no_turbo = 1` and
+the `performance` governor, the core held at base (2.59 GHz) throughout:
+the `HelioseleneField` constant and structured rows cross as before or
+harder (dense square −113, constant sqrt −266 at 1M), every half, every
+null and every `Field25519` row is flat. **The P-state controller is not
+the mechanism**: the Hertzbleed class is eliminated. What remains is
+activity-dependent timing below the P-state level on these x86_64 parts
+(adaptive clocking, or an operand-dependent latency the ISA does not
+promise against), absent on the Cortex-A72, and reached only through a
+canonical representation. The MSR driver refuses unprivileged APERF/MPERF
+reads, so cycles against wall time, which would name it further, needs a
+root-run sampler; it is not required to act.
+
+**Mechanism: narrowed.** Two remained once BINSEC's model was exhausted, with
+different owners and fixes; the pinned-clock run has since eliminated (a):
+(a) power → frequency (the Hertzbleed class:
 operand Hamming weight or toggle count changes core power, the P-state
 controller turns it into frequency, the wall-clock timer sees time; a
 platform property that would follow the field onto crypto-bigint 0.7
