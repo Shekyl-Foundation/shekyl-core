@@ -29,6 +29,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 TOR_BUNDLE = REPO / "scripts" / "release" / "tor_bundle.py"
+TOR_MACHO = REPO / "scripts" / "release" / "tor_macho.py"
+TOR_PE = REPO / "scripts" / "release" / "tor_pe.py"
 TARGETS_GATE = REPO / "scripts" / "ci" / "check_tor_pin_targets.py"
 
 HOST = "x86_64-linux-gnu"
@@ -66,6 +68,7 @@ def base_pins(tarball_digest):
         "bundle_url": "https://invalid.example/{bundle_version}/{bundle_target}.tar.gz",
         "source_url": "https://invalid.example/tor-{tor_version}.tar.gz",
         "source_signature_url": "https://invalid.example/tor-{tor_version}.tar.gz.asc",
+        "signed_url": "https://invalid.example/signed-{bundle_version}/{bundle_target}-{name}",
         "targets": [
             {
                 "os": "linux",
@@ -258,18 +261,19 @@ class Bench:
 
     def macos(self):
         """Make the pinned row a macOS bundle: Tor's unsigned `tor` and
-        `libevent` in the tarball, their signed copies in `self.signed`, and a
-        row pinning the signed bytes as `files` and Tor's as `upstream`."""
+        `libevent` in the tarball, their signed copies in the sources cache,
+        and a row pinning the signed bytes as `files` and Tor's as `upstream`."""
         self.upstream = {name: make_macho(seed) for seed, name in enumerate(MAC_FILES)}
         self.shipped = {name: sign(data) for name, data in self.upstream.items()}
         members = {f"tor/{name}": data for name, data in self.upstream.items()}
         members["tor/pluggable_transports/lyrebird"] = b"a transport Shekyl does not ship"
         members["docs/tor.txt"] = b"tor licence"
         self.tarball = self.sources / "tor-expert-bundle-macos-aarch64-9.9.9.tar.gz"
-        self.signed = self.root / "signed"
-        self.signed.mkdir()
+        # The only directory stage reads the signed files from.
+        self.signed_cache = self.sources / "tor-signed-macos-aarch64-9.9.9"
+        self.signed_cache.mkdir()
         for name, data in self.shipped.items():
-            (self.signed / name).write_bytes(data)
+            (self.signed_cache / name).write_bytes(data)
         row = self.pins["targets"][0]
         row.update(
             os="macos",
@@ -283,13 +287,6 @@ class Bench:
         )
         self.host = MAC_HOST
         self.write()
-
-    def stage_signed(self, signed=None):
-        return self.run(
-            "stage", "--host", self.host, "--sources", str(self.sources),
-            "--dest", str(self.dest), "--licenses", str(self.licenses),
-            "--signed", str(signed or self.signed),
-        )
 
     def tie(self, shipped_tor):
         """`tie` over a signed directory whose `tor` is `shipped_tor`."""
@@ -646,10 +643,10 @@ def _(b):
 # --- macOS: signed files tied to Tor's (TB-11) -----------------------------
 
 
-@case("macos: stage --signed stages the signed files, and verify --sources ties them")
+@case("macos: stage reads the signed cache, and verify --sources ties them")
 def _(b):
     b.macos()
-    expect(b.stage_signed(), 0, "staged tor 0.0.0.1")
+    expect(b.stage(), 0, "staged tor 0.0.0.1")
     assert sorted(os.listdir(b.dest)) == sorted(MAC_FILES), os.listdir(b.dest)
     for name, data in b.shipped.items():
         assert (b.dest / name).read_bytes() == data, name
@@ -660,26 +657,75 @@ def _(b):
     expect(b.verify("--sources", str(b.sources)), 0, "holds exactly the pinned bundle")
 
 
-@case("macos: stage without --signed refuses; it never ships Tor's unsigned files")
+@case("macos: stage takes the signed files from the cache, never Tor's unsigned ones")
 def _(b):
     b.macos()
-    expect(b.stage(), 1, "name them with --signed")
+    proc = b.run(
+        "stage", "--host", b.host, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    expect(proc, 0, "staged tor 0.0.0.1")
+    for name, data in b.shipped.items():
+        assert (b.dest / name).read_bytes() == data, name
+
+
+@case("macos: stage --no-fetch with no signed file in the cache refuses and downloads nothing")
+def _(b):
+    b.macos()
+    (b.signed_cache / "tor").unlink()
+    proc = b.run(
+        "stage", "--host", b.host, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    expect(proc, 1, "--no-fetch forbids downloading it")
+    assert "could not fetch" not in proc.stderr, proc.stderr
     assert not b.dest.exists()
+
+
+@case("macos: a cached signed file that is not the pinned one refuses")
+def _(b):
+    b.macos()
+    (b.signed_cache / "libevent-2.1.7.dylib").write_bytes(sign(b.upstream["libevent-2.1.7.dylib"], blob=b"\x02" * 512))
+    proc = b.run(
+        "stage", "--host", b.host, "--sources", str(b.sources), "--no-fetch",
+        "--dest", str(b.dest), "--licenses", str(b.licenses),
+    )
+    expect(proc, 1, "is not the pinned signed libevent-2.1.7.dylib")
+    assert not b.dest.exists()
+
+
+@case("pin file: a pinned macOS row needs an https signed_url naming the file")
+def _(b):
+    b.macos()
+    for bad in (None, "http://invalid.example/{bundle_target}-{name}", "https://invalid.example/x"):
+        if bad is None:
+            b.pins.pop("signed_url")
+        else:
+            b.pins["signed_url"] = bad
+        b.write()
+        expect(b.stage(), 1, "needs \"signed_url\"")
+    b.pins["signed_url"] = (
+        "https://invalid.example/{bundle_version}/{bundle_target}/{name}/{extra}"
+    )
+    b.write()
+    expect(b.stage(), 1, "signed_url cannot be filled")
 
 
 @case("macos: a signed file that ties but is not the pinned one refuses")
 def _(b):
     b.macos()
-    (b.signed / "tor").write_bytes(sign(b.upstream["tor"], blob=b"\x01" * 512))
-    expect(b.stage_signed(), 1, "does not match its pin")
+    (b.signed_cache / "tor").write_bytes(sign(b.upstream["tor"], blob=b"\x01" * 512))
+    proc = b.stage()
+    expect(proc, 1, "is not the pinned signed tor")
+    assert "differs from the upstream file" not in proc.stderr, proc.stderr
     assert not b.dest.exists()
 
 
 @case("macos: a signed directory with a file too many refuses")
 def _(b):
     b.macos()
-    (b.signed / "lyrebird").write_bytes(b"x")
-    expect(b.stage_signed(), 1, "the signed files are exactly")
+    (b.signed_cache / "lyrebird").write_bytes(b"x")
+    expect(b.stage(), 1, "the signed files are exactly")
 
 
 @case("macos: a pinned signed file whose code differs from Tor's refuses the tie")
@@ -687,18 +733,18 @@ def _(b):
     b.macos()
     forged = bytearray(b.shipped["tor"])
     forged[0x800] ^= 1
-    (b.signed / "tor").write_bytes(bytes(forged))
+    (b.signed_cache / "tor").write_bytes(bytes(forged))
     row = b.pins["targets"][0]
     row["files"][0]["sha256"] = sha(bytes(forged))
     b.write()
-    expect(b.stage_signed(), 1, "differs from the upstream file signed at byte 0x800")
+    expect(b.stage(), 1, "differs from the upstream file signed at byte 0x800")
     assert not b.dest.exists()
 
 
 @case("macos: verify needs --sources, and the tie runs there too")
 def _(b):
     b.macos()
-    expect(b.stage_signed(), 0)
+    expect(b.stage(), 0)
     expect(b.verify(), 1, "verify needs --sources")
     # An upstream pin that is not Tor's file: the tie cannot vouch for it.
     b.pins["targets"][0]["upstream"][0]["sha256"] = "0" * 64
@@ -706,11 +752,14 @@ def _(b):
     expect(b.verify("--sources", str(b.sources)), 1, "does not match its upstream pin")
 
 
-@case("--signed and verify --sources belong to a macOS host only")
+@case("verify --sources re-checks the cached tarball on every host")
 def _(b):
-    expect(b.stage_signed(signed=b.root), 1, "--signed is for a macOS host")
     expect(b.stage(), 0)
-    expect(b.verify("--sources", str(b.sources)), 1, "--sources is for a macOS host")
+    expect(b.verify("--sources", str(b.sources)), 0, "holds exactly the pinned bundle")
+    data = bytearray(b.tarball.read_bytes())
+    data[-1] ^= 1
+    b.tarball.write_bytes(bytes(data))
+    expect(b.verify("--sources", str(b.sources)), 1, "is not the pinned tarball")
 
 
 @case("pin file: a macOS row lists upstream, under the names it ships")
@@ -719,10 +768,10 @@ def _(b):
     row = b.pins["targets"][0]
     upstream = row.pop("upstream")
     b.write()
-    expect(b.stage_signed(), 1, "lists Tor's own files as \"upstream\"")
+    expect(b.stage(), 1, "lists Tor's own files as \"upstream\"")
     row["upstream"] = [dict(upstream[0]), dict(upstream[1], name="libevent.dylib")]
     b.write()
-    expect(b.stage_signed(), 1, "name different files")
+    expect(b.stage(), 1, "name different files")
 
 
 @case("pin file: only a macOS row carries upstream")
@@ -827,7 +876,10 @@ def targets_tree(tmp, pins=None, hosts=("x86_64-linux-gnu riscv64-linux-gnu",),
     (root / "contrib" / "gitian").mkdir(parents=True)
     (root / ".github" / "workflows").mkdir(parents=True)
     (root / "docs").mkdir()
-    shutil.copy(TOR_BUNDLE, root / "scripts" / "release" / TOR_BUNDLE.name)
+    release = root / "scripts" / "release"
+    shutil.copy(TOR_BUNDLE, release / TOR_BUNDLE.name)
+    shutil.copy(TOR_MACHO, release / TOR_MACHO.name)
+    shutil.copy(TOR_PE, release / TOR_PE.name)
     shutil.copy(TARGETS_GATE, root / "scripts" / "ci" / TARGETS_GATE.name)
     (root / "config" / "tor_pins.json").write_text(
         json.dumps(pins if pins is not None else base_pins("0" * 64)), encoding="utf-8"
