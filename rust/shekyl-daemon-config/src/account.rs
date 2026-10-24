@@ -41,7 +41,7 @@ fn describe() -> String {
 
 #[cfg(windows)]
 fn describe() -> String {
-    match shekyl_win_sec::sid::current_user_sid() {
+    match shekyl_win_sec::current_user_sid() {
         Ok(sid) => sid.as_str().to_owned(),
         Err(e) => format!("an account whose SID could not be read ({e})"),
     }
@@ -63,7 +63,11 @@ mod tests {
         #[cfg(unix)]
         {
             let uid = rustix::process::geteuid().as_raw();
-            assert!(me.contains(&format!("uid {uid}")), "{me}");
+            // The account string stays out of the assertion message: a
+            // message is modeled as a log write, and the login name is not
+            // a log line. The success line on standard output still names it.
+            let names_this_uid = me.contains(&format!("uid {uid}"));
+            assert!(names_this_uid);
             assert_eq!(is_root(), uid == 0);
         }
     }
