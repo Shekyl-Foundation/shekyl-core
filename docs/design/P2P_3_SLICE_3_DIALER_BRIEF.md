@@ -804,7 +804,16 @@ again, one dial per two wakes (R3: mean 1 s per wake), with no backoff
 on clearnet (R2). The report's other option, returning an operator-named
 address to gray after a failure window, was not taken: it would make
 list membership depend on who supplied the address, which the apply
-table refuses. That wake re-admits the
+table refuses. *The log (Rick's review of #1174, 2026-10-24):* recovery
+is an episode. It is entered once, with the count re-admitted, and left
+once, when recovery worked: the kept count rose, or the connector drew
+an address it did not re-admit in that episode. Drawing a re-admitted
+address is still recovery, so a dead configured address that is
+re-admitted, drawn and dropped does not cycle the two lines. A
+configured address refused at re-admission (a banned one, for
+instance) is said once per episode, not once per wake. The pacing of
+those redials is the retry PR's (`docs/FOLLOWUPS.md`, the Tor-retries
+row). That wake re-admits the
 connector's configured addresses to gray as operator-named, under normal
 admission: the compiled seeds and `--add-peer`, or, when a closed
 network is declared (`--add-exclusive-node`), that list alone. It dials

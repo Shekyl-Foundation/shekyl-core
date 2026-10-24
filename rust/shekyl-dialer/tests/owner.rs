@@ -741,9 +741,14 @@ impl MakeWriter<'_> for LogBuf {
 }
 
 fn warn_text(run: impl FnOnce()) -> String {
+    log_text(tracing::Level::WARN, run)
+}
+
+/// Everything logged at `level` or above while `run` runs.
+fn log_text(level: tracing::Level, run: impl FnOnce()) -> String {
     let buf = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::WARN)
+        .with_max_level(level)
         .with_ansi(false)
         .with_writer(LogBuf(Arc::clone(&buf)))
         .finish();
@@ -994,4 +999,71 @@ fn a_connector_under_target_with_nothing_drawable_re_admits_its_configured_addre
         "the kept session is untouched"
     );
     let _ = kept;
+}
+
+/// **The recovery log does not cycle on a working connector** (Rick's review
+/// of #1174, 2026-10-24). One kept session under a target of two; one dead
+/// configured address, which every wake re-admits, draws, fails and drops;
+/// one configured address under a ban, refused at every re-admission. Over
+/// twenty wakes: recovery is entered once, never left (the kept count did
+/// not rise, and nothing was drawn that the episode did not re-admit), and
+/// the banned address is refused aloud once. Before this fix the entered
+/// and left lines repeated every two wakes and the refusal every wake.
+#[test]
+fn the_recovery_log_is_one_episode_while_a_dead_configured_address_cycles() {
+    const WAKES: usize = 20;
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let hub = hub_with_arming(&posts);
+    // The keep, then another network's handshake for every redial of the
+    // dead address: each is refused, dropped, and re-admitted next wake.
+    let mut answers = vec![reply(NETWORK, vec![])];
+    answers.extend(std::iter::repeat_n(reply([9; 16], vec![]), WAKES));
+    let dial = Arc::new(GapDial::answering(answers));
+    hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);
+    let dialer = dialer_for(&hub);
+    let mut rng = SplitMix64::new(11);
+    dialer.set_target(ConnectorId::Clearnet, 2, &mut rng);
+    for n in [1, 2] {
+        dialer
+            .admit_operator(&peer(n), Tick::new(1), &mut rng)
+            .expect("admitted");
+    }
+    // peer(3) is banned for the whole run, so it is configured (named by
+    // the operator) and never admitted: every re-admission refuses it.
+    let until = Tick::new(hub.now().get().saturating_add(3_600_000_000_000));
+    hub.ban_host(std::net::IpAddr::V4(Ipv4Addr::new(11, 12, 0, 3)), until);
+    assert!(matches!(
+        dialer.admit_operator(&peer(3), Tick::new(1), &mut rng),
+        Err(shekyl_peerlist::Refusal::Banned)
+    ));
+    dialer
+        .dial(ConnectorId::Clearnet, &peer(1), DialAim::Keep, &mut rng)
+        .expect("the first dial is kept");
+    assert_eq!(dialer.kept_sessions(ConnectorId::Clearnet), 1);
+
+    let text = log_text(tracing::Level::INFO, || {
+        for _ in 0..WAKES {
+            dialer.wake(ConnectorId::Clearnet, &mut rng);
+        }
+    });
+    assert_eq!(
+        text.matches("no drawable candidate; re-admitted").count(),
+        1,
+        "recovery is entered once:\n{text}"
+    );
+    assert_eq!(
+        text.matches("no longer stranded").count(),
+        0,
+        "recovery is never left: nothing it did not re-admit was drawn:\n{text}"
+    );
+    assert_eq!(
+        text.matches("was not re-admitted").count(),
+        1,
+        "the banned configured address is refused aloud once:\n{text}"
+    );
+    assert_eq!(dialer.kept_sessions(ConnectorId::Clearnet), 1);
+    assert!(
+        !gray_of(&dialer).contains(&peer(3)),
+        "the banned address stays out"
+    );
 }
