@@ -440,7 +440,11 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     let block_pow = schema::ordinal_of("block_pow").expect("catalogued");
     let alt_bodies = schema::ordinal_of("alt_block_bodies").expect("catalogued");
     let release_journal = schema::ordinal_of("archival_release_journal").expect("catalogued");
-    let last = schema::ordinal_of("archival_complete_trees").expect("catalogued");
+    let complete = schema::ordinal_of("archival_complete_trees").expect("catalogued");
+    let support_unissued = schema::ordinal_of("archival_support_unissued").expect("catalogued");
+    let support_block = schema::ordinal_of("archival_support_block").expect("catalogued");
+    let support_issued = schema::ordinal_of("archival_support_issued").expect("catalogued");
+    let last = schema::ordinal_of("archival_support_settlement").expect("catalogued");
     // The journal stores ordinals as `u32`. A catalogue that does not fit
     // that width cannot be journaled, so the length check fails here
     // rather than at the first pop.
@@ -460,11 +464,15 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     assert_eq!(drawable_digest.index() + 1, block_pow.index());
     assert_eq!(block_pow.index() + 1, alt_bodies.index());
     assert_eq!(alt_bodies.index() + 1, release_journal.index());
-    assert_eq!(release_journal.index() + 1, last.index());
+    assert_eq!(release_journal.index() + 1, complete.index());
+    assert_eq!(complete.index() + 1, support_unissued.index());
+    assert_eq!(support_unissued.index() + 1, support_block.index());
+    assert_eq!(support_block.index() + 1, support_issued.index());
+    assert_eq!(support_issued.index() + 1, last.index());
     assert_eq!(
         last.index() + 1,
         catalogue_len,
-        "archival_complete_trees is the final catalogue slot"
+        "archival_support_settlement is the final catalogue slot"
     );
     // 33 LMDB mirrors plus the thirteen Rust-only tables
     // (`archival_budget_accruing`, `curve_tree_leaf_counts`, `undo_log`,
@@ -490,7 +498,7 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
     // (`archival_release_journal`, layout 28); 46 since `SO-D12h` froze
     // each settled epoch's complete trees (`archival_complete_trees`,
     // layout 29).
-    assert_eq!(catalogue_len, 46);
+    assert_eq!(catalogue_len, 50);
     let names: Vec<&str> = schema::RUST_ONLY_TABLES.iter().map(|(n, _)| *n).collect();
     assert_eq!(
         names,
@@ -507,7 +515,11 @@ fn the_rust_only_tables_are_catalogued_last_and_named() {
             "block_pow",
             "alt_block_bodies",
             "archival_release_journal",
-            "archival_complete_trees"
+            "archival_complete_trees",
+            "archival_support_unissued",
+            "archival_support_block",
+            "archival_support_issued",
+            "archival_support_settlement",
         ]
     );
     // One 32-byte codec; `Coded<PqcAuthHash>` on the value side.

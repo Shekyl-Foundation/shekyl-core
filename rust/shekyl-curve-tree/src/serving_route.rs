@@ -63,8 +63,8 @@ pub const RESPONSE_HEADER_NAMES: &[&str] = &["content-type", "content-length"];
 
 /// The one required request header (`SF-D5`, second amendment): its value
 /// is [`REQUEST_HEADER_HEX_LEN`] lowercase hex characters decoding to
-/// [`REQUEST_HEADER_BYTES`] bytes, `nonce[32] ‖ anchor_height_le[8] ‖
-/// anchor_hash[32]`.
+/// [`REQUEST_HEADER_BYTES`] bytes, `stream[1] ‖ nonce[32] ‖
+/// anchor_height_le[8] ‖ anchor_hash[32]`.
 ///
 /// Spelling is the lowercase form the client emits. HTTP header names are
 /// case-insensitive on the wire; the *value* is not — one canonical
@@ -104,7 +104,7 @@ pub fn is_refusal_trailer(envelope: &[u8]) -> bool {
 /// transcript `P` signs over it are `shekyl-archival-retention`'s
 /// (`pass_anchor::PASS_REQUEST_HEADER_LEN`); the fetch crate const-asserts
 /// the two equal. This crate owns only the textual carrier.
-pub const REQUEST_HEADER_BYTES: usize = 72;
+pub const REQUEST_HEADER_BYTES: usize = 73;
 
 /// Textual length of the request header value: two hex digits per byte.
 pub const REQUEST_HEADER_HEX_LEN: usize = REQUEST_HEADER_BYTES * 2;
@@ -196,6 +196,6 @@ mod tests {
             REQUEST_HEADER_NAME.to_ascii_lowercase()
         );
         assert!(!REQUEST_HEADER_NAME.starts_with("x-"));
-        assert_eq!(REQUEST_HEADER_BYTES, 32 + 8 + 32);
+        assert_eq!(REQUEST_HEADER_BYTES, 1 + 32 + 8 + 32);
     }
 }

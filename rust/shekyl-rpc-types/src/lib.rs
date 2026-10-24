@@ -66,17 +66,22 @@ use serde::{Deserialize, Serialize};
 
 pub mod archival;
 pub mod archival_reads;
+pub mod bans;
 pub mod bin_commands;
 pub mod chain;
 pub mod chain_reads;
 pub mod consensus_digest;
+pub mod errors;
 pub mod hash;
 pub mod headers;
 pub mod hex128;
 pub mod identity;
 pub mod info;
+pub mod methods;
+pub mod mining;
 pub mod nullable;
 pub mod p2p;
+pub mod pool;
 pub mod transactions;
 pub use archival::{
     RequestArchivalShardRequest, RequestArchivalShardResponse, ARCHIVAL_SHARD_REFUSAL_CODES,

@@ -284,7 +284,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
     // arithmetic, and the claim below is built from it.
     let bonds = [EpochCloseBond {
         join_settlement_epoch: join_epoch.to_raw(),
-        is_foundation_complete_tree: false,
+        is_support_complete_tree: false,
         bad_intervals: &[],
     }];
     let shards = [EpochCloseShard {
@@ -454,7 +454,7 @@ async fn the_drivers_emission_claim_connects_and_pays_the_persona() {
                 row.bonds,
                 vec![ClaimBondRow {
                     join_settlement_epoch: join_epoch.to_raw(),
-                    is_foundation_complete_tree: false,
+                    is_support_complete_tree: false,
                     bad_intervals_flat: vec![],
                 }]
             );
@@ -812,7 +812,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
     // two complete trees out of the market. It is the one-server epoch.
     let bond = |complete| EpochCloseBond {
         join_settlement_epoch: join_epoch.to_raw(),
-        is_foundation_complete_tree: complete,
+        is_support_complete_tree: complete,
         bad_intervals: &[],
     };
     let bonds = [bond(false), bond(true), bond(true)];
@@ -1021,7 +1021,7 @@ async fn a_claim_verifies_after_the_epochs_complete_trees_are_released_and_slash
                 .expect("a snapshot");
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
             ));

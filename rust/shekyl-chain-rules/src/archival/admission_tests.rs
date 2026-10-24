@@ -43,6 +43,7 @@ fn bundle(h: BlockHeight, indexes: &[u64]) -> super::super::Admitted {
                 [],
             )
             .expect("no pass is out of range"),
+            support: PassBitmap::none(),
         },
         draws: indexes
             .iter()
@@ -52,6 +53,7 @@ fn bundle(h: BlockHeight, indexes: &[u64]) -> super::super::Admitted {
                 passed: true,
             })
             .collect(),
+        support: Vec::new(),
     }
 }
 

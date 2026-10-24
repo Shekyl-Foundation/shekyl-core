@@ -14,10 +14,13 @@
 //! over a real node. An absent handle never answers with a zero or an
 //! empty list (RK-D23): those are what a live, empty node reports.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId};
+use shekyl_rpc_types::errors::Diagnostic;
+
+use shekyl_types::{BlockHash, BlockHeight, KeyImage, PCanonicalId, TxHash};
 
 use crate::chain_facts::{
     BlockAt, BlockHashAt, BlockHeaderAt, BlockLookup, ChainFacts, ChainTip, DaemonIdentity,
@@ -26,9 +29,10 @@ use crate::chain_facts::{
 use crate::info_facts::{
     InfoChainFacts, InfoFacts, InfoStatusFacts, PeerFacts, PoolCounts, PoolScope, SessionCounts,
 };
+use crate::mining_facts::{LocalOutcome, MiningState, Pending, PopOutcome, PostedTemplate};
 use crate::read_facts::{
-    AltChainFacts, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt, PowSeed,
-    ShardCoverage,
+    AltChainFacts, BlocksAt, ChainReadFacts, ClaimSource, CoinbaseRange, CurveTreeFacts, PowAt,
+    PowSeed, ShardCoverage, SpentAt,
 };
 
 /// The chain reads that replace `FfiChainFacts`, `FfiInfoFacts` and
@@ -41,6 +45,23 @@ impl<T> ChainRead for T where T: ChainFacts + InfoFacts + ChainReadFacts {}
 /// A chain-read handle.
 pub type ChainReadHandle = Arc<dyn ChainRead>;
 
+/// One pool entry, as a listing reads it: never when it arrived (S7).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PoolEntryFacts {
+    /// Its id.
+    pub id: TxHash,
+    /// The transaction, serialized.
+    pub blob: Vec<u8>,
+    /// Its weight.
+    pub weight: u64,
+    /// Its fee, in atomic units.
+    pub fee: u64,
+    /// Whether the node shows it; `false` is its stem phase.
+    pub shown: bool,
+    /// The key images it spends.
+    pub key_images: Vec<KeyImage>,
+}
+
 /// The pool, as the RPC will read it. A live empty pool reports `0`; an
 /// absent handle does not.
 pub trait PoolFacts: Send + Sync {
@@ -50,6 +71,35 @@ pub trait PoolFacts: Send + Sync {
     ///
     /// [`FactsFault::NotReady`] when no pool was supplied.
     fn broadcast_count(&self) -> Result<u64, FactsFault>;
+
+    /// The entries `scope` may see: the shown ones, or every one for the
+    /// host's administrator (`RPC_CHANNEL.md` RT-O9.3).
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no pool was supplied.
+    fn entries(&self, scope: PoolScope) -> Result<Vec<PoolEntryFacts>, FactsFault>;
+
+    /// Remove `ids` from the pool, or every entry when `ids` is empty
+    /// (`flush_txpool`); the removed ids. It writes the pool file, so it
+    /// waits: the node runs it on a blocking thread.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no pool was supplied, or the pool is
+    /// retired; [`FactsFault::StoreUnreadable`] when the pool file faults,
+    /// which retires the pool.
+    fn flush(&self, ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>>;
+
+    /// Offer the node's own `ids` to the relay again (`relay_tx`); the ids
+    /// offered. The relay driver is RD's; until it is wired, not ready.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] until a relay driver is supplied.
+    fn relay(&self, _ids: &[TxHash]) -> Result<Vec<TxHash>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
 }
 
 /// A pool handle.
@@ -65,13 +115,40 @@ pub trait DoorFacts: Send + Sync {
     /// [`FactsFault::NotReady`] when no door was supplied. A closed door
     /// is `Ok(0)`: the node is up and is not accepting.
     fn room(&self) -> Result<usize, FactsFault>;
+
+    /// Offer `block` through the node's local-arrival entry (b4): wait for
+    /// the local seat, offer it, and await its one reply. Its listed
+    /// bodies come from the pool.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no door was supplied.
+    fn offer_local(&self, block: Vec<u8>) -> Pending<'_, LocalOutcome>;
+
+    /// Pop `count` blocks from the tip, returning their bodies to the pool
+    /// (`pop_blocks`, DX-Q3, Q7). A pop below the lowest poppable height is
+    /// refused before any pop.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no door was supplied or the node is
+    /// stopping.
+    fn pop(&self, count: u64) -> Pending<'_, PopOutcome>;
+
+    /// Resolve once the tip is at `height` or above.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no door was supplied, or when the node
+    /// stops first.
+    fn tip_at_least(&self, height: BlockHeight) -> Pending<'_, ()>;
 }
 
 /// A door handle.
 pub type DoorHandle = Arc<dyn DoorFacts>;
 
-/// Mining control. PR 3b starts the miner; until then a live node reports
-/// that it is not mining, and an absent handle is not ready.
+/// Mining control and the node's posted template (N2). An absent handle
+/// is not ready.
 pub trait MiningFacts: Send + Sync {
     /// Whether this node is mining.
     ///
@@ -79,27 +156,129 @@ pub trait MiningFacts: Send + Sync {
     ///
     /// [`FactsFault::NotReady`] when no mining control was supplied.
     fn running(&self) -> Result<bool, FactsFault>;
+
+    /// The posted template, or why none is posted.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn template(&self) -> Result<Result<PostedTemplate, Diagnostic>, FactsFault>;
+
+    /// Start the built-in miner with `threads` workers, or the host's
+    /// parallelism. The inner error is the node's refusal. Joins nothing,
+    /// but spawns threads: a caller on a runtime calls it from a blocking
+    /// thread.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn start(&self, threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault>;
+
+    /// Stop the built-in miner; `false` when it was not running. The node
+    /// keeps running. Joins the workers, which can be mid-hash: a caller on
+    /// a runtime calls it from a blocking thread.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn stop(&self) -> Result<bool, FactsFault>;
+
+    /// The miner, the posted job, and why none is posted.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn status(&self) -> Result<MiningState, FactsFault>;
+
+    /// Resolves, with why, once the job is withdrawn for a reason the next
+    /// tip does not clear (not synced, no address, the pool retired, a
+    /// fault, a stop): after it no miner can move the tip.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no mining control was supplied.
+    fn withdrawn(&self) -> Pending<'_, Diagnostic>;
 }
 
 /// A mining handle.
 pub type MiningHandle = Arc<dyn MiningFacts>;
 
-/// The process ban table.
+/// What a ban names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BanTargetFacts {
+    /// One host.
+    Host(IpAddr),
+    /// An IPv4 subnet: its network address and prefix length.
+    Subnet {
+        /// The network address.
+        network: Ipv4Addr,
+        /// The prefix length, 0 to 32.
+        prefix: u8,
+    },
+}
+
+/// How long a ban has left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BanLeftFacts {
+    /// Until it is lifted.
+    Permanent,
+    /// Whole seconds until its deadline, rounded up.
+    Seconds(u64),
+}
+
+/// One ban in force.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BanRow {
+    /// What it names.
+    pub target: BanTargetFacts,
+    /// How long it has left.
+    pub left: BanLeftFacts,
+}
+
+/// The node's ban table: through the bound hub while there is one, which
+/// closes the sockets a new ban drops; otherwise the node's socket table
+/// (`DRS_X_STORE_FLIP.md` DX-Q3, Q11). Tor inbound is never banned: it has
+/// no address to ban (`shekyl-transport-layer`'s admission).
 pub trait BansFacts: Send + Sync {
-    /// Ban `host` for the life of the process.
+    /// Ban `target` for `seconds`, or until it is lifted when `None`.
+    /// `Ok(false)` when the deadline does not fit the clock; nothing is
+    /// banned then.
     ///
     /// # Errors
     ///
     /// [`FactsFault::NotReady`] when no table was supplied.
-    fn ban_host(&self, host: IpAddr) -> Result<(), FactsFault>;
+    fn ban(&self, target: BanTargetFacts, seconds: Option<u64>) -> Result<bool, FactsFault>;
 
-    /// Whether `host` is banned.
+    /// Whether a ban of `seconds` fits the clock now: what [`Self::ban`]
+    /// would refuse, asked before any ban of a request is made.
     ///
     /// # Errors
     ///
-    /// [`FactsFault::NotReady`] when no table was supplied. `Ok(false)` is
-    /// a live table that does not ban `host`.
-    fn banned(&self, host: IpAddr) -> Result<bool, FactsFault>;
+    /// [`FactsFault::NotReady`] when no table was supplied.
+    fn fits(&self, seconds: u64) -> Result<bool, FactsFault>;
+
+    /// Lift `target`'s ban; `Ok(false)` when there was none.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no table was supplied.
+    fn lift(&self, target: BanTargetFacts) -> Result<bool, FactsFault>;
+
+    /// How long `host`'s longest ban has left; `None` when it is not
+    /// banned.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no table was supplied: no table is not
+    /// "this host is allowed".
+    fn remaining(&self, host: IpAddr) -> Result<Option<BanLeftFacts>, FactsFault>;
+
+    /// Every ban in force.
+    ///
+    /// # Errors
+    ///
+    /// [`FactsFault::NotReady`] when no table was supplied.
+    fn list(&self) -> Result<Vec<BanRow>, FactsFault>;
 }
 
 /// A bans handle.
@@ -217,6 +396,26 @@ impl InfoFacts for ChainReadAbsent {
 }
 
 impl ChainReadFacts for ChainReadAbsent {
+    fn transactions(
+        &self,
+        _ids: &[TxHash],
+        _scope: crate::info_facts::PoolScope,
+    ) -> Result<crate::read_facts::TransactionsAt, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn blocks_by_height(&self, _heights: &[BlockHeight]) -> Result<BlocksAt, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn output_indices(&self, _txid: &TxHash) -> Result<Option<Vec<u64>>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn key_images_spent(&self, _key_images: &[KeyImage]) -> Result<Vec<SpentAt>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
     fn alt_block_hashes(&self) -> Result<Vec<BlockHash>, FactsFault> {
         Err(FactsFault::NotReady)
     }
@@ -256,6 +455,14 @@ impl PoolFacts for PoolAbsent {
     fn broadcast_count(&self) -> Result<u64, FactsFault> {
         Err(FactsFault::NotReady)
     }
+
+    fn entries(&self, _scope: PoolScope) -> Result<Vec<PoolEntryFacts>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn flush(&self, _ids: Vec<TxHash>) -> Pending<'_, Vec<TxHash>> {
+        Box::pin(async { Err(FactsFault::NotReady) })
+    }
 }
 
 struct DoorAbsent;
@@ -263,6 +470,18 @@ struct DoorAbsent;
 impl DoorFacts for DoorAbsent {
     fn room(&self) -> Result<usize, FactsFault> {
         Err(FactsFault::NotReady)
+    }
+
+    fn offer_local(&self, _block: Vec<u8>) -> Pending<'_, LocalOutcome> {
+        Box::pin(async { Err(FactsFault::NotReady) })
+    }
+
+    fn tip_at_least(&self, _height: BlockHeight) -> Pending<'_, ()> {
+        Box::pin(async { Err(FactsFault::NotReady) })
+    }
+
+    fn pop(&self, _count: u64) -> Pending<'_, PopOutcome> {
+        Box::pin(async { Err(FactsFault::NotReady) })
     }
 }
 
@@ -272,16 +491,48 @@ impl MiningFacts for MiningAbsent {
     fn running(&self) -> Result<bool, FactsFault> {
         Err(FactsFault::NotReady)
     }
+
+    fn template(&self) -> Result<Result<PostedTemplate, Diagnostic>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn start(&self, _threads: Option<NonZeroUsize>) -> Result<Result<(), Diagnostic>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn stop(&self) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn status(&self) -> Result<MiningState, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn withdrawn(&self) -> Pending<'_, Diagnostic> {
+        Box::pin(async { Err(FactsFault::NotReady) })
+    }
 }
 
 struct BansAbsent;
 
 impl BansFacts for BansAbsent {
-    fn ban_host(&self, _host: IpAddr) -> Result<(), FactsFault> {
+    fn ban(&self, _target: BanTargetFacts, _seconds: Option<u64>) -> Result<bool, FactsFault> {
         Err(FactsFault::NotReady)
     }
 
-    fn banned(&self, _host: IpAddr) -> Result<bool, FactsFault> {
+    fn fits(&self, _seconds: u64) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn lift(&self, _target: BanTargetFacts) -> Result<bool, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn remaining(&self, _host: IpAddr) -> Result<Option<BanLeftFacts>, FactsFault> {
+        Err(FactsFault::NotReady)
+    }
+
+    fn list(&self) -> Result<Vec<BanRow>, FactsFault> {
         Err(FactsFault::NotReady)
     }
 }
@@ -296,8 +547,6 @@ impl StopFacts for StopAbsent {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
-
     use super::*;
 
     #[test]
@@ -314,10 +563,11 @@ mod tests {
         assert_eq!(handles.door.room(), Err(FactsFault::NotReady));
         assert_eq!(handles.mining.running(), Err(FactsFault::NotReady));
         assert_eq!(
-            handles.bans.banned(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            handles.bans.remaining(IpAddr::V4(Ipv4Addr::LOCALHOST)),
             Err(FactsFault::NotReady),
             "no table is not 'this host is allowed'"
         );
+        assert_eq!(handles.bans.list(), Err(FactsFault::NotReady));
         assert_eq!(handles.stop.request_stop(), Err(FactsFault::NotReady));
     }
 }

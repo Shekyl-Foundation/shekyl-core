@@ -10,15 +10,16 @@ use blake2::Blake2s256;
 use zeroize::Zeroizing;
 
 use crate::aead::{self, HASH_LEN};
-use crate::direction::Direction;
+use crate::direction::{RecvDirection, SendDirection};
 
 /// What the symmetric state can fail at. A handshake maps these into its own
 /// error type; which of the two it was says nothing a peer may be told.
 #[derive(Debug)]
 pub enum SymmetricError {
-    /// An AEAD operation failed: a bad tag on open.
+    /// A bad tag on open.
     Decrypt,
-    /// No key where one was needed, or the nonce ran out.
+    /// No key where one was needed, the nonce ran out, or the cipher refused
+    /// to seal.
     State,
 }
 
@@ -113,7 +114,7 @@ impl SymmetricState {
 
     fn encrypt(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, SymmetricError> {
         let key = self.k.as_ref().ok_or(SymmetricError::State)?;
-        let ct = aead::seal(key, self.n, &self.h, plaintext).ok_or(SymmetricError::Decrypt)?;
+        let ct = aead::seal(key, self.n, &self.h, plaintext).ok_or(SymmetricError::State)?;
         self.n = self.n.checked_add(1).ok_or(SymmetricError::State)?;
         Ok(ct)
     }
@@ -136,7 +137,7 @@ impl SymmetricState {
     /// Each direction keeps its own chaining key. Rekey advances the two
     /// directions independently. No key leaves this function.
     #[must_use = "the directions are the session"]
-    pub fn into_directions(self, role: SplitRole) -> (Direction, Direction) {
+    pub fn into_directions(self, role: SplitRole) -> (SendDirection, RecvDirection) {
         let [first, second] = aead::hkdf(&self.ck, &[]);
         let (send_key, recv_key) = match role {
             SplitRole::Initiator => (first, second),
@@ -147,8 +148,8 @@ impl SymmetricState {
         // tell its own session's direction from another's.
         let h = self.h;
         (
-            Direction::new(self.ck, send_key, h),
-            Direction::new(recv_ck, recv_key, h),
+            SendDirection::new(self.ck, send_key, h),
+            RecvDirection::new(recv_ck, recv_key, h),
         )
     }
 

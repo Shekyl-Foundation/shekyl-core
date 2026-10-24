@@ -525,7 +525,7 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
         prunable_as_hex: String::new(),
         prunable_hash: tagged_hash(12),
         archival_len: 16874,
-        as_json: String::new(),
+        as_json: Some(String::new()),
         pruned: false,
         double_spend_seen: false,
         location: TxLocation::Mined {
@@ -542,12 +542,12 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
         prunable_as_hex: String::new(),
         prunable_hash: tagged_hash(22),
         archival_len: 5389,
-        as_json: String::new(),
+        as_json: Some(String::new()),
         pruned: false,
         double_spend_seen: true,
         location: TxLocation::Pooled {
             relayed: true,
-            received_timestamp: 1_750_000_123,
+            received_timestamp: Some(1_750_000_123),
         },
     };
     let built = GetTransactionsResponse {
@@ -572,7 +572,7 @@ fn get_transactions_split_form_matches_the_oracle() {
             prunable_as_hex: "0607".to_owned(),
             prunable_hash: tagged_hash(32),
             archival_len: 7,
-            as_json: String::new(),
+            as_json: Some(String::new()),
             pruned: true,
             double_spend_seen: false,
             location: TxLocation::Mined {
@@ -604,7 +604,7 @@ fn get_transactions_decoded_matches_the_oracle() {
             prunable_as_hex: String::new(),
             prunable_hash: tagged_hash(42),
             archival_len: 0,
-            as_json,
+            as_json: Some(as_json),
             pruned: false,
             double_spend_seen: false,
             location: TxLocation::Mined {
@@ -802,7 +802,7 @@ fn request_sequences_are_omitted_when_empty_and_present_when_not() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 35] = [
+    let links: [(&str, &str); 36] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -943,6 +943,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v35.json"),
             include_str!("vectors/rpc/get_version_synced_v36.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v36.json"),
+            include_str!("vectors/rpc/get_version_synced_v37.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -961,7 +965,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // The trailing comment names the minor the *newer* vector carries.
     // `v1` is 3.24, so link `i`'s newer minor is `25 + i`. The comment sits
     // on its element, so it cannot attach to the neighbor.
-    const ADDED_AT_LINK: [&[&str]; 35] = [
+    const ADDED_AT_LINK: [&[&str]; 36] = [
         &[],                                                        // 3.25
         &[],                                                        // 3.26
         &[],                                                        // 3.27
@@ -997,6 +1001,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.57 (get_fee_estimate drops grace_blocks and quantization_mask, FL-R26 / FL-R27; get_version gains nothing)
         &[], // 3.58 (option_set / option_show, the JSON-RPC error `data` member and the four runtime endpoints' deletion, DAEMON_CONFIG_CUTOVER §2.7; get_version gains nothing)
         &[], // 3.59 (the connection rows drop support_flags with the P2P word, PWD-T7; get_version gains nothing)
+        &[], // 3.60 (the claim-source bond field is is_support_complete_tree; get_version gains nothing)
     ];
     assert_eq!(
         ADDED_AT_LINK.len(),
@@ -1008,7 +1013,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // `ADDED_AT_LINK`, held to the same standard: a member leaves only where
     // its link names it. Indexed like `ADDED_AT_LINK`; every link but the
     // 3.44 one retires nothing.
-    const REMOVED_AT_LINK: [&[&str]; 35] = [
+    const REMOVED_AT_LINK: [&[&str]; 36] = [
         &[],             // 3.25
         &[],             // 3.26
         &[],             // 3.27
@@ -1044,6 +1049,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         &[], // 3.57 (get_fee_estimate's two members retire elsewhere; get_version retires nothing)
         &[], // 3.58 (the retired endpoints are not get_version's; it retires nothing)
         &[], // 3.59 (support_flags leaves the connection rows; get_version retires nothing)
+        &[], // 3.60 (the renamed bond field is not get_version's; it retires nothing)
     ];
     assert_eq!(
         REMOVED_AT_LINK.len(),

@@ -1182,13 +1182,11 @@ record's holdings as they stood → filter → emit in canonical order.
 1. **Exclude bonds with `E_join ≥ E`.** A bond posted after `h_open(E)`
    is present at tip and was not drawable. The record carries `E_join`;
    the rule is the existing `E_first = E_join + 1`.
-2. **`CompleteTree` expands over every shard `s` with
-   `closed_and_final(view, s, h_open(E), reorg_cap)`, not over tip.** `k`
-   grows during an epoch, so a tip-based expansion makes foundation
-   records contribute a time-varying pair count — the same instability on
-   a different axis. Closed is not enough: the drawable set has to stay
-   inside the record's owed set, and a shard inside the reorg cap can
-   still change contents (§8.0 input 4, *The `CompleteTree` expansion*).
+2. **`CompleteTree` is not in `D` — RULED 2026-10-22**
+   (`ARCHIVAL_SUPPORT_DRAW.md`). A complete tree contributes no pair and
+   no receipt key. It is drawn on its own stream. SUPERSEDED 2026-10-22:
+   the 2026-09-16 pin expanded the record over every shard closed and
+   final at `h_open(E)`, not over tip.
 
    **Two bounds on "the shards that exist", and what tells them apart
    (confirmed 2026-10-06).** The tree has two, and they are not rivals:

@@ -7374,7 +7374,7 @@ void BlockchainLMDB::gather_archival_epoch_rows_window(uint64_t epoch_lo, uint64
               // them against tip holdings was the M2-1 drop-after-serve
               // under-count.
               entry.second.join_settlement_epoch = bond.join_settlement_epoch;
-              entry.second.is_foundation_complete_tree = bond.is_complete_tree();
+              entry.second.is_support_complete_tree = bond.is_complete_tree();
               entry.second.bad_intervals_flat = archival_bad_intervals_flat(bond);
             }
             cached = bond_cache.emplace(row_p_id, std::move(entry)).first;

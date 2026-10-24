@@ -932,6 +932,79 @@ fn the_fill_and_the_template_price_the_same_block() {
     }
 }
 
+/// The burn operands do not move the reward the fill prices: `build` also
+/// takes `total_burned` and `closed_shards`, and they reach only the fee
+/// burn and the split, after the reward is fixed (`price_emission`), so
+/// the fill's verdict — the gross coinbase — is the same with or without
+/// them (the review of #1165). Over the penalty-free weight and deep in the
+/// penalty zone, with a generated supply, a burn, closed shards, a volume
+/// and fee-paying bodies, the template pays the fill's reward and does
+/// burn part of its fees. Red edit: let `price_emission` pay the reward
+/// less the burn.
+#[test]
+fn the_burn_operands_leave_the_fill_and_the_template_on_one_reward() {
+    let params = EconomicParams::default();
+    let miner = miner();
+    let chain = chain_of(2);
+    let already_generated = 3_000_000_000_000_000;
+    let tx_volume = TxVolume::window(params.tx_volume_baseline * 1_000, 1_000);
+    let operands = EmissionOperands {
+        already_generated_coins: AtomicUnits::from_raw(already_generated),
+        total_burned: AtomicUnits::from_raw(already_generated / 10),
+        median_weight: FULL_REWARD_ZONE,
+        tx_volume,
+        closed_shards: ClosedShardCount::new(3),
+    };
+    let empty = build(&TemplateContext {
+        emission: operands,
+        ..context(&chain, &params, &miner, &[])
+    })
+    .expect("builds");
+    let coinbase = u64::try_from(empty.block.miner_transaction.weight()).expect("fits");
+    for (label, target) in [
+        ("over", FULL_REWARD_ZONE - coinbase + 2_000),
+        ("deep", FULL_REWARD_ZONE * 3 / 2 - coinbase),
+    ] {
+        let listed: Vec<Transaction> = bodies_landing_within(1_500, target)
+            .into_iter()
+            .map(|tx| shekyl_chain_rules::harness::fixture::paying_fee(tx, 1_000_000))
+            .collect();
+        let template = build(&TemplateContext {
+            emission: operands,
+            ..context(&chain, &params, &miner, &listed)
+        })
+        .expect(label);
+        let bodies: u64 = template
+            .transactions
+            .iter()
+            .map(|tx| u64::try_from(tx.weight()).expect("fits"))
+            .sum();
+        let built = u64::try_from(template.block.miner_transaction.weight()).expect("fits");
+        let fill = crate::fill::Fill::listed(
+            FULL_REWARD_ZONE,
+            built,
+            already_generated,
+            tx_volume,
+            &params,
+            bodies,
+            template.total_fees.to_raw(),
+        )
+        .unwrap_or_else(|err| panic!("{label}: the fill prices the template's block: {err}"));
+        assert_eq!(template.block_weight, fill.block_weight(), "{label}");
+        assert_eq!(
+            template.block_reward.to_raw(),
+            fill.reward(),
+            "{label}: the reward"
+        );
+        assert!(
+            template.fees_burned > AtomicUnits::ZERO,
+            "{label}: the burn operands are in force: {} fees, {} burned",
+            template.total_fees.to_raw(),
+            template.fees_burned.to_raw()
+        );
+    }
+}
+
 /// Bodies at the fill's bound build a block at or under twice the median.
 ///
 /// The bound is `2·median −` the derived reserve, and the reserve covers

@@ -21,6 +21,18 @@ pub enum Network {
 }
 
 impl Network {
+    /// The address network a mining address on this network is decoded
+    /// for. Regtest has no prefixes of its own: it takes mainnet's, as the
+    /// C++ `FAKECHAIN` does.
+    #[must_use]
+    pub const fn address_network(self) -> shekyl_address::Network {
+        match self {
+            Self::Mainnet | Self::Regtest => shekyl_address::Network::Mainnet,
+            Self::Testnet => shekyl_address::Network::Testnet,
+            Self::Stagenet => shekyl_address::Network::Stagenet,
+        }
+    }
+
     /// Every network, in the grammar's order.
     pub const ALL: [Self; 4] = [Self::Mainnet, Self::Testnet, Self::Stagenet, Self::Regtest];
 

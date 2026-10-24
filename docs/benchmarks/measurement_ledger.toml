@@ -121,6 +121,7 @@ stale_through = [
   { through = "a6b029e82", note = "DRS-X PR 3 (#1106): the crate-level doc comment in shekyl-pow-randomx's lib.rs names its consumers. Doc text only; no code path changed, and nothing the capture priced has moved." },
   { through = "fe6f6bfa1", note = "DRS-X PR 3 (#1106): the crate doc in shekyl-pow-randomx's lib.rs names that calc_pow and the Rust miner call CacheStore::lookup and never derive, and that pin_canonical is the validator's epoch fill. Doc text only; no hash, derivation or verify function changed, and nothing the block-verify capture priced has moved. The rows stay stale from PL-D3." },
   { through = "437921d02", note = "Doc comment only in signature.rs: sign_with_ml_dsa_seed stops linking the private nested sign. No byte string, function or code path changed, and the Ed25519 + ML-DSA-65 sign and verify that block verification prices are untouched. Not re-measured; nothing the capture priced has moved. The rows stay stale from PL-D3." },
+  { through = "08af7470a1", note = "One doc comment in signature.rs: a serve receipt is described as a signature over 113 bytes where it said 112. No function, domain string or sign/verify path changed. The Ed25519 + ML-DSA-65 work that block verification prices does not read that comment. Not re-measured; the rows stay stale from PL-D3." },
 ]
 
 [[constant]]
@@ -293,6 +294,9 @@ stale_through = [
   { through = "e8740ab466", note = "PR #1049 review: the doc comment of sign_receipt_transcript in countersign.rs states that the function is STAGED, who makes it live and its falsifier. Doc comment only; the verdict's arms are untouched." },
   { through = "45a115cc3f", note = "p-serve (45a115cc3f): the write-stall tests move into serve_stall_tests.rs, and write_bounded's writer parameter is renamed from W to S so W stays the envelope width. The stall bound is the same timeout around each write. Chunk size, read, digest and sign are unchanged, so a served response costs what it did. Not re-measured." },
   { through = "be38532e2b", note = "Two unused type aliases (IdentityPassKey, IdentityPassSigner) and their re-export deleted from shekyl-p-serve; shekyl-p-fetch gains PassVerifyingKey::WITHIN_WIDEST, a compile-time assertion that a scheme's envelope is within the widest, evaluated in max_response_len as a unit constant. No read, hash, signature or socket operation on the serve or fetch path is added, removed or reordered, and nothing runs at run time that did not before. Not re-measured." },
+  { through = "08af7470a1", note = "The pass transcript opens with a stream byte, so a served response signs 113 bytes where it signed 112, and a header that does not decode is refused before the store. A valid economy header is the previous 72 bytes with a leading zero. The floor verdict prices an abandoned request, which never reaches the signature; the extra byte is on the header check ahead of the body. Not re-measured." },
+  { through = "1871825227", note = "The module comment in serve.rs states that 73-byte header and 113-byte transcript. No executable code changed, so a served response costs what it did at 08af7470a1. Not re-measured." },
+  { through = "efa02f64b", note = "The served identity pin is regenerated from the same seeds, so the signature covers the 113-byte transcript 08af7470a1 already signs. Fixture bytes only. No read, hash, sign or socket operation on the serve path changed. Not re-measured." },
 ]
 
 [[path_set]]
@@ -344,6 +348,9 @@ stale_through = [
   { through = "e8740ab466", note = "PR #1049 review: the doc comment of sign_receipt_transcript in countersign.rs states that the function is STAGED, who makes it live and its falsifier. Doc comment only; no executable serve or fetch code changed." },
   { through = "45a115cc3f", note = "p-serve (45a115cc3f): the write-stall tests move into serve_stall_tests.rs, and write_bounded's writer parameter is renamed from W to S so W stays the envelope width. The stall bound is the same timeout around each write. No read, hash, sign or socket operation on the serve or fetch path is added, removed or reordered. Not re-measured." },
   { through = "be38532e2b", note = "Two unused type aliases (IdentityPassKey, IdentityPassSigner) and their re-export deleted from shekyl-p-serve; shekyl-p-fetch gains PassVerifyingKey::WITHIN_WIDEST, a compile-time assertion that a scheme's envelope is within the widest, evaluated in max_response_len as a unit constant. No read, hash, signature or socket operation on the serve or fetch path is added, removed or reordered, and nothing runs at run time that did not before. Not re-measured." },
+  { through = "08af7470a1", note = "The request header and the transcript open with a stream byte. The client writes one leading zero on an economy read and verifies that byte; the server signs 113 bytes where it signed 112 and refuses a header that does not decode before it opens the store. One extra byte on the wire and in the signed message. The readings these constants rest on predate it. Not re-measured." },
+  { through = "1871825227", note = "Comments in serve.rs name the 73-byte header and the 113-byte transcript. No executable serve or fetch code changed. Not re-measured." },
+  { through = "efa02f64b", note = "The identity exchange pins are regenerated from the same seeds. The request carries the 73-byte header with the economy stream byte first, and the signed responses cover the 113-byte transcript. Those are the bytes 08af7470a1 already exchanges. Fixture bytes only; no read, hash, sign or socket operation on the serve or fetch path changed. Not re-measured." },
 ]
 
 [[constant]]
@@ -555,6 +562,11 @@ stale_through = [
   { through = "ea68874a8", note = "RT-W9 step 5a: ClassedRecord, a new framer in shekyl-noise that the P2P transport does not use, and two crate-private reads on Direction (its next nonce and epoch, and the header-protection key). Direction's seal and open are unchanged and the P2P framer calls nothing new. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "37e6ec8ee", note = "The header-protection key is no longer a method of Direction. ClassedRecord passes the record-header label to hkdf_from_record_key and keeps the output. The P2P transport does not call it. Direction's seal and open are unchanged. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
   { through = "6884efdbe", note = "ClassedError implements Display and Error, so a caller can keep the variant as the source of an io::Error. seal and open are unchanged. The P2P transport does not match on the error's text. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "969085429", note = "RT-W9 close-out F3/F5: the P2P framer holds a SendDirection and a RecvDirection in place of two Directions, and a direction checks one dead flag per seal and open. RecvHalf already killed itself on any error but truncation, so nothing it can observe changes. The same AEAD calls run on the same bytes. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "5089df9db", note = "RT-W9 close-out F4: poly1305 and the mask cipher wipe their state when dropped, and the HMAC digests land in wiped buffers. Each P2P record seal and open now ends with a wipe of the Poly1305 state (r, h, pad; tens of bytes), and each HKDF writes two digests to wiped stack arrays. Nanoseconds a record against the record path; not re-measured." },
+  { through = "5671b3721", note = "rustfmt line breaks in the close-out files; no code changed. Not re-measured." },
+  { through = "3c8ed9e03", note = "Crate documentation and a test helper only; no code the P2P path runs changed. Not re-measured." },
+  { through = "f7c1a94de7", note = "RT-W9 close-out review: the shared direction state is private to its module, and the P2P record path still seals and opens the same AEAD on the same bytes. A non-truncation refusal sets the RecvDirection's poison flag instead of a flag on RecvHalf. A dead sealer returns Poisoned before its argument checks; the P2P sender does not use that sealer. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
 ]
 
 [[constant]]
@@ -714,6 +726,7 @@ spec = [
 stale_through = [
   { through = "20738bf714", note = "PL-D3 touched output.rs and kem.rs. Whether it moved decapsulation cost is not established." },
   { through = "b5e7dbfed5", note = "Seeded at this merge, 2026-10-05. The other commits to these paths since the capture were not individually reviewed for cost." },
+  { through = "5dcd0cfa97", note = "Added check_ml_kem_768_ek to kem.rs, a parse of an encapsulation key for the mining address and the address check. Decapsulation and the scan do not call it; the measured path is unchanged." },
 ]
 
 [[constant]]
@@ -801,7 +814,9 @@ stale_through = [
   { through = "e5035fcfb", note = "#1081 (review item 2, R3 applied): the FCMP++ verify's batch weights come from a ChaCha20Rng seeded by cSHAKE256 over the verify's inputs instead of OsRng. The prover, the tree and the spend path are untouched; the verify gains one hash over the proof and its inputs and a ChaCha20 stream. Not re-measured; the rows stay ungraded." },
   { through = "0da922834", note = "#1081 review: the batch-weight statement moves from proof.rs into its own module, batch_weights.rs (BatchWeights, BatchKind), with its tests beside it. The preimage, both domains, the seed and the weights the verifiers draw are byte-for-byte unchanged (the pinned seed KATs moved with it and pass); no verify step is added, removed or reordered. Not re-measured." },
   { through = "196717b00", note = "#1108: the wallet's spend gate takes in_tree_at_reference, one comparison now defined in reference.rs, and drained_through moves there from client.rs, its callers in client.rs, assemble.rs and capture.rs calling it by its new path. The cutoff is the same value; path assembly, the tree and the prover do the same work. Not measured." },
-  { through = "7679944f3", note = "#1108: in_tree_at_reference is the drain cutoff. It does one saturating subtraction and a zero-height check where it compared maturity with the reference directly. The boolean is the same at every height, and blocks_until_in_tree returns zero when the predicate holds. Path assembly, the tree and the prover do the same work. Not measured." }
+  { through = "7679944f3", note = "#1108: in_tree_at_reference is the drain cutoff. It does one saturating subtraction and a zero-height check where it compared maturity with the reference directly. The boolean is the same at every height, and blocks_until_in_tree returns zero when the predicate holds. Path assembly, the tree and the prover do the same work. Not measured." },
+  { through = "08af7470a1", note = "REQUEST_HEADER_BYTES in serving_route.rs is 73, one stream byte ahead of the nonce. The spend path — tree build, path assembly, the prover — does not read that constant. The hex encoder grows by two characters on the serving route only. Not measured; the rows stay ungraded." },
+  { through = "1871825227", note = "The request-header doc and its length assertion name the stream byte (1 + 32 + 8 + 32). The constant stays 73. No function on the spend path changed. Not measured." },
 ]
 
 [[constant]]
@@ -972,7 +987,13 @@ cleared = [
   { through = "ea68874a8", reason = "ClassedRecord is a new framer in shekyl-noise. The handshake calls Direction's seal and open, which this commit does not change, and it does not call the framer or the two new reads (next, and the header key). The budget still charges 2,163,800 ns. The RT-P9 deadlines are onion round trips and are unchanged." },
   { through = "37e6ec8ee", reason = "The record-header label leaves Direction. HeaderKey::mask passes it to hkdf_from_record_key and keeps the output; the handshake does not derive a header key. Direction's seal and open are unchanged. The budget still charges 2,163,800 ns, and the RT-P9 deadlines are unchanged." },
   { through = "8c465cff7", reason = "open_first_message now lends the receiving direction, runs the same Direction::open the bench times, and releases on the checks that function already made (this session's handshake hash, one successful open, an accepted message). That step is inside the summed handshake and is moves around the same open. The charge stays 2,163,800 ns. Message 1's deadline is before this function, and the whole-handshake deadline is the onion round trip." },
-  { through = "6884efdbe", reason = "ClassedError implements Display and Error. The handshake matches the variant, and Direction's seal and open are unchanged. The budget still charges 2,163,800 ns. The RT-P9 deadlines are unchanged." }
+  { through = "6884efdbe", reason = "ClassedError implements Display and Error. The handshake matches the variant, and Direction's seal and open are unchanged. The budget still charges 2,163,800 ns. The RT-P9 deadlines are unchanged." },
+  { through = "969085429", reason = "RT-W9 close-out F3/F5: the handshake splits into a SendDirection and a RecvDirection in place of two Directions, and a direction checks one dead flag per seal and open. Every AEAD and key agreement RT-P6 and RT-P9 timed runs on the same bytes in the same order; the pinned vectors are unchanged." },
+  { through = "5089df9db", reason = "RT-W9 close-out F4: Poly1305 wipes its state when dropped and HMAC-BLAKE2s writes its digests to wiped arrays. The handshake makes a few dozen HMAC and AEAD calls, each now ending in a wipe of tens of bytes: nanoseconds against RT-P6s 2,163.8 us. The constant is not moved." },
+  { through = "57969a78c", reason = "RT-W9 close-out D2 and tests: the client retry policy draws its busy waits from a random source, and the budget gains tests only. No step the daemon charges or RT-P9 timed changes." },
+  { through = "5671b3721", reason = "rustfmt line breaks in the close-out files; no code changed." },
+  { through = "3c8ed9e03", reason = "Crate documentation and checked instants in a retry test; no code the daemon runs changed." },
+  { through = "f7c1a94de7", reason = "RT-W9 close-out review: the handshake still splits into a SendDirection and a RecvDirection and runs the same AEAD. The direction state is private to its module, and a dead direction refuses before it frames, which seal and open already did once the direction was dead. The budget charge stays 2,163,800 ns. The RT-P9 deadlines are unchanged." },
 ]
 
 [[constant]]

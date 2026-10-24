@@ -36,9 +36,9 @@ grants, no tunnel, no client posture: those are RT-W10 to RT-W12. Where a
 piece of RT-W9 turns out to need one of them, the work stops and that is
 reported.
 
-Two of its numbers do not exist yet and are not chosen here: the padding
-size classes, which come from RT-P5's measurement, and the handshake
-deadline, which comes from RT-P6's.
+Two of its numbers are not chosen here: the padding size classes come
+from RT-P5's measurement (RT-O6, re-ruled 2026-10-18), and the handshake
+deadlines from RT-P9's (ruled 2026-10-20).
 
 ---
 
@@ -411,8 +411,11 @@ This document is step 0 and is the only content of the first.
 | 2 | The handshake, red first | RT-O18, RT-O19 | The comparison is an in-crate test, written and observed failing before the implementation. Production construction takes no generator. One generator source, compiled into that test and into the cross-check crate. Then one test per requirement of §4.3. Built in PR #1039 (`rust/shekyl-rpc-channel/src/pinned_handshake.rs`) |
 | 3 | RT-P5 sizes | step 2; RT-O21 | HTTP message sizes per method, on the generated wallet and the generated chain. No adapter. The method, the flush policy and the host claim are registered before it runs. The classes are derived from this trace |
 | 4 | RT-P6: handshake cost on the floor device | step 2; step 3's candidate classes | Registered before it runs; quiet claim |
+| 4a | RT-P6's follow-through: mac1 on message 1, the handshake budget, the busy reply and the replay window | step 4 | Ruled 2026-10-20 (`RPC_CHANNEL.md` §4.3). Built in PR #1137, with RT-P6's stranger re-measured with mac1. Each check seen failing with it removed |
+| 4b | RT-P9 and the handshake's deadlines; the client's retry policy | step 4a | Registered and run 2026-10-20: 4 s for message 1, 11 s for the whole handshake. One silent retry after a timeout, and a back-off after busy. Built in PR #1139 |
 | 5 | `ClassedRecord` and `shekyl-rpc-stream` | RT-O20; steps 3 and 4 | The wire format is §4.4 of the parent, already specified. The adapter is written once, against `ClassedRecord`, and observed failing with splitting removed. Record boundaries are observed here, under step 3's flush policy. The header-label registry row lands with the constant. `FixedWindow` is not built. The interim framer is not copied into `shekyl-noise`. **Split 2026-10-20:** **5a** is `ClassedRecord` in `shekyl-noise`, with the registry row, a known answer and a test for each check, seen failing without it. **5b** is `shekyl-rpc-stream`, the submission's fixed size, and the record boundaries, built to RT-O28 and RT-O29 as ruled 2026-10-20 (§4a). Built 2026-10-20: the named edit (splitting removed) fails the block-batch test, and hyper flushes once per message, as RT-P5 registered |
-| 6 | Two registry exclusion rows; the standing-check gate | RT-O22 | One row for each protocol-name literal, one reason, excluded-count pin 8 → 10. Each gate is shown failing under a named edit |
+| 6 | Two registry exclusion rows; the standing-check gate | RT-O22 | One row for each protocol-name literal, one reason, excluded-count pin 8 → 10. The registry gate gains a call-site pin for mechanism 7. The standing check reads every flag source and fails on one it does not recognise; its attestation file is seeded as attested, and RT-P4 is re-run on the Windows laptop with the shipped flags (ruled 2026-10-22, `RPC_CHANNEL.md` §10). Each gate is shown failing under a named edit |
+| 7 | The close-out | steps 1 to 5 | Ruled 2026-10-22, one pull request per line: the stream adapter's fixes; the noise crate's and the handshake's, with the busy back-off's jitter; these docs; step 6; then the time-bound message 1, designed and ruled before it is built (`RPC_CHANNEL.md` §10) |
 
 **Named edits, fixed now so they are not improvised later.**
 

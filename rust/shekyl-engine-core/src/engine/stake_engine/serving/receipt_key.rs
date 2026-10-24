@@ -116,7 +116,7 @@
 //!
 //! [`ResidentPassKey`](super::pass_key::ResidentPassKey)'s shape, for its
 //! reasons. It is not a key: it holds a non-owning handle to the stake actor
-//! and a slot. A signature is a message round-trip in which the 112-byte
+//! and a slot. A signature is a message round-trip in which the 113-byte
 //! transcript goes in and the signature comes out. The handle is weak, so
 //! this role cannot keep the persona's secrets resident past the wallet
 //! close that wipes them, and a stopped actor is a refusal at pre-flight.
@@ -209,7 +209,7 @@ impl PassKey<RECEIPT_ENVELOPE_LEN> for ResidentReceiptKey {
         Ok(())
     }
 
-    /// Sign the 112-byte pass transcript with the persona's receipt key.
+    /// Sign the 113-byte pass transcript with the persona's receipt key.
     /// Runs on the blocking pool: it parks on the actor's reply. A refusal
     /// that proves the key undecodable is remembered, so the next pre-flight
     /// refuses with it.
@@ -321,8 +321,14 @@ mod tests {
                 .is_err());
         }
         // Not over another transcript.
-        let other_shard =
-            pass_countersignature_message(&NONCE, ANCHOR, &ANCHOR_HASH, SHARD + 1, &DIGEST);
+        let other_shard = pass_countersignature_message(
+            shekyl_archival_retention::PassStream::Economy,
+            &NONCE,
+            ANCHOR,
+            &ANCHOR_HASH,
+            SHARD + 1,
+            &DIGEST,
+        );
         assert!(scheme
             .verify(&public, SCHEME_DOMAIN_RECEIPT, &other_shard, &signature)
             .is_err());
@@ -356,6 +362,7 @@ mod tests {
         let bundle = derive_bundle(SLOT);
         verify_pass_transcript(
             bundle.hybrid_bond_id(),
+            shekyl_archival_retention::PassStream::Economy,
             &NONCE,
             ANCHOR,
             &ANCHOR_HASH,
@@ -615,6 +622,7 @@ mod tests {
             .expect("the identity key still signs");
         verify_pass_transcript(
             derive_bundle(SLOT).hybrid_bond_id(),
+            shekyl_archival_retention::PassStream::Economy,
             &NONCE,
             ANCHOR,
             &ANCHOR_HASH,

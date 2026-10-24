@@ -43,7 +43,7 @@ use shekyl_chain_rules::{
     Fault, RuleSet, ViewRead,
 };
 use shekyl_chain_store::store::{ChainStore, ReadSnapshot, SnapshotView, StoreError};
-use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, TxHash};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, KeyImage, TxHash};
 use shekyl_wire::Block;
 
 use crate::chain_facts::{
@@ -65,6 +65,17 @@ pub trait NodeFacts: Send + Sync {
     fn sync(&self) -> Result<SyncFacts, FactsFault>;
     /// The pool's population (PR-b's Rust pool).
     fn pool_counts(&self, scope: PoolScope) -> Result<PoolCounts, FactsFault>;
+    /// Whether a transaction the pool shows spends each of `key_images`,
+    /// in order. A stem-phase spend answers `false` (S6).
+    fn pool_spends(&self, key_images: &[KeyImage]) -> Result<Vec<bool>, FactsFault>;
+    /// The body of each of `ids` the pool holds and `scope` may see, in
+    /// order: any caller sees what the pool shows, the host its stem
+    /// entries too (S6).
+    fn pool_bodies(
+        &self,
+        ids: &[TxHash],
+        scope: PoolScope,
+    ) -> Result<Vec<Option<PoolBody>>, FactsFault>;
     /// The Peers part: transport and peerlist detail (the p2p layer).
     fn peers(&self) -> Result<PeerFacts, FactsFault>;
     /// One snapshot of the seam board's handshaken sessions.
@@ -73,6 +84,15 @@ pub trait NodeFacts: Send + Sync {
     fn free_space(&self) -> Result<u64, FactsFault>;
     /// The wall clock, Unix seconds.
     fn now(&self) -> u64;
+}
+
+/// A pool entry's body, as `get_transactions` reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PoolBody {
+    /// The transaction, serialized whole.
+    pub tx: Vec<u8>,
+    /// Whether the node shows it; `false` is its stem phase.
+    pub shown: bool,
 }
 
 /// What the sync owner and the writer report about the node's progress.

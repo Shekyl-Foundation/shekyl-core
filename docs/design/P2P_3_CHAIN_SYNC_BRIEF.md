@@ -84,7 +84,7 @@ fix to its PR 2 (`:330`). §A records the couplings that remain.
 - **CS-F6. The wire can be headers-first with no new primitive.**
   - `Block::pow_blob()` is `header ‖ tx_tree_hash ‖ V(count)`.
     `identity_of_pow_blob()` names the block from that alone
-    (`shekyl-wire/src/block.rs:253-287`).
+    (`shekyl-wire/src/block.rs:322-356`).
   - Difficulty is `lwma1_next` over timestamps and cumulative
     difficulties only.
   - `ReleaseAnchors` is a genesis hash plus a static table of

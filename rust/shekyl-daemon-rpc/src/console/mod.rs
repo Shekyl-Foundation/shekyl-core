@@ -490,7 +490,12 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
         out.push(full_hex);
     }
     if json_out {
-        out.push(tx.as_json.clone());
+        let Some(json) = tx.as_json.clone() else {
+            return Err(format!(
+                "print_transaction: the daemon sent no JSON rendering for {hash}"
+            ));
+        };
+        out.push(json);
     }
     Ok(out.join("\n"))
 }

@@ -154,19 +154,20 @@ pub enum BundleWireError {
         /// The block's draw count.
         count: u32,
     },
-    /// The kept part is the seed, `h`, `count`, and a bitmap of exactly
-    /// `count` bits. `expected` is the length the stated count implies, or
-    /// the 44 fixed bytes when there are too few to state one.
+    /// The kept part is the seed, `h`, the economy count and bitmap, and
+    /// the support count and bitmap. `expected` is the length those fields
+    /// imply from what has been read, or the 44 fixed bytes when the input
+    /// is too short to state a count.
     #[error("the kept part is {expected} bytes for the count it states, not {found}")]
     KeptLength {
-        /// `44 + ⌈count / 8⌉`.
+        /// The length the fields read so far imply.
         expected: usize,
         /// The bytes offered.
         found: usize,
     },
-    /// A reference is its kept part and a 32-byte hash: exactly
-    /// `76 + ⌈count / 8⌉` bytes for the count it states.
-    #[error("a reference is 76 bytes and the bitmap its count implies, not {found} bytes")]
+    /// A reference is its kept part and a 32-byte hash. With both bitmaps
+    /// empty that is 80 bytes; each bitmap adds `⌈its count / 8⌉`.
+    #[error("a reference is its kept part and a 32-byte hash, not {found} bytes")]
     ReferenceLength {
         /// The bytes offered.
         found: usize,
@@ -227,6 +228,15 @@ impl PassBitmap {
             count,
             bytes: bytes.to_vec(),
         })
+    }
+
+    /// A bitmap of no draws.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            count: 0,
+            bytes: Vec::new(),
+        }
     }
 
     /// The bitmap of `count` bits with exactly `passes` set — the
@@ -294,18 +304,21 @@ pub struct BundleKept {
     pub h: BlockHeight,
     /// The revealed draw seed.
     pub seed: [u8; BUNDLE_SEED_LEN],
-    /// The stated count and its bits.
+    /// The stated economy count and its bits.
     pub passes: PassBitmap,
+    /// The stated support count and its bits. Not part of
+    /// [`Self::charge`].
+    pub support: PassBitmap,
 }
 
 impl BundleKept {
-    /// The bytes [`Self::encode`] returns: `44 + ⌈count / 8⌉`.
+    /// The bytes [`Self::encode`] returns: `48 + ⌈count / 8⌉ + ⌈support / 8⌉`.
     #[must_use]
     pub fn encoded_len(&self) -> usize {
-        BUNDLE_KEPT_FIXED_LEN + self.passes.as_bytes().len()
+        BUNDLE_KEPT_FIXED_LEN + self.passes.as_bytes().len() + 4 + self.support.as_bytes().len()
     }
 
-    /// `seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉]`.
+    /// `seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ support_count_le[4] ‖ support_bitmap`.
     ///
     /// The one encoding of the kept part. The reference opens with these
     /// bytes, the header root hashes them inside each reference, and the
@@ -323,6 +336,8 @@ impl BundleKept {
         out.extend_from_slice(&self.h.to_raw().to_le_bytes());
         out.extend_from_slice(&self.passes.count().to_le_bytes());
         out.extend_from_slice(self.passes.as_bytes());
+        out.extend_from_slice(&self.support.count().to_le_bytes());
+        out.extend_from_slice(self.support.as_bytes());
     }
 
     /// The kept part these bytes are. The count is read from the bytes.
@@ -333,26 +348,54 @@ impl BundleKept {
     /// `44 + ⌈count / 8⌉` long for the count it states;
     /// [`BundleWireError::BitmapPadding`] for a set padding bit.
     pub fn decode(bytes: &[u8]) -> Result<Self, BundleWireError> {
-        let Some((fixed, bitmap)) = bytes.split_at_checked(BUNDLE_KEPT_FIXED_LEN) else {
+        let Some((fixed, rest)) = bytes.split_at_checked(BUNDLE_KEPT_FIXED_LEN) else {
             return Err(BundleWireError::KeptLength {
                 expected: BUNDLE_KEPT_FIXED_LEN,
                 found: bytes.len(),
             });
         };
-        let (seed, rest) = fixed.split_at(BUNDLE_SEED_LEN);
-        let (h, count) = rest.split_at(8);
+        let (seed, tail) = fixed.split_at(BUNDLE_SEED_LEN);
+        let (h, count) = tail.split_at(8);
         let count = u32::from_le_bytes(count.try_into().expect("4 bytes"));
-        let passes = PassBitmap::new(count, bitmap).map_err(|refusal| match refusal {
+        let economy_len = PassBitmap::byte_len(count);
+        let Some((economy, after_economy)) = rest.split_at_checked(economy_len) else {
+            return Err(BundleWireError::KeptLength {
+                expected: BUNDLE_KEPT_FIXED_LEN.saturating_add(economy_len),
+                found: bytes.len(),
+            });
+        };
+        let Some((support_count, support_bytes)) = after_economy.split_at_checked(4) else {
+            return Err(BundleWireError::KeptLength {
+                expected: BUNDLE_KEPT_FIXED_LEN
+                    .saturating_add(economy_len)
+                    .saturating_add(4),
+                found: bytes.len(),
+            });
+        };
+        let support_count = u32::from_le_bytes(support_count.try_into().expect("4 bytes"));
+        let passes = PassBitmap::new(count, economy).map_err(|refusal| match refusal {
             BundleWireError::BitmapLength { expected, .. } => BundleWireError::KeptLength {
                 expected: BUNDLE_KEPT_FIXED_LEN.saturating_add(expected),
                 found: bytes.len(),
             },
             other => other,
         })?;
+        let support =
+            PassBitmap::new(support_count, support_bytes).map_err(|refusal| match refusal {
+                BundleWireError::BitmapLength { expected, .. } => BundleWireError::KeptLength {
+                    expected: BUNDLE_KEPT_FIXED_LEN
+                        .saturating_add(economy_len)
+                        .saturating_add(4)
+                        .saturating_add(expected),
+                    found: bytes.len(),
+                },
+                other => other,
+            })?;
         Ok(Self {
             h: BlockHeight::from_raw(u64::from_le_bytes(h.try_into().expect("8 bytes"))),
             seed: seed.try_into().expect("32 bytes"),
             passes,
+            support,
         })
     }
 
@@ -400,9 +443,8 @@ impl BundleRef {
         }
     }
 
-    /// `seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ prunable_hash[32]`: the
-    /// kept part ([`BundleKept::encode`]), then the hash. `76 + ⌈count /
-    /// 8⌉` bytes.
+    /// The kept part ([`BundleKept::encode`]), then the prunable hash.
+    /// `80 + ⌈economy count / 8⌉ + ⌈support count / 8⌉` bytes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.kept.encoded_len() + 32);
@@ -420,7 +462,7 @@ impl BundleRef {
     /// # Errors
     ///
     /// [`BundleWireError::ReferenceLength`] unless `bytes` is exactly
-    /// `76 + ⌈count / 8⌉` long for the count it states;
+    /// the kept part plus 32 bytes for the counts it states;
     /// [`BundleWireError::BitmapPadding`] for a set padding bit.
     pub fn decode(bytes: &[u8]) -> Result<Self, BundleWireError> {
         let length = BundleWireError::ReferenceLength { found: bytes.len() };
@@ -481,14 +523,17 @@ impl BundleRef {
         self.kept.charge()
     }
 
-    /// The length of the body this reference names: the witness key and
-    /// signature, and one record per set bit. The reference fixes it, so a
-    /// longer fetch is refused before it completes (§7.5).
+    /// The length of the body this reference names: the witness, then one
+    /// record per set bit of the economy bitmap and of the support bitmap.
+    /// The reference fixes it, so a longer fetch is refused before it
+    /// completes (§7.5).
     #[must_use]
     pub fn body_len(&self) -> u64 {
-        // At most 2^32 set bits of 1,397 bytes each: no overflow in `u64`.
-        BUNDLE_WITNESS_LEN as u64
-            + u64::from(self.kept.passes.popcount()) * BUNDLE_RECORD_LEN as u64
+        // Each popcount is a `u32`. Their sum times [`BUNDLE_RECORD_LEN`]
+        // fits `u64`: two bitmaps, each with every bit set.
+        let records =
+            u64::from(self.kept.passes.popcount()) + u64::from(self.kept.support.popcount());
+        BUNDLE_WITNESS_LEN as u64 + records * BUNDLE_RECORD_LEN as u64
     }
 }
 
@@ -654,7 +699,8 @@ impl BundleBody {
 ///
 /// ```text
 /// cSHAKE256_32("shekyl/archival-serve-credit-bundle-v1",
-///              seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap ‖ r₁ ‖ … ‖ rₙ)
+///              seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap
+///              ‖ support_count_le[4] ‖ support_bitmap ‖ r₁ ‖ … ‖ rₙ)
 /// ```
 ///
 /// That is **the kept part followed by the records**: the preimage opens
@@ -692,7 +738,8 @@ pub fn bundle_prunable_hash(prunable: &[u8]) -> [u8; 32] {
 ///
 /// ```text
 /// cSHAKE256_32("shekyl/archival-bundle-root-v1", n_le[4] ‖ ref₁ ‖ … ‖ refₙ)
-/// refᵢ = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉] ‖ prunable_hash[32]
+/// refᵢ = seed[32] ‖ h_le[8] ‖ count_le[4] ‖ bitmap[⌈count / 8⌉]
+///        ‖ support_count_le[4] ‖ support_bitmap[⌈support / 8⌉] ‖ prunable_hash[32]
 /// ```
 ///
 /// Each bundle contributes its kept bytes and the hash of its prunable

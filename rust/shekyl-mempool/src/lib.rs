@@ -48,6 +48,6 @@ pub use door::{judge, stateless, DoorFault, Judged};
 pub use evict::{Evicted, Limits};
 pub use pool::{Admission, Duplicate, Pool, PoolFault};
 pub use reconcile::{Reconciled, Removed};
-pub use relay::{shown, Listed, RelayView};
-pub use template::{select, Selected};
+pub use relay::{shown, Entry, Listed, RelayView};
+pub use template::{select, select_admitting, select_shown, ListedTx, Selected, ShownBody};
 pub use view::{KeyImages, PoolView};

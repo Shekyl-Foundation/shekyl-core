@@ -762,7 +762,7 @@ where
             prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes(*prunable_hash),
             archival_len: archival_len.to_raw(),
-            as_json: String::new(),
+            as_json: None,
             pruned: pruned_flag,
             double_spend_seen,
             location,
@@ -780,23 +780,23 @@ where
                 } else {
                     [pruned.as_slice(), prunable.as_slice()].concat()
                 };
-                entry.as_json = render(&blob, base_only).map_err(|code| {
+                entry.as_json = Some(render(&blob, base_only).map_err(|code| {
                     ProjectionFailed::Render(RenderFailed {
                         txid: entry.tx_hash.to_string(),
                         code,
                     })
-                })?;
+                })?);
             }
         } else {
             let full: Vec<u8> = [pruned.as_slice(), prunable.as_slice()].concat();
             entry.as_hex = hex::encode(&full);
             if request.decode_as_json {
-                entry.as_json = render(&full, false).map_err(|code| {
+                entry.as_json = Some(render(&full, false).map_err(|code| {
                     ProjectionFailed::Render(RenderFailed {
                         txid: entry.tx_hash.to_string(),
                         code,
                     })
-                })?;
+                })?);
             }
         }
 
@@ -1880,7 +1880,11 @@ pub(crate) mod tests {
                 e.prunable_as_hex, prunable_as_hex,
                 "prunable_as_hex @ {label}"
             );
-            assert_eq!(e.as_json, as_json, "as_json @ {label}");
+            assert_eq!(
+                e.as_json.as_deref(),
+                (!as_json.is_empty()).then_some(as_json),
+                "as_json @ {label}: absent unless rendered"
+            );
             assert_eq!(e.archival_len, tx.archival_len, "archival_len @ {label}");
         }
     }
@@ -1906,7 +1910,10 @@ pub(crate) mod tests {
         assert!(e.as_hex.is_empty(), "no concatenated form exists");
         assert_eq!(e.pruned_as_hex, pruned_hex);
         assert!(e.prunable_as_hex.is_empty());
-        assert_eq!(e.as_json, format!("{pruned_hex}|base_only=true"));
+        assert_eq!(
+            e.as_json.as_deref(),
+            Some(format!("{pruned_hex}|base_only=true").as_str())
+        );
         assert_eq!(e.archival_len, 0);
     }
 
@@ -1926,7 +1933,7 @@ pub(crate) mod tests {
                     prunable_hash: [0x22; 32],
                     double_spend_seen: true,
                     relayed: true,
-                    received_timestamp: 1_700_000_001,
+                    received_timestamp: Some(1_700_000_001),
                 },
                 TxSlot::Missed,
             ],
@@ -2071,10 +2078,10 @@ pub(crate) mod tests {
         );
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
-        // Head of the `get_version` chain (`_v36` = 3.59). A bump that
+        // Head of the `get_version` chain (`_v37` = 3.60). A bump that
         // forgets this include fails on `version` below.
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v36.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v37.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {

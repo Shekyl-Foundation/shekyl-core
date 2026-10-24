@@ -7,8 +7,9 @@
 //! door, and a refusal that leaves no trace in memory or in the file.
 
 use shekyl_chain_rules::harness::fixture::{listed_on, spendable_chain};
-use shekyl_chain_rules::{AdmissionPolicy, RuleSet};
-use shekyl_types::UnixSeconds;
+use shekyl_chain_rules::{AdmissionPolicy, RuleSet, Tip};
+use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_types::{BlockHash, BlockHeight, UnixSeconds};
 
 use super::{Admission, Arrival, Duplicate, Pool, Step1};
 use crate::door::Judged;
@@ -101,4 +102,38 @@ fn a_refused_transaction_leaves_no_trace() {
         assert_eq!(reconciled, crate::reconcile::Reconciled::default());
     });
     drop(std::fs::remove_file(&path));
+}
+
+fn marker(height: u64, byte: u8, work: u128) -> super::JudgedTip {
+    super::JudgedTip {
+        tip: Tip {
+            height: BlockHeight::from_raw(height),
+            hash: BlockHash::from_bytes([byte; 32]),
+        },
+        work: CumulativeDifficulty::from_raw(work),
+    }
+}
+
+/// Fork-choice work orders the judged tip. A same-height reorg is heavier,
+/// so it replaces the marker and a template on the old tip no longer
+/// matches it. A lighter snapshot does not put the old tip back, and equal
+/// work under two hashes clears the marker.
+#[test]
+fn work_orders_the_judged_tip_across_a_reorg() {
+    let old = marker(4, 0xA1, 100);
+    let same_height = marker(4, 0xB2, 140);
+    let shorter = marker(3, 0xC3, 180);
+    let tie = marker(4, 0xD4, 140);
+    assert_eq!(super::judged_tip_after(None, old), Some(old));
+    assert_eq!(super::judged_tip_after(Some(old), old), Some(old));
+    assert_eq!(
+        super::judged_tip_after(Some(old), same_height),
+        Some(same_height)
+    );
+    assert_eq!(super::judged_tip_after(Some(old), shorter), Some(shorter));
+    assert_eq!(
+        super::judged_tip_after(Some(same_height), old),
+        Some(same_height)
+    );
+    assert_eq!(super::judged_tip_after(Some(same_height), tie), None);
 }

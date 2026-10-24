@@ -360,7 +360,7 @@ impl Drive {
                 Input::PinAccepted
             }
             Err(error) => match error {
-                shekyl_tor_control_daemon::TorBinaryError::NotFound => Input::BundleMissing,
+                shekyl_tor_control_daemon::TorBinaryError::NotFound { .. } => Input::BundleMissing,
                 shekyl_tor_control_daemon::TorBinaryError::Unavailable { .. } => Input::Unavailable,
                 _ => Input::PinRefused,
             },

@@ -17,13 +17,15 @@
 //! - exactly [`SUBMISSION_RECORDS`](crate::SUBMISSION_RECORDS) largest-class
 //!   payload records in a row, counted from a message boundary.
 //!
-//! A boundary is the start of the stream, a record of a smaller class, or a
-//! padded frame that just finished. An empty padding record opens a frame.
+//! A boundary is the start of the stream, a record of a smaller class, a
+//! padded frame that just finished, or a record this side sent (on the
+//! daemon, a response). An empty padding record opens a frame.
 //! It does not end the message before it. One more largest-class record
 //! after the five clears the verdict, so a longer ordinary message is never
-//! a submission. A full-size submission that continues a run which already
-//! ended on a largest-class record has no boundary in front of it, and the
-//! daemon refuses it.
+//! a submission. A full-size submission sent straight after a message that
+//! ended on a largest-class record, with no response between them, has no
+//! boundary in front of it, and the daemon refuses it. Only a pipelining
+//! client sends that way.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -220,6 +222,18 @@ impl Frame {
         Ok(())
     }
 
+    /// This side sealed a record: on the daemon, its response.
+    ///
+    /// The peer's message ended before it. A client sends its next request
+    /// only after the response, so the next run counts from here, and a
+    /// path observer sees the response between them too. Inside a frame
+    /// nothing changes: the frame is still owed its records.
+    pub(crate) fn sent(&mut self) {
+        if let Place::Run { .. } = self.place {
+            self.place = Place::Run { count: 0 };
+        }
+    }
+
     /// One payload record of a padded frame has been accepted. `remaining`
     /// is how many payload records the frame still owes after this one.
     fn payload_accepted(&mut self, remaining: usize) {
@@ -322,6 +336,44 @@ mod tests {
         run.push((largest, false));
         run.extend(copies(largest, false, SUBMISSION_RECORDS));
         assert!(drive(&run).unwrap());
+    }
+
+    #[test]
+    fn a_record_this_side_sent_is_a_boundary() {
+        let largest = largest();
+        let mut frame = Frame::new();
+        let five_full = |frame: &mut Frame| {
+            for _ in 0..SUBMISSION_RECORDS {
+                frame.admit(largest, false, largest).unwrap();
+            }
+            frame.submission()
+        };
+        assert!(five_full(&mut frame), "the first full-size submission");
+        // The daemon answers it. The next five are the next request.
+        frame.sent();
+        assert!(five_full(&mut frame), "a second one after the response");
+        // Without a response between them, the run continues.
+        assert!(!five_full(&mut frame), "five more with no response");
+        // A response does not change the verdict the handler reads.
+        frame.sent();
+        assert!(!frame.submission());
+    }
+
+    #[test]
+    fn a_record_sent_inside_a_frame_leaves_the_frame() {
+        let largest = largest();
+        let mut frame = Frame::new();
+        frame.admit(largest, true, largest).unwrap();
+        frame.sent();
+        for _ in 1..SUBMISSION_RECORDS {
+            frame.admit(largest, false, largest).unwrap();
+        }
+        assert!(frame.submission(), "the frame the padding opened");
+        // And a smaller record where the frame owes payload is still refused.
+        let mut frame = Frame::new();
+        frame.admit(largest, true, largest).unwrap();
+        frame.sent();
+        assert!(frame.admit(ClassId(0), false, largest).is_err());
     }
 
     #[test]
