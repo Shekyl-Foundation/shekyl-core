@@ -20,8 +20,8 @@
 //! - [`CachePlan::Evidence`]: a cache derived for this job and dropped when
 //!   it ends. It never evicts either ingest slot.
 //!
-//! [`Command::Prove`]: crate::Command::Prove
-//! [`Event::Proven`]: crate::Event::Proven
+//! [`Command::Prove`]: shekyl_chain_sync::Command::Prove
+//! [`Event::Proven`]: shekyl_chain_sync::Event::Proven
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -33,7 +33,7 @@ use shekyl_pow_randomx::{PreparedCache, Seedhash};
 use shekyl_types::{BlockHash, PowHash, Timestamp};
 use shekyl_wire::PowBlob;
 
-use crate::model::{CachePlan, HashClass, ProveItem, Proved};
+use shekyl_chain_sync::{CachePlan, HashClass, ProveItem, Proved};
 
 /// The budget class a model [`HashClass`] runs under: one to one.
 #[must_use]
@@ -150,7 +150,7 @@ impl Executor {
     }
 
     /// CEN-C1's wall clock: the substrate's, which the owner reads once
-    /// per event for [`crate::Sync::set_wall`].
+    /// per event for [`shekyl_chain_sync::Sync::set_wall`].
     ///
     /// # Errors
     ///

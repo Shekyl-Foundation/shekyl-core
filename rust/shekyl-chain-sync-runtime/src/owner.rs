@@ -63,7 +63,7 @@ use tracing::Instrument;
 use crate::executor::Executor;
 use crate::router::Routed;
 use crate::serve::{serve_bodies, serve_headers};
-use crate::{
+use shekyl_chain_sync::{
     BoundArrival, ClaimError, Command, Event, Job, Outcome, PeerClaim, Proved, Sync as Model,
     SyncState,
 };
@@ -799,7 +799,12 @@ where
                     .and_then(|max| usize::try_from(max).ok());
                 for (tag, _, bytes) in tags {
                     let outcome = match refusal {
-                        Refusal::NoRoom | Refusal::Throttled => Outcome::NoRoom,
+                        // An unreadable store stops the service on the same
+                        // read, so the arrival is held, not asked for again:
+                        // no room report follows, and nothing is re-offered.
+                        Refusal::NoRoom | Refusal::Throttled | Refusal::StoreUnreadable => {
+                            Outcome::NoRoom
+                        }
                         Refusal::Oversize if max.is_some_and(|max| bytes > max) => {
                             Outcome::Oversize { invalidate: true }
                         }

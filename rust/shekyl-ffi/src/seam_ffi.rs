@@ -7,7 +7,7 @@
 //!
 //! C++ calls `open`, `send`, and `close`. Rust calls the bound post, which
 //! only enqueues onto the connection's strand. The hub's post sink is the
-//! chain-sync router (`shekyl_chain_sync::router`), pass-through here: no
+//! chain-sync router (`shekyl_chain_sync_runtime::router`), pass-through here: no
 //! sync owner is attached, so each post is the bound post's, unchanged. The strand calls back when
 //! the handler is armed, when a delivery returns, when `closed` starts,
 //! and when the executor drops the link.
@@ -21,7 +21,7 @@ use std::ffi::c_void;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
-use shekyl_chain_sync::router::Router;
+use shekyl_chain_sync_runtime::router::Router;
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
     connector_from_index, direction_from_index, CloseCause, CloseKind, ConnectorId, Direction,

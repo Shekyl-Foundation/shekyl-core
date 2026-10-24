@@ -6,7 +6,7 @@
 //! The scripted sync peers of CS-Q11.
 //!
 //! A [`ServingPeer`] answers from a real store through the node's own
-//! responder (`shekyl_chain_sync::serve`), so an honest peer is the server
+//! responder (`shekyl_chain_sync_runtime::serve`), so an honest peer is the server
 //! the node itself runs, and each adversary is that server with one answer
 //! changed. A [`HeaderChainPeer`] serves a header chain no store holds: a
 //! fork only a header path judges.
@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::ChainStore;
-use shekyl_chain_sync::serve::{serve_bodies, serve_headers};
+use shekyl_chain_sync_runtime::serve::{serve_bodies, serve_headers};
 use shekyl_levin::{
     notify, PortableMap, RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders,
     SyncCommand, HASH_SIZE, HEADERS_RESPONSE_BYTES,

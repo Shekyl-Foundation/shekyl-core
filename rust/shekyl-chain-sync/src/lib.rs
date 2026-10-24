@@ -12,7 +12,8 @@
 //! Events come in, commands go out, and nothing here waits, hashes, or
 //! reads a store. The caller passes the main chain as a [`HeaderView`]
 //! snapshot with each event, and the instant. PoW leaves as a command
-//! the executor (CS-3) runs.
+//! the executor runs. The executor, the owner, the router and serving are
+//! `shekyl-chain-sync-runtime`'s (CS-3).
 
 #![deny(unsafe_code)]
 
@@ -28,15 +29,6 @@ mod proof;
 mod scenarios;
 #[cfg(test)]
 mod select_tests;
-
-#[cfg(feature = "runtime")]
-pub mod executor;
-#[cfg(feature = "runtime")]
-pub mod owner;
-#[cfg(feature = "runtime")]
-pub mod router;
-#[cfg(feature = "runtime")]
-pub mod serve;
 
 mod branch;
 mod claim;
