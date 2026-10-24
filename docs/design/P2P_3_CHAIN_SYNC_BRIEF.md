@@ -1185,10 +1185,12 @@ does it meet ingest's backpressure?
     forwards everything else to the C++ handler unchanged
     (`P2P_TRANSPORT_LAYER.md`, the seam's post sink). It also takes the
     hint intake's claims (`Router::hint`).
-  - The owner publishes its derived state into a sender its caller
-    supplies (`OwnerParts::state`): the node's handle, which the RPC's
-    `get_info`, the miner's template feed and the relay gate read
-    (CS-Q2 step 8).
+  - The owner publishes its derived state into the node's one sync
+    sender, `shekyl_node::Node::sync()` (`OwnerParts::state` is that
+    sender, cloned; DX-Q3 Q13), which the RPC's facts, the miner's
+    follower and the relay gate read (CS-Q2 step 8). `Behind` carries
+    the target, the best verified chain's block count, and the facts
+    answer `target_height` from it.
 
 **Wargame.**
 - **Termination.** Every wait is a deadline or an event.

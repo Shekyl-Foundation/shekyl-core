@@ -105,7 +105,9 @@ pub struct OwnerParts<C: Clock + Clone, R> {
     /// The router's output.
     pub routed: mpsc::UnboundedReceiver<Routed>,
     /// Where the derived sync state is published (CS-Q2 step 8): the
-    /// node's handle, which the RPC, the miner and the relay gate read.
+    /// node's one sync sender (`shekyl_node::Node::sync()`, cloned), which
+    /// the RPC's facts, the miner's follower and the relay gate read. The
+    /// owner is its publisher and holds no other.
     pub state: watch::Sender<SyncState>,
 }
 

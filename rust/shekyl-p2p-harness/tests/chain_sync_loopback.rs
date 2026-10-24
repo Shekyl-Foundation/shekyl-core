@@ -256,6 +256,13 @@ async fn a_fresh_node_syncs_a_corpus_from_two_honest_peers_hashing_headers_only(
             && kinds.iter().rposition(|kind| *kind == "Synced") > behind,
         "the handle published {kinds:?}"
     );
+    // `Behind` names what sync works towards: the corpus's block count.
+    assert!(
+        states.iter().any(
+            |state| matches!(state, SyncState::Behind { target, .. } if target.to_raw() == count)
+        ),
+        "the handle published {states:?}"
+    );
     // The chain fits one response: one header request, and no span
     // offered over another and fetched again.
     assert_eq!(seen.iter().map(|seen| seen.headers()).sum::<usize>(), 1);

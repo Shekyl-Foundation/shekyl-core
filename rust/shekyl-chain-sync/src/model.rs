@@ -586,6 +586,7 @@ where
             return SyncState::Behind {
                 have: local.work,
                 best: self.star.work,
+                target: self.star_count(),
             };
         }
         if self.fill_frontier > Self::checkpoint() {

@@ -72,14 +72,19 @@ impl NodeFacts for Surroundings {
         // Chain sync's state, the one the follower posts on (DX-Q3, Q13),
         // read by the follower's rule: a closed watch says nothing about
         // the chain, so it reads `NoView`, not its last value.
-        // `following_degraded` is the latch the flip writes into the store.
+        // The target is the best verified chain's count, which chain sync
+        // publishes with `Behind`. `following_degraded` is the latch the
+        // flip writes into the store.
         let state = if self.sync.has_changed().is_err() {
             SyncState::NoView
         } else {
             *self.sync.borrow()
         };
         Ok(SyncFacts {
-            target: None,
+            target: match state {
+                SyncState::Behind { target, .. } => Some(target),
+                _ => None,
+            },
             synchronized: state == SyncState::Synced,
             busy_syncing: matches!(
                 state,
@@ -678,5 +683,41 @@ mod tests {
         let closed = surroundings.sync().expect("closed");
         assert!(!closed.synchronized, "a closed watch is not Synced");
         assert!(!closed.busy_syncing);
+    }
+
+    /// The node's facts read what chain sync publishes into the node's one
+    /// sync sender: `Behind` with its target, then `Synced` with none
+    /// (CS-Q2 step 8). Red edit: answer `target: None` always.
+    #[test]
+    fn the_sync_facts_read_the_published_state_and_its_target() {
+        let dir = tempfile::tempdir().expect("temp");
+        let (sender, sync) = tokio::sync::watch::channel(SyncState::NoView);
+        let surroundings = Surroundings {
+            pool: Arc::new(Mutex::new(None)),
+            data_dir: dir.path().to_path_buf(),
+            offline: false,
+            sync,
+            health: PoolHealth::unwired(),
+        };
+        let none = surroundings.sync().expect("open");
+        assert_eq!(
+            (none.target, none.synchronized, none.busy_syncing),
+            (None, false, false)
+        );
+        let target = shekyl_types::ChainCount::from_raw(120);
+        sender.send_replace(SyncState::Behind {
+            have: shekyl_difficulty::CumulativeDifficulty::from_raw(80),
+            best: shekyl_difficulty::CumulativeDifficulty::from_raw(120),
+            target,
+        });
+        let behind = surroundings.sync().expect("open");
+        assert_eq!(behind.target, Some(target));
+        assert!(behind.busy_syncing && !behind.synchronized);
+        sender.send_replace(SyncState::Synced);
+        let synced = surroundings.sync().expect("open");
+        assert_eq!(
+            (synced.target, synced.synchronized, synced.busy_syncing),
+            (None, true, false)
+        );
     }
 }
