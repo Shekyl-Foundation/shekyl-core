@@ -11,8 +11,8 @@
 //! hands each to the model with a fresh store snapshot as `main`, and runs
 //! the commands that come out, in order.
 //!
-//! - **Sessions** are [`Session`]s. [`shekyl_seam::SocketId`] does not order itself, and
-//!   the model's maps need an order. [`Session`] orders by the admission
+//! - **Sessions** are `Session`s. [`shekyl_seam::SocketId`] does not order itself, and
+//!   the model's maps need an order. `Session` orders by the admission
 //!   number, and that order carries no meaning: draws are uniform over the
 //!   set. The entry's [`SessionId`] is that number, and only at the door.
 //! - **`now`** is the timing engine's clock as an [`Instant`]. Deadlines
