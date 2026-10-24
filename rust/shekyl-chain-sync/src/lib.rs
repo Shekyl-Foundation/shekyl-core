@@ -22,6 +22,8 @@ mod announce_tests;
 #[cfg(test)]
 mod continuation_tests;
 #[cfg(test)]
+mod earned_seed_tests;
+#[cfg(test)]
 mod harness;
 #[cfg(all(test, feature = "cs2-long-run"))]
 mod long_run;

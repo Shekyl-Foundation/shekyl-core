@@ -25,6 +25,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use shekyl_chain_rules::{seed_height, FormAttempt, HeaderJudged, RuleSet, Target};
+use shekyl_difficulty::SEEDHASH_EPOCH_LAG;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{BlockBody, PowBlob};
 
@@ -376,13 +377,19 @@ pub(crate) fn cache_for(run: &Run, index: usize) -> Option<CachePlan> {
     if on_main {
         return Some(CachePlan::Main(checked.seed));
     }
+    // A branch seed is earned once (CS-Q2 step 3): when the seed header
+    // and the lag after it are proven, which is every header before the
+    // first one that names the seed. The cache may then be built, and every
+    // later header under that seed is hashed in the same job.
     let seed_at = seed_height(checked.height)?;
-    let seed_index = run.chain.index_at(seed_at)?;
-    if seed_index < run.chain.proven && index <= run.chain.proven {
-        Some(CachePlan::Branch(checked.seed))
-    } else {
-        None
-    }
+    let first_named = BlockHeight::from_raw(
+        seed_at
+            .to_raw()
+            .saturating_add(SEEDHASH_EPOCH_LAG)
+            .saturating_add(1),
+    );
+    let first_named = run.chain.index_at(first_named)?;
+    (first_named <= run.chain.proven).then_some(CachePlan::Branch(checked.seed))
 }
 
 /// One open peer.

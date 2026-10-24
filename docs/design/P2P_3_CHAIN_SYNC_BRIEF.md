@@ -345,14 +345,27 @@ ingest deciding forks.**
      cache is derived only for a seed the chain has earned.
      - **A seed one of the two cache slots holds** (the window the
        ingest door uses) is used as is.
-     - **A seed on the run's own branch** is earned when the seed header
-       and every header after it, up to the one being hashed, are
-       PoW-verified on that branch. In-order verification gives this
-       whenever a header names such a seed: the lag puts the seed header
-       at least 65 headers earlier, each paid for at its claimed
-       difficulty. This is the header form of B2's "65 or more stored
-       blocks". Initial sync is this case: each seed on `H*` past `L` is
-       earned by the headers `T` already verified.
+     - **A seed on the run's own branch is earned once (Rick,
+       2026-10-24).** It is earned when the seed header and the lag after
+       it are PoW-verified on that branch: every header before the first
+       one that names the seed, 65 headers in all, each paid for at its
+       claimed difficulty. This is the header form of B2's "65 or more
+       stored blocks". Then the cache is built, and every later header
+       under that seed is hashed in one job, spread across the budget's
+       permits and answered in item order, stopping at the first refusal.
+       Initial sync is this case: each seed on `H*` past `L` is earned by
+       the headers `T` already verified.
+       - **What a forged run costs now.** Before the first refusal is
+         seen, a job may already have hashed up to one header per permit
+         (4 on the floor device). The results after the refusal are
+         discarded and the session closes. That is accepted: B2 bounds
+         *cache builds*, and batching builds no further cache, since the
+         cache exists once the seed is earned; the extra hashes are
+         bounded by this node's own permit count and paid once per
+         session; and the reconnect throttle prices the next session.
+         Hashing one header at a time would make a 50,000-header sync
+         take hours on one slot (4.8 h measured on a 16-thread x86 host,
+         far longer on the floor device).
      - Such a cache is **transient**. It never takes the canonical slot
        or the pinned pair, and it is never pinned. It is built under
        `Class::HeaderPow` (`shekyl-hash-budget`, DRS-X PR 2), one build
