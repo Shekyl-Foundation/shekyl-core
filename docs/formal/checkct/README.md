@@ -86,7 +86,10 @@ secret bytes (the full field, no secret-dependent rejection), the `U256`
 mod rows from a 512-bit remainder, the `Residue` rows from an unrestricted
 `U256` (the Montgomery conversion reduces it), and the `from_repr` rows
 from unrestricted bytes, invalid encodings included. Records made before
-this carry the earlier sampler; the regenerated ones replace them.
+this carry the earlier sampler; the static ones are regenerated with the
+new one, and the device rows were re-run with the corrected binary
+(`dynamic-*-rerun.txt`) with the same outcome: the x86_64 host crosses on
+`HelioseleneField`, the floor device is flat on every row.
 Upstream's calibration driver is pinned by revision in `setup.sh`
 (`CRYPTO_BIGINT_DRIVER_REV`), so a fresh setup runs the entrypoints the
 records name.
@@ -271,10 +274,12 @@ regenerate it after any run.
 | `subject.nightly-2026-10-06.txt` | subject | nightly-2026-10-06 | `--timeout 900` | riscv32imac-unknown-none-elf | 25 / 1 / 0 | insecure: cb055_residue_pow_secret_exp |
 | `subject.nightly-2026-10-06.txt` | subject | nightly-2026-10-06 | `--timeout 900` | thumbv7em-none-eabihf | 26 / 0 / 0 | — |
 | `subject.nightly-2026-10-06.txt` | subject | nightly-2026-10-06 | `--timeout 900` | x86_64-unknown-linux-gnu | 25 / 0 / 1 | unknown: dfg_invert |
+| `dynamic-aarch64-floor-device-rerun.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-aarch64-floor-device.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-diagnostics.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-fleet-measurement-host-halves.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-fleet-measurement-host-property.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-fleet-measurement-host-rerun.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-fleet-measurement-host-slp-ab.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-fleet-measurement-host.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-method-check.txt` | dynamic | see file | — | — | — | not a checkct record |
