@@ -13,7 +13,7 @@ use subtle::ConstantTimeLess;
 use crypto_bigint::{
     impl_modulus,
     modular::constant_mod::{Residue, ResidueParams},
-    NonZero, U256, U512,
+    Encoding, NonZero, U256, U512,
 };
 
 impl_modulus!(
@@ -25,16 +25,30 @@ type R = Residue<P25519, { U256::LIMBS }>;
 const P: U256 = <P25519 as ResidueParams<{ U256::LIMBS }>>::MODULUS;
 const WIDE: U512 = U256::ZERO.concat(&P);
 
+/// A secret element of the full range [0, p): 64 secret bytes reduced by the
+/// public modulus, the way dalek-ff-group's `reduce` samples. Masking the
+/// top bits instead would exclude the near-modulus values (p - 1 and its
+/// neighbours), where the reduction's carries and borrows differ.
 fn secret_u256() -> U256 {
+    black_box(PublicRng::new().next_u32());
+    let mut b = [0u8; 64];
+    PrivateRng::new().fill_bytes(&mut b);
+    let wide = U512::from_be_slice(&b).rem(&NonZero::new(WIDE).unwrap());
+    U256::from_le_slice(&wide.to_le_bytes()[..32])
+}
+
+/// An unrestricted secret 256-bit value: any encoding, in or out of range.
+fn secret_any_u256() -> U256 {
     black_box(PublicRng::new().next_u32());
     let mut b = [0u8; 32];
     PrivateRng::new().fill_bytes(&mut b);
-    b[0] &= 0x3f;
     U256::from_be_slice(&b)
 }
 
+/// `Residue::new` is a Montgomery conversion that reduces any `U256`, so the
+/// residue inputs take the unrestricted value and cover every encoding.
 fn secret_r() -> R {
-    R::new(&secret_u256())
+    R::new(&secret_any_u256())
 }
 
 #[inline(never)]

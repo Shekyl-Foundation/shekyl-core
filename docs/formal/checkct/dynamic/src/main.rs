@@ -222,12 +222,12 @@ trait RandomInput: Sized {
 }
 impl RandomInput for HelioseleneField {
     fn random(r: &mut Rng) -> Self {
-        fehelio(r.bytes32())
+        fehelio(r.bytes64())
     }
 }
 impl RandomInput for Field25519 {
     fn random(r: &mut Rng) -> Self {
-        fe25519(r.bytes32())
+        fe25519(r.bytes64())
     }
 }
 impl RandomInput for u8 {
@@ -268,14 +268,29 @@ struct Run {
     only: Option<usize>,
 }
 
-fn fe25519(b: [u8; 32]) -> Field25519 {
+/// A uniformly random element of the full field, through the field's own wide
+/// reduction of 64 bytes: every element, the near-modulus ones included.
+/// (Decoding masked 32-byte encodings would never sample [2^254, p).)
+fn fe25519(b: [u8; 64]) -> Field25519 {
+    Field25519::wide_reduce(b)
+}
+fn fehelio(b: [u8; 64]) -> HelioseleneField {
+    HelioseleneField::wide_reduce(b)
+}
+/// Decode a 32-byte encoding; an invalid one becomes zero through the
+/// constant-time `unwrap_or`. For `from_repr` rows (any bytes) and for the
+/// structured operands, which are canonical by construction.
+fn fe25519_repr(b: [u8; 32]) -> Field25519 {
     Field25519::from_repr(b).unwrap_or(Field25519::ZERO)
 }
-fn fehelio(b: [u8; 32]) -> HelioseleneField {
+fn fehelio_repr(b: [u8; 32]) -> HelioseleneField {
     HelioseleneField::from_repr(b).unwrap_or(HelioseleneField::ZERO)
 }
+/// The whole result reaches the sink before one limb is taken from it, so an
+/// inlined operation cannot drop the computation of the limbs nobody reads.
 fn low64<F: PrimeField<Repr = [u8; 32]>>(f: &F) -> u64 {
-    u64::from_le_bytes(f.to_repr()[..8].try_into().unwrap())
+    let r = black_box(f).to_repr();
+    u64::from_le_bytes(black_box(r)[..8].try_into().unwrap())
 }
 
 /// Every test row twice: dudect's fixed-against-fresh, and the fixed-pair
@@ -295,11 +310,21 @@ macro_rules! both {
 }
 
 fn main() {
+    let samples = match std::env::args().nth(1) {
+        None => DEFAULT_SAMPLES,
+        Some(a) => match a.parse::<usize>() {
+            // Welch's t needs at least two observations per class after the 1 %
+            // crop, so three per class is the floor; fewer would print
+            // "no difference seen" from a NaN.
+            Ok(n) if n >= 3 => n,
+            _ => {
+                eprintln!("ct-dynamic: samples per class must be an integer >= 3, got {a:?}");
+                std::process::exit(2);
+            }
+        },
+    };
     let run = Run {
-        samples: std::env::args()
-            .nth(1)
-            .and_then(|a| a.parse().ok())
-            .unwrap_or(DEFAULT_SAMPLES),
+        samples,
         filter: std::env::args().nth(2),
         only: match std::env::args().nth(3).as_deref() {
             Some("only-fixed") => Some(0),
@@ -318,27 +343,27 @@ fn main() {
         &run,
         "null: fe25519 mul",
         Mode::Null,
-        |r| (fe25519(r.bytes32()), fe25519(r.bytes32())),
+        |r| (fe25519(r.bytes64()), fe25519(r.bytes64())),
         |(a, b)| low64(&(*a * *b)),
     );
     measure(
         &run,
         "null: helio square",
         Mode::Null,
-        |r| fehelio(r.bytes32()),
+        |r| fehelio(r.bytes64()),
         |a| low64(&a.square()),
     );
     measure(
         &run,
         "null: helio mul",
         Mode::Null,
-        |r| (fehelio(r.bytes32()), fehelio(r.bytes32())),
+        |r| (fehelio(r.bytes64()), fehelio(r.bytes64())),
         |(a, b)| low64(&(*a * *b)),
     );
 
     println!("-- helioselene::Field25519 (dalek_ff_group::FieldElement)");
-    let pair = |r: &mut Rng| (fe25519(r.bytes32()), fe25519(r.bytes32()));
-    let one = |r: &mut Rng| fe25519(r.bytes32());
+    let pair = |r: &mut Rng| (fe25519(r.bytes64()), fe25519(r.bytes64()));
+    let one = |r: &mut Rng| fe25519(r.bytes64());
     both!(&run, "fe25519 add", pair, |(a, b)| { low64(&(*a + *b)) });
     both!(&run, "fe25519 sub", pair, |(a, b)| { low64(&(*a - *b)) });
     both!(&run, "fe25519 mul", pair, |(a, b)| { low64(&(*a * *b)) });
@@ -353,15 +378,15 @@ fn main() {
         &a.pow(*e)
     ),);
     both!(&run, "fe25519 from_repr", |r| r.bytes32(), |b| low64(
-        &fe25519(*b)
+        &fe25519_repr(*b)
     ),);
     both!(&run, "fe25519 wide_reduce", |r| r.bytes64(), |b| low64(
         &Field25519::wide_reduce(*b)
     ),);
 
     println!("-- helioselene::HelioseleneField");
-    let hpair = |r: &mut Rng| (fehelio(r.bytes32()), fehelio(r.bytes32()));
-    let hone = |r: &mut Rng| fehelio(r.bytes32());
+    let hpair = |r: &mut Rng| (fehelio(r.bytes64()), fehelio(r.bytes64()));
+    let hone = |r: &mut Rng| fehelio(r.bytes64());
     both!(&run, "helio add", hpair, |(a, b)| { low64(&(*a + *b)) });
     both!(&run, "helio sub", hpair, |(a, b)| { low64(&(*a - *b)) });
     both!(&run, "helio mul", hpair, |(a, b)| { low64(&(*a * *b)) });
@@ -376,43 +401,43 @@ fn main() {
         &a.pow(*e)
     ),);
     both!(&run, "helio from_repr", |r| r.bytes32(), |b| low64(
-        &fehelio(*b)
+        &fehelio_repr(*b)
     ),);
     both!(&run, "helio wide_reduce", |r| r.bytes64(), |b| low64(
         &HelioseleneField::wide_reduce(*b)
     ),);
 
     println!("-- constant-value control (class 0: one value, allocated fresh per batch; class 1: fresh values)");
-    let hc = fehelio(seed.bytes32());
-    let hc2 = fehelio(seed.bytes32());
-    let fc = fe25519(seed.bytes32());
-    let fc2 = fe25519(seed.bytes32());
+    let hc = fehelio(seed.bytes64());
+    let hc2 = fehelio(seed.bytes64());
+    let fc = fe25519(seed.bytes64());
+    let fc2 = fe25519(seed.bytes64());
     measure(
         &run,
         "constant: helio square",
         Mode::Constant(hc),
-        |r| fehelio(r.bytes32()),
+        |r| fehelio(r.bytes64()),
         |a| low64(&a.square()),
     );
     measure(
         &run,
         "constant: helio mul",
         Mode::Constant((hc, hc2)),
-        |r| (fehelio(r.bytes32()), fehelio(r.bytes32())),
+        |r| (fehelio(r.bytes64()), fehelio(r.bytes64())),
         |(a, b)| low64(&(*a * *b)),
     );
     measure(
         &run,
         "constant: helio sqrt",
         Mode::Constant(hc),
-        |r| fehelio(r.bytes32()),
+        |r| fehelio(r.bytes64()),
         |a| low64(&a.sqrt().unwrap_or(HelioseleneField::ZERO)),
     );
     measure(
         &run,
         "constant: fe25519 mul",
         Mode::Constant((fc, fc2)),
-        |r| (fe25519(r.bytes32()), fe25519(r.bytes32())),
+        |r| (fe25519(r.bytes64()), fe25519(r.bytes64())),
         |(a, b)| low64(&(*a * *b)),
     );
 
@@ -424,19 +449,19 @@ fn main() {
             b[l * 8 + (r.next() % 8) as usize] = (r.next() & 0xff) as u8;
         }
         b[31] &= 0x3f;
-        fehelio(b)
+        fehelio_repr(b)
     };
     // High limbs zero: a value below 2^64.
     let small_h = |r: &mut Rng| {
         let mut b = [0u8; 32];
         b[..8].copy_from_slice(&r.next().to_le_bytes());
-        fehelio(b)
+        fehelio_repr(b)
     };
     // Dense: all bytes 0xff except the top bits (near the modulus).
     let dense_h = |_r: &mut Rng| {
         let mut b = [0xffu8; 32];
         b[31] = 0x3f;
-        fehelio(b)
+        fehelio_repr(b)
     };
     measure(
         &run,
@@ -469,7 +494,7 @@ fn main() {
                 b[l * 8 + (r.next() % 8) as usize] = (r.next() & 0xff) as u8;
             }
             b[31] &= 0x3f;
-            fe25519(b)
+            fe25519_repr(b)
         },
         |a| low64(&a.square()),
     );
@@ -480,7 +505,7 @@ fn main() {
         |r| {
             let mut b = [0u8; 32];
             b[..8].copy_from_slice(&r.next().to_le_bytes());
-            fe25519(b)
+            fe25519_repr(b)
         },
         |a| low64(&a.square()),
     );
@@ -495,7 +520,7 @@ fn main() {
                 U256::from_be_slice(&r.bytes32()),
             )
         },
-        |(a, e)| a.pow(e).retrieve().as_limbs()[0].0,
+        |(a, e)| black_box(a.pow(e).retrieve()).as_limbs()[0].0,
     );
 
     println!("-- positive controls (must show a class difference)");

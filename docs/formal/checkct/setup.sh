@@ -30,6 +30,10 @@ CRYPTO_BIGINT_REPO=https://github.com/RustCrypto/crypto-bigint
 # Parent of the merge of RustCrypto/crypto-bigint#1358 (the first 0.7.6
 # constant-time fix); #1360 follows it. Upstream found this tree leaky.
 CRYPTO_BIGINT_PREFIX=eeaabbe
+# The revision of upstream's own checkct driver (checkct/driver/src/driver.rs)
+# that the ctlpre workspace runs against the pre-fix tree. Pinned so a fresh
+# setup tests the same entrypoints the records name.
+CRYPTO_BIGINT_DRIVER_REV=f8d9dfcc06c9cc2b69890fed5d2cabad44d3d1d0
 IMAGE=shekyl-checkct:85271e5
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -49,6 +53,8 @@ fi
 if [ ! -d "$BUILD/crypto-bigint/.git" ]; then
     git clone -q "$CRYPTO_BIGINT_REPO" "$BUILD/crypto-bigint"
 fi
+git -C "$BUILD/crypto-bigint" cat-file -e "$CRYPTO_BIGINT_DRIVER_REV^{commit}" \
+    || git -C "$BUILD/crypto-bigint" fetch -q origin "$CRYPTO_BIGINT_DRIVER_REV"
 if [ ! -d "$BUILD/cb-pre" ]; then
     git -C "$BUILD/crypto-bigint" worktree add -q "$BUILD/cb-pre" "$CRYPTO_BIGINT_PREFIX"
 fi
@@ -100,7 +106,8 @@ mkws() {
         inctr "cargo checkct add -d /repo/docs/formal/checkct/.build/$name -n $drv >/dev/null"
         members+=("\"$drv\"")
         if [ "$drv" = ctlpre ]; then
-            cp "$BUILD/crypto-bigint/checkct/driver/src/driver.rs" "$ws/checkct/$drv/src/driver.rs"
+            git -C "$BUILD/crypto-bigint" show "$CRYPTO_BIGINT_DRIVER_REV:checkct/driver/src/driver.rs" \
+                >"$ws/checkct/$drv/src/driver.rs"
         else
             cp "$HERE/drivers/$drv.rs" "$ws/checkct/$drv/src/driver.rs"
         fi

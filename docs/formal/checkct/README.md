@@ -78,6 +78,19 @@ repeats x86_64 with `-C no-vectorize-slp`; and the template's `thumbv6m`
 cannot build our stack (`spin` needs compare-and-swap), so the low-end
 targets are `riscv32imac` and `thumbv7em`.
 
+**Operand domain (review, 2026-10-24).** The first records sampled operands
+by clearing the top two bits of a 32-byte encoding, which never reaches
+[2^254, p): the near-modulus values whose carries and borrows differ. The
+drivers now take every operand from the field's own wide reduction of 64
+secret bytes (the full field, no secret-dependent rejection), the `U256`
+mod rows from a 512-bit remainder, the `Residue` rows from an unrestricted
+`U256` (the Montgomery conversion reduces it), and the `from_repr` rows
+from unrestricted bytes, invalid encodings included. Records made before
+this carry the earlier sampler; the regenerated ones replace them.
+Upstream's calibration driver is pinned by revision in `setup.sh`
+(`CRYPTO_BIGINT_DRIVER_REV`), so a fresh setup runs the entrypoints the
+records name.
+
 ## Calibration (why a `secure` here means something)
 
 The pipeline must report leaks before any `secure` counts. Both toolchains,
@@ -151,6 +164,13 @@ docs/formal/checkct/run.sh subject-noslp --checks control-flow,memory-access,div
 docs/formal/checkct/run.sh helio --timeout 3600
 CHECKCT_NIGHTLY=nightly-2025-12-04 docs/formal/checkct/setup.sh && docs/formal/checkct/run.sh subject-noslp
 ```
+
+The dynamic crate samples the same way (64 bytes through `wide_reduce`;
+unrestricted bytes for its `from_repr` rows), passes the whole result
+through `black_box` before taking a limb for the sink (so an inlined
+operation cannot drop the limbs nobody reads), and refuses a sample count
+under three per class (Welch's t needs two observations after the crop;
+fewer printed "no difference seen" from a NaN).
 
 `run.sh` exits with cargo-checkct's own status: non-zero for any insecure
 or unknown entrypoint. A new `unknown` is a tool gap or a timeout, never a
