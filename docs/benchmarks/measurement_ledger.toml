@@ -567,6 +567,7 @@ stale_through = [
   { through = "5671b3721", note = "rustfmt line breaks in the close-out files; no code changed. Not re-measured." },
   { through = "3c8ed9e03", note = "Crate documentation and a test helper only; no code the P2P path runs changed. Not re-measured." },
   { through = "f7c1a94de7", note = "RT-W9 close-out review: the shared direction state is private to its module, and the P2P record path still seals and opens the same AEAD on the same bytes. A non-truncation refusal sets the RecvDirection's poison flag instead of a flag on RecvHalf. A dead sealer returns Poisoned before its argument checks; the P2P sender does not use that sealer. Dial, handshake, and gap I/O are unchanged. Not re-measured." },
+  { through = "52cc732c0", note = "The gray lifecycle, item 2: the close cause carries three marks in its padding byte, stamped at construction; names_the_destination reads the mark. The clearnet dial, its handshake, the gap and their I/O are unchanged; this moves no cost. The rows stay stale for the reasons already recorded." },
 ]
 
 [[constant]]
