@@ -9,8 +9,7 @@
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
 
-use shekyl_dialer::memory::FIRST_WINDOW_NANOS;
-use shekyl_dialer::{Attempts, CandidateFilter, DialAim, FailedAddresses, Skip};
+use shekyl_dialer::{Attempts, CandidateFilter, DialAim, Skip};
 use shekyl_draw_rng::SplitMix64;
 use shekyl_peerlist::{
     BanQuery, CloseCause, CloseKind, DialOutcome, Host, NetworkAddress, NoBans, Tick,
@@ -53,7 +52,6 @@ struct World {
     sessions: BTreeSet<NetworkAddress>,
     outbound_hosts: BTreeSet<Host>,
     attempts: Attempts,
-    failed: FailedAddresses,
 }
 
 impl World {
@@ -68,7 +66,6 @@ impl World {
             sessions: &self.sessions,
             outbound_hosts: &self.outbound_hosts,
             attempts: &self.attempts,
-            failed: &self.failed,
             bans,
             now,
         }
@@ -157,40 +154,6 @@ fn a_banned_host_is_not_a_candidate() {
         Ok(()),
         "an onion has no IP to ban"
     );
-}
-
-#[test]
-fn a_recently_failed_onion_is_skipped_until_its_window_ends() {
-    let mut world = World::default();
-    let refused = DialOutcome::DialFailed(onion(9), CloseCause::proxy_refused(0x05));
-    world.failed.observe(&refused, at(100));
-    assert_eq!(
-        world.check(&onion(9), &mut NoBans, at(100 + FIRST_WINDOW_NANOS)),
-        Err(Skip::RecentlyFailed)
-    );
-    assert_eq!(
-        world.check(&onion(9), &mut NoBans, at(100 + FIRST_WINDOW_NANOS + 1)),
-        Ok(())
-    );
-}
-
-/// R2: no clearnet candidate is ever skipped for a past failure, because
-/// nothing writes the memory on clearnet.
-#[test]
-fn a_clearnet_address_is_never_skipped_for_a_past_failure() {
-    let mut world = World::default();
-    for kind in [CloseKind::DialFailed, CloseKind::LevinHandshakeRejected] {
-        let failed = DialOutcome::DialFailed(peer(10, 18080), CloseCause::new(kind));
-        world.failed.observe(&failed, at(100));
-    }
-    world.failed.observe(
-        &DialOutcome::PeerlistRefused(
-            peer(10, 18080),
-            CloseCause::new(CloseKind::LevinHandshakeRejected),
-        ),
-        at(100),
-    );
-    assert_eq!(world.check(&peer(10, 18080), &mut NoBans, at(100)), Ok(()));
 }
 
 // ---- the dialer's own counts --------------------------------------------

@@ -260,37 +260,6 @@ impl CloseCause {
         self.reply_code
     }
 
-    /// Whether remembering this cause should stop us dialing the address.
-    ///
-    /// Forgetting shrinks the dial set, and a shrunken set favours whoever
-    /// is feeding us addresses. So the memory is written only when both of
-    /// these hold (Rick, 2026-10-13):
-    ///
-    /// 1. The cause names the destination ([`Self::names_the_destination`]).
-    /// 2. The connector's declaration says the destination is
-    ///    authenticated to the dialer
-    ///    ([`Declaration::destination_authenticated`]), so a party on the
-    ///    path cannot produce that cause for an honest address.
-    ///
-    /// Clearnet authenticates no one (Noise NN), so no clearnet cause
-    /// counts (R2, 2026-10-12): a party on the path can forge a reset and
-    /// can forge a handshake rejection, and either would suppress an
-    /// honest address. An onion address is the service's key, so on Tor
-    /// the destination-naming causes count.
-    ///
-    /// The connector is read as data, not matched by name: a later
-    /// connector gets its answer from its declaration column.
-    ///
-    /// [`Declaration::destination_authenticated`]: crate::Declaration::destination_authenticated
-    #[must_use]
-    pub const fn implicates_address(self, connector: ConnectorId) -> bool {
-        let authenticated = match declaration(connector.column()).destination_authenticated() {
-            Assessment::Assessed(DestinationAuth::OneWay) => true,
-            Assessment::Assessed(DestinationAuth::No) | Assessment::NotAssessed => false,
-        };
-        authenticated && self.names_the_destination()
-    }
-
     /// Whether this cause is evidence about the address that was dialed.
     ///
     /// [`CloseKind::LevinHandshakeRejected`] is the Levin layer judging
@@ -477,7 +446,6 @@ _Static_assert(offsetof(shekyl_close_cause, reply_code) == {CLOSE_CAUSE_REPLY_OF
 #[cfg(test)]
 mod tests {
     use super::{c_header, CloseCause, CloseKind, Marks, Phase};
-    use crate::declaration::{declaration, Assessment, DestinationAuth};
     use crate::ConnectorId;
 
     #[test]
@@ -532,28 +500,6 @@ mod tests {
             .copied()
             .filter(|kind| kind.applies_in(phase))
             .collect()
-    }
-
-    /// The connector is read from its declaration: the answer follows the
-    /// `destination_authenticated` cell, for every connector the table has.
-    #[test]
-    fn a_destination_naming_cause_counts_exactly_where_the_destination_is_authenticated() {
-        let naming = CloseCause::new(CloseKind::LevinHandshakeRejected);
-        assert!(naming.names_the_destination());
-        for connector in ConnectorId::ALL {
-            let authenticated = matches!(
-                declaration(connector.column()).destination_authenticated(),
-                Assessment::Assessed(DestinationAuth::OneWay)
-            );
-            assert_eq!(
-                naming.implicates_address(*connector),
-                authenticated,
-                "{connector:?}"
-            );
-        }
-        // Both answers are present in the table, so the loop tested both.
-        assert!(naming.implicates_address(ConnectorId::Tor));
-        assert!(!naming.implicates_address(ConnectorId::Clearnet));
     }
 
     /// Every cause's marks are in [`Marks::ALL`], and nothing the transport
@@ -655,45 +601,6 @@ mod tests {
             .proving_misbehaviour_on(ConnectorId::Tor)
             .proves_misbehaviour());
         assert_eq!(timeout.proving_misbehaviour_on(ConnectorId::Tor), timeout);
-    }
-
-    /// On Tor exactly six causes write the memory: a rejected handshake,
-    /// and the five proxy replies `0x04`, `0x05`, `0xF0`, `0xF1`, `0xF2`.
-    /// No other kind does: `DialFailed` on an onion dial is this node's
-    /// SOCKS port. `0xF3` and `0xF7` stay dialable. This does not launch
-    /// Tor and does not cover the directory attacker who can force reply 4.
-    #[test]
-    fn an_onion_dial_implicates_a_rejection_and_the_five_destination_naming_replies() {
-        let mut counted = 0;
-        for kind in CloseKind::ALL {
-            if *kind == CloseKind::ProxyRefused {
-                continue;
-            }
-            let implicated = CloseCause::new(*kind).implicates_address(ConnectorId::Tor);
-            assert_eq!(
-                implicated,
-                *kind == CloseKind::LevinHandshakeRejected,
-                "{kind:?} on an onion dial"
-            );
-            counted += usize::from(implicated);
-        }
-        assert!(!CloseCause::new(CloseKind::DialFailed).implicates_address(ConnectorId::Tor));
-        counted += (0u16..=0x0100)
-            .filter(|reply| CloseCause::proxy_refused(*reply).implicates_address(ConnectorId::Tor))
-            .count();
-        assert_eq!(counted, 6, "the rejection plus five replies");
-        for reply in 0u16..=0x00FF {
-            let cause = CloseCause::proxy_refused(reply);
-            // The expected set is the spec's, written here. It is not
-            // `proxy_reply_names_the_destination`.
-            let onion = matches!(reply, 0x04 | 0x05 | 0xF0 | 0xF1 | 0xF2);
-            assert_eq!(
-                cause.implicates_address(ConnectorId::Tor),
-                onion,
-                "onion reply {reply:#x}"
-            );
-        }
-        assert!(!CloseCause::proxy_refused(0x0100).implicates_address(ConnectorId::Tor));
     }
 
     #[test]

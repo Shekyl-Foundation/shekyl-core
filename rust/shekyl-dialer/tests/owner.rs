@@ -347,10 +347,6 @@ fn another_network_is_a_rejected_handshake_with_no_row_and_no_post() {
     assert!(shared.lists.is_gray(&peer(1)), "the draw stays gray");
     assert!(shared.lists.is_cooling(&peer(1)), "and cools");
     assert!(!shared.lists.is_white(&peer(1)));
-    assert!(
-        !shared.memory.is_recently_failed(&peer(1), Tick::new(1)),
-        "a clearnet rejection writes no memory (R2)"
-    );
 }
 
 #[test]
@@ -495,6 +491,9 @@ struct GapDial {
     driven: Mutex<Vec<SocketId>>,
     retired: Mutex<Vec<SocketId>>,
     answers: Mutex<VecDeque<Vec<u8>>>,
+    /// Causes the next connects fail with, in order, before any channel
+    /// opens: the connector refusing the dial, as a SOCKS reply would.
+    refusals: Mutex<VecDeque<CloseCause>>,
 }
 
 impl GapDial {
@@ -505,7 +504,16 @@ impl GapDial {
             driven: Mutex::new(Vec::new()),
             retired: Mutex::new(Vec::new()),
             answers: Mutex::new(VecDeque::new()),
+            refusals: Mutex::new(VecDeque::new()),
         }
+    }
+
+    /// Fail the next connects with `refusals`, in order, then answer each
+    /// later channel from `answers`.
+    fn refusing_then_answering(refusals: Vec<CloseCause>, answers: Vec<Vec<u8>>) -> Self {
+        let dial = Self::answering(answers);
+        *dial.refusals.lock().expect("refusals") = refusals.into();
+        dial
     }
 
     fn answering(answers: Vec<Vec<u8>>) -> Self {
@@ -526,6 +534,9 @@ impl Dial for GapDial {
         ceiling: InboundCeiling,
         now: Tick,
     ) -> Result<Channel, CloseCause> {
+        if let Some(cause) = self.refusals.lock().expect("refusals").pop_front() {
+            return Err(cause);
+        }
         let mut channel = self.inner.connect(endpoint, ceiling, now)?;
         if let Some(answer) = self.answers.lock().expect("answers").pop_front() {
             assert!(self.inner.inject(channel.open.id(), answer));
@@ -1193,4 +1204,90 @@ fn a_tor_peer_sending_a_list_over_d3_is_dropped() {
         dialer.shared().lists.is_cooling(&peer(1)),
         "clearnet: cooled, not dropped"
     );
+}
+
+/// **A Tor address failing with 0xF0 twice, then succeeding, ends white
+/// after three attempts in one test** (the gray lifecycle, test 6a'). The
+/// first two connects are refused with the missing-descriptor reply, which
+/// the Tor connector's table marks worth a retry; each waits its turn
+/// without holding the in-flight slot, the address stays the outstanding
+/// draw meanwhile, nothing is recorded for the failed attempts (no
+/// cooldown, no failed-test count), and the third attempt keeps the
+/// session: one `SessionAccepted`, the address white. A fourth refusal would
+/// have been the test's outcome instead.
+#[test]
+fn a_tor_address_failing_twice_with_a_missing_descriptor_then_succeeding_ends_white() {
+    let posts = Arc::new(Mutex::new(VecDeque::new()));
+    let clock = ManualClock::new(Tick::new(1));
+    let hub = hub_with_arming_on(&posts, &clock);
+    let dial = Arc::new(GapDial::refusing_then_answering(
+        vec![
+            CloseCause::proxy_refused(0xF0),
+            CloseCause::proxy_refused(0xF0),
+        ],
+        vec![reply(NETWORK, vec![])],
+    ));
+    hub.install_dial(Arc::clone(&dial) as Arc<dyn Dial>);
+    let dialer = dialer_for(&hub);
+    assert!(matches!(
+        hub.links().publish_usable(
+            ConnectorId::Tor,
+            Route::Socks(std::net::SocketAddr::from(([127, 0, 0, 1], 9050))),
+            Tick::new(1),
+        ),
+        RoutePublish::Installed { .. }
+    ));
+    let mut rng = SplitMix64::new(21);
+    let onion = NetworkAddress::Tor {
+        host: shekyl_onion_v3::v3_onion_hostname(&[1; 32]),
+        port: 18080,
+    };
+    dialer
+        .admit_operator(&onion, Tick::new(1), &mut rng)
+        .expect("admitted");
+
+    // Attempt 1: refused, worth a retry. Nothing is recorded, the address
+    // is still the outstanding draw, and no slot is held while it waits.
+    assert!(dialer.wake(ConnectorId::Tor, &mut rng), "attempt 1 dialed");
+    {
+        let shared = dialer.shared();
+        assert!(shared.lists.is_gray(&onion) && !shared.lists.is_cooling(&onion));
+        assert_eq!(shared.lists.failed_tests(&onion), 0);
+    }
+    assert_eq!(
+        dialer.in_flight(ConnectorId::Tor),
+        0,
+        "the wait holds no slot"
+    );
+    // A wake before the due tick draws nothing: the address is outstanding
+    // and nothing else is gray.
+    assert!(
+        !dialer.wake(ConnectorId::Tor, &mut rng),
+        "too early for attempt 2"
+    );
+
+    // Attempt 2, past the first wait (5 s + up to 5 s): refused again.
+    clock.set(Tick::new(clock.now().get() + 10 * 1_000_000_000 + 1));
+    assert!(dialer.wake(ConnectorId::Tor, &mut rng), "attempt 2 dialed");
+    assert_eq!(dialer.shared().lists.failed_tests(&onion), 0);
+    assert_eq!(dialer.kept_sessions(ConnectorId::Tor), 0);
+
+    // Attempt 3, past the second wait (20 s + up to 10 s): kept.
+    clock.set(Tick::new(clock.now().get() + 30 * 1_000_000_000 + 1));
+    assert!(dialer.wake(ConnectorId::Tor, &mut rng), "attempt 3 dialed");
+    assert_eq!(dialer.kept_sessions(ConnectorId::Tor), 1);
+    let shared = dialer.shared();
+    assert!(
+        shared.lists.is_white(&onion),
+        "one test, three attempts, white"
+    );
+    assert_eq!(shared.lists.failed_tests(&onion), 0);
+    drop(shared);
+    let accepted = posts
+        .lock()
+        .expect("posts")
+        .iter()
+        .filter(|post| matches!(post, Post::HandshakeResult { .. }))
+        .count();
+    assert_eq!(accepted, 1, "one handshake result, for the kept attempt");
 }
