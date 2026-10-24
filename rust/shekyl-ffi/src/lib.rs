@@ -140,6 +140,11 @@ pub mod dandelionpp_ffi;
 // callbacks so no enum tag crosses the boundary (§18.4a).
 pub mod relay_zone_ffi;
 
+// The relay's hop-0 verdict for a local origin, one cell for the process
+// (`GS-Q3`): written by the production zone's publish, read by the managed-Tor
+// supervisor and the RPC Health boolean.
+pub mod origin_verdict;
+
 // Levin ingress policy and white-noise emit FFI (IMPLEMENTATION_INDEX LV
 // row). `handle_recv` admits each bucket through these exports, and the C++
 // noise/fragment builders are marshaling shims over them.
