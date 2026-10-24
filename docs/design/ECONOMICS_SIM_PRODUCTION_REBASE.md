@@ -20,19 +20,20 @@ fee-share verdict in
 
 ## Reading-pass finding 1: the production default carries 22 of 50 (re-measured 2026-10-17; the 2026-10-03 run is §5.7)
 
-*Relabelled 2026-10-05 (Rick's ruling, [`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2).* "The production block-template fill rule" below is the reward-aware fill, which is the design's. The daemon runs Monero's pre-v5 rule until the fill moves to Rust, so this finding is the design's behaviour once the fill lands, not what the daemon does today. The sim's fill also weighs the bodies without the coinbase (1,331 B a block); the figures are re-run when the owner prices the block's weight ([`FOLLOWUPS.md`](../FOLLOWUPS.md)).
+*Relabelled 2026-10-05 (Rick's ruling, [`ECONOMY_UMBRELLA_PLAN.md`](ECONOMY_UMBRELLA_PLAN.md) §3.2).* "The production block-template fill rule" below is the reward-aware fill, which is the design's. The daemon runs Monero's pre-v5 rule until the fill moves to Rust, so this finding is the design's behaviour once the fill lands, not what the daemon does today. The fill prices the block with the coinbase reserve (#1152, §5.23), as the node's template does since #1165.md`](../FOLLOWUPS.md)).
 
 **What the run says.** On the baseline schedule, 50 ordinary transactions a
 block, at the production Standard rung and under the production
 block-template fill rule:
 
 - Blocks carry **22 transactions** for the first eighteen years.
-- The median stays within one transaction of the 300 KB zone (314–322 KB).
+- The median stays within one transaction of the 300 KB zone (315–324 KB).
 - About **28 a block go unserved**, roughly 7.4 M a year.
 - Blocks grow in year 19, 42.4 a block on average that year. From year 20
-  they carry all 50, and the median settles at 732–764 KB.
+  they carry all 50, and the median settles at 733–765 KB.
 
-On the flat control fee blocks carry 20 for the whole 60-year run.
+On the flat control fee blocks carry 21 in year 1 and 20 from year 2 to
+year 60.
 
 **The mechanism is production code.** The producer lists a transaction only
 when it does not lower the gross coinbase (`fill_block_template`, now
@@ -41,7 +42,7 @@ weight `w` therefore needs a fee that covers its penalty:
 `w ≤ 4ρ·w_ref·(m/M)²` at the Standard rung, with `ρ = (1 − σ)/(1 − b)`. The
 fee grows with `w` and the penalty with `w²`. The ladder's reference weight
 `w_ref = 3 000` is a quarter to a fifth of a post-quantum ordinary
-transaction (12.6–15.3 KB), so the condition fails until `ρ` reaches about 1.2. That
+transaction (14.3–15.3 KB), so the condition fails until `ρ` reaches about 1.2. That
 happens in year 19 on this trajectory (`--stage2`, the growth-gate table).
 The table evaluates `w·M² ≤ 4·ρ·w_ref·m²` in integers: `ρ` is
 `fee_correction / M_r` and `4` is `STANDARD_RUNG_OVER_ECONOMY`. It prints
@@ -225,7 +226,8 @@ tables has one cause. Each item names what would show it wrong.
 | **ESR-7** | A miner stuffer: transactions the miner includes in its own blocks. Two arms: the fee floor **unenforced** (the current system — zero fee, bounded only by the penalty) and **enforced** (a declared divergence, §4). | `--stage2` prints a stuffer row at zero fee beside the fee-path one. |
 | **ESR-8** | Restated constants become imports, or are declared in §4. The stake schedule, the stake ratio and `ActivityMetric.total_staked` stay (Rick, 2026-10-03): staking is being built now, and the sim is the instrument for designing it. A staking surface the daemon does not read yet is not dead. Rejected: deleting the stake schedule as dead. | The census's restated-constant rows are each closed by an import, a deletion, or a §4 entry; staking surfaces are excepted from deletion. Appendix A2 holds none open. |
 | **ESR-9** | Every live passage that quotes a superseded figure or reads as history is replaced by the current one, with the history in git (ruled 2026-10-15). In scope: the documents that quote the old tables (§12.13–§12.14 rows); the FL-E1 note in [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §11.7, re-measured before it is replaced; the staking-sim plan's clause that L11–L19 figures become records-was rows (§6, EUP-3's to restate before it runs); and Appendix A, which Appendix A2's re-census supersedes; and the thin-margin counts that `FEE_LADDER_DERIVATION.md` (the arm table of §10.10) and `FEE_LADDER_ROUND.md` (round 16b) quote from a column the sim no longer prints. Also in scope: the deleted fee-ladder arms (`served_ceil_cq`, and the quantized, hysteresis, rate-limited and grid columns), the FL-R3 and FL-R18 sweep lines `--fee-ladder` no longer prints, and the §4 nearest-pow2 row. | No current-tense sentence quotes a superseded figure, and no live section says records-was. |
-| **ESR-15** | The ordinary fee is rounded up to the fee lattice by `shekyl_economics::quantized_fee`, as the wallet pays it, and §4's unrounded-fee row is deleted. Its own step, after ESR-9 and before ESR-10 registers its predictions (ruled 2026-10-17): ESR-10's fixture changes then come from ESR-10 alone, and it starts from a fee path with no declared departures. Predictions are written before it runs. | A fee `--stage2` charges on the production arm that is not a multiple of `FEE_QUANTIZATION_MASK`. |
+| **ESR-15** | One fee loop over a pricing function: the ordinary fee is the lattice-rounded fixed point of weight and rate, paid as the wallet pays it (`shekyl_economics::quantized_fee`), and §4's unrounded-fee row is deleted. The loop is judged against seven properties (the brief's §A.2a, ruled 2026-10-24; [`FEE_LADDER_DERIVATION.md`](FEE_LADDER_DERIVATION.md) §12): it never under-pays; it pays the least fee that clears; its over-payment is bounded; it is exact in integers; it fails closed; it terminates by agreement of payer and admission; one lattice on both sides. Its own step, after ESR-9 and before ESR-10 runs (ruled 2026-10-17): ESR-10's fixture changes then come from ESR-10 alone. Its PR records the lattice's size as an open fee-ladder row with its current ground, and prints the lattice step as basis points of the ordinary fee (ruling 7, 2026-10-24); the six decimals stay until ruled. Predictions are written before it runs. | A fee `--stage2` charges on the production arm that is not a multiple of `FEE_QUANTIZATION_MASK`; a loop output that fails one of the seven properties on any registered cell. |
+| **ESR-16** | The parameter sweep (the brief's §B.3a; ruled 2026-10-24, [`ECONOMICS_SIM_PHASE0.md`](ECONOMICS_SIM_PHASE0.md) §P0.9). Two generated structs from the one JSON file: `EconomicParams` is chain identity and stays in the digest, and every consensus constant that is not yet a field becomes one, promoted in one PR so the digest and the C4 fixtures move once; `RelayPolicy` (G, the admission slack, the fee decimals, the emission-claim hold) stays outside the digest, on FL-R27's reasoning. One accessor per struct, onto which the validator's `OnceLock`, the FFI's `default()` sites and the wallet cap collapse, and a gate that holds it: production reads only the default. The windows become const generics, not runtime buffers. Each two-source constant gets one source in the lowest crate with a test holding the derived pair equal (the zone and `TX_WEIGHT_LIMIT`; `settlement_epoch_blocks`; `BLOCKS_PER_YEAR` from the DAA target). The bond floor's `const` asserts become a test on the generated default, the cover rung derives from the field, and `engine-core`'s second generated copy goes. The sim varies both structs; production never does. | A production composition that reads a bare economic constant, or resolves parameters anywhere but the accessor (the gate); a default-valued sweep cell that differs from the default report by one byte. |
 
 The constant-fee closed form for the fee horizon (`onset.rs`, and the two
 tests that pin it) describes a fee the chain does not charge. It is
@@ -293,12 +295,20 @@ several times Standard with what is partly a reference weight wrong by
 4–5×. Run on both constants, the ceremony sees which part of block growth
 is demand paying up and which part is the constant.
 
-One implementation fact for the re-derived arm:
-`shekyl_chain_rules::medians_from` floors the medians at the shipped
-`FULL_REWARD_ZONE` constant, not at `EconomicParams::full_reward_zone`.
-The arm therefore cannot be expressed through parameters alone, and either
-the floor takes its zone from the parameter set or the arm declares the
-divergence.
+The re-derived arm is expressible through parameters:
+`shekyl_chain_rules::medians_from` floors the medians at
+`EconomicParams::full_reward_zone` (`55d5266a7`, #1152), so the zone has one
+reader. `w_ref` is the parameter it still needs, which ESR-16 provides.
+
+**Build list (ruled 2026-10-24; the brief's §B.0–§B.7 as relayed, and
+[`ESR10_PREDICTIONS.md`](ESR10_PREDICTIONS.md) §0).** In order: the
+prediction set is amended against the post-#1152 fixture before the run
+(the year-1 operands are unchanged, `ρ` 0.879 and `θ` 1.188; the boom-bust
+cycle crosses in year 15); the multi-class pool (`ESR10_PREDICTIONS.md`
+§0.1: one waiting queue per rung, by rung then by age); then both constant
+arms, the inherited `w_ref` and zone and the re-derived pair. ESR-10 runs
+before the sweep grades the release rails, because `M_r` sits at its 0.8
+floor while 22 of 50 are carried.
 
 **Amended 2026-10-18 (design owner, after ESR-9).** The prediction set's
 year-1 operands are this document's growth-gate table (finding 2), not
@@ -458,7 +468,6 @@ defect.
 | The admission rate at a shard count (`AdmissionAtShards`) | Arms that sample the chain by shard count alone have no height, and the rate depends on emission, not on traffic. The pairing is fixed as the baseline scenario's: the rate at the year the baseline reaches that count, and its last year's rate beyond | Stated in the stuffer table's footer |
 | Admission rate sampled at the year's last block | A stuffer picks its moment, and on the production arm the floor falls through the year | Attacker-favouring; stated at the field |
 | A scenario that starts mid-chain starts with an empty volume window and empty median windows | A fold's heights are its own; `genesis_height_offset` scenarios carry no history before their first block, so their medians start at the zone as a genesis chain's do | Stated in `volume_window.rs` and `median_window.rs` |
-| A block's weight is its bodies' | The coinbase's few hundred bytes are neither priced nor recorded in the median. The fill rule itself prices bodies only, as the C++ does; the template then prices the whole block | Stated at `BlockSpace` |
 | Waiting transactions pay the fee of the block they are offered to | They were built at an earlier block's fee. Every transaction is the same shape, so a refusal of one is a refusal of all, and the pool's order (fee, then age) is age | Stated at `BlockSpace` |
 | The pool's livetime is a restated C++ define | `CRYPTONOTE_MEMPOOL_TX_LIVETIME` has no Rust owner until the pool moves (`DRS_E1_SPOOL.md`); the sim's copy is pinned to the header by a test | Stated at its definition |
 | Budget disposition (b) is unpenalised | (b) is the unmodulated subsidy, a counterfactual of the release multiplier. The penalty in (a) is bounded by the fees of the transactions that crossed the median, since the fill rule admits no other | Stated in `budget.rs` |
@@ -471,10 +480,13 @@ defect.
 | The secret draw's reveal lag and dropout (ESR-11) | Who reveals a block's seed, and when, is behaviour production cannot know. ESR-13 runs ESR-11's epoch at `Timing::esr11()` on production's `draw_count`, `draw_horizon` and `select_draw`; ESR-11's own loop was deleted at `f58531716` (§5.22). ESR-11's analytic functions are called: the `(m, n)` re-check, the retry mixture and the clearing figures, the evidence set's shape, and the count rule's callers `count_at` / `capped_at` | `secret_draw.rs`, `secret_draw_production.rs`; `--secret-draw` |
 | The secret draw on production's count and selection: producer dropout, filing lag, inclusion latency, loss to a reorg, and each block's seed and hash (ESR-13) | The count, the horizon and the selection are production's and are called. What decides whether a block's bundle is admitted is the behaviour of producers and of the chain, which has no owner to call; the seed and the block hash are the generator's bytes because no block is built. `M` is challenger policy, not consensus | `secret_draw_production.rs`; §5.17 fixes the model before the run |
 | The f64 closed forms of the m-of-n rule (`mn_feasibility.rs`, `cartel.rs`, R22) | Production's rule is a predicate over one window, not a probability. The closed forms are the analysis of that predicate and are cross-checked against the predicate-backed kernel by test | Stated at each form |
-| Maturity operands (`MATURITY_D = 324_000`, 40 000 projected pairs; D13) | Assumptions about a network that does not exist yet, not values of the chain | Named as assumptions where they are defined |
+| Maturity operands (`EVIDENCE_PAIRS`, 4 096 and 324 000 pairs; `projected_pairs`, 40 000; D13) | Assumptions about a network that does not exist yet, not values of the chain | Named as assumptions where they are defined, `secret_draw.rs` and `mn_feasibility.rs` |
 | Gate-7's locked supply counts one shard per `blocks_per_shard` blocks (`engine.rs`, D1) | The partition is by archival bytes (`shard_of`), and the engine fold carries no byte fold to read it from. The default cadence is one shard per `SETTLEMENT_EPOCH_BLOCKS`; the sim's own stage-2 baseline closes 229,864 shards in ten years, one per eleven blocks, so the default understates the locked supply by a factor near 900. **Not a neutral choice:** a gate-7 figure is a floor on the lock, not an estimate of it | Stated at `ArchivalLockModel::blocks_per_shard`. Moving gate-7 onto the byte fold moves its committed figures and is its own step, with its predictions written first |
 | The A3 and A4 base paths score through the plateau curve (`population.rs`, `stranding.rs`, D3) | Credited work is linear in production; the curve is kept there for counterfactuals only. The two base paths predate that and still read `curve_milli` | `distribution.rs` and OQ-4 name themselves counterfactual; `redistribution.rs` is linear. Re-basing A3 and A4 moves both narration fixtures and is its own step, with its predictions written first |
 | Demand does not respond to the fee or to congestion | A schedule is a number of transactions per block, the same whatever they cost or however long they wait: no elasticity, no rung escalation, no resubmission after expiry. What the chain fails to carry expires; it is not deterred | Stated at the head of this document beside the result it governs |
+| The engine, budget and recorder folds pass zero closed shards to `price_emission`; only the stage-2 fold passes the byte-fold count | Those folds carry no byte fold to read a count from. Inert while the escalation ships flat (the asymptote at the floor), and `the_shipped_split_is_flat_at_every_count` fails the moment it is not | Stated at `ChainCursor`'s `closed_shards` field; `engine.rs`, `budget.rs`, `record.rs` |
+| The FL-C7 and FL-E1 feedback instruments run with no fill and a fixed median | They measure the fee loop's settling, not a chain: every elastic transaction is carried, the median is a grid parameter, and the emission advances unpenalised | `fee_ladder.rs`, `fee_floor.rs`; the grid is their label |
+| The miner-stuffer envelope is one block | Its bodies never enter the median or the volume window: the envelope prices what a block can carry at each era, not a campaign (§5.10) | `miner_stuffer.rs` |
 
 ## 5. Predictions, written before any run (2026-10-02)
 
@@ -2117,7 +2129,8 @@ agreement on its own runs (§5.18).
 ### R10 as built, and what it found about `price_emission`
 
 `price_emission` fits the folds with no change. The cursor calls it once
-the fill has decided what the block lists, at the bodies' weight, and
+the fill has decided what the block lists, at the weight it reports (the
+bodies and the coinbase reserve), and
 asserts on every block that the fill's reward and the composition's paid
 reward are one number. The folds and the stuffer advance and price from
 that paid reward. The fill's copy is read only by the assert.
@@ -2142,9 +2155,9 @@ written-out arithmetic is the independent side of a comparison; and
 
 `docs/test_vectors/economics/baseline_steady_state.json`, eleven rows.
 The metadata and the neutral milestones are unchanged. Every row moved,
-and each move follows from one fact: the fill lists 20 to 24 of the 50
+and each move follows from one fact: the fill lists 20 to 23 of the 50
 transactions offered, because ordinary transactions at the control fee
-fill the 300 kB zone at 24 in an empty tree and at 20 in a deep one, and
+fill the 300 kB zone at 23 in an empty tree and at 20 in a deep one, and
 the fee does not cover the penalty past it.
 
 | Column | Before → after (year 1, last block) | Why |
@@ -2179,7 +2192,7 @@ stores the window (`volume_tx_count_sum`, `volume_window_blocks`) and
 both columns are taken from it. `tx_volume` remains the listed count.
 The differential replays `TxVolume::window` of that pair and does not
 read `tx_volume`. On the regenerated baseline every sampled window mean
-is the listed count — 24 over the one block before height 1, then 21
+is the listed count — 23 over the one block before height 1, then 21
 and 20 over the full 720-block window at the year ends — so
 `burn_pct_bp` and `release_multiplier_milli` do not move. The operand
 is the window anyway.

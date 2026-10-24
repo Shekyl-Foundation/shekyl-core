@@ -484,4 +484,45 @@ mod tests {
         assert!(out.contains("is not in this run"), "{out}");
         assert!(out.contains("fee_correction"), "{out}");
     }
+
+    /// The figures the design leans on and ESR-10's P2 reads, held by no test
+    /// until Phase 0 (`ECONOMICS_SIM_PHASE0.md` §P0.1): on the baseline,
+    /// year 1's `rho` and `theta`, the year `rho` first reaches `theta`, and
+    /// the year blocks grow. Nineteen years of the production fold.
+    #[test]
+    fn the_baseline_year_one_operands_and_the_crossing_year_are_held() {
+        let params = SimParams::default();
+        let economic = params.economic();
+        let mut config = crate::scenarios::all_scenarios(&params)
+            .into_iter()
+            .find(|c| c.name == BASELINE_STEADY_STATE)
+            .expect("the baseline scenario");
+        config.sim_years = 19;
+        let aggs = crate::stage2::a1_year_aggs(&params, &config);
+        let gates: Vec<FeeGate> = aggs
+            .iter()
+            .map(|agg| fee_gate(&GateBlock::from_agg(agg), &params, &economic))
+            .collect();
+        assert_eq!(format!("{:.3}", gates[0].rho), "0.879");
+        assert_eq!(format!("{:.3}", gates[0].theta_at_equal_medians), "1.188");
+        let crossing = aggs
+            .iter()
+            .zip(&gates)
+            .find(|(_, gate)| gate.rho >= gate.theta_at_equal_medians)
+            .map(|(agg, _)| agg.year);
+        assert_eq!(crossing, Some(19), "rho reaches theta in year 19");
+        let traffic: Vec<BlockTraffic> = aggs
+            .iter()
+            .map(|agg| BlockTraffic {
+                year: agg.year,
+                carried_txs: agg.carried_txs,
+                expired_txs: agg.expired_txs,
+            })
+            .collect();
+        assert_eq!(
+            congestion_escape_year(&traffic, params.blocks_per_year),
+            Some(19),
+            "blocks grow in year 19"
+        );
+    }
 }
