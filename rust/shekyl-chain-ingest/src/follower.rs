@@ -317,8 +317,8 @@ pub(crate) async fn follow<S>(
             break;
         }
         let tip = *tips.borrow_and_update();
-        if let Err(read) = install_window(&shared).await {
-            crate::service::record_store_read(&shared, read);
+        if let Err(stop) = install_window(&shared).await {
+            crate::service::record_window_stop(&shared, stop);
             break;
         }
         if shared.stopping() {
@@ -414,6 +414,9 @@ struct Planted {
 enum PlantFault {
     Store(StoreError),
     Chain(Fault<StoreError>),
+    /// The blocking judge panicked: a defect. Reached only where a panic
+    /// unwinds (the test profile); dev and release abort.
+    Panicked,
 }
 
 /// Reconcile the pool. File entries and parked bodies are judged before
@@ -451,6 +454,9 @@ where
             Err(PlantFault::Chain(fault)) => {
                 return shared.fail(ServiceFault::Pool(PoolFault::Chain(fault)));
             }
+            // As the producer's panic: the service stops on it, the
+            // follower leaves its loop, and the job goes with it.
+            Err(PlantFault::Panicked) => return shared.fail(ServiceFault::FollowerEnded),
         }
     };
     let done = with_pool(shared, move |pool, _, view, rule_set, policy, now| {
@@ -506,9 +512,15 @@ where
 {
     let store = std::sync::Arc::clone(shared.store());
     let rules = shared.rules();
-    tokio::task::spawn_blocking(move || plant_blocking(&store, rules, unverified, pending))
+    match tokio::task::spawn_blocking(move || plant_blocking(&store, rules, unverified, pending))
         .await
-        .expect("judging pool entries does not panic")
+    {
+        Ok(planted) => planted,
+        Err(join) => {
+            tracing::error!("judging pool entries panicked: {join}");
+            Err(PlantFault::Panicked)
+        }
+    }
 }
 
 fn plant_blocking(

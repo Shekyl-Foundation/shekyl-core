@@ -613,8 +613,8 @@ where
                 // its snapshot; the slots lag that pair until the window is
                 // installed for it. Install it, under a chain permit, and
                 // place the arrival again.
-                if let Err(read) = super::install_window(shared).await {
-                    super::record_store_read(shared, read);
+                if let Err(stop) = super::install_window(shared).await {
+                    super::record_window_stop(shared, stop);
                     return Next::Halt;
                 }
                 return Next::Again(vec![arrival]);
@@ -812,8 +812,8 @@ where
     let mut formed = form_switch(shared, &plan, Arc::clone(&held)).await;
     if let Err(PlanStop::Substrate(fault)) = &formed {
         if shared.substrate().cache_absent(fault) {
-            if let Err(read) = super::install_window(shared).await {
-                super::record_store_read(shared, read);
+            if let Err(stop) = super::install_window(shared).await {
+                super::record_window_stop(shared, stop);
                 return None;
             }
             formed = form_switch(shared, &plan, held).await;

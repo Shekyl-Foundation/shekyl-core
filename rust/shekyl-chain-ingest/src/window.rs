@@ -72,24 +72,56 @@ where
     Ok(())
 }
 
+/// Why installing the seed window stops its caller.
+pub(crate) enum WindowStop {
+    /// A store read failed ([`install_blocking`]'s error).
+    Read(ViewRead<StoreError>),
+    /// The install panicked: a defect in this node.
+    Panicked,
+}
+
 /// [`install_blocking`] off the runtime.
 ///
 /// # Errors
 ///
-/// As [`install_blocking`].
-pub(crate) async fn install_window<S>(shared: &Arc<Shared<S>>) -> Result<(), ViewRead<StoreError>>
+/// [`WindowStop::Read`] as [`install_blocking`]; [`WindowStop::Panicked`]
+/// when the blocking install panicked. The workspace's dev and release
+/// profiles abort on panic, so the second is reached only where a panic
+/// unwinds (the test profile). Either way the caller stops through
+/// [`record_window_stop`].
+pub(crate) async fn install_window<S>(shared: &Arc<Shared<S>>) -> Result<(), WindowStop>
 where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
     let shared = Arc::clone(shared);
-    tokio::task::spawn_blocking(move || install_blocking(&shared))
-        .await
-        .expect("installing the seed window does not panic")
+    match tokio::task::spawn_blocking(move || install_blocking(&shared)).await {
+        Ok(installed) => installed.map_err(WindowStop::Read),
+        Err(join) => {
+            tracing::error!("installing the seed window panicked: {join}");
+            Err(WindowStop::Panicked)
+        }
+    }
 }
 
-/// Record a door-side store read that failed, and stop. The door still
-/// answers [`super::Refusal::NoRoom`]: the span was not accepted.
+/// Stop the service on a failed install. A failed read is recorded as
+/// [`record_store_read`] records it. A panic stops it as the follower's
+/// end does ([`ServiceFault::FollowerEnded`]): the follower then leaves its
+/// loop, and the miner's job is withdrawn with it.
+pub(crate) fn record_window_stop<S>(shared: &Shared<S>, stop: WindowStop)
+where
+    S: Substrate,
+    S::Fault: core::fmt::Debug,
+{
+    match stop {
+        WindowStop::Read(read) => record_store_read(shared, read),
+        WindowStop::Panicked => shared.fail(ServiceFault::FollowerEnded),
+    }
+}
+
+/// Record a store read that failed, and stop. On the door's side the
+/// arrival is refused with what the failed read is
+/// ([`super::Refusal::StoreUnreadable`]); the span was not accepted.
 pub(crate) fn record_store_read<S>(shared: &Shared<S>, read: ViewRead<StoreError>)
 where
     S: Substrate,

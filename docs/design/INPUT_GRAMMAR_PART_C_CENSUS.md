@@ -390,7 +390,7 @@ Rust mirrors live in `T/archival_reads.rs`; the C++ structs are canonical for th
 | value | meaning |
 |---|---|
 | `both` | served on the restricted (view) and admin listeners |
-| `admin` (JSON-RPC) | in `RESTRICTED_METHODS` (`D/handlers/json_rpc.rs:49-66`); the restricted listener answers HTTP 403 with `-32601 "Method not allowed in restricted mode"` |
+| `admin` (JSON-RPC) | a `HostOnly` row of the method table (`T/methods.rs`, RW-Q7), whose grant column dispatch reads; the restricted listener answers HTTP 403 with `-32601 "Method not allowed in restricted mode"` |
 | `admin` (REST) | `Visibility::AdminOnly` in `D/server.rs:209-326`; the path is not registered, so the restricted listener answers 404 |
 
 ### Rust-native JSON-RPC methods
@@ -853,7 +853,7 @@ Dispatch: `get_jsonrpc_table`, `F:248-280`. Handlers are in `S`. Results pass th
 |---|---|
 | transport | JSON-RPC |
 | owner | C++ |
-| visibility | **both**: it is not in `RESTRICTED_METHODS`; the handler gates it on nettype (regtest / FAKECHAIN) |
+| visibility | **admin**: a `HostOnly` row, and an armed lever, in the method table (`T/methods.rs:135`); the handler also gates it on nettype (regtest / FAKECHAIN) |
 | aliases | none |
 | handler | `S:739` |
 
@@ -1604,7 +1604,7 @@ The reply has **no `status`**.
 
 ### 3.8 Surface notes
 
-- `inject_archival_serve_credit` is served on the restricted listener. It is gated only by nettype in the handler, not by `RESTRICTED_METHODS`.
+- `inject_archival_serve_credit` is host-only and an armed lever in the method table (`T/methods.rs:135`), and its handler gates it on nettype as well.
 - `get_block_template`, `get_miner_data`, `submit_block` and `get_txpool_backlog` are also served on both listeners.
 - C++ JSON-RPC aliases: `getblocktemplate` and `submitblock`. Rust aliases: `getblockcount`, `on_getblockhash`, `getblockheaderbyheight`, `getblock`, `getlastblockheader`, `getblockheaderbyhash`, `getblockheadersrange`. REST aliases: `/getheight`, `/gettransactions`, `/getinfo`, `/getblocks_by_height.bin`.
 

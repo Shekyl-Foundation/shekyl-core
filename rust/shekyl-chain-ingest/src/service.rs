@@ -356,7 +356,9 @@ pub enum ServiceFault<F> {
     #[error("pool: {0:?}")]
     Pool(PoolFault<StoreError>),
     /// The tip attendant ended while the service had not stopped, or it
-    /// panicked. The miner must not keep hashing a job nothing will refresh.
+    /// panicked, or a blocking task of the follower's panicked: the seed
+    /// window's install, the pool's judging, the template producer. The
+    /// miner must not keep hashing a job nothing will refresh.
     #[error("the tip follower ended")]
     FollowerEnded,
     /// An in-cap alternative named a seed below its fork that the window
@@ -1187,7 +1189,8 @@ mod window;
 
 pub use window::Reservation;
 pub(crate) use window::{
-    divide_pool_faults, install_window, record_store_read, with_pool, PoolDivision,
+    divide_pool_faults, install_window, record_store_read, record_window_stop, with_pool,
+    PoolDivision,
 };
 
 #[cfg(test)]
