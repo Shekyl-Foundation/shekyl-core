@@ -172,10 +172,100 @@ pub struct Syncing {
 pub struct BootstrapLine {
     /// How long the percent has been unchanged.
     pub held_for: std::time::Duration,
-    /// Bytes Tor read in the window. `None` when a sample did not say.
+    /// Bytes Tor read across [`Self::window`]. `None` when no sample in that
+    /// span reported a count: unknown, never zero.
     pub received: Option<u64>,
-    /// The window `received` covers.
+    /// The span [`Self::received`] covers, from the byte mark to the moment
+    /// this line was said. Not the policy interval: a control ask that held
+    /// the driver makes the span longer than the deadline.
     pub window: std::time::Duration,
+}
+
+/// The progress line's evidence. The percent, when it last moved, and the
+/// byte mark the next line measures from.
+///
+/// The supervisor owns one of these per incarnation. The Tor connector never
+/// sees it: the line is said from the control connection's samples
+/// (`TSR-Q9`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProgressWindow {
+    percent: u8,
+    /// When `percent` last changed, in the caller's clock.
+    progress_at: u64,
+    /// When the current byte window opened.
+    opened_at: u64,
+    /// Latest `traffic/read` this incarnation.
+    latest: Option<u64>,
+    /// `traffic/read` at `opened_at`.
+    baseline: Option<u64>,
+    line: Option<BootstrapLine>,
+}
+
+impl ProgressWindow {
+    /// A new incarnation. The percent is 0 and no byte count has been seen.
+    #[must_use]
+    pub const fn start(now: u64) -> Self {
+        Self {
+            percent: 0,
+            progress_at: now,
+            opened_at: now,
+            latest: None,
+            baseline: None,
+            line: None,
+        }
+    }
+
+    /// The last percent a sample or a bootstrap notice reported.
+    #[must_use]
+    pub const fn percent(self) -> u8 {
+        self.percent
+    }
+
+    /// The last line [`Self::speak`] produced.
+    #[must_use]
+    pub const fn line(self) -> Option<BootstrapLine> {
+        self.line
+    }
+
+    /// The percent moved, or was confirmed. A confirmation does not reset
+    /// how long the percent has held.
+    pub fn note_percent(&mut self, percent: u8, now: u64) {
+        if percent != self.percent {
+            self.progress_at = now;
+        }
+        self.percent = percent;
+    }
+
+    /// A directory sample reported `traffic/read`. `None` leaves the marks
+    /// where they are: a missing count is not a zero, and it is not a new
+    /// window. The first count opens the window at `now`.
+    pub fn note_read(&mut self, read: Option<u64>, now: u64) {
+        let Some(bytes) = read else {
+            return;
+        };
+        self.latest = Some(bytes);
+        if self.baseline.is_none() {
+            self.baseline = Some(bytes);
+            self.opened_at = now;
+        }
+    }
+
+    /// Say the line as of `now`. `received` and `window` are the same span:
+    /// from the open mark to `now`. The next line measures from here.
+    /// A count that moved backwards saturates to nothing rather than wrapping.
+    pub fn speak(&mut self, now: u64) {
+        let received = match (self.latest, self.baseline) {
+            (Some(read), Some(then)) => Some(read.saturating_sub(then)),
+            _ => None,
+        };
+        self.line = Some(BootstrapLine {
+            held_for: std::time::Duration::from_nanos(now.saturating_sub(self.progress_at)),
+            received,
+            window: std::time::Duration::from_nanos(now.saturating_sub(self.opened_at)),
+        });
+        self.baseline = self.latest;
+        self.opened_at = now;
+    }
 }
 
 /// One typed read of the supervisor (`TSR-Q12`). No message text.
