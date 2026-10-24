@@ -13,9 +13,9 @@
 //! This rule admits a body only when listing it does not lower the gross
 //! coinbase, and keeps the block — bodies plus the coinbase weight it was
 //! given — within twice the effective median. The C++ scan deletes with
-//! `tx_pool.cpp` at the DRS-X flip. The economics sim calls this rule and
-//! passes the reserve as the coinbase weight. The template passes the
-//! coinbase it built.
+//! `tx_pool.cpp` at the DRS-X flip. The economics sim and the node's
+//! template both pass `shekyl_wire::transaction::COINBASE_RESERVE` as the
+//! coinbase weight.
 //!
 //! A producer offers pool bodies to a [`Fill`] in its own order — the
 //! daemon offers them by fee, then by receive time — and lists those this
@@ -31,10 +31,10 @@
 //!   both would weigh a body differently; that is a question for the fee
 //!   design, not something this rule settles.
 //! - The weight stored is the block's. It starts at the coinbase weight
-//!   the caller passed and grows by each admitted body. The reserve is not
-//!   this rule's operand. The sim passes the reserve, the maximum. A
-//!   caller who has built the coinbase passes that weight. [`crate::build`]
-//!   prices the listing it is given and does not drop a body from it.
+//!   the caller passed and grows by each admitted body. The sim and the
+//!   node's template pass `COINBASE_RESERVE`, which is at least any
+//!   coinbase the grammar can build. [`crate::build`] prices the listing
+//!   it is given and does not drop a body from it.
 //! - The comparison is exact. An earlier C++ copy of this rule rounded
 //!   through a float threshold of 1.0; that copy left with the hard-fork
 //!   mechanism and is not what the daemon runs.

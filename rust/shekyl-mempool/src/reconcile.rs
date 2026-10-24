@@ -147,6 +147,9 @@ impl Pool {
         rule_set: &RuleSet,
         policy: &AdmissionPolicy,
     ) -> Result<Reconciled, PoolFault<V::Fault>> {
+        let tip = chain
+            .tip()
+            .map_err(|fault| PoolFault::Chain(Fault::View(fault)))?;
         // Taken before the held borrow: step 1 was planted outside this lock.
         let mut planted = self.take_planted();
         let mut order: Vec<(&TxHash, &Held)> = self.held().iter().collect();
@@ -205,6 +208,7 @@ impl Pool {
                 .write(|batch| removals.iter().try_for_each(|txid| batch.remove(txid)))?;
         }
         self.install(&judged_all, key_images);
+        self.note_reconciled(chain, tip);
         Ok(reconciled)
     }
 }

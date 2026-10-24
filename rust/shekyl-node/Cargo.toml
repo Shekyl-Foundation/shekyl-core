@@ -16,6 +16,11 @@ publish = false
 [dependencies]
 shekyl-address = { path = "../shekyl-address" }
 shekyl-chain-ingest = { path = "../shekyl-chain-ingest" }
+# The sync state the follower posts on: chain sync's own type, so its
+# cutover plugs a publisher in and changes nothing else (DX-Q3, Q13).
+shekyl-chain-sync = { path = "../shekyl-chain-sync" }
+# The coinbase keys the node's one template pays (N2).
+shekyl-block-template = { path = "../shekyl-block-template" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 shekyl-daemon-config = { path = "../shekyl-daemon-config" }
@@ -30,14 +35,25 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 shekyl-runtime = { path = "../shekyl-runtime" }
 shekyl-transport-layer = { path = "../shekyl-transport-layer" }
 shekyl-types = { path = "../shekyl-types" }
+shekyl-units = { path = "../shekyl-units" }
 shekyl-wire = { path = "../shekyl-wire" }
 shekyl-win-sec = { path = "../shekyl-win-sec" }
 hex = "0.4"
 rustix = { version = "1", features = ["fs"] }
 thiserror = { workspace = true }
 tracing = "0.1"
+# The sync watch and the posting watch; `stop` checks it is not in a runtime.
+tokio = { version = "1", default-features = false, features = ["rt", "sync"] }
 
 [dev-dependencies]
+# The flush-fault test refuses the pool file's next commit
+# (`pool-commit-fault`). Dev edge only; check_test_only_features.py holds
+# that the normal dependency above leaves it off.
+shekyl-mempool = { path = "../shekyl-mempool", features = ["pool-commit-fault"] }
+# The planted entry's body, a harness spend.
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# A mining address for the template tests, from a fixed seed's keys.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-options = { path = "../shekyl-options" }
 shekyl-timing-engine = { path = "../shekyl-timing-engine" }

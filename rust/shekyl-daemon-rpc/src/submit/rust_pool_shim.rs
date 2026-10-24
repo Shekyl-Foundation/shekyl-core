@@ -56,7 +56,7 @@
 //! driver takes what the pool holds unpublished, and a nudge from the
 //! engine is that driver's to wire.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use shekyl_archival_retention::{
     cold_authority_pin, BondPostKind as RetentionBondPostKind, HoldingsDescriptor,
@@ -98,7 +98,8 @@ pub trait ChainSource {
 /// The submit engine's seam over the Rust pool (module docs).
 pub struct RustPoolShim<C> {
     chain: C,
-    pool: Mutex<Pool>,
+    /// The node's one pool, shared with the ingest service (N1).
+    pool: Arc<Mutex<Pool>>,
     policy: AdmissionPolicy,
     clock: fn() -> UnixSeconds,
 }
@@ -110,16 +111,32 @@ impl<C> core::fmt::Debug for RustPoolShim<C> {
 }
 
 impl<C: ChainSource> RustPoolShim<C> {
-    /// The shim over `chain` and `pool`, admitting under `policy`, with
-    /// `clock` the wall clock an admission is stamped by.
+    /// The shim over `chain` and the node's `pool`, admitting under
+    /// `policy`, with `clock` the wall clock an admission is stamped by.
+    /// The pool is the one the ingest service holds, not a second one over
+    /// the same file.
     #[must_use]
-    pub fn new(chain: C, pool: Pool, policy: AdmissionPolicy, clock: fn() -> UnixSeconds) -> Self {
+    pub fn new(
+        chain: C,
+        pool: Arc<Mutex<Pool>>,
+        policy: AdmissionPolicy,
+        clock: fn() -> UnixSeconds,
+    ) -> Self {
         Self {
             chain,
-            pool: Mutex::new(pool),
+            pool,
             policy,
             clock,
         }
+    }
+
+    /// The node's pool, locked under the service's policy: a panic that
+    /// poisoned the lock left the pool as the file has it (every write is
+    /// the file's first), so the guard is taken back, as the ingest service
+    /// takes it. One policy for the one pool: otherwise a panic on the
+    /// service's side would fail every later submit for good.
+    fn pool(&self) -> MutexGuard<'_, Pool> {
+        self.pool.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The relay's fluff event for `txid`, through the shim's lock
@@ -128,22 +145,16 @@ impl<C: ChainSource> RustPoolShim<C> {
     ///
     /// # Errors
     ///
-    /// [`ShimFault`] when the lock is poisoned or the pool file faults.
+    /// [`ShimFault`] when the pool file faults.
     pub fn fluffed(&self, txid: &TxHash) -> Result<bool, ShimFault> {
-        let mut pool = self.pool.lock().map_err(|_| ShimFault)?;
-        pool.fluffed(txid).map_err(|_| ShimFault)
+        self.pool().fluffed(txid).map_err(|_| ShimFault)
     }
 
     /// Read the pool under the shim's lock, as the relay reads it
     /// ([`RelayView`]: every entry, the stem phase included — never for an
     /// answer to a peer or a foreign caller; the review of #1102, S6).
-    ///
-    /// # Errors
-    ///
-    /// [`ShimFault`] when the lock is poisoned.
-    pub fn with_pool<R>(&self, f: impl FnOnce(RelayView<'_>) -> R) -> Result<R, ShimFault> {
-        let pool = self.pool.lock().map_err(|_| ShimFault)?;
-        Ok(f(pool.relay_view()))
+    pub fn with_pool<R>(&self, f: impl FnOnce(RelayView<'_>) -> R) -> R {
+        f(self.pool().relay_view())
     }
 }
 
@@ -485,8 +496,10 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
         bond_probe: Option<BondProbe<'_>>,
         emission_probe: Option<(&[u8; 32], &[u64])>,
     ) -> Result<SubmitFacts, ShimFault> {
-        let pool = self.pool.lock().map_err(|_| ShimFault)?;
+        // The snapshot first, then the pool: the order every reader of
+        // both keeps (`shekyl-chain-ingest`'s `live_pool`).
         self.chain.read(|snapshot, rule_set| {
+            let pool = self.pool();
             gather(
                 snapshot,
                 rule_set,
@@ -527,11 +540,9 @@ impl<C: ChainSource> SubmitStateShim for RustPoolShim<C> {
             .ok()
             .and_then(Result::ok)
             .and_then(Result::ok);
-        let Ok(mut pool) = self.pool.lock() else {
-            return CommitOutcome::InternalFault;
-        };
         let now = (self.clock)();
         let outcome = self.chain.read(|snapshot, rule_set| {
+            let mut pool = self.pool();
             let view = SnapshotView::new(snapshot);
             let admitted =
                 pool.admit_judged(parsed.tx.clone(), prior, now, &view, rule_set, &self.policy);

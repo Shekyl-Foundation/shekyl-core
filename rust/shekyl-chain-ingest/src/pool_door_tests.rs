@@ -116,6 +116,17 @@ pub(crate) async fn paying_the_floor(
     mined: &[Mined],
     coinbase: u64,
 ) -> Transaction {
+    paying_the_floor_at(scenario, mined, coinbase, h(AT)).await
+}
+
+/// [`paying_the_floor`] listed in the block connecting at `connecting`, so
+/// its reference is the newest one admissible there.
+pub(crate) async fn paying_the_floor_at(
+    scenario: &mut Scenario<FreeHash>,
+    mined: &[Mined],
+    coinbase: u64,
+    connecting: BlockHeight,
+) -> Transaction {
     let floor = scenario
         .read_chain(|view, _| {
             let connecting = shekyl_chain_rules::Tip::connecting_height(
@@ -135,7 +146,7 @@ pub(crate) async fn paying_the_floor(
     let wallet = scenario.wallet();
     let mut fee = Family::Main.fee();
     for _ in 0..8 {
-        let tx = spender.spend_coinbase(wallet, h(coinbase), h(AT), fee);
+        let tx = spender.spend_coinbase(wallet, h(coinbase), connecting, fee);
         let weight = u64::try_from(tx.weight()).expect("a weight fits");
         let needed = shekyl_economics::quantized_fee(weight, floor).expect("priceable");
         if needed == fee {
@@ -412,7 +423,7 @@ async fn an_unfluffed_transaction_is_shown_nowhere_until_the_relay_fluffs_it() {
                 (
                     pool.listing().any(|(id, _)| id == txid),
                     pool.peer_sync().any(|(id, _)| id == txid),
-                    template.transactions.iter().any(|(id, _)| *id == txid),
+                    template.transactions.iter().any(|body| body.id == txid),
                     pool.unpublished().any(|(id, _)| id == txid),
                 )
             };

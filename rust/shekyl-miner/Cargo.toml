@@ -29,8 +29,15 @@ shekyl-thread-ledger = { path = "../shekyl-thread-ledger" }
 # Each worker below the daemon's CPU priority (SH-3).
 shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 shekyl-types = { path = "../shekyl-types" }
+# A job's reward, as the template priced it.
+shekyl-units = { path = "../shekyl-units" }
 shekyl-wire = { path = "../shekyl-wire" }
 tracing = "0.1"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The address tests' spend key off the curve: the first encoding that does
+# not decompress. The version `shekyl-crypto-pq` pins.
+curve25519-dalek = "4"

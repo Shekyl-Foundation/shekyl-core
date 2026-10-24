@@ -281,14 +281,14 @@ stop" holds only after the dialer stop; #1066's step 9 is sequential today.
 else the routine leaves beside the directory are named under that prefix, and
 the sweep removes files as well as directories.
 
-**TSR-F15 (medium; TB lane). macOS has no managed Tor yet, and §7 is what
-gives it one.** Both macOS rows are `unavailable` with `"pending": "TB-11"` in
-`config/tor_pins.json`; TB-11 makes a target pinned only with a launch test,
-and the digests are already verified (`TOR_BUNDLE_DISTRIBUTION.md` §4). §7's
-macOS cases are that launch test: the change whose job passes them adopts the
-macOS pin and removes its `pending` marker. TB-11's Windows launch test is
-this lane's Windows entry, the `windows-x86_64` entry of `tor-pin-verify`;
-§7's Windows cases are the supervisor's acceptance tests, not the pin's gate.
+**TSR-F15 (medium; TB lane). macOS has a managed Tor; §7's macOS cases are
+the supervisor's acceptance tests there.** Both macOS rows are pinned at
+15.0.26 (TB-11, Rick 2026-10-23), with the Developer ID-signed `tor` and
+`libevent` as what ships (`TOR_BUNDLE_DISTRIBUTION.md` §4). TB-11's launch
+test on both platforms is `tor-pin-verify`: its Windows entry and its two
+macOS entries, which run the live tests on the exact signed bytes. §7's
+Windows and macOS cases are the supervisor's acceptance tests, not the pin's
+gate.
 Windows run of 2026-10-15 (the Windows development host): the pinned
 `tor.exe` imports 21 libraries, all the operating system's (8 System32
 libraries and 13 UCRT apisets), with no delay-loads; the pin's `imports`
@@ -729,12 +729,11 @@ Every question of this round is ruled (§1).
 
 Linux, Windows, macOS; the Pi 4 is the Linux host for the soak. Each case
 asserts the announced transitions, the recovery, the RPC fields, **and that the
-gray list is unchanged by the outage**. On macOS these cases are TB-11's
-launch test; on Windows TB-11's launch test is `tor-pin-verify`'s Windows
-entry, and these cases are the supervisor's acceptance tests (`TSR-F15`). The
-respawn case runs in the Windows CI job
-beside the boot-and-stop smoke test (#1072), and in a macOS job once one
-exists.
+gray list is unchanged by the outage**. TB-11's launch test is
+`tor-pin-verify`'s Windows and macOS entries; on both platforms these cases
+are the supervisor's acceptance tests (`TSR-F15`). The respawn case runs in
+the Windows CI job beside the boot-and-stop smoke test (#1072), and in
+`tor-pin-verify`'s macOS entries.
 
 **Linux run, 2026-10-23** (the development workstation, `shekyld` from `dev`
 `34397ac08` with the pinned bundle beside it, testnet, a managed Tor):
@@ -899,8 +898,9 @@ included: p50 3.89 s, max 4.08 s. The cold seed for that run bootstrapped in
   fields. No leg carries Status to the GUI yet: RT-15's socket or pipe is
   RT-W10's, not authorized; the sidecar reaches Status over the owning
   connection it is launched with (`GS-Q1`; core increment `GS-C3`).
-- **TB:** §7's macOS rows are TB-11's macOS launch test; the Windows launch
-  test is `tor-pin-verify`'s Windows entry (`TSR-F15`).
+- **TB:** TB-11's launch test is `tor-pin-verify`'s Windows and macOS
+  entries; §7's cases on both platforms are the supervisor's acceptance
+  tests (`TSR-F15`).
 - **Wallet and clients:** the send flow reads `OwnTx` from Status before
   broadcasting (§1). `Held` is reported held, not sent. `ClearnetOnly` is
   sent over clearnet and is not reported held, and Health stays false.

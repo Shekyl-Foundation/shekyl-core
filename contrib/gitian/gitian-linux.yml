@@ -182,6 +182,9 @@ script: |
     # gitian-build.py fetched it there, digest-checked, before the build
     # started. --no-fetch makes a cache miss a refusal, and a build with no
     # cache at all stops here, so this step cannot go online.
+    #
+    # verify re-checks the staged directory and the cached tarball. A row
+    # that carries upstream also ties each staged file to Tor's bytes.
     if [ -z "${SOURCES_PATH:-}" ]; then
       echo "tor bundle: no sources cache (SOURCES_PATH is unset); the bundle is not downloaded inside the build" >&2
       exit 1
@@ -195,7 +198,7 @@ script: |
       exit 1
     fi
     if [ "${TOR_DISPOSITION}" = "pinned" ]; then
-      if ! python3 ../scripts/release/tor_bundle.py verify --host "${i}" --dir bin/tor; then
+      if ! python3 ../scripts/release/tor_bundle.py verify --host "${i}" --dir bin/tor --sources "${SOURCES_PATH}"; then
         echo "tor bundle: verify failed for ${i}" >&2
         exit 1
       fi

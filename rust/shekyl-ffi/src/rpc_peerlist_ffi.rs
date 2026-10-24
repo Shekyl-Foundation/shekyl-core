@@ -378,3 +378,66 @@ mod tests {
         unsafe { shekyl_rpc_peer_list_free(std::ptr::null_mut()) };
     }
 }
+
+/// What the bound hub and its dialer report of this node's peers
+/// (`DRS_X_STORE_FLIP.md` DX-Q3, b9): sockets by connector and direction,
+/// and the clearnet peer lists' sizes. Rust data the C++ facts read back
+/// through `shekyl_rpc_peerlist_sizes` and the seam's socket counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerCounts {
+    /// Clearnet sockets opened to this node.
+    pub clearnet_in: u64,
+    /// Clearnet sockets this node opened.
+    pub clearnet_out: u64,
+    /// Tor sockets opened to this node.
+    pub tor_in: u64,
+    /// Tor sockets this node opened.
+    pub tor_out: u64,
+    /// The white list's size.
+    pub white: u64,
+    /// The gray list's size.
+    pub gray: u64,
+}
+
+/// The peer counts, while a hub and its dialer are up; `None` before.
+#[must_use]
+pub fn peer_counts() -> Option<PeerCounts> {
+    let hub = crate::seam_ffi::hub()?;
+    let dialer = dialer()?;
+    let sockets = |connector, direction| hub.socket_count(connector, direction);
+    let now = dialer.hub().now();
+    let mut bans = BanSnapshot::take(dialer.hub());
+    let (white, gray) = {
+        let mut shared = dialer.shared();
+        let white = shared.lists.white_count(
+            ConnectorId::Clearnet,
+            now,
+            &mut bans,
+            &mut crate::secure_relay_rng::SecureRelayRng,
+        );
+        let gray = shared.lists.gray_count(ConnectorId::Clearnet);
+        (white, gray)
+    };
+    let width = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    Some(PeerCounts {
+        clearnet_in: sockets(ConnectorId::Clearnet, shekyl_seam::Direction::Inbound),
+        clearnet_out: sockets(ConnectorId::Clearnet, shekyl_seam::Direction::Outbound),
+        tor_in: sockets(ConnectorId::Tor, shekyl_seam::Direction::Inbound),
+        tor_out: sockets(ConnectorId::Tor, shekyl_seam::Direction::Outbound),
+        white: width(white),
+        gray: width(gray),
+    })
+}
+
+/// Handshaken sessions on the bound hub's board, `(outbound, inbound)`;
+/// `None` while no hub is bound. A row before its handshake is not a
+/// session (the registry's `established_count`).
+#[must_use]
+pub fn session_counts() -> Option<(u64, u64)> {
+    let board = crate::seam_ffi::hub()?.board();
+    let width = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    Some((
+        width(board.established_count(shekyl_seam::Direction::Outbound)),
+        width(board.established_count(shekyl_seam::Direction::Inbound)),
+    ))
+}

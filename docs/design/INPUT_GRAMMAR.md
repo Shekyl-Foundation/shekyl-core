@@ -2,7 +2,7 @@
 
 **Status:** RULED (Rick) — Part A 2026-10-13 (§0–§9, IG-Q1…IG-Q20), Part B
 2026-10-14 (§10–§15, IG-Q21…IG-Q39); IG-Q40, the inbound cap, 2026-10-14;
-IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157.
+IG-Q41, the Tor binary, 2026-10-15; Part C (§16–§20, IG-Q42…IG-Q57), the RPC wire's names, 2026-10-19; Part D (§21–§22, IG-Q58…IG-Q65), checking a configuration and the shipped file, RULED 2026-10-22 (Rick), as written with the IG-Q64 package-header amendment; the sole-member rule it names is shekyl-core #1157; Part E (§23–§24, IG-Q66…IG-Q72), the Tor status fields, POSED 2026-10-22, revised 2026-10-23.
 Each question carries its ruling in
 its own line. The rules IG-1…IG-15 are the cursor rule
 [`83-input-grammar`](../../.cursor/rules/83-input-grammar.mdc); this
@@ -165,7 +165,7 @@ A term listed under two parents is one term. Part B's terms are §11; a parent a
 | mine | — | the daemon's miner and its control | |
 | address | mine, make, — | a Shekyl address (the payment meaning; never a network location); bare, *view* — the wallet's primary address | —:view |
 | threads | mine | a thread count | |
-| rpc | —, wallet | an RPC service's listeners: the daemon's, or the wallet's (`shekyl-wallet-rpc`, and `wallet-rpc-*` in `shekyl-cli`) | |
+| rpc | —, wallet, dev | an RPC service's listeners: the daemon's, or the wallet's (`shekyl-wallet-rpc`, and `wallet-rpc-*` in `shekyl-cli`); under `dev`, the armed test levers it serves (RT-O9.2, IG-Q49) | |
 | view | rpc | the `view` preset, a fixed set of grants (RPC_CHANNEL §6.1) | |
 | admin | rpc | the `admin` preset, every grant (RPC_CHANNEL §6.1) | |
 | cors | rpc | cross-origin resource sharing | |
@@ -289,6 +289,7 @@ Legend — **R** rename or fold (no trace), **K** kept as is, **X** REJECTED row
 | `restricted-rpc`, `rpc-restricted-bind-port`, `rpc-restricted-bind-ip`, `rpc-restricted-bind-ipv6-address` | `rpc-view-listen` | list of endpoint, loopback only | `none` | both |  |  | R; survives RT-W10 unchanged (plaintext loopback at view, off by default, ruled 2026-10-08); the GUI sidecar passes `--rpc-admin-listen none --rpc-view-listen 127.0.0.1:<port>` |
 | `rpc-access-control-origins` | `rpc-cors-origin` | list of origin | `none` | both |  |  | R; explicit web origins only, `none` is CORS default-deny; `*` is refused: a wildcard lets any page in the operator's browser read and drive the plaintext admin listener |
 | `rpc-max-connections`, `rpc-max-connections-per-public-ip`, `rpc-max-connections-per-private-ip` | `rpc-connections-max` | integer ≥ 1 | `25` (inherited; IG-Q12) | both |  |  | R; one option for one value, where today three set it (IG-F1); the cutover ships the inherited 25 with a FOLLOWUPS row for the RPC lane to derive the default under the RT-O9 resource policy, the same shape as `txpool-weight-max` |
+| — | `dev-rpc` | switch | off | both |  |  | N; testnet, stagenet, regtest (IG-8, IG-Q49: never mainnet); serves the armed test levers (`generateblocks`, `pop_blocks`; RT-O9.2) to the host's administrator, refused outside the grant while off (`DRS_X_STORE_FLIP.md` DX-Q3, Q8) |
 | `disable-rpc-ban` | — | | | |  |  | – (R5; the scorer it switches has no caller, IG-F9) |
 | `rpc-response-soft-limit` | — | | | |  |  | – (response limits belong to the RPC resource policy, IG-Q12) |
 
@@ -325,7 +326,7 @@ Criterion: a REJECTED row exists for a capability a user could reasonably ask fo
 
 The `removed_flags` shim, its FOLLOWUPS sunset row, and its C++ tests go with the cutover; the X rows live in the Rust table.
 
-**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early`; 48 live names after, the four levers among them (unchanged at RT-W10: `rpc-listen` arrives and `rpc-admin-listen` becomes an X row).
+**Count:** 83 registered options and 4 environment levers today, plus PR-3's `p2p-disclose-early` and DRS-X's `dev-rpc`; 49 live names after, the four environment levers among them (unchanged at RT-W10: `rpc-listen` arrives and `rpc-admin-listen` becomes an X row).
 
 ---
 
@@ -1246,3 +1247,108 @@ Each carries its recommendation, ruled as recommended on 2026-10-22 (Rick). The 
 - **Purge.** Purge removes the per-network files the post-install copy placed, then removes `/etc/shekyl/` only if it is empty (`rmdir`, never a recursive delete), so an operator's own files there survive and the directory stays with them. The chain data and logs, which systemd created for the service, and the system account follow their own conventions: the data is the operator's to delete, and a system account is kept so that a reused uid never owns another account's files.
 
 **IG-Q65 — the shipped file's comments — RULED 2026-10-22, folded into IG-Q64.** The comments are `example_toml`'s: the row's help, and its default where the row has a derived one. `dev-` rows, REJECTED rows and RESERVED rows are already absent, because the renderer keeps `Visibility::Public` file rows. The package header is the only added text. A second comment contract would be a second renderer.
+
+---
+
+## 23. Part E — the Tor status fields
+
+**POSED 2026-10-22, revised 2026-10-23.** Ground: `dev` `1045d90f0`. Rick assigned the naming to the RPC wire round ([`TOR_SUPERVISOR.md`](TOR_SUPERVISOR.md) `TSR-Q12`, ruled 2026-10-20; the FOLLOWUPS row "Name the Tor Status and Health fields", owned by [`RPC_WIRE.md`](RPC_WIRE.md)). The supervisor's increment 3 exposes one typed read; this Part names its fields on the wire under RW-Q1, RW-Q10 and Part C's rules (IG-Q42's walk, IG-Q53's replies, IG-Q54's kinds). The hop-0 split named below is GS-C1 (PR #1164, in flight, not on the ground; #1161 closed with its base). On the ground, `own_tx` still returns `AddressHiding` whenever health is true. GS-C1 replaces that function. This Part names the wire of the replacement, so the two lanes describe one read.
+
+**Two producers, two grants** (`RPC_CHANNEL.md` §6.1). A field is present only under its grant. `health` and `status` are different grants, so a status caller does not see Health's boolean and a health caller does not see the reason.
+
+- **The relay's hop-0 verdict**, under every `tor` setting, in two parts. `connected`: an outbound session hides this node's address now. That is Health's boolean (`TSR-Q4` as GS-C1 reads it): transient, and it says nothing lasting about the node, so it stays off any reply that would let an outsider tie the endpoint to the onion (§8). `routable`: `connected`, and this epoch's origin pin is not exhausted. `routable` implies `connected`. `OwnTx` follows `routable`, under `status`. Health can be true while `OwnTx` is `Held`, which is the pin exhausted while a session is live. The link being usable is neither part.
+- **The managed supervisor**, and only that posture. `tor::begin` returns nothing unless the setting is managed. An operator's Tor has no child and no §4.3 phase (§4.9). The `tor` object is that projection. It is null unless `posture.tor` is `managed`.
+- **Status** also carries (`TSR-Q12`): the posture (the `tor` and `clearnet` settings); `OwnTx`; why an origin is held when the managed projection is not the reason; whether the node is syncing, and over what; and, inside the managed object, the §4.3 state, the cause as one variant, since when, the respawn count, the bootstrap percent, the version flag, and the fixes that apply.
+- **Typed values, never sentences, and polling** (`TSR-Q13`). Clients read Status on their normal refresh. One renderer in a shared crate turns the values into words for the daemon's log line, `shekyl-cli` and the GUI. GS-C2 puts these reply fields on `daemon_status`. GS-C1 publishes the two verdict parts. The supervisor's increment 3 owns the managed projection, including growing the version flag out of the cause slot so a flag and a cause can both stand.
+
+**The GUI's grant** (`TSR-Q12`'s third ask) is answered by ruled text, not by a question here, but not by a leg that exists yet. `RPC_CHANNEL.md` RT-15 rules that a caller running as the daemon's own OS user, over the owner-only socket or pipe, is the owner, with every grant, Status included, and names the GUI running `shekyld` as its child as the case it covers. That socket or pipe is RT-W10's, which is not built. Until it is, the GUI's sidecar runs with `--rpc-admin-listen none` and a loopback `--rpc-view-listen` (`shekyl-gui-wallet` `src-tauri/src/daemon_manager.rs`; DC-Q8), and the `view` preset carries no Status, so no leg carries Status to the GUI today. The GUI sync lane's GS-Q1, on launching the sidecar with an owning connection, concerns that gap. After RT-W10, a GUI pointed at a service-mode daemon, another user's daemon or another machine reaches it over the channel and sees Status only if its enrolment grants it.
+
+**The names, as recommended** (§24 poses each):
+
+| Field (holder) | Grant | Kind and values | From |
+|---|---|---|---|
+| `hiding` (`daemon_status`) | health | switch: an outbound session hides this node's address now. The class part. `origination` `address-hiding` implies it, because `routable` implies `connected`. It stays true while `origination` is `held` and the pin is exhausted | GS-C1 |
+| `posture` (`daemon_status`) | status | object: `tor` (one-of `managed`, `operator`, `off`) and `clearnet` (one-of `on`, `off`), the settings' own names and keywords (§5) | `TSR-Q12` |
+| `origination` (`daemon_status`) | status | one-of `address-hiding`, `held`, `clearnet-only`, `offline`. `address-hiding` is the pin part (`routable`), not Health | `OwnTx` |
+| `hold` (`daemon_status`) | status | `connecting` (`connected` false), `rebuilding` (`connected` true and the pin exhausted), or null. Null when `origination` is not `held`, and when the managed projection explains the hold: `tor.state` is `restarting`, `waiting`, or `bootstrapping`, or `impaired` with facet `outbound`. An inbound impairment does not explain origination, and neither does an impairment that names no facet. `tor` null is an operator Tor, which has no phase (IG-Q72). Null is no answer; absence is the grant (RK-D23) | the two verdict parts |
+| `sync_connector` (`daemon_status`) | status | a list of one-of `clearnet`, `tor`: the connectors the node syncs over now; `[]` when it syncs over none | `TSR-Q12` |
+| `tor` (`daemon_status`) | status | the managed supervisor's projection, below. Null unless `posture.tor` is `managed` | §4.9 |
+| `tor.state` | status | one-of `restarting`, `waiting`, `bootstrapping`, `usable`, `impaired`. `waiting` is Restarting (held). `impaired` is §4.3's Degraded. The chain field `degraded` keeps that word | §4.3 |
+| `tor.facet` | status | `outbound`, `inbound`, or null. The facet down. Null unless `state` is `impaired` and the cause names a facet. `descriptor-limit` is `impaired` and the value is null (RK-D23) | §4.3, §5 |
+| `tor.cause` | status | null, or one object with one key, the variant below. The value is that variant's payload. A variant with no payload has `null`. No second object carries detail | §5 |
+| `tor.since` | status | time (IG-Q54, unix seconds): when `state` began. The supervisor's internal clock is not this field | `TSR-Q12` |
+| `tor.respawn_count` | status | integer: respawns since the daemon started | `TSR-Q12` |
+| `tor.progress` | status | an integer 0 through 100 inclusive, or null. The last bootstrap percent while `state` is `bootstrapping`; 0 before the first sample. Null in every other state, because 0 is a sample (RK-D23) | §4.2 |
+| `tor.flagged` | status | switch: the consensus does not recommend this Tor. Independent of `state` and of `cause`, so it stands while `state` is `usable` | §5 |
+| `tor.fix` | status | a list of one-of `restore-managed`, `operator`, `clearnet-on`, `clearnet-only`. Empty unless `cause` is an install variant. `clearnet-on` is offered only when the clearnet setting is off | `ManagedTorFix` |
+
+**Cause variants.** One key, so a clock skew cannot carry a path. §5's "Rendered from the cause: none" rows are not variants. The value is the payload.
+
+| Key | Payload | Shown as | Fixes |
+|---|---|---|---|
+| `outbound-blocked` | null | `impaired`, facet `outbound` | none |
+| `directory-unreachable` | null | `impaired`, facet `outbound` | none |
+| `clock-skew` | a signed integer, seconds (IG-6, the row allows the sign) | `impaired`, facet `outbound` | none |
+| `onion-unreachable` | null | `impaired`, facet `inbound` | none |
+| `descriptor-limit` | a non-negative integer, how many Tor reported open. The supervisor reports that count and not a second limit | `impaired`, facet null | none |
+| `exited` | an integer exit code, or null when the reap reported none (the process ended, or the control connection ended) | `restarting` | none |
+| `unanswered` | null. A control reply missed its bound | `restarting` | none |
+| `launch-failed` | null. A spawn that passed the pin did not come up | `restarting` | none |
+| `install-defect` | a path (IG-6): the file the pin rejected. The binary was not executed. The pin error carries that path and `PinRefused` drops it; this value is the path | `waiting` | the install list |
+| `missing` | null. Discovery found no bundle. The segment `not` is refused (IG-4), so this is not `not-installed` | `waiting` | the install list |
+| `unavailable` | null. This release has no managed Tor for this platform | `waiting` | the install list |
+| `unusable` | `unwritable`, `exhausted`, or null. `unwritable` is a directory the account cannot write. `exhausted` is no space left. Null is any other failure, which is the whole variant today: `DirectoryUnusable` carries no kind. The path is `data-dir`, already named under the `config` grant. The subject `data` keeps its meaning, and `full` keeps "the whole address" | `waiting` | none |
+
+Directory wait is `state` `bootstrapping`, `cause` null, `progress` the last sample. A clock jump leaves the cause alone. It moves the shown state to `bootstrapping`, and `since` dates that state, only when the shown state changes: a live link that was `usable` and is not impaired. A jump during `bootstrapping`, during a standing impairment, or while the process is down leaves `state`, `cause`, and `since` as they were. Today's `shown` reports an impairment before the resumed link for `outbound-blocked`, `directory-unreachable`, `clock-skew`, and `descriptor-limit`. `onion-unreachable` is the same projection once that cause exists: a jump does not clear it. No `resumed` keyword and no `directory-waiting` keyword. `exited`, `unanswered` and `launch-failed` are §5's one "exited or wedged" row, split by the sentence the renderer speaks (`TSR-Q13`): one keyword cannot carry three sentences. `onion-unreachable` is §5's row; the supervisor's descriptor-failed path does not set a cause yet, and the variant is the contract it grows to.
+
+The install list is `restore-managed`, `operator`, `clearnet-only`, and `clearnet-on` only when clearnet is off. A crash, a bad data directory, an unanswered control connection and an impaired facet offer nothing. `clearnet-only` stays the operator's own choice of `tor = off` with `clearnet = on` (`TSR-Q10`, `TSR-Q11`), whether it appears as `origination` or as a fix.
+
+**Terms these names need** (for §19, on ruling). Each walks under IG-Q42. `tor` and `clearnet` are subjects, used by reference under `posture` and, for `tor`, as the managed object. No term below ends a command, so no Kind cell is set. Value keywords are closed sets on a row. They are not paths, so a keyword adds no edge: `address-hiding` does not parent `hiding` under `address`.
+
+| Term | Parents | Meaning |
+|---|---|---|
+| hiding | daemon | an outbound session hides this node's address now: the class part of the hop-0 verdict |
+| posture | daemon | the connector settings in force: `tor` and `clearnet` |
+| origination | daemon | what happens to the node's own transactions (`OwnTx`), from the pin part |
+| hold | daemon | why the node holds its own transactions when the managed projection is not the reason (IG-Q72) |
+| facet | tor | which facet is down: outbound or inbound. Null when the impaired state names no facet |
+| since | tor | when the state began, a time (IG-Q54) |
+| respawn | tor | a restart of the managed Tor; with `count`, how many |
+| progress | tor | how far bootstrap has come, an integer from 0 to 100 |
+| flagged | tor | the consensus does not recommend this Tor. Independent of the state and of the cause |
+| fix | tor | a fix the operator may apply. The list is empty except for an install cause |
+
+Existing terms that gain a parent. On ruling, the §19 row gains the parent and states the meaning per parent, as `height` does:
+
+- `state` gains `tor` on its §19 defining row. Under `connection` it is the connection's state. Under `tor` it is the §4.3 projection.
+- `cause` gains `tor` on its §19 defining row. Under `tx` it is why a rejected transaction was refused. Under `tor` it is the supervisor's cause variant, one object or null.
+- `connector` gains `sync` on its §19 defining row, keeping "one-of `clearnet`, `tor`".
+- `count` gains `respawn` on its §19 gains row. `count` is defined in §11, so a second defining row would be a duplicate. The meaning stays "how many".
+
+On ruling, §18.1 walks `hiding`, `posture`, `origination`, `hold`, `sync_connector` and `tor` under `daemon`. `sync_connector` and `tor` are references: `sync` then `connector`, and the subject `tor`. Under `posture`, `tor` and `clearnet` are references. The managed object's fields walk under the subject `tor`: `state`, `facet`, `cause`, `since`, `respawn_count`, `progress`, `flagged` and `fix`.
+
+`offline` is already the term "P2P is off" (IG-Q3). The origination keyword uses it with that meaning: Tor off and clearnet off.
+
+Value keywords: `restarting`, `waiting`, `bootstrapping`, `usable`, `impaired` (state); `outbound`, `inbound` (facet; both already terms); the cause keys in the table above; `unwritable`, `exhausted` (`unusable`'s payload); `address-hiding`, `held`, `clearnet-only`, `offline` (origination); `connecting`, `rebuilding` (hold); `restore-managed`, `clearnet-on` (fix). `operator` and `clearnet-only` are the settings those fixes name, with the same meaning as in `posture` and `origination`.
+
+## 24. Questions for Part E
+
+Each is posed for ruling, with a recommendation. The managed projection is the supervisor's increment 3 (`TOR_SUPERVISOR.md` §12). The two verdict parts are GS-C1 (PR #1164). GS-C2 puts the reply fields on `daemon_status`. The `TSR-Q12` correction in the supervisor document is GS-C4; this Part does not edit that document, which #1164 already has open.
+
+**IG-Q66 — where the fields live — POSED 2026-10-22, revised 2026-10-23.** *Recommended:* in `daemon_status` (today's `get_info`). `hiding` is in the Health part. Everything else in the table is in the Status part. The grant filter withholds a part the caller may not see (absent, never zeroed; RK-D23), which is why `hiding` and `hold` are two fields: a status caller does not hold `health`, and a health caller must not see the pin. Clients already poll `daemon_status` on their normal refresh (`TSR-Q13`). Posture, origination and the sync connectors are not Tor's alone, so a `tor_status` method would split one node's state across two reads. The alternative is a `tor_status` view under the `status` grant, with `hiding` staying in `daemon_status`.
+
+**IG-Q67 — Health's boolean — POSED 2026-10-22, revised 2026-10-23.** *Recommended:* `hiding`, beside `peered`. It is the class part: an outbound session hides this node's address now. `origination` `address-hiding` implies `hiding`, because the pin part implies the class part. The converse is false. `hiding` stays true while `origination` is `held` and the pin is exhausted, so a `view` caller cannot watch the pin move (`RPC_CHANNEL.md` §6.1). It says nothing about anonymity, and it is not the signal the send flow reads. The alternatives were `masked`, a longer `address_hiding` (that path would parent `hiding` under `address`, which is a Shekyl address), and defining `hiding` as true exactly when `origination` is `address-hiding`, which is the ground's `own_tx` and the function GS-C1 replaces.
+
+**IG-Q68 — the posture and origination — POSED 2026-10-22, revised 2026-10-23.** *Recommended:* `posture` carries the two settings under their own option names and keywords (§5's `tor` and `clearnet` rows), so a value shown is valid input to the file. `origination` carries `OwnTx` as `address-hiding`, `held`, `clearnet-only` and `offline`. `address-hiding` is the pin part. `held` is every other case where Tor is `managed` or `operator`: the link is down, no session hides the address yet, or the pin is exhausted while a session is live. `clearnet-only` means one thing, here and as a fix: the operator's own choice of `tor = off` with `clearnet = on` (`TSR-Q10`, `TSR-Q11`). A node whose managed Tor is down reports `held`, never `clearnet-only`, even while it syncs over clearnet. The send flow reads `origination` before broadcasting (`TSR-Q12`).
+
+**IG-Q69 — the Tor object — POSED 2026-10-22, revised 2026-10-23.** *Recommended:* one nested object, `tor`, null unless `posture.tor` is `managed`, with `state`, `facet`, `cause`, `since`, `respawn_count`, `progress`, `flagged` and `fix`. There is no `detail` object. Restarting (held) is the keyword `waiting`, because `held` is `origination`'s word. §4.3's Degraded is the keyword `impaired`, because `degraded` is already the chain-following field on this reply (§19). `facet` is `outbound` or `inbound` when an impaired cause names a facet, and null for `descriptor-limit`. `cause` is null when the supervisor has no variant: the opening `restarting`, `usable`, and `bootstrapping` with no cause. A resume does not clear a variant. Where the cause was null and the link was `usable`, the state becomes `bootstrapping` and `since` dates it. A standing impairment stays `impaired` with its cause and its `since` (RK-D23: null is no answer, not a withheld field). `flagged` may be true in any state. `progress` is the bootstrap percent while `state` is `bootstrapping`, and null in every other state.
+
+**IG-Q70 — the cause is one variant — POSED 2026-10-22, revised 2026-10-23.** *Recommended:* `tor.cause` is null, or one object with one key, as the table in §23. The key is named by what the operator sees (rule 81). The value is that variant's payload, and a variant with no payload has null, so the illegal combinations a detail bag allowed cannot be written. `flagged` is the §5 announcement and is a switch, not a cause: the supervisor's single cause slot that stores the version flag is the slot increment 3 grows out of, because a usable node can be flagged and skewed at once and one slot cannot hold both. The open-file payload is the count Tor reported. The data-directory payload is `unwritable` or `exhausted`, not a field named `data` and not the keyword `full`. Fixes are the install variants only.
+
+**IG-Q71 — syncing over what — POSED 2026-10-22.** *Recommended:* `sync_connector`, a list of the connectors the node syncs over now. Health's `syncing` already says whether it syncs; the list says over what, and `[]` with `syncing` true is not a state the node can be in. The supervisor's current pair, configured clearnet and "the link is usable", is the stand-in a chain-sync feed replaces. This field is that feed.
+
+**IG-Q72 — a hold while the projection is not the reason — POSED 2026-10-23, revised 2026-10-23.** The relay holds the node's own transactions in two cases that are not a Tor fault, not a respawn and not a fix. GS-C1 publishes both parts. `tor.cause` stays the supervisor's variant.
+- `connecting`: no outbound session hides this node's address yet (`connected` false). After Tor boots, before the first onion peer completes its handshake, and also an operator Tor, which has no phase, until a session exists;
+- `rebuilding`: the epoch's origin pin is exhausted while a session is live (`connected` true, `routable` false). Health stays true.
+
+*Recommended:* `hold`, beside `origination`, `connecting`, `rebuilding`, or null (RK-D23). The value is `connecting` or `rebuilding` when `origination` is `held` and the managed projection does not explain the hold. The projection explains it when `tor.state` is `restarting`, `waiting`, or `bootstrapping`, or `impaired` with facet `outbound`: the outbound link is not usable (§4.1). It does not explain it when `tor` is null (an operator Tor has no phase), when `tor.state` is `usable`, when the impairment is inbound (`onion-unreachable`: hop 0 needs outbound only), or when the impairment names no facet (`descriptor-limit`). Those leave `connecting` or `rebuilding` beside `tor`. The keywords name what the operator sees (rule 81). No timing detail: `tor.since` dates the state, and an epoch's end would date the pin. The alternative, a further `tor.cause` of `relay-waiting`, puts a reason that is not Tor's under `tor`, and it has no object to live on when the posture is `operator`.

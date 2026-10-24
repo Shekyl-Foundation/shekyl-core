@@ -1651,6 +1651,33 @@ fn archival_len_of(pqc_auths: &[u8], prunable: &[u8]) -> ArchivalLength {
 }
 
 impl Transaction {
+    /// Where the prefix's `extra` bytes begin in [`write`](Self::write)'s
+    /// output: after the version, the unlock time, the inputs, the outputs
+    /// and the extra's own length. A block template adds this to the
+    /// coinbase's offset in the block blob to find the extra nonce.
+    #[must_use]
+    pub fn extra_offset(&self) -> usize {
+        let mut before = Vec::new();
+        write_varint(TX_VERSION, &mut before).expect("writing to a Vec is infallible");
+        write_varint(self.prefix.unlock_time, &mut before).expect("writing to a Vec is infallible");
+        write_varint(self.prefix.inputs.len(), &mut before)
+            .expect("writing to a Vec is infallible");
+        for input in &self.prefix.inputs {
+            input
+                .write(&mut before)
+                .expect("writing to a Vec is infallible");
+        }
+        write_varint(self.prefix.outputs.len(), &mut before)
+            .expect("writing to a Vec is infallible");
+        for output in &self.prefix.outputs {
+            output
+                .write(&mut before)
+                .expect("writing to a Vec is infallible");
+        }
+        write_varint(self.prefix.extra.len(), &mut before).expect("writing to a Vec is infallible");
+        before.len()
+    }
+
     /// Write the transaction.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         write_varint(TX_VERSION, w)?;

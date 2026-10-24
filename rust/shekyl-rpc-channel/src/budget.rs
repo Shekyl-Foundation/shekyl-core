@@ -295,6 +295,13 @@ mod tests {
             Admission::Busy,
             "time that runs backwards earns no admission"
         );
+        // Nor does it move the clock back: presenting at t0 again earns
+        // nothing for the second it went backwards.
+        assert_eq!(
+            budget.present(&tag(burst + 1), t0),
+            Admission::Busy,
+            "a later presentation at t0 earns nothing for the backwards step"
+        );
     }
 
     /// A mac1 takes at most one admission. A repeat leaves the balance where
@@ -331,5 +338,44 @@ mod tests {
             Admission::Admitted,
             "a ruled burst of newer mac1s evicted the first"
         );
+    }
+
+    /// The window is exactly the ruled burst: one newer mac1 short of it,
+    /// the first is still refused as a replay.
+    #[test]
+    fn the_window_holds_exactly_the_ruled_burst() {
+        let t0 = Instant::now();
+        let wide = HandshakeBudget::with_share(1_000, Duration::from_secs(3_600), t0);
+        let first = [0xcd; MAC1_LEN];
+        assert_eq!(wide.present(&first, t0), Admission::Admitted);
+        for n in 0..HANDSHAKE_REPLAY_SLOTS - 1 {
+            assert_eq!(wide.present(&tag(n), t0), Admission::Admitted);
+        }
+        assert_eq!(
+            wide.present(&first, t0),
+            Admission::Replay,
+            "{} newer mac1s are one short of the window",
+            HANDSHAKE_REPLAY_SLOTS - 1
+        );
+    }
+
+    /// A mac1 answered busy is remembered as well: after the bucket has
+    /// refilled, the same message 1 is a replay, not a fresh admission.
+    #[test]
+    fn a_mac1_answered_busy_is_remembered() {
+        let t0 = Instant::now();
+        let none = HandshakeBudget::with_share(1_000, Duration::ZERO, t0);
+        let one = Duration::from_nanos(HANDSHAKE_DAEMON_CPU_NANOS);
+        let refilling = HandshakeBudget::with_share(1_000, one, t0);
+        assert_eq!(refilling.present(&tag(0), t0), Admission::Admitted);
+        let answered = [0xef; MAC1_LEN];
+        assert_eq!(refilling.present(&answered, t0), Admission::Busy);
+        assert_eq!(
+            refilling.present(&answered, t0 + Duration::from_secs(1)),
+            Admission::Replay,
+            "the bucket refilled, and the busy-answered mac1 is still spent"
+        );
+        assert_eq!(none.present(&answered, t0), Admission::Busy);
+        assert!(none.remembers(&answered));
     }
 }

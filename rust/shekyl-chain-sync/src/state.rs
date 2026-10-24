@@ -32,3 +32,19 @@ pub enum SyncState {
     /// On the best verified chain, and the fill has reached its checkpoint.
     Synced,
 }
+
+impl SyncState {
+    /// The RPC `sync` parameter under `mine.not_synced`.
+    ///
+    /// The spelling is the contract. The work and frontier payloads stay
+    /// off the wire.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NoView => "no_view",
+            Self::Behind { .. } => "behind",
+            Self::Following { .. } => "following",
+            Self::Synced => "synced",
+        }
+    }
+}
