@@ -2,7 +2,7 @@
 
 **Families (registered in `IMPLEMENTATION_INDEX.md` §2, rule 94):** **`DX-Q`** (questions, ruled here) and **`DX-F`** (findings). `X-` is taken by the exit-standoff family; `DX-Q` and `DX-F` are free at `d2ac8b45d`.
 **Ground:** `dev` at `d2ac8b45d` (2026-10-16); #1088 (Rust `main()`) at its PR head. Counts re-measured at the landing pin, `d2ac8b45d`: two line spans corrected in place (DX-F1's cache block, DX-F6's `RelayState`); every other count and pin held.
-**Status:** OPEN — Round 0 RULED, Rick 2026-10-16: DX-Q1…DX-Q9 accepted as recommended, and DX-Q8 amended (§3). DX-Q5's relay seam was grounded the same day (§2, DX-F6). DX-Q10, the fee floor's move at the flip, was ruled with FL PR-C (#1096, 2026-10-16) and is carried here by name. DX-Q3 is amended by PR 3b's Round 0 (N1, N2 and Q1–Q13, ruled by Rick 2026-10-21/22; DX-Q3's amendments below). Implementation proceeds in the order of §4.
+**Status:** OPEN — Round 0 RULED, Rick 2026-10-16: DX-Q1…DX-Q9 accepted as recommended, and DX-Q8 amended (§3). DX-Q5's relay seam was grounded the same day (§2, DX-F6). DX-Q10, the fee floor's move at the flip, was ruled with FL PR-C (#1096, 2026-10-16) and is carried here by name. DX-Q3 is amended by PR 3b's Round 0 (N1, N2 and Q1–Q13, ruled by Rick 2026-10-21/22; DX-Q3's amendments below). The flip's own questions, FLIP-Q1–Q5, were ruled by Rick on 2026-10-24 (below DX-Q3's amendments). Implementation proceeds in the order of §4.
 **Parent:** `DAEMON_REDB_STORE.md`. This document replaces the plan's one-line DRS-X and DRS-B rows and amends R2 (2026-10-15) where §1 says.
 
 ---
@@ -151,6 +151,18 @@ PR 3b's questions share one cause, no composition root. Two global rulings answe
 | Q12 | Where the handles live | N1 |
 | Q13 | The sync watch | The node owns one `watch::Sender<shekyl_chain_sync::SyncState>`, chain sync's own type: `Synced` once genesis connects on regtest, `NoView` elsewhere until chain sync's cutover publishes. The follower posts only on `Synced`, and `mining_status` names the reason while no job is posted. No interim |
 
+#### The flip's questions: FLIP-Q1–Q5 (ruled by Rick, 2026-10-24)
+
+Raised by the landing review of PR 3b (design review, 2026-10-24) and ruled as it recommended.
+
+| # | Question | Ruling |
+| --- | --- | --- |
+| FLIP-Q1 | `is_synchronized` for `levin_notify` between the flip and chain sync's cutover | The shell's `i_core_events::is_synchronized` asks the C++ protocol handler's own `m_synchronized`: C++ to C++, no FFI, deleted together at chain sync's cutover. The Rust node's `SyncState` stays `NoView` on every public network until that cutover (Q13), and a shell that read it would never relay a transaction on testnet in between. The Rust RPC reads the Rust node's state, as PR 3b built it; the two disagree by design until the cutover, and `get_info.synchronized` reads `false` on a testnet node that is relaying, which Q13 already accepts. Nothing a peer sends changes this |
+| FLIP-Q2 | Where the rebuild sits | After the flip, before genesis. Releases come from `main` and every pre-genesis release wipes, so the flip is not the first file an operator keeps; the rebuild is on `DAEMON_REDB_STORE.md` §8.1's genesis checklist (`DRS_X_REBUILD_ROUND0.md`, Sequencing) |
+| FLIP-Q3 | `release_build`'s one definition | A `cfg` the release workflow sets, by the mechanism the version string uses; `debug_assertions` is not it. `get_info.release_build` is that flag |
+| FLIP-Q4 | The flip's `CORE_RPC_VERSION` bump | One minor bump (§3.1, "The flip's `CORE_RPC_VERSION` bump"), its number read from the tree at the flip's pin. The in-tree clients (`shekyl-cli`, the engine's daemon trait, the GUI's pairing) change in the flip PR |
+| FLIP-Q5 | What stays in C++ after the flip | Named with its owner, so DX-Q3's falsifier is read against the list: the protocol handler's sync half and `rpc_facts_ffi.cpp`'s sync half (connection claims, sync spans) until chain sync's cutover; `levin_notify` and the relay entry until RD's; the inbound handshake until slice 4's |
+
 ### DX-Q4 — The miner loop is Rust
 
 - The local miner becomes a Rust loop over `shekyl-pow-randomx`, the pure-Rust light-cache hasher that already serves production PoW, for verification **and** for the built-in miner: `miner.cpp` hashes each nonce through its `get_block_hash` callback → `get_block_longhash` → `hash_pow_randomx` → `shekyl_pow_randomx_v2_hash` (`src/crypto/pow_randomx.cpp`; `src/cryptonote_core/cryptonote_tx_utils.cpp:242`, `:264`).
@@ -184,7 +196,9 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 | 2 | **Router, arrival entry, `TipChanged`, the shared hasher budget**; the scenario driver is the source in tests | staged; merged 2026-10-20 (#1123) |
 | 3 | **The read-only RPC handlers and the store-backed facts (DX-Q3), and the miner loop (DX-Q4)**, unrouted | staged; merged 2026-10-19 (#1106) |
 | 3n | **`shekyl-node`**, the daemon's one `Node` (N1): the store, ingest, the pool, the hasher budget, the cache store, the job board and the socket table. Built at start beside the C++ core; genesis through the door; nothing routed | staged; merged (#1147) |
-| 3b | **The node's one template (N2) and the methods that read it; mining control; `submit_block`, `generateblocks` and `pop_blocks`; the pool's handlers; the bans and `stop_daemon`; three Q1 reads** (DX-Q3), unrouted | staged (#1165) |
+| 3b | **The node's one template (N2) and the methods that read it; mining control; `submit_block`, `generateblocks` and `pop_blocks`; the pool's handlers; the bans and `stop_daemon`; three Q1 reads** (DX-Q3), unrouted | staged; merged 2026-10-23 (#1165) |
+| 3c | **The landing's cleanup**: a retired pool answers the chain's reads, the producer's listed bodies confirmed at its second lock, the follower built again at the same tip after a transient withdrawal, `generateblocks` waiting out a transient reason, the follower's joins, the template-secrets gate | staged (#1176) |
+| 3d | **What the flip's day needs that is final today**: `dev-rpc` armed in every harness that calls an armed lever, and the LMDB-bound C++ tests whose rule Rust already pins deleted | staged |
 | 4 | **The flip** (below) | live |
 
 **The flip PR:**
@@ -206,9 +220,11 @@ The splinter rule: a mechanism is deleted whole, in one PR. The join rule: no FF
 - arms the `dev-rpc` row in the daemon config of every regtest harness that calls `generateblocks` or `pop_blocks` — the engine-core e2e runs, GF-7, the bench scripts and the Python framework — before dispatch reads the `armed` column (the review of #1165, ruling 1);
 - hands the submit engine's shim (`RustPoolShim`) the service's `PoolHealth`, so a pool-file fault met on the submit path retires the pool as one met by the service, the pool handle or the chain handle does (the review of #1165, M5);
 - runs the RPC on a runtime of its own, never the node's: `pop_blocks` returns its bodies through `offer_carried`, which verifies each body's stateless half on the caller's runtime without a hasher permit (`span.rs`), bounded by the operator only because the lever is armed and the host's;
+- moves `shekyl-cli`'s `mine start` to the route it calls: today it sends `miner_address` and `threads_count` (`rust/shekyl-cli/src/daemon.rs:327`–`:336`), which the live C++ route requires; the store-backed route takes `{ threads }` and no address (N2). The CLI follows the route in the flip PR, with the GUI repository's pairing in the same change if it sends the same (`src-tauri/src/daemon_rpc.rs`). Nothing bridges the two before then;
+- moves the GUI's `get_info` reader to `tx_pool_size: Option<u64>` with its pairing (`DAEMON_RPC_KV_GET_INFO.md` §5.1): the store-backed node is the first that retires a pool, and its retired reply carries `null` (3.61);
 - restates the two decisions `RPC_WIRE.md` carries that are bound to state the flip ends: RK-D7 (one implementation, `StoreFacts`, once the shims are deleted) and the per-lock-domain rule (over the Rust pool's lock and the store's MVCC snapshot, where today its example is `tx_memory_pool::check_for_key_images`).
 
-PR-b, PR 2 and PR 3 may run in parallel; PR 3n is the node (#1147), and PR 3b builds on it (#1165). The flip needs PR-b, PR 2, PR 3, PR 3n, PR 3b and #1088.
+PR-b, PR 2 and PR 3 may run in parallel; PR 3n is the node (#1147), and PR 3b builds on it (#1165). PR 3c and PR 3d run in parallel off `dev`. The flip needs PR-b, PR 2, PR 3, PR 3n, PR 3b, PR 3c, PR 3d, the DX-Q8 baseline (§4) and #1088.
 
 ### DX-Q9 — CEN-L14's remaining sites
 
@@ -359,7 +375,10 @@ Each observed difference becomes one row.
 | the size bound before parse (CEN-A5) | the cumulative weight limit plus `BLOCK_SIZE_SANITY_LEEWAY` (100) | the header bound plus twice the ceiling limit `2·S·LTEM` at the tip's successor (`admission::ArrivalBound`), `Oversize` before acceptance | **Design** (PR2-Q2): no valid block's arrival exceeds it at any height a span reaches; CEN-A5 is bucket 3 |
 | unsolicited block announcements | no bound per session | two per target interval per session, at most two held; a dry bucket is `Throttled` before parse and never a score | **Design** (PR2-Q2; CS-Q5 (c)) |
 
-**The flip's `CORE_RPC_VERSION` bump.** One minor bump covers every row above that changes what a client reads:
+**The flip's `CORE_RPC_VERSION` bump.** One minor bump covers every row above that changes what a client reads (FLIP-Q4):
+- `get_transactions.as_json` is absent, and `decode_as_json` is refused;
+- `get_block_template` takes no parameters, and `start_mining` no address (N2);
+- the pool fields with no Rust state leave the wire (Q10);
 - `get_block.json` disappears;
 - an alt block's header carries its own values;
 - the coinbase sum's emission changes meaning;
@@ -414,8 +433,11 @@ Its number is read from the tree at the flip's pin, never carried from a plan (`
 2. **PR 2** — router, entry, `TipChanged`, hasher budget, L14 walk. Merged (#1123), staged: built and tested, nothing routed.
 3. **PR 3** — the read-only RPC handlers, the store-backed facts and the miner loop. Merged (#1106).
 4. **PR 3n** — `shekyl-node`, the daemon's one `Node` (N1, DX-Q3's amendments). Merged (#1147). Staged: Rust `main` builds it at start beside the C++ core, an empty store connects the pinned genesis through the ingest door, and nothing is routed.
-5. **PR 3b** (#1165) — the node's one template under N2: the tip follower builds it on one snapshot and posts it, and `get_block_template` and `get_miner_data` read the posted job; mining control (`start_mining`, `stop_mining`, `mining_status`); `submit_block` and `generateblocks` through the local-arrival entry; `pop_blocks`; the pool's handlers; the bans and `stop_daemon`; `is_key_image_spent` and the two `.bin` reads (DX-Q3 and its amendments). Staged: built over a real `Node` and tested, nothing routed.
-6. **The flip** needs PR-b, PR 2, PR 3, PR 3n, PR 3b and #1088. DEL-008's gate holds at genesis (Rick, 2026-10-18). At genesis the requirements are — SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`). Until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code. The flip's edit to `try_add_next_blocks` carries its own `UNFREEZE` line in `scripts/ci/dial_path_freeze.tsv` if CS-Q9's shrink-only rows for the protocol handler have landed (CS-Q9, Rick 2026-10-18).
-7. **Chain sync's cutover** follows the flip. It deletes the protocol handler's sync half, the complement request included (CS-Q1, Rick 2026-10-18). **RD** deletes its transaction routes, complement serving, `levin_notify` and the relay entry. Whichever lands second deletes the handler file.
+5. **PR 3b** (#1165), merged 2026-10-23 — the node's one template under N2: the tip follower builds it on one snapshot and posts it, and `get_block_template` and `get_miner_data` read the posted job; mining control (`start_mining`, `stop_mining`, `mining_status`); `submit_block` and `generateblocks` through the local-arrival entry; `pop_blocks`; the pool's handlers; the bans and `stop_daemon`; `is_key_image_spent` and the two `.bin` reads (DX-Q3 and its amendments). Staged: built over a real `Node` and tested, nothing routed.
+6. **PR 3c** (#1176) — the landing's cleanup: a pool-file fault no longer blacks out `get_info` and `get_transactions` (`is_key_image_spent` stays failed closed); the producer confirms its listed bodies at its second lock; the follower builds again at the same tip when a transient reason clears; `generateblocks` waits out a transient reason; the follower's joins stop the service rather than panic; the template-secrets gate is held to its one function. Staged.
+7. **PR 3d** — `dev-rpc` armed in every harness that calls an armed lever, and the LMDB-bound C++ tests whose rule Rust already pins deleted, each with its sentence. Staged; in parallel with PR 3c.
+8. **The DX-Q8 baseline**, on `dev` once PR 3c and PR 3d are in, before the flip PR opens: the E2 corpus replayed against the C++, the RPC suites against the `dev` binary, the IBD-floor run (`DAEMON_REDB_STORE.md` §1.3) and the floor device's figures, each labelled. Recorded in `shekyl-dev` as the flip's baseline artifact, pinned to the `dev` sha: the pre-flip binary stops existing when the flip merges, and §3.1's register needs its C++ column.
+9. **The flip** needs PR-b, PR 2, PR 3, PR 3n, PR 3b, PR 3c, PR 3d, the baseline and #1088. DEL-008's gate holds at genesis (Rick, 2026-10-18). At genesis the requirements are — SO-D8 Slice C's admission rows `implemented`, CEN-J8–J10 retired, and the secret draw live (`DAEMON_REDB_STORE.md:2697`). Until then testnet archival runs on the Rust path as it stands, carriers included, so passes land on live code. The flip's edit to `try_add_next_blocks` carries its own `UNFREEZE` line in `scripts/ci/dial_path_freeze.tsv` if CS-Q9's shrink-only rows for the protocol handler have landed (CS-Q9, Rick 2026-10-18).
+10. **Chain sync's cutover** and **the rebuild** (FLIP-Q2) follow the flip; the rebuild lands before genesis. Chain sync's cutover deletes the protocol handler's sync half, the complement request included (CS-Q1, Rick 2026-10-18). **RD** deletes its transaction routes, complement serving, `levin_notify` and the relay entry. Whichever lands second deletes the handler file.
 
 **Chain sync CS-F5** (fixed in PR 2): `shekyl-chain-ingest/src/source.rs` states the landed switch — the fork choice is ingest's, and a live source never emits `Rewind`.
