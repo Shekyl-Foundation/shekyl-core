@@ -5,14 +5,15 @@
 
 //! Chain sync's model (CS-2, `P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2).
 //!
-//! Two machines. A [`peer`] owns one session's conversation: its run
+//! Two machines. A peer machine (`peer`) owns one session's conversation: its run
 //! mode, its follow-up, its body span, and any announce proving beside
 //! the run. [`Sync`] is the coordinator: which peer to ask, how much to
 //! ask for, when the node is synced, and how a heavier fork is selected.
 //! Events come in, commands go out, and nothing here waits, hashes, or
 //! reads a store. The caller passes the main chain as a [`HeaderView`]
 //! snapshot with each event, and the instant. PoW leaves as a command
-//! the executor (CS-3) runs.
+//! the executor runs. The executor, the owner, the router and serving are
+//! `shekyl-chain-sync-runtime`'s (CS-3).
 
 #![deny(unsafe_code)]
 
@@ -22,6 +23,8 @@ mod announce_tests;
 mod harness;
 #[cfg(all(test, feature = "cs2-long-run"))]
 mod long_run;
+#[cfg(test)]
+mod offer_tests;
 #[cfg(test)]
 mod proof;
 #[cfg(test)]
@@ -34,14 +37,15 @@ mod claim;
 mod locator;
 mod model;
 mod peer;
+mod protocol;
 mod runs;
 mod state;
 mod tree;
 
 pub use claim::{PayloadRefused, PeerClaim};
 pub use model::{
-    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, Outcome,
-    ProveItem, Proved, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
+    BoundArrival, CachePlan, ClaimError, CloseCause, Command, Event, HashClass, Job, OfferedBody,
+    Outcome, ProveItem, Proved, Sync, BODY_REQUESTS_IN_FLIGHT, SYNC_RATE_FLOOR,
 };
 pub use shekyl_chain_rules::HeaderView;
 pub use state::SyncState;

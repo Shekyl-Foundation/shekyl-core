@@ -1285,8 +1285,8 @@ network, never a node.
 |---|---|
 | `chain` | Chain reads: `/get_height`, `get_block_count`, `on_get_block_hash`, the four block-header methods (including their `fill_pow_hash` parameter, RT-O9.4), `get_block`, `/get_transactions`, `/is_key_image_spent`, `/get_blocks_by_height.bin`, `/get_o_indexes.bin`, `get_fee_estimate`, `get_coinbase_tx_sum` (a public chain fact; moved from the admin set, RT-O9.4), `get_curve_tree_info`, `get_curve_tree_checkpoint`, `get_archival_emission_claim_source`, `get_archival_shard_coverage`; and `get_info`'s chain fields (difficulty, cumulative difficulty, block-weight limit and median, transaction count, the difficulty target in seconds (`target`), `adjusted_time`, emission and economics fields) |
 | `pool` | The **relayed** pool: `/get_transaction_pool`, `/get_transaction_pool_hashes`, `/get_transaction_pool_stats`, `get_txpool_backlog`; `get_info`'s pool size, counting relayed entries. Entries not yet relayed are in no grant (host-only, RT-O9.3) |
-| `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), the RPC and protocol contract versions (the nettype comes from `get_version`); `option_show`, whose rows are each present only when the connection holds the grant the row names (§6.4, RT-O24) |
-| `status` | Facts about **this node**, each a fingerprint: build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_net_stats`; `option_show`'s `status` rows, this node's rate limits and log settings (§6.4) |
+| `health` | Whether this node is usable now: `get_version` whole; from `get_info`, the chain tip (height, top hash), `target_height`, `synchronized`, `busy_syncing`, `offline`, `following_degraded`, **`has_peers`** (a boolean, RK-D14 — never a count), `hiding` (an address-hiding session exists now, with no pin state; `INPUT_GRAMMAR.md` IG-Q67), the RPC and protocol contract versions (the nettype comes from `get_version`); `option_show`, whose rows are each present only when the connection holds the grant the row names (§6.4, RT-O24) |
+| `status` | **A level of `health`, not a separate entity: holding `status` holds `health`** (ruled 2026-10-24; Health and Status are levels of detail of one node state, and Status includes everything Health carries). Facts about **this node**, each a fingerprint: the Tor posture, `origination`, the sync connectors and the managed Tor object (`INPUT_GRAMMAR.md` Part E); build version string; start time; free space and database size; aggregate inbound and outbound peer counts; RPC connection count; alt-blocks count, `/get_alt_blocks_hashes`, `get_alternate_chains`; `/get_net_stats`; `option_show`'s `status` rows, this node's rate limits and log settings (§6.4) |
 | `peers` | The graph: `get_connections`, `sync_info`, `/get_peer_list`; `get_info`'s per-connector socket counts and peerlist sizes; `option_show`'s `peers` rows: the peer, closed-peer and ban rows (§6.4) |
 | `submit` | `/submit_transaction` |
 | `mining-work` | An external miner's loop: `get_block_template`, `get_miner_data`, `submit_block`, `calc_pow` (a computation service; moved from the admin set, RT-O9.4) |
@@ -1324,7 +1324,10 @@ can contain either.
   over the channel does not include them. The daemon decides this from
   which of its own credentials is asking, not from the network a request
   arrived on. Reason: no remote job needs this data, and it is exactly what
-  Dandelion++ exists to hide.
+  Dandelion++ exists to hide. The rule covers data about other people's
+  transactions (stem tallies, unrelayed pool entries); `origination`
+  describes the node's own sends, names no transaction, and sits in
+  `status` (ruled 2026-10-24, `INPUT_GRAMMAR.md` Part E).
 - **Armed test levers (RT-O9.2; the arming ruled 2026-10-09).**
   `generateblocks`, `inject_archival_serve_credit` and `/pop_blocks`
   (ruled 2026-10-14, §6.4) are not production capabilities. The regtest
@@ -1358,14 +1361,22 @@ an explicit list of grants):
 | Preset | Grants |
 |---|---|
 | `view` | `chain` + `pool` + `health` |
-| `wallet` | `view` + `submit` |
+| `wallet` | `view` + `submit` + `status` |
 | `miner` | `view` + `mining-work` |
 | `admin` | every grant, `enrol` included — and **neither** non-grant class |
 
-**`status`, `peers` and `config` are in no preset but `admin`.** They are granted
-only when the operator names them, so publishing a node's uptime or its
-peers is a deliberate act, not something a consumer inherits from the
-preset it landed in. The plaintext loopback listener is fixed at `view`
+**`peers` and `config` are in no preset but `admin`; `status` is in `wallet` and
+`admin`** (ruled 2026-10-24, amending RT-O9). A wallet needs Status for full
+function: its send flow reads `origination` before broadcasting, and the
+enrolled key is the operator's own device. `peers` and `config` are granted
+only when the operator names them, so publishing a node's peers or its
+configuration is a deliberate act, not something a consumer inherits from
+the preset it landed in. **Local wallets are never outsiders.** A same-user
+wallet (the GUI, `shekyl-cli`, any wallet that conducts transactions) holds
+every grant through the owner leg (RT-15; the GUI through its owning
+connection), and a wallet reaching a service-mode daemon over the channel
+holds `status` through the `wallet` preset. Health is the level for outside
+readers only. The plaintext loopback listener is fixed at `view`
 (RT-15); the default request on the channel is `view` (§6.2).
 
 *Changes from today's two-level gate* (ruled 2026-10-09, RT-O9):
@@ -1546,7 +1557,8 @@ two. Every route they replace is a REST path today.
   - **`config`, the default** — every other row, including everything
     that describes the host or links the operator: the onion, SOCKS
     endpoints, paths, notify commands, `mine-address`. `config` is a new
-    grant, carried by the `admin` preset only, like `status` and `peers`.
+    grant, carried by the `admin` preset only, like `peers` (`status` is
+    also in `wallet`, ruled 2026-10-24).
 
   A grant is a set of facts (§6.1), and this keeps it one. A dashboard
   that wants the rate limits holds `status` and is never shown the onion,

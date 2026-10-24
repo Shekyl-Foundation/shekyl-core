@@ -120,11 +120,11 @@ use crate::schema;
 use super::{
     post_image, AltBlock, AltBlockFacts, AltBodies, BlockDraws, BlockInfo, BondRecord, Canonical,
     Coded, CompleteTreeSet, CoverageGaps, CurveTreeState, DrawableDigest, FirstPayingHeight,
-    HeldShard, Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey, OutTx, PoolRecord,
-    ProbeCell, PropertyCell, RMarket, RecordedPow, RuleSetInForce, SchemaVersion,
-    SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry, SlashedHolding,
-    SupportCount, SupportIssued, TreeDepth, TxIndex, TxOutputIndices, UndoEntry, UndoLog,
-    PROPERTY_CELLS, SCHEMA_VERSION,
+    FollowingDegraded, HeldShard, Holdings, IssuedDigest, IssuedDraw, LayerHash, LeafCount, OutKey,
+    OutTx, PoolRecord, ProbeCell, PropertyCell, RMarket, RecordedPow, RuleSetInForce,
+    SchemaVersion, SettlementEpochBlocks, SettlementRow, SigmaWorkMilli, SlashLogEntry,
+    SlashedHolding, SupportCount, SupportIssued, TreeDepth, TxIndex, TxOutputIndices, UndoEntry,
+    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::pool::PoolSchemaVersion;
@@ -539,6 +539,31 @@ impl Fixtures for TreeLeaf {
                 TreeLeaf::from_bytes(core::array::from_fn(|i| {
                     u8::try_from(0x10 * (i / 32 + 1) + i % 32).expect("fits a byte")
                 })),
+            ),
+        ]
+    }
+}
+
+impl Fixtures for FollowingDegraded {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "genesis_fork",
+                FollowingDegraded {
+                    fork_at: BlockHeight::ZERO,
+                    tip: shekyl_types::BlockHash::from_bytes([0xd1; 32]),
+                    work: shekyl_difficulty::CumulativeDifficulty::from_raw(1),
+                },
+            ),
+            (
+                "byte_order",
+                FollowingDegraded {
+                    fork_at: BlockHeight::from_raw(0x0102_0304_0506_0708),
+                    tip: shekyl_types::BlockHash::from_bytes([0xd2; 32]),
+                    work: shekyl_difficulty::CumulativeDifficulty::from_raw(
+                        0x1112_1314_1516_1718_191a_1b1c_1d1e_1f20,
+                    ),
+                },
             ),
         ]
     }
@@ -1498,6 +1523,7 @@ snapshotted_codecs! {
     LeafCount => codec_snapshot_leaf_count in Chain,
     TreeLeaf => codec_snapshot_tree_leaf in Chain,
     CurveTreeState => codec_snapshot_curve_tree_state in Chain,
+    FollowingDegraded => codec_snapshot_following_degraded in Chain,
     LayerHash => codec_snapshot_layer_hash in Chain,
     BondRecord => codec_snapshot_bond_record in Chain,
     RMarket => codec_snapshot_r_market in Chain,

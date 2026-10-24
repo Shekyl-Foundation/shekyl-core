@@ -194,6 +194,19 @@ impl Run {
         )
     }
 
+    /// A reachable run with a proof in flight. The proof moves `H*` when it
+    /// lands.
+    pub(crate) fn proving_toward_star(&self) -> bool {
+        matches!(self.mode, Mode::Reachable { proof: Some(_) })
+    }
+
+    /// A reachable run holding headers it is not hashing: a prefix that
+    /// does not beat `H*`, kept only for its continuation.
+    pub(crate) fn unhashed(&self) -> bool {
+        matches!(self.mode, Mode::Reachable { proof: None })
+            && self.chain.proven < self.chain.checked.len()
+    }
+
     pub(crate) fn is_slot(&self) -> bool {
         matches!(self.mode, Mode::Slot { .. })
     }
