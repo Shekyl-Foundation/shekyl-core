@@ -182,6 +182,49 @@ fn install_cause(cause: &Cause) -> bool {
     )
 }
 
+/// What the node does with its own transactions while Tor is not carrying
+/// them and Tor was asked for (`OwnTx::Held`).
+///
+/// `clearnet_on` is the clearnet connector, the same bit [`Syncing::clearnet`]
+/// reads until a chain-sync feed replaces it. The daemon's pin warning uses
+/// this sentence too: at the warning, Tor is not up yet.
+#[must_use]
+pub const fn held_sentence(clearnet_on: bool) -> &'static str {
+    if clearnet_on {
+        "This node is syncing over clearnet and holding its own transactions."
+    } else {
+        "This node is waiting for Tor and holding its own transactions. It is not syncing."
+    }
+}
+
+/// The words for an install cause: a missing bundle, a refused pin, or no
+/// managed Tor on this platform.
+///
+/// [`render`] and the daemon's pin warning both speak these. `None` for
+/// every other cause, whose sentence reads the rest of a [`Status`]. The
+/// paths a missed discovery searched are not a cause field; the pin error
+/// carries them, and the warning prints that error beside this sentence.
+#[must_use]
+pub fn install_sentence(cause: &Cause) -> Option<&'static str> {
+    match cause {
+        Cause::BundleMissing => Some("No Tor was found beside the daemon."),
+        Cause::PinRefused => {
+            Some("The Tor that was found failed its check, so it was not started.")
+        }
+        Cause::Unavailable => Some("This release has no Tor for this platform yet."),
+        Cause::None
+        | Cause::FailedStart
+        | Cause::Died { .. }
+        | Cause::DirectoryUnusable
+        | Cause::ExternalBlocked
+        | Cause::DirectoryUnreachable
+        | Cause::ClockSkew { .. }
+        | Cause::TooManyFiles { .. }
+        | Cause::ReplyLate
+        | Cause::DangerousVersion => None,
+    }
+}
+
 /// The one renderer (`TSR-Q13`). Behaviour, then the cause, then the fixes
 /// in the posture table's order.
 #[must_use]
@@ -189,12 +232,7 @@ pub fn render(status: &Status) -> String {
     let mut text = String::new();
     match status.own_tx {
         OwnTx::AddressHiding => text.push_str("Tor is carrying this node's traffic."),
-        OwnTx::Held if status.sync.clearnet => text.push_str(
-            "This node is syncing over clearnet and holding its own transactions.",
-        ),
-        OwnTx::Held => text.push_str(
-            "This node is waiting for Tor and holding its own transactions. It is not syncing.",
-        ),
+        OwnTx::Held => text.push_str(held_sentence(status.sync.clearnet)),
         OwnTx::ClearnetOnly => text.push_str(
             "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.",
         ),
@@ -218,11 +256,9 @@ fn cause_sentence(status: &Status) -> Option<String> {
             progress = status.progress
         )),
         Cause::None => None,
-        Cause::BundleMissing => Some("No Tor was found beside the daemon.".to_owned()),
-        Cause::PinRefused => {
-            Some("The Tor that was found failed its check, so it was not started.".to_owned())
+        Cause::BundleMissing | Cause::PinRefused | Cause::Unavailable => {
+            install_sentence(&status.cause).map(str::to_owned)
         }
-        Cause::Unavailable => Some("This release has no Tor for this platform yet.".to_owned()),
         Cause::FailedStart => Some("Tor did not start.".to_owned()),
         Cause::Died { exit_code } => Some(died_sentence(status.respawn_count, *exit_code)),
         Cause::DirectoryUnusable => Some("Tor's data directory could not be used.".to_owned()),

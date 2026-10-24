@@ -342,6 +342,16 @@ impl DaemonConfig {
         self.clearnet == Clearnet::Off && self.tor == Tor::Off
     }
 
+    /// Whether the clearnet connector is on. The supervisor and the pin
+    /// warning both read this bit.
+    #[must_use]
+    pub fn clearnet_on(&self) -> bool {
+        match self.clearnet {
+            Clearnet::Off => false,
+            Clearnet::On { .. } => true,
+        }
+    }
+
     /// Whether this process is a client of a running daemon (§2.2, client
     /// mode).
     #[must_use]

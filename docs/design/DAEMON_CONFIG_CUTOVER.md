@@ -155,8 +155,9 @@ What crosses the FFI after the cutover, and nothing else:
    log directory and open the log file (`log_location_creatable`), the
    owner values judged and not latched (`check_seed_epoch`,
    `check_settlement_schedule`), and the managed Tor's pin read and not
-   started (`tor::pin_warning`, a warning under TB-2). Each effect below
-   calls its question first, so a decision is written once. With
+   started (`tor::pin_warning`, a warning under TB-2, in the posture's
+   install sentence; a missed discovery names the paths it searched).
+   Each effect below calls its question first, so a decision is written once. With
    `--config-verify` the process stops here: a refusal is start's own,
    through IG-11 with exit 2 (1 for a host with no network id); on
    acceptance standard output carries the account checked and the
@@ -167,7 +168,7 @@ What crosses the FFI after the cutover, and nothing else:
    will start, on the host; it takes no lock, so it runs while the daemon
    is up. A port in use, Tor's bootstrap, disk space and mandatory-access
    policy are outside its verdict. The test `config_verify_accepts_and_
-   creates_nothing_even_while_the_lock_is_held` (`run.rs`) holds the
+   creates_nothing_even_while_the_lock_is_held` (`verify.rs`) holds the
    claim. On Windows the creatability questions see existence, kind and
    the read-only attribute; a DACL that denies the account is found by
    step 3's own create.
