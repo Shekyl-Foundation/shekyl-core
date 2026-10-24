@@ -289,8 +289,8 @@ pub struct Fed {
 /// One session's position in its byte stream.
 ///
 /// `raw` is every byte accepted since the last hand-off, in order. A feed
-/// appends its chunk there and parses. [`commit`] drops what that feed
-/// handed to the handler or the owner. Until then [`take_raw`] is the
+/// appends its chunk there and parses. [`Self::commit`] drops what that feed
+/// handed to the handler or the owner. Until then [`Self::take_raw`] is the
 /// stream the handler must see if the owner has gone: the unhanded prefix
 /// and this chunk, once.
 #[derive(Debug)]
