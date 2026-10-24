@@ -106,19 +106,26 @@ calibration and the full verdict tables are
   `panic = "abort"`, `overflow-checks = true`, no LTO, no `target-cpu`);
   deltas are `debug = true`, `-Zbuild-std` and a static relocation model.
 
-**Upstream, in order of leverage** (none sent yet; each is Rick's call):
+**Upstream (Rick's brief, 2026-10-24): three notices, no PRs.** The harness,
+drivers and dynamic crate were written with an LLM coding agent, which
+upstream's Contributing.md rule 1 bars from contributions, so what goes
+upstream is the result and a link to this tree, with authorship stated in
+every post, and nothing from `dynamic/` until its method check is closed.
+Posted after #1178 merges (the links must resolve on `dev`), monero-oxide
+first; the drafts are in shekyl-dev's crypto-audit directory, and the three
+URLs come back into this section in the PR that follows the posts.
 
-1. monero-oxide: red on the same advisory with `ignore = []`, and
-   helioselene is theirs. Offer the harness (the `Field25519` and
-   `HelioseleneField` drivers and the result tables) to the `fcmp++`
-   branch; it is Monero's own evidence for its pinned 0.5.5 and keeps our
-   helioselene pin aligned with theirs.
-2. RustCrypto: the 0.5.5 `Residue::pow` window branch as a confirming data
-   point on #1360/#1365, informational; a 0.5.6 is not expected (0.5 has no
-   maintenance branch).
-3. serai: `next`'s `prime-field` sits on 0.7.5; the bump to 0.7.6 is one
-   line, and the ask is a release of `dalek-ff-group`/`ciphersuite` from
-   `next`.
+1. monero-oxide/monero-oxide, an issue: they are red on the same advisory
+   (`deny.toml` `ignore = []`, `yanked = "deny"`; helioselene asks for
+   `crypto-bigint = "0.5"`, lock 0.5.5), and helioselene is theirs. The
+   static method, targets, toolchains, the one leak, calibration, links to
+   the records. (URL recorded here once posted)
+2. RustCrypto/crypto-bigint, a comment on #1365: the 0.5.5 `Residue::pow`
+   window branch as a data point for the 0.5.x range; no code, no 0.5.6
+   asked. (URL recorded here once posted)
+3. serai-dex/serai, an issue: `next`'s `prime-field` is on 0.7.5, 0.7.6 is
+   the fix; is a release of `dalek-ff-group`/`ciphersuite` from `next`
+   planned? A request for a path, not a leak report. (URL recorded here once posted)
 
 An `unaffected = ["< 0.6.0"]` advisory-db PR is not among them: 0.5.5 does
 branch.
