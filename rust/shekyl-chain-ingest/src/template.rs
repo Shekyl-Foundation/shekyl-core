@@ -116,8 +116,12 @@ pub(crate) struct Producer<'a> {
     pub(crate) now: Timestamp,
     /// A test acts on the pool between the producer's two locks.
     #[cfg(test)]
-    pub(crate) between_locks: Option<&'a (dyn Fn(&Mutex<Pool>) + Sync)>,
+    pub(crate) between_locks: Option<&'a BetweenLocks<'a>>,
 }
+
+/// What a test does to the pool between the producer's two locks.
+#[cfg(test)]
+pub(crate) type BetweenLocks<'a> = dyn Fn(&Mutex<Pool>) + Sync + 'a;
 
 /// Build the template for the block after `snap`'s tip (module docs).
 ///
