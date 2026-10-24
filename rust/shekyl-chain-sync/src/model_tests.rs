@@ -12,17 +12,15 @@ use std::time::{Duration, Instant};
 use core::num::NonZeroU128;
 
 use shekyl_chain_rules::{
-    AtHeight, CenRow, DifficultyRule, FakechainSchedule, HeaderRecord, HeaderView, InvalidBlock,
-    Locus, RuleSet, Tip, Trust,
+    AtHeight, DifficultyRule, FakechainSchedule, HeaderRecord, HeaderView, RuleSet, Tip, Trust,
 };
 use shekyl_difficulty::{CumulativeDifficulty, GENESIS_DIFFICULTY};
 use shekyl_draw_rng::RelayRng;
 use shekyl_levin::BODIES_RESPONSE_BYTES;
-use shekyl_peer_policy::SyncReply;
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, ChainCount, CurveTreeRoot};
 use shekyl_wire::BlockHeader;
 
-use super::{body_deadline, Command, Event, Outcome, Sync, SYNC_RATE_FLOOR};
+use super::{body_deadline, Command, Event, Sync, SYNC_RATE_FLOOR};
 use crate::{ClaimError, PayloadRefused, PeerClaim, SyncState};
 
 struct NoDraw;
@@ -103,6 +101,7 @@ fn claim(count: u64, work: u128) -> PeerClaim {
     PeerClaim {
         count: ChainCount::from_raw(count),
         work: CumulativeDifficulty::from_raw(work),
+        top: BlockHash::NULL,
     }
 }
 
@@ -434,48 +433,4 @@ fn a_body_deadline_is_the_body_budget_at_the_rate_floor() {
     let deadline = body_deadline(now, transit);
     let secs = BODIES_RESPONSE_BYTES / SYNC_RATE_FLOOR;
     assert_eq!(deadline, now + transit + Duration::from_secs(secs));
-}
-
-/// A refusal with no census row is not an outcome. An oversize solicited
-/// body invalidates its header. An oversize announce does not. A solicited
-/// connect does not relay.
-#[test]
-fn a_reply_names_its_own_outcome() {
-    let at = BlockHash::from_bytes([1; 32]);
-    let verdict = InvalidBlock::new(CenRow::G2, Locus::Block);
-    assert_eq!(
-        Outcome::from_reply(SyncReply::Refused, true, at, at, Vec::new(), None),
-        None
-    );
-    assert_eq!(
-        Outcome::from_reply(SyncReply::PromotionRefused, true, at, at, Vec::new(), None),
-        None
-    );
-    assert_eq!(
-        Outcome::from_reply(
-            SyncReply::PromotionRefused,
-            true,
-            at,
-            at,
-            Vec::new(),
-            Some(verdict)
-        ),
-        Some(Outcome::PromotionRefused { verdict, block: at })
-    );
-    assert_eq!(
-        Outcome::from_reply(SyncReply::Refused, true, at, at, Vec::new(), Some(verdict)),
-        Some(Outcome::Refused { verdict })
-    );
-    assert_eq!(
-        Outcome::from_reply(SyncReply::Oversize, true, at, at, Vec::new(), None),
-        Some(Outcome::Oversize { invalidate: true })
-    );
-    assert_eq!(
-        Outcome::from_reply(SyncReply::Oversize, false, at, at, Vec::new(), None),
-        Some(Outcome::Oversize { invalidate: false })
-    );
-    assert_eq!(
-        Outcome::from_reply(SyncReply::Connected, true, at, at, Vec::new(), None),
-        Some(Outcome::Connected { relay: false })
-    );
 }

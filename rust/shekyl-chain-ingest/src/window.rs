@@ -121,7 +121,8 @@ where
 
 /// Record a store read that failed, and stop. On the door's side the
 /// arrival is refused with what the failed read is
-/// ([`super::Refusal::StoreUnreadable`]); the span was not accepted.
+/// ([`super::Refusal::StoreUnreadable`]); the span was not accepted, and
+/// the caller does not wait it out.
 pub(crate) fn record_store_read<S>(shared: &Shared<S>, read: ViewRead<StoreError>)
 where
     S: Substrate,
@@ -370,8 +371,14 @@ pub struct Reservation {
 
 impl Reservation {
     /// Accept `span`. It is the arrivals [`Door::reserve`] judged, in that
-    /// order, now carrying their bytes.
-    pub fn commit(mut self, span: Vec<Arrival>) -> Vec<Ticket> {
+    /// order, now carrying their bytes. Each one is hashed here.
+    pub fn commit(self, span: Vec<Arrival>) -> Vec<Ticket> {
+        self.accept(span.into_iter().map(super::Staged::hashed).collect())
+    }
+
+    /// Accept `span`. It is the arrivals [`Door::reserve`] judged, in that
+    /// order. A hashed arrival and a judged one take the same seats.
+    pub(super) fn accept(mut self, span: Vec<super::Staged>) -> Vec<Ticket> {
         assert_eq!(
             span.len(),
             self.seats.len(),
@@ -381,10 +388,10 @@ impl Reservation {
         self.committed = true;
         let mut tickets = Vec::with_capacity(span.len());
         let mut accepted = Vec::with_capacity(span.len());
-        for (arrival, seat) in span.into_iter().zip(seats) {
+        for (staged, seat) in span.into_iter().zip(seats) {
             let (sender, receiver) = oneshot::channel();
             tickets.push(Ticket {
-                tag: arrival.tag,
+                tag: staged.tag,
                 reply: receiver,
             });
             accepted.push(Accepted {
@@ -392,10 +399,11 @@ impl Reservation {
                     sender: Some(sender),
                     seat: Some(seat),
                 },
-                tag: arrival.tag,
-                origin: arrival.origin,
-                block: arrival.block,
-                bodies: arrival.bodies,
+                tag: staged.tag,
+                block: staged.block,
+                bodies: staged.bodies,
+                proof: staged.proof,
+                witness: staged.witness,
             });
         }
         // A service that has ended drops the span here, and each slot
@@ -441,13 +449,9 @@ impl Door {
         let Ok(bound) = self.admission.bound() else {
             return Err(Refusal::StoreUnreadable);
         };
-        let oversize = lengths.iter().any(|arrival| {
-            let bytes = arrival
-                .body_lens
-                .iter()
-                .fold(arrival.block_len, |total, len| total.saturating_add(*len));
-            !bound.admits(u64::try_from(bytes).unwrap_or(u64::MAX))
-        });
+        let oversize = lengths
+            .iter()
+            .any(|arrival| !bound.admits(u64::try_from(arrival.bytes()).unwrap_or(u64::MAX)));
         if oversize {
             return Err(Refusal::Oversize);
         }

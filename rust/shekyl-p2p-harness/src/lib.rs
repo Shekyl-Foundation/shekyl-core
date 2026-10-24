@@ -23,6 +23,8 @@ mod script;
 mod seam_host;
 mod transcript;
 
+pub mod sync;
+
 pub use compare::{
     diff, parity_transcript, run_agrees, run_matches_script, DeferredInvariant, Field, Finding, Run,
 };

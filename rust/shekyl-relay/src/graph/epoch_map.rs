@@ -118,8 +118,23 @@ impl EpochMap {
                 let _change = map.update(all, rng);
             }
             Self::Reserved(map) => {
-                let _change = map.update_with_reserved(class, rest, rng);
+                let _change = map.update_with_reserved(&class, &rest, rng);
             }
+        }
+    }
+
+    /// [`StemMap::local_origin_leaves`] on a reserved epoch. A uniform
+    /// epoch has no address-hiding class, so a local origin never leaves on
+    /// one.
+    #[must_use]
+    pub(super) fn local_origin_leaves(
+        &self,
+        class: &[ConnectionId],
+        rest: &[ConnectionId],
+    ) -> bool {
+        match self {
+            Self::Reserved(map) => map.local_origin_leaves(class, rest),
+            Self::Uniform(_) => false,
         }
     }
 
