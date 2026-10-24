@@ -27,7 +27,8 @@
 //! and against both when its first transport message does.
 //!
 //! The type at each step is the only thing that step can do, and transport
-//! directions exist only after message 4. They are [`shekyl_noise::Direction`]s
+//! directions exist only after message 4. They are a [`shekyl_noise::SendDirection`]
+//! and a [`shekyl_noise::RecvDirection`]
 //! from [`shekyl_noise::SymmetricState::into_directions`]. This handshake
 //! does not frame them.
 //!
@@ -79,7 +80,7 @@
 use fips203::ml_kem_768;
 use fips203::traits::{Decaps, Encaps, SerDes};
 use rand_core::{CryptoRngCore, OsRng};
-use shekyl_noise::{Direction, SplitRole, SymmetricState};
+use shekyl_noise::{RecvDirection, SendDirection, SplitRole, SymmetricState};
 use zeroize::Zeroizing;
 
 use std::time::Instant;
@@ -830,7 +831,7 @@ impl Established {
     /// Seal and open with [`TRANSPORT_AD`]. The first ciphertext the client
     /// sends is what authenticates it to the daemon.
     #[must_use = "the directions are the session"]
-    pub fn into_directions(self) -> (Direction, Direction) {
+    pub fn into_directions(self) -> (SendDirection, RecvDirection) {
         self.sym.into_directions(SplitRole::Initiator)
     }
 }
@@ -915,7 +916,7 @@ pub struct PendingSession {
 #[must_use = "dropping this drops the session unreleased"]
 pub struct WithheldSession {
     handshake_hash: [u8; HANDSHAKE_HASH_LEN],
-    send: Direction,
+    send: SendDirection,
     client: StaticPublic,
     request: Vec<u8>,
 }
@@ -929,9 +930,9 @@ pub struct AuthenticatedSession {
     /// Message 3's payload: what the client asked for.
     pub request: Vec<u8>,
     /// The daemon's sending direction. Its nonce is still 0.
-    pub send: Direction,
+    pub send: SendDirection,
     /// The daemon's receiving direction, past the first message.
-    pub recv: Direction,
+    pub recv: RecvDirection,
     /// The handshake hash.
     pub handshake_hash: [u8; HANDSHAKE_HASH_LEN],
 }
@@ -972,7 +973,7 @@ impl PendingSession {
     /// around the direction, and a short read leaves both where they are.
     /// [`WithheldSession::release`] is how the session comes out.
     #[must_use = "dropping the withheld session drops the session unreleased"]
-    pub fn lend(self) -> (WithheldSession, Direction) {
+    pub fn lend(self) -> (WithheldSession, RecvDirection) {
         let handshake_hash = self.sym.handshake_hash();
         let (send, recv) = self.sym.into_directions(SplitRole::Responder);
         (
@@ -1009,7 +1010,7 @@ impl PendingSession {
     /// dropped unseen.
     pub fn open_first_message<T, E>(
         self,
-        opener: impl FnOnce(&mut Direction) -> Result<T, E>,
+        opener: impl FnOnce(&mut RecvDirection) -> Result<T, E>,
     ) -> Result<(AuthenticatedSession, T), FirstMessageRefused> {
         let (withheld, mut recv) = self.lend();
         let opened = opener(&mut recv);
@@ -1026,12 +1027,12 @@ impl WithheldSession {
     /// `Ok`:
     ///
     /// - it is **this session's** direction: it carries this session's
-    ///   handshake hash ([`Direction::handshake_hash`], stamped by
+    ///   handshake hash ([`RecvDirection::handshake_hash`], stamped by
     ///   `into_directions`). The caller owns the direction, so it could
     ///   hand back another session's, one that has already opened; that is
     ///   refused;
     /// - it has itself opened at least one ciphertext
-    ///   ([`Direction::opened`]): a tag verified under a key only the
+    ///   ([`RecvDirection::opened`]): a tag verified under a key only the
     ///   client's ML-KEM key could have produced.
     ///
     /// `Ok` with nothing opened, or after only failed attempts, has
@@ -1046,7 +1047,7 @@ impl WithheldSession {
     /// this session's direction, or when that direction opened nothing.
     pub fn release<T, E>(
         self,
-        recv: Direction,
+        recv: RecvDirection,
         opened: Result<T, E>,
     ) -> Result<(AuthenticatedSession, T), FirstMessageRefused> {
         let opened = opened.map_err(|_| FirstMessageRefused)?;

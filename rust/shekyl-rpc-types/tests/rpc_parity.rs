@@ -525,7 +525,7 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
         prunable_as_hex: String::new(),
         prunable_hash: tagged_hash(12),
         archival_len: 16874,
-        as_json: String::new(),
+        as_json: Some(String::new()),
         pruned: false,
         double_spend_seen: false,
         location: TxLocation::Mined {
@@ -542,12 +542,12 @@ fn get_transactions_chain_and_pool_matches_the_oracle() {
         prunable_as_hex: String::new(),
         prunable_hash: tagged_hash(22),
         archival_len: 5389,
-        as_json: String::new(),
+        as_json: Some(String::new()),
         pruned: false,
         double_spend_seen: true,
         location: TxLocation::Pooled {
             relayed: true,
-            received_timestamp: 1_750_000_123,
+            received_timestamp: Some(1_750_000_123),
         },
     };
     let built = GetTransactionsResponse {
@@ -572,7 +572,7 @@ fn get_transactions_split_form_matches_the_oracle() {
             prunable_as_hex: "0607".to_owned(),
             prunable_hash: tagged_hash(32),
             archival_len: 7,
-            as_json: String::new(),
+            as_json: Some(String::new()),
             pruned: true,
             double_spend_seen: false,
             location: TxLocation::Mined {
@@ -604,7 +604,7 @@ fn get_transactions_decoded_matches_the_oracle() {
             prunable_as_hex: String::new(),
             prunable_hash: tagged_hash(42),
             archival_len: 0,
-            as_json,
+            as_json: Some(as_json),
             pruned: false,
             double_spend_seen: false,
             location: TxLocation::Mined {

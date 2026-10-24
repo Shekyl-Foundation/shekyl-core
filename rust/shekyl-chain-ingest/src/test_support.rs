@@ -747,3 +747,42 @@ impl Source for Scripted {
         Ok(self.events.pop_front())
     }
 }
+
+/// The keys every scenario block's coinbase pays: the harness wallet's.
+pub(crate) fn harness_keys() -> shekyl_block_template::MinerKeys {
+    let recipient = MinerWallet::harness().recipient();
+    shekyl_block_template::MinerKeys {
+        spend_public: recipient.spend_public,
+        x25519_pk: recipient.x25519_pk,
+        ml_kem_ek: recipient.ml_kem_ek.clone(),
+    }
+}
+
+/// A job seat on `board` paying `keys`, under the sync state `sync`
+/// reads; with the miner's sender, which a test keeps alive or drops, and
+/// the follower's posting.
+#[cfg(feature = "pipeline")]
+pub(crate) fn job_seat(
+    board: &std::sync::Arc<shekyl_miner::JobBoard>,
+    keys: Option<shekyl_block_template::MinerKeys>,
+    sync: tokio::sync::watch::Receiver<shekyl_chain_sync::SyncState>,
+) -> (
+    crate::follower::JobSeat,
+    shekyl_miner::FoundBlocks,
+    tokio::sync::watch::Receiver<crate::follower::Posting>,
+) {
+    let (sender, found) = shekyl_miner::found_blocks();
+    let (posting, posted) = tokio::sync::watch::channel(crate::follower::Posting::Withdrawn(
+        crate::follower::NoJob::Starting,
+    ));
+    (
+        crate::follower::JobSeat {
+            board: std::sync::Arc::clone(board),
+            keys,
+            miner: crate::follower::MinerFeed { found, sync },
+            posting,
+        },
+        sender,
+        posted,
+    )
+}

@@ -145,8 +145,9 @@ fn cors_layer(origins: &[String]) -> CorsLayer {
 //   * A route with no handler does not compile. `handler_for` matches
 //     [`Endpoint`] exhaustively with no wildcard, so adding a row without
 //     binding it is a compile error, not a `panic!` at daemon start (§70.1).
-//   * A path cannot be admin-only *and* public. Visibility is a field of the
-//     row, not membership in one of two lists that could both contain it.
+//   * A path cannot be admin-only *and* public. Visibility is the grant of
+//     the path's one row in the method table (`shekyl_rpc_types::methods`,
+//     RW-Q7), not membership in one of two lists that could both contain it.
 //
 // Handlers stay out of the table (and out of anything a unit test calls)
 // because naming a handler pulls `core_rpc_ffi_*` into the link set; lib tests
@@ -206,7 +207,24 @@ pub(crate) struct Route {
     /// Paths this endpoint answers on. More than one = epee-compatibility
     /// aliases, which share a handler by construction.
     pub(crate) paths: &'static [&'static str],
-    pub(crate) visibility: Visibility,
+}
+
+impl Route {
+    /// Which listener serves this route: the grant of its row in the method
+    /// table. A path with no row is a defect the table gate names; it is
+    /// treated as the host's, so a missing row never widens what the view
+    /// listener serves.
+    pub(crate) fn visibility(&self) -> Visibility {
+        let grant = self
+            .paths
+            .first()
+            .and_then(|path| shekyl_rpc_types::methods::rest_path(path))
+            .map(|row| row.grant);
+        match grant {
+            Some(shekyl_rpc_types::methods::Grant::Any) => Visibility::Always,
+            Some(shekyl_rpc_types::methods::Grant::HostOnly) | None => Visibility::AdminOnly,
+        }
+    }
 }
 
 /// The daemon RPC route table — the single source of *what is served where*.
@@ -217,28 +235,23 @@ pub(crate) const ROUTES: &[Route] = &[
     Route {
         endpoint: Endpoint::JsonRpc,
         paths: &["/json_rpc"],
-        visibility: Visibility::Always,
     },
     // JSON REST (with aliases) -- GET + POST to match epee behaviour.
     Route {
         endpoint: Endpoint::GetHeight,
         paths: &["/get_height", "/getheight"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetTransactions,
         paths: &["/get_transactions", "/gettransactions"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetAltBlocksHashes,
         paths: &["/get_alt_blocks_hashes"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::IsKeyImageSpent,
         paths: &["/is_key_image_spent"],
-        visibility: Visibility::Always,
     },
     // The typed submit route (DAEMON_SUBMIT_VERDICT.md §2.4) is the only
     // submit surface; the legacy /send_raw_transaction proxy was deleted
@@ -246,89 +259,72 @@ pub(crate) const ROUTES: &[Route] = &[
     Route {
         endpoint: Endpoint::SubmitTransaction,
         paths: &["/submit_transaction"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetTransactionPool,
         paths: &["/get_transaction_pool"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetTransactionPoolHashes,
         paths: &["/get_transaction_pool_hashes"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetTransactionPoolStats,
         paths: &["/get_transaction_pool_stats"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetInfo,
         paths: &["/get_info", "/getinfo"],
-        visibility: Visibility::Always,
     },
     // Binary endpoints.
     Route {
         endpoint: Endpoint::GetBlocksByHeightBin,
         paths: &["/get_blocks_by_height.bin", "/getblocks_by_height.bin"],
-        visibility: Visibility::Always,
     },
     Route {
         endpoint: Endpoint::GetOIndexesBin,
         paths: &["/get_o_indexes.bin"],
-        visibility: Visibility::Always,
     },
     // §55: anonymity graph — the peer set is the sensitive part.
     Route {
         endpoint: Endpoint::GetStemTallies,
         paths: &["/get_stem_tallies"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::StartMining,
         paths: &["/start_mining"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::StopMining,
         paths: &["/stop_mining"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::MiningStatus,
         paths: &["/mining_status"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::SaveBc,
         paths: &["/save_bc"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::GetPeerList,
         paths: &["/get_peer_list"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::SetLogHashRate,
         paths: &["/set_log_hash_rate"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::StopDaemon,
         paths: &["/stop_daemon"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::GetNetStats,
         paths: &["/get_net_stats"],
-        visibility: Visibility::AdminOnly,
     },
     Route {
         endpoint: Endpoint::PopBlocks,
         paths: &["/pop_blocks"],
-        visibility: Visibility::AdminOnly,
     },
 ];
 
@@ -340,7 +336,7 @@ pub(crate) const ROUTES: &[Route] = &[
 pub(crate) fn served_routes(restricted: bool) -> impl Iterator<Item = &'static Route> {
     ROUTES
         .iter()
-        .filter(move |route| !(restricted && route.visibility == Visibility::AdminOnly))
+        .filter(move |route| !(restricted && route.visibility() == Visibility::AdminOnly))
 }
 
 /// Paths this listener serves — [`served_routes`] flattened over aliases.
@@ -388,7 +384,7 @@ fn handler_for(endpoint: Endpoint) -> MethodRouter<Arc<AppState>> {
         Endpoint::GetInfo => get(json::get_info).post(json::get_info),
         Endpoint::GetBlocksByHeightBin => post(binary::get_blocks_by_height),
         Endpoint::GetOIndexesBin => post(binary::get_o_indexes),
-        // Admin-only (listener selection is the row's `visibility`, not this
+        // Admin-only (listener selection is the method table's grant, not this
         // match). §55: anonymity graph — the peer set is the sensitive part.
         Endpoint::GetStemTallies => get(json::get_stem_tallies).post(json::get_stem_tallies),
         Endpoint::StartMining => get(json::start_mining).post(json::start_mining),
@@ -1088,6 +1084,36 @@ mod lifecycle_tests {
                 .expect("every acceptor must stop")
                 .expect("the serve task must not panic")
                 .expect("a clean stop is Ok");
+        }
+    }
+
+    /// RW-Q7's gate for REST: every route's paths are one row's names in the
+    /// method table, and every REST row is a route. A path served without a
+    /// row, or a row nothing serves, fails here.
+    #[test]
+    fn every_route_is_one_method_row_and_every_rest_row_is_routed() {
+        use shekyl_rpc_types::methods::{rest_path, Surface, METHODS};
+        for route in crate::server::ROUTES {
+            let row = rest_path(route.paths[0])
+                .unwrap_or_else(|| panic!("{} has no row in the method table", route.paths[0]));
+            let mut routed: Vec<&str> = route.paths.to_vec();
+            let mut named: Vec<&str> = row.names().collect();
+            routed.sort_unstable();
+            named.sort_unstable();
+            assert_eq!(
+                routed, named,
+                "{}: the route's paths are its row's names",
+                row.name
+            );
+        }
+        for row in METHODS.iter().filter(|row| row.surface == Surface::Rest) {
+            assert!(
+                crate::server::ROUTES
+                    .iter()
+                    .any(|route| route.paths.contains(&row.name)),
+                "{} is a REST row that no route serves",
+                row.name
+            );
         }
     }
 }

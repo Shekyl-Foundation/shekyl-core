@@ -301,9 +301,15 @@ pub enum TorBinaryError {
         /// Why, as recorded in the pin file.
         reason: &'static str,
     },
-    /// No `tor` was found in the `tor/` directory beside the executable or in
-    /// the system directory under `/opt/shekyl`.
-    NotFound,
+    /// No `tor` was found at any candidate discovery looked at. `searched` is
+    /// that list, in order, composed by the same function discovery uses, so
+    /// the message names this platform's own places and no others: on
+    /// Windows only the `tor/` directory beside the executable, elsewhere also
+    /// the version-exact system directory.
+    NotFound {
+        /// The candidate paths discovery tried, in order.
+        searched: Vec<PathBuf>,
+    },
     /// The candidate, or an entry in its directory, exists but is not a
     /// regular file (a directory, a symlink, a FIFO, a device) — refused
     /// before it is opened, so a FIFO cannot hang discovery.
@@ -381,12 +387,25 @@ impl std::fmt::Display for TorBinaryError {
                 "Shekyl does not manage a tor on this platform ({reason}); run your own tor \
                  and attach it"
             ),
-            Self::NotFound => write!(
+            Self::NotFound { searched } if searched.is_empty() => write!(
                 f,
-                "no tor binary found (install the pinned bundle in the tor/ directory beside \
-                 the executable or under /opt/shekyl/<version>-<target>/, or name \
-                 the tor inside such a directory with tor-file)"
+                "no tor binary found, and there was nowhere to look (the running \
+                 executable's directory is unknown); name the tor with tor-file"
             ),
+            Self::NotFound { searched } => {
+                write!(f, "no tor binary found at ")?;
+                for (i, path) in searched.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " or ")?;
+                    }
+                    write!(f, "{}", path.display())?;
+                }
+                write!(
+                    f,
+                    "; install the pinned bundle there, or name a tor that passes its \
+                     check with tor-file"
+                )
+            }
             Self::NotAFile(p) => {
                 write!(f, "not a regular file: {}", p.display())
             }
@@ -486,8 +505,8 @@ pub fn discover_and_verify() -> Result<VerifiedTorBinary, TorBinaryError> {
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
     let well_known = well_known_candidate(&pin);
-    let path = candidate_from(exe_dir.as_deref(), well_known.as_deref(), pin.executable)
-        .ok_or(TorBinaryError::NotFound)?;
+    let searched = candidates(exe_dir.as_deref(), well_known.as_deref(), pin.executable);
+    let path = first_present(&searched).ok_or(TorBinaryError::NotFound { searched })?;
     verify_candidate(&path, &pin)
 }
 
@@ -511,17 +530,29 @@ pub fn discover_and_verify_at(path: &Path) -> Result<VerifiedTorBinary, TorBinar
 /// not a silent fallback. Presence is `is_file()` in both discovered tiers, so
 /// a staged non-executable file surfaces as *its* `NotExecutable` error rather
 /// than as "not found".
+#[cfg(test)]
 fn candidate_from(
     exe_dir: Option<&Path>,
     well_known: Option<&Path>,
     executable: &str,
 ) -> Option<PathBuf> {
-    if let Some(beside) = exe_dir.map(|dir| dir.join(BESIDE_TOR_DIR).join(executable)) {
-        if beside.is_file() {
-            return Some(beside);
-        }
-    }
-    well_known.filter(|wk| wk.is_file()).map(Path::to_path_buf)
+    first_present(&candidates(exe_dir, well_known, executable))
+}
+
+fn first_present(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates.iter().find(|path| path.is_file()).cloned()
+}
+
+/// The discovered tiers, in precedence order: `tor/<executable>` beside the
+/// running executable when its directory is known, then the system candidate
+/// where the platform has one. Discovery tries these and a `NotFound` names
+/// them, so the two cannot disagree about where a tor may be.
+fn candidates(exe_dir: Option<&Path>, well_known: Option<&Path>, executable: &str) -> Vec<PathBuf> {
+    exe_dir
+        .map(|dir| dir.join(BESIDE_TOR_DIR).join(executable))
+        .into_iter()
+        .chain(well_known.map(Path::to_path_buf))
+        .collect()
 }
 
 /// Does the path carry any execute bit? (Unix). A file with none would pass

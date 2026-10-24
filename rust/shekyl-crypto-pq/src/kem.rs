@@ -46,6 +46,23 @@ pub const HYBRID_KEM_CT_LEN: usize = X25519_KEM_CT_LEN + ML_KEM_768_CT_LEN;
 /// Domain separator for KEM shared-secret combination.
 pub const KEM_DOMAIN_SALT: &[u8] = b"shekyl-kem-v1";
 
+/// Check that `ek` is a well-formed ML-KEM-768 encapsulation key: 1184
+/// bytes whose 12-bit coefficients each decode below `q` (FIPS 203 §7.2,
+/// the encapsulation key's modulus check). A key that fails cannot be
+/// encapsulated to, so no output can be paid to it.
+///
+/// # Errors
+///
+/// [`CryptoError::InvalidKeyMaterial`] for the wrong length or a
+/// coefficient at or above `q`.
+pub fn check_ml_kem_768_ek(ek: &[u8]) -> Result<(), CryptoError> {
+    let bytes: [u8; ML_KEM_768_EK_LEN] =
+        ek.try_into().map_err(|_| CryptoError::InvalidKeyMaterial)?;
+    ml_kem_768::EncapsKey::try_from_bytes(bytes)
+        .map(drop)
+        .map_err(|_| CryptoError::InvalidKeyMaterial)
+}
+
 /// ML-KEM-768 decapsulation key parsed once for batch chain scan.
 ///
 /// FA-6 runs universal decap on every output. Callers scanning many outputs

@@ -83,7 +83,10 @@ pub enum TxLocation {
     /// absence is the contract and those sentinels never reached a client.
     Pooled {
         relayed: bool,
-        received_timestamp: u64,
+        /// When this node received it. Absent where the pool keeps no
+        /// receive time: the Rust pool's (S7, the review of #1102 — across
+        /// many nodes' answers a receive time points at the origin).
+        received_timestamp: Option<u64>,
     },
 }
 
@@ -120,7 +123,10 @@ pub struct TxEntry {
     /// coinbase. Always present: a reply that omitted it would leave a
     /// pruned body's identity unverifiable.
     pub archival_len: u64,
-    pub as_json: String,
+    /// The epee JSON rendering, present only where a daemon rendered it
+    /// (`decode_as_json` on the C++-backed server). It retires with RK-W
+    /// (RW-Q4); absent is withheld, never an empty rendering (RK-D23).
+    pub as_json: Option<String>,
     /// `KV_SERIALIZE_OPT(pruned, false)` — omitted at its default. True when
     /// the daemon holds no prunable data for the transaction.
     pub pruned: bool,
@@ -145,7 +151,8 @@ struct RawTxEntry {
     prunable_as_hex: String,
     prunable_hash: HashHex,
     archival_len: u64,
-    as_json: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    as_json: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pruned: bool,
     in_pool: bool,
@@ -219,9 +226,7 @@ impl TryFrom<RawTxEntry> for TxEntry {
         let location = if raw.in_pool {
             TxLocation::Pooled {
                 relayed: raw.relayed.ok_or_else(|| missing("relayed"))?,
-                received_timestamp: raw
-                    .received_timestamp
-                    .ok_or_else(|| missing("received_timestamp"))?,
+                received_timestamp: raw.received_timestamp,
             }
         } else {
             TxLocation::Mined {
@@ -286,7 +291,7 @@ impl From<TxEntry> for RawTxEntry {
                 received_timestamp,
             } => {
                 raw.relayed = Some(relayed);
-                raw.received_timestamp = Some(received_timestamp);
+                raw.received_timestamp = received_timestamp;
             }
         }
         raw
@@ -419,7 +424,7 @@ mod tests {
             prunable_as_hex: String::new(),
             prunable_hash: HashHex::from_bytes([2u8; 32]),
             archival_len: 42,
-            as_json: String::new(),
+            as_json: None,
             pruned: false,
             double_spend_seen: false,
             location,
@@ -438,7 +443,7 @@ mod tests {
     fn pooled() -> TxLocation {
         TxLocation::Pooled {
             relayed: true,
-            received_timestamp: 77,
+            received_timestamp: Some(77),
         }
     }
 

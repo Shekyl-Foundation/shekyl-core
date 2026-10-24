@@ -77,7 +77,7 @@ pub fn pin_warning(binary: Option<&Path>) -> Option<String> {
     };
     let (cause, detail) = match verified {
         Ok(_) => return None,
-        Err(shekyl_tor_control_daemon::TorBinaryError::NotFound) => {
+        Err(shekyl_tor_control_daemon::TorBinaryError::NotFound { .. }) => {
             ("No Tor was found beside the daemon.", None)
         }
         Err(error @ shekyl_tor_control_daemon::TorBinaryError::Unavailable { .. }) => (
@@ -359,7 +359,7 @@ impl Drive {
                 Input::PinAccepted
             }
             Err(error) => match error {
-                shekyl_tor_control_daemon::TorBinaryError::NotFound => Input::BundleMissing,
+                shekyl_tor_control_daemon::TorBinaryError::NotFound { .. } => Input::BundleMissing,
                 shekyl_tor_control_daemon::TorBinaryError::Unavailable { .. } => Input::Unavailable,
                 _ => Input::PinRefused,
             },

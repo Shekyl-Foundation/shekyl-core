@@ -70,7 +70,7 @@ use tokio::task::JoinSet;
 
 use crate::connector::{
     Apply, CheckpointState, Connector, ConnectorArgs, Digest, HashAt, HeaderAt, Inject,
-    ObserveTarget, Rewind, RunFault,
+    ObserveTarget, Rewind, Rewound, RunFault,
 };
 use crate::grader::Observations;
 use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
@@ -660,6 +660,18 @@ pub enum PipelineFault<SrcF, SubF> {
         /// The bit.
         credit: ServeCredit,
     },
+    /// The source's `Rewind { to }` would pop a block below the lowest
+    /// poppable height. The writer refused it before any pop; a source
+    /// that asks for it is defective.
+    #[error("rewind to {to} would pop below the lowest poppable height {floor} (tip {tip})")]
+    RewindBelowFloor {
+        /// The rewind's target.
+        to: BlockHeight,
+        /// The tip, unchanged.
+        tip: BlockHeight,
+        /// The lowest poppable height.
+        floor: BlockHeight,
+    },
 }
 
 /// A barrier event waiting for the stage ahead of it to drain: no `Extend`
@@ -1243,10 +1255,13 @@ where
             });
         }
         let rewound = self.connector.ask(Rewind { to }).await.map_err(collapse)?;
+        if let Rewound::Refused { tip, floor } = rewound {
+            return Err(PipelineFault::RewindBelowFloor { to, tip, floor });
+        }
         let digest = self.connector.ask(Digest).await.map_err(collapse)?;
         self.report.switches.push(Switch {
             to,
-            popped: rewound.popped,
+            popped: rewound.popped(),
             digest,
         });
         // The popped heights' root comparisons were against the trace's

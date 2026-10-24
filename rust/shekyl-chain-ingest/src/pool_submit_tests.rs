@@ -47,6 +47,56 @@ pub(crate) fn hex(tx: &shekyl_wire::Transaction) -> String {
     tx.serialize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The pool the submit shim shares with the ingest service keeps admitting
+/// after a panic poisoned its lock: the service takes such a lock back, and
+/// a shim that faulted on it would refuse every later submit for good (the
+/// review of #1165, M7). Red edit: the shim maps a poisoned lock to a fault.
+#[tokio::test]
+async fn a_poisoned_pool_still_admits() {
+    let (mut scenario, mined) = matured("pool-poisoned").await;
+    let paid = paying_the_floor(&mut scenario, &mined, 0).await;
+    let path = tmp("pool-poisoned-pool");
+    let verdict = scenario
+        .with_store(|store, rules| {
+            let chain = Store { store, rules };
+            let pool = chain
+                .read(|snapshot, rule_set| {
+                    Pool::open(
+                        &path,
+                        shekyl_types::UnixSeconds::from_raw(1),
+                        &SnapshotView::new(snapshot),
+                        rule_set,
+                        &AdmissionPolicy::GENESIS,
+                    )
+                    .expect("open")
+                    .0
+                })
+                .expect("a snapshot");
+            let pool = Arc::new(std::sync::Mutex::new(pool));
+            let poisoner = Arc::clone(&pool);
+            let panicked = std::thread::spawn(move || {
+                let _held = poisoner.lock();
+                panic!("a panic under the pool's lock");
+            })
+            .join();
+            assert!(
+                panicked.is_err() && pool.is_poisoned(),
+                "the lock is poisoned"
+            );
+            let shim = Arc::new(RustPoolShim::new(
+                chain,
+                pool,
+                AdmissionPolicy::GENESIS,
+                || UnixSeconds::from_raw(1),
+            ));
+            SubmitEngine::new(shim, DaemonTxVerifier).submit(&hex(&paid), SubmitCaller::Owner)
+        })
+        .await;
+    drop(std::fs::remove_file(&path));
+    scenario.close().await;
+    assert_eq!(verdict.expect("no engine fault"), SubmitVerdict::Accepted);
+}
+
 /// A spend paying the floor is accepted and held by the pool, not public
 /// (the engine's own submit is a relay origination); the same bytes again
 /// are `AlreadyInPool`, the identity the shim's facts carry; a spend paying
@@ -81,7 +131,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
                 .expect("a snapshot");
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
             ));
@@ -89,7 +139,7 @@ async fn the_engine_submits_through_the_rust_pool_and_its_door() {
             let first = engine.submit(&hex(&paid), SubmitCaller::Owner);
             let again = engine.submit(&hex(&paid), SubmitCaller::Owner);
             let below = engine.submit(&hex(&cheap), SubmitCaller::Owner);
-            let held = shim.with_pool(|pool| pool.record(&txid)).expect("the lock");
+            let held = shim.with_pool(|pool| pool.record(&txid));
             (first, again, below, held)
         })
         .await;
@@ -148,9 +198,12 @@ async fn a_twin_of_an_accepted_spend_is_a_double_spend_conflict() {
                 })
                 .expect("a snapshot");
             let engine = SubmitEngine::new(
-                RustPoolShim::new(chain, pool, AdmissionPolicy::GENESIS, || {
-                    UnixSeconds::from_raw(1)
-                }),
+                RustPoolShim::new(
+                    chain,
+                    std::sync::Arc::new(std::sync::Mutex::new(pool)),
+                    AdmissionPolicy::GENESIS,
+                    || UnixSeconds::from_raw(1),
+                ),
                 DaemonTxVerifier,
             );
             (
@@ -292,9 +345,12 @@ async fn join_posts_are_accepted_through_the_rust_pool_shim() {
                 })
                 .expect("a snapshot");
             let engine = SubmitEngine::new(
-                RustPoolShim::new(chain, pool, AdmissionPolicy::GENESIS, || {
-                    UnixSeconds::from_raw(1)
-                }),
+                RustPoolShim::new(
+                    chain,
+                    std::sync::Arc::new(std::sync::Mutex::new(pool)),
+                    AdmissionPolicy::GENESIS,
+                    || UnixSeconds::from_raw(1),
+                ),
                 DaemonTxVerifier,
             );
             listed
@@ -383,11 +439,7 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
         .await;
     assert!(selected.refused.is_empty(), "{:?}", selected.refused);
     assert!(selected.stale.is_empty());
-    let chosen: Vec<_> = selected
-        .transactions
-        .iter()
-        .map(|(txid, _)| *txid)
-        .collect();
+    let chosen: Vec<_> = selected.transactions.iter().map(|body| body.id).collect();
     assert_eq!(
         chosen.len(),
         2,
@@ -404,7 +456,7 @@ async fn two_posts_by_one_persona_are_held_and_the_template_selects_one() {
     let bodies = selected
         .transactions
         .into_iter()
-        .map(|(_, tx)| tx)
+        .map(|body| body.tx)
         .collect();
     scenario
         .mine_listing(bodies)
@@ -459,7 +511,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
                 .expect("a snapshot");
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
             ));
@@ -477,8 +529,7 @@ async fn a_foreign_caller_is_told_nothing_the_stem_phase_holds() {
                 counted(&twin, SubmitCaller::Foreign),
                 counted(&fresh, SubmitCaller::Foreign),
                 counted(&cheap, SubmitCaller::Foreign).0,
-                shim.with_pool(|pool| (pool.len(), pool.record(&twin.txid_parts().hash).is_some()))
-                    .expect("the lock"),
+                shim.with_pool(|pool| (pool.len(), pool.record(&twin.txid_parts().hash).is_some())),
             );
             assert!(shim.fluffed(&paid.txid_parts().hash).expect("fluffed"));
             let after = (
@@ -572,7 +623,7 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
             });
             let shim = Arc::new(RustPoolShim::new(
                 chain,
-                pool,
+                std::sync::Arc::new(std::sync::Mutex::new(pool)),
                 AdmissionPolicy::GENESIS,
                 || UnixSeconds::from_raw(1),
             ));
@@ -583,9 +634,8 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
             let owned = submit(&held, SubmitCaller::Owner);
             let duplicate = submit(&held, SubmitCaller::Foreign);
             let fresh = submit(&peer, SubmitCaller::Foreign);
-            let unpublished = shim
-                .with_pool(|pool| pool.record(&held.txid_parts().hash).map(|r| r.public))
-                .expect("the lock");
+            let unpublished =
+                shim.with_pool(|pool| pool.record(&held.txid_parts().hash).map(|r| r.public));
             (owned, duplicate, fresh, unpublished)
         })
         .await;
@@ -605,4 +655,137 @@ async fn a_full_pool_answers_a_stem_duplicate_as_a_fresh_spend_at_its_rate() {
     assert_eq!(duplicate, fresh, "and so does the held one, concealed");
     drop(std::fs::remove_file(&path));
     scenario.close().await;
+}
+
+/// A lone regtest node's own transaction (DX-Q3, Q9; no opt-in, rule 71):
+/// submitted through the node's one pool, it enters in its stem phase and
+/// the node's template does not list it; once the relay's entry marks it
+/// shown (`RustPoolShim::fluffed`, what the relay driver calls at embargo
+/// expiry), the node's next template lists it. The transaction is submitted
+/// before the service starts, so the first job is built over it; every
+/// observation is taken before the service stops and judged after, so a
+/// failure reports instead of hanging the runtime's drop. Red edit: let the
+/// producer list an entry in its stem phase.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lone_nodes_own_transaction_is_listed_once_the_relay_shows_it() {
+    use crate::follower::Posting;
+    use crate::service::{Arrival, ArrivalTag, Follow, Origin, PoolWiring, Reply, Service};
+    let (mut scenario, mined) = matured("lone-own-tx").await;
+    let paid = paying_the_floor(&mut scenario, &mined, 0).await;
+    let txid = paid.txid_parts().hash;
+    let copy = tmp("lone-own-tx-node");
+    scenario
+        .reopen(|path| {
+            std::fs::copy(path, &copy).expect("a copy of the chain");
+        })
+        .await;
+    // The tip the node will meet next: mined after the copy was taken.
+    let next = scenario.mine(1).await;
+    let store = Arc::new(crate::test_support::open_store_under(
+        &copy,
+        &crate::scenario::RULES.in_force(h(0)),
+        shekyl_chain_store::apply_policy::ApplyPolicy::Full,
+    ));
+    let pool_path = tmp("lone-own-tx-pool");
+    let chain = Store {
+        store: &store,
+        rules: crate::scenario::RULES,
+    };
+    let pool = chain
+        .read(|snapshot, rule_set| {
+            Pool::open(
+                &pool_path,
+                UnixSeconds::from_raw(1),
+                &SnapshotView::new(snapshot),
+                rule_set,
+                &AdmissionPolicy::GENESIS,
+            )
+            .expect("open")
+            .0
+        })
+        .expect("a snapshot");
+    let pool = Arc::new(std::sync::Mutex::new(pool));
+    let board = Arc::new(shekyl_miner::JobBoard::new());
+    let (_sync_tx, sync) = tokio::sync::watch::channel(shekyl_chain_sync::SyncState::Synced);
+    let (seat, _sender, mut posting) =
+        crate::test_support::job_seat(&board, Some(crate::test_support::harness_keys()), sync);
+    let shim = Arc::new(RustPoolShim::new(
+        Store {
+            store: &store,
+            rules: crate::scenario::RULES,
+        },
+        Arc::clone(&pool),
+        AdmissionPolicy::GENESIS,
+        || UnixSeconds::from_raw(1),
+    ));
+    let engine = SubmitEngine::new(Arc::clone(&shim), DaemonTxVerifier);
+    assert_eq!(
+        engine
+            .submit(&hex(&paid), SubmitCaller::Owner)
+            .expect("no engine fault"),
+        SubmitVerdict::Accepted
+    );
+    let service = Service::start(
+        Arc::clone(&store),
+        crate::scenario::RULES,
+        Arc::new(crate::service::service_tests::Gated::new()),
+        crate::service::ServiceConfig::default(),
+        shekyl_hash_budget::Budget::of_host(),
+        Follow {
+            job: Some(seat),
+            pool: Some(PoolWiring {
+                pool: Arc::clone(&pool),
+                policy: AdmissionPolicy::GENESIS,
+                wall: Arc::new(|| UnixSeconds::from_raw(1)),
+            }),
+        },
+    );
+    let listed_now = |board: &shekyl_miner::JobBoard| {
+        board
+            .posted()
+            .map(|(_, job)| job.listed.iter().any(|body| body.id == txid))
+    };
+    let posted = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        posting.wait_for(|now| matches!(now, Posting::Posted(_))),
+    )
+    .await
+    .is_ok_and(|seen| seen.is_ok());
+    let at_wait = posting.borrow().clone();
+    let first = listed_now(&board);
+    let shown = shim.fluffed(&txid).expect("the lock");
+    let connected = service
+        .door()
+        .offer(Arrival {
+            tag: ArrivalTag(1),
+            origin: Origin::Local,
+            block: next[0].template.block.serialize(),
+            bodies: Vec::new(),
+        })
+        .expect("room")
+        .reply()
+        .await
+        .reply;
+    let started = std::time::Instant::now();
+    let mut later = listed_now(&board);
+    while later != Some(true) && started.elapsed() < std::time::Duration::from_secs(60) {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        later = listed_now(&board);
+    }
+    service.stop().await.expect("stops");
+    drop(std::fs::remove_file(&pool_path));
+    crate::test_support::cleanup(&copy);
+    scenario.close().await;
+    assert!(posted, "the node posts a job; the board reads {at_wait:?}");
+    assert_eq!(first, Some(false), "a stem entry is not listed");
+    assert!(shown, "the relay shows it");
+    assert!(
+        matches!(connected, Reply::Connected { .. }),
+        "{connected:?}"
+    );
+    assert_eq!(
+        later,
+        Some(true),
+        "the next template lists the shown transaction"
+    );
 }

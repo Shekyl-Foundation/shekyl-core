@@ -232,6 +232,7 @@ const ROWS: &[Row] = &[
     dev("dev-clearnet-encrypt", Kind::Switch, Default::Unset, TEST_NETWORKS, "Encrypt the clearnet transport; deleted at the Noise flip."),
     dev("dev-sync", Kind::OneOf(&["on", "off"]), Default::Value("on"), REGTEST, "Chain synchronisation with peers."),
     dev("dev-relay-cover", Kind::Switch, Default::Unset, TEST_NETWORKS, "The relay's development cover carrier."),
+    dev("dev-rpc", Kind::Switch, Default::Unset, TEST_NETWORKS, "Serve the armed test levers to the host's administrator."),
     // Core, pool, notify, mine
     dev("dev-difficulty", COUNT, Default::Unset, REGTEST, "A fixed difficulty."),
     rejected("span-limit", SYNC_PROTOCOL_BUDGETS),
@@ -361,18 +362,19 @@ mod tests {
         assert_eq!(TABLE.defects(), Vec::<String>::new());
     }
 
-    /// `INPUT_GRAMMAR.md` §5 counts 49 live names, the four levers among
-    /// them. A row added or removed without the grammar fails here first.
+    /// `INPUT_GRAMMAR.md` §5 counts 50 live names, the four environment
+    /// levers among them. A row added or removed without the grammar fails
+    /// here first.
     #[test]
     fn the_live_count_is_the_grammars() {
         let live = TABLE.rows.iter().filter(|r| r.is_live()).count();
-        assert_eq!(live, 49);
+        assert_eq!(live, 50);
         let levers = TABLE
             .rows
             .iter()
             .filter(|r| matches!(r.visibility, Visibility::Dev { .. }))
             .count();
-        assert_eq!(levers, 8);
+        assert_eq!(levers, 9);
     }
 
     #[test]

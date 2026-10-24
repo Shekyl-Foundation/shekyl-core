@@ -473,7 +473,7 @@ fn an_echoed_label_over_a_substituted_body_is_refused() {
         prunable_as_hex: hex::encode(tail),
         prunable_hash: HashHex::from_bytes([0x5A; 32]),
         archival_len: archival_len.to_raw(),
-        as_json: String::new(),
+        as_json: None,
         pruned: false,
         double_spend_seen: false,
         location: shekyl_rpc_types::TxLocation::Mined {
@@ -534,7 +534,7 @@ fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
         prunable_as_hex: String::new(),
         prunable_hash: HashHex::from_bytes(CHOSEN),
         archival_len: CHOSEN_LEN.to_raw(),
-        as_json: String::new(),
+        as_json: None,
         pruned: true,
         double_spend_seen: false,
         location: shekyl_rpc_types::TxLocation::Mined {
@@ -572,7 +572,7 @@ fn extra_transaction_entries_are_a_malformed_reply() {
         prunable_as_hex: "ccdd".to_owned(),
         prunable_hash: HashHex::from_bytes([0x5A; 32]),
         archival_len: 2,
-        as_json: String::new(),
+        as_json: None,
         pruned: false,
         double_spend_seen: false,
         location: shekyl_rpc_types::TxLocation::Mined {
@@ -642,7 +642,7 @@ fn mined_entry(txid: [u8; 32]) -> shekyl_rpc_types::TxEntry {
         prunable_as_hex: hex::encode([0xCCu8]),
         prunable_hash: HashHex::from_bytes([0x5A; 32]),
         archival_len: 1,
-        as_json: String::new(),
+        as_json: None,
         pruned: false,
         double_spend_seen: false,
         location: shekyl_rpc_types::TxLocation::Mined {
