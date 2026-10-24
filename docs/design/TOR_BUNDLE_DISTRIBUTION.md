@@ -155,7 +155,7 @@ said about a row on its own.
 | `--tor-pin-override <sha256>` | **REJECTED** | It is flexibility provisioned ahead of need, and it turns a structural gate into one a unit-file edit opens. **Reopen** if a Tor security advisory cannot be answered by a Shekyl release in time |
 | A signed pin manifest that moves between releases | **REJECTED** | It is an update channel: one key becomes "run this binary on every node", and a startup fetch is a beacon. A Tor CVE costs a patch release, as a CVE in any shipped dependency does. **Reopen** on the same criterion as above |
 | Depending on a distribution's `tor` | **REJECTED** | A distribution build cannot match the pin; "our tor, their OpenSSL" is the same objection one layer down (finding 5) |
-| Building tor from the signed source inside gitian | not this round | The route to a pinned FreeBSD and riscv64 Linux, which no Expert Bundle covers, and to a stable `linux-aarch64`. A round of its own; the `Unavailable` rows it would close are gaps (TB-4) |
+| Building tor from the signed source inside gitian | not this round | The route to a pinned FreeBSD, which no Expert Bundle covers (riscv64 Linux was switched off as a shipped target on 2026-10-24), and to a stable `linux-aarch64`. A round of its own; the `Unavailable` rows it would close are gaps (TB-4) |
 
 ## 4. The pins TB-10 and TB-11 adopt
 
@@ -298,8 +298,9 @@ current" procedure.
    - TB-1: `tor = off` logs the clearnet-only warning on every boot. A node
      with no tor found, which has not declined, warns too (it was an info
      line); TB-2 says what it then does and says.
-   - FreeBSD and riscv64 Linux are `Unavailable` rows with their reasons,
-     both rulings. A row may carry `"pending"`, the work item that will pin
+   - FreeBSD is an `Unavailable` row with its reason, a ruling (riscv64
+     Linux was one too until it was switched off as a shipped target on
+     2026-10-24; its row stays `Unavailable` for a source build). A row may carry `"pending"`, the work item that will pin
      it; it compiles as `Unavailable`, so TB-4's two states stand at runtime,
      and `check_tor_pin_targets.py` prints every pending row. None is pending
      now: the macOS rows were, until TB-11 pinned them.
@@ -351,8 +352,8 @@ current" procedure.
      the posture table.
 3. **FreeBSD:** TB-5's `Unavailable` arm and its user guide.
 4. **Close the `Unavailable` gaps** (TB-4, Rick 2026-10-19): every OS ships
-   its Tor. FreeBSD and riscv64 Linux have no Expert Bundle and wait on
-   building tor from the signed source (§3).
+   its Tor. FreeBSD has no Expert Bundle and waits on building tor from
+   the signed source (§3); riscv64 Linux is no longer shipped (2026-10-24).
    `check_tor_pin_targets.py` prints every pending row on every run.
 
 The Foundation's own hosts are reconfigured one at a time after step 1, to the

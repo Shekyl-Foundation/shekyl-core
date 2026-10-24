@@ -111,8 +111,8 @@ The CI workflows install all dependencies automatically. For local builds:
    once `dev` has moved it is not done.
 
 7. **GitHub Actions takes over.** The `gitian` workflow automatically:
-   - Builds reproducible, deterministic binaries for Linux (x86_64, aarch64,
-     riscv64), Windows x64, macOS (x86_64, aarch64), and FreeBSD x86_64
+   - Builds reproducible, deterministic binaries for Linux (x86_64, aarch64),
+     Windows x64, macOS (x86_64, aarch64), and FreeBSD x86_64
      inside isolated Docker containers
    - Packages Linux x86_64 and aarch64 binaries as `.deb` and `.rpm`
    - Builds a Windows NSIS installer (`.exe`)
@@ -164,8 +164,8 @@ Each release produces these files (all binaries are Gitian reproducible builds):
 | `SHA256SUMS` | Checksums for all artifacts |
 | `SHA256SUMS.asc` | Detached signature over `SHA256SUMS`, added by the manifest ceremony (step 9) |
 
-The Gitian Linux build also produces a RISC-V 64-bit tarball; the release job
-does not publish it (see "Future Platforms").
+RISC-V 64-bit is switched off in the Gitian Linux build (see "Future
+Platforms"); nothing is produced for it.
 
 ## Linux Package Details
 
@@ -203,7 +203,7 @@ The pipeline has two phases:
 Each Gitian build descriptor installs the Rust toolchain via `rustup`,
 pinned to the workspace toolchain (`--default-toolchain 1.94.0`, kept in
 lockstep with `rust/rust-toolchain.toml`) with the minimal profile and the
-appropriate cross-compilation targets (aarch64, RISC-V for Linux; 64-bit
+appropriate cross-compilation targets (aarch64 for Linux; 64-bit
 MinGW for Windows; Darwin targets for macOS). The pin is serial and
 up-front by design: the parallel `make` build invokes many `cargo`
 processes at once, and letting them auto-install the toolchain concurrently
@@ -245,7 +245,11 @@ Or trigger manually from the Actions tab without retagging.
 
 - **macOS `.dmg` installer** -- native disk image with drag-to-Applications UX.
 - **Linux AppImage** -- single-file portable binary for desktop distributions.
-- **RISC-V 64-bit** is available via Gitian deterministic builds and may be
-  promoted to the main release if demand warrants. 32-bit platforms are
+- **RISC-V 64-bit** is switched off in the Gitian descriptor (Rick,
+  2026-10-24): the constant-time record (`docs/design/CRYPTO_AUDIT.md` §1)
+  cannot cover a target with no BINSEC decoder and no board, so it is not
+  shipped until a user asks for it and there is a way to measure it. The
+  `riscv64` arch mapping in CMake stays, so a source build is still
+  possible. 32-bit platforms are
   permanently out of scope on security grounds — see `docs/CHANGELOG.md`
   entry "Retired 32-bit build targets".
