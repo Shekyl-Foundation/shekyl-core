@@ -67,21 +67,37 @@
 #   helioselene, ec-divisors (vendored shekyl-oxide), shekyl-curve-generators
 # Where it matters: `helioselene::Field25519` IS
 # `dalek_ff_group::FieldElement`, whose arithmetic is crypto-bigint's
-# `Residue` (Montgomery mul/sub). That field carries the FCMP++ prover's
-# secret witness on the wallet side, so the exposure is a co-located
-# timing/microarchitectural observer of the proving machine. Verification
-# (daemon) handles public data only. Whether 0.5.5 actually compiles to
-# the leaking branches is unmeasured: upstream's fixes (crypto-bigint
-# #1358, #1360) target 0.7's code, and #1358's leak came from a 2025
-# workaround that 0.5.5 predates; no `cargo checkct` run exists for 0.5.5.
-# Why it cannot be bumped: no released dalek-ff-group or ciphersuite uses
-# crypto-bigint 0.7 (latest 0.5.0 / 0.4.2; serai `develop` is still on
-# 0.5), and the vendored crates sit on top of that stack, so clearing it
-# means owning a fork of the serai curve stack ported to 0.7, with every
-# pinned FCMP++/curve-tree vector held byte-identical.
-# Reopen when ANY of: (a) serai publishes dalek-ff-group/ciphersuite on
-# crypto-bigint >= 0.7.6 -- bump and drop this; (b) the fork-and-port is
-# scheduled -- drop this in that PR; (c) a `cargo checkct` run shows
-# 0.5.5's Residue mul/sub/invert branching on x86_64 or aarch64 -- the
-# fork becomes blocking for the next release, not optional.
+# `Residue` (Montgomery mul/sub) and whose wide reduction is `U512::rem`.
+# That field carries the FCMP++ prover's secret witness on the wallet
+# side, so the exposure is a co-located timing/microarchitectural observer
+# of the proving machine. Verification (daemon) handles public data only.
+# `HelioseleneField` takes only U256 limb plumbing from crypto-bigint
+# (sbb/adc, wide mul, ct_eq/ct_lt, conditional_select); its only division
+# calls are under `cfg(test)`.
+# Why it cannot be bumped: no RELEASED dalek-ff-group or ciphersuite uses
+# crypto-bigint 0.7 (latest 0.5.0 / 0.4.2). serai's `next` branch
+# (2026-09-22) has already moved dalek-ff-group onto a new `prime-field`
+# crate on crypto-bigint 0.7, unreleased; so the fix is a bump to that
+# branch pinned by git rev, with every pinned FCMP++/curve-tree vector held
+# byte-identical, not a port of our own.
+# Measured 2026-10-24 with cargo-checkct/BINSEC (docs/formal/checkct):
+# every crypto-bigint 0.5.5 operation dalek-ff-group uses, and every
+# Field25519 operation, is branchless on x86_64 (and on the riscv32imac /
+# thumbv7em stand-ins) under the tool's nightly and under the LLVM 21 line
+# 1.94.0 ships. HelioseleneField: branchless for 10 of 12 operations on
+# x86_64 and 12 of 12 on the stand-ins; its `pow` (public exponent in
+# production) and `sqrt` (reached only through point decompression and
+# transcript sampling, on public inputs; the secret-path sqrt is
+# Field25519's, measured) are NOT ASSESSED on x86_64 (BINSEC timeout).
+# 0.5.5's own `Residue::pow` with a SECRET exponent does branch
+# (riscv32imac; x86_64 under LLVM 21), and nothing in our stack calls it
+# that way. aarch64 and riscv64 are outside the tool's reach (aarch64 gets a
+# dynamic row; riscv64 is not assessed).
+# Reopen when ANY of: (a) serai releases dalek-ff-group/ciphersuite on
+# crypto-bigint >= 0.7.6 -- bump, re-run the harness against the new
+# field, drop this; (b) the toolchain is bumped -- re-measure in the same
+# PR (scripts/ci/check_checkct_toolchain.py makes a bump without it red);
+# (c) a static or dynamic row on a shipped target shows a branch or a
+# class difference in an operation we reach with a secret -- the pin
+# becomes blocking for the next release, not optional.
 ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2023-0089", "RUSTSEC-2026-0192", "RUSTSEC-2026-0387"]
