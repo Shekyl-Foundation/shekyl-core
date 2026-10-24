@@ -234,6 +234,27 @@ depends on how consecutive operations overlap in the pipeline, which fits
 activity-dependent timing of the instruction stream, a platform property,
 better than any single-operand or single-instruction cause.
 
+**The halves (fleet host, `dynamic-x86_64-fleet-measurement-host-halves.txt`).**
+`square_wide` alone, `mul_wide` alone, `red512` alone and `red512` fed with
+a square's output are all flat, fixed against fresh and fixed against
+fixed; so are the plain fixed-set `square` rows in a build where the
+operation sits behind a call. What crosses, strongly and only for
+`HelioseleneField`, is a constant operand (the same uniformly random value
+for every operation of a batch: −44 at 200k, −72 at 1M) and the structured
+operands (sparse, small, dense: −17 to −57), all faster than uniformly
+random ones; `Field25519` is flat for the same classes. The asymmetry that
+matches this is the **representation**: `dalek_ff_group::FieldElement`
+holds values in Montgomery form, so `from_repr` turns a sparse, small,
+dense or constant input into a dense residue before any arithmetic, while
+`HelioseleneField` holds the canonical value, so the operand's structure
+reaches the multiplier and the reduction intact. The timer then sees
+whatever the platform does with low-activity versus high-activity
+operand streams. That makes CA-2 both: a platform behaviour (activity-
+dependent timing) and a code property that exposes it (canonical
+representation), with a code-side mitigation available in principle
+(Montgomery or blinded representation) besides the platform one (fixed
+frequency).
+
 **Mechanism: open.** Two remain once BINSEC's model is exhausted, with
 different owners and fixes: (a) power → frequency (the Hertzbleed class:
 operand Hamming weight or toggle count changes core power, the P-state

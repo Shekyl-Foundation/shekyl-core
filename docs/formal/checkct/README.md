@@ -253,6 +253,7 @@ regenerate it after any run.
 | `subject.nightly-2026-10-06.txt` | subject | nightly-2026-10-06 | `--timeout 900` | x86_64-unknown-linux-gnu | 25 / 0 / 1 | unknown: dfg_invert |
 | `dynamic-aarch64-floor-device.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-diagnostics.txt` | dynamic | see file | — | — | — | not a checkct record |
+| `dynamic-x86_64-fleet-measurement-host-halves.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-fleet-measurement-host-property.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-fleet-measurement-host-slp-ab.txt` | dynamic | see file | — | — | — | not a checkct record |
 | `dynamic-x86_64-fleet-measurement-host.txt` | dynamic | see file | — | — | — | not a checkct record |
