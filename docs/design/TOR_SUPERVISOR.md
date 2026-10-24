@@ -744,8 +744,8 @@ the Windows CI job beside the boot-and-stop smoke test (#1072), and in
   directory kept, the route back and the same onion republished 5 s after
   the kill.
 - **Wedged Tor:** undetected for five minutes. In steady Running nothing asked
-  Tor anything, so the reply bound never armed. The liveness sample above is
-  the fix; with it, the route was withdrawn 70 s after `SIGSTOP` (the pending
+  Tor anything, so the reply bound never armed. The liveness sample (§4.11)
+  is the fix; with it, the route was withdrawn 70 s after `SIGSTOP` (the pending
   `SETCONF` held the queue for its own bound), and Tor respawned with the
   same onion 3 s later.
 - **Daemon stop:** one stop path, Tor torn down 0.33 s after `SIGTERM`, no
