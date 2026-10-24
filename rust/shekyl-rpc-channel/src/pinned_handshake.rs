@@ -18,7 +18,7 @@
 //! generator source, compiled here and into the cross-check crate. Neither
 //! exports it.
 //!
-//! **The transport comparison is one Noise ciphertext.** `Direction::seal`
+//! **The transport comparison is one Noise ciphertext.** `SendDirection::seal`
 //! under [`TRANSPORT_AD`] at the initial epoch is the plain Noise transport
 //! message the vectors pin. The same ciphertext is what
 //! [`PendingSession::open_first_message`] opens. There is no framing in

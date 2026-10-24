@@ -2983,6 +2983,7 @@ dependencies = [
  "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -4839,6 +4840,7 @@ dependencies = [
  "blake2",
  "chacha20",
  "chacha20poly1305",
+ "poly1305",
  "x25519-dalek",
  "zeroize",
 ]

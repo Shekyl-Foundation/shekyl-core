@@ -6,8 +6,9 @@
 #![deny(unsafe_code)]
 
 //! What every Noise transport in the workspace shares: the symmetric
-//! primitives, the handshake's symmetric state, and [`Direction`], the one
-//! nonce stream a framer seals with.
+//! primitives, the handshake's symmetric state, and the two transport
+//! directions a session splits into: a [`SendDirection`], which only seals,
+//! and a [`RecvDirection`], which only opens.
 //!
 //! Two transports use it. The P2P handshake (`shekyl-p2p-transport`) and the
 //! RPC channel each bring their own pattern, their own protocol name, their
@@ -20,7 +21,8 @@
 //! leaves it.
 //!
 //! This crate has no handshake of its own and no socket. Its one framer is
-//! [`ClassedRecord`], the RPC channel's (section 4.4). The length-prefixed
+//! the RPC channel's (section 4.4): a [`ClassedSealer`] and a
+//! [`ClassedOpener`]. The length-prefixed
 //! framer the clearnet seam speaks stays in `shekyl-p2p-transport`.
 //!
 //! # The `rekey-timing` feature
@@ -39,8 +41,8 @@ pub mod symmetric;
 pub use aead::rekey_hkdf;
 pub use aead::{HASH_LEN, TAG_LEN};
 pub use classed::{
-    ClassId, ClassTable, ClassTableError, ClassedError, ClassedRecord, Opened, CLASS_TABLE_MAX,
-    HEADER_LEN, MAX_RECORD_PLAINTEXT, OCCUPANCY_LEN,
+    ClassId, ClassTable, ClassTableError, ClassedError, ClassedOpener, ClassedSealer, Opened,
+    CLASS_TABLE_MAX, HEADER_LEN, MAX_RECORD_PLAINTEXT, OCCUPANCY_LEN,
 };
-pub use direction::{Direction, DirectionError, KeyEpoch, REKEY_NONCES};
+pub use direction::{DirectionError, KeyEpoch, RecvDirection, SendDirection, REKEY_NONCES};
 pub use symmetric::{SplitRole, SymmetricError, SymmetricState};
