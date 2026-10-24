@@ -88,8 +88,14 @@ pub enum Cause {
         /// The process exit code, when the reap reported one.
         exit_code: Option<i32>,
     },
-    /// The data directory could not be used.
-    DirectoryUnusable,
+    /// The data directory could not be used (§5, "Data directory unusable").
+    DirectoryUnusable {
+        /// The directory, the daemon's data directory Tor's lives under.
+        path: std::path::PathBuf,
+        /// The shortfall, when the pre-spawn check found too little space.
+        /// `None` when the directory itself could not be created or used.
+        space: Option<Space>,
+    },
     /// This machine cannot reach the Tor network.
     ExternalBlocked,
     /// No directory Tor knows answered.
@@ -108,6 +114,15 @@ pub enum Cause {
     ReplyLate,
     /// The consensus does not recommend this Tor.
     DangerousVersion,
+}
+
+/// Free space under Tor's data directory against what a spawn needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Space {
+    /// Bytes this process can write there.
+    pub available: u64,
+    /// Bytes the spawn needs.
+    pub needed: u64,
 }
 
 /// Whether the node is syncing, and over what (`TSR-Q12`).
@@ -283,7 +298,15 @@ fn cause_sentence(status: &Status) -> Option<String> {
         Cause::Unavailable => Some("This release has no Tor for this platform yet.".to_owned()),
         Cause::FailedStart => Some("Tor did not start.".to_owned()),
         Cause::Died { exit_code } => Some(died_sentence(status.respawn_count, *exit_code)),
-        Cause::DirectoryUnusable => Some("Tor's data directory could not be used.".to_owned()),
+        Cause::DirectoryUnusable { path, space } => Some(match space {
+            Some(space) => format!(
+                "Tor's data directory {} has {} free and Tor needs {}. Free space there.",
+                path.display(),
+                spoken_bytes(space.available),
+                spoken_bytes(space.needed)
+            ),
+            None => format!("Tor's data directory {} could not be used.", path.display()),
+        }),
         Cause::ExternalBlocked | Cause::DirectoryUnreachable => Some(
             "This machine cannot reach the Tor network. Check the firewall or the network."
                 .to_owned(),

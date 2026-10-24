@@ -12,7 +12,9 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use super::posture::{fixes, own_tx, BootstrapLine, Cause, Connectors, Shown, Status, Syncing};
+use super::posture::{
+    fixes, own_tx, BootstrapLine, Cause, Connectors, Shown, Space, Status, Syncing,
+};
 
 /// Shifts past this saturate a doubling backoff for any base of at least one
 /// nanosecond. The cap is what the operator waits.
@@ -119,8 +121,14 @@ pub enum Input {
     BundleMissing,
     /// This platform manages no Tor.
     Unavailable,
-    /// The data directory cannot be used.
-    DirectoryUnusable,
+    /// The data directory cannot be used, or has too little free space for
+    /// the spawn (the pre-spawn check).
+    DirectoryUnusable {
+        /// The daemon's data directory.
+        path: std::path::PathBuf,
+        /// The shortfall, when that was the reason.
+        space: Option<Space>,
+    },
     /// The process is up and the control connection answered.
     Spawned,
     /// The process did not stay up through the launch.
@@ -271,6 +279,10 @@ pub struct Core {
     posted: Shown,
     since: u64,
     last_announce: Option<u64>,
+    /// What the last announcement said: the projection and the cause's kind.
+    /// A different one is a state change and is said at once (`TSR-F11`);
+    /// only a repeat of the same waits for the cap.
+    said: Option<(Shown, std::mem::Discriminant<Cause>)>,
     respawn_count: u32,
     launch_failures: u32,
     backoff_failures: u32,
@@ -310,6 +322,7 @@ impl Core {
             posted: Shown::Restarting,
             since: now,
             last_announce: None,
+            said: None,
             respawn_count: 0,
             launch_failures: 0,
             backoff_failures: 0,
@@ -338,7 +351,11 @@ impl Core {
             Input::PinRefused => self.hold(now, Cause::PinRefused, AbsentDuty::Held),
             Input::BundleMissing => self.hold(now, Cause::BundleMissing, AbsentDuty::Held),
             Input::Unavailable => self.hold(now, Cause::Unavailable, AbsentDuty::Fixed),
-            Input::DirectoryUnusable => self.hold(now, Cause::DirectoryUnusable, AbsentDuty::Held),
+            Input::DirectoryUnusable { path, space } => self.hold(
+                now,
+                Cause::DirectoryUnusable { path, space },
+                AbsentDuty::Held,
+            ),
             Input::Spawned => self.spawned(now),
             Input::SpawnFailed => self.launch_failed(now),
             Input::BootstrapComplete => self.bootstrap_complete(now),
@@ -388,10 +405,19 @@ impl Core {
             return self.step(now, Vec::new());
         }
         let mut actions = Vec::new();
+        let pin_due = self.pin_at.is_some_and(|at| now >= at);
         if self.announce_at.is_some_and(|at| now >= at) {
-            actions.extend(self.say(now, false));
+            // A repeat belongs to the state it repeats. Once that state is
+            // gone (Tor spawned), the deadline is stale and says nothing. When
+            // a pin check is due in the same tick, the check speaks for itself:
+            // repeating the old cause just before it passes misleads.
+            if self.repeats_announcement() && !pin_due {
+                actions.extend(self.say(now, false));
+            } else {
+                self.announce_at = None;
+            }
         }
-        if self.pin_at.is_some_and(|at| now >= at) {
+        if pin_due {
             self.pin_at = None;
             if matches!(
                 self.phase,
@@ -700,6 +726,13 @@ impl Core {
         };
         self.sample_at = None;
         self.alive_at = None;
+        // A full cap of usable outbound is shown health: the backoff starts
+        // again from its base (§4.4, Rick 2026-10-24). Tied to the cap, not a
+        // new constant, so a crash rate that keeps the backoff pinned today
+        // still does: an adversary cannot buy a fast re-roll of the cadence.
+        if self.posted == Shown::Usable && now.saturating_sub(self.since) >= self.cap() {
+            self.backoff_failures = 0;
+        }
         if launch_failed {
             self.launch_failures = self.launch_failures.saturating_add(1);
         } else {
@@ -800,7 +833,9 @@ impl Core {
         let due = self
             .last_announce
             .is_none_or(|then| now.saturating_sub(then) >= self.cap());
-        if !(recovery || due) {
+        let key = (self.shown(), std::mem::discriminant(&self.cause));
+        let changed = self.said != Some(key);
+        if !(recovery || changed || due) {
             if self.repeats_announcement() {
                 if let Some(last) = self.last_announce {
                     self.announce_at = Some(last.saturating_add(self.cap()));
@@ -809,6 +844,7 @@ impl Core {
             return Vec::new();
         }
         self.last_announce = Some(now);
+        self.said = Some(key);
         if self.repeats_announcement() {
             self.announce_at = Some(now.saturating_add(self.cap()));
         } else {
