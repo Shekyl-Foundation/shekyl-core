@@ -6,10 +6,11 @@
 //! The responder side of 2011–2014, from the store (CS-3 §4.5). Reads only.
 //!
 //! A header request is a sparse locator. The first hash the store holds on
-//! its main chain is the fork point. The null hash, an empty chain's whole
-//! locator, starts the response at genesis. A hash held as an alternative block is
-//! walked down its parents to the main chain, and that block is the fork
-//! point. From the fork point's child upward the response carries
+//! its main chain is the fork point, and a hash held only as an alternative
+//! block is passed over: the requester accepts a response only when its
+//! first header's parent is a hash it named. The null hash, an empty
+//! chain's whole locator, starts the response at genesis. From the fork
+//! point's child upward the response carries
 //! `pow_blob`s until [`HEADERS_RESPONSE_BYTES`] would be passed. `more` says
 //! whether the main chain continues, and `tip_work` is the tip's cumulative
 //! difficulty.
@@ -87,8 +88,10 @@ pub fn serve_headers(
 }
 
 /// The height the response starts at: the child of the first locator hash
-/// this store holds on its main chain, directly or as the base of an
-/// alternative chain. `None` when no locator hash is held.
+/// this store holds on its main chain. A hash held only as an alternative
+/// block is passed over, since the response's first parent must be a
+/// locator hash and an alternative block's fork point seldom is. `None`
+/// when no locator hash is on the main chain.
 fn first_held(
     snap: &ReadSnapshot<'_>,
     locator: &[[u8; HASH_SIZE]],
@@ -103,33 +106,6 @@ fn first_held(
         if let Some(height) = snap.height_of(&hash)? {
             return Ok(Some(height + BlockCount::ONE));
         }
-        if let Some(fork) = fork_of_alt(snap, hash)? {
-            return Ok(Some(fork + BlockCount::ONE));
-        }
-    }
-    Ok(None)
-}
-
-/// Where the alternative chain through `hash` leaves the main chain: the
-/// height of its first ancestor on main. `None` when `hash` is not an
-/// alternative block, or its chain reaches nothing on main. The walk is
-/// bounded by the alternative blocks the store holds.
-fn fork_of_alt(
-    snap: &ReadSnapshot<'_>,
-    hash: BlockHash,
-) -> Result<Option<BlockHeight>, StoreError> {
-    let mut steps = snap.alt_block_count()?;
-    let mut at = hash;
-    while let Some(alt) = snap.alt_block(&at)? {
-        let parent = alt.block().header.previous;
-        if let Some(height) = snap.height_of(&parent)? {
-            return Ok(Some(height));
-        }
-        if steps == 0 {
-            return Ok(None);
-        }
-        steps -= 1;
-        at = parent;
     }
     Ok(None)
 }

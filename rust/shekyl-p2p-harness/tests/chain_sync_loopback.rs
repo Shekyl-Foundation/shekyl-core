@@ -822,3 +822,64 @@ async fn the_node_serves_requests_its_own_form_checks_accept() {
     assert_eq!(node.closed(id), None);
     node.stop().await;
 }
+
+/// A locator hash this store holds only as an alternative block is
+/// skipped, and the response starts after the next locator hash on the
+/// main chain. The requester accepts a response only when its first
+/// header's parent is a hash it named, and an alternative block's fork
+/// point is seldom in a sparse locator.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_locator_hash_held_only_as_an_alternative_is_skipped() {
+    use shekyl_chain_ingest::service::{Arrival, ArrivalTag, Origin, Reply};
+    use shekyl_chain_sync_runtime::serve::serve_headers;
+    use shekyl_levin::RequestHeaders;
+
+    let (corpus, steps) = spend();
+    let chain = source("serve-alt", &corpus, &steps).await;
+    let (count, _, _) = chain.tip().expect("a chain");
+    let fork_at = count - 3;
+    let main = chain.block(fork_at + 1);
+    let bodies = steps
+        .iter()
+        .find_map(|step| match step {
+            Step::Block { block, bodies } if *block == main.serialize() => Some(bodies.clone()),
+            _ => None,
+        })
+        .expect("the corpus holds the block");
+    // The main block's sibling: the same parent and transactions, another
+    // nonce. It is lighter than the main chain, so it is stored beside it.
+    let mut sibling = main.clone();
+    sibling.header.nonce ^= 0x5A5A_5A5A;
+    let ticket = chain
+        .service
+        .door()
+        .offer(Arrival {
+            tag: ArrivalTag(9001),
+            origin: Origin::Local,
+            block: sibling.serialize(),
+            bodies,
+        })
+        .expect("room");
+    let reply = ticket.reply().await.reply;
+    assert!(matches!(reply, Reply::Held { .. }), "{reply:?}");
+    let named = chain.block(fork_at - 2).hash();
+    let genesis = chain.block(0).hash();
+    let response = serve_headers(
+        &chain.store,
+        &RequestHeaders {
+            block_ids: vec![
+                *sibling.hash().as_bytes(),
+                *named.as_bytes(),
+                *genesis.as_bytes(),
+            ],
+        },
+    )
+    .expect("the store answers");
+    let first = PowBlob::read(response.blobs.first().expect("headers")).expect("a preimage");
+    assert_eq!(
+        first.header.previous, named,
+        "the response starts after a hash the requester named"
+    );
+    assert!(!response.more);
+    chain.stop().await;
+}
