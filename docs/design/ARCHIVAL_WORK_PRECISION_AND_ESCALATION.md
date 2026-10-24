@@ -62,7 +62,7 @@ today. Therefore any shard with `r_market > g_milli` contributes **exactly 0**.
 
 **Consequence.** An archiver whose shards each exceed the co-holder cliff scores
 `work_P = 0` — no reward, permanently — regardless of how much correctly-served
-data they hold. Worst *representable* case (see F-A): **4,096 shards ≈ 13.6 GB**
+data they hold. Worst *representable* case (see F-A): **4,096 shards ≈ 12.3 GB**
 of served data, every challenge passed, `work_P = 0`. The cliff sits at
 `r_market > g_milli`: **1,000 for a fresh shard, up to 3,000 at max age.**
 
@@ -139,7 +139,7 @@ self-indexing rather than a constant bolted onto a growing cost.
 `MAX_HOLDINGS_SHARDS = 4096` (`bond_wire.rs:33`) caps the holdings descriptor
 **and** the per-epoch claim entries (write-side rejection,
 `emission_wire.rs:457`). Worst representable case per bond: **4,096 shards ≈
-13.6 GB → work 0.** This also corrects the anti-tail arithmetic: under a
+12.3 GB → work 0.** This also corrects the anti-tail arithmetic: under a
 `max(1, ·)` tail, one bond caps at 4,096 milli → `curve_milli(4096) = 4,048`
 against plateau value 8,000, so the full-plateau-via-common-shards sybil path
 needs **≥ 4 bonds**, not one. The anti-tail argument survives (per-persona bonds
@@ -297,7 +297,7 @@ measures the wrong thing — this is evidence validity.
   sweep that confirms the burden-coupling argument leaves no early-chain regime
   where Δshare outruns Δburden. **Cross-chain-precedent arms (§11):**
   - **Proxy-cost arm (W10, §11.1):** proxy cost (fetch-within-grace from public
-    daemons, per the gate-4 window) vs honest cost (hold ~13.6 GB) vs the
+    daemons, per the gate-4 window) vs honest cost (hold ~12.3 GB) vs the
     **post-D1/D2** reward — confirm the §7.4 fetch-cost-vs-deadline margin still
     binds after D1 restores bulk-holder pay and D2 escalates the pool. If it does
     not, the disposition is gate-4 grace tightening or PoRep-reopen acceleration,
@@ -354,14 +354,14 @@ argument for it over a participation-derived signal:
 >    the property that actually matters here.** This section's scope is *swings*:
 >    pump-and-dump, whale diving, reflexive feedback — manipulation that profits
 >    from a **reversal**. The lever A6 found can only **accelerate the monotone
->    ratchet**: `+1.41` (penalty-free) to `+2.82` points/epoch at the block-weight
->    ceiling against `−0.10` at the *full* reorg bound, one-directional always. No reversal, no
+>    ratchet**: `+0.05` (penalty-free) to `+0.10` points/epoch at the block-weight
+>    ceiling against `−0.004` at the *full* reorg bound, one-directional always. No reversal, no
 >    oscillation, no whipsaw. **W8 stays armed by operand.**
 > 2. **Acceleration: economically closed — and *conditionally*.** The slew is real
->    (a W9 flood buys `n` at the block-weight ceiling: ~2 714 shards/epoch
->    early-chain penalty-free — **`+1.41` pts/epoch**, or **`+2.82`** if the flooder
+>    (a W9 flood buys `n` at the block-weight ceiling: ~3 870 shards/epoch
+>    early-chain penalty-free — **`+0.05` pts/epoch**, or **`+0.10`** if the flooder
 >    also compensates the miner-reward penalty to use the legal `2×` limit,
->    ~45 k SKL/epoch in fees) and it is closed by **price**, not by structure. The
+>    ~430 k SKL/epoch in fees; the shallowest 90 % member, which step 0b re-reads on the steepest) and it is closed by **price**, not by structure. The
 >    measurement splits it into **two tiers with two different closers**:
 >    - **penalty-free tier (`+1.41`)** — ~~closed by the **reopen-(c) per-output
 >      fee-floor**, and **open until (c) lands**~~ **REOPENED AS ITS OWN ITEM
@@ -378,11 +378,12 @@ argument for it over a participation-derived signal:
 >    - **legal-`2×` tier (`+2.82`)** — closed **already, independently of (c)**, by
 >      the block-reward penalty: at `B = 2M` the production formula
 >      (`get_block_reward`) pays the miner *exactly zero*, so the flooder must fund
->      ~**10.24 M SKL/epoch** of compensation — **114×** the fee cost. Doubling the
->      slew costs ~114× more, so the upper tier is not a live lever.
-> 3. **Hardening with depth: improves unattended.** The slew ceiling **falls** as
->    the tree deepens (deeper tree ⇒ heavier FCMP proofs ⇒ fewer leaves per block),
->    so the operand becomes *harder* to move over time. Pinned in a test.
+>      ~**5.12 M SKL/epoch** of compensation — about **12×** the fee cost. Doubling the
+>      slew costs ~12× more, so the upper tier is not a live lever.
+> 3. **Nearly flat with depth.** A deeper tree means heavier proofs and fewer
+>    leaves a block, but the shard partition is by archival bytes, so the
+>    ceiling in shards an epoch barely moves. Pinned in a test
+>    (`flood_ceiling_is_finite_and_nearly_depth_flat`).
 >
 > **"Slow" therefore holds in the sense the section needs** — no burst can reverse
 > or oscillate the operand — **but not in the absolute sense the original wording
@@ -583,9 +584,9 @@ decision.
     fork) **trigger:** the W10 proxy-cost arm showing the fetch-cost-vs-deadline
     margin no longer binds under the D1/D2 economics. **🔴 FIRED (Stage 2 · A5 ·
     cp5a `49cf160e9`).** The margin is negative at the current grace window (the
-    cheap ~3 KB opening re-fetches for ≪ the cost of holding 13.6 GB; §12.6). The
+    cheap 6.8 KB opening re-fetches for ≪ the cost of holding 12.3 GB; §12.6). The
     named remedy applies: **tighten the gate-4 grace window** to force a re-fetch-
-    failure rate `q ≥ q*` (`q* ≈ 0.098–0.278` — the m-of-n slash crossover),
+    failure rate `q ≥ q*` (`q* ≈ 0.105–0.271` — the m-of-n slash crossover),
     **or** accelerate the **PoRep** reopen (`q → 1`, sealed possession). **Not** a
     D2 redesign. NB: the corrected m-of-n slash (`ARCHIVAL_FAILURE_CONFIRMATION_PIN`,
     a single miss absorbed) *weakens* the deterrent vs a single-strike, so `q*` is
@@ -606,7 +607,7 @@ decision.
 | W7 | Cached `frozen_segment_count` drift at the D2 read-point | Pinned read through frontier-check (M1 §11.8 M3-1) | ✅ carried |
 | W8 | **Fast-swing** manipulation of the staker share (pump-and-dump, whale dive, reflexive feedback) | The operand is monotone + slow + predictable (§6.0) and the function is a pure map of `n` with no controller (§6.1) — pump/dump/whale have **no lever** on a monotone chain-state operand; the only lever is the durable one (W9) | ✅ by operand (fast-swing has no lever) |
 | W9 | **Durable output-stuffing** — mint outputs to inflate leaf count → segment-freeze rate → `n` → share, permanently (the ratchet cuts both ways, §6.2). Not covered by `DESIGN_CONCEPTS.md` §6, which keys the stuffer's cost to `tx_volume` (a tx count) via the sqrt damper, which does not escalate against output count. **Live precedent**: Monero's suspected March-2024 output-flood; Bitcoin's 2015 dust floods (§11.3) | Burden-coupling: the operand *is* the funded quantity, so a stuffer raises the share and the real cost (a permanent ~3.33 MB shard held forever) in the coupled ratio — "manipulating an honest measure of the funded quantity mostly funds the quantity"; only weight-fees escalate against outputs | 🔴 **FAILS** (Stage 2, A4 cp4b/cp4c). Served-work ROI is 2.8×–17.8× at the rational honest equilibrium (§12.5): the coupled bond burden is real but ~1% of cost, and the weight-fee at the `300`/byte floor is cheap against the Δpool a flood unlocks. Diagnosis: **pure fee-flow-volume leverage** (first-mover premium ≈ 1.0 — *not* a concentration attack at the realistic end); the cross-regime `fee×→1` spread (2.8→17.8) is volume/share-slope, so a floor cannot be one number. Disposition: ~~reopen (c) **FIRED** — weight-denominated per-output fee-floor~~ **RETRACTED 2026-07-27 → ✅ CLEARS (§12.11)**: the FAIL measured *profit*, not *theft*. Netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales**; reopen (c) is **CLOSED with NO MECHANISM**. The **D3** capture-side companion (reopen (e)) landed independently (§12.9.1, PR #371). |
-| W10 | **Proxy free-riding on the on-demand-serving ruling** (§11.1) — a thin proxy re-fetches challenged data cheaply within the gate-4 grace window instead of holding it; D1 now *pays* that profile (was zero under truncation) and D2 escalates the pool it drains, re-pricing the §7.4 free-rider equilibrium that was closed under the old economics | Fetch-cost-vs-deadline margin must still bind (the §7.4/L14 judgment). If the Stage-2 arm shows it doesn't: tighten the gate-4 grace window or accelerate the PoRep reopen (the doc's own named economics-reopens) — **not** redesign D2 | 🔴 **FAILS** (Stage 2, A5 cp5a; §12.6). The margin is negative at the current grace: the challenge is a cheap ~3 KB opening (GATE2 §0–3: *fetch-on-demand IS service*), re-fetchable for ≪ the cost of holding 13.6 GB. Disposition (§8 reopen (d), **FIRED**): tighten gate-4 grace to force `q ≥ q* ≈ 0.098–0.278`, or accelerate PoRep (`q→1`) — **not** a D2 redesign. |
+| W10 | **Proxy free-riding on the on-demand-serving ruling** (§11.1) — a thin proxy re-fetches challenged data cheaply within the gate-4 grace window instead of holding it; D1 now *pays* that profile (was zero under truncation) and D2 escalates the pool it drains, re-pricing the §7.4 free-rider equilibrium that was closed under the old economics | Fetch-cost-vs-deadline margin must still bind (the §7.4/L14 judgment). If the Stage-2 arm shows it doesn't: tighten the gate-4 grace window or accelerate the PoRep reopen (the doc's own named economics-reopens) — **not** redesign D2 | 🔴 **FAILS** (Stage 2, A5 cp5a; §12.6). The margin is negative at the current grace: the challenge is a cheap ~3 KB opening (GATE2 §0–3: *fetch-on-demand IS service*), re-fetchable for ≪ the cost of holding 12.3 GB. Disposition (§8 reopen (d), **FIRED**): tighten gate-4 grace to force `q ≥ q* ≈ 0.098–0.278`, or accelerate PoRep (`q→1`) — **not** a D2 redesign. |
 
 ---
 
@@ -841,7 +842,7 @@ Grounded in `shekyl-economics-sim`:
 | **A2 distributional shift (W6)** | The D1 fix moves ex-zero bulk holders into `Σwork`, diluting scarce-holders' shares of a fixed budget | Scarce-holder share pre- vs post-D1 across the archiver distribution | **Descriptive** — quantify the redistribution; **flag** if it strands scarce holders below their marginal cost |
 | **A3 stranding** | What fraction of diverted budget goes unminted? | Σ unclaimed `reward_P` past `MAX_CLAIM_AGE_W = 26` epochs ÷ Σ budget | ✅ **REPORTED** (Stage 2, cp5b; §12.7). Pre-D1 strands **100%** past the co-holder cliff (an **early-chain** regime) — the §1 Stage-0 claim confirmed and stronger than stated; post-D1 ≈ 0 except a **residual**: D1 *scales* the cliff to `r > ~1000 × shards_held`, so small holders still zero at extreme replication. Joint with A1: stranded budget is not burden-clearing |
 | **A4 output-stuffing (W9)** | Does stuffing pay the attacker — is there an early-chain regime where their manipulation profits? | **attacker ROI** = marginal captured revenue (their **served-work first-mover slice** of the Δpool over the horizon) ÷ marginal cost (weight-fees + the coupled bond). ⚠️ **Retraction (§12.5):** the ratified D-2 wording "*stake-fraction* of the Δpool" was wrong at source — the staker pool distributes by **capped served work per bond** (`reward_share_floor`), *not* by stake; the capture term was written without re-walking the disbursement path. The correction makes the attack **stronger** (r=1 first-mover work-capture is a sharper lever than any stake fraction). On `scenario_4`(output-variant) × `scenario_7`(bootstrap); `Δshare/Δburden` reported as a coherence **diagnostic** | **Pass** iff attacker **ROI < 1** everywhere in the sweep — the executable form of "stuffing it funds it" (§6.2); calibrated to the March-2024 profile (DQ-2C). ~~**Result: FAILS (§12.5)**~~ **→ RETRACTED 2026-07-27 (§12.11): the GATE ITSELF was wrong.** "ROI < 1" tests whether archiving *pays*, and it must — `ROI > 1` is the definition of a working archival incentive. The exploit question is **excess return over honest archiving**, on which the stuffer strictly loses (they pay to manufacture burden an honest archiver is handed free, then keep only `w_a` of the lift). Reopen (c) **CLOSED, no mechanism**; the D3 companion (reopen e) landed separately (§12.9.1). |
-| **A5 proxy free-riding (W10)** | Does the §7.4 fetch-cost-vs-deadline margin still bind after D1 restores bulk pay and D2 escalates the pool? | **margin** = expected proxy cost/epoch − honest storage cost/epoch, where proxy cost includes within-grace re-fetch feasibility (gate-4 window) **and** the L14 challenge-failure exposure; against the **post-D1/D2** reward on ~13.6 GB held | **Pass** iff margin `> 0` (§7.4: "if re-fetch is cheap, the challenge *is* the free-rider equilibrium"). Fail → tighten gate-4 grace or accelerate PoRep reopen (§11.1), **not** a D2 redesign |
+| **A5 proxy free-riding (W10)** | Does the §7.4 fetch-cost-vs-deadline margin still bind after D1 restores bulk pay and D2 escalates the pool? | **margin** = expected proxy cost/epoch − honest storage cost/epoch, where proxy cost includes within-grace re-fetch feasibility (gate-4 window) **and** the L14 challenge-failure exposure; against the **post-D1/D2** reward on ~12.3 GB held | **Pass** iff margin `> 0` (§7.4: "if re-fetch is cheap, the challenge *is* the free-rider equilibrium"). Fail → tighten gate-4 grace or accelerate PoRep reopen (§11.1), **not** a D2 redesign |
 | **A6 swing / band width (§6.0)** | Is the lift a wide-but-slow band, not a cliff? | `d(share)/d(n)` across the sweep | **Report** the rate; **flag** any cliff (bounded-slope is the §6.1 requirement) |
 
 **Scenario 9 (new, §11.2):** high-history / low-activity — large `n`, low current
@@ -960,11 +961,11 @@ cannot; A1 runs on it as the binding case.
   hard-code; no ring-sig byte economics enter the sim.
   - **A4 build pins (ratified round D-1..D-5):** the cost is single-sourced
     through the production **`predict_size_and_weight`** (a byte-mirror of
-    `Transaction::write`) for a **1-in / 16-out** stuffer — a tx *shape* (1
-    input minimises the per-input FCMP membership proof; 16 = `MAX_OUTPUTS` =
-    `2^4`, zero BP+ padding, maximises leaves/tx), **not** a black-marble/decoy
+    `Transaction::write`) for the stuffer's cheapest shape, **searched** over the input and output
+    counts (8-in / 1-out on the production run: the input proofs are archival
+    bytes the stuffer is buying), **not** a black-marble/decoy
     construct (FCMP++ has no rings; the leaves inflate `frozen_segment_count`,
-    they do not poison a decoy pool). Fee floor `FEE_PER_BYTE = 300` atomic
+    they do not poison a decoy pool). The rate is the relay floor at each row
     (genesis-provisional); net cost carries the fee-rebate term. Revenue is
     attacker-favouring (r=1 first-mover capture, undiscounted `H ∈ {1,5,10}`,
     high `w_a`); gate is **attacker ROI < 1** everywhere.
@@ -1037,7 +1038,7 @@ cannot; A1 runs on it as the binding case.
     `total_burn_skl × share_fraction` instead of the integer
     `mul_scale(whole_burn_atomic, share_milli)` production runs. Re-run through the
     integer path (`u128` accumulation; `mul_scale` share; f64 only at the reported
-    ratio and the rate/price boundaries): **the verdict held exactly** — scenario 9
+    ratio and the rate/price boundaries): **the verdict held exactly** on the leaf-era sweep — scenario 9
     flat-25 `0.66×`, escalation `2.36×`. The margin was wide enough the seam
     didn't flip it, but "wide enough" is the phrase this rule exists to eliminate.
 - **DQ-2H — archiver population model (needed for W6 + stranding). ✅ ratified,
@@ -1078,8 +1079,8 @@ models (each cell links its section).
 | **A1** clearance | 🔴 **two scenarios uncleared** (production fee, `--stage2`) | No candidate in the band clears the late-chain tail (flat-25 **0.24×**, best **0.65×** at the binding 10 % opportunity-cost rate, 0 %/yr Kryder) or high-history / low-activity (flat-25 **0.05×**, best **0.17×**). Every other scenario clears within its own horizon, and in none does the best candidate clear where flat-25 does not. In closed byte shards the bond term is ~40× per unit of traffic. The flat-fee run is §12.13. |
 | **A2** distribution (W6) | ✅ **clears** (§12.10) | Scarce-holder share `1.0000 → 0.9998` — **0.02 %** dilution, **zero** scarce holders stranded below marginal cost. |
 | **A3** stranding | ✅ **reported** (§12.7) | Pre-D1 strands **100 %** past the co-holder cliff — the §1 coupling claim confirmed and *understated*. Post-D1 ≈ 0 outside the quantization corner. |
-| **A4** stuffing (W9) | ✅ **CLEARS (§12.11)** | The arm measures the stuffer's *profit*, not theft: netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales** (§12.11). On the production fee (`--stage2`, the 8-in / 1-out shape searched as the stuffer's best) served-work ROI at the rational equilibrium is **0.05×** on the baseline and at most **3.07×** (sustained growth), with premium ≈ 1.0: pure fee-flow-volume leverage. `fee×→1` spans **0.0→7.7** across scenarios. Under R2 (plateau deletion) the baseline's ROI is **0.0008** (OQ-4). |
-| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching the ~6.9 KB opening costs **$0.00083** an epoch at 0.01 $/GB against **$0.00468** to hold 12.3 GB, so at the cheap end of the fetch band the proxy free-rides by **5.6×**; crossover `q* ≈ 0.105–0.271` (`--stage2`). |
+| **A4** stuffing (W9) | ✅ **CLEARS (§12.11)** | The arm measures the stuffer's *profit*, not theft: netted for the no-exclusivity subsidy the stuffer is **negative-sum** and the play **anti-scales** (§12.11). On the production fee (`--stage2`, the 8-in / 1-out shape searched as the stuffer's best) served-work ROI at the rational equilibrium is **0.05×** on the baseline and at most **3.03×** (sustained growth), with premium ≈ 1.0: pure fee-flow-volume leverage. `fee×→1` spans **0.0→7.5** across scenarios. Under R2 (plateau deletion) the baseline's ROI is **0.0008** (OQ-4). |
+| **A5** proxy (W10) | 🔴 **FAILS** (§12.6) | Re-fetching the 6 784 B opening costs **$0.00083** an epoch at 0.01 $/GB against **$0.00468** to hold 12.3 GB, so at the cheap end of the fetch band the proxy free-rides by **5.6×**; crossover `q* ≈ 0.105–0.271` (`--stage2`). |
 | **A6** swing | ✅ **no cliff** / ⚠️ **slew priced** (§12.10) | Monotone, no discontinuity; the only down-swing is a reorg's, ≤ **0.0036** pts. A flood at the surge ceiling moves the share at most **0.0504** pts/epoch penalty-free and **0.1008** pts/epoch at the legal 2× limit (`--stage2`, steepest candidate). Both tiers close structurally (§12.11.1): they are descriptive bounds on how fast the chain can be pushed toward a sanctioned state, not residual risk. See the §6.0 amendment. |
 
 **The through-line: one theorem, three independent confirmations.** A4's
@@ -1213,7 +1214,7 @@ Decomposition (cp4c):
 standard. The `ROI(resp)` row is reported so Stage 3 sees how much is "market never
 responds" — but a freeze decision cannot *rely* on market-response speed.
 
-### 12.6 A5 (W10) result — the proxy free-rides; reopen (d) FIRED
+### 12.6 A5 (W10) result — the proxy free-rides; reopen (d) FIRED (run 2026-07-25, cp5a `49cf160e9`; the current figures are §12.4.1)
 
 **Built:** cp5a (`49cf160e9`, `shekyl-economics-sim::proxy`). This is the
 **reopen-trigger** arm, and it is deliberately **GATE2-conformant** — it models
@@ -1341,7 +1342,7 @@ at an implementable grace — with this arm's crossover surface as its input. If
 `(grace, m, n)` satisfies both, that infeasibility is itself the finding and it
 promotes the **PoRep** branch over grace-tightening.
 
-### 12.7 A3 (stranding) result — the §1 coupling claim confirmed, and stronger
+### 12.7 A3 (stranding) result — the §1 coupling claim confirmed, and stronger (run 2026-07-25, cp5b `9a7071ead`)
 
 **Built:** cp5b (`9a7071ead`, `shekyl-economics-sim::stranding`). Scored under
 **both** work scorings, so the Stage-0 coupling claim is evidence, not assertion.
@@ -1624,7 +1625,7 @@ told** that `min_holding` (R3) may shift the population's bond-count/holdings sh
 which changes challenge *volume* per bond even though per-window tuning is
 unaffected.
 
-#### OQ-2 — **dissolved**: the floor is a predicate, not a number ✅
+#### OQ-2 — **dissolved**: the floor is a predicate, not a number ✅ (run 2026-07-26 at `2a9a646643`)
 
 The sizing exercise ran (boundary `min_holding(r) = ceil(r/1000)`; swept 1–8
 shards; a 2× safety multiple would give 16) — **and the exercise is what showed the
@@ -1700,7 +1701,7 @@ splitting incentive that motivated D3 is *gone* — and independent per-bond flo
 means splitting weakly **loses**. Consolidation is mildly preferred; nobody is
 pushed to sit at the floor.
 
-#### OQ-4 — A4 under deletion: prediction confirmed exactly ✅
+#### OQ-4 — A4 under deletion: prediction confirmed exactly ✅ (run 2026-07-26 at `2a9a646643`; the current figures are §12.4.1 and the `--stage2` OQ-4 table)
 
 | honest regime | ROI | `fee× → 1` |
 | --- | --- | --- |
@@ -2072,13 +2073,14 @@ the escalation *should* follow because it tracks genuine burden growth.
   than got built.
 - **The §6.0 amendment's "load-bearing twice" framing is fully retired.** W9's
   profit gate went at §12.11; this was the surviving half, and it is now closed
-  on its own terms. Both slew tiers are covered: the penalty-free `1.41`
-  pts/epoch tier (which lost its (c) closer) and the legal-`2×` `2.82` tier —
-  whose "already priced out by the block-reward penalty (**114×**)" claim was
+  on its own terms. Both slew tiers are covered: the penalty-free `0.05`
+  pts/epoch tier (which lost its (c) closer) and the legal-`2×` `0.10` tier —
+  whose "already priced out by the block-reward penalty (about **12×**)" claim was
   *also* a price argument and inherits the same blindness to a griefer. Neither
   tier needs a price closer, because neither tier's arrival is harmful.
-- **A6's slew measurement stands as a measurement** (`1.41`/`2.82` pts/epoch,
-  hardening with tree depth) and is now a **descriptive bound on how fast the
+- **A6's slew measurement stands as a measurement** (`0.05`/`0.10` pts/epoch on
+  the shallowest 90 % member, nearly flat with depth; step 0b re-reads it on
+  the steepest) and is now a **descriptive bound on how fast the
   chain can be pushed toward a sanctioned state**, not a residual risk.
 - **Stage 3 opens.** No outstanding hard inputs: (c) closed with no mechanism
   (§12.11), D3 implemented (§12.9.1, PR #371), and this residual discharged.

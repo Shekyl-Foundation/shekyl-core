@@ -35,9 +35,9 @@ use shekyl_economics::params::{SCALE, TX_VOLUME_WINDOW};
 use shekyl_economics::{
     advance_already_generated, base_block_reward, block_reward_with_penalty, calc_burn_pct,
     calc_release_multiplier, corrected_fee_ladder, correction_factors_at, effective_emission,
-    paid_block_reward, projected_already_generated, relay_fee_floor, tail_subsidy_per_block,
-    CirculatingSupply, EconomicParams, FeeCorrection, FeeLadder, TxVolume, BLOCKS_PER_YEAR,
-    RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
+    emission_share_at, paid_block_reward, projected_already_generated, relay_fee_floor,
+    tail_subsidy_per_block, CirculatingSupply, EconomicParams, FeeCorrection, FeeLadder, TxVolume,
+    BLOCKS_PER_YEAR, RELAY_ADMISSION_SLACK_BP, RELAY_FLOOR_REFERENCE_TX_WEIGHT,
 };
 use shekyl_units::AtomicUnits;
 
@@ -269,7 +269,15 @@ pub(crate) struct AgeState {
 }
 
 pub(crate) fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
-    let height = age_years * BLOCKS_PER_YEAR;
+    state_at_height(age_years * BLOCKS_PER_YEAR, params)
+}
+
+/// The projected trajectory's state at one height. [`age_state`] is this at
+/// a whole year. The reachable extremes also read it at block 1, where the
+/// staker share starts, and at the first height where the share has decayed
+/// to zero: `C` is lowest at the one and highest at the other, and a sample
+/// on whole years sees neither (`ECONOMICS_SIM_PHASE0.md` §P0.1).
+pub(crate) fn state_at_height(height: u64, params: &EconomicParams) -> AgeState {
     let ag = projected_already_generated(height, params).expect("projected ag");
     let base_reward = base_block_reward(ag, params).expect("base reward");
     AgeState {
@@ -277,6 +285,16 @@ pub(crate) fn age_state(age_years: u64, params: &EconomicParams) -> AgeState {
         ag,
         base_reward,
     }
+}
+
+/// The first whole-year height at which production's staker share is zero.
+/// The share decays by a tenth a year and its fixed-point value truncates to
+/// nothing; the owner is asked year by year rather than the year assumed.
+fn sigma_floor_height() -> u64 {
+    (0..)
+        .map(|years| 1 + years * BLOCKS_PER_YEAR)
+        .find(|&height| emission_share_at(height) == 0)
+        .expect("the staker share decays to zero")
 }
 
 // ---------------------------------------------------------------------------
@@ -662,8 +680,15 @@ pub fn report() -> FeeLadderReport {
             }
         }
     }
-    // The tenth grid excludes genesis. The projected trajectory includes it.
-    for &(_, st) in &states {
+    // The tenth grid excludes genesis. The projected trajectory includes it,
+    // and the two heights the year grid misses: block 1, where the staker
+    // share is at its start and `C` at its low end, and the first height
+    // where the share is zero and `C` at its structural maximum.
+    let boundaries = [
+        state_at_height(1, &params),
+        state_at_height(sigma_floor_height(), &params),
+    ];
+    for st in states.iter().map(|(_, st)| *st).chain(boundaries) {
         for &v in &SURFACE_VOLUMES {
             let c = correction_factor(v, st.ag, st.height, &params).c_scaled;
             c_min = c_min.min(c);

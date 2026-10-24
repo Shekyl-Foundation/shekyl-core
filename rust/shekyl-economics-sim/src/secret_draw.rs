@@ -449,4 +449,21 @@ mod tests {
         assert!(max_holder_exposure(per_pair) > budget);
         assert!(!clears_at_read_failure(x));
     }
+
+    /// The clearing figures the design quotes (`ECONOMICS_SIM_PRODUCTION_REBASE.md`
+    /// §5.15), held by no test until Phase 0: the draw may go unread after
+    /// every try with probability at most 0.2076; at the window's per-try
+    /// failure of 0.30 that is the later tries all failing, given the first
+    /// did, with probability at most 0.692; in the mixture model a
+    /// correlation of at most 0.6614.
+    #[test]
+    fn the_clearing_figures_are_the_recorded_ones() {
+        let x_star = clearing_read_failure();
+        let per_try = retry_row(1.0).read_failure;
+        assert_eq!(format!("{per_try:.2}"), "0.30");
+        assert_eq!(format!("{x_star:.4}"), "0.2076");
+        assert_eq!(format!("{:.4}", x_star / per_try), "0.6918");
+        let rho = clearing_correlation().expect("the window clears with independent tries");
+        assert_eq!(format!("{rho:.4}"), "0.6614");
+    }
 }
