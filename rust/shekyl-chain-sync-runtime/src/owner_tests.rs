@@ -7,10 +7,11 @@
 //! end is the loopback harness's (`shekyl-p2p-harness`,
 //! `tests/chain_sync_loopback.rs`).
 
-use shekyl_chain_ingest::service::{ArrivalTag, Reply};
+use shekyl_chain_ingest::service::{ArrivalTag, CannotFollow, Reply};
+use shekyl_chain_ingest::PopBeyondReorgCap;
 use shekyl_chain_rules::{CenRow, InvalidBlock, Locus};
 use shekyl_levin::{RequestBodies, RequestHeaders};
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight};
 
 use super::{outcome_of, ServeRequest, Serving};
 use shekyl_chain_sync::Outcome;
@@ -57,10 +58,42 @@ fn every_entry_reply_has_an_outcome() {
         ),
         (Reply::Cancelled { by: ArrivalTag(4) }, Outcome::Again),
         (Reply::Stopped, Outcome::Again),
+        (
+            Reply::BeyondCap(PopBeyondReorgCap {
+                depth: BlockCount::ONE,
+                cap: BlockCount::ONE,
+            }),
+            Outcome::BeyondCap,
+        ),
+        (
+            Reply::Switched {
+                demoted: Vec::new(),
+                promoted: Vec::new(),
+            },
+            Outcome::Noted,
+        ),
+        (
+            Reply::CannotFollow(CannotFollow::BelowFloor {
+                tip: BlockHeight::ZERO,
+                floor: BlockHeight::ZERO,
+            }),
+            Outcome::Noted,
+        ),
     ];
     for (reply, expected) in cases {
-        assert_eq!(outcome_of(reply.clone()), Some(expected), "{reply:?}");
+        assert_eq!(outcome_of(reply.clone(), true), expected, "{reply:?}");
     }
+    assert_eq!(
+        outcome_of(
+            Reply::Connected {
+                height: BlockHeight::ZERO,
+                hash,
+            },
+            false,
+        ),
+        Outcome::Connected { relay: true },
+        "an unsolicited connect is relayed"
+    );
 }
 
 /// A session's queue holds at most one waiting request of each kind,

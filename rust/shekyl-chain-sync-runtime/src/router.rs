@@ -194,17 +194,34 @@ impl Router {
                 if fed.forward.is_empty() {
                     routed.push(Routed::Finished { id });
                 }
-                // An owner gone mid-chunk cannot finish it: the chunk goes
-                // to the C++ handler whole, and the session is not split
-                // again.
-                if routed.into_iter().any(|item| owner.send(item).is_err()) {
-                    self.splits().remove(&id);
-                    (self.forward)(Post::Deliver {
-                        id,
-                        connector,
-                        bytes,
-                    });
-                } else if !fed.forward.is_empty() {
+                // A send that fails before anything was delivered is an owner
+                // that is gone: the chunk goes to the C++ handler whole, and
+                // the session is not split again. A prefix already delivered
+                // stays with the owner. Bytes the owner never saw still go
+                // to the C++ handler, and the split ends either way so a
+                // later chunk is not cut against a stream the owner left.
+                let mut delivered = false;
+                for item in routed {
+                    if owner.send(item).is_err() {
+                        self.splits().remove(&id);
+                        if !delivered {
+                            (self.forward)(Post::Deliver {
+                                id,
+                                connector,
+                                bytes,
+                            });
+                        } else if !fed.forward.is_empty() {
+                            (self.forward)(Post::Deliver {
+                                id,
+                                connector,
+                                bytes: fed.forward,
+                            });
+                        }
+                        return;
+                    }
+                    delivered = true;
+                }
+                if !fed.forward.is_empty() {
                     (self.forward)(Post::Deliver {
                         id,
                         connector,

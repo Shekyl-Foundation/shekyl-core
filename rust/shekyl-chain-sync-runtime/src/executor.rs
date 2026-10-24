@@ -85,24 +85,29 @@ impl Executor {
         self.budget.permits()
     }
 
-    /// The cache a job's plan hashes under. `Main` holds none: the slots
-    /// are looked up. `Branch` is the executor's one branch cache, derived
-    /// under one permit of the job's class when the seed is new. `Evidence`
-    /// is derived for this job under one permit, and dropped with it.
-    /// `None` when the budget stopped before a needed permit. Blocking.
-    fn prepare(&self, class: Class, cache: CachePlan) -> Option<Option<Arc<PreparedCache>>> {
+    /// The cache a job's plan hashes under. `Lookup` is a main seed: the
+    /// slots are looked up and nothing is held. `Held` is the executor's
+    /// one branch cache, derived under one permit of the job's class when
+    /// the seed is new, or an evidence cache derived for this job and
+    /// dropped with it. `Stopped` when the budget stopped before a needed
+    /// permit. Blocking.
+    fn prepare(&self, class: Class, cache: CachePlan) -> Prepared {
         match cache {
-            CachePlan::Main(_) => Some(None),
+            CachePlan::Main(_) => Prepared::Lookup,
             CachePlan::Branch(seed) => {
                 if let Some(held) = self.branch_held(seed) {
-                    return Some(Some(held));
+                    return Prepared::Held(held);
                 }
-                let _permit = self.budget.acquire_unless(class, &self.stop)?;
-                Some(Some(self.branch_cache(seed)))
+                let Some(_permit) = self.budget.acquire_unless(class, &self.stop) else {
+                    return Prepared::Stopped;
+                };
+                Prepared::Held(self.branch_cache(seed))
             }
             CachePlan::Evidence(seed) => {
-                let _permit = self.budget.acquire_unless(class, &self.stop)?;
-                Some(Some(self.derive(seed)))
+                let Some(_permit) = self.budget.acquire_unless(class, &self.stop) else {
+                    return Prepared::Stopped;
+                };
+                Prepared::Held(self.derive(seed))
             }
         }
     }
@@ -234,8 +239,10 @@ pub async fn prove(
         let executor = Arc::clone(&executor);
         tokio::task::spawn_blocking(move || executor.prepare(class, cache)).await
     };
-    let Ok(Some(held)) = prepared else {
-        return Vec::new();
+    let held = match prepared {
+        Ok(Prepared::Held(held)) => Some(held),
+        Ok(Prepared::Lookup) => None,
+        Ok(Prepared::Stopped) | Err(_) => return Vec::new(),
     };
     let lanes = executor.permits().max(1);
     let items = Arc::new(items);
@@ -282,6 +289,16 @@ pub async fn prove(
         }
     }
     results
+}
+
+/// The cache [`Executor::prepare`] returns.
+enum Prepared {
+    /// The budget stopped before a permit the plan needed.
+    Stopped,
+    /// A main seed. The slots are looked up, and nothing is held.
+    Lookup,
+    /// A branch or evidence cache, held for the job.
+    Held(Arc<PreparedCache>),
 }
 
 /// The production substrate, hashing under a held cache when the plan

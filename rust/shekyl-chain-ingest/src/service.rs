@@ -52,7 +52,7 @@ use std::time::Duration;
 use kameo::actor::{ActorRef, PreparedActor};
 use shekyl_chain_rules::{AdmissionPolicy, InvalidBlock, Substrate};
 use shekyl_chain_store::store::{ChainStore, StoreError};
-use shekyl_hash_budget::Budget;
+use shekyl_hash_budget::{Budget, Class};
 use shekyl_mempool::{Pool, PoolFault};
 use shekyl_types::{BlockHash, BlockHeight, UnixSeconds};
 use shekyl_wire::Transaction;
@@ -109,13 +109,15 @@ pub struct Arrival {
 /// to that header before the offer (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 steps
 /// 3 and 6; CS2-Q1). The service forms it with `form_judged`, which consumes
 /// the proof and does not hash, so it takes no hasher permit and pins no
-/// seed. Its origin is always a solicited peer arrival.
+/// seed.
 #[derive(Clone, Debug)]
 pub struct BoundArrival {
     /// The caller's name for it.
     pub tag: ArrivalTag,
     /// The session that served the body.
     pub session: SessionId,
+    /// Whether this node asked for the body. An announcement is not.
+    pub solicited: bool,
     /// The header the sync owner's proof accepted.
     pub judged: shekyl_chain_rules::HeaderJudged,
     /// The block blob.
@@ -140,7 +142,7 @@ impl BoundArrival {
             tag: self.tag,
             origin: Origin::Peer {
                 session: self.session,
-                solicited: true,
+                solicited: self.solicited,
             },
             block_len: self.block.len(),
             body_lens: self.bodies.iter().map(Vec::len).collect(),
@@ -351,16 +353,87 @@ impl Drop for ReplySlot {
     }
 }
 
+/// How an accepted arrival is formed.
+///
+/// A hashed arrival takes one permit of its class. A judged arrival
+/// carries the proof chain sync already paid for, and `form_judged`
+/// consumes it without a hash.
+#[derive(Clone)]
+enum Proof {
+    /// Hashed here, under one permit of `class`.
+    Hash {
+        /// The budget class the permit is taken from.
+        class: Class,
+    },
+    /// Proven already.
+    Judged(Box<shekyl_chain_rules::HeaderJudged>),
+}
+
+impl Proof {
+    /// The class a hash waits in. A judged arrival does not hash.
+    const fn hash_class(&self) -> Option<Class> {
+        match self {
+            Self::Hash { class } => Some(*class),
+            Self::Judged(_) => None,
+        }
+    }
+}
+
+/// The hasher class an arrival's `form` waits in: a block this node asked
+/// for or made is the chain's; an announcement is unsolicited.
+const fn class_of(origin: Origin) -> Class {
+    match origin {
+        Origin::Peer {
+            solicited: false, ..
+        } => Class::Unsolicited,
+        Origin::Peer {
+            solicited: true, ..
+        }
+        | Origin::Local => Class::Chain,
+    }
+}
+
+/// One arrival a reservation accepts, before its seat is attached.
+struct Staged {
+    tag: ArrivalTag,
+    block: Vec<u8>,
+    bodies: Vec<Vec<u8>>,
+    proof: Proof,
+    witness: Vec<u8>,
+}
+
+impl Staged {
+    fn hashed(arrival: Arrival) -> Self {
+        Self {
+            tag: arrival.tag,
+            block: arrival.block,
+            bodies: arrival.bodies,
+            proof: Proof::Hash {
+                class: class_of(arrival.origin),
+            },
+            witness: Vec::new(),
+        }
+    }
+
+    fn judged(arrival: BoundArrival) -> Self {
+        Self {
+            tag: arrival.tag,
+            block: arrival.block,
+            bodies: arrival.bodies,
+            proof: Proof::Judged(Box::new(arrival.judged)),
+            witness: arrival.attestation_witness,
+        }
+    }
+}
+
 /// An accepted arrival, parsed or not.
 struct Accepted {
     slot: ReplySlot,
     tag: ArrivalTag,
-    origin: Origin,
     block: Vec<u8>,
     bodies: Vec<Vec<u8>>,
-    /// A bound arrival's proven header ([`BoundArrival`]); `None` for an
-    /// arrival that is formed, and hashed, here.
-    judged: Option<Box<shekyl_chain_rules::HeaderJudged>>,
+    /// How this arrival is formed.
+    proof: Proof,
     /// The witness carried beside the block; empty when none was.
     witness: Vec<u8>,
 }
@@ -850,7 +923,8 @@ impl Door {
     /// [`Refusal`].
     pub fn offer_bound(&self, span: Vec<BoundArrival>) -> Result<Vec<Ticket>, Refusal> {
         let lengths: Vec<ArrivalLengths> = span.iter().map(BoundArrival::lengths).collect();
-        Ok(self.reserve(&lengths)?.commit_bound(span))
+        let staged = span.into_iter().map(Staged::judged).collect();
+        Ok(self.reserve(&lengths)?.accept(staged))
     }
 }
 

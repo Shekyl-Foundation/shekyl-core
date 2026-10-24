@@ -11,9 +11,10 @@
 //! hands each to the model with a fresh store snapshot as `main`, and runs
 //! the commands that come out, in order.
 //!
-//! - **Sessions** are keyed by the admission id's number. [`SocketId`]
-//!   does not order itself, and the model's maps need an order. The order
-//!   carries no meaning: draws are uniform over the set.
+//! - **Sessions** are [`Session`]s. [`shekyl_seam::SocketId`] does not order itself, and
+//!   the model's maps need an order. [`Session`] orders by the admission
+//!   number, and that order carries no meaning: draws are uniform over the
+//!   set. The entry's [`SessionId`] is that number, and only at the door.
 //! - **`now`** is the timing engine's clock as an [`Instant`]. Deadlines
 //!   go to the engine as ticks on that same clock, and come back as
 //!   [`Event::Deadline`]. The engine holds one deadline per owner, so the
@@ -43,7 +44,7 @@ use shekyl_chain_ingest::service::{
     Alarm, ArrivalTag, BoundArrival as EntryArrival, Door, Refusal, Reply, SessionId,
 };
 use shekyl_chain_ingest::{ChainRules, TipChanged};
-use shekyl_chain_rules::{InvalidBlock, Tip};
+use shekyl_chain_rules::Tip;
 use shekyl_chain_store::codec::FollowingDegraded;
 use shekyl_chain_store::store::{ChainStore, SnapshotView};
 use shekyl_difficulty::CumulativeDifficulty;
@@ -53,19 +54,19 @@ use shekyl_levin::{
     RequestHeaders, SyncCommand, HASH_SIZE, NOTIFY_GET_TXPOOL_COMPLEMENT,
     NOTIFY_REQUEST_COMPACT_MISSING_TX,
 };
-use shekyl_peer_policy::SyncReply;
+use shekyl_peer_policy::{Invalidate, SyncReply, SyncReplyAction};
 use shekyl_runtime::{Pool, RuntimeBudget, ThreadName};
-use shekyl_seam::{ConnectorId, Hub, SocketId, SyncPayload};
+use shekyl_seam::{Hub, SyncPayload};
 use shekyl_timing_engine::{Clock, OwnerHandle, Tick};
 use shekyl_transport_layer::{declaration, Assessment};
 use shekyl_types::{BlockHeight, ChainCount};
-use shekyl_wire::TxBody;
 use tokio::sync::{mpsc, watch};
 use tracing::Instrument;
 
 use crate::executor::Executor;
 use crate::router::Routed;
 use crate::serve::{serve_bodies, serve_headers};
+use crate::session::Session;
 use shekyl_chain_sync::{
     BoundArrival, ClaimError, Command, Event, Job, Outcome, PeerClaim, Proved, Sync as Model,
     SyncState,
@@ -186,9 +187,17 @@ enum Input {
         reply: Reply,
     },
     Served {
-        session: u64,
+        session: Session,
         bytes: Option<Vec<u8>>,
     },
+}
+
+/// An offer waiting on the entry.
+struct Offered {
+    /// The session that served the body.
+    session: Session,
+    /// A body this node requested. An announcement is not, so a connect relays.
+    solicited: bool,
 }
 
 /// A request a session sent this node.
@@ -232,7 +241,7 @@ impl Serving {
 
 /// What the owner keeps beside the model.
 struct Owner<C: Clock + Clone, R> {
-    sync: Model<u64, Box<dyn Fn(BlockHeight) -> shekyl_chain_rules::RuleSet + Send>>,
+    sync: Model<Session, Box<dyn Fn(BlockHeight) -> shekyl_chain_rules::RuleSet + Send>>,
     store: Arc<ChainStore>,
     door: Door,
     alarm: Alarm,
@@ -243,15 +252,13 @@ struct Owner<C: Clock + Clone, R> {
     pool_hashes: Arc<dyn Fn() -> Vec<[u8; HASH_SIZE]> + Send + Sync>,
     inputs: mpsc::UnboundedSender<Input>,
     /// Engine ticks to the (session, request) pairs due then.
-    deadlines: BTreeMap<Tick, Vec<(u64, u64)>>,
+    deadlines: BTreeMap<Tick, Vec<(Session, u64)>>,
     armed: Option<Tick>,
     /// The engine clock's origin, read once at start.
     base: (Instant, Tick),
-    /// Offered arrivals, by tag: who served them, for `from_reply`.
-    offered: HashMap<u64, u64>,
-    /// The connector each session is on.
-    connectors: HashMap<u64, ConnectorId>,
-    serving: HashMap<u64, Serving>,
+    /// Offered arrivals, by tag.
+    offered: HashMap<u64, Offered>,
+    serving: HashMap<Session, Serving>,
     seats: Option<usize>,
     state_tx: watch::Sender<SyncState>,
     alarm_tx: watch::Sender<bool>,
@@ -301,7 +308,6 @@ async fn run<C, R>(
         armed: None,
         base,
         offered: HashMap::new(),
-        connectors: HashMap::new(),
         serving: HashMap::new(),
         seats: None,
         state_tx,
@@ -377,7 +383,7 @@ where
     }
 
     /// Hand one event to the model and run what it asks for.
-    fn event(&mut self, event: Event<u64>) {
+    fn event(&mut self, event: Event<Session>) {
         let mut out = Vec::new();
         if let Ok(wall) = self.executor.wall() {
             self.sync.set_wall(wall);
@@ -396,7 +402,7 @@ where
         self.commands(out);
     }
 
-    fn claim(&mut self, session: u64, sync: SyncPayload) {
+    fn claim(&mut self, session: Session, sync: SyncPayload) {
         let claim = PeerClaim {
             count: ChainCount::from_raw(sync.current_height),
             work: CumulativeDifficulty::from_raw(
@@ -418,7 +424,7 @@ where
         match result {
             Ok(()) => {}
             Err(ClaimError::Refused(refused)) => {
-                tracing::debug!(session, ?refused, "a claim that cannot be a chain");
+                tracing::debug!(%session, ?refused, "a claim that cannot be a chain");
                 self.close(session);
             }
             Err(ClaimError::View(err)) => {
@@ -431,22 +437,21 @@ where
     fn routed(&mut self, routed: Routed) {
         match routed {
             Routed::Established { id, connector } => {
-                let session = id.get();
-                self.connectors.insert(session, connector);
+                let session = Session::new(id);
                 let transit = match declaration(connector.column()).transit_ms() {
                     Assessment::Assessed(ms) => Duration::from_millis(u64::from(ms.ms())),
                     Assessment::NotAssessed => Duration::ZERO,
                 };
                 self.event(Event::SessionOpened { session, transit });
             }
-            Routed::Claim { id, sync } => self.claim(id.get(), sync),
+            Routed::Claim { id, sync } => self.claim(Session::new(id), sync),
             Routed::Message {
                 id,
                 command,
                 payload,
-            } => self.message(id.get(), command, payload),
+            } => self.message(Session::new(id), command, payload),
             Routed::Finished { id } => {
-                let session = id.get();
+                let session = Session::new(id);
                 match self.serving.get_mut(&session) {
                     Some(serving) if serving.busy || !serving.queue.is_empty() => {
                         serving.finishes = serving.finishes.saturating_add(1);
@@ -455,19 +460,18 @@ where
                 }
             }
             Routed::Closed { id } => {
-                let session = id.get();
-                self.connectors.remove(&session);
+                let session = Session::new(id);
                 self.serving.remove(&session);
-                self.door.session_closed(SessionId(session));
+                self.door.session_closed(SessionId(session.socket().get()));
                 self.event(Event::SessionClosed { session });
             }
         }
     }
 
-    fn message(&mut self, session: u64, command: SyncCommand, payload: Vec<u8>) {
+    fn message(&mut self, session: Session, command: SyncCommand, payload: Vec<u8>) {
         match command {
             SyncCommand::ResponseHeaders => {
-                tracing::trace!(session, bytes = payload.len(), "a header response");
+                tracing::trace!(%session, bytes = payload.len(), "a header response");
                 self.event(Event::Headers {
                     session,
                     bytes: payload,
@@ -480,32 +484,29 @@ where
             SyncCommand::RequestHeaders => match RequestHeaders::decode(&payload) {
                 Ok(request) => self.queue_serve(session, ServeRequest::Headers(request)),
                 Err(err) => {
-                    tracing::debug!(session, %err, "a header request that does not decode");
+                    tracing::debug!(%session, %err, "a header request that does not decode");
                     self.close(session);
                 }
             },
             SyncCommand::RequestBodies => match RequestBodies::decode(&payload) {
                 Ok(request) => self.queue_serve(session, ServeRequest::Bodies(request)),
                 Err(err) => {
-                    tracing::debug!(session, %err, "a body request that does not decode");
+                    tracing::debug!(%session, %err, "a body request that does not decode");
                     self.close(session);
                 }
             },
         }
     }
 
-    fn queue_serve(&mut self, session: u64, request: ServeRequest) {
+    fn queue_serve(&mut self, session: Session, request: ServeRequest) {
         let serving = self.serving.entry(session).or_default();
         if serving.push(request) {
-            tracing::debug!(
-                session,
-                "a later request replaced a waiting one of its kind"
-            );
+            tracing::debug!(%session, "a later request replaced a waiting one of its kind");
         }
         self.serve_next(session);
     }
 
-    fn serve_next(&mut self, session: u64) {
+    fn serve_next(&mut self, session: Session) {
         let Some(serving) = self.serving.get_mut(&session) else {
             return;
         };
@@ -514,10 +515,9 @@ where
         }
         let Some(request) = serving.queue.pop_front() else {
             let finishes = std::mem::take(&mut serving.finishes);
-            if let Some(id) = SocketId::from_ffi(session) {
-                for _ in 0..finishes {
-                    self.hub.delivery_finished(id, true);
-                }
+            let id = session.socket();
+            for _ in 0..finishes {
+                self.hub.delivery_finished(id, true);
             }
             return;
         };
@@ -561,21 +561,29 @@ where
                 self.event(Event::Proven { job, results });
             }
             Input::Entry { tag, reply } => {
-                let session = self.offered.remove(&tag);
-                tracing::trace!(tag, ?session, ?reply, "an entry reply");
-                match outcome_of(reply) {
-                    Some(outcome) => self.event(Event::Entry { tag, outcome }),
-                    None => tracing::error!(tag, ?session, "an entry reply with no outcome"),
-                }
+                let offered = self.offered.remove(&tag);
+                tracing::trace!(
+                    tag,
+                    session = offered
+                        .as_ref()
+                        .map(|offered| offered.session.socket().get()),
+                    ?reply,
+                    "an entry reply"
+                );
+                let solicited = offered.is_none_or(|offered| offered.solicited);
+                self.event(Event::Entry {
+                    tag,
+                    outcome: outcome_of(reply, solicited),
+                });
                 self.room();
             }
             Input::Served { session, bytes } => {
                 if let Some(serving) = self.serving.get_mut(&session) {
                     serving.busy = false;
                 }
-                if let (Some(bytes), Some(id)) = (bytes, SocketId::from_ffi(session)) {
+                if let Some(bytes) = bytes {
                     // A refused send is the transport's close, not sync's.
-                    let _sent = self.hub.send(id, bytes);
+                    let _sent = self.hub.send(session.socket(), bytes);
                 }
                 self.serve_next(session);
             }
@@ -614,13 +622,11 @@ where
         });
     }
 
-    fn close(&mut self, session: u64) {
-        if let Some(id) = SocketId::from_ffi(session) {
-            self.hub.close(id);
-        }
+    fn close(&mut self, session: Session) {
+        self.hub.close(session.socket());
     }
 
-    fn arm(&mut self, deadline: Instant, session: u64, request: u64) {
+    fn arm(&mut self, deadline: Instant, session: Session, request: u64) {
         let tick = self.tick_of(deadline);
         self.deadlines
             .entry(tick)
@@ -657,14 +663,12 @@ where
         self.rearm();
     }
 
-    fn send(&mut self, session: u64, bytes: Vec<u8>) {
-        if let Some(id) = SocketId::from_ffi(session) {
-            // A refused send is the transport's close, not sync's.
-            let _sent = self.hub.send(id, bytes);
-        }
+    fn send(&mut self, session: Session, bytes: Vec<u8>) {
+        // A refused send is the transport's close, not sync's.
+        let _sent = self.hub.send(session.socket(), bytes);
     }
 
-    fn commands(&mut self, out: Vec<Command<u64>>) {
+    fn commands(&mut self, out: Vec<Command<Session>>) {
         for command in out {
             match command {
                 Command::Publish { state } => {
@@ -678,7 +682,7 @@ where
                 } => match request.store() {
                     Ok(payload) => {
                         tracing::trace!(
-                            session,
+                            %session,
                             id,
                             locator = request.block_ids.len(),
                             "a header request"
@@ -722,7 +726,7 @@ where
                 }
                 Command::Offer { arrivals } => self.offer(arrivals),
                 Command::Close { session, cause } => {
-                    tracing::debug!(session, ?cause, "chain sync closes a session");
+                    tracing::debug!(%session, ?cause, "chain sync closes a session");
                     self.close(session);
                 }
                 Command::RaiseAlarm { fork_at, tip, work } => {
@@ -780,39 +784,50 @@ where
     /// Offer bound arrivals to the entry. A refused span answers every
     /// arrival in it: no room is `NoRoom`, and an oversize arrival is
     /// `Oversize` while the rest of its span is wanted again.
-    fn offer(&mut self, arrivals: Vec<BoundArrival<u64>>) {
+    fn offer(&mut self, arrivals: Vec<BoundArrival<Session>>) {
         if arrivals.is_empty() {
             return;
         }
+        let mut pending = Vec::with_capacity(arrivals.len());
         let span: Vec<EntryArrival> = arrivals
             .into_iter()
-            .map(|arrival| EntryArrival {
-                tag: ArrivalTag(arrival.tag),
-                session: SessionId(arrival.session),
-                judged: arrival.header,
-                block: arrival.body.block,
-                bodies: arrival
-                    .body
-                    .txs
-                    .into_iter()
-                    .filter_map(|tx| match tx {
-                        TxBody::Full(bytes) => Some(bytes),
-                        TxBody::Skeleton(_) => None,
-                    })
-                    .collect(),
-                attestation_witness: arrival.body.attestation_witness,
+            .map(|arrival| {
+                let BoundArrival {
+                    tag,
+                    session,
+                    header,
+                    body,
+                    solicited,
+                } = arrival;
+                pending.push((tag, session, solicited));
+                EntryArrival {
+                    tag: ArrivalTag(tag),
+                    session: SessionId(session.socket().get()),
+                    solicited,
+                    judged: header,
+                    block: body.block,
+                    bodies: body.txs,
+                    attestation_witness: body.attestation_witness,
+                }
             })
             .collect();
         // The door's own measure, so an arrival it would admit is never
         // called oversize here.
-        let tags: Vec<(u64, u64, usize)> = span
+        let tags: Vec<(u64, Session, bool, usize)> = span
             .iter()
-            .map(|arrival| (arrival.tag.0, arrival.session.0, arrival.bytes()))
+            .zip(pending)
+            .map(|(arrival, (tag, session, solicited))| (tag, session, solicited, arrival.bytes()))
             .collect();
         match self.door.offer_bound(span) {
             Ok(tickets) => {
-                for (tag, session, _) in &tags {
-                    self.offered.insert(*tag, *session);
+                for (tag, session, solicited, _) in &tags {
+                    self.offered.insert(
+                        *tag,
+                        Offered {
+                            session: *session,
+                            solicited: *solicited,
+                        },
+                    );
                 }
                 for ticket in tickets {
                     let inputs = self.inputs.clone();
@@ -830,7 +845,7 @@ where
                     .door
                     .max_arrival_bytes()
                     .and_then(|max| usize::try_from(max).ok());
-                for (tag, _, bytes) in tags {
+                for (tag, _, _, bytes) in tags {
                     let outcome = match refusal {
                         // An unreadable store stops the service on the same
                         // read, so the arrival is held, not asked for again:
@@ -860,40 +875,71 @@ fn proved_kind(proved: &Proved) -> &'static str {
     }
 }
 
-/// The entry's reply as the model's outcome (`Outcome::from_reply`). A
-/// bound arrival is always solicited.
-fn outcome_of(reply: Reply) -> Option<Outcome> {
-    let null = shekyl_types::BlockHash::NULL;
-    let (sync, at, block, indices, verdict): (_, _, _, _, Option<InvalidBlock>) = match reply {
-        Reply::Connected { .. } => (SyncReply::Connected, null, null, Vec::new(), None),
-        Reply::Refused(verdict) => (SyncReply::Refused, null, null, Vec::new(), Some(verdict)),
-        Reply::Unlinked { at } => (SyncReply::Unlinked, at, null, Vec::new(), None),
-        Reply::AlreadyHeld => (SyncReply::AlreadyHeld, null, null, Vec::new(), None),
-        Reply::Held { .. } => (SyncReply::Held, null, null, Vec::new(), None),
-        Reply::BeyondCap(_) => (SyncReply::BeyondCap, null, null, Vec::new(), None),
-        Reply::Switched { .. } => (SyncReply::Switched, null, null, Vec::new(), None),
-        Reply::PromotionRefused { hash, refused, .. } => (
-            SyncReply::PromotionRefused,
-            null,
-            hash,
-            Vec::new(),
-            Some(refused),
-        ),
-        Reply::CannotFollow(_) => (SyncReply::CannotFollow, null, null, Vec::new(), None),
-        Reply::MissingBodies { indices } => (
-            SyncReply::MissingBodies,
-            null,
-            null,
-            indices
-                .into_iter()
-                .map(|index| u64::try_from(index).unwrap_or(u64::MAX))
-                .collect(),
-            None,
-        ),
-        Reply::Cancelled { .. } => (SyncReply::Cancelled, null, null, Vec::new(), None),
-        Reply::Stopped => (SyncReply::Stopped, null, null, Vec::new(), None),
-    };
-    Outcome::from_reply(sync, true, at, block, indices, verdict)
+/// The entry's reply as the model's outcome.
+///
+/// [`SyncReply::action`] is the authority for what the reply means.
+/// `solicited` is a body this node requested. A bound body is; an
+/// announcement, when that path is attached, is not. The reply carries its
+/// own verdict and its own hash: a refusal that reached this function named
+/// them.
+fn outcome_of(reply: Reply, solicited: bool) -> Outcome {
+    let action = sync_reply(&reply).action(solicited);
+    match (action, reply) {
+        (SyncReplyAction::Advance { relay }, Reply::Connected { .. }) => {
+            Outcome::Connected { relay }
+        }
+        (SyncReplyAction::Invalidate(Invalidate::Refused), Reply::Refused(verdict)) => {
+            Outcome::Refused { verdict }
+        }
+        (
+            SyncReplyAction::Invalidate(Invalidate::PromotionRefused),
+            Reply::PromotionRefused { hash, refused, .. },
+        ) => Outcome::PromotionRefused {
+            verdict: refused,
+            block: hash,
+        },
+        (SyncReplyAction::Relocate, Reply::Unlinked { at }) => Outcome::Unlinked { at },
+        (SyncReplyAction::RequestHeaders, Reply::BeyondCap(_)) => Outcome::BeyondCap,
+        (SyncReplyAction::RequestMissing, Reply::MissingBodies { indices }) => {
+            Outcome::MissingBodies {
+                indices: indices
+                    .into_iter()
+                    .map(|index| u64::try_from(index).unwrap_or(u64::MAX))
+                    .collect(),
+            }
+        }
+        (SyncReplyAction::Again, Reply::Cancelled { .. } | Reply::Stopped) => Outcome::Again,
+        (
+            SyncReplyAction::None,
+            Reply::AlreadyHeld
+            | Reply::Held { .. }
+            | Reply::Switched { .. }
+            | Reply::CannotFollow(_),
+        ) => Outcome::Noted,
+        (action, reply) => {
+            tracing::error!(?action, ?reply, "an entry reply and its action disagree");
+            Outcome::Noted
+        }
+    }
+}
+
+/// The peer-policy name of an entry reply. Exhaustive, so a new reply
+/// cannot arrive here unnamed.
+fn sync_reply(reply: &Reply) -> SyncReply {
+    match reply {
+        Reply::Connected { .. } => SyncReply::Connected,
+        Reply::Refused(_) => SyncReply::Refused,
+        Reply::PromotionRefused { .. } => SyncReply::PromotionRefused,
+        Reply::Unlinked { .. } => SyncReply::Unlinked,
+        Reply::AlreadyHeld => SyncReply::AlreadyHeld,
+        Reply::Held { .. } => SyncReply::Held,
+        Reply::Switched { .. } => SyncReply::Switched,
+        Reply::BeyondCap(_) => SyncReply::BeyondCap,
+        Reply::CannotFollow(_) => SyncReply::CannotFollow,
+        Reply::MissingBodies { .. } => SyncReply::MissingBodies,
+        Reply::Cancelled { .. } => SyncReply::Cancelled,
+        Reply::Stopped => SyncReply::Stopped,
+    }
 }
 
 #[cfg(test)]

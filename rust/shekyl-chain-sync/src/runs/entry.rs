@@ -13,11 +13,12 @@ use shekyl_chain_rules::{
     target_claim, Fault, FormAttempt, FormedHeader, HeaderView, OpenHeader, RuleSet,
 };
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
-use shekyl_wire::{Block, BlockBody, PowBlob, TxBody};
+use shekyl_wire::{Block, BlockBody, PowBlob};
 
 use super::{retry_of, Judged, WallClock};
 use crate::model::{
-    BoundArrival, CachePlan, CloseCause, Command, HashClass, Job, Outcome, ProveItem, Proved, Sync,
+    BoundArrival, CachePlan, CloseCause, Command, HashClass, Job, OfferedBody, Outcome, ProveItem,
+    Proved, Sync,
 };
 use crate::peer::Announced;
 
@@ -354,19 +355,20 @@ where
             self.close(session, CloseCause::Bind(refused.rule), out);
             return;
         }
-        if body.txs.iter().any(|tx| matches!(tx, TxBody::Skeleton(_))) {
+        let Some(offered) = OfferedBody::from_full(body) else {
             if let Some(peer) = self.peers.get_mut(&session) {
                 peer.inventory.skeleton.insert(hash);
             }
             return;
-        }
+        };
         let tag = self.next_tag;
         self.next_tag = self.next_tag.saturating_add(1);
         self.held.push(BoundArrival {
             tag,
             session,
             header: judged,
-            body: body.clone(),
+            body: offered,
+            solicited: false,
         });
         self.flush_offers(out);
     }

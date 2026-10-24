@@ -12,10 +12,10 @@ use std::time::Instant;
 use shekyl_chain_rules::RuleSet;
 use shekyl_levin::{BodiesFormFault, RequestBodies, ResponseBodies, MAX_OBJECT_REQUEST_COUNT};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
-use shekyl_wire::{Block, TxBody};
+use shekyl_wire::Block;
 
 use crate::model::{
-    body_deadline, BoundArrival, CloseCause, Command, Sync, BODY_REQUESTS_IN_FLIGHT,
+    body_deadline, BoundArrival, CloseCause, Command, OfferedBody, Sync, BODY_REQUESTS_IN_FLIGHT,
 };
 use crate::peer::{BodySpan, Dispute};
 
@@ -81,20 +81,22 @@ where
                 return;
             }
             // Until the discard rule lands, every byte is kept, so a
-            // skeleton is wanted again in full. It is not a fault.
-            if body.txs.iter().any(|tx| matches!(tx, TxBody::Skeleton(_))) {
+            // skeleton is wanted again in full. It is not a fault, and it
+            // is not an offer.
+            let Some(offered) = OfferedBody::from_full(body) else {
                 if let Some(state) = self.peers.get_mut(&session) {
                     state.inventory.skeleton.insert(hash);
                 }
                 continue;
-            }
+            };
             let tag = self.next_tag;
             self.next_tag = self.next_tag.saturating_add(1);
             self.held.push(BoundArrival {
                 tag,
                 session,
                 header: judged,
-                body: body.clone(),
+                body: offered,
+                solicited: true,
             });
         }
         self.flush_offers(out);
