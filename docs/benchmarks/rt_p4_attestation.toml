@@ -20,6 +20,20 @@
 # no rustflags. `+crt-static` reached the MSVC targets on 2026-10-19, after
 # the laptop's run, and the laptop's entry is red until it is re-run with it.
 #
+# What `rustflags` leaves out, and why:
+#   - cmake/BuildRust.cmake gives a cross build `CARGO_TARGET_<T>_RUSTFLAGS`
+#     made of `-C link-arg=` values. They change the link, not the code, and
+#     the gate holds every `-C` in that file to `link-arg=`; anything else
+#     there is unrecognised.
+#   - The gate reads files. A RUSTFLAGS set in a build machine's environment
+#     is outside it (it would also replace the config's flags); the build
+#     sets none for an MSVC target.
+#
+# Re-running a device: build from a pushed commit, so the record can cite it
+# and the clone carries rust/.cargo/config.toml. Commit the new record, and
+# REPLACE that device's entry here with the new run's commit and settings.
+# An old entry kept beside it would stay red, since every entry is compared.
+#
 # Fields:
 #   device            the measured machine, by role
 #   record            the run's record
