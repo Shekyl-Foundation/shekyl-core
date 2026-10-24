@@ -883,3 +883,67 @@ async fn a_locator_hash_held_only_as_an_alternative_is_skipped() {
     assert!(!response.more);
     chain.stop().await;
 }
+
+/// A chunk that mixes chain-sync requests with bytes for the C++ handler
+/// is finished by that handler, not after serving, so the transport does
+/// not hold the peer back. The owner's queue bounds it instead: a flood of
+/// header requests packed beside a relay is answered a few times, not once
+/// per request, and the session stays open. A last request for our tip
+/// (answered with no headers) marks the end of the flood's serving.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_flood_beside_cpp_bytes_is_bounded_by_the_serving_queue() {
+    logs();
+    let (corpus, steps) = spend();
+    let mut node = Node::start("serve-flood", corpus.rules(), &steps, 1, rng()).await;
+    let (_, _, tip) = node.chain.tip().expect("a chain");
+    let answers = Arc::new(Mutex::new(Answers::default()));
+    let id = node.connect(Box::new(Asker(Arc::clone(&answers))), None);
+    const REQUESTS: usize = 64;
+    let mut chunk = Vec::new();
+    for index in 0..REQUESTS {
+        chunk.extend_from_slice(&request_headers(vec![[0; 32]]));
+        if index == REQUESTS / 2 {
+            chunk.extend_from_slice(&notify(
+                NOTIFY_NEW_TRANSACTIONS,
+                b"a relay the stub does not parse",
+            ));
+        }
+    }
+    assert!(node.inject(id, chunk).await);
+    assert!(
+        node.wait(LIMIT, |node| node
+            .stub
+            .lock()
+            .expect("stub")
+            .commands
+            .contains(&(id, NOTIFY_NEW_TRANSACTIONS)))
+            .await,
+        "the relay did not reach the C++ handler"
+    );
+    assert!(node.inject(id, request_headers(vec![*tip.as_bytes()])).await);
+    assert!(
+        node.wait(LIMIT, |_| answers
+            .lock()
+            .expect("answers")
+            .headers
+            .iter()
+            .any(|response| response.blobs.is_empty()))
+            .await,
+        "the marker request was not answered"
+    );
+    let flood = answers
+        .lock()
+        .expect("answers")
+        .headers
+        .iter()
+        .filter(|response| !response.blobs.is_empty())
+        .count();
+    eprintln!("{REQUESTS} packed header requests were answered {flood} times");
+    assert!(flood >= 1, "the flood was not served at all");
+    assert!(
+        flood < REQUESTS,
+        "every packed request was served: the queue is unbounded"
+    );
+    assert_eq!(node.closed(id), None);
+    node.stop().await;
+}

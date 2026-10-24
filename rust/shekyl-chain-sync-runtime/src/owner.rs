@@ -23,7 +23,11 @@
 //!   request at a time per session, in arrival order. A delivered chunk
 //!   that carried only chain-sync messages is finished after the requests
 //!   it carried are answered, so a peer's requests wait in the transport
-//!   and not in this task.
+//!   and not in this task. A chunk that also carried bytes for the C++
+//!   handler is finished by that handler, so the queue is bounded here as
+//!   well: a session holds at most one waiting request of each kind, and a
+//!   later one replaces it. A requester asks again only after it gave the
+//!   first up, so the later request is the one it reads.
 //! - **Announcements** (2008, `NOTIFY_NEW_COMPACT_BLOCK`) reach the C++
 //!   handler until the cutover routes them here, so [`Event::Announce`]
 //!   does not arrive yet, and the commands only an announcement produces
@@ -193,13 +197,37 @@ enum ServeRequest {
     Bodies(RequestBodies),
 }
 
-/// One session's serving queue.
+/// One session's serving queue: the request being served, and at most
+/// one waiting request of each kind.
 #[derive(Default)]
 struct Serving {
     queue: VecDeque<ServeRequest>,
     busy: bool,
     /// Chunks the router handed back, finished when the queue drains.
     finishes: u32,
+}
+
+impl Serving {
+    /// Queue `request`. A waiting request of the same kind is replaced in
+    /// its place, however the peer packed its chunks (module docs).
+    /// `true` when one was replaced.
+    fn push(&mut self, request: ServeRequest) -> bool {
+        let kind = std::mem::discriminant(&request);
+        match self
+            .queue
+            .iter_mut()
+            .find(|waiting| std::mem::discriminant(*waiting) == kind)
+        {
+            Some(waiting) => {
+                *waiting = request;
+                true
+            }
+            None => {
+                self.queue.push_back(request);
+                false
+            }
+        }
+    }
 }
 
 /// What the owner keeps beside the model.
@@ -468,7 +496,12 @@ where
 
     fn queue_serve(&mut self, session: u64, request: ServeRequest) {
         let serving = self.serving.entry(session).or_default();
-        serving.queue.push_back(request);
+        if serving.push(request) {
+            tracing::debug!(
+                session,
+                "a later request replaced a waiting one of its kind"
+            );
+        }
         self.serve_next(session);
     }
 
