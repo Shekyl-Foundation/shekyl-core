@@ -193,3 +193,6 @@ release/
 
 # Claude settings
 .claude/
+# cargo-checkct harness: cloned tools and build-std target trees (docs/formal/checkct/setup.sh)
+docs/formal/checkct/.build/
+docs/formal/checkct/results/**/*.log
