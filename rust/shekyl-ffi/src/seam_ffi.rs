@@ -25,7 +25,7 @@ use shekyl_chain_sync_runtime::router::Router;
 use shekyl_peer_policy::{InboundCeiling, UnboundedReason};
 use shekyl_seam::{
     connector_from_index, direction_from_index, CloseCause, CloseKind, ConnectorId, Direction,
-    Endpoint, Hub, Post, SocketId, TOR_HOST_MAX,
+    Endpoint, Hub, Post, SocketId, SyncPayload, TOR_HOST_MAX,
 };
 use shekyl_timing_engine::{Clock, EngineService, Handle, MonotonicClock, Tick};
 
@@ -309,6 +309,61 @@ fn store(next: Option<Hub>) {
     *STATE.lock().expect("seam state") = next;
 }
 
+/// The bound hub's post sink, kept for [`shekyl_chain_sync_hint`].
+static ROUTER: Mutex<Option<Arc<Router>>> = Mutex::new(None);
+
+fn store_router(next: Option<Arc<Router>>) {
+    *ROUTER.lock().unwrap_or_else(PoisonError::into_inner) = next;
+}
+
+/// Chain sync's hint intake (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q10): a
+/// session's sync payload that reaches Rust through no post, because the
+/// C++ handler decoded it. The inbound handshake and both directions of
+/// timed sync call this beside `process_payload_sync_data`; slice 4 deletes
+/// the callers. The fields are `CORE_SYNC_DATA`'s, as the outbound
+/// handshake's result carries them.
+///
+/// Returns 1 when the sync owner took it as the session's claim; 0 when no
+/// seam is bound or no owner is attached (the daemon's router is
+/// pass-through until the chain-sync cutover, so the hint is dropped and
+/// the C++ handler keeps its own copy); -1 when `socket_id` is zero or
+/// `top_id` is null.
+///
+/// # Safety
+/// `top_id` points at 32 readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_chain_sync_hint(
+    socket_id: u64,
+    current_height: u64,
+    cumulative_difficulty: u64,
+    cumulative_difficulty_top64: u64,
+    top_id: *const u8,
+) -> i32 {
+    let Some(id) = SocketId::from_ffi(socket_id) else {
+        return -1;
+    };
+    if top_id.is_null() {
+        return -1;
+    }
+    let mut top = [0u8; 32];
+    // SAFETY: the caller guarantees 32 readable bytes at `top_id`.
+    unsafe { std::ptr::copy_nonoverlapping(top_id, top.as_mut_ptr(), top.len()) };
+    let router = ROUTER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    let Some(router) = router else {
+        return 0;
+    };
+    let sync = SyncPayload {
+        current_height,
+        cumulative_difficulty,
+        cumulative_difficulty_top64,
+        top_id: top,
+    };
+    i32::from(router.hint(id, sync))
+}
+
 pub(crate) fn ceiling_from_abi(ceiling: ShekylInboundCeiling) -> Option<InboundCeiling> {
     match ceiling.kind {
         SHEKYL_INBOUND_CEILING_BOUNDED => Some(InboundCeiling::Bounded(ceiling.ceiling)),
@@ -353,11 +408,13 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
     let Some(post) = post else {
         let _table = hold_table();
         store(None);
+        store_router(None);
         return 0;
     };
     if ctx.is_null() {
         let _table = hold_table();
         store(None);
+        store_router(None);
         return 0;
     }
     let ceiling = crate::inbound_ceiling_ffi::configured();
@@ -374,10 +431,13 @@ pub unsafe extern "C" fn shekyl_seam_bind(ctx: *mut c_void, post: Option<PostFn>
         // The Rust Levin router is the post sink. Until the chain-sync
         // cutover attaches the sync owner it is pass-through: every post
         // reaches the C++ handler unchanged.
-        let sink = Router::pass_through(Arc::new(move |item: Post| post_one(&bound, item)));
-        let hub = Hub::new(process_sockets(), ceiling, sink.into_sink(), clock);
+        let router = Arc::new(Router::pass_through(Arc::new(move |item: Post| {
+            post_one(&bound, item);
+        })));
+        let hub = Hub::new(process_sockets(), ceiling, router.sink(), clock);
         // `store` stops the previous hub's dialer; this hub's is built after.
         store(Some(hub.clone()));
+        store_router(Some(router));
         hub
     };
     crate::dialer_ffi::ensure_dialer(&hub);

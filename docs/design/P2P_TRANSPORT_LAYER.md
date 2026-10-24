@@ -580,12 +580,14 @@ flags, length) and never a payload:
 
 - **To the owner, whole:** 2011–2014 (`SyncCommand`), as a notify (`Q`,
   no `S`, not a fragment, no response expected), with no undefined flag,
-  within the command's cap. The C++ ingress never admits them.
+  within the command's cap. The C++ ingress never admits them. And 2008,
+  an announced block, on the same terms within its cap: announcements
+  are chain sync's, and attaching the router is what moves them.
 - **To the C++ handler, byte for byte:** every other bucket. That is
   `DefinedCommand`'s set (1001 handshake, 1002 timed sync, 2002 new
-  transactions, 2003 / 2004 get objects, 2006 / 2007 chain, 2008 new
-  compact block, 2009 compact missing transactions, 2010 pool
-  complement) and any bucket the router does not admit, which the C++
+  transactions, 2003 / 2004 get objects, 2006 / 2007 chain, 2009 compact
+  missing transactions, 2010 pool complement, and 2008 while the router
+  is pass-through) and any bucket the router does not admit, which the C++
   ingress refuses as it does today. `established`, `closed` and the
   handshake result go to the C++ handler as well, and the owner gets its
   own copy.
@@ -597,6 +599,10 @@ flags, length) and never a payload:
   exactly one `delivery_finished`. A delivery that carried nothing for
   the C++ handler is finished by the owner, from its own task.
 - An owner that is gone turns the router back to pass-through.
+- **The hint intake.** A sync payload the C++ handler decoded (an inbound
+  handshake, a timed sync) reaches the owner through
+  `shekyl_chain_sync_hint` and `Router::hint`; a pass-through router
+  drops it.
 
 The cutover deletes this forwarding together with the C++ sync half.
 

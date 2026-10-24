@@ -12,7 +12,7 @@ use shekyl_timing_engine::Tick;
 
 use super::{
     bans::host_is_banned, install_process_sockets, process_sockets, seam_bind_lock,
-    shekyl_seam_bind, ShekylSeamObserved,
+    shekyl_chain_sync_hint, shekyl_seam_bind, ShekylSeamObserved,
 };
 
 /// A hub whose posts go nowhere.
@@ -130,6 +130,35 @@ fn the_peer_counts_are_the_bound_hubs() {
         ))
     );
     drop(open);
+    unbind();
+}
+
+/// The hint intake: a zero id or a null tip is refused; with no seam
+/// bound, and with the daemon's pass-through router bound, nothing
+/// takes the hint. Red edit: hand a hint to a pass-through router's
+/// forward.
+#[test]
+fn a_hint_has_no_owner_before_the_cutover() {
+    let _gate = seam_bind_lock().lock();
+    let top = [7u8; 32];
+    unbind();
+    assert_eq!(
+        unsafe { shekyl_chain_sync_hint(0, 1, 1, 0, top.as_ptr()) },
+        -1
+    );
+    assert_eq!(
+        unsafe { shekyl_chain_sync_hint(5, 1, 1, 0, std::ptr::null()) },
+        -1
+    );
+    assert_eq!(
+        unsafe { shekyl_chain_sync_hint(5, 1, 1, 0, top.as_ptr()) },
+        0
+    );
+    bind();
+    assert_eq!(
+        unsafe { shekyl_chain_sync_hint(5, 1, 1, 0, top.as_ptr()) },
+        0
+    );
     unbind();
 }
 

@@ -19,8 +19,9 @@ use shekyl_chain_rules::AtHeight;
 use shekyl_chain_store::store::ChainStore;
 use shekyl_chain_sync_runtime::serve::{serve_bodies, serve_headers};
 use shekyl_levin::{
-    notify, PortableMap, RequestBodies, RequestHeaders, ResponseBodies, ResponseHeaders,
-    SyncCommand, HASH_SIZE, HEADERS_RESPONSE_BYTES,
+    notify, BlockCompleteEntry, NewCompactBlock, PortableMap, RequestBodies, RequestHeaders,
+    ResponseBodies, ResponseHeaders, SyncCommand, TxBlobEntry, HASH_SIZE, HEADERS_RESPONSE_BYTES,
+    NOTIFY_NEW_COMPACT_BLOCK,
 };
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_wire::{Block, SkeletonTx, TxBody};
@@ -34,6 +35,8 @@ pub struct Seen {
     pub header_requests: AtomicUsize,
     /// Body requests (2013).
     pub body_requests: AtomicUsize,
+    /// Announced blocks (2008) the node relayed.
+    pub announcements: AtomicUsize,
     /// Anything else the node sent.
     pub other: AtomicUsize,
 }
@@ -49,6 +52,20 @@ impl Seen {
     #[must_use]
     pub fn bodies(&self) -> usize {
         self.body_requests.load(Ordering::Acquire)
+    }
+
+    /// Announced blocks the node relayed so far.
+    #[must_use]
+    pub fn announced(&self) -> usize {
+        self.announcements.load(Ordering::Acquire)
+    }
+
+    fn note_other(&self, command: u32) {
+        if command == NOTIFY_NEW_COMPACT_BLOCK {
+            self.announcements.fetch_add(1, Ordering::AcqRel);
+        } else {
+            self.other.fetch_add(1, Ordering::AcqRel);
+        }
     }
 }
 
@@ -200,7 +217,7 @@ impl SyncPeer for ServingPeer {
                 vec![frame]
             }
             _ => {
-                self.seen.other.fetch_add(1, Ordering::AcqRel);
+                self.seen.note_other(command);
                 Vec::new()
             }
         }
@@ -293,7 +310,7 @@ impl SyncPeer for HeaderChainPeer {
                 vec![frame(SyncCommand::ResponseBodies, &response)]
             }
             _ => {
-                self.seen.other.fetch_add(1, Ordering::AcqRel);
+                self.seen.note_other(command);
                 Vec::new()
             }
         }
@@ -319,5 +336,54 @@ pub fn request_headers(locator: Vec<[u8; HASH_SIZE]>) -> Vec<u8> {
     frame(
         SyncCommand::RequestHeaders,
         &RequestHeaders { block_ids: locator },
+    )
+}
+
+/// The block at `height` in `store`, announced as a peer announces it: a
+/// 2008 carrying the block, every listed transaction whole, and its
+/// witness.
+///
+/// # Panics
+///
+/// The store does not hold the block.
+#[must_use]
+pub fn announcement(store: &ChainStore, height: u64) -> Vec<u8> {
+    let snap = store.begin_read().expect("a read");
+    let block = match snap.block(BlockHeight::from_raw(height)).expect("a read") {
+        AtHeight::Recorded(body) => body.block,
+        AtHeight::AboveTip => panic!("no block at {height}"),
+    };
+    let count = height + 1;
+    drop(snap);
+    let request = RequestBodies {
+        hashes: vec![*block.hash().as_bytes()],
+    };
+    let body = serve_bodies(store, &request)
+        .expect("the store answers")
+        .bodies
+        .remove(0);
+    let payload = NewCompactBlock {
+        b: BlockCompleteEntry {
+            pruned: false,
+            block: body.block,
+            block_weight: 0,
+            txs: body
+                .txs
+                .into_iter()
+                .map(|tx| match tx {
+                    TxBody::Full(blob) => TxBlobEntry {
+                        blob,
+                        prunable_hash: [0; HASH_SIZE],
+                    },
+                    TxBody::Skeleton(_) => panic!("a held block serves whole"),
+                })
+                .collect(),
+            attestation_witness: body.attestation_witness,
+        },
+        current_blockchain_height: count,
+    };
+    notify(
+        NOTIFY_NEW_COMPACT_BLOCK,
+        &payload.store().expect("the payload encodes"),
     )
 }

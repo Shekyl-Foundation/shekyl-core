@@ -50,7 +50,10 @@ where
             Outcome::Connected { relay } => {
                 self.accepted.insert(hash);
                 if relay {
-                    out.push(Command::Relay { hash });
+                    out.push(Command::Relay {
+                        hash,
+                        from: session,
+                    });
                 }
             }
             Outcome::Refused { verdict } => {
@@ -367,6 +370,7 @@ where
             session,
             header: judged,
             body: body.clone(),
+            announced: true,
         });
         self.flush_offers(out);
     }
