@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use shekyl_daemon_config::sections::Tor;
+use shekyl_ffi::origin_verdict::OriginVerdict;
 use shekyl_ffi::zone_ffi::DownCause;
 use shekyl_timing_engine::{Clock, MonotonicClock, OwnerClass, OwnerHandle, Tick};
 use shekyl_tor_control_client::binary::{
@@ -26,7 +27,7 @@ use shekyl_tor_control_client::control::{
 };
 use shekyl_tor_control_client::supervisor::{
     held_sentence, input_of, install_sentence, render, Action, Cause, Connectors, Core, Input,
-    ManagedRunning, Policy, Step, TorSetting,
+    ManagedRunning, OriginVerdict as FoldedOrigin, Policy, Step, Syncing, TorSetting,
 };
 use shekyl_tor_control_daemon::{
     DaemonTorConfig, DaemonTorControl, DaemonTorStartError, KeptDataDir, OnionPow, OnionSeed,
@@ -71,10 +72,9 @@ impl Supervisor {
 /// `None` when the pin is accepted. Otherwise one warning. The cause is the
 /// class the supervisor's pin takes, spoken with [`install_sentence`]; the
 /// parenthetical is the pin error, which for a missed discovery names every
-/// path it searched. The last sentence is [`held_sentence`] for
-/// `clearnet_on`: Tor is not up, and whether the node syncs is the clearnet
-/// connector. Under TB-2 a pin that fails is announced and the daemon starts
-/// all the same.
+/// path it searched. The last sentence is [`held_sentence`] for a link that
+/// is not up: nothing syncs over Tor, and clearnet is the connector. Under
+/// TB-2 a pin that fails is announced and the daemon starts all the same.
 #[must_use]
 pub fn pin_warning(binary: Option<&Path>, clearnet_on: bool) -> Option<String> {
     let verified = match binary {
@@ -121,13 +121,22 @@ fn classify_pin(error: &TorBinaryError) -> PinClass {
     }
 }
 
+/// The sync a pin warning speaks. The link is not up, so nothing syncs
+/// over Tor. `clearnet` is the connector.
+fn pin_sync(clearnet_on: bool) -> Syncing {
+    Syncing {
+        tor: false,
+        clearnet: clearnet_on,
+    }
+}
+
 /// The warning text for a pin error. `error`'s display is the detail: a
 /// `NotFound` lists `searched`, and the posture cause does not carry those
 /// paths.
 fn pin_warning_line(error: &TorBinaryError, clearnet_on: bool) -> String {
     let class = classify_pin(error);
     let sentence = install_sentence(&class.cause).expect("a pin class is an install cause");
-    let consequence = held_sentence(clearnet_on);
+    let consequence = held_sentence(pin_sync(clearnet_on));
     format!("warning: managed Tor: {sentence} ({error}) {consequence}")
 }
 
@@ -165,6 +174,18 @@ pub fn begin(
     })
 }
 
+/// The relay's published verdict as the core's input.
+///
+/// The supervisor does not depend on the relay. The variants are the same
+/// three states, mapped one for one.
+fn verdict_input(verdict: OriginVerdict) -> Input {
+    Input::AddressHidingOrigin(match verdict {
+        OriginVerdict::Absent => FoldedOrigin::Absent,
+        OriginVerdict::Connected => FoldedOrigin::Connected,
+        OriginVerdict::Routable => FoldedOrigin::Routable,
+    })
+}
+
 async fn drive(
     binary: Option<PathBuf>,
     clearnet_on: bool,
@@ -193,7 +214,15 @@ async fn drive(
         tor: TorSetting::Managed,
         clearnet_on,
     };
-    let (core, step) = Core::start(Policy::provisional(), connectors, now(&owner));
+    let origin = shekyl_ffi::origin_verdict::watch();
+    let started = now(&owner);
+    let (mut core, mut step) = Core::start(Policy::provisional(), connectors, started);
+    // A receiver marks the current value seen, so a verdict published before
+    // the supervisor started is folded once, here. The pin check stays the
+    // first action: replacing the startup step would never spawn.
+    let folded = core.on(verdict_input(*origin.borrow()), started);
+    step.actions.extend(folded.actions);
+    step.deadline = folded.deadline;
     let (death_tx, death_rx) = mpsc::channel(4);
     Drive {
         core,
@@ -207,6 +236,7 @@ async fn drive(
         virtual_port,
         stop,
         forward,
+        origin,
         control: None,
         kept: None,
         pinned: None,
@@ -233,6 +263,9 @@ struct Drive {
     virtual_port: u16,
     stop: watch::Receiver<bool>,
     forward: watch::Receiver<Option<SocketAddr>>,
+    /// The relay's hop-0 verdict for a local origin (`GS-Q3`). Health and
+    /// `OwnTx` project it.
+    origin: watch::Receiver<OriginVerdict>,
     control: Option<DaemonTorControl>,
     kept: Option<KeptDataDir>,
     pinned: Option<VerifiedTorBinary>,
@@ -262,6 +295,14 @@ impl Drive {
                     // the receiver has not marked the current value seen.
                     if changed.is_ok() && self.forward.borrow().is_some() {
                         self.fold(Input::EndpointReady).await;
+                    }
+                }
+                changed = self.origin.changed() => {
+                    // The sender is process-static, so `Err` does not happen;
+                    // it is not folded so a closed channel cannot spin here.
+                    if changed.is_ok() {
+                        let verdict = *self.origin.borrow_and_update();
+                        self.fold(verdict_input(verdict)).await;
                     }
                 }
                 wake = self.owner.wait_wake_async() => {
@@ -647,8 +688,8 @@ mod tests {
         let sentence = install_sentence(&Cause::BundleMissing).expect("an install cause");
         assert!(line.contains(sentence));
         assert!(line.contains(searched.to_str().unwrap()));
-        assert!(line.contains(held_sentence(false)));
-        assert!(!line.contains(held_sentence(true)));
+        assert!(line.contains(&held_sentence(pin_sync(false))));
+        assert!(!line.contains(&held_sentence(pin_sync(true))));
 
         let unavailable = TorBinaryError::Unavailable {
             reason: "no bundle for this target",
@@ -660,7 +701,7 @@ mod tests {
         let sentence = install_sentence(&Cause::Unavailable).expect("an install cause");
         assert!(line.contains(sentence));
         assert!(line.contains("no bundle for this target"));
-        assert!(line.contains(held_sentence(true)));
+        assert!(line.contains(&held_sentence(pin_sync(true))));
 
         let refused = TorBinaryError::NotAFile(PathBuf::from("/srv/tor-dir"));
         let class = classify_pin(&refused);
@@ -671,6 +712,6 @@ mod tests {
         assert!(line.contains(sentence));
         assert!(line.contains("was not started"));
         assert!(line.contains("/srv/tor-dir"));
-        assert!(line.contains(held_sentence(false)));
+        assert!(line.contains(&held_sentence(pin_sync(false))));
     }
 }

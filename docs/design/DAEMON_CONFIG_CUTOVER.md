@@ -156,7 +156,8 @@ What crosses the FFI after the cutover, and nothing else:
    owner values judged and not latched (`check_seed_epoch`,
    `check_settlement_schedule`), and the managed Tor's pin read and not
    started (`tor::pin_warning`, a warning under TB-2, in the posture's
-   install sentence; a missed discovery names the paths it searched).
+   install sentence and its held sentence for a link that is not up; a
+   missed discovery names the paths it searched).
    Each effect below calls its question first, so a decision is written once. With
    `--config-verify` the process stops here: a refusal is start's own,
    through IG-11 with exit 2 (1 for a host with no network id); on

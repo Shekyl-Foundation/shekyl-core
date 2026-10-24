@@ -52,7 +52,7 @@ use std::time::Duration;
 use kameo::actor::{ActorRef, PreparedActor};
 use shekyl_chain_rules::{AdmissionPolicy, InvalidBlock, Substrate};
 use shekyl_chain_store::store::{ChainStore, StoreError};
-use shekyl_hash_budget::Budget;
+use shekyl_hash_budget::{Budget, Class};
 use shekyl_mempool::{Pool, PoolFault};
 use shekyl_types::{BlockHash, BlockHeight, UnixSeconds};
 use shekyl_wire::Transaction;
@@ -104,6 +104,52 @@ pub struct Arrival {
     pub bodies: Vec<Vec<u8>>,
 }
 
+/// One block chain sync has already proven: its header passed
+/// `form_header` and `judge_header` in the sync owner, and its body was bound
+/// to that header before the offer (`P2P_3_CHAIN_SYNC_BRIEF.md` CS-Q2 steps
+/// 3 and 6; CS2-Q1). The service forms it with `form_judged`, which consumes
+/// the proof and does not hash, so it takes no hasher permit and pins no
+/// seed.
+#[derive(Clone, Debug)]
+pub struct BoundArrival {
+    /// The caller's name for it.
+    pub tag: ArrivalTag,
+    /// The session that served the body.
+    pub session: SessionId,
+    /// Whether this node asked for the body. An announcement is not.
+    pub solicited: bool,
+    /// The header the sync owner's proof accepted.
+    pub judged: shekyl_chain_rules::HeaderJudged,
+    /// The block blob.
+    pub block: Vec<u8>,
+    /// The listed bodies, as blobs, in the block's order.
+    pub bodies: Vec<Vec<u8>>,
+    /// The attestation witness carried beside the block; empty for an empty
+    /// set.
+    pub attestation_witness: Vec<u8>,
+}
+
+impl BoundArrival {
+    /// The bytes the door bounds for this arrival
+    /// ([`ArrivalLengths::bytes`]).
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.lengths().bytes()
+    }
+
+    fn lengths(&self) -> ArrivalLengths {
+        ArrivalLengths {
+            tag: self.tag,
+            origin: Origin::Peer {
+                session: self.session,
+                solicited: self.solicited,
+            },
+            block_len: self.block.len(),
+            body_lens: self.bodies.iter().map(Vec::len).collect(),
+        }
+    }
+}
+
 /// The lengths of one arrival, which is all the door needs before the
 /// bytes are copied. A reservation judged from these either accepts the
 /// arrival or refuses it; the bytes are copied only after it accepts.
@@ -119,6 +165,15 @@ pub struct ArrivalLengths {
 }
 
 impl ArrivalLengths {
+    /// The bytes the door bounds ([`Door::max_arrival_bytes`]): the block
+    /// and the bodies it carried.
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.body_lens
+            .iter()
+            .fold(self.block_len, |total, len| total.saturating_add(*len))
+    }
+
     fn of(arrival: &Arrival) -> Self {
         Self {
             tag: arrival.tag,
@@ -298,13 +353,89 @@ impl Drop for ReplySlot {
     }
 }
 
+/// How an accepted arrival is formed.
+///
+/// A hashed arrival takes one permit of its class. A judged arrival
+/// carries the proof chain sync already paid for, and `form_judged`
+/// consumes it without a hash.
+#[derive(Clone)]
+enum Proof {
+    /// Hashed here, under one permit of `class`.
+    Hash {
+        /// The budget class the permit is taken from.
+        class: Class,
+    },
+    /// Proven already.
+    Judged(Box<shekyl_chain_rules::HeaderJudged>),
+}
+
+impl Proof {
+    /// The class a hash waits in. A judged arrival does not hash.
+    const fn hash_class(&self) -> Option<Class> {
+        match self {
+            Self::Hash { class } => Some(*class),
+            Self::Judged(_) => None,
+        }
+    }
+}
+
+/// The hasher class an arrival's `form` waits in: a block this node asked
+/// for or made is the chain's; an announcement is unsolicited.
+const fn class_of(origin: Origin) -> Class {
+    match origin {
+        Origin::Peer {
+            solicited: false, ..
+        } => Class::Unsolicited,
+        Origin::Peer {
+            solicited: true, ..
+        }
+        | Origin::Local => Class::Chain,
+    }
+}
+
+/// One arrival a reservation accepts, before its seat is attached.
+struct Staged {
+    tag: ArrivalTag,
+    block: Vec<u8>,
+    bodies: Vec<Vec<u8>>,
+    proof: Proof,
+    witness: Vec<u8>,
+}
+
+impl Staged {
+    fn hashed(arrival: Arrival) -> Self {
+        Self {
+            tag: arrival.tag,
+            block: arrival.block,
+            bodies: arrival.bodies,
+            proof: Proof::Hash {
+                class: class_of(arrival.origin),
+            },
+            witness: Vec::new(),
+        }
+    }
+
+    fn judged(arrival: BoundArrival) -> Self {
+        Self {
+            tag: arrival.tag,
+            block: arrival.block,
+            bodies: arrival.bodies,
+            proof: Proof::Judged(Box::new(arrival.judged)),
+            witness: arrival.attestation_witness,
+        }
+    }
+}
+
 /// An accepted arrival, parsed or not.
 struct Accepted {
     slot: ReplySlot,
     tag: ArrivalTag,
-    origin: Origin,
     block: Vec<u8>,
     bodies: Vec<Vec<u8>>,
+    /// How this arrival is formed.
+    proof: Proof,
+    /// The witness carried beside the block; empty when none was.
+    witness: Vec<u8>,
 }
 
 /// The service's knobs, each with its reason. How many `form` workers hash
@@ -615,6 +746,46 @@ where
     }
 }
 
+/// The sync owner's way to the `following_degraded` latch: the connector's
+/// [`RaiseAlarm`](crate::connector::RaiseAlarm), cloneable.
+#[derive(Clone)]
+pub struct Alarm {
+    connector: kameo::actor::ActorRef<Connector>,
+}
+
+/// Why an [`Alarm`] was not written.
+#[derive(Debug, thiserror::Error)]
+pub enum AlarmFault {
+    /// The connector replied with a fault.
+    #[error("connector: {0}")]
+    Connector(RunFault),
+    /// The connector's mailbox is gone.
+    #[error("connector unreachable")]
+    Mailbox,
+}
+
+impl Alarm {
+    /// Write the latch with `evidence`. `true` when this call set it.
+    ///
+    /// # Errors
+    ///
+    /// [`AlarmFault`].
+    pub async fn raise(
+        &self,
+        evidence: shekyl_chain_store::codec::FollowingDegraded,
+    ) -> Result<bool, AlarmFault> {
+        match self
+            .connector
+            .ask(crate::connector::RaiseAlarm(evidence))
+            .await
+        {
+            Ok(set) => Ok(set),
+            Err(kameo::error::SendError::HandlerError(fault)) => Err(AlarmFault::Connector(fault)),
+            Err(_) => Err(AlarmFault::Mailbox),
+        }
+    }
+}
+
 /// A monotonic reading: the time since the service started.
 pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
 
@@ -739,6 +910,21 @@ impl Door {
     pub fn offer_span(&self, span: Vec<Arrival>) -> Result<Vec<Ticket>, Refusal> {
         let lengths: Vec<ArrivalLengths> = span.iter().map(ArrivalLengths::of).collect();
         Ok(self.reserve(&lengths)?.commit(span))
+    }
+
+    /// Offer a span of [`BoundArrival`]s, chain sync's typed entry: every
+    /// arrival is accepted, or none is, judged exactly as
+    /// [`Door::offer_span`] judges a solicited span. An accepted arrival is
+    /// formed with `form_judged`, never `form`, so no second longhash runs.
+    /// The tickets and replies are the same.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal`].
+    pub fn offer_bound(&self, span: Vec<BoundArrival>) -> Result<Vec<Ticket>, Refusal> {
+        let lengths: Vec<ArrivalLengths> = span.iter().map(BoundArrival::lengths).collect();
+        let staged = span.into_iter().map(Staged::judged).collect();
+        Ok(self.reserve(&lengths)?.accept(staged))
     }
 }
 
@@ -1102,6 +1288,54 @@ where
             .ask(WatchTip)
             .await
             .map_err(|_| ServiceFault::Mailbox)
+    }
+
+    /// A receiver of the `following_degraded` latch (`DRS_X_STORE_FLIP.md`
+    /// DX-Q2 item 8): `None` is clear, `Some` is the evidence that set it.
+    ///
+    /// # Errors
+    ///
+    /// The connector is gone.
+    pub async fn watch_latch(
+        &self,
+    ) -> Result<
+        tokio::sync::watch::Receiver<Option<shekyl_chain_store::codec::FollowingDegraded>>,
+        ServiceFault<S::Fault>,
+    > {
+        self.shared
+            .connector
+            .ask(crate::connector::WatchLatch)
+            .await
+            .map_err(|_| ServiceFault::Mailbox)
+    }
+
+    /// Chain sync's past-cap evidence (`P2P_3_CHAIN_SYNC_BRIEF.md` §A item
+    /// 7): the connector writes the latch in its own transaction. `true`
+    /// when this call set it; a latch already set keeps its first evidence.
+    ///
+    /// # Errors
+    ///
+    /// The connector is gone, or the store refused the write.
+    pub async fn raise_alarm(
+        &self,
+        evidence: shekyl_chain_store::codec::FollowingDegraded,
+    ) -> Result<bool, ServiceFault<S::Fault>> {
+        self.alarm()
+            .raise(evidence)
+            .await
+            .map_err(|fault| match fault {
+                AlarmFault::Connector(fault) => ServiceFault::Connector(fault),
+                AlarmFault::Mailbox => ServiceFault::Mailbox,
+            })
+    }
+
+    /// A cloneable handle on [`Self::raise_alarm`], for the sync owner, which
+    /// does not hold the service.
+    #[must_use]
+    pub fn alarm(&self) -> Alarm {
+        Alarm {
+            connector: self.shared.connector.clone(),
+        }
     }
 
     /// The last `TipChanged` publication the tip follower acted on: what a

@@ -11,7 +11,7 @@
 //! be a chain.
 
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::ChainCount;
+use shekyl_types::{BlockHash, ChainCount};
 
 /// What a peer says its chain is. The handshake and an announce both
 /// arrive as this, and a headers response's `tip_work` replaces it.
@@ -23,6 +23,12 @@ pub struct PeerClaim {
     pub count: ChainCount,
     /// The peer's cumulative work through those blocks.
     pub work: CumulativeDifficulty,
+    /// The tip the peer named: the handshake's `top_id`. When this node
+    /// holds that block in `T`, it is a frontier the session named
+    /// (CS-F8): enough to ask the session for bodies along it, never a
+    /// reason to trust them. A response's `tip_work` carries no hash and
+    /// leaves it.
+    pub top: BlockHash,
 }
 
 /// The claim cannot be a chain. This is the whole of `PayloadRefused`

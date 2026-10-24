@@ -28,12 +28,54 @@ pub struct Connectors {
     pub clearnet_on: bool,
 }
 
+/// The relay's hop-0 verdict for a local origin, folded into this supervisor.
+///
+/// The relay names the same three states. This crate does not depend on the
+/// relay: the daemon maps one onto the other, variant for variant.
+///
+/// [`Self::Absent`]: no outbound session hides this node's address.
+/// [`Self::Connected`]: one does, and a local origin does not leave on it.
+/// [`Self::Routable`]: a local origin leaves on one.
+///
+/// Health is [`Self::hides_address`]. `OwnTx` reads [`Self::origin_leaves`].
+/// The pin stays off health (`RPC_CHANNEL.md` §6.1): a peer who held `health`
+/// and was this node's own edge could otherwise watch the boolean flip on
+/// its own disconnect.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OriginVerdict {
+    /// No outbound session hides this node's address.
+    #[default]
+    Absent,
+    /// An outbound session hides this node's address, and a local origin
+    /// does not leave on it.
+    Connected,
+    /// A local origin leaves on a session that hides this node's address.
+    Routable,
+}
+
+impl OriginVerdict {
+    /// An outbound session hides this node's address now.
+    #[must_use]
+    pub const fn hides_address(self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+
+    /// A local origin leaves on such a session now.
+    #[must_use]
+    pub const fn origin_leaves(self) -> bool {
+        matches!(self, Self::Routable)
+    }
+}
+
 /// What the node does with its own transactions (`TSR-Q11`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OwnTx {
-    /// Health is true: originated traffic goes out over Tor.
+    /// [`OriginVerdict::Routable`]: a local origin leaves on a session that
+    /// hides this node's address.
     AddressHiding,
-    /// Health is false and Tor is managed or an operator's Tor.
+    /// The verdict does not route, and Tor is managed or an operator's Tor.
+    /// Health may still be true ([`OriginVerdict::Connected`]). The
+    /// transaction is held on this node, not sent.
     Held,
     /// The operator set Tor off and clearnet on.
     ClearnetOnly,
@@ -125,7 +167,9 @@ pub struct Syncing {
 /// One typed read of the supervisor (`TSR-Q12`). No message text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
-    /// True when the Tor link's outbound facet is usable.
+    /// [`OriginVerdict::hides_address`]: an outbound session hides this
+    /// node's address now. Not the link: [`Self::shown`] is the link.
+    /// `health` can be true while [`Self::own_tx`] is [`OwnTx::Held`].
     pub health: bool,
     /// The §4.3 projection.
     pub shown: Shown,
@@ -145,10 +189,13 @@ pub struct Status {
     pub progress: u8,
 }
 
-/// `OwnTx` from health and the connector settings.
+/// `OwnTx` from the relay's hop-0 verdict and the connector settings.
+///
+/// [`OriginVerdict::Routable`] is [`OwnTx::AddressHiding`]. Every other
+/// state follows the connector pair.
 #[must_use]
-pub fn own_tx(health: bool, connectors: Connectors) -> OwnTx {
-    if health {
+pub fn own_tx(verdict: OriginVerdict, connectors: Connectors) -> OwnTx {
+    if verdict.origin_leaves() {
         return OwnTx::AddressHiding;
     }
     match (connectors.tor, connectors.clearnet_on) {
@@ -180,21 +227,6 @@ fn install_cause(cause: &Cause) -> bool {
         cause,
         Cause::BundleMissing | Cause::PinRefused | Cause::Unavailable
     )
-}
-
-/// What the node does with its own transactions while Tor is not carrying
-/// them and Tor was asked for (`OwnTx::Held`).
-///
-/// `clearnet_on` is the clearnet connector, the same bit [`Syncing::clearnet`]
-/// reads until a chain-sync feed replaces it. The daemon's pin warning uses
-/// this sentence too: at the warning, Tor is not up yet.
-#[must_use]
-pub const fn held_sentence(clearnet_on: bool) -> &'static str {
-    if clearnet_on {
-        "This node is syncing over clearnet and holding its own transactions."
-    } else {
-        "This node is waiting for Tor and holding its own transactions. It is not syncing."
-    }
 }
 
 /// The words for an install cause: a missing bundle, a refused pin, or no
@@ -232,7 +264,7 @@ pub fn render(status: &Status) -> String {
     let mut text = String::new();
     match status.own_tx {
         OwnTx::AddressHiding => text.push_str("Tor is carrying this node's traffic."),
-        OwnTx::Held => text.push_str(held_sentence(status.sync.clearnet)),
+        OwnTx::Held => text.push_str(&held_sentence(status.sync)),
         OwnTx::ClearnetOnly => text.push_str(
             "This node is syncing and sending over the open network. Until the encrypted link is in place, that network is unencrypted.",
         ),
@@ -247,6 +279,30 @@ pub fn render(status: &Status) -> String {
         text.push_str(&fixes_sentence(&status.fixes));
     }
     text
+}
+
+/// The `Held` sentence. The node is "waiting for Tor" only while the link
+/// is not usable; a held origin beside a usable link (no address-hiding peer
+/// yet, or the epoch's pin exhausted) is holding, not waiting. What the node
+/// syncs over is read from `sync`, never assumed from the hold; the typed
+/// reason for the hold is `GS-C2`'s (IG-Q72).
+///
+/// [`render`] speaks this for a held status. The daemon's pin warning
+/// speaks it too, with `tor` false: the link is not up, and `clearnet` is
+/// the connector.
+#[must_use]
+pub fn held_sentence(sync: Syncing) -> String {
+    let syncing = match (sync.tor, sync.clearnet) {
+        (true, true) => "It is syncing over Tor and clearnet.",
+        (true, false) => "It is syncing over Tor.",
+        (false, true) => "It is syncing over clearnet.",
+        (false, false) => "It is not syncing.",
+    };
+    if sync.tor {
+        format!("This node is holding its own transactions. {syncing}")
+    } else {
+        format!("This node is waiting for Tor and holding its own transactions. {syncing}")
+    }
 }
 
 fn cause_sentence(status: &Status) -> Option<String> {
