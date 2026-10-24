@@ -187,6 +187,15 @@ TEST_ONLY: dict[tuple[str, str], str] = {
     "reconcile does not know the test exists, and a shipped write commits "
     "exactly what its closure returned",
     (
+        "shekyl-mempool",
+        "pool-commit-fault",
+    ): "Pool::plant holds an entry without the door, and "
+    "Pool::refuse_next_commit forwards to PoolStore's, so shekyl-node's "
+    "test can show a flush whose pool-file write faults retires the pool "
+    "for the service too. Enabled from shekyl-node's dev-dependency edge "
+    "only; a shipped pool admits only through its door and commits what "
+    "its closure returned",
+    (
         "shekyl-chain-rules",
         "harness",
     ): "exposes the negative-fixture harness (MockChain, MockSubstrate) as a "
@@ -330,6 +339,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
         "shekyl-draw-rng",
         "shekyl-noise",
         "shekyl-chain-sync",
+        "shekyl-mempool",
     }
 )
 

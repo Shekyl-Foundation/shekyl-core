@@ -213,6 +213,7 @@ jobs:
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message1.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_read_message2.rs
             rust/shekyl-p2p-transport/fuzz/fuzz_targets/fuzz_open_one.rs
+            rust/shekyl-noise/fuzz/fuzz_targets/fuzz_classed_opener.rs
           )
           MISSING=0
           for target in "${REQUIRED_TARGETS[@]}"; do
@@ -514,7 +515,7 @@ jobs:
         # but `-D warnings`, or if this step carries any key but `name`,
         # `working-directory`, `run`. Add a row there and a `-p` here in
         # the same commit.
-        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-draw-rng -p shekyl-p-host -p shekyl-tor-control-client --lib -- -D warnings
+        run: cargo clippy --locked -p shekyl-chain-ingest -p shekyl-chain-rules -p shekyl-chain-store -p shekyl-mempool -p shekyl-draw-rng -p shekyl-p-host -p shekyl-tor-control-client --lib -- -D warnings
       - name: shekyl-standoff conformance suite (x86_64 only)
         working-directory: rust
         # `shekyl-standoff`'s conformance grading + negative controls

@@ -272,8 +272,12 @@ impl super::Admission {
     /// # Errors
     ///
     /// The store's. The bound hook records it and the service stops; the
-    /// door still answers [`super::Refusal::NoRoom`].
+    /// door answers [`super::Refusal::StoreUnreadable`].
     pub(super) fn bound(&self) -> Result<crate::admission::ArrivalBound, ()> {
+        #[cfg(test)]
+        if self.refuse_reads.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(());
+        }
         let tip = match self.store.begin_read().and_then(|snap| snap.tip()) {
             Ok(state) => state.recorded.map(|recorded| recorded.hash),
             Err(store) => {
@@ -439,10 +443,11 @@ impl Door {
         if self.room.is_closed() {
             return Err(Refusal::NoRoom);
         }
-        // A store the door cannot read has no room: the service meets the
-        // same read and fails on it.
+        // A store the door cannot read is its own refusal, never "no room":
+        // a local arrival waits out no room, and a seat being free would
+        // send it straight back here.
         let Ok(bound) = self.admission.bound() else {
-            return Err(Refusal::NoRoom);
+            return Err(Refusal::StoreUnreadable);
         };
         let oversize = lengths
             .iter()

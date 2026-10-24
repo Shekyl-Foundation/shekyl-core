@@ -116,7 +116,7 @@ async fn a_rewind_pops_to_the_target_and_mining_resumes_on_the_new_tip() {
         .rewind_to(BlockHeight::from_raw(2))
         .await
         .expect("rewinds");
-    assert_eq!(rewound.popped, 2);
+    assert_eq!(rewound.popped(), 2);
     assert_eq!(
         scenario
             .hash_at(BlockHeight::from_raw(3))

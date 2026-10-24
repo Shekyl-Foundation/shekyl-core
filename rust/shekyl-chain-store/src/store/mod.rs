@@ -632,9 +632,9 @@ impl ChainStore {
 
     /// Open a write batch, run `f`, and **abort**.
     ///
-    /// The producer's read of the chain (`TemplateFacts`): it needs the
-    /// validator's [`WriteBatch::chain_view`] — the same body, the same
-    /// poison latch — and it must not commit. An invariant the closure
+    /// A read on the validator's own [`WriteBatch::chain_view`] — the same
+    /// body, the same poison latch — that must not commit: a test that
+    /// judges a header on the view a connect would. An invariant the closure
     /// observes still halts the writer, exactly as [`Self::write`] does;
     /// an unpoisoned `Ok` drops the transaction. A connect or a pop inside
     /// `f` is rolled back with it.

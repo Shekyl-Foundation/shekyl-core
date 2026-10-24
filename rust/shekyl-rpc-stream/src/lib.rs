@@ -9,7 +9,7 @@
 //!
 //! hyper and axum expect a byte stream; the channel carries records.
 //! [`RecordStream`] is `AsyncRead` and `AsyncWrite` over two
-//! [`ClassedRecord`] halves and a transport:
+//! halves, a [`ClassedSealer`] and a [`ClassedOpener`], and a transport:
 //!
 //! - **Writing combines bytes until a flush** (RT-P5's registered flush
 //!   policy). The private `message` module decides the cut. An ordinary record is cut when
@@ -58,7 +58,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-use shekyl_noise::{ClassId, ClassedError, ClassedRecord, Direction};
+use shekyl_noise::{
+    ClassId, ClassedError, ClassedOpener, ClassedSealer, RecvDirection, SendDirection,
+};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -198,8 +200,8 @@ pub(crate) struct Counters {
 /// A byte stream over the channel's records.
 pub struct RecordStream<T> {
     io: T,
-    send: ClassedRecord,
-    recv: ClassedRecord,
+    send: ClassedSealer,
+    recv: ClassedOpener,
     /// The message being cut. The transport's in-flight record is `out`,
     /// not here: a seal commits in the message only after it succeeds,
     /// and `out` is that record until the transport takes it.
@@ -235,16 +237,16 @@ pub struct RecordStream<T> {
 impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
     /// A stream over `io`, sealing with `send` and opening with `recv`.
     #[must_use]
-    pub fn new(io: T, send: Direction, recv: Direction) -> Self {
+    pub fn new(io: T, send: SendDirection, recv: RecvDirection) -> Self {
         Self::after_first_record(io, send, recv, Vec::new(), Vec::new())
     }
 
     /// A stream whose first record the handshake already opened.
     ///
     /// The caller is the handshake's release of a pending session: it
-    /// lends the receiving [`Direction`], opens the first record with a
-    /// [`ClassedRecord`], and takes the direction back with
-    /// [`ClassedRecord::into_direction`]. That direction has spent the
+    /// lends the receiving [`RecvDirection`], opens the first record with a
+    /// [`ClassedOpener`], and takes the direction back with
+    /// [`ClassedOpener::into_direction`]. That direction has spent the
     /// first record's nonce. `first_payload` is read before anything
     /// else, then `unread_wire` (bytes already read past that record,
     /// which may be the next record or only the start of it), then the
@@ -257,15 +259,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
     #[must_use]
     pub fn after_first_record(
         io: T,
-        send: Direction,
-        recv: Direction,
+        send: SendDirection,
+        recv: RecvDirection,
         first_payload: Vec<u8>,
         unread_wire: Vec<u8>,
     ) -> Self {
         Self {
             io,
-            send: ClassedRecord::new(send, class_table()),
-            recv: ClassedRecord::new(recv, class_table()),
+            send: ClassedSealer::new(send, class_table()),
+            recv: ClassedOpener::new(recv, class_table()),
             message: Message::new(),
             out: Vec::new(),
             out_pos: 0,
@@ -370,6 +372,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> RecordStream<T> {
         );
         self.out = wire;
         self.out_pos = 0;
+        // Whatever this side sends ends the peer's message before it.
+        self.frame.sent();
     }
 
     /// The message's last record has left: count it and go idle.

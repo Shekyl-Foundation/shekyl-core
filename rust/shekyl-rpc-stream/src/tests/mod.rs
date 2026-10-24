@@ -20,8 +20,13 @@ use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt, DuplexStream};
 
 use super::*;
 
+mod inbound_shape;
+
 /// Two ends of one session: the client's (send, receive) and the daemon's.
-fn directions() -> ((Direction, Direction), (Direction, Direction)) {
+fn directions() -> (
+    (SendDirection, RecvDirection),
+    (SendDirection, RecvDirection),
+) {
     let state = || {
         let mut s = SymmetricState::new(b"shekyl-rpc-stream test", b"");
         s.mix_key(&[0x42; 32]);
@@ -404,12 +409,12 @@ async fn the_opened_first_record_is_read_before_the_transport() {
     let ((c_send, _), (d_send, d_recv)) = directions();
     let table = class_table();
     let class = table.smallest_for(b"first".len()).unwrap();
-    let mut send = ClassedRecord::new(c_send, table.clone());
+    let mut send = ClassedSealer::new(c_send, table.clone());
     let first = send.seal(class, b"first").unwrap();
     let second = send.seal(class, b"second").unwrap();
     let third = send.seal(class, b"third").unwrap();
 
-    let mut framed = ClassedRecord::new(d_recv, table);
+    let mut framed = ClassedOpener::new(d_recv, table);
     let opened = framed.open(&first).unwrap();
     assert_eq!(opened.payload, b"first");
     let d_recv = framed.into_direction();
@@ -608,11 +613,11 @@ async fn hyper_flushes_once_per_message() {
 
 /// The client's sealer, for tests that put records on the wire by hand,
 /// and the daemon's reading end of the same session.
-fn sealer_and_reader() -> (ClassedRecord, RecordStream<DuplexStream>, DuplexStream) {
+fn sealer_and_reader() -> (ClassedSealer, RecordStream<DuplexStream>, DuplexStream) {
     let ((c_send, _), (d_send, d_recv)) = directions();
     let (feed, x) = duplex(1 << 20);
     (
-        ClassedRecord::new(c_send, class_table()),
+        ClassedSealer::new(c_send, class_table()),
         RecordStream::new(x, d_send, d_recv),
         feed,
     )
@@ -821,7 +826,7 @@ async fn padding_is_accepted_only_in_the_shape_a_sender_makes() {
 #[test]
 fn a_run_of_padding_yields() {
     let ((c_send, _), (d_send, d_recv)) = directions();
-    let mut sealer = ClassedRecord::new(c_send, class_table());
+    let mut sealer = ClassedSealer::new(c_send, class_table());
     let (mut feed, x) = duplex(1 << 20);
     let mut daemon = RecordStream::new(x, d_send, d_recv);
     let waker = std::task::Waker::noop();
@@ -876,84 +881,6 @@ async fn a_refused_record_poisons_both_sides() {
     assert!(is::<StreamPoisoned>(&second), "{second}");
     let write = daemon.write_all(b"answer").await.unwrap_err();
     assert!(is::<StreamPoisoned>(&write), "{write}");
-}
-
-/// F2: the stream reports the shape of the records it just read, and the
-/// daemon's route can tell a padded submission from anything else.
-#[tokio::test]
-async fn the_inbound_shape_tells_a_submission_from_anything_else() {
-    // One client stream, one daemon stream, several requests in turn.
-    let (mut client, mut daemon) = pair(1 << 20);
-    let shape = daemon.inbound_shape();
-    let mark = client.submission_mark();
-    let mut got = vec![0u8; 1 << 20];
-
-    // An ordinary request.
-    client.write_all(b"GET /info").await.unwrap();
-    client.flush().await.unwrap();
-    daemon.read_exact(&mut got[..9]).await.unwrap();
-    assert!(!shape.ends_in_submission());
-
-    // A padded submission (one payload record, four padding).
-    mark.arm();
-    client.write_all(&bytes(300)).await.unwrap();
-    client.flush().await.unwrap();
-    daemon.read_exact(&mut got[..300]).await.unwrap();
-    assert!(shape.ends_in_submission());
-
-    // A submission that fills all five records carries no padding. The
-    // padded frame that preceded it is the boundary the five are counted from.
-    mark.arm();
-    client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
-    client.flush().await.unwrap();
-    daemon.read_exact(&mut got[..SUBMISSION_CAP]).await.unwrap();
-    assert!(shape.ends_in_submission());
-
-    // The same bytes sent unarmed: five full ordinary records, after a
-    // message that ended on a full record. Not taken for a submission.
-    client.write_all(&bytes(SUBMISSION_CAP)).await.unwrap();
-    client.flush().await.unwrap();
-    daemon.read_exact(&mut got[..SUBMISSION_CAP]).await.unwrap();
-    assert!(!shape.ends_in_submission());
-
-    // A submission's size sent unarmed: ordinary records, refused.
-    client.write_all(&bytes(1_000)).await.unwrap();
-    client.flush().await.unwrap();
-    daemon.read_exact(&mut got[..1_000]).await.unwrap();
-    assert!(!shape.ends_in_submission());
-}
-
-/// A largest-class ordinary record after a padded frame is not a submission.
-/// The padding belongs to the frame that finished; borrowing it would make
-/// this record look like the end of a shorter frame.
-#[tokio::test]
-async fn an_ordinary_record_after_a_padded_frame_is_not_a_submission() {
-    let (mut client, mut daemon) = pair(1 << 20);
-    let shape = daemon.inbound_shape();
-    client.submission_mark().arm();
-    client.write_all(&bytes(300)).await.unwrap();
-    client.flush().await.unwrap();
-    let mut got = vec![0u8; 300];
-    daemon.read_exact(&mut got).await.unwrap();
-    assert!(shape.ends_in_submission());
-
-    // 20,000 bytes is one record of the largest class: more than the middle
-    // class holds, and at most one largest payload.
-    let medium = 20_000;
-    client.write_all(&bytes(medium)).await.unwrap();
-    client.flush().await.unwrap();
-    let mut got = vec![0u8; medium];
-    daemon.read_exact(&mut got).await.unwrap();
-    assert!(!shape.ends_in_submission());
-
-    // The same bytes with no frame behind them are not a submission either.
-    let (mut client, mut daemon) = pair(1 << 20);
-    let shape = daemon.inbound_shape();
-    client.write_all(&bytes(medium)).await.unwrap();
-    client.flush().await.unwrap();
-    let mut got = vec![0u8; medium];
-    daemon.read_exact(&mut got).await.unwrap();
-    assert!(!shape.ends_in_submission());
 }
 
 /// Shutdown has sealed the close. A later write is a use of a shut side,

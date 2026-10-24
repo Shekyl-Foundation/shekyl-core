@@ -762,6 +762,9 @@ pub fn build_pqc_public_key(
 /// with the supplied Ed25519 view public key (i.e., its first 32 bytes are
 /// the birational image of `view_pk`).
 ///
+/// The ML-KEM-768 suffix must also be a well-formed encapsulation key
+/// ([`crate::kem::check_ml_kem_768_ek`]).
+///
 /// This is the runtime invariant check C++ runs on every
 /// `account_public_address` freshly loaded from the wire or from disk.
 /// A mismatch means either corruption or an attacker substituting an
@@ -774,8 +777,14 @@ pub fn check_pqc_public_key_matches_view(
     if pqc_public_key[..32] != expected_x25519 {
         return Err(CryptoError::InvalidKeyMaterial);
     }
-    Ok(())
+    crate::kem::check_ml_kem_768_ek(&pqc_public_key[32..])
 }
+
+pub use super::coinbase::{coinbase_recipient, RecipientRefused};
+
+#[cfg(test)]
+#[path = "coinbase_recipient_tests.rs"]
+mod coinbase_recipient_tests;
 
 #[cfg(test)]
 mod tests {
@@ -947,6 +956,21 @@ mod tests {
         let mut blob =
             rederive_account(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39).unwrap();
         blob.pqc_public_key[0] ^= 0x01;
+        assert!(check_pqc_public_key_matches_view(
+            &blob.pqc_public_key,
+            blob.view_pk.as_canonical_bytes()
+        )
+        .is_err());
+    }
+
+    /// An encapsulation key with a coefficient at or above `q` is not an
+    /// address's key, whatever its X25519 prefix: all-ones encodes 4095.
+    #[test]
+    fn pqc_public_key_check_rejects_a_malformed_kem_key() {
+        let seed = [0x99u8; MASTER_SEED_BYTES];
+        let mut blob =
+            rederive_account(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39).unwrap();
+        blob.pqc_public_key[32..].fill(0xff);
         assert!(check_pqc_public_key_matches_view(
             &blob.pqc_public_key,
             blob.view_pk.as_canonical_bytes()

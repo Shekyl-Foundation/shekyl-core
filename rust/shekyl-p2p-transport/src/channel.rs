@@ -4,7 +4,8 @@
 // BSD-3-Clause
 
 //! The interim record framer. Each record is an encrypted 2-byte length and
-//! an encrypted body, two nonces of a [`Direction`]. A plaintext longer than
+//! an encrypted body, two nonces of a [`SendDirection`] or a
+//! [`RecvDirection`]. A plaintext longer than
 //! [`MAX_BODY`] bytes is several records; the concatenation is the session
 //! byte stream.
 //!
@@ -12,7 +13,7 @@
 //! This framer is the length-prefixed wire the clearnet seam speaks today.
 //! It is not the channel's classed records.
 
-use shekyl_noise::{Direction, DirectionError, TAG_LEN};
+use shekyl_noise::{DirectionError, RecvDirection, SendDirection, TAG_LEN};
 
 const MAX_BODY: usize = u16::MAX as usize; // `usize::from` is not const here (E0658).
 const LENGTH_WIRE: usize = 2 + TAG_LEN;
@@ -32,32 +33,32 @@ impl From<DirectionError> for RecordError {
     fn from(err: DirectionError) -> Self {
         match err {
             DirectionError::Decrypt => Self::Decrypt,
-            DirectionError::State => Self::State,
+            // The direction is dead. A later open is `Poisoned`, and that
+            // is this half's state: it keeps no death of its own.
+            DirectionError::State | DirectionError::Poisoned => Self::State,
         }
     }
 }
 
 pub struct SendHalf {
-    dir: Direction,
+    dir: SendDirection,
 }
 
 pub struct RecvHalf {
-    dir: Direction,
+    dir: RecvDirection,
     /// Length already decrypted. Its nonce is spent; the body nonce is not,
-    /// until those bytes arrive or the half is poisoned.
+    /// until those bytes arrive or the direction is poisoned.
     pending_body: Option<usize>,
-    dead: bool,
 }
 
 /// The two halves of one session. `send` seals what this side sends; `recv`
 /// opens what it receives. Each direction already holds its own chaining key.
-pub(crate) fn session(send: Direction, recv: Direction) -> (SendHalf, RecvHalf) {
+pub(crate) fn session(send: SendDirection, recv: RecvDirection) -> (SendHalf, RecvHalf) {
     (
         SendHalf { dir: send },
         RecvHalf {
             dir: recv,
             pending_body: None,
-            dead: false,
         },
     )
 }
@@ -89,16 +90,17 @@ impl SendHalf {
 impl RecvHalf {
     /// Open one record from the front of `buf`.
     ///
-    /// [`RecordError::Truncated`] keeps the half usable: a short read has not
-    /// spent the body nonce. Any other error poisons the half.
+    /// [`RecordError::Truncated`] keeps the direction usable: a short read
+    /// has not spent the body nonce. Any other error poisons the direction,
+    /// and every later open is [`RecordError::State`], a short read included.
     pub fn open_one(&mut self, buf: &[u8]) -> Result<(Vec<u8>, usize), RecordError> {
-        if self.dead {
+        if self.dir.is_dead() {
             return Err(RecordError::State);
         }
         match open_record(&mut self.dir, &mut self.pending_body, buf) {
             Err(RecordError::Truncated) => Err(RecordError::Truncated),
             Err(e) => {
-                self.dead = true;
+                self.dir.poison();
                 Err(e)
             }
             ok => ok,
@@ -106,7 +108,11 @@ impl RecvHalf {
     }
 }
 
-fn seal_chunk(send: &mut Direction, chunk: &[u8], out: &mut Vec<u8>) -> Result<(), RecordError> {
+fn seal_chunk(
+    send: &mut SendDirection,
+    chunk: &[u8],
+    out: &mut Vec<u8>,
+) -> Result<(), RecordError> {
     if chunk.is_empty() || chunk.len() > MAX_BODY {
         return Err(RecordError::Oversize);
     }
@@ -120,7 +126,7 @@ fn seal_chunk(send: &mut Direction, chunk: &[u8], out: &mut Vec<u8>) -> Result<(
 }
 
 fn open_record(
-    recv: &mut Direction,
+    recv: &mut RecvDirection,
     pending_body: &mut Option<usize>,
     buf: &[u8],
 ) -> Result<(Vec<u8>, usize), RecordError> {
@@ -196,6 +202,10 @@ mod tests {
         let empty = a_send.seal_empty_body();
         assert!(matches!(b_recv.open_one(&empty), Err(RecordError::Empty)));
         assert!(matches!(b_recv.open_one(&empty), Err(RecordError::State)));
+        assert!(
+            matches!(b_recv.open_one(&[]), Err(RecordError::State)),
+            "a short read after a refusal is not a retry"
+        );
     }
 
     #[test]

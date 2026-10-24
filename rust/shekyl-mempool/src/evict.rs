@@ -75,14 +75,17 @@ impl Limits {
     }
 }
 
-/// Why CEN-M10 evicted an entry.
+/// Why an entry left the pool other than by being mined.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Evicted {
-    /// The template's `tx_against` refused it against the parent.
+    /// CEN-M10: the template's `tx_against` refused it against the parent.
     Refused,
-    /// The pool was over its weight limit (module docs: the cheapest per
-    /// weight first).
+    /// CEN-M10: the pool was over its weight limit (module docs: the
+    /// cheapest per weight first).
     OverWeight,
+    /// The host's administrator flushed it ([`Pool::flush`]): not a
+    /// verdict on the transaction.
+    Flushed,
 }
 
 impl Pool {
@@ -126,15 +129,21 @@ impl Pool {
 
     /// Apply CEN-M10, `refused` being the entries the last template
     /// selection refused against its parent: those leave, then the
-    /// cheapest per weight until the pool is within its limit. Writes every
-    /// removal to the file in one batch (P3), then drops the entries and
-    /// their key images from the index.
+    /// cheapest per weight until the pool is within its limit, passing over
+    /// `listed`, the bodies that template lists (a posted job must not name
+    /// a body the pool no longer holds). Writes every removal to the file
+    /// in one batch (P3), then drops the entries and their key images from
+    /// the index.
     ///
     /// # Errors
     ///
     /// The pool file's; nothing is dropped from the index unless the file
     /// dropped it.
-    pub fn evict(&mut self, refused: &[TxHash]) -> Result<Vec<(TxHash, Evicted)>, StoreError> {
+    pub fn evict(
+        &mut self,
+        refused: &[TxHash],
+        listed: &[TxHash],
+    ) -> Result<Vec<(TxHash, Evicted)>, StoreError> {
         let mut evicted: Vec<(TxHash, Evicted)> = Vec::new();
         let mut gone: BTreeSet<TxHash> = BTreeSet::new();
         for txid in refused {
@@ -148,6 +157,7 @@ impl Pool {
             .into_iter()
             .filter(|(txid, _)| !gone.contains(txid))
             .collect();
+        // The listed bodies count toward the weight and are never chosen.
         let mut total: u128 = survivors
             .iter()
             .map(|(_, held)| u128::from(held.weight))
@@ -156,6 +166,9 @@ impl Pool {
         for (txid, held) in survivors {
             if total <= limit {
                 break;
+            }
+            if listed.contains(&txid) {
+                continue;
             }
             total -= u128::from(held.weight);
             over_weight.push(txid);
@@ -173,6 +186,34 @@ impl Pool {
             }
         }
         Ok(evicted)
+    }
+}
+
+impl Pool {
+    /// Remove `ids` that the pool holds, at the host administrator's
+    /// request (`flush_txpool`): each tagged [`Evicted::Flushed`], an id the
+    /// pool does not hold skipped. Writes every removal to the file in one
+    /// batch, then drops the entries and their key images from the index.
+    ///
+    /// # Errors
+    ///
+    /// The pool file's; nothing is dropped from the index unless the file
+    /// dropped it.
+    pub fn flush(&mut self, ids: &[TxHash]) -> Result<Vec<(TxHash, Evicted)>, StoreError> {
+        let mut gone: BTreeSet<TxHash> = BTreeSet::new();
+        let flushed: Vec<(TxHash, Evicted)> = ids
+            .iter()
+            .filter(|txid| self.held().contains_key(txid) && gone.insert(**txid))
+            .map(|txid| (*txid, Evicted::Flushed))
+            .collect();
+        if !flushed.is_empty() {
+            self.store()
+                .write(|batch| flushed.iter().try_for_each(|(txid, _)| batch.remove(txid)))?;
+            for (txid, _) in &flushed {
+                self.drop_held(txid);
+            }
+        }
+        Ok(flushed)
     }
 }
 

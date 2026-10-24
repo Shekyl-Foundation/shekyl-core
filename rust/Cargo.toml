@@ -472,6 +472,7 @@ exclude = [
     "shekyl-wire/fuzz",
     "shekyl-engine-state/fuzz",
     "shekyl-p2p-transport/fuzz",
+    "shekyl-noise/fuzz",
     # FCMP++ research crypto, vendored from the monero-oxide fork (pinned by
     # UPSTREAM_MONERO_OXIDE_COMMIT). The clean upstream-formatted mirror lives on
     # the fork — the EC-membership review artifact; this vendored copy is

@@ -60,7 +60,9 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 
 use crate::admission::{ArrivalBound, Buckets};
-use crate::connector::{Connector, ConnectorArgs, PopBeyondReorgCap, RunFault, WatchTip};
+use crate::connector::{
+    Connector, ConnectorArgs, PopBeyondReorgCap, PopBlocks, Rewound, RunFault, WatchTip,
+};
 use crate::follower::JobSeat;
 use crate::schedule::ChainRules;
 
@@ -193,6 +195,9 @@ pub enum Refusal {
     /// An arrival is larger than any valid block near this tip can be
     /// (`admission` module docs).
     Oversize,
+    /// The door could not read the store to bound the arrival. The service
+    /// meets the same read and stops on it, so waiting does not help.
+    StoreUnreadable,
 }
 
 /// Why this node cannot follow a heavier chain it stored and judged: the
@@ -311,15 +316,6 @@ impl Ticket {
         Tagged {
             tag: self.tag,
             reply: self.reply.await.unwrap_or(Reply::Stopped),
-        }
-    }
-
-    /// [`reply`](Self::reply) from a thread that is not the runtime's: the
-    /// found-block sink's.
-    pub(crate) fn blocking_reply(self) -> Tagged {
-        Tagged {
-            tag: self.tag,
-            reply: self.reply.blocking_recv().unwrap_or(Reply::Stopped),
         }
     }
 }
@@ -567,10 +563,6 @@ where
         self.branch_gate.lock().await
     }
 
-    pub(crate) const fn connector(&self) -> &ActorRef<Connector> {
-        &self.connector
-    }
-
     pub(crate) const fn store(&self) -> &Arc<ChainStore> {
         &self.store
     }
@@ -606,16 +598,27 @@ where
         self.pool.is_some() && self.pool_live.load(Ordering::Acquire)
     }
 
+    /// The pool, when it is wired and live. A caller that also reads the
+    /// chain begins its snapshot before it locks this, as [`with_pool`]
+    /// does.
+    pub(crate) fn live_pool(&self) -> Option<&Mutex<Pool>> {
+        if !self.pool_is_live() {
+            return None;
+        }
+        self.pool.as_ref().map(|wiring| &*wiring.pool)
+    }
+
+    /// Whether a pool is wired and its file has faulted.
+    pub(crate) fn pool_retired(&self) -> bool {
+        self.pool.is_some() && !self.pool_live.load(Ordering::Acquire)
+    }
+
     /// The pool file faulted. Block ingest continues; the pool is not read
     /// or written again until a restart opens the file afresh. The file is
     /// discardable (`SPL-Q8`), but one this process cannot read is refused
     /// at open, never deleted, so the remedy is the operator's restart.
     pub(crate) fn pool_dead(&self, fault: &StoreError) {
-        tracing::error!(
-            "the pool file faulted: the node keeps following the chain without a \
-             transaction pool until it restarts: {fault}"
-        );
-        self.pool_live.store(false, Ordering::Release);
+        retire_pool(&self.pool_live, fault);
     }
 
     /// Park `bodies` for the attendant and wake it.
@@ -725,6 +728,10 @@ struct Admission {
     clock: Clock,
     /// Set once the service exists, so a failed read stops it.
     on_read_fault: Mutex<Option<ReadFault>>,
+    /// A test makes the bound read fail; the chain store has no read
+    /// fault of its own to inject.
+    #[cfg(test)]
+    refuse_reads: std::sync::atomic::AtomicBool,
 }
 
 /// The door: the one way in (module docs). Cheap to clone.
@@ -757,24 +764,52 @@ impl Door {
         self.admission.bound().ok().map(|bound| bound.0)
     }
 
-    /// Whether [`Service::stop`](crate::service::Service::stop) has closed the door.
-    #[must_use]
-    pub(crate) fn is_closed(&self) -> bool {
-        self.room.is_closed()
-    }
-
-    /// Block until a block this node mined can take a seat, or the door closes.
-    ///
-    /// `false` is a closed door: the wait woke because the service is
-    /// stopping, and a seat will not appear.
-    pub(crate) fn wait_for_local_seat(&self) -> bool {
-        self.room.wait_local();
-        !self.is_closed()
-    }
-
     /// Close the door and wake a miner waiting for a seat.
     pub(crate) fn close(&self) {
         self.room.close();
+    }
+
+    /// The local-arrival entry (`DRS_X_STORE_FLIP.md` DX-Q3, Q6): a block this
+    /// node mined, was submitted, or is connecting at genesis. It waits for
+    /// the local seat while the window is full, offers the block as
+    /// [`Origin::Local`], and awaits its one reply. A door that closes while
+    /// it waits answers [`Reply::Stopped`]: the service is stopping, and the
+    /// block was not accepted.
+    ///
+    /// The miner's sink, `submit_block`, `generateblocks` and the node's
+    /// genesis connect all enter here, so a local block has one path in.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::Oversize`]: the block is larger than any valid block near
+    /// the tip; [`Refusal::StoreUnreadable`]: the door could not read the
+    /// store. Waiting changes neither, so neither is waited out.
+    pub async fn offer_local(
+        &self,
+        tag: ArrivalTag,
+        block: Vec<u8>,
+        bodies: Vec<Vec<u8>>,
+    ) -> Result<Tagged, Refusal> {
+        let arrival = Arrival {
+            tag,
+            origin: Origin::Local,
+            block,
+            bodies,
+        };
+        loop {
+            match self.offer(arrival.clone()) {
+                Ok(ticket) => return Ok(ticket.reply().await),
+                Err(Refusal::NoRoom) => {
+                    if !self.room.wait_local().await {
+                        return Ok(Tagged {
+                            tag,
+                            reply: Reply::Stopped,
+                        });
+                    }
+                }
+                Err(refused) => return Err(refused),
+            }
+        }
     }
 
     /// Offer one arrival: a span of one.
@@ -894,6 +929,101 @@ pub struct PoolWiring {
     pub wall: Arc<dyn Fn() -> UnixSeconds + Send + Sync>,
 }
 
+/// Pops blocks for `pop_blocks` (`DRS_X_STORE_FLIP.md` DX-Q3, Q7), held
+/// apart from the service ([`Service::rewinder`]).
+pub struct Rewinder<S: Substrate>
+where
+    S::Fault: core::fmt::Debug,
+{
+    shared: Arc<Shared<S>>,
+}
+
+impl<S: Substrate> Clone for Rewinder<S>
+where
+    S::Fault: core::fmt::Debug,
+{
+    fn clone(&self) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl<S> Rewinder<S>
+where
+    S: Substrate + Send + Sync + 'static,
+    S::Fault: core::fmt::Debug + Send + 'static,
+{
+    /// Pop `count` blocks from the tip ([`PopBlocks`]). A count that would
+    /// pop genesis or a retired block is refused before any pop, and the
+    /// writer stays up. After a pop, the popped blocks' bodies are offered
+    /// through the pool's door, as a switch's demoted bodies are.
+    ///
+    /// # Errors
+    ///
+    /// [`ServiceFault::Connector`] for a store fault; [`ServiceFault::Mailbox`]
+    /// when the connector is gone.
+    pub async fn pop_blocks(&self, count: u64) -> Result<Rewound, ServiceFault<S::Fault>> {
+        let rewound = self
+            .shared
+            .connector
+            .ask(PopBlocks { count })
+            .await
+            .map_err(|error| match error {
+                kameo::error::SendError::HandlerError(fault) => ServiceFault::Connector(fault),
+                _ => ServiceFault::Mailbox,
+            })?;
+        if let Rewound::Popped { bodies, .. } = &rewound {
+            if !bodies.is_empty() {
+                span::offer_carried(&self.shared, span::Carried::Bodies(bodies.clone())).await;
+            }
+        }
+        Ok(rewound)
+    }
+}
+
+/// The pool file faulted: the one retirement, whoever met the fault.
+fn retire_pool(live: &AtomicBool, fault: &StoreError) {
+    tracing::error!(
+        "the pool file faulted: the node keeps following the chain without a \
+         transaction pool until it restarts: {fault}"
+    );
+    live.store(false, Ordering::Release);
+}
+
+/// Whether the pool file has faulted ([`Service::pool_health`]), and the
+/// way to say it has: a writer outside the service that meets a fault on
+/// the pool file retires the service's pool, not a copy.
+#[derive(Clone, Debug)]
+pub struct PoolHealth {
+    wired: bool,
+    live: Arc<AtomicBool>,
+}
+
+impl PoolHealth {
+    /// The health of a node with no pool wired: never retired.
+    #[must_use]
+    pub fn unwired() -> Self {
+        Self {
+            wired: false,
+            live: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// A pool is wired and its file has faulted.
+    #[must_use]
+    pub fn retired(&self) -> bool {
+        self.wired && !self.live.load(Ordering::Acquire)
+    }
+
+    /// The pool file faulted under a writer outside the service: the
+    /// service reads and writes the pool no more, as when it meets the
+    /// fault itself.
+    pub fn retire(&self, fault: &StoreError) {
+        retire_pool(&self.live, fault);
+    }
+}
+
 /// The running service (module docs).
 pub struct Service<S: Substrate>
 where
@@ -953,6 +1083,8 @@ where
             buckets: Buckets::new(Duration::from_secs(shekyl_difficulty::T_SECONDS)),
             clock,
             on_read_fault: Mutex::new(None),
+            #[cfg(test)]
+            refuse_reads: std::sync::atomic::AtomicBool::new(false),
         });
         let prepared = PreparedActor::<Connector>::new(kameo::mailbox::unbounded());
         let connector = prepared.actor_ref().clone();
@@ -1144,7 +1276,25 @@ where
     /// a restart. What `get_info` and `mining_status` report (PR 3b).
     #[must_use]
     pub fn pool_retired(&self) -> bool {
-        self.shared.pool.is_some() && !self.shared.pool_live.load(Ordering::Acquire)
+        self.shared.pool_retired()
+    }
+
+    /// What pops blocks for `pop_blocks`, held apart from the service.
+    #[must_use]
+    pub fn rewinder(&self) -> Rewinder<S> {
+        Rewinder {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+
+    /// The same reading, held apart from the service: what the node's
+    /// mining control reports after the service is gone.
+    #[must_use]
+    pub fn pool_health(&self) -> PoolHealth {
+        PoolHealth {
+            wired: self.shared.pool.is_some(),
+            live: Arc::clone(&self.shared.pool_live),
+        }
     }
 
     /// The door.
@@ -1196,7 +1346,7 @@ pub(crate) use window::{
 
 #[cfg(test)]
 #[path = "service_tests.rs"]
-mod service_tests;
+pub(crate) mod service_tests;
 
 #[cfg(test)]
 #[path = "service_pool_tests.rs"]
