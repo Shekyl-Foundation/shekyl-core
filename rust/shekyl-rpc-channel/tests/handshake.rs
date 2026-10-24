@@ -13,7 +13,8 @@
 //! production does.
 
 use shekyl_noise::{
-    ClassId, ClassTable, ClassedError, ClassedRecord, Direction, DirectionError, OCCUPANCY_LEN,
+    ClassId, ClassTable, ClassedError, ClassedOpener, ClassedSealer, DirectionError, RecvDirection,
+    SendDirection, OCCUPANCY_LEN,
 };
 use shekyl_rpc_channel::budget::HandshakeBudget;
 use shekyl_rpc_channel::handshake::{
@@ -312,7 +313,7 @@ fn an_impostor_cannot_answer_message_1() {
 fn through_message_4(
     client_id: &StaticKeypair,
     daemon_id: &StaticKeypair,
-) -> (PendingSession, Direction, Direction) {
+) -> (PendingSession, SendDirection, RecvDirection) {
     let (client, m1) = Client::start(&NETWORK, client_id, daemon_id.public()).unwrap();
     let daemon = read1(daemon_id, &m1).unwrap();
     let (daemon, m2) = daemon.write_message2().unwrap();
@@ -328,7 +329,9 @@ fn through_message_4(
 /// The tests' opener: the first message is one bare Noise ciphertext under
 /// [`TRANSPORT_AD`]. A record that may arrive in pieces uses
 /// [`PendingSession::lend`]; this opener exists for a message already whole.
-fn bare(ciphertext: &[u8]) -> impl FnOnce(&mut Direction) -> Result<Vec<u8>, DirectionError> + '_ {
+fn bare(
+    ciphertext: &[u8],
+) -> impl FnOnce(&mut RecvDirection) -> Result<Vec<u8>, DirectionError> + '_ {
     move |recv| {
         recv.open(ciphertext, TRANSPORT_AD)
             .map(|(plaintext, _)| plaintext)
@@ -380,7 +383,6 @@ fn an_opener_that_opened_nothing_is_refused_whatever_it_returns() {
     let (session, first) = pending.open_first_message(bare(&message)).unwrap();
     assert_eq!(first, b"first request");
     assert_eq!(session.recv.opened(), 1);
-    assert_eq!(session.send.opened(), 0);
 }
 
 /// The count says a direction opened a ciphertext; it does not say which
@@ -507,11 +509,11 @@ fn a_fragmented_first_record_stays_withheld_until_it_opens() {
     let (client_id, daemon_id) = identities();
     let (pending, send, mut client_recv) = through_message_4(&client_id, &daemon_id);
     let table = ClassTable::new(&[lend_class_len()]).unwrap();
-    let mut framed_send = ClassedRecord::new(send, table.clone());
+    let mut framed_send = ClassedSealer::new(send, table.clone());
     let wire = framed_send.seal(ClassId(0), b"request").unwrap();
 
     let (withheld, recv) = pending.lend();
-    let mut framed = ClassedRecord::new(recv, table.clone());
+    let mut framed = ClassedOpener::new(recv, table.clone());
     assert_eq!(framed.open(&wire[..1]), Err(ClassedError::Truncated));
     assert_eq!(
         framed.record_len(wire[0]),
@@ -526,10 +528,9 @@ fn a_fragmented_first_record_stays_withheld_until_it_opens() {
     assert_eq!(released, b"request");
     assert_eq!(session.request, REQUEST);
     assert_eq!(session.recv.opened(), 1);
-    assert_eq!(session.send.opened(), 0);
 
     let wire = framed_send.seal(ClassId(0), b"second").unwrap();
-    let mut recv = ClassedRecord::new(session.recv, table);
+    let mut recv = ClassedOpener::new(session.recv, table);
     assert_eq!(recv.open(&wire).unwrap().payload, b"second");
     let (reply, _) = session.send.seal(b"reply", TRANSPORT_AD).unwrap();
     let (opened, _) = client_recv.open(&reply, TRANSPORT_AD).unwrap();

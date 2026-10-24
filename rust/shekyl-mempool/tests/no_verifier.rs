@@ -7,10 +7,15 @@
 //! condition; DRS-E5 PR-b). Two ways it could be, both closed here:
 //!
 //! - **By dependency.** A crate can call only what it depends on. This
-//!   crate's normal dependencies are exactly the validator, the store and
-//!   the three vocabulary crates — no verifier (`shekyl-bulletproofs`, the
-//!   FCMP++ crates, `shekyl-crypto-pq`) — so every verification it causes
-//!   is one the validator performs. A new edge fails here first.
+//!   crate's normal dependencies are the validator, the store, the three
+//!   vocabulary crates, and `shekyl-difficulty` for `CumulativeDifficulty`
+//!   — the work a judged tip is ordered by. That crate is a leaf over
+//!   `shekyl-types`. It is not a proof verifier (`shekyl-bulletproofs`,
+//!   the FCMP++ crates, `shekyl-crypto-pq`), so every verification this
+//!   crate causes is one the validator performs. A new edge fails here
+//!   first, and production code may name only `CumulativeDifficulty` from
+//!   the work crate: the adjustment, the hash check, fork choice and the
+//!   timestamp rule stay with the validator.
 //! - **Through the validator's side doors.** The validator exports things
 //!   that verify besides the door's three calls — the H19 batch over a
 //!   candidate (`ListedProofs`), the bundle verifier — so this crate's
@@ -46,6 +51,7 @@ fn the_crate_depends_on_no_verifier() {
     let expected: BTreeSet<&str> = [
         "shekyl-chain-rules",
         "shekyl-chain-store",
+        "shekyl-difficulty",
         "shekyl-types",
         "shekyl-units",
         "shekyl-wire",
@@ -53,6 +59,64 @@ fn the_crate_depends_on_no_verifier() {
     .into_iter()
     .collect();
     assert_eq!(normal_dependencies(), expected);
+}
+
+/// The only path production code may take into `shekyl-difficulty`.
+const WORK_TYPE: &str = "shekyl_difficulty::CumulativeDifficulty";
+
+/// `code` names nothing from `shekyl-difficulty` except [`WORK_TYPE`].
+fn names_only_the_work_type(code: &str) -> bool {
+    const CRATE_PATH: &str = "shekyl_difficulty::";
+    let mut rest = code;
+    while let Some(at) = rest.find(CRATE_PATH) {
+        let after = &rest[at + CRATE_PATH.len()..];
+        let ident_len = after
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .map(char::len_utf8)
+            .sum();
+        if &after[..ident_len] != "CumulativeDifficulty" {
+            return false;
+        }
+        rest = &after[ident_len..];
+    }
+    true
+}
+
+#[test]
+fn the_work_crate_is_named_only_for_cumulative_difficulty() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut scanned = Vec::new();
+    for entry in std::fs::read_dir(&src).expect("the crate's src/") {
+        let path = entry.expect("an entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_owned();
+        if !name.ends_with(".rs") || name.ends_with("_tests.rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("a source file");
+        for (n, line) in source.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            assert!(
+                names_only_the_work_type(code),
+                "{name}:{}: names something other than `{WORK_TYPE}`",
+                n + 1
+            );
+        }
+        scanned.push(name);
+    }
+    assert!(
+        scanned.iter().any(|n| n == "pool.rs"),
+        "scanned {scanned:?}"
+    );
+    let pool = std::fs::read_to_string(src.join("pool.rs")).expect("pool.rs");
+    assert!(
+        pool.contains(WORK_TYPE),
+        "the pool names the work type it orders a judged tip by"
+    );
 }
 
 /// Whether `code` names the identifier `word` — not as part of a longer one

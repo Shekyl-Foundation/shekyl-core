@@ -21,7 +21,7 @@
 //!   not hold the skeleton the view is read against, so it serves no shard
 //!   view at all.
 //!
-//! The method is admin-only (`RESTRICTED_METHODS`): a shard view is a
+//! The method is the host's (its row in [`crate::methods`]): a shard view is a
 //! fetch the daemon makes on the caller's behalf, and the public listener
 //! does not fetch for strangers (`SV-D6`).
 

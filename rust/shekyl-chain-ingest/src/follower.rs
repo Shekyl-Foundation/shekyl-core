@@ -13,15 +13,13 @@
 //! 2. the pool reconciled to the tip. File entries are judged outside the
 //!    pool lock. Bodies a span parked because the tip moved are judged
 //!    here. A pool-file fault retires the pool and does not stop ingest;
-//! 3. the miner's next job, while the node is synced. The canonical seed
-//!    is already `seed(connecting)`, which is the seed the job hashes
-//!    under. The job does not pin. A seed the slots do not hold leaves the
-//!    current job in place; the next publication tries again.
-//!
-//! **The template source is a seam.** The block a job carries is the
-//! source's: in tests the scenario driver's template; at the flip, PR 3b's
-//! `get_block_template` assembler. The producer claims the seed and the
-//! target itself, on one snapshot.
+//! 3. the node's one template, built and posted while chain sync's state
+//!    reads `Synced` and a `mine-address` is set (`template` module docs;
+//!    `DRS_X_STORE_FLIP.md` DX-Q3, N2). The canonical seed is already
+//!    `seed(connecting)`, which is the seed the job hashes under. The job
+//!    does not pin. A seed the slots do not hold leaves the current job in
+//!    place; the next publication tries again. Every other pass that posts
+//!    nothing withdraws the job and says why ([`Posting`]).
 //!
 //! **The found-block sink.** A found block enters through the service's
 //! one door as a local arrival. A full window waits for the reserved seat
@@ -32,51 +30,186 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use shekyl_chain_rules::{Fault, HeaderView, InvalidBlock, StatelessPass, Substrate, Tip};
+use shekyl_block_template::MinerKeys;
+use shekyl_chain_rules::{
+    Fault, HeaderView, InvalidBlock, StatelessPass, Substrate, Tip, ViewRead,
+};
 use shekyl_chain_store::store::{SnapshotView, StoreError};
+use shekyl_chain_sync::SyncState;
+use shekyl_economics::EconomicParams;
 use shekyl_mempool::{stateless, PoolFault};
-use shekyl_miner::{FoundInbox, Generation, Job, JobBoard};
+use shekyl_miner::{FoundInbox, Generation, JobBoard};
 use shekyl_types::TxHash;
-use shekyl_wire::{Block, Transaction};
+use shekyl_wire::Transaction;
 use tokio::sync::watch;
 
-use crate::connector::{ChainFacts, TemplateFacts, TipChanged};
-use crate::router::claim_next;
+use crate::connector::{FactsStop, TipChanged};
+use crate::router::ClaimStop;
 use crate::schedule::ChainRules;
 use crate::service::{
-    divide_pool_faults, install_window, with_pool, Arrival, ArrivalTag, Door, Origin, PoolDivision,
-    ServiceFault, Shared,
+    divide_pool_faults, install_window, with_pool, ArrivalTag, Door, PoolDivision, ServiceFault,
+    Shared,
 };
+use crate::template::{produce, NoTemplate, Producer};
 
-/// Where the miner's blocks come from (module docs).
-pub trait TemplateSource: Send + Sync + 'static {
-    /// The block to mine after the tip `facts` describes, and its listed
-    /// bodies; `None` when it cannot build one now.
-    fn template(&self, facts: &ChainFacts) -> Option<(Block, Vec<Transaction>)>;
+/// Why the board holds no job: what `mining_status` and
+/// `get_block_template` say while nothing is posted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NoJob {
+    /// The follower has not acted on a tip yet.
+    Starting,
+    /// No `mine-address` row: there is no one for a coinbase to pay.
+    NoAddress,
+    /// Chain sync does not say this node is synced.
+    NotSynced(SyncState),
+    /// The pool file faulted. The node runs without a pool, and builds no
+    /// template, until it restarts.
+    PoolRetired,
+    /// The template could not be built, and why.
+    Unbuilt(Unbuilt),
+    /// The service stopped.
+    Stopped,
 }
 
-/// The miner, once one exists, and the sync owner it reads.
+impl core::fmt::Display for NoJob {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Starting => f.write_str("no template: the node is starting"),
+            Self::NoAddress => f.write_str("no template: no mine-address is set"),
+            Self::NotSynced(SyncState::NoView) => {
+                f.write_str("no template: not synced (no sync owner before chain sync's cutover)")
+            }
+            Self::NotSynced(state) => write!(f, "no template: not synced ({})", state.name()),
+            Self::PoolRetired => {
+                f.write_str("no template: the pool file faulted; restart the node to reopen it")
+            }
+            Self::Unbuilt(why) => write!(f, "no template: {why}"),
+            Self::Stopped => f.write_str("no template: the node is stopping"),
+        }
+    }
+}
+
+impl NoJob {
+    /// Whether the next tip clears this reason.
+    ///
+    /// `generateblocks` keeps waiting while the board is withdrawn for one
+    /// of these: the follower posts again when the tip moves, or when the
+    /// first pass finishes.
+    #[must_use]
+    pub const fn transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Starting | Self::Unbuilt(Unbuilt::PoolOnAnotherTip)
+        )
+    }
+}
+
+/// Why a template could not be built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unbuilt {
+    /// The store faulted; the service is stopping.
+    StoreFault,
+    /// The store is corrupt; the service is stopping.
+    StoreCorrupt,
+    /// The pool's selection could not read the chain; the service is
+    /// stopping.
+    Selection,
+    /// The node's clock could not be read.
+    Clock,
+    /// The OS random source failed.
+    Random,
+    /// The block could not be priced or assembled.
+    Pricing,
+    /// The built coinbase reserves no extra nonce.
+    NoNonceSlot,
+    /// The tip is the last height there is.
+    LastHeight,
+    /// The chain's own headers refuse the next block's target.
+    TargetRefused,
+    /// A seed block is not on the snapshot it was read from.
+    SeedMissing,
+    /// The pool was last judged against another tip; the next tip change
+    /// builds again.
+    PoolOnAnotherTip,
+    /// The template producer panicked; the service is stopping.
+    ProducerPanicked,
+}
+
+impl core::fmt::Display for Unbuilt {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::StoreFault => "the store faulted",
+            Self::StoreCorrupt => "the store is corrupt",
+            Self::Selection => "the pool's selection could not read the chain",
+            Self::Clock => "the clock could not be read",
+            Self::Random => "the OS random source failed",
+            Self::Pricing => "the block could not be priced",
+            Self::NoNonceSlot => "the coinbase reserves no extra nonce",
+            Self::LastHeight => "the tip is the last height there is",
+            Self::TargetRefused => "the chain's own headers refuse its target",
+            Self::SeedMissing => "a seed block is not on the snapshot",
+            Self::PoolOnAnotherTip => "the pool was judged against another tip",
+            Self::ProducerPanicked => "the template producer panicked",
+        })
+    }
+}
+
+impl Unbuilt {
+    /// The RPC `kind` parameter under `mine.unbuilt`.
+    ///
+    /// These spellings are the contract. A rename is a wire change.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::StoreFault => "store_fault",
+            Self::StoreCorrupt => "store_corrupt",
+            Self::Selection => "selection",
+            Self::Clock => "clock",
+            Self::Random => "random",
+            Self::Pricing => "pricing",
+            Self::NoNonceSlot => "no_nonce_slot",
+            Self::LastHeight => "last_height",
+            Self::TargetRefused => "target_refused",
+            Self::SeedMissing => "seed_missing",
+            Self::PoolOnAnotherTip => "pool_on_another_tip",
+            Self::ProducerPanicked => "producer_panicked",
+        }
+    }
+}
+
+/// What the board holds, as the follower last left it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Posting {
+    /// A job, at this generation.
+    Posted(Generation),
+    /// No job, and why.
+    Withdrawn(NoJob),
+}
+
+/// The miner's inbox and chain sync's state.
 pub struct MinerFeed {
-    /// What each job's block is.
-    pub source: Arc<dyn TemplateSource>,
-    /// Whether the node is synced: the sync owner's. While it reads
-    /// `false`, the board is withdrawn on each pass.
-    pub synced: watch::Receiver<bool>,
     /// Where found blocks arrive. Closed when the service stops, which
     /// ends the sink while a sender still lives. The last sender dropping
     /// ends it too.
     pub found: FoundInbox,
+    /// Chain sync's state. The follower posts a job only while it reads
+    /// [`SyncState::Synced`]; a closed watch reads as
+    /// [`SyncState::NoView`].
+    pub sync: watch::Receiver<SyncState>,
 }
 
-/// A board the attendant holds, and the miner when one is seated.
-///
-/// A seat with no miner is the node before a miner exists: the board is
-/// withdrawn when the attendant ends, and nothing is posted in between.
+/// The board the follower posts the node's one template on
+/// (`DRS_X_STORE_FLIP.md` DX-Q3, N2), and what it is built from.
 pub struct JobSeat {
-    /// The board the miner's workers read.
+    /// The board the miner's workers and `get_block_template` read.
     pub board: Arc<JobBoard>,
-    /// The miner and its sync owner. `None` until both exist.
-    pub miner: Option<MinerFeed>,
+    /// Whom the coinbase pays: the `mine-address` row's keys. `None`
+    /// posts nothing.
+    pub keys: Option<MinerKeys>,
+    /// The miner's inbox and the sync watch.
+    pub miner: MinerFeed,
+    /// Where the follower says what the board holds.
+    pub posting: watch::Sender<Posting>,
 }
 
 /// Jobs kept for the found-block sink: a found block's generation names
@@ -90,27 +223,33 @@ const FOUND_SINK_THREAD: &str = "shekyl-found";
 /// Each posted generation's listed bodies.
 pub(crate) type Postings = Arc<Mutex<BTreeMap<Generation, Vec<Transaction>>>>;
 
-/// Withdraws the miner's job on every way out, including a panic.
-struct BoardGuard(Option<Arc<JobBoard>>);
-
-impl BoardGuard {
-    fn hold(board: Option<Arc<JobBoard>>) -> Self {
-        Self(board)
-    }
-}
+/// Withdraws the miner's job on every way out, including a panic, and
+/// says so.
+struct BoardGuard(Option<(Arc<JobBoard>, watch::Sender<Posting>)>);
 
 impl Drop for BoardGuard {
     fn drop(&mut self) {
-        if let Some(board) = self.0.take() {
+        if let Some((board, posting)) = self.0.take() {
             board.withdraw();
+            posting.send_replace(Posting::Withdrawn(NoJob::Stopped));
         }
     }
 }
 
-/// The miner half of a seat, once the inbox has been handed to the sink.
-struct SeatedMiner {
-    source: Arc<dyn TemplateSource>,
-    synced: Option<watch::Receiver<bool>>,
+/// The seat, once the inbox has been handed to the sink.
+struct Seated {
+    board: Arc<JobBoard>,
+    keys: Option<MinerKeys>,
+    sync: Option<watch::Receiver<SyncState>>,
+    posting: watch::Sender<Posting>,
+}
+
+impl Seated {
+    /// Withdraw the job, and say why.
+    fn withdraw(&self, why: NoJob) {
+        self.board.withdraw();
+        self.posting.send_replace(Posting::Withdrawn(why));
+    }
 }
 
 /// The sink thread, the inbox that closes it, and the signal it sends
@@ -133,24 +272,23 @@ pub(crate) async fn follow<S>(
     S::Fault: core::fmt::Debug + Send + 'static,
 {
     let postings: Postings = Arc::new(Mutex::new(BTreeMap::new()));
-    let (board, mut miner, sink) = match job {
+    let (mut seat, sink) = match job {
         Some(JobSeat {
             board,
-            miner:
-                Some(MinerFeed {
-                    source,
-                    synced,
-                    found,
-                }),
+            keys,
+            miner: MinerFeed { found, sync },
+            posting,
         }) => {
             let inbox = found.clone();
             let (done_tx, done_rx) = tokio::sync::oneshot::channel();
             let thread = spawn_sink(found, door.clone(), Arc::clone(&postings), done_tx);
+            posting.send_replace(Posting::Withdrawn(NoJob::Starting));
             (
-                Some(board),
-                Some(SeatedMiner {
-                    source,
-                    synced: Some(synced),
+                Some(Seated {
+                    board,
+                    keys,
+                    sync: Some(sync),
+                    posting,
                 }),
                 Some(SinkJoin {
                     thread,
@@ -159,10 +297,12 @@ pub(crate) async fn follow<S>(
                 }),
             )
         }
-        Some(JobSeat { board, miner: None }) => (Some(board), None, None),
-        None => (None, None, None),
+        None => (None, None),
     };
-    let _board = BoardGuard::hold(board.clone());
+    let _board = BoardGuard(
+        seat.as_ref()
+            .map(|seat| (Arc::clone(&seat.board), seat.posting.clone())),
+    );
     let mut stopping = shared.stop_signal();
     loop {
         if shared.stopping() {
@@ -182,21 +322,26 @@ pub(crate) async fn follow<S>(
         if shared.stopping() {
             break;
         }
-        if let (Some(board), Some(seated)) = (&board, miner.as_mut()) {
-            let is_synced = seated
-                .synced
-                .as_mut()
-                .is_some_and(|s| *s.borrow_and_update());
-            if is_synced {
-                post(&shared, board, seated.source.as_ref(), &postings).await;
-            } else {
-                board.withdraw();
+        if let Some(seat) = seat.as_mut() {
+            // A closed watch still holds its last value; it reads as no
+            // view from the moment it closes, whichever branch woke us.
+            let state = match seat.sync.as_mut() {
+                Some(sync) if sync.has_changed().is_ok() => *sync.borrow_and_update(),
+                _ => {
+                    seat.sync = None;
+                    SyncState::NoView
+                }
+            };
+            match (&seat.keys, state) {
+                (None, _) => seat.withdraw(NoJob::NoAddress),
+                (Some(_), SyncState::Synced) => post(&shared, seat, &postings).await,
+                (Some(_), behind) => seat.withdraw(NoJob::NotSynced(behind)),
             }
         }
         shared.followed(tip.seq);
         let sync_changed = async {
-            match miner.as_mut().and_then(|seated| seated.synced.as_mut()) {
-                Some(synced) => synced.changed().await.is_err(),
+            match seat.as_mut().and_then(|seat| seat.sync.as_mut()) {
+                Some(sync) => sync.changed().await.is_err(),
                 None => std::future::pending().await,
             }
         };
@@ -206,8 +351,8 @@ pub(crate) async fn follow<S>(
             // any more. That is "behind" — the job is withdrawn on the
             // next pass — not a reason to stop following the chain.
             closed = sync_changed => if closed {
-                if let Some(seated) = miner.as_mut() {
-                    seated.synced = None;
+                if let Some(seat) = seat.as_mut() {
+                    seat.sync = None;
                 }
             },
             () = shared.pending_ready().notified() => {}
@@ -223,9 +368,9 @@ pub(crate) async fn follow<S>(
     {
         // Close the inbox before waiting, so a sink blocked in `recv`
         // wakes while a sender still lives. The wait yields this task:
-        // the service task can then drop a queued arrival, which answers
-        // a sink blocked in `blocking_reply`. The join is after that
-        // answer, so it does not occupy the worker the reply needs.
+        // the service task can then answer a queued local arrival, which
+        // a sink waits on in `offer_local`. The join is after that answer,
+        // so it does not occupy the worker the reply needs.
         inbox.close();
         if done.await.is_err() {
             tracing::error!("the found-block sink ended without signalling");
@@ -374,58 +519,175 @@ fn plant_blocking(
     })
 }
 
-/// Post the job for the block after the tip. The window is already pinned.
-/// A seed the slots do not hold leaves the current job; the next
-/// publication tries again.
-async fn post<S>(
-    shared: &Arc<Shared<S>>,
-    board: &JobBoard,
-    source: &dyn TemplateSource,
-    postings: &Postings,
-) where
+/// Build and post the job for the block after the tip (`template`
+/// module docs). The window is already pinned. A seed the slots do not
+/// hold leaves the current job; the next publication tries again.
+///
+/// The build runs on a blocking thread and takes no hasher permit: one
+/// more blocking task than the permits (`shekyl-node`, "Blocking
+/// threads").
+async fn post<S>(shared: &Arc<Shared<S>>, seat: &Seated, postings: &Postings)
+where
     S: Substrate + Send + Sync + 'static,
     S::Fault: core::fmt::Debug + Send + 'static,
 {
-    let Ok(facts) = shared.connector().ask(TemplateFacts).await else {
-        board.withdraw();
-        return;
+    let Some(keys) = seat.keys.clone() else {
+        return seat.withdraw(NoJob::NoAddress);
     };
-    let store = std::sync::Arc::clone(shared.store());
-    let rules = shared.rules();
-    let claimed = tokio::task::spawn_blocking(move || claim_next(&store, rules))
-        .await
-        .expect("the claim reader does not panic");
-    let Ok((height, seed, target)) = claimed else {
-        board.withdraw();
-        return;
-    };
-    if height != facts.connecting {
-        return;
+    if shared.pool_retired() {
+        return seat.withdraw(NoJob::PoolRetired);
     }
+    let now = match shared.substrate().local_clock() {
+        Ok(now) => now,
+        Err(fault) => {
+            tracing::error!("no template: the clock: {fault:?}");
+            return seat.withdraw(NoJob::Unbuilt(Unbuilt::Clock));
+        }
+    };
     let Some(window) = shared.seed_now() else {
         return;
     };
-    if !window.holds(&seed) {
-        return;
-    }
-    let Some((block, transactions)) = source.template(&facts) else {
-        board.withdraw();
-        return;
+    let reader = Arc::clone(shared);
+    let produced = tokio::task::spawn_blocking(move || {
+        let snap = reader.store().begin_read().map_err(Unposted::Store)?;
+        let params = EconomicParams::default();
+        let producer = Producer {
+            rules: reader.rules(),
+            keys: &keys,
+            params: &params,
+            now,
+        };
+        produce(&snap, &producer, reader.live_pool(), |seed| {
+            window.holds(seed)
+        })
+        .map_err(Unposted::Template)
+    })
+    .await;
+    // A panic in the producer is a defect, not a reason to take the
+    // follower down with it: the job goes, and the service stops on it as
+    // it does on any end of the follower. The workspace's dev and release
+    // profiles abort on panic, so this arm is reached only where a panic
+    // unwinds (the test profile).
+    let produced = match produced {
+        Ok(produced) => produced,
+        Err(join) => {
+            tracing::error!("the template producer panicked: {join}");
+            seat.withdraw(NoJob::Unbuilt(Unbuilt::ProducerPanicked));
+            shared.fail(ServiceFault::FollowerEnded);
+            return;
+        }
     };
+    let produced = match produced {
+        Ok(produced) => produced,
+        Err(unposted) => {
+            if let Some(why) = unposted.apply(shared) {
+                seat.withdraw(why);
+            }
+            return;
+        }
+    };
+    tracing::debug!(
+        height = produced.job.height.to_raw(),
+        bodies = produced.transactions.len(),
+        block_weight = produced.block_weight,
+        coinbase_weight = produced.coinbase_weight,
+        block_reward = produced.block_reward.to_raw(),
+        "posted the template"
+    );
+    if !produced.evicted.is_empty() {
+        tracing::debug!("CEN-M10 evicted {:?}", produced.evicted);
+    }
     // The sink reads the body list by generation. The insert happens
     // before `publish` returns, so a block the miner finds on this job
     // cannot observe an empty list. `publish` takes the board's lock, not
     // this one; the sink takes this one and not the board's.
     let mut kept = postings.lock().unwrap_or_else(PoisonError::into_inner);
-    let generation = board.publish(Job {
-        block,
-        height,
-        seed,
-        difficulty: target.difficulty(),
-    });
-    kept.insert(generation, transactions);
+    let generation = seat.board.publish(produced.job);
+    kept.insert(generation, produced.transactions);
     while kept.len() > KEPT_JOBS {
         kept.pop_first();
+    }
+    drop(kept);
+    seat.posting.send_replace(Posting::Posted(generation));
+}
+
+/// Why a pass posted nothing.
+enum Unposted {
+    Store(StoreError),
+    Template(NoTemplate),
+}
+
+impl Unposted {
+    /// A store fault or a corrupt store ends the service, as it does for
+    /// any other reader; a chain fault in the pool's selection is the
+    /// pool's chain fault; a pool-file fault retires the pool. Returns the
+    /// reason to withdraw the job with, or `None` to leave it (a seed the
+    /// slots do not hold yet).
+    fn apply<S>(self, shared: &Shared<S>) -> Option<NoJob>
+    where
+        S: Substrate,
+        S::Fault: core::fmt::Debug,
+    {
+        let why = |kind: Unbuilt| Some(NoJob::Unbuilt(kind));
+        match self {
+            Self::Store(store)
+            | Self::Template(
+                NoTemplate::Facts(FactsStop::Read(ViewRead::View(store)))
+                | NoTemplate::Claim(ClaimStop::Store(store)),
+            ) => {
+                shared.fail(ServiceFault::Store(store));
+                why(Unbuilt::StoreFault)
+            }
+            Self::Template(NoTemplate::Facts(FactsStop::Read(read @ ViewRead::Corrupt(_)))) => {
+                crate::service::record_store_read(shared, read);
+                why(Unbuilt::StoreCorrupt)
+            }
+            Self::Template(NoTemplate::Claim(ClaimStop::Corrupt { height, corrupt })) => {
+                shared.fail(ServiceFault::Corrupt { height, corrupt });
+                why(Unbuilt::StoreCorrupt)
+            }
+            Self::Template(NoTemplate::Selection(fault)) => {
+                shared.fail(ServiceFault::Pool(PoolFault::Chain(fault)));
+                why(Unbuilt::Selection)
+            }
+            Self::Template(NoTemplate::PoolFile(store)) => {
+                shared.pool_dead(&store);
+                Some(NoJob::PoolRetired)
+            }
+            Self::Template(NoTemplate::SeedNotHeld) => None,
+            Self::Template(NoTemplate::Facts(FactsStop::NoNextHeight { tip })) => {
+                tracing::error!("no template: the tip {tip:?} is the last height there is");
+                why(Unbuilt::LastHeight)
+            }
+            Self::Template(NoTemplate::Claim(ClaimStop::Refused { refused, .. })) => {
+                tracing::error!(
+                    "no template: the chain's own headers refuse its target: {refused:?}"
+                );
+                why(Unbuilt::TargetRefused)
+            }
+            Self::Template(NoTemplate::Claim(ClaimStop::Moved)) => {
+                tracing::error!(
+                    "no template: a seed block is not on the snapshot it was read from"
+                );
+                why(Unbuilt::SeedMissing)
+            }
+            Self::Template(NoTemplate::Random(error)) => {
+                tracing::error!("no template: the OS random source failed: {error}");
+                why(Unbuilt::Random)
+            }
+            Self::Template(NoTemplate::Build(error)) => {
+                tracing::error!("no template: {error}");
+                why(Unbuilt::Pricing)
+            }
+            Self::Template(NoTemplate::PoolOnAnotherTip) => {
+                tracing::debug!("no template: the pool was judged against another tip");
+                why(Unbuilt::PoolOnAnotherTip)
+            }
+            Self::Template(NoTemplate::NoNonceSlot) => {
+                tracing::error!("no template: the coinbase reserves no extra nonce");
+                why(Unbuilt::NoNonceSlot)
+            }
+        }
     }
 }
 
@@ -453,14 +715,16 @@ impl Drop for SignalDone {
 }
 
 /// The found-block sink. It ends when the inbox closes or the last sender
-/// drops, and the queue is empty. A full window waits for the reserved
-/// seat. A closed door drops the block and the loop goes back to `recv`.
+/// drops, and the queue is empty. Each block enters through the door's
+/// local-arrival entry ([`Door::offer_local`]) on the runtime it was
+/// spawned from. Called from inside that runtime.
 pub(crate) fn spawn_sink(
     found: FoundInbox,
     door: Door,
     postings: Postings,
     done: tokio::sync::oneshot::Sender<()>,
 ) -> std::thread::JoinHandle<()> {
+    let runtime = tokio::runtime::Handle::current();
     std::thread::Builder::new()
         .name(FOUND_SINK_THREAD.to_owned())
         .spawn(move || {
@@ -472,34 +736,19 @@ pub(crate) fn spawn_sink(
                     .get(&found.generation)
                     .cloned()
                     .unwrap_or_default();
-                let arrival = Arrival {
-                    tag: ArrivalTag(found.generation.to_raw()),
-                    origin: Origin::Local,
-                    block: found.block.serialize(),
-                    bodies: bodies.iter().map(Transaction::serialize).collect(),
-                };
-                // A full window waits for the local seat. A closed door wakes
-                // that wait and the offer is refused; the block is dropped.
-                // Anything else is this node's own block not joining the chain,
-                // and it is said once.
-                loop {
-                    match door.offer(arrival.clone()) {
-                        Ok(ticket) => {
-                            say_mined(&ticket.blocking_reply().reply);
-                            break;
-                        }
-                        Err(crate::service::Refusal::NoRoom) => {
-                            if !door.wait_for_local_seat() {
-                                break;
-                            }
-                        }
-                        Err(refused) => {
-                            tracing::error!(
-                                "a block this node mined was not accepted at the door: {refused:?}"
-                            );
-                            break;
-                        }
-                    }
+                // The local-arrival entry waits out a full window. A closed
+                // door answers `Stopped`. Anything else is this node's own
+                // block not joining the chain, and it is said once.
+                let offered = runtime.block_on(door.offer_local(
+                    ArrivalTag(found.generation.to_raw()),
+                    found.block.serialize(),
+                    bodies.iter().map(Transaction::serialize).collect(),
+                ));
+                match offered {
+                    Ok(tagged) => say_mined(&tagged.reply),
+                    Err(refused) => tracing::error!(
+                        "a block this node mined was not accepted at the door: {refused:?}"
+                    ),
                 }
             }
         })

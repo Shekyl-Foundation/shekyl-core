@@ -34,6 +34,11 @@ pipeline = [
     "dep:shekyl-hash-budget",
     "dep:shekyl-miner",
     "dep:shekyl-mempool",
+    "dep:shekyl-block-template",
+    "dep:shekyl-archival-retention",
+    "dep:shekyl-chain-sync",
+    "dep:rand",
+    "dep:zeroize",
 ]
 fetch = ["dep:shekyl-rpc-client", "dep:shekyl-rpc-types"]
 replay-cli = [
@@ -112,6 +117,16 @@ shekyl-miner = { path = "../shekyl-miner", optional = true }
 # tip, a switch's returns and an alternative block's bodies offered to its
 # door, a compact block's bodies resolved from what it shows.
 shekyl-mempool = { path = "../shekyl-mempool", optional = true }
+# pipeline: the node's one block template, built by the tip follower on one
+# snapshot (`DRS_X_STORE_FLIP.md` DX-Q3, N2), and the reward-aware fill it lists
+# bodies under (#1152).
+shekyl-block-template = { path = "../shekyl-block-template", optional = true }
+# pipeline: the template's coinbase secret, drawn from the OS per template
+# (Q4), and its wipe.
+rand = { version = "0.8", optional = true }
+# pipeline: chain sync's own state, the watch the follower posts a job on
+# only while it reads `Synced` (Q13).
+shekyl-chain-sync = { path = "../shekyl-chain-sync", optional = true }
 kameo = { workspace = true, optional = true }
 tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync"], optional = true }
 # A pool-file fault is logged and ingest continues: the file is discardable.
@@ -123,6 +138,8 @@ shekyl-rpc-types = { path = "../shekyl-rpc-types", optional = true }
 
 # replay-cli: argument parsing as shekyl-cli does it; HTTP transport for
 # `fetch`; SETTLEMENT_EPOCH_BLOCKS — a consensus constant, not a flag.
+# pipeline also takes `shekyl-archival-retention`: the template's draw
+# commitment (`commit_and_discard`, Q4) and the empty attestation root.
 clap = { version = "4", features = ["derive"], optional = true }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport", optional = true }
 shekyl-archival-retention = { path = "../shekyl-archival-retention", optional = true }
@@ -147,9 +164,8 @@ shekyl-thread-priority = { path = "../shekyl-thread-priority" }
 shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
 # The block producer the scenario driver (`scenario.rs`, test-only) builds
 # candidates with — the production template over the production stack
-# (CHAIN_RULES_SLICE_6.md §5.3). Dev-dependency: the driver is a test
-# instrument; the template crate's production consumer is the live
-# daemon's handler at the store flip (DRS-X).
+# (CHAIN_RULES_SLICE_6.md §5.3). Unconditional here for the driver; the
+# [dependencies] edge above is the tip follower's (`template.rs`).
 shekyl-block-template = { path = "../shekyl-block-template" }
 # The harness miner every scenario block pays (`scenario.rs`), and the
 # spender over the scenario's blocks: the wallet-side curve tree mirrors
@@ -199,6 +215,13 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # answer on (`rpc_store_facts_tests.rs`, `rpc_store_reads_tests.rs`).
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 hex = "0.4"
+# The wallet's block fetch over the store-backed handlers (the review of
+# #1165, ruling 7): the wallet's own client and transport, against a local
+# HTTP stand-in that serves `get_block`, `get_transactions` and
+# `get_o_indexes.bin` from `StoreFacts`.
+shekyl-engine-core = { path = "../shekyl-engine-core" }
+shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync", "net", "io-util", "time"] }
 
 [lints]
 workspace = true

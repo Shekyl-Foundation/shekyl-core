@@ -36,7 +36,7 @@ mod coinbase;
 pub use coinbase::{
     build_coinbase_extra, check_coinbase_extra_shape, check_tx_extra_shape, coinbase_extra_len,
     CoinbaseBuildError, CoinbaseGrammarError, ExtraSubject, COINBASE_NONCE_BYTES,
-    COINBASE_NONCE_OFFSET_FROM_PUBKEY,
+    COINBASE_NONCE_OFFSET_FROM_PUBKEY, COINBASE_NONCE_OFFSET_IN_EXTRA,
 };
 
 /// `0x00` — padding (a run of zero bytes to the end of `extra`).

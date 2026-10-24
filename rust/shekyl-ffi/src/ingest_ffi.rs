@@ -370,7 +370,10 @@ pub unsafe extern "C" fn shekyl_ingest_offer_span(
     };
     let reserved = match door.reserve(&lengths) {
         Ok(reserved) => reserved,
-        Err(Refusal::NoRoom) => return SHEKYL_INGEST_NO_ROOM,
+        // The C++ peer path drops a span it has no room for and never
+        // retries it in a loop, so an unreadable store answers as no room
+        // there; the service stops on the same read.
+        Err(Refusal::NoRoom | Refusal::StoreUnreadable) => return SHEKYL_INGEST_NO_ROOM,
         Err(Refusal::Throttled) => return SHEKYL_INGEST_THROTTLED,
         Err(Refusal::Oversize) => return SHEKYL_INGEST_OVERSIZE,
     };
